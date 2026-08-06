@@ -4,14 +4,73 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	basechannels "github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 )
+
+// TestSendMedia_CrossWorkspaceRefLogsDistinctDenialWarning is the FR-028a
+// review regression test: a media ref denied by the caller-workspace
+// membership guard (media.IsCallerWorkspaceDenied) must get its own
+// distinct WARN log line naming it a workspace-boundary denial. Unlike
+// Telegram/Matrix/Slack/Discord/Feishu (which `continue` past a resolve
+// failure), WeCom's resolveOutboundPart hard-returns the raw error and
+// SendMedia wraps it in channels.ErrSendFailed immediately — there was no
+// prior logging at this exact call site at all, so this only adds the new
+// WARN line, it does not need to distinguish it from an existing ERROR log.
+func TestSendMedia_CrossWorkspaceRefLogsDistinctDenialWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	logFile := filepath.Join(tmpDir, "wecom-media.log")
+	prevLevel := logger.GetLevel()
+	logger.DisableConsole()
+	logger.SetLevel(logger.WARN)
+	if err := logger.EnableFileLogging(logFile); err != nil {
+		t.Fatalf("EnableFileLogging() error = %v", err)
+	}
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(prevLevel)
+	})
+
+	ch := newTestWeComChannel(t, bus.NewMessageBus())
+	ch.SetRunning(true)
+	ch.SetMediaStore(media.NewFileMediaStore())
+
+	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+		Channel: "wecom",
+		ChatID:  "chat-1",
+		// WorkspaceID deliberately empty: a workspace-prefixed ref with no
+		// caller-workspace context trips the FR-028a guard
+		// (ErrWorkspaceContextRequired) before any media store provider is
+		// even consulted.
+		Parts: []bus.MediaPart{{Type: "image", Ref: "media://workspace/other-ws/some-id"}},
+	})
+	if err == nil {
+		t.Fatal("SendMedia() error = nil, want error for a denied workspace ref")
+	}
+	if !errors.Is(err, basechannels.ErrSendFailed) {
+		t.Fatalf("SendMedia() error = %v, want ErrSendFailed "+
+			"(a caller-workspace denial is permanent, same as any other local resolve failure)", err)
+	}
+
+	logged, readErr := os.ReadFile(logFile)
+	if readErr != nil {
+		t.Fatalf("reading captured log file: %v", readErr)
+	}
+	logStr := string(logged)
+	if !strings.Contains(logStr, "Media ref denied by caller-workspace guard") {
+		t.Fatalf("log file missing the distinct FR-028a denial WARN line; got:\n%s", logStr)
+	}
+}
 
 func TestStoreRemoteMedia_DetectsJPEGContentTypeFromBody(t *testing.T) {
 	t.Parallel()

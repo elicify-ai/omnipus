@@ -1,8 +1,10 @@
 // Renderer for already-finalized assistant messages in the virtualized list.
 // Shares every element renderer with the live AssistantUI renderer (markdown-text.tsx)
-// via markdown-shared.tsx — the two now differ ONLY in their block-code path: this one
-// renders a plain <pre><code> (Shiki is live-only, to keep this bundle light), the live
-// one uses Shiki. Both route a ```mermaid fence to the shared <MermaidDiagram>.
+// via markdown-shared.tsx — including, as of the library-spec D-6 fix, the actual
+// Shiki highlighting mechanism for block code (ShikiCodeBlock). The two renderers now
+// differ ONLY in the chrome around block code: this one uses its own copyText()-based
+// header (see HistoricalCodeBlock below), the live one uses AssistantUI's CodeHeader
+// slot. Both route a ```mermaid fence to the shared <MermaidDiagram>.
 
 import { useState, useRef, useEffect, memo } from 'react'
 import type { ReactNode } from 'react'
@@ -23,22 +25,23 @@ import {
   classifyFence,
   codeText,
   MermaidDiagram,
+  ShikiCodeBlock,
   commonMarkdownComponents,
 } from './markdown-shared'
 
 // ── Historical block-code header (language label + copy button) ───────────────
 // Mirrors CopyCodeHeader from shiki-highlighter.tsx but uses copyText() from
 // media-actions.ts (Phase A) rather than a raw clipboard call, and uses a 1.5s
-// reset (vs 2s in the live path) to stay snappy in the finalized view.
+// reset (vs 2s in the live path) to stay snappy in the finalized view. The
+// highlighted body itself is ShikiCodeBlock (markdown-shared.tsx) — shared with
+// the live path so highlighting no longer vanishes on finalize/reload.
 
 interface HistoricalCodeBlockProps {
   code: string
-  className: string | undefined
-  children: ReactNode
   language: string | undefined
 }
 
-function HistoricalCodeBlock({ code, className, children, language }: HistoricalCodeBlockProps) {
+function HistoricalCodeBlock({ code, language }: HistoricalCodeBlockProps) {
   const [copied, setCopied] = useState(false)
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -84,9 +87,7 @@ function HistoricalCodeBlock({ code, className, children, language }: Historical
           )}
         </button>
       </div>
-      <pre className="text-xs bg-[var(--color-surface-1)] rounded-b p-2 overflow-auto font-mono text-[var(--color-secondary)]">
-        <code className={className}>{children}</code>
-      </pre>
+      <ShikiCodeBlock language={language} code={code} />
     </div>
   )
 }
@@ -120,11 +121,7 @@ const historicalMarkdownComponents = {
       // Fenced content carries a trailing newline; trim so mermaid parses cleanly.
       return <MermaidDiagram code={text.replace(/\n$/, '')} />
     }
-    return (
-      <HistoricalCodeBlock code={codeText(children)} className={className} language={language}>
-        {children}
-      </HistoricalCodeBlock>
-    )
+    return <HistoricalCodeBlock code={codeText(children)} language={language} />
   },
 
   // Phosphor-emoji spans (from rehypePhosphorEmoji) and lightbox images — shared.

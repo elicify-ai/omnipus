@@ -31,15 +31,16 @@ interface AuditLogViewerProps {
 // ── Event badge config ─────────────────────────────────────────────────────────
 
 const EVENT_STYLES: Record<string, string> = {
-  tool_call:   'border-blue-500/30 bg-blue-500/10 text-blue-400',
-  exec:        'border-orange-500/30 bg-orange-500/10 text-orange-400',
-  file_op:     'border-sky-500/30 bg-sky-500/10 text-sky-400',
-  llm_call:    'border-violet-500/30 bg-violet-500/10 text-violet-400',
-  policy_eval: 'border-purple-500/30 bg-purple-500/10 text-purple-400',
-  rate_limit:  'border-yellow-500/30 bg-yellow-500/10 text-yellow-400',
-  ssrf:        'border-red-500/30 bg-red-500/10 text-red-400',
-  startup:     'border-zinc-500/30 bg-zinc-500/10 text-zinc-400',
-  shutdown:    'border-zinc-500/30 bg-zinc-500/10 text-zinc-400',
+  tool_call:              'border-blue-500/30 bg-blue-500/10 text-blue-400',
+  exec:                   'border-orange-500/30 bg-orange-500/10 text-orange-400',
+  file_op:                'border-sky-500/30 bg-sky-500/10 text-sky-400',
+  llm_call:               'border-violet-500/30 bg-violet-500/10 text-violet-400',
+  policy_eval:            'border-purple-500/30 bg-purple-500/10 text-purple-400',
+  rate_limit:             'border-yellow-500/30 bg-yellow-500/10 text-yellow-400',
+  ssrf:                   'border-red-500/30 bg-red-500/10 text-red-400',
+  startup:                'border-zinc-500/30 bg-zinc-500/10 text-zinc-400',
+  shutdown:               'border-zinc-500/30 bg-zinc-500/10 text-zinc-400',
+  security_setting_change: 'border-rose-500/30 bg-rose-500/10 text-rose-400',
 }
 
 const DECISION_STYLES: Record<string, string> = {
@@ -99,10 +100,19 @@ function JsonBlock({ label, value }: { label: string; value: Record<string, unkn
 
 function AuditRow({ entry }: { entry: AuditEntry }) {
   const [expanded, setExpanded] = useState(false)
+  // D20: security_setting_change records (see pkg/audit.SecurityChangeRecord)
+  // carry actor/resource/old_value/new_value instead of the tool-call shape
+  // (parameters/command/policy_rule) — a row must be expandable when any of
+  // those fields is present too, or an armed god-mode change (and every
+  // other security_setting_change) renders as an unexpandable, all-blank row.
   const hasDetail = hasNonEmpty(entry.parameters) ||
                     hasNonEmpty(entry.details) ||
                     !!entry.command ||
-                    !!entry.policy_rule
+                    !!entry.policy_rule ||
+                    !!entry.actor ||
+                    !!entry.resource ||
+                    hasNonEmpty(entry.old_value) ||
+                    hasNonEmpty(entry.new_value)
 
   const detailId = useId()
 
@@ -172,11 +182,32 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
                   <p className="text-xs font-mono text-[var(--color-secondary)]">{entry.policy_rule}</p>
                 </div>
               )}
+              {/* D20: security_setting_change shape (pkg/audit.SecurityChangeRecord) —
+                  actor + resource + old_value/new_value, distinct from the
+                  tool-call shape above. */}
+              {entry.actor && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Actor</p>
+                  <p className="text-xs font-mono text-[var(--color-secondary)]">{entry.actor}</p>
+                </div>
+              )}
+              {entry.resource && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Resource</p>
+                  <p className="text-xs font-mono text-[var(--color-secondary)]">{entry.resource}</p>
+                </div>
+              )}
               {hasNonEmpty(entry.parameters) && (
                 <JsonBlock label="Parameters" value={entry.parameters!} />
               )}
               {hasNonEmpty(entry.details) && (
                 <JsonBlock label="Details" value={entry.details!} />
+              )}
+              {hasNonEmpty(entry.old_value) && (
+                <JsonBlock label="Old Value" value={entry.old_value!} />
+              )}
+              {hasNonEmpty(entry.new_value) && (
+                <JsonBlock label="New Value" value={entry.new_value!} />
               )}
             </div>
           </TableCell>
@@ -190,15 +221,16 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
 
 const EVENT_TYPE_OPTIONS = [
   { value: 'all', label: 'All events' },
-  { value: 'tool_call',   label: 'tool_call' },
-  { value: 'exec',        label: 'exec' },
-  { value: 'file_op',     label: 'file_op' },
-  { value: 'llm_call',    label: 'llm_call' },
-  { value: 'policy_eval', label: 'policy_eval' },
-  { value: 'rate_limit',  label: 'rate_limit' },
-  { value: 'ssrf',        label: 'ssrf' },
-  { value: 'startup',     label: 'startup' },
-  { value: 'shutdown',    label: 'shutdown' },
+  { value: 'tool_call',              label: 'tool_call' },
+  { value: 'exec',                   label: 'exec' },
+  { value: 'file_op',                label: 'file_op' },
+  { value: 'llm_call',               label: 'llm_call' },
+  { value: 'policy_eval',            label: 'policy_eval' },
+  { value: 'rate_limit',             label: 'rate_limit' },
+  { value: 'ssrf',                   label: 'ssrf' },
+  { value: 'startup',                label: 'startup' },
+  { value: 'shutdown',               label: 'shutdown' },
+  { value: 'security_setting_change', label: 'security_setting_change' },
 ]
 
 const DECISION_OPTIONS = [

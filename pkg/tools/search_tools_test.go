@@ -165,7 +165,6 @@ func TestToolsTool_Query_AutoLoadsTopHit(t *testing.T) {
 	}
 }
 
-//nolint:dupl // near-identical to TestBM25_PolicyDeniedVisibleToolExcludedFromAutoLoad; separate to test hidden vs visible tools
 func TestToolsTool_Query_DeniedTopHitFallsThrough(t *testing.T) {
 	reg := NewToolRegistry()
 	reg.RegisterHidden(&mockSearchableTool{name: "mcp_denied", desc: "denied tool"})

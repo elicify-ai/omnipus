@@ -21,22 +21,32 @@ const { mockSendTabAction, mockSendControl, mockSendInput, mockConnect, mockDeta
     callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
   }))
 
-vi.mock('@/lib/browserLiveWs', () => ({
-  BrowserLiveWsConnection: vi.fn().mockImplementation(
-    function (_sessionId: string, _agentId: string, callbacks: BrowserLiveWsCallbacks) {
-      callbacksRef.current = callbacks
-      return {
-        connect: mockConnect,
-        detach: mockDetach,
-        close: mockClose,
-        sendInput: mockSendInput,
-        sendControl: mockSendControl,
-        sendTabAction: mockSendTabAction,
-        isConnected: true,
-      }
-    },
-  ),
-}))
+// D5: importOriginal so the real translateBrowserErrorMessage (now imported
+// by BrowserLiveView for the D5 fix) stays live under this mock — only
+// BrowserLiveWsConnection itself is replaced.
+vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/browserLiveWs')>()
+  return {
+    ...actual,
+    BrowserLiveWsConnection: vi.fn().mockImplementation(
+      function (_sessionId: string, _agentId: string, callbacks: BrowserLiveWsCallbacks) {
+        callbacksRef.current = callbacks
+        return {
+          connect: mockConnect,
+          detach: mockDetach,
+          close: mockClose,
+          sendInput: mockSendInput,
+          sendControl: mockSendControl,
+          sendTabAction: mockSendTabAction,
+          // Adaptive viewport (2026-07-31): BrowserLiveView's ResizeObserver
+          // calls this on mount, so every connection double needs it.
+          sendViewport: vi.fn(() => true),
+          isConnected: true,
+        }
+      },
+    ),
+  }
+})
 
 import { BrowserLiveView } from './BrowserLiveView'
 
@@ -347,5 +357,185 @@ describe('BrowserLiveView — tab strip actions take the wheel (ADR-041 D4 / F1)
     fireEvent.click(screen.getByTestId('browser-tab-1'))
 
     expect(useUiStore.getState().toasts.some((t) => /could not switch tabs/i.test(t.message))).toBe(true)
+  })
+})
+
+// Regression coverage for the address bar going stale (operator report,
+// 2026-08-03: "back button and refresh button do not work").
+//
+// They DID work. Measured on v53: pressing Back moved the page and the tab
+// title to example.com while the address bar still read
+// en.wikipedia.org/wiki/Octopus — so the buttons looked broken because the bar
+// contradicted the page. Cause: setUrlInput was called in exactly ONE place,
+// the omnibox's own submit handler, so the bar only ever reflected what the
+// USER typed. Every other navigation — Back, Refresh, agent-driven, in-page
+// links — left it behind.
+//
+// The bar now follows the active tab's url from the same browser_tabs frame the
+// strip renders from, so the two can never disagree.
+describe('BrowserLiveView — address bar follows the active tab', () => {
+  const addressBar = () => screen.getByLabelText('Address bar') as HTMLInputElement
+
+  it('shows the active tab url without the user typing anything', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'Example Domain', url: 'https://example.com/', active: true }])
+
+    expect(addressBar().value).toBe('https://example.com/')
+  })
+
+  it('updates when navigation happens without the omnibox — the Back/Refresh case', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'Octopus', url: 'https://en.wikipedia.org/wiki/Octopus', active: true }])
+    expect(addressBar().value).toBe('https://en.wikipedia.org/wiki/Octopus')
+
+    // Back: the server reports the tab now sits on the previous entry.
+    emitTabs(0, [{ index: 0, title: 'Example Domain', url: 'https://example.com/', active: true }])
+    expect(addressBar().value).toBe('https://example.com/')
+  })
+
+  it('follows the active tab when the user switches tabs', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const tabs = [
+      { index: 0, title: 'Example Domain', url: 'https://example.com/' },
+      { index: 1, title: 'Octopus', url: 'https://en.wikipedia.org/wiki/Octopus' },
+    ]
+    emitTabs(0, tabs)
+    expect(addressBar().value).toBe('https://example.com/')
+
+    emitTabs(1, tabs)
+    expect(addressBar().value).toBe('https://en.wikipedia.org/wiki/Octopus')
+  })
+
+  // The guard that keeps this fix from becoming the FIRST bug reported in this
+  // series ("the URL bar clears itself while I type").
+  it('never overwrites a url the user is midway through typing', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'Example Domain', url: 'https://example.com/', active: true }])
+
+    const bar = addressBar()
+    fireEvent.focus(bar)
+    fireEvent.change(bar, { target: { value: 'https://my-half-typed-ur' } })
+
+    // A tabs frame lands mid-typing (a background title refresh, the agent
+    // navigating another tab, a periodic re-broadcast).
+    emitTabs(0, [{ index: 0, title: 'Something Else', url: 'https://unrelated.example/', active: true }])
+
+    expect(bar.value).toBe('https://my-half-typed-ur')
+  })
+
+  it('resumes following the active tab once the user leaves the bar', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const bar = addressBar()
+    fireEvent.focus(bar)
+    fireEvent.change(bar, { target: { value: 'typing…' } })
+    fireEvent.blur(bar)
+
+    emitTabs(0, [{ index: 0, title: 'Example Domain', url: 'https://example.com/', active: true }])
+    expect(bar.value).toBe('https://example.com/')
+  })
+
+  // about:blank is what a not-yet-navigated tab reports; showing it to a user
+  // looking at the Omnipus start page is noise.
+  it('does not display the blank-tab placeholder', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'Omnipus Browser', url: 'about:blank', active: true }])
+
+    expect(addressBar().value).toBe('')
+  })
+})
+
+// Header consolidation (operator direction, 2026-08-04). Four chrome rows
+// became two: tabs share the top strip with the window controls, everything
+// else rides the toolbar. These pin the two invariants that make that safe.
+describe('BrowserLiveView — consolidated two-row header', () => {
+  // The trap in this refactor. Close and Pop-out moved INTO the tab row, so if
+  // that row inherited the tab strip's `tabs.length > 0` guard, an empty tab
+  // list would take the only way to close the panel with it.
+  it('keeps Close and Pop-out reachable when the tab list is empty', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" onClose={() => {}} onPopOut={() => {}} />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'One', url: 'https://example.com' }])
+    expect(screen.getByTestId('browser-tab-strip')).toBeInTheDocument()
+
+    // The tab list arrives empty — the strip itself may go, the controls may not.
+    emitTabs(0, [])
+
+    expect(screen.queryByTestId('browser-tab-strip')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Close live browser panel')).toBeInTheDocument()
+    expect(screen.getByLabelText('Pop out')).toBeInTheDocument()
+  })
+
+  // Both rows are FIXED height. The panel pushes its own box as the remote
+  // viewport, so a header that changes height forces a full capture rebuild —
+  // the measured regression that made the handback hint always-mounted. Folding
+  // that hint onto the toolbar keeps it horizontal for exactly this reason.
+  it('never changes header row count or height when the drive state changes', () => {
+    const { container } = render(<BrowserLiveView sessionId="s1" agentId="a1" onClose={() => {}} />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'One', url: 'https://example.com' }])
+
+    const col = container.querySelector('[data-testid="browser-live-frame"]')?.closest('div')?.parentElement
+    const rowsIdle = [...(col?.children ?? [])].length
+    const hint = screen.getByTestId('browser-live-handback-hint')
+    expect(hint).toHaveClass('invisible')
+
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+
+    // Same element, same row count — it becomes visible in place rather than
+    // mounting a row and displacing the frame.
+    expect(screen.getByTestId('browser-live-handback-hint')).toBe(hint)
+    expect(hint).not.toHaveClass('invisible')
+    expect([...(col?.children ?? [])].length).toBe(rowsIdle)
+  })
+
+  // The consolidation itself: chrome above the frame is two rows, not four.
+  it('renders exactly two chrome rows above the live frame', () => {
+    const { container } = render(<BrowserLiveView sessionId="s1" agentId="a1" onClose={() => {}} />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'One', url: 'https://example.com' }])
+
+    const root = container.firstElementChild as HTMLElement
+    const kids = [...root.children]
+    const frameIdx = kids.findIndex((k) => k.querySelector('[data-testid="browser-live-frame"]') || k.getAttribute('data-testid') === 'browser-live-frame')
+    expect(frameIdx).toBe(2)
+    expect(kids[0].querySelector('[data-testid="browser-tab-strip"]')).toBeTruthy()
+    expect(kids[1].querySelector('input[aria-label="Address bar"]')).toBeTruthy()
+  })
+})
+
+// Regression: the consolidated toolbar collapsed the address bar to 23px.
+//
+// Measured on UAT v59, not theorised — row B was 575px wide and its fixed
+// children summed to 581px, so the `min-w-0 flex-1` form was flexed to zero and
+// the field became unusable. jsdom performs no layout, so this cannot assert a
+// pixel width; it asserts the structural guarantee that replaced the arithmetic
+// coincidence — a min-width floor on the field, and that the handback hint (the
+// 185px offender) no longer sits in a chrome row at all.
+describe('BrowserLiveView — the address bar cannot be squeezed out', () => {
+  it('gives the address field a min-width floor and keeps the hint off the toolbar', () => {
+    const { container } = render(
+      <BrowserLiveView sessionId="s1" agentId="a1" onClose={() => {}} onPopOut={() => {}} canAnnotate />,
+    )
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'One', url: 'https://example.com' }])
+
+    const form = container.querySelector('form')
+    expect(form?.className).toMatch(/min-w-\[\d+px\]/)
+    expect(form?.className).not.toMatch(/min-w-0/)
+
+    // The hint overlays the frame; it must not be a child of either chrome row.
+    const rows = [...(container.firstElementChild?.children ?? [])].slice(0, 2)
+    for (const row of rows) {
+      expect(row.querySelector('[data-testid="browser-live-handback-hint"]')).toBeNull()
+    }
+    expect(screen.getByTestId('browser-live-handback-hint')).toBeInTheDocument()
   })
 })

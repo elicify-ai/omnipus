@@ -1,0 +1,727 @@
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+package gateway
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/library"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
+)
+
+// HandleLibrary dispatches all /api/v1/library* requests (library-spec.md).
+// The Library is a file explorer over the FULL workspace work tree
+// (workspaces/<id>/work/ — see pkg/library's package doc), distinct from the
+// UUID-keyed workspace media library (pkg/media/library,
+// rest_workspace_media.go). Registration (rest.go is owned by another
+// in-flight change and is intentionally not touched here):
+//
+//	cm.RegisterHTTPHandler("/api/v1/library", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
+//	cm.RegisterHTTPHandler("/api/v1/library/", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
+//
+// withUploadAuth (not the plain 1 MB withAuth) is required because
+// POST .../upload streams a multipart body directly through this same
+// dispatcher; every JSON-bodied route here is independently capped at 1 MB
+// by decodeAndValidate regardless of the outer limit, so the larger ceiling
+// only actually matters for the upload route.
+func (a *restAPI) HandleLibrary(w http.ResponseWriter, r *http.Request) {
+	trimmed := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), "/api/v1/library")
+	trimmed = strings.TrimPrefix(trimmed, "/")
+	if trimmed == "" {
+		http.NotFound(w, r)
+		return
+	}
+	segs := strings.Split(trimmed, "/")
+
+	if len(segs) == 1 && segs[0] == "workspaces" {
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryWorkspaces(w, r)
+		return
+	}
+	if len(segs) == 1 && segs[0] == "move" {
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryTransfer(w, r, transferModeMove)
+		return
+	}
+	if len(segs) == 1 && segs[0] == "copy" {
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryTransfer(w, r, transferModeCopy)
+		return
+	}
+	if len(segs) != 2 {
+		http.NotFound(w, r)
+		return
+	}
+
+	workspaceID, sub := segs[0], segs[1]
+	if err := validateEntityID(workspaceID); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
+		return
+	}
+
+	switch sub {
+	case "entries":
+		switch r.Method {
+		case http.MethodGet:
+			a.handleLibraryEntriesList(w, r, workspaceID)
+		case http.MethodDelete:
+			a.handleLibraryEntryDelete(w, r, workspaceID)
+		default:
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	case "content":
+		switch r.Method {
+		case http.MethodGet:
+			a.handleLibraryContentGet(w, r, workspaceID)
+		case http.MethodPut:
+			a.handleLibraryContentPut(w, r, workspaceID)
+		default:
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	case "upload":
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryUpload(w, r, workspaceID)
+	case "mkdir":
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryMkdir(w, r, workspaceID)
+	case "rename":
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryRename(w, r, workspaceID)
+	case "download":
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryDownload(w, r, workspaceID)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// mapLibraryErr writes the appropriate HTTP error response for an error
+// returned by pkg/library, per library-spec.md's per-operation status
+// table: ErrInvalidPath/ErrNotDir → 400, ErrOutsideRoot → 403,
+// *DestinationParentNotFoundError → 404 with the missing directory named
+// (checked BEFORE the generic ErrNotFound case, since it wraps ErrNotFound
+// and would otherwise also match that arm — UAT Issue 4: a bare "not found"
+// gave no way to tell "source is missing" from "destination folder doesn't
+// exist yet", nor any path to success), ErrNotFound/ErrIsDir → 404 (the
+// contract pairs "path does not exist" and "path names a directory" under
+// the same 404 for every file-scoped operation), ErrAlreadyExists → 409,
+// anything else → 500 (logged).
+func mapLibraryErr(w http.ResponseWriter, op, workspaceID string, err error) {
+	var destErr *library.DestinationParentNotFoundError
+	switch {
+	case errors.Is(err, library.ErrInvalidPath):
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+	case errors.Is(err, library.ErrNotDir):
+		jsonErr(w, http.StatusBadRequest, "path is not a directory")
+	case errors.Is(err, library.ErrOutsideRoot):
+		jsonErr(w, http.StatusForbidden, "path resolves outside the workspace work tree")
+	case errors.As(err, &destErr):
+		jsonErr(w, http.StatusNotFound, fmt.Sprintf(
+			"destination directory %q does not exist — create it first with POST /library/{workspace_id}/mkdir",
+			destErr.Parent))
+	case errors.Is(err, library.ErrNotFound), errors.Is(err, library.ErrIsDir):
+		jsonErr(w, http.StatusNotFound, "not found")
+	case errors.Is(err, library.ErrAlreadyExists):
+		jsonErr(w, http.StatusConflict, "an entry already exists at the destination path")
+	default:
+		logger.ErrorCF("rest", "library: "+op+" failed",
+			map[string]any{"workspace_id": workspaceID, "error": err.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+	}
+}
+
+// openLibraryRoot opens workspaceID's Library root (mkdir-on-demand — see
+// library.OpenRoot's doc for why that side effect is deliberate here),
+// writing a 500 response and returning ok=false on an already-logged
+// failure. label distinguishes the log line for the one call site juggling
+// two roots at once (handleLibraryTransfer's from/to).
+func (a *restAPI) openLibraryRoot(w http.ResponseWriter, workspaceID, label string) (*library.Root, bool) {
+	root, err := library.OpenRoot(a.homePath, workspaceID)
+	if err != nil {
+		logger.ErrorCF("rest", "library: open "+label+" failed",
+			map[string]any{"workspace_id": workspaceID, "error": err.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return nil, false
+	}
+	return root, true
+}
+
+// --- GET /library/workspaces ---
+
+func (a *restAPI) handleLibraryWorkspaces(w http.ResponseWriter, r *http.Request) {
+	workspaces, err := listWorkspaceFiles(a.homePath)
+	if err != nil {
+		logger.ErrorCF("rest", "library: list workspaces failed", map[string]any{"error": err.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	nodes := make([]gen.LibraryWorkspaceNode, 0, len(workspaces))
+	for _, ws := range workspaces {
+		count, countErr := library.CountVisibleRootEntries(a.homePath, ws.ID)
+		if countErr != nil {
+			logger.WarnCF("rest", "library: count root entries failed",
+				map[string]any{"workspace_id": ws.ID, "error": countErr.Error()})
+			count = 0
+		}
+		nodes = append(nodes, gen.LibraryWorkspaceNode{
+			Id:         ws.ID,
+			Name:       ws.Name,
+			EntryCount: int32(count),
+		})
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		return strings.ToLower(nodes[i].Name) < strings.ToLower(nodes[j].Name)
+	})
+	jsonOK(w, nodes)
+}
+
+// --- GET/DELETE /library/{workspace_id}/entries ---
+
+func (a *restAPI) handleLibraryEntriesList(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	rel, err := library.CleanRelPath(r.URL.Query().Get("path"))
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	includeHidden := false
+	if raw := r.URL.Query().Get("include_hidden"); raw != "" {
+		parsed, perr := strconv.ParseBool(raw)
+		if perr != nil {
+			jsonErr(w, http.StatusBadRequest, "include_hidden must be a boolean")
+			return
+		}
+		includeHidden = parsed
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	entries, err := root.List(rel, includeHidden)
+	if err != nil {
+		mapLibraryErr(w, "list entries", workspaceID, err)
+		return
+	}
+	if entries == nil {
+		entries = []gen.LibraryEntry{}
+	}
+	jsonOK(w, entries)
+}
+
+func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	rawPath := r.URL.Query().Get("path")
+	if rawPath == "" {
+		jsonErr(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	rel, err := library.CleanRelPath(rawPath)
+	if err != nil || rel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	if err := root.Delete(rel); err != nil {
+		mapLibraryErr(w, "delete entry", workspaceID, err)
+		return
+	}
+	a.logLibraryAudit(r, "library.delete", workspaceID, map[string]any{"path": rel})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- GET/PUT /library/{workspace_id}/content ---
+
+func (a *restAPI) handleLibraryContentGet(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	rawPath := r.URL.Query().Get("path")
+	if rawPath == "" {
+		jsonErr(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	rel, err := library.CleanRelPath(rawPath)
+	if err != nil || rel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	result, err := root.ReadContent(rel)
+	if err != nil {
+		mapLibraryErr(w, "get content", workspaceID, err)
+		return
+	}
+
+	resp := gen.LibraryContentResponse{
+		Path:     rel,
+		IsText:   result.IsText,
+		Size:     result.Size,
+		TooLarge: result.TooLarge,
+	}
+	if result.Mime != "" {
+		m := result.Mime
+		resp.Mime = &m
+	}
+	if result.IsText && !result.TooLarge {
+		c := result.Content
+		resp.Content = &c
+	}
+	jsonOK(w, resp)
+}
+
+func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+
+	var req gen.LibraryContentRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "LibraryContentRequest", &req, validateEnabled) {
+		return
+	}
+	if len(req.Content) > library.MaxContentBytes {
+		jsonErr(w, http.StatusBadRequest, "content exceeds the 10 MB limit")
+		return
+	}
+	rel, err := library.CleanRelPath(req.Path)
+	if err != nil || rel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	fi, err := root.WriteContent(rel, []byte(req.Content))
+	if err != nil {
+		mapLibraryErr(w, "put content", workspaceID, err)
+		return
+	}
+	jsonOK(w, library.EntryFromInfo(rel, fi))
+}
+
+// --- POST /library/{workspace_id}/upload ---
+
+func (a *restAPI) handleLibraryUpload(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	targetDir, err := library.CleanRelPath(r.URL.Query().Get("path"))
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	// Upload does not auto-create nested directories beyond the work-tree
+	// root itself (OpenRoot already guarantees that one exists) — matches
+	// putLibraryContent's "parent directory must already exist" contract.
+	if targetDir != "" {
+		if _, statErr := root.StatDir(targetDir); statErr != nil {
+			mapLibraryErr(w, "upload", workspaceID, statErr)
+			return
+		}
+	}
+
+	reader, err := r.MultipartReader()
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("invalid multipart request: %v", err))
+		return
+	}
+
+	var resp gen.LibraryUploadResponse
+	var createdRelPaths []string
+	rollback := func() {
+		for _, rel := range createdRelPaths {
+			if rmErr := root.Delete(rel); rmErr != nil {
+				logger.WarnCF("rest", "library: upload rollback failed",
+					map[string]any{"workspace_id": workspaceID, "path": rel, "error": rmErr.Error()})
+			}
+		}
+	}
+
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			rollback()
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("multipart read error: %v", err))
+			return
+		}
+		fileName := part.FileName()
+		if fileName == "" {
+			// Non-file field — discard.
+			if _, discardErr := io.Copy(io.Discard, part); discardErr != nil {
+				logger.WarnCF("rest", "library: upload: discard field failed",
+					map[string]any{"workspace_id": workspaceID, "error": discardErr.Error()})
+			}
+			part.Close()
+			continue
+		}
+
+		sanitized, sanErr := agent.SanitizeUploadFilename(path.Base(fileName))
+		if sanErr != nil {
+			part.Close()
+			rollback()
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("invalid filename: %v", sanErr))
+			return
+		}
+		destRel := sanitized
+		if targetDir != "" {
+			destRel = targetDir + "/" + sanitized
+		}
+
+		finalRel, f, createErr := root.CreateUnique(destRel)
+		if createErr != nil {
+			part.Close()
+			rollback()
+			logger.ErrorCF("rest", "library: upload: create file failed",
+				map[string]any{"workspace_id": workspaceID, "path": destRel, "error": createErr.Error()})
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create file: %v", createErr))
+			return
+		}
+
+		limited := io.LimitReader(part, maxUploadFileSize+1)
+		written, copyErr := io.Copy(f, limited)
+		f.Close()
+		part.Close()
+		if copyErr != nil {
+			if rmErr := root.Delete(finalRel); rmErr != nil {
+				logger.WarnCF("rest", "library: upload: remove partial file failed",
+					map[string]any{"workspace_id": workspaceID, "path": finalRel, "error": rmErr.Error()})
+			}
+			rollback()
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("file write failed: %v", copyErr))
+			return
+		}
+		if written > maxUploadFileSize {
+			if rmErr := root.Delete(finalRel); rmErr != nil {
+				logger.WarnCF("rest", "library: upload: remove oversized file failed",
+					map[string]any{"workspace_id": workspaceID, "path": finalRel, "error": rmErr.Error()})
+			}
+			rollback()
+			jsonErr(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("file %q exceeds 100 MB limit", sanitized))
+			return
+		}
+
+		createdRelPaths = append(createdRelPaths, finalRel)
+		fi, statErr := root.StatFile(finalRel)
+		if statErr != nil {
+			rollback()
+			logger.ErrorCF("rest", "library: upload: stat uploaded file failed",
+				map[string]any{"workspace_id": workspaceID, "path": finalRel, "error": statErr.Error()})
+			jsonErr(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		resp.Entries = append(resp.Entries, library.EntryFromInfo(finalRel, fi))
+	}
+
+	if len(resp.Entries) == 0 {
+		jsonErr(w, http.StatusBadRequest, "no files found in upload")
+		return
+	}
+	a.logLibraryAudit(r, "library.upload", workspaceID, map[string]any{
+		"path": targetDir, "count": len(resp.Entries),
+	})
+	jsonCreated(w, resp)
+}
+
+// --- POST /library/{workspace_id}/mkdir ---
+
+// handleLibraryMkdir creates a directory in workspaceID's work tree,
+// creating any missing intermediate directories along the way (UAT Issue 4:
+// previously there was no way for a caller to create a folder at all, and a
+// clean, non-malicious nested Move/Copy destination like "subfolder/test.txt"
+// had no path to success because those operations deliberately do not
+// auto-create missing parents — see requireParentDir's doc). Idempotent:
+// creating a directory that already exists returns 200 with its existing
+// entry rather than an error; 409 if a regular FILE already occupies path.
+func (a *restAPI) handleLibraryMkdir(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+
+	var req gen.LibraryMkdirRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "LibraryMkdirRequest", &req, validateEnabled) {
+		return
+	}
+	rel, err := library.CleanRelPath(req.Path)
+	if err != nil || rel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	fi, created, err := root.Mkdir(rel)
+	if err != nil {
+		mapLibraryErr(w, "mkdir", workspaceID, err)
+		return
+	}
+	entry := library.EntryFromInfo(rel, fi)
+	a.logLibraryAudit(r, "library.mkdir", workspaceID, map[string]any{"path": rel, "created": created})
+	if created {
+		jsonCreated(w, entry)
+	} else {
+		jsonOK(w, entry)
+	}
+}
+
+// --- GET /library/{workspace_id}/download ---
+
+func (a *restAPI) handleLibraryDownload(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	rawPath := r.URL.Query().Get("path")
+	if rawPath == "" {
+		jsonErr(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	rel, err := library.CleanRelPath(rawPath)
+	if err != nil || rel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	f, fi, err := root.OpenFileForDownload(rel)
+	if err != nil {
+		mapLibraryErr(w, "download", workspaceID, err)
+		return
+	}
+	defer f.Close()
+
+	filename := path.Base(rel)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	http.ServeContent(w, r, filename, fi.ModTime(), f)
+}
+
+// --- POST /library/{workspace_id}/rename ---
+
+func (a *restAPI) handleLibraryRename(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+
+	var req gen.LibraryRenameRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "LibraryRenameRequest", &req, validateEnabled) {
+		return
+	}
+	fromRel, err := library.CleanRelPath(req.From)
+	if err != nil || fromRel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid from path")
+		return
+	}
+	toRel, err := library.CleanRelPath(req.To)
+	if err != nil || toRel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid to path")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	fi, err := root.Rename(fromRel, toRel)
+	if err != nil {
+		mapLibraryErr(w, "rename", workspaceID, err)
+		return
+	}
+	a.logLibraryAudit(r, "library.rename", workspaceID, map[string]any{"from": fromRel, "to": toRel})
+	jsonOK(w, library.EntryFromInfo(toRel, fi))
+}
+
+// --- POST /library/move, POST /library/copy ---
+
+type libraryTransferMode string
+
+const (
+	transferModeMove libraryTransferMode = "move"
+	transferModeCopy libraryTransferMode = "copy"
+)
+
+func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, mode libraryTransferMode) {
+	var req gen.LibraryTransferRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "LibraryTransferRequest", &req, validateEnabled) {
+		return
+	}
+
+	if err := validateEntityID(req.FromWorkspaceId); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid from_workspace_id")
+		return
+	}
+	if err := validateEntityID(req.ToWorkspaceId); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid to_workspace_id")
+		return
+	}
+	if !workspace.Exists(a.homePath, req.FromWorkspaceId) {
+		jsonErr(w, http.StatusNotFound, "from_workspace_id not found")
+		return
+	}
+	if !workspace.Exists(a.homePath, req.ToWorkspaceId) {
+		jsonErr(w, http.StatusNotFound, "to_workspace_id not found")
+		return
+	}
+
+	fromRel, err := library.CleanRelPath(req.FromPath)
+	if err != nil || fromRel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid from_path")
+		return
+	}
+	toRel, err := library.CleanRelPath(req.ToPath)
+	if err != nil || toRel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid to_path")
+		return
+	}
+
+	sameWorkspace := req.FromWorkspaceId == req.ToWorkspaceId
+
+	fromRoot, ok := a.openLibraryRoot(w, req.FromWorkspaceId, "from-root")
+	if !ok {
+		return
+	}
+	defer fromRoot.Close()
+
+	toRoot := fromRoot
+	if !sameWorkspace {
+		toRoot, ok = a.openLibraryRoot(w, req.ToWorkspaceId, "to-root")
+		if !ok {
+			return
+		}
+		defer toRoot.Close()
+	}
+
+	var fi os.FileInfo
+	var opErr error
+	switch mode {
+	case transferModeMove:
+		fi, opErr = library.MoveInto(fromRoot, toRoot, fromRel, toRel)
+	case transferModeCopy:
+		fi, opErr = library.CopyInto(fromRoot, toRoot, fromRel, toRel)
+	}
+	if opErr != nil {
+		mapLibraryErr(w, string(mode), req.FromWorkspaceId, opErr)
+		return
+	}
+
+	entry := library.EntryFromInfo(toRel, fi)
+	a.logLibraryAudit(r, "library."+string(mode), req.FromWorkspaceId, map[string]any{
+		"from_workspace_id": req.FromWorkspaceId, "from_path": fromRel,
+		"to_workspace_id": req.ToWorkspaceId, "to_path": toRel,
+	})
+	if mode == transferModeCopy {
+		jsonCreated(w, entry)
+	} else {
+		jsonOK(w, entry)
+	}
+}
+
+// logLibraryAudit emits a best-effort audit event for a mutating Library
+// operation. Audit write failures are logged, never surfaced to the HTTP
+// caller — an audit gap must not block an otherwise-successful operation,
+// matching the convention rest_workspace_media.go's logMediaDeleteAudit and
+// rest_workspaces.go's workspace.create/update events already establish.
+func (a *restAPI) logLibraryAudit(r *http.Request, event, workspaceID string, details map[string]any) {
+	if a.auditor == nil {
+		return
+	}
+	details["actor"] = a.callerIdentity(r).Username
+	details["workspace_id"] = workspaceID
+	if err := a.auditor.Log(&audit.Entry{
+		Event:    event,
+		Decision: audit.DecisionAllow,
+		Details:  details,
+	}); err != nil {
+		logger.WarnCF("rest", "library: audit write failed",
+			map[string]any{"event": event, "workspace_id": workspaceID, "error": err.Error()})
+	}
+}

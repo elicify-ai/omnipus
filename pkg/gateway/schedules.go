@@ -561,6 +561,15 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 	// during the run (SEC-2/#406, Rule-2). Distinct from owner (agentID).
 	userOwner := job.CreatedBy
 
+	// workspaceID is the schedule's resolved workspace (see
+	// resolveScheduleWorkspaceID's doc for the two sources and why a plain
+	// CronJob.AgentID lookup was rejected). Resolved once per fire and
+	// stamped onto whichever session this run picks below, so
+	// ProcessScheduled's existing transcriptStore.GetMeta(sessionID).WorkspaceID
+	// read (loop.go, the FIX-1 comment there) resolves to a real value
+	// instead of always "" — this is the write side that closes that gap.
+	workspaceID := resolveScheduleWorkspaceID(r.getConfig(), *job)
+
 	switch mode {
 	case cron.SessionModeContinue:
 		id := job.SessionID
@@ -573,6 +582,7 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 			}
 			job.SessionID = fresh.ID
 			r.stampScheduledSessionOwner(store, fresh.ID, userOwner)
+			r.stampScheduledSessionWorkspace(store, fresh.ID, workspaceID)
 			return fresh.ID, nil
 		}
 		meta, err := store.GetOrCreateScheduledSession(id, owner)
@@ -585,9 +595,11 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 				return "", fmt.Errorf("continue fallback create: %w", ferr)
 			}
 			r.stampScheduledSessionOwner(store, fresh.ID, userOwner)
+			r.stampScheduledSessionWorkspace(store, fresh.ID, workspaceID)
 			return fresh.ID, nil
 		}
 		r.stampScheduledSessionOwner(store, meta.ID, userOwner)
+		r.stampScheduledSessionWorkspace(store, meta.ID, workspaceID)
 		return meta.ID, nil
 
 	case cron.SessionModeMain:
@@ -597,6 +609,7 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 			return "", fmt.Errorf("main session create: %w", err)
 		}
 		r.stampScheduledSessionOwner(store, meta.ID, userOwner)
+		r.stampScheduledSessionWorkspace(store, meta.ID, workspaceID)
 		return meta.ID, nil
 
 	default: // isolated
@@ -605,7 +618,175 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 			return "", fmt.Errorf("isolated session create: %w", err)
 		}
 		r.stampScheduledSessionOwner(store, fresh.ID, userOwner)
+		r.stampScheduledSessionWorkspace(store, fresh.ID, workspaceID)
 		return fresh.ID, nil
+	}
+}
+
+// resolveScheduleWorkspaceID resolves the workspace a fired schedule's agent
+// turn should be scoped to, so pickSession can stamp it onto the session
+// meta BEFORE ProcessScheduled runs. loop.go's ProcessScheduled already
+// reads transcriptStore.GetMeta(sessionID).WorkspaceID (see its FIX-1
+// comment) — that read was always "" because nothing upstream ever wrote
+// it; this is the write side that makes it meaningful, for both
+// operator-created schedules and workspace-scoped heartbeats (ADR-027).
+//
+// Two sources, tried in order:
+//
+//  1. Heartbeat jobs are workspace-scoped BY CONSTRUCTION: the reconciler
+//     (heartbeat_schedule.go) names each job
+//     "heartbeat:<workspaceID>:<agentID>" and that (workspace, agent) pairing
+//     never changes for the job's lifetime (a workspace/interval/message
+//     change re-stamps the same job; enabling elsewhere creates a distinct
+//     job with a distinct name). workspaceIDFromHeartbeatJobName parses it
+//     back out.
+//
+//  2. An operator-created schedule's payload.Channel, when set, names a
+//     channel INSTANCE — the same key space processMessage resolves a
+//     session's workspace from (cfg.Channels[instanceID].WorkspaceID; see
+//     loop.go's resolveOrCreateChannelSession / resolveWorkspaceIDForContinuation).
+//     A channel instance is bound to at most one workspace (ADR-029), so
+//     this is a direct config lookup — no ResolveRoute/peer-binding pass is
+//     needed or even possible here: a fired schedule carries no
+//     peer/guild/team match context, only a channel + chat id.
+//
+// Rejected as a general-purpose source: CronJob.AgentID (the owning agent)
+// alone. An agent can sit on multiple workspaces with different rosters —
+// that is the explicit rationale ADR-037 gives for removing the global
+// delegation graph in favor of workspace-scoped trust — so "the owner's
+// workspace" is ambiguous for a plain schedule. It is NOT ambiguous for a
+// heartbeat job specifically, because a heartbeat job already IS one
+// (workspace, agent) pair by construction; case 1 above relies on that,
+// not on AgentID being globally unique to one workspace.
+//
+// Rejected as a schema change: adding an explicit WorkspaceID field to
+// CronJob/CronPayload (option (c) in the investigation). Schedules are a
+// REST entity (Constraint #8), so a new field would need a contracts/
+// change, codegen, AND a migration story for every job already on disk.
+// Both sources above are derivable from data the job already carries, so no
+// wire change is needed.
+//
+// A schedule with neither a heartbeat name nor a channel (e.g.
+// deliver=true's own send-path, which never reaches pickSession, or an
+// operator schedule that fires no channel context at all) has no
+// resolvable workspace. "" is returned deliberately in that case — never
+// fabricated — and stampScheduledSessionWorkspace treats "" as "nothing to
+// stamp", leaving the session's existing (possibly still-empty) tag alone.
+func resolveScheduleWorkspaceID(cfg *config.Config, job cron.CronJob) string {
+	if wsID := workspaceIDFromHeartbeatJobName(job); wsID != "" {
+		return wsID
+	}
+	channel := strings.ToLower(strings.TrimSpace(job.Payload.Channel))
+	if channel == "" || cfg == nil {
+		return ""
+	}
+	inst, ok := cfg.Channels[channel]
+	if !ok {
+		// FIX 3: the schedule names a channel instance that no longer exists
+		// in config at all — the operator deleted or renamed it after the
+		// schedule was created. That is a REGRESSION from a previously
+		// working binding, and left unlogged it is byte-identical to "this
+		// schedule never had a channel context", which is the normal,
+		// silent, zero-signal case just above (channel == ""). Do NOT
+		// fabricate a workspace id in its place; just make the regression
+		// visible. (An instance that DOES still exist but simply carries no
+		// WorkspaceID — the common case for a channel never bound to a
+		// workspace — is not logged: that is not a regression, it is the
+		// ordinary "unbound" state, returned via inst.WorkspaceID below.)
+		logger.WarnCF(
+			"gateway",
+			"scheduled run: schedule's bound channel instance no longer exists in config; workspace unresolved",
+			map[string]any{"job_id": job.ID, "job_name": job.Name, "channel": channel},
+		)
+		return ""
+	}
+	return inst.WorkspaceID
+}
+
+// workspaceIDFromHeartbeatJobName extracts the workspace id encoded in a
+// workspace-scoped heartbeat job's deterministic name
+// ("heartbeat:<workspaceID>:<agentID>", built by heartbeatJobName in
+// heartbeat_schedule.go — same package, reused here rather than
+// re-implemented). job.AgentID is already known and trusted (it is exactly
+// the string the reconciler appended when it built the name), so trimming
+// that exact ":"+AgentID suffix from the name yields exactly the workspace
+// id, regardless of what characters the workspace id itself contains —
+// robust even if a workspace id were ever allowed to include a colon,
+// unlike a positional split on ":". Returns "" for a non-heartbeat job or a
+// name that does not match the expected shape (e.g. hand-edited store data
+// or a stale AgentID after a heartbeat reassignment mid-flight).
+func workspaceIDFromHeartbeatJobName(job cron.CronJob) string {
+	if job.Payload.Kind != heartbeatJobKind {
+		// Not a heartbeat job at all — this is the overwhelmingly common
+		// case for every plain user schedule, so it is deliberately NOT
+		// logged (would be pure noise on every non-heartbeat fire).
+		return ""
+	}
+	// From here on the job claims to BE a heartbeat job, so every remaining
+	// "" return is a name/AgentID mismatch on a job that should be
+	// internally consistent by construction (heartbeatJobName, the
+	// reconciler's sole writer of this shape) — a config-integrity signal
+	// worth an operator's attention regardless of how it arose (FIX 2):
+	// hand-edited store data, a stale AgentID surviving a heartbeat
+	// reassignment mid-flight (ReconcileHeartbeatSchedules never mutates an
+	// existing job's AgentID in place — see its "Update in place" comment —
+	// so this path is reconcile-safe on its own), or a caller reassigning
+	// owner_agent_id through PUT /schedules/{id} before the FIX 2 guard on
+	// that endpoint existed.
+	if job.AgentID == "" {
+		logger.WarnCF("gateway", "heartbeat-kind job has no owning agent id; cannot resolve workspace from its name",
+			map[string]any{"job_id": job.ID, "job_name": job.Name})
+		return ""
+	}
+	rest := strings.TrimPrefix(job.Name, heartbeatJobNamePrefix)
+	if rest == job.Name {
+		logger.WarnCF(
+			"gateway",
+			"heartbeat-kind job name is missing the expected \"heartbeat:\" prefix; workspace cannot be resolved",
+			map[string]any{"job_id": job.ID, "job_name": job.Name, "agent_id": job.AgentID},
+		)
+		return "" // name doesn't carry the expected "heartbeat:" prefix at all
+	}
+	suffix := ":" + job.AgentID
+	if !strings.HasSuffix(rest, suffix) {
+		logger.WarnCF(
+			"gateway",
+			"heartbeat-kind job name does not match its own agent id; workspace cannot be resolved",
+			map[string]any{"job_id": job.ID, "job_name": job.Name, "agent_id": job.AgentID},
+		)
+		return ""
+	}
+	return strings.TrimSuffix(rest, suffix)
+}
+
+// stampScheduledSessionWorkspace sets WorkspaceID on a scheduled session from
+// the resolved schedule workspace (resolveScheduleWorkspaceID). Mirrors
+// stampScheduledSessionOwner's posture in every respect: only stamps when
+// the session has no workspace yet (a later change to the schedule's channel
+// binding does not retroactively move an already-anchored continue/main
+// session — same non-clobber policy the owner stamp uses; for isolated mode
+// every session is fresh so this always fires), a resolved-empty
+// workspaceID is a legitimate "no context" outcome and is never forced onto
+// an existing meta, and errors are non-fatal and logged as warnings
+// (SEC-2/#406 posture) — a missing workspace tag degrades gracefully to the
+// private/global room for media resolution rather than aborting the run.
+func (r *scheduledRunner) stampScheduledSessionWorkspace(store *session.UnifiedStore, sessionID, workspaceID string) {
+	if workspaceID == "" {
+		return
+	}
+	meta, err := store.GetMeta(sessionID)
+	if err != nil {
+		logger.WarnCF("gateway", "scheduled run: could not read session meta for workspace stamp",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return
+	}
+	if meta.WorkspaceID != "" {
+		return
+	}
+	wsCopy := workspaceID
+	if setErr := store.SetMeta(sessionID, session.MetaPatch{WorkspaceID: &wsCopy}); setErr != nil {
+		logger.WarnCF("gateway", "scheduled run: could not stamp session workspace",
+			map[string]any{"session_id": sessionID, "workspace_id": workspaceID, "error": setErr.Error()})
 	}
 }
 
@@ -1044,6 +1225,30 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, i
 	var req gen.ScheduleUpdate
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Heartbeat-immutability guard: a heartbeat-kind job's (workspace, agent)
+	// pair is fixed by construction — the reconciler names it
+	// "heartbeat:<workspaceID>:<agentID>" (heartbeatJobName) and treats that
+	// pairing as immutable for the job's lifetime; a reassignment there is
+	// always a remove-and-recreate under a new name (ReconcileHeartbeatSchedules),
+	// never an in-place AgentID mutation. This endpoint has no such
+	// discipline: letting a caller reassign owner_agent_id here would desync
+	// the job's name from its AgentID, which is exactly the drift
+	// workspaceIDFromHeartbeatJobName treats as "workspace unresolvable" (it
+	// refuses to guess and returns "", now also logged at WARN) — silently
+	// losing the workspace stamp on the job's session at its very next fire.
+	// Reject the reassignment outright instead of persisting an inconsistent
+	// job; the workspace's own Team tab (member_configs) is the only place a
+	// heartbeat's owning agent is meant to change, and that path removes and
+	// recreates the job under the correct name via the reconciler.
+	if req.OwnerAgentId != nil && *req.OwnerAgentId != job.AgentID && isHeartbeatJob(job) {
+		jsonErr(
+			w,
+			http.StatusBadRequest,
+			"owner_agent_id cannot be reassigned on a heartbeat-kind schedule (managed via the workspace's member_configs, not this endpoint)",
+		)
 		return
 	}
 

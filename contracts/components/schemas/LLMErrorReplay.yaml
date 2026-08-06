@@ -1,0 +1,27 @@
+title: LLMErrorReplay
+description: Replay-safe translated provider/LLM error with live-only detail omitted.
+type: object
+required:
+  - code
+  - message
+  - retryable
+additionalProperties: false
+properties:
+  code:
+    type: string
+    enum:
+      - media_unsupported
+      - provider_rejected
+      - rate_limited
+      - network
+      - content_policy
+      - context_too_long
+      - tool_args
+      - schema
+      - unknown
+  message:
+    type: string
+    minLength: 1
+    maxLength: 4096
+  retryable:
+    type: boolean

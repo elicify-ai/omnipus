@@ -145,7 +145,7 @@ func TestTaskExecutor_NoPerAgentConcurrencyCap(t *testing.T) {
 	// completes almost instantly even though every goroutine it spawns is
 	// about to block indefinitely on releaseAll.
 	for i, id := range taskIDs {
-		err := te.ExecuteTask(context.Background(), id)
+		err := te.ExecuteTask(context.Background(), id, nil)
 		require.NoError(t, err,
 			"ExecuteTask(#%d) must succeed: dispatchSema has 100 free slots and "+
 				"there is NO per-agent cap (defaultMaxConcurrentTasksPerAgent was removed)", i)
@@ -253,7 +253,7 @@ func TestTaskExecutor_DispatchSemaphoreStillGatesSingleAgent(t *testing.T) {
 
 	var successes, capRejections int
 	for i, id := range taskIDs {
-		err := te.ExecuteTask(context.Background(), id)
+		err := te.ExecuteTask(context.Background(), id, nil)
 		if err == nil {
 			successes++
 			select {

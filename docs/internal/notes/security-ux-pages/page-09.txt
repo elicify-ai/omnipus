@@ -1,0 +1,20 @@
+```
+
+Each line links to the control that owns it.
+
+### 3 — Rename Advanced into 4 cards
+
+1. **What agents may do** — global tool grid + “Global Deny wins; per-agent in Agents → Tools”
+2. **Shell & commands** — approval, timeouts, binary allowlist, deny patterns (one place)
+3. **Containment (sandbox & network)** — plain mode names:
+   - **Block violations (recommended)** = enforce
+   - **Log only (not protected)** = permissive
+   - **No isolation (dev only)** = off  
+   Then folders outside workspace; private network presets
+4. **Oversight** — audit, rates, prompt guard, skill trust
+
+Hide Landlock ABI / syscall lists under **“Technical details for support”**.
+
+### 4 — Move God mode into Security (or dual-surface)
+
+Nuclear switch next to the fences it disables. Gateway can keep a short “Runtime overrides” note.

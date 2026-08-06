@@ -1,0 +1,99 @@
+title: TaskOccurrenceSet
+description: >
+  The server-expanded occurrence set of one recurring-capable task within the
+  queried range, returned by `GET /api/v1/tasks/occurrences`. Covers all
+  trigger flavors that can recur (`rrule` via rrule-go, legacy `cron_expr` via
+  gronx in the server zone, and `every_ms` as a forward-only projection off
+  the live job's next-run instant — FR-008a). Only tasks the scheduler would
+  actually arm are expanded (non-terminal, non-`heartbeat`-surface); tasks
+  with zero occurrences in range are omitted from the response array
+  entirely — an empty result is `[]`, never null.
+type: object
+required:
+  - task_id
+  - occurrences_ms
+  - day_buckets
+  - truncated
+additionalProperties: false
+properties:
+  task_id:
+    type: string
+    description: The task this occurrence set belongs to.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  occurrences_ms:
+    type: array
+    description: >
+      Individual occurrence instants (Unix epoch milliseconds) not folded into
+      a day bucket — every day in range when the query span is ≤ 8×24h
+      (Week/Day views), or days with ≤ 3 occurrences when the span is > 8×24h
+      (overview ranges, e.g. Month). Capped at 500 per task per request.
+    items:
+      type: integer
+      format: int64
+    example:
+      - 1784620800000
+      - 1785225600000
+  day_buckets:
+    type: array
+    description: >
+      Aggregated days — only populated for overview-range queries (span >
+      8×24h) on query-tz days with more than 3 occurrences (D6).
+    items:
+      $ref: ./DayBucket.yaml
+  occurrence_runs:
+    type: array
+    description: >
+      Additive per-occurrence run overlay (ADR-050 RD6 / task-run-history-spec
+      §3.7), scoped strictly to this set's individual `occurrences_ms[]`
+      instants (never bucket members — inherits the existing ≤500/task cap,
+      no new cap). Read-only, purely additive (ADR-050 RD11 — no migration);
+      absent (or empty) until the occurrence-overlay handler populates it.
+    items:
+      type: object
+      required:
+        - occurrence_ms
+        - status
+        - run_id
+        - session_id
+        - has_result
+      additionalProperties: false
+      properties:
+        occurrence_ms:
+          type: integer
+          format: int64
+          description: The occurrence instant (from occurrences_ms[]) this overlay entry describes.
+          example: 1784620800000
+        status:
+          type: string
+          enum:
+            - in_progress
+            - done
+            - failed
+            - skipped
+          description: The matched run's status.
+          example: "done"
+        run_id:
+          type: string
+          description: The matched run's ID (ULID).
+          example: "01J8Z3K2R9G4S6M0N1P2Q3R4S5"
+        session_id:
+          type: string
+          description: The matched run's chat session ID.
+          example: "session-uuid"
+        has_result:
+          type: boolean
+          description: >
+            Whether the matched run carries a non-empty result. The full
+            result text is fetched per-run (not inlined here) via
+            GET /tasks/{id}/runs.
+          example: true
+  truncated:
+    type: boolean
+    description: >
+      True when the 500-instant cap or the 10,000-computed-occurrence
+      per-task iteration budget was hit before fully covering the requested
+      range. The client renders a "more occurrences not shown" marker on the
+      last covered day. False for provably regular triggers (fixed-interval
+      `every_ms` or a plain `rrule` with no BY* modifiers), whose bucket
+      counts and positions are derived arithmetically rather than iterated.
+    example: false

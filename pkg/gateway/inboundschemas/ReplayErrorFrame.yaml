@@ -51,6 +51,8 @@ properties:
       categories are introduced (the enum keeps the wire contract tight).
   message:
     type: string
+    minLength: 1
+    maxLength: 4096
     description: >
       Human-readable error description (the same text previously written
       to TranscriptEntry.Content). Kept verbatim for backward compat with
@@ -59,31 +61,4 @@ properties:
     type: string
     description: Agent that was active when the error fired.
   payload:
-    type: object
-    description: >
-      Optional structured error payload (rate-limit metadata, retry-after,
-      policy rule, etc.). The replay producer mirrors the structured event
-      payload that originally fired (RateLimitPayload for rate_limit,
-      ErrorPayload for error). Empty object when no structured payload was
-      persisted. additionalProperties: false so unknown fields are caught
-      at contract time rather than silently passed through.
-    additionalProperties: false
-    properties:
-      retry_after_seconds:
-        type: number
-        description: Seconds until the rate limit window expires (rate_limit only).
-      policy_rule:
-        type: string
-        description: Rate-limit policy rule that fired (rate_limit only).
-      scope:
-        type: string
-        description: "Rate-limit scope: session | agent | global (rate_limit only)."
-      resource:
-        type: string
-        description: Rate-limited resource identifier (rate_limit only).
-      tool:
-        type: string
-        description: Tool name when the rate limit applies per-tool (rate_limit only).
-      stage:
-        type: string
-        description: Pipeline stage where the error fired (error only, e.g. "llm").
+    $ref: ./ReplayErrorPayload.yaml

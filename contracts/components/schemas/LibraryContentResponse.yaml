@@ -1,0 +1,52 @@
+title: LibraryContentResponse
+description: >
+  Response from GET /api/v1/library/{workspace_id}/content — the text
+  content of one file for the SPA editor/viewer (library-spec.md D-5).
+  Carries explicit is_text / too_large flags so the SPA can fall back to
+  the download endpoint rather than guessing from the content field.
+type: object
+additionalProperties: false
+required:
+  - path
+  - size
+  - is_text
+  - too_large
+properties:
+  path:
+    type: string
+    description: Workspace-relative path echoed back from the request.
+    example: "uploads/report.md"
+  content:
+    type: string
+    description: >
+      File text content, UTF-8. Present only when is_text is true and
+      too_large is false; absent otherwise. The SPA MUST check both flags
+      before rendering this field rather than treating an absent/empty
+      value as "the file is empty."
+    example: "# Report\n\nStatus: green.\n"
+  size:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Actual file size in bytes, provided even when content is omitted.
+    example: 2048
+  is_text:
+    type: boolean
+    description: >
+      Whether the server sniffed this file as text (not binary). False for
+      images, video, and other binary formats — the SPA renders a metadata
+      card + download link instead (library-spec.md section 4 scope table).
+    example: true
+  too_large:
+    type: boolean
+    description: >
+      Whether the file exceeds the server's inline-text-editing size
+      threshold — the same 10485760-byte (10 MB) threshold enforced as
+      LibraryContentRequest.content's maxLength, so a file this endpoint
+      reports as editable is always one the write endpoint can accept back.
+      When true, content is omitted even for a text file.
+    example: false
+  mime:
+    type: string
+    description: Best-effort MIME type sniffed from the file extension/content.
+    example: "text/markdown"

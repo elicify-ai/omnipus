@@ -97,6 +97,47 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
   const baselineRef = useRef<string>('')
   const hydratedRef = useRef(false)
 
+  // D3 residual (2nd site) fix: reactive counterpart to `hydratedRef`,
+  // mirroring AgentProfile's `formHydrated` / WorkspaceSettingsTab's
+  // `instructionsHydrated`. useAutoSave's baseline-capture / re-arm logic
+  // (see useAutoSave.ts's `wasDisabledRef`) is keyed off its `disabled`
+  // OPTION actually transitioning true→false across a real committed
+  // render — a `useRef` alone is invisible to that machinery (reading
+  // `hydratedRef.current` at render time does not make React re-run
+  // useAutoSave's internal effect). Before this fix, `hydratedRef` was set
+  // once on the FIRST-ever hydration and never reset, so on every
+  // subsequent workspace switch (this component persists across switches —
+  // no `key` prop at the route) `disabled` stayed permanently `false`:
+  // useAutoSave treated the newly-adopted workspace's own fresh
+  // core_team/edges as a "genuine edit" relative to the stale previous
+  // workspace's baseline, and fired a spurious `updateWorkspace` +
+  // `updateWorkspaceDelegation` PUT echoing that data straight back.
+  //
+  // Reset via the "adjusting state during render" pattern (React docs:
+  // you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes)
+  // rather than a plain `useEffect` keyed on `workspaceId` — this is the
+  // SAME fix WorkspaceSettingsTab's `instructionsHydrated` already uses
+  // (see its own doc comment for the full story) and for the same reason: a
+  // plain effect-based reset runs in the SAME batched effect-flush as the
+  // hydration effect below whenever `delegation` for the new workspace is
+  // already cache-resolved on the very first render of the switch (no
+  // network gap) — React would coalesce `setHydrated(false)` immediately
+  // followed by `setHydrated(true)` into one update with no OBSERVABLE
+  // commit in between, so useAutoSave's `disabled` prop would never
+  // actually be SEEN as `true` and the re-arm branch would never fire,
+  // reproducing the exact spurious-PUT bug this fix exists to close. Doing
+  // the reset mid-render instead guarantees the very FIRST committed render
+  // after a workspace switch already carries `hydrated = false`, regardless
+  // of whether the new workspace's delegation resolves synchronously
+  // (cache hit) or asynchronously (network fetch).
+  const [hydrated, setHydrated] = useState(false)
+  const [prevWorkspaceIdForHydration, setPrevWorkspaceIdForHydration] = useState(workspaceId)
+  if (workspaceId !== prevWorkspaceIdForHydration) {
+    setPrevWorkspaceIdForHydration(workspaceId)
+    hydratedRef.current = false
+    setHydrated(false)
+  }
+
   const stateKey = useCallback(
     (s: TeamEditState) =>
       JSON.stringify(buildSaveEdges(s)) + '|' + [...s.members].sort().join(','),
@@ -112,6 +153,12 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
       hydratedRef.current = true
       baselineRef.current = nextKey
       setEditState(next)
+      // D3 fix: flip the reactive readiness flag in the SAME commit the
+      // freshly-hydrated data lands (see `hydrated`'s doc comment above) —
+      // batched with `setEditState` above into one render, so there is no
+      // intermediate frame where `disabled` is already false but the data
+      // is still stale.
+      setHydrated(true)
       return
     }
     // Background refetch: adopt the new server value only when the user has no
@@ -128,15 +175,30 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
   }, [delegation, workspace.core_team, stateKey])
 
   // ── Auto-save ───────────────────────────────────────────────────────────────
-  // The auto-save `data` is the request BODY shape ({ edges }) so the keepalive
-  // page-hide flush (PUT delegation) sends exactly the right payload.
+  // The auto-save `data` MUST include `members`, not just `edges` — D7 fix.
+  // useAutoSave's change-detection JSON-compares consecutive `data` snapshots
+  // and only debounce-fires `saveFn` when that JSON actually differs (see
+  // useAutoSave.ts's "skip if data hasn't changed" guard). Adding a member
+  // with no incident edge does not change `buildSaveEdges(editState)` at all
+  // — the edges array is byte-identical — so an edges-only body silently
+  // starves the debounce timer AND (for the same reason) the unmount flush /
+  // pagehide beacon, both of which gate on `hasPendingChanges()` doing the
+  // same JSON comparison. The result: an edgeless member added to the team
+  // never triggers ANY save path, not even the emergency ones, and just
+  // vanishes on next refetch with no autosave ever having been attempted.
+  // Including `members` here doesn't change what's PERSISTED (saveFn always
+  // read `editState.members` for the core_team PUT; that part worked) — it
+  // fixes WHEN the save fires at all.
   const saveBody = useMemo(
-    () => ({ edges: editState ? buildSaveEdges(editState) : [] }),
+    () => ({
+      members: editState?.members ?? [],
+      edges: editState ? buildSaveEdges(editState) : [],
+    }),
     [editState],
   )
 
   const saveFn = useCallback(
-    async (body: { edges: ReturnType<typeof buildSaveEdges> }) => {
+    async (body: { members: string[]; edges: ReturnType<typeof buildSaveEdges> }) => {
       if (!hydratedRef.current) return
 
       // P0 fix: persist team MEMBERSHIP before the edges PUT. The backend's
@@ -149,7 +211,7 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
       // write throws, we must NOT proceed to the edges PUT — the throw
       // propagates to useAutoSave's catch, which surfaces the error via
       // AutoSaveIndicator instead of silently dropping the edit.
-      const members = editState?.members ?? []
+      const members = body.members
       const updatedWorkspace = await updateWorkspace(workspaceId, { core_team: members })
 
       // Land the fresh core_team on every cache a consumer might read it from.
@@ -197,7 +259,7 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
           : new Error(message, { cause: err })
       }
     },
-    [workspaceId, queryClient, editState, stateKey],
+    [workspaceId, queryClient, stateKey],
   )
 
   // ── F3 — emergency-flush ordering ────────────────────────────────────────
@@ -276,7 +338,10 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
     error: saveError,
     lastSavedAt,
   } = useAutoSave(saveBody, saveFn, {
-    disabled: !hydratedRef.current || editState === null,
+    // D3 residual (2nd site) fix: `hydrated` (reactive state), not
+    // `hydratedRef.current` — see `hydrated`'s doc comment above for why a
+    // ref alone cannot correctly gate useAutoSave's re-arm logic.
+    disabled: !hydrated || editState === null,
     // F3: use the component-supplied ordered flush (core_team, then edges)
     // instead of the built-in single-URL beacon — see the comment above
     // `beaconFlush`'s definition for why.
@@ -297,10 +362,15 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
     return buildTeamGraphModel(editState, agents)
   }, [editState, agents])
 
-  // Edgeless, non-core members are NOT persisted (the PUT is edges-only; the
-  // backend derives team = core_team ∪ edge endpoints). Surface them so an agent
-  // the user added doesn't silently vanish on refetch — the fix is to connect it
-  // with a delegation edge.
+  // Edgeless, non-core members are queued for the next autosave rather than
+  // permanently unpersisted (D7 fix): saveFn's core_team PUT writes the FULL
+  // current member list unconditionally (see the ordering comment above
+  // `saveFn`), regardless of whether a member has an incident edge — it's
+  // only the edges-derived team computed by the delegation PUT that has an
+  // edges-only view. Surface these here so the transient "not saved yet"
+  // window between adding a member and the debounced autosave landing is
+  // visible, not silent — it self-clears once `workspace.core_team` (below)
+  // reflects the just-saved membership.
   const coreTeamSet = useMemo(
     () => new Set(workspace.core_team ?? []),
     [workspace.core_team],
@@ -432,9 +502,10 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
         >
           <Info size={12} weight="fill" className="shrink-0" />
           <span>
-            {unsavedNames.join(', ')} {unsavedNames.length === 1 ? 'is' : 'are'} not connected yet —
-            connect {unsavedNames.length === 1 ? 'it' : 'them'} with a delegation edge to keep{' '}
-            {unsavedNames.length === 1 ? 'it' : 'them'} on the team (membership saves with edges).
+            {unsavedNames.join(', ')} {unsavedNames.length === 1 ? 'is' : 'are'} not saved yet —{' '}
+            {unsavedNames.length === 1 ? 'it' : 'they'} will join the team on the next autosave.
+            Draw a delegation edge to{' '}
+            {unsavedNames.length === 1 ? 'it' : 'them'} to also enable delegation.
           </span>
         </div>
       )}

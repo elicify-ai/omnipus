@@ -5,6 +5,7 @@ import {
   SquaresFour,
   CalendarBlank,
   UsersThree,
+  Files,
   Tray,
   CaretDown,
 } from '@phosphor-icons/react'
@@ -30,6 +31,22 @@ export const WORKSPACE_TABS = [
   { segment: 'chat', label: 'Chat', Icon: ChatCircle },
   { segment: 'board', label: 'Tasks', Icon: SquaresFour },
   { segment: 'calendar', label: 'Calendar', Icon: CalendarBlank },
+  // Renamed Media -> Library (library-spec.md supersedes the old workspace
+  // Media tab / UUID-blob manifest surface entirely). The segment/route
+  // ('media') and its Link-based navigation are DELIBERATELY left in place
+  // rather than special-cased into a plain button here: WORKSPACE_TABS feeds
+  // both the full strip below and the compact view-switcher dropdown via one
+  // uniform `.map`, and a route-vs-button special case would fork that
+  // rendering in both places plus the SEGMENT_LABELS completeness map for a
+  // single entry. Instead, the route itself
+  // (routes/_app/workspaces.$workspaceId.media.tsx) is now a redirect stub:
+  // clicking this tab (or hitting a bookmarked /workspaces/{id}/media URL
+  // directly) opens the Library panel scoped to this workspace — the same
+  // `useUiStore.getState().openLibraryPanel(workspaceId)` call
+  // ChatControls.tsx's "Open library" button makes — then redirects back to
+  // the workspace's Chat tab so the URL never dead-ends on a page with no
+  // content of its own.
+  { segment: 'media', label: 'Library', Icon: Files },
   { segment: 'team', label: 'Team', Icon: UsersThree },
   // NOTE: workspace settings is deliberately NOT a tab — settings is chrome,
   // not a view. It's reached by clicking the workspace NAME in the top bar

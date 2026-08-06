@@ -1,0 +1,59 @@
+title: BrowserViewportFrame
+description: >
+  Client → server. Reports the live-browser panel's current render box so the
+  gateway can size the captured tab to match it.
+
+  Why this exists (operator UAT 2026-07-31): the captured tab was pinned to a
+  hardcoded 1280x720 (`--window-size` in exec_resolver.go) while the docked
+  panel is an arbitrary, resizable shape — measured ~890x1010 (portrait) in the
+  reported case. `object-fit: contain` preserves the SOURCE aspect, so the page
+  could only ever fill one dimension and the rest of the panel was letterboxed
+  black. No CSS change can fix a source whose shape is wrong; the capture
+  itself has to follow the container.
+
+  `device_scale_factor` addresses the second half of the same report — blur.
+  The managed headless Chrome renders at DPR 1, so a capture displayed larger
+  than its CSS size upscales. Sending the viewer's devicePixelRatio lets the
+  gateway render at that factor instead.
+
+  Sent on attach and (debounced) on every panel resize. The server applies the
+  new metrics and then triggers a `browser_capture_control{action: recapture}`
+  so the WebRTC encoder rebuilds its stream at the new geometry — capture
+  constraints are pinned per stream, so an already-running capture cannot
+  change shape without being re-created.
+type: object
+required:
+  - type
+  - width
+  - height
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_viewport
+  session_id:
+    type: string
+  agent_id:
+    type: string
+  width:
+    type: integer
+    minimum: 1
+    maximum: 8192
+    description: >
+      Panel render-box width in CSS pixels. Bounded to keep a malformed or
+      hostile frame from asking Chromium for an absurd allocation.
+  height:
+    type: integer
+    minimum: 1
+    maximum: 8192
+    description: Panel render-box height in CSS pixels.
+  device_scale_factor:
+    type: number
+    minimum: 1
+    maximum: 3
+    description: >
+      Viewer's devicePixelRatio, used as Chromium's deviceScaleFactor so the
+      capture is rendered at display resolution rather than upscaled. Capped at
+      3 because cost scales with the SQUARE of this value — a 2x factor is 4x
+      the pixels to render, encode and ship. Omitted means 1 (unchanged
+      behaviour).

@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
 
 export const AuthFrame = z
   .object({
@@ -15,10 +15,10 @@ export const AuthFrame = z
   })
   .strict();
 
-export const MessageFrame = z
+export const MessageFrameBase = z
   .object({
     type: z.literal("message"),
-    content: z.string().min(1).max(5242880),
+    content: z.string().max(5242880),
     session_id: z.string().min(1).max(128).optional(),
     agent_id: z.string().min(1).max(128).optional(),
     media: z.array(z.string().min(1).max(256)).max(16).optional(),
@@ -31,6 +31,10 @@ export const MessageFrame = z
     .passthrough().optional(),
   })
   .strict();
+
+export const MessageFrame = MessageFrameBase.refine((v) => ((typeof v["content"] === "string" && v["content"].length >= 1)) || ((Array.isArray(v["media"]) && v["media"].length >= 1)), {
+  message: "does not satisfy the schema's anyOf constraint",
+});
 
 export const CancelFrame = z
   .object({
@@ -110,11 +114,33 @@ export const DoneFrame = z
   })
   .strict();
 
+export const LLMError = z
+  .object({
+    code: z.enum(["media_unsupported", "provider_rejected", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "unknown"]),
+    message: z.string().min(1).max(4096),
+    retryable: z.boolean(),
+    detail: z.string().max(2048).optional(),
+  })
+  .strict();
+
+export const LLMErrorReplay = z
+  .object({
+    code: z.enum(["media_unsupported", "provider_rejected", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "unknown"]),
+    message: z.string().min(1).max(4096),
+    retryable: z.boolean(),
+  })
+  .strict();
+
 export const ErrorFrame = z
   .object({
     type: z.literal("error"),
     session_id: z.string().max(128).optional(),
     message: z.string().min(1).max(4096),
+    payload: z
+    .object({
+      llm_error: LLMError,
+    })
+    .strict().optional(),
   })
   .strict();
 
@@ -251,6 +277,16 @@ export const TaskStatusChangedFrame = z
   })
   .strict();
 
+export const TaskRunStatusFrame = z
+  .object({
+    type: z.literal("task_run_status"),
+    task_id: z.string().min(1),
+    run_id: z.string().min(1),
+    occurrence_ms: z.number().int().optional(),
+    status: z.enum(["in_progress", "done", "failed", "skipped"]),
+  })
+  .strict();
+
 export const ReplayMessageFrame = z
   .object({
     type: z.literal("replay_message"),
@@ -262,7 +298,6 @@ export const ReplayMessageFrame = z
     agent_id: z.string().optional(),
     model: z.string().max(256).optional(),
     turn_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -273,16 +308,11 @@ export const ReplayErrorFrame = z
     entry_id: z.string(),
     timestamp: z.string(),
     kind: z.enum(["rate_limit", "error"]),
-    message: z.string(),
+    message: z.string().min(1).max(4096),
     agent_id: z.string().optional(),
     payload: z
     .object({
-      retry_after_seconds: z.number().optional(),
-      policy_rule: z.string().optional(),
-      scope: z.string().optional(),
-      resource: z.string().optional(),
-      tool: z.string().optional(),
-      stage: z.string().optional(),
+      llm_error: LLMErrorReplay,
     })
     .strict().optional(),
   })
@@ -472,6 +502,8 @@ export const BrowserInputFrame = z
     kind: z.enum(["mouse_move", "mouse_down", "mouse_up", "wheel", "key_down", "key_up", "text", "navigate", "navigate_back", "reload"]),
     x: z.number().optional(),
     y: z.number().optional(),
+    capture_width: z.number().min(1).max(16384).optional(),
+    capture_height: z.number().min(1).max(16384).optional(),
     button: z.enum(["none", "left", "middle", "right", "back", "forward"]).optional(),
     delta_x: z.number().optional(),
     delta_y: z.number().optional(),
@@ -522,6 +554,17 @@ export const BrowserStatusFrame = z
     controlled_by_other: z.boolean().optional(),
     control_only: z.boolean().optional(),
     session_id: z.string().optional(),
+  })
+  .strict();
+
+export const BrowserViewportFrame = z
+  .object({
+    type: z.literal("browser_viewport"),
+    session_id: z.string().optional(),
+    agent_id: z.string().optional(),
+    width: z.number().int().min(1).max(8192),
+    height: z.number().int().min(1).max(8192),
+    device_scale_factor: z.number().min(1).max(3).optional(),
   })
   .strict();
 
@@ -606,6 +649,8 @@ export const BrowserCaptureControlFrame = z
     type: z.literal("browser_capture_control"),
     action: z.enum(["recapture", "shutdown", "ping"]),
     reason: z.string().max(512).optional(),
+    expected_width: z.number().int().min(1).max(16384).optional(),
+    expected_height: z.number().int().min(1).max(16384).optional(),
   })
   .strict();
 
@@ -671,11 +716,23 @@ export const JudgeVerdictFrame = z
   })
   .strict();
 
+export const ErrorPayload = z
+  .object({
+    llm_error: LLMError,
+  })
+  .strict();
+
+export const ReplayErrorPayload = z
+  .object({
+    llm_error: LLMErrorReplay,
+  })
+  .strict();
+
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
   AuthFrame,
-  MessageFrame,
+  MessageFrameBase,
   CancelFrame,
   PingFrame,
   PongFrame,
@@ -692,6 +749,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   SubagentMessageFrame,
   SubagentStateFrame,
   TaskStatusChangedFrame,
+  TaskRunStatusFrame,
   ReplayMessageFrame,
   ReplayErrorFrame,
   RateLimitFrame,
@@ -714,6 +772,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   BrowserDetachFrame,
   BrowserScreencastFrame,
   BrowserStatusFrame,
+  BrowserViewportFrame,
   BrowserTabActionFrame,
   BrowserTabsFrame,
   BrowserWebRTCOfferFrame,

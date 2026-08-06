@@ -68,15 +68,24 @@ function renderBanner() {
   )
 }
 
-// GodModeStatus = { enabled, available, supported }
-const STATE_OFF = { enabled: false, available: true, supported: true }
-const STATE_ON = { enabled: true, available: true, supported: true }
-// Build supports god mode, but this boot was never authorized (no
-// --allow-god-mode, no prior UI-enable + restart). The toggle must still be
-// clickable — this is the state the UI-driven enablement flow starts from.
-const STATE_SUPPORTED_UNAVAILABLE = { enabled: false, available: false, supported: true }
+// GodModeStatus = { enabled, available, supported, persisted }
+const STATE_OFF = { enabled: false, available: true, supported: true, persisted: false }
+const STATE_ON = { enabled: true, available: true, supported: true, persisted: true }
+// S0: fresh install, never armed. Build supports god mode, but this boot was
+// never authorized (no --allow-god-mode, no prior UI-enable + restart), and
+// nothing has ever been persisted. The toggle must still be clickable — this
+// is the state the UI-driven enablement flow starts from — but it must NOT
+// show the "restart to activate" note (D19): that note implies something WAS
+// armed, which is false here.
+const STATE_S0_NEVER_ARMED = { enabled: false, available: false, supported: true, persisted: false }
+// S1: armed via the UI, pending restart. The config write succeeded
+// (persisted=true) but this boot's authorization is frozen, so the override
+// has no live effect yet (available=false, enabled=false). D1: the switch
+// must render as ON/dangerous (bound to `persisted`, not `enabled`) and offer
+// a disarm affordance, or an operator can never turn it back off from the UI.
+const STATE_S1_ARMED_PENDING = { enabled: false, available: false, supported: true, persisted: true }
 // nogodmode build — god mode does not exist in this binary at all.
-const STATE_COMPILED_OUT = { enabled: false, available: false, supported: false }
+const STATE_COMPILED_OUT = { enabled: false, available: false, supported: false, persisted: false }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -131,14 +140,74 @@ describe('GodModeControl', () => {
     })
   })
 
-  it('is clickable when supported but not yet available (UI-driven enablement)', async () => {
-    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_SUPPORTED_UNAVAILABLE)
+  it('is clickable when supported but not yet available, and shows NO restart note when never armed (S0)', async () => {
+    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_S0_NEVER_ARMED)
+    renderControl()
+    await waitFor(() => {
+      expect(screen.getByTestId('god-mode-toggle')).toBeEnabled()
+    })
+    // D19: a fresh, never-touched install must not falsely claim god-mode is
+    // "authorized but not yet active" — nothing has ever been armed.
+    expect(screen.queryByTestId('god-mode-restart-note')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('god-mode-unavailable-note')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('god-mode-cancel-authorization')).not.toBeInTheDocument()
+    expect(screen.getByTestId('god-mode-toggle')).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('shows the restart note AND a disarm affordance when armed via the UI but not yet available (S1)', async () => {
+    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_S1_ARMED_PENDING)
     renderControl()
     await waitFor(() => {
       expect(screen.getByTestId('god-mode-restart-note')).toBeInTheDocument()
     })
+    // D1: the switch reflects the persisted (armed) intent, not the inert
+    // `enabled` flag — otherwise an armed-pending switch looks OFF.
+    expect(screen.getByTestId('god-mode-toggle')).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByTestId('god-mode-toggle')).toBeEnabled()
     expect(screen.queryByTestId('god-mode-unavailable-note')).not.toBeInTheDocument()
+    expect(screen.getByTestId('god-mode-cancel-authorization')).toBeInTheDocument()
+  })
+
+  it('D1: clicking the main toggle from S1 (armed/pending) disarms — emits {enabled:false}, not a re-arm', async () => {
+    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_S1_ARMED_PENDING)
+    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+    vi.mocked(api.setGodMode).mockResolvedValue({ enabled: false, restart_required: false })
+
+    renderControl()
+    await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
+
+    // Before the fix, requestToggle computed `!enabled` — since `enabled` is
+    // always false while `available` is false, this click would have staged
+    // `true` again (a re-arm), even though the switch visually reads as ON.
+    fireEvent.click(screen.getByTestId('god-mode-toggle'))
+    await waitFor(() => screen.getByTestId('reauth-password-input'))
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(api.setGodMode).toHaveBeenCalledWith(false, 'reauth_tok')
+    })
+  })
+
+  it('S1: "Cancel authorization" disarms via the existing setGodMode(false, token) re-auth flow', async () => {
+    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_S1_ARMED_PENDING)
+    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+    vi.mocked(api.setGodMode).mockResolvedValue({ enabled: false, restart_required: false })
+
+    renderControl()
+    await waitFor(() => screen.getByTestId('god-mode-cancel-authorization'))
+
+    fireEvent.click(screen.getByTestId('god-mode-cancel-authorization'))
+    await waitFor(() => screen.getByTestId('reauth-password-input'))
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(api.setGodMode).toHaveBeenCalledWith(false, 'reauth_tok')
+    })
+    // No new backend endpoint — this replays the exact same setGodMode call
+    // the main toggle would, just from a more discoverable affordance.
+    expect(api.setGodMode).toHaveBeenCalledTimes(1)
   })
 
   it('disables the toggle and shows the compiled-out note on a nogodmode build', async () => {
@@ -186,7 +255,7 @@ describe('GodModeControl', () => {
   })
 
   it('opens GatewayRestartModal when enabling returns restart_required=true', async () => {
-    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_SUPPORTED_UNAVAILABLE)
+    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_S0_NEVER_ARMED)
     vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
     vi.mocked(api.setGodMode).mockResolvedValue({ enabled: true, restart_required: true })
 

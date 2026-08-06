@@ -55,11 +55,12 @@ import { cn, initialOf } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { IconRenderer } from '@/components/shared/IconRenderer'
-import { BrowserLiveWsConnection } from '@/lib/browserLiveWs'
+import { BrowserLiveWsConnection, translateBrowserErrorMessage } from '@/lib/browserLiveWs'
 import { BrowserWebRTCSession } from '@/lib/browserWebRTC'
 import {
   computeCropRect,
   computeModifiers,
+  computeObjectContainRect,
   framePixelToDeviceCoords,
   isPrintableKey,
   mapClientToDevice,
@@ -129,6 +130,44 @@ export interface BrowserLiveViewProps {
    * may know this before the track metadata is fully available.
    */
   hasAudio?: boolean
+  /**
+   * BUG 1 fix (pop-out "tiny letterboxed video", live UAT re-run) — `false`
+   * (the default) keeps the historical intrinsic-size-capped layout
+   * (`w-auto h-auto max-w-full max-h-full`): the media element never grows
+   * past its own native resolution, only shrinks to fit. That's correct for
+   * the docked panel (BrowserLivePanel.tsx), whose container is usually
+   * close to the native resolution already, and — more importantly —
+   * matches the "container tightly wraps the visible content, no
+   * letterboxing" invariant the annotate-a-region crop math
+   * (containerRef.getBoundingClientRect() used directly, see
+   * finalizeSelection/handlePointerDown's annotate branch) depends on.
+   *
+   * `true` makes the media element FILL its container (`w-full h-full
+   * object-contain`), scaling UP past intrinsic size when the container is
+   * bigger — this is what the fullscreen pop-out route
+   * (routes/_app/browser-live.tsx) needs: a 1600×880 window showing a
+   * 639×316 video was ~90% wasted black space under the capped layout.
+   * Filling introduces real letterbox/pillarbox bars whenever the
+   * container's aspect ratio doesn't match the content's, so every
+   * coordinate-mapping call site routes its raw bounding rect through
+   * `computeObjectContainRect` (browserLiveCoords.ts) first — see
+   * `mapPointerToDeviceCoords` below — to keep pointer/wheel input landing
+   * on the right device pixel regardless.
+   *
+   * Safe to combine with `canAnnotate` as of 2026-07-31. It previously was
+   * NOT: annotate's crop math (mapClientToFramePixels / computeCropRect) read
+   * `containerRef.getBoundingClientRect()` directly with no letterbox
+   * correction, so pairing the two misplaced the selection whenever bars were
+   * showing. `finalizeSelection` now routes that rect through
+   * `computeObjectContainRect` first — the same correction the pointer/wheel
+   * path always applied — which removes the restriction.
+   *
+   * The docked panel (BrowserLivePanel) now passes BOTH: without
+   * `fillContainer` it rendered the page at intrinsic size inside a much
+   * larger panel (operator UAT measured ~695x343 in ~890x1010), too small to
+   * interact with.
+   */
+  fillContainer?: boolean
 }
 
 /** ADR-040 D2/D6 — the three (+ one) mutually-exclusive visual/control states. */
@@ -175,6 +214,34 @@ function computeDriveMode(state: {
   return 'idle'
 }
 
+/**
+ * Fault 3 fix (docs/internal/browser-viewport-input-rootcause-2026-07-31.md)
+ * — builds the `capture_width`/`capture_height` keys for a coordinate-
+ * carrying `BrowserInputFrame`, or an empty object in JPEG mode. A plain
+ * `capture_width: undefined` field would survive property-existence checks
+ * (and any consumer reading the object before it hits `JSON.stringify`,
+ * which is the only place `undefined` values actually vanish) — spreading
+ * this return value keeps the keys genuinely absent, not merely undefined,
+ * matching the legacy JPEG-mode wire shape exactly.
+ */
+// Toolbar icon buttons share ONE shape (operator direction, 2026-08-04: "the
+// buttons should be icons ... it needs to be flatter"). Back, refresh, annotate,
+// mute and the degraded-retry all render as a bare 32px glyph with no border and
+// no fill — the frames and pill backgrounds made a row of five controls read as
+// five competing objects. Hover is the only chrome; active state is carried by
+// COLOUR PLUS `aria-pressed`, never colour alone. The coarse-pointer floor keeps
+// the WCAG 2.5.8 target even though the visual box shrank.
+const TOOLBAR_ICON_BTN =
+  'shrink-0 flex h-8 w-8 items-center justify-center rounded-md transition-colors ' +
+  'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] ' +
+  'disabled:cursor-not-allowed disabled:opacity-40 ' +
+  'pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]'
+
+function captureDimsFields(dims: { captureWidth?: number; captureHeight?: number }): { capture_width?: number; capture_height?: number } {
+  if (dims.captureWidth === undefined || dims.captureHeight === undefined) return {}
+  return { capture_width: dims.captureWidth, capture_height: dims.captureHeight }
+}
+
 // The visible border/frame around the browser panel is REMOVED per operator
 // direction. The header chip (agent identity + drive-status) is the sole
 // driving-state signal. The data-visual-state attribute on the (invisible)
@@ -186,46 +253,19 @@ function computeDriveMode(state: {
 // connection lifecycle, not anything the backend ever sends as a status.
 type LiveStatus = BrowserStatusFrame['state'] | 'connecting' | 'disconnected'
 
-// UAT finding FE-7: the backend surfaces raw Go error strings verbatim on a
-// terminal browser_status{state:'error'} frame — e.g.
-// `browser input failed: browser live: navigate blocked: ... SSRF: blocked
-// cloud metadata endpoint 169.254.169.254` or Go's url.Parse format
-// `parse "...": invalid character " " in host name`. Map the two known,
-// user-triggerable cases to plain language; anything unrecognized passes
-// through unchanged rather than risk hiding real diagnostic information the
-// existing doc comment above (already-controlled, take-control-disabled,
-// no-manager-for-agent, live-view-disabled, malformed control) already
-// treats as reasonably readable.
-function friendlyBrowserStatusMessage(raw: string): string {
-  // Order matters: the backend wraps EVERY navigate failure — a Go url.Parse
-  // error, an ordinary DNS/network failure, AND an actual SSRF policy block
-  // — identically as "... navigate blocked: ...", so classification must run
-  // from MOST specific to LEAST specific. Reviewer finding F2: the old
-  // `navigate blocked|SSRF` catch-all also matched the ordinary "domain
-  // doesn't resolve / typo / site down" path — pkg/security/ssrf.go's
-  // resolver returns e.g. "SSRF: DNS resolution failed for <host>" or
-  // "SSRF: no addresses found for <host>" for that path (string-prefixed
-  // "SSRF:" because the resolver lives in the SSRF-guarded dial path, not
-  // because the address was actually policy-blocked) — so a mistyped or
-  // unreachable URL was wrongly told it was "blocked for security reasons".
-  // The invalid-URL and unreachable branches below are checked BEFORE the
-  // real-block branch, and the real-block branch is narrowed to the actual
-  // policy-deny messages (cloud metadata / private IP range / explicit
-  // "SSRF: blocked ...") rather than any string merely containing "SSRF".
-  if (/invalid character .* in host name|parse "[^"]*":/i.test(raw)) {
-    console.debug('[browser] invalid URL:', raw)
-    return "That doesn't look like a valid web address."
-  }
-  if (/DNS resolution failed|no addresses found|too many redirects|cannot extract host|could not resolve/i.test(raw)) {
-    console.debug('[browser] address unreachable:', raw)
-    return "That address couldn't be reached — check the URL and try again."
-  }
-  if (/blocked cloud metadata|blocked private IP|blocked .* range|SSRF: blocked/i.test(raw)) {
-    console.debug('[browser] navigation blocked:', raw)
-    return 'That address is blocked for security reasons.'
-  }
-  return raw
-}
+// UAT finding FE-7 / D5: the backend surfaces raw Go error strings verbatim
+// on a terminal browser_status{state:'error'} frame — e.g. `browser input
+// failed: browser live: navigate blocked: ... SSRF: blocked cloud metadata
+// endpoint 169.254.169.254` or Go's url.Parse format `parse "...": invalid
+// character " " in host name` — as well as on this connection's own `error`
+// ErrorFrames (D5 Site 2, handled in browserLiveWs.ts's onmessage). The
+// translation now lives in browserLiveWs.ts as `translateBrowserErrorMessage`
+// (moved from here) so BOTH leak sites share one function and can never
+// drift into different copy for the identical underlying string; see its
+// doc comment for the full pattern list and the deliberately-excluded
+// already-readable sessionErrorStatus() messages (already-controlled,
+// take-control-disabled, no-manager-for-agent, live-view-disabled, malformed
+// control).
 
 // fix-wave B (HIGH) — the `BrowserWebRTCSession.onFallback` reason strings
 // that mean "WebRTC was never available here at all" (arrive via
@@ -238,6 +278,56 @@ function friendlyBrowserStatusMessage(raw: string): string {
 // IS surfaced — an explicit gateway-reported error is a runtime failure, not
 // a capability gate).
 const WEBRTC_CAPABILITY_GATE_REASONS = new Set(['disabled', 'not_capable', 'lite_build'])
+
+// FIRST_FRAME_TIMEOUT_MS bounds how long the panel shows "Waiting for the first
+// frame…" before admitting failure. Generous on purpose: a cold Chrome launch
+// plus WebRTC negotiation can legitimately take several seconds on a small box,
+// and a premature error on a session that was about to work is worse than a few
+// extra seconds of spinner. What is NOT acceptable is waiting forever — see
+// firstFrameTimedOut for the silent-failure this bounds.
+const FIRST_FRAME_TIMEOUT_MS = 15_000
+
+// VIEWPORT_SETTLE_MS is how long a new panel size must hold still before it is
+// committed to the server. Each commit REBUILDS the capture stream (tabCapture
+// constraints are pinned per stream), so an intermediate size captured
+// mid-drag or mid-animation costs a visible stall for a geometry that is
+// already obsolete. Short enough to feel immediate after a deliberate resize,
+// long enough to swallow an animation's intermediate frames.
+const VIEWPORT_SETTLE_MS = 250
+
+// MOVE_FLUSH_MS paces coalesced pointer-move sends. Chosen to sit under the
+// server's maxInputEventsPerSecond (50/s, pkg/tools/browser/live.go) with
+// headroom for the down/up/wheel events that share that budget: at ~16ms a
+// sustained drag alone would ride the cap and start losing events to the
+// limiter. Not requestAnimationFrame — see scheduleInputFlush.
+const MOVE_FLUSH_MS = 25
+
+// textFieldHasFocus reports whether a text-entry element currently holds focus,
+// meaning any container resize right now is probably the on-screen keyboard or
+// an AutoFill accessory bar rather than something the user asked for.
+//
+// Scope is DOCUMENT-WIDE, not the frame's subtree: the address bar is a sibling
+// of the frame's body wrapper, and the chat composer on the other side of the
+// app opens the same accessory bar and shrinks the same container. `frameEl` is
+// excluded because the frame itself is focusable (tabIndex=0) and focusing it is
+// how normal driving begins — that must never suppress a real resize.
+//
+// Reads live focus rather than a stored flag deliberately: a blur that never
+// fires (element unmounted, window deactivated) would wedge a flag on forever
+// and suppress every subsequent resize.
+function textFieldHasFocus(frameEl: Element | null): boolean {
+  const active = document.activeElement
+  if (!active || active === frameEl) return false
+  const tag = active.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || (active as HTMLElement).isContentEditable === true
+}
+
+// BLANK_TAB_URL is the placeholder a not-yet-navigated tab reports. The address
+// bar must not display it: showing "about:blank" to a user who is looking at the
+// Omnipus start page is noise, and it would also overwrite a url the user is
+// about to submit on a fresh tab. Kept in sync with pkg/tools/browser's
+// BlankPageURL.
+const BLANK_TAB_URL = 'about:blank'
 
 /**
  * ADR-041 D4 — a tab's display label: prefer `title`, fall back to the
@@ -338,6 +428,7 @@ export function BrowserLiveView({
   // internal WebRTC signaling result instead of forcing JPEG-forever.
   mediaStream: mediaStreamProp = null,
   hasAudio: hasAudioProp = false,
+  fillContainer = false,
 }: BrowserLiveViewProps) {
   const wsRef = useRef<BrowserLiveWsConnection | null>(null)
   // WebRTC build (W2-B) — the viewer-side PC state machine (browserWebRTC.ts),
@@ -362,6 +453,13 @@ export function BrowserLiveView({
   // somewhere useful instead of on a container that just stopped capturing
   // keys (see releaseWheel below).
   const addressBarRef = useRef<HTMLInputElement | null>(null)
+  // urlBarEditingRef guards the address bar against being overwritten while the
+  // user is mid-typing. The bar now follows the ACTIVE TAB's url (see the
+  // effect below), and without this guard a tab/url update arriving between
+  // keystrokes would yank a half-typed address away — the "URL bar clears
+  // itself" symptom from the 2026-08-03 recordings. Set on focus, cleared on
+  // blur and on submit.
+  const urlBarEditingRef = useRef(false)
   const frameRef = useRef<BrowserScreencastFrame | null>(null)
   const controllingRef = useRef(false)
   // ── ADR-040 D2 implicit control model ───────────────────────────────────
@@ -448,8 +546,35 @@ export function BrowserLiveView({
   // this can flood the server's input rate limiter at is one frame's worth
   // of paint cadence — never the native pointermove rate (60-120Hz+, higher
   // on gaming mice/some trackpads).
-  const pendingMoveRef = useRef<{ x: number; y: number; modifiers: number } | null>(null)
-  const moveFlushScheduledRef = useRef(false)
+  // captureWidth/captureHeight travel with x/y (not re-read at flush time) —
+  // see handlePointerMove's own comment on why the capture dims must be the
+  // SAME ones the position was mapped against, not whatever is live when the
+  // coalesced flush eventually fires.
+  const pendingMoveRef = useRef<{ x: number; y: number; modifiers: number; captureWidth?: number; captureHeight?: number } | null>(null)
+  // Wheel is coalesced on the SAME pacer as moves, with deltas ACCUMULATED
+  // (position = latest). Un-paced wheel was the second half of the operator's
+  // "clicks work only sometimes": a trackpad/momentum scroll emits wheel at the
+  // display refresh rate, so one gesture alone could exceed the server's
+  // per-second input budget and the click that followed it was silently
+  // dropped by the limiter. Summing deltas preserves total scroll distance, so
+  // pacing costs resolution in time, never travel.
+  const pendingWheelRef = useRef<{
+    x: number
+    y: number
+    modifiers: number
+    deltaX: number
+    deltaY: number
+    captureWidth?: number
+    captureHeight?: number
+  } | null>(null)
+  // Guards re-scheduling of the shared move+wheel flush, and OWNS the timer
+  // handle. Storing the id is what makes cancellation real: clearing the flag
+  // alone left the already-armed callback running, so the next move would arm a
+  // second, overlapping timer and the stale one would flush it early — sends
+  // bursting faster than the pacer's own cadence, straight into the server's
+  // rate limiter. Mirrors settleRef's handle-owning pattern.
+  const inputFlushScheduledRef = useRef(false)
+  const inputFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [frame, setFrame] = useState<BrowserScreencastFrame | null>(null)
   // WebRTC build (W2-B) — this component's OWN signaling result (populated
@@ -459,6 +584,12 @@ export function BrowserLiveView({
   // WS means the PC's fate is unknown/stale either way — JPEG is always
   // safe to fall back to, the machine is stopped and re-armed on reconnect).
   const [webrtcStream, setWebrtcStream] = useState<MediaStream | null>(null)
+  // Persistent degraded indicator (review finding). Before this the ONLY
+  // signal that live video had fallen back to still-picture mode was a toast
+  // that auto-dismissed after 4s — look away for five seconds and a broken
+  // video path was indistinguishable from a working one, since the <img> sink
+  // renders identically either way. `null` = not degraded.
+  const [degradedReason, setDegradedReason] = useState<string | null>(null)
   const [webrtcHasAudio, setWebrtcHasAudio] = useState(false)
   // WebRTC build (W1-F) — starts MUTED (autoplay-safe: browsers block
   // autoplaying audio without a prior user gesture; the video itself still
@@ -506,6 +637,7 @@ export function BrowserLiveView({
   // ── Omnibox (ADR-039 D-A2, ADR-040 D5 — always visible) ──────────────────
   const [urlInput, setUrlInput] = useState('')
 
+
   // ── Tab strip (ADR-041 D4) — the latest known tab list + active index,
   // straight off the most recent `browser_tabs` frame. `null` until the
   // first one arrives (the strip stays unrendered — never shown empty).
@@ -522,6 +654,27 @@ export function BrowserLiveView({
   // would also be acceptable — this "reconcile from the next frame" choice
   // is a local implementation decision, not something the ADR mandates.)
   const [tabState, setTabState] = useState<{ tabs: BrowserTabsFrame['tabs']; activeIndex: number } | null>(null)
+  // Keep the address bar in sync with the ACTIVE TAB's real url.
+  //
+  // Before this, setUrlInput was called in exactly one place: the omnibox's own
+  // submit handler. So the bar only ever showed what the USER typed, and every
+  // other navigation left it stale — Back and Refresh (operator report:
+  // "back button and refresh button do not work"), agent-driven navigation, and
+  // ordinary in-page link clicks. Measured on v53: after pressing Back the page
+  // and tab title correctly moved to example.com while the bar still read
+  // en.wikipedia.org/wiki/Octopus, which is why the buttons LOOKED broken —
+  // they had in fact navigated.
+  //
+  // tabState is the same source of truth the tab strip renders from (ADR-041
+  // D4), so the bar can never disagree with the strip again.
+  useEffect(() => {
+    if (urlBarEditingRef.current) return // never clobber a half-typed address
+    const active = tabState?.tabs?.[tabState.activeIndex]
+    const url = active?.url
+    if (typeof url === 'string' && url !== '' && url !== BLANK_TAB_URL) {
+      setUrlInput(url)
+    }
+  }, [tabState])
 
   // ── Annotate mode (ADR-039 D-B1/B2) — container-relative CSS coords for
   // the live selection-box overlay; frozen (not cleared) once a selection
@@ -552,7 +705,38 @@ export function BrowserLiveView({
   // (the "error while controlling" case below). This is what actually
   // renders (both before and after the first frame arrives) — see the
   // "!frame" branch and the persistent error strip below.
-  const displayError = connError ?? (statusIsError ? statusMessage ?? 'The live browser session reported an error.' : null)
+  // firstFrameTimedOut (2026-08-03): the connection can be fully established —
+  // WS connected, video track live and unmuted, ZERO console errors — while no
+  // frame ever arrives, because the capture bound to a tab that is no longer
+  // the one being shown. Live-measured on UAT: the panel sat on "Waiting for
+  // the first frame…" and then fell to indistinguishable black, with nothing
+  // anywhere telling the user it had failed. Silence is the bug: without a
+  // deadline this state is visually identical to "still loading" forever.
+  //
+  // Only armed once `connected` is true — before that the honest message is
+  // "Connecting…", and a slow connect is not a first-frame failure.
+  const [firstFrameTimedOut, setFirstFrameTimedOut] = useState(false)
+  useEffect(() => {
+    if (frame) {
+      // A frame arrived (possibly after a previous timeout — a recapture can
+      // recover): clear the deadline state so the error does not stick.
+      setFirstFrameTimedOut(false)
+      return
+    }
+    if (!connected) {
+      setFirstFrameTimedOut(false)
+      return
+    }
+    const timer = setTimeout(() => setFirstFrameTimedOut(true), FIRST_FRAME_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [frame, connected])
+
+  const displayError =
+    connError ??
+    (statusIsError ? statusMessage ?? 'The live browser session reported an error.' : null) ??
+    (firstFrameTimedOut && !frame
+      ? 'No video received from the browser. The capture may be bound to a tab that is no longer active — try switching tabs or reloading the page.'
+      : null)
 
   // ── ADR-040 D2 — "agent working" signal ───────────────────────────────────
   // Read directly from the per-session bucket (`sessionsById[sessionId]`),
@@ -825,20 +1009,30 @@ export function BrowserLiveView({
   useEffect(() => {
     const machine = new BrowserWebRTCSession()
     webrtcRef.current = machine
-    machine.onStream((stream) => setWebrtcStream(stream))
+    machine.onStream((stream) => {
+      setWebrtcStream(stream)
+      setDegradedReason(null) // recovered
+    })
     machine.onInputChannelOpen(() => {
       inputChannelOpenRef.current = true
     })
     machine.onInputChannelClose(() => {
       inputChannelOpenRef.current = false
     })
-    // ADR-047 fallback contract: JPEG never stopped running underneath (it's
-    // a wholly separate WS path, untouched here) — this just drops the video
-    // sink back to null so the <img> sink takes over on the next render, and
+    // ADR-047 fallback contract: the JPEG path is a wholly separate WS path,
+    // untouched here, and stays AVAILABLE — but it is not unconditionally
+    // running. The server pauses the CDP screencast while every JPEG viewer is
+    // also covered by live WebRTC, and resumes it the moment that stops being
+    // true, including on a mid-session relay-side eviction. (An earlier
+    // revision of this comment said JPEG "never stopped running underneath";
+    // that became false once the pause landed.) This handler just drops the
+    // video sink back to null so the <img> sink takes over on the next
+    // render, and
     // clears the DC-open flag so dispatchInput routes back to WS immediately
     // rather than waiting for a stale readyState check to catch up.
     machine.onFallback((reason) => {
       setWebrtcStream(null)
+      setDegradedReason(reason)
       setWebrtcHasAudio(false)
       inputChannelOpenRef.current = false
       // fix-wave B (HIGH): the reason used to be discarded entirely — a
@@ -869,10 +1063,26 @@ export function BrowserLiveView({
         // suppressed. Every OTHER reason, and 'answer-timeout' once the
         // stream HAD connected before, still toasts — that's a genuine
         // degradation of a previously-working stream.
-        const coldStartAnswerTimeout = reason === 'answer-timeout' && !machine.hasConnectedOnce
+        // Cold-start suppression is correct for the FIRST attempt (a slow
+        // capture start racing the timeout, which then connects fine on
+        // retry) — but suppressing it for EVERY retry meant a total WebRTC
+        // failure produced no user-facing explanation at all, ever: the panel
+        // just silently looked like plain JPEG (review finding). The
+        // persistent degraded badge now covers the steady state; this keeps
+        // the toast suppressed only while a cold start is still plausibly in
+        // progress, i.e. the first attempt.
+        const coldStartAnswerTimeout =
+          reason === 'answer-timeout' && !machine.hasConnectedOnce && machine.retryAttempts === 0
         if (!coldStartAnswerTimeout) {
           useUiStore.getState().addToast({
-            message: 'Live video degraded to picture mode — audio unavailable.',
+            // The reason is carried IN the toast, not just console.warn'd
+            // above (2026-07-30 UAT): the operator reproduces this on an
+            // iPad, where opening a JS console is impractical, so a bare
+            // "degraded" message left the actual trigger — the one thing
+            // needed to tell an ICE drop from a gateway-side unavailability
+            // from an answer timeout — unobservable on the only device that
+            // reproduces it.
+            message: `Live video degraded to picture mode — audio unavailable. (${reason})`,
             variant: 'warning',
           })
         }
@@ -928,7 +1138,7 @@ export function BrowserLiveView({
         }
         // FE-7: only error-state messages get the raw-Go-string treatment —
         // other states' messages (if ever present) are left alone.
-        setStatusMessage(f.state === 'error' && f.message ? friendlyBrowserStatusMessage(f.message) : f.message ?? null)
+        setStatusMessage(f.state === 'error' && f.message ? translateBrowserErrorMessage(f.message) : f.message ?? null)
         setStatusIsError(f.state === 'error')
         setStatusState((prev) => (f.state === 'error' && prev === 'controlling' ? prev : f.state))
         // FE-6: only overwrite `controlledByOther` when the server actually
@@ -1071,11 +1281,31 @@ export function BrowserLiveView({
   // (activeFrameDims's fallback branch reads the identical frameRef fields),
   // preserving byte-identical JPEG-mode behavior.
   const mapPointerToDeviceCoords = useCallback(
-    (clientX: number, clientY: number, rect: RectLike): DeviceCoords | null => {
+    (clientX: number, clientY: number, rect: RectLike): (DeviceCoords & { captureWidth?: number; captureHeight?: number }) | null => {
       const dims = activeFrameDims()
       if (!dims) return null
-      if (dims.video) return mapClientToDeviceVideo(clientX, clientY, rect, dims.width, dims.height)
-      return mapClientToDevice(clientX, clientY, rect, dims.width, dims.height, dims.pageScale)
+      // BUG 1 fix — `fillContainer` layouts (the pop-out route) let the media
+      // element grow past its intrinsic size via `object-fit: contain`,
+      // which can letterbox/pillarbox within `rect` whenever the container's
+      // aspect ratio doesn't match the content's. `computeObjectContainRect`
+      // is a no-op when they already match (the docked panel's historical
+      // layout, and most fillContainer frames too) — safe to route through
+      // unconditionally rather than branching on the `fillContainer` prop
+      // here, so this stays correct even if a future container size doesn't
+      // match its content for some other reason.
+      const contentRect = computeObjectContainRect(rect, dims.width, dims.height)
+      const coords = dims.video
+        ? mapClientToDeviceVideo(clientX, clientY, contentRect, dims.width, dims.height)
+        : mapClientToDevice(clientX, clientY, contentRect, dims.width, dims.height, dims.pageScale)
+      if (!coords) return null
+      // Fault 3 fix (docs/internal/browser-viewport-input-rootcause-2026-07-31.md):
+      // the video sink's intrinsic size can silently drift from the page's CSS
+      // pixel space (measured 319x158 vs ~1280 page — the encoder downscales
+      // under load), which broke the server's old "videoWidth == page pixels"
+      // assumption. Report the SAME `dims` this call just mapped into, so the
+      // server can rescale instead of assuming. JPEG mode omits both — its
+      // page_scale handling already produces CSS pixels, nothing to correct.
+      return dims.video ? { ...coords, captureWidth: dims.width, captureHeight: dims.height } : coords
     },
     [activeFrameDims],
   )
@@ -1135,6 +1365,323 @@ export function BrowserLiveView({
     [mediaStream],
   )
 
+  // ── Adaptive viewport (2026-07-31 operator UAT) ──────────────────────────
+  // Report the panel's render box so the backend can size the CAPTURED TAB to
+  // match. Before this, the tab was pinned to a hardcoded 1280x720 while this
+  // panel is an arbitrary, resizable shape (measured ~890x1010, portrait), and
+  // since `object-fit: contain` preserves the SOURCE aspect the page could
+  // fill only one dimension — the rest was letterboxed black and too small to
+  // interact with. devicePixelRatio is sent as Chromium's deviceScaleFactor,
+  // which fixes the same report's blur (headless Chrome renders at DPR 1, so
+  // anything displayed larger upscales).
+  //
+  // Debounced hard (400ms) and gated on a meaningful delta, because the
+  // backend responds by REBUILDING the capture stream — tabCapture constraints
+  // are pinned per stream and cannot be renegotiated on a running track — and
+  // each rebuild is a brief visible blip. Sending per resize event would make
+  // dragging a window a strobe.
+  const lastSentViewportRef = useRef<{ w: number; h: number; dpr: number } | null>(null)
+  // settleRef holds the pending "has the size stopped changing?" check — see
+  // the SETTLE CHECK in push() below.
+  const settleRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return undefined
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    // Cold-start race (live UAT 2026-07-31, fresh machine): the attach-time
+    // viewport frame can reach the gateway BEFORE the live view exists —
+    // handleViewport drops it (applied=false) — and with the panel size never
+    // changing again, the sub-threshold gate below suppressed every future
+    // send, pinning the capture to launch geometry forever. This effect
+    // re-runs when `frame` flips non-null (media now exists server-side), so
+    // clearing the sent-marker here forces exactly one re-send at a moment
+    // the server can actually apply it. Worst case is one duplicate frame,
+    // which the server-side throttle absorbs.
+    lastSentViewportRef.current = null
+
+    const push = () => {
+      // TRANSIENT-RESIZE GUARD (operator video 0804, 11 unintended rebuilds).
+      //
+      // Focusing the address bar makes Safari open its AutoFill accessory bar,
+      // which shrinks the browser viewport — and therefore this container — by
+      // ~50px. Measured in the recording: focused 644px, blurred 694px, focused
+      // 644px again. Each transition pushed a viewport and forced a full
+      // capture rebuild, which the operator sees as the panel resizing and
+      // stalling for no reason they initiated.
+      //
+      // The container really did change size, so the ResizeObserver is not
+      // wrong — what is wrong is treating a transient, focus-driven change like
+      // a deliberate one. While focus sits in one of the panel's own inputs
+      // (address bar, annotate field), hold the current geometry: the shrink
+      // lasts exactly as long as the accessory bar does, and re-pushing on blur
+      // would just replay the same rebuild in reverse.
+      //
+      // Deliberately checks LIVE focus rather than a stored flag: a blur that
+      // never fires (element unmounted, window lost focus) would otherwise
+      // wedge the guard on permanently, suppressing real resizes forever.
+      //
+      // This DEFERS the resize, it does not discard it. On a desktop browser
+      // focusing the address bar does not change the container size at all, so
+      // a genuine window resize performed while the address bar has focus
+      // would otherwise be swallowed here and never recovered — no blur-driven
+      // resize follows to replay it. The focusout listener registered below is
+      // what closes that hole: it re-runs this same path once focus leaves, at
+      // which point the size is real and either commits or dedups.
+      if (textFieldHasFocus(el)) return
+
+      const box = el.getBoundingClientRect()
+      const w = Math.round(box.width)
+      const h = Math.round(box.height)
+      if (w < 1 || h < 1) return
+      const dpr = window.devicePixelRatio || 1
+      const prev = lastSentViewportRef.current
+      // A rebuild costs a visible blip, so ignore sub-threshold jitter (a
+      // scrollbar appearing, a 1px layout settle). 8px is below what a user
+      // would notice as wrong aspect but well above incidental churn.
+      if (prev && Math.abs(prev.w - w) < 8 && Math.abs(prev.h - h) < 8 && prev.dpr === dpr) return
+
+      // SETTLE CHECK: only commit a size that has held still. A drag, an
+      // animated sidebar, or a transient overlay produces a stream of
+      // intermediate sizes; committing any of them costs a rebuild that the
+      // next frame invalidates.
+      //
+      // On a mismatch this RE-ARMS itself rather than returning. Relying on a
+      // trailing schedule() to come back would lose the resize outright
+      // whenever the size stops changing DURING the settle window: the last
+      // ResizeObserver event has already been consumed by the debounce, so
+      // nothing else is pending, and the panel would stay the wrong size until
+      // some unrelated resize happened to occur. Re-arming converges on the
+      // final size on its own, and cannot spin — each pass either commits or
+      // observes a NEW size, and a size that keeps changing forever is a
+      // resize that is genuinely still in progress.
+      const trySettle = (targetW: number, targetH: number) => {
+        settleRef.current = setTimeout(() => {
+          settleRef.current = null
+          const now = el.getBoundingClientRect()
+          const nw = Math.round(now.width)
+          const nh = Math.round(now.height)
+          // A degenerate measurement RE-ARMS rather than returns. Returning
+          // here would recreate, one branch over, the lost-resize bug the
+          // re-arm below exists to fix: a container that momentarily measures
+          // 0x0 mid-chase (parent hidden for a tick, display:none flash during
+          // an unrelated layout pass) would abandon the chase silently and the
+          // panel would stay wrong-sized until some unrelated resize happened
+          // to fire. Under the ResizeObserver path 0 -> real is itself an
+          // observed change, but the window-resize FALLBACK path only hears
+          // about window events, so there the resize really would be lost.
+          // Re-arming costs one 250ms timer while the panel is hidden, which
+          // browsers throttle anyway.
+          if (nw < 1 || nh < 1) {
+            trySettle(targetW, targetH)
+            return
+          }
+          if (nw !== targetW || nh !== targetH) {
+            trySettle(nw, nh) // still moving — chase the new size
+            return
+          }
+          // Re-check the focus guard HERE, not only at push() time. A settle
+          // armed while nothing was focused would otherwise commit a size
+          // measured AFTER the user clicked into the address bar — the
+          // AutoFill-shrunk geometry the guard exists to reject, slipping
+          // through a 250ms window. Bailing without re-arming is safe ONLY
+          // because the focusout listener below re-runs push() on blur; that
+          // is what makes this a DEFERRAL rather than a drop.
+          if (textFieldHasFocus(el)) return
+
+          // Re-read the DPR instead of reusing push()'s: the chase can span a
+          // window being dragged between displays with different pixel ratios.
+          // That fires a window resize but need not change the container's CSS
+          // box, so ResizeObserver may never re-enter push() — committing
+          // push()'s stale DPR would stamp lastSentViewportRef with a ratio the
+          // client no longer has, which is the mis-scale this field exists to
+          // prevent.
+          const settleDpr = window.devicePixelRatio || 1
+          const settled = lastSentViewportRef.current
+          // Re-check the dedup gate against the SETTLED size: the box may have
+          // travelled away and come back, in which case there is nothing to
+          // send and a rebuild would be pure cost.
+          if (
+            settled &&
+            Math.abs(settled.w - nw) < 8 &&
+            Math.abs(settled.h - nh) < 8 &&
+            settled.dpr === settleDpr
+          ) {
+            return
+          }
+          if (wsRef.current?.sendViewport(nw, nh, settleDpr)) {
+            lastSentViewportRef.current = { w: nw, h: nh, dpr: settleDpr }
+          }
+        }, VIEWPORT_SETTLE_MS)
+      }
+      if (settleRef.current !== null) clearTimeout(settleRef.current)
+      trySettle(w, h)
+    }
+
+    const schedule = () => {
+      if (timer !== null) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        push()
+      }, 400)
+    }
+
+    // Initial push once connected — the WS may not be open on first mount, so
+    // `connected` is a dependency and this re-runs when it flips true.
+    if (connected) schedule()
+
+    // BLUR CATCH-UP — the other half of the focus guard, and the thing that
+    // makes suppression a deferral instead of a silent drop.
+    //
+    // Both review passes independently proved the same hole: a REAL resize
+    // that completes while a text field holds focus is suppressed by the
+    // guard and then never retried, because recovery was left to "some later
+    // resize event" that need not ever come. On a desktop browser, focusing
+    // the address bar does not change the container size at all, so blur
+    // produces no resize either — drag the window larger while typing a URL
+    // and the panel stayed pinned to the old geometry indefinitely.
+    //
+    // focusout fires on every focus departure, including the accessory-bar
+    // case (where it is redundant — the size change fires its own resize —
+    // and harmlessly dedups). Routing through schedule() rather than push()
+    // reuses the debounce, so focus churn cannot stampede the settle chase.
+    document.addEventListener('focusout', schedule)
+
+    // ResizeObserver is guarded, not assumed. Adaptive sizing is an
+    // enhancement; an environment without the API (jsdom under test, an old
+    // or locked-down browser) must still get a working panel rather than a
+    // crash that takes the whole live view down — which is exactly what an
+    // unguarded `new ResizeObserver` did when this landed (174 tests, 8
+    // files, all "ResizeObserver is not defined"). Falling back to window
+    // resize still tracks the common case, since the panel is sized by the
+    // viewport; it just misses container-only changes such as the sidebar
+    // being pinned or unpinned.
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', schedule)
+      return () => {
+        if (timer !== null) clearTimeout(timer)
+        if (settleRef.current !== null) clearTimeout(settleRef.current)
+        window.removeEventListener('resize', schedule)
+        document.removeEventListener('focusout', schedule)
+      }
+    }
+
+    const ro = new ResizeObserver(schedule)
+    ro.observe(el)
+    return () => {
+      if (timer !== null) clearTimeout(timer)
+      if (settleRef.current !== null) clearTimeout(settleRef.current)
+      document.removeEventListener('focusout', schedule)
+      ro.disconnect()
+    }
+    // `frame !== null` is load-bearing, not incidental (BLOCKER caught in
+    // review): containerRef is only attached once a frame exists (the
+    // container div is gated on `frame`), but `connected` flips true from
+    // ws.onopen — SECONDS before the first frame arrives, since the backend's
+    // cold capture start can run ~25s. With `[connected]` alone this effect
+    // ran exactly once, while containerRef.current was still null, bailed,
+    // and never re-ran — so sendViewport was NEVER called on a fresh open and
+    // the capture stayed at its hardcoded default. Same dependency shape the
+    // wheel listener below already uses, for the same reason.
+  }, [connected, frame !== null])
+
+  // ── coalesced pointer-move + wheel pacing ────────────────────────────────
+  // Native pointermove fires far faster than the backend's input rate limiter
+  // (50 events/sec) can absorb — a 120Hz+ mouse/trackpad would flood it,
+  // causing silent server-side drops and a janky remote cursor. Coalesce to
+  // "at most one send per animation frame": every handlePointerMove call
+  // overwrites pendingMoveRef with the latest position; a single scheduled
+  // flush (idempotent — inputFlushScheduledRef guards re-scheduling) drains
+  // whatever is pending when the frame/timer fires. Mirrors the rAF-or-
+  // setTimeout(0) fallback ws.ts already uses for inbound batching (rAF is
+  // unavailable in jsdom/node and a hidden tab never fires it).
+  const flushPendingMove = useCallback(() => {
+    const pending = pendingMoveRef.current
+    if (!pending) return
+    pendingMoveRef.current = null
+    // Reviewer finding (queued-move leak): re-validate the drive gate at
+    // FLUSH time, not just at schedule time — the agent can start working
+    // (or the connection can drop, or annotate mode can engage) in the gap
+    // between the pointermove that scheduled this flush and the animation
+    // frame/timer actually firing. Without this, a queued position captured
+    // while still driving could leak into the tab a frame later, after
+    // watch-only has already taken over.
+    if (!canDispatchInput(implicitDriveRef.current)) return
+    // forceWs while the implicit-take gesture is still open — see
+    // dispatchInput's own doc comment (WS/DC ordering).
+    dispatchInput(
+      {
+        kind: 'mouse_move',
+        x: pending.x,
+        y: pending.y,
+        modifiers: pending.modifiers,
+        // Carried from handlePointerMove's own mapping call, not re-derived
+        // here — see pendingMoveRef's and captureDimsFields's doc comments.
+        ...captureDimsFields(pending),
+      },
+      { forceWs: implicitDriveRef.current },
+    )
+  }, [canDispatchInput, dispatchInput])
+
+  // Coalesce moves on a TIMER, not on requestAnimationFrame (operator report,
+  // 2026-08-04: "inputs feel laggy/slowish", worst while a video plays).
+  //
+  // rAF ties the network send to the LOCAL RENDERING pipeline. Whenever the
+  // page is busy compositing — exactly what happens while the panel is
+  // decoding and painting a video stream — frame callbacks stretch out, so
+  // pointer positions queue behind rendering work that has nothing to do with
+  // them. The delay is also unpredictable, which is what makes it feel
+  // sluggish rather than merely slow.
+  //
+  // A fixed interval decouples the two: input flows at a steady, known rate
+  // regardless of what the compositor is doing. MOVE_FLUSH_MS is set below the
+  // server's own rate cap so the pacing stays client-side and predictable
+  // instead of being shaped by server-side drops.
+  const flushPendingWheel = useCallback(() => {
+    const pending = pendingWheelRef.current
+    if (!pending) return
+    pendingWheelRef.current = null
+    // Same flush-time re-validation as the move drain: the agent can take over,
+    // annotate mode can engage, or the socket can drop between the wheel event
+    // and this tick.
+    if (!canDispatchInput(false)) return
+    dispatchInput({
+      kind: 'wheel',
+      x: pending.x,
+      y: pending.y,
+      delta_x: pending.deltaX,
+      delta_y: pending.deltaY,
+      modifiers: pending.modifiers,
+      // Fault 3 (browser-viewport-input-rootcause-2026-07-31.md) — see
+      // captureDimsFields's doc comment for why this is a spread, not a
+      // direct assignment.
+      ...captureDimsFields(pending),
+    })
+  }, [canDispatchInput, dispatchInput])
+
+  // Move is drained BEFORE wheel: that is the order a real browser delivers
+  // them in when a pointer moves and scrolls in the same tick, and the remote
+  // page's hit-testing depends on the cursor already being where the scroll
+  // happens.
+  const flushPendingInput = useCallback(() => {
+    inputFlushScheduledRef.current = false
+    inputFlushTimerRef.current = null
+    flushPendingMove()
+    flushPendingWheel()
+  }, [flushPendingMove, flushPendingWheel])
+
+  const cancelInputFlush = useCallback(() => {
+    if (inputFlushTimerRef.current !== null) clearTimeout(inputFlushTimerRef.current)
+    inputFlushTimerRef.current = null
+    inputFlushScheduledRef.current = false
+  }, [])
+
+  const scheduleInputFlush = useCallback(() => {
+    if (inputFlushScheduledRef.current) return
+    inputFlushScheduledRef.current = true
+    inputFlushTimerRef.current = setTimeout(flushPendingInput, MOVE_FLUSH_MS)
+  }, [flushPendingInput])
+
   // ── Native (non-passive) wheel listener — React's synthetic onWheel is
   // passive by default, so preventDefault() inside a JSX handler would warn
   // and no-op. Attached once; reads live state via refs to avoid re-binding
@@ -1153,66 +1700,34 @@ export function BrowserLiveView({
       const rect = el!.getBoundingClientRect()
       const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
       if (!device) return
-      dispatchInput({
-        kind: 'wheel',
+      // Accumulate; the shared pacer dispatches. preventDefault() still has to
+      // happen synchronously above, or the host page scrolls instead.
+      const prev = pendingWheelRef.current
+      pendingWheelRef.current = {
         x: device.x,
         y: device.y,
-        delta_x: e.deltaX,
-        delta_y: e.deltaY,
         modifiers: computeModifiers(e),
-      })
+        deltaX: (prev?.deltaX ?? 0) + e.deltaX,
+        deltaY: (prev?.deltaY ?? 0) + e.deltaY,
+        captureWidth: device.captureWidth,
+        captureHeight: device.captureHeight,
+      }
+      scheduleInputFlush()
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [frame !== null, canDispatchInput, mapPointerToDeviceCoords, dispatchInput])
+  }, [frame !== null, canDispatchInput, mapPointerToDeviceCoords, scheduleInputFlush])
 
-  // ── mouse_move RAF coalescing ────────────────────────────────────────────
-  // Native pointermove fires far faster than the backend's input rate limiter
-  // (50 events/sec) can absorb — a 120Hz+ mouse/trackpad would flood it,
-  // causing silent server-side drops and a janky remote cursor. Coalesce to
-  // "at most one send per animation frame": every handlePointerMove call
-  // overwrites pendingMoveRef with the latest position; a single scheduled
-  // flush (idempotent — moveFlushScheduledRef guards re-scheduling) drains
-  // whatever is pending when the frame/timer fires. Mirrors the rAF-or-
-  // setTimeout(0) fallback ws.ts already uses for inbound batching (rAF is
-  // unavailable in jsdom/node and a hidden tab never fires it).
-  const flushPendingMove = useCallback(() => {
-    moveFlushScheduledRef.current = false
-    const pending = pendingMoveRef.current
-    if (!pending) return
-    pendingMoveRef.current = null
-    // Reviewer finding (queued-move leak): re-validate the drive gate at
-    // FLUSH time, not just at schedule time — the agent can start working
-    // (or the connection can drop, or annotate mode can engage) in the gap
-    // between the pointermove that scheduled this flush and the animation
-    // frame/timer actually firing. Without this, a queued position captured
-    // while still driving could leak into the tab a frame later, after
-    // watch-only has already taken over.
-    if (!canDispatchInput(implicitDriveRef.current)) return
-    // forceWs while the implicit-take gesture is still open — see
-    // dispatchInput's own doc comment (WS/DC ordering).
-    dispatchInput(
-      { kind: 'mouse_move', x: pending.x, y: pending.y, modifiers: pending.modifiers },
-      { forceWs: implicitDriveRef.current },
-    )
-  }, [canDispatchInput, dispatchInput])
-
-  const scheduleMoveFlush = useCallback(() => {
-    if (moveFlushScheduledRef.current) return
-    moveFlushScheduledRef.current = true
-    if (typeof requestAnimationFrame !== 'undefined' && document.visibilityState !== 'hidden') {
-      requestAnimationFrame(flushPendingMove)
-    } else {
-      setTimeout(flushPendingMove, 0)
-    }
-  }, [flushPendingMove])
 
   // Cancel any in-flight coalesced move on unmount — nothing to flush once
   // the socket is about to be closed/detached by the WS lifecycle effect.
   useEffect(() => {
     return () => {
-      moveFlushScheduledRef.current = false
+      if (inputFlushTimerRef.current !== null) clearTimeout(inputFlushTimerRef.current)
+      inputFlushTimerRef.current = null
+      inputFlushScheduledRef.current = false
       pendingMoveRef.current = null
+      pendingWheelRef.current = null
     }
   }, [])
 
@@ -1235,10 +1750,13 @@ export function BrowserLiveView({
     if (!connectedRef.current) return
     if (controllingRef.current) return // already driving — nothing to acquire
     if (pendingTakeRef.current) return // a take is already in flight — never double-fire
-    // UAT finding FE-6, preserved: don't race a DIFFERENT connection of this
-    // same session that already holds the lock (the pop-out and the docked
-    // panel can both be open on the same agent at once).
-    if (controlledByOtherRef.current) return
+    // NO controlledByOther bail-out (operator directive, 2026-08-03). This used
+    // to return early whenever ANY other connection held the lock, which meant a
+    // second panel, a pop-out, or a stale automation session silently disabled
+    // the real human's mouse, keyboard and omnibox — the panel showed "Someone
+    // else is driving" and dropped everything. The panel is a real browser: the
+    // human's input always proceeds, and the server no longer gates dispatch on
+    // a control lock either (see dispatchInput).
     if (agentWorkingRef.current) {
       // ADR-040 D2 "Take over": pause the agent FIRST, via the exact same
       // chat-store action the chat Stop button calls — reusing it here
@@ -1402,8 +1920,26 @@ export function BrowserLiveView({
       // null (byte-identical JPEG-mode behavior).
       const dims = activeFrameDims()
       if (!dims) return fail()
-      const startPx = mapClientToFramePixels(startClient.x, startClient.y, containerRect, dims.width, dims.height)
-      const endPx = mapClientToFramePixels(endClient.x, endClient.y, containerRect, dims.width, dims.height)
+      // Letterbox correction (2026-07-31) — the precondition this component's
+      // `fillContainer` doc comment names for enabling that mode alongside
+      // `canAnnotate`. Under `fillContainer` the media element is `w-full
+      // h-full object-contain`, so it fills the box and REAL letterbox /
+      // pillarbox bars appear whenever the container's aspect ratio differs
+      // from the content's — which is the normal case for the docked panel (a
+      // tall, narrow column showing a wide page). Mapping a client point
+      // against the raw container rect would then treat the bars as part of
+      // the image and skew every crop toward the wrong region.
+      //
+      // The pointer/wheel path already did this (see mapPointerToDeviceCoords);
+      // the annotate path did not, which is precisely why the two could not be
+      // combined. Routing the rect through the same helper removes that
+      // restriction. Degenerate/zero-size boxes are handled inside
+      // computeObjectContainRect, and when aspect ratios happen to match it
+      // returns the box unchanged — so this is a no-op in the non-letterboxed
+      // case rather than a behaviour change.
+      const contentRect = computeObjectContainRect(containerRect, dims.width, dims.height)
+      const startPx = mapClientToFramePixels(startClient.x, startClient.y, contentRect, dims.width, dims.height)
+      const endPx = mapClientToFramePixels(endClient.x, endClient.y, contentRect, dims.width, dims.height)
       if (!startPx || !endPx) return fail()
       const cropRect = computeCropRect(startPx, endPx, dims.width, dims.height)
       if (!cropRect) return fail()
@@ -1464,6 +2000,9 @@ export function BrowserLiveView({
       takeWheelIfNeeded()
       wsRef.current?.sendInput({ kind: 'navigate', url: resolved })
       setUrlInput(resolved)
+      // Submit ends the edit: the tab-follow effect may now correct this to the
+      // url the browser actually landed on (a redirect, a normalised form).
+      urlBarEditingRef.current = false
     },
     [urlInput, takeWheelIfNeeded],
   )
@@ -1542,9 +2081,21 @@ export function BrowserLiveView({
     // pointer at full native resolution.
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
-    pendingMoveRef.current = { x: device.x, y: device.y, modifiers: computeModifiers(e) }
-    scheduleMoveFlush()
-  }, [scheduleMoveFlush, annotateMode, canDispatchInput, mapPointerToDeviceCoords])
+    // captureWidth/captureHeight are captured HERE, at the same event that
+    // computed x/y, and ride through to the coalesced flush unchanged — not
+    // re-read from activeFrameDims() at flush time. The stream geometry can
+    // drift between this event and the next animation frame (encoder rebuild
+    // mid-gesture); re-reading at flush would report a capture size that no
+    // longer matches the x/y that were already mapped against the old one.
+    pendingMoveRef.current = {
+      x: device.x,
+      y: device.y,
+      modifiers: computeModifiers(e),
+      captureWidth: device.captureWidth,
+      captureHeight: device.captureHeight,
+    }
+    scheduleInputFlush()
+  }, [scheduleInputFlush, annotateMode, canDispatchInput, mapPointerToDeviceCoords])
 
   // Focuses the frame container (so keyboard input starts flowing) and
   // best-effort captures the pointer so a drag that leaves the container
@@ -1601,7 +2152,13 @@ export function BrowserLiveView({
       // will actually land, and takeWheelIfNeeded would silently no-op the
       // (redundant) take anyway, leaving this gesture's input to go out
       // regardless if it weren't guarded here too.
-      if ((mode !== 'idle' && mode !== 'agent-working') || pendingTakeRef.current) return
+      // 'other-driving' is explicitly ALLOWED through here (operator
+      // directive, 2026-08-03). It used to fall into this bail-out, which is
+      // what made the reported session's mouse and keyboard dead: another
+      // attached viewer put this panel in 'other-driving' and every pointer
+      // gesture returned right here, before dispatching anything. Control is
+      // shared — a human's click always acts.
+      if ((mode !== 'idle' && mode !== 'agent-working' && mode !== 'other-driving') || pendingTakeRef.current) return
       // Idle: the first pointer interaction implicitly takes the wheel
       // (ADR-040 D2). Agent-working (UAT fix): the click ALSO implicitly
       // takes the wheel — takeWheelIfNeeded pauses the agent (cancelStream)
@@ -1623,6 +2180,25 @@ export function BrowserLiveView({
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
+
+    // Drop any coalesced move still waiting to be sent (operator report,
+    // 2026-08-04: a click on the video's fullscreen button "did not show the
+    // effect"). mouse_down maps its OWN fresh coordinates from this event, so
+    // it is always accurate — but a pending move captured up to MOVE_FLUSH_MS
+    // earlier would otherwise flush AFTER it, and the remote browser would see
+    // press-at-target followed by move-from-an-older-position. That reordering
+    // can drag the press off its target or cancel the click outright.
+    //
+    // The stale position is not merely redundant, it is actively wrong: this
+    // event's coordinates supersede it. Clearing the scheduled flag too means
+    // the next real move re-arms the timer normally.
+    pendingMoveRef.current = null
+    cancelInputFlush()
+    // A pending WHEEL is flushed rather than dropped: unlike the move, it is
+    // not superseded by this event, and letting it land after the press would
+    // scroll the target out from under a click that already happened.
+    flushPendingWheel()
+
     dispatchInput(
       {
         kind: 'mouse_down',
@@ -1630,10 +2206,21 @@ export function BrowserLiveView({
         y: device.y,
         button: mapMouseButton(e.button),
         modifiers: computeModifiers(e),
+        // Fault 3 (browser-viewport-input-rootcause-2026-07-31.md) — see
+        // captureDimsFields's doc comment.
+        ...captureDimsFields(device),
       },
       { forceWs: implicitDriveRef.current },
     )
-  }, [annotateMode, focusAndCapturePointer, takeWheelIfNeeded, mapPointerToDeviceCoords, dispatchInput])
+  }, [
+    annotateMode,
+    focusAndCapturePointer,
+    takeWheelIfNeeded,
+    mapPointerToDeviceCoords,
+    dispatchInput,
+    cancelInputFlush,
+    flushPendingWheel,
+  ])
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -1660,6 +2247,17 @@ export function BrowserLiveView({
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
+    // Same supersede-the-stale-move rule as handlePointerDown, applied to the
+    // OTHER end of the gesture. mouse_up maps its own fresh coordinates, so a
+    // coalesced move captured up to MOVE_FLUSH_MS earlier would land AFTER the
+    // release and the remote page would see release-at-target followed by a
+    // move from a stale position. For a drag, slider, or text selection — all
+    // of which read the last move relative to the release — that is a wrong
+    // drop point, not merely a redundant event. A pending WHEEL is flushed
+    // rather than dropped, for the same ordering reason as in pointerdown.
+    pendingMoveRef.current = null
+    cancelInputFlush()
+    flushPendingWheel()
     // forceWs when this gesture implicitly took the wheel — a DC-routed
     // mouse_up racing ahead of the WS take frame would be dropped as
     // not-controlling and leave the remote page holding a stuck button
@@ -1671,10 +2269,21 @@ export function BrowserLiveView({
         y: device.y,
         button: mapMouseButton(e.button),
         modifiers: computeModifiers(e),
+        // Fault 3 (browser-viewport-input-rootcause-2026-07-31.md) — see
+        // captureDimsFields's doc comment.
+        ...captureDimsFields(device),
       },
       { forceWs: wasImplicitDrive },
     )
-  }, [annotateMode, finalizeSelection, canDispatchInput, mapPointerToDeviceCoords, dispatchInput])
+  }, [
+    annotateMode,
+    finalizeSelection,
+    canDispatchInput,
+    mapPointerToDeviceCoords,
+    dispatchInput,
+    cancelInputFlush,
+    flushPendingWheel,
+  ])
 
   const handleSendAnnotation = useCallback(() => {
     const annotation = pendingAnnotation
@@ -1819,7 +2428,13 @@ export function BrowserLiveView({
       }
     }
     if (visualDriveMode === 'other-driving') {
-      return { label: 'Someone else is driving', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
+      // Informational, NOT a lock-out. Control is shared — this viewer's mouse,
+      // keyboard and omnibox all still work while someone else is also active
+      // (operator directive, 2026-08-03). The old label read "Someone else is
+      // driving", which told the user their input would be ignored — and it
+      // was, because the client and server both gated on the lock. Both gates
+      // are gone; the chip now just says who else is here.
+      return { label: 'Also viewing', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
     }
     return { label: 'Click to drive', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
   })()
@@ -1833,40 +2448,174 @@ export function BrowserLiveView({
 
   return (
     <div className={cn('flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
-      {/* Header. pr-14 (not just px-4) reserves room past the row's own buttons.
-          Historical note (now stale, kept for context): this used to also
-          clear Radix's own built-in Sheet close button, which rendered in
-          the same top-right corner when this panel was hosted inside a
-          Radix Sheet overlay — and BrowserLivePanel.tsx passed
-          `showClose={false}` to that SheetContent specifically because THIS
-          row already renders its own labeled Close (`aria-label="Close live
-          browser panel"`, further down), avoiding a second, unlabeled close
-          stacked on top of it. The Sheet was retired 2026-07-16 (operator
-          direction, amends ADR-040 D4) — the panel is now ALWAYS a plain
-          docked `<aside>` (BrowserLivePanel.tsx), so there is no Radix
-          Content/Sheet anywhere in this tree and nothing else occupies that
-          corner. The pr-14 gap itself is kept regardless — harmless, and
-          still leaves clean room for this row's own Pop-out/Close
-          buttons. */}
-      <div
-        className="flex shrink-0 items-center gap-2 overflow-x-auto h-chrome-header min-h-chrome-header pl-4 pr-14"
-        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
-      >
-        {/* ADR-043 D3 / US-6 (multi-agent clarity) — agent-identity chip.
-            Unambiguously labels WHICH agent's browser context this panel is
-            driving. With multiple agents browsing concurrently (each in its
-            own isolated per-agent browser context per ADR-043 D2), this is the
-            persistent identity anchor — DISTINCT from the drive-status chip
-            below, which shows who is currently driving (agent vs. you vs.
-            someone else). The avatar reuses the exact same colour-circle +
-            IconRenderer/initial pattern as the composer AgentPicker and
-            message avatars (do not reinvent). Falls back to a muted 'Agent'
-            label on a query-cache miss (same fallback the drive chip already
-            uses) — never a dead or empty affordance. */}
+      {/* == Row A: tabs + window controls =============================
+          Header consolidation (operator direction, 2026-08-04): the panel used
+          to spend FOUR rows on chrome -- identity/controls, handback hint,
+          tabs, omnibox -- measured at 156px of a 900px panel (17.3 percent),
+          all of it taken from the remote page. It is now two, the way Chrome
+          and Safari do it: tabs share the top strip with the window controls,
+          everything else rides the toolbar below.
+
+          This row is UNCONDITIONAL even though the tab strip inside it is not.
+          Close and Pop-out live here now, and gating the row on
+          `tabs.length > 0` would take the only way to close the panel with it
+          the moment the tab list arrived empty.
+
+          FIXED height (h-browser-tabs), like the toolbar below: this panel
+          pushes its own box as the remote viewport, so a header row that
+          changes height forces a full capture rebuild. That is the same
+          measured regression the handback hint was made always-mounted for. */}
+      <div className="flex h-browser-tabs min-h-browser-tabs shrink-0 items-center gap-1 px-2">
+        {tabState && tabState.tabs.length > 0 ? (
+          <div
+            role="group"
+            aria-label="Browser tabs"
+            data-testid="browser-tab-strip"
+            className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+            style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
+          >
+            {tabState.tabs.map((tab) => {
+              const active = tab.index === tabState.activeIndex
+              const label = tabLabel(tab)
+              return (
+                <div
+                  key={tab.index}
+                  className={cn(
+                    'flex shrink-0 max-w-[180px] items-center gap-1.5 rounded-t-md border-b-2 py-1 pl-2.5 pr-1 text-xs transition-colors',
+                    // Active tab: Forge-Gold underline + full opacity + a
+                    // heavier label weight — colour is never the only signal
+                    // (WCAG). Inactive: dimmed, transparent underline.
+                    active
+                      ? 'border-[var(--color-accent)] bg-[var(--color-surface-2)] text-[var(--color-secondary)] opacity-100'
+                      : 'border-transparent text-[var(--color-muted)] opacity-70 hover:bg-[var(--color-surface-1)] hover:opacity-100',
+                  )}
+                >
+                  <button tabIndex={0}
+                    type="button"
+                    aria-pressed={active}
+                    disabled={!connected}
+                    onClick={() => handleTabSwitch(tab.index)}
+                    title={tab.title || tab.url || 'New tab'}
+                    data-testid={`browser-tab-${tab.index}`}
+                    className={cn(
+                      'flex min-w-0 flex-1 items-center gap-1.5',
+                      connected ? 'cursor-pointer' : 'cursor-not-allowed',
+                      'disabled:cursor-not-allowed',
+                    )}
+                  >
+                    <Globe size={12} weight={active ? 'fill' : 'regular'} className="shrink-0" />
+                    <span className={cn('min-w-0 flex-1 truncate', active && 'font-medium')}>{label}</span>
+                  </button>
+                  <button tabIndex={0}
+                    type="button"
+                    onClick={() => handleTabClose(tab.index)}
+                    disabled={!connected}
+                    aria-label={`Close tab: ${label}`}
+                    title="Close tab"
+                    data-testid={`browser-tab-close-${tab.index}`}
+                    className="shrink-0 rounded p-0.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <X size={10} weight="bold" />
+                  </button>
+                </div>
+              )
+            })}
+            <button tabIndex={0}
+              type="button"
+              onClick={handleTabOpen}
+              disabled={!connected}
+              aria-label="Open new tab"
+              title="Open a new tab"
+              data-testid="browser-tab-new"
+              className="shrink-0 rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Plus size={13} />
+            </button>
+          </div>
+        ) : (
+          <div className="min-w-0 flex-1" />
+        )}
+        {onPopOut && (
+          <button tabIndex={0}
+            type="button"
+            onClick={onPopOut}
+            aria-label="Pop out"
+            title="Pop out into its own window"
+            className={TOOLBAR_ICON_BTN}
+          >
+            <ArrowSquareOut size={16} />
+          </button>
+        )}
+        {onClose && (
+          <button tabIndex={0}
+            type="button"
+            onClick={onClose}
+            aria-label="Close live browser panel"
+            title="Close"
+            className={TOOLBAR_ICON_BTN}
+          >
+            <X size={16} />
+          </button>
+        )}
+      </div>
+
+      {/* == Row B: toolbar ============================================
+          [back] [refresh] [address] then the status/identity chips and the
+          mode toggles that used to occupy their own row above the tabs. The
+          address field is deliberately no longer the full width of the panel;
+          it gives that space to the controls, which is what removes the row.
+
+          Only the address input is wrapped in the <form>. Enter-to-submit is
+          all the form was ever for, and keeping the toggles outside it avoids
+          implying they take part in submission. */}
+      <div className="flex h-chrome-header min-h-chrome-header shrink-0 items-center gap-1 px-2">
+        <button tabIndex={0}
+          type="button"
+          onClick={() => handleToolbarNav('navigate_back')}
+          disabled={!connected} /* not gated on controlledByOther: control is shared (2026-08-03) */
+          aria-label="Go back"
+          title="Back"
+          className={TOOLBAR_ICON_BTN}
+        >
+          <CaretLeft size={16} weight="bold" />
+        </button>
+        <button tabIndex={0}
+          type="button"
+          onClick={() => handleToolbarNav('reload')}
+          disabled={!connected} /* not gated on controlledByOther: control is shared (2026-08-03) */
+          aria-label="Refresh page"
+          title="Refresh"
+          className={TOOLBAR_ICON_BTN}
+        >
+          <ArrowsClockwise size={15} />
+        </button>
+        {/* min-w floor is load-bearing, not cosmetic: with `min-w-0 flex-1`
+            alone the field collapsed to 23px on a 575px row (measured on UAT
+            v59) once the chips and toggles were added beside it — flex happily
+            takes a min-content:0 item to zero. The floor makes "the address bar
+            stays usable" a guarantee instead of an arithmetic coincidence that
+            holds only until the next control is added. */}
+        <form onSubmit={handleOmniboxSubmit} className="flex min-w-[120px] flex-1 items-center">
+        <Input
+          ref={addressBarRef}
+          type="text"
+          value={urlInput}
+          onChange={(e) => setUrlInput(e.target.value)}
+          onFocus={() => {
+            urlBarEditingRef.current = true
+          }}
+          onBlur={() => {
+            urlBarEditingRef.current = false
+          }}
+          placeholder="Search or enter a URL…"
+          aria-label="Address bar"
+          className="h-8 flex-1 text-xs"
+        />
+        </form>
         <span
           data-testid="browser-live-agent-chip"
           title={`Driving ${agentDisplayName}'s browser context`}
-          className="flex shrink-0 items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-secondary)] whitespace-nowrap"
+          className="flex shrink-0 items-center gap-1.5 px-1 text-[11px] font-medium text-[var(--color-secondary)] whitespace-nowrap"
         >
           <span
             aria-hidden="true"
@@ -1881,14 +2630,14 @@ export function BrowserLiveView({
               <Robot size={9} />
             )}
           </span>
-          <span className="max-w-[140px] truncate">{agentDisplayName}</span>
+          {/* Avatar always; the NAME yields first when the row is tight —
+              identity survives as the coloured avatar, and the full name is in
+              this chip's own `title`. */}
+          <span className="hidden max-w-[140px] truncate xl:inline">{agentDisplayName}</span>
         </span>
-        {/* ADR-040 D6 — header chip replaces the old take/release-control-derived
-            corner status pill: words + icon + a pulsing "live" dot back up the
-            colour (never colour alone) for who's currently driving. */}
         <span
           data-testid="browser-live-status-chip"
-          className={cn('flex shrink-0 items-center gap-1.5 rounded px-2 py-0.5 text-[11px] font-medium whitespace-nowrap', driveChip.textClass)}
+          className={cn('flex shrink-0 items-center gap-1.5 px-1 text-[11px] font-medium whitespace-nowrap', driveChip.textClass)}
         >
           <span
             aria-hidden="true"
@@ -1897,15 +2646,22 @@ export function BrowserLiveView({
           <driveChip.Icon size={12} weight={driveChip.pulse ? 'fill' : 'regular'} />
           {driveChip.label}
         </span>
-        <div className="flex-1 min-w-2" />
-        {/* ADR-040 D1 — minimal header: Pen (annotate) · Pin · Pop out · Close.
-            The old Take/Release-control toggle and Hand-to-agent button are
-            gone entirely — see the file header comment for the replacement
-            implicit-control model. */}
-        {/* Annotate toggle (ADR-039 D-B1/B2, ADR-040 D3) — a third interaction
-            mode, mutually exclusive with driving: entering it releases control
-            (handleToggleAnnotate). Hidden entirely when !canAnnotate (FE-4) —
-            see the prop's doc comment. */}
+        {degradedReason && (
+          <button
+            type="button"
+            tabIndex={0}
+            data-testid="browser-degraded-badge"
+            onClick={() => {
+              setDegradedReason(null)
+              webrtcRef.current?.start((sdp) => wsRef.current?.sendWebRTCOffer(sdp) ?? false)
+            }}
+            title={`Live video degraded to picture mode (${degradedReason}). Click to retry.`}
+            aria-label={`Live video degraded: ${degradedReason}. Retry live video.`}
+            className={cn(TOOLBAR_ICON_BTN, 'text-[var(--color-warning)] hover:text-[var(--color-warning)]')}
+          >
+            <WarningCircle size={16} weight="fill" />
+          </button>
+        )}
         {canAnnotate && (
           <button tabIndex={0}
             type="button"
@@ -1913,24 +2669,12 @@ export function BrowserLiveView({
             disabled={!connected}
             aria-label={annotateMode ? 'Exit annotate mode' : 'Annotate a region'}
             title={annotateMode ? 'Exit annotate mode' : 'Drag a region (or click a spot) to comment on it'}
-            className={cn(
-              'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium transition-colors',
-              'disabled:cursor-not-allowed disabled:opacity-40',
-              annotateMode
-                ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:opacity-90'
-                : 'border border-[var(--color-border)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
-            )}
+            aria-pressed={annotateMode}
+            className={cn(TOOLBAR_ICON_BTN, annotateMode && 'text-[var(--color-accent)]')}
           >
-            <ChatCircleDots size={13} />
-            {annotateMode ? 'Exit annotate' : 'Annotate'}
+            <ChatCircleDots size={16} weight={annotateMode ? 'fill' : 'regular'} />
           </button>
         )}
-        {/* WebRTC build (W1-F) — mute/unmute toggle. Shown ONLY in video mode
-            (mediaStream set) with an audio track present (hasAudio) — mirrors
-            the Annotate button's opt-in gating pattern above. The <video>
-            sink itself always starts muted (autoplay-safe); this click IS
-            the user gesture that makes unmuting reliable. No signaling wave
-            wires a real stream yet, so this never renders until Wave 2. */}
         {mediaStream && hasAudio && (
           <button tabIndex={0}
             type="button"
@@ -1939,195 +2683,13 @@ export function BrowserLiveView({
             title={videoMuted ? 'Unmute audio' : 'Mute audio'}
             aria-pressed={!videoMuted}
             data-testid="browser-live-mute-toggle"
-            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+            className={TOOLBAR_ICON_BTN}
           >
-            {videoMuted ? <SpeakerSlash size={15} /> : <SpeakerHigh size={15} />}
-          </button>
-        )}
-        {/* Pin toggle retired 2026-07-16 (operator direction, amends ADR-040
-            D4): the panel is ALWAYS docked when open — there is no overlay
-            layout to pin/unpin between. Fullscreen is the pop-out below. */}
-        {/* Pop out — de-emphasised utility affordance (ADR-040 D1). Gated on
-            `onPopOut` presence ONLY, exactly like onClose. */}
-        {onPopOut && (
-          <button tabIndex={0}
-            type="button"
-            onClick={onPopOut}
-            aria-label="Pop out"
-            title="Pop out into its own window"
-            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
-          >
-            <ArrowSquareOut size={15} />
-          </button>
-        )}
-        {onClose && (
-          <button tabIndex={0}
-            type="button"
-            onClick={onClose}
-            aria-label="Close live browser panel"
-            title="Close"
-            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
-          >
-            <X size={15} />
+            {videoMuted ? <SpeakerSlash size={16} /> : <SpeakerHigh size={16} />}
           </button>
         )}
       </div>
 
-      {/* UAT finding (both testers): neither could discover that sending a
-          chat message hands control back to the agent — the file header
-          comment explains the mechanism ("handing back is just sending a
-          chat message") but nothing on screen ever hinted at it. A single
-          small, muted line — shown ONLY while the user actually holds the
-          wheel (`visualState === 'you-driving'`, which now also covers the
-          UAT-A8 optimistic pendingTake window right after Take-over) — right
-          under the header where the "You're driving" chip already lives.
-          WCAG 2.1.2: also advertises the Escape exit (releaseWheel, wired in
-          handleKeyDown above) — a keyboard-only escape hatch that isn't
-          advertised somewhere on screen doesn't satisfy "No Keyboard Trap"
-          even once it technically works. */}
-      {visualState === 'you-driving' && (
-        <p
-          data-testid="browser-live-handback-hint"
-          className="shrink-0 px-4 pb-1.5 text-[11px] text-[var(--color-muted)]"
-        >
-          Send a message to hand back to {resolvedAgentName ?? 'the agent'} — or press Esc to stop driving
-        </p>
-      )}
-
-      {/* Tab strip (ADR-041 D4) — open tabs: favicon-or-globe + truncated
-          title/hostname + active highlight + close ✕, plus a trailing ＋ to
-          open a new tab. Rendered whenever the tab list is known (the
-          backend always keeps at least one tab — see `tabState`'s doc
-          comment — so "known" and "non-empty" coincide in practice; the
-          `tabState.tabs.length > 0` check is just defense in depth against
-          an ill-formed frame). Sits below the always-visible omnibox and
-          above the screencast frame, matching the ADR-040 header/omnibox
-          stack.
-
-          A11y fix: this used to be `role="tablist"` > `role="tab"` (with a
-          nested Close button inside each "tab") — the real ARIA tab pattern
-          promises arrow-key roving-tabindex + aria-controls linking each tab
-          to a tabpanel, none of which is wired here, AND `role="tab"` is
-          children-presentational per the ARIA spec, so the nested Close
-          button's own role/name got stripped for assistive tech (it read as
-          inert text, not an activatable button). Mirrors the exact fix
-          already applied to CalendarToolbar.tsx's view switcher (same a11y
-          audit): `role="group"` + `aria-pressed` per button correctly
-          describes a set of independently-tabbable toggle buttons instead of
-          promising a pattern that isn't implemented. Close is now a SIBLING
-          button, not nested, so it keeps its own accessible name. Disconnected
-          state uses native `disabled` (not aria-disabled + tabIndex=0 "inert"
-          stops) so a disconnected chip is genuinely removed from the tab
-          order and keyboard-inert, not just visually/ARIA-flagged. */}
-      {tabState && tabState.tabs.length > 0 && (
-        <div
-          role="group"
-          aria-label="Browser tabs"
-          data-testid="browser-tab-strip"
-          className="flex shrink-0 items-center gap-1 overflow-x-auto px-2 py-1.5"
-          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
-        >
-          {tabState.tabs.map((tab) => {
-            const active = tab.index === tabState.activeIndex
-            const label = tabLabel(tab)
-            return (
-              <div
-                key={tab.index}
-                className={cn(
-                  'flex shrink-0 max-w-[180px] items-center gap-1.5 rounded-t-md border-b-2 py-1 pl-2.5 pr-1 text-xs transition-colors',
-                  // Active tab: Forge-Gold underline + full opacity + a
-                  // heavier label weight — colour is never the only signal
-                  // (WCAG). Inactive: dimmed, transparent underline.
-                  active
-                    ? 'border-[var(--color-accent)] bg-[var(--color-surface-2)] text-[var(--color-secondary)] opacity-100'
-                    : 'border-transparent text-[var(--color-muted)] opacity-70 hover:bg-[var(--color-surface-1)] hover:opacity-100',
-                )}
-              >
-                <button tabIndex={0}
-                  type="button"
-                  aria-pressed={active}
-                  disabled={!connected}
-                  onClick={() => handleTabSwitch(tab.index)}
-                  title={tab.title || tab.url || 'New tab'}
-                  data-testid={`browser-tab-${tab.index}`}
-                  className={cn(
-                    'flex min-w-0 flex-1 items-center gap-1.5',
-                    connected ? 'cursor-pointer' : 'cursor-not-allowed',
-                    'disabled:cursor-not-allowed',
-                  )}
-                >
-                  <Globe size={12} weight={active ? 'fill' : 'regular'} className="shrink-0" />
-                  <span className={cn('min-w-0 flex-1 truncate', active && 'font-medium')}>{label}</span>
-                </button>
-                <button tabIndex={0}
-                  type="button"
-                  onClick={() => handleTabClose(tab.index)}
-                  disabled={!connected}
-                  aria-label={`Close tab: ${label}`}
-                  title="Close tab"
-                  data-testid={`browser-tab-close-${tab.index}`}
-                  className="shrink-0 rounded p-0.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <X size={10} weight="bold" />
-                </button>
-              </div>
-            )
-          })}
-          <button tabIndex={0}
-            type="button"
-            onClick={handleTabOpen}
-            disabled={!connected}
-            aria-label="Open new tab"
-            title="Open a new tab"
-            data-testid="browser-tab-new"
-            className="shrink-0 rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <Plus size={13} />
-          </button>
-        </div>
-      )}
-
-      {/* Omnibox toolbar (ADR-039 D-A2, ADR-040 D5) — Chrome-style: sits BELOW
-          the tab strip, with [back] [refresh] [address bar]. Enter submits (no
-          Go button — Hick/Fitts: the keyboard path is already the fastest, the
-          button is redundant). ALWAYS visible; the server's ValidateURL SSRF
-          gate is the authority on navigate. Back (navigate_back) / refresh
-          (reload) take the wheel first, like the omnibox (D5). Icon-only
-          buttons carry aria-labels (WCAG 4.1.2) + 44px coarse-pointer targets. */}
-      <form
-        onSubmit={handleOmniboxSubmit}
-        className="flex shrink-0 items-center gap-1 px-2 py-1.5"
-      >
-        <button tabIndex={0}
-          type="button"
-          onClick={() => handleToolbarNav('navigate_back')}
-          disabled={!connected || (controlledByOther && !isControlling)}
-          aria-label="Go back"
-          title="Back"
-          className="shrink-0 flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-        >
-          <CaretLeft size={16} weight="bold" />
-        </button>
-        <button tabIndex={0}
-          type="button"
-          onClick={() => handleToolbarNav('reload')}
-          disabled={!connected || (controlledByOther && !isControlling)}
-          aria-label="Refresh page"
-          title="Refresh"
-          className="shrink-0 flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-        >
-          <ArrowsClockwise size={15} />
-        </button>
-        <Input
-          ref={addressBarRef}
-          type="text"
-          value={urlInput}
-          onChange={(e) => setUrlInput(e.target.value)}
-          placeholder="Search or enter a URL…"
-          aria-label="Address bar"
-          className="h-8 flex-1 text-xs"
-        />
-      </form>
 
       {/* Body */}
       <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black p-2">
@@ -2140,6 +2702,29 @@ export function BrowserLiveView({
           data-visual-state={visualState}
           className="pointer-events-none absolute inset-0 z-30"
         />
+        {/* Handback discoverability (UAT: neither tester worked out that sending
+            a chat message hands control back). It lived on its own 23px row,
+            then briefly on the toolbar — where it reserved 185px of a 575px row
+            and collapsed the address bar to 23px. It belongs on neither: it is
+            transient guidance about the FRAME, so it overlays the frame.
+            Absolutely positioned, so it costs zero layout and can never move
+            the frame — which is what the always-mounted rule was protecting
+            against (a header height change forces a full capture rebuild).
+            Still ALWAYS MOUNTED and merely `invisible` when idle.
+            pointer-events-none so it can never swallow a click meant for the
+            page. Names BOTH exits on screen: advertising the Esc escape is what
+            satisfies WCAG 2.1.2 (No Keyboard Trap), which a tooltip would not. */}
+        <p
+          data-testid="browser-live-handback-hint"
+          aria-hidden={visualState !== 'you-driving'}
+          className={cn(
+            'pointer-events-none absolute inset-x-0 bottom-0 z-40 truncate px-3 py-1.5 text-center text-[11px] text-[var(--color-secondary)]',
+            'bg-black/60 backdrop-blur-sm',
+            visualState !== 'you-driving' && 'invisible',
+          )}
+        >
+          Send a message to hand back to {resolvedAgentName ?? 'the agent'} — or press Esc to stop driving
+        </p>
         {!frame && (
           <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-[var(--color-muted)]">
             {displayError ? (
@@ -2163,7 +2748,15 @@ export function BrowserLiveView({
             role="application"
             aria-label="Live browser view"
             data-testid="browser-live-frame"
-            className="relative inline-block max-h-full max-w-full select-none outline-none"
+            // BUG 1 fix: `fillContainer` (pop-out route) fills the available
+            // body space instead of shrink-wrapping the media's intrinsic
+            // size — see the prop's own doc comment on why the two layouts
+            // must differ and why that's safe for coordinate mapping
+            // (computeObjectContainRect in mapPointerToDeviceCoords).
+            className={cn(
+              'relative select-none outline-none',
+              fillContainer ? 'h-full w-full' : 'inline-block max-h-full max-w-full',
+            )}
             // ADR-040 D6 — hover cursor communicates the mode at the point of
             // interaction: hidden (synthetic cursor takes over) while
             // actually driving, "watching"/not-allowed while the agent works
@@ -2198,7 +2791,16 @@ export function BrowserLiveView({
                 muted={videoMuted}
                 aria-label="Live browser session"
                 data-testid="browser-live-video"
-                className="block h-auto max-h-full w-auto max-w-full select-none object-contain"
+                // BUG 1 fix: fillContainer stretches to 100% of the
+                // (now-container-sized) box and lets object-contain do the
+                // aspect-preserving fit — the OLD `h-auto w-auto max-h-full
+                // max-w-full` combination can shrink but never grow past
+                // intrinsic size, which is exactly what left the pop-out's
+                // video tiny and letterboxed inside a much larger window.
+                className={cn(
+                  'block select-none object-contain',
+                  fillContainer ? 'h-full w-full' : 'h-auto max-h-full w-auto max-w-full',
+                )}
               />
             ) : (
               <img
@@ -2206,7 +2808,10 @@ export function BrowserLiveView({
                 src={`data:image/jpeg;base64,${frame.data}`}
                 alt="Live browser session"
                 draggable={false}
-                className="block h-auto max-h-full w-auto max-w-full select-none"
+                className={cn(
+                  'block select-none',
+                  fillContainer ? 'h-full w-full object-contain' : 'h-auto max-h-full w-auto max-w-full',
+                )}
                 data-testid="browser-live-img"
               />
             )}
@@ -2243,10 +2848,10 @@ export function BrowserLiveView({
             <button tabIndex={0}
               type="button"
               onClick={takeWheelIfNeeded}
-              // FE-6, preserved: disabled while a DIFFERENT connection of
-              // this same session already holds the lock — clicking would
-              // just silently no-op (takeWheelIfNeeded's own guard).
-              disabled={!connected || controlledByOther}
+              // No longer disabled by controlledByOther (2026-08-03): another
+              // attached viewer must never make this button dead, since taking
+              // over from the agent is exactly what the user is trying to do.
+              disabled={!connected}
               aria-label={takeOverLabel}
               title={takeOverLabel}
               className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[var(--color-info)]/50 bg-[var(--color-surface-1)]/90 px-3 py-1.5 text-xs font-medium text-[var(--color-secondary)] shadow-lg backdrop-blur transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"

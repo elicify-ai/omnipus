@@ -8,7 +8,6 @@ package agent
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +34,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
@@ -268,6 +268,27 @@ type AgentLoop struct {
 	// NewBrowserCoordinator, which builds the ownership-marker path
 	// (<homePath>/browser/shared-chrome.pid) from it.
 	homePath string
+
+	// capabilityCatalog (ADR-051 Rev 4, Wave 3 T9) is the step-1 capability
+	// gate source for the presentation chain (FR-010). Constructed from the
+	// compiled-in seed at NewAgentLoop time so the gate works without gateway
+	// boot wiring; the gateway may inject a puller-equipped catalog via
+	// SetCapabilityCatalog (FR-025 repo-pull). Nil → optimistic (FR-026).
+	// Guarded by mu (the struct's primary RWMutex).
+	capabilityCatalog *capabilities.Catalog
+
+	// workspaceLibCache (FR-007a) caches per-workspace media libraries for
+	// manifest-refcount accounting. Keyed by workspace ID. Lazily populated
+	// by getWorkspaceLibrary; refcount mutations go through the cached
+	// instance so a workspace always sees consistent refcount state.
+	workspaceLibCache sync.Map // map[string]*library.Library
+
+	// sessionRefcounts (FR-007a) tracks the per-session manifest-refcount
+	// state (workspace ID + seen-set) so CloseSession can run the matching
+	// decrement pass. Keyed by transcript session ID. Populated by
+	// getTurnRefcounter during turns; drained by
+	// decrementSessionMediaRefcounts at session close.
+	sessionRefcounts sync.Map // map[string]*sessionRefcountState
 
 	// Tier 1/3 deps — stored so WireTier13Deps can re-run on hot reload.
 	// Without this, hot-reload would drop web_serve, workspace.shell, and
@@ -619,6 +640,9 @@ type continuationTarget struct {
 	SessionKey string
 	Channel    string
 	ChatID     string
+	// WorkspaceID is the workspace this continuation's turn should run inside
+	// — see buildContinuationTarget's resolution comment (FIX 1 re-review).
+	WorkspaceID string
 }
 
 const (
@@ -780,6 +804,23 @@ func NewAgentLoop(
 	al.homePath = homePath
 	al.taskStore = task.New(filepath.Join(homePath, "tasks"))
 	al.taskExecutor = newTaskExecutor(al, al.taskStore)
+
+	// ADR-051 Rev 4 (Wave 3 T9): construct the capability catalog from the
+	// compiled-in seed so the step-1 presentation gate (FR-010) works
+	// immediately, without gateway boot wiring. The gateway may later inject
+	// a puller-equipped catalog via SetCapabilityCatalog (FR-025 repo-pull).
+	// A construction failure is non-fatal — nil catalog → optimistic (FR-026).
+	if catalog, catErr := capabilities.NewCatalog(capabilities.EmbeddedSeed(), nil, nil, nil); catErr != nil {
+		logger.WarnCF(
+			"agent",
+			"Capability catalog construction failed; presentation gate degrades to optimistic",
+			map[string]any{
+				"error": catErr.Error(),
+			},
+		)
+	} else {
+		al.capabilityCatalog = catalog
+	}
 
 	// Initialize shared session store at $OMNIPUS_HOME/sessions/.
 	// All new chat sessions are created here (joined session model).
@@ -1222,6 +1263,21 @@ func (al *AgentLoop) SetAppliedSandboxMode(mode sandbox.Mode) {
 // fields. Audit failures are logged at warn level and swallowed — a rate-limit
 // denial must still be reported to the caller even when the audit logger is
 // unhealthy.
+//
+// Wave 1 (rate-limit dedup correctness, ADR-051 §RD6): this function
+// emits ONE event (EventKindRateLimit) and writes ONE transcript entry —
+// the previous "EventKindError + RateLimitPayload + EventKindRateLimit"
+// dual-emit caused two live frames for the same condition (the WS
+// forwarder then had to suppress the duplicate via code==rate_limited,
+// but the EventKindError was still emitted onto the bus with a payload
+// that was typed RateLimitPayload, not ErrorPayload — leaking the dual
+// shape into every subscriber). The transcript write now goes through
+// appendErrorTranscript's classifier with pe=nil; the classifier
+// recognizes the "rate limit: …" shape via the message substring and
+// emits CodeRateLimited, but the friendly caller-supplied message is
+// preserved verbatim (ADR-051 §RD5 MAJ-001/004 carve-out — rate-limit
+// messages are already user-safe and don't need a second translation
+// pass).
 func (al *AgentLoop) recordRateLimitDenial(
 	ts *turnState,
 	limitType string,
@@ -1246,17 +1302,12 @@ func (al *AgentLoop) recordRateLimitDenial(
 		})
 	}
 	// FR-001: rate-limit denials MUST be visible after a page reload.
-	// The spec requires EventKindError in the JSONL transcript (consumed by the
-	// replay path on session reopen), but the live WS UI still subscribes to
-	// EventKindRateLimit for the dedicated denial banner. We therefore emit BOTH
-	// — EventKindError drives the persistent record + replay, EventKindRateLimit
-	// drives the live toast/banner. The transcript write below closes the
-	// "Error replay gap" called out as US-1.
-	al.emitEvent(
-		EventKindError,
-		ts.eventMeta("runTurn", "turn.error"),
-		payload,
-	)
+	// EventKindRateLimit is the authoritative live frame for the WS toast
+	// AND the source for the dedicated denial banner. Replay reads the
+	// transcript entry written below. No duplicate EventKindError emit —
+	// the prior dual-emit (EventKindError carrying RateLimitPayload +
+	// EventKindRateLimit) was a live-bus pollution source and was removed
+	// in the Wave 1 fix pass.
 	al.emitEvent(
 		EventKindRateLimit,
 		ts.eventMeta("runTurn", "turn.rate_limit"),
@@ -1964,8 +2015,11 @@ func registerSharedTools(
 				if al.taskExecutor != nil {
 					al.taskExecutor.onTaskComplete(t)
 				}
-				// A terminal update removes the task's trigger job (OnTaskUpserted
-				// drops jobs for terminal tasks); a non-terminal update re-syncs it.
+				// A terminal update removes the task's trigger job UNLESS the
+				// trigger repeats (recurring/every), whose series survives past a
+				// per-run terminal status (OnTaskUpserted, pkg/agent/task_trigger.go);
+				// a non-terminal update re-syncs it (a no-op if it is already
+				// correctly armed for the current trigger content).
 				al.NotifyTaskUpserted(t)
 			})
 			// ADR-037: legacy SetDelegateChecker retired here too — see the
@@ -2071,6 +2125,40 @@ func registerSharedTools(
 				if cfg.Tools.Browser.ExecPath != "" {
 					browserCfg.ExecPath = cfg.Tools.Browser.ExecPath
 				}
+				// Idle reaping: 0 = unset, keep browser.DefaultIdleTTL;
+				// negative = operator explicitly disables reaping (mapped to 0,
+				// which ReapIdleSessions treats as "never reap").
+				if cfg.Tools.Browser.IdleTTLSec > 0 {
+					browserCfg.IdleTTL = time.Duration(cfg.Tools.Browser.IdleTTLSec) * time.Second
+				} else if cfg.Tools.Browser.IdleTTLSec < 0 {
+					browserCfg.IdleTTL = 0
+				}
+				// Start page: an operator override wins; otherwise default to
+				// the gateway's own served start page so a fresh tab lands
+				// somewhere branded and legible instead of about:blank (a blank
+				// void is indistinguishable from a broken panel on this
+				// surface). Addressed over LOOPBACK deliberately — the client
+				// is the managed headless Chrome running on this same host, so
+				// localhost is reachable even when the gateway binds a wildcard
+				// address (where the canonical public origin is empty) and even
+				// with no public URL configured at all. The same
+				// localhost:port origin is already granted through the SSRF
+				// checker just above.
+				if cfg.Tools.Browser.StartPageURL != "" {
+					browserCfg.StartPageURL = cfg.Tools.Browser.StartPageURL
+				} else if cfg.Gateway.Port > 0 {
+					browserCfg.StartPageURL = fmt.Sprintf("http://localhost:%d/browser-start", cfg.Gateway.Port)
+				}
+				// ADR-052 D2/M1: PreferPackaged and TrustPathChrome are
+				// ALWAYS copied (bool fields, no "unset vs explicit false"
+				// distinction needed — the default-config zero value IS
+				// the security-hardened default). Without these the runtime
+				// resolver stays on its own defaults and the operator's
+				// config flips have no effect (SPEC-002). Both are wired
+				// every reload, not just at first-seed, so a Settings save
+				// takes effect without a gateway restart.
+				browserCfg.PreferPackaged = cfg.Tools.Browser.PreferPackaged
+				browserCfg.TrustPathChrome = cfg.Tools.Browser.TrustPathChrome
 				// Headless is intentionally NOT copied from
 				// cfg.Tools.Browser.Headless here: browser.DefaultConfig()
 				// always sets Headless=true, and a bare bool config field
@@ -2285,6 +2373,17 @@ func registerSharedTools(
 						// and kills the manager's own Chrome in the
 						// no-coordinator legacy path.
 						prior.Shutdown()
+						// B2c(i): invalidate the retired manager's own
+						// exec-path cache at the same reload trigger the
+						// coordinator's ApplyRuntimeConfig (above,
+						// al.browserCoordinator.ApplyRuntimeConfig) responds
+						// to — see BrowserManager.InvalidateExecPathCache's
+						// doc comment for why this is currently a no-op
+						// against the freshly-replaced `mgr` (a new instance
+						// already starts with an empty cache) but closes the
+						// gap against `prior` and any future refactor that
+						// stops replacing the whole manager on reload.
+						prior.InvalidateExecPathCache()
 					}
 				}
 			}
@@ -3288,7 +3387,11 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					var err error
 					response, ag, err = al.processMessage(runCtx, msg)
 					if err != nil && response == "" {
-						response = fmt.Sprintf("Error processing message: %v", err)
+						// ADR-051 §RD5: never surface raw err text in the assistant-facing
+						// reply. Route through the classifier so provider-originated body /
+						// status / model identity is replaced with the typed copy.
+						// The raw err stays in the defer's log line for operator triage.
+						response = TranslateLLMError(nil, err.Error()).Message
 					}
 					if response != "" {
 						al.publishResponseIfNeeded(runCtx, ag, msg.Channel, msg.ChatID, response)
@@ -3445,10 +3548,77 @@ func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuat
 	}
 
 	return &continuationTarget{
-		SessionKey: resolveScopeKey(route, msg.SessionKey),
-		Channel:    msg.Channel,
-		ChatID:     msg.ChatID,
+		SessionKey:  resolveScopeKey(route, msg.SessionKey),
+		Channel:     msg.Channel,
+		ChatID:      msg.ChatID,
+		WorkspaceID: al.resolveWorkspaceIDForContinuation(msg),
 	}, nil
+}
+
+// resolveWorkspaceIDForContinuation resolves the workspace a steering
+// continuation (Continue/continueWithSteeringMessages) should run inside
+// (FIX 1 re-review). continueWithSteeringMessages previously left
+// processOptions.WorkspaceID unset entirely, so a steering-continued turn's
+// tool media silently degraded to the private/global room exactly like the
+// other four gap sites this fix pass covers.
+//
+// buildContinuationTarget is called AFTER the triggering turn's own
+// processMessage call has already returned (session_worker.go's runLoop) —
+// msg here is session_worker's own copy of the inbound message, not the one
+// processMessage mutated internally (Go passes bus.InboundMessage by value),
+// so msg.SessionID reflects only what was already on the message BEFORE that
+// turn ran. Two mechanisms cover this, both lifted directly from
+// processMessage's own resolution (loop.go's "M4" comment, ~line 5350) rather
+// than invented fresh:
+//
+//  1. msg.SessionID already set (always true for webchat — the gateway
+//     websocket handler stamps it on the message before publish, so no
+//     mutation-visibility gap applies) — resolve the session's own meta,
+//     the authoritative source once a session exists.
+//  2. msg.SessionID empty (the common case for a channel message that had
+//     no session yet when session_worker dispatched it — processMessage
+//     lazily creates one internally via resolveOrCreateChannelSession, but
+//     that mutation is invisible here) — fall back to the bound channel
+//     instance's own configured WorkspaceID, the exact same value
+//     resolveOrCreateChannelSession itself would have seeded the new
+//     session's meta with, so this independently recomputes the identical
+//     answer rather than guessing.
+//
+// Falls back to the inbound metadata key last, matching processMessage's own
+// final fallback. Returns "" (never guessed) when none of the above apply —
+// e.g. an unbound channel with no session, the "system" and unrouted-message
+// cases buildContinuationTarget already short-circuits above.
+func (al *AgentLoop) resolveWorkspaceIDForContinuation(msg bus.InboundMessage) string {
+	if msg.SessionID != "" {
+		if store := al.ResolveSessionStore(msg.SessionID); store != nil {
+			// FIX 1 (re-review of the re-review): a real meta-read failure
+			// (corrupt meta.json, decode error, I/O error — see
+			// pkg/session/unified.go's readMetaLocked) must not take the
+			// identical silent path as "this session legitimately has no
+			// workspace". os.ErrNotExist (no meta.json yet — a genuinely new
+			// session) is the one expected, silent case; anything else is a
+			// storage-integrity signal worth a WARN, matching the standard
+			// the WRITE side of this same data already holds itself to
+			// (pkg/gateway/schedules.go's stampScheduledSessionWorkspace).
+			if meta, mErr := store.GetMeta(msg.SessionID); mErr != nil {
+				if !errors.Is(mErr, os.ErrNotExist) {
+					logger.WarnCF("agent",
+						"continuation: could not read session meta while resolving workspace; workspace unresolved",
+						map[string]any{"session_id": msg.SessionID, "error": mErr.Error()})
+				}
+			} else if meta != nil && meta.WorkspaceID != "" {
+				return meta.WorkspaceID
+			}
+		}
+	}
+	if instanceID := inboundInstanceID(msg); instanceID != "" {
+		if cfg := al.GetConfig(); cfg != nil {
+			if inst, ok := cfg.Channels[instanceID]; ok && inst.WorkspaceID != "" {
+				return inst.WorkspaceID
+			}
+		}
+	}
+	return inboundMetadata(msg, "workspace_id")
 }
 
 // WaitForActiveRequests blocks until all in-flight LLM calls tracked by
@@ -3552,7 +3722,15 @@ func (al *AgentLoop) Close() {
 		}
 	}()
 
+	// Mark the runtime closed and take the manager as one step under initMu
+	// so no ReconcileMCP pass — in flight or launched after this point — can
+	// observe a manager that is mid-teardown: ReconcileMCP checks isClosed()
+	// immediately after acquiring initMu and returns without touching
+	// anything once it is set.
+	al.mcp.initMu.Lock()
+	al.mcp.setClosed()
 	mcpManager := al.mcp.takeManager()
+	al.mcp.initMu.Unlock()
 
 	if mcpManager != nil {
 		if err := mcpManager.Close(); err != nil {
@@ -3899,6 +4077,17 @@ func (al *AgentLoop) EmitLoopStatusChanged(p LoopStatusChangedPayload) {
 	al.emitEvent(EventKindLoopStatusChanged, EventMeta{Source: "goal_loop"}, p)
 }
 
+// EmitTaskRunStatus publishes a per-execution TaskRun open/close transition
+// (ADR-050 §3.8) onto the event bus so every connected SPA WebSocket client
+// receives a task_run_status frame — additive alongside EmitTaskStatusChanged
+// (see EventKindTaskRunStatus's own doc comment for why a separate event is
+// needed: a recurring occurrence's run transitions do not move Task.status
+// between distinct values). Safe to call from any goroutine — the bus drops
+// to a full subscriber rather than blocking.
+func (al *AgentLoop) EmitTaskRunStatus(p TaskRunStatusPayload) {
+	al.emitEvent(EventKindTaskRunStatus, EventMeta{Source: "task_executor"}, p)
+}
+
 func cloneEventArguments(args map[string]any) map[string]any {
 	if len(args) == 0 {
 		return nil
@@ -3950,12 +4139,19 @@ func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDe
 	}
 
 	err := fmt.Errorf("hook aborted turn during %s: %s", stage, reason)
+	// FIX 3: compute the classifier code once and thread it onto the live
+	// ErrorPayload so the WS forwarder (FIX 2) does not have to re-translate
+	// this curated message from scratch — mirroring appendErrorTranscript's
+	// own llm.Code computation for the SAME message below. providerErr is
+	// nil (hook aborts are never provider-originated); the classifier falls
+	// back to substring matching on err.Error().
+	llm := TranslateLLMError(nil, err.Error())
 	al.emitEvent(
 		EventKindError,
 		ts.eventMeta("hooks", "turn.error"),
 		ErrorPayload{
-			Stage:   "hook." + stage,
-			Message: err.Error(),
+			Stage: "hook." + stage, ChatID: ts.opts.ChatID,
+			Code: string(llm.Code), Message: err.Error(),
 		},
 	)
 	// US-1: persist the hook abort to the JSONL transcript so the
@@ -4265,6 +4461,32 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// The old registry's resources (session file handles) will be GC'd when
 	// no more references exist. This trades a brief fd leak during reload
 	// for crash safety.
+
+	// Reconcile live MCP connections against the just-swapped config, and —
+	// unconditionally — re-register every already-connected server's tools
+	// onto the brand-new registry above (NewAgentRegistry gives every agent a
+	// fresh, empty Tools registry, which would otherwise silently drop MCP
+	// tools on every hot reload / settings save). Must run after al.mu.Unlock
+	// (ReconcileMCP takes al.mcp.initMu and reads al.cfg under its own
+	// al.mu.RLock snapshot, and al.registry via GetRegistry — both would
+	// deadlock if called while al.mu is still held here) and must not fail
+	// the reload — a broken MCP server config shouldn't block a
+	// provider/config swap that otherwise already succeeded. A
+	// canceled/expired ctx means the pass never actually ran (reconcileLocked
+	// checks ctx.Err() before touching anything) rather than having hit a
+	// real per-server or systemic failure, so — unlike other errors, which
+	// are just logged — that specific case also clears the initialized latch:
+	// otherwise, if an earlier pass had ever succeeded, ensureMCPInitialized's
+	// fast path would keep taking the "already done" shortcut forever and the
+	// next turn's MCP state would never actually be reconciled. Other errors
+	// are surfaced via MCPServerStatus / a later successful pass instead.
+	if err := al.ReconcileMCP(ctx); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			al.mcp.clearInitialized()
+		}
+		logger.WarnCF("agent", "MCP reconciliation failed after config reload",
+			map[string]any{"error": err.Error()})
+	}
 
 	logger.InfoCF("agent", "Provider and config reloaded successfully",
 		map[string]any{
@@ -5177,16 +5399,61 @@ func (al *AgentLoop) resolveOrCreateChannelSession(
 // ResolveSessionStore finds which UnifiedStore owns the given sessionID.
 // Checks the shared store first, then the main agent's legacy store, then
 // all other per-agent stores. Returns nil if the session cannot be found.
+//
+// FIX (silent-corruption gap): each probe below used to accept a store only
+// on err == nil, treating "session genuinely doesn't live here"
+// (os.ErrNotExist — the frequent, legitimate case for a session that hasn't
+// been created yet) and "session lives here but its meta.json is corrupt or
+// unreadable" (JSON decode error, I/O error, permission error) identically —
+// both fell through to the next probe, and a corrupt hit on the LAST probe
+// made the function return nil exactly as if the session never existed.
+// Callers (resolveWorkspaceIDForContinuation, ProcessScheduled,
+// processMessage's M4 block, processSystemMessage) then proceeded as if the
+// session had no workspace bound, silently dropping the binding — and their
+// own downstream WARN logging (which re-reads GetMeta expecting to
+// distinguish the same two cases) never fired, because they never got a
+// non-nil store to call GetMeta on in the first place.
+//
+// A non-ErrNotExist GetMeta error on a given store is itself strong evidence
+// that THIS store owns the session — readUnifiedMeta only reaches the JSON
+// decode (or a bare read failure past ENOENT) once sessionDir/meta.json
+// exists under that store's baseDir, so there is no reason to keep scanning
+// remaining stores for a "real" copy elsewhere: continuing to probe would
+// either find nothing (wasted work, same nil-after-corruption outcome) or,
+// in the pathological case of a duplicate session ID across stores, mask the
+// corruption behind an unrelated hit. So on a non-ErrNotExist error this
+// still returns the store immediately (log first) rather than falling
+// through — that is what makes the store reach the caller at all, which is
+// what makes the four downstream WARNs reachable. An out-of-scope
+// alternative — changing this function's signature to return the error too
+// — was rejected: it would ripple into pkg/gateway/websocket.go and
+// pkg/gateway/rest.go call sites outside this agent's edit scope for no
+// benefit over logging here and letting callers' own GetMeta re-read see the
+// identical error.
 func (al *AgentLoop) ResolveSessionStore(sessionID string) *session.UnifiedStore {
 	// Fast path: shared store owns new sessions.
 	if al.sharedSessionStore != nil {
 		if _, err := al.sharedSessionStore.GetMeta(sessionID); err == nil {
+			return al.sharedSessionStore
+		} else if !errors.Is(err, os.ErrNotExist) {
+			logger.WarnCF(
+				"agent",
+				"ResolveSessionStore: session meta unreadable (not a missing-session case); returning owning store despite read failure",
+				map[string]any{"session_id": sessionID, "store": al.sharedSessionStore.BaseDir(), "error": err.Error()},
+			)
 			return al.sharedSessionStore
 		}
 	}
 	// Legacy fast path: main agent owns most old sessions.
 	if store := al.GetAgentStore(DefaultAgentID); store != nil {
 		if _, err := store.GetMeta(sessionID); err == nil {
+			return store
+		} else if !errors.Is(err, os.ErrNotExist) {
+			logger.WarnCF(
+				"agent",
+				"ResolveSessionStore: session meta unreadable (not a missing-session case); returning owning store despite read failure",
+				map[string]any{"session_id": sessionID, "store": store.BaseDir(), "error": err.Error()},
+			)
 			return store
 		}
 	}
@@ -5200,6 +5467,13 @@ func (al *AgentLoop) ResolveSessionStore(sessionID string) *session.UnifiedStore
 			continue
 		}
 		if _, err := store.GetMeta(sessionID); err == nil {
+			return store
+		} else if !errors.Is(err, os.ErrNotExist) {
+			logger.WarnCF(
+				"agent",
+				"ResolveSessionStore: session meta unreadable (not a missing-session case); returning owning store despite read failure",
+				map[string]any{"session_id": sessionID, "store": store.BaseDir(), "error": err.Error()},
+			)
 			return store
 		}
 	}
@@ -5587,11 +5861,11 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// doc comment above, which already (incorrectly, until this fix)
 	// described the callback as firing.
 	//
-	// Finish(false) is safe to add here: at THIS point (construction, right
+	// Calling Finish here is safe to add: at THIS point (construction, right
 	// before registerActiveTurn ran above) ts.cancelFunc/ts.providerCancel
 	// are still nil — cancel-propagation FIX 1 (external_dispatch.go's
 	// runExternalCLISubTurn) only wires them once dispatch actually starts,
-	// below. By the time this function returns and the deferred Finish(false)
+	// below. By the time this function returns and the deferred Finish call
 	// below actually RUNS, those fields are typically non-nil (set to the
 	// dispatch's own context.CancelFunc) — see this function's top doc
 	// comment's STALE-COMMENT CORRECTION note for the full explanation. That
@@ -5600,13 +5874,16 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// which is exactly what dispatchCancel's own `defer dispatchCancel()`
 	// below already guarantees happens — canceling an already-canceled
 	// context is a no-op, so calling it twice (once via that defer, once via
-	// Finish) is harmless. isHardAbort is false so the child-cascade branch
-	// is unreachable, and Finish's closeOnce.Do + the
-	// cancelFired-swap-then-nil-check around onCancelFinish make a second
+	// Finish) is harmless. Below (FIX 2), this call passes
+	// ts.hardAbortRequested() rather than a hardcoded false, so the
+	// child-cascade branch CAN run here when a hard abort was requested — but
+	// that is also safe: Finish's closeOnce.Do + the
+	// cancelFired-swap-then-nil-check around onCancelFinish make ANY repeated
 	// Finish call (e.g. a concurrent InterruptSessionHard elsewhere calling
-	// Finish(true) on this same ts via steering.go) idempotent — the
-	// identical safety runTurn's own `defer ts.Finish(false)` already relies
-	// on for the hard-abort-then-graceful-defer sequence (loop.go, "closeOnce.Do
+	// requestHardAbort on this same ts via steering.go, whether or not this
+	// site's own call also cascades) idempotent — the identical safety
+	// runTurn's own deferred Finish call already relies on for the
+	// hard-abort-then-deferred-Finish sequence (loop.go, "closeOnce.Do
 	// inside Finish makes repeated Finish calls safe" comment).
 	//
 	// Ordering matches runTurn's LIFO defer pattern (loop.go, "Execution
@@ -5617,9 +5894,25 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// fire — the same class of race that ordering guards against in
 	// runTurn. Defers execute LIFO, so writing Finish's defer first and
 	// clearActiveTurn's defer second makes clearActiveTurn run FIRST and
-	// Finish run LAST, exactly like runTurn's `defer ts.Finish(false)` /
-	// `defer al.clearActiveTurn(ts)` pair.
-	defer ts.Finish(false)
+	// Finish run LAST, exactly like runTurn's own Finish/clearActiveTurn pair.
+	//
+	// FIX 2: call Finish with ts.hardAbortRequested(), not a hardcoded false.
+	// InterruptSessionHard (the session-wide web-cancel escalation path;
+	// steering.go) hard-aborts a turn by calling ts.requestHardAbort() alone —
+	// it never calls ts.Finish(true) itself (only the legacy single-session
+	// HardAbort()/InterruptHard do that). For a turn hard-aborted that way,
+	// THIS deferred call is the only Finish call that will ever happen, so a
+	// hardcoded false silently mislabeled a genuine hard abort as a graceful
+	// finish — wrong for the cancelFired-gated onCancelFinish callback
+	// (cancel.go's RequestCancel), which threads its "graceful"/"hard"
+	// cancelMethod straight into the persisted turn_canceled transcript entry
+	// that pkg/gateway/replay.go renders back to the user as
+	// "Turn canceled (%s)". Must be wrapped in a closure: a bare
+	// `defer ts.Finish(ts.hardAbortRequested())` would evaluate
+	// hardAbortRequested() immediately at THIS defer statement (Go evaluates
+	// deferred arguments at registration time, not at call time) — i.e.
+	// always false, reproducing the exact bug this fixes.
+	defer func() { ts.Finish(ts.hardAbortRequested()) }()
 	defer al.clearActiveTurn(ts)
 
 	rtCfg := al.getSubTurnConfig()
@@ -5959,7 +6252,7 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 	// Transcribe each audio media ref in order.
 	var transcriptions []string
 	for _, ref := range msg.Media {
-		path, meta, err := store.ResolveWithMeta(ref)
+		path, meta, err := store.ResolveWithMetaOpts(ref, media.ResolveOpts{})
 		if err != nil {
 			logger.WarnCF("voice", "Failed to resolve media ref", map[string]any{"ref": ref, "error": err})
 			continue
@@ -6210,6 +6503,41 @@ func (al *AgentLoop) ProcessScheduled(
 		return "", fmt.Errorf("scheduled run: transcript write failed for session %q: %w", sessionID, err)
 	}
 
+	// FIX 1 (re-review): WorkspaceID was never threaded here, so any tool
+	// media a scheduled/heartbeat-fired run produces silently degraded to the
+	// private/global room (bus.OutboundMediaMessage.WorkspaceID stays "")
+	// even when `channel` is an operator-configured EXTERNAL channel (Slack,
+	// Telegram, ...) whose SendMedia does honor it. The concrete session this
+	// run writes into (sessionID) is the one genuine source available here —
+	// same lookup processMessage (loop.go, ~line 5332) uses for the
+	// interactive path.
+	//
+	// GAP CLOSED: pkg/gateway/schedules.go's scheduledRunner.pickSession now
+	// resolves the schedule's workspace (from a heartbeat job's deterministic
+	// name, or from the channel instance a plain schedule's payload.Channel
+	// names — see resolveScheduleWorkspaceID's doc there) and stamps it onto
+	// the session's meta via stampScheduledSessionWorkspace BEFORE this
+	// function runs, using the exact GetSessionStore()/GetMeta/SetMeta
+	// surface this read below already relies on. This function needed no
+	// logic change to pick that up — it was already forward-compatible by
+	// design, as this comment previously promised. A schedule with no
+	// resolvable workspace (no heartbeat identity, no channel binding) still
+	// correctly resolves to "" here — never fabricated.
+	workspaceID := ""
+	if meta, mErr := transcriptStore.GetMeta(sessionID); mErr != nil {
+		// FIX 1 (re-review of the re-review): distinguish a real meta-read
+		// failure from "no workspace bound" — see resolveWorkspaceIDForContinuation's
+		// doc comment above for the full rationale and the WRITE-side standard
+		// (pkg/gateway/schedules.go's stampScheduledSessionWorkspace) this matches.
+		if !errors.Is(mErr, os.ErrNotExist) {
+			logger.WarnCF("agent",
+				"scheduled run: could not read session meta while resolving workspace; workspace unresolved",
+				map[string]any{"session_id": sessionID, "error": mErr.Error()})
+		}
+	} else if meta != nil {
+		workspaceID = meta.WorkspaceID
+	}
+
 	resp, err := al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:          sessionKey,
 		Channel:             channel,
@@ -6220,6 +6548,7 @@ func (al *AgentLoop) ProcessScheduled(
 		SendResponse:        false,
 		TranscriptSessionID: sessionID,
 		TranscriptStore:     transcriptStore,
+		WorkspaceID:         workspaceID,
 		AutoDenyAsk:         true, // FR-009: headless — auto-deny ask-policy tools
 	})
 	if err == nil && ctx.Err() == context.DeadlineExceeded {
@@ -6404,7 +6733,16 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// and finally to "" — task_create then resolves the real default workspace.
 	workspaceID := ""
 	if transcriptStore != nil && transcriptSessionID != "" {
-		if meta, mErr := transcriptStore.GetMeta(transcriptSessionID); mErr == nil && meta != nil {
+		// FIX 1 (re-review of the re-review): distinguish a real meta-read
+		// failure from "no workspace bound" — see
+		// resolveWorkspaceIDForContinuation's doc comment (above,
+		// ~line 3099) for the full rationale.
+		if meta, mErr := transcriptStore.GetMeta(transcriptSessionID); mErr != nil {
+			if !errors.Is(mErr, os.ErrNotExist) {
+				logger.WarnCF("agent", "could not read session meta while resolving workspace; workspace unresolved",
+					map[string]any{"session_id": transcriptSessionID, "error": mErr.Error()})
+			}
+		} else if meta != nil {
 			workspaceID = meta.WorkspaceID
 		}
 	}
@@ -6889,6 +7227,40 @@ func (al *AgentLoop) processSystemMessage(
 		sessionKey = fmt.Sprintf("agent:%s:session:%s", agent.ID, transcriptSessionID)
 	}
 
+	// FIX 1 (re-review): mirror processMessage's WorkspaceID resolution
+	// (loop.go, "M4" comment ~line 5332) so a delegate-completion / async-
+	// notify turn reconstructed here also stamps bus.OutboundMediaMessage
+	// with the real workspace instead of silently falling back to the
+	// private/global room. originChannel is parsed straight from msg.ChatID
+	// above and can be ANY external channel the producing turn was bound to
+	// — the same class of gap ProcessScheduled has. The session this turn
+	// persists into (transcriptSessionID, already resolved above by FIX 5d)
+	// is the authoritative source: it is the SAME session the producing turn
+	// wrote to, so its meta.WorkspaceID (stamped at session-creation time via
+	// resolveOrCreateChannelSession's channel-binding lookup) is exactly the
+	// workspace this reconstructed turn should inherit. Falls back to the
+	// inbound metadata key, matching processMessage's own final fallback, for
+	// callers that stamp workspace_id directly on the system message instead.
+	workspaceID := ""
+	if transcriptStore != nil && transcriptSessionID != "" {
+		// FIX 1 (re-review of the re-review): distinguish a real meta-read
+		// failure from "no workspace bound" — see
+		// resolveWorkspaceIDForContinuation's doc comment (above,
+		// ~line 3099) for the full rationale.
+		if meta, mErr := transcriptStore.GetMeta(transcriptSessionID); mErr != nil {
+			if !errors.Is(mErr, os.ErrNotExist) {
+				logger.WarnCF("agent",
+					"delegate-completion: could not read session meta while resolving workspace; workspace unresolved",
+					map[string]any{"session_id": transcriptSessionID, "error": mErr.Error()})
+			}
+		} else if meta != nil {
+			workspaceID = meta.WorkspaceID
+		}
+	}
+	if workspaceID == "" {
+		workspaceID = inboundMetadata(msg, "workspace_id")
+	}
+
 	return al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:          sessionKey,
 		Channel:             originChannel,
@@ -6899,6 +7271,7 @@ func (al *AgentLoop) processSystemMessage(
 		SendResponse:        true,
 		TranscriptSessionID: transcriptSessionID,
 		TranscriptStore:     transcriptStore,
+		WorkspaceID:         workspaceID,
 	})
 }
 
@@ -7090,6 +7463,12 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	turnMediaStore := al.GetMediaStore()
 	// Snapshot the channel manager for the same reason.
 	turnChannelManager := al.getChannelManager()
+	// ADR-051 Rev 4 (Wave 3 T9): snapshot the capability catalog and the
+	// per-session manifest refcounter for the presentation chain. Both are
+	// nil-safe (nil catalog → optimistic gate; nil refcounter → no tracking),
+	// so legacy/no-workspace turns degrade gracefully.
+	turnCatalog := al.getCapabilityCatalog()
+	turnRefcounter := al.getTurnRefcounter(ts.opts.WorkspaceID, ts.transcriptSessionID)
 
 	var turnCtx context.Context
 	var turnCancel context.CancelFunc
@@ -7103,7 +7482,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	ts.setTurnCancel(turnCancel)
 
 	// NOTE: finalizeStreamer's defer is registered further below (after
-	// ts.Finish(false)/al.clearActiveTurn), not here — see that registration
+	// ts.Finish/al.clearActiveTurn), not here — see that registration
 	// site's comment for why the ORDER relative to Finish is load-bearing
 	// (FIX 1/5c live-verification finding).
 
@@ -7153,12 +7532,26 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// to a workspace can route to an agent stale-removed from that
 	// workspace's CoreTeam. Keying off agent identity instead of the
 	// turn-carried value is also what makes this correctly cover DELEGATED
-	// sub-agent turns: spawnSubTurn (pkg/agent/subturn.go) never threads
-	// WorkspaceID into a child's processOptions, so the old ts.opts.WorkspaceID
-	// gate could never have re-rooted a delegated child's filesystem regardless
-	// of any flag — this identity-keyed lookup applies uniformly to top-level
-	// turns and delegated children alike, since both resolve ts.agent.ID the
-	// same way.
+	// sub-agent turns regardless of whether ts.opts.WorkspaceID happens to be
+	// set on the child: this identity-keyed lookup applies uniformly to
+	// top-level turns and delegated children alike, since both resolve
+	// ts.agent.ID the same way.
+	//
+	// STALE-COMMENT CORRECTION (FIX 1 re-review): this used to say
+	// spawnSubTurn never threads WorkspaceID into a child's processOptions,
+	// making ts.opts.WorkspaceID structurally always "" for a delegated
+	// child. That is no longer true — spawnSubTurn (pkg/agent/subturn.go)
+	// now inherits WorkspaceID from the PARENT turn (session/room context,
+	// same as Channel/ChatID; see that struct literal's own comment for why
+	// this is deliberately NOT covered by ADR-032's target-identity
+	// inheritance rule). A delegated child's ts.opts.WorkspaceID can
+	// therefore be non-empty today, which is exactly what lets it
+	// participate in FindForAgentPreferring's tie-break below when the
+	// child agent belongs to more than one workspace's CoreTeam — it does
+	// NOT change the identity-primacy described above: a child with no
+	// CoreTeam membership at all still gets no re-root regardless of
+	// ts.opts.WorkspaceID, and a child whose membership is unambiguous
+	// (one workspace) resolves the same way with or without it.
 	//
 	// FindForAgentPreferring (not FindForAgent) is used here so that when the
 	// SAME agent belongs to MORE than one workspace's CoreTeam — a real,
@@ -7167,9 +7560,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// memberships) breaks the tie, instead of FindForAgent's arbitrary
 	// sorted-first pick. This narrows an already-ambiguous choice using a
 	// signal that is trustworthy exactly when it is present; it never widens
-	// or overrides the identity-based membership check, so the
-	// unbound-channel and delegated-child cases above are unaffected (an
-	// empty ts.opts.WorkspaceID falls straight through to FindForAgent).
+	// or overrides the identity-based membership check, so an unbound-channel
+	// turn (ts.opts.WorkspaceID == "") is unaffected — it falls straight
+	// through to FindForAgent.
 	//
 	// Security: workspaces/<id>/ lives under $OMNIPUS_HOME, which the boot
 	// Landlock policy already grants RWX — this changes only the working
@@ -7214,7 +7607,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	al.registerActiveTurn(ts)
 	// Execution order (LIFO defer — registered in reverse of desired run
 	// order): clearActiveTurn runs FIRST, then finalizeStreamer, then
-	// Finish(false) LAST.
+	// Finish LAST.
 	//
 	// clearActiveTurn must run before finalizeStreamer, which sends the
 	// "done" WS frame. IsAlive()/onCancelFinish are unaffected by
@@ -7234,13 +7627,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// "done" is sent closes that window: any cancel arriving after closes on
 	// nothing to claim.
 	//
-	// finalizeStreamer must still run BEFORE ts.Finish(false) — registered
-	// here, between clearActiveTurn and Finish. finalizeStreamer is what
-	// calls wsStreamer.Finalize(), which writes the assistant transcript
-	// entry (FIX 1). Finish(false)'s onCancelFinish callback
-	// (pkg/agent/cancel.go) is what writes the turn_canceled entry AND calls
-	// MarkLastEntryTruncated to flag the assistant entry. Both depend on the
-	// assistant entry already existing in transcript.jsonl:
+	// finalizeStreamer must still run BEFORE Finish — registered here,
+	// between clearActiveTurn and Finish. finalizeStreamer is what calls
+	// wsStreamer.Finalize(), which writes the assistant transcript entry
+	// (FIX 1). Finish's onCancelFinish callback (pkg/agent/cancel.go) is what
+	// writes the turn_canceled entry AND calls MarkLastEntryTruncated to flag
+	// the assistant entry. Both depend on the assistant entry already
+	// existing in transcript.jsonl:
 	//   - MarkLastEntryTruncated's backward-walk finds nothing to flag if the
 	//     assistant entry isn't there yet (silently succeeds as a no-op —
 	//     Truncated never gets set).
@@ -7255,9 +7648,28 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// turn_canceled -> assistant (wrong order) when finalizeStreamer ran
 	// after Finish's callback; user -> assistant -> turn_canceled (correct)
 	// with finalizeStreamer running first. closeOnce.Do inside Finish makes
-	// repeated Finish calls safe — the cancel path may have already called
-	// Finish(true); this deferred Finish(false) is then a no-op.
-	defer ts.Finish(false)
+	// repeated Finish calls safe — the cancel path (steering.go's legacy
+	// single-session HardAbort/InterruptHard) may have already called
+	// Finish(true) directly; this deferred call is then a harmless repeat of
+	// the same idempotent operation.
+	//
+	// FIX 2: pass ts.hardAbortRequested(), not a hardcoded false. The
+	// session-wide web-cancel escalation path (InterruptSessionHard,
+	// steering.go) hard-aborts a turn via ts.requestHardAbort() ALONE — it
+	// never calls ts.Finish(true) itself. For a turn hard-aborted that way,
+	// THIS deferred call is the ONLY Finish call that ever happens, so a
+	// hardcoded false silently mislabeled a genuine hard abort as a graceful
+	// finish: the onCancelFinish callback above computes cancelMethod from
+	// Finish's own isHardAbort argument, and that value is persisted verbatim
+	// as TranscriptEntry.CancelMethod, which pkg/gateway/replay.go renders
+	// back to the user as "Turn canceled (%s)" — so a hard-aborted turn was
+	// always reported to the user, and audited, as a graceful cancel. Must be
+	// a closure, not a bare `defer ts.Finish(ts.hardAbortRequested())`: Go
+	// evaluates deferred arguments at the defer statement's registration time
+	// (here, before the turn even starts), not when the deferred call
+	// actually runs at function exit — a bare form would always capture
+	// false and reproduce the exact bug this fixes.
+	defer func() { ts.Finish(ts.hardAbortRequested()) }()
 	defer ts.finalizeStreamer(ctx)
 	defer al.clearActiveTurn(ts)
 
@@ -7340,16 +7752,27 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				// (appendErrorTranscript), AND push a live notification so the
 				// CURRENT session learns immediately — the transcript write alone
 				// only becomes visible after a reload.
+				//
+				// Wave 1 (ADR-051 §RD5 MAJ-003): sanitize the model_switch
+				// message via the classifier so the model name does not leak
+				// into the assistant-facing copy. The classifier recognizes
+				// the "could not switch to model" shape via substring and
+				// emits a generic message; raw stays in logger.WarnCF for
+				// operator triage.
 				switchFailMsg := fmt.Sprintf(
 					"Could not switch to model %q: %s. This reply used %q instead.",
 					requested, switchErr.Error(), ts.agent.Model,
 				)
+				switchLLM := TranslateLLMError(nil, switchFailMsg)
 				al.emitEvent(
 					EventKindError,
 					ts.eventMeta("runTurn", "turn.error"),
-					ErrorPayload{Stage: "model_switch", Message: switchFailMsg},
+					ErrorPayload{
+						Stage: "model_switch", Code: string(switchLLM.Code),
+						Message: switchLLM.Message, ChatID: ts.opts.ChatID,
+					},
 				)
-				ts.appendErrorTranscript(EventKindError.String(), "model_switch", switchFailMsg)
+				ts.appendErrorTranscript(EventKindError.String(), "model_switch", switchLLM.Message)
 				// NB: no notification frame here — `model_switch_failed` is not a
 				// contract NotificationFrame.notification_type, so the SPA's
 				// inbound Zod validation would drop it. The EventKindError +
@@ -7392,7 +7815,16 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 
 	cfg := al.GetConfig()
 	maxMediaSize := cfg.Agents.Defaults.GetMaxMediaSize()
-	messages = resolveMediaRefs(messages, turnMediaStore, maxMediaSize, ts.agent.Model)
+	// Step-5 offload target: the workspace work/ dir already resolved (and
+	// MkdirAll'd) for this turn at resolveTurnWorkDirOrRefuse above. Passing it
+	// as an offloadSink lets attachments no provider can present (e.g. AVIF/HEIC
+	// with no decoder) be copied into work/ and surfaced as a filesystem path +
+	// guidance instead of dying the turn (ADR-051 Rev 4 FR-020/020a/021).
+	messages = resolveMediaRefsWithOffload(
+		messages, turnMediaStore, maxMediaSize, ts.agent.Model,
+		&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
+		ts.opts.WorkspaceID,
+	)
 
 	if !ts.opts.NoHistory {
 		toolDefs := ts.agent.Tools.ToProviderDefs()
@@ -7423,7 +7855,11 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				ts.media,
 				activeSkillNames(ts.agent, ts.opts),
 			)
-			messages = resolveMediaRefs(messages, turnMediaStore, maxMediaSize, ts.agent.Model)
+			messages = resolveMediaRefsWithOffload(
+				messages, turnMediaStore, maxMediaSize, ts.agent.Model,
+				&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
+				ts.opts.WorkspaceID,
+			)
 		}
 	}
 
@@ -7559,7 +7995,11 @@ turnLoop:
 
 		// Inject pending steering messages
 		if len(pendingMessages) > 0 {
-			resolvedPending := resolveMediaRefs(pendingMessages, turnMediaStore, maxMediaSize, activeModel)
+			resolvedPending := resolveMediaRefsWithOffload(
+				pendingMessages, turnMediaStore, maxMediaSize, activeModel,
+				&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
+				ts.opts.WorkspaceID,
+			)
 			totalContentLen := 0
 			for i, pm := range pendingMessages {
 				messages = append(messages, resolvedPending[i])
@@ -7958,30 +8398,128 @@ turnLoop:
 			return err == nil
 		}
 
+		// synthesizeImageRejection restores the pre-classifier friendly path for
+		// image-only capability/format rejections. Image-only failures are terminal:
+		// stripping the image and retrying would silently answer a different prompt.
+		// PDF or mixed-media requests continue through TryMediaDowngrade below.
+		synthesizeImageRejection := func(pe *ProviderError, rejectionErr error) bool {
+			// FIX 5: this is the IMAGE-only friendly-rejection path — it must
+			// consult ts.imageRetryDone, the image-class guard, NOT
+			// ts.mediaRetryDone (the PDF-class guard). turn.go's design
+			// comment on the two fields is explicit that the guard was split
+			// per-class precisely so a PDF-class downgrade earlier in the
+			// SAME turn can never consume the image-class budget (or vice
+			// versa). Reading the wrong guard here meant a PDF downgrade
+			// earlier in the turn silently blocked this friendly synthesis
+			// for a LATER, unrelated image rejection — it fell through to
+			// the generic classifier-driven strip-retry instead.
+			if ts.imageRetryDone.Load() || rejectionErr == nil {
+				return false
+			}
+
+			rejectionText := rejectionErr.Error()
+			if pe != nil && pe.Body != "" {
+				rejectionText = pe.Body
+			}
+			if !isImageRejectionMessage(rejectionText) || isPDFRejectionMessage(rejectionText) {
+				return false
+			}
+
+			// No media is allowed here for compatibility with capability errors
+			// returned after compaction. When media is present, every block must be
+			// an image; a PDF or any other block makes this a mixed-media request.
+			for _, message := range callMessages {
+				for _, mediaRef := range message.Media {
+					if !startsWithCaseInsensitive(mediaRef, "data:image/") {
+						return false
+					}
+				}
+			}
+
+			logger.WarnCF("agent", "model rejected image input — returning guidance instead of retrying without it",
+				map[string]any{"agent_id": ts.agent.ID, "model": llmModel, "error": rejectionErr.Error()})
+			response = &providers.LLMResponse{
+				Content: fmt.Sprintf(
+					"I can't view images with the current model (%s). To work with images, switch this "+
+						"agent to a model that supports image input, then try again.",
+					llmModel,
+				),
+			}
+			err = nil
+			ts.imageRetryDone.Store(true)
+			ts.setLastProducedModel(ModelSyntheticImageRejection)
+			logger.DebugCF("agent", "image-rejection synthesis stamped; llmModel retained in error log only",
+				map[string]any{"agent_id": ts.agent.ID, "model": llmModel})
+			return true
+		}
+
 		for retry := 0; retry <= maxRetries; retry++ {
 			response, err = callLLM(callMessages, providerToolDefs)
 			if err == nil {
 				break
 			}
-			// If the provider rejected image input on a tool result, strip
-			// inline image data URLs from tool messages and retry once. This
-			// keeps text-only models working while still giving vision-capable
-			// models the picture.
-			if strings.Contains(err.Error(), "image input") {
-				stripped := false
-				for i := range callMessages {
-					if callMessages[i].Role == "tool" && len(callMessages[i].Media) > 0 {
-						callMessages[i].Media = nil
-						stripped = true
+			// Preserve the friendly image-only synthesis before the generic media
+			// downgrade path. PDF and mixed-media failures deliberately fall through.
+			pe := errorToProviderError(err)
+			if synthesizeImageRejection(pe, err) {
+				break
+			}
+			// Wave 1 (ADR-051 RD2): classifier-gated media downgrade-retry.
+			// Replaces the prior inline substring "image input" strip path
+			// (which only handled vision-capability errors and ran on every
+			// retry iteration). The new helper:
+			//   1. classifies pe via the shared classifier — only retries
+			//      CodeMediaUnsupported (never content-policy/auth/unknown).
+			//   2. hoists the per-turn guard onto ts.mediaRetryDone — the
+			//      retry cannot fire twice in the same turn.
+			//   3. handles both PDF and image media (PDF via
+			//      downgradePDFMediaToText; image via stripRejectedImageMedia).
+			if downgradeResult := TryMediaDowngrade(ts, callMessages, pe); downgradeResult.Applied {
+				// FR-017a (Slice E / Wave 1b): the helper's verdict decides
+				// the recorded turn classifier code. The classifier-primary
+				// path always reports CodeMediaUnsupported; the
+				// outcome-based fallback may report a different code (the
+				// original classifier was inconclusive). Read the helper's
+				// verdict via the typed result (Wave 1 TD-M8 — the bool
+				// return was overloaded and lost the trigger; this commit
+				// adds DowngradeTrigger + MediaClass so the warn-log and
+				// the FR-017a relabel are both data-derived from the
+				// helper, not from a re-classification at the call site).
+				// The message fallback is err.Error() (not ""): pe is never
+				// actually nil on this path (errorToProviderError only
+				// returns nil for a nil err, and this call site is inside
+				// the `err != nil` retry branch), but classifyByProviderError
+				// falls back to the message when pe is nil — passing the
+				// real error text keeps this call correct if that
+				// invariant is ever loosened, instead of being a latent
+				// no-op that silently classifies "" today.
+				helperCode := classifyByProviderError(pe, err.Error())
+				logger.WarnCF("agent",
+					"provider rejected media input — retrying with downgraded media block",
+					map[string]any{
+						"agent_id":    ts.agent.ID,
+						"model":       llmModel,
+						"error":       err.Error(),
+						"code":        string(helperCode),
+						"trigger":     string(downgradeResult.Trigger),
+						"media_class": string(downgradeResult.MediaClass),
+					})
+				response, err = callLLM(callMessages, providerToolDefs)
+				if err == nil {
+					// FR-017a success edge (Slice E / Wave 1b): when the
+					// outcome-based fallback fired (Trigger ==
+					// TriggerOutcomeFallback) AND the retry succeeded,
+					// the recorded turn classifier verdict MUST be
+					// relabeled to CodeMediaUnsupported — the classifier
+					// now LABELS the outcome (per the ADR §4
+					// "classify the outcome" contract), not just the
+					// trigger. The classifier-primary path's helperCode
+					// is already CodeMediaUnsupported so no relabel is
+					// needed for that branch.
+					if downgradeResult.Trigger == TriggerOutcomeFallback {
+						ts.setOutcomeRelabel(CodeMediaUnsupported)
 					}
-				}
-				if stripped {
-					logger.WarnCF("agent", "provider rejected image input — retrying without media",
-						map[string]any{"agent_id": ts.agent.ID, "model": llmModel})
-					response, err = callLLM(callMessages, providerToolDefs)
-					if err == nil {
-						break
-					}
+					break
 				}
 			}
 			if ts.hardAbortRequested() && errors.Is(err, context.Canceled) {
@@ -8373,56 +8911,46 @@ turnLoop:
 			if errors.Is(err, context.DeadlineExceeded) {
 				return turnResult{}, fmt.Errorf("turn timed out")
 			}
-			// Friendly degradation for non-vision models. A user attached an image
-			// to a model that can't view images, so the provider returned a raw
-			// 400 whose message specifically indicates a missing vision capability
-			// (e.g. "'claude-3-5-haiku-...' does not support image input.").
-			// isImageInputRejection uses a narrow match: errors about corrupt
-			// images, oversized files, or content-moderation blocks are NOT
-			// intercepted here and fall through to the normal error path.
-			// Images have no text fallback (unlike PDFs), and the tool-result
-			// image-strip above only covers agent-generated images — so instead
-			// of surfacing the raw error, synthesize a clear, actionable
-			// assistant reply and fall through to the normal emit path
-			// (streamed/published like any other response).
-			if isImageInputRejection(err) {
-				logger.WarnCF("agent", "model rejected image input — returning guidance instead of error",
-					map[string]any{"agent_id": ts.agent.ID, "model": llmModel, "error": err.Error()})
-				response = &providers.LLMResponse{
-					Content: fmt.Sprintf(
-						"I can't view images with the current model (%s). To work with images, switch this "+
-							"agent to a model that supports image input, then try again.",
-						llmModel,
-					),
-				}
-				err = nil
-				// The synthesized guidance above is NOT produced by llmModel — the
-				// provider refused the call entirely. Stamp a sentinel so the
-				// transcript model field does NOT mis-attribute this turn to llmModel
-				// (silent-failure-A #5). The original error stays in the warn log
-				// above so operators can debug; we surface a debug-level marker here
-				// for search/discovery.
-				ts.setLastProducedModel(ModelSyntheticImageRejection)
-				logger.DebugCF("agent", "image-rejection synthesis stamped; llmModel retained in error log only",
-					map[string]any{"agent_id": ts.agent.ID, "model": llmModel})
-				// fall through to the normal post-LLM handling below.
-			}
 		}
 		if err != nil {
 			turnStatus = TurnEndStatusError
+			// Wave 1 (error-provenance hardening, ADR-051 §RD5 CRIT-001):
+			// never emit raw err.Error() to the assistant-facing bus /
+			// transcript. Build a *ProviderError from the wrapped chain
+			// (best-effort — falls back to substring matching on err.Error()
+			// when no FailoverError is in the chain), route through the
+			// shared translateLLMError, and surface the generic message
+			// instead of the raw provider text. Raw stays in logger.ErrorCF
+			// + the wrapped fmt.Errorf return for operator triage.
+			pe := errorToProviderError(err)
+			llm := TranslateLLMError(pe, err.Error())
+
+			// FR-017a: outcome-based relabel overrides the classifier's code
+			// for both the live WS frame AND the transcript write. The relabel
+			// applies to any error emitted by this turn after the outcome-based
+			// strip-retry succeeded.
+			if ts.outcomeRelabel != "" {
+				llm.Code = ts.outcomeRelabel
+				llm.Message = UserMessageForCode(ts.outcomeRelabel)
+			}
+
 			al.emitEvent(
 				EventKindError,
 				ts.eventMeta("runTurn", "turn.error"),
 				ErrorPayload{
-					Stage:   "llm",
-					Message: err.Error(),
+					Stage: "llm", ChatID: ts.opts.ChatID,
+					Code:          string(llm.Code),
+					Message:       llm.Message,
+					ProviderError: pe,
 				},
 			)
-			// FR-002: persist the provider error to the transcript (see
-			// appendErrorTranscript docstring for rationale).
+			// FR-002: persist the translated provider error to the transcript
+			// (write choke point — ADR-051 §RD5). pe threaded through so the
+			// classifier sees status/body, not the stringified err.
 			ts.appendErrorTranscript(
 				EventKindError.String(), "runTurn",
-				fmt.Sprintf("LLM call failed after retries: %s", err.Error()),
+				llm.Message,
+				pe,
 			)
 			logger.ErrorCF("agent", "LLM call failed",
 				map[string]any{
@@ -8430,6 +8958,7 @@ turnLoop:
 					"iteration": iteration,
 					"model":     llmModel,
 					"error":     err.Error(),
+					"code":      string(llm.Code),
 				})
 			return turnResult{}, fmt.Errorf("LLM call failed after retries: %w", err)
 		}
@@ -8601,16 +9130,29 @@ turnLoop:
 					return turnResult{}, fmt.Errorf("turn timed out")
 				}
 				turnStatus = TurnEndStatusError
+				// Wave 1 (error-provenance hardening): translate via the
+				// shared classifier (CRIT-001). Never surface raw err.Error()
+				// to the assistant / bus / transcript.
+				pe := errorToProviderError(err)
+				llm := TranslateLLMError(pe, err.Error())
+
+				// FR-017a: outcome-based relabel override for this turn.
+				if ts.outcomeRelabel != "" {
+					llm.Code = ts.outcomeRelabel
+					llm.Message = UserMessageForCode(ts.outcomeRelabel)
+				}
+
 				al.emitEvent(
 					EventKindError,
 					ts.eventMeta("runTurn", "turn.error"),
-					ErrorPayload{Stage: "llm_empty_retry", Message: err.Error()},
+					ErrorPayload{Stage: "llm_empty_retry", Code: string(llm.Code), Message: llm.Message, ProviderError: pe, ChatID: ts.opts.ChatID},
 				)
-				// FR-002: persist this provider error to the transcript (see
-				// appendErrorTranscript docstring for rationale).
+				// FR-002: persist this provider error to the transcript (write
+				// choke point).
 				ts.appendErrorTranscript(
 					EventKindError.String(), "runTurn",
-					fmt.Sprintf("LLM call failed during empty-response retry: %s", err.Error()),
+					llm.Message,
+					pe,
 				)
 				return turnResult{}, fmt.Errorf("LLM call failed during empty-response retry: %w", err)
 			}
@@ -9241,6 +9783,43 @@ turnLoop:
 					return
 				}
 
+				// FIX 3: a turn that was ever the target of a cancel claim
+				// (ts.cancelFired — set exactly once, and never reset, by
+				// ClaimCancel/handleCancel; see cancel.go's RequestCancel) must
+				// not spring back to life through this async completion. This
+				// closure captures the PARENT ts that dispatched the async
+				// tool call (delegate/background bash); the callback fires
+				// independently, on its own goroutine, whenever that tool
+				// finishes — which is routinely AFTER the user has already
+				// clicked Stop, since the whole point of async dispatch is
+				// that the parent turn moves on immediately (see executeAsync's
+				// doc comment in pkg/tools/delegate.go). Without this guard,
+				// Notify below publishes an inbound "system" message
+				// unconditionally, and processSystemMessage (this file) turns
+				// it into a BRAND NEW, fully-tooled turn — the agent can then
+				// narrate the delegation and even issue ANOTHER delegate call,
+				// seconds after being told to stop (live-reproduced: a third
+				// turn, ID parent+2, arriving ~3s after the cancel completed,
+				// calling delegate again). Skipping Notify here does not lose
+				// the async tool's own result: spawnSubTurn inherits the
+				// parent's TranscriptSessionID/TranscriptStore (subturn.go), so
+				// the child's own tool calls and final answer are already
+				// persisted to the SAME session's transcript via its own turn
+				// — only this callback's REACTIVE continuation turn is
+				// suppressed, which is exactly the behavior a canceled turn
+				// should have.
+				if ts.cancelFired.Load() {
+					logger.InfoCF("agent", "Suppressing async-notify continuation turn: originating turn was canceled",
+						map[string]any{
+							"tool":        asyncToolName,
+							"channel":     ts.channel,
+							"chat_id":     ts.chatID,
+							"agent_id":    ts.agent.ID,
+							"content_len": len(content),
+						})
+					return
+				}
+
 				// AsyncNotifier.Notify (async-notifier-spec.md) now owns
 				// sensitive-data filtering, truncation, EventKindFollowUpQueued
 				// emission, and the inbound bus publish that used to be inlined
@@ -9391,7 +9970,7 @@ turnLoop:
 				for _, ref := range toolResult.Media {
 					part := bus.MediaPart{Ref: ref}
 					if turnMediaStore != nil {
-						if _, meta, err := turnMediaStore.ResolveWithMeta(ref); err == nil {
+						if _, meta, err := turnMediaStore.ResolveWithMetaOpts(ref, media.ResolveOpts{}); err == nil {
 							part.Filename = meta.Filename
 							part.ContentType = meta.ContentType
 							part.Type = inferMediaType(meta.Filename, meta.ContentType)
@@ -9400,10 +9979,27 @@ turnLoop:
 					parts = append(parts, part)
 				}
 				outboundMedia := bus.OutboundMediaMessage{
-					Channel:   ts.channel,
-					ChatID:    ts.chatID,
-					SessionID: ts.transcriptSessionID,
-					Parts:     parts,
+					Channel: ts.channel,
+					ChatID:  ts.chatID,
+					// FIX 1: workspace-scoped media resolution (channels'
+					// store.ResolveWithCallerWorkspace) was silently degrading
+					// to the private/global room for every channel send
+					// because WorkspaceID was never set here. ts.opts.WorkspaceID
+					// is the authoritative source — it is what turnCtx itself
+					// was populated with via tools.WithWorkspaceID above (see
+					// "Inject the workspace ID" a few hundred lines up in this
+					// function). Deliberately read directly from ts.opts rather
+					// than tools.ToolWorkspaceID(ctx): `ctx` here is runTurn's
+					// ORIGINAL parameter, not turnCtx — WithWorkspaceID was
+					// only ever applied to the derived turnCtx (and its
+					// children, e.g. execCtx), never back-propagated onto the
+					// `ctx` variable, so tools.ToolWorkspaceID(ctx) would
+					// always read back "". ts.opts.WorkspaceID carries the
+					// exact same value turnCtx was stamped with and needs no
+					// context-plumbing assumptions to stay correct.
+					WorkspaceID: ts.opts.WorkspaceID,
+					SessionID:   ts.transcriptSessionID,
+					Parts:       parts,
 				}
 				if turnChannelManager != nil && ts.channel != "" && !constants.IsInternalChannel(ts.channel) {
 					if err := turnChannelManager.SendMedia(ctx, outboundMedia); err != nil {
@@ -9500,19 +10096,18 @@ turnLoop:
 			// Attach inline image data URLs so vision-capable models can SEE the
 			// screenshot/image returned by the tool. Without this the LLM only
 			// gets the placeholder text and cannot reason about the picture.
+			//
+			// ADR-051 Rev 4 Gap 4: the inline-attach site must normalize
+			// non-universal image MIMEs (SVG / AVIF / HEIC / HEIF / ICO)
+			// before building the data URL — providers 400 on image/svg+xml
+			// blocks and the pure-Go decoder set cannot normalize the rest,
+			// and the tool-result message is persisted into session
+			// history at loop.go:8442-8443, so a bad MIME would poison
+			// every subsequent turn. attachToolResultMedia owns that
+			// guard; the artifact tag at loop.go:8246 is the path-based
+			// fallback hook for the rare "rasterize failed" case.
 			if len(toolResult.Media) > 0 && turnMediaStore != nil {
-				for _, ref := range toolResult.Media {
-					localPath, meta, err := turnMediaStore.ResolveWithMeta(ref)
-					if err != nil || !strings.HasPrefix(meta.ContentType, "image/") {
-						continue
-					}
-					data, err := os.ReadFile(localPath)
-					if err != nil {
-						continue
-					}
-					dataURL := "data:" + meta.ContentType + ";base64," + base64.StdEncoding.EncodeToString(data)
-					toolResultMsg.Media = append(toolResultMsg.Media, dataURL)
-				}
+				attachToolResultMedia(&toolResultMsg, toolResult.Media, turnMediaStore, maxMediaSize)
 			}
 			endSID, endProducingSID := u9ToolExecSessionIDs(ts)
 			al.emitEvent(
@@ -9608,7 +10203,7 @@ turnLoop:
 				for _, ref := range toolResult.Media {
 					d := map[string]any{"ref": ref}
 					if turnMediaStore != nil {
-						if _, meta, err := turnMediaStore.ResolveWithMeta(ref); err == nil {
+						if _, meta, err := turnMediaStore.ResolveWithMetaOpts(ref, media.ResolveOpts{}); err == nil {
 							if meta.Filename != "" {
 								d["filename"] = meta.Filename
 							}
@@ -9816,12 +10411,16 @@ turnLoop:
 		ts.recordPersistedMessage(finalMsg)
 		if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
 			turnStatus = TurnEndStatusError
+			// Wave 1: never surface raw err.Error() (session-save is a
+			// local I/O error, not a provider error, but the same
+			// invariant holds — the classifier emits a generic copy).
+			saveLLM := TranslateLLMError(nil, err.Error())
 			al.emitEvent(
 				EventKindError,
 				ts.eventMeta("runTurn", "turn.error"),
 				ErrorPayload{
-					Stage:   "session_save",
-					Message: err.Error(),
+					Stage: "session_save", ChatID: ts.opts.ChatID,
+					Code: string(saveLLM.Code), Message: saveLLM.Message,
 				},
 			)
 			// US-1: persist the session-save failure to the JSONL
@@ -9829,7 +10428,7 @@ turnLoop:
 			// appendErrorTranscript docstring).
 			ts.appendErrorTranscript(
 				EventKindError.String(), "runTurn",
-				fmt.Sprintf("session save failed: %s", err.Error()),
+				saveLLM.Message,
 			)
 			return turnResult{}, err
 		}
@@ -9915,12 +10514,19 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 	ts.setPhase(TurnPhaseAborted)
 	if !ts.opts.NoHistory {
 		if err := ts.restoreSession(ts.agent); err != nil {
+			// Wave 1: never surface raw err.Error() — route through the
+			// shared classifier (CRIT-001). Local I/O errors that aren't
+			// provider-shaped still go through the same generic-message
+			// path for consistency.
+			restoreLLM := TranslateLLMError(nil, err.Error())
 			al.emitEvent(
 				EventKindError,
 				ts.eventMeta("abortTurn", "turn.error"),
 				ErrorPayload{
 					Stage:   "session_restore",
-					Message: err.Error(),
+					Code:    string(restoreLLM.Code),
+					Message: restoreLLM.Message,
+					ChatID:  ts.opts.ChatID,
 				},
 			)
 			return turnResult{}, err
@@ -9941,15 +10547,32 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 		reason = "no reason provided"
 	}
 	err := fmt.Errorf("turn aborted during %s: %s", stage, reason)
+	// Wave 2 (BLOCK 2 / IMPORTANT 1): system-initiated aborts are
+	// operator-shaped; preserve the original reason verbatim in both the
+	// returned error AND the event payload (a user/operator needs to see
+	// the actionable signal: which policy, which synthetic-floor count,
+	// which hook reason). The classifier's generic copy is the
+	// fall-through for the LIVE wire when the caller did not produce a
+	// curated message; here the caller did. The typed code stamps the
+	// EventPayload so the SPA can render the right banner.
+	abortLLM := TranslateLLMError(nil, err.Error())
+	presented := err.Error()
+	if abortLLM.Code != CodeUnknown {
+		// The classifier recognized a provider-shaped signal in the abort
+		// reason; use the sanitized generic copy instead of the raw text.
+		presented = abortLLM.Message
+	}
 	al.emitEvent(
 		EventKindError,
 		ts.eventMeta("abortTurn", "turn.error"),
 		ErrorPayload{
 			Stage:   stage,
-			Message: err.Error(),
+			Code:    string(abortLLM.Code),
+			Message: presented,
+			ChatID:  ts.opts.ChatID,
 		},
 	)
-	ts.appendErrorTranscript(EventKindError.String(), stage, err.Error())
+	ts.appendErrorTranscript(EventKindError.String(), stage, presented)
 	return turnResult{status: TurnEndStatusAborted}, err
 }
 

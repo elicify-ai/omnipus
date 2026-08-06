@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
 // defaultPerCandidateTimeout is used when no explicit per-candidate timeout is
@@ -552,6 +553,69 @@ func (e *FallbackExhaustedError) Error() string {
 		}
 	}
 	return sb.String()
+}
+
+// Unwrap returns the slice of attempted errors for errors.Is / errors.As
+// traversal (Wave 1, ADR-051 §RD5 + Go 1.20 multi-error convention).
+// The agent-loop's errorToProviderError helper walks this chain looking
+// for a *FailoverError (most specific) — Unwrap exposing the whole slice
+// means errors.As works regardless of which attempt the classifier is
+// pointed at. Returns nil when there are no attempts.
+func (e *FallbackExhaustedError) Unwrap() []error {
+	if e == nil || len(e.Attempts) == 0 {
+		return nil
+	}
+	out := make([]error, 0, len(e.Attempts))
+	for _, a := range e.Attempts {
+		if a.Error != nil {
+			out = append(out, a.Error)
+		}
+	}
+	return out
+}
+
+// LastProviderError walks the attempts (most-recent first, the one the
+// chain actually emitted when it gave up) and returns the deepest
+// *FailoverError found. Returns nil when no attempt produced a
+// classifiable provider error — the chain may have exhausted itself
+// entirely on cooldown skips, in which case the caller cannot derive a
+// status from the chain.
+//
+// Used by runTurn (loop.go) to populate ErrorPayload.ProviderError via
+// the agent package's errorToProviderError — gives the classifier at the
+// two choke points the real provider status, not a stringified message.
+func (e *FallbackExhaustedError) LastProviderError() *FailoverError {
+	if e == nil || len(e.Attempts) == 0 {
+		return nil
+	}
+	for i := len(e.Attempts) - 1; i >= 0; i-- {
+		var fe *FailoverError
+		if errors.As(e.Attempts[i].Error, &fe) {
+			return fe
+		}
+	}
+	return nil
+}
+
+// LastStructuredError walks the attempts (most-recent first) and returns
+// the deepest *common.ProviderError found. This is the broader accessor
+// than LastProviderError: it returns the underlying structured error
+// (Status/Body/Err) regardless of whether the wrapping is a FailoverError
+// or another shape. The agent package's ProviderErrorFromFailover uses
+// this to recover the full body bytes for the classifier's substring
+// match, even when the chain wrapped in a non-FailoverError. Returns nil
+// when no attempt produced a classifiable structured error.
+func (e *FallbackExhaustedError) LastStructuredError() *common.ProviderError {
+	if e == nil || len(e.Attempts) == 0 {
+		return nil
+	}
+	for i := len(e.Attempts) - 1; i >= 0; i-- {
+		var pe *common.ProviderError
+		if errors.As(e.Attempts[i].Error, &pe) {
+			return pe
+		}
+	}
+	return nil
 }
 
 // stripProviderPrefix removes the "<provider>/" prefix from model when it

@@ -332,6 +332,218 @@ describe('AgentProfile — locked core agent sections (test #13)', () => {
   })
 })
 
+// D3 (UAT v0.1.1 defects) — hydration must never trigger a spurious PUT.
+//
+// Root cause: AgentProfile's form fields start at hardcoded useState
+// defaults (name='', model='', ...). Before this fix, useAutoSave's
+// `disabled` option was never set for this call, so it defaulted to
+// `false` for the ENTIRE life of the component — useAutoSave's own "skip
+// first render" baseline-capture logic ran on the very first commit
+// (mount, before the agent query had resolved), seeding its baseline from
+// the all-defaults state. The LATER commit where the real agent data
+// hydrates into those fields then looked like a genuine user edit, arming
+// the 1500ms debounce and firing `updateAgent` — a PUT that just echoes
+// the server's own data back, bumping `updated_at` and showing "✓ Saved
+// just now" to a user who never touched the form.
+//
+// Field evidence: opening the read-only core agent Mia fired
+// `GET /api/v1/agents/mia` followed by an unsolicited `PUT` ~1.5s later.
+// Reproduced by 2 UAT testers with network capture.
+describe('AgentProfile — D3: hydration must not trigger a spurious PUT', () => {
+  it('opening a read-only core agent and touching nothing never calls updateAgent, even after the debounce window elapses (REVERT-PROOF: fails without the formHydrated gate)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    // PASSIVE idle wait — no interaction at all — comfortably past the
+    // 1500ms debounce so a spurious hydration-triggered save gets every
+    // chance to fire.
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+    expect(updateAgent).not.toHaveBeenCalled()
+  })
+
+  it('the same passive-open holds for an editable (non-locked) agent too — the bug is not locked-agent-specific', async () => {
+    // Explicitly guards against reintroducing an `agent.locked` guard as
+    // the "fix" — the RCA confirmed that's the wrong mechanism, since the
+    // spurious PUT fires for every agent, locked or not.
+    vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+    expect(updateAgent).not.toHaveBeenCalled()
+  })
+
+  // Root cause was inside useAutoSave.ts itself: `initializedRef` seeded its
+  // "skip first render" baseline exactly once per hook instance and never
+  // re-armed on a LATER `disabled: true→false` transition, so only the
+  // FIRST entity a long-lived hook instance ever hydrated got a safe
+  // baseline — every subsequent entity's hydration still looked like a
+  // genuine edit relative to the previous entity's stale baseline. Fixed by
+  // making useAutoSave itself re-arm `previousJsonRef`/`lastSavedJsonRef`
+  // from the CURRENT `data` on every `disabled` true→false transition (see
+  // `wasDisabledRef` in useAutoSave.ts), not just the hook's very first
+  // commit — so `formHydrated`'s existing false→true→false→true cycle
+  // across agent switches (AgentProfile.tsx:284/884) now gets a fresh
+  // baseline every time, not just the first.
+  it('REVERT-PROOF: switching to a SECOND agent within the same mounted AgentProfile instance (it does not unmount on agent switch) does not fire a spurious PUT for that second agent', async () => {
+    vi.mocked(fetchAgent).mockImplementation((id: string) =>
+      Promise.resolve(id === 'mia' ? mockLockedCoreAgent : mockCoreAgent),
+    )
+    const client = makeClient()
+    const { rerender } = render(
+      <QueryClientProvider client={client}>
+        <AgentProfile agentId="general-assistant" />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('General Assistant')
+    // Let the first agent's hydration settle well past the debounce window
+    // before switching — the passive-open tests above already cover the
+    // first-agent case; this just establishes a clean starting point.
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+    expect(updateAgent).not.toHaveBeenCalled()
+
+    // Switch to a SECOND agent WITHOUT unmounting — same QueryClientProvider,
+    // same <AgentProfile> element position, only the `agentId` prop changes.
+    // This mirrors the real app: AgentProfile is mounted at the route/layout
+    // level and does not unmount when the operator opens a different agent
+    // (see the `formHydrated` doc comment in AgentProfile.tsx).
+    rerender(
+      <QueryClientProvider client={client}>
+        <AgentProfile agentId="mia" />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Mia')
+    // PASSIVE idle wait — no interaction at all — comfortably past the
+    // 1500ms debounce so a spurious hydration-triggered save of the SECOND
+    // agent gets every chance to fire.
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+    expect(updateAgent).not.toHaveBeenCalled()
+  })
+
+  // EMPIRICAL TEST — 7-reviewer-gate Finding B (fix/uat-v0.1.1-defects):
+  //
+  // A different reviewer suspected AgentProfile could still coalesce its
+  // hydration-readiness reset on a CACHED revisit. AgentProfile uses TWO
+  // plain effects — `[agentId]` resets `formHydrated` to false, `[agentId,
+  // agent]` sets it back to true once `agent` is available — instead of the
+  // mid-render state-adjustment pattern WorkspaceTeamTab/WorkspaceSettingsTab
+  // use specifically because a plain effect pair CAN be coalesced by React
+  // when the new entity's `agent` is already cache-resolved on the very
+  // SAME render as the `agentId` change: both effects fire back-to-back in
+  // the same passive-effect flush, and their `setFormHydrated(false)` then
+  // `setFormHydrated(true)` calls batch into a single re-render — so
+  // `disabled` (`!formHydrated`) passed to useAutoSave never actually
+  // commits as `true` in between. Without that real false-render,
+  // useAutoSave's `wasDisabledRef` re-arm (the D3 fix above) never engages,
+  // and the revisited entity's freshly-hydrated data is diffed against the
+  // PREVIOUS entity's stale baseline — indistinguishable from a genuine
+  // edit, arming the debounce and firing a spurious echo PUT.
+  //
+  // The existing D3 regression test above (switching to a SECOND agent)
+  // cannot exercise this: `fetchAgent`'s mock always returns a promise, so
+  // the second agent's `agent` is undefined for at least one render — a
+  // real (non-coalesced) false→true cycle. This test instead REVISITS an
+  // agent whose data is already sitting in the QueryClient cache from an
+  // earlier fetch in this same test (a genuine cache hit, synchronously
+  // resolved on the same render as the `agentId` prop change), which is
+  // the precondition the reviewer flagged.
+  it('EMPIRICAL (Finding B): revisiting an ALREADY-CACHED agent (A→B→A) does not fire a spurious PUT for the revisited agent', async () => {
+    vi.mocked(fetchAgent).mockImplementation((id: string) =>
+      Promise.resolve(id === 'mia' ? mockLockedCoreAgent : mockCoreAgent),
+    )
+    const client = makeClient()
+    const { rerender } = render(
+      <QueryClientProvider client={client}>
+        <AgentProfile agentId="general-assistant" />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('General Assistant')
+    // general-assistant's data is now cached in `client` (queryKey
+    // ['agent', 'general-assistant']).
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+    expect(updateAgent).not.toHaveBeenCalled()
+
+    // Switch to a SECOND agent — first-ever fetch for 'mia', so this leg
+    // behaves like the existing D3 test above (a real, non-coalesced cycle).
+    rerender(
+      <QueryClientProvider client={client}>
+        <AgentProfile agentId="mia" />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Mia')
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+    expect(updateAgent).not.toHaveBeenCalled()
+
+    // REVISIT general-assistant. Its data is already cached from the first
+    // render above, so `useQuery` can resolve it SYNCHRONOUSLY on the same
+    // render as the `agentId` prop flipping back — the cache-hit precondition
+    // for the coalescing hazard Finding B raised.
+    rerender(
+      <QueryClientProvider client={client}>
+        <AgentProfile agentId="general-assistant" />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('General Assistant')
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+    expect(updateAgent).not.toHaveBeenCalled()
+  })
+})
+
+// Guard-noise fix (AgentProfile.tsx:405-450): the `updated_at` monotonic
+// hydration guard used to conflate "genuinely stale" (`<`) with "identical,
+// nothing to apply" (`===`) under one `<=` branch, console.warn-ing (+
+// logDiagnostic) on BOTH. Only the `<` case is load-bearing noise; `===` is
+// a normal no-op (e.g. a same-content invalidateQueries echo) and must stay
+// silent.
+describe('AgentProfile — guard-noise fix: stale vs identical updated_at', () => {
+  it('warns via console.warn for a genuinely OLDER incoming snapshot (still load-bearing)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t0 = '2026-01-01T00:00:10.000Z'
+    const t1 = '2026-01-01T00:00:05.000Z' // older than t0
+    const first: Agent = { ...mockCoreAgent, updated_at: t0 }
+    vi.mocked(fetchAgent).mockResolvedValue(first)
+    const client = makeClient()
+    renderProfile('general-assistant', client)
+    await screen.findByText('General Assistant')
+    warnSpy.mockClear()
+
+    // Simulate a stale refetch landing with an OLDER updated_at than what
+    // was already incorporated — queryClient.setQueryData mimics a raw
+    // cache write the way a race-y refetch would.
+    client.setQueryData(['agent', 'general-assistant'], { ...first, updated_at: t1 })
+
+    await waitFor(() => {
+      expect(warnSpy).toHaveBeenCalledWith(
+        'agentProfile.updatedAtGuardRejectedHydration',
+        expect.anything(),
+      )
+    })
+    warnSpy.mockRestore()
+  })
+
+  it('does NOT call console.warn for an IDENTICAL incoming snapshot (silent no-op)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t0 = '2026-01-01T00:00:10.000Z'
+    const first: Agent = { ...mockCoreAgent, updated_at: t0 }
+    vi.mocked(fetchAgent).mockResolvedValue(first)
+    const client = makeClient()
+    renderProfile('general-assistant', client)
+    await screen.findByText('General Assistant')
+    warnSpy.mockClear()
+
+    // Same-content echo: identical updated_at, identical everything else —
+    // e.g. a same-content invalidateQueries refetch.
+    client.setQueryData(['agent', 'general-assistant'], { ...first })
+
+    // Give the effect a chance to run; then assert no warning was ever logged.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      'agentProfile.updatedAtGuardRejectedHydration',
+      expect.anything(),
+    )
+    warnSpy.mockRestore()
+  })
+})
+
 // US-E6: per-agent skill assignment tests
 // Traces to: nontech-ux-hardening-spec.md §6.5, F-06
 describe('AgentProfile — Skills picker (US-E6)', () => {
@@ -1822,6 +2034,12 @@ describe('AgentProfile — updated_at staleness guard', () => {
     }, { timeout: 6000 })
   })
 
+  // The `<` (genuinely stale) case remains load-bearing and must stay
+  // noisy — covered by "AgentProfile — guard-noise fix: stale vs identical
+  // updated_at" below (the sibling describe block introduced alongside
+  // this fix), which drives it directly via a synthetic stale
+  // `setQueryData` poke rather than a real save + refetch race.
+
   it('fails CLOSED (rejects the hydration, does not silently adopt it) and warns when updated_at cannot be parsed', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t0 = '2026-02-01T00:00:00.000Z'
@@ -2050,6 +2268,24 @@ describe('AgentProfile — sheet-close flush (item 1)', () => {
     // drive), exercising `handleCloseAgentSheet` for real rather than
     // calling the store action directly.
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+    // The close handler's flush calls saveNow() synchronously, which starts
+    // doSave() up to its first await (the mocked, already-resolved
+    // updateAgent promise) — but doSave()'s OWN post-await bookkeeping
+    // (status→'saved', and the 2s "fade to idle" setTimeout it arms) is not
+    // gated by any timer here, so a plain sync `advanceTimersByTime` has
+    // nothing to advance. Flush the pending microtasks while STILL on fake
+    // timers (advanceTimersByTimeAsync(0) is this codebase's established
+    // idiom for exactly this — see browserWebRTC.test.ts) so that
+    // continuation — including the fade-timer arm — settles as a FAKE timer
+    // before switching to real ones below. Without this, the arm can race
+    // past the vi.useRealTimers() switch on unlucky microtask orderings,
+    // leaking a genuine setTimeout that fires ~2s later during a LATER test
+    // and throws on this already-unmounted component. See useAutoSave.ts's
+    // fade-timer comment.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
     vi.useRealTimers()
 
     await waitFor(() => {
@@ -2062,6 +2298,188 @@ describe('AgentProfile — sheet-close flush (item 1)', () => {
     // The sheet actually closed (store cleared) — confirms this exercised
     // the real close path, not a debounce coincidence.
     expect(useUiStore.getState().editAgentId).toBeNull()
+  })
+})
+
+// ── Finding A (7-reviewer-gate, fix/uat-v0.1.1-defects) — reachability probe ──
+//
+// `handleCloseAgentSheet` only flushes a pending edit when the sheet closes
+// via ITS OWN `onClose` (the Sheet's dismiss affordance / Escape / backdrop
+// click). The deep-link route (`src/routes/_app/agents.$agentId.tsx`) does
+// NOT go through that handler — it calls `useUiStore.getState().
+// openEditAgentSlideOver(newAgentId)` directly, a raw Zustand setter with no
+// flush logic of its own (`src/store/ui.ts`). Since AgentProfile is mounted
+// once at the layout level and does NOT unmount between agents, switching
+// `editAgentId` this way while a DIFFERENT agent's sheet is open with a
+// genuinely pending (debounced, not yet sent) edit bypasses the flush
+// entirely — this test proves that reachability empirically by simulating
+// exactly what the deep-link route does (calling the store action directly)
+// rather than clicking the sheet's own close affordance.
+describe('AgentProfile — Finding A: store-driven agent switch bypasses the close-flush', () => {
+  beforeEach(() => {
+    useUiStore.setState({ editAgentId: null, editAgentWorkspaceId: null })
+  })
+
+  it('REACHABILITY PROBE: switching editAgentId directly (as the deep-link route does) while a SOUL edit is still debounced loses the edit — never sent to the server, and gone from the UI on revisit', async () => {
+    vi.mocked(fetchAgent).mockImplementation((id: string) =>
+      Promise.resolve(id === 'mia' ? mockLockedCoreAgent : { ...mockCoreAgent, soul: '' }),
+    )
+    vi.mocked(updateAgent).mockReset().mockResolvedValue(mockCoreAgent)
+
+    useUiStore.setState({ editAgentId: 'general-assistant' })
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <AgentProfile />
+      </QueryClientProvider>,
+    )
+
+    await screen.findByText('General Assistant')
+    switchTab('tab-personality')
+    const soulTextarea = await screen.findByTestId('agent-soul')
+
+    vi.useFakeTimers()
+    fireEvent.change(soulTextarea, { target: { value: 'Typed just before switch' } })
+
+    // Advance WELL SHORT of the 1500ms debounce — the timer is still armed,
+    // unfired.
+    await act(async () => { vi.advanceTimersByTime(200) })
+    expect(updateAgent).not.toHaveBeenCalled()
+
+    // Simulate the deep-link route's bypass: call the RAW store action
+    // directly instead of the sheet's own close affordance. This is exactly
+    // what `AgentProfileRoute` (agents.$agentId.tsx) does on mount — no
+    // `handleCloseAgentSheet`, no flush.
+    await act(async () => {
+      useUiStore.getState().openEditAgentSlideOver('mia')
+      // Let the debounce timer that was already armed for general-assistant
+      // run its full course — the route-bypass fix (if any) needs to survive
+      // this, not merely "hasn't fired yet".
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+    vi.useRealTimers()
+
+    await screen.findByText('Mia')
+
+    // The pending SOUL edit for general-assistant must never have reached
+    // the server — this assertion is expected to FAIL on unfixed code only
+    // if a naive "flush on switch" were added with a stale closure; on
+    // TODAY's code (no flush at all on this path) it currently passes
+    // vacuously (updateAgent is never called for ANY reason), which is the
+    // silent-data-loss symptom itself. The revisit assertion below is what
+    // actually distinguishes "lost silently" from "handled correctly".
+    for (const call of vi.mocked(updateAgent).mock.calls) {
+      expect(call[1]).not.toMatchObject({ soul: 'Typed just before switch' })
+    }
+
+    // Revisit general-assistant. If the edit had been durably captured
+    // anywhere (server or otherwise), it would reappear. It does not — the
+    // form re-hydrates to the server's original (untouched) soul, proving
+    // the edit is gone, not merely "not yet sent".
+    await act(async () => {
+      useUiStore.getState().openEditAgentSlideOver('general-assistant')
+    })
+    await screen.findByText('General Assistant')
+    switchTab('tab-personality')
+    const revisitedSoulTextarea = await screen.findByTestId('agent-soul')
+    expect(revisitedSoulTextarea).not.toHaveValue('Typed just before switch')
+    expect(revisitedSoulTextarea).toHaveValue('')
+  })
+
+  // REVERT-PROOF: this is the actual fix under test (not just the
+  // reachability probe above). Fails on code with no Finding-A guard at
+  // all (no toast is ever raised — the loss stays silent); passes once the
+  // `lostPendingAgentEditRef` + no-deps effect in AgentProfile.tsx surfaces
+  // it. See the reachability probe above for why an automatic re-flush was
+  // deliberately NOT chosen.
+  it('surfaces a toast + diagnostic when a store-driven switch discards a pending edit (the fix under test)', async () => {
+    vi.mocked(fetchAgent).mockImplementation((id: string) =>
+      Promise.resolve(id === 'mia' ? mockLockedCoreAgent : { ...mockCoreAgent, soul: '' }),
+    )
+    vi.mocked(updateAgent).mockReset().mockResolvedValue(mockCoreAgent)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    useUiStore.setState({ editAgentId: 'general-assistant' })
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <AgentProfile />
+      </QueryClientProvider>,
+    )
+
+    await screen.findByText('General Assistant')
+    switchTab('tab-personality')
+    const soulTextarea = await screen.findByTestId('agent-soul')
+
+    const idsBefore = new Set(useUiStore.getState().toasts.map((t) => t.id))
+
+    vi.useFakeTimers()
+    fireEvent.change(soulTextarea, { target: { value: 'Typed just before switch' } })
+    await act(async () => { vi.advanceTimersByTime(200) })
+
+    await act(async () => {
+      useUiStore.getState().openEditAgentSlideOver('mia')
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    vi.useRealTimers()
+
+    await screen.findByText('Mia')
+
+    await waitFor(() => {
+      const newOnes = useUiStore.getState().toasts.filter((t) => !idsBefore.has(t.id))
+      expect(newOnes.some((t) => /not saved before you switched/i.test(t.message))).toBe(true)
+    })
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('unsaved pending edit'),
+      expect.objectContaining({ agentId: 'general-assistant' }),
+    )
+
+    warnSpy.mockRestore()
+  })
+
+  // Guards against the false-positive this fix could easily introduce: an
+  // agent that is STILL LOADING (never hydrated — `disabled` was true the
+  // entire time) has no real baseline yet, so `hasPendingChanges()` would
+  // trivially read `true` against the hardcoded-default form state. Without
+  // the `formHydrated` guard, switching away from a still-loading agent
+  // would falsely report a "lost edit" that never existed.
+  it('does NOT warn when switching away from an agent that never finished loading (no real edit could have existed)', async () => {
+    let resolveFetch: ((agent: Agent) => void) | undefined
+    vi.mocked(fetchAgent).mockImplementation((id: string) => {
+      if (id === 'general-assistant') {
+        return new Promise((resolve) => { resolveFetch = resolve })
+      }
+      return Promise.resolve(mockLockedCoreAgent)
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    useUiStore.setState({ editAgentId: 'general-assistant' })
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <AgentProfile />
+      </QueryClientProvider>,
+    )
+
+    // Still loading — never hydrated.
+    expect(screen.getByText(/loading agent/i)).toBeInTheDocument()
+
+    const idsBefore = new Set(useUiStore.getState().toasts.map((t) => t.id))
+
+    await act(async () => {
+      useUiStore.getState().openEditAgentSlideOver('mia')
+    })
+    await screen.findByText('Mia')
+
+    // Let the never-resolved general-assistant fetch's promise linger
+    // harmlessly (this test doesn't need it to resolve).
+    void resolveFetch
+
+    await new Promise((r) => setTimeout(r, 50))
+    const newOnes = useUiStore.getState().toasts.filter((t) => !idsBefore.has(t.id))
+    expect(newOnes.some((t) => /not saved before you switched/i.test(t.message))).toBe(false)
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('unsaved pending edit'),
+      expect.anything(),
+    )
+    warnSpy.mockRestore()
   })
 })
 

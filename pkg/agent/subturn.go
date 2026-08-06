@@ -677,8 +677,26 @@ func spawnSubTurn(
 	// blocked delivering results — a deadlock.
 	var semAcquired bool
 	if parentTS.concurrencySem != nil {
-		// Create a timeout context for semaphore acquisition
-		timeoutCtx, cancel := context.WithTimeout(ctx, rtCfg.concurrencyTimeout)
+		// Create a timeout context for semaphore acquisition.
+		//
+		// Critical sub-turns (async/background delegation via DelegateTool's
+		// executeAsync, which always sets Critical:true) are designed to
+		// outlive the parent turn — the child runs on an INDEPENDENT
+		// context.Background()-derived childCtx built further below (line
+		// ~473), and runTurn receives that childCtx, never the parent ctx.
+		// Deriving the acquire timeout from ctx in that case races the parent
+		// turn's own completion: a background delegation's goroutine is
+		// frequently scheduled only after the parent turn has already ended
+		// and canceled its ctx, so the acquire's select would pick the
+		// already-done timeout channel and abort the spawn with ctx.Err() —
+		// silently dropping a delegation that was supposed to keep running.
+		// Base the timeout on context.Background() for Critical spawns so only
+		// a genuine concurrencyTimeout exhaustion bounds the acquire.
+		semTimeoutBase := ctx
+		if cfg.Critical {
+			semTimeoutBase = context.Background()
+		}
+		timeoutCtx, cancel := context.WithTimeout(semTimeoutBase, rtCfg.concurrencyTimeout)
 		defer cancel()
 
 		select {
@@ -690,8 +708,11 @@ func spawnSubTurn(
 				}
 			}()
 		case <-timeoutCtx.Done():
-			// Check parent context first - if it was canceled, propagate that error
-			if ctx.Err() != nil {
+			// A Critical acquire can no longer be aborted by parent
+			// cancellation (its base is context.Background()), so a done
+			// timeout here is a genuine concurrencyTimeout exhaustion. Only
+			// the non-Critical path can still surface a parent cancellation.
+			if !cfg.Critical && ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			// Otherwise it's our timeout
@@ -1204,6 +1225,33 @@ func spawnSubTurn(
 		SkipInitialSteeringPoll: true,
 		TranscriptSessionID:     childID, // FR-007: the child's OWN session id, not the parent's
 		TranscriptStore:         parentTS.transcriptStore,
+		// FIX 1 (re-review): WorkspaceID inherits from the PARENT turn, not
+		// execSource (the resolved delegate). This is deliberately NOT covered
+		// by ADR-032's "no inheritance from the parent" rule (see that ADR's
+		// note in CLAUDE.md): the "Workspace" ADR-032 protects is the
+		// AgentInstance Home field — the per-agent directory-path identity
+		// field (renamed "agent home" by ADR-046) — sourced from execSource a
+		// few lines above via CloneExcept/the execSource-snapshot copy, and
+		// via the SEPARATE, identity-keyed CoreTeam reroot in runTurn
+		// (resolveTurnWorkDirOrRefuse, keyed off ts.agent.ID == execSource.ID
+		// for the child). processOptions.WorkspaceID is a different concept
+		// entirely — the Spec-1 multi-agent Workspace *room* a turn is
+		// running inside (FR-7.1 memory routing / bus.OutboundMediaMessage
+		// delivery) — and it is turn/session-scoped, not agent-scoped: every
+		// other field in this same struct literal that carries that same
+		// kind of context (Channel, ChatID, SenderID, SenderDisplayName,
+		// TranscriptSessionID, TranscriptStore) is already sourced from
+		// parentTS, not execSource, because a delegated child is still
+		// answering within the PARENT's conversation/room, just running as a
+		// different agent identity. Leaving WorkspaceID as the sole
+		// session-context field NOT inherited was the actual bug: it silently
+		// degraded bus.OutboundMediaMessage.WorkspaceID (loop.go's tool-media
+		// delivery block) to the private/global room for every delegated
+		// child that produces media inside a workspace-bound session, and
+		// (via FindForAgentPreferring's tie-break, loop.go's "Filesystem
+		// re-rooting" comment) removed a genuine tie-breaking signal for a
+		// child agent that belongs to more than one workspace's CoreTeam.
+		WorkspaceID: parentTS.opts.WorkspaceID,
 	}
 
 	// Create event scope for the child turn

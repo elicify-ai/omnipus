@@ -12,6 +12,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -80,6 +81,22 @@ func getTaskStartedAt(t *testing.T, api *restAPI, id string) *time.Time {
 	var tsk gen.Task
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
 	return tsk.StartedAt
+}
+
+// getTaskFull reads back a task via GET /api/v1/tasks/{id} and returns the
+// full wire struct. Used by the fresh-run-reset revert tests below, which
+// need to assert on several fields (result, session_id, artifacts,
+// completed_at, status) from a single consistent read.
+func getTaskFull(t *testing.T, api *restAPI, id string) gen.Task {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+id, nil)
+	r.URL.Path = "/api/v1/tasks/" + id
+	api.HandleTasks(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "getTaskFull GET must return 200; body=%s", w.Body.String())
+	var tsk gen.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
+	return tsk
 }
 
 // advanceTaskToNext advances a task from inbox to next (adding a description for
@@ -316,6 +333,168 @@ func TestHandleTaskPatch_InProgress_WithKnownAgent(t *testing.T) {
 		}, 10*time.Second, 20*time.Millisecond,
 			"task goroutine must reach a terminal state before test teardown")
 	})
+}
+
+// TestTransition_DoneRepeatingTaskRunNow is FIX 2's regression test (the
+// second of the two 7-reviewer-gate findings on commit 1b3d4b3d): a
+// done-but-still-armed recurring/every task's manual "Run now" action (PATCH
+// status=in_progress) must succeed — mirroring the fact that the scheduler
+// itself keeps a repeating trigger's series armed past a done status
+// (pkg/agent/task_trigger.go's OnTaskUpserted). The narrow validateTransition
+// carve-out (pkg/task/store.go) must NOT unfreeze `done` for a task whose
+// trigger does not repeat (manual/once) — that must stay a 400 exactly as
+// before.
+func TestTransition_DoneRepeatingTaskRunNow(t *testing.T) {
+	t.Run("done every task: PATCH status=in_progress is rejected (400, use POST /runs)", func(t *testing.T) {
+		api := newTestRestAPIAlignedStores(t)
+		wsID := ensureTestWorkspace(t, api)
+		setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+
+		body := fmt.Sprintf(
+			`{"title":"RerunMe","action":"llm","workspace_id":%q,"agent_id":"main","trigger":{"type":"every","config":{"every_ms":60000}}}`,
+			wsID,
+		)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.URL.Path = "/api/v1/tasks"
+		api.HandleTasks(w, r)
+		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+		var tsk gen.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
+
+		advanceTaskToDone(t, api, tsk.Id)
+		doneTask := getTaskStatus(t, api, tsk.Id)
+		require.Equal(t, gen.TaskStatusDone, doneTask, "precondition: task must be done")
+		sessionBefore := getTaskSessionID(t, api, tsk.Id)
+
+		// ADR-050 / task-run-history-spec.md §3.4: the PATCH-based "fresh-run
+		// reset" re-run path is retired. A done+repeating task's "Run now" must
+		// now be rejected via PATCH — re-running goes exclusively through
+		// POST /api/v1/tasks/{id}/runs.
+		wRerun := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
+		require.Equal(t, http.StatusBadRequest, wRerun.Code,
+			"a done EVERY (repeating) task's PATCH status=in_progress must be rejected; body=%s", wRerun.Body.String())
+		var errResp gen.ErrorResponse
+		require.NoError(t, json.Unmarshal(wRerun.Body.Bytes(), &errResp))
+		assert.Contains(t, errResp.Error, "runs",
+			"rejection message must point callers to POST /api/v1/tasks/{id}/runs")
+
+		// The reject happens before any store write — the task must be left
+		// completely untouched.
+		statusAfter := getTaskStatus(t, api, tsk.Id)
+		assert.Equal(t, gen.TaskStatusDone, statusAfter,
+			"task must remain done after the rejected PATCH (no write occurred)")
+		sessionAfter := getTaskSessionID(t, api, tsk.Id)
+		assert.Equal(t, sessionBefore, sessionAfter,
+			"session_id must be unchanged after the rejected PATCH (no fresh-run reset, no write)")
+	})
+
+	t.Run("done manual (no trigger) task: PATCH status=in_progress still 400s", func(t *testing.T) {
+		api := newTestRestAPIAlignedStores(t)
+		wsID := ensureTestWorkspace(t, api)
+
+		tsk := createTaskViaAPI(t, api, "OneShotDone", wsID)
+		advanceTaskToDone(t, api, tsk.Id)
+		require.Equal(t, gen.TaskStatusDone, getTaskStatus(t, api, tsk.Id), "precondition: task must be done")
+
+		wRerun := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
+		assert.Equal(t, http.StatusBadRequest, wRerun.Code,
+			"a done task with a NON-repeating trigger must stay frozen; body=%s", wRerun.Body.String())
+		var errResp gen.ErrorResponse
+		require.NoError(t, json.Unmarshal(wRerun.Body.Bytes(), &errResp))
+		assert.NotEmpty(t, errResp.Error)
+	})
+}
+
+// TestHandleTaskPatch_RepeatingRunNow_RejectedLeavesDataUnchanged verifies
+// ADR-050 / task-run-history-spec.md §3.4: PATCH-based re-run of a done
+// REPEATING task is rejected with 400 before any store write, so a task
+// carrying a prior run's result/session_id/artifacts/completed_at is left
+// completely untouched. This retires the old "fresh-run reset + revert on
+// failure" behavior (handleTaskPatch used to wipe session_id/result/
+// artifacts/completed_at before calling StartTaskNow, then restore them on
+// failure) — that whole path is gone, so the "data preserved" guarantee now
+// holds trivially: the request never reaches a write in the first place.
+//
+// Traces to: ADR-050 / docs/internal/plan/task-run-history-spec.md §3.4 —
+// the PATCH-based "fresh-run reset" re-run path is retired; re-running a
+// repeating task goes exclusively through POST /api/v1/tasks/{id}/runs.
+//
+// BDD:
+//
+//	Given a done REPEATING task carrying a prior run's result, session_id,
+//	     artifacts, and completed_at,
+//	When PATCH /api/v1/tasks/{id} with {"status":"in_progress"} ("Run now"),
+//	Then 400 Bad Request (error message points to POST /runs), and a
+//	     subsequent GET shows status=done with result/session_id/artifacts/
+//	     completed_at ALL UNCHANGED from their pre-PATCH values.
+func TestHandleTaskPatch_RepeatingRunNow_RejectedLeavesDataUnchanged(t *testing.T) {
+	api := newTestRestAPIAlignedStores(t)
+	wsID := ensureTestWorkspace(t, api)
+	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+
+	body := fmt.Sprintf(
+		`{"title":"RerunFailPreserve","action":"llm","workspace_id":%q,"agent_id":"main","trigger":{"type":"every","config":{"every_ms":60000}}}`,
+		wsID,
+	)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/tasks"
+	api.HandleTasks(w, r)
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+	var tsk gen.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
+
+	advanceTaskToDone(t, api, tsk.Id)
+	require.Equal(t, gen.TaskStatusDone, getTaskStatus(t, api, tsk.Id), "precondition: task must be done")
+
+	// Seed distinguishable "prior completed run" data directly on the store so
+	// an unchanged-vs-wiped comparison is unambiguous (advanceTaskToDone's own
+	// mock-LLM result text would work too, but a synthetic, obviously-non-empty
+	// fixture makes the assertions below self-evidently about THIS data, not
+	// incidental mock-provider output).
+	seededResult := "the completed run's important result text"
+	seededSessionID := "prior-run-session-xyz"
+	seededArtifacts := []string{"report.md", "chart.png"}
+	seededCompletedAt := "2026-01-01T00:00:00Z"
+	_, seedErr := api.taskStore.Update(tsk.Id, task.Patch{
+		Result:      &seededResult,
+		SessionID:   &seededSessionID,
+		Artifacts:   &seededArtifacts,
+		CompletedAt: &seededCompletedAt,
+	})
+	require.NoError(t, seedErr, "seeding prior-run data must succeed")
+
+	before := getTaskFull(t, api, tsk.Id)
+	require.Equal(t, seededResult, deref(before.Result), "precondition: seeded result must be readable")
+	require.Equal(t, seededSessionID, deref(before.SessionId), "precondition: seeded session_id must be readable")
+	require.NotNil(t, before.Artifacts)
+	require.Len(t, *before.Artifacts, 2, "precondition: seeded artifacts must be readable")
+	require.NotNil(t, before.CompletedAt, "precondition: seeded completed_at must be readable")
+
+	wRerun := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
+	require.Equal(t, http.StatusBadRequest, wRerun.Code,
+		"PATCH status=in_progress on a done repeating task must be rejected; body=%s", wRerun.Body.String())
+	var errResp gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(wRerun.Body.Bytes(), &errResp))
+	assert.Contains(t, errResp.Error, "runs",
+		"rejection message must point callers to POST /api/v1/tasks/{id}/runs")
+
+	after := getTaskFull(t, api, tsk.Id)
+	assert.Equal(t, gen.TaskStatusDone, after.Status,
+		"task must remain done after the rejected PATCH (no write occurred)")
+	assert.Equal(t, seededResult, deref(after.Result),
+		"result must be UNCHANGED after the rejected PATCH — no write ever reached the store")
+	assert.Equal(t, seededSessionID, deref(after.SessionId),
+		"session_id must be UNCHANGED after the rejected PATCH — the prior run's chat link must not be lost")
+	require.NotNil(t, after.Artifacts, "artifacts must be unchanged, not wiped, after the rejected PATCH")
+	assert.ElementsMatch(t, seededArtifacts, *after.Artifacts,
+		"artifacts must be unchanged after the rejected PATCH")
+	require.NotNil(t, after.CompletedAt, "completed_at must be unchanged, not wiped, after the rejected PATCH")
+	assert.Equal(t, before.CompletedAt, after.CompletedAt,
+		"completed_at must be UNCHANGED after the rejected PATCH")
 }
 
 // TestHandleTaskPatch_InProgress_Idempotent verifies that a second PATCH with

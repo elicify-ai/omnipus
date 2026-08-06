@@ -455,7 +455,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// sniff the first 512 bytes to detect binary content before loading
 	// it into the LLM context. Seeking back to 0 afterwards restores state.
 	sniff := make([]byte, 512)
-	sniffN, _ := file.Read(sniff)
+	sniffN, sniffErr := file.Read(sniff)
+	if sniffErr != nil && !errors.Is(sniffErr, io.EOF) {
+		return ErrorResult(fmt.Sprintf("failed to sniff file content: %v", sniffErr))
+	}
 
 	// Reject binary files: null bytes are a reliable binary indicator.
 	if bytes.Contains(sniff[:sniffN], []byte{0}) {
@@ -466,7 +469,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		// workspace policy when the turn carries a workspace dir, else the
 		// fixed agent policy), never a raw os.Open, so it cannot escape the
 		// boundary ResolvePath enforced.
-		if docextract.IsExtractable("", filepath.Base(path)) {
+		if docextract.IsExtractableBytes(sniff[:sniffN], filepath.Base(path)) {
 			return t.extractDocument(ctx, handle, path, offset, length)
 		}
 		return ErrorResult("binary file detected: use a dedicated tool to handle binary files")

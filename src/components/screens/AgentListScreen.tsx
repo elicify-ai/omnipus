@@ -299,6 +299,50 @@ function AgentsLibraryView({
         </div>
       ) : (
         <div className="space-y-8">
+          {/* Built-in roster — rendered FIRST (Agents-screen IA fix): the
+              locked Mia/Jim/Ava/Ray roster is 100% of a fresh install (Main
+              agents and Sub-agent workers are both empty until the operator
+              creates a custom one), so it must be the thing a first-time
+              visitor sees immediately, not a collapsed section they have to
+              scroll past two empty-state cards to reach. Two independent UAT
+              testers stopped at the (empty) Main-agents / worker cards above
+              the old bottom position and concluded there was no built-in
+              roster at all. */}
+          {builtInAgents.length > 0 && (
+            <section data-testid="built-in-agents-section">
+              <Accordion
+                type="single"
+                collapsible
+                value={builtInOpen}
+                onValueChange={setBuiltInOpen}
+              >
+                <AccordionItem value="built-in">
+                  <AccordionTrigger data-testid="built-in-agents-trigger">
+                    <div className="text-left">
+                      <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
+                        Built-in roster
+                      </h2>
+                      <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                        Core agents — Mia, Jim, Ava, Ray and any other locked system roster.
+                      </p>
+                    </div>
+                  </AccordionTrigger>
+                  <AccordionContent>
+                    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 pt-2">
+                      {builtInAgents.map((agent) => (
+                        <AgentCard
+                          key={agent.id}
+                          agent={agent}
+                          onSetDefault={() => onSetDefault(agent)}
+                        />
+                      ))}
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            </section>
+          )}
+
           {/* Main agents */}
           <section data-testid="base-agents-section">
             <div className="flex items-start justify-between gap-3 mb-3">
@@ -328,7 +372,7 @@ function AgentsLibraryView({
                 <p className="text-sm text-[var(--color-muted)]">
                   {workspaceFilter !== 'all'
                     ? 'No Main agents on this workspace team.'
-                    : 'No custom Main agents yet. Create one, or use a built-in below.'}
+                    : 'No custom Main agents yet. Create one, or use a built-in above.'}
                 </p>
               </div>
             ) : (

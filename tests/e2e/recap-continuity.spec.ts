@@ -45,6 +45,7 @@ import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, assistantMessages } from './fixtures/selectors'
+import { openSessionByDeepLink } from './fixtures/session-setup'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -471,13 +472,31 @@ test(
     // We create the session via REST so we have the session_id for the WS close
     // frame.  Then we navigate to it so the SPA attaches to this session.
     // Pattern from cancel-cross-channel.spec.ts.
+    //
+    // Root cause of the previous flake (CI: assistantMessages toHaveCount(1)
+    // timed out at 0 for the full 90s): this session has no workspace_id (a
+    // bare POST /api/v1/sessions), so sessions.$sessionId.tsx takes the
+    // inline fallback path and calls attachToSession() from an effect gated
+    // on fetchSessionDetail + fetchWorkspaces resolving — that effect is NOT
+    // synchronized with the composer becoming enabled (waitForConnected only
+    // proves the WS socket is open, not that attach_session for THIS session
+    // has been sent). A message typed+sent in that window finds
+    // activeSessionId still null, so chat.ts's sendMessage() takes its
+    // "no active session" branch: the WS `message` frame carries no
+    // session_id, the server mints a BRAND NEW phantom session, and the
+    // conversation happens there while sessionId's own transcript.jsonl stays
+    // permanently empty (confirmed on disk via local reproduction: message
+    // and reply landed under a fresh server-minted session id while
+    // sessionId's transcript.jsonl remained 0 bytes). This is the exact
+    // "mid-turn attach flake" root-caused for replay-fidelity.spec.ts (c) and
+    // already fixed there via
+    // openSessionByDeepLink's data-active-session-id wait
+    // (tests/e2e/fixtures/session-setup.ts) — this spec just never adopted
+    // it. Reuse that proven helper instead of the ad hoc
+    // goto+visible+waitForConnected sequence, which is missing exactly that
+    // guard.
     const sessionId = await createSession(page, agentId)
-    await page.goto(`/#/sessions/${sessionId}`)
-    await expect(inputLocator).toBeVisible({ timeout: 15_000 })
-
-    // Wait for the SPA WS to connect before sending any messages.
-    // The SPA auto-attaches on session navigation; give it a moment.
-    await page.waitForTimeout(2_000)
+    await openSessionByDeepLink(page, sessionId)
 
     // ── Step 2: Send distinctive fact ─────────────────────────────────────────
 
@@ -537,13 +556,13 @@ test(
     // We start it the SAME way as Step 1 (createSession via REST + navigate), NOT
     // via the workspace "New Chat" button: a REST-created session with no workspace
     // renders the inline ChatScreen, which has no workspace top-bar / "New Chat"
-    // button. createSession + goto is the flow proven to work for Step 1/2.
+    // button. createSession + openSessionByDeepLink is the flow proven to work for
+    // Step 1/2 — see the root-cause comment there for why the deep-link helper
+    // (not a manual goto+visible+waitForConnected sequence) is required here.
     const recallSessionId = await createSession(page, agentId)
-    await page.goto(`/#/sessions/${recallSessionId}`)
-    await expect(inputLocator).toBeVisible({ timeout: 15_000 })
-    // Fresh session — no prior assistant turns; and let the SPA attach + WS connect.
+    await openSessionByDeepLink(page, recallSessionId)
+    // Fresh session — no prior assistant turns.
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-    await page.waitForTimeout(2_000)
 
     const recallQuestion =
       'What was the launch codename I mentioned in our previous conversation?'

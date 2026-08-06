@@ -79,6 +79,8 @@ import {
   StorageStats as StorageStatsSchema,
   // Newly wired schemas:
   Provider as ProviderSchema,
+  // D18 — model-capabilities warn-and-proceed (contract-first #8):
+  ModelCapabilities as ModelCapabilitiesSchema,
   CliDetect as CliDetectSchema,
   // external-executor-cli-path-detection spec (ADR-030): create-time validate.
   CliValidateResponse as CliValidateResponseSchema,
@@ -112,7 +114,6 @@ import {
   // Wire-shape schemas used for raw-to-SPA transform validation:
   Message as WireMessageSchema,
   Session as WireSessionSchema,
-  SessionDetail as WireSessionDetailSchema,
   // ADR-057 FR-091/FR-098 (U10, W16e): GET /sessions now returns one named
   // SessionPage envelope ({sessions, next_cursor?, partial_errors?}) instead
   // of the retired two-variant oneOf (bare array | {sessions, partial_errors}).
@@ -128,10 +129,6 @@ import {
   // fix-AC: promoted from hand-written inline schemas:
   UserContextResponse as UserContextResponseSchema,
   McpServerToolsResponse as McpServerToolsResponseSchema,
-  // #264 Schedules (contract-first #8):
-  Schedule as ScheduleSchema,
-  ScheduleList as ScheduleListSchema,
-  ScheduleRunResult as ScheduleRunResultSchema,
   // #264 Notifications (contract-first #8):
   NotificationList as NotificationListSchema,
   // Level-1 workspaces + unified tasks + token stats (contract-first #8):
@@ -141,6 +138,8 @@ import {
   // Workspace / Project Instructions (contract-first #8):
   WorkspaceInstructionsResponse as WorkspaceInstructionsResponseSchema,
   Task as TaskSchema,
+  // Per-task run history (ADR-050 / task-run-history-spec §4.1):
+  TaskRun as TaskRunSchema,
   TokenUsageSummary as TokenUsageSummarySchema,
   // Planning & Goals (ADR-049, contract-first #8):
   Plan as PlanSchema,
@@ -176,6 +175,16 @@ import {
   MailboxListResponse as MailboxListResponseSchema,
   // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
   BrowserInspectResponse as BrowserInspectResponseSchema,
+  // ADR-051 Rev 4 — workspace media library (contract-first #8):
+  MediaLibraryEntry as MediaLibraryEntrySchema,
+  // library-spec.md — Library file explorer over workspace work/ trees
+  // (contract-first #8), supersedes the media library above. Only response
+  // schemas are imported (request bodies are validated server-side, matching
+  // the existing convention — see the comment above ExecutorCommandPreviewResponse).
+  LibraryWorkspaceNode as LibraryWorkspaceNodeSchema,
+  LibraryEntry as LibraryEntrySchema,
+  LibraryContentResponse as LibraryContentResponseSchema,
+  LibraryUploadResponse as LibraryUploadResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -298,6 +307,8 @@ import type {
   Agent,
   Provider,
   ProviderUpdateRequest,
+  // D18 — model-capabilities warn-and-proceed (contract-first #8):
+  ModelCapabilities,
   CliDetect,
   CliDetectEntry,
   CliValidateRequest,
@@ -374,12 +385,9 @@ import type {
   TaskUpdateRequest,
   Todo,
   TaskTrigger,
-  // #264 Schedules (contract-first #8):
-  Schedule,
-  ScheduleCreate,
-  ScheduleUpdate,
-  ScheduleList,
-  ScheduleRunResult,
+  // Per-task run history (ADR-050 / task-run-history-spec §4.1):
+  TaskRun,
+  RunNowRequest,
   // #264 Notifications (contract-first #8):
   NotificationList,
   // Planning & Goals (ADR-049, contract-first #8) — Plan container, task
@@ -435,6 +443,18 @@ import type {
   // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
   BrowserInspectRequest,
   BrowserInspectResponse,
+  // ADR-051 Rev 4 — workspace media library (contract-first #8):
+  MediaLibraryEntry,
+  MediaAttachmentRequest,
+  // library-spec.md — Library file explorer over workspace work/ trees (contract-first #8):
+  LibraryWorkspaceNode,
+  LibraryEntry,
+  LibraryContentResponse,
+  LibraryContentRequest,
+  LibraryMkdirRequest,
+  LibraryRenameRequest,
+  LibraryUploadResponse,
+  LibraryTransferRequest,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -467,6 +487,8 @@ export type {
   // Wire types migrated from hand-written interfaces:
   Agent,
   Provider,
+  // D18 — model-capabilities warn-and-proceed (contract-first #8):
+  ModelCapabilities,
   CliDetect,
   CliDetectEntry,
   CliValidateRequest,
@@ -544,7 +566,8 @@ export type {
   Todo,
   TaskTrigger,
   // Planning & Goals (ADR-049) — Plan container, task acceptance criteria,
-  // evidence, and judge verdicts (replaces Milestones):
+  // evidence, and judge verdicts (replaces Milestones — the Milestone schema
+  // family was deleted from contracts/ on this branch; do not reintroduce):
   Plan,
   PlanCreateRequest,
   PlanUpdateRequest,
@@ -555,6 +578,10 @@ export type {
   EvidenceRecord,
   JudgeVerdict,
   CriterionVerdict,
+  // Per-task run history (ADR-050 / task-run-history-spec §4.1) — additive,
+  // unrelated to the Plan/Milestone replacement above:
+  TaskRun,
+  RunNowRequest,
   // Spec-6 U5:
   ReAuthResponse,
   IntegrationProvider,
@@ -585,6 +612,18 @@ export type {
   // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
   BrowserInspectRequest,
   BrowserInspectResponse,
+  // ADR-051 Rev 4 — workspace media library (contract-first #8):
+  MediaLibraryEntry,
+  MediaAttachmentRequest,
+  // library-spec.md — Library file explorer over workspace work/ trees (contract-first #8):
+  LibraryWorkspaceNode,
+  LibraryEntry,
+  LibraryContentResponse,
+  LibraryContentRequest,
+  LibraryMkdirRequest,
+  LibraryRenameRequest,
+  LibraryUploadResponse,
+  LibraryTransferRequest,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -1621,15 +1660,105 @@ export function insertOrphanSessionAsRoot(tree: SessionTreeNode[], orphan: Sessi
   return [...tree, ...buildSessionTree([orphan])]
 }
 
+// ── Per-item message-list resilience (Issue 3 / library-uat HIGH) ────────────
+//
+// GET /sessions/{id}/messages, and the `messages` array nested inside
+// GET /sessions/{id} (SessionDetail), are LIST responses. Before this fix
+// both validated the ENTIRE array against z.array(WireMessageSchema) in one
+// shot: a single malformed entry (e.g. a future/unknown EntryType, or — the
+// case reproduced live by all three UAT testers — an attachment `type`
+// value outside the Attachment enum) rejected the whole array, so one bad
+// historical row made the ENTIRE session appear unrecoverably empty
+// ("Could not load messages." + a Retry that can never succeed, since the
+// same bad row comes back every time).
+//
+// Per CLAUDE.md hard-constraint #8, the SPA edge validates every incoming
+// payload and on failure should drop + counter + dev-mode toast, with NO
+// prod crash. That machinery already existed (_recordApiSchemaError below)
+// but this call site still threw the whole batch. Fixed here by validating
+// each element independently: keep the valid ones, and count + surface the
+// invalid ones through the EXISTING _recordApiSchemaError path (no parallel
+// counter — see fetchSkills/fetchCommands below for an older, simpler
+// per-item pattern that predates _recordApiSchemaError and does NOT feed
+// the shared counter; this one deliberately does).
+//
+// Scoping note: this degrade-per-item treatment applies ONLY to the
+// `messages` LIST. The `session` object nested alongside it in
+// SessionDetail is a single-object response and still fails loudly via the
+// normal request()/ApiSchemaError path (see fetchSessionDetail below) —
+// blanket-suppressing single-object validation failures would hide real
+// contract drift instead of exposing it.
+//
+// Judgment call — placeholder vs. silent drop: a dropped item is replaced
+// with a minimal placeholder SystemMessage ("This message could not be
+// displayed") rather than vanishing without a trace. Silently omitting the
+// row is itself a mild silent failure: message counts and scrollback shift
+// with no visible signal, and a user/support conversation about "where did
+// my upload go" becomes undebuggable. A visible placeholder costs a little
+// transcript noise but tells the truth — something was here and couldn't
+// be rendered — while the rest of the conversation still loads normally.
+
+function placeholderMessage(raw: unknown, index: number): SystemMessage {
+  const obj = (raw !== null && typeof raw === 'object') ? raw as Record<string, unknown> : {}
+  const id = typeof obj.id === 'string' && obj.id.length > 0 ? obj.id : `unrenderable-${index}`
+  const timestamp = typeof obj.timestamp === 'string' && obj.timestamp.length > 0
+    ? obj.timestamp
+    : new Date().toISOString()
+  return {
+    id,
+    session_id: undefined,
+    role: 'system',
+    content: 'This message could not be displayed.',
+    timestamp,
+    status: 'done',
+  }
+}
+
+// Validates each element of a raw message-list body against the wire
+// Message schema. Valid entries are transformed via rawToMessage(); invalid
+// entries are counted through _recordApiSchemaError (endpoint + that item's
+// own issue list) and replaced with placeholderMessage() so the list length
+// and ordering the user sees still matches what the server actually holds.
+// A single rate-limited dev toast summarises the drop (maybeDevToast is
+// throttled per key, so a burst of bad items in one response doesn't spam
+// the UI); production gets the existing _recordApiSchemaError telemetry.
+function parseWireMessageList(items: unknown[], endpoint: string): Message[] {
+  const messages: Message[] = []
+  let dropped = 0
+  let firstIssue: string | undefined
+  items.forEach((item, index) => {
+    const result = WireMessageSchema.safeParse(item)
+    if (result.success) {
+      messages.push(rawToMessage(result.data as RawMessage))
+      return
+    }
+    dropped++
+    firstIssue ??= result.error.issues[0]?.message
+    _recordApiSchemaError(endpoint, result.error.issues.length)
+    messages.push(placeholderMessage(item, index))
+  })
+  if (dropped > 0) {
+    void maybeDevToast(
+      `[api] Dropped ${dropped} malformed message${dropped === 1 ? '' : 's'} from ${endpoint}: ${firstIssue ?? 'unknown'}`,
+      `${endpoint}:message-item-schema`,
+    )
+  }
+  return messages
+}
+
 export async function fetchSessionMessages(sessionId: string): Promise<Message[]> {
-  // Validate with the wire Message schema first, then transform each message
-  // so that tool_calls[].parameters is renamed to tool_calls[].params.
-  const raw = await request<RawMessage[]>(
-    `/sessions/${encodeURIComponent(sessionId)}/messages`,
+  // Top-level shape assertion only: the body must be an array. A non-array
+  // body (an error page, a wholly different endpoint shape) is a genuine
+  // contract break and still fails loudly here. Each element is validated
+  // and degraded individually by parseWireMessageList — see the block
+  // comment above for why.
+  const path = `/sessions/${encodeURIComponent(sessionId)}/messages`
+  const rawItems = await request<unknown[]>(
+    path,
     undefined,
-    z.array(WireMessageSchema) as ZodType<RawMessage[]>,
+    z.array(z.unknown()) as ZodType<unknown[]>,
   )
-  return raw.map(rawToMessage)
+  return parseWireMessageList(rawItems, `GET /api/v1${path}`)
 }
 
 export async function installSkillFromFile(content: string, filename: string): Promise<void> {
@@ -1695,17 +1824,30 @@ export interface SessionDetail { // not-wire-format: SPA-internal detail type. U
 }
 
 export async function fetchSessionDetail(sessionId: string): Promise<SessionDetail> {
-  // Validate with the wire SessionDetail schema (session + messages array),
-  // then transform both the nested session stats and each message's tool_calls.
-  type RawSessionDetail = { session: RawSession; messages: RawMessage[]; agent_removed?: boolean }
-  const raw = await request<RawSessionDetail>(
-    `/sessions/${encodeURIComponent(sessionId)}`,
+  // `session` (a single object) is still validated strictly via
+  // WireSessionSchema and fails loudly on mismatch — same policy as any
+  // other single-object GET. `messages` (a list) is loosened to
+  // z.array(z.unknown()) at this top-level shape check and validated /
+  // degraded per-item below via parseWireMessageList, so one malformed
+  // historical message can't take down the whole session-detail view
+  // (Issue 3 / library-uat HIGH finding — see the block comment above
+  // fetchSessionMessages for the full rationale and the placeholder
+  // judgment call).
+  type RawSessionDetailShape = { session: RawSession; messages: unknown[]; agent_removed?: boolean }
+  const shapeSchema = z.object({
+    session: WireSessionSchema,
+    messages: z.array(z.unknown()),
+    agent_removed: z.boolean().optional(),
+  })
+  const path = `/sessions/${encodeURIComponent(sessionId)}`
+  const raw = await request<RawSessionDetailShape>(
+    path,
     undefined,
-    WireSessionDetailSchema as ZodType<RawSessionDetail>,
+    shapeSchema as ZodType<RawSessionDetailShape>,
   )
   return {
     session: rawToSession(raw.session),
-    messages: raw.messages.map(rawToMessage),
+    messages: parseWireMessageList(raw.messages, `GET /api/v1${path}`),
     agent_removed: raw.agent_removed,
   }
 }
@@ -2024,6 +2166,68 @@ export function fetchProviders(): Promise<Provider[]> {
   return request<Provider[]>('/providers', undefined, z.array(ProviderSchema) as ZodType<Provider[]>)
 }
 
+// D18: flat list of {id, modalities} from the backend's in-repo capability
+// catalog (pkg/providers/capabilities) — model vision capability is not
+// knowable client-side at all otherwise. Used to warn (non-blocking) before
+// sending a vision attachment to a model that cannot see images. Empty array
+// when the catalog is unavailable server-side (never an error the caller
+// needs to branch on beyond the normal request() failure path).
+export function fetchModelCapabilities(): Promise<ModelCapabilities[]> {
+  return request<ModelCapabilities[]>(
+    '/providers/model-capabilities',
+    undefined,
+    z.array(ModelCapabilitiesSchema) as ZodType<ModelCapabilities[]>,
+  )
+}
+
+// D18: pure decision helper shared by the two vision-attachment send paths
+// (browserAnnotate.ts's live-browser annotation submit, attachment-adapter.ts's
+// composer image attach) — kept here (not duplicated) so both warn on the
+// identical rule. Unknown/unlisted models return false (optimistic — mirrors
+// the server-side FR-026 default in pkg/providers/capabilities/catalog.go),
+// so a stale or incomplete capabilities fetch never spuriously blocks/warns.
+//
+// Mirrors pkg/providers/capabilities/catalog.go's Catalog.Resolve fix
+// (2026-07-28, live UAT): agents' models are provider-prefixed
+// ("z-ai/glm-5.2"), but the /providers/model-capabilities catalog is keyed
+// by the BARE model id ("glm-5.2") — the vendor is recorded separately.
+// An exact-string-only lookup on a prefixed id always misses, silently
+// falling through to the optimistic default even when the catalog carries
+// an authoritative (and possibly negative) entry for that exact model. See
+// findModelCapabilityEntry below for the stripped-prefix fallback, which
+// applies the identical semantics as the Go side.
+export function modelLacksImageCapability(modelId: string | undefined, entries: ModelCapabilities[]): boolean {
+  if (!modelId) return false
+  const entry = findModelCapabilityEntry(modelId, entries)
+  if (!entry) return false
+  return !entry.modalities.includes('image')
+}
+
+// findModelCapabilityEntry mirrors pkg/providers/capabilities/catalog.go's
+// Catalog.Resolve + resolveStrippedPrefix exactly: try an exact id match
+// first (so a genuine bare catalog id like "gpt-4o", which never carries a
+// vendor prefix, always wins outright and never reaches the fallback);
+// then strip leading "<segment>/" prefixes one at a time — walking from the
+// longest remaining suffix down to the bare trailing segment — retrying the
+// exact lookup after each strip, stopping at the first hit. This also
+// handles the double-prefixed "openrouter/z-ai/glm-5.2" onboarding artifact
+// (both segments must be stripped to reach the bare "glm-5.2" catalog id).
+// Can never produce a WRONG match: catalog ids are unique, so a stripped
+// suffix that hits is, by construction, the intended model.
+function findModelCapabilityEntry(modelId: string, entries: ModelCapabilities[]): ModelCapabilities | undefined {
+  const exact = entries.find((c) => c.id === modelId)
+  if (exact) return exact
+
+  let rest = modelId
+  for (;;) {
+    const idx = rest.indexOf('/')
+    if (idx < 0 || idx === rest.length - 1) return undefined
+    rest = rest.slice(idx + 1)
+    const match = entries.find((c) => c.id === rest)
+    if (match) return match
+  }
+}
+
 // configureProvider sets a model/provider's API key, endpoint, and/or model.
 // Post-onboarding this PUT is re-auth gated (Spec-6 FR-12.2 / FR-6.6): the server
 // rejects it with 403 unless a single-use consent token (from reAuth) is replayed
@@ -2209,6 +2413,10 @@ export const tasksQueryKeys = {
   },
   detail: (id: string) => ['tasks', id] as const,
   subtasks: (id: string) => ['tasks', id, 'subtasks'] as const,
+  // Per-task run history (ADR-050 / task-run-history-spec §4.1) — invalidated
+  // by the task_run_status WS frame handler (src/store/chat.ts) so the
+  // calendar slide-over and TaskDetailPanel's Runs list update live.
+  runs: (id: string) => ['tasks', id, 'runs'] as const,
 }
 
 // Keep boardTasksQueryKeys as an alias so tests and existing queries still compile
@@ -2486,37 +2694,52 @@ export function fetchTaskVerdicts(taskId: string): Promise<JudgeVerdict[]> {
   )
 }
 
+// ── Per-task run history (ADR-050 / task-run-history-spec §4.1) ────────────────
+//
+// TaskRun is a purely additive execution-record layer — Task.status/result/
+// session_id keep their existing behaviour unchanged. GET /tasks/{id}/runs is
+// the authoritative history list (retention-bounded, newest first, full
+// result strings); POST /tasks/{id}/runs ("Run now") opens + dispatches a new
+// run and returns 202 (fire-and-forget — observe progress via the
+// task_run_status WS frame, see src/store/chat.ts, or by refetching this
+// list). Foundation for the calendar slide-over + TaskDetailPanel Runs
+// section (both consume the shared TaskRunsList component).
+
+export function fetchTaskRuns(taskId: string): Promise<TaskRun[]> {
+  return request<TaskRun[]>(`/tasks/${encodeURIComponent(taskId)}/runs`, undefined, z.array(TaskRunSchema) as ZodType<TaskRun[]>)
+}
+
+/**
+ * POST /tasks/{id}/runs ("Run now", ADR-050 RD7).
+ *
+ * - `occurrenceMs` provided (including explicit `null`) → body carries
+ *   `{occurrence_ms}`: materializes/re-runs that specific recurring
+ *   occurrence (idempotent against a concurrent scheduler fire for the same
+ *   instant).
+ * - `occurrenceMs` omitted (`undefined`) → empty body: re-runs a normal/once
+ *   task as a fresh run: the prior run (if any) is preserved in the run
+ *   history, not overwritten.
+ *
+ * Returns 202 with no body — the run executes asynchronously; no response
+ * schema to validate (request() resolves `undefined` for a schema-less,
+ * bodyless 2xx).
+ */
+export function runTaskNow(taskId: string, occurrenceMs?: number | null): Promise<void> {
+  const init: RequestInit = { method: 'POST' }
+  if (occurrenceMs !== undefined) {
+    const body: RunNowRequest = { occurrence_ms: occurrenceMs }
+    init.body = JSON.stringify(body)
+  }
+  return request<void>(`/tasks/${encodeURIComponent(taskId)}/runs`, init)
+}
+
 // ── #264 Schedules ──────────────────────────────────────────────────────────────
-
-// Schedule wire types are re-exported from generated openapi-types (contract-first #8).
-// See contracts/components/schemas/Schedule*.yaml. The /schedules surface is the
-// contract projection over the underlying cron job.
-
-export function fetchSchedules(): Promise<Schedule[]> {
-  // GET /schedules returns { schedules: Schedule[] }; flatten to the array the UI consumes.
-  return request<ScheduleList>('/schedules', undefined, ScheduleListSchema as ZodType<ScheduleList>)
-    .then((list) => list.schedules)
-}
-
-export function createSchedule(body: ScheduleCreate): Promise<Schedule> {
-  return request<Schedule>('/schedules', { method: 'POST', body: JSON.stringify(body) }, ScheduleSchema as ZodType<Schedule>)
-}
-
-export function updateSchedule(id: string, body: ScheduleUpdate): Promise<Schedule> {
-  return request<Schedule>(`/schedules/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }, ScheduleSchema as ZodType<Schedule>)
-}
-
-export function deleteSchedule(id: string): Promise<void> {
-  return request<void>(`/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' })
-}
-
-export function runSchedule(id: string): Promise<ScheduleRunResult> {
-  return request<ScheduleRunResult>(`/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' }, ScheduleRunResultSchema as ZodType<ScheduleRunResult>)
-}
-
-export function pauseSchedule(id: string): Promise<Schedule> {
-  return request<Schedule>(`/schedules/${encodeURIComponent(id)}/pause`, { method: 'POST' }, ScheduleSchema as ZodType<Schedule>)
-}
+// The SPA schedules client was DELETED (2026-07-19, operator directive): the
+// Schedules UI is retired — scheduled/recurring work lives in the workspace
+// Calendar; heartbeats are the only agent-level exception. The backend
+// /api/v1/schedules entity and the pkg/cron engine remain (they execute task
+// triggers + heartbeats). Do NOT reintroduce a schedules UI or these wrappers
+// when merging older branches — see CLAUDE.md "Retired surfaces".
 
 // ── #264 Notifications ────────────────────────────────────────────────────────
 //
@@ -3198,9 +3421,12 @@ export function updateUserContext(content: string): Promise<void> {
 // UploadedFile — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/UploadedFile.yaml.
 
-export async function uploadFiles(sessionId: string, files: File[]): Promise<UploadFilesResponse> {
+export async function uploadFiles(sessionId: string, files: File[], workspaceId?: string): Promise<UploadFilesResponse> {
   const formData = new FormData()
   formData.append('session_id', sessionId)
+  if (workspaceId) {
+    formData.append('workspace_id', workspaceId)
+  }
   for (const file of files) {
     formData.append('files', file)
   }
@@ -3723,6 +3949,8 @@ export const workspacesQueryKeys = {
   detail: (id: string) => ['workspaces', id] as const,
   delegation: (id: string) => ['workspaces', id, 'delegation'] as const,
   instructions: (id: string) => ['workspaces', id, 'instructions'] as const,
+  // ADR-051 Rev 4 — workspace media library (Slice H):
+  media: (workspaceId: string) => ['workspaces', workspaceId, 'media'] as const,
 }
 
 export function fetchWorkspaces(params?: { status?: string }): Promise<Workspace[]> {
@@ -3761,6 +3989,252 @@ export function updateWorkspace(id: string, body: WorkspaceUpdateRequest): Promi
 
 export function deleteWorkspace(id: string): Promise<void> {
   return request<void>(`/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+// ── ADR-051 Rev 4 — Workspace Media Library (Slice H) ─────────────────────────
+//
+// The workspace media library is the blob store behind chat uploads
+// (`workspaces/<ws>/media/`, UUID-keyed with a manifest). NOTE: the standalone
+// workspace "Media" tab that used to surface it was REMOVED when the Library
+// replaced it — the Library is a file explorer over the workspace `work/` tree
+// (see docs/internal/specs/library-spec.md), a different store, so do not
+// reintroduce a UI that lists this manifest as if it were the Library. These
+// endpoints remain live because the composer picker still attaches an existing
+// library entry to a chat message by
+// its `media://workspace/<workspace_id>/<media_id>` ref (FR-022) without
+// re-uploading. Wire types are the generated MediaLibraryEntry /
+// MediaAttachmentRequest (contract-first #8) — never hand-written.
+
+/**
+ * List a workspace's media-library entries (GET /workspaces/{id}/media).
+ * Returns the full manifest; raw bytes are fetched on demand via /media/{ref}.
+ */
+export function fetchWorkspaceMedia(workspaceId: string): Promise<MediaLibraryEntry[]> {
+  return request<MediaLibraryEntry[]>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/media`,
+    undefined,
+    z.array(MediaLibraryEntrySchema) as ZodType<MediaLibraryEntry[]>,
+  )
+}
+
+/**
+ * Explicitly delete one workspace media-library entry (FR-008). Removes the
+ * raw bytes + manifest entry; the server emits a media.delete audit event
+ * (FR-033). Returns 204 No Content.
+ */
+export function deleteWorkspaceMedia(workspaceId: string, mediaId: string): Promise<void> {
+  return request<void>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/media/${encodeURIComponent(mediaId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+/**
+ * Register a workspace library entry as a chat attachment (FR-022,
+ * POST /workspaces/{id}/media/attachments) without re-uploading the file.
+ * Returns 204 No Content; the SPA threads the `media://workspace/<ws>/<id>`
+ * ref into the outgoing message frame via the library-attachment store.
+ */
+export function attachWorkspaceMedia(workspaceId: string, mediaId: string): Promise<void> {
+  const body: MediaAttachmentRequest = { media_id: mediaId }
+  return request<void>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/media/attachments`,
+    { method: 'POST', body: JSON.stringify(body) },
+  )
+}
+
+// ── Library (library-spec.md) ────────────────────────────────────────────────
+//
+// A file explorer over workspace work/ trees — supersedes the Media Library
+// above (D-2: entries are workspace-relative PATHS, not UUIDs; a workspace's
+// Library root IS its work/ directory). Two entry points share one component
+// (D-3): the sidebar's virtual root (every workspace, GET /library/workspaces)
+// and a workspace-scoped view (GET /library/{workspace_id}/entries). Wire
+// types are the generated Library* schemas (contract-first #8) — never
+// hand-written. See contracts/components/schemas/Library*.yaml.
+
+export const libraryQueryKeys = {
+  workspaces: () => ['library', 'workspaces'] as const,
+  entries: (workspaceId: string, path: string, includeHidden: boolean) =>
+    ['library', workspaceId, 'entries', path, includeHidden] as const,
+  content: (workspaceId: string, path: string) => ['library', workspaceId, 'content', path] as const,
+}
+
+/** Every workspace as a Library virtual-root node (D-3 sidebar entry point). */
+export function fetchLibraryWorkspaces(): Promise<LibraryWorkspaceNode[]> {
+  return request<LibraryWorkspaceNode[]>(
+    '/library/workspaces',
+    undefined,
+    z.array(LibraryWorkspaceNodeSchema) as ZodType<LibraryWorkspaceNode[]>,
+  )
+}
+
+/**
+ * List the entries directly inside `path` in a workspace's work/ tree. Omit
+ * or pass '' to list the work-tree root. `includeHidden` surfaces
+ * dot-prefixed entries (e.g. work/.library/ — D-8's "Show Hidden" toggle;
+ * LibraryEntry.is_hidden is the sole definition of "hidden").
+ */
+export function fetchLibraryEntries(
+  workspaceId: string,
+  path = '',
+  includeHidden = false,
+): Promise<LibraryEntry[]> {
+  const params = new URLSearchParams()
+  if (path) params.set('path', path)
+  if (includeHidden) params.set('include_hidden', 'true')
+  const qs = params.toString()
+  return request<LibraryEntry[]>(
+    `/library/${encodeURIComponent(workspaceId)}/entries${qs ? `?${qs}` : ''}`,
+    undefined,
+    z.array(LibraryEntrySchema) as ZodType<LibraryEntry[]>,
+  )
+}
+
+/**
+ * Create a directory inside a workspace's work tree (mkdir -p semantics —
+ * intermediate directories along `path` are created too). Idempotent:
+ * resolves normally (200) if a directory already exists at `path`; the
+ * caller cannot distinguish "created" from "already there" from the
+ * response alone, which the New Folder UI doesn't need to (library-spec.md
+ * — UAT fix: without this endpoint being reachable from the UI at all,
+ * `POST /library/{workspace_id}/mkdir` working at the API layer was a
+ * capability nobody could use).
+ */
+export function mkdirLibraryEntry(workspaceId: string, body: LibraryMkdirRequest): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    `/library/${encodeURIComponent(workspaceId)}/mkdir`,
+    { method: 'POST', body: JSON.stringify(body) },
+    LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/** Delete a file or directory (and everything under it) from a workspace's work tree. Returns 204. */
+export function deleteLibraryEntry(workspaceId: string, path: string): Promise<void> {
+  const qs = new URLSearchParams({ path }).toString()
+  return request<void>(`/library/${encodeURIComponent(workspaceId)}/entries?${qs}`, { method: 'DELETE' })
+}
+
+/** Read a file's text content for the Library viewer (D-5 preview/edit — read side; the editor/preview pane itself is a separate, later task). */
+export function fetchLibraryContent(workspaceId: string, path: string): Promise<LibraryContentResponse> {
+  const qs = new URLSearchParams({ path }).toString()
+  return request<LibraryContentResponse>(
+    `/library/${encodeURIComponent(workspaceId)}/content?${qs}`,
+    undefined,
+    LibraryContentResponseSchema as ZodType<LibraryContentResponse>,
+  )
+}
+
+/** Write a file's text content from the Library editor (D-5 — write side; the editor itself is a separate, later task). */
+export function putLibraryContent(workspaceId: string, body: LibraryContentRequest): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    `/library/${encodeURIComponent(workspaceId)}/content`,
+    { method: 'PUT', body: JSON.stringify(body) },
+    LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/** Rename or move an entry within a single workspace's work tree — same-workspace sugar over /library/move. Rejects (409) if "to" already exists. */
+export function renameLibraryEntry(workspaceId: string, body: LibraryRenameRequest): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    `/library/${encodeURIComponent(workspaceId)}/rename`,
+    { method: 'POST', body: JSON.stringify(body) },
+    LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/**
+ * Move a file or directory, optionally across two workspaces (D-9). Rejects
+ * (409) if the destination already exists — the server never silently
+ * overwrites, so there is no "overwrite" outcome to confirm beyond the
+ * dialog step itself; a 409 here is surfaced to the caller as a normal
+ * ApiError (never swallowed).
+ */
+export function moveLibraryEntry(body: LibraryTransferRequest): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    '/library/move',
+    { method: 'POST', body: JSON.stringify(body) },
+    LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/** Copy a file or directory, optionally across two workspaces (D-9), leaving the source in place. Same 409-on-conflict behavior as moveLibraryEntry. */
+export function copyLibraryEntry(body: LibraryTransferRequest): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    '/library/copy',
+    { method: 'POST', body: JSON.stringify(body) },
+    LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/**
+ * Upload one or more files into `path` inside a workspace's work tree (D-1 —
+ * uploads land as real, named files, de-duplicated server-side on collision).
+ * Multipart; mirrors uploadFiles's raw-fetch pattern above since request() is
+ * JSON-only.
+ */
+export async function uploadLibraryFiles(workspaceId: string, files: File[], path = ''): Promise<LibraryUploadResponse> {
+  const formData = new FormData()
+  for (const file of files) {
+    formData.append('files', file)
+  }
+  // Upload is a state-changing POST — fail fast if we have no CSRF cookie
+  // (see request() for the same pattern).
+  if (readCSRFCookie() === null) {
+    throw new ApiError(
+      403,
+      'CSRF cookie missing — cannot upload files. Log in first so the server can issue the CSRF cookie.',
+      { code: 'csrf_missing' },
+    )
+  }
+  // FormData holds File references (not a consumed stream), so retrying with
+  // the same formData on a CSRF-recovery pass (withCsrfRetry) re-sends the
+  // same bytes safely.
+  return withCsrfRetry(() => doUploadLibraryFiles(workspaceId, formData, path))
+}
+
+async function doUploadLibraryFiles(workspaceId: string, formData: FormData, path: string): Promise<LibraryUploadResponse> {
+  // Read fresh — never cache (see readCSRFCookie).
+  const csrf = readCSRFCookie()
+  const headers: Record<string, string> = {}
+  if (csrf) headers[CSRF_HEADER_NAME] = csrf
+  const qs = path ? `?${new URLSearchParams({ path }).toString()}` : ''
+  let res: Response
+  try {
+    res = await fetch(`${BASE_URL}/api/v1/library/${encodeURIComponent(workspaceId)}/upload${qs}`, {
+      method: 'POST',
+      credentials: 'include',
+      // NOTE: do NOT set Content-Type — the browser sets the multipart boundary.
+      headers,
+      body: formData,
+    })
+  } catch (cause) {
+    throw new ApiError(0, 'Network unavailable. Check your connection.', { cause })
+  }
+  if (!res.ok) {
+    throw await ApiError.fromResponse(res)
+  }
+  const raw: unknown = await res.json()
+  const parsed = (LibraryUploadResponseSchema as ZodType<LibraryUploadResponse>).safeParse(raw)
+  if (!parsed.success) {
+    _recordApiSchemaError('/library/upload', parsed.error.issues.length)
+    const issues = parsed.error.issues.map((i) => ({ path: i.path as (string | number)[], message: i.message }))
+    void maybeDevToast(`[api] uploadLibraryFiles response schema mismatch: ${issues[0]?.message ?? 'unknown'}`, 'POST:/library/upload:schema')
+    throw new ApiSchemaError('/library/upload', issues, raw)
+  }
+  return parsed.data
+}
+
+/**
+ * URL for downloading a file's raw bytes (GET .../download). Deliberately
+ * NOT routed through request() — the response is a binary stream, not JSON,
+ * and GET is not state-changing so no CSRF token is required. Meant for an
+ * <a href=… download> or window.open(): auth rides the same-origin
+ * omnipus-session cookie automatically on a plain navigation/anchor click.
+ */
+export function libraryDownloadUrl(workspaceId: string, path: string): string {
+  const qs = new URLSearchParams({ path }).toString()
+  return `${BASE_URL}/api/v1/library/${encodeURIComponent(workspaceId)}/download?${qs}`
 }
 
 // ── Per-workspace delegation graph (M5) ─────────────────────────────────────────

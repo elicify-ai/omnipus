@@ -1,9 +1,69 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, agentPicker, assistantMessages } from './fixtures/selectors';
+import { chatInput, agentPicker, assistantMessages, selectAgent } from './fixtures/selectors';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
+
+const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
+
+const OMNIPUS_HOME =
+  process.env.OMNIPUS_HOME ||
+  (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '/tmp/omnipus-e2e-test');
+
+/**
+ * Resolve the active workspace ID so a fixture file can be placed inside its
+ * work/ directory (the ADR-046 P1 per-turn filesystem re-root every CoreTeam
+ * agent's tools are confined to — pkg/workspace/instructions.go WorkDir() =
+ * `<OMNIPUS_HOME>/workspaces/<id>/work`). Mirrors
+ * memory-remember-recall.spec.ts's resolveWorkspaceId — duplicated locally
+ * per this suite's established "shared harness pattern, not extracted to a
+ * fixture" convention (see waitForTurnFullyDone's doc comment above for the
+ * same rationale applied to a different helper).
+ *
+ * Strategy: GET /api/v1/workspaces first (dev_mode_bypass admin session rides
+ * along via cookies), falling back to a disk scan of
+ * $OMNIPUS_HOME/workspaces/ if the API is unreachable.
+ */
+async function resolveWorkspaceId(page: Page): Promise<string> {
+  try {
+    const resp = await page.request.get(`${BASE_URL}/api/v1/workspaces`, {
+      failOnStatusCode: false,
+    });
+    if (resp.ok()) {
+      const workspaces = (await resp.json()) as Array<{
+        id: string;
+        is_default?: boolean;
+        status?: string;
+      }>;
+      if (Array.isArray(workspaces) && workspaces.length > 0) {
+        const def = workspaces.find((w) => w.is_default === true);
+        if (def?.id) return def.id;
+        const first = workspaces.find((w) => !w.status || w.status === 'active') ?? workspaces[0];
+        if (first?.id) return first.id;
+      }
+    }
+  } catch {
+    // Network error — fall through to disk scan.
+  }
+
+  const workspacesDir = path.join(OMNIPUS_HOME, 'workspaces');
+  if (fs.existsSync(workspacesDir)) {
+    const wsDirs = fs
+      .readdirSync(workspacesDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+    if (wsDirs.length > 0) return wsDirs[0];
+  }
+
+  throw new Error(
+    'BLOCKED: could not resolve an active workspace ID via GET /api/v1/workspaces or a disk ' +
+      `scan of ${workspacesDir}. send_file needs a workspace-scoped work/ directory to deliver ` +
+      'its fixture from — see resolveWorkspaceId in this file.',
+  );
+}
 
 /**
  * Wait for any follow-up LLM call after the current assistant message settles.
@@ -122,18 +182,90 @@ test(
 );
 
 test(
-  '(b) file-download fallback: large binary request triggers browser download dialog',
-  // T0.1: Promoted from test.skip. Blocked on #107 — deterministic file-download test
-  // requires a mock gateway tool that returns a non-image media frame. InlineMedia
-  // <a download> only renders on non-image media frames (ChatScreen.tsx:226-237).
-  // See tests/e2e/SPA-GAPS.md — "Download test requires mock media tool".
-  // This test fails loudly until the scenario-provider HTTP endpoint or a mock media
-  // tool is available to inject deterministic non-image frames.
+  '(b) file-download fallback: send_file delivers a non-image file that renders a working download link',
+  // T0.1 (re-investigated): the #107 blocker no longer holds. It was written
+  // when no tool could reliably produce a non-image media frame without a
+  // mock. This branch (sendfile-fix) now ships a real `send_file` tool
+  // (pkg/tools/send_file.go, allowed for Jim/Mia/Ray — pkg/coreagent/core.go)
+  // that registers ANY local file through the exact same MediaStore pipeline
+  // browser_screenshot already uses in test (a) above. Pre-seeding a plain
+  // fixture file on disk and instructing the agent to call send_file with
+  // its exact relative path is exactly as deterministic as the
+  // "call read_file with path=/etc/hostname" pattern subagent.spec.ts
+  // already relies on elsewhere in this suite — no LLM judgment call, no
+  // mock gateway tool needed.
+  //
+  // Why this exercises the NON-image branch deterministically: InlineMedia
+  // (ChatScreen.tsx:366-387) renders <img> only when a media part's `type`
+  // is "image"; every other type renders the `<a download>` branch. `type`
+  // comes from inferMediaType(filename, contentType) (pkg/agent/loop.go),
+  // which classifies a `.txt` file as "file" (it's in none of the
+  // image/audio/video extension lists) regardless of what content-type
+  // detection returns for a plain-text file — so this is robust even if
+  // magic-byte detection is inconclusive for text.
   async ({ page }) => {
-    void page;
-    // BLOCKED: #107 — mock media tool not implemented. This test will remain failing
-    // until a deterministic non-image media frame can be injected without a real LLM.
-    // Do not re-suppress with test.skip.
-    test.skip(true, 'BLOCKED on #107 — file-download test requires mock gateway media tool; see SKIP_ALLOWLIST');
+    test.setTimeout(120_000);
+
+    // Seed a real fixture file directly on disk inside the workspace's work/
+    // directory (the ADR-046 P1 filesystem re-root every CoreTeam agent's
+    // tools are confined to), so the agent needs only ONE forced tool call
+    // (send_file) — no write_file round-trip, no room for the LLM to
+    // improvise content.
+    const workspaceId = await resolveWorkspaceId(page);
+    const relDir = 'e2e-media-download';
+    const fileName = `report-${Date.now()}.txt`;
+    const nonce = `OMNIPUS-E2E-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const fixtureContent = `Omnipus E2E download fixture\nnonce: ${nonce}\n`;
+    const workDir = path.join(OMNIPUS_HOME, 'workspaces', workspaceId, 'work', relDir);
+    fs.mkdirSync(workDir, { recursive: true });
+    fs.writeFileSync(path.join(workDir, fileName), fixtureContent, 'utf-8');
+    const relPath = `${relDir}/${fileName}`;
+
+    // Jim has send_file:allow (pkg/coreagent/core.go IDJim case) and is the
+    // established "does real work now" agent elsewhere in this suite
+    // (subagent.spec.ts's startFreshChat / selectAgent default).
+    await selectAgent(page, /Jim/i);
+
+    const input = chatInput(page);
+    await expect(input).toBeVisible({ timeout: 10_000 });
+
+    const countBefore = await assistantMessages(page).count();
+    await input.fill(
+      [
+        `Call the send_file tool exactly once with path "${relPath}".`,
+        'Do not pass a filename argument. Do not call any other tool.',
+        'After the tool result, reply with exactly: SENT',
+      ].join(' '),
+    );
+    await input.press('Enter');
+
+    await expect(assistantMessages(page)).toHaveCount(countBefore + 1, { timeout: 60_000 });
+
+    // Structural assertion: the non-image branch of InlineMedia renders an
+    // <a download="..."> link (ChatScreen.tsx:378-386), never an <img>, for
+    // a file classified as "file" — not "some link appeared".
+    const downloadLink = page.locator(`a[download="${fileName}"]`);
+    await expect(downloadLink).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(`img[src*="${fileName}"]`)).toHaveCount(0);
+
+    const href = await downloadLink.getAttribute('href');
+    expect(href).toMatch(/\/api\/v1\/media\//);
+
+    // Differentiation + persistence test: actually download the file through
+    // the real HTTP endpoint and assert the exact nonce-bearing bytes round-
+    // tripped (local disk -> send_file -> MediaStore -> HTTP -> browser).
+    // A hardcoded/stub send_file, or one that registers a ref without really
+    // persisting the file, cannot reproduce this nonce.
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      downloadLink.click(),
+    ]);
+    expect(download.suggestedFilename()).toBe(fileName);
+    const downloadPath = await download.path();
+    expect(downloadPath).toBeTruthy();
+    const downloadedContent = fs.readFileSync(downloadPath as string, 'utf-8');
+    expect(downloadedContent).toBe(fixtureContent);
+
+    await expectA11yClean(page);
   },
 );

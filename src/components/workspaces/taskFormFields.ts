@@ -6,6 +6,7 @@
 // hand-rolled wire structs (Constraint #8).
 
 import type { TaskTrigger } from '@/lib/api'
+import { parseRruleString, summarizeRecurrence } from '@/lib/calendar/recurrence'
 
 export type TriggerKind = TaskTrigger['type'] // 'manual' | 'once' | 'every' | 'recurring'
 
@@ -79,6 +80,50 @@ export function datetimeLocalToDate(value?: string | null): Date | null {
  */
 export function dateToDatetimeLocal(date: Date | null): string {
   return date ? toDatetimeLocalValue(date.getTime()) : ''
+}
+
+/**
+ * Whether a trigger is a calendar-only recurring trigger (`every`/`recurring`,
+ * FR-011/D3). Board and List exclude tasks whose trigger matches this
+ * predicate — recurring tasks live exclusively on the workspace calendar.
+ * Accepts `trigger` directly (not the whole `Task`) so BoardView/ListView can
+ * call it inline as `isRecurringTrigger(t.trigger)`.
+ */
+export function isRecurringTrigger(trigger?: TaskTrigger | null): trigger is TaskTrigger {
+  return trigger?.type === 'every' || trigger?.type === 'recurring'
+}
+
+/**
+ * Defensive, read-only plain-English summary for a recurring trigger (FR-023).
+ * Used ONLY by the generic TaskDetailPanel's defensive guard — normally
+ * unreachable since Board/List exclude recurring tasks (isRecurringTrigger
+ * above), reachable only via stale cache or a race. Deliberately never
+ * includes `cron_expr` or `rrule` — no raw cron/rule string is ever displayed
+ * outside the calendar editor (D8/D9). NOT the same as `triggerSummary` below,
+ * which is a general-purpose label that DOES surface the raw cron string and
+ * must not be reused for this guard.
+ */
+export function recurringTriggerSummary(trigger: TaskTrigger): string {
+  if (trigger.type === 'every') {
+    const ms = trigger.config?.every_ms
+    if (typeof ms === 'number' && ms > 0) {
+      const minutes = Math.round(ms / 60_000)
+      return `Repeats every ${minutes} minute${minutes === 1 ? '' : 's'}`
+    }
+    return 'Repeats on a fixed interval'
+  }
+  // FR-023: a real plain-English summary of the actual rule, not a generic
+  // placeholder — mirrors the calendar editor's own summarizeRecurrence, but
+  // never renders the raw rrule/cron string (D8/D9).
+  const rrule = trigger.config?.rrule
+  const dtstartMs = trigger.config?.dtstart_ms
+  if (typeof rrule === 'string' && typeof dtstartMs === 'number') {
+    const state = parseRruleString(rrule, dtstartMs)
+    if (state) {
+      return summarizeRecurrence({ kind: 'rrule', state }, new Date(dtstartMs))
+    }
+  }
+  return 'Repeats on a recurring schedule'
 }
 
 /** Human label for a trigger summary line. */

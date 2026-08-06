@@ -216,7 +216,7 @@ type turnState struct {
 	// been corrected with the real terminal status/duration — or it has been
 	// determined that no correction attempt was needed/possible (no
 	// transcript store, no session ID). isFinished flips the instant runTurn
-	// returns (its own `defer ts.Finish(false)`), but spawnSubTurn's cleanup
+	// returns (its own deferred Finish call), but spawnSubTurn's cleanup
 	// defer — which performs the correction via updateToolCallStatusWithRetry,
 	// up to ~935ms of retry backoff for async delegation — only runs AFTER
 	// that point, once spawnSubTurn itself returns. A reload/replay landing
@@ -367,6 +367,35 @@ type turnState struct {
 	// into a new turn or crosses into another session's turnState.
 	denialLedger turnDenialLedger
 
+	// mediaRetryDone is the per-turn guard for the RD2 media-downgrade retry
+	// (ADR-051 §RD2 / FR-007 / FR-008). When true, the loop's classifier-gated
+	// TryMediaDowngrade helper refuses to perform another downgrade — even if
+	// a subsequent LLM call in the same turn returns the same media-rejection
+	// shape. Hoisted here (was a per-iteration reset in the loop retry block)
+	// so a turn can NEVER fire more than one media downgrade-retry, matching
+	// the ADR-051 invariant "at most one media rejection → at most one
+	// downgrade-retry". Initialized to false (zero value of atomic.Bool).
+	mediaRetryDone atomic.Bool
+
+	// imageRetryDone is the per-turn guard for IMAGE-only downgrades. The
+	// pass-2 media-downgrade fix split the per-turn guard into image-class
+	// and pdf-class, so a PDF rejection in a turn with both media types
+	// cannot consume the image-retry budget (and vice versa). Each LLM
+	// call may consume at most one downgrade per media class.
+	imageRetryDone atomic.Bool
+
+	// outcomeRelabel is the FR-017a relabel-on-success contract. When the
+	// outcome-based strip-retry fallback fires AND the subsequent LLM
+	// call succeeds, this field is stamped with CodeMediaUnsupported so
+	// any later classifier-driven emission for this turn (warn logs,
+	// audit, transcript) carries the outcome-labeled verdict rather
+	// than the original (inconclusive) classifier verdict. Empty when
+	// no outcome-based retry succeeded this turn — the classifier's own
+	// verdict governs in that case. Written by the loop call site
+	// (loop.go) only; read by emit sites that consult the recorded
+	// turn classifier verdict.
+	outcomeRelabel LLMErrorCode
+
 	// lastProducedModel is the model string that produced the most recent
 	// assistant message in this turn. Set after each successful LLM call in
 	// loop.go (and external_dispatch.go for CLI providers). The transcript
@@ -400,6 +429,23 @@ func (ts *turnState) auditUser() string {
 	}
 	return ts.userID
 }
+
+// setOutcomeRelabel stamps the FR-017a outcome-labeller verdict for this
+// turn. Called by the loop call site after a successful outcome-based
+// strip-retry (the classifier's inconclusive-4xx fallback fired and
+// the subsequent LLM call returned a real response). Nil-safe.
+func (ts *turnState) setOutcomeRelabel(code LLMErrorCode) {
+	if ts == nil {
+		return
+	}
+	ts.outcomeRelabel = code
+}
+
+// outcomeRelabel is the FR-017a relabel-on-success contract field — see (*AgentLoop).emitError consumer.
+// FR-017a: when the outcome-based retry succeeds, the loop writes the
+// outcome-labeled verdict here and consults it to relabel the error before
+// persisting it. The write-only flag is intentional at this layer;
+// the gateway boundary in (*AgentLoop).emitError is the next-step consumer.
 
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
 	ts := &turnState{
@@ -727,6 +773,58 @@ func (al *AgentLoop) resolveSessionIDByChannelChat(channel, chatID string) strin
 		return string(rootTS.routingSessionID)
 	}
 	return ""
+}
+
+// claimAnyTurnForSession scans activeTurnStates for ANY turnState matching
+// sessionID (transcriptSessionID equality — the same predicate
+// GetActiveTurnHookForSession/collectDescendantTurnIDs/InterruptSession all
+// share) that is still alive (IsAlive()) and successfully wins the
+// first-cancel-wins ClaimCancel() check.
+//
+// RequestCancel uses this as a fallback when the SINGLE hook
+// GetActiveTurnHookForSession resolved (root-preferring) could not be
+// claimed — most commonly because it already fired from an earlier,
+// unrelated cancel — while a DIFFERENT, live, never-canceled descendant (a
+// background/Critical async delegate is the common case: it shares the
+// root's transcriptSessionID but is a wholly separate turnState) still
+// shares the session. Without this fallback, RequestCancel's entire
+// descendant-cancellation cascade AND its turn_canceled transcript/audit
+// write live behind the wasFired gate computed from that ONE resolved hook
+// alone, so a claimable-but-never-tried descendant would be silently
+// skipped — precisely the bug class 78bddc82 already fixed for
+// KillBackgroundSessions (which fires unconditionally, independent of
+// wasFired, for exactly this reason), just for the native
+// InterruptSession/transcript cascade instead of the background-bash one.
+//
+// Root-preference does not apply here — unlike GetActiveTurnHookForSession,
+// this is a last-resort "is there ANYTHING left to claim" scan, not the
+// primary resolution, so the first live, claimable match in sync.Map's
+// (unspecified) iteration order is used; InterruptSession's own independent
+// Range scan (not this function) is what actually cascades the signal to
+// every matching turn regardless of which one was claimed here. Returns nil
+// when no turnState matches sessionID, or every match is already finished
+// or already claimed.
+func (al *AgentLoop) claimAnyTurnForSession(sessionID string) TurnCancelHook {
+	var claimed *turnState
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts := value.(*turnState)
+		if ts.transcriptSessionID != sessionID || !ts.IsAlive() {
+			return true
+		}
+		if ts.ClaimCancel() {
+			claimed = ts
+			return false // stop — one successful claim is enough
+		}
+		return true
+	})
+	if claimed == nil {
+		// Explicit nil-interface return: a nil *turnState boxed directly into
+		// TurnCancelHook would compare != nil to callers (classic Go
+		// interface-nil gotcha), silently defeating the `fallback != nil`
+		// check RequestCancel relies on.
+		return nil
+	}
+	return claimed
 }
 
 // getActiveRootTurnStateForSession returns the ROOT turnState (depth==0 /
@@ -1453,18 +1551,84 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 // `kind` parameter is the EventKind label that triggered the write
 // ("error" for a provider error, "rate_limit" for a rate-limit denial);
 // `stage` is the loop stage ("runTurn", "hooks", etc.); `message` is the
-// human-readable description.
+// human-readable description; `pe` is the optional structured provider
+// error (status/body) — when present, the classifier runs here (write
+// choke point, ADR-051 §RD5) so raw provider text never lands on disk.
 //
 // Used by recordRateLimitDenial and the LLM-call-error paths in loop.go to
 // satisfy FR-001 (rate_limit → transcript) and FR-002 (provider error →
-// transcript) of docs/internal/specs/phase-1-chat-model-and-errors.md.
+// transcript) of docs/internal/specs/phase-1-chat-model-and-errors.md, plus
+// the translation-at-write invariant of ADR-051 §RD5 (FR-007/008).
+//
+// Rate-limit skip (ADR-051 §RD5 MAJ-001/004): when kind==EventKindRateLimit
+// the caller-supplied message is already friendly (rate_limit: policyRule
+// (retry after Ns)) — passing pe=nil here lets the classifier recognize
+// it via the message substring and emit CodeRateLimited, but the caller
+// message is preserved as-is. Either way, raw provider text never reaches
+// the JSONL.
 //
 // Silently no-ops when the turn has been abandoned or when no transcript
 // store is wired (matches appendAssistantTranscript's failure semantics — a
 // failed transcript write must NOT abort the in-flight turn). Debug-level
 // logging is emitted when the no-op fires so an operator can trace why a
 // transcript entry was suppressed.
-func (ts *turnState) appendErrorTranscript(kind, stage, message string) {
+// trustedInternalStages is the set of stage+kind tuples that the write
+// choke point MUST NOT sanitize. Callers of appendErrorTranscript for
+// these stages produce curated, generic copy that is the actionable
+// signal a user/operator needs to see; sanitizing them would clobber
+// the operator-friendly shape. Provider-originated text NEVER enters
+// these paths (the prior call site is an internal hook, abort, or
+// synthetic-deny source).
+type internalStage struct{ stage, kind string }
+
+var trustedInternalStageSet = map[internalStage]struct{}{
+	{"rate_limit", "rate_limit"}:   {},
+	{"model_switch", "error"}:      {},
+	{"before_llm", "error"}:        {},
+	{"after_llm", "error"}:         {},
+	{"llm_call", "error"}:          {},
+	{"llm_retry_backoff", "error"}: {},
+	{"turn_loop", "error"}:         {},
+	// ADR-058 §10.A3: FR-084 (the retired synthetic-error-floor feature) was
+	// deleted in full — no producer calls appendErrorTranscript with that
+	// stage name anymore, so a trust-set entry for it does not belong here.
+	// FIX 6: hookAbortError (loop.go) is the SOLE producer of hook-abort
+	// transcript entries, and it ALWAYS calls appendErrorTranscript with the
+	// literal stage "hooks" — regardless of which HookInterceptor stage
+	// (before_llm/after_llm/before_tool/after_tool) actually triggered the
+	// abort; that more specific stage name only flows into the error
+	// MESSAGE text and the live EventPayload.Stage ("hook."+stage), never
+	// into this appendErrorTranscript call. So "hooks" is the one entry
+	// that actually matters here: without it, hookAbortError's
+	// decision.Reason (caller-curated text from a HookInterceptor — before_
+	// tool/after_tool share the exact same ToolInterceptor/HookManager
+	// plumbing and provenance as before_llm/after_llm, already trusted
+	// above) gets re-run through the classifier, and any hook reason that
+	// happens to contain a pinned substring (e.g. "safety", "rate limit")
+	// is silently replaced with generic boilerplate — even though the SAME
+	// reason survives byte-for-byte in the CodeUnknown/no-providerErr
+	// fallback below for reasons that don't happen to match a substring.
+	// "before_tool"/"after_tool" are added too — unlike "hooks" above, these
+	// ARE reachable today, via a DIFFERENT call site than hookAbortError:
+	// abortTurn (loop.go) passes its `stage` argument straight through to
+	// appendErrorTranscript verbatim (no hardcoded "hooks" collapse), and is
+	// itself called as al.abortTurn(ts, "before_tool", decision.Reason) /
+	// al.abortTurn(ts, "after_tool", decision.Reason) on a HookActionHardAbort
+	// decision (loop.go's before_tool and after_tool HookInterceptor call
+	// sites). decision.Reason is the same caller-curated
+	// HookInterceptor/HookManager text as before_llm/after_llm/"hooks" above,
+	// so it needs the identical trusted-stage protection from re-classification.
+	{"hooks", "error"}:       {},
+	{"before_tool", "error"}: {},
+	{"after_tool", "error"}:  {},
+}
+
+func isTrustedInternalStage(stage, kind string) bool {
+	_, ok := trustedInternalStageSet[internalStage{stage: stage, kind: kind}]
+	return ok
+}
+
+func (ts *turnState) appendErrorTranscript(kind, stage, message string, pe ...*ProviderError) {
 	if ts == nil {
 		return
 	}
@@ -1486,13 +1650,60 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string) {
 		)
 		return
 	}
+
+	// ADR-051 §RD5 write choke point: translate the message via the shared
+	// classifier so raw provider text never persists. The classifier reads
+	// pe.Status/pe.Body when present (nil-safe — see classifyByProviderError);
+	// pe nil means "this is not a provider error" (e.g. internal model_switch
+	// failures, hook aborts, rate-limit denials) and the classifier falls
+	// back to substring matching on the caller-supplied message.
+	var providerErr *ProviderError
+	if len(pe) > 0 {
+		providerErr = pe[0]
+	}
+	// Trusted internal-stages bypass (ADR-051 §RD5 IMPORTANT 1):
+	// the caller has produced a curated, generic message for these stages
+	// that does NOT carry raw provider text. Sanitizing them would clobber
+	// the actionable signal the operator relies on (e.g. hook abort reason,
+	// synthetic-error-floor count, model-switch friendly guidance). The
+	// classifier still stamps a typed code on the entry for replay routing,
+	// but the user-visible text is the caller-provided copy verbatim.
+	llm := TranslateLLMError(providerErr, message)
+
+	// FR-017a: outcome-based relabel overrides the classifier's code for
+	// this turn when the outcome-based strip-retry succeeded. The relabeled
+	// code is always CodeMediaUnsupported, matching what the classifier
+	// would have returned had it classified the outcome rather than the
+	// trigger.
+	if ts.outcomeRelabel != "" {
+		llm.Code = ts.outcomeRelabel
+		llm.Message = defaultUserMessage(ts.outcomeRelabel)
+	}
+
+	written := message
+	if !isTrustedInternalStage(stage, kind) {
+		// Friendly short-circuit for rate-limit messages whose caller-supplied
+		// copy is already generic and safe (rate_limit: policyRule (retry
+		// after Ns)); translation reuses it. This is the ADR-051 §RD5
+		// MAJ-001/004 carve-out — the classifier still RECOGNIZES rate-limit
+		// shape, but the emitted Content is the caller-provided message
+		// verbatim (no double translate, no model-name leak from MAJ-003).
+		if llm.Code == CodeRateLimited {
+			written = message
+		} else if llm.Code != CodeUnknown || providerErr != nil {
+			written = llm.Message
+		}
+	}
+
 	agentID := ts.resolveActiveAgentID()
 	entry := session.TranscriptEntry{
-		ID:        uuid.New().String(),
-		Type:      session.EntryTypeSystem,
-		AgentID:   agentID,
-		Content:   message,
-		Timestamp: time.Now().UTC(),
+		ID:             uuid.New().String(),
+		Type:           session.EntryTypeSystem,
+		AgentID:        agentID,
+		Content:        written,
+		Timestamp:      time.Now().UTC(),
+		ErrorCode:      string(llm.Code),
+		ErrorRetryable: llm.Retryable,
 		// Status="error" lets the replay path distinguish error entries from
 		// informational system entries (e.g. compaction summaries) without
 		// parsing the free-text Content.
@@ -1571,8 +1782,9 @@ func (ts *turnState) Finish(isHardAbort bool) {
 
 	// If handleCancel claimed this turn, fire the post-cancel callback exactly
 	// once. Swap the callback to nil under the write-lock so that concurrent or
-	// repeated Finish calls (e.g. the defer Finish(false) after a hard-abort
-	// Finish(true)) cannot invoke it a second time (FR-15).
+	// repeated Finish calls (e.g. runTurn's own deferred Finish call running
+	// after an explicit Finish(true) from a hard abort) cannot invoke it a
+	// second time (FR-15).
 	if ts.cancelFired.Load() {
 		ts.mu.Lock()
 		cb := ts.onCancelFinish

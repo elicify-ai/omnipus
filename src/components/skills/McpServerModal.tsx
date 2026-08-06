@@ -150,6 +150,24 @@ function transportToMode(transport: 'stdio' | 'sse' | 'http' | undefined): Conne
   return transport === 'stdio' ? 'local' : 'network'
 }
 
+/**
+ * Invalidate every cache an MCP server mutation can affect, beyond the
+ * server list itself. Adding/editing/removing a server now reconciles the
+ * live MCP manager (connect/disconnect + tool registration) synchronously
+ * server-side, which changes what the central tool registry and per-agent
+ * tool lists report — so the policy editors (Settings → Security,
+ * ToolsAndPermissions) and the Skills screen's own tools tab must refetch
+ * too, or they keep showing stale (pre-reconcile) tool counts / MCP
+ * sections.
+ */
+function invalidateMcpToolCaches(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
+  queryClient.invalidateQueries({ queryKey: ['tools-builtin'] }) // SecuritySection global editor
+  queryClient.invalidateQueries({ queryKey: ['registry-tools'] }) // ToolsAndPermissions per-agent editor
+  queryClient.invalidateQueries({ queryKey: ['agent-tools'] }) // prefix match — every agent
+  queryClient.invalidateQueries({ queryKey: ['tools'] }) // SkillsScreen's own tools tab
+}
+
 export function McpServerModal({ open, onOpenChange, initialServer }: McpServerModalProps) {
   const queryClient = useQueryClient()
   const { addToast } = useUiStore()
@@ -241,9 +259,21 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
         })
       }
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
-      addToast({ message: 'MCP server added', variant: 'success' })
+    onSuccess: (server) => {
+      invalidateMcpToolCaches(queryClient)
+      // Config write can succeed while the live connect does not — 'error' (bad
+      // command/URL, auth, network) and 'disconnected' (e.g. MCP globally
+      // disabled, not yet reconciled) both mean "not actually usable yet".
+      // Reflect that honestly instead of a blanket "added"; the plain success
+      // toast is reserved for a proven live connection.
+      if (server.status !== 'connected') {
+        addToast({
+          message: 'Server added, but not currently connected — check the command/URL and use Test.',
+          variant: 'warning',
+        })
+      } else {
+        addToast({ message: 'MCP server added', variant: 'success' })
+      }
       handleClose()
     },
     onError: (err: unknown) =>
@@ -287,9 +317,16 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
       }
       return updateMcpServer(initialServer.id, patch)
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
-      addToast({ message: 'MCP server updated', variant: 'success' })
+    onSuccess: (server) => {
+      invalidateMcpToolCaches(queryClient)
+      if (server.status !== 'connected') {
+        addToast({
+          message: 'Server updated, but not currently connected — check the command/URL and use Test.',
+          variant: 'warning',
+        })
+      } else {
+        addToast({ message: 'MCP server updated', variant: 'success' })
+      }
       handleClose()
     },
     onError: (err: unknown) =>

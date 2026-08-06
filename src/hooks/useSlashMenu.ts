@@ -193,6 +193,28 @@ const GHOST_TEXT_PLACEHOLDER = '<message>'
 // silently drift from this one.
 export const SECTION_CAP = 8
 
+// Root-cause fix (cancel-cross-channel T24a investigation, sendfile-fix):
+// the composer's `inputEnabled` (ChatScreen.tsx) depends only on the WS
+// being connected — never on this hook's own `['commands','web']` query
+// having resolved — so a fast typed "/new"+Enter (or any other client
+// command) right after the composer becomes usable can race ahead of that
+// separate REST fetch. Before this fix, `interceptClientCommand` could only
+// recognize a client command by name-matching the FETCHED `commands` list
+// (`allCommands` below); during that ordinary, transient "hasn't resolved
+// yet" window `commands` is still `[]`, the lookup failed, the caller never
+// called `preventDefault()`, and the literal text (e.g. "/new") was sent to
+// the backend as an ordinary chat message — silently minting/continuing a
+// session under whatever agent was active at that moment, discarding a
+// subsequent agent switch once the (now-stale) ack for that phantom message
+// arrived and re-synced the picker.
+//
+// Fixed via a readiness gate + deferred flush (see `commandsFirstLoadPending`,
+// `deferredSlashSubmitRef`, and `interceptClientCommand` below) rather than a
+// hardcoded client-command name list: while the first fetch is in flight, a
+// slash submit that misses the FETCHED list is held (intercepted, never sent
+// to the backend) instead of guessed at, and replayed for real the instant
+// the list resolves — see the "interceptClientCommand readiness gate" tests.
+
 // Deferred item 4: prefix-then-substring matching, shared by all three
 // sections (commands/skills/agents) so "@assist" can find "Code Assistant"
 // the same way "/assist" can find a "/assistant-setup" command or an

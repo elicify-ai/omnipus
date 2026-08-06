@@ -61,7 +61,7 @@ type fakePlanDispatcher struct {
 	clearedStreaks []string
 }
 
-func (f *fakePlanDispatcher) ExecuteTask(_ context.Context, taskID string) error {
+func (f *fakePlanDispatcher) ExecuteTask(_ context.Context, taskID string, _ *int64) error {
 	f.mu.Lock()
 	f.calls = append(f.calls, taskID)
 	fn := f.onDispatch
@@ -97,7 +97,7 @@ func (f *fakePlanDispatcher) ClearEvidenceGateStreak(taskID string) {
 // ENGINE's own decisions, not TaskExecutor's gate — so this is a plain alias
 // for ExecuteTask, recorded identically in f.calls.
 func (f *fakePlanDispatcher) executeTaskPlanVerified(ctx context.Context, taskID string) error {
-	return f.ExecuteTask(ctx, taskID)
+	return f.ExecuteTask(ctx, taskID, nil)
 }
 
 func (f *fakePlanDispatcher) callList() []string {

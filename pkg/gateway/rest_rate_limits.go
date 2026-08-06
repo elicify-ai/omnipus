@@ -131,16 +131,20 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try hot-reload; on failure the config is persisted but the live AgentLoop
-	// still holds the old values until the operator restarts.
-	reloadErr := a.triggerReloadAndWait()
 	newCfg := a.agentLoop.GetConfig().Sandbox.RateLimits
 
-	// Emit the audit ONCE, after safeUpdateConfigJSON succeeds, regardless of
-	// reload outcome. The audit entry is the operator-facing record of the
-	// persisted change — not of the runtime effect — so it must fire even when
-	// the hot-reload fails (the operator still needs to know what was saved).
+	// Audit the config write itself, unconditionally — mirrors
+	// rest_prompt_guard.go's putPromptGuard (emit-then-reload, not gated
+	// behind the reload's own outcome). The write has already landed on disk
+	// at this point regardless of whether the follow-up hot-reload confirms
+	// in time; the security_setting_change record documents WHAT changed,
+	// not whether the in-memory rebuild kept up.
 	if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
+		// ADR-053 D12: daily_cost_cap_usd is retired from this struct
+		// entirely (rejected with 400 above, before this point is ever
+		// reached) — the audit before/after snapshot only ever covers the
+		// two sliding-window fields that still exist on
+		// OmnipusRateLimitsConfig.
 		if err := audit.EmitSecuritySettingChange(
 			r.Context(), auditLogger, "sandbox.rate_limits",
 			map[string]any{
@@ -156,6 +160,7 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	confirmed, reloadErr := a.triggerReloadAndWaitOutcome()
 	if reloadErr != nil {
 		slog.Warn("rest: rate limits saved but hot-reload failed; restart required",
 			"reload_error", reloadErr,
@@ -169,6 +174,13 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 			Warning:         &warnMsg,
 		})
 		return
+	}
+	if !confirmed {
+		slog.Warn("rest: hot-reload after rate limits update did not confirm within the poll window; "+
+			"running agents may still be enforcing the previous rate limits",
+			"max_agent_llm_calls_per_hour", oldCfg.MaxAgentLLMCallsPerHour,
+			"max_agent_tool_calls_per_minute", oldCfg.MaxAgentToolCallsPerMinute,
+		)
 	}
 
 	slog.Info("rest: rate limits updated",

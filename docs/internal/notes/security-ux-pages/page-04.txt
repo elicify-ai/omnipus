@@ -1,0 +1,20 @@
+
+### Primary (always visible)
+
+1. **Security health** (`DiagnosticsSection` / doctor score)
+2. **Protection settings**
+   - Agent tool access → `policy_mode` allow/deny (“Must ask first” / “Run freely”)
+   - Shell command approval → `exec_approval` auto/ask/deny
+   - Daily spending limit
+   - Skill trust
+3. **Credential vault** (after Advanced)
+
+### Advanced (collapsed)
+
+- Global tool policy grid (`allow` / `ask` / `deny` per tool)
+- Command execution timeouts + “enable deny patterns”
+- Binary allowlist
+- SSRF proxy status card
+- Prompt injection level
+- **Process sandbox** (status, mode, allowed paths, SSRF allow_internal, global shell deny regexes)
+- Per-agent rate limits

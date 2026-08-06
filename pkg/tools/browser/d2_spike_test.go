@@ -48,7 +48,8 @@ func TestD2Spike_BrowserContextIsolation(t *testing.T) {
 	// disk/RAM-constrained devpod for no coverage benefit (same binary).
 	binPath := resolveTestBinaryHeadlessShell(t)
 
-	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
+	allocOpts := append(
+		chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(binPath),
 		chromedp.Flag("no-first-run", true),
 		chromedp.Flag("no-default-browser-check", true),
@@ -117,7 +118,8 @@ func TestD2Spike_BrowserContextIsolation(t *testing.T) {
 		// drain
 		_ = ev
 	})
-	if err := chromedp.Run(ctxA,
+	if err := chromedp.Run(
+		ctxA,
 		// comma-operator returns undefined so CDP doesn't try to serialize the Window object
 		chromedp.Evaluate(fmt.Sprintf(`(window.open(%q, "_blank"), undefined)`, srv.URL), nil),
 	); err != nil {

@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	_ "time/tzdata" // FR-018: embed IANA tzdata so RRULE `tz` resolution works on minimal systems (single-binary Constraint #1) without a system zoneinfo database.
 
 	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"

@@ -56,6 +56,10 @@ type BrowserCaptureAnswerFrame struct {
 // BrowserCaptureControlFrame — Bidirectional control frame on the /api/v1/browser/capture-ingest channel. Server (gateway) → client (extension) for `recapture` (the agent's active tab changed — chrome.tabs.query({active:true}) must be re-bound, the onTabsChanged/rebindScreencast analog for the WebRTC path, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer detached past the grace period, or the gateway is stopping the stream); client (extension) → server (gateway) for `ping`, the encoder page's periodic health beacon / reconnect-watchdog signal. `reason` is an optional human-readable note (e.g. why shutdown was requested).
 type BrowserCaptureControlFrame struct {
 	Action string `json:"action"`
+	// recapture only: expected CSS viewport height. See expected_width.
+	ExpectedHeight *int `json:"expected_height,omitempty"`
+	// recapture only, server → extension: the CDP-verified CSS viewport width the tab was just resized to. chrome.tabs.get lags the OS window reflow, so a recapture racing a resize can pin the stream to a stale size — the encoder polls tabs.get until it converges on this, falling back to it on timeout.
+	ExpectedWidth *int `json:"expected_width,omitempty"`
 	// Optional human-readable context for the action (e.g. shutdown cause).
 	Reason *string `json:"reason,omitempty"`
 	Type   string  `json:"type"`
@@ -89,13 +93,17 @@ type BrowserDetachFrame struct {
 	Type      string  `json:"type"`
 }
 
-// BrowserInputFrame — Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the screencast frame.
+// BrowserInputFrame — Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the screencast frame, UNLESS capture_width/capture_height are present — then x/y are in that capture-frame pixel space and the server rescales them into the tab's real CSS viewport before dispatch (root cause 2026-07-31, fault 3).
 type BrowserInputFrame struct {
-	Button *string  `json:"button,omitempty"`
-	Code   *string  `json:"code,omitempty"`
-	DeltaX *float64 `json:"delta_x,omitempty"`
-	DeltaY *float64 `json:"delta_y,omitempty"`
-	Key    *string  `json:"key,omitempty"`
+	Button *string `json:"button,omitempty"`
+	// Intrinsic pixel height of the capture frame the client mapped x/y into. See capture_width.
+	CaptureHeight *float64 `json:"capture_height,omitempty"`
+	// Intrinsic pixel width of the capture frame the client mapped x/y into (the <video>'s videoWidth in WebRTC mode). With capture_height, the server rescales x/y into the tab's actual CSS viewport before CDP dispatch. Absent (older client) means x/y are already CSS pixels.
+	CaptureWidth *float64 `json:"capture_width,omitempty"`
+	Code         *string  `json:"code,omitempty"`
+	DeltaX       *float64 `json:"delta_x,omitempty"`
+	DeltaY       *float64 `json:"delta_y,omitempty"`
+	Key          *string  `json:"key,omitempty"`
 	// Windows virtual key code for key_down/key_up (DOM KeyboardEvent.keyCode) — required for CDP to perform editing/nav key actions and modifier shortcuts. See ADR-039.
 	KeyCode   *int     `json:"key_code,omitempty"`
 	Kind      string   `json:"kind"`
@@ -157,6 +165,19 @@ type BrowserTabsFrame struct {
 		Url    *string `json:"url,omitempty"`
 	} `json:"tabs"`
 	Type string `json:"type"`
+}
+
+// BrowserViewportFrame — Client → server. Reports the live-browser panel's current render box so the gateway can size the captured tab to match it. The captured tab was pinned to a hardcoded 1280x720 while the docked panel is an arbitrary resizable shape, so object-fit:contain could only ever fill one dimension and letterboxed the rest (operator UAT 2026-07-31). device_scale_factor addresses the same report's second half, blur: the managed headless Chrome renders at DPR 1, so a capture displayed larger than its CSS size upscales. Sent on attach and debounced on resize; the server applies the metrics then triggers browser_capture_control{action: recapture} so the encoder rebuilds its stream at the new geometry (capture constraints are pinned per stream).
+type BrowserViewportFrame struct {
+	AgentId *string `json:"agent_id,omitempty"`
+	// Viewer devicePixelRatio, used as Chromium's deviceScaleFactor so the capture renders at display resolution rather than upscaling. Capped at 3 because cost scales with the SQUARE of this value. Omitted means 1.
+	DeviceScaleFactor *float64 `json:"device_scale_factor,omitempty"`
+	// Panel render-box height in CSS pixels.
+	Height    int     `json:"height"`
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
+	// Panel render-box width in CSS pixels. Bounded so a malformed or hostile frame cannot ask Chromium for an absurd allocation.
+	Width int `json:"width"`
 }
 
 // BrowserWebRTCAnswerFrame — Server → client. Pion SDP answer to a browser_webrtc_offer, sent once the gateway's relay has created the viewer PeerConnection and gathered its own ICE candidates (non-trickle — the answer is complete, no separate candidate frames follow). See ADR-047 D1/D4.
@@ -263,11 +284,19 @@ type DoneStats struct {
 	TurnFailed               *bool    `json:"turn_failed,omitempty"`
 }
 
-// ErrorFrame — Server → client error notification.
+// ErrorFrame — Server → client. Error notification. May be global (no session_id, e.g., auth failure) or session-scoped. The SPA displays the message as a toast or inline error. Does NOT terminate the WebSocket connection.
 type ErrorFrame struct {
-	Message   string  `json:"message"`
+	// Human-readable error description.
+	Message string        `json:"message"`
+	Payload *ErrorPayload `json:"payload,omitempty"`
+	// Session this error relates to. Optional: global errors (auth, connection) are not tied to a specific session.
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
+}
+
+// ErrorPayload — Structured payload for a live error frame.
+type ErrorPayload struct {
+	LlmError LLMError `json:"llm_error"`
 }
 
 // GoalStatusFrame — Server → client. Status push for a session's active /goal loop (ADR-049 D6/D7/US-8; state enum + goal_id extended by ADR-053 §Contract Surface — "Pill-state enum"/R§8.10). Emitted on round completion, state change, and clear/stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep in sync by hand with components/schemas/GoalStatusFrame.yaml. Class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id until the audit classifies it.
@@ -308,12 +337,28 @@ type JudgeVerdictFrame struct {
 	Type   string  `json:"type"`
 }
 
+// LLMError — Translated provider/LLM error safe for the live WebSocket boundary.
+type LLMError struct {
+	Code string `json:"code"`
+	// Live-only technical detail; never persisted or replayed.
+	Detail    *string `json:"detail,omitempty"`
+	Message   string  `json:"message"`
+	Retryable bool    `json:"retryable"`
+}
+
+// LLMErrorReplay — Replay-safe translated provider/LLM error with live-only detail omitted.
+type LLMErrorReplay struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	Retryable bool   `json:"retryable"`
+}
+
 // LoopStatusFrame — Server → client. Status push for a session's active /loop (ADR-049 D6/D7/US-9). Emitted on run completion, state change, and stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id until the audit classifies it.
 type LoopStatusFrame struct {
 	MaxRuns int    `json:"max_runs"`
 	Mode    string `json:"mode"`
 	// Milliseconds until the next scheduled run. Present for `interval` mode and once a `self_paced` run has scheduled its next one-shot fire.
-	NextDelay *int `json:"next_delay,omitempty"`
+	NextDelay *int64 `json:"next_delay,omitempty"`
 	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see this frame's description.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
 	Run                int     `json:"run"`
@@ -346,7 +391,7 @@ type MediaPart struct {
 	Url         string  `json:"url"`
 }
 
-// MessageFrame — Client → server user chat message. Omit session_id to start a new session; include to continue an existing one.
+// MessageFrame — Client → server user chat message. Omit session_id to start a new session; include to continue an existing one. content must always be present as a key, but MAY be an empty string when media is also present and non-empty — an attachment-only send legitimately has no caption (UAT Issue 5). The anyOf below enforces the actual invariant: content has at least 1 character, OR media has at least 1 entry — a message with neither is still rejected.
 type MessageFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	Content string  `json:"content"`
@@ -362,7 +407,7 @@ type MessageFrame struct {
 type NotificationFrame struct {
 	AgentId          *string `json:"agent_id,omitempty"`
 	Body             *string `json:"body,omitempty"`
-	CreatedAtMs      int     `json:"created_at_ms"`
+	CreatedAtMs      int64   `json:"created_at_ms"`
 	Id               string  `json:"id"`
 	NotificationType string  `json:"notification_type"`
 	Read             bool    `json:"read"`
@@ -405,23 +450,27 @@ type RateLimitFrame struct {
 	Type              string  `json:"type"`
 }
 
-// ReplayErrorFrame — Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). The SPA renders this frame's `kind` discriminant to dispatch to the rate-limit banner or generic error component — without this typed frame the SPA previously rendered rate-limit text as a regular assistant message (Role="" fallback path).
+// ReplayErrorFrame — Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). Emitted by the replay path when the server encounters a TranscriptEntry with Type=system AND Status="error" — produced by appendErrorTranscript for rate-limit denials (kind=rate_limit) and provider LLM call failures (kind=error). The SPA uses this frame's `kind` discriminant to render the rate-limit-denial component or the generic error component instead of falling back to the default "assistant" bubble render path. Without this typed frame, replay treats the entry as a normal assistant message (the previous bug — empty Role falls back to "assistant" via ReplayMessageFrame.Role, so the SPA renders rate-limit text as a regular assistant message).
 type ReplayErrorFrame struct {
+	// Agent that was active when the error fired.
 	AgentId *string `json:"agent_id,omitempty"`
-	EntryId string  `json:"entry_id"`
-	Kind    string  `json:"kind"`
-	Message string  `json:"message"`
-	Payload struct {
-		PolicyRule        *string  `json:"policy_rule,omitempty"`
-		Resource          *string  `json:"resource,omitempty"`
-		RetryAfterSeconds *float64 `json:"retry_after_seconds,omitempty"`
-		Scope             *string  `json:"scope,omitempty"`
-		Stage             *string  `json:"stage,omitempty"`
-		Tool              *string  `json:"tool,omitempty"`
-	} `json:"payload,omitempty"`
+	// Server-assigned transcript entry ID. Matches TranscriptEntry.ID from the JSONL partition so the SPA can dedup against live entries on WS reconnect.
+	EntryId string `json:"entry_id"`
+	// Error category. The SPA renders a different component per kind: "rate_limit" → rate-limit-denial banner with retry-after countdown, "error" → generic error component. Add new kinds here as new error categories are introduced (the enum keeps the wire contract tight).
+	Kind string `json:"kind"`
+	// Human-readable error description (the same text previously written to TranscriptEntry.Content). Kept verbatim for backward compat with the existing replay_message rendering path.
+	Message string              `json:"message"`
+	Payload *ReplayErrorPayload `json:"payload,omitempty"`
+	// Session being replayed.
 	SessionId string `json:"session_id"`
+	// ISO-8601 timestamp of the original error event.
 	Timestamp string `json:"timestamp"`
 	Type      string `json:"type"`
+}
+
+// ReplayErrorPayload — Structured replay-safe payload for a replay error frame.
+type ReplayErrorPayload struct {
+	LlmError LLMErrorReplay `json:"llm_error"`
 }
 
 // ReplayMessageFrame — Server → client replayed transcript entry. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the gateway replay path, not by a turn, so producing_session_id is absent (FR-013).
@@ -430,13 +479,11 @@ type ReplayMessageFrame struct {
 	Content string  `json:"content"`
 	Id      *string `json:"id,omitempty"`
 	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
-	Model *string `json:"model,omitempty"`
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type — emitted by the gateway replay path, not by a turn.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	Role               string  `json:"role"`
-	SessionId          string  `json:"session_id"`
-	Timestamp          *string `json:"timestamp,omitempty"`
-	// Turn-correlation identifier (from TranscriptEntry.TurnID), stamped on assistant entries and turn-cancellation entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels, without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between). Omitted for legacy entries written before turn-id stamping landed.
+	Model     *string `json:"model,omitempty"`
+	Role      string  `json:"role"`
+	SessionId string  `json:"session_id"`
+	Timestamp *string `json:"timestamp,omitempty"`
+	// Turn-correlation identifier (from TranscriptEntry.TurnID), stamped on assistant entries and turn-cancellation entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels, without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between). Omitted for legacy entries written before turn-id stamping landed. producing_session_id: type: string minLength: 1 description: > ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type — emitted by the gateway replay path, not by a turn.
 	TurnId *string `json:"turn_id,omitempty"`
 	Type   string  `json:"type"`
 }
@@ -561,6 +608,16 @@ type SystemOverloadFrame struct {
 	Type               string  `json:"type"`
 }
 
+// TaskRunStatusFrame — Server → client task RUN status updated (open or close). Additive alongside TaskStatusChangedFrame (ADR-050 / task-run-history-spec §3.8) — emitted at run open and close so the calendar's per-occurrence chip can update live without a full refetch.
+type TaskRunStatusFrame struct {
+	// The scheduled RRULE instant this run realizes (the calendar join key). Null for an ad-hoc/once/manual run.
+	OccurrenceMs *int64 `json:"occurrence_ms,omitempty"`
+	RunId        string `json:"run_id"`
+	Status       string `json:"status"`
+	TaskId       string `json:"task_id"`
+	Type         string `json:"type"`
+}
+
 // TaskStatusChangedFrame — Server → client task status updated. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id for this type until the audit classifies it.
 type TaskStatusChangedFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
@@ -679,8 +736,11 @@ const (
 	WsFrameTypeToolCallStart            WsFrameType = "tool_call_start"
 	WsFrameTypeToolCallResult           WsFrameType = "tool_call_result"
 	WsFrameTypeSubagentStart            WsFrameType = "subagent_start"
+	WsFrameTypeSubagentMessage          WsFrameType = "subagent_message"
+	WsFrameTypeSubagentState            WsFrameType = "subagent_state"
 	WsFrameTypeSubagentEnd              WsFrameType = "subagent_end"
 	WsFrameTypeTaskStatusChanged        WsFrameType = "task_status_changed"
+	WsFrameTypeTaskRunStatus            WsFrameType = "task_run_status"
 	WsFrameTypeReplayMessage            WsFrameType = "replay_message"
 	WsFrameTypeReplayError              WsFrameType = "replay_error"
 	WsFrameTypeRateLimit                WsFrameType = "rate_limit"
@@ -705,6 +765,7 @@ const (
 	WsFrameTypeBrowserStatus            WsFrameType = "browser_status"
 	WsFrameTypeBrowserTabAction         WsFrameType = "browser_tab_action"
 	WsFrameTypeBrowserTabs              WsFrameType = "browser_tabs"
+	WsFrameTypeBrowserViewport          WsFrameType = "browser_viewport"
 	WsFrameTypeBrowserWebrtcOffer       WsFrameType = "browser_webrtc_offer"
 	WsFrameTypeBrowserWebrtcAnswer      WsFrameType = "browser_webrtc_answer"
 	WsFrameTypeBrowserWebrtcState       WsFrameType = "browser_webrtc_state"

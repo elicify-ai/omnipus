@@ -1112,6 +1112,42 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
   })
 })
 
+// Root-cause regression (cancel-cross-channel T24a investigation,
+// sendfile-fix): ChatScreen.tsx's `inputEnabled` gate is
+// `!agentRemoved && !isReplaying && !(reconnectPhase === 'gave_up') &&
+// isConnected` — it depends ONLY on the WS being connected, never on this
+// hook's own `['commands','web']` query having resolved. So the composer
+// accepts (and can submit) input the instant the socket connects, which can
+// easily be BEFORE the separate REST fetch for the commands list lands —
+// e.g. a fast typed "/new"+Enter (or Playwright's `input.fill('/new');
+// input.press('Enter')`, which has no reason to wait on it either) right
+// after page load.
+//
+// Before the fix: `allCommands` was built from `[resume, workspace,
+// ...commands]` where `commands` defaults to `[]` until the query resolves
+// — during that ordinary, non-error loading window, "/new" was not found in
+// `allCommands`, `interceptClientCommand()` returned false, and the
+// caller's `onSubmit`/Send handlers only call `e.preventDefault()` when it
+// returns true — so the literal text "/new" fell through and was sent to
+// the backend as an ordinary chat message. Because this happens before the
+// user has (necessarily) picked a specific agent, that phantom message
+// mints/continues a session bound to whatever agent is currently active
+// (typically the default), and the session_started ack for it can arrive
+// AFTER a later, correct agent switch and silently revert the picker/active
+// agent back to the default — the exact "picker showed Jim, then the turn
+// ran as Mia" symptom from the T24a investigation.
+//
+// Fixed via the readiness gate + deferred flush covered by the
+// "interceptClientCommand readiness gate (commands still loading)" describe
+// block above — a held submit is never dispatched to the backend and is
+// replayed for real once the list resolves. This is DISTINCT from the
+// "commandsError" describe block above that one: that block models a
+// CONFIRMED, permanent query failure, where the team deliberately decided
+// most client commands should degrade (see its own doc comment); the
+// readiness-gate block models the ordinary, transient "hasn't resolved YET"
+// window, which is not a confirmed failure and was never a deliberate
+// degradation — it is the actual bug.
+
 describe('useSlashMenu — "@" agent-mention menu', () => {
   it('shows nothing for "@" mid-text — only a leading "@" triggers (same rule as "/")', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))

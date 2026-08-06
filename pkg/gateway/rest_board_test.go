@@ -128,6 +128,23 @@ func getTaskStatus(t *testing.T, api *restAPI, id string) gen.TaskStatus {
 	return tsk.Status
 }
 
+// getTaskSessionID reads back a task via GET /api/v1/tasks/{id} and returns
+// its session_id ("" when unset).
+func getTaskSessionID(t *testing.T, api *restAPI, id string) string {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+id, nil)
+	r.URL.Path = "/api/v1/tasks/" + id
+	api.HandleTasks(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "getTaskSessionID GET must return 200; body=%s", w.Body.String())
+	var tsk gen.Task
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
+	if tsk.SessionId == nil {
+		return ""
+	}
+	return *tsk.SessionId
+}
+
 // ensureTestWorkspace creates a workspace (via the workspaces API) and returns its ID.
 func ensureTestWorkspace(t *testing.T, api *restAPI) string {
 	t.Helper()

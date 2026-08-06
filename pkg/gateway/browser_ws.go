@@ -155,7 +155,26 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// just because it landed inside the same 2s window. See handleInput's
 	// doc comment.
 	lastInputErrorMessage string
+	// lastViewportAt throttles browser_viewport handling (review finding).
+	// The SPA debounces at 400ms, but that is client-side and any
+	// authenticated client can send raw frames faster. Each accepted frame
+	// costs a CDP resize AND a full capture rebuild on the encoder, so an
+	// unthrottled flood is a genuine thrash/DoS vector against the single
+	// shared Chrome. Only touched from readLoop's goroutine, like every other
+	// field here.
+	lastViewportAt time.Time
 
+	// webrtcMu guards webrtc and webrtcEpoch below (FIX WAVE A finding 1).
+	// browser_webrtc_offer processing now runs off readLoop's own goroutine
+	// (dispatchWebRTCOffer, browser_webrtc.go) so a slow/CDP-bound offer can
+	// never block readLoop's ReadMessage loop — which means committing the
+	// resulting attachment can now race readLoop's OWN synchronous
+	// browser_detach handling and its connection-close cleanup, both of
+	// which still run directly on readLoop's goroutine while an offer's
+	// background goroutine may still be negotiating. Every access to
+	// webrtc/webrtcEpoch outside a fresh, single-goroutine test fixture must
+	// go through the methods below, never the bare fields.
+	webrtcMu sync.Mutex
 	// webrtc tracks this connection's attached WebRTC viewer (ADR-047 D4,
 	// wave-plan W2-A) — separate from the JPEG screencast attachment above
 	// (sessionID/mgr), since both paths can be active simultaneously on the
@@ -165,10 +184,90 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// field pair (fix-wave simplification): the two were always set and
 	// cleared together, so the pair could represent an illegal
 	// half-set/half-nil state the type system did nothing to prevent.
-	// webrtc != nil iff a browser_webrtc_offer has succeeded and not yet
-	// been torn down (viewer detach, connection close, or a stream
-	// failure).
+	// webrtc != nil iff a browser_webrtc_offer has succeeded, COMMITTED (see
+	// commitWebRTCAttachment), and not yet been torn down (viewer detach,
+	// connection close, or a stream failure).
 	webrtc *webrtcAttachment
+	// webrtcEpoch increments every time this connection either (a) begins
+	// processing a NEW browser_webrtc_offer frame (beginWebRTCOffer, called
+	// synchronously from readLoop the instant the frame is dispatched — see
+	// that method's doc comment for why the bump must happen there, not
+	// inside the goroutine it spawns) or (b) is told to give up any
+	// in-flight offer (invalidateWebRTCOffer — an explicit browser_detach or
+	// the connection itself closing). A background offer goroutine captures
+	// the epoch beginWebRTCOffer returned and, once it finishes negotiating,
+	// only commits its result via commitWebRTCAttachment if that captured
+	// value still matches current — i.e. nothing newer (another offer, a
+	// detach, or a close) has superseded it in the meantime. A stale commit
+	// attempt tears down what it built instead of silently attaching a
+	// viewer state this connection no longer wants.
+	webrtcEpoch uint64
+}
+
+// beginWebRTCOffer bumps this connection's webrtcEpoch and returns the new
+// value. Called synchronously — still on readLoop's own goroutine — the
+// instant a browser_webrtc_offer frame is dispatched (dispatchWebRTCOffer,
+// browser_webrtc.go), BEFORE the goroutine that will actually process it is
+// spawned. Bumping here rather than inside that (unpredictably-scheduled)
+// goroutine is what keeps epoch ordering aligned with the ORDER frames
+// actually arrived in: a second offer frame dispatched a moment later always
+// observes (and invalidates) whatever the first offer's goroutine captured,
+// regardless of which goroutine the Go scheduler happens to run first.
+func (s *browserConnState) beginWebRTCOffer() uint64 {
+	s.webrtcMu.Lock()
+	defer s.webrtcMu.Unlock()
+	s.webrtcEpoch++
+	return s.webrtcEpoch
+}
+
+// invalidateWebRTCOffer bumps webrtcEpoch without starting a new offer —
+// used by an explicit browser_detach and by the connection-close cleanup
+// (both via detachWebRTCViewer) so a background offer goroutine that hasn't
+// committed yet (see commitWebRTCAttachment) recognizes, whenever it
+// eventually finishes negotiating, that this connection no longer wants its
+// result.
+func (s *browserConnState) invalidateWebRTCOffer() {
+	s.webrtcMu.Lock()
+	s.webrtcEpoch++
+	s.webrtcMu.Unlock()
+}
+
+// commitWebRTCAttachment installs att as this connection's WebRTC attachment
+// iff epoch still matches the CURRENT webrtcEpoch — returns false (does not
+// install) if a newer offer, an explicit detach, or the connection closing
+// already invalidated this generation while handleWebRTCOffer was
+// negotiating in the background.
+func (s *browserConnState) commitWebRTCAttachment(epoch uint64, att *webrtcAttachment) bool {
+	s.webrtcMu.Lock()
+	defer s.webrtcMu.Unlock()
+	if s.webrtcEpoch != epoch {
+		return false
+	}
+	s.webrtc = att
+	return true
+}
+
+// takeWebRTCAttachment atomically reads and clears this connection's WebRTC
+// attachment (used by detachWebRTCViewer) — safe to call whether or not an
+// offer goroutine is concurrently trying to commit one, since both go
+// through the same webrtcMu.
+func (s *browserConnState) takeWebRTCAttachment() *webrtcAttachment {
+	s.webrtcMu.Lock()
+	defer s.webrtcMu.Unlock()
+	att := s.webrtc
+	s.webrtc = nil
+	return att
+}
+
+// peekWebRTCAttachment returns the currently-committed attachment WITHOUT
+// clearing it, for callers that need to act on the live capture session and
+// leave it in place (handleViewport). Distinct from takeWebRTCAttachment,
+// whose clear-on-read is what makes teardown idempotent — using that here
+// would silently detach the viewer as a side effect of a resize.
+func (s *browserConnState) peekWebRTCAttachment() *webrtcAttachment {
+	s.webrtcMu.Lock()
+	defer s.webrtcMu.Unlock()
+	return s.webrtc
 }
 
 // minInputErrorInterval is the minimum gap between two IDENTICAL real-input-
@@ -176,6 +275,12 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 // finding #4). A different error message bypasses the cooldown entirely —
 // see browserConnState.lastInputErrorMessage's doc comment.
 const minInputErrorInterval = 2 * time.Second
+
+// minViewportInterval is the server-side floor between two accepted
+// browser_viewport frames on one connection. Comfortably below the SPA's
+// 400ms debounce so normal resizing is never throttled, while bounding what a
+// hostile or buggy client can force. See browserConnState.lastViewportAt.
+const minViewportInterval = 300 * time.Millisecond
 
 // BrowserWSHandler implements the /api/v1/browser/ws endpoint (ADR-038):
 // screencast-out + input-injection-in for the live interactive browser
@@ -359,7 +464,7 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn, r *http.Request) (
 		authFrame.Type != string(generated.WsFrameTypeAuth) {
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "first message must be {\"type\":\"auth\",\"token\":\"...\"}",
+			Message: wsAuthErrBadFirstFrame,
 		})
 		return "", false
 	}
@@ -374,7 +479,7 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn, r *http.Request) (
 	if bearerAccountsConfigured(cfg) {
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "unauthorized: invalid token",
+			Message: wsAuthErrInvalidToken,
 		})
 		writeCloseAuthFailed(conn)
 		return "", false
@@ -388,7 +493,7 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn, r *http.Request) (
 		}
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "no users configured, complete onboarding first",
+			Message: wsAuthErrNoUsers,
 		})
 		writeCloseAuthFailed(conn)
 		return "", false
@@ -396,7 +501,7 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn, r *http.Request) (
 	if subtle.ConstantTimeCompare([]byte(rawToken), []byte(required)) != 1 {
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "unauthorized: invalid token",
+			Message: wsAuthErrInvalidToken,
 		})
 		writeCloseAuthFailed(conn)
 		return "", false
@@ -408,7 +513,7 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn, r *http.Request) (
 // writeCloseAuthFailed sends the WS close control frame used by every
 // authentication failure branch, matching authenticateWS's behavior exactly.
 func writeCloseAuthFailed(conn *websocket.Conn) {
-	// Same invariant as writePump below: a close frame to an unresponsive
+	// Same invariant as writePump above: a close frame to an unresponsive
 	// client must not block this goroutine forever.
 	if err := conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
 		slog.Debug("browser-ws: SetWriteDeadline failed for close frame", "error", err)
@@ -426,18 +531,16 @@ func writeCloseAuthFailed(conn *websocket.Conn) {
 // connection. gorilla/websocket requires all writes to happen from the same
 // goroutine. A nil message on sendCh is the sentinel for a ping frame.
 func (h *BrowserWSHandler) writePump(wc *browserWSConn) {
-	// 2026-07-31 review finding: writePump returning on a write-side stall
-	// used to leave the connection write-dead but read-alive — nothing else
-	// here calls wc.close(), so pingPump/sendFrame/sendCritical kept selecting
-	// on a doneCh that was never closed, and readLoop's own deadline kept
-	// getting refreshed by whatever the client was still sending (including
-	// the client's own app-level heartbeat). The SetWriteDeadline fix above
-	// only bounds how long ONE write blocks; without this, the connection was
-	// still only actually reaped by the client's independent ~60s
-	// missed-ping self-heal (ws.ts), not by anything server-side. wc.close()
-	// is sync.Once-guarded (idempotent with the same call in the connection's
-	// main handler), so signalling here the moment the writer dies is safe.
+	// defer close (2026-07-31, found by the sibling instance's reviewers and
+	// verified here): every exit path below is a bare `return`. Without this,
+	// a write failure left the connection WRITE-dead but READ-alive — doneCh
+	// was never closed, so sendFrame/sendCritical kept selecting on a channel
+	// nobody would ever close, and readLoop kept refreshing its deadline from
+	// whatever the client was still sending. The socket was then only reaped
+	// by the CLIENT's own missed-ping self-heal ~60s later. close() is
+	// sync.Once-guarded, so this is safe alongside every other caller.
 	defer wc.close()
+
 	for {
 		select {
 		case msg, ok := <-wc.sendCh:
@@ -454,13 +557,14 @@ func (h *BrowserWSHandler) writePump(wc *browserWSConn) {
 			// goroutine for good: no further frames, and — worse — no further
 			// keepalive pings. The peer then hits its own read timeout and
 			// tears the connection down, which is what surfaces as the
-			// abnormal `close 1006` the operator has been seeing. This socket
-			// carries the high-volume JPEG screencast stream, so it is by far
-			// the most likely of the two to fill a window in the first place.
+			// abnormal `close 1006` the operator has been seeing (33 of them
+			// in one session's log). This socket is the one carrying the
+			// high-volume JPEG screencast stream, so it is by far the most
+			// likely of the two to fill a window in the first place.
 			//
 			// With the deadline, a stalled write fails fast and this pump
-			// exits (see the defer wc.close() above for why that now tears
-			// the whole connection down immediately, not just this goroutine).
+			// exits cleanly, letting the normal reconnect path run instead of
+			// leaving a half-dead connection nobody times out for 60s.
 			if err := wc.conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
 				slog.Debug("browser-ws: SetWriteDeadline failed", "error", err)
 				return
@@ -518,9 +622,15 @@ func (h *BrowserWSHandler) readLoop(
 		if state.mgr != nil && state.sessionID != "" {
 			h.detach(state.mgr, state.sessionID, viewerID, userID)
 		}
-		if state.webrtc != nil {
-			h.detachWebRTCViewer(&state, viewerID)
-		}
+		// detachWebRTCViewer is called unconditionally (not gated on
+		// state.webrtc != nil): a browser_webrtc_offer dispatched via
+		// dispatchWebRTCOffer may still be negotiating in the background
+		// when this connection closes, with nothing committed to state.webrtc
+		// yet — detachWebRTCViewer's invalidateWebRTCOffer call (FIX WAVE A
+		// finding 1) is what tells that goroutine, once it finishes, to tear
+		// down what it built instead of attaching a viewer state this
+		// now-closed connection can never use.
+		h.detachWebRTCViewer(&state, viewerID)
 	}()
 
 	for {
@@ -579,13 +689,26 @@ func (h *BrowserWSHandler) readLoop(
 			h.handleControl(wc, &state, viewerID, userID, data, cfg)
 		case string(generated.WsFrameTypeBrowserTabAction):
 			h.handleTabAction(wc, &state, viewerID, data)
+		case string(generated.WsFrameTypeBrowserViewport):
+			h.handleViewport(wc, &state, viewerID, data)
 		case string(generated.WsFrameTypeBrowserDetach):
 			h.handleDetach(wc, &state, viewerID, userID)
-			if state.webrtc != nil {
-				h.detachWebRTCViewer(&state, viewerID)
-			}
+			// Unconditional for the same reason as readLoop's own cleanup
+			// defer above: an in-flight background offer (dispatchWebRTCOffer)
+			// may not have committed to state.webrtc yet, but this explicit
+			// detach must still invalidate it.
+			h.detachWebRTCViewer(&state, viewerID)
 		case string(generated.WsFrameTypeBrowserWebrtcOffer):
-			h.handleWebRTCOffer(wc, &state, viewerID, userID, data, cfg)
+			// FIX WAVE A finding 1: dispatched onto its own goroutine
+			// (dispatchWebRTCOffer, browser_webrtc.go) rather than handled
+			// inline — handleWebRTCOffer's slow path (cs.Start's CDP round
+			// trip, HandleViewerOffer's waitForTracks) must never block THIS
+			// ReadMessage loop, since gorilla only services the PongHandler
+			// (which refreshes the 60s read deadline set below) from inside a
+			// ReadMessage call. A synchronous call here previously starved
+			// every Pong, killing the JPEG screencast fallback along with the
+			// stalled WebRTC attempt — see dispatchWebRTCOffer's doc comment.
+			h.dispatchWebRTCOffer(wc, &state, viewerID, userID, data, cfg)
 		default:
 			wc.sendCriticalGen(generated.ErrorFrame{
 				Type:    string(generated.WsFrameTypeError),
@@ -791,6 +914,12 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 	if err := state.mgr.Live().Input(browser.DefaultSessionID, viewerID, in); err != nil {
 		if browser.IsBenignLiveInputError(err) {
 			slog.Debug("browser-ws: input rejected (benign)", "error", err, "session_id", state.sessionID)
+			// The not-controller repair that lived here is gone: input is
+			// never gated on a control lock (see dispatchInput). It could
+			// still refuse a human whenever a DIFFERENT viewer was attached
+			// and holding control — a second panel or a stale automation
+			// session was enough to leave the real user with a dead mouse
+			// and keyboard. Only the self-correcting rate limit remains.
 			return
 		}
 		slog.Warn("browser-ws: input dispatch failed", "error", err, "session_id", state.sessionID)
@@ -865,6 +994,19 @@ func browserInputFrameToLiveInput(frame generated.BrowserInputFrame) browser.Liv
 	}
 	if frame.Modifiers != nil {
 		in.Modifiers = *frame.Modifiers
+	}
+	// CaptureWidth/CaptureHeight (contracts/components/schemas/BrowserInputFrame.yaml):
+	// the intrinsic pixel size of the capture frame the client mapped X/Y
+	// into. Absent (older client, or a kind with no coordinates) leaves both
+	// at their zero value, which dispatchInput's rescale gate
+	// (CaptureWidth > 0 && CaptureHeight > 0) treats as "dispatch X/Y
+	// unscaled" — see root-cause doc Fault 3
+	// (docs/internal/browser-viewport-input-rootcause-2026-07-31.md).
+	if frame.CaptureWidth != nil {
+		in.CaptureWidth = *frame.CaptureWidth
+	}
+	if frame.CaptureHeight != nil {
+		in.CaptureHeight = *frame.CaptureHeight
 	}
 	return in
 }
@@ -1156,5 +1298,104 @@ func sessionErrorStatus(sessionID, message string) generated.BrowserStatusFrame 
 		State:     "error",
 		SessionId: &sessionID,
 		Message:   &message,
+	}
+}
+
+// handleViewport resizes the captured tab to the viewer's panel geometry and
+// then forces the WebRTC encoder to rebuild its stream at that new geometry.
+//
+// Operator UAT 2026-07-31: the tab was pinned to a hardcoded 1280x720 while
+// the docked panel is an arbitrary resizable shape (measured ~890x1010,
+// portrait). `object-fit: contain` preserves the SOURCE aspect, so the page
+// could fill only one dimension and the rest of the panel was letterboxed
+// black — unusable for interaction. device_scale_factor addresses the same
+// report's second half, blur, by rendering above DPR 1.
+//
+// ORDER MATTERS and is the whole subtlety here: SetViewport changes only the
+// TAB. A capture already in flight keeps its old geometry, because tabCapture
+// constraints are pinned per stream (encoder.js pins minWidth==maxWidth at
+// stream creation) and cannot be renegotiated on a running track. Recapture()
+// tears that stream down and re-runs captureActiveTabStream, which re-reads
+// chrome.tabs.get() — so it must come AFTER the resize, or the encoder
+// rebuilds at the OLD size and the resize appears to do nothing.
+//
+// Best-effort by design: a viewport frame is a display optimisation, never
+// load-bearing for the session. A failure is logged and reported to this
+// viewer, but never tears down the connection — a browser that cannot be
+// resized is still a browser that works.
+func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
+	var frame generated.BrowserViewportFrame
+	if err := json.Unmarshal(data, &frame); err != nil {
+		slog.Warn("browser-ws: dropping invalid browser_viewport frame", "error", err, "viewer_id", viewerID)
+		return
+	}
+	if state.mgr == nil || state.sessionID == "" {
+		return
+	}
+
+	// Control gate, mirroring handleTabAction's F3 check in this same file.
+	// browser.DefaultSessionID is ONE tab shared by every attached viewer AND
+	// by the agent's own browser_* tools. Without this, any merely-attached
+	// viewer — a second panel, a pop-out — could resize the tab out from under
+	// whoever holds control, or under an agent tool call mid-flight. A resize
+	// is if anything more disruptive than the tab switch that gate already
+	// covers: it reflows responsive layout and shifts coordinate-based element
+	// targeting for whoever IS driving. Uncontrolled (controller == "") stays
+	// permitted, so a lone viewer sizing the panel before taking the wheel
+	// still works.
+	if controller := state.mgr.Live().Controller(browser.DefaultSessionID); controller != "" && controller != viewerID {
+		slog.Debug("browser-ws: ignoring viewport from a non-controlling viewer",
+			"viewer_id", viewerID, "controller", controller)
+		return
+	}
+
+	if now := time.Now(); now.Sub(state.lastViewportAt) < minViewportInterval {
+		slog.Debug("browser-ws: viewport frame throttled", "viewer_id", viewerID)
+		return
+	}
+	state.lastViewportAt = time.Now()
+
+	dsf := 1.0
+	if frame.DeviceScaleFactor != nil {
+		dsf = float64(*frame.DeviceScaleFactor)
+	}
+
+	applied, err := state.mgr.Live().SetViewport(browser.DefaultSessionID, frame.Width, frame.Height, dsf)
+	if err != nil {
+		slog.Warn("browser-ws: viewport resize failed",
+			"error", err, "viewer_id", viewerID, "width", frame.Width, "height", frame.Height)
+		wc.sendCriticalGen(
+			errorStatus("could not resize the browser viewport"),
+			dropContext(state.sessionID, viewerID, "viewport-failed"),
+		)
+		return
+	}
+	if !applied {
+		// No live view bound yet (panel opened before the capture exists).
+		// Not an error: the next attach starts the tab at whatever size the
+		// browser was launched with, and the SPA re-sends on attach.
+		slog.Debug("browser-ws: viewport frame with no live view bound — ignoring", "viewer_id", viewerID)
+		return
+	}
+
+	slog.Debug("browser-ws: viewport applied",
+		"viewer_id", viewerID, "width", frame.Width, "height", frame.Height, "device_scale_factor", dsf)
+
+	// Rebuild the WebRTC capture at the new geometry. peek (not take) — this
+	// must not detach the viewer as a side effect of a resize. Thread the
+	// CDP-verified CSS viewport SetViewport just cached through to
+	// RecaptureAt (follow-up to
+	// docs/internal/browser-viewport-input-rootcause-2026-07-31.md, measured
+	// 2026-07-31: a recapture racing this very resize otherwise pins the
+	// WebRTC stream to a stale tab size, because the encoder's own
+	// chrome.tabs.get-based resolution lags the OS window reflow). Falls
+	// back to the no-hint Recapture() if the cache came back empty (e.g.
+	// SetViewport's own read-back was invalidated).
+	if att := state.peekWebRTCAttachment(); att != nil && att.capture != nil {
+		if w, h, ok := state.mgr.Live().CSSViewport(browser.DefaultSessionID); ok {
+			att.capture.RecaptureAt(w, h)
+		} else {
+			att.capture.Recapture()
+		}
 	}
 }

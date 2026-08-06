@@ -112,6 +112,15 @@ Manual key file: `openssl rand -hex 32 > master.key && chmod 600 master.key && e
 
 **UI rules:** Chat-first, dark-first. Sidebar is an overlay drawer (pinnable). No separate canvas (rich content inline, expands fullscreen). No emoji in stored data or UI chrome (emoji→Phosphor translator in chat output only). Tool calls visible by default, collapsible. **Exception (`src/lib/toolVisibility.ts`, ADR-036-adjacent):** a closed, narrow set of infra-only calls with no standalone meaning to a reader are hidden by default from the chat THREAD — `load_tool`; `bash`'s background-dispatch/status-poll/read sub-cases; and (as of 2026-07-16) `delegate`'s `run` sub-case (sync or async) and its `status`-poll sub-case, plus its whole SubagentBlock delegation card in the thread. Unlike `load_tool` (still forced visible on error), a failed/denied `delegate` or background-`bash` outcome does **not** override the hide — that failure is left to the calling agent's own response text. The ActivityPanel slide-out (default INVERTS to show everything except `load_tool`) is the durable fallback for inspecting it, but its coverage is narrower than "fully transparent": it only ever shows subagent spans and background bash sessions, capped at the 8 most-recently-finished (`RECENTLY_FINISHED_CAP` in `useRunningActivity.ts`), and (Fix 1, 2026-07-16) stays reachable at idle only while a failure is still retained in that capped list (`ActivityBar.tsx`). A delegation DENIED outright at dispatch time never opens a span, so it never reaches the panel either — verbose chat is the only render surface for that case, and absent verbose chat the calling agent's own narration is the only place the denial surfaces. A user-facing "Verbose chat" override (Settings → Chat) reveals everything, thread and panel alike. Persistence is unaffected — hidden calls still exist in the session transcript, this is render-only.
 
+## Retired surfaces — do NOT reintroduce (operator directive, 2026-07-19)
+
+The following were deleted on `feat/calendar-scheduler-ui`. **When merging or rebasing other branches, a merge can resurrect these files/surfaces — always resolve by keeping the deletion.** Re-adding any of them is a regression, not a conflict resolution.
+
+- **Command Center screen** — does not exist and must not come back. `/tasks` and `/automations` route files are redirect stubs into the workspace Board/Calendar; keep them as redirects only. Scheduled/recurring work lives exclusively in the workspace **Calendar** tab; per-agent **heartbeats** are the only agent-level exception.
+- **Schedules UI** — the entire `src/components/command-center/` directory is deleted: `SchedulesList.tsx`, `ScheduleFormSheet.tsx`, `cronUtils.ts` (+ tests) were dead code (unreachable from any route). The SPA schedules client wrappers (`fetchSchedules`/`createSchedule`/`updateSchedule`/`deleteSchedule`/`runSchedule`/`pauseSchedule` and the `Schedule*` type/schema re-exports) were removed from `src/lib/api.ts`. The backend `/api/v1/schedules` REST entity and the `pkg/cron` engine **remain** — the engine executes task triggers and heartbeats.
+- `TaskDetailPanel.tsx` (the generic Board/List task detail panel) moved to `src/components/workspaces/` — do not recreate `src/components/command-center/`.
+- **Raw cron entry or display in any UI** — forbidden product-wide. All scheduling is UI-driven (calendar recurrence editor; see `docs/internal/specs/calendar-recurrence-redesign-spec.md`). Cron survives under the hood only (engine, API, heartbeats).
+
 ## Spec-Driven Workflow
 
 When implementing features: (1) read the relevant BRD section(s); (2) `/plan-spec` for TDD/BDD specs; (3) `/grill-spec` to stress-test; (4) `/taskify` to decompose; (5) implement in Plan Mode first; (6) `/grill-code` to verify compliance.
@@ -143,13 +152,6 @@ You (the lead) orchestrate all work by spawning subagents via the Agent tool (no
 ### Review pipeline — 7-reviewer quality gate (MANDATORY)
 
 Runs **twice**: after EACH feature (before its PR merges to base) AND on the WHOLE epic diff before the final `→ main` PR. All seven must be clean or each finding explicitly deferred with a tracked issue. Hard release rule, on par with Constraint #7.
-
-### Which subagents to spawn per task type
-- **Frontend-only work:** frontend-lead → qa-lead
-- **Backend-only work:** backend-lead → qa-lead
-- **Security work:** security-lead + backend-lead → qa-lead
-- **Full-stack features:** frontend-lead + backend-lead (parallel) → qa-lead
-- **Design questions:** architect
 
 ## Quality Gates
 
@@ -277,6 +279,9 @@ Run codegen: `make gen-contracts` (lints both specs, regenerates all; idempotent
 explain` / `graphify path` / `graphify update`, and do not look for `graphify-out/`. It
 does not exist here — subagents have wasted effort discovering that the hard way. The
 knowledge graph is **GitNexus**; see the GitNexus section immediately below for the tools.
+GitNexus replaced graphify on 2026-07-25 — graphify itself, its `graphify-out/` indexes (8
+dirs, ~1.15 GB), its 23 skill dirs, and its two PreToolUse hooks were removed system-wide.
+Do **not** reintroduce graphify or any `graphify-out/` directory.
 
 **This applies to every spawned subagent, not just the main session.** When dispatching a
 subagent for codebase exploration, tell it explicitly to use the **GitNexus MCP tools**
@@ -298,6 +303,15 @@ graphs** — and they are all registered under the same name (`omnipus`), so a t
 resolving by name rather than path can read another checkout's graph. Check the registry
 if a result looks like it came from the wrong branch. Re-index a checkout with
 `node .gitnexus/run.cjs analyze` from that checkout's root.
+
+Operating notes the auto-generated block below does not cover:
+
+- **Falling back to direct Read/Grep is correct and expected** whenever the graph doesn't cover a file, or the question is about exact lines rather than structure — normal use, not non-compliance.
+- The index lives in `.gitnexus/` (gitignored, ~760 MB), never in the repo tree.
+- **Disk is the binding constraint on this pod.** `/home/dev` is a 40 GB volume that has hit 100% and killed an index mid-run. Check `df -h /home/dev` (not `df -h /`, an unrelated 7.8 GB root overlay) before re-indexing; `~/.cache/go-build` is the usual reclaim target.
+- **GitNexus does NOT manage git worktrees or branches** — it only pins an index to a branch (`analyze --branch <name>`) and names a default branch for examples (`--default-branch`). Worktree/branch workflow stays plain `git worktree` plus this project's own conventions.
+- The 9 tool skills are global in `~/.claude/skills/`. The 20 per-area skills below live in `.claude/skills/generated/` (**gitignored** — a fresh clone lacks them until `gitnexus analyze --skills`; the table's links are local-use).
+- **Routine re-index: `gitnexus analyze --skills --skip-agents-md`** — leaves the working tree clean. `--skills` is required (a bare `analyze` rewrites the generated block and silently drops all 20 per-area rows, orphaning the skills). `--skip-agents-md` is required because **clustering is non-deterministic** (same commit re-indexed: 167,451 vs 167,453 relationships) and would rewrite `CLAUDE.md`/`AGENTS.md` every run. Drop `--skip-agents-md` only to deliberately refresh the block (expect counts to jitter slightly).
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
@@ -358,5 +372,25 @@ This project is indexed by GitNexus as **omnipus** (48994 symbols, 185470 relati
 | Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
 | Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+| Work in the Gateway area (2320 symbols) | `.claude/skills/generated/gateway/SKILL.md` |
+| Work in the Agent area (2240 symbols) | `.claude/skills/generated/agent/SKILL.md` |
+| Work in the Tools area (1325 symbols) | `.claude/skills/generated/tools/SKILL.md` |
+| Work in the Browser area (484 symbols) | `.claude/skills/generated/browser/SKILL.md` |
+| Work in the Ui area (226 symbols) | `.claude/skills/generated/ui/SKILL.md` |
+| Work in the Providers area (217 symbols) | `.claude/skills/generated/providers/SKILL.md` |
+| Work in the Runner area (212 symbols) | `.claude/skills/generated/runner/SKILL.md` |
+| Work in the Task area (201 symbols) | `.claude/skills/generated/task/SKILL.md` |
+| Work in the Settings area (193 symbols) | `.claude/skills/generated/settings/SKILL.md` |
+| Work in the Config area (192 symbols) | `.claude/skills/generated/config/SKILL.md` |
+| Work in the Audit area (190 symbols) | `.claude/skills/generated/audit/SKILL.md` |
+| Work in the Security area (185 symbols) | `.claude/skills/generated/security/SKILL.md` |
+| Work in the Sandbox area (181 symbols) | `.claude/skills/generated/sandbox/SKILL.md` |
+| Work in the Skills area (170 symbols) | `.claude/skills/generated/skills/SKILL.md` |
+| Work in the Chat area (152 symbols) | `.claude/skills/generated/chat/SKILL.md` |
+| Work in the Channels area (142 symbols) | `.claude/skills/generated/channels/SKILL.md` |
+| Work in the Session area (114 symbols) | `.claude/skills/generated/session/SKILL.md` |
+| Work in the Commands area (113 symbols) | `.claude/skills/generated/commands/SKILL.md` |
+| Work in the Workspaces area (98 symbols) | `.claude/skills/generated/workspaces/SKILL.md` |
+| Work in the Cron area (85 symbols) | `.claude/skills/generated/cron/SKILL.md` |
 
 <!-- gitnexus:end -->

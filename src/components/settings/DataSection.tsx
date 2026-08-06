@@ -73,11 +73,22 @@ export function DataSection() {
   const markDirty = () => { isDirtyRef.current = true }
 
   const [retentionDays, setRetentionDays] = useState('90')
+  // D3 / UAT spurious-PUT fix: reactive readiness flag, distinct from the
+  // `!config` check useAutoSave's `disabled` option used to key off of.
+  // `config` turns truthy in the SAME commit the hydration effect below is
+  // SCHEDULED, but the effect's own `setRetentionDays` call doesn't land
+  // until the NEXT commit — so `disabled: !config` flipped false one render
+  // too early, letting useAutoSave capture the hardcoded '90' default as
+  // its baseline instead of the real persisted value. `retentionHydrated`
+  // is set at the END of the hydration effect, so it flips true in the same
+  // commit the real value lands.
+  const [retentionHydrated, setRetentionHydrated] = useState(false)
 
   useEffect(() => {
     if (!config) return
     if (isDirtyRef.current) return
     setRetentionDays(config.data.session_retention_days.toString())
+    setRetentionHydrated(true)
   }, [config])
 
   const dataFormData = useMemo(() => ({
@@ -91,7 +102,7 @@ export function DataSection() {
       isDirtyRef.current = false
       queryClient.invalidateQueries({ queryKey: ['config'] })
     },
-    { disabled: !config },
+    { disabled: !retentionHydrated },
   )
 
   const { mutate: doBackup, isPending: isCreatingBackup } = useMutation({

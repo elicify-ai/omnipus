@@ -30,5 +30,37 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
+    launchOptions: {
+      args: [
+        // browser-live-video.spec.ts needs the VIEWER's (this Playwright-
+        // driven Chromium's) own WebAudio AnalyserNode to run immediately —
+        // no prior user gesture required — so it can sample the live
+        // <video> sink's audio track without any autoplay-policy ambiguity.
+        // Harmless for every other spec: it only relaxes a restriction,
+        // never tightens one, and no other spec asserts on gesture-gated
+        // audio/autoplay behavior either way.
+        '--autoplay-policy=no-user-gesture-required',
+        // Keep THIS (the viewer) Chromium's renderer awake. browser-live-video
+        // .spec.ts samples the live <video> sink by drawing it to a canvas at
+        // two moments and asserting the pixels CHANGED. That reads whatever
+        // frame the renderer last painted — so if Chromium backgrounds or
+        // treats this renderer as occluded, the painted frame stops advancing
+        // and two samples 1.5s apart come back BYTE-IDENTICAL, failing as
+        // "the video is frozen" even though the WebRTC stream is perfectly
+        // healthy and still delivering frames. Observed intermittently on the
+        // 2026-07-28 real-Chrome runs (pass, then flaky, then flaky, with
+        // identical pixel data to 15 decimal places each time it failed).
+        //
+        // These are the same three flags the AGENT's managed Chrome already
+        // launches with (pkg/tools/browser/exec_resolver.go) and for the same
+        // reason; they were simply never applied to Playwright's own browser,
+        // which is a separate process we launch separately. They only relax
+        // throttling, so they cannot mask a real product stall: a genuinely
+        // frozen stream still produces identical frames and still fails.
+        '--disable-renderer-backgrounding',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-background-timer-throttling',
+      ],
+    },
   },
 });

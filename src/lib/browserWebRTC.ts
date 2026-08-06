@@ -16,22 +16,34 @@
 // offer is not sent until `RTCPeerConnection.iceGatheringState` reaches
 // 'complete', so there is no `onicecandidate`/trickle handling here at all.
 //
-// Fallback contract (wave-plan W2-B): JPEG screencast NEVER stops running
-// underneath (that's owned entirely by browserLiveWs.ts/BrowserLiveView,
-// outside this class) — this class's only job on fallback is to clean up its
-// own PC/data-channel state and tell the caller via `onFallback(reason)` so
-// the caller can drop back to rendering the JPEG `<img>` sink. Triggers:
+// Fallback contract (wave-plan W2-B): the JPEG screencast remains AVAILABLE
+// underneath — but note it is no longer literally always-on. The server pauses
+// the CDP screencast while every JPEG-attached viewer is also covered by a
+// live WebRTC stream, and resumes it as soon as that stops being true
+// (CaptureSession.ReconcileScreencast, plus the relay's own eviction
+// notification for a mid-session WebRTC failure). So "keeps running" is a
+// dynamic per-viewer-coverage guarantee, not an unconditional one; an earlier
+// version of this comment claimed the latter and was wrong once the pause was
+// introduced. Either way it is owned entirely by browserLiveWs.ts/
+// BrowserLiveView, outside this class — this class's only job on fallback is
+// to clean up its own PC/data-channel state and tell the caller via
+// `onFallback(reason)` so the caller can drop back to the `<img>` sink.
+// Triggers:
 //   - a `browser_webrtc_state{available:false}` frame while offering/connected
 //   - no answer within the current answer timeout of sending the offer (see
 //     `hasConnectedOnce`/`firstAnswerTimeoutMs` below — it is NOT always
 //     `answerTimeoutMs`)
 //   - ICE connection state 'failed'
 //   - ICE connection state 'disconnected' for longer than `disconnectedGraceMs`
-//     (default 5s) without recovering to 'connected'/'completed'
-// Retry: exactly ONE automatic re-offer `retryDelayMs` (default 15s) after a
-// fallback. If that retry also falls back, no further automatic retry is
-// scheduled — the caller must call `start()` again (a fresh re-attach) to
-// re-arm it. `start()` always resets the one-shot retry budget.
+//     (default 15s) without recovering to 'connected'/'completed'
+// Retry (revised 2026-07-30 UAT — see DEFAULT_MAX_RETRIES): up to
+// `maxRetries` (default 5) CONSECUTIVE automatic re-offers, with exponential
+// backoff starting at `retryDelayMs` (default 15s) and doubling each attempt.
+// The counter RESETS on every successful connect, so only a sustained
+// inability to connect exhausts it; once exhausted the caller must call
+// `start()` again (a fresh re-attach) to re-arm. `start()` always resets the
+// budget. This replaced a one-shot boolean that stranded the panel in the
+// JPEG sink permanently after a single failed re-offer.
 //
 // Answer-timeout duration (fix-wave, MED — reviewer finding 4): the gateway's
 // legitimate COLD START (capture start ~20s + bringToFront ~5s + tracks wait)
@@ -47,8 +59,6 @@
 // regular short `answerTimeoutMs`. This applies to every attempt made while
 // still cold — including the one automatic retry above, if that retry also
 // starts from `hasConnectedOnce === false`.
-
-import type { BrowserWebRTCStateFrame } from '@/lib/api/generated/asyncapi-types'
 
 /** The four states this machine is ever in. 'failed' is folded into
  * 'fallback' as a *reason string* passed to `onFallback` rather than a
@@ -80,11 +90,14 @@ export interface BrowserWebRTCSessionOptions { // not-wire-format: local constru
    * `answerTimeoutMs` default of 5s). */
   firstAnswerTimeoutMs?: number
   /** ms an ICE `disconnected` state is tolerated before falling back.
-   * Default 5000. */
-  disconnectedGraceMs?: number
-  /** ms to wait after a fallback before the single automatic re-offer.
    * Default 15000. */
+  disconnectedGraceMs?: number
+  /** ms before the FIRST automatic re-offer after a fallback; each further
+   * consecutive retry doubles it. Default 15000. */
   retryDelayMs?: number
+  /** Max CONSECUTIVE failed re-offers before giving up until the next
+   * `start()`. Reset by a successful connect. Default 5. */
+  maxRetries?: number
   /** ms to wait for `RTCPeerConnection.iceGatheringState` to reach
    * 'complete' before giving up and sending the offer with whatever
    * candidates have gathered so far (non-trickle still works with a partial
@@ -93,11 +106,51 @@ export interface BrowserWebRTCSessionOptions { // not-wire-format: local constru
   iceGatheringTimeoutMs?: number
 }
 
+/**
+ * The subset of `BrowserWebRTCStateFrame` `applyState` reacts to. `reason` is
+ * deliberately widened from the frame's generated (currently 4-value) enum
+ * to a plain `string` — fix-wave C: this class only ever checks *truthiness*
+ * of `reason` and forwards it verbatim to `onFallback`, it never pattern-
+ * matches against the enum's specific literal members, so it must not
+ * require the wire enum to already enumerate a value (e.g. a prospective
+ * "ingest_timeout") before this class can react to it correctly. Not itself
+ * a wire type — never constructed from raw JSON; the one real call site
+ * (BrowserLiveView.tsx) always narrows an already-Zod-validated
+ * `BrowserWebRTCStateFrame`, which satisfies this structurally (its `reason`
+ * union is a subtype of `string`).
+ */
+interface BrowserWebRTCStateSignal { // not-wire-format: locally widened view of BrowserWebRTCStateFrame (reason enum -> string) so applyState reacts correctly to a reason value the generated wire enum doesn't list yet; never constructed from raw JSON itself
+  available: boolean
+  reason?: string
+  active?: boolean
+}
+
 const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
 const DEFAULT_ANSWER_TIMEOUT_MS = 5000
 const DEFAULT_FIRST_ANSWER_TIMEOUT_MS = 30000
-const DEFAULT_DISCONNECTED_GRACE_MS = 5000
+// DEFAULT_DISCONNECTED_GRACE_MS (2026-07-30 UAT, Batam→Fly over VPN on iPad
+// Safari): was 5000. A 5s grace is far too tight for a high-latency mobile /
+// VPN path, where ICE 'disconnected' is a routine, self-recovering blip. The
+// live evidence: every viewer connection died 2-22s after connecting, the
+// client closed the PeerConnection itself (the gateway logged the SCTP
+// "User Initiated Abort: Close called" from OUR side), and the panel dropped
+// to the JPEG sink. 15s also sits comfortably under the relay's own
+// disconnect eviction (pkg/tools/browser/webrtc/viewer.go's
+// disconnectGracePeriod, raised to 30s in the same fix) so the server no
+// longer evicts a viewer the client is still trying to recover — before,
+// the client (5s) and server (10s) both gave up, in that order, on a link
+// that would have come back.
+const DEFAULT_DISCONNECTED_GRACE_MS = 15000
 const DEFAULT_RETRY_DELAY_MS = 15000
+// DEFAULT_MAX_RETRIES (same UAT): the retry budget used to be a single
+// one-shot boolean (`retriedOnce`) — after ONE failed re-offer the panel was
+// stranded in picture mode for the rest of the session with no way back
+// except a full re-attach. On a flaky mobile link that is precisely the
+// wrong policy: the transport recovers, but nothing ever tries again. The
+// budget is now a counter with exponential backoff, and it RESETS on every
+// successful connection, so only a sustained inability to connect
+// (5 consecutive failures, ~15s/30s/60s/120s/240s apart) gives up for good.
+const DEFAULT_MAX_RETRIES = 5
 const DEFAULT_ICE_GATHERING_TIMEOUT_MS = 3000
 
 function defaultPcFactory(): RTCPeerConnection {
@@ -110,6 +163,7 @@ export class BrowserWebRTCSession {
   private readonly firstAnswerTimeoutMs: number
   private readonly disconnectedGraceMs: number
   private readonly retryDelayMs: number
+  private readonly maxRetries: number
   private readonly iceGatheringTimeoutMs: number
   /** Lifetime flag (never reset once true) — has this session's PC EVER
    * reached ICE 'connected'/'completed', across every attempt this instance
@@ -135,7 +189,9 @@ export class BrowserWebRTCSession {
 
   private _state: BrowserWebRTCState = 'idle'
   private stopped = true
-  private retriedOnce = false
+  /** Consecutive failed re-offer attempts. Reset to 0 by `start()` and by
+   * every successful transition to 'connected' — see DEFAULT_MAX_RETRIES. */
+  private retryCount = 0
 
   private answerTimeoutTimer: ReturnType<typeof setTimeout> | null = null
   private disconnectedTimer: ReturnType<typeof setTimeout> | null = null
@@ -152,6 +208,7 @@ export class BrowserWebRTCSession {
     this.firstAnswerTimeoutMs = options.firstAnswerTimeoutMs ?? DEFAULT_FIRST_ANSWER_TIMEOUT_MS
     this.disconnectedGraceMs = options.disconnectedGraceMs ?? DEFAULT_DISCONNECTED_GRACE_MS
     this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS
+    this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES
     this.iceGatheringTimeoutMs = options.iceGatheringTimeoutMs ?? DEFAULT_ICE_GATHERING_TIMEOUT_MS
   }
 
@@ -165,6 +222,13 @@ export class BrowserWebRTCSession {
    * exists: BrowserLiveView.tsx reads it to distinguish a cold-start false
    * positive from a genuine stream degradation on an 'answer-timeout'
    * fallback. */
+  /** Consecutive failed re-offers so far. Lets a caller distinguish a first
+   * cold-start attempt (where an answer-timeout is plausibly just a slow
+   * capture start) from a repeated failure that deserves surfacing. */
+  get retryAttempts(): number {
+    return this.retryCount
+  }
+
   get hasConnectedOnce(): boolean {
     return this._hasConnectedOnce
   }
@@ -218,7 +282,7 @@ export class BrowserWebRTCSession {
       this.retryTimer = null
     }
     this.stopped = false
-    this.retriedOnce = false
+    this.retryCount = 0
     this.sendOfferFn = sendOffer
     void this._beginOffer()
   }
@@ -238,24 +302,58 @@ export class BrowserWebRTCSession {
    * Feed in every `browser_webrtc_state` frame the gateway sends. Only acts
    * when it signals unavailability WHILE a session is actually in flight —
    * deciding whether/when to `start()` on an *available* signal is the
-   * caller's job (wave-plan W2-B wiring note), so an available:true frame is
-   * intentionally a no-op here UNLESS it also reports `active:false` after
-   * this session had already connected (fix-wave B, MED): the gateway pushes
-   * `available:false` on an ordinary stop, but the relay can also drop out
-   * from under an established connection while the capability itself stays
-   * available (`active` flips false without `available` following it) — the
-   * contract calls that a fallback trigger too, same as any other
-   * mid-session failure.
+   * caller's job (wave-plan W2-B wiring note), so an available:true frame
+   * with neither a `reason` nor `active:false` is intentionally a no-op
+   * here — that's the routine post-attach "you may offer" re-announcement
+   * (`announceWebRTCAvailability`, sent with no reason at all).
+   *
+   * fix-wave C (the "first-offer failure never surfaces" defect,
+   * 2026-07-28): a HandleViewerOffer failure is reported as
+   * `available:true` (WebRTC as a *capability* is still fine) with a
+   * populated `reason` (e.g. "error", or a future distinct value like
+   * "ingest_timeout") — `active` is NOT sent as an explicit `false` on that
+   * frame (the gateway's Go `*bool` + `omitempty` encoding only ever
+   * serializes a literal `true` or omits the field entirely, see
+   * `sendWebRTCState`/pkg/gateway/browser_webrtc.go), so it arrives on the
+   * wire as `undefined`, not `false`. The OLD logic here only ever reacted
+   * to `active === false` while `this._state === 'connected'` — for a FIRST
+   * offer, the machine has never left `'offering'` (no PC was ever built
+   * server-side), so that check never matched, and the frame was a complete
+   * no-op: the user then waited out the full `firstAnswerTimeoutMs` (30s)
+   * local timer before anything visibly changed, even though the gateway
+   * had already reported failure within seconds.
+   *
+   * The fix: a truthy `reason` alongside `available:true` is ALWAYS a
+   * genuine failure report for THIS connection's in-flight attempt — the
+   * routine re-announcement never carries one — so react to `reason`
+   * presence directly (while `offering` OR `connected`), regardless of
+   * `active`. This is forward-compatible with any future reason string
+   * (e.g. a prospective "ingest_timeout") without this file needing to know
+   * its exact spelling — the wire's `reason` is passed straight through as
+   * the fallback reason, exactly like the `available:false` branch already
+   * does.
+   *
+   * The `active === false` check is kept as a fallback trigger in its own
+   * right (defensive — some future/test caller may construct a frame with
+   * an explicit `false` and no `reason`) but is only reachable once this
+   * session had already connected: an ordinary in-flight `offering` attempt
+   * with `active:false` and NO reason is still treated as ambiguous/benign
+   * rather than assumed to be a failure.
    */
-  applyState(frame: Pick<BrowserWebRTCStateFrame, 'available' | 'reason' | 'active'>): void {
+  applyState(frame: BrowserWebRTCStateSignal): void {
     if (!frame.available) {
       if (this._state === 'offering' || this._state === 'connected') {
         this._fallback(frame.reason ?? 'unavailable')
       }
       return
     }
+    if (this._state !== 'offering' && this._state !== 'connected') return
+    if (frame.reason) {
+      this._fallback(frame.reason)
+      return
+    }
     if (frame.active === false && this._state === 'connected') {
-      this._fallback(frame.reason ?? 'stream-stopped')
+      this._fallback('stream-stopped')
     }
   }
 
@@ -403,6 +501,13 @@ export class BrowserWebRTCSession {
         this._clearDisconnectedTimer()
         this._setState('connected')
         this._hasConnectedOnce = true
+        // Reaching 'connected' proves the path works RIGHT NOW, so the
+        // retry budget starts fresh: a later blip gets its own full set of
+        // attempts rather than inheriting exhaustion from an earlier,
+        // already-recovered one. Without this reset the counter would be a
+        // session-lifetime cap and a long session on a flaky link would
+        // still end up permanently stranded in the JPEG sink.
+        this.retryCount = 0
       } else if (iceState === 'failed') {
         this._fallback('ice-failed')
       } else if (iceState === 'disconnected') {
@@ -461,12 +566,16 @@ export class BrowserWebRTCSession {
     this._setState('fallback')
     this.fallbackCb?.(reason)
     if (this.stopped) return
-    if (this.retriedOnce) return
-    this.retriedOnce = true
+    if (this.retryCount >= this.maxRetries) return
+    // Exponential backoff, capped by the attempt count: a transient blip
+    // recovers on the first retry (retryDelayMs), while a genuinely-down
+    // relay is not hammered every 15s for the life of the panel.
+    const delay = this.retryDelayMs * 2 ** this.retryCount
+    this.retryCount++
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null
       if (!this.stopped) void this._beginOffer()
-    }, this.retryDelayMs)
+    }, delay)
   }
 
   private _cleanupPeer(): void {

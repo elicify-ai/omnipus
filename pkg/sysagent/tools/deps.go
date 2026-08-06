@@ -108,6 +108,27 @@ type Deps struct {
 	// field — see UpsertAgentFastFunc's own doc comment for why delete is
 	// deliberately NOT fast-pathed.
 	ReloadFunc func() error
+	// ReconcileMCP triggers live MCP reconciliation (connect/disconnect servers
+	// and re-sync every agent's tool registry plus the central MCPRegistry)
+	// after a config mutation that adds, removes, or edits an MCP server.
+	// Without this, add_mcp_server / remove_mcp_server only persist
+	// config.json — the live pkg/mcp.Manager and central registry are
+	// untouched until the next full gateway reload. Nil in tests or when not
+	// wired — callers must nil-check before use.
+	//
+	// The gateway wires this to AgentLoop.ReconcileMCP.
+	ReconcileMCP func(ctx context.Context) error
+	// MCPStatus reports live per-server connection status so mcp tool results
+	// can be honest about whether a server actually connected rather than
+	// just echoing the config write. status is one of "connected", "error",
+	// or "disconnected"; toolCount is the number of tools currently
+	// registered for that server in the central MCP registry (0 when unset);
+	// errMsg carries the last connect error when status is "error" (empty
+	// otherwise). Nil in tests or when not wired — callers must nil-check
+	// before use.
+	//
+	// The gateway wires this to AgentLoop.MCPServerStatus.
+	MCPStatus func(name string) (status string, toolCount int, errMsg string)
 	// UpsertAgentFastFunc publishes a single agent create/update into the
 	// live AgentRegistry without restarting channels/cron/schedulers/the plan
 	// engine (issue #571's sysagent-facing half — the agent-facing

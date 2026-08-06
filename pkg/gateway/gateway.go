@@ -67,11 +67,13 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/heartbeat"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/library"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
@@ -1169,6 +1171,104 @@ func populateAgentsListFromEntityStoreStrict(cfg *config.Config, homePath string
 	return nil
 }
 
+// installSlogBridge installs logger.NewSlogHandler() as log/slog's
+// process-wide default handler, so every bare `slog.Warn/Info/Error(...)`
+// call site — ~1200 of them, across this package and every other package the
+// gateway process links in (agent loop, sysagent tools, media library,
+// etc.) — forwards into pkg/logger's zerolog sink instead of silently
+// writing to log/slog.Default()'s zero-value stderr-only handler.
+//
+// Nothing in this repo calls slog.SetDefault in production code without
+// this: on the documented backgrounded launch form (`./omnipus gateway
+// --allow-empty &`), stderr is not captured anywhere, so every bare slog
+// call was permanently invisible. bootLoggingAndDataModel calls this
+// immediately after logger.EnableFileLogging succeeds and BEFORE
+// datamodel.Init runs — the earliest subsystem boot code in the process that
+// itself calls bare slog (see datamodel.Init's first-run slog.Info) — so
+// every downstream slog call for the rest of this process's life lands in
+// $OMNIPUS_HOME/logs/gateway.log (or wherever EnableFileLogging pointed).
+//
+// Re-review FIX 1 (two independent reviewers): this used to be called from
+// RunContextWithOptions AFTER datamodel.Init, even though this doc comment
+// already claimed "before any subsequent subsystem boot code has a chance
+// to log." That claim was false by exactly the 19 lines separating the two
+// calls — datamodel.Init's own first-run slog.Info/Debug calls (the single
+// most operator-relevant first-run line: "default config written") fired
+// before the bridge existed AND before logger.InitPanic's stderr redirect,
+// so on a fresh install that line reached neither gateway.log nor
+// gateway_panic.log nor anywhere else durable. Fixed by extracting the
+// ordering-sensitive boot preamble into bootLoggingAndDataModel, which both
+// RunContextWithOptions and the ordering test below call, so the two cannot
+// silently drift apart again the way the inline call sites did.
+//
+// Deliberately not restored via defer on shutdown: the orphan-GC ticker
+// started later in RunContextWithOptions (and any other long-lived
+// background goroutine started during boot) keeps calling bare slog after
+// RunContextWithOptions itself returns in an in-process test rerun, and
+// those calls should stay bridged for as long as they run rather than
+// reverting the instant this function unwinds. Production processes never
+// return from RunContextWithOptions except at actual process exit, where
+// restoring the previous default would have no observable effect anyway.
+//
+// See logger.SlogHandler's doc comment for the level/attribute mapping, and
+// slog_bridge_wiring_test.go for the file-appears-in-gateway.log proof
+// (both with and without this function called).
+func installSlogBridge() {
+	slog.SetDefault(slog.New(logger.NewSlogHandler()))
+}
+
+// bootLoggingAndDataModel runs logger.EnableFileLogging, installSlogBridge,
+// and datamodel.Init — in that order — so datamodel.Init's own first-run
+// slog.Info/Debug calls are bridged and file-logged instead of hitting
+// log/slog's zero-value stderr-only default the way they used to.
+//
+// RunContextWithOptions calls this immediately after creating
+// $OMNIPUS_HOME/logs and initializing the panic log (both of which stay
+// inline in RunContextWithOptions — see the comment there for why): this
+// helper is deliberately the minimal slice of the boot preamble that (a) is
+// order-sensitive for the slog-visibility bug and (b) is safe to exercise
+// directly from an in-process test. logger.InitPanic is NOT part of this
+// helper on purpose: it Dup2's the real process stderr fd into the panic
+// log file, a process-wide side effect with no built-in undo — calling it
+// from a test would silently redirect the shared pkg/gateway test binary's
+// stderr for the remainder of that test run. Excluding it costs nothing for
+// THIS bug: InitPanic never touches log/slog, so its position relative to
+// EnableFileLogging/installSlogBridge/datamodel.Init has no bearing on
+// whether datamodel.Init's slog calls reach gateway.log.
+//
+// datamodel.Init has no dependency on anything logger.EnableFileLogging or
+// installSlogBridge set up — it only calls bare slog, and creates its own
+// directories independently of the logging path — so this reorder is safe.
+//
+// Both RunContextWithOptions and
+// TestBootOrder_DataModelInitLogsReachGatewayLog (boot_order_test.go) call
+// this helper so a future refactor of one cannot silently drift the order
+// away from the other, the way the two inline call sites did before this
+// fix (two independent reviewers plus a third verifying pass all flagged
+// the same bug: this function used to be called AFTER datamodel.Init).
+func bootLoggingAndDataModel(homePath string) error {
+	logsDir := filepath.Join(homePath, logPath)
+
+	// Preserves the original inline call site's panic-on-failure behavior
+	// (predates this fix, not itself part of the FIX 1 ordering change) —
+	// EnableFileLogging failing this early means no durable log sink exists
+	// to report the failure into.
+	if err := logger.EnableFileLogging(filepath.Join(logsDir, logFile)); err != nil {
+		panic(fmt.Errorf("error enabling file logging: %w", err))
+	}
+
+	// Bridge log/slog's process-wide default into pkg/logger's zerolog sink
+	// (console + $OMNIPUS_HOME/logs/gateway.log, just enabled above) — see
+	// installSlogBridge's doc comment for why. Installed BEFORE
+	// datamodel.Init so its first-run slog calls are captured too.
+	installSlogBridge()
+
+	if err := datamodel.Init(homePath); err != nil {
+		return fmt.Errorf("directory initialization failed: %w", err)
+	}
+	return nil
+}
+
 // persistSeededCoreAgents persists every agent SeedConfig added-or-touched
 // via the agent store: Create for one with no existing record, Update (full-
 // record replace) for one that already has one — matching SeedConfig's own
@@ -1291,20 +1391,39 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	configPath := opts.ConfigPath
 	allowEmptyStartup := opts.AllowEmptyStartup
 	allowGodMode := opts.AllowGodMode
-	// Bootstrap ~/.omnipus/ directory tree on every start (idempotent, US-1).
-	if err := datamodel.Init(homePath); err != nil {
-		return fmt.Errorf("directory initialization failed: %w", err)
+
+	// Create $OMNIPUS_HOME/logs ourselves, at 0700, before anything else
+	// touches it. datamodel.Init (below) also creates this directory as
+	// part of omnipusDirs, at 0700 — but only later in this sequence;
+	// logger.InitPanic and logger.EnableFileLogging each MkdirAll the same
+	// directory too, at 0755. os.MkdirAll is a silent no-op — it does not
+	// chmod — when the directory already exists, so whichever of these
+	// calls creates the directory first permanently wins its permission
+	// bits. Creating it here first, at the stricter 0700, is what stops the
+	// two logger calls' 0755 from leaking through and leaving
+	// $OMNIPUS_HOME/logs group/world-readable for the life of the install.
+	logsDir := filepath.Join(homePath, logPath)
+	if err := os.MkdirAll(logsDir, 0o700); err != nil {
+		return fmt.Errorf("creating log directory: %w", err)
 	}
 
-	panicPath := filepath.Join(homePath, logPath, panicFile)
+	panicPath := filepath.Join(logsDir, panicFile)
 	panicFunc, err := logger.InitPanic(panicPath)
 	if err != nil {
 		return fmt.Errorf("error initializing panic log: %w", err)
 	}
 	defer panicFunc()
 
-	if err = logger.EnableFileLogging(filepath.Join(homePath, logPath, logFile)); err != nil {
-		panic(fmt.Errorf("error enabling file logging: %w", err))
+	// Re-review FIX 1 (two independent reviewers, plus a third verifying
+	// pass): bootLoggingAndDataModel runs logger.EnableFileLogging,
+	// installSlogBridge, and datamodel.Init in the one order that captures
+	// datamodel.Init's own first-run slog calls instead of silently losing
+	// them — this used to call datamodel.Init BEFORE any of this boot
+	// preamble existed. See bootLoggingAndDataModel's doc comment for the
+	// full account and why logger.InitPanic stays inline here rather than
+	// folding into that helper.
+	if err = bootLoggingAndDataModel(homePath); err != nil {
+		return err
 	}
 	defer logger.DisableFileLogging()
 
@@ -1550,6 +1669,127 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		}()
 	}
 
+	// Boot-time browser WARM-UP (distinct from Preprovision above):
+	// Preprovision only RESOLVES (and, on a fresh install, downloads) a
+	// Chromium binary — it never launches the process. Chrome launch, the
+	// agent's first tab, and the CDP capture-extension load stayed entirely
+	// lazy, deferred to an agent's first browser tool call
+	// (BrowserManager.ensureStarted, reached via Session()/createFirstTab()).
+	// That lazy path is the unbounded cold start ADR-042 recorded at 30-60s
+	// historically — long enough to blow past the browser WS handler's 60s
+	// read deadline and tear down the connection. Kick the actual launch off
+	// here too so the shared Chrome is already up (process live, CDP pipe
+	// dialed, capture extension loaded if configured — see
+	// BrowserCoordinator.WarmUp) by the time any agent's first interaction
+	// needs it.
+	//
+	// Only ONE shared, gateway-scoped Chrome exists regardless of agent
+	// count (coordinator.go's whole design) — this warms that ONE instance,
+	// found via the first browser manager whose Coordinator() is non-nil (in
+	// coordinator mode every agent's manager is attached to the exact same
+	// *browser.BrowserCoordinator, so any one of them resolves it). A
+	// per-agent Chrome pool is explicitly out of scope — tracked separately
+	// as issue #570.
+	//
+	// Respects tools.browser.cdp_url: in remote-CDP mode there is nothing to
+	// warm (an operator-managed Chromium elsewhere; launching a local Chrome
+	// here would be wrong and wasteful), so this is skipped entirely when
+	// cdp_url is set. tools.browser.enabled (default true — browser tools
+	// are a standard built-in like exec/web/cron) additionally gates it so a
+	// deployment that has explicitly disabled browser tooling doesn't pay
+	// for it either.
+	//
+	// Operator opt-out: `tools.browser.warm_at_boot`
+	// (config.BrowserToolConfig.WarmAtBoot, env
+	// OMNIPUS_TOOLS_BROWSER_WARM_AT_BOOT), default true — following the same
+	// "default true" pattern as LiveViewEnabled/WebRTCEnabled/
+	// CaptureSharedContext. Setting it false keeps browser tools fully
+	// available and simply defers the Chrome launch to first use; it does
+	// not disable the browser.
+	//
+	// Skippable via OMNIPUS_SKIP_BROWSER_PREPROVISION=1 — the same escape
+	// hatch an integration test harness needs whenever it wants a fully
+	// browser-inert boot (no launch attempt of any kind, eager or lazy):
+	// without it, a harness that configures a real/valid exec_path for a
+	// browser-tool test would otherwise have this warm-up race a test's
+	// t.TempDir() cleanup exactly like the historical Preprovision-download
+	// flake this mirrors the escape hatch for.
+	//
+	// Best-effort + non-blocking, matching the Preprovision loop's own
+	// contract exactly: boot must not stall or fail on a browser problem
+	// (CLAUDE.md graceful degradation, Hard Constraint #4). A bare `go
+	// func(){}()`, not joined by anything — gateway shutdown does not wait
+	// for it, so it cannot delay RunContext's return. ctx is the gateway's
+	// own shutdown-aware context (canceled when the gateway is asked to
+	// stop); WarmUp's underlying ensureLaunched/exec-path resolution honors
+	// it for cancellation during resolution, and BrowserCoordinator.Shutdown
+	// (invoked from the gateway's own Close path, not from here) remains the
+	// sole process-kill path regardless of whether this warm-up finished.
+	// browserWarmUpEnabled/findSharedBrowserCoordinator are extracted (rather
+	// than inlined here) so the exact decision logic gateway.RunContext acts
+	// on is unit-testable without booting a full gateway.
+	if browserWarmUpEnabled(cfg) {
+		sharedBrowserCoordinator := findSharedBrowserCoordinator(agentLoop.BrowserManagers())
+		if sharedBrowserCoordinator == nil {
+			// Do NOT fall through silently. Warm-up being enabled but finding
+			// nothing to warm is otherwise indistinguishable from "warm-up is
+			// off" and from "warm-up is still running" — an operator who set
+			// warm_at_boot and then sees a slow first interaction would have
+			// no way to tell which of the three happened.
+			logger.InfoCF(
+				"browser",
+				"boot-time Chrome warm-up enabled but no shared browser coordinator was found — nothing to warm; Chrome will launch lazily at first browser tool use",
+				nil,
+			)
+		} else {
+			go func() {
+				// Boot must never die on a browser problem (Hard Constraint #4).
+				// The error path is already best-effort, but an unexpected PANIC
+				// in the warm-up chain would take the whole gateway process down
+				// with it — turning an optional latency optimisation into a boot
+				// crash. Contain it and fall back to the lazy path.
+				// Both failure paths below ALSO emit an audit event, not just a
+				// log line. Every other browser-lifecycle failure in this
+				// codebase is auditable (EventBrowserWebRTCStreamStartFailed,
+				// EventBrowserWebRTCIngestAuthRejected,
+				// EventBrowserWebRTCViewerOfferFailed); warm-up was log-only, so
+				// an operator reconstructing "did Chrome come up at boot?" from
+				// the audit trail found nothing — silence indistinguishable from
+				// "warm-up disabled" and from "warm-up succeeded". Success stays
+				// log-only: the audit trail records the exceptional outcome, not
+				// the routine one.
+				defer func() {
+					if r := recover(); r != nil {
+						logger.WarnCF(
+							"browser",
+							"boot-time Chrome warm-up panicked — recovered; will launch lazily at first browser tool use",
+							map[string]any{"panic": fmt.Sprintf("%v", r)},
+						)
+						audit.Emit(
+							context.Background(), agentLoop.AuditLogger(),
+							audit.EventBrowserWarmUpFailed, audit.SeverityWarn,
+							map[string]any{"reason": "panic", "error": fmt.Sprintf("%v", r)},
+						)
+					}
+				}()
+				if warmErr := sharedBrowserCoordinator.WarmUp(ctx); warmErr != nil {
+					logger.WarnCF(
+						"browser",
+						"boot-time Chrome warm-up failed — will launch lazily at first browser tool use",
+						map[string]any{"error": warmErr.Error()},
+					)
+					audit.Emit(
+						context.Background(), agentLoop.AuditLogger(),
+						audit.EventBrowserWarmUpFailed, audit.SeverityWarn,
+						map[string]any{"reason": "error", "error": warmErr.Error()},
+					)
+					return
+				}
+				logger.InfoCF("browser", "shared Chrome warmed up at boot", nil)
+			}()
+		}
+	}
+
 	// B1.2(d): wire the per-thread restrict-failure audit emitter into the
 	// sandbox package now that the agent loop (and thus the audit logger) is
 	// constructed. The hook bridges sandbox → audit without an import cycle —
@@ -1768,6 +2008,12 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		}
 	}
 	centralMCPReg := tools.NewMCPRegistry()
+	// Wire the central registries into the agent loop so ReconcileMCP (triggered
+	// by REST/sysagent MCP writes and hot-reload) populates the SAME registry
+	// instance restAPI reads for GET /api/v1/tools and /mcp-servers tool_count —
+	// otherwise connected MCP tools would never surface outside the per-agent
+	// registries. Nil-safe on the AgentLoop side.
+	agentLoop.SetCentralMCPRegistries(centralMCPReg, centralBuiltinReg)
 
 	runningServices, err := setupAndStartServices(
 		cfg,
@@ -1952,6 +2198,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// here (FR-104: roots-only would silently under-count delegated
 		// children's token spend).
 		ListSessions: u25AllSessionsForUsage(agentLoop),
+		// Live MCP reconciliation: without these, add/remove_mcp_server
+		// only persist config — the server never actually connects and its tools never
+		// reach the central/per-agent registries until the next hot reload or process restart.
+		ReconcileMCP: agentLoop.ReconcileMCP,
+		MCPStatus:    agentLoop.MCPServerStatus,
 	}
 	agentLoop.WireSysagentDeps(sysAgentDeps)
 
@@ -2005,6 +2256,13 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		"general_builtins", generalBuiltinsRegistered,
 		"browser_builtins", browserBuiltinsRegistered,
 		"total", centralBuiltinReg.Count())
+
+	// centralBuiltinReg was just reassigned to a fresh instance above — re-wire
+	// it (and centralMCPReg, unchanged but re-asserted for clarity) into the
+	// agent loop so MCP name-collision admission (ValidateMCPName) checks
+	// against the live-deps builtin instance, not the pre-deps one the earlier
+	// SetCentralMCPRegistries call saw.
+	agentLoop.SetCentralMCPRegistries(centralMCPReg, centralBuiltinReg)
 
 	fmt.Printf("✓ Gateway started on %s:%d\n", cfg.Gateway.Host, cfg.Gateway.Port)
 	fmt.Println("Press Ctrl+C to stop")
@@ -2066,6 +2324,17 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	}
 	if sharedStore := agentLoop.GetSessionStore(); sharedStore != nil {
 		startRetentionSweepLoop(ctx, sharedStore, agentLoop.GetConfig, 24*time.Hour)
+	}
+
+	// Per-task run-history prune + stuck-run reaper (ADR-050 RD9/RD10) runs
+	// alongside the transcript sweep on the same retention window/cadence —
+	// see pkg/gateway/retention_task_runs.go. GetTaskStore returns nil only
+	// when the task store failed to initialize; the tick no-ops via the nil
+	// check in executeSweepTick when that happens.
+	if tStore := agent.GetTaskStore(agentLoop); tStore != nil {
+		retentionTaskRunSweepFn = func(cutoff time.Time) (int, error) {
+			return pruneAllTaskRuns(tStore, cutoff)
+		}
 	}
 
 	// FR-031: Launch the nightly retro sweep goroutine alongside the session sweep.
@@ -2204,6 +2473,53 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			runReloadCycle(agentLoop, runningServices, nil, runOneReload, loadReloadConfig)
 		}
 	}
+}
+
+// browserWarmUpEnabled reports whether RunContextWithOptions' boot-time
+// browser warm-up (see the "Boot-time browser WARM-UP" block above) should
+// run for cfg, given the current process environment. Extracted as a small,
+// pure predicate — no side effects, no coordinator/manager access — so the
+// exact decision gateway.go's boot sequence makes is unit-testable without
+// booting a full gateway.
+//
+// cfg.Tools.Browser.WarmAtBoot (default true, see its doc comment on
+// BrowserToolConfig) is the operator's opt-out: setting it false keeps browser
+// tools fully available and simply defers the Chrome launch to first use.
+//
+// cfg.Tools.Browser.Enabled (default true) and an empty CDPURL together mean
+// "this deployment wants local browser automation" — an empty/remote-CDP or
+// explicitly-disabled config must never trigger a local Chrome launch.
+//
+// OMNIPUS_SKIP_BROWSER_PREPROVISION=1 is an unconditional override: when
+// set, this returns false regardless of cfg, matching Preprovision's own
+// long-standing "escape hatch a test harness needs" contract (see the boot
+// wiring's doc comment for why an integration test harness needs one).
+func browserWarmUpEnabled(cfg *config.Config) bool {
+	return cfg.Tools.Browser.WarmAtBoot &&
+		cfg.Tools.Browser.Enabled &&
+		cfg.Tools.Browser.CDPURL == "" &&
+		os.Getenv("OMNIPUS_SKIP_BROWSER_PREPROVISION") != "1"
+}
+
+// findSharedBrowserCoordinator returns the ONE gateway-scoped
+// *browser.BrowserCoordinator shared across every agent's *browser.
+// BrowserManager in coordinator mode (nil when none is attached — e.g. every
+// agent is configured for remote CDP, or the list is empty). All managers in
+// coordinator mode share the exact same coordinator instance
+// (pkg/agent/loop.go's registerSharedTools wiring), so the first non-nil
+// Coordinator() found is sufficient; there is no need to look further once
+// one is found. Extracted from the boot-time warm-up wiring so it is
+// unit-testable in isolation with fake managers.
+func findSharedBrowserCoordinator(mgrs []*browser.BrowserManager) *browser.BrowserCoordinator {
+	for _, mgr := range mgrs {
+		if mgr == nil {
+			continue
+		}
+		if coord := mgr.Coordinator(); coord != nil {
+			return coord
+		}
+	}
+	return nil
 }
 
 // servicesSnapshot captures all fields that restartServices and executeReload
@@ -2666,6 +2982,13 @@ func setupAndStartServices(
 		fmt.Println("✓ Queued-task drain owned by: TaskDrainService (dedicated poll)")
 	} else {
 		fmt.Println("⚠ Queued-task drain disabled: no task executor available")
+		// FIX 2: this warning is genuinely operator-relevant (queued tasks will
+		// never dispatch) and, unlike the interactive-only banners nearby, has
+		// no other durable record — pair it with logger.WarnCF (same pattern as
+		// the "Gateway started without default model" warning above) so it
+		// reaches gateway.log on the documented backgrounded launch, not just
+		// an attached terminal's stdout.
+		logger.WarnCF("gateway", "queued-task drain disabled — no task executor available", nil)
 	}
 
 	// Mailbox drain (M11): unhandled inbound mail → Board tasks. The provider is
@@ -2734,6 +3057,22 @@ func setupAndStartServices(
 		fms.Start()
 	}
 
+	// Wire the workspace-library provider into the media store so
+	// media://workspace/<ws>/<id> refs resolve through the owning
+	// workspace's library (FR-028). MUST share AgentLoop's workspace
+	// library cache — a separate cache here caused live UAT failures
+	// where uploads (via GetWorkspaceLibrary) updated one in-memory
+	// manifest while resolve (via this provider) read a stale sibling.
+	if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
+		fms.SetWorkspaceLibraryProvider(func(workspaceID string) (media.WorkspaceLibraryResolver, error) {
+			lib := agentLoop.GetWorkspaceLibrary(workspaceID)
+			if lib == nil {
+				return nil, fmt.Errorf("workspace library unavailable for %q", workspaceID)
+			}
+			return lib, nil
+		})
+	}
+
 	runningServices.ChannelManager, err = channels.NewManager(
 		cfg,
 		runningServices.bundle,
@@ -2765,6 +3104,10 @@ func setupAndStartServices(
 		fmt.Printf("✓ Channels enabled: %s\n", enabledChannels)
 	} else {
 		fmt.Println("⚠ Warning: No channels enabled")
+		// FIX 2: genuinely operator-relevant (no channel is reachable at all)
+		// and otherwise invisible on a backgrounded launch — pair with
+		// logger.WarnCF, same reasoning as the queued-task-drain warning above.
+		logger.WarnCF("gateway", "no channels enabled — gateway has no reachable channel", nil)
 	}
 
 	// Apply warmup timeout default (FR-013 / CR-04).
@@ -3222,6 +3565,48 @@ func setupAndStartServices(
 		})
 	}
 
+	// Build the capability catalog for model media-modality resolution
+	// (FR-024/FR-025/FR-026): seeded from embedded data, refreshed from
+	// the Omnipus GitHub release every 7 days.
+	//
+	// Re-review FIX 1b: capabilities.NewCatalog's `log` parameter used to be
+	// slog.Default() directly, which meant every Warn/Info diagnostic
+	// catalog.go emits (failed pull, degraded/unverified transport
+	// fallback, rejected pulled catalog, version regression, last-known-good
+	// persistence failure) went to the same invisible-on-a-backgrounded-
+	// gateway sink FIX 1 above fixes — but catalog.go is owned by another
+	// agent and out of scope to edit here. capabilityCatalogLogAdapter
+	// satisfies the same minimal (unexported, structurally-matched)
+	// Warn/Info interface catalog.go declares — exactly the way
+	// slog.Default() (a *slog.Logger, which also has Warn/Info methods)
+	// already did — so no change to catalog.go is needed: passing a
+	// differently-backed value that satisfies the same structural interface
+	// is sufficient.
+	capCatalog, catErr := capabilities.NewCatalog(
+		capabilities.EmbeddedSeed(),
+		capabilities.NewGHReleasePuller("elicify-ai", "omnipus", "providers_capabilities.json"),
+		&capFileStore{path: filepath.Join(homePath, "capabilities_catalog.json")},
+		capabilityCatalogLogAdapter{},
+	)
+	if catErr != nil {
+		logger.WarnCF("gateway", "capability catalog construction failed; model modality detection degraded",
+			map[string]any{"error": catErr})
+	} else {
+		agentLoop.SetCapabilityCatalog(capCatalog)
+		// Start the 7-day background refresh (FR-025). Non-fatal: a pull
+		// failure retains last-known-good and is logged but does not abort
+		// the gateway or the refresh loop. Extracted into its own function
+		// (rather than an inline goroutine literal) so the "refresh once
+		// immediately, THEN wait for the ticker" ordering is independently
+		// unit-testable without booting the whole gateway — see
+		// capability_catalog_refresh_test.go.
+		go runCapabilityCatalogRefreshLoop(
+			capCatalog,
+			capabilityCatalogRefreshInterval,
+			capabilityCatalogRefreshTimeout,
+		)
+	}
+
 	api := &restAPI{
 		agentLoop:       agentLoop,
 		allowedOrigin:   allowedOrigin,
@@ -3314,6 +3699,13 @@ func setupAndStartServices(
 	// request and 404s when disabled (FR-006) — no restart required to flip it.
 	// All handlers live in rest_preview.go.
 	api.registerPreviewEndpoints(runningServices.ChannelManager)
+
+	// Omnipus start page — what a fresh browser tab opens instead of
+	// about:blank. Registered bare (no auth) for the same structural reason as
+	// /preview/: the client is the managed headless Chrome, which carries no
+	// session cookie, and the page is static and non-sensitive. See
+	// browser_start_page.go.
+	api.registerBrowserStartPage(runningServices.ChannelManager)
 
 	// Catch-all for any /api/ path not registered — returns JSON 404 instead of SPA HTML.
 	// Do not echo r.URL.Path in the response; that leaks internal routing details.
@@ -3495,7 +3887,228 @@ func setupAndStartServices(
 		fmt.Println("✓ Device event service started")
 	}
 
+	// Start the orphan GC scheduler: runs Library.OrphanGC across every
+	// workspace media library every hour (best-effort). A single failure
+	// (e.g. corrupted manifest) does not abort the loop — the error is
+	// logged and the next tick proceeds. Libraries with no orphan files
+	// are a fast no-op.
+	go func() {
+		const orphanInterval = 1 * time.Hour
+		ticker := time.NewTicker(orphanInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				a := agentLoop
+				if a == nil {
+					continue
+				}
+				wsFiles, wsErr := listWorkspaceFiles(homePath)
+				if wsErr != nil {
+					slog.Warn("orphan-gc: list workspaces failed", "error", wsErr)
+					continue
+				}
+				for _, ws := range wsFiles {
+					lib, libErr := library.New(homePath, ws.ID)
+					if libErr != nil {
+						slog.Warn("orphan-gc: open library", "workspace_id", ws.ID, "error", libErr)
+						continue
+					}
+					gcEntry, gcErr := lib.OrphanGC(library.OrphanGCConfig{Enabled: true})
+					if gcErr != nil {
+						slog.Warn("orphan-gc: run failed", "workspace_id", ws.ID, "error", gcErr)
+						continue
+					}
+					if len(gcEntry) > 0 {
+						slog.Info("orphan-gc: deleted orphan entries",
+							"workspace_id", ws.ID, "count", len(gcEntry))
+					}
+				}
+			}
+		}
+	}()
+
+	// Start the idle-browser reaper: closes idle TABS, and any browsing context
+	// they leave empty, once tools.browser.idle_ttl has passed with no attached
+	// live-panel viewer.
+	//
+	// Why this is needed: closing the live panel is a pure UI dismiss — the
+	// SPA sends no shutdown frame, and browser.CloseSession had no production
+	// caller at all — so a browsing context (and its resident Chrome) outlived
+	// the panel indefinitely. Reopening the panel days later showed the exact
+	// page the user had left. Sweeping is best-effort and idempotent; a sweep
+	// that reaps nothing is a cheap map scan.
+	//
+	// The interval MUST stay well under idle_ttl, or the TTL is a floor rather
+	// than the actual lifetime: a tab going idle just after a sweep waits out
+	// the TTL *plus* the remainder of the interval. Shipped history was a 5m
+	// sweep against a 30m TTL, where the slack was proportionally small; the
+	// TTL dropping to 5m made the interval the dominant term, so a "5 minute"
+	// cleanup would really have meant 5-10. One minute keeps the observed
+	// lifetime inside ~5-6 minutes, and a sweep that reaps nothing is a map
+	// scan — sweeping more often costs far less than a renderer outliving its
+	// TTL (measured 74-268MB RSS each). "Outliving", not "leaked": issue #592's
+	// headline leak turned out to be one Chrome's normal process tree, and
+	// this comment should not quietly reintroduce the word that misled it.
+	go func() {
+		const reapInterval = time.Minute
+		ticker := time.NewTicker(reapInterval)
+		defer ticker.Stop()
+		// Each tick is recovered INDIVIDUALLY, matching the boot-time
+		// warm-up goroutine above: an unrecovered panic in any goroutine takes
+		// the WHOLE gateway process down — chat, every channel, every agent —
+		// and this is a best-effort idle sweep. Recovering per tick (rather
+		// than around the loop) also means one bad sweep does not stop all
+		// future ones, which a single outer recover would.
+		sweep := func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("browser-reaper: sweep panicked; cleanup paused until the next tick",
+						"panic", fmt.Sprintf("%v", r))
+				}
+			}()
+			a := agentLoop
+			if a == nil {
+				return
+			}
+			for _, mgr := range a.BrowserManagers() {
+				if mgr == nil {
+					continue
+				}
+				if reaped := mgr.ReapIdleSessions(); len(reaped) > 0 {
+					slog.Info("browser-reaper: closed idle browsing contexts",
+						"count", len(reaped), "session_ids", reaped)
+				}
+			}
+		}
+		for range ticker.C {
+			sweep()
+		}
+	}()
+
 	return runningServices, nil
+}
+
+// capFileStore implements capabilities.Store by persisting the catalog JSON
+// to a single file on disk. It is a gateway-private type; the capabilities
+// package defines the Store interface.
+type capFileStore struct {
+	path string
+	mu   sync.Mutex
+}
+
+func (s *capFileStore) Read(ctx context.Context) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func (s *capFileStore) Write(ctx context.Context, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fileutil.WriteFileAtomic(s.path, data, 0o600)
+}
+
+// capabilityCatalogRefreshInterval and capabilityCatalogRefreshTimeout are
+// the production values for the FR-025 background refresh: pull at most
+// once every 7 days, bound each individual pull attempt to 30s.
+const (
+	capabilityCatalogRefreshInterval = 7 * 24 * time.Hour
+	capabilityCatalogRefreshTimeout  = 30 * time.Second
+)
+
+// capabilityCatalogLogAdapter routes capabilities.NewCatalog's minimal
+// Warn(msg string, args ...any) / Info(msg string, args ...any) logger
+// dependency through pkg/logger instead of log/slog.Default() (re-review
+// FIX 1b — see the doc comment at this type's construction site). args
+// follows log/slog's own alternating-key/value convention, since that is
+// the shape catalog.go's call sites already use (they were written
+// against slog.Logger's Warn/Info signature).
+type capabilityCatalogLogAdapter struct{}
+
+func (capabilityCatalogLogAdapter) Warn(msg string, args ...any) {
+	logger.WarnCF("capabilities", msg, slogArgsToFields(args))
+}
+
+func (capabilityCatalogLogAdapter) Info(msg string, args ...any) {
+	logger.InfoCF("capabilities", msg, slogArgsToFields(args))
+}
+
+// slogArgsToFields converts a slog-style alternating key/value argument
+// list into the map[string]any pkg/logger's *CF functions take. A
+// malformed odd-length call (a bug at the call site, not expected in
+// practice) preserves its trailing value under "!BADKEY" rather than
+// silently dropping it — the same convention log/slog itself documents
+// for the identical case.
+func slogArgsToFields(args []any) map[string]any {
+	fields := make(map[string]any, len(args)/2+1)
+	for i := 0; i+1 < len(args); i += 2 {
+		key, ok := args[i].(string)
+		if !ok {
+			key = fmt.Sprintf("%v", args[i])
+		}
+		fields[key] = args[i+1]
+	}
+	if len(args)%2 == 1 {
+		fields["!BADKEY"] = args[len(args)-1]
+	}
+	return fields
+}
+
+// runCapabilityCatalogRefreshLoop performs an immediate refresh, then a
+// refresh every interval thereafter, forever. It never returns — the sole
+// caller (setupAndStartServices) invokes it in its own goroutine.
+//
+// The immediate call before the ticker loop is load-bearing, not
+// cosmetic: Go's time.Ticker does NOT fire on creation, so a bare
+// `for { select { case <-ticker.C: ... } } }` loop (the previous shape of
+// this code, inlined at the call site) never invokes the puller until
+// `interval` has elapsed — meaning any gateway restarted more often than
+// that (dev pods, containers, k8s rolling deploys, systemd restarts) runs
+// indefinitely on the build-time embedded seed and never refreshes at
+// all. That contradicts both this package's own intent (FR-025) and
+// catalog.go's doc comment, which promises a refresh "on gateway startup
+// and every 7 days". A failed initial refresh does not prevent the ticker
+// loop from starting: last-known-good (the embedded seed, on a fresh
+// catalog) is retained and the failure is logged, exactly like any
+// periodic refresh failure.
+//
+// Extracted as its own function (rather than an inline goroutine literal)
+// specifically so this startup-ordering invariant is unit-testable
+// without booting the whole gateway — see
+// capability_catalog_refresh_test.go, which passes a very long interval
+// and a fake Puller to prove the first Pull happens immediately rather
+// than only after the (never-fired-in-the-test) ticker tick.
+func runCapabilityCatalogRefreshLoop(cat *capabilities.Catalog, interval, refreshTimeout time.Duration) {
+	refresh := func(failureLogMsg string) {
+		ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+		defer cancel()
+		if err := cat.Refresh(ctx); err != nil {
+			// Re-review FIX 1: this used to be a bare slog.Warn. slog.SetDefault
+			// is never called anywhere in this repo, so log/slog.Default() sits
+			// on its zero-value stderr-only handler — invisible on a
+			// backgrounded gateway (the documented `./omnipus gateway
+			// --allow-empty &` launch form), since nothing routes stderr into
+			// $OMNIPUS_HOME/logs/gateway.log. Route through pkg/logger (the
+			// same structured sink pkg/agent already uses, wired to
+			// gateway.log via logger.EnableFileLogging at this file's own
+			// EnableFileLogging call) so a refresh failure is actually
+			// discoverable.
+			logger.WarnCF("gateway", failureLogMsg, map[string]any{"error": err})
+		}
+	}
+
+	refresh("gateway: capability catalog initial refresh failed; embedded seed retained")
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		refresh("gateway: capability catalog refresh failed; last-known-good retained")
+	}
 }
 
 func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Duration, isReload bool) {
@@ -3783,6 +4396,16 @@ func restartServices(
 			slog.Warn("media: failed to load persisted registry", "error", loadErr)
 		}
 		fms.Start()
+		// Re-wire workspace-library provider onto the new store (same shared
+		// AgentLoop cache as boot) so media://workspace/ refs keep resolving
+		// after hot reload.
+		fms.SetWorkspaceLibraryProvider(func(workspaceID string) (media.WorkspaceLibraryResolver, error) {
+			lib := al.GetWorkspaceLibrary(workspaceID)
+			if lib == nil {
+				return nil, fmt.Errorf("workspace library unavailable for %q", workspaceID)
+			}
+			return lib, nil
+		})
 	}
 	// Swap the live pointer first so uploads arriving after this point use the
 	// new store (closes the N-D reload-swap window).
@@ -3814,6 +4437,11 @@ func restartServices(
 		fmt.Printf("  ✓ Channels enabled: %s\n", enabledChannels)
 	} else {
 		fmt.Println("  ⚠ Warning: No channels enabled")
+		// FIX 2: reload-time twin of the same warning in setupAndStartServices —
+		// pair with logger.WarnCF for the same reason (invisible otherwise on a
+		// backgrounded gateway; a reload can be the moment the last channel got
+		// disabled, which is exactly when an operator most needs to notice).
+		logger.WarnCF("gateway", "no channels enabled after reload — gateway has no reachable channel", nil)
 	}
 
 	// Stop the previous DeviceService before replacing it to avoid goroutine

@@ -7,6 +7,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -143,9 +144,26 @@ func (r *captureRegistry) findByToken(candidateHex string) (agentID string, cs *
 // half-set state (e.g. a non-empty agentID with a nil capture) the type
 // system did nothing to prevent. Both fields non-empty/non-nil together, or
 // the pointer itself is nil — structurally enforced.
+//
+// handle identifies the SPECIFIC HandleViewerOffer attempt that produced this
+// attachment (browser.CaptureSession.HandleViewerOffer's return value, the
+// same *browser.ViewerAttachHandle handleWebRTCOffer already threads through
+// its own failure/superseded-before-commit cleanup branches via
+// CleanupViewerOffer). detachWebRTCViewer MUST tear this attachment down via
+// CleanupViewerOffer(handle), NOT a bare viewerID-keyed
+// Relay().CloseViewer/RemoveViewer pair (fix-wave finding: detachWebRTCViewer
+// was the one teardown path still bypassing the identity check the offer
+// path already uses) — otherwise a detach or connection-close racing a
+// second, still-negotiating offer for the SAME viewerID (an ICE-restart
+// reconnect: commitWebRTCAttachment/epoch only guards this connection's
+// single-slot webrtc field, not CaptureSession.viewers or the relay's own
+// viewer registry, both of which a second HandleViewerOffer call mutates
+// BEFORE it commits) would kill the newer, live PeerConnection instead of
+// the one this attachment actually owns.
 type webrtcAttachment struct {
 	agentID string
 	capture *browser.CaptureSession
+	handle  *browser.ViewerAttachHandle
 }
 
 // webrtcViewerConn is the per-viewer entry in BrowserWSHandler.viewerConns
@@ -168,6 +186,53 @@ type webrtcViewerConn struct {
 	lastErrMsg string
 }
 
+// dispatchWebRTCOffer launches handleWebRTCOffer on its own goroutine so a
+// slow/CDP-bound offer can never block readLoop's ReadMessage loop (FIX WAVE
+// A finding 1): browser_ws.go's readLoop is gorilla/websocket's SOLE reader
+// for this connection, and gorilla only invokes the registered PongHandler
+// (which refreshes the connection's 60s read deadline) from INSIDE a
+// ReadMessage call. handleWebRTCOffer's own documented, BOUNDED steps already
+// sum to roughly the same order as that deadline (cs.Start's up-to-20s
+// captureStartTimeout + up-to-5s bringToFrontTimeout, HandleViewerOffer's
+// up-to-15s waitForTracksTimeout) before ever counting a genuinely unbounded
+// CDP call underneath — running it inline (as before this fix) meant no Pong
+// could ever be processed while it ran, so the 60s deadline elapsed
+// unconditionally regardless of how many Pongs the peer answered, and
+// readLoop's own cleanup defer tore down BOTH this WebRTC attempt AND the
+// independent JPEG browser_screencast fallback with it — directly violating
+// ADR-047 D3 ("WebRTC failing must never take the JPEG fallback down with
+// it").
+//
+// state.beginWebRTCOffer() is called HERE, synchronously, still on
+// readLoop's own goroutine, BEFORE the goroutine below is spawned — see that
+// method's doc comment (browser_ws.go) for why the epoch bump must happen at
+// dispatch time rather than inside the (unpredictably-scheduled) goroutine,
+// to keep epoch ordering aligned with the order frames actually arrived in.
+//
+// The spawned goroutine is tracked via h.activeConns — the SAME WaitGroup
+// ServeHTTP itself holds an outstanding Add for over this connection's whole
+// lifetime — so Wait() (used by every test in this package via
+// t.Cleanup(handler.Wait)) continues to block until this offer has fully
+// finished negotiating or been superseded, exactly as it already does for
+// the connection's own ServeHTTP goroutine. Add() happening here, on
+// readLoop's still-live goroutine, strictly before ServeHTTP's own Done()
+// could possibly fire is what keeps that safe (no window where Wait() could
+// observe a zero count prematurely).
+func (h *BrowserWSHandler) dispatchWebRTCOffer(
+	wc *browserWSConn,
+	state *browserConnState,
+	viewerID, userID string,
+	data []byte,
+	cfg *config.Config,
+) {
+	epoch := state.beginWebRTCOffer()
+	h.activeConns.Add(1)
+	go func() {
+		defer h.activeConns.Done()
+		h.handleWebRTCOffer(wc, state, viewerID, userID, data, cfg, epoch)
+	}()
+}
+
 // handleWebRTCOffer processes a browser_webrtc_offer frame (ADR-047 D4). Gate
 // ladder, in order: resolve the agent's BrowserManager -> webrtcUnavailableReason
 // (WebRTCEnabled -> lite build -> capture-capable, ADR-048 condition 3) ->
@@ -176,12 +241,22 @@ type webrtcViewerConn struct {
 // HandleViewerOffer. Every rejection sends a browser_webrtc_state frame with
 // available=false and a reason; the JPEG screencast (handleAttach, already
 // running independently) is never touched by any branch here.
+//
+// Runs on its own goroutine in production (dispatchWebRTCOffer, above), never
+// on readLoop's own goroutine — epoch is the value state.beginWebRTCOffer()
+// returned at dispatch time, and MUST be threaded through unchanged to the
+// commitWebRTCAttachment call below so a stale/superseded generation is
+// detected before this call ever mutates connection-shared state. Tests that
+// invoke this method directly (bypassing dispatchWebRTCOffer, exercising the
+// gate-ladder logic synchronously) pass 0, matching a fresh browserConnState's
+// zero-value webrtcEpoch.
 func (h *BrowserWSHandler) handleWebRTCOffer(
 	wc *browserWSConn,
 	state *browserConnState,
 	viewerID, userID string,
 	data []byte,
 	cfg *config.Config,
+	epoch uint64,
 ) {
 	var frame generated.BrowserWebRTCOfferFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
@@ -278,7 +353,22 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 			}
 			slog.Info("browser-webrtc: superseding another agent's viewerless capture session",
 				"agent_id", frame.AgentId, "superseded_agent_id", other)
-			otherCS.Stop()
+			// FIX WAVE A finding 3: Stop() is synchronous and includes a
+			// loopback ingest write bounded at up to captureIngestWriteTimeout
+			// (5s, capture_session.go) — calling it INLINE here would hold
+			// h.captureFenceMu (a single, process-wide mutex every agent's
+			// offer must acquire) for that entire duration, letting one
+			// agent's stale/viewerless-session teardown block a brand-new,
+			// wholly UNRELATED agent's connect for up to 5s per superseded
+			// session. Stop() is documented idempotent and operates on a
+			// completely separate CaptureSession (its own encoder tab, its
+			// own relay) from the one this offer is about to start — nothing
+			// about the fence's single-capture invariant requires WAITING for
+			// this teardown to finish before proceeding; it only requires
+			// deciding to supersede it, which already happened above under
+			// the lock. Firing it off-lock lets it complete in its own time
+			// without gating anyone else's fence acquisition.
+			go otherCS.Stop()
 		}
 	}
 
@@ -310,14 +400,39 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 			map[string]any{"session_id": sessID})
 	}
 
-	cs.AddViewer(viewerID)
-	answer, offerErr := cs.HandleViewerOffer(viewerID, frame.Sdp)
+	// gen/viewerHandle make this offer's cleanup IDENTITY-AWARE. Both
+	// CaptureSession.viewers and the relay's own registry are keyed by
+	// viewerID alone, and ensureCaptureSession memoizes, so two offers on
+	// this connection for the same agent share one CaptureSession and one
+	// registry key. A viewerID-only cleanup from a SUPERSEDED offer would
+	// therefore close whatever PeerConnection currently sits at that key —
+	// i.e. the NEWER, already-committed offer's live connection — and delete
+	// the viewers entry it depends on, dropping ViewerCount() to 0 and arming
+	// the 60s captureGracePeriod stop timer while that viewer is actively
+	// watching. Symptom: WebRTC connects, then spontaneously drops to picture
+	// mode seconds-to-a-minute later, with logs showing only an unrelated
+	// supersede/grace-timer trail. CleanupViewerOffer no-ops unless the
+	// registered entry is the one THIS offer created — the same identity
+	// discipline removeViewer already applies on the ICE-eviction path.
+	gen := cs.AddViewer(viewerID)
+	answer, viewerHandle, offerErr := cs.HandleViewerOffer(viewerID, frame.Sdp, gen)
 	if offerErr != nil {
-		cs.RemoveViewer(viewerID)
 		// Fix 8: a broken/aborted viewer PeerConnection must not stay
-		// registered on the relay — CloseViewer is idempotent-safe (a no-op
-		// if HandleViewerOffer never got far enough to register one).
-		cs.Relay().CloseViewer(viewerID)
+		// registered on the relay — CleanupViewerOffer is idempotent-safe (a
+		// no-op if HandleViewerOffer never got far enough to register one).
+		cs.CleanupViewerOffer(viewerHandle)
+		// 2026-07-28 incident fix: classify this SPECIFIC failure mode
+		// (errors.Is against webrtc.ErrNoIngestVideoTrack — waitForTracks
+		// gave up before the encoder's video track ever arrived) separately
+		// from every other HandleViewerOffer error, so an operator reading
+		// logs/audit doesn't have to parse the nested error string to tell
+		// "the capture pipeline just hadn't produced a frame in time" (often
+		// transient, see waitForTracksTimeout's doc comment in
+		// pkg/tools/browser/webrtc/ingest.go) apart from a real defect.
+		reason := "error"
+		if errors.Is(offerErr, webrtc.ErrNoIngestVideoTrack) {
+			reason = "ingest_timeout"
+		}
 		slog.Warn(
 			"browser-webrtc: viewer offer failed",
 			"error",
@@ -326,13 +441,58 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 			frame.AgentId,
 			"viewer_id",
 			viewerID,
+			"reason",
+			reason,
 		)
+		h.auditStream(userID, frame.AgentId, audit.SeverityWarn, audit.EventBrowserWebRTCViewerOfferFailed,
+			map[string]any{"session_id": sessID, "viewer_id": viewerID, "reason": reason, "error": offerErr.Error()})
 		h.sendWebRTCState(wc, sessID, viewerID, true, false, false, "error")
 		return
 	}
 
-	state.webrtc = &webrtcAttachment{agentID: frame.AgentId, capture: cs}
+	// FIX WAVE A finding 1: commit only if nothing invalidated this offer's
+	// epoch while HandleViewerOffer was negotiating above (a newer offer on
+	// this same connection, an explicit browser_detach, or the connection
+	// itself closing). A stale commit here would attach a viewer state that
+	// nothing will ever tear down through the normal detach path (readLoop's
+	// cleanup already ran, or is about to run against a DIFFERENT, newer
+	// attachment) — tear down what THIS offer just built instead, mirroring
+	// detachWebRTCViewer's own teardown exactly.
+	if !state.commitWebRTCAttachment(
+		epoch,
+		&webrtcAttachment{agentID: frame.AgentId, capture: cs, handle: viewerHandle},
+	) {
+		slog.Info(
+			"browser-webrtc: offer superseded before commit (a newer offer, a detach, or the connection closing "+
+				"arrived first) — tearing down the viewer this offer just registered",
+			"agent_id", frame.AgentId,
+			"viewer_id", viewerID,
+			"session_id", sessID,
+		)
+		// Identity-aware, for the same reason as the offer-failure path above:
+		// if the newer offer that superseded us has ALREADY registered its own
+		// PeerConnection under this viewerID, a viewerID-keyed teardown here
+		// would kill that live connection instead of ours.
+		cs.CleanupViewerOffer(viewerHandle)
+		return
+	}
 	h.registerWebRTCViewerConn(viewerID, wc, sessID)
+
+	// Cold-start ordering fix (live UAT 2026-07-31): the panel's viewport
+	// frame routinely applies BEFORE this attachment exists — handleViewport's
+	// recapture is gated on peekWebRTCAttachment and silently skips — so the
+	// capture spins up at launch geometry and nothing ever corrects it (the
+	// SPA won't re-send an unchanged size). If a CDP-verified viewport is
+	// already cached for the live tab, issue the corrective recapture NOW,
+	// with those dims, so the stream the viewer is about to receive is built
+	// at the panel's real shape. Warm path cost: one extra rebuild during
+	// attach churn when the capture was already correct — accepted; the
+	// encoder converges on the expected dims either way.
+	if state.mgr != nil {
+		if w, hgt, ok := state.mgr.Live().CSSViewport(browser.DefaultSessionID); ok {
+			cs.RecaptureAt(w, hgt)
+		}
+	}
 
 	stats := cs.Stats()
 	wc.sendCriticalGen(generated.BrowserWebRTCAnswerFrame{
@@ -376,15 +536,53 @@ func webrtcUnavailableReason(cfg *config.Config, mgr *browser.BrowserManager) st
 // W2-A item 4), and unregisters the viewer from h.viewerConns (fix 3/7's
 // cross-goroutine registry). Independent of the JPEG screencast attachment's
 // own detach(), since both can be active on the same connection.
+//
+// ALWAYS bumps state's webrtc epoch (invalidateWebRTCOffer, FIX WAVE A
+// finding 1), even when takeWebRTCAttachment finds nothing yet committed —
+// a browser_webrtc_offer dispatched via dispatchWebRTCOffer may still be
+// negotiating on its own goroutine at the moment this runs (an explicit
+// browser_detach, or the connection itself closing, can both arrive before
+// that negotiation finishes); invalidating here is what makes that
+// goroutine's eventual commit attempt recognize it has been superseded and
+// tear down what it built instead of attaching a viewer state nobody wants
+// anymore. Safe (and expected) to call unconditionally — every call site now
+// does, rather than gating on state.webrtc != nil first.
+//
+// Fix-wave finding (identity-aware teardown, third bypass): this used to
+// tear down the committed attachment via the bare, viewerID-only
+// att.capture.Relay().CloseViewer(viewerID) + att.capture.RemoveViewer(viewerID)
+// pair — exactly the unsafe pattern handleWebRTCOffer's own failure and
+// superseded-before-commit branches were fixed to stop using (see
+// CleanupViewerOffer's doc comment). commitWebRTCAttachment/webrtcEpoch only
+// guard THIS connection's single-slot state.webrtc field; they do not guard
+// CaptureSession.viewers or the relay's own viewer registry, both of which a
+// SECOND, still-negotiating browser_webrtc_offer for the SAME viewerID (an
+// ICE-restart/reconnect: dispatchWebRTCOffer spawns an unserialized goroutine
+// per offer frame) can mutate — via AddViewer minting a newer generation and
+// HandleViewerOfferHandle registering a newer PeerConnection — BEFORE that
+// second offer ever reaches its own commit attempt. If a detach or
+// connection-close raced in at exactly that point, takeWebRTCAttachment()
+// here still returns the OLDER, already-committed attachment, and the old
+// unconditional pair would close/evict whatever the relay/CaptureSession
+// currently hold for viewerID — i.e. the NEWER offer's live, still-
+// negotiating connection — instead of the one this attachment actually
+// owns. CleanupViewerOffer(att.handle) is the same identity-checked
+// mechanism (ViewerAttachHandle's gen + the relay's own
+// CloseViewerIfCurrent/RemoveViewerIfCurrent) the offer path already relies
+// on: a no-op if att.handle's registration has since been superseded, and a
+// full, real teardown (closes the PeerConnection, arms the grace-stop timer,
+// resumes the JPEG screencast via ReconcileScreencast) when it is still
+// current — which is always true for the ordinary case of a legitimate
+// detach with no second offer in flight, so a normal detach's viewer is
+// still fully removed exactly as before.
 func (h *BrowserWSHandler) detachWebRTCViewer(state *browserConnState, viewerID string) {
-	att := state.webrtc
-	state.webrtc = nil
+	att := state.takeWebRTCAttachment()
+	state.invalidateWebRTCOffer()
 	h.unregisterWebRTCViewerConn(viewerID)
 	if att == nil || att.capture == nil {
 		return
 	}
-	att.capture.Relay().CloseViewer(viewerID)
-	att.capture.RemoveViewer(viewerID)
+	att.capture.CleanupViewerOffer(att.handle)
 }
 
 // registerWebRTCViewerConn / unregisterWebRTCViewerConn maintain
@@ -501,7 +699,26 @@ var (
 // no-progress tick already implies a dead capture; two ticks costs at most
 // one extra encoderLivenessCheckInterval of latency for the added safety
 // margin.
-const encoderLivenessVideoStallTicks = 2
+//
+// Raised 2 -> 6 (2026-07-30 UAT). The premise quoted above — "VP8 keeps
+// emitting packets on completely static content at ~30fps" — is FALSE for
+// this capture path, and measured live traffic disproves it: on a static
+// Google page the ingest leg forwarded ~2 video packets/sec against ~50
+// audio packets/sec, i.e. exactly the 1 Hz blinking text cursor and nothing
+// else. tabCapture is REPAINT-driven, not clock-driven: a page with nothing
+// animating (no cursor, no video, no spinner) legitimately produces ZERO
+// frames, indefinitely, while the capture is perfectly healthy. At 2 ticks
+// this watchdog would call cs.Stop() on such a page after only 20s and kill
+// a working session — a false positive that reads to the user exactly like
+// the freeze we are fixing. 6 ticks (60s) keeps the wedged-capture-with-
+// live-ping detection this check exists for while making that false
+// positive far less likely. It does NOT eliminate it: a genuinely static
+// page still trips this at 60s. The durable fix is to distinguish "no
+// frames because nothing repainted" from "no frames because the pipeline is
+// wedged" (e.g. an encoder-side frame-production counter rather than an
+// RTP-egress counter), which is out of scope here and is why this remains a
+// tick-count tuning rather than a redesign.
+const encoderLivenessVideoStallTicks = 6
 
 // watchEncoderLiveness runs for the lifetime of one CaptureSession (fix 3),
 // exiting as soon as cs.Done() closes (Stop(), from ANY cause) so at most
@@ -710,6 +927,25 @@ func (h *BrowserWSHandler) webrtcInputSink(mgr *browser.BrowserManager, cfg *con
 		if err := mgr.Live().Input(browser.DefaultSessionID, viewerID, in); err != nil {
 			if browser.IsBenignLiveInputError(err) {
 				slog.Debug("browser-webrtc: input rejected (benign)", "error", err, "viewer_id", viewerID)
+				// 2026-07-30 UAT: "benign" must not mean "invisible" for the
+				// not-controller case. Every other benign rejection is
+				// self-correcting; this one is not — the client keeps
+				// believing it is driving and keeps sending input the server
+				// keeps discarding. The operator's panel read "You're
+				// driving" through 448 consecutive rejected inputs, so
+				// clicks and keystrokes did nothing at all with no error
+				// anywhere the user could see. Push the AUTHORITATIVE
+				// control state back to this viewer so its UI corrects
+				// itself and the next click re-takes the wheel properly.
+				// The not-controller rejection this branch used to repair no
+				// longer exists: input is never gated on holding a control
+				// lock (see dispatchInput). The previous repair — acquire the
+				// lock, then retry the same event — still refused a human's
+				// click whenever ANOTHER viewer was attached and holding
+				// control, which is exactly how a second panel or a stale
+				// automation session left the real user with a dead mouse and
+				// keyboard. What remains here is the rate limit, which is
+				// self-correcting.
 				return
 			}
 			slog.Warn("browser-webrtc: input dispatch failed", "error", err, "viewer_id", viewerID)
@@ -718,19 +954,6 @@ func (h *BrowserWSHandler) webrtcInputSink(mgr *browser.BrowserManager, cfg *con
 	}
 }
 
-// surfaceWebRTCInputError pushes a browser_status(error) frame to viewerID's
-// main WS connection (looked up via h.viewerConns — the viewer driving over
-// the data channel always has one, registered by handleWebRTCOffer). Fix 7:
-// previously a non-benign DC input dispatch error was logged at Warn
-// server-side and otherwise silently dropped — the WS input path's
-// handleInput surfaces the identical class of failure to the user via
-// sessionErrorStatus, and the DC path had no equivalent. Applies the SAME
-// content-aware throttle discipline handleInput uses (minInputErrorInterval;
-// discrete kinds — navigate/navigate_back/reload — are never throttled) so a
-// dead/crashed tab failing every DC input event can't flood the viewer with
-// one error frame per event. A no-op if viewerID has no registered
-// connection (e.g. the viewer detached between the DC message arriving and
-// this dispatch completing).
 func (h *BrowserWSHandler) surfaceWebRTCInputError(viewerID, kind string, dispatchErr error) {
 	v, ok := h.viewerConns.Load(viewerID)
 	if !ok {
@@ -945,12 +1168,28 @@ func (h *captureIngestWSHandler) serveConn(conn *websocket.Conn, remoteAddr stri
 	cs.RecordExtVersion(hello.ExtVersion)
 
 	ic := &captureIngestConn{conn: conn}
-	send := func(action string, reason *string) error {
-		return ic.sendJSON(generated.BrowserCaptureControlFrame{
+	// send additionally carries expectedW/expectedH — the CDP-verified CSS
+	// viewport CaptureSession.RecaptureAt wants the encoder to converge on
+	// (follow-up to
+	// docs/internal/browser-viewport-input-rootcause-2026-07-31.md, measured
+	// 2026-07-31). 0 means "absent" (RecaptureAt's convention, mirrored by
+	// Recapture()'s own 0,0 call), so ExpectedWidth/ExpectedHeight are only
+	// set on the wire frame when the corresponding value is actually
+	// positive — an absent field, not a literal 0, is what tells the encoder
+	// there is no hint to converge on.
+	send := func(action string, reason *string, expectedW, expectedH int) error {
+		frame := generated.BrowserCaptureControlFrame{
 			Type:   string(generated.WsFrameTypeBrowserCaptureControl),
 			Action: action,
 			Reason: reason,
-		})
+		}
+		if expectedW > 0 {
+			frame.ExpectedWidth = &expectedW
+		}
+		if expectedH > 0 {
+			frame.ExpectedHeight = &expectedH
+		}
+		return ic.sendJSON(frame)
 	}
 	var closeOnce sync.Once
 	closeConn := func() {

@@ -41,8 +41,15 @@ export function normalizeNavigateUrl(raw: string): string | null {
  *   treated as a URL/bare domain and normalized via `normalizeNavigateUrl`
  *   (which prepends "https://" when no scheme is present).
  * - anything else (contains a space, or has no "." — e.g. "cheap flights to
- *   tokyo", or a single bare word like "wikipedia") → a Google search for
- *   the text. Only OUTER whitespace is trimmed (matching `normalizeNavigateUrl`'s
+ *   tokyo", or a single bare word like "wikipedia") → a DuckDuckGo search for
+ *   the text. DuckDuckGo, not Google, so the omnibox agrees with the Omnipus
+ *   start page, whose own search form already posts to duckduckgo.com
+ *   (pkg/gateway/browser_start_page.go) — two different engines depending on
+ *   whether you typed into the page or the address bar was a split-brain the
+ *   user could see. It also fits the product's no-telemetry posture, and in
+ *   practice Google far more readily serves a CAPTCHA to a headless,
+ *   datacentre-IP browser, which is a failure the user experiences as "search
+ *   is broken". Only OUTER whitespace is trimmed (matching `normalizeNavigateUrl`'s
  *   own `.trim()`) — interior whitespace between words is preserved exactly
  *   as typed, not collapsed, so "cheap   flights" is searched with its
  *   original spacing rather than being normalized to single spaces.
@@ -62,5 +69,5 @@ export function resolveOmniboxInput(raw: string): string | null {
   if (looksLikeUrl) {
     return normalizeNavigateUrl(trimmed)
   }
-  return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`
+  return `https://duckduckgo.com/?q=${encodeURIComponent(trimmed)}`
 }

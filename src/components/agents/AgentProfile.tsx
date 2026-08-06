@@ -203,6 +203,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
 
+  // Finding A (7-reviewer-gate, fix/uat-v0.1.1-defects): captured (mid-render,
+  // synchronously, in the Finding-B `prevAgentIdForReset` block below) with
+  // whichever agentId we are switching AWAY from, the instant a switch is
+  // detected — BEFORE `prevAgentIdForReset` itself is overwritten to the new
+  // value. Read later by the `onDisabledWithPendingChanges` callback passed
+  // to `useAutoSave()` (a plain ref read, not a closure — the callback's OWN
+  // closure would otherwise observe the ALREADY-caught-up `prevAgentIdForReset`
+  // by the time the hook's effect actually invokes it, since that effect
+  // fires on the "restarted" render triggered by the very same mid-render
+  // `setPrevAgentIdForReset` call).
+  const switchedAwayFromAgentIdRef = useRef<string | null>(null)
+
   // Item 11: ref to THIS instance's own SheetContent DOM node, so the
   // focus-check belt-and-braces guard (`isFocusedInAgentProfileForm`) scopes
   // to the right sheet instead of a document-wide first-match query.
@@ -211,6 +223,25 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Tracks whether the initial hydration from the server has completed.
   // Guards auto-save from firing with default (empty) state before the first fetch resolves.
   const hasHydrated = useRef(false)
+
+  // D3 / UAT spurious-PUT fix: reactive counterpart to `hasHydrated` above.
+  // A `useRef` read at render time is NOT reactive — useAutoSave's own
+  // "skip first render" baseline-capture logic runs off its `disabled`
+  // option, gated purely by React's commit/effect cycle, so the flag it
+  // reads has to be component STATE, flipped at the END of the hydration
+  // effect below, so the exact commit where the hydrated field values land
+  // is also the commit where `disabled` flips false. That's the only way
+  // useAutoSave captures the HYDRATED data as its baseline instead of the
+  // hardcoded useState defaults every field below starts at (name='',
+  // description='', model='', ...) before the agent's real data has
+  // loaded — the root cause of the spurious-PUT bug (mount → hydrate →
+  // unsolicited PUT echoing the server's own data back). Reset to false in
+  // the `[agentId]` effect below — required because this component
+  // persists across agent switches (it does NOT unmount on sheet close —
+  // see `handleCloseAgentSheet`'s comment), so without the reset the NEXT
+  // agent inherits "ready" a render too early and reproduces the same bug
+  // on every subsequent agent open.
+  const [formHydrated, setFormHydrated] = useState(false)
 
   // I12: cache the executor kind+cli+cli_path we've already passed the
   // runner-test for, so the auto-save debounce (500 ms) doesn't re-fire the
@@ -253,15 +284,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // out. Comparing `updated_at` timestamps closes the window regardless of
   // WHERE the stale `agent` reference came from.
   const lastIncorporatedUpdatedAtRef = useRef<string | undefined>(undefined)
-
-  // Reset flags when navigating to a different agent
-  useEffect(() => {
-    isDirtyRef.current = false
-    hasHydrated.current = false
-    conflictRef.current = false
-    hbDirtyRef.current = false
-    lastIncorporatedUpdatedAtRef.current = undefined
-  }, [agentId])
 
   // Hydrate heartbeat state from workspace member_configs when the workspace
   // data loads (or when we navigate to a different agent or workspace).
@@ -382,6 +404,65 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Tracks whether the heartbeat form has been modified since last save.
   const hbDirtyRef = useRef(false)
   const markHbDirty = () => { hbDirtyRef.current = true }
+
+  // Finding B (7-reviewer-gate, fix/uat-v0.1.1-defects): reset flags when
+  // navigating to a different agent — via a MID-RENDER state adjustment
+  // (https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes),
+  // NOT a plain `useEffect(..., [agentId])` as this used to be.
+  //
+  // Root cause the plain-effect version had: it and the hydration effect
+  // below (`[agentId, agent]`, which flips `formHydrated` back to `true`)
+  // are BOTH passive effects. On an ordinary agent switch where `agent` is
+  // NOT yet cached (fetched fresh), TanStack Query returns `undefined` for
+  // at least one render, so the hydration effect's `if (!agent) return`
+  // guard bails on that first pass — the reset effect's `setFormHydrated(false)`
+  // commits on its own, `disabled` (`!formHydrated`) genuinely renders as
+  // `true`, and useAutoSave's `wasDisabledRef` re-arm (see useAutoSave.ts)
+  // correctly engages once the hydration effect flips it back to `true`
+  // later. But on a REVISIT of an agent whose data is ALREADY in the
+  // QueryClient cache — e.g. A→B→A — `agent` resolves SYNCHRONOUSLY on the
+  // very same render `agentId` changes on. Both effects then fire back to
+  // back in the SAME passive-effect flush with no commit in between:
+  // `setFormHydrated(false)` immediately followed by `setFormHydrated(true)`
+  // batch into a single re-render, so `disabled` never actually commits as
+  // `true` — useAutoSave's re-arm never engages, and the revisited agent's
+  // freshly-(re)hydrated data is diffed against the PREVIOUS agent's stale
+  // baseline: indistinguishable from a genuine edit, arming the debounce and
+  // firing a spurious echo PUT. Confirmed empirically — see
+  // `AgentProfile.test.tsx`'s "Finding B" regression test (fails without
+  // this fix, passes with it).
+  //
+  // A mid-render `setFormHydrated(false)` call makes React discard and
+  // restart the CURRENT render immediately, before ANY effect for this
+  // commit has run — so the reset is guaranteed to land in its own real,
+  // committed render (with `disabled === true`) strictly BEFORE the
+  // hydration effect (a passive effect, which can only run after a commit)
+  // has any chance to flip it back. This closes the coalescing window
+  // regardless of whether `agent` happens to be cache-resolved or not.
+  // Precedent: `WorkspaceSettingsTab.tsx`'s `prevWorkspaceIdForReset` /
+  // `identityHydrated` pair uses the exact same pattern for the same reason.
+  //
+  // Positioned here (after every ref/state it touches has been declared,
+  // not up near `formHydrated`'s own declaration) because a mid-render
+  // mutation executes synchronously as this function runs top-to-bottom —
+  // unlike the refs/effects above and below, which only ever read these via
+  // deferred closures, so their textual position relative to a `const`
+  // declared later in the same render doesn't matter.
+  const [prevAgentIdForReset, setPrevAgentIdForReset] = useState(agentId)
+  if (agentId !== prevAgentIdForReset) {
+    // Finding A: capture the OLD agentId before it's overwritten below —
+    // see `switchedAwayFromAgentIdRef`'s own doc comment above.
+    switchedAwayFromAgentIdRef.current = prevAgentIdForReset
+    setPrevAgentIdForReset(agentId)
+    isDirtyRef.current = false
+    hasHydrated.current = false
+    conflictRef.current = false
+    hbDirtyRef.current = false
+    lastIncorporatedUpdatedAtRef.current = undefined
+    // D3 fix: re-arm the hydration-readiness gate for the new agent — see
+    // `formHydrated`'s own doc comment above for why this reset is required.
+    setFormHydrated(false)
+  }
 
   useEffect(() => {
     if (!agent) return
@@ -523,6 +604,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // US-E6: hydrate agent skills from the API response (default none).
     setAgentSkills(agent.skills ?? [])
     hasHydrated.current = true
+    // D3 fix: flip the reactive readiness flag as the LAST line of this
+    // effect, after every setState call above — React batches all of these
+    // into a single commit, so `formHydrated` becomes true in the exact
+    // same commit the hydrated field values land. See `formHydrated`'s own
+    // doc comment (near `hasHydrated`'s declaration) for the full rationale.
+    setFormHydrated(true)
   }, [agentId, agent])
 
   // US-1/US-5 AC-1: OFFER the detected absolute path when cli_path is EMPTY —
@@ -865,8 +952,30 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
       queryClient.invalidateQueries({ queryKey: ['agents'] })
     },
-    // Locked agents can still save model and tool changes — do not disable auto-save
+    // Locked agents can still save model and tool changes — locked status
+    // itself must NEVER disable auto-save (an `agent.locked` guard is a
+    // confirmed-wrong fix for the D3 spurious-PUT bug below — it fires for
+    // every agent, locked or not). The `disabled` key in the options object
+    // is unrelated to locked status: it gates on hydration readiness only.
     {
+      // D3 / UAT spurious-PUT fix: block useAutoSave's own change-detection
+      // entirely until `formHydrated` flips true at the end of the
+      // hydration effect above. Without this, useAutoSave's "skip first
+      // render" baseline-capture logic seeds itself from the hardcoded
+      // useState defaults every field above starts at (name='',
+      // description='', model='', ...) — captured on the FIRST commit
+      // where `disabled` is false, which used to be the very first render,
+      // before the agent's real data had loaded. The LATER hydration
+      // commit then looks like a genuine user edit relative to that
+      // all-defaults baseline, arming the debounce and firing a `PUT` that
+      // just echoes the server's own data back (bumps `updated_at`, shows
+      // "✓ Saved just now" to a user who touched nothing — reproduced by 2
+      // UAT testers opening the read-only core agent Mia). `formHydrated`
+      // is real component state, not a ref read at render time, so it
+      // flips false→true in the SAME commit the hydrated field values
+      // land — useAutoSave's baseline is captured from the HYDRATED data
+      // instead.
+      disabled: !formHydrated,
       // Long-form surface (SOUL and other multi-line fields live on this
       // form) — raised from the 500ms default so a normal typing cadence
       // doesn't fire a save (and its own invalidateQueries echo) on nearly
@@ -902,6 +1011,49 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // sendBeacon can't carry either, which is why useAutoSave uses fetch
       // keepalive instead. No client-side token to pass through anymore.
       flushUrl: agentId !== null ? `/api/v1/agents/${agentId}` : undefined,
+      // Finding A (7-reviewer-gate, fix/uat-v0.1.1-defects):
+      // `openEditAgentSlideOver` (the raw Zustand setter behind
+      // `editAgentId`) has THREE call sites — the deep-link route
+      // (`src/routes/_app/agents.$agentId.tsx`), AgentCard, and
+      // WorkspaceTeamTab — and NONE of them go through this component's own
+      // `handleCloseAgentSheet` flush-before-switch (below). Since
+      // AgentProfile is mounted once at the layout level and never unmounts
+      // between agents, any of those call sites switching `editAgentId`
+      // while THIS agent has a genuinely pending (debounced, not yet sent)
+      // edit bypasses the flush entirely. Confirmed empirically — see
+      // `AgentProfile.test.tsx`'s "Finding A" tests (switching `editAgentId`
+      // directly, exactly as the deep-link route does, silently loses a
+      // debounced SOUL edit with no error, no toast, no log — until this
+      // callback).
+      //
+      // useAutoSave itself now detects this generically (see
+      // `onDisabledWithPendingChanges`'s doc comment on
+      // `UseAutoSaveOptions`) — an AUTOMATIC flush was deliberately rejected
+      // there (render-phase/StrictMode hazards, and this form's `saveFn` has
+      // real side-effecting preconditions — the I12 runner-test-before-save
+      // gate, locked-agent field stripping, 409 handling — that a hand-rolled
+      // "deferred flush" would have to reimplement correctly or risk a WORSE
+      // bug than the one being fixed). This callback only SURFACES the loss:
+      // a toast telling the operator to redo the edit, plus a diagnostic
+      // breadcrumb — "no silent errors" — instead of leaving it silently
+      // discarded.
+      //
+      // `switchedAwayFromAgentIdRef` (set mid-render, in the Finding-B
+      // `prevAgentIdForReset` block above, the instant a switch away from a
+      // DIFFERENT agent is detected) supplies which agent this was — `data`
+      // alone doesn't carry an id.
+      onDisabledWithPendingChanges: () => {
+        const lostAgentId = switchedAwayFromAgentIdRef.current
+        console.warn(
+          'AgentProfile: switched away from an agent with an unsaved pending edit — the edit was not saved',
+          { agentId: lostAgentId },
+        )
+        logDiagnostic('agentProfileSwitchDiscardedPendingEdit', { agentId: lostAgentId })
+        addToast({
+          message: 'Your last change was not saved before you switched agents. Reopen it and re-enter the change.',
+          variant: 'error',
+        })
+      },
     },
   )
 
@@ -1027,8 +1179,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // UploadButton moved to the shared UploadMdButton in AgentFormFields.tsx
   // (create/edit parity, P3 2026-07-03) — one implementation for both dialogs.
 
-  // Wave 5 / spec §6.1 BDD #15: Delete agent confirmation. Mirrors the
-  // pattern from SchedulesList (`doDelete`): the mutation invalidates
+  // Wave 5 / spec §6.1 BDD #15: Delete agent confirmation: the mutation invalidates
   // the list cache on success, surfaces the API error inline on failure,
   // and closes the slide-over only on success (so a network blip keeps
   // the operator on the same page). The button itself is hidden for
@@ -2640,8 +2791,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         )}
       </div>
 
-      {/* Wave 5 / spec §6.1 BDD #15: Delete confirmation dialog. Mirrors the
-          SchedulesList pattern (`AlertDialog` + `AlertDialogAction`) so the
+      {/* Wave 5 / spec §6.1 BDD #15: Delete confirmation dialog
+          (`AlertDialog` + `AlertDialogAction`) so the
           destructive-confirm flow is identical across the app. The confirm
           fires the deleteAgentMutation; on success the slide-over closes
           and the agent is removed from the list cache. */}

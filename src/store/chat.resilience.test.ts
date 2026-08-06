@@ -228,6 +228,41 @@ describe('C8 — clearStreamingState resolves a stuck stream', () => {
     expect(bucket.messagesById['a1'].status).toBe('error')
     expect(bucket.messagesById['a1'].isStreaming).toBe(false)
   })
+
+  // D5 fix (UAT "Site 3"): the coalesce-into-existing-streaming-bubble path
+  // (a1 is already streaming, unlike the fresh-bubble case covered in
+  // chat.llm-error.test.ts) must ALSO sanitize a Go-internal-jargon-shaped
+  // legacy frame.message instead of stamping it verbatim as the closed
+  // bubble's content. The bubble must have EMPTY content (an unstarted
+  // placeholder) — `msg.content || fallbackContent` only reaches
+  // fallbackContent when there is no partial content yet (see the
+  // reducer's own comment); seedStreamingBucket's default 'a1' already has
+  // content:'thinking…', so this overrides it to '' to actually exercise
+  // the fallback path.
+  it('D5: sanitizes a Go-internal-jargon-shaped frame.message when coalescing into an existing (empty-content) streaming bubble', () => {
+    seedStreamingBucket(SID, {
+      messagesById: {
+        'a1': {
+          id: 'a1',
+          role: 'assistant',
+          content: '',
+          timestamp: new Date().toISOString(),
+          status: 'streaming',
+          isStreaming: true,
+        },
+      },
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'error',
+        session_id: SID,
+        message: 'browser_attach: agent_id and session_id are required',
+      })
+    })
+    const bucket = useChatStore.getState().sessionsById[SID]
+    expect(bucket.messagesById['a1'].content).toBe('Something went wrong — please try again.')
+    expect(bucket.messagesById['a1'].content).not.toContain('browser_attach')
+  })
 })
 
 describe('I1 — reconnect cursor advances for any timestamped frame', () => {

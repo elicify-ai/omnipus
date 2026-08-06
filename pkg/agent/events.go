@@ -97,6 +97,14 @@ const (
 	// Part B US-9). The WS forwarder turns it into a loop_status frame,
 	// broadcast to every connection.
 	EventKindLoopStatusChanged
+	// EventKindTaskRunStatus is emitted when a per-task-execution TaskRun
+	// record (ADR-050, docs/internal/specs/task-run-history-spec.md §3.8 —
+	// additive alongside Task.status/EventKindTaskStatusChanged) opens or
+	// closes. A recurring occurrence's queued→in_progress→done transition
+	// does not move Task.status between distinct values the calendar reads
+	// (RD2), so the WS forwarder turns THIS event into a task_run_status
+	// frame the calendar's per-occurrence chip can key off instead.
+	EventKindTaskRunStatus
 
 	eventKindCount
 )
@@ -135,6 +143,7 @@ var eventKindNames = [...]string{
 	"plan_status_changed",
 	"goal_status_changed",
 	"loop_status_changed",
+	"task_run_status",
 }
 
 // String returns the stable string form of an EventKind.
@@ -591,9 +600,27 @@ type SubTurnOrphanPayload struct {
 }
 
 // ErrorPayload describes an execution error inside the agent loop.
+//
+// ProviderError (ADR-051 §RD5 CRIT-001) carries the structured
+// *ProviderError — status + body + wrapped error — so the classifier at
+// the two choke points (appendErrorTranscript write + WS-forwarder
+// EventKindError live) sees real provider data instead of a stringified
+// message. Optional: non-provider error paths (hook aborts, internal
+// model_switch failures, rate-limit denials) leave it nil and the
+// classifier falls back to substring matching on Message.
+//
+// Detail is computed live at the forwarder (NEVER persisted); only the
+// WS path surfaces it, behind Verbose Chat (operator Q2).
 type ErrorPayload struct {
-	Stage   string
-	Message string
+	Stage         string
+	Code          string
+	Message       string
+	ProviderError *ProviderError
+	// ChatID is needed so the WS event forwarder can route this event to the
+	// right connection via matchesChatID. Mirrors RateLimitPayload's
+	// explicit ChatID field; both are required for the live path to deliver
+	// typed errors to the right user.
+	ChatID string
 }
 
 // TurnTimeoutPayload describes a turn that exceeded its configured timeout.
@@ -732,4 +759,28 @@ type LoopStatusChangedPayload struct {
 	MaxRuns   int    `json:"max_runs"`
 	NextDelay *int   `json:"next_delay,omitempty"`
 	State     string `json:"state"`
+}
+
+// TaskRunStatusPayload carries a per-execution TaskRun open/close transition
+// (ADR-050 §3.8, docs/internal/specs/task-run-history-spec.md §3.8) for the
+// SPA. The WS forwarder turns this into a task_run_status frame
+// (generated.TaskRunStatusFrame) so the calendar's per-occurrence chip can
+// update live without a full occurrences refetch — additive alongside
+// TaskStatusChangedPayload, never a replacement for it (RD2: Task.status
+// keeps its exact existing behavior and event).
+//
+// OccurrenceMs mirrors task.TaskRun.OccurrenceMs's own nullability: nil for
+// an ad-hoc/once/manual run, non-nil for the RRULE instant a recurring fire
+// realizes. Status is one of task.StatusInProgress/StatusDone/StatusFailed/
+// task.StatusSkipped (task.IsValidRunStatus) — the narrower 4-state TaskRun
+// vocabulary, not the full 7-state Task one. StatusSkipped is emitted by
+// TaskTriggerScheduler (task_trigger.go's RunScheduled, via the same
+// TaskExecutor.emitRunStatus function OpenRun/CloseRun already use) when the
+// overlap guard records a skipped-occurrence run, not just by OpenRun/
+// CloseRun's in_progress/done/failed transitions.
+type TaskRunStatusPayload struct {
+	TaskID       string `json:"task_id"`
+	RunID        string `json:"run_id"`
+	OccurrenceMs *int64 `json:"occurrence_ms,omitempty"`
+	Status       string `json:"status"`
 }

@@ -8,6 +8,7 @@ import type { ChatMessage, MediaAttachment } from "@/store/chat";
 import type { AssistantMessage, ToolCall } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
 import { omnipusAttachmentAdapter, takeResolvedUpload } from "@/lib/attachment-adapter";
+import { takeLibraryAttachments, mediaRefURL } from "@/lib/library-attachment";
 import { isImageAttachment } from "@/components/chat/AttachmentCard";
 
 type StoreToolCall = ToolCall & { call_id: string }; // not-wire-format: internal Zustand store type enriching ToolCall with a required call_id; never emitted to the backend
@@ -272,6 +273,24 @@ export function useOmnipusRuntime() {
           console.warn(`[omnipus-runtime] Attachment "${att.name}" (id=${att.id}) had no resolved ref — it will not be sent to the agent.`);
           addToast({ message: `Attachment "${att.name}" was not sent — it failed to upload or register.`, variant: "error" });
         }
+      }
+
+      // ADR-051 Rev 4 (Slice H): drain pending workspace-LIBRARY attachments
+      // added via the composer picker. These are reused manifest entries
+      // (media://workspace/<ws>/<id>, FR-022) — no upload, no File. Drain
+      // (not read) so a single send cannot re-thread them into a later
+      // message. mediaRefURL() derives the local preview URL from the ref
+      // itself (not lib.mediaId) — a bare /api/v1/media/{id} route 404s for
+      // workspace-scoped entries (HandleMedia is a legacy-registry lookup
+      // that rejects any id containing "/"); see mediaRefURL's doc comment.
+      for (const lib of takeLibraryAttachments()) {
+        mediaRefs.push(lib.ref);
+        attachments.push({
+          type: isImageAttachment(lib.filename, lib.contentType) ? "image" : "file",
+          url: mediaRefURL(lib.ref),
+          filename: lib.filename,
+          contentType: lib.contentType,
+        });
       }
 
       // Attachment-only messages (no typed text) are valid — send as long as we

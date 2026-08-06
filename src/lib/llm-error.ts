@@ -1,0 +1,232 @@
+import type {
+  LLMError as GeneratedLLMError,
+  LLMErrorReplay as GeneratedLLMErrorReplay,
+} from '@/lib/api/generated/asyncapi-types'
+
+/**
+ * fromModelPrefix is the attribution marker applied to upstream-caused
+ * error codes. The bubble can render this with a muted style to make the
+ * attribution skim-friendly without changing the copy itself; the string
+ * is the single source of truth for both the bubble and the transcript.
+ */
+export const fromModelPrefix = 'From the model:'
+
+/**
+ * llm-error.ts — ADR-051 SPA-side error translation.
+ *
+ * The backend emits a typed `ErrorFrame` (live) and `ReplayErrorFrame`
+ * (history replay) carrying an `llm_error` payload with a stable,
+ * enumerated `code` and human-friendly `message`. This module is the
+ * single SPA-side source of truth for translating those codes into
+ * user-facing copy and for safely reading the typed payload off a
+ * frame that may pre-date the contract (legacy frames lack it).
+ *
+ * Wire types live in `src/lib/api/generated/asyncapi-types.ts`
+ * (`LLMError`, `LLMErrorReplay`) — this module aliases them so the chat
+ * store can stay decoupled from the generated barrel's exact name while
+ * remaining pinned to the regenerated enum union (compile-time gate via
+ * `Record<LLMErrorCode, string>` below — adding a new code without
+ * regenerating and updating the copy map fails `tsc -b --noEmit`).
+ *
+ * NOT a wire type (no `json:` tags, never crosses the gateway boundary) —
+ * display-only. Per CLAUDE.md hard-constraint #8 the canonical wire types
+ * are the generated ones; this file aliases them rather than mirroring
+ * them so the manually-maintained surface can never drift from the spec.
+ */
+export type LLMError = GeneratedLLMError
+export type LLMErrorReplay = GeneratedLLMErrorReplay
+export type LLMErrorCode = GeneratedLLMError['code']
+
+/**
+ * Generic, user-facing copy per error code. Always shown regardless of the
+ * verbose-chat preference — this is the minimum a user needs to understand
+ * what went wrong. The raw `message` from the wire is NOT shown in the
+ * bubble (it can leak provider internals / PII); verbose mode surfaces it
+ * via the "Technical details" disclosure as `detail`.
+ *
+ * Copy is intentionally actionable — tells the user what happened and what
+ * (if anything) they can do.
+ *
+ * Attribution: errors whose cause is upstream of Omnipus (model/provider
+ * rejections, capability, rate limits, content policy, shape, unclassified)
+ * are prefixed with "From the model:" so the user knows the failure is
+ * not a product bug — they should retry or switch models. Failures we own
+ * outright (5xx, fallback) carry no prefix; we take the blame. `network`
+ * is ambiguous and carries no prefix; the wording ("check the network")
+ * already disambiguates. See `docs/internal/uat/ADR-051-rev4-error-copy-review.md`
+ * for the full rationale.
+ *
+ * The `Record<LLMErrorCode, string>` shape is a compile-time gate: adding
+ * a new code to the generated AsyncAPI types without updating this map
+ * fails `tsc -b --noEmit`.
+ */
+export const codeToDisplay: Record<LLMErrorCode, string> = {
+  media_unsupported:
+    "From the model: it can’t use that attachment. Try another format, or switch to a vision-capable model.",
+  provider_rejected:
+    "From the model: it refused this request. Retry once, or pick a different model.",
+  rate_limited:
+    "From the model: it’s rate-limited right now. Wait a moment, then retry.",
+  network:
+    "Couldn’t reach the model. Check the network, then retry.",
+  content_policy:
+    "From the model: it blocked this under its safety policy. Rephrase, or remove the flagged content.",
+  context_too_long:
+    "From the model: this chat is too long for its context window. Start a new session, or drop older turns.",
+  tool_args:
+    "From the model: a tool call had invalid arguments. Retry the turn — Verbose chat shows which tool.",
+  schema:
+    "From the model: the request didn’t match what it expects. Retry; if it keeps failing, switch models or check the tool setup.",
+  unknown:
+    "From the model: it didn’t complete this turn. Retry. If it keeps failing, open Technical details (Verbose chat) or switch models.",
+}
+
+/**
+ * Resolve the user-facing copy for a code, with a safe fallback for an
+ * unrecognized code (forward-compat: a newer backend may emit a code this
+ * SPA build doesn't know yet — never throw, never render blank).
+ */
+export function codeToMessage(code: string | undefined): string {
+  if (code && code in codeToDisplay) {
+    return codeToDisplay[code as LLMErrorCode]
+  }
+  return codeToDisplay.unknown
+}
+
+/**
+ * Compute the display shape for an LLM error.
+ *
+ * `message` is ALWAYS the generic code→display copy (stable, user-friendly,
+ * never leaks provider internals). `detail` is included ONLY when BOTH
+ * `verboseChatEnabled` is true AND `le.detail` is a non-empty string —
+ * otherwise it is `undefined`, and the renderer must omit the "Technical
+ * details" disclosure entirely (not just hide it).
+ *
+ * The typed `LLMErrorReplay` (replay path) carries no `detail` field, so
+ * for replay frames `detail` is always `undefined` regardless of the
+ * verbose preference — this is by design (history never persists provider
+ * internals).
+ */
+export function getLLMErrorDisplay(
+  le: { code: string; message: string; retryable: boolean; detail?: string },
+  verboseChatEnabled: boolean,
+): { message: string; detail?: string } {
+  const message = codeToMessage(le.code)
+  // Trim before the emptiness check — a whitespace-only detail carries no
+  // information and would render as a blank "Technical details" disclosure.
+  // Mirrors the renderer's own trim guard on `message.errorDetail`.
+  const rawDetail = typeof le.detail === 'string' ? le.detail.trim() : ''
+  const detail =
+    verboseChatEnabled && rawDetail.length > 0 ? le.detail : undefined
+  return detail ? { message, detail } : { message }
+}
+
+// ─── Safe optional accessors ─────────────────────────────────────────────────
+//
+// Legacy frames (pre-ADR-051 backend, or frames that never carried the
+// typed payload — e.g. a cancel-ack synthesized on the gateway side) don't
+// have `payload.llm_error`. These accessors cast `unknown` → typed and
+// return `undefined` for any shape mismatch, so the reducer's fallback to
+// `frame.message` stays a one-liner.
+//
+// The shape guards are deliberately permissive (object + a string `code`):
+// they only exist to confirm a typed payload is present, not to validate
+// its full contract — Zod already did that at the WS boundary.
+
+function isTypedLLMError(value: unknown): value is { code: string; message: string; retryable: boolean; detail?: string } {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return typeof v.code === 'string' && typeof v.message === 'string' && typeof v.retryable === 'boolean'
+}
+
+/**
+ * Read the typed `payload.llm_error` off a live `ErrorFrame`-shaped value.
+ * Returns the (narrowed) `LLMError` shape when present and well-formed, else
+ * `undefined`. The input is `unknown` so callers can pass a raw `frame`
+ * without first narrowing the frame union.
+ */
+export function readLLMErrorFromFrame(frame: unknown): LLMError | undefined {
+  if (typeof frame !== 'object' || frame === null) return undefined
+  const f = frame as { payload?: unknown }
+  const payload = f.payload
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const p = payload as { llm_error?: unknown }
+  if (!isTypedLLMError(p.llm_error)) return undefined
+  // `detail` is optional on the wire; only copy it through if it's a string.
+  const le = p.llm_error
+  return {
+    code: le.code as LLMErrorCode,
+    message: le.message,
+    retryable: le.retryable,
+    ...(typeof le.detail === 'string' ? { detail: le.detail } : {}),
+  }
+}
+
+/**
+ * Read the typed `payload.llm_error` off a `ReplayErrorFrame`-shaped value.
+ * Replay payloads have no `detail`, so the returned shape is the narrower
+ * `LLMErrorReplay`. Returns `undefined` for legacy frames / shape mismatch.
+ */
+export function readLLMErrorFromReplayFrame(frame: unknown): LLMErrorReplay | undefined {
+  if (typeof frame !== 'object' || frame === null) return undefined
+  const f = frame as { payload?: unknown }
+  const payload = f.payload
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const p = payload as { llm_error?: unknown }
+  if (!isTypedLLMError(p.llm_error)) return undefined
+  const le = p.llm_error
+  return {
+    code: le.code as LLMErrorCode,
+    message: le.message,
+    retryable: le.retryable,
+  }
+}
+
+/**
+ * Read the optional `entry_id` off a replay/error frame. Used for live↔replay
+ * dedup so a live error bubble that already rendered isn't duplicated when
+ * history is reloaded. Returns `undefined` for frames without one.
+ */
+export function readEntryIdFromFrame(frame: unknown): string | undefined {
+  if (typeof frame !== 'object' || frame === null) return undefined
+  const f = frame as { entry_id?: unknown }
+  return typeof f.entry_id === 'string' ? f.entry_id : undefined
+}
+
+/**
+ * D5 fix (UAT "Site 3") — a legacy/synthesized `ErrorFrame` (no typed
+ * `llm_error` payload — an auth-handshake rejection, a workspace-setup
+ * kickoff reject, a gateway-synthesized cancel-ack, etc.) falls back to the
+ * raw wire `message` for display in `store/chat.ts`'s `case 'error'`. Most
+ * of those ARE deliberately-authored, human-readable strings (see the
+ * `Message:` literals in pkg/gateway/websocket.go) — but a raw Go-internal/
+ * protocol string can still reach this fallback: an unwrapped backend error,
+ * or any future ErrorFrame the backend hasn't wrapped in the typed payload
+ * yet. This is the safety net for that path — it collapses anything that
+ * LOOKS like internal protocol/Go-error shape into a generic, human message
+ * instead of showing it verbatim:
+ *   - a `{"type":"..."}` JSON-ish wire frame accidentally strung into the
+ *     message field instead of being parsed, or
+ *   - the Go `<component>: <verb...>` error-wrapping convention (a single
+ *     lowercase/snake_case/dotted identifier immediately followed by
+ *     `": "`, e.g. "browser_control: attach before requesting control",
+ *     "browser_attach: agent_id and session_id are required") — a
+ *     deliberately-authored user-facing sentence never starts this way (see
+ *     the `Message:` literals above — "cancel failed: ...", "workspace
+ *     setup has already run", etc. all have a SPACE, not a bare identifier,
+ *     before their first colon or none at all), so this is a conservative,
+ *     low-false-positive signal.
+ *
+ * The concrete leaking strings this UAT finding traced (the WS auth-
+ * handshake rejection messages) were fixed at their SOURCE — see
+ * `wsAuthErrBadFirstFrame`/`wsAuthErrInvalidToken`/`wsAuthErrNoUsers` in
+ * pkg/gateway/websocket.go — this function is defense-in-depth for anything
+ * else that reaches the same raw-fallback path.
+ */
+export function sanitizeLegacyErrorMessage(raw: string): string {
+  const trimmed = raw.trim()
+  if (trimmed === '') return raw
+  if (/^\{"type"\s*:/.test(trimmed)) return 'Something went wrong — please try again.'
+  if (/^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*:\s/.test(trimmed)) return 'Something went wrong — please try again.'
+  return raw
+}

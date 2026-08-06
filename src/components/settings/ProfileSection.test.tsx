@@ -312,6 +312,52 @@ describe('ProfileSection — Workspace Context echo-race (autosave hydration mus
   })
 })
 
+// D3 (UAT v0.1.1 defects) — hydration must never trigger a spurious PUT.
+//
+// Root cause: `userContent` starts at the hardcoded useState default ''.
+// Before this fix, useAutoSave's `disabled` option here was
+// `userContextError` — no readiness gate at all — so useAutoSave captured
+// '' as its baseline on the very first commit (mount, before
+// fetchUserContext had resolved). The LATER commit where the real fetched
+// content hydrates looked like a genuine edit — firing a spurious
+// `updateUserContext` that echoes the fetched content straight back.
+describe('ProfileSection — D3: hydration must not trigger a spurious PUT', () => {
+  it('loading non-empty workspace context content never calls updateUserContext, even after the debounce window elapses (REVERT-PROOF: fails without the contextHydrated gate)', async () => {
+    vi.mocked(fetchUserContext).mockReset().mockResolvedValue({ content: 'hello world' })
+    renderSection()
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('textbox', { name: /workspace context/i }),
+      ).toHaveValue('hello world')
+    })
+
+    // PASSIVE idle wait — no interaction at all — comfortably past the
+    // 1500ms debounce (raised from the 500ms default for this long-form
+    // field — see ProfileSection.tsx's context useAutoSave call).
+    await new Promise((resolve) => setTimeout(resolve, 1800))
+    expect(updateUserContext).not.toHaveBeenCalled()
+  })
+
+  it('the workspace context textarea is disabled until the GET resolves (closes the pre-hydration-typing race)', async () => {
+    let resolveFetch: (v: { content: string }) => void
+    vi.mocked(fetchUserContext).mockReset().mockReturnValue(
+      new Promise((resolve) => { resolveFetch = resolve }),
+    )
+    renderSection()
+
+    const textarea = screen.getByRole('textbox', { name: /workspace context/i })
+    expect(textarea).toBeDisabled()
+
+    resolveFetch!({ content: 'loaded content' })
+
+    await waitFor(() => {
+      expect(textarea).not.toBeDisabled()
+    })
+    expect(textarea).toHaveValue('loaded content')
+  })
+})
+
 // ── Pagehide flush wiring (item 4) ───────────────────────────────────────────
 //
 // The Workspace Context field previously passed no `flushUrl`/`beaconFlush`

@@ -248,9 +248,13 @@ func mustNotDropEventKind(kind EventKind) bool {
 //   - EventKindWhatsAppPairing: a dropped QR leaves the pairing screen blank (#283).
 //   - EventKindNotification: a dropped schedule_failed alert means the live bell
 //     never updates (M1) — same class as #283.
+//   - EventKindTaskRunStatus: a dropped open/close transition (ADR-050 §3.8)
+//     leaves a calendar occurrence chip stuck at its previous state (e.g.
+//     "in progress" after the run actually finished) until a manual refresh —
+//     same class as EventKindTaskStatusChanged.
 func isStateCriticalEventKind(kind EventKind) bool {
 	switch kind {
-	case EventKindWhatsAppPairing, EventKindNotification, EventKindTaskStatusChanged:
+	case EventKindWhatsAppPairing, EventKindNotification, EventKindTaskStatusChanged, EventKindTaskRunStatus:
 		return true
 	default:
 		return false

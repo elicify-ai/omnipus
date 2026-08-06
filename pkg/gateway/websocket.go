@@ -708,6 +708,35 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.readLoop(r.Context(), conn, wc, chatID)
 }
 
+// D5 fix (UAT): the three ErrorFrame messages a rejected WS handshake can
+// send were raw Go-internal/protocol strings ("first message must be
+// {\"type\":\"auth\",\"token\":\"...\"}", "unauthorized: invalid token", "no
+// users configured, complete onboarding first") surfaced verbatim to the end
+// user via BrowserLiveView's/chat's error banners — see
+// friendlyBrowserStatusMessage's/onError's doc comments on the SPA side.
+// authenticateWS (this file, the chat WS) and BrowserWSHandler.authenticate
+// (browser_ws.go) are deliberately near-identical mirrored implementations
+// (browser_ws.go's own doc comment: "mirroring WSHandler.authenticateWS
+// exactly") that hit these exact three conditions independently — sharing
+// these constants means the two can never drift into two different
+// user-facing strings for the identical condition, and fixing the copy here
+// fixes both call sites at once.
+const (
+	// wsAuthErrBadFirstFrame — the client's first WS frame (on the no-cookie
+	// fallback path) wasn't a well-formed {"type":"auth","token":"..."}
+	// frame. Only reachable by a non-cookie client (the SPA always attaches
+	// the same-origin session cookie) — a stale client build or a dropped/
+	// malformed handshake is the realistic trigger, so "reload" is the
+	// correct recovery action either way.
+	wsAuthErrBadFirstFrame = "Your session expired — reload the page to reconnect."
+	// wsAuthErrInvalidToken — the presented cookie/bearer token didn't match
+	// any configured identity (expired session, revoked token, stale cookie).
+	wsAuthErrInvalidToken = "Your session expired — reload the page to reconnect."
+	// wsAuthErrNoUsers — no account or token is configured at all yet (fresh
+	// install, onboarding not completed).
+	wsAuthErrNoUsers = "Setup isn't complete yet — finish onboarding, then reload the page."
+)
+
 // authenticateWS authenticates the WS handshake via EITHER the omnipus-session
 // cookie (checked first, synchronously, against the upgrade request r) OR the
 // legacy first-message {"type":"auth","token":...} frame (FR-009). The SPA no
@@ -755,7 +784,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 			conn,
 			generated.ErrorFrame{
 				Type:    string(generated.WsFrameTypeError),
-				Message: "first message must be {\"type\":\"auth\",\"token\":\"...\"}",
+				Message: wsAuthErrBadFirstFrame,
 			},
 		)
 		return false
@@ -784,7 +813,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 	if bearerAccountsConfigured(cfg) {
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "unauthorized: invalid token",
+			Message: wsAuthErrInvalidToken,
 		})
 		conn.WriteMessage(
 			websocket.CloseMessage,
@@ -804,7 +833,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 		// No auth configured — deny by default (fail closed), matching HTTP auth path.
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "no users configured, complete onboarding first",
+			Message: wsAuthErrNoUsers,
 		})
 		conn.WriteMessage(
 			websocket.CloseMessage,
@@ -815,7 +844,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 	if subtle.ConstantTimeCompare([]byte(rawToken), []byte(required)) != 1 {
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "unauthorized: invalid token",
+			Message: wsAuthErrInvalidToken,
 		})
 		conn.WriteMessage(
 			websocket.CloseMessage,
@@ -1128,6 +1157,11 @@ func wsFrameSchemaName(frameType string) string {
 	// rationale as the 4 ADR-038 browser-live frame types above.
 	case string(generated.WsFrameTypeBrowserTabAction):
 		return "BrowserTabActionFrame"
+	// 2026-07-31 adaptive viewport: bounds (1..8192, dsf 1..3) are declared in
+	// the schema, so without this mapping a malformed frame would reach
+	// Emulation.setDeviceMetricsOverride unvalidated.
+	case string(generated.WsFrameTypeBrowserViewport):
+		return "BrowserViewportFrame"
 	// ADR-047 D4 (wave-plan W2-A): the viewer's WebRTC offer, on this same
 	// browser WS. browser_webrtc.go's handleWebRTCOffer is the actual
 	// caller, same rationale as the ADR-038/ADR-041 browser-live frame types
@@ -1439,6 +1473,55 @@ func (h *WSHandler) handleChatMessage(
 	// used as msg.Content for a kickoff turn.
 	var kickoffInstruction string
 
+	// #254: thread client-supplied media refs into the inbound message so the
+	// agent loop resolves them into multimodal content blocks. Only accept
+	// Hard-cap inbound media to prevent resource exhaustion. Refs beyond
+	// maxInboundMediaRefs and refs exceeding maxInboundRefLen are dropped and
+	// counted against the inbound-dropped counter.
+	//
+	// Computed HERE — before the transcript-append block below — so that
+	// D2 (library-spec) can persist the accepted, validated set as
+	// session.TranscriptEntry.Attachments. It used to be computed AFTER
+	// that block, which meant the persisted transcript never had access to
+	// the media this very message carried.
+	const maxInboundMediaRefs = 16
+	const maxInboundRefLen = 256
+
+	var acceptedMedia []string
+	for i, ref := range mediaRefs {
+		if i >= maxInboundMediaRefs {
+			wc.inboundDropped.Add(1)
+			slog.Warn("ws: media array exceeds cap — dropping remaining refs",
+				"chat_id", chatID, "session_id", sessionID,
+				"dropped_from_index", i, "total_supplied", len(mediaRefs))
+			break
+		}
+		if len(ref) > maxInboundRefLen {
+			wc.inboundDropped.Add(1)
+			slog.Warn("ws: dropping oversized ref in message frame",
+				"chat_id", chatID, "session_id", sessionID,
+				"ref_prefix", ref[:32])
+			continue
+		}
+		// Accept only well-formed media:// refs (non-empty ID validated by
+		// ParseMediaRef — rejects bare "media://" with empty ID, non-prefixed
+		// strings, raw paths, and HTTP URLs that a buggy channel might emit).
+		// Non-matching strings are a client error or smuggling attempt — drop
+		// and count them via the inboundDropped counter.
+		if _, err := media.ParseMediaRef(ref); err == nil {
+			acceptedMedia = append(acceptedMedia, ref)
+		} else {
+			wc.inboundDropped.Add(1)
+			truncated := ref
+			if len(truncated) > 64 {
+				truncated = truncated[:64] + "…"
+			}
+			slog.Warn("ws: dropping invalid media:// ref in message frame",
+				"chat_id", chatID, "session_id", sessionID,
+				"ref_prefix", truncated)
+		}
+	}
+
 	if store != nil {
 		// Workspace-setup kickoff idempotency guard: clear SetupPending exactly
 		// once, under the per-workspace lock (workspace.LockID). ANY outcome
@@ -1624,6 +1707,15 @@ func (h *WSHandler) handleChatMessage(
 				AgentID:   targetAgentID,
 				Content:   content,
 				Timestamp: time.Now().UTC(),
+				// D2 (library-spec, 2026-07-29 UAT): persist which files this
+				// message attached. Previously this field was never set even
+				// though it has existed on TranscriptEntry all along — a later
+				// turn (or a DIFFERENT AGENT after a handoff, exactly what
+				// happened in the UAT: Mia -> Ray) had no durable record of
+				// what was uploaded, only the live in-flight message. Built
+				// from acceptedMedia (the validated ref set), not the raw
+				// client-supplied mediaRefs.
+				Attachments: buildTranscriptAttachments(h.agentLoop.GetMediaStore(), acceptedMedia, workspaceID),
 			}
 			if setupKickoff {
 				// Record the kickoff trigger as a system-role event, not a user
@@ -1648,49 +1740,6 @@ func (h *WSHandler) handleChatMessage(
 			// that could still fail, producing a false "consumed" audit
 			// record even on a failure that had just restored the flag and
 			// rolled back this very session.
-		}
-	}
-
-	// #254: thread client-supplied media refs into the inbound message so the
-	// agent loop resolves them into multimodal content blocks. Only accept
-	// Hard-cap inbound media to prevent resource exhaustion. Refs beyond
-	// maxInboundMediaRefs and refs exceeding maxInboundRefLen are dropped and
-	// counted against the inbound-dropped counter.
-	const maxInboundMediaRefs = 16
-	const maxInboundRefLen = 256
-
-	var acceptedMedia []string
-	for i, ref := range mediaRefs {
-		if i >= maxInboundMediaRefs {
-			wc.inboundDropped.Add(1)
-			slog.Warn("ws: media array exceeds cap — dropping remaining refs",
-				"chat_id", chatID, "session_id", sessionID,
-				"dropped_from_index", i, "total_supplied", len(mediaRefs))
-			break
-		}
-		if len(ref) > maxInboundRefLen {
-			wc.inboundDropped.Add(1)
-			slog.Warn("ws: dropping oversized ref in message frame",
-				"chat_id", chatID, "session_id", sessionID,
-				"ref_prefix", ref[:32])
-			continue
-		}
-		// Accept only well-formed media:// refs (non-empty ID validated by
-		// ParseMediaRef — rejects bare "media://" with empty ID, non-prefixed
-		// strings, raw paths, and HTTP URLs that a buggy channel might emit).
-		// Non-matching strings are a client error or smuggling attempt — drop
-		// and count them via the inboundDropped counter.
-		if _, err := media.ParseMediaRef(ref); err == nil {
-			acceptedMedia = append(acceptedMedia, ref)
-		} else {
-			wc.inboundDropped.Add(1)
-			truncated := ref
-			if len(truncated) > 64 {
-				truncated = truncated[:64] + "…"
-			}
-			slog.Warn("ws: dropping invalid media:// ref in message frame",
-				"chat_id", chatID, "session_id", sessionID,
-				"ref_prefix", truncated)
 		}
 	}
 
@@ -1853,6 +1902,70 @@ func (h *WSHandler) consumeWorkspaceSetupKickoff(
 		return kickoffFailed, "", ""
 	}
 	return kickoffConsumed, w.Name, w.Description
+}
+
+// buildTranscriptAttachments resolves each accepted media ref into a
+// session.Attachment for persistence on the user's TranscriptEntry (D2,
+// library-spec). A ref that fails to resolve (deleted file, integrity
+// failure, cross-workspace mismatch) is logged and skipped rather than
+// aborting the whole message — an attachment record is best-effort
+// metadata, not load-bearing for the turn itself (the raw ref still reaches
+// the agent loop via msg.Media regardless of what this function returns).
+//
+// Path prefers the EXACT workspace-relative path the D-1 dual-write staged
+// the file at (agent.LookupUploadWorkPath), falling back to the best-effort
+// plain-name formula (agent.FallbackAnnouncedUploadPath) for a workspace ref
+// whose write-time record is unavailable (e.g. a gateway restart between
+// the upload and this message), and finally to the bare ref for a
+// non-workspace ref (legacy media://<uuid>, channel-native attachments),
+// which has no workspace-relative path at all.
+func buildTranscriptAttachments(store media.MediaStore, refs []string, callerWorkspace string) []session.Attachment {
+	if store == nil || len(refs) == 0 {
+		return nil
+	}
+	opts := media.ResolveOpts{}
+	if callerWorkspace != "" {
+		opts = media.WithCallerWorkspace(callerWorkspace)
+	}
+	out := make([]session.Attachment, 0, len(refs))
+	for _, ref := range refs {
+		localPath, meta, err := store.ResolveWithMetaOpts(ref, opts)
+		if err != nil {
+			slog.Warn("ws: could not resolve media ref for transcript attachment",
+				"ref", ref, "error", err)
+			continue
+		}
+		var size int64
+		if info, statErr := os.Stat(localPath); statErr == nil {
+			size = info.Size()
+		} else {
+			slog.Warn("ws: could not stat media file for transcript attachment size",
+				"ref", ref, "error", statErr)
+		}
+		path := ref
+		if media.IsWorkspaceRef(ref) {
+			if workPath, ok := agent.LookupUploadWorkPath(ref); ok {
+				path = workPath
+			} else if fallback := agent.FallbackAnnouncedUploadPath(meta.Filename); fallback != "" {
+				path = fallback
+			}
+		}
+		out = append(out, session.Attachment{
+			// DetectAttachmentType, NOT DetectFileClass. This value crosses
+			// the wire, so it must be the contract's media-category enum
+			// (image|audio|video|file). DetectFileClass returns the
+			// presentation-noun class (image|document|file) used to phrase
+			// the LLM guidance line — "document" is not a legal wire value.
+			// Using it here shipped a BLOCKER: the SPA's strict Zod schema
+			// rejected the whole messages payload, so chat history refused
+			// to load at all after any document upload (live UAT 2026-07-29).
+			Type:     agent.DetectAttachmentType(meta.ContentType, meta.Filename),
+			Path:     path,
+			Size:     size,
+			MIMEType: meta.ContentType,
+		})
+	}
+	return out
 }
 
 // buildWorkspaceKickoffInstruction assembles the SERVER-CANONICAL prompt that
@@ -2700,6 +2813,7 @@ func (h *WSHandler) writePump(wc *wsConn) {
 	// so signalling here the moment the writer dies is safe to call alongside
 	// whatever else already calls it.
 	defer wc.close()
+
 	for {
 		select {
 		case msg, ok := <-wc.sendCh:
@@ -3706,6 +3820,81 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				rateF.Tool = &tool
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeRateLimit), rateF)
+		case agent.EventKindError:
+			// ADR-051 §RD6: forward translated provider/LLM errors to the
+			// browser so the chat UI can render the typed ErrorFrame inline
+			// (Code/Retryable/Detail) instead of the raw provider text.
+			// `code==rate_limited` is suppressed here — the dedicated
+			// RateLimitFrame above is authoritative for that class and the SPA
+			// would otherwise render two bubbles for the same denial.
+			p, ok := evt.Payload.(agent.ErrorPayload)
+			if !ok {
+				continue
+			}
+			if !matchesChatID(p.ChatID) {
+				continue
+			}
+			// FIX 2: prefer the already-computed p.Code/p.Message over a
+			// fresh TranslateLLMError call. Every ErrorPayload construction
+			// site now populates Code (pkg/agent's FIX 3) alongside a
+			// Message that is EITHER the classifier's own generic copy OR —
+			// for trusted internal stages (hook aborts, model-switch
+			// failures, session save/restore, synthetic-error-floor,
+			// external-CLI sanitized text) — caller-curated text that must
+			// reach the wire verbatim. This mirrors appendErrorTranscript's
+			// write-choke-point behavior (pkg/agent/turn.go): re-running
+			// TranslateLLMError against already-curated text here would
+			// re-classify it against the generic message catalog and
+			// silently replace the curated copy with boilerplate whenever
+			// the text happened to contain a pinned substring (e.g. a hook
+			// abort reason mentioning "safety") — exactly the live-vs-replay
+			// divergence this closes. Only fall back to a fresh translation
+			// when a call site left Code empty (defensive — after FIX 3
+			// every production site sets it).
+			translated := agent.TranslateLLMError(p.ProviderError, p.Message)
+			code := translated.Code
+			message := translated.Message
+			retryable := translated.Retryable
+			detail := translated.Detail
+			if p.Code != "" {
+				code = agent.LLMErrorCode(p.Code)
+				message = p.Message
+				retryable = agent.IsRetryableCode(code)
+				// FIX 2 (re-review): detail must follow the same
+				// curated-preferred rule as code/message/retryable above,
+				// not silently stay pinned to the fresh-classification
+				// value computed a few lines up. Recomputing from
+				// (p.ProviderError, message) — message is already the
+				// curated p.Message reassigned just above — is a no-op
+				// TODAY (every curated site passes ProviderError: nil, so
+				// agent.BuildDetail(nil, msg) echoes msg exactly like
+				// translated.Detail already does), but stops being one the
+				// day a curated site pairs a curated Code+Message with a
+				// non-nil ProviderError: buildDetail favors pe.Status/
+				// pe.Body over the message argument once pe != nil, so
+				// leaving this pinned to `translated.Detail` would render a
+				// diagnostic string that was never validated against the
+				// curated Code/Message this frame actually carries.
+				detail = agent.BuildDetail(p.ProviderError, message)
+			}
+			if code == agent.CodeRateLimited {
+				continue
+			}
+			errSID := sessionIDForChat(p.ChatID)
+			errF := generated.ErrorFrame{
+				Type:      string(generated.WsFrameTypeError),
+				SessionId: &errSID,
+				Message:   message,
+			}
+			errF.Payload = &generated.ErrorPayload{
+				LlmError: generated.LLMError{
+					Code:      string(code),
+					Message:   message,
+					Retryable: retryable,
+					Detail:    &detail,
+				},
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeError), errF)
 		case agent.EventKindWhatsAppPairing:
 			// #283: WhatsApp linked-device pairing (QR + status). Not tied to a
 			// chatID. Delivered only to connections that subscribed to this
@@ -3775,7 +3964,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				Title:            p.Title,
 				Severity:         p.Severity,
 				Read:             p.Read,
-				CreatedAtMs:      int(p.CreatedAtMs),
+				CreatedAtMs:      p.CreatedAtMs,
 			}
 			if p.Body != "" {
 				body := p.Body
@@ -3883,9 +4072,29 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				State:     p.State,
 			}
 			if p.NextDelay != nil {
-				loopF.NextDelay = p.NextDelay
+				nd := int64(*p.NextDelay)
+				loopF.NextDelay = &nd
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeLoopStatus), loopF)
+		case agent.EventKindTaskRunStatus:
+			// A per-execution run opened or closed (ADR-050). Broadcast so the
+			// calendar's per-occurrence chip updates live without a full refetch.
+			// occurrence_ms is nil for an ad-hoc/once/manual run.
+			p, ok := evt.Payload.(agent.TaskRunStatusPayload)
+			if !ok {
+				continue
+			}
+			runF := generated.TaskRunStatusFrame{
+				Type:   string(generated.WsFrameTypeTaskRunStatus),
+				TaskId: p.TaskID,
+				RunId:  p.RunID,
+				Status: p.Status,
+			}
+			if p.OccurrenceMs != nil {
+				ms := *p.OccurrenceMs
+				runF.OccurrenceMs = &ms
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeTaskRunStatus), runF)
 		}
 	}
 }

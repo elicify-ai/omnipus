@@ -638,3 +638,53 @@ func TestDoctorIssuesHaveActionLinks(t *testing.T) {
 		assert.NotEmpty(t, actionLabel, "issue[%d] action_label must not be empty", i)
 	}
 }
+
+// TestDoctorGodModeArmed_HighSeverity proves runDiagnosticChecks (D6) flags an
+// armed god-mode as a distinct, high-severity Security Health issue. Triggered
+// on cfg.Sandbox.GodMode (covers both S1 armed-via-UI-pending-restart and S2
+// live-active) — NOT on cfg.Sandbox.GodModeAllowed alone, which is S3
+// (authorized in the past, currently disabled: genuinely inert) and must not
+// false-positive.
+//
+// BDD: Given god-mode is armed (sandbox.god_mode=true),
+// When the doctor's diagnostic checks run,
+// Then a "god-mode-armed" issue is produced with severity "high" and a
+// complete title/description/recommendation/action_link/action_label.
+// Given only sandbox.god_mode_allowed=true (god-mode NOT currently armed),
+// Then no "god-mode-armed" issue is produced.
+func TestDoctorGodModeArmed_HighSeverity(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	cfg := api.agentLoop.GetConfig()
+
+	// S3: authorized in the past, not currently armed — must NOT trigger
+	// (this is the false-positive the RCA explicitly calls out).
+	cfg.Sandbox.GodModeAllowed = true
+	cfg.Sandbox.GodMode = false
+	issuesInert := api.runDiagnosticChecks(cfg)
+	for _, iss := range issuesInert {
+		assert.NotEqual(t, "god-mode-armed", iss["id"],
+			"GodModeAllowed alone (S3, genuinely inert) must not trigger the god-mode-armed check")
+	}
+
+	// S1/S2: armed (whether pending restart or already live) — MUST trigger.
+	cfg.Sandbox.GodMode = true
+	issuesArmed := api.runDiagnosticChecks(cfg)
+	var found map[string]any
+	for _, iss := range issuesArmed {
+		if iss["id"] == "god-mode-armed" {
+			found = iss
+			break
+		}
+	}
+	require.NotNil(t, found, "armed god-mode (sandbox.god_mode=true) must produce a god-mode-armed issue")
+	assert.Equal(t, "high", found["severity"],
+		"god-mode-armed must be high severity — strictly worse than the medium sandbox-disabled check, "+
+			"since it disables the sandbox, egress restrictions, AND the shell guard simultaneously")
+	assert.NotEmpty(t, found["title"])
+	assert.NotEmpty(t, found["description"])
+	assert.NotEmpty(t, found["recommendation"])
+	assert.NotEmpty(t, found["action_link"])
+	assert.NotEmpty(t, found["action_label"])
+}

@@ -15,6 +15,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
 // webchatChannel implements channels.Channel so the channel Manager can route
@@ -141,6 +142,13 @@ func (c *webchatChannel) collectSessionConnsLocked(originChatID, sessionID strin
 	return out
 }
 
+func mediaRefURL(ref string) string {
+	if strings.HasPrefix(ref, media.WorkspaceRefPrefix) {
+		return "/api/v1/media/workspace/" + strings.TrimPrefix(ref, media.WorkspaceRefPrefix)
+	}
+	return "/api/v1/media/" + strings.TrimPrefix(ref, "media://")
+}
+
 // SendMedia delivers media attachments to the WebSocket client.
 // Implements channels.MediaSender so the channel manager can route
 // OutboundMediaMessage to the webchat channel.
@@ -169,7 +177,7 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 		}
 		part := generated.MediaPart{
 			Type:        p.Type,
-			Url:         "/api/v1/media/" + strings.TrimPrefix(p.Ref, "media://"),
+			Url:         mediaRefURL(p.Ref),
 			Filename:    p.Filename,
 			ContentType: p.ContentType,
 		}

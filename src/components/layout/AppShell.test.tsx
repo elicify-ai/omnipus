@@ -167,26 +167,31 @@ describe('AppShell — skip link', () => {
   })
 })
 
-// ── visualViewport focus-gated tracking (regression guard) ──────────────────
+// ── visualViewport ALWAYS-ON tracking (regression guard) ────────────────────
 //
-// This hook (AppShell.tsx L69-121) has been rewritten three times chasing
-// iOS keyboard/scroll regressions — see
-// docs/internal/architecture/ios-scroll-stability.md. The current, canonical
-// mechanism (commit dec7713b) is a FOCUS gate: --app-vh/--app-top are
-// published only while an editable element has focus, and removed the
-// instant focus leaves. The two prior variants (height-math gate,
-// always-on/ungated tracking) are both documented "do not resurrect" — this
-// test exists so a well-meaning refactor of the hook can't silently
-// reintroduce either failure mode.
-describe('AppShell — visualViewport focus-gated tracking', () => {
+// This hook (AppShell.tsx, the `computeAppMetrics`-driven effect) has been
+// rewritten repeatedly chasing iOS keyboard/scroll regressions — see
+// docs/internal/architecture/ios-scroll-stability.md. The canonical mechanism
+// as of the 2026-07-20 fix is ALWAYS-ON: `--app-top`/`--app-vh` are published
+// from `visualViewport` unconditionally, with NO dependency on
+// `document.activeElement`. A prior "fix" (commit dec7713b) gated publishing
+// on an editable having focus — that REMOVED the vars (shell snaps to
+// top:0/100dvh) the instant focus left the composer for anything
+// non-editable, reproducing the exact bug this test guards against: "the
+// header row jumps out of the viewable area, and tapping any non-editable
+// element makes it jump to the top again." Do not reintroduce that gate; see
+// also the pure-function coverage in `AppShell.viewport.test.ts`
+// (`computeAppMetrics`).
+describe('AppShell — visualViewport always-on tracking', () => {
   const originalMatchMedia = window.matchMedia
   const originalVisualViewport = (window as unknown as { visualViewport?: unknown }).visualViewport
+  const originalInnerHeight = window.innerHeight
 
-  function stubVisualViewport() {
+  function stubVisualViewport(initial: { height: number; offsetTop: number }) {
     const listeners: Record<string, Array<() => void>> = { resize: [], scroll: [] }
     const vv = {
-      height: 480,
-      offsetTop: 130,
+      height: initial.height,
+      offsetTop: initial.offsetTop,
       addEventListener: vi.fn((type: string, cb: () => void) => {
         listeners[type] = listeners[type] ?? []
         listeners[type].push(cb)
@@ -194,6 +199,7 @@ describe('AppShell — visualViewport focus-gated tracking', () => {
       removeEventListener: vi.fn((type: string, cb: () => void) => {
         listeners[type] = (listeners[type] ?? []).filter((l) => l !== cb)
       }),
+      fireResize: () => listeners.resize?.forEach((cb) => cb()),
     }
     Object.defineProperty(window, 'visualViewport', {
       configurable: true,
@@ -222,12 +228,16 @@ describe('AppShell — visualViewport focus-gated tracking', () => {
     })
   }
 
+  function stubInnerHeight(height: number) {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: height })
+  }
+
   beforeEach(() => {
-    stubVisualViewport()
+    stubInnerHeight(800)
     stubCoarsePointerMatchMedia()
     // Make requestAnimationFrame synchronous so the effect's rAF-batched
-    // metric writes are observable immediately after dispatching focus
-    // events, without depending on jsdom's own (unreliable) rAF timing.
+    // metric writes are observable immediately after dispatching events,
+    // without depending on jsdom's own (unreliable) rAF timing.
     vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
       cb(0)
       return 0
@@ -238,6 +248,7 @@ describe('AppShell — visualViewport focus-gated tracking', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     Object.defineProperty(window, 'matchMedia', { configurable: true, writable: true, value: originalMatchMedia })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: originalInnerHeight })
     if (originalVisualViewport === undefined) {
       delete (window as unknown as { visualViewport?: unknown }).visualViewport
     } else {
@@ -247,7 +258,12 @@ describe('AppShell — visualViewport focus-gated tracking', () => {
     document.documentElement.style.removeProperty('--app-top')
   })
 
-  it('sets --app-vh/--app-top from visualViewport on focusin of an editable, and removes them on focusout', async () => {
+  it('publishes --app-vh/--app-top from visualViewport at mount, with no editable ever focused', async () => {
+    // Keyboard-open-shaped state (height well below innerHeight) and a
+    // panned offsetTop — set with NO focus/focusin dispatched at all. Under
+    // the old focus gate this would be permanently absent; always-on
+    // tracking must publish it from the very first read.
+    stubVisualViewport({ height: 480, offsetTop: 130 })
     vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
     vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
 
@@ -256,26 +272,111 @@ describe('AppShell — visualViewport focus-gated tracking', () => {
       expect(api.fetchAppState).toHaveBeenCalled()
     })
 
-    // No editable focused yet (mount-time state) — vars must be absent, the
-    // shell falls back to plain 100dvh@0.
-    expect(document.documentElement.style.getPropertyValue('--app-vh')).toBe('')
-    expect(document.documentElement.style.getPropertyValue('--app-top')).toBe('')
+    expect(document.documentElement.style.getPropertyValue('--app-top')).toBe('130px')
+    expect(document.documentElement.style.getPropertyValue('--app-vh')).toBe('480px')
+  })
 
+  it('does NOT remove --app-top when focus leaves an editable for a non-editable element — the iPad header-jump regression', async () => {
+    const vv = stubVisualViewport({ height: 480, offsetTop: 130 })
+    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+
+    renderShell()
+    await waitFor(() => {
+      expect(api.fetchAppState).toHaveBeenCalled()
+    })
+    expect(document.documentElement.style.getPropertyValue('--app-top')).toBe('130px')
+
+    // Focus the composer (keyboard opens) — offsetTop stays panned.
     const input = document.createElement('input')
     document.body.appendChild(input)
     input.focus()
     document.dispatchEvent(new Event('focusin', { bubbles: true }))
-
-    expect(document.documentElement.style.getPropertyValue('--app-vh')).toBe('480px')
     expect(document.documentElement.style.getPropertyValue('--app-top')).toBe('130px')
 
+    // Tap a non-editable element: blur the input, focus moves to a plain
+    // div. This is the exact reproduction — a focus-gated implementation
+    // removes the vars here, snapping the shell to top:0 while the visual
+    // viewport is still panned.
+    const nonEditable = document.createElement('div')
+    document.body.appendChild(nonEditable)
     input.blur()
+    nonEditable.setAttribute('tabindex', '-1')
+    nonEditable.focus()
     document.dispatchEvent(new Event('focusout', { bubbles: true }))
 
-    expect(document.documentElement.style.getPropertyValue('--app-vh')).toBe('')
-    expect(document.documentElement.style.getPropertyValue('--app-top')).toBe('')
+    expect(document.documentElement.style.getPropertyValue('--app-top')).toBe('130px')
+    expect(document.documentElement.style.getPropertyValue('--app-vh')).toBe('480px')
 
     document.body.removeChild(input)
+    document.body.removeChild(nonEditable)
+    void vv
+  })
+
+  it('removes --app-vh once the keyboard is deterministically closed (height ≈ innerHeight), independent of focus', async () => {
+    const vv = stubVisualViewport({ height: 480, offsetTop: 130 })
+    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+
+    renderShell()
+    await waitFor(() => {
+      expect(api.fetchAppState).toHaveBeenCalled()
+    })
+    expect(document.documentElement.style.getPropertyValue('--app-vh')).toBe('480px')
+
+    // Keyboard closes: vv settles back to full height/offset. Fired as a
+    // real `resize` event (no focus event involved at all).
+    vv.height = 800
+    vv.offsetTop = 0
+    vv.fireResize()
+
+    expect(document.documentElement.style.getPropertyValue('--app-vh')).toBe('')
+    expect(document.documentElement.style.getPropertyValue('--app-top')).toBe('0px')
+  })
+
+  it('schedules a trailing re-read on focusout to catch a dropped final resize event', async () => {
+    const vv = stubVisualViewport({ height: 480, offsetTop: 130 })
+    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+
+    renderShell()
+    await waitFor(() => {
+      expect(api.fetchAppState).toHaveBeenCalled()
+    })
+    expect(document.documentElement.style.getPropertyValue('--app-vh')).toBe('480px')
+
+    // Switch to fake timers only now, so the component's ~250ms trailing
+    // setTimeout can be advanced deterministically without also faking out
+    // the render's own async plumbing above.
+    vi.useFakeTimers()
+
+    // Keyboard closes but iOS drops the final `resize` event — simulate by
+    // mutating vv WITHOUT firing resize, then blurring (focusout is the
+    // trailing-read trigger). Also force the synchronous re-read inside
+    // handleFocusOut to be a no-op by pre-advancing state only after it —
+    // i.e. mutate AFTER the synchronous read so only the trailing read (not
+    // the immediate one) can observe the settled values.
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.focus()
+    input.blur()
+    document.dispatchEvent(new Event('focusout', { bubbles: true }))
+    // The synchronous re-read inside handleFocusOut has now run with the
+    // STILL-OPEN vv state (480/130) — vars remain reflecting keyboard-open.
+    expect(document.documentElement.style.getPropertyValue('--app-vh')).toBe('480px')
+
+    // Now mutate vv to the settled/closed state — this is what the dropped
+    // resize event would have applied, and only the trailing timer path
+    // will pick it up.
+    vv.height = 800
+    vv.offsetTop = 0
+    vi.advanceTimersByTime(300)
+
+    expect(document.documentElement.style.getPropertyValue('--app-vh')).toBe('')
+    expect(document.documentElement.style.getPropertyValue('--app-top')).toBe('0px')
+
+    document.body.removeChild(input)
+    vi.useRealTimers()
   })
 })
 

@@ -110,6 +110,11 @@ func TestWebchatChannel_SendBroadcastsToSecondAttachedTab(t *testing.T) {
 	}
 }
 
+func TestWebchatChannel_MediaRefURL(t *testing.T) {
+	assert.Equal(t, "/api/v1/media/workspace/ws-1/abc", mediaRefURL("media://workspace/ws-1/abc"))
+	assert.Equal(t, "/api/v1/media/uuid-1", mediaRefURL("media://uuid-1"))
+}
+
 func bytesContains(haystack []byte, needle string) bool {
 	return len(haystack) >= len(needle) && stringIndex(string(haystack), needle) >= 0
 }

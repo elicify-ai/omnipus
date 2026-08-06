@@ -94,15 +94,20 @@ export function normalizeDepth(raw: unknown): number | undefined {
 //   - `members`: the ordered set of agent ids on the team (node set).
 //   - `edges`:   the directed delegation edges, each with its own modes/depth.
 //
-// PERSISTENCE CAVEAT (important): the PUT body is EDGES-ONLY. The backend then
-// computes the persisted team as `core_team ∪ {every edge endpoint}`. So an
-// EDGELESS member — added to the node set but with no incident edge — is NOT
-// persisted: it survives only in client state and DISAPPEARS on the next
-// refetch (unless it's already in core_team). It is therefore NOT "re-derived
-// from team[] on refetch". The editor surfaces this to the user (see
-// `isMemberPersisted` / the unsaved-member hint in WorkspaceTeamTab) so an
-// agent doesn't silently vanish: to keep a member on the team, connect it with
-// at least one delegation edge. See buildSaveEdges.
+// PERSISTENCE NOTE: the DELEGATION PUT body (`updateWorkspaceDelegation`,
+// `buildSaveEdges` below) is EDGES-ONLY, and in isolation the backend derives
+// ITS team view as `core_team ∪ {every edge endpoint}` — an edgeless member
+// wouldn't show up there. But the editor's autosave (WorkspaceTeamTab's
+// `saveFn`) also fires a SEPARATE `updateWorkspace({ core_team: <full
+// current member list> })` PUT, unconditionally, before the edges PUT — that
+// one persists every current member directly, edge or no edge. So an
+// edgeless member IS durably kept on the team once autosave lands; the only
+// window it can appear to "vanish" in is the transient gap between adding it
+// and the debounced save completing (see `isMemberPersisted` / the
+// unsaved-member hint in WorkspaceTeamTab, and the D7 fix that made that
+// debounce actually fire for an edgeless-only change). Drawing a delegation
+// edge is what additionally lets the member delegate/be delegated to — it is
+// not required just to keep it on the team.
 
 export interface TeamEdgeEdit {
   from: string
@@ -595,10 +600,20 @@ export function buildSaveEdges(state: TeamEditState): WorkspaceDelegationEdge[] 
 
 // ── Membership persistence ───────────────────────────────────────────────────
 //
-// The PUT persists EDGES only; the backend derives team = core_team ∪ edge
-// endpoints. So a member is only durable if it is in core_team OR has at least
-// one incident edge. An edgeless, non-core member is "unsaved" — it will be
-// dropped on refetch. These helpers let the UI flag that honestly.
+// The DELEGATION PUT (edges endpoint) persists EDGES only; the backend derives
+// ITS view of team as core_team ∪ edge endpoints. In isolation that would mean
+// an edgeless, non-core member never durably lands. In practice it does:
+// WorkspaceTeamTab's `saveFn` always fires a SEPARATE PUT to the workspace
+// itself (`updateWorkspace({ core_team: <full current member list> })`)
+// BEFORE the edges PUT, and that PUT sets `core_team` directly — no edge
+// required (see WorkspaceTeamTab.tsx's saveFn comment, and the D7 fix that
+// made the debounced autosave actually FIRE for an edgeless-member-only
+// change, which it previously did not).
+//
+// So "unsaved" here means "not yet reflected in the last-fetched
+// `workspace.core_team`" — a transient window until the next autosave
+// round-trip lands, not a permanent loss. These helpers let the UI flag that
+// window honestly (see the "not saved yet" banner in WorkspaceTeamTab).
 
 /** True if `agentId` will survive a save (core member, or has an incident edge). */
 export function isMemberPersisted(

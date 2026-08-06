@@ -1,7 +1,7 @@
 [
   {
     "name": "add_mcp_server",
-    "description": "Add an MCP server to the configuration (tools.mcp.servers). The server is persisted to config.json and connects on next reload.\nParameters: name (required), transport (stdio/sse/http; default stdio), command (required for stdio), url (required for sse/http), args, env.",
+    "description": "Add an MCP server to the configuration (tools.mcp.servers). The server is saved to config.json, a connection is attempted immediately, and the result reports live connection status and tool count.\nParameters: name (required), transport (stdio/sse/http; default stdio), command (required for stdio), url (required for sse/http), args, env.",
     "scope": "core",
     "category": "mcp",
     "source": "builtin"

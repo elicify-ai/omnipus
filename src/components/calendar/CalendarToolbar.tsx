@@ -29,7 +29,15 @@
 import { CaretLeft, CaretRight, CalendarBlank, Plus } from '@phosphor-icons/react'
 import type { CalendarApi } from '@fullcalendar/core'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { AGENT_FILTER_ALL, AGENT_FILTER_UNASSIGNED } from './calendarAgentFilter'
 import {
   CALENDAR_VIEWS,
   CALENDAR_VIEW_LABELS,
@@ -49,6 +57,10 @@ export function CalendarToolbar({
   title,
   onViewChange,
   onNewTask,
+  agentFilter,
+  onAgentFilterChange,
+  agentOptions,
+  agentRosterError,
 }: CalendarToolbarProps) {
   // ── FC API helpers ────────────────────────────────────────────────────────
   const getApi = () => calendarRef.current?.getApi()
@@ -79,7 +91,43 @@ export function CalendarToolbar({
 
   const handlePrev = withApi('prev', (api) => api.prev())
   const handleNext = withApi('next', (api) => api.next())
-  const handleToday = withApi('today', (api) => api.today())
+  // "Today" jumps the DATE range (api.today()) AND scrolls to the current
+  // TIME — matching Google Calendar's own Today button, which does both, not
+  // just the date. Reported live: without this, landing back on today's date
+  // still left the user scrolled wherever they'd last scrolled to (e.g.
+  // 8am), with no way to jump straight to "now" itself.
+  //   - timeGrid views (Week/Day): api.scrollToTime — a real FullCalendar
+  //     API for this, takes an "HH:MM:SS" duration-from-midnight string.
+  //   - Agenda (listWeek): no FullCalendar API scrolls a list view to a
+  //     time — `calendarRef`'s `elRef` isn't exposed, so this queries the
+  //     rendered now-marker row directly (present whenever there's at least
+  //     one real event that day — see CalendarScreen's nowMarkerEvent) and
+  //     falls back to today's own day-group header when the marker isn't
+  //     rendered (e.g. a day with zero real events).
+  //   - Month: date-only, no time position to scroll to.
+  const handleToday = withApi('today', (api) => {
+    api.today()
+    const view = api.view.type
+    if (view === 'timeGridWeek' || view === 'timeGridDay') {
+      const now = new Date()
+      const hh = String(now.getHours()).padStart(2, '0')
+      const mm = String(now.getMinutes()).padStart(2, '0')
+      const ss = String(now.getSeconds()).padStart(2, '0')
+      api.scrollToTime(`${hh}:${mm}:${ss}`)
+    } else if (view === 'listWeek') {
+      requestAnimationFrame(() => {
+        const now = new Date()
+        const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+        // .fc-list-day has no dedicated "is today" class — it carries a
+        // data-date="YYYY-MM-DD" attribute (@fullcalendar/list's own
+        // formatDayString), which is what the fallback keys off.
+        const target =
+          document.querySelector('.fc-sovereign-wrapper .fc-sovereign-now-marker-row') ??
+          document.querySelector(`.fc-sovereign-wrapper .fc-list-day[data-date="${todayStr}"]`)
+        target?.scrollIntoView({ block: 'center' })
+      })
+    }
+  })
 
   const handleViewChange = (view: CalendarViewName) => {
     withApi('changeView', (api) => api.changeView(view))()
@@ -264,6 +312,52 @@ export function CalendarToolbar({
             )
           })}
         </div>
+
+        {/* Agent filter (FR-015 / US-4) — client-side, no refetch (SC-004).
+            Rendered only when the host wires `onAgentFilterChange` (real
+            usage: CalendarScreen); every other/legacy caller renders exactly
+            as before. */}
+        {onAgentFilterChange && (
+          <div className="flex flex-col gap-0.5 shrink-0">
+            <Select
+              value={agentFilter ?? AGENT_FILTER_ALL}
+              onValueChange={onAgentFilterChange}
+            >
+              <SelectTrigger
+                data-testid="calendar-agent-filter"
+                aria-label="Filter by agent"
+                className={cn(
+                  'h-8 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)]',
+                  'text-[var(--color-secondary)] w-auto min-w-[8rem]',
+                  touchTarget,
+                )}
+              >
+                <SelectValue placeholder="All agents" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={AGENT_FILTER_ALL} className="text-xs">
+                  All agents
+                </SelectItem>
+                <SelectItem value={AGENT_FILTER_UNASSIGNED} className="text-xs">
+                  Unassigned
+                </SelectItem>
+                {(agentOptions ?? []).map((a) => (
+                  <SelectItem key={a.value} value={a.value} className="text-xs">
+                    {a.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {/* Degrade notice (Edge Cases) — reuses the existing wording from
+                CreateTaskSlideOver/TaskDetailPanel's team-roster fallback so
+                the same failure reads identically everywhere in the app. */}
+            {agentRosterError && (
+              <p className="text-[10px] text-[var(--color-muted)] whitespace-nowrap">
+                Team list unavailable — showing all agents
+              </p>
+            )}
+          </div>
+        )}
 
         {/* New task — primary CTA, Forge Gold */}
         <Button

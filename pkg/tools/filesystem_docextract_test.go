@@ -10,11 +10,26 @@ import (
 	"testing"
 )
 
-// makeDocxBytes synthesizes a minimal .docx (zip) with the given paragraphs.
+// makeDocxBytes synthesizes a minimal valid .docx (OOXML zip) with the given
+// paragraphs. It includes [Content_Types].xml so pkg/docextract's magic-byte
+// sniff routes the file through the OOXML text extractor instead of the
+// generic zip-manifest path (every real .docx carries this part).
 func makeDocxBytes(t *testing.T, paragraphs ...string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
+
+	contentTypes := `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+		`<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>` +
+		`</Types>`
+	ct, err := zw.Create("[Content_Types].xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, writeErr := ct.Write([]byte(contentTypes)); writeErr != nil {
+		t.Fatal(writeErr)
+	}
 
 	var xmlBuf strings.Builder
 	xmlBuf.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
@@ -37,11 +52,26 @@ func makeDocxBytes(t *testing.T, paragraphs ...string) []byte {
 	return buf.Bytes()
 }
 
-// makeXlsxBytes synthesizes a minimal .xlsx (zip) with one sheet of inline cells.
+// makeXlsxBytes synthesizes a minimal valid .xlsx (OOXML zip) with one sheet of
+// inline cells. It includes [Content_Types].xml so pkg/docextract's magic-byte
+// sniff routes the file through the OOXML text extractor instead of the
+// generic zip-manifest path (every real .xlsx carries this part).
 func makeXlsxBytes(t *testing.T, rows [][]string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
+
+	contentTypes := `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+		`<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
+		`</Types>`
+	ct, err := zw.Create("[Content_Types].xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, writeErr := ct.Write([]byte(contentTypes)); writeErr != nil {
+		t.Fatal(writeErr)
+	}
 
 	var sheetBuf strings.Builder
 	sheetBuf.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)

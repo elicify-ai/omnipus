@@ -52,6 +52,7 @@ vi.mock('@/store/auth', () => ({
 
 import {
   fetchConfig,
+  updateConfig,
   fetchGatewayStatus,
   fetchCredentials,
   addCredential,
@@ -874,5 +875,34 @@ describe('SecuritySection — credential vault re-auth gate (B4)', () => {
       expect(rotateCredentials).toHaveBeenCalledTimes(2)
       expect(vi.mocked(rotateCredentials).mock.calls[1]).toEqual(['new-pass-phrase', 'rot_tok'])
     })
+  })
+})
+
+// D3 (UAT v0.1.1 defects) — hydration must never trigger a spurious PUT.
+//
+// Root cause: `dailyCostCap` (and 7 sibling fields) start at hardcoded
+// useState defaults (''). Before this fix, useAutoSave's `disabled` option
+// here was `!config` — but `config` turns truthy in the SAME commit the
+// hydration effect is SCHEDULED, one render before the effect's own
+// setState calls actually land. So `disabled` flipped false one render too
+// early, useAutoSave captured the hardcoded '' default as its baseline,
+// and the LATER commit where the real persisted value hydrates (10, per
+// MINIMAL_CONFIG.security.daily_cost_cap) looked like a genuine edit —
+// firing a spurious `updateConfig` that echoes the fetched value straight
+// back. This does NOT cover `GlobalToolPoliciesSection`'s own separate
+// useAutoSave (already gated correctly via `isDraftReady` before this fix
+// — confirmed safe, untouched).
+describe('SecuritySection — D3: hydration must not trigger a spurious PUT', () => {
+  it('loading a daily cost cap that differs from the hardcoded "" default never calls updateConfig, even after the debounce window elapses (REVERT-PROOF: fails without the securityHydrated gate)', async () => {
+    renderSection() // beforeEach already stubs fetchConfig with MINIMAL_CONFIG (daily_cost_cap: 10)
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('10')).toBeInTheDocument()
+    })
+
+    // PASSIVE idle wait — no interaction at all — comfortably past the
+    // 500ms default debounce.
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    expect(updateConfig).not.toHaveBeenCalled()
   })
 })

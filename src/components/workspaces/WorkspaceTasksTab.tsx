@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
 import { IconRenderer } from '@/components/shared/IconRenderer'
+import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { CreatePlanSlideOver } from './CreatePlanSlideOver'
 import { PlansFilterBand } from './PlansFilterBand'
 import { BoardView } from './BoardView'
@@ -147,6 +148,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
     data: tasks = [],
     isLoading: tasksLoading,
     isError: tasksError,
+    refetch: refetchTasks,
   } = useQuery({
     queryKey: tasksQueryKeys.list({ workspace_id: workspaceId, surface: 'user' }),
     queryFn: () => fetchTasks({ workspace_id: workspaceId, surface: 'user' }),
@@ -360,9 +362,12 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
         ) : tasksLoading ? (
           <BoardSkeleton />
         ) : tasksError && tasks.length === 0 ? (
-          <div className="flex items-center justify-center flex-1 p-8 text-[var(--color-muted)] text-sm">
-            Failed to load tasks. Check your connection and try again.
-          </div>
+          <QueryErrorState
+            layout="fill"
+            message="Failed to load tasks. Check your connection and try again."
+            onRetry={() => void refetchTasks()}
+            testId="workspace-tasks-error"
+          />
         ) : view === 'board' ? (
           <BoardView
             tasks={filteredTasks}

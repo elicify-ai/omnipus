@@ -50,6 +50,16 @@ TAGS="goolm,stdjson"
 export PATH=/usr/local/go/bin:/cache/go/bin:$PATH
 export HOME="${HOME:-/root}"   # non-login SSH shell has no HOME; gen-contracts.sh uses set -u
 
+# Temp lives on the 40G /cache volume, NOT the 7.8G root overlay that / and
+# /tmp share. ADR-052's browser tests download Chromium from chrome-for-testing
+# into a t.TempDir() (which honours $TMPDIR), and that filled the overlay to
+# 0 bytes — go-test then reported "REAL FAILURE (failed twice)" for
+# pkg/tools/browser because the flake filter's isolated re-run hit the same
+# full disk, not a real defect. Note `df -h /` shows the small overlay, so
+# check `df -h /cache` when diagnosing space here.
+export TMPDIR=/cache/tmp
+mkdir -p "$TMPDIR"
+
 log() { printf '\n\033[1;36m=== %s ===\033[0m\n' "$*"; }
 rc=0; step() { local name="$1"; shift; log "$name"; "$@"; local e=$?; printf '\033[1m%s -> exit %d\033[0m\n' "$name" "$e"; [ $e -ne 0 ] && rc=1; return 0; }
 

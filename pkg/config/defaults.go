@@ -309,6 +309,8 @@ func DefaultConfig() *Config {
 				"list_directory":      "allow",
 				"edit_file":           "allow",
 				"append_file":         "allow",
+				"library_list":        "allow",
+				"library_read":        "allow",
 				"search_web":          "allow",
 				"fetch_url":           "allow",
 				"send_message":        "allow",
@@ -672,6 +674,21 @@ func DefaultConfig() *Config {
 				// WebRTCStunServer="" for host-candidates-only.
 				WebRTCEnabled:    true,
 				WebRTCStunServer: "stun:stun.l.google.com:19302",
+				// ADR-052 D2: default false — operators keep $PATH Chrome as the
+				// winning source by default (operator autonomy preserved), BUT
+				// ONLY when they have also opted into TrustPathChrome (the
+				// SEC-ADR052-002 toggle below). With TrustPathChrome=false
+				// (the default), $PATH Chrome is recorded but refused — see
+				// BrowserToolConfig.PreferPackaged's doc comment for the full
+				// interaction. Fleets that want the pinned package Chrome to
+				// outrank $PATH for reproducibility flip BOTH fields to true
+				// (post-onboarding, in config.json).
+				PreferPackaged: false,
+				// ADR-052 SEC-ADR052-002: default false — the resolver records a
+				// $PATH Chrome but refuses to launch it (falls through to the
+				// package Chrome + emits WARN-BROWSER-007). Operators with a
+				// deliberate custom Chrome opt in with true.
+				TrustPathChrome: false,
 				// ADR-048 condition 1/Option A: default TRUE — WebRTC capture
 				// requires the agent's session to share Chrome's default
 				// browser context (see CaptureSharedContext's doc comment on
@@ -680,6 +697,14 @@ func DefaultConfig() *Config {
 				// false; the JPEG browser_screencast fallback keeps working
 				// either way.
 				CaptureSharedContext: true,
+				// Launch the shared Chrome during boot rather than on the
+				// first browser tool call. Default TRUE: the lazy cold start
+				// is expensive (ADR-042: ~30-60s on a fresh install) and
+				// lands on a user-facing interaction, including the WebRTC
+				// offer path where it must fit inside the browser
+				// WebSocket's 60s read deadline. Best-effort — a warm-up
+				// failure is logged and the lazy path still works.
+				WarmAtBoot: true,
 			},
 			Skills: SkillsToolsConfig{
 				ToolConfig: ToolConfig{

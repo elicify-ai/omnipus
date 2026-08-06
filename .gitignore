@@ -112,5 +112,8 @@ pkg/**/system/cost.json
 # Contract codegen temp files
 *.generated.tmp.*
 
-# graphify knowledge graph (regenerable, goes stale across branches)
-graphify-out/
+# GitNexus knowledge graph (regenerable, goes stale across branches)
+.gitnexus/
+
+# GitNexus per-area skills (regenerated each analyze; clustering is non-deterministic)
+.claude/skills/generated/

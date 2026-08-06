@@ -26,6 +26,7 @@ import {
   XCircle,
   Circle,
   Clock,
+  SkipForward,
 } from '@phosphor-icons/react'
 
 import '@/styles/fullcalendar-theme.css'
@@ -52,19 +53,89 @@ const ICON_MAP: Record<StatusIconKey, IconComponent> = {
   XCircle,
   Circle,
   Clock,
+  SkipForward,
+}
+
+/**
+ * Accessible-name status text for an occurrence chip (H3 fix). `statusLabel`
+ * (from `@/lib/statusColors`) only knows the canonical 7-member `TaskStatus`
+ * enum and silently falls back to `STATUS_LABELS.inbox` ("Inbox") for
+ * anything outside it — including the two ADR-050 run-overlay synthetic
+ * states `'scheduled'`/`'no_record'`, which are NOT `TaskStatus` members (its
+ * own `status: string | undefined` signature let this compile without tsc
+ * ever catching it). Exported for direct unit coverage — jsdom cannot lay out
+ * FullCalendar itself (see CalendarScreen tests), so this mapping needs to be
+ * testable independent of rendering.
+ */
+export function occurrenceStatusLabel(status: string): string {
+  if (status === 'scheduled') return 'Scheduled'
+  if (status === 'no_record') return 'No record'
+  // `skipped` is a real `TaskRun.status` value (not a `TaskStatus` member) —
+  // `statusLabel` only knows the 7-member `TaskStatus` enum and would
+  // silently fall back to `STATUS_LABELS.inbox` ("Inbox") for it, exactly
+  // the class of bug this function exists to prevent (see doc comment above).
+  if (status === 'skipped') return 'Skipped'
+  return statusLabel(status)
+}
+
+/**
+ * The chip's tooltip text (L3 fix) — `ext.tooltip` when the extendedProps
+ * variant carries one (`task-occurrence`/`-agg`/`-more`), else `undefined`.
+ * `eventMapping.ts` has populated `tooltip` (the no-record explanation, the
+ * bucket worst-wins breakdown, "first at HH:MM") since the run-overlay
+ * landed, but nothing here ever read it, so it was invisible (BDD #9). A
+ * plain `'tooltip' in ext` narrow rather than a `kind` switch since it's the
+ * FIELD, not the kind, that varies (`task-due`/`task-fire` carry no tooltip
+ * at all).
+ */
+export function extTooltip(ext: CalendarEventExtProps): string | undefined {
+  return 'tooltip' in ext ? ext.tooltip : undefined
+}
+
+/**
+ * The Agenda (`listWeek`) "now" divider — EventChip branches here instead of
+ * the normal chip for a `kind: 'now-marker'` synthetic event. `aria-hidden`
+ * since it's a pure visual divider, not a real, informative list item — see
+ * `types.ts`'s `now-marker` variant doc comment for the full rationale.
+ * Exported for direct unit testing (same reason as `occurrenceStatusLabel`/
+ * `extTooltip` above — jsdom can't lay out a real FullCalendar render).
+ *
+ * Full-row-width rendering: `eventContent` (this component) only fills the
+ * THIRD of three `<td>`s `@fullcalendar/list` renders per row (time | dot |
+ * title — see `@fullcalendar/list/internal.js`'s `ListViewEventRow`), so a
+ * naive `width:100%` here would only span the title column, not the row.
+ * `eventClassNames` below tags the marker's `<tr>` with
+ * `fc-sovereign-now-marker-row`; `fullcalendar-theme.css` uses that class to
+ * hide the sibling time/graphic `<td>`s for JUST this row, so the title
+ * `<td>` — the only cell left — expands to the row's full width.
+ */
+export function NowMarkerLine({ timeText }: { timeText: string }) {
+  return (
+    <div className="fc-sovereign-now-marker-line" aria-hidden="true">
+      {timeText && <span className="fc-sovereign-now-marker-time">{timeText}</span>}
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
 // eventContent renderer — chip with icon + title (+ time for timed events)
 // ---------------------------------------------------------------------------
 
-function EventChip({ arg }: { arg: EventContentArg }) {
+export function EventChip({ arg }: { arg: EventContentArg }) {
   const ext = arg.event.extendedProps as CalendarEventExtProps
+  // now-marker carries none of the fields read below (icon/status/etc) — must
+  // branch BEFORE any of them are touched. `timeLabel` (pre-formatted by
+  // CalendarScreen), NOT `arg.timeText` — `@fullcalendar/list` hardcodes
+  // `timeText: ""` for every row's custom eventContent (list view renders
+  // the native time into its own separate `<td>` instead), so `arg.timeText`
+  // is always empty in Agenda view — see types.ts's `now-marker` doc comment.
+  if (ext.kind === 'now-marker') return <NowMarkerLine timeText={ext.timeLabel} />
   const icon = ext.icon as StatusIconKey | undefined
   const Icon = (icon && ICON_MAP[icon]) || Circle
   const bg = arg.event.backgroundColor || 'transparent'
   const isAllDay = arg.event.allDay
   const timeText = !isAllDay ? arg.timeText : undefined
+  const tooltip = extTooltip(ext)
 
   // A11y choice (audit fix, option b — do NOT add tabIndex/role="button" here):
   // FullCalendar's own event harness (the `<a>` wrapping this eventContent,
@@ -85,13 +156,25 @@ function EventChip({ arg }: { arg: EventContentArg }) {
   // for FC's wrapping `<a>` per the accname spec, so it becomes what gets
   // announced on focus — title + status + time, meaningfully, with zero
   // duplicate stops.
-  const statusText = statusLabel(ext.status)
+  //
+  // NOTE this whole harness is dayGridMonth/timeGridWeek/timeGridDay only.
+  // `@fullcalendar/list` (Agenda) does NOT wrap eventContent in that same
+  // anchor — its `ListViewEventRow` only builds one when NO custom
+  // `eventContent` is supplied (its own `defaultGenerator` path); since this
+  // file registers `eventContent` globally, no row in Agenda view — real
+  // chip or `NowMarkerLine` — is currently keyboard-focusable at all
+  // (verified via @fullcalendar/list's source and empirically). That's a
+  // pre-existing gap in Agenda view generally, not something introduced by
+  // or specific to the now-marker; a real fix would need Agenda's own
+  // focus/keyboard harness, out of scope here.
+  const statusText = occurrenceStatusLabel(ext.status)
   const chipLabel = [arg.event.title, statusText, timeText].filter(Boolean).join(', ')
 
   return (
     <div
       className="fc-sovereign-chip"
       aria-label={chipLabel}
+      title={tooltip}
       style={{
         backgroundColor: bg,
         color: CHIP_TEXT_COLOR,
@@ -137,9 +220,20 @@ function EventChip({ arg }: { arg: EventContentArg }) {
 // ---------------------------------------------------------------------------
 // dayCellContent renderer — Forge-Gold pill for today; hover "+" affordance
 // via CSS class (I-3). The CSS in fullcalendar-theme.css styles the hook.
+//
+// Month-view (dayGridMonth) ONLY. `dayCellContent` is also invoked by
+// FullCalendar for the all-day row's cells in timeGridWeek/timeGridDay — a
+// prior version of this renderer applied the pill there too, which put a
+// big static gold "today" dot in the all-day lane of Week/Day, visually
+// competing with (and easily mistaken for) the REAL live now-indicator line
+// those views already render natively (`nowIndicator={true}` below).
+// Week/Day need no additional "today" marker: the header date + the live
+// line already convey it, matching Google Calendar's convention of never
+// decorating the all-day lane with a today marker in grid/day views.
 // ---------------------------------------------------------------------------
 
-function DayCellRenderer({ arg }: { arg: DayCellContentArg }) {
+export function DayCellRenderer({ arg }: { arg: DayCellContentArg }) {
+  if (arg.view.type !== 'dayGridMonth') return null
   const isToday = arg.isToday
   return (
     <div className={`fc-sovereign-day-cell${isToday ? ' fc-sovereign-day-today' : ''}`}>
@@ -228,7 +322,7 @@ export function FullCalendarView({
   onDatesSet,
 }: FullCalendarViewProps) {
   const handleDatesSet = (arg: DatesSetArg) => {
-    onDatesSet?.(arg.view.title, arg.view.type as CalendarViewName)
+    onDatesSet?.(arg.view.title, arg.view.type as CalendarViewName, arg.view.activeStart, arg.view.activeEnd)
   }
 
   return (
@@ -248,9 +342,20 @@ export function FullCalendarView({
         initialView={initialView ?? 'dayGridMonth'}
         // Week starts Monday (FR-006, §3)
         firstDay={1}
-        // Time bounds for week/day views (spec §A7 / §5 edge)
-        slotMinTime="06:00:00"
-        slotMaxTime="22:00:00"
+        // Full 24h grid (was 06:00–22:00 per spec §A7/F-15's documented
+        // business-hours window, with Month/Agenda as its accepted fallback
+        // for anything outside it). slotMinTime/slotMaxTime HARD-bound the
+        // rendered grid — there is no "scroll past the edge"; content outside
+        // them, including the live nowIndicator line itself, has no valid
+        // position and simply doesn't render. That silently broke Week/Day's
+        // "now" line for any time outside 6am-10pm (reported live from
+        // Asia/Jakarta, ~23:20 local) — matching Google Calendar's own
+        // Week/Day grids, which are always full 24h and scrollable, not
+        // clipped to business hours. `scrollTime` keeps the convenient
+        // default landing position so business hours are still visible
+        // without scrolling on open.
+        slotMinTime="00:00:00"
+        slotMaxTime="24:00:00"
         scrollTime="08:00:00"
         // 12-hour time display
         eventTimeFormat={{
@@ -281,6 +386,14 @@ export function FullCalendarView({
         // Custom renderers
         eventContent={(arg) => <EventChip arg={arg} />}
         dayCellContent={(arg) => <DayCellRenderer arg={arg} />}
+        // Tags the now-marker's own <tr> so fullcalendar-theme.css can hide its
+        // sibling time/graphic <td>s in Agenda view — see NowMarkerLine's doc
+        // comment above for why (eventContent alone can't span the whole row).
+        eventClassNames={(arg) =>
+          (arg.event.extendedProps as CalendarEventExtProps).kind === 'now-marker'
+            ? ['fc-sovereign-now-marker-row']
+            : []
+        }
         // Callback wiring (FullCalendarViewProps)
         eventDrop={onEventDrop}
         eventClick={onEventClick}

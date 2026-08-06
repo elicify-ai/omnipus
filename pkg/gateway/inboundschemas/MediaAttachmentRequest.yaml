@@ -1,0 +1,15 @@
+title: MediaAttachmentRequest
+description: >
+  Request to attach an existing workspace media-library entry to a chat
+  message without uploading the file again.
+type: object
+additionalProperties: false
+required:
+  - media_id
+properties:
+  media_id:
+    type: string
+    format: uuid
+    maxLength: 36
+    description: UUID of the MediaLibraryEntry to attach.
+    example: "550e8400-e29b-41d4-a716-446655440000"

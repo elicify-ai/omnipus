@@ -1,0 +1,78 @@
+title: LibraryEntry
+description: >
+  One file-explorer entry inside a workspace's work tree (library-spec.md
+  D-2: "the Library is a file explorer over workspace trees, not a blob
+  list" — entries are workspace-relative PATHS, not UUIDs, distinct from
+  MediaLibraryEntry which is UUID-keyed). Returned by
+  GET /api/v1/library/{workspace_id}/entries (directory listing), and
+  echoed back by the write/rename/upload operations that produce or mutate
+  a single entry.
+type: object
+additionalProperties: false
+required:
+  - name
+  - path
+  - is_dir
+  - is_hidden
+  - size
+  - modified_at
+  - is_text_editable
+properties:
+  name:
+    type: string
+    minLength: 1
+    description: Base filename or directory name (final path segment).
+    example: "report.md"
+  path:
+    type: string
+    minLength: 1
+    description: >
+      Workspace-relative path from the work-tree root (workspaces/<id>/work/,
+      the root the Library explorer shows in full — not merely the reserved
+      work/.library/ upload directory), forward-slash separated. Never
+      absolute and never containing a ".." segment — every Library path
+      operation resolves inside the target workspace's work tree, with
+      symlinks not followed out of the root (library-spec.md Constraints).
+    example: "notes/report.md"
+  is_dir:
+    type: boolean
+    description: True when this entry is a directory.
+    example: false
+  is_hidden:
+    type: boolean
+    description: >
+      True when this entry's name begins with a dot (".") — the sole,
+      explicit definition of "hidden" for the Library, so client and
+      server cannot drift on it. Excluded from
+      GET .../entries by default (see that operation's include_hidden
+      parameter); the reserved work-tree directory where uploads land,
+      work/.library/, is the prototypical hidden entry. Included and set
+      true here so the SPA can still style a hidden entry distinctly when
+      the caller explicitly asks to see it.
+    example: false
+  size:
+    type: integer
+    format: int64
+    minimum: 0
+    description: File size in bytes. Always 0 for directories.
+    example: 4096
+  modified_at:
+    type: string
+    format: date-time
+    description: RFC3339 UTC last-modified timestamp of the underlying file or directory.
+    example: "2026-07-28T10:15:00Z"
+  mime:
+    type: string
+    description: >
+      Best-effort MIME type sniffed from the file extension/content. Absent
+      for directories and for files where sniffing was inconclusive.
+    example: "text/markdown"
+  is_text_editable:
+    type: boolean
+    description: >
+      Whether the SPA should offer this entry for CodeMirror text editing
+      (library-spec.md D-5 / section 4 scope table). Always false for
+      directories. This is a best-effort hint from the directory listing,
+      not a guarantee — GET .../content's is_text/too_large fields are the
+      authoritative check at read time.
+    example: true

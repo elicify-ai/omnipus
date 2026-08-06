@@ -20,7 +20,28 @@ const gatherTimeout = 10 * time.Second
 // waitForTracksTimeout bounds how long HandleViewerOffer waits for the
 // ingest side's video track to exist before rejecting the viewer (the
 // encoder may not have connected yet).
-const waitForTracksTimeout = 5 * time.Second
+//
+// Root-caused live on uat-omnipus (2026-07-28, DEBUG-level relay logs
+// captured across two independent capture-session cycles, see the incident
+// writeup this const's history references): with the encoder already warm
+// (extension loaded, Chrome running), the FULL ingest handshake — encoder
+// page reachable, tabCapture, offer, ICE-connect, audio's first RTP packet —
+// consistently completed in UNDER 1 SECOND. The VIDEO track's first RTP
+// packet, however, consistently arrived ~5s AFTER that (VP8 software-encoder
+// warm-up/first-keyframe latency on this deployment's shared vCPU), i.e.
+// almost EXACTLY at the boundary of the previous 5s value here — losing the
+// race on both observed cycles by a hair, 100% reproducibly, not a flake.
+// Bumped to 15s: 3x the observed ~5s video-track latency, while staying
+// safely inside the SPA's firstAnswerTimeoutMs budget (30s,
+// src/lib/browserWebRTC.ts) for the overwhelmingly common warm-Chrome case
+// this deployment exhibited. A genuinely cold Start() (extension/Chrome
+// never launched before, up to captureStartTimeout=20s +
+// bringToFrontTimeout=5s in capture_session.go) can still exhaust the SPA's
+// 30s budget regardless of this value — that pre-existing, documented
+// cold-start risk is unchanged by this fix and is mitigated by the SPA's
+// own one-shot automatic retry (see captureGracePeriod's doc comment in
+// capture_session.go for why THAT retry needed its own alignment fix too).
+const waitForTracksTimeout = 15 * time.Second
 
 // audioGraceTimeout bounds how much LONGER waitForTracks keeps waiting for
 // the audio track once video is already present. The viewer PeerConnection
@@ -98,6 +119,42 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 	})
 	pc.OnConnectionStateChange(func(st webrtc.PeerConnectionState) {
 		s.logf("%s peer connection state -> %s", prefix, st.String())
+
+		// Clear a DEAD ingest connection instead of only logging it
+		// (live-diagnosed 2026-08-03). Previously this handler was
+		// log-only, so s.ingestPC kept pointing at a closed connection
+		// forever: every subsequent recapture called sendPLI ->
+		// WriteRTCP -> "io: read/write on closed pipe", no keyframe ever
+		// arrived, and the panel stayed frozen on whatever frame it last
+		// received — the operator saw the start page persist while the tab
+		// title and URL bar advanced through several real sites.
+		//
+		// Only the CURRENTLY-INSTALLED connection is cleared: a late state
+		// change from a connection that a newer offer already replaced must
+		// not wipe its healthy successor.
+		switch st {
+		case webrtc.PeerConnectionStateFailed,
+			webrtc.PeerConnectionStateClosed,
+			webrtc.PeerConnectionStateDisconnected:
+			s.mu.Lock()
+			cleared := s.ingestPC == pc
+			if cleared {
+				s.ingestPC = nil
+			}
+			notify := s.onIngestLost
+			s.mu.Unlock()
+			if !cleared {
+				return
+			}
+			s.logf("%s ingest connection %s — cleared; a fresh capture is required", prefix, st.String())
+			// Ask the owner (CaptureSession) to re-establish capture. Without
+			// this the session sits with no ingest at all and nothing ever
+			// asks the encoder to reconnect, which is indistinguishable to
+			// the user from a hung browser.
+			if notify != nil {
+				go notify()
+			}
+		}
 	})
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		go s.attachIngestTrack(prefix, track, receiver)

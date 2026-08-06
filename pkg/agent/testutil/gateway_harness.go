@@ -520,18 +520,22 @@ func (g *TestGateway) Close() {
 		return
 	}
 
-	// #265: deterministic cleanup-race safety net for macOS APFS. The shutdown
-	// fixes (recap drain + tracking the system/unroutable turn goroutines +
-	// stopping heartbeat/cron before the drain) drain the writers — confirmed on
-	// Linux (no post-close writes). But on the slower macOS runner a straggler
-	// write can still land just after RunContext returns and race t.TempDir's
-	// RemoveAll ("directory not empty"). Wait until the sessions subtree is stable
-	// for a short settle window before yielding to the test's RemoveAll. This is
-	// bounded and, on Linux where there is nothing in flight, returns on the first
-	// stable scan (~one settle window). Earlier fixed-sleep attempts failed
-	// because they ran WITHOUT the shutdown drains above (writers never stopped);
-	// with the residual now bounded, quiescence is reached well inside the budget.
-	waitForSessionsQuiescent(g.homeDir, 150*time.Millisecond, 3*time.Second)
+	// #265: deterministic cleanup-race safety net. The shutdown fixes (recap
+	// drain + tracking the system/unroutable turn goroutines + stopping
+	// heartbeat/cron before the drain) drain the writers, but a straggler write
+	// can still land just after RunContext returns and race t.TempDir's
+	// RemoveAll ("directory not empty"). Wait until the home dir is stable for a
+	// short settle window before yielding to the test's RemoveAll. Bounded, and
+	// where nothing is in flight it returns on the first stable scan.
+	//
+	// Scans the WHOLE home dir, not just sessions/. It used to watch only the
+	// sessions subtree, which left every other late writer uncovered — logs,
+	// memory, tasks, config — and that is exactly how it still failed: CI run 2
+	// hit "unlinkat /tmp/TestSinceCursor_.../001: directory not empty" on the
+	// HOME dir while sessions/ itself had long since settled. Earlier
+	// fixed-sleep attempts failed for a different reason (they ran WITHOUT the
+	// shutdown drains, so writers never stopped at all).
+	waitForHomeQuiescent(g.homeDir, 150*time.Millisecond, 3*time.Second)
 
 	// Surface any boot error that occurred after the gateway became ready.
 	if p := g.bootErr.Load(); p != nil && *p != nil {
@@ -541,22 +545,22 @@ func (g *TestGateway) Close() {
 	}
 }
 
-// waitForSessionsQuiescent blocks until the homeDir/sessions subtree produces two
+// waitForHomeQuiescent blocks until the ENTIRE homeDir tree produces two
 // consecutive identical (path,size,mtime) snapshots `settle` apart, or `budget`
-// elapses. Pure read-only; never errors. Used by Close to avoid the macOS APFS
-// RemoveAll-vs-late-write race (#265). On Linux (nothing in flight post-Close) it
-// returns after the first settle window.
-func waitForSessionsQuiescent(homeDir string, settle, budget time.Duration) {
+// elapses. Pure read-only; never errors. Used by Close to avoid the
+// RemoveAll-vs-late-write race (#265) that surfaces as t.TempDir cleanup
+// failing with "directory not empty". Returns after the first settle window
+// when nothing is in flight.
+func waitForHomeQuiescent(homeDir string, settle, budget time.Duration) {
 	if homeDir == "" {
 		return
 	}
-	sessions := filepath.Join(homeDir, "sessions")
 	deadline := time.Now().Add(budget)
 	prev := ""
 	stableSince := time.Time{}
 	for time.Now().Before(deadline) {
 		var sb strings.Builder
-		_ = filepath.WalkDir(sessions, func(p string, d os.DirEntry, err error) error {
+		_ = filepath.WalkDir(homeDir, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil //nolint:nilerr // best-effort read-only scan; ignore transient walk errors
 			}

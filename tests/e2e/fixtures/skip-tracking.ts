@@ -95,70 +95,30 @@ import { execSync } from 'child_process';
 // feature. Update the `until` date when the issue is resolved or the deadline
 // is formally extended.
 export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?: string }[] = [
-  // chat.spec.ts — W1.6 user-approved permanent skip: #105 offline send queue
-  {
-    test: '(f) queue-on-disconnect: messages sent during WS disconnect send in order after reconnect',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/105',
-    until: '2026-09-30',
-    note: 'useChatStore has no offline send queue; messages sent during WS disconnect are dropped.',
-  },
-  // media.spec.ts — W1.6 user-approved permanent skip: #107 mock-media tool
-  {
-    test: '(b) file-download fallback: large binary request triggers browser download dialog',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/107',
-    until: '2026-09-30',
-    note: 'InlineMedia <a download> path requires a mock non-image media frame; no scenario provider yet.',
-  },
-  // contract-counters.spec.ts — production binary does not expose window.__omnipus_test_hooks
-  {
-    test: 'no schema-validation errors during authenticated page load + navigation',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/155',
-    until: '2026-12-31',
-    note: 'window.__omnipus_test_hooks counters are only present in dev builds (import.meta.env.DEV). ' +
-      'CI runs against the embedded production binary where MODE=production. ' +
-      'Run against a Vite dev server to exercise the full assertion.',
-  },
-  // channels-routing.spec.ts — depends on ChannelConfigPanel SmartSelect wired to the
-  // 4-base agent roster. The test setup uses agents.find(/mia/) and a mock
-  // /api/v1/channels/telegram/routing interceptor; the UI flow likely changed
-  // alongside the agent-roster re-cast in d854b02. Tracked:
-  // https://github.com/elicify-ai/omnipus/issues/425
-  {
-    test: '(d) selecting a Default agent calls PUT /channels/{id}/routing with the agent id',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/425',
-    until: '2026-09-30',
-    note: 'ChannelConfigPanel SmartSelect agent-options layout likely changed with the 4-base roster re-cast (d854b02). Verify test against the new UI flow.',
-  },
-  {
-    test: '(e) selecting "(Global default)" calls PUT /channels/{id}/routing with default_agent_id omitted',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/425',
-    until: '2026-09-30',
-    note: 'Same root cause as (d).',
-  },
-  // agents.spec.ts — slideover refactor removed the branded 404 page for unknown
-  // agent IDs. The transient /_app/agents/$agentId route silently opens the slideover
-  // and navigates back to /#/agents for unknown IDs.
-  // Tracked: https://github.com/elicify-ai/omnipus/issues/427
-  {
-    test: '(e) deleted agent URL returns branded 404 with "Back to Agents" link',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/427',
-    until: '2026-09-30',
-    note: 'The /_app/agents/$agentId route (src/routes/_app/agents.$agentId.tsx) is a transient "open slideover + navigate back" handler. Unknown agent IDs do not render a branded 404 page. Either add the 404 page or drop the test.',
-  },
-  // subagent.spec.ts — known LLM timing flake (per the run-ci configuration
-  // comment in playwright.config.ts). The 8 Group-A failures (subagent×5,
-  // handoff b, media a) all share the same symptom: under
-  // prolonged suite load (~12 min total wall-clock) the LLM occasionally takes
-  // >40s to emit the expected tool call, even though every test passes alone
-  // in 5-25s. Retries are NOT a cover for real bugs — the design-flaw fix
-  // is deterministic scenario providers (T4.1). Soft-skip until then.
-  // Tracked: https://github.com/elicify-ai/omnipus/issues/155 (v0.2 hardening)
-  {
-    test: '(c) live step counter: collapsed header step count increments during multi-step sub-turn',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/155',
-    until: '2026-12-31',
-    note: 'LLM-driven live step counter occasionally takes >40s under suite load (12+ min wall-clock). Retries=3 in CI typically recover. The deterministic scenario-provider fix is tracked in T4.1.',
-  },
+  // chat.spec.ts (f) — #105 RESOLVED: investigation found the outbound-queue
+  // store mechanics (useChatStore's outboundQueue/pendingDrainQueue/
+  // enqueueOutboundMessage/drainOutboundQueue) were already fully
+  // implemented and unit-tested; the only gap was ChatScreen.tsx's
+  // `inputEnabled` gate requiring strict `isConnected`, which silently
+  // blocked the only real-UI path into the queue during the
+  // 'reconnecting'/'slow' retry window. Fixed — the composer now stays
+  // usable while reconnecting, messages queue and drain for real. Test
+  // promoted to a real, passing assertion; entry removed.
+  //
+  // contract-counters.spec.ts — #155 RESOLVED: the note on this entry assumed
+  // window.__omnipus_test_hooks was dev-only, but src/lib/ws.ts and
+  // src/lib/api.ts already gate the hooks on `navigator.webdriver === true`
+  // in addition to DEV/test mode. Playwright's Chromium always sets
+  // navigator.webdriver=true, so the hooks ARE present when this spec runs
+  // against the embedded production binary — confirmed directly in the built
+  // bundle (the minified production JS still carries the navigator.webdriver
+  // branch; the DEV/MODE==='test' literals fold away under Terser). The
+  // test's soft-skip fallback was replaced with a hard assertion that the
+  // hooks are available, and a deliberately-injected schema violation
+  // (page.route intercepting GET /api/v1/agents with a malformed body) was
+  // used to confirm the zero-count assertions actually fail on a real
+  // violation, before the injection was reverted. Entry removed; the
+  // underlying assumption was stale, not a real product gap.
 ];
 
 // ── Validation ──────────────────────────────────────────────────────────────────

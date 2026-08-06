@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/browser"
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -24,10 +26,55 @@ const (
 	screencastEveryNthFrame = 1
 )
 
-// maxInputEventsPerSecond caps injected input events per LiveView session
-// (ADR-038 D6: "browser_input is rate-limited"). Generous enough for a real
-// mouse-move stream while bounding a runaway or malicious client.
-const maxInputEventsPerSecond = 50
+// agentWindowWidth/Height size each agent's Chrome window (coordinator.go's
+// CreateTarget). Deliberately SEPARATE from the screencast caps above, which
+// tune JPEG bandwidth: a window must be large enough to satisfy the largest
+// CSS viewport a panel may request AT ITS deviceScaleFactor, and in headless
+// Chrome a window can never exceed the virtual screen (--window-size,
+// exec_resolver.go).
+//
+// Sized at 1280x720 before, these two limits collided: a panel asking for a
+// 512-CSS-px-tall viewport at dsf 2 needs 1024 device px, so Chrome clamped it
+// and the live panel visibly shrank moments after opening and stayed shrunk
+// (operator report 2026-08-03; gateway log "window resize not fully reflected
+// in the tab's CSS viewport", requested_height 512 -> actual_height 425). The
+// chrome-delta compensation could not converge, because the ceiling was the
+// screen rather than a constant offset.
+//
+// Kept in lockstep with --window-size in exec_resolver.go.
+const (
+	agentWindowWidth  = 2560
+	agentWindowHeight = 1440
+)
+
+// Input rate limiting (ADR-038 D6: "browser_input is rate-limited") is split
+// into two budgets by event kind, because a single shared one made the limiter
+// itself a source of the bug it was meant to be neutral about.
+//
+// The budget is per SESSION, not per connection — and since the exclusive
+// controller lock was removed (2026-08-03) so a human and the agent can drive
+// together, several senders now draw from it concurrently. Under one shared
+// counter a sustained pointer stream could consume the whole allowance and the
+// NEXT mouse_up would be refused. A dropped mouse_move is self-healing (the
+// following one supersedes it); a dropped mouse_up is not — the remote page
+// keeps believing the button is held, which is a stuck drag or a runaway text
+// selection with nothing in the UI explaining why.
+//
+// So: coalescible position kinds get a large bucket, and discrete state
+// transitions get their own, which a flood of movement can no longer exhaust.
+// Both remain bounded, so a runaway or malicious client is still capped.
+const (
+	// maxCoalescibleInputEventsPerSecond bounds mouse_move and wheel. The
+	// client paces each at ~40/s (MOVE_FLUSH_MS) and coalesces both, so this
+	// leaves room for several concurrent viewers plus the agent before anyone
+	// is throttled. The old value of 50 sat BELOW what a single 60Hz pointer
+	// stream produces on its own, so legitimate input was being dropped
+	// routinely — reported as "clicks work only sometimes".
+	maxCoalescibleInputEventsPerSecond = 300
+	// maxDiscreteInputEventsPerSecond bounds button and key transitions. No
+	// human produces anywhere near this; it exists purely to cap automation.
+	maxDiscreteInputEventsPerSecond = 100
+)
 
 // screencastAckTimeout bounds each Page.screencastFrameAck CDP round trip
 // issued by runAckWorker. Acks are lightweight, so this is deliberately much
@@ -35,6 +82,63 @@ const maxInputEventsPerSecond = 50
 // (wedged/overloaded transport), the worker recovers in bounded time and
 // moves on to the next (coalesced, latest) frame instead of getting stuck.
 const screencastAckTimeout = 5 * time.Second
+
+// viewportSetTimeout bounds the Emulation.setDeviceMetricsOverride round trip
+// in SetViewport. Kept short: a resize arrives on the UI's debounce and a slow
+// or wedged tab must not stall the WS reader goroutine that dispatched it.
+const viewportSetTimeout = 5 * time.Second
+
+// viewportDriftTolerancePx is the acceptable gap between SetViewport's
+// requested width/height and the tab's actual read-back CSS viewport before
+// treating the resize as imperfectly reflected. Below this, a small
+// scrollbar/AA-width discrepancy is normal noise; above it, something real
+// diverged — confirmed live (UAT v24, 2026-07-31): a requested 615x744
+// landed at an actual CSS viewport of 615x657, an 87px HEIGHT deficit from
+// Chrome's own window chrome (tab strip/toolbar), width matching exactly.
+// See the compensation step in SetViewport's mechanism doc comment.
+const viewportDriftTolerancePx = 8
+
+// viewportFetchFailureEscalation is how many CONSECUTIVE viewport-read failures
+// turn a silently-dropped pointer event into a user-visible error. Two, not
+// one: a single miss is routinely transient (a cache invalidated by a legitimate
+// resize, a lost race with a reflow) and surfacing it would be noise. A second
+// consecutive failure — a full viewportInputFetchBackoff later — is no longer
+// plausibly transient, and silence there is precisely the "dead browser looks
+// idle" failure ADR-038 finding #4 exists to prevent.
+const viewportFetchFailureEscalation = 2
+
+// viewportInputFetchTimeout bounds rescaleToCSSViewport's best-effort
+// cache-miss fetch of the tab's CSS viewport. Deliberately much shorter than
+// viewportSetTimeout: that timeout is sized for a user-triggered resize
+// (rare, debounced), while this fetch runs on the dispatchInput -> WS
+// read-loop hot path, once per input event on every cache miss — a
+// slow/wedged CDP transport must fail fast here rather than stall input
+// throughput up to a multi-second timeout per event (review CRITICAL
+// finding: under a sustained CDP hiccup, the old shared timeout collapsed
+// input throughput to roughly one event per timeout, with a fresh WARN log
+// line each time).
+const viewportInputFetchTimeout = 1 * time.Second
+
+// viewportInputFetchBackoff bounds how soon rescaleToCSSViewport retries its
+// cache-miss fetch after a failure. Once a fetch fails, further input events
+// dispatch unscaled — without retrying the fetch or re-logging the failure —
+// for this long, rather than repeating the same (bounded, but non-zero cost)
+// failing CDP round trip on every single subsequent input event. See
+// rescaleToCSSViewport's doc comment for the full failure-backoff mechanism.
+const viewportInputFetchBackoff = 3 * time.Second
+
+// Viewport bounds. Per-field limits mirror BrowserViewportFrame's schema so
+// SetViewport is safe even when gateway.validate_inbound is off (it defaults
+// to false, making this the ONLY check on a default install).
+const (
+	maxViewportDimension   = 8192
+	maxViewportScaleFactor = 3.0
+	// maxViewportPhysicalPixels bounds width*height*dsf^2 — the actual
+	// framebuffer Chromium must allocate. ~33.2M is a generous 8K-class
+	// surface (7680x4320 = 33.2M) while refusing the ~604M that the per-field
+	// maxima alone would permit.
+	maxViewportPhysicalPixels = 33_200_000.0
+)
 
 // LiveFrame is one CDP screencast frame plus the metadata a viewer needs to
 // map its own rendered coordinates back to CSS pixels on the page. Field set
@@ -89,6 +193,22 @@ type LiveInput struct {
 	// split into a real discriminated union, preserve this invariant.
 	URL       string
 	Modifiers int // bit field: Alt=1, Ctrl=2, Meta=4, Shift=8 — clamped to [0,15] by buildInputAction.
+
+	// CaptureWidth/CaptureHeight are the intrinsic pixel size of the capture
+	// frame the client mapped X/Y into (0/0 = absent, meaning an older
+	// client already sent X/Y in CSS pixels — mirrors
+	// generated.BrowserInputFrame.CaptureWidth's doc comment). When both are
+	// present for a pointer-position kind (mouse_move/mouse_down/mouse_up/
+	// wheel), dispatchInput rescales X/Y from this space into the tab's
+	// actual CSS viewport before CDP dispatch — root-cause doc Fault 3
+	// (docs/internal/browser-viewport-input-rootcause-2026-07-31.md): with
+	// adaptive resize/encoder downscaling, the capture's pixel size can
+	// differ from the page's CSS pixel space by several times (measured
+	// 319x158 capture vs ~1280 page), so a raw 1:1 mapping lands clicks far
+	// from their intended target. Never rescaled for wheel's DeltaX/DeltaY
+	// (scroll deltas, not positions) or for key/text kinds (no coordinates
+	// at all).
+	CaptureWidth, CaptureHeight float64
 }
 
 // FrameSink receives screencast frames for one attached viewer. Implementations
@@ -282,6 +402,8 @@ func (r *LiveViewRegistry) Attach(
 	if err != nil {
 		return false, err
 	}
+	// A watched browsing context is never idle — see ReapIdleSessions.
+	r.mgr.ViewerAttached(sessionID)
 
 	// ADR-041 D4: give the newly-attached viewer the CURRENT tab strip
 	// immediately, mirroring lastFrame's "don't make a piggybacking/fresh
@@ -307,6 +429,10 @@ func (r *LiveViewRegistry) Detach(sessionID, viewerID string) {
 		return
 	}
 	lv.detach(viewerID)
+	// Starts the idle clock from the moment the last viewer left, rather than
+	// from whenever the session was last touched before that — see
+	// ViewerDetached / ReapIdleSessions.
+	r.mgr.ViewerDetached(sessionID)
 }
 
 // PauseScreencast stops the underlying CDP screencast for sessionID WITHOUT
@@ -318,6 +444,456 @@ func (r *LiveViewRegistry) Detach(sessionID, viewerID string) {
 // screencast isn't currently active, or it is already paused. The caller
 // (pkg/tools/browser's CaptureSession.ReconcileScreencast) decides WHEN
 // pausing is appropriate; this method only performs the mechanical stop.
+
+// SetViewport resizes the captured tab to width x height CSS pixels and
+// renders it at deviceScaleFactor, so the capture's shape and resolution
+// follow the viewer's panel instead of a fixed constant.
+//
+// Why (operator UAT 2026-07-31): the tab was pinned to a hardcoded
+// --window-size=1280,720 (exec_resolver.go) while the docked panel is an
+// arbitrary, resizable shape — measured ~890x1010 (portrait). Since
+// `object-fit: contain` preserves the SOURCE aspect, the page could only ever
+// fill one dimension and the rest of the panel was letterboxed black. No CSS
+// change can correct a source whose shape is wrong. The same report's second
+// half was blur: the managed headless Chrome renders at DPR 1, so a capture
+// displayed larger than its CSS size upscales — deviceScaleFactor fixes that
+// in the same call.
+//
+// Mechanism (rewritten 2026-07-31 — root-caused via live measurement, not
+// hypothetical, see docs/internal/browser-viewport-input-rootcause-2026-07-31.md
+// Fault 1): this USED TO call only
+// Emulation.setDeviceMetricsOverride(width, height, dsf, false). That
+// override is real inside the CDP/renderer world — the page's own CSS media
+// queries and layout genuinely see the new size — but it is NOT reflected in
+// what the extension-side capture reads: encoder.js's
+// captureActiveTabStream sizes the tabCapture stream from
+// chrome.tabs.get(tabId).width/height, which is the tab's real OS window
+// size and stays put regardless of the emulation override. Every layer
+// (this method, CaptureSession.Recapture, runCaptureAndOffer) logged success
+// while the captured stream never actually reshaped — confirmed live: stream
+// aspect stuck at 2.02 against a 0.96 panel, three consecutive "viewport
+// applied" log lines notwithstanding. Textbook silent failure.
+//
+// Fixed by driving the actual OS-level browser window via
+// Browser.getWindowForTarget + Browser.setWindowBounds, which DOES change
+// what chrome.tabs.get() reports, so the extension's capture follows.
+// Emulation.setDeviceMetricsOverride is kept, but ONLY for
+// deviceScaleFactor now — passing width/height 0 to it means "no size
+// override" to CDP, so it can never fight the window-bounds resize above.
+// When deviceScaleFactor <= 1, this calls Emulation.clearDeviceMetricsOverride
+// instead of setDeviceMetricsOverride(0, 0, 1, false) — clearing any stale
+// override outright rather than setting a redundant no-op one, so a viewer
+// moving from a 2x display back to a 1x one doesn't leave Chromium still
+// rendering at the old scale.
+//
+// This ONLY changes the tab. A capture already in flight keeps its old
+// geometry, because tabCapture constraints are pinned per stream
+// (encoder.js's minWidth/maxWidth) and cannot be renegotiated on a running
+// track. The caller must follow this with CaptureSession.Recapture(), which
+// tears the stream down and re-reads chrome.tabs.get() — see
+// pkg/gateway/browser_ws.go's handleViewport for the ordering.
+//
+// After applying, this reads back the tab's ACTUAL CSS layout viewport via
+// Page.getLayoutMetrics — the only thing that can prove the resize really
+// took effect, per the root-cause doc's "Exit proof" section — and caches it
+// on the LiveView (cssViewportW/H, guarded by lv.mu). That cache is the
+// source of truth dispatchInput's rescaleToCSSViewport uses to map a
+// viewer's capture-space input coordinates into CSS pixels (Fault 3).
+//
+// Chrome-delta compensation (fix-wave, live evidence UAT v24, 2026-07-31):
+// the deployed read-back WARN fired with a requested 615x744 landing at an
+// ACTUAL CSS viewport of 615x657 — an 87px HEIGHT deficit, width matching
+// exactly. Cause: Browser.setWindowBounds sizes the OUTER OS-level window;
+// the tab's own CSS viewport is that minus Chrome's window chrome (tab
+// strip/toolbar), which the window-bounds call has no way to account for up
+// front. That chrome delta is constant for a given window, so a single
+// correction converges: when the read-back gap exceeds
+// viewportDriftTolerancePx in either dimension, this re-applies
+// Browser.setWindowBounds ONCE more with the request plus its own just-
+// measured deficit added (requested + (requested - actual)), then reads back
+// again — the FINAL read-back (compensated or not) is what gets logged and
+// cached. Exactly one compensation attempt is made, reusing viewportSetTimeout
+// as its timeout budget; the per-field maxViewportDimension ceiling is
+// re-applied to the compensated bounds (they can legitimately exceed the
+// original request by the chrome delta), but the combined physical-pixel
+// ceiling is deliberately NOT re-run against them — it already gated the
+// original request above, and the compensation delta is a small,
+// window-chrome-sized correction, not an independent size request.
+//
+// A requested/actual gap over viewportDriftTolerancePx in either dimension
+// (after any compensation attempt) is logged at WARN, explicitly saying the
+// window resize was not fully reflected — this is what would have caught
+// Fault 1 instead of every layer silently reporting success. A partial
+// resize still returns applied=true; it is not treated as a failure, only
+// flagged loudly. A read-back that fails outright, or comes back degenerate
+// (width or height <= 0), invalidates the cache instead of leaving a stale
+// value behind (review CRITICAL finding) — see invalidateCSSViewportCache's
+// doc comment for why a stale-but-positive cache is worse than an empty one.
+//
+// Returns false if no live view exists for sessionID (nothing to resize).
+func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, deviceScaleFactor float64) (bool, error) {
+	sessionID = resolveSessionID(sessionID)
+	lv, ok := r.lookup(sessionID)
+	if !ok {
+		return false, nil
+	}
+	lv.mu.Lock()
+	tabCtx := lv.tabCtx
+	lv.mu.Unlock()
+	if tabCtx == nil {
+		return false, nil
+	}
+	// Serialize the whole apply→compensate→read-back→cache sequence per
+	// LiveView (live UAT 2026-07-31, pop-out): two viewers may legally send
+	// viewport frames near-simultaneously while the tab is uncontrolled (the
+	// docked panel's first-frame re-send racing the pop-out's attach frame).
+	// Interleaved, one caller's raw bounds-write lands in the middle of the
+	// other's compensation and the window ends at a hybrid neither asked for
+	// (measured: outer bounds stuck at the pop-out's UNcompensated first
+	// apply, tab pinned 86px short, self-heal correctly seeing "no drift"
+	// against a genuinely wrong tab). NOT lv.mu — this holds across several
+	// CDP round trips, and lv.mu must never be held across a CDP call
+	// (ADR-038 discipline).
+	lv.viewportMu.Lock()
+	defer lv.viewportMu.Unlock()
+	// Bounds are also enforced by the wire schema (BrowserViewportFrame), but
+	// re-checked here because this is a public method on the registry and a
+	// future non-WS caller must not be able to hand Chromium a degenerate or
+	// enormous allocation.
+	if width < 1 || height < 1 || width > maxViewportDimension || height > maxViewportDimension {
+		return false, fmt.Errorf("browser live: viewport %dx%d out of range", width, height)
+	}
+	if deviceScaleFactor < 1 || deviceScaleFactor > maxViewportScaleFactor {
+		// Reject rather than silently clamp (review finding): a caller asking
+		// for dsf 50 got no feedback at all under the old clamp, while an
+		// out-of-range width got an explicit error. Same input class, same
+		// treatment.
+		return false, fmt.Errorf("browser live: device scale factor %.2f out of range (1..%.0f)",
+			deviceScaleFactor, maxViewportScaleFactor)
+	}
+	// Combined ceiling. Each dimension and the scale factor are individually
+	// bounded above, but nothing bounded their PRODUCT: 8192x8192 at dsf 3 is
+	// inside every per-field limit and asks Chromium for a ~24576x24576
+	// physical surface — on the order of gigabytes of framebuffer, against the
+	// single shared Chrome backing the agent's browsing.
+	physicalPixels := float64(width) * float64(height) * deviceScaleFactor * deviceScaleFactor
+	if physicalPixels > maxViewportPhysicalPixels {
+		return false, fmt.Errorf(
+			"browser live: viewport %dx%d @%.1fx = %.0f physical pixels, over the %.0f ceiling",
+			width, height, deviceScaleFactor, physicalPixels, maxViewportPhysicalPixels)
+	}
+
+	// Step 1: actually reshape the OS-level browser window (Fault 1 fix —
+	// see the mechanism section above). windowBoundsAction folds
+	// Browser.getWindowForTarget (which resolves the current tab's own
+	// window with no explicit target ID, because it is called "as a part of
+	// the session" — tabCtx IS that session) and Browser.setWindowBounds
+	// into one chromedp.Action — see its doc comment for why this is a
+	// small named type rather than a bare chromedp.ActionFunc closure, and
+	// for why the windowID no longer needs to live in an outer variable
+	// (test-seam review MEDIUM finding).
+	actions := []chromedp.Action{windowBoundsAction{width: width, height: height}}
+	// Step 2: deviceScaleFactor only (see the mechanism section above for
+	// why width/height are 0 here, not width/height again). dsf==1 clears
+	// any stale override instead of setting a no-op one, so a viewer moving
+	// from a 2x display to a 1x one doesn't leave Chromium still rendering
+	// at the old scale.
+	if deviceScaleFactor > 1 {
+		actions = append(actions, emulation.SetDeviceMetricsOverride(0, 0, deviceScaleFactor, false))
+	} else {
+		actions = append(actions, emulation.ClearDeviceMetricsOverride())
+	}
+	// Bundled into one runCDPWithTimeout call / one timeout budget — not
+	// "one CDP round trip" as the mechanism section used to describe it: it
+	// is actually THREE sequential protocol commands (GetWindowForTarget,
+	// SetWindowBounds, and SetDeviceMetricsOverride/
+	// ClearDeviceMetricsOverride) run in order inside a single bounded
+	// chromedp.Run, since all three are cheap, sequential, and any one
+	// failing makes the rest pointless. Routed through lv.runCDP, not the
+	// package-level runCDPWithTimeout directly (test-seam review MEDIUM
+	// finding) — every other CDP call site in this file uses the same
+	// injectable seam; see its doc comment.
+	if err := lv.runCDP(tabCtx, viewportSetTimeout, actions...); err != nil {
+		return false, fmt.Errorf("browser live: resize viewport: %w", err)
+	}
+
+	// Step 3: read back what ACTUALLY happened — see the mechanism section
+	// above. readBack is called once here and, at most, once more by the
+	// compensation step below — both share the same lv.runCDP-routed
+	// layoutMetricsAction (see its doc comment for why a small named type is
+	// used here too, in place of an inline ActionFunc closure).
+	readBack := func() (int64, int64, error) {
+		var w, h int64
+		err := lv.runCDP(tabCtx, viewportSetTimeout, layoutMetricsAction{w: &w, h: &h})
+		return w, h, err
+	}
+
+	actualW, actualH, readErr := readBack()
+	if readErr == nil && (actualW <= 0 || actualH <= 0) {
+		readErr = fmt.Errorf("degenerate CSS viewport read back (%dx%d)", actualW, actualH)
+	}
+	if readErr != nil {
+		// A failure/degenerate read-back here does not undo the resize
+		// above (best-effort: the resize itself already succeeded), so this
+		// is logged and swallowed rather than turned into an error return —
+		// but (review CRITICAL finding) it DOES invalidate the cache rather
+		// than leaving a stale value in place; see
+		// invalidateCSSViewportCache's doc comment for why that matters.
+		lv.invalidateCSSViewportCache()
+		logger.WarnCF(
+			"browser",
+			"live view: set viewport applied but could not read back the actual CSS viewport to verify it — cache invalidated, input coordinates will re-fetch it on the next event",
+			map[string]any{
+				"error":            readErr.Error(),
+				"session_id":       sessionID,
+				"requested_width":  width,
+				"requested_height": height,
+			},
+		)
+		return true, nil
+	}
+
+	// Chrome-delta compensation — SINGLE PASS, deliberately not iterated.
+	//
+	// Browser.setWindowBounds' OUTER-window size does not fully carry through
+	// to the tab's CSS viewport, so one correction (request + observed gap) is
+	// attempted. It frequently does not work, and the diagnostic fields added
+	// for exactly this question show why iterating would NOT help (v52 logs,
+	// deviceScaleFactor 1):
+	//
+	//	requested 587 -> first read-back 444 -> asked 730 -> still 444
+	//	requested 564 -> first read-back 421 -> asked 707 -> still 421
+	//
+	// The second setWindowBounds changes NOTHING: the post-compensation
+	// read-back equals the pre-compensation one exactly. Chrome is ignoring the
+	// resize outright, not partially honoring it — so a convergence loop would
+	// merely repeat a no-op N times and burn CDP round trips. (A loop was built
+	// and reverted twice on this evidence; do not reintroduce one without first
+	// showing that a SECOND setWindowBounds moves the viewport at all.)
+	//
+	// The cause is still open. It is NOT the screen bound: the managed Chrome
+	// launches with --window-size=2560,1440 (exec_resolver.go, verified on the
+	// running container) so a ~730px request has ample headroom and is still
+	// ignored. Whatever the reason, the cache below records the TRUE viewport,
+	// so input-coordinate mapping stays correct even while the panel renders
+	// undersized — a cosmetic shrink, not mis-aimed clicks.
+	compensated := false
+	var compensatedAskW, compensatedAskH int
+	if viewportDeltaPx(width, actualW) > viewportDriftTolerancePx ||
+		viewportDeltaPx(height, actualH) > viewportDriftTolerancePx {
+		compW := clampViewportDim(width + (width - int(actualW)))
+		compH := clampViewportDim(height + (height - int(actualH)))
+		compensatedAskW, compensatedAskH = compW, compH
+		if err := lv.runCDP(tabCtx, viewportSetTimeout, windowBoundsAction{width: compW, height: compH}); err != nil {
+			logger.WarnCF(
+				"browser",
+				"live view: set viewport — chrome-delta compensation re-apply failed, keeping the pre-compensation read-back",
+				map[string]any{
+					"error":              err.Error(),
+					"session_id":         sessionID,
+					"compensated_width":  compW,
+					"compensated_height": compH,
+				},
+			)
+		} else {
+			compW2, compH2, compErr := readBack()
+			if compErr == nil && (compW2 <= 0 || compH2 <= 0) {
+				compErr = fmt.Errorf("degenerate CSS viewport read back after compensation (%dx%d)", compW2, compH2)
+			}
+			if compErr != nil {
+				lv.invalidateCSSViewportCache()
+				logger.WarnCF("browser",
+					"live view: set viewport — could not read back the CSS viewport after "+
+						"chrome-delta compensation — cache invalidated, input coordinates will "+
+						"re-fetch it on the next event",
+					map[string]any{
+						"error":              compErr.Error(),
+						"session_id":         sessionID,
+						"requested_width":    width,
+						"requested_height":   height,
+						"compensated_width":  compW,
+						"compensated_height": compH,
+					})
+				return true, nil
+			}
+			// Keep the CLOSEST read-back, not merely the latest: if the
+			// compensated attempt came back worse (or, as measured, identical),
+			// the cache must not be degraded. cssViewportW/H feeds input
+			// coordinate mapping, so "closest to the page's real size" is the
+			// property that matters.
+			if viewportDeltaPx(width, compW2)+viewportDeltaPx(height, compH2) <
+				viewportDeltaPx(width, actualW)+viewportDeltaPx(height, actualH) {
+				actualW, actualH = compW2, compH2
+			}
+			compensated = true
+		}
+	}
+
+	fields := map[string]any{
+		"session_id":          sessionID,
+		"requested_width":     width,
+		"requested_height":    height,
+		"actual_width":        actualW,
+		"actual_height":       actualH,
+		"device_scale_factor": deviceScaleFactor,
+		"compensated":         compensated,
+		// What compensation actually asked Chrome for (0 when it never ran).
+		// Present so a recurrence of the DSF-2 shrink is diagnosable from the
+		// log alone — reconstructing it by hand produced two wrong models.
+		"compensated_ask_width":  compensatedAskW,
+		"compensated_ask_height": compensatedAskH,
+	}
+	if viewportDeltaPx(width, actualW) > viewportDriftTolerancePx ||
+		viewportDeltaPx(height, actualH) > viewportDriftTolerancePx {
+		// The silent-success failure mode the root-cause doc documents:
+		// every prior layer reported success while the capture never
+		// actually reshaped. Loud enough here that it can't be missed the
+		// way it was during the 2026-07-31 UAT.
+		logger.WarnCF(
+			"browser",
+			"live view: set viewport — window resize not fully reflected in the tab's CSS viewport",
+			fields,
+		)
+	} else {
+		logger.InfoCF("browser", "live view: viewport applied", fields)
+	}
+
+	// The FINAL read-back (post-compensation when compensation fired) is
+	// always sane/non-degenerate by this point — both failure/degenerate
+	// paths above already returned early via invalidateCSSViewportCache.
+	lv.mu.Lock()
+	lv.cssViewportW = int(actualW)
+	lv.cssViewportH = int(actualH)
+	lv.mu.Unlock()
+
+	return true, nil
+}
+
+// windowBoundsAction folds Browser.getWindowForTarget + Browser.setWindowBounds
+// into ONE chromedp.Action (test-seam review MEDIUM finding): the windowID no
+// longer needs to live in a variable shared across two chromedp.Tasks slice
+// entries — chromedp.Tasks runs its actions in order and aborts on the first
+// error, so a two-entry [get, set] slice with an outer `var windowID
+// browser.WindowID` behaved identically to resolving and using it entirely
+// inside one action. Implemented as a small named type — rather than a bare
+// chromedp.ActionFunc closure — specifically so SetViewport's compensation
+// step is testable: live_test.go type-asserts the *requested* width/height
+// straight off this struct's exported-to-the-package fields, without ever
+// having to execute a real CDP round trip to observe them (a closure hides
+// that same information behind an opaque func value with no way to inspect
+// it short of actually calling Do(ctx) against a live browser). SetViewport
+// constructs this at most twice: once for the requested size, and — only
+// when the chrome-delta compensation step fires (see SetViewport's mechanism
+// doc comment) — once more for the compensated size.
+type windowBoundsAction struct {
+	width, height int
+}
+
+// Do implements chromedp.Action.
+func (a windowBoundsAction) Do(ctx context.Context) error {
+	windowID, _, werr := browser.GetWindowForTarget().Do(ctx)
+	if werr != nil {
+		return fmt.Errorf("get window for target: %w", werr)
+	}
+	return browser.SetWindowBounds(windowID, &browser.Bounds{
+		Width:  int64(a.width),
+		Height: int64(a.height),
+	}).Do(ctx)
+}
+
+// layoutMetricsAction reads the tab's actual CSS layout viewport via
+// Page.getLayoutMetrics and writes the result through w/h (test-seam review
+// MEDIUM finding: the duplicated Page.GetLayoutMetrics closure in
+// SetViewport's read-back and rescaleToCSSViewport's cache-miss fetch is
+// factored into readCSSLayoutViewport, and this type is the one shared
+// chromedp.Action wrapper both call sites use around it). A small named type
+// with pointer output fields, like windowBoundsAction, rather than a bare
+// chromedp.ActionFunc closure capturing outer variables — same rationale:
+// live_test.go's scripted runCDP stubs need to write scripted width/height
+// values straight through w/h without executing a real CDP round trip.
+type layoutMetricsAction struct {
+	w, h *int64
+}
+
+// Do implements chromedp.Action.
+func (a layoutMetricsAction) Do(ctx context.Context) error {
+	w, h, err := readCSSLayoutViewport(ctx)
+	if err != nil {
+		return err
+	}
+	*a.w, *a.h = w, h
+	return nil
+}
+
+// readCSSLayoutViewport issues Page.getLayoutMetrics and returns the tab's
+// CSS layout viewport's client width/height — the only thing that can prove
+// a resize actually took effect (root-cause doc's "Exit proof" section).
+// Pure CDP-call helper wrapped by layoutMetricsAction above; factored out on
+// its own so the two call sites (SetViewport's read-back, rescaleToCSSViewport's
+// cache-miss fetch) share exactly one implementation of the underlying
+// protocol call instead of two near-identical duplicated closures (review
+// MEDIUM finding).
+func readCSSLayoutViewport(ctx context.Context) (w, h int64, err error) {
+	// CDP GetLayoutMetrics returns 7 values and only two are meaningful here;
+	// naming five throwaways would be noisier than the blanks.
+	//nolint:dogsled // see above
+	_, _, _, cssLayout, _, _, lerr := page.GetLayoutMetrics().Do(ctx)
+	if lerr != nil {
+		return 0, 0, lerr
+	}
+	if cssLayout != nil {
+		w = cssLayout.ClientWidth
+		h = cssLayout.ClientHeight
+	}
+	return w, h, nil
+}
+
+// viewportDeltaPx returns the absolute pixel gap between a requested int
+// dimension and an actual CDP-reported int64 dimension — shared by
+// SetViewport's compensation-trigger check and its final requested-vs-actual
+// log/cache decision, which both need the identical comparison.
+func viewportDeltaPx(requested int, actual int64) int {
+	d := requested - int(actual)
+	if d < 0 {
+		return -d
+	}
+	return d
+}
+
+// clampViewportDim bounds a compensated window-bounds dimension to
+// maxViewportDimension (SetViewport's compensation step, item 1 of the
+// 2026-07-31 fix wave): the compensated size legitimately exceeds the
+// ORIGINAL request by the window's own chrome delta, so the per-field
+// ceiling is re-applied to the compensated value alone. The combined
+// physical-pixel ceiling is deliberately NOT re-run here — it already gated
+// the original request in SetViewport above, and a compensation delta is a
+// small, window-chrome-sized correction, not an independent size request.
+func clampViewportDim(v int) int {
+	if v > maxViewportDimension {
+		return maxViewportDimension
+	}
+	if v < 1 {
+		return 1
+	}
+	return v
+}
+
+// invalidateCSSViewportCache zeroes the cached CSS viewport (review CRITICAL
+// finding, item 2 of the 2026-07-31 fix wave): a stale-but-positive cache
+// passes rescaleToCSSViewport's cache-hit guard (cssViewportW/H > 0) and
+// silently mis-maps every subsequent click by the old/new ratio — exactly the
+// bug class this whole fix exists to kill. Called whenever SetViewport's
+// read-back (or its at-most-one compensated re-read) fails outright or comes
+// back degenerate, so a broken read-back can never leave a confidently-wrong
+// cache behind — the next input event's rescaleToCSSViewport call re-fetches
+// from a known-empty (0,0) state instead of trusting a value that no longer
+// corresponds to reality.
+func (lv *LiveView) invalidateCSSViewportCache() {
+	lv.mu.Lock()
+	lv.cssViewportW, lv.cssViewportH = 0, 0
+	lv.mu.Unlock()
+}
+
 func (r *LiveViewRegistry) PauseScreencast(sessionID string) bool {
 	sessionID = resolveSessionID(sessionID)
 	lv, ok := r.lookup(sessionID)
@@ -362,6 +938,35 @@ func (r *LiveViewRegistry) AttachedViewerIDs(sessionID string) []string {
 	return out
 }
 
+// CSSViewport returns sessionID's cached CSS layout viewport — SetViewport's
+// Page.getLayoutMetrics read-back (including its at-most-one chrome-delta
+// compensation re-read), the CDP-verified truth of the tab's actual size
+// (see SetViewport's mechanism doc comment). ok is false when no live view
+// exists for sessionID, or the cache is unset/invalidated (zero — either
+// SetViewport has never run for this session, or its last read-back failed
+// or came back degenerate; see invalidateCSSViewportCache).
+//
+// Follow-up to
+// docs/internal/browser-viewport-input-rootcause-2026-07-31.md (measured
+// 2026-07-31): the gateway's browser_ws.go handleViewport calls this right
+// after a successful SetViewport so it can thread the verified dimensions
+// through to CaptureSession.RecaptureAt — without them, the encoder's own
+// chrome.tabs.get-based resolution can race the OS window reflow and pin
+// the WebRTC stream to a stale tab size.
+func (r *LiveViewRegistry) CSSViewport(sessionID string) (w, h int, ok bool) {
+	sessionID = resolveSessionID(sessionID)
+	lv, exists := r.lookup(sessionID)
+	if !exists {
+		return 0, 0, false
+	}
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	if lv.cssViewportW <= 0 || lv.cssViewportH <= 0 {
+		return 0, 0, false
+	}
+	return lv.cssViewportW, lv.cssViewportH, true
+}
+
 // Input dispatches a viewer input event via CDP, but ONLY when viewerID
 // currently holds control of sessionID (ADR-038 D6). Returns an error
 // (nothing is applied) when the viewer doesn't hold control, no live view is
@@ -390,6 +995,40 @@ func (r *LiveViewRegistry) TakeControl(sessionID, viewerID string) bool {
 		return false
 	}
 	return r.view(sessionID).takeControl(viewerID)
+}
+
+// EnsureControlForInput grants viewerID control when a human viewer sends
+// input, unless a DIFFERENT, STILL-ATTACHED viewer genuinely holds the lock.
+// Returns whether viewerID holds control afterwards.
+//
+// Product model (operator, 2026-07-30): "the user is driving per default
+// unless the agent is evidently driving, and even then the user can click
+// into the browser to take over." The lock's original design was the
+// inverse — nobody drives until an explicit take frame arrives — which made
+// a human's input silently invalid whenever client and server disagreed
+// about who held it.
+//
+// Two concrete failures this closes, both seen in the 2026-07-30 UAT:
+//
+//  1. STALE LOCK. lv.controller is cleared in detach(), which only runs on a
+//     CLEAN WebSocket close. A mobile/VPN client that vanishes abruptly
+//     leaves its viewerID owning the lock forever, and every later
+//     connection is locked out of a browser nobody is driving. Checking
+//     lv.viewers membership distinguishes a live holder from a ghost.
+//  2. LOST TAKE ACROSS RECONNECT. The client kept believing it was driving
+//     across a WS reconnect, so it never re-sent the take under its NEW
+//     viewerID; the server rejected all 448 of its inputs while the panel
+//     read "You're driving".
+//
+// The agent is not a viewer and never holds this lock (its activity is the
+// separate agent-working axis), so "a different attached viewer" here always
+// means another human — the one case where refusing is correct.
+func (r *LiveViewRegistry) EnsureControlForInput(sessionID, viewerID string) bool {
+	sessionID = resolveSessionID(sessionID)
+	if viewerID == "" {
+		return false
+	}
+	return r.view(sessionID).ensureControlForInput(viewerID)
 }
 
 // ReleaseControl releases viewerID's control of sessionID's live view, if it
@@ -468,6 +1107,44 @@ type LiveView struct {
 	lastFrame  *LiveFrame
 	controller string // viewerID holding control; "" = uncontrolled
 
+	// cssViewportW/cssViewportH cache the tab's actual CSS layout viewport
+	// (Page.getLayoutMetrics' cssLayoutViewport ClientWidth/ClientHeight),
+	// read back after every SetViewport call (including its at-most-one
+	// chrome-delta compensation re-read) — that read-back is the source of
+	// truth dispatchInput's rescaleToCSSViewport uses to map a viewer's
+	// capture-space input coordinates into CSS pixels (root-cause doc
+	// Fault 3). Zero until the first SetViewport call, or the first input
+	// event that needs it and finds the cache empty, populates it. Also
+	// explicitly zeroed by invalidateCSSViewportCache (review CRITICAL
+	// finding, 2026-07-31 fix wave) whenever a SetViewport read-back fails
+	// or comes back degenerate — a stale-but-positive value here is worse
+	// than an empty one, since it passes rescaleToCSSViewport's cache-hit
+	// guard and silently mis-maps input by the old/new ratio.
+	cssViewportW, cssViewportH int
+
+	// viewportMu serializes SetViewport's multi-round-trip
+	// apply→compensate→read-back sequence (see SetViewport). Separate from mu
+	// because it is held across CDP calls, which mu never may be.
+	viewportMu sync.Mutex
+
+	// nextFetchAfter backs off rescaleToCSSViewport's cache-miss fetch after
+	// a failure (2026-07-31 fix wave, item 3): zero until the first fetch
+	// failure; set to time.Now().Add(viewportInputFetchBackoff) on failure,
+	// and consulted (then implicitly cleared by a subsequent successful
+	// fetch) on every later cache-miss call so a sustained CDP hiccup
+	// doesn't repeat the same failing round trip — and its WARN log — once
+	// per input event. See rescaleToCSSViewport's doc comment.
+	nextFetchAfter time.Time
+	// viewportFetchFailures counts CONSECUTIVE cache-miss fetch failures in
+	// rescaleToCSSViewport, reset on any success. A single failure is a
+	// transient the user simply retries past; a sustained streak means the CDP
+	// transport is wedged or the tab is dead, which LiveInputErrorReal's own
+	// doc comment names as the single most important thing to surface ("a dead
+	// browser looked identical to a healthy, idle one" — ADR-038 finding #4).
+	// Escalating on the streak keeps a routine hiccup quiet while ensuring a
+	// genuinely dead tab still reaches the user.
+	viewportFetchFailures int
+
 	// pausedForWebRTC (ADR-047 fix-wave finding 3, pod-CPU-saturation UAT:
 	// "inputs feel dead / choppy under heavy video") is true when the CDP
 	// screencast was deliberately stopped by PauseScreencast because WebRTC
@@ -486,7 +1163,8 @@ type LiveView struct {
 	// time, so one shared counter per LiveView is sufficient — no per-viewer
 	// bookkeeping needed.
 	inputWindowStart time.Time
-	inputCount       int
+	inputCount       int // coalescible kinds (mouse_move, wheel)
+	discreteCount    int // button/key transitions
 
 	// ackCh is the mailbox runAckWorker consumes from: handleScreencastEvent
 	// hands off each frame's session ID here (coalescing to the latest via
@@ -647,7 +1325,8 @@ func (lv *LiveView) attach(
 	// consts' doc) rendered every target regardless, which is why this was
 	// never needed before. Measured on real Chrome 150: 0 frames in 4s on an
 	// animating page without bringToFront; ~60fps with it.
-	err := lv.runCDP(tabCtx, lv.mgr.PageTimeout(),
+	err := lv.runCDP(
+		tabCtx, lv.mgr.PageTimeout(),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			return page.BringToFront().Do(ctx)
 		}),
@@ -938,7 +1617,8 @@ func (lv *LiveView) rebindScreencastOnce(newCtx context.Context) (context.Contex
 	// --headless=new requirement as attach() — a newly-activated tab is
 	// hidden to the compositor until brought to front, and a hidden target
 	// produces zero screencast frames (see attach()'s comment).
-	err := lv.runCDP(newCtx, lv.mgr.PageTimeout(),
+	err := lv.runCDP(
+		newCtx, lv.mgr.PageTimeout(),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			return page.BringToFront().Do(ctx)
 		}),
@@ -1341,7 +2021,8 @@ func (lv *LiveView) resumeScreencast() bool {
 	})
 	go lv.runAckWorker(ackCtx, listenCtx)
 
-	err = lv.runCDP(tabCtx, lv.mgr.PageTimeout(),
+	err = lv.runCDP(
+		tabCtx, lv.mgr.PageTimeout(),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			return page.BringToFront().Do(ctx)
 		}),
@@ -1407,6 +2088,28 @@ func benignInputError(format string, args ...any) error {
 	return &LiveInputError{Kind: LiveInputErrorBenign, err: fmt.Errorf(format, args...)}
 }
 
+// ErrViewerNotController is the specific benign rejection meaning "this
+// viewer sent input but does not hold the session's control lock".
+//
+// 2026-07-30 UAT — why this needs to be distinguishable from every other
+// benign rejection: it is the only one that indicates the CLIENT'S BELIEF IS
+// WRONG rather than that the input was merely unwanted. A rate-limit
+// rejection is self-correcting (slow down and the next event lands); this
+// one never self-corrects, because the client goes on believing it is
+// driving and the server goes on discarding everything it sends. The
+// operator hit exactly that: the panel read "You're driving" while 448
+// consecutive inputs were rejected and silently dropped at debug level.
+// Callers use IsNotControllerLiveInputError to detect it and push the
+// authoritative control state back to that viewer so the UI can correct
+// itself. See pkg/gateway/browser_webrtc.go's data-channel input handler.
+var ErrViewerNotController = errors.New("browser live: viewer does not hold control of this session")
+
+// IsNotControllerLiveInputError reports whether err is the "viewer does not
+// hold control" rejection — see ErrViewerNotController.
+func IsNotControllerLiveInputError(err error) bool {
+	return errors.Is(err, ErrViewerNotController)
+}
+
 func realInputError(format string, args ...any) error {
 	return &LiveInputError{Kind: LiveInputErrorReal, err: fmt.Errorf(format, args...)}
 }
@@ -1426,19 +2129,80 @@ func IsBenignLiveInputError(err error) bool {
 // input action. Called with no locks held by the caller.
 func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 	lv.mu.Lock()
-	if lv.controller == "" || lv.controller != viewerID {
+	// NO CONTROL GATE (operator directive, 2026-08-03). The live panel is a
+	// REAL BROWSER the human uses normally, and the agent can steer it too —
+	// both, concurrently. Input is never refused because some other viewer
+	// "holds the wheel".
+	//
+	// This replaced an exclusive single-controller lock that refused every
+	// event unless viewerID matched lv.controller. Measured consequence: a
+	// second attached viewer (another panel, a pop-out, an automation session
+	// that never detached) left the actual human with a dead mouse, dead
+	// keyboard, and a URL bar that would not submit — the panel showed
+	// "Someone else is driving" and silently dropped everything the user did.
+	// A browser that refuses input is not a browser.
+	//
+	// lv.controller is retained for PRESENTATION only (who to show as active
+	// in the header, the ADR-039 controlSinks broadcast); it must never again
+	// become an authorization decision on this path.
+	if !lv.allowInputLocked(in.Kind) {
 		lv.mu.Unlock()
-		return benignInputError("browser live: viewer does not hold control of this session")
-	}
-	if !lv.allowInputLocked() {
-		lv.mu.Unlock()
-		return benignInputError("browser live: input rate limit exceeded (%d/s)", maxInputEventsPerSecond)
+		limit := maxDiscreteInputEventsPerSecond
+		if isCoalescibleInputKind(in.Kind) {
+			limit = maxCoalescibleInputEventsPerSecond
+		}
+		return benignInputError("browser live: input rate limit exceeded for %s (%d/s)", in.Kind, limit)
 	}
 	tabCtx := lv.tabCtx
 	lv.mu.Unlock()
 
 	if tabCtx == nil {
 		return realInputError("browser live: session is not attached")
+	}
+
+	// Root-cause doc Fault 3: x/y arrive in the CLIENT's capture-frame pixel
+	// space, which is no longer guaranteed to equal the tab's CSS pixel
+	// space now that SetViewport (Fault 1 fix, above) can resize the tab
+	// independently of what the encoder's downscaling happens to produce.
+	// Only pointer-position kinds carry a meaningful position to rescale —
+	// wheel's DeltaX/DeltaY are scroll deltas, not positions, and key/text
+	// carry no coordinates at all.
+	switch in.Kind {
+	case "mouse_move", "mouse_down", "mouse_up", "wheel":
+		if in.HasXY && in.CaptureWidth > 0 && in.CaptureHeight > 0 {
+			rx, ry, ok := lv.rescaleToCSSViewport(tabCtx, in.X, in.Y, in.CaptureWidth, in.CaptureHeight)
+			if !ok {
+				// DROP rather than dispatch at an unmapped coordinate — see
+				// rescaleToCSSViewport's doc comment: unscaled coordinates
+				// land ~34% off (measured), i.e. on the wrong element, and a
+				// mis-aimed click can navigate away, delete or submit.
+				//
+				// Classification matters as much as the drop. A one-off miss
+				// is a transient the user retries past, so it stays benign and
+				// silent. But a SUSTAINED streak means the CDP transport is
+				// wedged or the tab is dead — and LiveInputErrorReal's own doc
+				// comment names exactly that as the thing that must reach the
+				// user ("a dead browser looked identical to a healthy, idle
+				// one", ADR-038 finding #4). Without this escalation a crashed
+				// tab would swallow every click forever with no error, since
+				// pointer kinds bail out here and never reach the real-error
+				// CDP dispatch below.
+				lv.mu.Lock()
+				failures := lv.viewportFetchFailures
+				lv.mu.Unlock()
+				if failures >= viewportFetchFailureEscalation {
+					return realInputError(
+						"browser live: cannot read the tab's CSS viewport after %d consecutive attempts — the browser tab may have crashed or the CDP transport is wedged",
+						failures,
+					)
+				}
+				return benignInputError(
+					"browser live: viewport unknown, dropped %s to avoid a mis-aimed dispatch",
+					in.Kind,
+				)
+			}
+			in.X, in.Y = rx, ry
+		}
 	}
 
 	action, err := buildInputAction(in)
@@ -1486,18 +2250,125 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 	return nil
 }
 
+// rescaleToCSSViewport maps (x, y) from the client's capture-frame pixel
+// space (capW x capH) into the tab's actual CSS pixel space, using the
+// cssViewportW/H cache SetViewport maintains (root-cause doc Fault 3). Called
+// with no LiveView lock held, per the ADR-038 CDP-call discipline this file
+// observes everywhere else.
+//
+// If nothing has populated the cache yet — no SetViewport call this session
+// yet, or a prior read-back was invalidated (invalidateCSSViewportCache) —
+// this fetches it once via Page.getLayoutMetrics, bounded by the much
+// shorter viewportInputFetchTimeout, NOT SetViewport's viewportSetTimeout
+// (review CRITICAL finding, item 3): this call runs on the dispatchInput ->
+// WS-read-loop hot path, once per input event on every cache miss, not on a
+// rare, debounced user-triggered resize, so a slow/wedged CDP transport must
+// fail fast here instead of stalling input throughput up to a multi-second
+// timeout per event.
+//
+// On fetch failure it reports ok=false and the caller DROPS the event.
+// This reverses the previous behavior, which dispatched unscaled on the
+// reasoning that "a slightly-off click still beats a completely dead panel".
+// Measurement killed that argument (2026-08-03): the capture frame and the CSS
+// viewport differed by 562 vs 369 px, so an unscaled click lands ~34% below
+// where the user aimed — reliably on the WRONG element, not merely near the
+// right one. A dropped click is a no-op the user retries; a mis-aimed click
+// activates something they did not choose, which on a real page can navigate
+// away, delete, or submit. Silence beats a wrong action.
+//
+// Failure backoff (item 3b): a failed fetch arms lv.nextFetchAfter
+// viewportInputFetchBackoff into the future. While that window is open,
+// further cache-miss calls are DROPPED (see above) WITHOUT retrying the fetch or
+// re-logging the failure — before this fix, a sustained CDP hiccup meant
+// every subsequent input event repeated the same (bounded, but non-zero
+// cost) failing round trip and logged a fresh WARN, collapsing input
+// throughput to roughly one event per timeout. The failure is logged once,
+// when it actually happens, not once per event that finds the cache still
+// empty.
+func (lv *LiveView) rescaleToCSSViewport(tabCtx context.Context, x, y, capW, capH float64) (rx, ry float64, ok bool) {
+	lv.mu.Lock()
+	cssW, cssH := lv.cssViewportW, lv.cssViewportH
+	inBackoff := !lv.nextFetchAfter.IsZero() && time.Now().Before(lv.nextFetchAfter)
+	lv.mu.Unlock()
+
+	if cssW <= 0 || cssH <= 0 {
+		if inBackoff {
+			// Already logged when the fetch actually failed — staying quiet
+			// here is the whole point of the backoff window.
+			return 0, 0, false
+		}
+
+		var w, h int64
+		err := lv.runCDP(tabCtx, viewportInputFetchTimeout, layoutMetricsAction{w: &w, h: &h})
+		if err != nil || w <= 0 || h <= 0 {
+			logger.WarnCF(
+				"browser",
+				"live view: input rescale — could not read the tab's CSS viewport, DROPPING this positional event (backing off further fetches)",
+				map[string]any{
+					"session_id":      lv.sessionID,
+					"backoff_seconds": viewportInputFetchBackoff.Seconds(),
+				},
+			)
+			lv.mu.Lock()
+			lv.nextFetchAfter = time.Now().Add(viewportInputFetchBackoff)
+			lv.viewportFetchFailures++
+			lv.mu.Unlock()
+			return 0, 0, false
+		}
+
+		lv.mu.Lock()
+		lv.cssViewportW, lv.cssViewportH = int(w), int(h)
+		lv.nextFetchAfter = time.Time{}
+		lv.viewportFetchFailures = 0
+		lv.mu.Unlock()
+		cssW, cssH = int(w), int(h)
+	}
+
+	rx, ry = rescaleInputCoords(x, y, capW, capH, float64(cssW), float64(cssH))
+	return rx, ry, true
+}
+
+// rescaleInputCoords maps (x, y) from the capture frame's pixel space
+// (capW x capH) into the tab's CSS pixel space (cssW x cssH). Pure math, no
+// CDP — factored out of rescaleToCSSViewport so it is unit-testable without
+// a real Chromium (root-cause doc Fault 3: the assumption that
+// videoWidth/videoHeight == page CSS pixels is false whenever the encoder
+// downscales, e.g. the measured 319x158 capture against a ~1280-wide page).
+// Callers must guard against capW/capH <= 0 themselves — this function does
+// not, so it can stay a trivial, allocation-free ratio computation.
+func rescaleInputCoords(x, y, capW, capH, cssW, cssH float64) (float64, float64) {
+	return x * cssW / capW, y * cssH / capH
+}
+
 // allowInputLocked applies a simple fixed-window rate limiter. Must be called
 // with mu held.
-func (lv *LiveView) allowInputLocked() bool {
+// isCoalescibleInputKind reports whether a dropped event of this kind is
+// self-healing: a later event of the same kind fully supersedes it. Position
+// updates are; state transitions are not, and must not share their budget.
+func isCoalescibleInputKind(kind string) bool {
+	return kind == "mouse_move" || kind == "wheel"
+}
+
+// allowInputLocked charges the event against the bucket for its kind and
+// reports whether it may proceed. Both buckets share one fixed window.
+func (lv *LiveView) allowInputLocked(kind string) bool {
 	now := time.Now()
 	if now.Sub(lv.inputWindowStart) >= time.Second {
 		lv.inputWindowStart = now
 		lv.inputCount = 0
+		lv.discreteCount = 0
 	}
-	if lv.inputCount >= maxInputEventsPerSecond {
+	if isCoalescibleInputKind(kind) {
+		if lv.inputCount >= maxCoalescibleInputEventsPerSecond {
+			return false
+		}
+		lv.inputCount++
+		return true
+	}
+	if lv.discreteCount >= maxDiscreteInputEventsPerSecond {
 		return false
 	}
-	lv.inputCount++
+	lv.discreteCount++
 	return true
 }
 
@@ -1509,6 +2380,33 @@ func (lv *LiveView) allowInputLocked() bool {
 // connection's display agree with that lock instead of continuing to show
 // stale state. The sinks are dispatched via broadcastControl (no lock held),
 // mirroring deliver().
+// ensureControlForInput is EnsureControlForInput's per-view half — see that
+// method's doc comment for the model and the two failures it closes.
+func (lv *LiveView) ensureControlForInput(viewerID string) bool {
+	lv.mu.Lock()
+	if lv.controller == viewerID {
+		lv.mu.Unlock()
+		return true
+	}
+	if lv.controller != "" {
+		if _, stillAttached := lv.viewers[lv.controller]; stillAttached {
+			// A real, live viewer is driving — refuse. This is the only case
+			// where denying a human's input is correct, and it is what keeps
+			// two simultaneous humans from fighting over the same page.
+			lv.mu.Unlock()
+			return false
+		}
+		// Holder is a ghost: it owns the lock but is no longer attached, so
+		// it can never release it. Steal rather than stay wedged forever.
+	}
+	lv.controller = viewerID
+	otherSinks := lv.snapshotControlSinksExceptLocked(viewerID)
+	lv.mu.Unlock()
+
+	broadcastControl(otherSinks, true)
+	return true
+}
+
 func (lv *LiveView) takeControl(viewerID string) bool {
 	lv.mu.Lock()
 	if lv.controller != "" && lv.controller != viewerID {
@@ -1664,10 +2562,28 @@ func buildInputAction(in LiveInput) (chromedp.Action, error) {
 		if in.Key == "" && in.Code == "" {
 			return nil, fmt.Errorf("browser live: key_down input requires a key or code")
 		}
-		return input.DispatchKeyEvent(input.KeyRawDown).
+		// CDP dispatches two keydown variants and the split is what decides
+		// whether the browser PERFORMS the key: "keyDown" runs text processing
+		// and default actions (Enter submits the focused form, inserts a
+		// newline in a textarea); "rawKeyDown" delivers the DOM event only.
+		// Live UAT 2026-07-31: typing into a remote page's search box then
+		// pressing Enter did nothing, because every key_down went out as
+		// rawKeyDown with empty text — the virtual key code alone never
+		// triggers form submission. Mirror Puppeteer's convention exactly:
+		// synthesize text "\r" for Enter when the client sent none, and use
+		// keyDown whenever text is present, rawKeyDown otherwise.
+		text := in.Text
+		if text == "" && in.Key == "Enter" {
+			text = "\r"
+		}
+		keyType := input.KeyRawDown
+		if text != "" {
+			keyType = input.KeyDown
+		}
+		return input.DispatchKeyEvent(keyType).
 			WithKey(in.Key).
 			WithCode(in.Code).
-			WithText(in.Text).
+			WithText(text).
 			WithWindowsVirtualKeyCode(int64(in.KeyCode)).
 			WithNativeVirtualKeyCode(int64(in.KeyCode)).
 			WithModifiers(mods), nil

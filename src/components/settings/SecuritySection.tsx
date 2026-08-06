@@ -199,6 +199,16 @@ export function SecuritySection() {
   const [execTimeoutSecs, setExecTimeoutSecs] = useState('')
   const [maxBackgroundSecs, setMaxBackgroundSecs] = useState('')
   const [enableDenyPatterns, setEnableDenyPatterns] = useState(false)
+  // D3 / UAT spurious-PUT fix: reactive readiness flag, distinct from the
+  // `!config` check useAutoSave's `disabled` option used to key off of.
+  // `config` turns truthy in the SAME commit the hydration effect below is
+  // SCHEDULED, but the effect's own setState calls don't land until the
+  // NEXT commit — so `disabled: !config` flipped false one render too
+  // early, letting useAutoSave capture the hardcoded useState defaults as
+  // its baseline instead of the real persisted values. `securityHydrated`
+  // is set at the END of the hydration effect, so it flips true in the
+  // same commit the real values land.
+  const [securityHydrated, setSecurityHydrated] = useState(false)
 
   // Audit log dialog state
   const [auditLogOpen, setAuditLogOpen] = useState(false)
@@ -221,6 +231,7 @@ export function SecuritySection() {
     setExecTimeoutSecs(config.security.exec_timeout_seconds?.toString() ?? '')
     setMaxBackgroundSecs(config.security.max_background_seconds?.toString() ?? '')
     setEnableDenyPatterns(config.security.enable_deny_patterns ?? false)
+    setSecurityHydrated(true)
   }, [config])
 
   const securityFormData = useMemo(() => ({
@@ -253,7 +264,7 @@ export function SecuritySection() {
       isDirtyRef.current = false
       queryClient.invalidateQueries({ queryKey: ['config'] })
     },
-    { disabled: !config },
+    { disabled: !securityHydrated },
   )
 
   // Credential add/delete are re-auth gated server-side (ADR-022). Route them

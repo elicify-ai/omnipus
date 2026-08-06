@@ -1,0 +1,90 @@
+title: TaskRun
+description: >
+  One execution record for a task (ADR-050 / docs/internal/specs/task-run-history-spec.md
+  §2.1) — a purely additive record layer. Runs are append-only and
+  event-sourced: an "open" record is written when a dispatch is claimed
+  (`status: in_progress`, `ended_at: null`) and a "close" record carrying the
+  SAME `run_id` is appended when it finishes (`status: done|failed`,
+  `result`, `ended_at`). Readers fold by `run_id`, last record wins.
+  `Task.status`/`result`/`session_id` keep their existing behaviour
+  completely unchanged (RD2) — TaskRun is read by the calendar occurrence
+  overlay (`occurrence_runs` on TaskOccurrenceSet, `run_counts` on DayBucket)
+  and the task-detail run-history list. Returned by GET /tasks/{id}/runs.
+type: object
+required:
+  - run_id
+  - task_id
+  - occurrence_ms
+  - status
+  - session_id
+  - kind
+  - started_at
+  - ended_at
+additionalProperties: false
+properties:
+  run_id:
+    type: string
+    description: Stable ULID identifying this run across its open and close records.
+    example: "01J8Z3K2R9G4S6M0N1P2Q3R4S5"
+  task_id:
+    type: string
+    description: The task this run belongs to.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  occurrence_ms:
+    type: integer
+    format: int64
+    nullable: true
+    description: >
+      The scheduled RRULE instant this run realizes (the calendar join key,
+      Unix epoch milliseconds). Null for an ad-hoc/once/manual run.
+    example: 1784620800000
+  status:
+    type: string
+    enum:
+      - in_progress
+      - done
+      - failed
+      - skipped
+    description: >
+      Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has
+      no producer today; a stuck-run reaper closes abandoned runs to
+      `failed`). `skipped` records a scheduled fire that never ran at all
+      because the overlap guard found the previous occurrence still
+      `in_progress` — a purely bookkeeping close, not a failure.
+    example: "done"
+  result:
+    type: string
+    maxLength: 50000
+    description: >
+      Terminal-run output text. Absent while the run is `in_progress`
+      (mirrors Task.result's own "absent while running" convention).
+    example: "Found 3 anomalies in the gateway logs."
+  session_id:
+    type: string
+    description: >
+      The chat session this run produced. Minted at open time, unlike
+      Task.session_id (which is only set once a task has ever run) — a
+      TaskRun always has one from creation onward, EXCEPT a `status: skipped`
+      record: the overlap guard's scheduled fire never started a session, so
+      a skipped run's `session_id` is always the empty string.
+    example: "session-uuid"
+  kind:
+    type: string
+    enum:
+      - scheduled
+      - manual
+    description: How the run started — an automatic trigger fire, or a user Run-now.
+    example: "scheduled"
+  started_at:
+    type: string
+    format: date-time
+    description: >
+      RFC 3339 timestamp when the run opened (also the on-disk day-partition
+      key for the open record).
+    example: "2026-07-20T09:00:00Z"
+  ended_at:
+    type: string
+    format: date-time
+    nullable: true
+    description: RFC 3339 timestamp when the run closed. Null while in_progress.
+    example: "2026-07-20T09:05:30Z"

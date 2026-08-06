@@ -1,0 +1,27 @@
+title: LibraryRenameRequest
+description: >
+  Request body for POST /api/v1/library/{workspace_id}/rename. Renames or
+  moves a file or directory within the workspace's work tree — "to" may
+  name a different parent directory than "from", so this operation doubles
+  as a move.
+type: object
+additionalProperties: false
+required:
+  - from
+  - to
+properties:
+  from:
+    type: string
+    minLength: 1
+    description: >
+      Current workspace-relative path of the file or directory,
+      forward-slash separated. Never absolute and never containing a ".."
+      segment (library-spec.md Constraints).
+    example: "uploads/draft.md"
+  to:
+    type: string
+    minLength: 1
+    description: >
+      New workspace-relative path, same constraints as "from". Rejected
+      (409) if an entry already exists at this path.
+    example: "uploads/report.md"

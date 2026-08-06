@@ -70,7 +70,7 @@ func TestTaskExecutor_AttemptBoundaries(t *testing.T) {
 				t.Fatalf("create task: %v", err)
 			}
 
-			if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+			if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 				t.Fatalf("ExecuteTask: %v", err)
 			}
 
@@ -118,7 +118,7 @@ func TestTaskExecutor_AttemptHardCeiling_StopsUnconditionally(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestTaskExecutor_ScratchpadExemptFromGoalLoop(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -197,7 +197,7 @@ func TestTaskExecutor_JudgeMetVerdict_CompletesTaskDone(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -285,7 +285,7 @@ func TestGoalLoop_ExplicitUpdateTaskDone_StillJudged(t *testing.T) {
 		},
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 

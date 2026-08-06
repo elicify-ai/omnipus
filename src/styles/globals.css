@@ -69,6 +69,15 @@
      utility over ad-hoc py-* on header rows. */
   --spacing-chrome-header: 44px;
 
+  /* Browser live-panel tab row. Deliberately shorter than the 44px shell
+     chrome: the live panel consolidates its whole toolbar into two rows so
+     the remote page gets the height back, and the tab strip carries only
+     tab chips plus the window controls. FIXED (not min-) on purpose — the
+     panel pushes its own box as the remote viewport, so a header row that
+     changes height forces a full capture rebuild (see BrowserLiveView's
+     handback-hint comment for the measured regression this prevents). */
+  --spacing-browser-tabs: 34px;
+
   /* Animation */
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -102,6 +111,14 @@
 }
 @utility min-h-chrome-header {
   min-height: var(--spacing-chrome-header);
+}
+
+/* Browser live-panel tab row (see --spacing-browser-tabs). */
+@utility h-browser-tabs {
+  height: var(--spacing-browser-tabs);
+}
+@utility min-h-browser-tabs {
+  min-height: var(--spacing-browser-tabs);
 }
 
 /* ------------------------------------------------------------------ */

@@ -205,19 +205,48 @@ func TestValidateTransition_LegalTransitions(t *testing.T) {
 	}
 	for _, tc := range legal {
 		t.Run(fmt.Sprintf("%s→%s", tc.from, tc.to), func(t *testing.T) {
-			err := validateTransition(tc.from, tc.to, false)
+			err := validateTransition(tc.from, tc.to, false, false)
 			require.NoError(t, err, "%s→%s should be legal", tc.from, tc.to)
 		})
 	}
 }
 
 func TestValidateTransition_DoneIsFrozen(t *testing.T) {
-	// Traces to: store.go line 459 — done is terminal, no transition out
+	// Traces to: store.go line 459 — done is terminal, no transition out.
+	// repeating=false throughout: this is the general (non-repeating-trigger)
+	// frozen behavior; TestTransition_DoneRepeatingCarveOut below covers the
+	// narrow repeating=true exception.
+	//
+	// StatusPlanning does not exist on this branch (ADR-051 removed the
+	// planning status — plans-as-filter over the combined board superseded
+	// it); release/v0.1.1 still had it at the point this test was written
+	// there. Dropped from the enumeration to match our status set.
 	frozen := []Status{StatusInbox, StatusNext, StatusInProgress, StatusFailed}
 	for _, to := range frozen {
 		t.Run(fmt.Sprintf("done→%s", to), func(t *testing.T) {
-			err := validateTransition(StatusDone, to, false)
+			err := validateTransition(StatusDone, to, false, false)
 			require.Error(t, err, "done→%s should be forbidden", to)
+			assert.True(t, errors.Is(err, ErrIllegalTransition), "must be ErrIllegalTransition")
+		})
+	}
+}
+
+// TestTransition_DoneRepeatingCarveOut covers the narrow validateTransition
+// exception added for a repeating-trigger task's manual "Run now" action: a
+// `done` task whose trigger repeats (recurring/every) may transition to
+// `in_progress` — mirroring the fact that the scheduler itself keeps such a
+// task's series armed past a `done` status (task_trigger.go's
+// OnTaskUpserted). Every OTHER done→* edge stays frozen even with
+// repeating=true — the carve-out is exactly one edge wide.
+func TestTransition_DoneRepeatingCarveOut(t *testing.T) {
+	err := validateTransition(StatusDone, StatusInProgress, false, true)
+	require.NoError(t, err, "done→in_progress must be permitted for a repeating trigger")
+
+	stillFrozen := []Status{StatusInbox, StatusNext, StatusFailed}
+	for _, to := range stillFrozen {
+		t.Run(fmt.Sprintf("done→%s still frozen even when repeating", to), func(t *testing.T) {
+			err := validateTransition(StatusDone, to, false, true)
+			require.Error(t, err, "done→%s should stay forbidden even for a repeating trigger", to)
 			assert.True(t, errors.Is(err, ErrIllegalTransition), "must be ErrIllegalTransition")
 		})
 	}
@@ -226,16 +255,16 @@ func TestValidateTransition_DoneIsFrozen(t *testing.T) {
 func TestValidateTransition_BlockedClearsOnlyViaInternal(t *testing.T) {
 	// Traces to: store.go line 465 — leaving blocked requires internal hatch
 	// External (internal=false): blocked→next is rejected.
-	err := validateTransition(StatusBlocked, StatusNext, false)
+	err := validateTransition(StatusBlocked, StatusNext, false, false)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrIllegalTransition))
 
 	// Internal (internal=true): blocked→next is permitted.
-	err = validateTransition(StatusBlocked, StatusNext, true)
+	err = validateTransition(StatusBlocked, StatusNext, true, false)
 	require.NoError(t, err, "internal hatch allows leaving blocked")
 
 	// Internal hatch also allows entering blocked.
-	err = validateTransition(StatusNext, StatusBlocked, true)
+	err = validateTransition(StatusNext, StatusBlocked, true, false)
 	require.NoError(t, err, "internal hatch allows entering blocked")
 }
 
@@ -1371,6 +1400,7 @@ func TestUpdateClearsTrigger(t *testing.T) {
 	s := newStore(t)
 	cron := "0 9 * * MON"
 	tk := mkTask("t", "ws")
+	tk.AgentID = "agent-1"
 	tk.Trigger = &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
 	mustCreate(t, s, tk)
 

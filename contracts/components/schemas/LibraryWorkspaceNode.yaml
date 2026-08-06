@@ -1,0 +1,37 @@
+title: LibraryWorkspaceNode
+description: >
+  One workspace as a node in the Library's virtual root listing
+  (GET /api/v1/library/workspaces) — the sidebar entry point (library-spec.md
+  D-3: "two entry points, one component"). Drilling into a node scopes all
+  subsequent Library operations to that workspace's work tree via
+  {workspace_id}.
+type: object
+additionalProperties: false
+required:
+  - id
+  - name
+  - entry_count
+properties:
+  id:
+    type: string
+    description: Workspace identifier (matches Workspace.id).
+    example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  name:
+    type: string
+    description: Human-readable workspace name (matches Workspace.name).
+    example: "website-api"
+  entry_count:
+    type: integer
+    format: int32
+    minimum: 0
+    description: >
+      Number of direct entries (files and directories) at the root of this
+      workspace's work tree (workspaces/<id>/work/ — the same root
+      GET .../entries lists), counted non-recursively so this stays cheap
+      across every workspace on one request. Counts only non-hidden
+      entries (see LibraryEntry.is_hidden), matching what the default
+      (include_hidden=false) directory listing shows — the reserved
+      work/.library/ upload directory is excluded from this count even
+      though it exists. 0 when the work tree does not exist yet or has no
+      visible entries.
+    example: 12

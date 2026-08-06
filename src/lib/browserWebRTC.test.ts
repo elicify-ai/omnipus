@@ -763,6 +763,109 @@ describe('BrowserWebRTCSession — applyState honors active:false after connecti
   })
 })
 
+describe('BrowserWebRTCSession — applyState reacts promptly to a reported reason while offering (fix-wave C, "first-offer failure never surfaced" defect)', () => {
+  it('falls back IMMEDIATELY — no waiting for the cold-start answer timeout — when a first-offer failure arrives as available:true + reason while still offering', async () => {
+    const pc = makeFakePc()
+    const onFallback = vi.fn()
+    // Deliberately huge cold-start answer timeout AND retry delay: before
+    // this fix, `applyState({available:true, reason:'error'})` while
+    // `offering` was a complete no-op (neither the available:false branch
+    // nor the active===false-while-connected branch matched — the gateway
+    // never sends an explicit `active:false` on the wire, only `true` or
+    // omitted, per `sendWebRTCState`'s `if active { f.Active = boolPtr(true) }`
+    // encoding). Without the fix this assertion would fail immediately
+    // (onFallback never called, state stuck at 'offering') rather than
+    // merely being slow — proving the reaction is synchronous to the
+    // server's report, not gated behind any timer.
+    const machine = new BrowserWebRTCSession({
+      pcFactory: () => asRTCPeerConnection(pc),
+      firstAnswerTimeoutMs: 100_000,
+      retryDelayMs: 100_000,
+    })
+    machine.onFallback(onFallback)
+    machine.start(vi.fn())
+    await driveToOfferSent(pc)
+    expect(machine.state).toBe('offering')
+
+    // Exactly the gateway's real HandleViewerOffer-failure frame shape
+    // (available:true, active omitted, reason:"error" —
+    // pkg/gateway/browser_webrtc.go:347's
+    // `sendWebRTCState(wc, sessID, viewerID, true, false, false, "error")`).
+    machine.applyState({ available: true, reason: 'error' })
+
+    expect(onFallback).toHaveBeenCalledWith('error')
+    expect(machine.state).toBe('fallback')
+    expect(pc.close).toHaveBeenCalled()
+  })
+
+  it('is forward-compatible with an unrecognized/future reason value (e.g. a prospective "ingest_timeout") while offering — reacts the same way, passing the reason straight through rather than treating it as a capability gate', async () => {
+    const pc = makeFakePc()
+    const onFallback = vi.fn()
+    const machine = new BrowserWebRTCSession({
+      pcFactory: () => asRTCPeerConnection(pc),
+      firstAnswerTimeoutMs: 100_000,
+      retryDelayMs: 100_000,
+    })
+    machine.onFallback(onFallback)
+    machine.start(vi.fn())
+    await driveToOfferSent(pc)
+
+    machine.applyState({ available: true, reason: 'ingest_timeout' })
+
+    expect(onFallback).toHaveBeenCalledWith('ingest_timeout')
+    expect(machine.state).toBe('fallback')
+  })
+
+  it('also reacts promptly to a reported reason once already connected (unchanged/still-covered case)', async () => {
+    const pc = makeFakePc()
+    const onFallback = vi.fn()
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc), retryDelayMs: 100_000 })
+    machine.onFallback(onFallback)
+    machine.start(vi.fn())
+    await driveToConnected(pc)
+
+    machine.applyState({ available: true, reason: 'error' })
+
+    expect(onFallback).toHaveBeenCalledWith('error')
+    expect(machine.state).toBe('fallback')
+  })
+
+  it('still arms exactly one automatic retry (at the configured retryDelayMs) after an offering-stage reason fallback — the single-retry budget is unaffected by reacting sooner', async () => {
+    const pcs: FakePc[] = []
+    const pcFactory = () => {
+      const pc = makeFakePc()
+      pcs.push(pc)
+      return asRTCPeerConnection(pc)
+    }
+    const machine = new BrowserWebRTCSession({ pcFactory, firstAnswerTimeoutMs: 100_000, retryDelayMs: 40 })
+    machine.start(vi.fn())
+    await driveToOfferSent(pcs[0])
+
+    machine.applyState({ available: true, reason: 'error' })
+    expect(pcs).toHaveLength(1) // no new PC yet — the retry timer just armed
+
+    await wait(20)
+    expect(pcs).toHaveLength(1) // not yet — well before the 40ms retry delay
+
+    await wait(40) // past the 40ms retry delay (t=60ms total)
+    expect(pcs).toHaveLength(2) // exactly one retry fired
+  })
+
+  it('the routine post-attach re-announcement (available:true, no reason, active omitted) stays a no-op while offering', async () => {
+    const pc = makeFakePc()
+    const onFallback = vi.fn()
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc) })
+    machine.onFallback(onFallback)
+    machine.start(vi.fn())
+    await driveToOfferSent(pc)
+
+    machine.applyState({ available: true })
+
+    expect(onFallback).not.toHaveBeenCalled()
+    expect(machine.state).toBe('offering')
+  })
+})
+
 describe('BrowserWebRTCSession — sendOffer failure (MED, fix-wave B)', () => {
   it('falls back immediately with "offer-send-failed" when sendOffer returns false, without waiting for the answer timeout', async () => {
     const pc = makeFakePc()
@@ -901,5 +1004,115 @@ describe('BrowserWebRTCSession — stop()', () => {
     const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(makeFakePc()) })
     expect(() => machine.stop()).not.toThrow()
     expect(machine.state).toBe('idle')
+  })
+})
+
+// Regression: the 2026-07-30 Batam/VPN UAT. The retry budget used to be a
+// one-shot boolean (`retriedOnce`), so after a SINGLE failed re-offer the
+// panel was stranded in the JPEG ("picture mode") sink for the rest of the
+// session — which is exactly what the operator hit: the stream degraded and
+// never came back. The budget is now a counter with exponential backoff that
+// resets on every successful connect.
+describe('BrowserWebRTCSession — retry budget (2026-07-30 UAT: permanent picture-mode stranding)', () => {
+  // Drives the pc at `idx` to "offer sent", then lets its answer time out —
+  // i.e. fails exactly one negotiation attempt.
+  async function failAttempt(pcs: FakePc[], idx: number): Promise<void> {
+    await vi.advanceTimersByTimeAsync(0)
+    pcs[idx].iceGatheringState = 'complete'
+    pcs[idx].onicegatheringstatechange?.()
+    await vi.advanceTimersByTimeAsync(20)
+  }
+
+  it('retries repeatedly with exponential backoff rather than giving up after one re-offer', async () => {
+    vi.useFakeTimers()
+    try {
+      const pcs: FakePc[] = []
+      const pcFactory = () => {
+        const pc = makeFakePc()
+        pcs.push(pc)
+        return asRTCPeerConnection(pc)
+      }
+      const machine = new BrowserWebRTCSession({
+        pcFactory,
+        answerTimeoutMs: 20,
+        firstAnswerTimeoutMs: 20,
+        retryDelayMs: 1000,
+        maxRetries: 3,
+      })
+      machine.start(vi.fn())
+      await failAttempt(pcs, 0)
+      expect(pcs).toHaveLength(1)
+
+      // Retry 1 at retryDelayMs * 2^0.
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(pcs).toHaveLength(2)
+      await failAttempt(pcs, 1)
+
+      // Retry 2 at retryDelayMs * 2^1. PRE-FIX THIS NEVER HAPPENED — the
+      // one-shot flag had already been consumed, so the session stayed in
+      // 'fallback' forever.
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(pcs).toHaveLength(3)
+      await failAttempt(pcs, 2)
+
+      // Retry 3 at retryDelayMs * 2^2 — the last one maxRetries allows.
+      await vi.advanceTimersByTimeAsync(4000)
+      expect(pcs).toHaveLength(4)
+      await failAttempt(pcs, 3)
+
+      // Budget exhausted: no further attempt, however long we wait.
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(pcs).toHaveLength(4)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('resets the retry budget after a successful connect, so a later blip gets a full set of attempts', async () => {
+    vi.useFakeTimers()
+    try {
+      const pcs: FakePc[] = []
+      const pcFactory = () => {
+        const pc = makeFakePc()
+        pcs.push(pc)
+        return asRTCPeerConnection(pc)
+      }
+      const machine = new BrowserWebRTCSession({
+        pcFactory,
+        answerTimeoutMs: 20,
+        firstAnswerTimeoutMs: 20,
+        retryDelayMs: 1000,
+        maxRetries: 1,
+      })
+      machine.start(vi.fn())
+
+      // Attempt 1 FAILS, consuming the single retry the budget allows.
+      await failAttempt(pcs, 0)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(pcs).toHaveLength(2)
+
+      // Attempt 2 CONNECTS — this must clear the consumed count.
+      await vi.advanceTimersByTimeAsync(0)
+      pcs[1].iceGatheringState = 'complete'
+      pcs[1].onicegatheringstatechange?.()
+      machine.applyAnswer('sdp')
+      await vi.advanceTimersByTimeAsync(0)
+      pcs[1].iceConnectionState = 'connected'
+      pcs[1].oniceconnectionstatechange?.()
+      expect(machine.state).toBe('connected')
+
+      // Now the working connection dies. Because the success above reset the
+      // budget, this must buy a FRESH retry. Pre-fix — and with a
+      // non-resetting counter — the budget was already spent by attempt 1 and
+      // this blip would strand the panel in the JPEG sink permanently.
+      pcs[1].iceConnectionState = 'failed'
+      pcs[1].oniceconnectionstatechange?.()
+      expect(machine.state).toBe('fallback')
+
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(pcs).toHaveLength(3)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

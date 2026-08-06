@@ -1,0 +1,63 @@
+app = "uat-omnipus"
+primary_region = "fra"
+
+[build]
+  # Path is relative to THIS config file, which must therefore live in the repo.
+  dockerfile = "docker/Dockerfile.heavy"
+
+[env]
+  # Bind all interfaces so Fly's proxy (which reaches the private address)
+  # can route to us — a loopback bind returns 502.
+  OMNIPUS_GATEWAY_HOST = "0.0.0.0"
+  OMNIPUS_GATEWAY_PORT = "5000"
+  # The default container seccomp profile blocks syscalls the hardened-exec
+  # path needs; enforce would break `bash` with "permission denied".
+  OMNIPUS_SANDBOX_MODE = "permissive"
+  # NO trust_path_chrome override here — deliberately.
+  #
+  # An earlier revision of this file set
+  # OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME="true" as a UAT workaround, back
+  # when Dockerfile.heavy shipped a Chromium the resolver refused (B2a). That
+  # override is now not just unnecessary but actively harmful, and it silently
+  # defeated the B2a fix: exec_resolver.go's step 3 (the chrome.sha256-verified
+  # package-Chrome path) only runs when `pathResolved == "" || PreferPackaged`,
+  # and PreferPackaged defaults false (defaults.go:465). So trusting $PATH made
+  # the resolver return the UNVERIFIED $PATH binary and never reach the
+  # verification the image now provides — i.e. a deploy from this file would
+  # have exercised the OLD insecure path while appearing to test the new one.
+  #
+  # Dockerfile.heavy now generates a chrome.sha256 manifest at the package root,
+  # so the default posture (TrustPathChrome=false) resolves correctly on its
+  # own: $PATH is discarded, step 3 finds the verified package Chrome.
+  # SEC-ADR052-002's threat model stays intact.
+  # Reverse-proxy origin: drives CanonicalGatewayOrigin, which CSP/CORS and
+  # the WS CheckOrigin all validate against. Without it the SPA's WebSocket
+  # is rejected at the origin check.
+  OMNIPUS_GATEWAY_PUBLIC_URL = "https://uat-omnipus.fly.dev"
+
+[http_service]
+  internal_port = 5000
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 200
+    soft_limit = 100
+
+# Persist ~/.omnipus (config, credentials, sessions, workspaces) across
+# restarts so a UAT persona's setup survives a machine bounce.
+[[mounts]]
+  source = "uat_omnipus_data"
+  destination = "/home/omnipus/.omnipus"
+
+[[vm]]
+  # shared-cpu-4x: 2 shared vCPUs starved the software VP8 encoder into
+  # collapsing the WebRTC capture to 319x158 (root cause 2026-07-31, fault 2 —
+  # docs/internal/browser-viewport-input-rootcause-2026-07-31.md). The encoder
+  # now holds resolution (maintain-resolution), which trades CPU pressure into
+  # framerate instead; 4 vCPUs keeps that trade tolerable.
+  size = "shared-cpu-4x"
+  memory = "4096mb"

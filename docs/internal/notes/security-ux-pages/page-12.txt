@@ -1,0 +1,20 @@
+    ├── What agents may do (tool grid)
+    ├── Shell & commands
+    ├── Containment (sandbox + network)
+    └── Oversight (audit, rates, prompt guard)
+        └── Technical details (ABI, syscalls, doctor raw)
+```
+
+---
+
+## 6. Bottom line
+
+**Mechanisms:** solid multi-layer design (tool policy, human ask, shell filters, kernel sandbox, SSRF, prompt guard, skills, cost, audit, vault) with god mode as deliberate global override.
+
+**UX confusion:** layers exposed as peer controls with overlapping names; god mode off-tab; sandbox/SSRF jargon-first; live vs restart unclear.
+
+**Highest ROI (in order):**
+
+1. Protection **presets**
+2. **Posture dashboard** at top of Security
+3. Rename sandbox modes + bury Landlock details

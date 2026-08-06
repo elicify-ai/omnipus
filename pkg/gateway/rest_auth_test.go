@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
@@ -2060,4 +2062,138 @@ func TestTriggerReloadAndWait_AlreadyInProgress_PollsThrough(t *testing.T) {
 	err := apiObj.triggerReloadAndWait()
 	require.NoError(t, err,
 		"triggerReloadAndWait must return nil on ErrReloadAlreadyInProgress poll-through")
+}
+
+// --- triggerReloadAndWaitOutcome tests (FIX 4) ---
+
+// TestTriggerReloadAndWaitOutcome_ConfirmedReload_ReturnsConfirmedTrue is the
+// positive-case proof: when IsReloadPending() clears within the poll window,
+// triggerReloadAndWaitOutcome must report confirmed=true.
+func TestTriggerReloadAndWaitOutcome_ConfirmedReload_ReturnsConfirmedTrue(t *testing.T) {
+	apiObj, wrap := newTestRestAPIForReload(t)
+
+	wrap.al.SetReloadFunc(func() error {
+		return nil
+	})
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		wrap.al.ClearReloadPending()
+	}()
+
+	confirmed, err := apiObj.triggerReloadAndWaitOutcome()
+	require.NoError(t, err)
+	assert.True(t, confirmed, "a reload confirmed within the poll window must report confirmed=true")
+}
+
+// TestTriggerReloadAndWaitOutcome_TimesOutStillPending_ReturnsUnconfirmed is
+// the FIX 4 regression test: before this fix, a reload that never confirmed
+// within the poll window was indistinguishable from a confirmed one — both
+// triggerReloadAndWait return values were nil. Nothing ever calls
+// ClearReloadPending here, so IsReloadPending() stays true for the whole
+// (shortened, via reloadWaitTimeout) poll window, forcing the timeout
+// branch deterministically rather than relying on a slow real 5s wait.
+func TestTriggerReloadAndWaitOutcome_TimesOutStillPending_ReturnsUnconfirmed(t *testing.T) {
+	apiObj, wrap := newTestRestAPIForReload(t)
+
+	prevDeadline := reloadWaitTimeout
+	reloadWaitTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { reloadWaitTimeout = prevDeadline })
+
+	// The reloadFunc marks the reload pending, mirroring production: the flag
+	// is set by the gateway's trigger (services.beginReload), NOT by
+	// TriggerReload itself (see TriggerReload's own doc comment) — a fake
+	// that returned nil without marking would mean "no reload queued", and
+	// the poll loop would correctly return at once, leaving this test
+	// asserting nothing (see TestTriggerReloadAndWait_PollsUntilNotPending's
+	// identical setup above).
+	wrap.al.SetReloadFunc(func() error {
+		wrap.al.MarkReloadPending()
+		return nil
+	})
+	// Deliberately never call ClearReloadPending — the pending flag must
+	// still be set when the poll loop hits the deadline.
+
+	start := time.Now()
+	confirmed, err := apiObj.triggerReloadAndWaitOutcome()
+	elapsed := time.Since(start)
+
+	require.NoError(t, err,
+		"a timeout must still return a nil error — the 15 existing call sites outside this "+
+			"fix's scope that only check err must not start treating a slow reload as a hard failure")
+	assert.False(t, confirmed,
+		"FIX 4: a reload that never confirmed within the poll window must report confirmed=false, "+
+			"not be indistinguishable from a genuinely confirmed reload")
+	assert.GreaterOrEqual(t, elapsed, 150*time.Millisecond,
+		"must have actually waited out the poll window, not returned early")
+
+	// The reload really is still marked pending; clear it so nothing in
+	// AgentLoop teardown depends on it.
+	wrap.al.ClearReloadPending()
+}
+
+// TestHandleChangePassword_ReloadTimeout_LogsDistinctWarning is the FIX 4
+// regression test for HandleChangePassword's own call site: before this fix,
+// a reload that timed out without confirming was completely silent (the old
+// `if err := a.triggerReloadAndWait(); err != nil` guard never fires when
+// err is nil, which it always is on a timeout) — an operator had no way to
+// know the freshly-cleared token set might not be live everywhere yet. This
+// proves the new confirmed==false branch logs a distinct message.
+func TestHandleChangePassword_ReloadTimeout_LogsDistinctWarning(t *testing.T) {
+	api, _ := newTestRestAPIWithUser(t, "cpuser-reload-timeout", "OldPass123")
+
+	prevDeadline := reloadWaitTimeout
+	reloadWaitTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { reloadWaitTimeout = prevDeadline })
+
+	// Wire a reload func that marks the reload pending (mirroring production
+	// — see TriggerReload's own doc comment for why TriggerReload itself
+	// deliberately does not) and deliberately never clear the pending flag,
+	// so triggerReloadAndWaitOutcome (called from inside HandleChangePassword)
+	// runs out the (shortened) poll window with confirmed=false.
+	api.agentLoop.SetReloadFunc(func() error {
+		api.agentLoop.MarkReloadPending()
+		return nil
+	})
+	t.Cleanup(func() { api.agentLoop.ClearReloadPending() })
+
+	logFile := filepath.Join(t.TempDir(), "change-password-reload-timeout.log")
+	prevLevel := logger.GetLevel()
+	logger.DisableConsole()
+	logger.SetLevel(logger.WARN)
+	require.NoError(t, logger.EnableFileLogging(logFile))
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(prevLevel)
+	})
+	// HandleChangePassword's new confirmed==false branch uses a bare
+	// slog.Warn (matching the existing err!=nil branch right next to it).
+	// In production this reaches gateway.log because RunContextWithOptions
+	// installs the slog→logger bridge at boot (FIX 1) before any handler
+	// can run; this test binary never calls RunContextWithOptions, so the
+	// bridge must be installed explicitly here to observe the same real
+	// behavior — same pattern as slog_bridge_wiring_test.go.
+	prevDefault := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+	installSlogBridge()
+
+	body := `{"current_password":"OldPass123","new_password":"NewPass456"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = injectUser(req, "cpuser-reload-timeout")
+	w := httptest.NewRecorder()
+
+	api.HandleChangePassword(w, req)
+
+	// The wire response is unaffected — HandleChangePassword still reports
+	// success (gen.OperationResult has no field to carry this distinction;
+	// see triggerReloadAndWaitOutcome's doc comment). The password change
+	// itself is genuinely unconditional on the reload outcome.
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	logged, readErr := os.ReadFile(logFile)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(logged), "did not confirm within the poll window",
+		"a reload that timed out unconfirmed must now be logged distinctly, "+
+			"not silently indistinguishable from a confirmed reload")
+	assert.Contains(t, string(logged), "cpuser-reload-timeout")
 }

@@ -77,7 +77,7 @@ func TestConsumeAttemptOrExhaust_ReviveGuard_DropsOutcomeAfterConcurrentStop(t *
 	stale := *tk // the caller's in-memory view, taken BEFORE the simulated Stop
 	simulateConcurrentStop(t, taskStore, tk.ID)
 
-	redispatch := al.taskExecutor.consumeAttemptOrExhaust(context.Background(), &stale, "", "unmet claim", nil)
+	redispatch := al.taskExecutor.consumeAttemptOrExhaust(context.Background(), &stale, "", "unmet claim", nil, nil)
 
 	if redispatch != "" {
 		t.Errorf("must not re-dispatch a task the Stop already claimed, got %q", redispatch)
@@ -117,7 +117,7 @@ func TestConsumeAttemptOrExhaust_ExhaustedBranch_DropsTerminalWriteAfterStop(t *
 	stale := *tk
 	simulateConcurrentStop(t, taskStore, tk.ID)
 
-	redispatch := al.taskExecutor.consumeAttemptOrExhaust(context.Background(), &stale, "", "unmet claim", nil)
+	redispatch := al.taskExecutor.consumeAttemptOrExhaust(context.Background(), &stale, "", "unmet claim", nil, nil)
 	if redispatch != "" {
 		t.Errorf("must not re-dispatch, got %q", redispatch)
 	}
@@ -150,7 +150,7 @@ func TestCompleteTaskWithResult_DoneOverwriteGuard_DropsOutcomeAfterConcurrentSt
 	stale := *tk
 	simulateConcurrentStop(t, taskStore, tk.ID)
 
-	applied := al.taskExecutor.completeTaskWithResult(&stale, "", task.StatusInProgress, true, "claims success")
+	applied := al.taskExecutor.completeTaskWithResult(&stale, "", task.StatusInProgress, true, "claims success", nil)
 	if applied {
 		t.Fatal("completeTaskWithResult must report applied=false on a CAS conflict")
 	}
@@ -186,7 +186,7 @@ func TestRejectBareEvidenceClaim_FreeRetry_DropsOutcomeAfterConcurrentStop(t *te
 	stale := *tk
 	simulateConcurrentStop(t, taskStore, tk.ID)
 
-	redispatch := al.taskExecutor.rejectBareEvidenceClaim(context.Background(), &stale, "", "steering text")
+	redispatch := al.taskExecutor.rejectBareEvidenceClaim(context.Background(), &stale, "", "steering text", nil)
 	if redispatch != "" {
 		t.Errorf("must not re-dispatch a task the Stop already claimed, got %q", redispatch)
 	}
@@ -226,7 +226,7 @@ func TestRejectBareEvidenceClaim_StreakExhaust_DropsOutcomeAfterConcurrentStop(t
 	stale := *tk
 	simulateConcurrentStop(t, taskStore, tk.ID)
 
-	redispatch := al.taskExecutor.rejectBareEvidenceClaim(context.Background(), &stale, "", "steering text")
+	redispatch := al.taskExecutor.rejectBareEvidenceClaim(context.Background(), &stale, "", "steering text", nil)
 	if redispatch != "" {
 		t.Errorf("must not re-dispatch, got %q", redispatch)
 	}

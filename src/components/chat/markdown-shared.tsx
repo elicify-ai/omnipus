@@ -4,15 +4,18 @@
 //   • historical-markdown.tsx — the finalized / reloaded / virtualized renderer
 //
 // These two renderers exist because the live path is bound to AssistantUI's
-// MarkdownTextPrimitive (reads text from context, Shiki block code) while the
-// finalized path is plain react-markdown over a content string (plain <pre> block
-// code) — they cannot collapse into one component. But everything that is NOT the
-// block-code mechanism (paragraphs, headings, lists, inline code, links, images,
-// emoji spans, and the mermaid routing) is identical and MUST stay in parity. Keeping
-// two hand-maintained copies drifted three times (mermaid missing when finalized, the
-// languageless-fence collapse, and silent strong/em + paragraph-whitespace divergence).
-// This module is that shared definition; the two renderers now differ ONLY in their
-// block-code path.
+// MarkdownTextPrimitive (reads text from context) while the finalized path is plain
+// react-markdown over a content string — the two markdown pipelines themselves cannot
+// collapse into one component. But everything they render — paragraphs, headings,
+// lists, inline code, links, images, emoji spans, the mermaid routing, AND (as of the
+// library-spec D-6 fix) the actual Shiki syntax-highlighting mechanism for block code —
+// is identical and MUST stay in parity. Keeping hand-maintained copies drifted three
+// times now: mermaid missing when finalized, the languageless-fence collapse, and
+// block code silently losing highlighting on finalize/reload (Shiki was live-only).
+// This module is that shared definition. The two renderers now differ ONLY in the
+// chrome around block code (each owns its own header/copy-button markup — see
+// ShikiCodeBlock below for exactly why that chrome, and the live path's
+// mermaid-streaming check, could not also move here).
 //
 // Renderers take `({ children })` (and the few element-specific attrs) and do NOT
 // spread arbitrary props: react-markdown passes a `node` prop that must not reach the
@@ -22,6 +25,7 @@
 
 import type { ComponentPropsWithoutRef, CSSProperties, ReactNode } from 'react'
 import type { Components } from 'react-markdown'
+import { ShikiHighlighter } from 'react-shiki'
 import { ChatImage } from './ChatImage'
 import { MermaidDiagram } from './mermaid-renderer'
 import { rewriteLegacyURL, resolveEffectivePreview } from '@/lib/preview-url'
@@ -139,8 +143,65 @@ export function classifyFence(children: ReactNode, className: string | undefined
 }
 
 // Re-export the shared diagram component so both renderers route mermaid through one
-// place (the only block-code piece that is identical across the two paths).
+// place.
 export { MermaidDiagram }
+
+// ── Shared Shiki block-code renderer (library-spec D-6) ───────────────────────
+// The actual syntax-highlighting mechanism for non-mermaid block code, shared by
+// both chat renderers. `historical-markdown.tsx`'s `HistoricalCodeBlock` used to
+// fall back to a plain <pre><code> with no highlighting at all — the file's own
+// (now-corrected) doc comment called this deliberate ("Shiki is live-only, to keep
+// this bundle light"), but Shiki is already in the bundle for the live path
+// regardless, so that reasoning didn't hold: the only real saving was the lazy
+// per-language grammar fetch, which happens on demand from either call site. The
+// result was highlighting that vanished the instant a message finalized or the page
+// reloaded — the second parity drift between these renderers, after Mermaid.
+//
+// Each caller keeps its OWN header chrome (language label + copy button): that
+// markup already differs deliberately (live: AssistantUI's `CodeHeader` slot,
+// wired to `CopyCodeHeader` in shiki-highlighter.tsx, using a raw
+// navigator.clipboard call with a 2s reset; historical: `HistoricalCodeBlock`'s
+// own header, using the app's copyText() helper from media-actions.ts with a
+// snappier 1.5s reset to stay responsive in the finalized view). Only the
+// highlighted body — theme, styling, and the ShikiHighlighter call itself — is
+// shared here, so it cannot drift a third time.
+//
+// What deliberately did NOT move here: shiki-highlighter.tsx's exported
+// `SyntaxHighlighter` also special-cases language==="mermaid" by rendering
+// `LiveMermaidBlock`, which calls `useMessage()` from `@assistant-ui/react` to
+// read the LIVE message's streaming status — so a mermaid fence renders nothing
+// until the block is complete, rather than repeatedly failing to parse a partial
+// diagram mid-stream. `useMessage()` only resolves inside AssistantUI's
+// MessagePrimitive context. The historical renderer runs entirely OUTSIDE that
+// context (plain react-markdown over an already-finalized content string, never
+// inside an AssistantUI message tree), so it cannot call that hook — and doesn't
+// need to anyway, since a finalized message is by definition never "streaming".
+// historical-markdown.tsx already special-cases `language === 'mermaid'` itself
+// (via `classifyFence`, above) before block code is ever reached. Hoisting the
+// mermaid branch here would mean either dragging the AssistantUI dependency into
+// this otherwise AssistantUI-agnostic module, or branching at runtime on "do we
+// have a message context" — not worth it for a check the historical path never
+// needs. If a third caller ever needs Shiki, it belongs here too; if it also
+// needs live-streaming mermaid awareness, that stays caller-side.
+export function ShikiCodeBlock({ language, code }: { language: string | undefined; code: string }) {
+  return (
+    <ShikiHighlighter
+      language={language || 'text'}
+      theme="vitesse-dark"
+      addDefaultStyles={false}
+      className="!bg-[var(--color-surface-2)] !rounded-b-md overflow-x-auto block w-full"
+      style={{
+        padding: '0.75rem 1rem',
+        fontSize: '11px',
+        lineHeight: '1.65',
+        fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+        margin: 0,
+      }}
+    >
+      {code}
+    </ShikiHighlighter>
+  )
+}
 
 // ── Common block-level element renderers ──────────────────────────────────────
 // Canonical styles (the superset previously only fully present in the finalized

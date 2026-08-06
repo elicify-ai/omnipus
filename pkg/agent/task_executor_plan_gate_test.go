@@ -425,7 +425,7 @@ func TestExecuteTask_StandaloneTaskStillDispatches(t *testing.T) {
 	// Deliberately do NOT wire a plan store.
 	tk := newPlanGateTestTask(t, al, "" /* no PlanID */)
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask on a standalone task must succeed, got: %v", err)
 	}
 
@@ -524,7 +524,7 @@ func TestDispatchReadyMembers_BypassDoesNotWeakenExecuteTask_ForOtherCallers(t *
 	// bypass.
 	tk := newPlanGateTestTask(t, al, "some-plan-id-with-no-store-on-executor")
 
-	err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID)
+	err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil)
 	if err == nil {
 		t.Fatal("ExecuteTask must fail closed when its own plan store is unset for a plan member task")
 	}

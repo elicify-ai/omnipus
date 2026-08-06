@@ -1,0 +1,104 @@
+title: MediaLibraryEntry
+description: >
+  Metadata for one persistent file in a workspace media library. Raw bytes are
+  stored separately and verified against sha256 before presentation.
+type: object
+additionalProperties: false
+required:
+  - id
+  - workspace_id
+  - filename
+  - mime
+  - size
+  - sha256
+  - uploaded_at
+  - source
+  - status
+properties:
+  id:
+    type: string
+    format: uuid
+    readOnly: true
+    description: UUID media identifier within the workspace library.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  workspace_id:
+    type: string
+    minLength: 1
+    maxLength: 64
+    readOnly: true
+    description: Workspace identifier that owns this library entry. Existing Omnipus workspaces use ULIDs; the cross-workspace guard (FR-028a) compares this value to the workspace segment in media://workspace/<workspace_id>/<id>. Server-assigned from the caller workspace context (FR-007a / Wave 1 TD-M2).
+    example: "01KY6SHW51CV7FMMHP5Y9SWB7P"
+  filename:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: Original user-visible filename. Server-side trim+reject for control characters and path separators; the 256-char cap mirrors POSIX filename limits.
+    example: "diagram.png"
+  mime:
+    type: string
+    readOnly: true
+    description: MIME type sniffed from the stored bytes.
+    example: "image/png"
+  size:
+    type: integer
+    format: int64
+    minimum: 0
+    maximum: 104857600
+    readOnly: true
+    description: Raw file size in bytes. Server-enforced 100 MB cap (maxUploadFileSize per ADR-051 Rev 4).
+    example: 204800
+  sha256:
+    type: string
+    pattern: "^[a-f0-9]{64}$"
+    readOnly: true
+    description: Lowercase hexadecimal SHA-256 digest verified on every read.
+    example: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  uploaded_at:
+    type: string
+    format: date-time
+    readOnly: true
+    description: RFC3339 UTC upload timestamp.
+    example: "2026-07-22T14:22:00Z"
+  source:
+    type: string
+    enum:
+      - user_upload
+      - tool_output
+    description: >
+      Origin that added the file to the workspace library. Encodes the
+      ADR-051 Rev 4 two-mechanism split (user uploads = persistent;
+      agent-generated tool output = session-scoped, never migrated into
+      the library). The internal-only test_fixture source used by
+      pkg/media/library test helpers is NOT a production wire value
+      (Wave 1 TD-m1).
+    example: "user_upload"
+  refcount:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: Server-maintained count of persisted message or session references. Required on every entry (FR-007a / Wave 1 TD-M2).
+  last_refcount_seen_at:
+    type: string
+    format: date-time
+    readOnly: true
+    description: RFC3339 UTC timestamp of the latest refcount observation. Required on every entry (Wave 1 TD-M2).
+  status:
+    type: string
+    enum:
+      - available
+      - stranded
+    readOnly: true
+    description: >
+      Server-computed presentation state; never persisted as real entry
+      state (it is derived at read time from the library's internal
+      corruption registry). "stranded" marks an entry whose manifest record
+      still exists but whose raw bytes are unreachable at their normal
+      on-disk location after a prior compound rollback failure — the file
+      is NOT usable and the UI should not offer open/attach/download for it.
+      Only GET .../media (list) annotates a stranded entry this way; the
+      single-entry read/attach/delete endpoints refuse a stranded entry
+      outright (500, "media entry is in an inconsistent state") rather than
+      returning it with this field set, so "stranded" is never observed
+      from those responses — this field is "available" everywhere except a
+      stranded row in the list.
+    example: "available"

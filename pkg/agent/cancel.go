@@ -60,9 +60,24 @@ type CancelCanceller struct {
 
 // CancelOutcome is returned to the caller after a cancel attempt.
 type CancelOutcome struct {
-	Fired       bool     // true if a turn was actually targeted (ClaimCancel succeeded)
-	Descendants []string // turn IDs canceled (parent + sub-turns)
-	TurnID      string   // root turn ID; empty when Fired is false
+	// Fired is true if ANY turn sharing the session was actually claimed
+	// (ClaimCancel succeeded) and therefore targeted by the cascade below —
+	// NOT specifically the root/parent turn. The primary resolution
+	// (GetActiveTurnHookForSession) prefers the root when one is claimable,
+	// but the claimAnyTurnForSession fallback (see that function's doc
+	// comment) can claim a live, never-canceled descendant instead when the
+	// root has already fired from an earlier, unrelated cancel or no longer
+	// resolves at all. Either way Fired:true means the descendant-
+	// cancellation cascade and the turn_canceled transcript/audit write did
+	// run; Fired:false means no live, unclaimed turn existed for this
+	// session at all (a genuine no-op, e.g. everything already finished).
+	Fired       bool     // true if some turn was actually targeted (ClaimCancel succeeded)
+	Descendants []string // turn IDs canceled (root/claimed turn + all its sub-turns)
+	// TurnID is the ID of whichever turn was actually claimed — the root when
+	// GetActiveTurnHookForSession resolved and claimed it, or a descendant's
+	// ID when claimAnyTurnForSession's fallback had to claim one instead
+	// (root already fired / not found). Empty when Fired is false.
+	TurnID string
 
 	// Armed is true when Fired is false because no turn was registered yet
 	// for the resolved identity AND a pre-registration cancel latch
@@ -577,8 +592,14 @@ func (al *AgentLoop) RequestCancel(
 	// reached only turn Y — an audit trail asserting a cancellation that
 	// never happened. Comparing actual set membership (not just count) below
 	// catches this class of mismatch and reports exactly which turn ids
-	// diverged, in which direction.
-	if missingFromInterrupted, extraInInterrupted := stringSliceSetDiff(descendants, interrupted); len(missingFromInterrupted) > 0 || len(extraInInterrupted) > 0 {
+	// diverged, in which direction. descendantSetsMatch is ALSO consulted
+	// (not just the missing/extra diff) so a duplicate-count-only divergence
+	// — which stringSliceSetDiff's pure-set comparison cannot see, since
+	// deduping both sides hides it — still fires this WARN; neither collector
+	// should ever emit a duplicate turn id, so any count disagreement is
+	// itself a genuine inconsistency worth surfacing.
+	missingFromInterrupted, extraInInterrupted := stringSliceSetDiff(descendants, interrupted)
+	if len(missingFromInterrupted) > 0 || len(extraInInterrupted) > 0 || !descendantSetsMatch(descendants, interrupted) {
 		slog.Warn("agent: RequestCancel: descendants list mismatch — turn added/removed between collect and interrupt; "+
 			"turn_canceled's descendants_canceled field may name a turn Interrupt did not actually reach, or omit one it did",
 			"session_id", sessionID,
@@ -766,13 +787,46 @@ func (al *AgentLoop) RequestCancel(
 	}, nil
 }
 
+// descendantSetsMatch reports whether a and b contain exactly the same
+// elements with exactly the same MULTIPLICITIES (duplicate counts),
+// independent of order — a stricter check than stringSliceSetDiff's pure-set
+// comparison, which dedupes both sides and so cannot see a duplicate-count-
+// only divergence (e.g. a=[x,x,y], b=[x,y,y]: both reduce to the SAME set
+// {x,y}, so stringSliceSetDiff reports no mismatch, even though the two
+// lists disagree on how many times x/y each appear). collectDescendantTurnIDs
+// and InterruptSession should never emit a duplicate turn id in the first
+// place, so any duplicate-count disagreement between the two collection
+// passes is itself a genuine inconsistency worth a WARN — see this
+// function's use in RequestCancel's PHASE-A/Interrupt consistency check
+// below, alongside stringSliceSetDiff's richer missing/extra reporting.
+func descendantSetsMatch(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, v := range a {
+		counts[v]++
+	}
+	for _, v := range b {
+		counts[v]--
+	}
+	for _, c := range counts {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // stringSliceSetDiff compares two string slices as SETS (not as ordered/
 // counted sequences) and returns (onlyInA, onlyInB): the elements present in
 // a but absent from b, and vice versa. Both returns are nil when the two
 // slices contain exactly the same set of elements, regardless of order or
 // duplicate count. Used by RequestCancel's PHASE-A/Interrupt consistency
 // check (FIX-5, Defect 3b) to catch a same-SIZE-but-different-MEMBERSHIP
-// mismatch that a bare len(a) != len(b) comparison cannot see.
+// mismatch that a bare len(a) != len(b) comparison cannot see. Paired with
+// descendantSetsMatch (above) to also catch a duplicate-count-only
+// divergence this pure-set diff cannot see on its own.
 func stringSliceSetDiff(a, b []string) (onlyInA, onlyInB []string) {
 	setA := make(map[string]struct{}, len(a))
 	for _, v := range a {

@@ -297,6 +297,16 @@ func TestBrowserWS_Auth_ValidCLIToken_ConnectionProceeds(t *testing.T) {
 // BDD: Given Gateway.Users holds one account,
 // When the client authenticates with a token that matches no account,
 // Then the server sends {"type":"error",...} and closes with code 1008.
+//
+// GAP 1 (D5 test-coverage gate): asserts EXACT equality against the shared
+// wsAuthErrInvalidToken constant (websocket.go), not a loose substring. Prior
+// to this fix the assertion checked for "unauthorized" — a string the D5 fix
+// (commit b764a484) removed from the wire in favor of a human-readable
+// message, which had gone undetected because nobody re-ran this test after
+// the copy change. See TestWSHandlerInvalidAuth (websocket_test.go) for the
+// mirrored chat-WS assertion against the same constant — a partial revert
+// that restores the old literal in only ONE of the two handlers now fails
+// exactly that handler's test while leaving the other green.
 func TestBrowserWS_Auth_InvalidToken_ClosesWithPolicyViolation(t *testing.T) {
 	token := "omnipus_" + strings.Repeat("8", 64)
 	hash, err := bcrypt.GenerateFromPassword([]byte(token), bcrypt.MinCost)
@@ -319,7 +329,8 @@ func TestBrowserWS_Auth_InvalidToken_ClosesWithPolicyViolation(t *testing.T) {
 
 	f := readBrowserFrame(t, conn, 3*time.Second)
 	assert.Equal(t, "error", f.Type)
-	assert.Contains(t, strings.ToLower(f.Message), "unauthorized")
+	assert.Equal(t, wsAuthErrInvalidToken, f.Message,
+		"browser WS invalid-token error must carry the shared wsAuthErrInvalidToken constant verbatim")
 
 	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
 	_, _, err = conn.ReadMessage()
@@ -338,6 +349,14 @@ func TestBrowserWS_Auth_InvalidToken_ClosesWithPolicyViolation(t *testing.T) {
 // When the client's first frame is browser_attach (not auth),
 // Then the server sends an error frame naming the required envelope and the
 // connection is not usable afterward.
+//
+// GAP 1 (D5 test-coverage gate): asserts EXACT equality against the shared
+// wsAuthErrBadFirstFrame constant (websocket.go). The prior assertion
+// (Contains(f.Message, "auth")) no longer matched the D5 friendly-copy fix
+// ("Your session expired — reload the page to reconnect." does not contain
+// "auth") and was silently red until this fix. See
+// TestWSHandlerAuth_BadFirstFrame_UsesSharedConstant (websocket_test.go) for
+// the mirrored chat-WS assertion against the same constant.
 func TestBrowserWS_Auth_NonAuthFirstFrame_Rejected(t *testing.T) {
 	handler, _ := newBrowserWSTestHandler(t, nil)
 	t.Cleanup(handler.Wait)
@@ -359,11 +378,51 @@ func TestBrowserWS_Auth_NonAuthFirstFrame_Rejected(t *testing.T) {
 
 	f := readBrowserFrame(t, conn, 3*time.Second)
 	assert.Equal(t, "error", f.Type)
-	assert.Contains(t, f.Message, "auth")
+	assert.Equal(t, wsAuthErrBadFirstFrame, f.Message,
+		"browser WS bad-first-frame error must carry the shared wsAuthErrBadFirstFrame constant verbatim")
 
 	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
 	_, _, err = conn.ReadMessage()
 	assert.Error(t, err, "connection must not remain usable after a non-auth first frame")
+}
+
+// TestBrowserWS_Auth_NoUsersConfigured_UsesSharedConstant verifies that when
+// no accounts, no CLI token, and no OMNIPUS_BEARER_TOKEN are configured, and
+// dev_mode_bypass is explicitly off, the browser-live handshake is rejected
+// with the shared wsAuthErrNoUsers constant rather than silently admitted —
+// mirroring authenticateWS's fail-closed behavior exactly, per this
+// function's own doc comment.
+// BDD: Given Gateway.Users is empty, Gateway.CLIToken is nil,
+// OMNIPUS_BEARER_TOKEN is unset, and dev_mode_bypass=false,
+// When the client sends any {"type":"auth","token":"..."} frame,
+// Then the server sends {"type":"error","message":wsAuthErrNoUsers} and
+// closes the connection.
+// Traces to: GAP 1 (D5 test-coverage gate) — browser_ws.go:383-395. No
+// existing test previously exercised this branch for the browser-live
+// socket at all (only TestBrowserWS_Auth_DevModeBypass_ConnectionProceeds
+// covered the dev_mode_bypass=true sibling path).
+func TestBrowserWS_Auth_NoUsersConfigured_UsesSharedConstant(t *testing.T) {
+	handler, _ := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+		cfg.Gateway.DevModeBypass = false // explicit: fail closed, not the dev-mode fallback.
+	})
+	t.Cleanup(handler.Wait)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialBrowserTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+
+	writeBrowserAuthFrame(t, conn, "any-token-nothing-is-configured")
+
+	f := readBrowserFrame(t, conn, 3*time.Second)
+	assert.Equal(t, "error", f.Type)
+	assert.Equal(t, wsAuthErrNoUsers, f.Message,
+		"browser WS no-users-configured error must carry the shared wsAuthErrNoUsers constant verbatim")
+
+	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	_, _, err := conn.ReadMessage()
+	assert.Error(t, err, "connection must be closed when no auth identity is configured at all")
 }
 
 // ---------------------------------------------------------------------------

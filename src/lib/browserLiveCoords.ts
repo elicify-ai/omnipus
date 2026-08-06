@@ -292,6 +292,57 @@ export function computeCropRect(
 }
 
 /**
+ * Given the bounding box of a replaced element rendered with `object-fit:
+ * contain` at `width:100%; height:100%` of its box, returns the sub-rectangle
+ * actually occupied by the visible content — compensating for the letterbox
+ * (top/bottom bars) or pillarbox (left/right bars) `contain` introduces
+ * whenever the box's aspect ratio differs from the content's own.
+ *
+ * BUG 1 fix (pop-out "tiny letterboxed video", live UAT re-run): the
+ * fullscreen pop-out route lets its media element grow to fill the whole
+ * window (`fillContainer` — see BrowserLiveView's own prop doc) instead of
+ * being capped at intrinsic size, so its container's aspect ratio no longer
+ * always matches the frame/video content's aspect ratio the way the docked
+ * panel's intrinsic-sized layout does. Every coordinate-mapping call
+ * (`mapClientToDevice`/`mapClientToDeviceVideo`) assumes its `rect` argument
+ * tightly wraps the visible content with NO letterboxing (see
+ * `mapClientToDevice`'s own doc comment) — `BrowserLiveView.mapPointerToDeviceCoords`
+ * routes every raw `containerRef.getBoundingClientRect()` through this first
+ * so that invariant keeps holding even when the element itself is now bigger
+ * than its content.
+ *
+ * A box whose aspect ratio already matches the content (the docked panel's
+ * historical "size-to-intrinsic-content, capped by max-*" layout, which
+ * never letterboxes) round-trips through this UNCHANGED but for
+ * floating-point noise — safe to call unconditionally, on every layout, not
+ * just the fill one.
+ *
+ * A non-positive box or content dimension returns `box` unchanged (mirrors
+ * every other guard in this file — a 0×0 box/content has no meaningful
+ * "visible sub-rectangle" to compute, and the caller's own frameWidth<=0
+ * check downstream already treats that as "no measurable size").
+ */
+export function computeObjectContainRect(box: RectLike, contentWidth: number, contentHeight: number): RectLike {
+  if (box.width <= 0 || box.height <= 0 || contentWidth <= 0 || contentHeight <= 0) {
+    return box
+  }
+  const boxAspect = box.width / box.height
+  const contentAspect = contentWidth / contentHeight
+  if (contentAspect > boxAspect) {
+    // Content relatively WIDER than the box: full box width used, letterboxed top/bottom.
+    const height = box.width / contentAspect
+    return { left: box.left, top: box.top + (box.height - height) / 2, width: box.width, height }
+  }
+  if (contentAspect < boxAspect) {
+    // Content relatively TALLER/narrower than the box: full box height used, pillarboxed left/right.
+    const width = box.height * contentAspect
+    return { left: box.left + (box.width - width) / 2, top: box.top, width, height: box.height }
+  }
+  // Aspect ratios already match (or are equal within this exact comparison) — no-op.
+  return box
+}
+
+/**
  * True when a keydown/keyup event represents a single printable character
  * that should be forwarded as a `text` input frame (Input.insertText on the
  * backend) rather than a `key_down`/`key_up` pair. A held Ctrl/Meta/Alt

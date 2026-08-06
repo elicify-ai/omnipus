@@ -42,8 +42,18 @@ const (
 	StatusNext       Status = "next"        // triaged & ready to start
 	StatusInProgress Status = "in_progress" // worked by a human OR agent
 	StatusBlocked    Status = "blocked"     // auto side-state: unmet dependency
-	StatusDone       Status = "done"        // terminal success
-	StatusFailed     Status = "failed"      // terminal failure
+	// StatusDone is terminal success — of the RUN that just finished. For a
+	// task with a repeating trigger (Trigger.IsRepeating: recurring/every) the
+	// SERIES continues past this status: the scheduler re-arms the next
+	// occurrence regardless (pkg/agent/task_trigger.go OnTaskUpserted), and
+	// only trigger removal or RRULE exhaustion (COUNT/UNTIL) actually retires
+	// it. "Terminal" here describes the current/last run's outcome, not that
+	// no further run will happen.
+	StatusDone Status = "done"
+	// StatusFailed is terminal failure — of the RUN that just finished. Same
+	// series-survives-terminal-status caveat as StatusDone applies for a
+	// repeating trigger.
+	StatusFailed Status = "failed"
 )
 
 // validStatuses is the set of allowed Status values.
@@ -138,8 +148,19 @@ type TriggerConfig struct {
 	AtMs *int64 `json:"at_ms,omitempty"`
 	// EveryMs is the interval in milliseconds for an `every` fire (min 1000).
 	EveryMs *int64 `json:"every_ms,omitempty"`
-	// CronExpr is the 5/6-field cron expression for a `recurring` fire.
+	// CronExpr is the 5/6-field cron expression for a `recurring` fire (legacy
+	// path). Exactly one of CronExpr/Rrule is set on a `recurring` trigger.
 	CronExpr *string `json:"cron_expr,omitempty"`
+	// Rrule is the RFC 5545 RRULE body for a `recurring` fire (Calendar
+	// Recurrence Redesign). Requires DtstartMs and Tz. Exactly one of
+	// CronExpr/Rrule is set on a `recurring` trigger.
+	Rrule *string `json:"rrule,omitempty"`
+	// DtstartMs is the anchor instant (Unix epoch milliseconds) for Rrule —
+	// the first occurrence's wall-clock moment. Required sibling of Rrule.
+	DtstartMs *int64 `json:"dtstart_ms,omitempty"`
+	// Tz is the IANA timezone name Rrule's wall-clock times are interpreted
+	// in. Required sibling of Rrule.
+	Tz *string `json:"tz,omitempty"`
 }
 
 // Trigger is when (and how) a task fires (remediation Detail #3). Modeled as
@@ -148,6 +169,20 @@ type TriggerConfig struct {
 type Trigger struct {
 	Type   TriggerType   `json:"type"`
 	Config TriggerConfig `json:"config"`
+}
+
+// IsRepeating reports whether tr's series survives a per-run terminal status
+// (done/failed) — a `recurring` (rrule or legacy cron_expr) or `every`
+// trigger keeps firing after any single run's outcome; only trigger
+// removal/change-to-manual or RRULE exhaustion (COUNT/UNTIL) actually ends
+// the series. `once` (and manual/nil) is deliberately excluded: its single
+// occurrence IS its whole series. nil-safe: a nil trigger is not repeating.
+//
+// Single source of truth for this predicate — pkg/agent/task_trigger.go's
+// OnTaskUpserted and pkg/gateway/rest_tasks.go's occurrence-selection filter
+// both call this instead of each re-deriving the same type check.
+func (tr *Trigger) IsRepeating() bool {
+	return tr != nil && (tr.Type == TriggerRecurring || tr.Type == TriggerEvery)
 }
 
 // TodoStatus is the tri-state status of a checklist Todo.
@@ -402,6 +437,15 @@ func (t *Task) CreatedByAgent(agentID string) bool {
 		return false
 	}
 	return t.CreatedByAgentID == agentID
+}
+
+// SeriesRetired reports whether t's task series is genuinely over: a
+// terminal status (done/failed) that is NOT masked by a repeating trigger
+// surviving past a single run's outcome (see StatusDone/StatusFailed's doc
+// comments and Trigger.IsRepeating). A non-terminal task is never retired
+// regardless of trigger shape.
+func (t *Task) SeriesRetired() bool {
+	return IsTerminal(t.Status) && !t.Trigger.IsRepeating()
 }
 
 // EffectivePriority returns the task priority, defaulting an unset (0) value

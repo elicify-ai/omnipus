@@ -35,22 +35,88 @@ RUN CGO_ENABLED=0 go build -tags goolm,stdjson \
 # ============================================================
 # Stage 3: Runtime with browser + MCP support (Chromium, Python, uv)
 # ============================================================
-FROM node:24-alpine3.23
+FROM node:24-bookworm-slim
 
-RUN apk add --no-cache \
-  ca-certificates \
-  curl \
-  git \
-  python3 \
-  py3-pip \
-  chromium \
-  jq
+# glibc base, NOT Alpine/musl (changed 2026-08-03 — operator-reported
+# regression: "we get captchas on google and youtube and streaming videos is
+# not working at all").
+#
+# The previous image installed Alpine's `apk add chromium`. That build is
+# open-source Chromium WITHOUT the proprietary codecs — no H.264, no AAC —
+# which is exactly what YouTube and most of the web serve, so video loaded a
+# player and then decoded nothing. It also fingerprints as an unusual browser,
+# which compounds bot-detection challenges.
+#
+# Real Chrome-for-Testing is the fix (and what ADR-052 D2 already specifies as
+# the runtime), but its Linux build is glibc-linked and cannot run on musl.
+# Alpine's gcompat shim is documented as unreliable for exactly this
+# headless/automation use, so the base image moves to Debian slim rather than
+# trying to shim it.
+#
+# DISTRIBUTION NOTE (operator-approved 2026-08-03): Chrome-for-Testing is a
+# Google binary under Google's terms, redistributed inside this MIT-licensed
+# image. That is a deliberate product decision — the proprietary codecs are
+# precisely what makes the browser usable — and is recorded here so it is not
+# re-litigated as an accident.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      git \
+      jq \
+      python3 \
+      python3-pip \
+      unzip \
+      fonts-liberation \
+      fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
 
-# Make the apk-installed Chromium discoverable by browser/manager.go's
-# PATH lookup (it tries `google-chrome`, `chromium`, `chromium-browser` in
-# order). Alpine's `chromium` package installs the binary as
-# /usr/bin/chromium-browser → /usr/lib/chromium/chrome, so the PATH lookup
-# already resolves; no symlink needed.
+# Chrome-for-Testing runtime shared libraries. Chrome links these directly;
+# without them the binary exists but exits immediately, which the resolver
+# reports as a missing-shared-library warning rather than anything obvious.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 \
+      libcups2 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 \
+      libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
+      libxfixes3 libxkbcommon0 libxrandr2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Fetch full Chrome-for-Testing (Stable) and lay it out exactly where the
+# runtime resolver expects the trusted "package Chrome" (ADR-052 D2 step 3 —
+# findPackageChrome probes <dir(omnipus binary)>/../chromium/chrome plus a
+# companion chrome.sha256).
+#
+# Mirrors scripts/cft-bundle.sh's contract (same CfT manifest URL the runtime
+# installer uses, full `chrome` build not chrome-headless-shell, chrome.sha256
+# written BESIDE the binary). Kept inline rather than COPYing the script so the
+# image builds from a bare context on any machine — this pod has no Docker
+# daemon, so the build only ever runs remotely.
+#
+# Layout is FLAT (<root>/chrome), which is binaryLayoutsForRoot's layout #3 and
+# accepted by findPackageChrome. Do NOT add a chrome-linux64/ subdir to satisfy
+# a doctor regression — that masks drift instead of fixing it.
+ARG TARGETARCH=amd64
+RUN set -eux; \
+    case "$TARGETARCH" in \
+      amd64) CFT_PLATFORM=linux64 ;; \
+      arm64) CFT_PLATFORM=linux-arm64 ;; \
+      *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    URL="$(curl -fsSL https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json \
+        | jq -r --arg p "$CFT_PLATFORM" '.channels.Stable.downloads.chrome[] | select(.platform==$p) | .url')"; \
+    test -n "$URL"; \
+    echo "fetching Chrome-for-Testing: $URL"; \
+    curl -fsSL -o /tmp/chrome.zip "$URL"; \
+    mkdir -p /tmp/cft /usr/local/chromium; \
+    unzip -q /tmp/chrome.zip -d /tmp/cft; \
+    cp -a "/tmp/cft/chrome-$CFT_PLATFORM/." /usr/local/chromium/; \
+    rm -rf /tmp/chrome.zip /tmp/cft; \
+    test -f /usr/local/chromium/chrome; \
+    test ! -L /usr/local/chromium/chrome; \
+    sha256sum /usr/local/chromium/chrome | awk '{printf "%s  %s\n", $1, $2}' > /usr/local/chromium/chrome.sha256; \
+    chmod -R go-w /usr/local/chromium; \
+    chmod 0755 /usr/local/chromium; \
+    ln -sf /usr/local/chromium/chrome /usr/local/bin/chrome; \
+    /usr/local/chromium/chrome --version
 
 # Install uv (used by Python MCP servers)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
@@ -78,10 +144,21 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 # Copy binary
 COPY --from=go-builder /out/omnipus /usr/local/bin/omnipus
 
-# Reuse existing node user (UID/GID 1000) — rename to omnipus
-RUN deluser node 2>/dev/null; delgroup node 2>/dev/null; \
-    addgroup -g 1000 omnipus 2>/dev/null; \
-    adduser -D -u 1000 -G omnipus -h /home/omnipus omnipus 2>/dev/null || true
+# Reuse existing node user (UID/GID 1000) — rename to omnipus.
+#
+# Debian/shadow syntax, NOT BusyBox (the base moved Alpine → Debian slim,
+# above). The previous `addgroup -g` / `adduser -D` form is BusyBox-only: on
+# Debian those flags are invalid, and because the whole chain ended in
+# `|| true` the failure would have been SILENT — leaving no omnipus user, so
+# `USER omnipus` fails the build (or, worse on a variant that tolerates it,
+# runs the gateway as root). Verified explicitly with `id omnipus` rather
+# than trusting the exit status.
+RUN set -eux; \
+    userdel -r node 2>/dev/null || true; \
+    groupdel node 2>/dev/null || true; \
+    groupadd -g 1000 omnipus; \
+    useradd -u 1000 -g omnipus -m -d /home/omnipus -s /usr/sbin/nologin omnipus; \
+    id omnipus
 
 USER omnipus
 

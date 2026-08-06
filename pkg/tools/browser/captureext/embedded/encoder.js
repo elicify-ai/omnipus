@@ -21,8 +21,18 @@
 //   -> {type: 'browser_capture_hello',   token, ext_version}
 //   -> {type: 'browser_capture_offer',   sdp}
 //   <- {type: 'browser_capture_answer',  sdp}
-//   <-  {type: 'browser_capture_control', action: recapture|shutdown, reason?}  (server -> client)
+//   <-  {type: 'browser_capture_control', action: recapture|shutdown, reason?, expected_width?, expected_height?}  (server -> client)
 //   ->  {type: 'browser_capture_control', action: ping}                        (client -> server)
+//
+// expected_width/expected_height (2026-07-31 follow-up,
+// docs/internal/browser-viewport-input-rootcause-2026-07-31.md): on a
+// recapture triggered by a viewport resize, the gateway has already read
+// back the tab's ACTUAL CSS viewport via CDP's Page.getLayoutMetrics — the
+// one piece of CDP-VERIFIED truth that exists at that moment — and threads
+// it through here so captureActiveTabStream can converge on a KNOWN target
+// instead of merely polling chrome.tabs.get until two reads agree with each
+// other (which two STALE reads can also satisfy). Absent on a recapture with
+// no such measurement to offer (e.g. an active-tab switch).
 //
 // browser_capture_hello is CLIENT -> SERVER ONLY — the gateway never sends
 // one back. Per the schema doc: "the gateway audits any hello with a
@@ -62,6 +72,14 @@ window.__omnipusState = {
   reconnectAttempts: 0,
   videoTracks: null,
   audioTracks: null,
+  // senderConstraints is set only by a POST-negotiation
+  // applyVideoSenderConstraints re-apply (see that function) whose
+  // setParameters() call actually resolved -- i.e. it is the external,
+  // outside-the-page proof (read via CDP Runtime.evaluate) that the
+  // degradationPreference/maxBitrate/scaleResolutionDownBy encoding
+  // constraints genuinely stuck on a settled sender, not just that this file
+  // attempted to set them. Stays null until the first such success.
+  senderConstraints: null,
   history: [],
 };
 
@@ -134,17 +152,58 @@ const RECONNECT_MAX_DELAY_MS = 30000;
 const ICE_BAD_GRACE_MS = 10000;
 const PING_BEACON_INTERVAL_MS = 15000;
 
-// DEFAULT_MAX_VIDEO_BITRATE_BPS (fix-wave finding 4, "overdrive"): the
-// tabCapture MediaStream has no bandwidth ceiling of its own, so an
+// expectedCaptureDims (2026-07-31 follow-up,
+// docs/internal/browser-viewport-input-rootcause-2026-07-31.md) carries the
+// CDP-verified {w, h} a viewport-resize-triggered recapture wants
+// captureActiveTabStream to converge on, or null when the incoming recapture
+// carried no such hint (e.g. an active-tab switch — see
+// handleControlFrame). Set just before runCaptureAndOffer is kicked off for
+// a recapture and consumed (then cleared) by captureActiveTabStream's own
+// polling logic below, so it is never stale across a LATER recapture that
+// omits the fields.
+let expectedCaptureDims = null;
+
+// lastPinnedCapDims records what captureActiveTabStream actually pinned the
+// running stream to, and selfHealBudget bounds the post-connect
+// verification below (2026-07-31 live UAT, pop-out): multiple recaptures can
+// overlap during a panel spin-up (attach-time corrective recapture, the
+// viewport apply's own recapture, the chrome-delta compensation's second
+// window reflow) and the LAST capture to win can pin a mid-compensation size
+// (measured: 1586x730 pinned while the settled viewport was 1586x816). Racing
+// orderings are unwinnable one by one — instead, ~1.2s after each capture
+// connects, re-read chrome.tabs.get once and self-recapture ONCE if the
+// pinned size drifted more than 8px from the settled tab. Bounded: the flag
+// resets per capture cycle, and a self-heal recapture that still mismatches
+// does not re-arm itself.
+let lastPinnedCapDims = null;
+// Budget of 3 (not a one-shot flag): live UAT showed overlapping spin-up
+// cycles consume a single-shot guard before the WINNING capture connects,
+// leaving a drifted stream unhealed (pop-out pinned 1586x730 vs settled
+// 816 while a sibling run converged fine). Each server-initiated recapture
+// (and the initial capture) grants 3 post-connect checks; self-heal
+// recaptures spend from the same budget — bounded convergence, no churn.
+let selfHealBudget = 3;
+
+// DEFAULT_MAX_VIDEO_BITRATE_BPS (fix-wave finding 4, "overdrive"; revised
+// per docs/internal/browser-viewport-input-rootcause-2026-07-31.md fault 2):
+// the tabCapture MediaStream has no bandwidth ceiling of its own, so an
 // unconstrained VP8 encoder will burn as much CPU/bandwidth as the content
-// demands -- a major contributor to the reported pod-CPU-saturation/choppy-
-// input UAT symptom under heavy (video-playing) pages. 2 Mbps is generous
-// for a 1280x720 browsing UI (comfortably covers text and moving video
-// alike) while giving the encoder a real ceiling to degrade against.
+// demands -- a real contributor to pod-CPU-saturation/choppy-input symptoms
+// under heavy (video-playing) pages, which is why a cap exists at all. The
+// original 2 Mbps cap was set with that CPU-saturation risk in mind, but
+// live UAT showed it was actually the PRESSURE that triggered the
+// resolution collapse this file's degradationPreference fix (see
+// applyVideoSenderConstraints) addresses: paired with 'balanced' degradation,
+// 2 Mbps was tight enough that VP8 gave up resolution to stay under it,
+// producing a 319x158 stream at panel-sized (~561x587) geometry -- both
+// visibly blurry and, worse, wrong for input mapping. 6 Mbps gives VP8
+// headroom to hold full panel-sized geometry without hitting the ceiling
+// under normal browsing content, while 'maintain-resolution' now means any
+// remaining pressure is spent on framerate instead of resolution.
 // Overridable per-install via window.__omnipusCapture.maxVideoBitrate
 // (bits/sec) for future config -- see the file header for the
 // injection mechanism; unset/invalid falls back to this default.
-const DEFAULT_MAX_VIDEO_BITRATE_BPS = 2000000;
+const DEFAULT_MAX_VIDEO_BITRATE_BPS = 6000000;
 
 // OFFER_ANSWER_TIMEOUT_MS (fix-wave finding 4, review-flagged gap): before
 // this fix, a browser_capture_offer whose browser_capture_answer never
@@ -189,16 +248,57 @@ function clearOfferAnswerTimeout() {
 }
 
 // applyVideoSenderConstraints (fix-wave finding 4) caps the video sender's
-// bitrate and sets encoding hints AFTER pc.addTrack has created its
-// RTCRtpSender for videoTrack. Errors are logged, not thrown -- a failed
-// setParameters/contentHint assignment should degrade to "uncapped
-// bitrate", not abort the whole capture/offer flow.
-function applyVideoSenderConstraints(pc, videoTrack) {
-  const sender = pc.getSenders().find((s) => s.track === videoTrack);
+// bitrate and sets encoding hints on the video track's RTCRtpSender. Errors
+// are logged, not thrown -- a failed setParameters/contentHint assignment
+// should degrade to "uncapped bitrate", not abort the whole capture/offer
+// flow.
+//
+// Called THREE times per capture cycle (UAT v24 finding,
+// docs/internal/browser-viewport-input-rootcause-2026-07-31.md fault 2,
+// fix-wave follow-up): once from runCaptureAndOfferOnce right after
+// pc.addTrack (context='pre-negotiation'), again once the
+// browser_capture_answer has been applied via setRemoteDescription
+// (context='post-answer'), and again on the PC's first transition to
+// connectionState 'connected' (context='post-connected'). The
+// pre-negotiation call is the one that shipped first and it is NOT enough
+// on its own: RTCRtpSender.getParameters()/setParameters() is a
+// transactional read-modify-write keyed to the sender's current transport
+// state, and calling it before setLocalDescription/setRemoteDescription has
+// completed negotiation commonly rejects with InvalidStateError or
+// InvalidModificationError on a sender whose transport isn't settled yet.
+// Live evidence: even after this function landed with
+// degradationPreference='maintain-resolution' + scaleResolutionDownBy=1 + a
+// 6 Mbps cap, UAT v24 still measured the delivered stream sitting at
+// 228x246 for 60s before stepping to 307x328 (exactly tab/2) and holding --
+// the resolution scaler was still active, meaning the pre-negotiation
+// setParameters call had almost certainly been silently rejected the whole
+// time (its .catch only warn()s, invisible in a headless run). Re-invoking
+// this function (idempotent -- same params, same sender) once the
+// transceiver has actually settled is what makes the constraints stick;
+// the pre-negotiation call is kept anyway as a best-effort "in case this
+// browser's sender accepts it early" no-op-on-failure attempt, now that
+// failure is no longer invisible (see the lastError writes below).
+//
+// Each call site is naturally idempotent against re-invocation without any
+// extra bookkeeping: the pre-negotiation and post-answer calls each fire at
+// most once per capture cycle from their respective call sites, and the
+// post-connected call is gated by the connectedConstraintsApplied flag
+// newPeerConnection closes over -- so this never "stacks" repeated
+// setParameters calls onto a single connectionstatechange listener.
+function applyVideoSenderConstraints(pc, opts) {
+  opts = opts || {};
+  const context = opts.context || 'pre-negotiation';
+  const recordSuccess = opts.recordSuccess === true;
+  const logPrefix = 'applyVideoSenderConstraints[' + context + ']';
+
+  const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
   if (!sender) {
-    warn('applyVideoSenderConstraints: no RTCRtpSender found for the video track');
+    const msg = logPrefix + ': no RTCRtpSender found for the video track';
+    warn(msg);
+    window.__omnipusState.lastError = msg;
     return;
   }
+  const videoTrack = sender.track;
 
   const cfg = window.__omnipusCapture || {};
   const maxBitrate =
@@ -210,38 +310,187 @@ function applyVideoSenderConstraints(pc, videoTrack) {
       params.encodings = [{}];
     }
     params.encodings[0].maxBitrate = maxBitrate;
-    // degradationPreference 'balanced' (not 'maintain-framerate' or
-    // 'maintain-resolution'): the captured tab can be anything from a
-    // text-heavy page (wants resolution to stay legible) to video playback
-    // (wants framerate to stay smooth) -- committing to either extreme
-    // permanently sacrifices the other content type. 'balanced' lets the
-    // encoder trade resolution/framerate against CURRENT conditions instead
-    // of a fixed bias, which pairs with this bitrate cap and the gateway's
-    // screencast-pause fix (ADR-047 fix-wave finding 3, which removes the
-    // competing CDP JPEG screencast's CPU draw while WebRTC is active) to
-    // keep the CPU/bandwidth budget under control without a permanent
-    // quality cliff for whichever content type ISN'T currently on screen.
-    params.degradationPreference = 'balanced';
-    sender.setParameters(params).catch((e) => {
-      warn('applyVideoSenderConstraints: setParameters failed', e);
-    });
+    // degradationPreference 'maintain-resolution' (previously 'balanced' --
+    // see docs/internal/browser-viewport-input-rootcause-2026-07-31.md,
+    // fault 2). The original rationale for 'balanced' was that the captured
+    // tab can be anything from a text-heavy page to video playback, and
+    // committing to either extreme permanently sacrifices the other content
+    // type. That reasoning undersold the cost: live UAT measured the
+    // delivered stream at 319x158 on a shared-cpu-2x box -- 'balanced' plus
+    // the (then 2 Mbps) bitrate cap let VP8 trade resolution away under CPU
+    // pressure, and it kept doing so far below anything a viewer would
+    // accept. That downscale is (a) the reported blur -- 319x158 upscaled
+    // ~2x into a ~561x587 panel -- and (b) was ORIGINALLY thought to be
+    // load-bearing for the SPA's input coordinate mapping too, on the
+    // assumption that capture pixels track the page's CSS viewport 1:1
+    // (wave-plan key-decision-8). That input-correctness argument no longer
+    // holds this fix up: the same fix-wave that raised this bitrate ceiling
+    // also made the server independently rescale every pointer event from
+    // whatever capture-frame size the client actually reports into the
+    // tab's real CSS pixel space -- see pkg/tools/browser/live.go's
+    // dispatchInput (which now rescales x/y per-event via
+    // rescaleToCSSViewport/rescaleInputCoords using the client's reported
+    // CaptureWidth/CaptureHeight, not an assumed 1:1). So a resolution
+    // collapse here is no longer a click-goes-nowhere bug -- it is now
+    // purely a sharpness/UX regression, handled as a second, independent
+    // line of defense. 'maintain-resolution' is kept because blurry video
+    // is still worth avoiding, and because avoiding a collapse in the first
+    // place is simpler than trusting every input-consuming surface to
+    // rescale correctly, not because input correctness depends on it.
+    // Paired with the raised bitrate ceiling below (6 Mbps) to give VP8
+    // headroom before it needs to degrade at all.
+    params.degradationPreference = 'maintain-resolution';
+    // Belt-and-braces against any lingering per-encoding down-scale --
+    // degradationPreference governs the encoder's *runtime* trade-off, but
+    // scaleResolutionDownBy is a separate, persistent per-encoding factor;
+    // pin it to 1 so nothing above this layer is quietly resizing the
+    // output out from under the resolution guarantee just established.
+    params.encodings[0].scaleResolutionDownBy = 1;
+    sender
+      .setParameters(params)
+      .then(() => {
+        record(logPrefix + ': setParameters applied');
+        if (recordSuccess) {
+          // The exit-proof probe (CDP Runtime.evaluate) reads this back to
+          // verify the constraints ACTUALLY stuck on a settled sender, not
+          // merely that this file attempted to set them -- see the
+          // window.__omnipusState.senderConstraints doc comment above.
+          window.__omnipusState.senderConstraints = {
+            degradationPreference: params.degradationPreference,
+            maxBitrate: maxBitrate,
+            scaleResolutionDownBy: params.encodings[0].scaleResolutionDownBy,
+            appliedAt: Date.now(),
+            context: context,
+          };
+        }
+      })
+      .catch((e) => {
+        const msg = logPrefix + ': setParameters failed: ' + String(e);
+        warn(msg, e);
+        window.__omnipusState.lastError = msg;
+      });
   } catch (e) {
-    warn('applyVideoSenderConstraints: getParameters/setParameters failed', e);
+    const msg = logPrefix + ': getParameters/setParameters failed: ' + String(e);
+    warn(msg, e);
+    window.__omnipusState.lastError = msg;
   }
 
-  // contentHint 'motion' (not 'detail'): asks the VP8 encoder to favor
-  // smooth motion over per-frame sharpness -- directly addresses this
-  // fix-wave's reported freeze/choppiness symptoms on real video content.
-  // Tradeoff: text-heavy (non-video) pages may render very slightly softer
-  // under 'motion' than 'detail' would produce. Accepted for now given the
-  // UAT content was video playback; a future per-page-adaptive hint (e.g.
-  // detecting an actively-playing <video> element vs a static page) is
-  // possible but out of scope for this fix.
+  // contentHint 'detail' (REVERSED from 'motion', 2026-07-31 live evidence):
+  // 'motion' tells libwebrtc this is camera-like video, which ENABLES the
+  // quality scaler -- the encoder is allowed to reduce RESOLUTION under
+  // CPU/bandwidth pressure. Measured on UAT v24/v25: the delivered stream sat
+  // pinned at ~tab/2.7 (228px wide against a 615px tab) even with
+  // degradationPreference 'maintain-resolution' + scaleResolutionDownBy 1
+  // applied post-negotiation and a 4Mbps start-bitrate hint -- the scaler
+  // kept winning, and 'motion' is what licenses it. 'detail' marks the track
+  // as screen content whose per-frame legibility matters: libwebrtc disables
+  // resolution scaling and sheds FRAMERATE under pressure instead. That is
+  // the right trade here -- a text page at full resolution and 10fps is
+  // usable; at 228px wide and 30fps it is not, and the original 'motion'
+  // rationale (video-playback smoothness) predates the server-side input
+  // rescale (live.go rescaleInputCoords), which now keeps clicks accurate
+  // regardless. A per-page-adaptive hint remains possible future work.
+  // Re-set on every call -- setting an unchanged value is a harmless no-op,
+  // so this needs no context guard.
   try {
-    videoTrack.contentHint = 'motion';
+    videoTrack.contentHint = 'detail';
   } catch (e) {
-    warn('applyVideoSenderConstraints: setting contentHint failed', e);
+    const msg = logPrefix + ': setting contentHint failed: ' + String(e);
+    warn(msg, e);
+    window.__omnipusState.lastError = msg;
   }
+}
+
+// mungeVideoStartBitrate appends libwebrtc's VP8 bitrate-hint fmtp
+// parameters (x-google-start-bitrate/min-bitrate/max-bitrate, kbps) to the
+// video m-section's VP8 fmtp line of a freshly-created offer, BEFORE it is
+// handed to setLocalDescription.
+//
+// Live evidence (UAT v24, 2026-07-31,
+// docs/internal/browser-viewport-input-rootcause-2026-07-31.md fault 2,
+// fix-wave follow-up): even with the applyVideoSenderConstraints re-apply
+// fix above landed, the delivered stream still sat at 228x246 for a full
+// 60s before stepping to 307x328 (exactly tab/2, tab is 615x657) and
+// holding there -- a textbook conservative bandwidth-estimation cold-start
+// ramp, not the resolution-collapse-under-pressure symptom that fix
+// addresses. This encoder's PeerConnection talks to the gateway's pion
+// ingest over LOOPBACK -- there is no real, lossy network path to probe
+// caution against, so spending 60+ seconds ramping up is pure waste on this
+// deployment topology. x-google-start-bitrate tells libwebrtc's VP8 encoder
+// to skip the slow-start climb and begin at the given rate; the paired
+// min/max hints bound the adaptive range it can move within afterward --
+// the RTCRtpSender.maxBitrate set in applyVideoSenderConstraints remains
+// the authoritative hard ceiling regardless.
+//
+// These are libwebrtc-specific SDP fmtp hints (Chrome's own dialect) --
+// harmless everywhere else, since a non-libwebrtc VP8 implementation on the
+// other end simply ignores fmtp parameters it doesn't recognize rather than
+// rejecting them.
+function mungeVideoStartBitrate(sdp) {
+  const START_KBPS = 4000;
+  const MIN_KBPS = 1000;
+  const MAX_KBPS = 6000;
+  const HINTS = 'x-google-start-bitrate=' + START_KBPS + ';x-google-min-bitrate=' + MIN_KBPS + ';x-google-max-bitrate=' + MAX_KBPS;
+
+  const lines = sdp.split('\r\n');
+
+  // Payload type numbers are only unique WITHIN an m-section, not across
+  // the whole SDP, so the video m-section's boundaries must be located
+  // first -- otherwise a VP8 payload type that happens to collide with an
+  // unrelated audio payload type number could get the wrong line munged.
+  let videoStart = -1;
+  let videoEnd = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    if (videoStart === -1 && lines[i].indexOf('m=video') === 0) {
+      videoStart = i;
+      continue;
+    }
+    if (videoStart !== -1 && lines[i].indexOf('m=') === 0) {
+      videoEnd = i;
+      break;
+    }
+  }
+  if (videoStart === -1) {
+    warn('mungeVideoStartBitrate: no m=video section found, leaving SDP untouched');
+    return sdp;
+  }
+
+  // Find the VP8 payload type via its rtpmap line within the video section
+  // only.
+  const rtpmapRe = /^a=rtpmap:(\d+) VP8\/90000/i;
+  let vp8Pt = null;
+  let rtpmapIdx = -1;
+  for (let i = videoStart; i < videoEnd; i++) {
+    const m = lines[i].match(rtpmapRe);
+    if (m) {
+      vp8Pt = m[1];
+      rtpmapIdx = i;
+      break;
+    }
+  }
+  if (!vp8Pt) {
+    warn('mungeVideoStartBitrate: no VP8 payload type found in offer, leaving SDP untouched');
+    return sdp;
+  }
+
+  // Append to an existing a=fmtp line for this payload type if present,
+  // otherwise insert a fresh one directly after the rtpmap line.
+  const fmtpPrefix = 'a=fmtp:' + vp8Pt + ' ';
+  let fmtpIdx = -1;
+  for (let i = videoStart; i < videoEnd; i++) {
+    if (lines[i].indexOf(fmtpPrefix) === 0) {
+      fmtpIdx = i;
+      break;
+    }
+  }
+
+  if (fmtpIdx !== -1) {
+    lines[fmtpIdx] = lines[fmtpIdx] + ';' + HINTS;
+  } else {
+    lines.splice(rtpmapIdx + 1, 0, fmtpPrefix + HINTS);
+  }
+
+  return lines.join('\r\n');
 }
 
 function teardownCapture() {
@@ -304,15 +553,115 @@ async function captureActiveTabStream() {
   // --window-size default.
   let capW = 1280;
   let capH = 720;
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    if (tab && tab.width && tab.height) {
-      capW = tab.width;
-      capH = tab.height;
+
+  // expectedCaptureDims (2026-07-31 follow-up,
+  // docs/internal/browser-viewport-input-rootcause-2026-07-31.md): consumed
+  // and cleared here, exactly once per capture cycle. A viewport-resize
+  // recapture carries the gateway's own CDP-verified Page.getLayoutMetrics
+  // read-back through CaptureSession.RecaptureAt -> browser_capture_control
+  // {expected_width, expected_height} -- the ONLY truth that actually proves
+  // what the tab's CSS viewport is at this instant (see live.go's
+  // SetViewport doc comment). Two independent failure modes measured live on
+  // 2026-07-31 motivate polling against this KNOWN target instead of the
+  // plain "two consecutive reads agree with EACH OTHER" strategy the `else`
+  // branch below still uses when no such hint is available:
+  //   (1) mid-reflow race: a single chrome.tabs.get read during the
+  //       window-bounds reflow can catch a transitional size (measured:
+  //       stream stuck at 615x766 while the settled, CDP-verified viewport
+  //       was already 615x744).
+  //   (2) two-agreeing-STALE-reads: the "poll until two consecutive reads
+  //       agree" strategy is fooled when chrome.tabs.get simply LAGS the
+  //       real window resize entirely -- two stale reads agree with each
+  //       other just as readily as two settled ones, so that poll exits
+  //       "successfully" pinned to the OLD geometry (measured: capture stuck
+  //       at the 1278x632 launch size while the tab was CDP-verified at
+  //       615x744 in the SAME second).
+  // Converging chrome.tabs.get onto the expected value closes both; if it
+  // never gets there within the poll budget, the CDP-verified expected
+  // value is trusted directly rather than whatever (possibly still-stale)
+  // size chrome.tabs.get last reported.
+  const expected = expectedCaptureDims;
+  expectedCaptureDims = null;
+
+  if (expected) {
+    const TOLERANCE_PX = 8;
+    const MAX_TRIES = 16;
+    const POLL_INTERVAL_MS = 150;
+    let converged = false;
+    try {
+      for (let attempt = 0; attempt < MAX_TRIES; attempt++) {
+        const tab = await chrome.tabs.get(tabId);
+        if (
+          tab &&
+          tab.width &&
+          tab.height &&
+          Math.abs(tab.width - expected.w) <= TOLERANCE_PX &&
+          Math.abs(tab.height - expected.h) <= TOLERANCE_PX
+        ) {
+          capW = tab.width;
+          capH = tab.height;
+          converged = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      }
+    } catch (e) {
+      warn(
+        'captureActiveTabStream: chrome.tabs.get failed while converging on expected dims, using expected values directly',
+        e
+      );
     }
-  } catch (e) {
-    warn('captureActiveTabStream: chrome.tabs.get failed, using default capture size', e);
+    if (!converged) {
+      // Timeout (or a thrown chrome.tabs.get): the CDP-verified expected
+      // values are still the best truth available -- use them directly
+      // rather than whatever stale/transitional size chrome.tabs.get last
+      // reported.
+      warn(
+        'captureActiveTabStream: chrome.tabs.get did not converge on expected ' +
+          expected.w +
+          'x' +
+          expected.h +
+          ' within ' +
+          MAX_TRIES +
+          ' tries, using the expected (CDP-verified) values directly'
+      );
+      capW = expected.w;
+      capH = expected.h;
+    }
+  } else {
+    try {
+      // Poll until two consecutive reads agree (bounded) — the fallback
+      // strategy for a recapture with no CDP-verified hint (e.g. an
+      // active-tab switch, live.go's onTabsChanged -> cs.Recapture()). A
+      // recapture fires right after SetViewport, and the chrome-delta
+      // COMPENSATION step there (live.go, 2026-07-31) applies window bounds
+      // twice in quick succession — a single chrome.tabs.get here can catch
+      // the tab mid-reflow and pin the whole stream to a transitional size
+      // (measured live: capture stuck at 615x766 while the settled,
+      // CDP-verified viewport was 615x744). Two agreeing reads 150ms apart
+      // mean the reflow has settled. See the expected-dims branch above for
+      // why mere self-agreement is NOT good enough once a verified target
+      // exists to poll against instead.
+      let prevW = 0;
+      let prevH = 0;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const tab = await chrome.tabs.get(tabId);
+        if (tab && tab.width && tab.height) {
+          if (tab.width === prevW && tab.height === prevH) {
+            break;
+          }
+          prevW = tab.width;
+          prevH = tab.height;
+          capW = tab.width;
+          capH = tab.height;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+    } catch (e) {
+      warn('captureActiveTabStream: chrome.tabs.get failed, using default capture size', e);
+    }
   }
+  lastPinnedCapDims = { w: capW, h: capH };
   record('captureActiveTabStream: capture size ' + capW + 'x' + capH);
 
   // Self-consume: no processing constraints needed — tabCapture's defaults
@@ -367,6 +716,13 @@ function resolveIceServers() {
 
 function newPeerConnection() {
   const pc = new RTCPeerConnection({ iceServers: resolveIceServers() });
+  // connectedConstraintsApplied is closed over per-PC (a fresh PC is created
+  // for every capture/recapture cycle, see runCaptureAndOfferOnce), so this
+  // guards only the FIRST 'connected' transition of THIS pc -- re-applying
+  // applyVideoSenderConstraints on every later connectionstatechange
+  // fluctuation (e.g. a transient disconnected->connected blip) would be
+  // harmless (setParameters is idempotent) but pointless, so it's skipped.
+  let connectedConstraintsApplied = false;
   pc.oniceconnectionstatechange = () => {
     window.__omnipusState.iceState = pc.iceConnectionState;
     record('ice state -> ' + pc.iceConnectionState);
@@ -377,6 +733,13 @@ function newPeerConnection() {
   pc.onconnectionstatechange = () => {
     window.__omnipusState.connState = pc.connectionState;
     record('connection state -> ' + pc.connectionState);
+    // Second post-negotiation re-apply point (see applyVideoSenderConstraints's
+    // doc comment) -- by 'connected' the transceiver is fully settled, so
+    // this is the most reliable point for setParameters to actually stick.
+    if (pc.connectionState === 'connected' && !connectedConstraintsApplied) {
+      connectedConstraintsApplied = true;
+      applyVideoSenderConstraints(pc, { context: 'post-connected', recordSuccess: true });
+    }
   };
   return pc;
 }
@@ -388,7 +751,48 @@ function newPeerConnection() {
 // the initial connect and for a recapture control message — matching
 // wv1-spike-results.md Q3's proven "new PC with fresh SSRCs replaces the
 // old one" recovery pattern rather than incremental same-PC renegotiation.
+// captureInFlight serialises runCaptureAndOffer (2026-07-31, found by review
+// of the adaptive-viewport feature). This function has two awaits before it
+// assigns currentPC/currentStream, and it had NO in-flight guard. That was
+// practically unreachable while the only trigger was an active-tab switch (a
+// rare, effectively serialized event) — but the viewport feature added a
+// second, client-driven, HIGH-FREQUENCY trigger: every panel resize sends
+// browser_viewport, and the gateway answers with a recapture. A CaptureSession
+// is shared per AGENT, so two viewers of the same tab each push their own
+// geometry with no cross-viewer coordination.
+//
+// Two overlapping calls race the same chrome.tabCapture pipeline for one tab.
+// Chrome allows only one active tabCapture stream per tab, so the loser's
+// getUserMedia throws — and handleControlFrame's catch closes the WHOLE ingest
+// WebSocket, tearing down a session that was otherwise fine. Even without a
+// throw, the loser's PeerConnection and MediaStreamTrack are orphaned, because
+// teardownCapture only ever closes whatever the globals currently point at.
+//
+// Coalesce rather than queue: if a recapture arrives while one is running, set
+// a rerun flag and let the in-flight call loop once more when it finishes. The
+// geometry we want is always the LATEST one, so collapsing N pending
+// recaptures into one extra pass is both correct and cheaper.
+let captureInFlight = false;
+let captureRerunRequested = false;
+
 async function runCaptureAndOffer() {
+  if (captureInFlight) {
+    captureRerunRequested = true;
+    record('runCaptureAndOffer: already in flight, coalescing into a rerun');
+    return;
+  }
+  captureInFlight = true;
+  try {
+    do {
+      captureRerunRequested = false;
+      await runCaptureAndOfferOnce();
+    } while (captureRerunRequested);
+  } finally {
+    captureInFlight = false;
+  }
+}
+
+async function runCaptureAndOfferOnce() {
   teardownCapture();
   setStatus('capturing');
 
@@ -402,13 +806,17 @@ async function runCaptureAndOffer() {
 
   // Fix-wave finding 4: cap bitrate + set encoding hints on the video
   // sender now that addTrack has created it. Video-only (audio/Opus has no
-  // equivalent overdrive risk here).
+  // equivalent overdrive risk here). This pre-negotiation call is
+  // best-effort -- see applyVideoSenderConstraints's doc comment for why
+  // the post-answer/post-connected re-applies below are the ones that
+  // actually matter.
   const videoTrack = stream.getVideoTracks()[0];
   if (videoTrack) {
-    applyVideoSenderConstraints(pc, videoTrack);
+    applyVideoSenderConstraints(pc, { context: 'pre-negotiation' });
   }
 
   const offer = await pc.createOffer();
+  offer.sdp = mungeVideoStartBitrate(offer.sdp);
   await pc.setLocalDescription(offer);
   await waitIceGatheringComplete(pc);
 
@@ -437,6 +845,19 @@ async function handleControlFrame(msg) {
   record('control frame: action=' + action + (msg.reason ? ' reason=' + msg.reason : ''));
 
   if (action === 'recapture') {
+    // Read expected_width/expected_height off the frame BEFORE kicking off
+    // runCaptureAndOffer -- captureActiveTabStream (called from inside that
+    // chain) is what actually consumes and clears expectedCaptureDims. Both
+    // fields must be present and numeric; anything else (either omitted, or
+    // an older/malformed server) means "no CDP-verified hint" and this
+    // recapture falls back to the historical two-agreeing-reads poll.
+    expectedCaptureDims =
+      typeof msg.expected_width === 'number' && typeof msg.expected_height === 'number'
+        ? { w: msg.expected_width, h: msg.expected_height }
+        : null;
+    // Each SERVER-initiated recapture gets one post-connect self-heal check;
+    // a self-heal's own recapture deliberately does not re-arm this (no loop).
+    selfHealBudget = 3;
     const forWs = ws;
     try {
       await runCaptureAndOffer();
@@ -506,6 +927,35 @@ async function handleWsMessage(raw) {
         setStatus('connected');
         lastGoodIceTime = Date.now();
         record('applied browser_capture_answer, PC connecting');
+        if (selfHealBudget > 0) {
+          selfHealBudget--;
+          const healPC = currentPC;
+          setTimeout(async () => {
+            if (currentPC !== healPC || shuttingDown || !lastPinnedCapDims) return;
+            try {
+              const tabId = await findActiveTargetTab();
+              const tab = await chrome.tabs.get(tabId);
+              if (
+                tab && tab.width && tab.height &&
+                (Math.abs(tab.width - lastPinnedCapDims.w) > 8 || Math.abs(tab.height - lastPinnedCapDims.h) > 8)
+              ) {
+                record('self-heal: pinned ' + lastPinnedCapDims.w + 'x' + lastPinnedCapDims.h + ' drifted from tab ' + tab.width + 'x' + tab.height + ' — recapturing once');
+                expectedCaptureDims = { w: tab.width, h: tab.height };
+                await runCaptureAndOffer();
+              }
+            } catch (e) {
+              warn('self-heal check failed', e);
+            }
+          }, 1200);
+        }
+        // First post-negotiation re-apply point (see
+        // applyVideoSenderConstraints's doc comment): the remote answer is
+        // now applied, so the transceiver's direction/codecs are settled
+        // even though ICE/DTLS may still be finishing up. A second
+        // re-apply follows at pc.connectionState === 'connected'
+        // (newPeerConnection's onconnectionstatechange) for whichever
+        // browser needs the transport fully up before setParameters sticks.
+        applyVideoSenderConstraints(currentPC, { context: 'post-answer', recordSuccess: true });
       } catch (e) {
         window.__omnipusState.lastError = String(e);
         record('setRemoteDescription(answer) FAILED: ' + e);

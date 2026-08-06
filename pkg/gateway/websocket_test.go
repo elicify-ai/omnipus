@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
@@ -178,6 +180,17 @@ func TestWSHandlerValidAuth(t *testing.T) {
 // When the client sends {"type":"auth","token":"wrong"},
 // Then the server sends an error frame and closes the connection.
 // Traces to: wave5b-system-agent-spec.md — Scenario: WebSocket invalid auth (E5)
+//
+// GAP 1 (D5 test-coverage gate): asserts EXACT equality against the shared
+// wsAuthErrInvalidToken constant (websocket.go), not a loose substring. Prior
+// to this fix the assertion checked for "unauthorized" — a string the D5 fix
+// (commit b764a484) removed from the wire in favor of a human-readable
+// message, which had gone undetected because nobody re-ran this test after
+// the copy change. Comparing to the constant itself means a future edit that
+// changes the copy in websocket.go but forgets the identical browser_ws.go
+// mirror call site (or vice versa) fails exactly one of the two tests that
+// reference it — see TestBrowserWS_Auth_InvalidToken_ClosesWithPolicyViolation
+// in browser_ws_test.go for the mirrored assertion.
 func TestWSHandlerInvalidAuth(t *testing.T) {
 	const testToken = "ws-correct-token"
 	handler, _, _ := newTestWSHandler(t)
@@ -202,12 +215,107 @@ func TestWSHandlerInvalidAuth(t *testing.T) {
 	var frame replayFrameDecoder
 	require.NoError(t, json.Unmarshal(resp, &frame))
 	assert.Equal(t, "error", frame.Type)
-	assert.Contains(t, strings.ToLower(frame.Message), "unauthorized")
+	assert.Equal(t, wsAuthErrInvalidToken, frame.Message,
+		"chat WS invalid-token error must carry the shared wsAuthErrInvalidToken constant verbatim")
 
 	// After error frame, connection must be closed.
 	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
 	_, _, err = conn.ReadMessage()
 	assert.Error(t, err, "connection must be closed after invalid auth")
+}
+
+// TestWSHandlerAuth_BadFirstFrame_UsesSharedConstant verifies that a
+// non-"auth" first frame (no session cookie present, so the frame path is
+// reached) is rejected with the shared wsAuthErrBadFirstFrame constant, and
+// that the connection is unusable afterward.
+// BDD: Given a freshly dialed chat WS connection with no cookie,
+// When the client's first frame is {"type":"message",...} (not "auth"),
+// Then the server sends {"type":"error","message":wsAuthErrBadFirstFrame}
+// and the connection cannot be used for further frames.
+// Traces to: GAP 1 (D5 test-coverage gate) — websocket.go:770-779.
+func TestWSHandlerAuth_BadFirstFrame_UsesSharedConstant(t *testing.T) {
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+
+	// First frame is a "message" frame, not the required "auth" envelope.
+	badFirst := wsClientFrameTestHelper{Type: "message", Content: "no auth frame sent"}
+	badData, err := json.Marshal(badFirst)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, badData))
+
+	_, resp, err := conn.ReadMessage()
+	require.NoError(t, err, "must receive error frame for a non-auth first frame")
+	var frame replayFrameDecoder
+	require.NoError(t, json.Unmarshal(resp, &frame))
+	assert.Equal(t, "error", frame.Type)
+	assert.Equal(t, wsAuthErrBadFirstFrame, frame.Message,
+		"chat WS bad-first-frame error must carry the shared wsAuthErrBadFirstFrame constant verbatim")
+
+	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	_, _, err = conn.ReadMessage()
+	assert.Error(t, err, "connection must be closed after a bad first frame")
+}
+
+// TestWSHandlerAuth_NoUsersConfigured_UsesSharedConstant verifies that when
+// no accounts, no CLI token, and no OMNIPUS_BEARER_TOKEN are configured, and
+// dev_mode_bypass is explicitly off, the handshake is rejected with the
+// shared wsAuthErrNoUsers constant rather than silently admitted.
+// BDD: Given Gateway.Users is empty, Gateway.CLIToken is nil,
+// OMNIPUS_BEARER_TOKEN is unset, and dev_mode_bypass=false,
+// When the client sends any {"type":"auth","token":"..."} frame,
+// Then the server sends {"type":"error","message":wsAuthErrNoUsers} and
+// closes the connection — fail closed, not fail open.
+// Traces to: GAP 1 (D5 test-coverage gate) — websocket.go:813-831. No existing
+// test previously exercised this branch at all (verified: only the
+// DevModeBypass=true / no-auth path was covered by
+// TestWSHandlerNoAuthRequired).
+func TestWSHandlerAuth_NoUsersConfigured_UsesSharedConstant(t *testing.T) {
+	os.Unsetenv("OMNIPUS_BEARER_TOKEN")
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Host: "127.0.0.1", Port: 8080,
+			DevModeBypass: false, // explicit: fail closed, not the dev-mode fallback.
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	handler := newWSHandler(msgBus, al, "")
+	t.Cleanup(handler.Wait)
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+
+	authFrame := wsClientFrameTestHelper{Type: "auth", Token: "any-token-nothing-is-configured"}
+	authData, err := json.Marshal(authFrame)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, authData))
+
+	_, resp, err := conn.ReadMessage()
+	require.NoError(t, err, "must receive error frame before connection closes")
+	var frame replayFrameDecoder
+	require.NoError(t, json.Unmarshal(resp, &frame))
+	assert.Equal(t, "error", frame.Type)
+	assert.Equal(t, wsAuthErrNoUsers, frame.Message,
+		"chat WS no-users-configured error must carry the shared wsAuthErrNoUsers constant verbatim")
+
+	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	_, _, err = conn.ReadMessage()
+	assert.Error(t, err, "connection must be closed when no auth identity is configured at all")
 }
 
 // TestWSHandlerMalformedFrame verifies that invalid JSON does not close the connection.
@@ -553,6 +661,105 @@ func TestEventForwarder_FiltersByChatID(t *testing.T) {
 		t.Fatalf("unexpected frame on sendCh — eventForwarder must filter by chatID, got: %s", string(raw))
 	case <-time.After(150 * time.Millisecond):
 		// Correct — no frame should arrive for a non-matching chatID.
+	}
+
+	eb.Unsubscribe(sub.ID)
+	select {
+	case <-eventDone:
+	case <-time.After(1 * time.Second):
+		t.Fatal("eventForwarder goroutine did not exit after subscription closed")
+	}
+}
+
+// TestEventForwarder_ForwardsTaskRunStatus verifies that an
+// agent.EventKindTaskRunStatus event (ADR-050 §3.8, task-run-history-spec.md
+// §3.8) is forwarded as an exact task_run_status frame, carrying
+// occurrence_ms as a correctly-typed, non-truncated int64 value. This is the
+// WS-side regression guard for the AsyncAPI int64 codegen drift fix
+// (scripts/gen-asyncapi-go/main.go — `format: int64` now maps to Go int64,
+// not int — see pkg/api/generated/asyncapi_types.gen.go's
+// TaskRunStatusFrame.OccurrenceMs and pkg/gateway/websocket.go's
+// eventForwarder, case agent.EventKindTaskRunStatus, which now assigns
+// *p.OccurrenceMs directly with no narrowing cast).
+//
+// Unlike ToolExecStart (chatID-scoped), EventKindTaskRunStatus is broadcast
+// unconditionally to every connection — mirroring EventKindTaskStatusChanged
+// immediately above it in eventForwarder's switch — so this test does not
+// need a matching chatID (the frame arrives regardless).
+//
+// BDD: Given an eventForwarder goroutine subscribed to an EventBus,
+// When a TaskRunStatusPayload event carrying a ms-epoch OccurrenceMs
+// (already > math.MaxInt32 for any date after 1970-01-25) is emitted,
+// Then a task_run_status frame with the exact field values — including
+// occurrence_ms round-tripping with no precision loss — appears on sendCh.
+// Traces to: pkg/gateway/websocket.go — WSHandler.eventForwarder,
+// case agent.EventKindTaskRunStatus.
+func TestEventForwarder_ForwardsTaskRunStatus(t *testing.T) {
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	wc := makeTestConn()
+	chatID := "chat-1"
+
+	eb := agent.NewEventBus()
+	t.Cleanup(eb.Close)
+
+	sub := eb.Subscribe(16)
+	eventDone := make(chan struct{})
+
+	go handler.eventForwarder(wc, chatID, sub, eventDone)
+
+	// Deliberately > math.MaxInt32 (2147483647) — any real epoch-ms value for
+	// a post-1970-01-25 date already is. Before the codegen fix, this would
+	// have silently wrapped when narrowed into the (bugged) *int field on a
+	// 32-bit target, or been truncated by the hand-written
+	// `int(*p.OccurrenceMs)` cast this test also guards the removal of.
+	occMs := int64(1_784_620_800_000)
+	eb.Emit(agent.Event{
+		Kind: agent.EventKindTaskRunStatus,
+		Payload: agent.TaskRunStatusPayload{
+			TaskID:       "task-abc",
+			RunID:        "run-xyz",
+			OccurrenceMs: &occMs,
+			Status:       "done",
+		},
+	})
+
+	select {
+	case raw := <-wc.sendCh:
+		// Assert the exact frame shape via a generic map first — proves the
+		// wire bytes themselves, not just Go-side decoding, carry the right
+		// values (and nothing extra).
+		var frame map[string]any
+		require.NoError(t, json.Unmarshal(raw, &frame), "sendCh frame must be valid JSON")
+		assert.Equal(t, "task_run_status", frame["type"])
+		assert.Equal(t, "task-abc", frame["task_id"])
+		assert.Equal(t, "run-xyz", frame["run_id"])
+		assert.Equal(t, "done", frame["status"])
+		require.Contains(t, frame, "occurrence_ms")
+		// encoding/json decodes a JSON number into map[string]any as float64;
+		// float64 has 53 bits of mantissa, comfortably exact for a ms-epoch
+		// value, so an exact match here still catches a truncation bug (which
+		// would produce a small/wrapped/negative value) while confirming the
+		// real wire value round-trips correctly.
+		occFloat, ok := frame["occurrence_ms"].(float64)
+		require.True(t, ok, "occurrence_ms must be a JSON number, not null/string")
+		assert.Equal(t, float64(occMs), occFloat,
+			"occurrence_ms must equal the emitted value exactly — no truncation")
+
+		// Decode into the generated wire type directly: this is the type-level
+		// regression guard — TaskRunStatusFrame.OccurrenceMs is *int64 (see
+		// TestContract_TaskRunStatusFrame_OccurrenceMsIsInt64Type in
+		// pkg/api/generated/contract_test.go for the reflect-based pin of the
+		// same fact), so this line would fail to compile if the codegen ever
+		// regressed back to *int.
+		var typed generated.TaskRunStatusFrame
+		require.NoError(t, json.Unmarshal(raw, &typed))
+		require.NotNil(t, typed.OccurrenceMs, "OccurrenceMs must not be nil")
+		assert.Equal(t, occMs, *typed.OccurrenceMs,
+			"occurrence_ms must round-trip exactly through *int64 — no 32-bit truncation")
+	case <-time.After(2 * time.Second):
+		t.Fatal("no frame received on sendCh within 2s — eventForwarder did not forward the task_run_status event")
 	}
 
 	eb.Unsubscribe(sub.ID)

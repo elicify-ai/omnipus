@@ -15,9 +15,14 @@
 // exactly like the composer's own AttachmentAdapter does internally
 // (src/lib/attachment-adapter.ts), just without needing the runtime.
 
-import { uploadFiles, inspectBrowserElement } from '@/lib/api'
+import { uploadFiles, inspectBrowserElement, fetchModelCapabilities, modelLacksImageCapability, ApiSchemaError } from '@/lib/api'
+import type { Agent } from '@/lib/api'
+import { mediaRefURL } from '@/lib/library-attachment'
+import { queryClient } from '@/lib/queryClient'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 
 export interface SubmitAnnotationParams { // not-wire-format: local params for the annotate-submit orchestration, never serialized across the gateway/SPA boundary
   /** User's typed comment. Must be non-empty (caller validates before calling). */
@@ -72,7 +77,47 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
     throw new AnnotationBusyError('The agent is busy — wait for it to finish, then send.')
   }
 
-  const uploadResult = await uploadFiles(sessionId, [file])
+  // D18: model vision capability is not knowable client-side at all — warn
+  // (non-blocking) BEFORE uploading when the target agent's resolved model
+  // is known to lack the "image" modality, so the user isn't surprised only
+  // AFTER losing a turn to the model's own rejection. `agents` is read from
+  // the existing `['agents']` react-query cache (shared with useChatAgents)
+  // rather than fetched again here. Best-effort: any failure resolving the
+  // agent's model or fetching the capability catalog must never block the
+  // send — the reactive server-side explanation (loop_media.go) remains the
+  // backstop either way.
+  try {
+    const agents = queryClient.getQueryData<Agent[]>(['agents'])
+    const agentModel = agents?.find((a) => a.id === agentId)?.model
+    if (agentModel) {
+      const caps = await fetchModelCapabilities()
+      if (modelLacksImageCapability(agentModel, caps)) {
+        useUiStore.getState().addToast({
+          message: `${agentModel} may not support image input — it might not be able to see this annotation.`,
+          variant: 'warning',
+        })
+      }
+    }
+  } catch (err) {
+    // Best-effort — a failure here must never block the send. But it must
+    // not vanish into console.debug either: an ApiSchemaError means the
+    // vision pre-send warning is DISABLED FOR EVERY MODEL until the
+    // contract drift is fixed (Constraint #8 requires schema-validation
+    // failures to be visible, not silently swallowed to a success-shaped
+    // no-op), which is a materially different — and more urgent — signal
+    // than an ordinary network hiccup. Distinguish the two rather than
+    // flattening both to the same log line.
+    if (err instanceof ApiSchemaError) {
+      console.warn(
+        '[browser] model-capability check failed schema validation — the vision pre-send warning is disabled for ALL models until this contract drift is fixed:',
+        err,
+      )
+    } else {
+      console.warn('[browser] model-capability check failed (best-effort, send proceeds regardless):', err)
+    }
+  }
+
+  const uploadResult = await uploadFiles(sessionId, [file], useWorkspacesStore.getState().activeWorkspaceId ?? undefined)
   const uploaded = uploadResult.files[0]
   if (!uploaded?.ref) {
     throw new Error('Upload failed — no media reference was returned.')
@@ -120,10 +165,26 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
   // attached image" instead of describing the (genuinely sparse) region.
   // Every send now carries this short, constant framing note — appended
   // AFTER the user's own comment (never prepended/rewritten) — telling the
-  // model the image IS attached, IS a cropped screenshot region, and MAY be
+  // model an image WAS sent, IS a cropped screenshot region, and MAY be
   // mostly blank on purpose, so it should describe what it actually sees
   // rather than deny the attachment.
-  const finalComment = `${comment}\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank.${autoContext} The attached image is the source of truth — describe what you actually see rather than saying no image was attached.]`
+  //
+  // Backend-investigation fix (live gateway-log proof, 2026-07-28): the
+  // server can reject/strip the image before it ever reaches the model
+  // (loop.go's outcome_fallback downgrade path logs "provider rejected
+  // media input — retrying with downgraded media block") and replaces it
+  // with its own honest "[attachment unavailable: ...]" marker
+  // (media_downgrade.go). The client sends this note at upload time and
+  // genuinely cannot know whether the image will survive that later,
+  // server-side step — so the note must NOT assert the image arrived (the
+  // old wording's "The attached image is the source of truth" was false
+  // whenever the server had to strip it, and directly contradicted the
+  // server's own marker in the very same message, producing a confused
+  // model response). The wording below stays true in BOTH outcomes: it
+  // only claims an image was sent, and defers to whichever signal the
+  // model actually observes (the image itself, or the server's
+  // unavailable-attachment note) rather than predicting which one wins.
+  const finalComment = `${comment}\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank.${autoContext} An image was sent with this message. If you can see it, treat it as the source of truth and describe exactly what you see rather than saying no image was attached. If instead this message contains a note that the attachment is unavailable, trust that note instead.]`
 
   // sendMessage always targets whatever chat is CURRENTLY active — re-check
   // right before sending (the user could have switched chats during the
@@ -134,12 +195,22 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
     throw new Error("The active chat has changed — switch back to this browser's chat to send the annotation.")
   }
 
+  // D16 fix: build the preview URL from the returned media ref (mediaRefURL),
+  // not a hardcoded `/api/v1/uploads/${sessionId}/${uploaded.name}` string.
+  // When this panel is opened from a workspace-scoped chat, uploadFiles()
+  // above routes the file into the workspace media library (HandleUpload,
+  // pkg/gateway/rest.go) and returns a `media://workspace/<ws>/<id>` ref —
+  // the legacy uploads/{session}/{filename} path is never written for that
+  // case, so the hardcoded URL 404s (HandleServeUpload only resolves
+  // uploads/<session>/<file>). mediaRefURL derives the correct route
+  // (/api/v1/media/workspace/<ws>/<id> or /api/v1/media/<id>) from the ref
+  // itself, mirroring the Go-side mediaRefURL in webchat_channel.go.
   useChatStore.getState().sendMessage(finalComment, {
     mediaRefs: [uploaded.ref],
     attachments: [
       {
         type: 'image',
-        url: `/api/v1/uploads/${sessionId}/${uploaded.name}`,
+        url: mediaRefURL(uploaded.ref),
         filename: file.name,
         contentType: uploaded.content_type,
       },

@@ -91,11 +91,26 @@ export function ProfileSection() {
   const contextDirtyRef = useRef(false)
   const markContextDirty = () => { contextDirtyRef.current = true }
 
+  // D3 / UAT spurious-PUT fix: reactive readiness flag for the userContent
+  // group's useAutoSave. `userContextError` alone (the previous `disabled`
+  // value) left the group enabled for the entire duration of the initial
+  // GET, so useAutoSave captured the hardcoded '' default as its baseline
+  // on mount — the later hydration commit then looked like a genuine edit
+  // and fired a spurious PUT echoing the fetched content back.
+  // `contextHydrated` is set at the END of this hydration effect (below),
+  // decoupled from the dirty check so a user who starts typing before the
+  // GET resolves doesn't leave useAutoSave disabled forever (see the
+  // matching comment in WorkspaceSettingsTab's instructions effect for the
+  // same reasoning) — the `<Textarea>` below is disabled until hydrated so
+  // that race can't happen in practice.
+  const [contextHydrated, setContextHydrated] = useState(false)
+
   useEffect(() => {
-    if (contextDirtyRef.current) return
-    if (userContextData) {
+    if (userContextData === undefined) return
+    if (!contextDirtyRef.current) {
       setUserContent(userContextData.content)
     }
+    setContextHydrated(true)
   }, [userContextData])
 
   // Item 4 (pagehide flush): the tracked `data` must match the wire body
@@ -112,7 +127,8 @@ export function ProfileSection() {
       queryClient.invalidateQueries({ queryKey: ['user-context'] })
     },
     {
-      disabled: userContextError,
+      // D3 fix: see `contextHydrated`'s doc comment above.
+      disabled: userContextError || !contextHydrated,
       // Long-form surface — raised from the 500ms default so a normal
       // typing cadence doesn't fire a save (and its own invalidate/refetch
       // echo) on nearly every pause.
@@ -384,6 +400,9 @@ export function ProfileSection() {
               placeholder={"# About Me\n\nDescribe your role, expertise, and preferences..."}
               rows={8}
               className="text-xs font-mono resize-none"
+              // D3 fix: inert until hydrated — see `contextHydrated`'s doc
+              // comment above.
+              disabled={!contextHydrated}
             />
           )}
         </div>

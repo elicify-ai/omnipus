@@ -408,7 +408,7 @@ func TestDispatchSema_TaskExecutor_ExecuteTask_SemaRejection(t *testing.T) {
 	defer release()
 
 	// ExecuteTask should fail with a concurrency error, not a nil-deref.
-	err := te.ExecuteTask(context.Background(), tk.ID)
+	err := te.ExecuteTask(context.Background(), tk.ID, nil)
 	if err == nil {
 		t.Fatal("expected error when dispatch sema is full")
 	}

@@ -76,6 +76,7 @@
         "tests/e2e/ws-reconnect.spec.ts",
         "tests/e2e/xss.spec.ts",
         "tests/e2e/calendar.spec.ts",
+        "tests/e2e/calendar-recurrence.spec.ts",
         "tests/e2e/create-agent.spec.ts"
       ]
     },
@@ -90,7 +91,8 @@
         "tests/e2e/replay-fidelity.spec.ts",
         "tests/e2e/retention.spec.ts",
         "tests/e2e/settings-memory.spec.ts",
-        "tests/e2e/tool-order.spec.ts"
+        "tests/e2e/tool-order.spec.ts",
+        "tests/e2e/browser-live-video.spec.ts"
       ]
     },
     {

@@ -265,11 +265,58 @@ function schemaToZod(schema, indent = 0) {
     }
 
     const closing = hasAdditional ? ".passthrough()" : ".strict()";
+    // NOTE: a top-level `anyOf` sitting alongside `properties`/`type: object`
+    // (e.g. MessageFrame's "content non-empty OR media non-empty") is
+    // deliberately NOT folded in here — see emitSchemaConst below, which
+    // splits such a schema into a plain `<Name>Base` object (used inside
+    // z.discriminatedUnion, which requires plain ZodObject members) plus the
+    // publicly-exported, .refine()-validated `<Name>`.
     return `z\n${pad}  .object({\n${propLines.join("\n")}\n${pad}  })\n${pad}  ${closing}`;
   }
 
   // Untyped — accept any value
   return "z.unknown()";
+}
+
+/**
+ * Translate one JSON Schema `anyOf` branch (a partial object schema with
+ * `required` and/or `properties` carrying minLength/minItems/maxLength/
+ * maxItems) into a JS boolean expression string testing a runtime value
+ * `v`. This is intentionally narrow — it covers exactly the constraint
+ * keywords schemaToZod itself understands for primitives, not general JSON
+ * Schema — but is not tied to any specific schema's field names, so it
+ * composes correctly for any object+anyOf schema this generator is handed.
+ */
+function anyOfBranchPredicate(branch) {
+  const required = new Set(branch.required ?? []);
+  const props = branch.properties ?? {};
+  const conditions = [];
+
+  for (const [key, propSchema] of Object.entries(props)) {
+    const accessor = `v[${JSON.stringify(key)}]`;
+    if (propSchema.minLength !== undefined) {
+      conditions.push(`(typeof ${accessor} === "string" && ${accessor}.length >= ${propSchema.minLength})`);
+    }
+    if (propSchema.minItems !== undefined) {
+      conditions.push(`(Array.isArray(${accessor}) && ${accessor}.length >= ${propSchema.minItems})`);
+    }
+    if (propSchema.maxLength !== undefined) {
+      conditions.push(`(typeof ${accessor} !== "string" || ${accessor}.length <= ${propSchema.maxLength})`);
+    }
+    if (propSchema.maxItems !== undefined) {
+      conditions.push(`(!Array.isArray(${accessor}) || ${accessor}.length <= ${propSchema.maxItems})`);
+    }
+  }
+  // A required key with no other constraint listed above still needs an
+  // existence check; a required key that DOES have a min constraint above
+  // already implies existence (an undefined value fails typeof/Array.isArray).
+  for (const key of required) {
+    if (!(key in props)) {
+      conditions.push(`v[${JSON.stringify(key)}] !== undefined`);
+    }
+  }
+
+  return conditions.length > 0 ? conditions.join(" && ") : "true";
 }
 
 // ── Generate TypeScript output ───────────────────────────────────────────────
@@ -434,12 +481,43 @@ if (wsFrameTypeSchema?.enum) {
   zodLines.push("");
 }
 
+// discriminatedUnionBaseNames maps a schema name to the plain-ZodObject
+// const name that must stand in for it inside z.discriminatedUnion (which
+// requires every member to be a ZodObject, not a ZodEffects) — populated
+// below for any schema that has a top-level `anyOf` alongside its object
+// properties (e.g. MessageFrame). Every other frame name maps to itself.
+const discriminatedUnionBaseNames = new Map();
+
 // Schemas that need passthrough (contain additionalProperties or are free-form)
 // Emitted in definition order; forward refs resolved by hoisting the const.
 for (const [name, schema] of Object.entries(schemas)) {
   if (name === "WsFrameType") continue;
-  const zodExpr = schemaToZod(schema, 0);
-  zodLines.push(`export const ${name} = ${zodExpr};`);
+  const baseExpr = schemaToZod(schema, 0);
+  const hasObjectAnyOf =
+    Array.isArray(schema.anyOf) &&
+    schema.anyOf.length > 0 &&
+    (schema.type === "object" || schema.properties);
+
+  if (!hasObjectAnyOf) {
+    zodLines.push(`export const ${name} = ${baseExpr};`);
+    zodLines.push("");
+    continue;
+  }
+
+  // Split into a plain `<Name>Base` object (the z.discriminatedUnion member)
+  // plus the publicly-exported `<Name>` — the SAME name every existing
+  // consumer already imports — now additionally enforcing the anyOf
+  // cross-field invariant via .refine(). This is a transparent upgrade: no
+  // consumer needs to change which name it imports.
+  const baseName = `${name}Base`;
+  discriminatedUnionBaseNames.set(name, baseName);
+  const branchExprs = schema.anyOf.map((branch) => anyOfBranchPredicate(branch));
+  const predicate = branchExprs.map((b) => `(${b})`).join(" || ");
+  zodLines.push(`export const ${baseName} = ${baseExpr};`);
+  zodLines.push("");
+  zodLines.push(`export const ${name} = ${baseName}.refine((v) => ${predicate}, {`);
+  zodLines.push(`  message: "does not satisfy the schema's anyOf constraint",`);
+  zodLines.push(`});`);
   zodLines.push("");
 }
 
@@ -449,7 +527,8 @@ zodLines.push("// ── WS frame discriminated union ────────�
 zodLines.push("");
 zodLines.push("export const WsFrame = z.discriminatedUnion(\"type\", [");
 frameNames.forEach((name) => {
-  zodLines.push(`  ${name},`);
+  const memberName = discriminatedUnionBaseNames.get(name) ?? name;
+  zodLines.push(`  ${memberName},`);
 });
 zodLines.push("]);");
 zodLines.push("");

@@ -498,7 +498,7 @@ func TestResolvePath_UnrestrictedScope_CarveOutHoldsUnderRace(t *testing.T) {
 // under WorkDir exactly like an ASCII one, with no lossy normalization.
 func TestResolvePath_UnicodePathResolvesCorrectly(t *testing.T) {
 	workDir := t.TempDir()
-	rel := filepath.Join("工作", "データ", "файл.txt") //nolint:gosmopolitan // intentional non-ASCII path test input
+	rel := filepath.Join("工作", "データ", "файл.txt")
 	full := filepath.Join(workDir, rel)
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		t.Fatalf("mkdir unicode dir: %v", err)

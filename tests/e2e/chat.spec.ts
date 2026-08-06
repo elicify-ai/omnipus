@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, agentPicker, assistantMessages, startNewChat, tokenCounter } from './fixtures/selectors';
+import { chatInput, agentPicker, assistantMessages, userMessages, startNewChat, tokenCounter, waitForConnected } from './fixtures/selectors';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -252,18 +252,110 @@ test(
 
 test(
   '(f) queue-on-disconnect: messages sent during WS disconnect send in order after reconnect',
-  // T0.1: Promoted from test.skip. The feature (offline send queue) is not yet implemented
-  // (blocked on #105), but silent skips hide the gap from CI. This test fails loudly until
-  // the implementation lands.
-  //
-  // To implement: useChatStore needs a max-5 local send queue for offline mode.
-  // Messages sent while context.setOffline(true) must be queued and auto-sent on reconnect
-  // with a pending indicator. See tests/e2e/SPA-GAPS.md — "Offline send queue".
+  // Investigation (closing the #105 skip) found the store-level queue
+  // mechanics (useChatStore's outboundQueue/pendingDrainQueue/
+  // enqueueOutboundMessage/drainOutboundQueue/maybeDrainNext — see
+  // src/store/chat.outbound-queue.test.ts) were ALREADY fully implemented
+  // and unit-tested, and the outbound-queue-indicator banner + reconnect
+  // banner + composer placeholder/aria-labels already assumed the composer
+  // stays usable while reconnecting. The one missing piece: ChatScreen.tsx's
+  // `inputEnabled` gate required strict `isConnected`, which is
+  // unconditionally false during the whole 'reconnecting'/'slow' retry
+  // window — so the native `disabled` attribute silently blocked the only
+  // real-UI path into the queue, making the entire mechanism unreachable by
+  // an actual user. Fixed in ChatScreen.tsx (see that file's `inputEnabled`
+  // comment) to allow typing/sending while reconnecting; this test drives
+  // the real, now-reachable path end-to-end. Deterministic component-level
+  // coverage of the same fix lives in
+  // src/components/chat/ChatScreen.outbound-queue.test.tsx.
   async ({ page, context }) => {
-    void page;
-    void context;
-    // BLOCKED: #105 — send queue not implemented. This test will remain failing until
-    // useChatStore implements offline queuing. Do not re-suppress with test.skip.
-    test.skip(true, 'BLOCKED on #105 — offline send queue not implemented; see SKIP_ALLOWLIST');
+    // Budget: this test drains TWO real LLM turns sequentially after
+    // reconnect (maybeDrainNext sends the queue one message at a time, only
+    // once each prior turn's `done` frame arrives — see store/chat.ts), on
+    // top of the setup/offline/reconnect steps' own timeouts below. Ceiling:
+    // 15+15+10+10 (setup) + 2*5 (indicator checks) + 120 (drain) + 20
+    // (banner clear) + 180 (both replies) + 188 (waitForTurnFullyDone worst
+    // case, mirroring test (b)'s own documented 8+180s ceiling) ≈ 570s.
+    // Rounded up with real headroom for CI scheduling/LLM jitter.
+    test.setTimeout(900_000);
+
+    const input = chatInput(page);
+    await expect(input).toBeVisible({ timeout: 15_000 });
+    await expect(input).toBeEnabled({ timeout: 15_000 });
+    // Confirm the socket is genuinely open BEFORE this test starts its own
+    // deliberate offline/reconnect manipulation below — toBeEnabled() alone
+    // no longer implies "connected" (2fa26e6a, #105 fix; see
+    // waitForConnected's doc comment in fixtures/selectors.ts). NOTE: this is
+    // NOT the same as the later `await expect(input).toBeEnabled()` at the
+    // point the test goes offline (line ~313 below) — THAT check is the
+    // intentional assertion that the composer STAYS enabled while
+    // reconnecting/queueing, and must not be changed.
+    await waitForConnected(page, { timeout: 15_000 });
+
+    // Fresh session so assistantMessages/userMessages counts start at zero.
+    await startNewChat(page);
+    await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
+
+    // Go offline — the browser drops the WS (same mechanism verified in
+    // ws-reconnect.spec.ts's online_event_triggers_reconnect) and the SPA
+    // enters its automatic reconnect-retry loop.
+    await context.setOffline(true);
+
+    // Wait for the disconnect to be detected (the persistent reconnect
+    // banner is the ground-truth signal — data-testid="reconnect-banner",
+    // ChatScreen.tsx).
+    await expect(page.getByTestId('reconnect-banner')).toBeVisible({ timeout: 10_000 });
+
+    // The composer must stay usable during the reconnect-retry window (the
+    // #105 fix) — NOT disabled, NOT silently inert. Type and submit TWO
+    // messages while still fully offline, to prove ordering across the
+    // queue as well as buffering itself.
+    //
+    // NOTE: a buffered (queued) message does NOT mint a chat bubble —
+    // useChatStore's disconnected-WS branch in sendMessage only pushes the
+    // raw text onto `outboundQueue` and returns; the optimistic user bubble
+    // is only created once the message is actually dispatched (by
+    // maybeDrainNext -> sendMessage, after reconnect). The queue is
+    // therefore NOT silent: the outbound-queue-indicator banner is the
+    // user-visible proof-of-buffering for this window, counting up
+    // deterministically with each queued send.
+    await expect(input).toBeEnabled();
+    await input.fill('Say exactly: QUEUEDONE');
+    await input.press('Enter');
+    await expect(page.getByTestId('outbound-queue-indicator')).toContainText('1 message queued', { timeout: 5_000 });
+    await input.fill('Say exactly: QUEUEDTWO');
+    await input.press('Enter');
+    await expect(page.getByTestId('outbound-queue-indicator')).toContainText('2 messages queued', { timeout: 5_000 });
+
+    // Neither message has been dispatched yet — no assistant reply, and no
+    // user bubble either (see the NOTE above): the ONLY visible evidence at
+    // this point is the queue indicator's count, which is exactly why that
+    // count is the assertion that actually distinguishes "queued" from
+    // "silently dropped" here.
+    expect(await assistantMessages(page).count()).toBe(0);
+    expect(await userMessages(page).count()).toBe(0);
+
+    // Reconnect.
+    await context.setOffline(false);
+
+    // The queue drains automatically, ONE message at a time as each turn
+    // completes (see maybeDrainNext in store/chat.ts) — wait for the
+    // indicator (and the reconnect banner) to fully clear...
+    await expect(page.getByTestId('outbound-queue-indicator')).not.toBeVisible({ timeout: 120_000 });
+    await expect(page.getByTestId('reconnect-banner')).not.toBeVisible({ timeout: 20_000 });
+
+    // ...then for BOTH replies to actually arrive — proving the messages
+    // were genuinely sent and answered, not just silently dequeued.
+    await expect(assistantMessages(page)).toHaveCount(2, { timeout: 180_000 });
+    await waitForTurnFullyDone(page, 8_000);
+
+    // Order: the two queued user messages must appear in the order they
+    // were typed (one, then two) — not reordered by the queue/drain
+    // mechanism (see the chat.ts store's own FIFO-ordering doc comments on
+    // drainOutboundQueue/maybeDrainNext).
+    await expect(userMessages(page).nth(0)).toContainText('QUEUEDONE');
+    await expect(userMessages(page).nth(1)).toContainText('QUEUEDTWO');
+
+    await expectA11yClean(page);
   },
 );

@@ -1,0 +1,9 @@
+title: ErrorPayload
+description: Structured payload for a live error frame.
+type: object
+required:
+  - llm_error
+additionalProperties: false
+properties:
+  llm_error:
+    $ref: ./LLMError.yaml

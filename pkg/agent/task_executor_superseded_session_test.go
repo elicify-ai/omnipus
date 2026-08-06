@@ -90,7 +90,7 @@ func TestConsumeAttemptOrExhaust_SupersededSessionTransitionsToInterrupted(t *te
 	}
 
 	resp := "did some work but forgot to report a completion signal"
-	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, taskSessionID, resp, nil, "")
+	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, taskSessionID, resp, nil, "", nil)
 
 	if redispatch == "" {
 		t.Fatal("expected a non-empty re-dispatch id — a no-signal outcome with attempts remaining must " +
@@ -170,7 +170,7 @@ func TestRejectBareEvidenceClaim_SupersededSessionTransitionsToInterrupted(t *te
 	}
 
 	resp := "I finished the work.\nTASK_STATUS: success\n" // no [goal:evidence] line — bare claim
-	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, taskSessionID, resp, nil, "")
+	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, taskSessionID, resp, nil, "", nil)
 
 	if redispatch == "" {
 		t.Fatal("expected a non-empty re-dispatch id — the FIRST bare-claim rejection re-dispatches for free")

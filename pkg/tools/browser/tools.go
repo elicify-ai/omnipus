@@ -97,7 +97,8 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	defer timeoutCancel()
 
 	var title string
-	err = chromedp.Run(tabCtx,
+	err = chromedp.Run(
+		tabCtx,
 		chromedp.Navigate(rawURL),
 		chromedp.Title(&title),
 	)
@@ -122,7 +123,8 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 			// Navigate away from the blocked page to prevent data exfiltration
 			_ = chromedp.Run(tabCtx, chromedp.Navigate("about:blank"))
 			return tools.ErrorResult(fmt.Sprintf(
-				"browser_navigate: redirect from %s landed on blocked URL: %s", rawURL, err))
+				"browser_navigate: redirect from %s landed on blocked URL: %s", rawURL, err,
+			))
 		}
 	}
 
@@ -200,7 +202,8 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 		return tools.ErrorResult(rerr.Error())
 	}
 
-	err = chromedp.Run(tabCtx,
+	err = chromedp.Run(
+		tabCtx,
 		chromedp.WaitVisible(target, chromedp.ByQuery),
 		chromedp.Click(target, chromedp.ByQuery),
 	)
@@ -375,7 +378,8 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		return tools.ErrorResult(rerr.Error())
 	}
 
-	err = chromedp.Run(tabCtx,
+	err = chromedp.Run(
+		tabCtx,
 		chromedp.WaitVisible(target, chromedp.ByQuery),
 		chromedp.SendKeys(target, text, chromedp.ByQuery),
 	)
@@ -442,7 +446,8 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 	// additional 500ms for client-side JS frameworks to finish painting.
 	var buf []byte
 	var pageURL, pageTitle string
-	err = chromedp.Run(tabCtx,
+	err = chromedp.Run(
+		tabCtx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			// Best-effort readyState poll. Any error during the poll is
 			// non-fatal — we fall through and let FullScreenshot try anyway.

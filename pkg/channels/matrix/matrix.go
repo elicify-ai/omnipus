@@ -452,17 +452,32 @@ func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 		return fmt.Errorf("no media store available: %w", channels.ErrSendFailed)
 	}
 
+	sentCount := 0
 	for _, part := range msg.Parts {
 		if err := sendCtx.Err(); err != nil {
 			return err
 		}
 
-		localPath, meta, err := store.ResolveWithMeta(part.Ref)
+		localPath, meta, err := store.ResolveWithCallerWorkspace(part.Ref, msg.WorkspaceID)
 		if err != nil {
-			logger.ErrorCF("matrix", "Failed to resolve media ref", map[string]any{
-				"ref":   part.Ref,
-				"error": err.Error(),
-			})
+			// FR-028a: distinguish the caller-workspace membership guard's
+			// denial (a security-relevant Spoofing rejection) from a
+			// routine stale/missing ref, so it's greppable/auditable
+			// separately instead of folding into the same undifferentiated
+			// "N of M media parts failed to send" count as any other
+			// resolve failure.
+			if media.IsCallerWorkspaceDenied(err) {
+				logger.WarnCF("matrix", "Media ref denied by caller-workspace guard", map[string]any{
+					"ref":              part.Ref,
+					"caller_workspace": msg.WorkspaceID,
+					"error":            err.Error(),
+				})
+			} else {
+				logger.ErrorCF("matrix", "Failed to resolve media ref", map[string]any{
+					"ref":   part.Ref,
+					"error": err.Error(),
+				})
+			}
 			continue
 		}
 
@@ -519,7 +534,14 @@ func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 				"type":  part.Type,
 				"error": err.Error(),
 			})
-			return fmt.Errorf("matrix upload media: %w", channels.ErrTemporary)
+			// CRITICAL fix (retry-duplication, sendfile-fix review): see
+			// ClassifyMediaSendError doc — a genuine upload API failure no
+			// longer returns a bare ErrTemporary. If an earlier part in
+			// this message already reached Matrix (sentCount > 0),
+			// retrying the whole message would re-upload/re-send it,
+			// duplicating it for the user, so the failure is classified
+			// permanent instead. The real API error stays in the chain.
+			return channels.ClassifyMediaSendError("matrix", sentCount, err)
 		}
 
 		msgType := matrixOutboundMsgType(part.Type, filename, contentType)
@@ -538,8 +560,35 @@ func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 				"type":    msgType,
 				"error":   err.Error(),
 			})
-			return fmt.Errorf("matrix send media: %w", channels.ErrTemporary)
+			// CRITICAL fix (retry-duplication, sendfile-fix review): the
+			// media for this part was already uploaded above (uploadResp)
+			// even though the room-send failed. Combined with any earlier
+			// parts, sentCount could be > 0 here; ClassifyMediaSendError
+			// makes that permanent so sendMediaWithRetry does not re-send
+			// the whole message and duplicate what already landed.
+			return channels.ClassifyMediaSendError("matrix", sentCount, err)
 		}
+		sentCount++
+	}
+
+	// sentCount < len(msg.Parts) means at least one part failed to
+	// resolve/stat/open locally (the loop above only `continue`s past those
+	// failures; a genuine upload/send API failure returns immediately
+	// above via ClassifyMediaSendError, never reaching here).
+	//
+	// Review re-fix: the original guard only caught sentCount==0 (total
+	// loss), so a PARTIAL failure — e.g. 2 of 3 parts delivered — returned
+	// nil and left the caller's (pkg/agent/loop.go) pre-baked success text
+	// untouched; neither the user nor the LLM learned a part never arrived.
+	// Reporting any shortfall closes that gap. Wrapping in
+	// channels.ErrSendFailed additionally marks it permanent: a local
+	// resolve/stat/open failure will not succeed on a bare retry with the
+	// same ref, so pkg/channels/manager.go's sendMediaWithRetry must not
+	// re-attempt it — retrying would also re-deliver the parts that already
+	// succeeded, duplicating them for the user.
+	if sentCount < len(msg.Parts) {
+		return fmt.Errorf("matrix: %d of %d media parts failed to send: %w",
+			len(msg.Parts)-sentCount, len(msg.Parts), channels.ErrSendFailed)
 	}
 
 	return nil

@@ -1,0 +1,53 @@
+title: LibraryTransferRequest
+description: >
+  Request body shared by POST /api/v1/library/move and
+  POST /api/v1/library/copy. Deliberately NOT scoped under
+  {workspace_id} like the other Library operations — source and
+  destination MAY be different workspaces, so both workspace ids are
+  modelled explicitly here rather than one in the path and one in the
+  body, making the two-workspace-capable shape obvious from the schema
+  alone. A same-workspace move/copy is simply the case where
+  from_workspace_id equals to_workspace_id (this is also what
+  POST /api/v1/library/{workspace_id}/rename does under the hood — kept
+  as same-workspace sugar over /move, see its own description).
+
+  Cross-workspace transfer is a USER-facing capability only: reachable
+  exclusively from the authenticated UI/CLI caller's own request, never
+  invoked by an agent tool — agents remain confined to their own
+  workspace's work tree. This is enforced server-side; it is stated here
+  so no future caller wires an agent-facing tool to this operation.
+type: object
+additionalProperties: false
+required:
+  - from_workspace_id
+  - from_path
+  - to_workspace_id
+  - to_path
+properties:
+  from_workspace_id:
+    type: string
+    description: Workspace ID that currently owns the file or directory.
+    example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  from_path:
+    type: string
+    minLength: 1
+    description: >
+      Workspace-relative path of the file or directory within
+      from_workspace_id's work tree (workspaces/<from_workspace_id>/work/),
+      forward-slash separated. Never absolute and never containing a ".."
+      segment.
+    example: "notes/draft.md"
+  to_workspace_id:
+    type: string
+    description: >
+      Destination workspace ID. Equal to from_workspace_id for a
+      same-workspace move/copy.
+    example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  to_path:
+    type: string
+    minLength: 1
+    description: >
+      Destination workspace-relative path within to_workspace_id's work
+      tree, same constraints as from_path. Rejected (409) if an entry
+      already exists at this path.
+    example: "reports/report.md"

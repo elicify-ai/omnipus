@@ -206,6 +206,49 @@ export function ToolsAndPermissions({
       onChange(result.config)
       queryClient.invalidateQueries({ queryKey: ['agent-tools', id] })
     },
+    // Finding C (7-reviewer-gate, fix/uat-v0.1.1-defects) — AUDITED, NOT
+    // REACHABLE TODAY: this `disabled` conflates three distinct meanings
+    // under one flag — "not hydrated yet" (transient, safe to re-baseline
+    // via useAutoSave's D3/`wasDisabledRef` re-arm), "permanently
+    // read-only" (`isLocked`), and "externally managed" (`isExternal`). If
+    // `isLocked`/`isExternal` could flip true→false (or vice versa) on an
+    // ALREADY-MOUNTED instance — independent of a hydration cycle — the
+    // re-arm would reseed the baseline from whatever `editorValue` happens
+    // to be at that instant, silently dropping a real pending edit exactly
+    // like Finding A. Audited and confirmed this cannot happen today, for
+    // THREE independent, reinforcing reasons — if ANY of them stops holding,
+    // this comment's assumption breaks and the gap becomes live:
+    //   1. `isLocked` = `agent.locked === true` (`agentKindFlags`) is never
+    //      part of any PUT payload the SPA sends (only ever read/stripped —
+    //      see AgentProfile.tsx's locked-field-stripping in its saveFn) and
+    //      is not exposed as an editable field in any create/edit form —
+    //      for a fixed `agentId` it cannot change between fetches.
+    //   2. `isExternal` (`isExternalType(agent.type) || (type === 'worker'
+    //      && executor.kind === 'external-cli')`) can only change via an
+    //      edit to `agent.type` (immutable post-creation) or `executor.kind`
+    //      — and `executor.kind` is editable ONLY on the Runtime tab, which
+    //      AgentProfile renders MUTUALLY EXCLUSIVELY with the Tools tab
+    //      (`{!isExternalAgent && <TabsContent value="tools">...}` vs.
+    //      `{isExternalAgent && <TabsContent value="runtime">...}` —
+    //      AgentProfile.tsx). An agent showing this component (Tools tab)
+    //      never simultaneously shows the control that could flip
+    //      `isExternal`; for a native worker the executor is a read-only
+    //      summary in Advanced, not editable at all. Confirmed by the
+    //      existing, passing `AgentProfile.test.tsx` "Wave 5 tab structure"
+    //      suite (tab-tools XOR tab-runtive by type).
+    //   3. Independent of (1)/(2): Radix `Tabs.Content`/`Accordion.Content`
+    //      unmount inactive panels by default in this codebase's wrapper
+    //      (no `forceMount` — see `src/components/ui/tabs.tsx`), so even a
+    //      hypothetical future change to (1) or (2) would still need THIS
+    //      component to stay mounted while the flip happens on the SAME
+    //      instance — switching tabs to reach whatever control caused the
+    //      flip already unmounts (and later remounts fresh) this component.
+    // If a future change adds a live "lock/unlock this agent" toggle, or
+    // renders Tools and Runtime concurrently (forceMount, a combined tab,
+    // etc.), split this into two flags — a `disabled` that only ever means
+    // "not hydrated" (safe to re-arm) and a separate `readOnly` for
+    // isLocked/isExternal that hides/disables the UI WITHOUT going through
+    // useAutoSave's `disabled` re-arm path at all.
     { disabled: isLocked || isExternal || !isDraftReady },
   )
 

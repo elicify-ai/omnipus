@@ -165,7 +165,7 @@ func TestFinishTaskRun_ToolDenialBudgetAbort_TaskLandsFailedNamingToolReasonAgen
 	}
 	require.NoError(t, store.Create(tk))
 
-	require.NoError(t, te.ExecuteTask(context.Background(), tk.ID),
+	require.NoError(t, te.ExecuteTask(context.Background(), tk.ID, nil),
 		"ExecuteTask must accept the dispatch synchronously — the abort happens "+
 			"later, inside the asynchronous runTask goroutine")
 

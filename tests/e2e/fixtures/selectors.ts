@@ -8,6 +8,51 @@ export const chatInput = (page: Page) =>
   page.locator('textarea[aria-label="Message input"]');
 
 /**
+ * Reconnect banner — ChatScreen.tsx renders `data-testid="reconnect-banner"`
+ * in exactly three mutually-exclusive branches, together covering EVERY
+ * state where the WebSocket is not genuinely open:
+ *   - `reconnectPhase === 'gave_up'`
+ *   - `reconnectPhase === 'reconnecting' | 'slow'`
+ *   - `!isConnected && reconnectPhase === null` (brief pre-first-connect /
+ *     just-dropped window)
+ * `useConnectionStore.setConnected` (src/store/connection.ts) atomically
+ * clears `reconnectPhase` to `null` in the SAME update that flips
+ * `isConnected` true, so there is no window where the banner is hidden yet
+ * the socket isn't really open. Its absence is therefore an exact,
+ * already-shipped (not test-only) observable for "the WebSocket is
+ * genuinely connected" — see `waitForConnected` below.
+ */
+export const reconnectBanner = (page: Page) =>
+  page.locator('[data-testid="reconnect-banner"]');
+
+/**
+ * Wait for a GENUINE, wire-ready WebSocket connection — not merely for the
+ * composer's `disabled` attribute to clear.
+ *
+ * Regression history (2fa26e6a, issue #105 fix): ChatScreen's `inputEnabled`
+ * used to require strict `isConnected`, so `chatInput(page)` reporting
+ * `toBeEnabled()` was a reliable (if accidental) proxy for "the socket is
+ * open" — every readiness gate in this suite leaned on that side effect.
+ * The #105 fix correctly ALSO enables the composer while
+ * `reconnectPhase` is `'reconnecting'`/`'slow'`, so a user can type during a
+ * transient outage — the message is buffered in the outbound queue and
+ * drained automatically once the connection recovers (this is the CORRECT,
+ * intentional product behavior — see ws-reconnect.spec.ts's
+ * `online_event_triggers_reconnect`, which deliberately asserts the
+ * composer STAYS enabled during that window; do not "fix" that test).
+ *
+ * `toBeEnabled()` alone therefore no longer implies "connected": a message
+ * filled and sent while only enabled-but-reconnecting lands in the outbound
+ * queue, not the wire, and a test awaiting a real LLM reply then hangs to
+ * its full timeout instead of failing fast. Call this ALONGSIDE (not
+ * instead of) a `toBeEnabled()` check wherever a test previously used
+ * `toBeEnabled()` alone as its "safe to type and send" gate.
+ */
+export async function waitForConnected(page: Page, opts?: { timeout?: number }): Promise<void> {
+  await expect(reconnectBanner(page)).toBeHidden({ timeout: opts?.timeout ?? 15_000 });
+}
+
+/**
  * Send button — ComposerPrimitive.Send rendered with aria-label="Send message"
  * (ChatScreen.tsx:698). Only visible when not streaming.
  */
@@ -160,3 +205,98 @@ export const selectAgent = async (page: Page, name: string | RegExp = /Jim/i) =>
   // AgentPicker shows only the agent name (no em-dash tagline).
   await expect(picker).toContainText(name, { timeout: 5_000 });
 };
+
+// ── Live browser panel (ADR-038/039/040/041/047) ──────────────────────────
+//
+// Ground truth (src/components/browser/BrowserLiveView.tsx):
+//   - "Watch live" launcher — aria-label="Watch live" (BrowserNavigateBlock /
+//     BrowserToolBlock, src/components/chat/tools/), opens the app-root
+//     BrowserLivePanel onto the globally-active session/agent.
+//   - data-testid="browser-live-panel-docked" — the docked panel's <aside>
+//     root (BrowserLivePanel.tsx).
+//   - data-testid="browser-live-frame" — the pointer/keyboard capture
+//     surface (role="application"), present once the first frame (JPEG or
+//     WebRTC) has arrived.
+//   - data-testid="browser-live-video" — the WebRTC <video> sink. ONLY
+//     rendered when a live MediaStream is actually attached (mediaStream
+//     truthy) — its presence is the one honest signal that this session is
+//     really running the WebRTC video/audio path, not the JPEG fallback.
+//   - data-testid="browser-live-img" — the JPEG-screencast <img> sink,
+//     rendered instead whenever no WebRTC stream is attached (capability
+//     gate, negotiation failure, or a genuine regression). A test that wants
+//     to prove "video is live" MUST see browser-live-video, never treat
+//     browser-live-img as an acceptable substitute — see
+//     browser-live-video.spec.ts's honesty gate for the full rationale.
+
+/** The "Watch live" launcher rendered on a browser tool-call row in chat. */
+export const watchLiveButton = (page: Page) =>
+  page.getByRole('button', { name: 'Watch live' }).first();
+
+/** The docked live-browser panel's root element. */
+export const browserLivePanel = (page: Page) =>
+  page.locator('[data-testid="browser-live-panel-docked"]');
+
+/** The pointer/keyboard capture surface inside the live panel (present once a frame has arrived). */
+export const browserLiveFrame = (page: Page) =>
+  page.locator('[data-testid="browser-live-frame"]');
+
+/** The WebRTC `<video>` sink — presence proves a real live MediaStream is attached (not the JPEG fallback). */
+export const browserLiveVideo = (page: Page) =>
+  page.locator('[data-testid="browser-live-video"]');
+
+/** The JPEG-screencast `<img>` fallback sink — presence WITHOUT `browserLiveVideo` means WebRTC never attached. */
+export const browserLiveImgFallback = (page: Page) =>
+  page.locator('[data-testid="browser-live-img"]');
+
+/**
+ * Poll until the live view settles on the WebRTC `<video>` sink, or the
+ * deadline expires — then report what it actually settled on: `"video"`,
+ * `"img"` (JPEG fallback only), or `null` (neither ever appeared, i.e. a
+ * capture-path failure rather than a WebRTC-specific one).
+ *
+ * CRITICAL — it must NOT return on the first `img` sighting. JPEG is
+ * architecturally guaranteed to paint FIRST on every healthy cold start, so
+ * returning early on it would false-red essentially every run, including on a
+ * fast machine:
+ *
+ *   - `BrowserLiveView.tsx` renders `mediaStream ? <video> : <img>`, and
+ *     `mediaStream` is non-null only once WebRTC negotiation COMPLETES.
+ *   - The JPEG frame arrives over a separate, always-on CDP screencast with
+ *     `screencastEveryNthFrame = 1` (pkg/tools/browser/live.go) — sub-second
+ *     first paint.
+ *   - WebRTC negotiation legitimately takes seconds to tens of seconds:
+ *     `waitForTracksTimeout` is 15s and the SPA's cold-start
+ *     `firstAnswerTimeoutMs` is 30s.
+ *
+ * So the honest question is never "which appeared first" — it is "did video
+ * EVER arrive within the budget". Seeing `img` is the expected intermediate
+ * state, not a verdict. We keep polling past it and only conclude `"img"`
+ * when the whole budget elapsed with the video sink never showing up.
+ *
+ * Deliberately NOT a `Promise.race` of two `waitFor` calls: both timeouts
+ * would still be in flight when the first resolves, and racing two
+ * "resolve to null after timeoutMs" promises cannot tell you which sink was
+ * actually visible. A manual poll gives an unambiguous answer.
+ */
+export async function waitForLiveSink(
+  page: Page,
+  timeoutMs = 90_000,
+): Promise<'video' | 'img' | null> {
+  const video = browserLiveVideo(page);
+  const img = browserLiveImgFallback(page);
+  const deadline = Date.now() + timeoutMs;
+  let sawImg = false;
+  while (Date.now() < deadline) {
+    // Video wins the moment it appears, whenever that happens — including
+    // long after the JPEG sink has been showing.
+    if (await video.isVisible().catch(() => false)) return 'video';
+    if (!sawImg && (await img.isVisible().catch(() => false))) {
+      sawImg = true;
+    }
+    await page.waitForTimeout(500);
+  }
+  // Budget exhausted. Distinguish "picture mode worked but video never came"
+  // (a WebRTC-path failure) from "nothing rendered at all" (a capture-path
+  // failure) — the two need very different investigations.
+  return sawImg ? 'img' : null;
+}

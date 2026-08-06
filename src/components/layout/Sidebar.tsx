@@ -18,6 +18,8 @@ import {
   WarningCircle,
   ArrowClockwise,
   UserCircle,
+  Files,
+  FolderOpen,
 } from '@phosphor-icons/react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
@@ -42,10 +44,13 @@ import {
 import { cn } from '@/lib/utils'
 import { Wordmark } from '@/components/shared/Wordmark'
 
-// Library items — reusable assets that live outside any single workspace.
+// Assets — reusable, cross-workspace resources (library-spec.md D-7 rename:
+// this section used to be titled "Library"; that name now belongs to the new
+// file-explorer nav entry below it, so the SECTION was renamed to avoid the
+// two meaning different things under the same label).
 // (Per-workspace work — chat, tasks, calendar, team — lives inside the
 // workspace tabs, not the sidebar.)
-const LIBRARY_ITEMS = [
+const ASSET_ITEMS = [
   { to: '/agents', label: 'Agents', Icon: Robot },
   { to: '/skills', label: 'Skills & Tools', Icon: PuzzlePiece },
   { to: '/connectors', label: 'Connectors', Icon: PlugsConnected },
@@ -630,9 +635,19 @@ export function Sidebar() {
       {/* Tiny divider between scrollable workspaces and fixed library items */}
       <div className="mx-4 my-1 border-t border-[var(--color-border)]" />
 
-      {/* Library items (fixed bottom — not scrollable, only 3 items) */}
-      <div className="shrink-0 py-2" role="group" aria-label="Library">
-        {LIBRARY_ITEMS.map(({ to, label, Icon }) => {
+      {/* Assets section (fixed bottom — not scrollable): Agents / Skills &
+          Tools / Connectors links, plus the Library file-explorer entry
+          point (library-spec.md D-3 sidebar entry point → the virtual root,
+          every workspace as a top-level node). Section header carries an
+          icon people associate with files (operator decision, D-7). */}
+      <div className="shrink-0 py-2" role="group" aria-label="Assets">
+        <div className="flex items-center gap-1.5 px-4 py-1 mb-0.5">
+          <Files size={12} className="text-[var(--color-muted)]" aria-hidden="true" />
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
+            Assets
+          </span>
+        </div>
+        {ASSET_ITEMS.map(({ to, label, Icon }) => {
           const isActive = location.pathname === to || location.pathname.startsWith(`${to}/`)
           return (
             <Link
@@ -660,6 +675,24 @@ export function Sidebar() {
             </Link>
           )
         })}
+        {/* Library — NOT a route Link like the items above: it opens the
+            docked LibraryPanel (mounted once in AppShell) at the virtual
+            root, same as clicking a workspace opens it scoped (D-3). The
+            /_app/library ROUTE exists only for the panel's pop-out button. */}
+        <button
+          type="button"
+          tabIndex={0}
+          data-testid="sidebar-library-button"
+          aria-label="Library"
+          onClick={() => {
+            useUiStore.getState().openLibraryPanel()
+            if (!effectivelyPinned) close()
+          }}
+          className="flex items-center gap-3 w-[calc(100%-16px)] px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+        >
+          <FolderOpen size={18} />
+          <span className="flex-1 text-left">Library</span>
+        </button>
       </div>
 
       {/* Username — stable at the very bottom, opens a popup menu */}
@@ -705,19 +738,19 @@ export function Sidebar() {
               </span>
             )}
           </DropdownMenuItem>
-          <DropdownMenuItem asChild>
+          <DropdownMenuItem asChild onSelect={() => { if (!effectivelyPinned) close() }}>
             <Link to="/usage" className="flex items-center gap-2 cursor-pointer">
               <ChartBar size={14} />
               Usage
             </Link>
           </DropdownMenuItem>
-          <DropdownMenuItem asChild>
+          <DropdownMenuItem asChild onSelect={() => { if (!effectivelyPinned) close() }}>
             <Link to="/profile" className="flex items-center gap-2 cursor-pointer">
               <UserCircle size={14} />
               Profile
             </Link>
           </DropdownMenuItem>
-          <DropdownMenuItem asChild>
+          <DropdownMenuItem asChild onSelect={() => { if (!effectivelyPinned) close() }}>
             <Link to="/settings" className="flex items-center gap-2 cursor-pointer">
               <Gear size={14} />
               Settings

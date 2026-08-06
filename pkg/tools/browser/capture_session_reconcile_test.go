@@ -130,6 +130,77 @@ func TestCaptureSession_ReconcileScreencast_StaysResumedWithAJPEGOnlyViewer(t *t
 	}
 }
 
+// TestCaptureSession_HandleViewerOffer_ReconcilesOnVideoTransition is the FIX
+// WAVE A finding 2 regression: for a BRAND NEW capture session, AddViewer
+// runs BEFORE the ingest side has connected at all, so its own
+// ReconcileScreencast call is guaranteed to observe HasVideo=false and
+// correctly leave the JPEG screencast running (setup assertion below,
+// matching TestCaptureSession_ReconcileScreencast_StaysResumedWhenVideoNotFlowingYet
+// exactly) — before this fix, NOTHING ever reconciled again after that point,
+// so the JPEG screencast kept running for the rest of the session even once
+// WebRTC video started flowing moments later, inside that SAME
+// HandleViewerOffer call. This test fails without CaptureSession.
+// HandleViewerOffer's post-success ReconcileScreencast call: with only the
+// AddViewer-time reconcile in place, pausedForWebRTC would stay false forever
+// once HasVideo flips true mid-offer.
+func TestCaptureSession_HandleViewerOffer_ReconcilesOnVideoTransition(t *testing.T) {
+	mgr := newReconcileTestManager(t)
+	lv := fakeActiveScreencast(mgr, DefaultSessionID, "viewer-1")
+
+	// HasVideo starts false (zero value) -- the ingest side hasn't connected
+	// yet, exactly the ordinary brand-new-session case.
+	relay := &fakeRelay{videoArrivesOnOffer: true}
+	cs, err := NewCaptureSessionWithDeps(mgr, "agent-1", relay, fakeEncoderStarter(new(int32), nil), nil)
+	if err != nil {
+		t.Fatalf("NewCaptureSessionWithDeps: %v", err)
+	}
+
+	// AddViewer's own reconcile necessarily sees HasVideo=false here -- this
+	// mirrors TestCaptureSession_ReconcileScreencast_StaysResumedWhenVideoNotFlowingYet
+	// and MUST still hold after this fix (that sibling test's own
+	// requirement is unaffected by it).
+	gen := cs.AddViewer("viewer-1")
+	lv.mu.Lock()
+	pausedAfterAdd := lv.pausedForWebRTC
+	lv.mu.Unlock()
+	if pausedAfterAdd {
+		t.Fatal(
+			"setup: AddViewer must NOT pause before video flows (matches the sibling StaysResumedWhenVideoNotFlowingYet test)",
+		)
+	}
+
+	// Now the SAME viewer's offer actually negotiates -- the fake models the
+	// real relay's waitForTracks contract: a successful return means the
+	// ingest video track now exists (videoArrivesOnOffer flips
+	// stats.HasVideo to true as part of this call, see fakeRelay's doc
+	// comment in capture_session_test.go).
+	answer, _, err := cs.HandleViewerOffer("viewer-1", "offer-sdp", gen)
+	if err != nil {
+		t.Fatalf("HandleViewerOffer: %v", err)
+	}
+	if answer == "" {
+		t.Fatal("HandleViewerOffer returned an empty answer on success")
+	}
+
+	lv.mu.Lock()
+	pausedAfterOffer := lv.pausedForWebRTC
+	active := lv.isActiveLocked()
+	lv.mu.Unlock()
+	if !pausedAfterOffer {
+		t.Error(
+			"HandleViewerOffer succeeding (video now flowing, and this WebRTC viewer covers the only JPEG viewer) " +
+				"must trigger a reconcile that pauses the JPEG screencast -- AddViewer's own earlier reconcile " +
+				"necessarily saw HasVideo=false and cannot have caught this transition on its own",
+		)
+	}
+	if active {
+		t.Error(
+			"ReconcileScreencast: the CDP screencast subscription should have been torn down once paused, " +
+				"but isActiveLocked()=true",
+		)
+	}
+}
+
 func TestCaptureSession_ReconcileScreencast_StaysResumedWhenVideoNotFlowingYet(t *testing.T) {
 	mgr := newReconcileTestManager(t)
 	lv := fakeActiveScreencast(mgr, DefaultSessionID, "viewer-1")
@@ -193,6 +264,88 @@ func TestCaptureSession_ReconcileScreencast_RemoveViewerResumesDecision(t *testi
 	if pausedAfterRemove {
 		t.Error(
 			"ReconcileScreencast: RemoveViewer must resolve to \"resume\" (clear pausedForWebRTC) once no WebRTC viewers remain",
+		)
+	}
+}
+
+// TestCaptureSession_RelayViewerEviction_ResumesScreencast is the regression
+// test for the "nothing resumes the JPEG screencast once WebRTC dies
+// mid-session" bug (traced by the lead in webrtc/viewer.go's
+// OnConnectionStateChange -> removeViewer): a viewer attaches via WebRTC,
+// video is flowing, the screencast correctly pauses (matches
+// TestCaptureSession_ReconcileScreencast_PausesWhenWebRTCCoversEveryJPEGViewer).
+// The relay then evicts that SAME viewer entirely on its own -- an ICE
+// failure or an unrecovered Disconnected timeout -- WITHOUT the gateway ever
+// calling CaptureSession.RemoveViewer: no browser_detach frame arrives,
+// because the browser_ws signaling connection and the JPEG live-view
+// attachment both stay alive (BrowserLiveView.tsx's onFallback sends no
+// frame back to the server on a WebRTC failure -- ADR-047's "JPEG never
+// stopped running underneath" contract). Before this fix, CaptureSession had
+// no way to learn of this relay-side-only eviction (ReconcileScreencast's
+// other call sites -- AddViewer/RemoveViewer/Stop/HandleViewerOffer -- all
+// require someone to notice and call in), so cs.viewers kept listing the
+// dead viewer as WebRTC-covered forever and the JPEG screencast never
+// resumed: the user was left staring at a frozen frame exactly when the
+// fallback was supposed to save them.
+//
+// Uses fakeRelay's SetOnViewerRemoved/triggerViewerRemoved to simulate the
+// relay-side eviction without real Pion/ICE machinery -- the real relay's
+// OWN identity-checked notification wiring (removeViewer ->
+// notifyViewerRemoved) has its own dedicated Go<->Go proof in
+// pkg/tools/browser/webrtc/session_test.go; this test isolates
+// CaptureSession's consumption of that notification (newCaptureSessionWithDeps
+// wiring SetOnViewerRemoved to cs.removeViewerByRelayHandle).
+//
+// Deliberately ZERO JPEG viewers (like TestCaptureSession_
+// ReconcileScreencast_RemoveViewerResumesDecision/ResumesOnStop above) so the
+// post-eviction resumeScreencast() call lands on its zero-viewers early
+// return (clears the flag, no CDP call) rather than its
+// mgr.Session()-dependent happy path -- keeps this a pure, Chrome-free unit
+// test of the reconcile WIRING itself, per this file's "not real Chrome"
+// testing directive. The "pause" decision itself doesn't need a live JPEG
+// viewer either: with zero JPEG viewers attached, ReconcileScreencast's own
+// "every attached JPEG viewer is WebRTC-covered" loop is vacuously true, so
+// it still pauses (see the sibling tests' own setup for the same reasoning).
+func TestCaptureSession_RelayViewerEviction_ResumesScreencast(t *testing.T) {
+	mgr := newReconcileTestManager(t)
+	lv := fakeActiveScreencast(mgr, DefaultSessionID) // zero JPEG viewers
+
+	relay := &fakeRelay{stats: webrtc.Stats{HasVideo: true}}
+	cs, err := NewCaptureSessionWithDeps(mgr, "agent-1", relay, fakeEncoderStarter(new(int32), nil), nil)
+	if err != nil {
+		t.Fatalf("NewCaptureSessionWithDeps: %v", err)
+	}
+
+	cs.AddViewer("webrtc-only-viewer")
+
+	lv.mu.Lock()
+	pausedAfterAdd := lv.pausedForWebRTC
+	lv.mu.Unlock()
+	if !pausedAfterAdd {
+		t.Fatal("setup: expected the screencast to pause (no JPEG viewers to keep it running for)")
+	}
+	if got := cs.ViewerCount(); got != 1 {
+		t.Fatalf("setup: ViewerCount = %d, want 1", got)
+	}
+
+	// Simulate the relay itself evicting "webrtc-only-viewer" (ICE failure /
+	// disconnect timeout) -- no gateway-driven RemoveViewer/browser_detach
+	// ever happens.
+	relay.triggerViewerRemoved("webrtc-only-viewer")
+
+	if got := cs.ViewerCount(); got != 0 {
+		t.Fatalf(
+			"ViewerCount after relay-side eviction = %d, want 0 (CaptureSession never learned the viewer left)",
+			got,
+		)
+	}
+
+	lv.mu.Lock()
+	pausedAfterEviction := lv.pausedForWebRTC
+	lv.mu.Unlock()
+	if pausedAfterEviction {
+		t.Error(
+			"a relay-side viewer eviction (ICE failure) must resume the JPEG screencast, but pausedForWebRTC is still true -- the user would be stuck on a frozen frame",
 		)
 	}
 }

@@ -31,6 +31,11 @@ import type {
   SubagentStartFrame,
   SubagentEndFrame,
   TaskStatusChangedFrame,
+  // Per-task run history (ADR-050 / task-run-history-spec §3.8): fires at
+  // run open + close so the calendar chip + Runs list (TaskRunsList,
+  // src/components/workspaces/TaskRunsList.tsx) update live. Handled in
+  // src/store/chat.ts's handleFrame (mirrors task_status_changed).
+  TaskRunStatusFrame,
   ReplayMessageFrame,
   RateLimitFrame,
   MediaFrame,
@@ -75,6 +80,7 @@ export type {
   SubagentStartFrame,
   SubagentEndFrame,
   TaskStatusChangedFrame,
+  TaskRunStatusFrame,
   ReplayMessageFrame,
   RateLimitFrame,
   MediaFrame,
@@ -489,7 +495,17 @@ export class WsConnection {
     // Flush any pending batch before tearing down so callers don't lose frames
     // queued just before disconnect() was called.
     this._flushBatch()
-    this.ws?.close(1000, 'User disconnected')
+    try {
+      this.ws?.close(1000, 'User disconnected')
+    } catch (err) {
+      // Same failure shape as the ping-timeout force-close (see
+      // _startHeartbeat): a throwing close() must not escape — it would abort
+      // the caller's teardown AND skip the ws-null below, leaving the class
+      // pointing at a half-dead socket it believes it released. intentionalClose
+      // is already true, so no synthetic _handleClose is needed here — the
+      // nulling below is the entire remaining cleanup for an intentional close.
+      console.warn('[ws] close() threw during disconnect — continuing teardown', err)
+    }
     this.ws = null
   }
 
@@ -770,13 +786,13 @@ export class WsConnection {
     this.ws.onclose = (event: CloseEvent) => this._handleClose(event)
   }
 
-  // Extracted from the inline this.ws.onclose assignment (2026-07-31 review
-  // finding) so the missed-ping force-close path below can drive the same
-  // teardown/reconnect logic manually when WebSocket.close() itself throws —
-  // in that case the browser never fires onclose, so nothing here would
-  // otherwise run and the connection would sit dead with no reconnect
-  // scheduled and no user-visible signal beyond a single stale console.warn.
-  private _handleClose(event: CloseEvent): void {
+  // _handleClose is the entire close path, extracted from the onclose handler
+  // so the heartbeat's force-close catch below can drive it with a synthetic
+  // event when close() itself throws — otherwise a throwing close() means
+  // onclose never fires, nothing is logged, and the connection sits frozen
+  // with no reconnect (see _startHeartbeat). Takes only the two fields it
+  // reads, so a synthetic {code, reason} literal is a legal argument.
+  private _handleClose(event: Pick<CloseEvent, 'code' | 'reason'>): void {
     // Drop this socket from the test-visible registry before nulling.
     if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver))) {
       const w = window as unknown as { __ws_instances?: WebSocket[] }
@@ -912,8 +928,16 @@ export class WsConnection {
       if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
         try {
           this.ws.close(1000, 'offline')
-        } catch {
-          // ignore — onclose will run regardless
+        } catch (err) {
+          // close() can throw, and when it does onclose does NOT run — the
+          // old comment here claimed otherwise and left the connection frozen
+          // with no log and no reconnect, exactly the ping-timeout bug (see
+          // _startHeartbeat's catch). Drive the close path by hand with a
+          // synthetic event; detach onclose first so a late real close event
+          // on the dying socket can't run the handler twice.
+          console.warn('[ws] close() threw during offline force-close — synthesizing close', err)
+          if (this.ws) this.ws.onclose = null
+          this._handleClose({ code: 1000, reason: 'offline (close() threw)' })
         }
       }
     }
@@ -966,16 +990,16 @@ export class WsConnection {
               // reconnect via _scheduleReconnect below.
               this.ws.close(4000, 'ping timeout')
             } catch (err) {
-              // 2026-07-31 review finding: close() with a valid code should
-              // not throw, but if some environment does throw here (a
-              // browser extension monkey-patching WebSocket.prototype.close,
-              // a non-standard WebView) onclose never fires, so nothing
-              // schedules a reconnect and the connection sits frozen with no
-              // further trace than this one log line. Drive the same
-              // teardown/reconnect path manually instead of relying on
-              // onclose, which this environment has just proven unreliable.
-              console.error('[ws] close(4000) unexpectedly threw — forcing reconnect manually', err)
-              this._handleClose({ code: 4000, reason: 'ping timeout (close() threw)' } as CloseEvent)
+              // close() with a valid code should not throw — but if it does,
+              // onclose never fires, so without this branch nothing is logged,
+              // no reconnect is scheduled, and the connection sits frozen
+              // until the user notices (the next 30s tick would just throw
+              // again). Drive the close path by hand with a synthetic event:
+              // detach onclose first so a late real close event on the dying
+              // socket can't run the handler a second time.
+              console.warn('[ws] close() threw during ping-timeout force-close — synthesizing close', err)
+              if (this.ws) this.ws.onclose = null
+              this._handleClose({ code: 4000, reason: 'ping timeout (close() threw)' })
             }
             return
           }

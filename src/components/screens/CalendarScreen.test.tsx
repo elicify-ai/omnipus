@@ -22,7 +22,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, act } from '@testing-library/react'
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { EventDropArg, EventClickArg, DateSelectArg } from '@fullcalendar/core'
 import type { DateClickArg } from '@fullcalendar/interaction'
@@ -97,29 +97,35 @@ vi.mock('@/components/calendar/CalendarToolbar', () => ({
 // ── 3. Mock slide-overs / popover with testid stubs that expose their state ───
 
 /**
- * CreateTaskSlideOver stub: renders data-testid="create-task-slideover" with
- * open state and the initialDue prop so tests can assert on them.
+ * CalendarEventSlideOver stub: renders data-testid="calendar-event-slideover"
+ * with open state, task id (edit mode), initialDate (create mode) and
+ * workspaceId so tests can assert on them. Replaces the old
+ * CreateTaskSlideOver stub — the Calendar Recurrence Redesign (US-1) routes
+ * every calendar-initiated create through CalendarEventSlideOver instead.
  */
-vi.mock('@/components/workspaces/CreateTaskSlideOver', () => ({
-  CreateTaskSlideOver: ({
+vi.mock('@/components/calendar/CalendarEventSlideOver', () => ({
+  CalendarEventSlideOver: ({
     open,
-    initialDue,
+    task,
+    initialDate,
     workspaceId,
     onOpenChange,
   }: {
     open: boolean
-    initialDue?: string
+    task: { id: string } | null
+    initialDate?: Date
     workspaceId: string
     onOpenChange: (open: boolean) => void
   }) => (
     <div
-      data-testid="create-task-slideover"
+      data-testid="calendar-event-slideover"
       data-open={String(open)}
-      data-initial-due={initialDue ?? ''}
+      data-task-id={task?.id ?? ''}
+      data-initial-date={initialDate ? initialDate.toISOString() : ''}
       data-workspace-id={workspaceId}
     >
       {open && (
-        <button onClick={() => onOpenChange(false)} data-testid="create-close-btn">
+        <button onClick={() => onOpenChange(false)} data-testid="event-slideover-close-btn">
           close
         </button>
       )}
@@ -547,19 +553,23 @@ describe('CalendarScreen — eventDrop on a task-fire event (spec §9 #11)', () 
 
 // ── dateClick → opens CreateTaskSlideOver ────────────────────────────────────
 
-describe('CalendarScreen — dateClick opens CreateTaskSlideOver (spec §9 #15)', () => {
-  it('allDay dateClick opens CreateTaskSlideOver with initialDue="YYYY-MM-DDTHH:mm" (F-02)', async () => {
-    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #15 / FR-012 / US-4/AS-1
+describe('CalendarScreen — dateClick opens CalendarEventSlideOver (Calendar Recurrence Redesign, US-1)', () => {
+  it('allDay dateClick opens CalendarEventSlideOver in create mode, defaulted to 9am on the clicked day', async () => {
+    // Traces to: calendar-recurrence-redesign-spec.md Behavioral Contract
+    // ("day/slot click opens the calendar event slide-over pre-filled with
+    // that date") — supersedes the old CreateTaskSlideOver flow (spec §9 #15).
     // BDD: Given Month view and user clicks day 2026-06-22,
     // When dateClick fires,
-    // Then CreateTaskSlideOver opens with initialDue = "2026-06-22T00:00".
+    // Then CalendarEventSlideOver opens in create mode (task=null) with
+    // initialDate = 2026-06-22 09:00 local (an all-day cell has no natural
+    // time, so it defaults to 9am).
 
     renderCalendarScreen()
 
     await waitFor(() => expect(capturedProps.onDateClick).not.toBeNull())
 
-    // Confirm create slide-over is closed initially
-    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute('data-open', 'false')
+    // Confirm the event slide-over is closed initially
+    expect(screen.getByTestId('calendar-event-slideover')).toHaveAttribute('data-open', 'false')
 
     const clickedDate = new Date(2026, 5, 22, 0, 0, 0) // Jun 22, local midnight
 
@@ -567,17 +577,18 @@ describe('CalendarScreen — dateClick opens CreateTaskSlideOver (spec §9 #15)'
       capturedProps.onDateClick!(makeDateClickArg(clickedDate, true))
     })
 
-    // Slide-over must now be open
-    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute('data-open', 'true')
+    // Slide-over must now be open, in create mode (no task id)
+    const stub = screen.getByTestId('calendar-event-slideover')
+    expect(stub).toHaveAttribute('data-open', 'true')
+    expect(stub).toHaveAttribute('data-task-id', '')
 
-    // initialDue must be "2026-06-22T00:00" (local midnight datetime — F-02)
-    const initialDue = screen.getByTestId('create-task-slideover').getAttribute('data-initial-due')
-    expect(initialDue).toBe('2026-06-22T00:00')
+    const initialDate = stub.getAttribute('data-initial-date')
+    expect(initialDate).toBe(new Date(2026, 5, 22, 9, 0, 0).toISOString())
   })
 
-  it('workspaceId is passed to CreateTaskSlideOver', async () => {
-    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #15 / FR-012
-    // BDD: The workspace ID must be passed to CreateTaskSlideOver.
+  it('workspaceId is passed to CalendarEventSlideOver', async () => {
+    // Traces to: calendar-recurrence-redesign-spec.md CalendarScreen wiring.
+    // BDD: The workspace ID must be passed to CalendarEventSlideOver.
 
     renderCalendarScreen()
 
@@ -589,7 +600,7 @@ describe('CalendarScreen — dateClick opens CreateTaskSlideOver (spec §9 #15)'
       capturedProps.onDateClick!(makeDateClickArg(clickedDate, true))
     })
 
-    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute(
+    expect(screen.getByTestId('calendar-event-slideover')).toHaveAttribute(
       'data-workspace-id',
       WORKSPACE_ID,
     )
@@ -673,15 +684,24 @@ describe('CalendarScreen — eventClick(task) opens TaskDetailSlideOver (spec §
   })
 })
 
-// ── Tasks query rejection → error toast (FR-016 tasks-fail branch) ───────────
-
-describe('CalendarScreen — tasks query failure (spec §9 / FR-016 tasks-fail branch)', () => {
-  it('shows "Couldn\'t load tasks" error toast when fetchTasks rejects', async () => {
-    // Traces to: workspace-calendar-fullcalendar-spec.md §9 / FR-016
+// ── D9: tasks query failure → real blocking error state, not a silent "empty" grid ──
+//
+// UAT defect D9: when the tasks query fails, the old code only fired a toast —
+// filteredEvents stayed [], so isEmpty=true was passed to FullCalendarView,
+// which rendered its normal "No scheduled items" empty hint. A user who saw
+// that had no way to tell "you have nothing scheduled" apart from "we
+// couldn't load your schedule". Tasks is CalendarScreen's sole event source
+// (milestones were retired with ADR-049; occurrences degrade separately —
+// see CalendarScreen.occurrencesDegrade.test.tsx), so a tasks failure with no
+// events to show is a genuine total failure: this suite proves the calendar
+// renders the shared QueryErrorState instead of the deceptive empty grid.
+describe('CalendarScreen — tasks query failure renders a real blocking error state (spec §9 / FR-016 / D9)', () => {
+  it('shows "Couldn\'t load tasks" error toast AND renders QueryErrorState (not the FullCalendarView "empty" grid) when fetchTasks rejects', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 / FR-016 / D9
     // BDD: Given the tasks request returns 500,
     // When the calendar loads,
     // Then addToast is called with message "Couldn't load tasks" and variant "error",
-    //   AND the FullCalendarView stub still renders (degradation, not a crash).
+    //   AND the shared QueryErrorState renders instead of the deceptive empty grid.
 
     vi.mocked(fetchTasks).mockRejectedValueOnce(new Error('500 Server Error'))
 
@@ -700,8 +720,39 @@ describe('CalendarScreen — tasks query failure (spec §9 / FR-016 tasks-fail b
     )
     expect(toastCall![0].variant).toBe('error')
 
-    // The calendar grid stub must still render — tasks failure must not crash the calendar
-    expect(screen.getByTestId('fullcalendar-stub')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByTestId('calendar-error')).toBeInTheDocument()
+    })
+    expect(screen.getByText(/couldn.t load your calendar/i)).toBeInTheDocument()
+    // The deceptive "renders as if empty" grid must NOT be what's on screen.
+    expect(screen.queryByTestId('fullcalendar-stub')).not.toBeInTheDocument()
+  })
+
+  it('clicking Retry re-invokes fetchTasks', async () => {
+    vi.mocked(fetchTasks).mockRejectedValueOnce(new Error('500 Server Error'))
+
+    renderCalendarScreen()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('calendar-error')).toBeInTheDocument()
+    })
+
+    const callsBeforeTasks = vi.mocked(fetchTasks).mock.calls.length
+
+    // Queue up a successful response for the retry.
+    vi.mocked(fetchTasks).mockResolvedValueOnce([makeTask()])
+
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+
+    await waitFor(() => {
+      expect(vi.mocked(fetchTasks).mock.calls.length).toBeGreaterThan(callsBeforeTasks)
+    })
+
+    // A successful retry replaces the error state with the grid again.
+    await waitFor(() => {
+      expect(screen.queryByTestId('calendar-error')).not.toBeInTheDocument()
+      expect(screen.getByTestId('fullcalendar-stub')).toBeInTheDocument()
+    })
   })
 })
 
@@ -856,7 +907,7 @@ describe('CalendarScreen — isLoading and isEmpty props on FullCalendarView (sp
 
 // ── Slot-select (US-4/AS-2) ───────────────────────────────────────────────────
 
-describe('CalendarScreen — timed slot-select opens CreateTaskSlideOver with initialDue (US-4/AS-2)', () => {
+describe('CalendarScreen — timed slot-select opens CalendarEventSlideOver with initialDate (US-4/AS-2)', () => {
   /**
    * Build a synthetic DateSelectArg for a timed (non-allDay) selection.
    */
@@ -869,18 +920,21 @@ describe('CalendarScreen — timed slot-select opens CreateTaskSlideOver with in
     } as unknown as DateSelectArg
   }
 
-  it('slot-select with allDay=false opens CreateTaskSlideOver prefilled with the slot start time', async () => {
-    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #15 / US-4/AS-2 / FR-012
+  it('slot-select with allDay=false opens CalendarEventSlideOver prefilled with the EXACT slot start time', async () => {
+    // Traces to: calendar-recurrence-redesign-spec.md Behavioral Contract;
+    // supersedes the old CreateTaskSlideOver flow (spec §9 #15 / US-4/AS-2).
     // BDD: Given Week/Day view,
     // When I drag-select 2026-06-22T10:00,
-    // Then CreateTaskSlideOver opens with initialDue = "2026-06-22T10:00".
+    // Then CalendarEventSlideOver opens in create mode with
+    // initialDate = 2026-06-22T10:00 — a TIMED slot keeps its exact time
+    // (unlike an all-day cell click, which defaults to 9am).
 
     renderCalendarScreen()
 
     await waitFor(() => expect(capturedProps.onDateSelect).not.toBeNull())
 
-    // Confirm create slide-over is closed initially
-    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute('data-open', 'false')
+    // Confirm the event slide-over is closed initially
+    expect(screen.getByTestId('calendar-event-slideover')).toHaveAttribute('data-open', 'false')
 
     // Simulate a timed slot-select starting at 10:00 local
     const slotStart = new Date(2026, 5, 22, 10, 0, 0) // Jun 22 10:00 local
@@ -889,17 +943,18 @@ describe('CalendarScreen — timed slot-select opens CreateTaskSlideOver with in
       capturedProps.onDateSelect!(makeDateSelectArg(slotStart, false))
     })
 
-    // Slide-over must now be open
-    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute('data-open', 'true')
+    // Slide-over must now be open, in create mode
+    const stub = screen.getByTestId('calendar-event-slideover')
+    expect(stub).toHaveAttribute('data-open', 'true')
+    expect(stub).toHaveAttribute('data-task-id', '')
 
-    // initialDue must be the local datetime "YYYY-MM-DDTHH:mm" of the slot start
-    const initialDue = screen.getByTestId('create-task-slideover').getAttribute('data-initial-due')
-    expect(initialDue).toBe('2026-06-22T10:00')
+    const initialDate = stub.getAttribute('data-initial-date')
+    expect(initialDate).toBe(slotStart.toISOString())
   })
 
-  it('differentiation: slot-select at two different times produces two different initialDue values', async () => {
-    // Anti-hardcode: different slot times → different initialDue strings.
-    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #15 / US-4/AS-2
+  it('differentiation: slot-select at two different times produces two different initialDate values', async () => {
+    // Anti-hardcode: different slot times → different initialDate values.
+    // Traces to: calendar-recurrence-redesign-spec.md Behavioral Contract; US-4/AS-2
 
     renderCalendarScreen()
 
@@ -910,25 +965,25 @@ describe('CalendarScreen — timed slot-select opens CreateTaskSlideOver with in
     await act(async () => {
       capturedProps.onDateSelect!(makeDateSelectArg(slot1, false))
     })
-    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute('data-open', 'true')
-    const initialDue1 = screen.getByTestId('create-task-slideover').getAttribute('data-initial-due')
+    expect(screen.getByTestId('calendar-event-slideover')).toHaveAttribute('data-open', 'true')
+    const initialDate1 = screen.getByTestId('calendar-event-slideover').getAttribute('data-initial-date')
 
     // Close the slide-over
     await act(async () => {
-      screen.getByTestId('create-close-btn').click()
+      screen.getByTestId('event-slideover-close-btn').click()
     })
-    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute('data-open', 'false')
+    expect(screen.getByTestId('calendar-event-slideover')).toHaveAttribute('data-open', 'false')
 
     // Second select: 14:30
     const slot2 = new Date(2026, 5, 22, 14, 30, 0)
     await act(async () => {
       capturedProps.onDateSelect!(makeDateSelectArg(slot2, false))
     })
-    expect(screen.getByTestId('create-task-slideover')).toHaveAttribute('data-open', 'true')
-    const initialDue2 = screen.getByTestId('create-task-slideover').getAttribute('data-initial-due')
+    expect(screen.getByTestId('calendar-event-slideover')).toHaveAttribute('data-open', 'true')
+    const initialDate2 = screen.getByTestId('calendar-event-slideover').getAttribute('data-initial-date')
 
-    expect(initialDue1).toBe('2026-06-22T10:00')
-    expect(initialDue2).toBe('2026-06-22T14:30')
-    expect(initialDue1).not.toBe(initialDue2)
+    expect(initialDate1).toBe(slot1.toISOString())
+    expect(initialDate2).toBe(slot2.toISOString())
+    expect(initialDate1).not.toBe(initialDate2)
   })
 })

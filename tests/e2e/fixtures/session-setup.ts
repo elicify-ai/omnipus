@@ -13,7 +13,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
-import { chatInput } from './selectors'
+import { chatInput, waitForConnected } from './selectors'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
@@ -132,6 +132,11 @@ function seedTranscript(sessionId: string, entries: TranscriptEntry[]): void {
 
 async function waitForWsConnected(page: Page): Promise<void> {
   await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
+  // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+  // see waitForConnected's doc comment in ./selectors). Confirm the socket
+  // is genuinely open, not merely queueing, before callers create a session
+  // and send messages against it.
+  await waitForConnected(page, { timeout: 15_000 })
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -178,6 +183,12 @@ export async function openSessionByDeepLink(page: Page, sessionId: string): Prom
   // "Replay finished" signal — the composer re-enables once the replay's
   // done frame lands. No arbitrary timeout.
   await expect(chatInput(page)).toBeEnabled({ timeout: 30_000 })
+  // toBeEnabled() alone conflates "replay done" with "connected" — it no
+  // longer implies the latter (2fa26e6a, #105 fix; see waitForConnected's
+  // doc comment in ./selectors). A caller that fills+sends immediately
+  // after this returns needs BOTH true, or the message lands in the
+  // outbound queue instead of the wire.
+  await waitForConnected(page, { timeout: 30_000 })
 }
 
 export interface SeedAndOpenResult {

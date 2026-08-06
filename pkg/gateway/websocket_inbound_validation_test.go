@@ -229,3 +229,75 @@ func TestWS_ValidateInbound_ValidFramePassesThrough(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
 		"connection must remain open when a valid frame is sent")
 }
+
+// TestWS_ValidateInbound_EmptyContentWithMedia_PassesThrough verifies the
+// UAT Issue 5 fix: an attachment-only send (content is legitimately empty
+// because media is present) must NOT trip schema validation.
+//
+// BDD:
+//
+//	Given an authenticated WebSocket connection with validate_inbound=true,
+//	When the client sends {"type":"message","content":"","media":["media://..."]},
+//	Then the frame is NOT rejected (no error frame from schema validation).
+//
+// Traces to: contracts/components/schemas/MessageFrame.yaml anyOf
+// (content minLength:1 OR media minItems:1).
+func TestWS_ValidateInbound_EmptyContentWithMedia_PassesThrough(t *testing.T) {
+	handler, _, al := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	al.GetConfig().Gateway.ValidateInbound = true
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	sendWSAuthFrameDevMode(t, conn)
+
+	// wsClientFrameTestHelper.Content has `omitempty`, which would drop the
+	// key entirely for "" — the real bug shape needs the key PRESENT with
+	// an empty value, so build the frame as a raw map instead.
+	attachmentOnlyFrame := map[string]any{
+		"type":    "message",
+		"content": "",
+		"media":   []string{"media://workspace/ws1/att1"},
+	}
+	data, err := json.Marshal(attachmentOnlyFrame)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+
+	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	ping := wsClientFrameTestHelper{Type: "ping"}
+	pingData, _ := json.Marshal(ping)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
+		"connection must remain open — an attachment-only send must not fail schema validation")
+}
+
+// TestWS_ValidateInbound_EmptyContentNoMedia_Rejected proves the Issue 5 fix
+// did NOT weaken content into "always optional": empty content with no
+// media at all must still be rejected.
+func TestWS_ValidateInbound_EmptyContentNoMedia_Rejected(t *testing.T) {
+	handler, _, al := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	al.GetConfig().Gateway.ValidateInbound = true
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	sendWSAuthFrameDevMode(t, conn)
+
+	emptyFrame := map[string]any{"type": "message", "content": ""}
+	data, err := json.Marshal(emptyFrame)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+
+	resp := readFrameOfType(t, conn, "error", 3*time.Second)
+	assert.Contains(t, resp.Message, "MessageFrame",
+		"empty content with no media must still fail schema validation")
+}

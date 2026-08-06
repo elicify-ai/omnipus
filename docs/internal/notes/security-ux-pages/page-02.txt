@@ -1,0 +1,20 @@
+┌───────────────────────────────────────┐
+│ 4. Network / SSRF                     │  Private IP / metadata block,
+│                                       │  optional allow_internal,
+│                                       │  port allow-list (Landlock ABI4+)
+└───────────────────────────────────────┘
+        │  (tool results back into LLM)
+        ▼
+┌───────────────────────────────────────┐
+│ 5. Prompt guard                       │  Sanitize untrusted tool output
+│ 6. Skill trust                        │  Hash-verify installed skills
+│ 7. Cost / rate limits                 │  Daily $ + call rate caps
+│ 8. Audit log                          │  What happened (HMAC chain)
+│ 9. Credential vault                   │  Keys encrypted at rest
+└───────────────────────────────────────┘
+```
+
+### What each fence means
+
+| Layer | What it answers | Typical default |
+|--------|------------------|-----------------|

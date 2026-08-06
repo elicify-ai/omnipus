@@ -31,7 +31,7 @@
 // ChatScreen.subagent-spans-historical-agenttype-wiring.test.tsx.
 
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
+import { render, screen, act, waitFor } from '@testing-library/react'
 import * as React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AssistantRuntimeProvider } from '@assistant-ui/react'
@@ -298,8 +298,12 @@ describe('SubagentSpansRenderer — W3 resolveSpanAgentType wiring (test-analyze
       )
     })
 
-    const stub = screen.getByTestId('subagent-block-stub')
-    expect(stub).toHaveAttribute('data-agent-type', '3p')
+    // agentType is derived from the async ['agents'] query (fetchAgents); wait
+    // for it to resolve before asserting, otherwise the stub renders with
+    // agentType="" on the first (query-loading) pass.
+    await waitFor(() => {
+      expect(screen.getByTestId('subagent-block-stub')).toHaveAttribute('data-agent-type', '3p')
+    })
   })
 
   it('computes and passes agentType="native" (never "3p") for a running span whose agentId resolves to a native agent', async () => {
@@ -316,7 +320,8 @@ describe('SubagentSpansRenderer — W3 resolveSpanAgentType wiring (test-analyze
       )
     })
 
-    const stub = screen.getByTestId('subagent-block-stub')
-    expect(stub).toHaveAttribute('data-agent-type', 'native')
+    await waitFor(() => {
+      expect(screen.getByTestId('subagent-block-stub')).toHaveAttribute('data-agent-type', 'native')
+    })
   })
 })

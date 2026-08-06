@@ -21,8 +21,11 @@ export type WsFrameType =
   | "tool_call_start"
   | "tool_call_result"
   | "subagent_start"
+  | "subagent_message"
+  | "subagent_state"
   | "subagent_end"
   | "task_status_changed"
+  | "task_run_status"
   | "replay_message"
   | "replay_error"
   | "rate_limit"
@@ -47,6 +50,7 @@ export type WsFrameType =
   | "browser_status"
   | "browser_tab_action"
   | "browser_tabs"
+  | "browser_viewport"
   | "browser_webrtc_offer"
   | "browser_webrtc_answer"
   | "browser_webrtc_state"
@@ -141,10 +145,26 @@ export interface DoneFrame {
   producing_session_id?: string;
 }
 
+export interface LLMError {
+  code: "media_unsupported" | "provider_rejected" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "unknown";
+  message: string;
+  retryable: boolean;
+  detail?: string;
+}
+
+export interface LLMErrorReplay {
+  code: "media_unsupported" | "provider_rejected" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "unknown";
+  message: string;
+  retryable: boolean;
+}
+
 export interface ErrorFrame {
   type: "error";
   session_id?: string;
   message: string;
+  payload?: {
+    llm_error: LLMError;
+  };
 }
 
 export interface ToolCallStartFrame {
@@ -258,6 +278,14 @@ export interface TaskStatusChangedFrame {
   producing_session_id?: string;
 }
 
+export interface TaskRunStatusFrame {
+  type: "task_run_status";
+  task_id: string;
+  run_id: string;
+  occurrence_ms?: number;
+  status: "in_progress" | "done" | "failed" | "skipped";
+}
+
 export interface ReplayMessageFrame {
   type: "replay_message";
   session_id: string;
@@ -268,7 +296,6 @@ export interface ReplayMessageFrame {
   agent_id?: string;
   model?: string;
   turn_id?: string;
-  producing_session_id?: string;
 }
 
 export interface ReplayErrorFrame {
@@ -280,12 +307,7 @@ export interface ReplayErrorFrame {
   message: string;
   agent_id?: string;
   payload?: {
-    retry_after_seconds?: number;
-    policy_rule?: string;
-    scope?: string;
-    resource?: string;
-    tool?: string;
-    stage?: string;
+    llm_error: LLMErrorReplay;
   };
 }
 
@@ -439,6 +461,8 @@ export interface BrowserInputFrame {
   kind: "mouse_move" | "mouse_down" | "mouse_up" | "wheel" | "key_down" | "key_up" | "text" | "navigate" | "navigate_back" | "reload";
   x?: number;
   y?: number;
+  capture_width?: number;
+  capture_height?: number;
   button?: "none" | "left" | "middle" | "right" | "back" | "forward";
   delta_x?: number;
   delta_y?: number;
@@ -481,6 +505,15 @@ export interface BrowserStatusFrame {
   controlled_by_other?: boolean;
   control_only?: boolean;
   session_id?: string;
+}
+
+export interface BrowserViewportFrame {
+  type: "browser_viewport";
+  session_id?: string;
+  agent_id?: string;
+  width: number;
+  height: number;
+  device_scale_factor?: number;
 }
 
 export interface BrowserTabActionFrame {
@@ -545,6 +578,8 @@ export interface BrowserCaptureControlFrame {
   type: "browser_capture_control";
   action: "recapture" | "shutdown" | "ping";
   reason?: string;
+  expected_width?: number;
+  expected_height?: number;
 }
 
 export interface GoalStatusFrame {
@@ -599,6 +634,14 @@ export interface JudgeVerdictFrame {
   judge_agent_id: string;
 }
 
+export interface ErrorPayload {
+  llm_error: LLMError;
+}
+
+export interface ReplayErrorPayload {
+  llm_error: LLMErrorReplay;
+}
+
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
 
 export type WsFrame =
@@ -620,6 +663,7 @@ export type WsFrame =
   | SubagentMessageFrame
   | SubagentStateFrame
   | TaskStatusChangedFrame
+  | TaskRunStatusFrame
   | ReplayMessageFrame
   | ReplayErrorFrame
   | RateLimitFrame
@@ -642,6 +686,7 @@ export type WsFrame =
   | BrowserDetachFrame
   | BrowserScreencastFrame
   | BrowserStatusFrame
+  | BrowserViewportFrame
   | BrowserTabActionFrame
   | BrowserTabsFrame
   | BrowserWebRTCOfferFrame
@@ -693,6 +738,7 @@ export type ServerFrame =
   | SubagentMessageFrame
   | SubagentStateFrame
   | TaskStatusChangedFrame
+  | TaskRunStatusFrame
   | ReplayMessageFrame
   | ReplayErrorFrame
   | RateLimitFrame
@@ -709,6 +755,7 @@ export type ServerFrame =
   | NotificationFrame
   | BrowserScreencastFrame
   | BrowserStatusFrame
+  | BrowserViewportFrame
   | BrowserTabActionFrame
   | BrowserTabsFrame
   | BrowserWebRTCAnswerFrame

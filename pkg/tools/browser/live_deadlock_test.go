@@ -184,7 +184,8 @@ func TestLiveView_QueueAck_NeverBlocksAndDoesNotPileUpGoroutines(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	runtime.GC()
 	after := runtime.NumGoroutine()
-	require.Less(t, after-before, 20,
+	require.Less(
+		t, after-before, 20,
 		"queueAck must not spawn a goroutine per frame — got %d extra goroutines for %d frames",
 		after-before, frameCount,
 	)

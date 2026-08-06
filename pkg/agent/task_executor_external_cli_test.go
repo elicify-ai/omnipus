@@ -208,7 +208,7 @@ func TestTaskExecutor_ExternalCLIWorker_CompletesViaStatusMarker(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -259,7 +259,7 @@ func TestTaskExecutor_ExternalCLIWorker_FatalError_TaskFails(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -270,9 +270,16 @@ func TestTaskExecutor_ExternalCLIWorker_FatalError_TaskFails(t *testing.T) {
 	if strings.TrimSpace(final.Result) == "" {
 		t.Error("task Result is empty — a failed task must carry a usable error message")
 	}
-	if !strings.Contains(final.Result, "external CLI crashed") {
-		t.Errorf("task Result = %q, want it to mention the underlying driver failure %q",
-			final.Result, "external CLI crashed")
+	// ADR-051 §RD5: the raw driver stderr ("external CLI crashed") is now
+	// sanitized through TranslateLLMError before reaching the task result.
+	// The result MUST carry the generic failure copy, NOT the raw text.
+	if strings.Contains(final.Result, "external CLI crashed") {
+		t.Errorf("task Result = %q must NOT contain the raw driver stderr (ADR-051 sanitization)",
+			final.Result)
+	}
+	if !strings.Contains(final.Result, "external-cli run failed") {
+		t.Errorf("task Result = %q, want it to mention the generic failure wrapper",
+			final.Result)
 	}
 	if provider.calls != 0 {
 		t.Fatalf("native LLM provider was called %d times, want 0", provider.calls)
@@ -330,7 +337,7 @@ func TestProcessTaskDirect_ExternalCLIWorker_Timeout_TaskFailsWithoutHanging(t *
 	shortCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if err := al.taskExecutor.ExecuteTask(shortCtx, tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(shortCtx, tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -402,7 +409,7 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 		t.Fatalf("create task: %v", err)
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 

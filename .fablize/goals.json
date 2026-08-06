@@ -1,0 +1,41 @@
+{
+ "brief": "Fix browser live panel viewport+input; deploy to UAT; live-validate side panel AND pop-out fullscreen",
+ "created": "2026-07-31T09:08:17.538769+00:00",
+ "goals": [
+  {
+   "id": "G001",
+   "title": "F1 reshape",
+   "objective": "SetViewport reshapes the real tab via Browser.setWindowBounds; setDeviceMetricsOverride only for DPR",
+   "status": "complete",
+   "evidence": "live.go SetViewport: SetWindowBounds + dsf-only override + getLayoutMetrics read-back logged/cached; go build/vet clean; TestRescaleInputCoords PASS (agent report)"
+  },
+  {
+   "id": "G002",
+   "title": "F2 resolution",
+   "objective": "encoder keeps resolution (maintain-resolution, scaleResolutionDownBy 1, higher bitrate)",
+   "status": "complete",
+   "evidence": "encoder.js maintain-resolution + scaleResolutionDownBy=1 + 6Mbps; node --check OK (agent report)"
+  },
+  {
+   "id": "G003",
+   "title": "F3 input mapping",
+   "objective": "pointer/keyboard mapping correct when capture size != page CSS pixels",
+   "status": "pending",
+   "evidence": null
+  },
+  {
+   "id": "G004",
+   "title": "UAT side panel",
+   "objective": "deploy; live-measure stream aspect==panel aspect, size~panel CSSxDPR, click activates target in side panel",
+   "status": "pending",
+   "evidence": null
+  },
+  {
+   "id": "G005",
+   "title": "UAT pop-out",
+   "objective": "same live validation in pop-out new-tab fullscreen mode",
+   "status": "pending",
+   "evidence": null
+  }
+ ]
+}

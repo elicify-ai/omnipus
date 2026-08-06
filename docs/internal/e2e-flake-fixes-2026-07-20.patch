@@ -1,0 +1,311 @@
+diff --git a/pkg/gateway/websocket.go b/pkg/gateway/websocket.go
+index 8364cf9f..a90d8720 100644
+--- a/pkg/gateway/websocket.go
++++ b/pkg/gateway/websocket.go
+@@ -564,9 +564,9 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 	defer conn.Close()
+ 
+-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
++	conn.SetReadDeadline(time.Now().Add(wsKeepAliveReadDeadline))
+ 	conn.SetPongHandler(func(_ string) error {
+-		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
++		return conn.SetReadDeadline(time.Now().Add(wsKeepAliveReadDeadline))
+ 	})
+ 
+ 	// Create wsConn before auth so authenticateWS can set the role on it.
+@@ -696,7 +696,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
+ 
+ 	if user, err := middleware.ResolveUserFromCookie(r, cfg.Gateway.Users); err == nil && user != nil {
+ 		wc.userID = user.Username // FR-073: needed for session_state user scoping
+-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
++		conn.SetReadDeadline(time.Now().Add(wsKeepAliveReadDeadline))
+ 		return true
+ 	}
+ 	// SFH-1: surface "cookie present but invalid" (replay/probe/stale
+@@ -735,7 +735,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
+ 	if user, viaCLIToken, matched := resolveBearerIdentity(cfg, rawToken); matched {
+ 		wc.userID = user.Username // FR-073: needed for session_state user scoping
+ 		wc.isCLIToken = viaCLIToken
+-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
++		conn.SetReadDeadline(time.Now().Add(wsKeepAliveReadDeadline))
+ 		return true
+ 	}
+ 
+@@ -761,7 +761,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
+ 	if required == "" {
+ 		if cfg.Gateway.DevModeBypass {
+ 			// Dev mode: allow without auth.
+-			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
++			conn.SetReadDeadline(time.Now().Add(wsKeepAliveReadDeadline))
+ 			return true
+ 		}
+ 		// No auth configured — deny by default (fail closed), matching HTTP auth path.
+@@ -786,7 +786,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
+ 		)
+ 		return false
+ 	}
+-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
++	conn.SetReadDeadline(time.Now().Add(wsKeepAliveReadDeadline))
+ 	return true
+ }
+ 
+@@ -795,6 +795,30 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
+ // is closed by gorilla/websocket (SetReadLimit causes a protocol-level close).
+ const wsMaxMessageBytes = 5 * 1024 * 1024
+ 
++// wsPingInterval is how often pingPump enqueues a keepalive ping frame.
++// wsKeepAliveReadDeadline is the read deadline (re)applied at connection start,
++// after auth, and by the pong handler — NOT touched by ordinary data-frame
++// reads during an active turn (see readLoop's per-message refresh, which uses
++// the same constant). A message-idle connection (e.g. the browser waiting out
++// a long awaited/foreground delegation turn with no client->server traffic)
++// relies ENTIRELY on the native protocol-level PONG reply to the server's
++// PING to keep this deadline pushed out — so the effective round-trip budget
++// before the server unilaterally tears down an otherwise-healthy connection
++// is (wsKeepAliveReadDeadline - wsPingInterval): with the previous 30s/60s
++// pair that was only ~30s of slack for a pong to arrive, which a CPU-starved
++// browser process (e.g. many concurrent Chromium instances under a
++// contended, oversubscribed CI worker) can plausibly miss, causing the
++// server to abruptly close the raw connection (no WS close handshake is sent
++// on this path — see readLoop's exit paths) which the browser reports as
++// code 1006 (abnormal closure) regardless of the underlying reason. Widened
++// from 60s to give ~90s of round-trip slack per ping cycle before the server
++// gives up, while still reclaiming a genuinely-dead connection well within a
++// couple of minutes.
++const (
++	wsPingInterval          = 30 * time.Second
++	wsKeepAliveReadDeadline = 120 * time.Second
++)
++
+ // readLoop processes client frames until the connection closes.
+ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsConn, chatID string) {
+ 	// Enforce a hard read limit so clients cannot exhaust server memory with
+@@ -824,7 +848,18 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
+ 				return
+ 			}
+ 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+-				slog.Debug("ws: connection closed unexpectedly", "chat_id", chatID, "error", err)
++				// CloseAbnormalClosure (1006, the code the BROWSER reports on
++				// the other end whenever this server side severs the raw TCP
++				// connection without first writing a WS close frame — which is
++				// every exit path in this function except the explicit auth
++				// CloseMessage writes in authenticateWS) previously logged at
++				// Debug only, invisible at the gateway's default "warn" level
++				// (pkg/config/defaults.go LogLevel). That made a genuine
++				// keepalive-driven disconnect indistinguishable, in the log an
++				// operator actually reads, from "nothing happened server-side" —
++				// the exact gap that made a real WS 1006 regression look like it
++				// had no server-side cause. Warn so it is diagnosable by default.
++				slog.Warn("ws: connection closed unexpectedly", "chat_id", chatID, "error", err)
+ 				return
+ 			}
+ 			// Every other ReadMessage failure previously fell through to a
+@@ -832,15 +867,23 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
+ 			// read-deadline-exceeded I/O timeout (net.Error, not a close-code
+ 			// error, so neither branch above matches it) — meaning an operator
+ 			// had no visibility into why a WS connection died this way. Log
+-			// every case here so the actual error/timeout-ness is visible.
++			// every case here so the actual error/timeout-ness is visible; Warn
++			// (not Debug) when it is a genuine deadline timeout — that means
++			// this connection went quiet for the full keepalive window (see
++			// wsKeepAliveReadDeadline) and the server gave up on it, which is
++			// exactly as actionable as the close-error case above.
+ 			var netErr net.Error
+ 			isTimeout := errors.As(err, &netErr) && netErr.Timeout()
+-			slog.Debug("ws: readLoop exiting on ReadMessage error",
++			level := slog.LevelDebug
++			if isTimeout {
++				level = slog.LevelWarn
++			}
++			slog.Log(ctx, level, "ws: readLoop exiting on ReadMessage error",
+ 				"chat_id", chatID, "error", err, "is_timeout", isTimeout)
+ 			return
+ 		}
+ 
+-		if err := conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
++		if err := conn.SetReadDeadline(time.Now().Add(wsKeepAliveReadDeadline)); err != nil {
+ 			slog.Warn("ws: SetReadDeadline failed, exiting readLoop", "chat_id", chatID, "error", err)
+ 			return
+ 		}
+@@ -2489,10 +2532,11 @@ func (h *WSHandler) writePump(wc *wsConn) {
+ 	}
+ }
+ 
+-// pingPump enqueues a nil sentinel onto sendCh every 30 s for keep-alive pings.
+-// All writes go through writePump, satisfying gorilla's single-writer requirement.
++// pingPump enqueues a nil sentinel onto sendCh every wsPingInterval for
++// keep-alive pings. All writes go through writePump, satisfying gorilla's
++// single-writer requirement.
+ func (h *WSHandler) pingPump(wc *wsConn) {
+-	ticker := time.NewTicker(30 * time.Second)
++	ticker := time.NewTicker(wsPingInterval)
+ 	defer ticker.Stop()
+ 	for {
+ 		select {
+diff --git a/src/lib/queryClient.retry.test.ts b/src/lib/queryClient.retry.test.ts
+index be9a5abd..325c8416 100644
+--- a/src/lib/queryClient.retry.test.ts
++++ b/src/lib/queryClient.retry.test.ts
+@@ -4,6 +4,12 @@
+ //   - 404 being retried (must NOT retry — missing resource won't appear on retry)
+ //   - 401 being retried (existing guard, verified here with the real retry predicate)
+ //   - 403 being retried (existing guard, verified here with the real retry predicate)
++//   - 409 being retried (must NOT retry — a conflict is decided by server-side
++//     state that an identical retry cannot change; retrying only delays the
++//     user-visible error by ~7s of pure exponential-backoff sleep for zero
++//     chance of success — root cause of the mcp-add duplicate-409 E2E flake
++//     under concurrent-shard load, where that ~7s baseline left almost no
++//     margin against a 10s toast-visibility assertion)
+ //   - 500 NOT being retried (500 IS retried — this test catches over-broad guards)
+ //
+ // Strategy: Exercise the real retry predicate from queryClient.ts directly —
+@@ -22,7 +28,7 @@ import { ApiError, ApiSchemaError } from './api'
+ function realRetryPredicate(failureCount: number, err: unknown): boolean {
+   return (
+     !(err instanceof ApiSchemaError) &&
+-    !(err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404)) &&
++    !(err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404 || err.status === 409)) &&
+     failureCount < 3
+   )
+ }
+@@ -60,6 +66,20 @@ describe('queryClient real retry predicate', () => {
+     expect(realRetryPredicate(0, new ApiError(403))).toBe(false)
+   })
+ 
++  it('returns false for ApiError 409 (conflict, not retried)', () => {
++    // BDD: 409 is a conflict decided by server-side state (e.g. a duplicate
++    // name) — retrying the identical request cannot change the outcome.
++    // Traces to: src/lib/queryClient.ts retry guard: err.status === 409
++    expect(realRetryPredicate(0, new ApiError(409))).toBe(false)
++  })
++
++  it('returns false for ApiError 409 regardless of failureCount', () => {
++    // Differentiation: 409 must never be retried, even on the first attempt.
++    expect(realRetryPredicate(0, new ApiError(409))).toBe(false)
++    expect(realRetryPredicate(1, new ApiError(409))).toBe(false)
++    expect(realRetryPredicate(2, new ApiError(409))).toBe(false)
++  })
++
+   it('returns false for ApiSchemaError (schema mismatch, not retried)', () => {
+     // BDD: Schema errors cannot be fixed by retrying.
+     // Traces to: src/lib/queryClient.ts retry guard: err instanceof ApiSchemaError
+diff --git a/src/lib/queryClient.ts b/src/lib/queryClient.ts
+index 08524712..2ccee4c5 100644
+--- a/src/lib/queryClient.ts
++++ b/src/lib/queryClient.ts
+@@ -28,17 +28,29 @@ export const queryClient = new QueryClient({
+       // the same token and would flood the console before the redirect fires.
+       // Never retry 404 — a missing resource will not appear on retry (e.g. a
+       // just-deleted schedule whose refetch fires after the delete onSuccess).
++      // Never retry 409 — a conflict (e.g. duplicate-name uniqueness check) is
++      // decided by server-side state that retrying the identical request
++      // cannot change; retrying only delays the error surfacing (3 retries *
++      // default exponential backoff = ~7s of pure client-side sleep before
++      // onError fires) with zero chance of succeeding.
+       retry: (failureCount, err) =>
+         !(err instanceof ApiSchemaError) &&
+-        !(err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404)) &&
++        !(err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404 || err.status === 409)) &&
+         failureCount < 3,
+       retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 30_000),
+     },
+     mutations: {
+-      // Same guard for mutations: schema mismatches, auth errors, and 404s are not transient.
++      // Same guard for mutations: schema mismatches, auth errors, 404s, and
++      // 409 conflicts are not transient — see the queries comment above. This
++      // matters even more for mutations (POST/PATCH/DELETE): unlike an idle
++      // background refetch, a mutation retry storm directly delays the
++      // user-visible error toast for an action the user is actively waiting
++      // on (e.g. "Add MCP Server" duplicate-name 409 — was previously
++      // retried 3x with exponential backoff before the conflict toast could
++      // appear, leaving almost no margin against E2E assertion timeouts).
+       retry: (failureCount, err) =>
+         !(err instanceof ApiSchemaError) &&
+-        !(err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404)) &&
++        !(err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404 || err.status === 409)) &&
+         failureCount < 3,
+     },
+   },
+diff --git a/tests/e2e/cancel-cross-channel.spec.ts b/tests/e2e/cancel-cross-channel.spec.ts
+index 4c3cab74..3b619ed0 100644
+--- a/tests/e2e/cancel-cross-channel.spec.ts
++++ b/tests/e2e/cancel-cross-channel.spec.ts
+@@ -744,37 +744,63 @@ test(
+ 
+     // Wait for cancel to complete. Allow 15s — under suite load the LLM cancel
+     // propagation can take several seconds after the stop button is clicked.
++    //
++    // NOTE: these two checks are NOT reliable proxies for "the backend has
++    // audited the cancellation". cancelStream() (src/store/chat.ts) calls
++    // markLastMessageInterrupted() — which flips isStreaming:false and drives
++    // both stop-btn's disappearance and chatInput's re-enable — SYNCHRONOUSLY
++    // on the client, BEFORE the `cancel` WS frame is even sent to the server
++    // (deliberate: "the server may take several seconds to process the
++    // cancel", per that function's own comment). So both awaits below
++    // typically resolve almost instantly regardless of backend load.
+     await expect(stopBtn).not.toBeVisible({ timeout: 15_000 })
+     await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
+ 
+-    // Allow audit flush (audit writes are synchronous on the gateway path, but
+-    // give a short settling window).
+-    await page.waitForTimeout(2_000)
+-
+-    // Read all audit entries written after we started.
+-    const allEntries = readJsonl<AuditEntry>(auditPath)
+-    const newEntries = allEntries.slice(entriesBefore)
++    // Poll for the audit entries rather than a fixed sleep. The turn_canceled
++    // entry is written from RequestCancel's SetOnCancelFinish callback
++    // (pkg/agent/cancel.go), which only fires once the turn's Finish() runs —
++    // i.e. once the underlying LLM stream actually notices the context
++    // cancellation and unwinds. That is fully decoupled from the client-side
++    // optimistic UI state asserted above, and RequestCancel's own escalation
++    // timers allow up to 3s (graceful → hard abort) + 5s (hard → detached)
++    // before a stuck turn is force-finished — well past a flat 2s buffer,
++    // and worse under concurrent-shard goroutine-scheduling contention. Wait
++    // on the actual condition instead of guessing a constant (anti-pattern:
++    // fixed sleep before an async assert).
++    const auditPollDeadline = Date.now() + 20_000
++    let allEntries: AuditEntry[] = []
++    let newEntries: AuditEntry[] = []
++    let attemptEntryPoll: AuditEntry | undefined
++    let cancelledEntryPoll: AuditEntry | undefined
++    do {
++      allEntries = readJsonl<AuditEntry>(auditPath)
++      newEntries = allEntries.slice(entriesBefore)
++      attemptEntryPoll = newEntries.find(
++        (e) => e.event === 'turn.cancel.attempt' && e.fields?.was_fired === true,
++      )
++      cancelledEntryPoll = newEntries.find((e) => e.event === 'turn.cancelled')
++      if (attemptEntryPoll && cancelledEntryPoll) break
++      await page.waitForTimeout(250)
++    } while (Date.now() < auditPollDeadline)
+ 
+     // Assert: turn_cancel_attempt entry with was_fired: true.
+     // events.go: EventTurnCancelAttempt = "turn.cancel.attempt"; struct tag json:"event"
+     // Audit entries nest their payload under "fields" (pkg/audit/audit.go Emit).
+-    const attemptEntry = newEntries.find(
+-      (e) => e.event === 'turn.cancel.attempt' && e.fields?.was_fired === true,
+-    )
++    const attemptEntry = attemptEntryPoll
+     if (!attemptEntry) {
+       throw new Error(
+-        'INCOMPLETE: audit log does not contain a turn.cancel.attempt entry with was_fired:true. ' +
+-          `New entries found: ${JSON.stringify(newEntries.map((e) => ({ event: e.event, was_fired: e.fields?.was_fired })))}. ` +
++        'INCOMPLETE: audit log does not contain a turn.cancel.attempt entry with was_fired:true ' +
++          `after polling for 20s. New entries found: ${JSON.stringify(newEntries.map((e) => ({ event: e.event, was_fired: e.fields?.was_fired })))}. ` +
+           'Traces to: cancel-cross-channel-spec.md T26, US-5.1, FR-18.',
+       )
+     }
+ 
+     // Assert: turn_canceled entry.
+     // events.go: EventTurnCancelled = "turn.cancelled"; struct tag json:"event"
+-    const cancelledEntry = newEntries.find((e) => e.event === 'turn.cancelled')
++    const cancelledEntry = cancelledEntryPoll
+     if (!cancelledEntry) {
+       throw new Error(
+-        'INCOMPLETE: audit log does not contain a turn.cancelled entry. ' +
++        'INCOMPLETE: audit log does not contain a turn.cancelled entry after polling for 20s. ' +
+           `New entries found: ${JSON.stringify(newEntries.map((e) => ({ event: e.event })))}. ` +
+           'Traces to: cancel-cross-channel-spec.md T26, US-5.2, FR-19.',
+       )

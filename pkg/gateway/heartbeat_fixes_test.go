@@ -465,13 +465,25 @@ func TestWorkspacePUT_EagerSession(t *testing.T) {
 	sess1 := *miaConfig1.Heartbeat.SessionId
 	assert.NotEmpty(t, sess1, "session_id must be non-empty after enable")
 
-	// Verify the session actually exists in the agent store.
-	store := api.agentLoop.GetAgentStore(agentID)
+	// Verify the session actually exists in the SHARED session store (not the
+	// legacy per-agent store — the eager-creation fix targets GetSessionStore
+	// so it lands in the same store pickSession's continue-mode lookup reads
+	// from; see the FIX comment in HandleWorkspaces).
+	store := api.agentLoop.GetSessionStore()
 	require.NotNil(t, store)
 	meta1, err := store.GetMeta(sess1)
-	require.NoError(t, err, "heartbeat session must exist after enable")
+	require.NoError(t, err, "heartbeat session must exist in the shared store after enable")
 	assert.Equal(t, session.SessionTypeHeartbeat, meta1.Type)
 	assert.Equal(t, wsID, meta1.WorkspaceID)
+
+	// It must NOT have been created in the legacy per-agent store — that was
+	// the pre-existing defect (the session created there was invisible to
+	// pickSession's GetOrCreateScheduledSession, which only checks the shared
+	// store, causing a duplicate empty session to be minted on first fire).
+	legacyStore := api.agentLoop.GetAgentStore(agentID)
+	require.NotNil(t, legacyStore)
+	_, legacyErr := legacyStore.GetMeta(sess1)
+	assert.Error(t, legacyErr, "heartbeat session must not exist in the legacy per-agent store")
 
 	// ── PUT 2: enable again → same session_id (idempotent) ── //
 	w2 := httptest.NewRecorder()
@@ -521,12 +533,125 @@ func TestWorkspacePUT_EagerSession(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Regression: WorkspaceHeartbeat_EagerCreation_FirstFireResolvesSameSession
+// ---------------------------------------------------------------------------
+
+// TestWorkspaceHeartbeat_EagerCreation_FirstFireResolvesSameSession is the
+// regression test for the pre-existing store-mismatch defect: eager creation
+// (HandleWorkspaces, enable path) used to call GetAgentStore (the legacy
+// per-agent store) while the heartbeat cron's continue-mode session lookup —
+// pickSession in schedules.go, via GetOrCreateScheduledSession — reads
+// exclusively from GetSessionStore (the shared store). Because the two are
+// different UnifiedStore instances rooted at different directories for the
+// same sessionKey (see loop.go's GetSessionStore/GetAgentStore doc comment),
+// the eagerly-created session was invisible to the first heartbeat fire,
+// which silently minted a second, empty session under the SAME id in the
+// shared store while the original (holding the WorkspaceID stamp) sat
+// orphaned in the per-agent store.
+//
+// This test drives the real eager-creation path (PUT /workspaces/{id} with
+// an enabled heartbeat) and then resolves the session exactly the way
+// pickSession's continue-mode branch does on first fire —
+// GetSessionStore().GetOrCreateScheduledSession(sessionID, agentID), the same
+// method call schedules.go makes — asserting:
+//  1. the resolved session id is IDENTICAL to the eagerly-created one (no
+//     new id minted);
+//  2. the shared store holds exactly ONE session total (no duplicate sitting
+//     alongside it);
+//  3. the resolved session's Type is still SessionTypeHeartbeat, not
+//     re-stamped to SessionTypeScheduled (proving GetOrCreateScheduledSession
+//     found the existing session rather than creating a fresh one); and
+//  4. the WorkspaceID stamped at eager-creation time survives unchanged into
+//     what the fired turn would read via transcriptStore.GetMeta (loop.go's
+//     ProcessScheduled FIX-1 read).
+//
+// It also asserts the legacy per-agent store ends up with ZERO sessions for
+// the agent — the failure mode this regression guards against is a session
+// silently living in the wrong store, not merely an extra one appearing.
+func TestWorkspaceHeartbeat_EagerCreation_FirstFireResolvesSameSession(t *testing.T) {
+	api, cs := buildHeartbeatTestAPI(t)
+	const agentID = "mia"
+
+	wsDir := filepath.Join(api.homePath, "workspaces")
+	require.NoError(t, os.MkdirAll(wsDir, 0o700))
+	wsID := "01JXFIRSTFIRETESTWSID0001"
+	ws := workspace.Workspace{
+		ID: wsID, Name: "First Fire WS", Status: "active",
+		CoreTeam:  []string{agentID},
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+	}
+	wsData, err := json.MarshalIndent(ws, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, wsID+".json"), wsData, 0o600))
+
+	// Step 1: enable heartbeat via the real PUT handler — eager creation.
+	w1 := putMemberConfigs(t, api, wsID,
+		`{"mia":{"heartbeat":{"enabled":true,"interval_minutes":10,"body":"Check tasks."}}}`)
+	require.Equal(t, http.StatusOK, w1.Code, "enable body=%s", w1.Body.String())
+	var resp1 gen.Workspace
+	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &resp1))
+	eagerSessionID := *(*resp1.MemberConfigs)[agentID].Heartbeat.SessionId
+	require.NotEmpty(t, eagerSessionID, "eager creation must assign a session_id")
+
+	// The reconciler must have wired the heartbeat cron job to reference this
+	// exact session id in continue mode — the same wiring heartbeat_schedule.go
+	// uses in production (SessionMode: cron.SessionModeContinue, SessionID: d.sessionID).
+	jobs := heartbeatJobsFor(cs)
+	require.Len(t, jobs, 1, "enable must create exactly one heartbeat cron job")
+	assert.Equal(t, eagerSessionID, jobs[0].SessionID,
+		"heartbeat cron job must carry the eagerly-created session id")
+	assert.Equal(t, cron.SessionModeContinue, jobs[0].SessionMode,
+		"heartbeat jobs always run in continue mode")
+
+	sharedStore := api.agentLoop.GetSessionStore()
+	require.NotNil(t, sharedStore)
+
+	// Step 2: simulate the FIRST heartbeat fire's session resolution —
+	// exactly the call pickSession's continue-mode branch makes
+	// (schedules.go: store.GetOrCreateScheduledSession(id, owner)).
+	resolved, err := sharedStore.GetOrCreateScheduledSession(eagerSessionID, agentID)
+	require.NoError(t, err)
+
+	// 1. No new id minted.
+	assert.Equal(t, eagerSessionID, resolved.ID,
+		"first fire must resolve to the SAME session id, not mint a fresh one")
+
+	// 2. Exactly one session exists in the shared store — no duplicate.
+	allShared, err := sharedStore.ListSessions()
+	require.NoError(t, err)
+	assert.Len(t, allShared, 1,
+		"the shared store must hold exactly one session after the first fire (no duplicate minted)")
+
+	// 3. Type preserved (proves the existing session was found, not recreated).
+	assert.Equal(t, session.SessionTypeHeartbeat, resolved.Type,
+		"first fire must not re-stamp the heartbeat session to scheduled")
+
+	// 4. WorkspaceID stamp survives to what the fired turn would read.
+	assert.Equal(t, wsID, resolved.WorkspaceID,
+		"the eager-creation WorkspaceID stamp must survive to the fired turn's session meta")
+
+	// Nothing was ever created in the legacy per-agent store.
+	legacyStore := api.agentLoop.GetAgentStore(agentID)
+	require.NotNil(t, legacyStore)
+	legacySessions, err := legacyStore.ListSessions()
+	require.NoError(t, err)
+	assert.Empty(t, legacySessions,
+		"no heartbeat session should ever land in the legacy per-agent store post-fix")
+}
+
+// ---------------------------------------------------------------------------
 // T-I1: WorkspaceDelete_Cascade
 // ---------------------------------------------------------------------------
 
 // TestWorkspaceDelete_Cascade verifies that deleting a workspace removes both
 // the heartbeat cron job (existing behavior) AND the standing heartbeat session
-// (HIGH-1 fix: sessions live in per-agent stores, not the workspace dir).
+// (HIGH-1 fix: sessions live in a session store, not the workspace dir). This
+// variant seeds the session directly in the LEGACY per-agent store (bypassing
+// the real eager-creation code path) to prove deleteHeartbeatSessionAnyStore's
+// per-agent fallback branch: a heartbeat session provisioned before the
+// eager-creation fix (which now targets the shared store) must still be
+// found and released by the workspace-delete cascade. The companion test
+// TestWorkspaceDelete_Cascade_SharedStore proves the primary (post-fix) path.
 func TestWorkspaceDelete_Cascade(t *testing.T) {
 	api, cs := buildHeartbeatTestAPI(t)
 	const agentID = "mia"
@@ -593,6 +718,159 @@ func TestWorkspaceDelete_Cascade(t *testing.T) {
 	// Assert: standing session gone (HIGH-1).
 	_, err = store.GetMeta(meta.ID)
 	assert.Error(t, err, "heartbeat session must be deleted by cascade delete (HIGH-1)")
+}
+
+// TestWorkspaceDelete_Cascade_SharedStore is the primary-path sibling of
+// TestWorkspaceDelete_Cascade: it enables the heartbeat through the real PUT
+// handler (so the session is eagerly created in the SHARED store, matching
+// the fixed behavior) and asserts workspace-delete cascade still finds and
+// releases it there — proving deleteHeartbeatSessionAnyStore's shared-store
+// branch, not just its legacy fallback.
+func TestWorkspaceDelete_Cascade_SharedStore(t *testing.T) {
+	api, cs := buildHeartbeatTestAPI(t)
+	const agentID = "mia"
+
+	wsDir := filepath.Join(api.homePath, "workspaces")
+	require.NoError(t, os.MkdirAll(wsDir, 0o700))
+	wsID := "01JXCASCSHAREDTESTWSID001"
+	ws := workspace.Workspace{
+		ID: wsID, Name: "Cascade Shared WS", Status: "active",
+		CoreTeam:  []string{agentID},
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+	}
+	wsData, err := json.MarshalIndent(ws, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, wsID+".json"), wsData, 0o600))
+
+	// Enable heartbeat via the real PUT handler — eager creation lands in the
+	// shared store.
+	w1 := putMemberConfigs(t, api, wsID,
+		`{"mia":{"heartbeat":{"enabled":true,"interval_minutes":10,"body":"Check tasks."}}}`)
+	require.Equal(t, http.StatusOK, w1.Code, "enable body=%s", w1.Body.String())
+	var resp1 gen.Workspace
+	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &resp1))
+	sessID := *(*resp1.MemberConfigs)[agentID].Heartbeat.SessionId
+	require.NotEmpty(t, sessID)
+
+	sharedStore := api.agentLoop.GetSessionStore()
+	require.NotNil(t, sharedStore)
+	_, err = sharedStore.GetMeta(sessID)
+	require.NoError(t, err, "heartbeat session must exist in the shared store before workspace delete")
+
+	require.Len(t, heartbeatJobsFor(cs), 1,
+		"heartbeat cron job must exist before workspace delete (reconciled by the enable PUT)")
+
+	w := deleteWorkspaceViaAPI(t, api, wsID)
+	require.Equal(t, http.StatusNoContent, w.Code, "DELETE workspace must return 204; body=%s", w.Body.String())
+
+	assert.Empty(t, heartbeatJobsFor(cs), "heartbeat cron job must be removed by cascade delete")
+
+	_, err = sharedStore.GetMeta(sessID)
+	assert.Error(t, err, "heartbeat session must be deleted from the shared store by cascade delete")
+}
+
+// TestWorkspaceDelete_Cascade_DualCopy is the FIX 1 regression test: it seeds
+// the SAME session ID in BOTH the legacy per-agent store and the shared
+// session store — the exact population deleteHeartbeatSessionAnyStore's
+// legacy fallback exists to remediate, per its own doc comment, and the
+// scenario neither TestWorkspaceDelete_Cascade (legacy-only) nor
+// TestWorkspaceDelete_Cascade_SharedStore (shared-only) above exercises.
+//
+// This dual-copy state arises in production when an install provisioned a
+// heartbeat session under the OLD code (legacy per-agent store) before the
+// eager-creation fix shipped: the first heartbeat fire's pickSession then
+// calls GetSessionStore().GetOrCreateScheduledSession(id, owner), which does
+// not find the legacy copy (a different UnifiedStore instance) and mints a
+// SECOND, independent session directory under the IDENTICAL id in the shared
+// store instead of reusing the legacy one. From that point the shared copy
+// is the live one the workspace's session_id addresses, but the legacy copy
+// still sits on disk.
+//
+// Before FIX 1, deleteHeartbeatSessionAnyStore tried the shared store first,
+// succeeded, and returned immediately on that single success — leaving the
+// legacy copy permanently orphaned. This test asserts workspace-delete
+// cascade now removes BOTH copies.
+func TestWorkspaceDelete_Cascade_DualCopy(t *testing.T) {
+	api, cs := buildHeartbeatTestAPI(t)
+	const agentID = "mia"
+	const wsID = "01JXDUALCOPYTESTWSID00001"
+
+	// Seed the LEGACY copy first (simulating the OLD eager-creation code
+	// path), capturing the session id it was assigned.
+	legacyMeta := createHeartbeatSessionForAgent(t, api.agentLoop, agentID, wsID)
+
+	// Seed a SECOND, independent copy under the IDENTICAL id in the shared
+	// store — exactly what pickSession's first-fire continue-mode lookup
+	// does in production (schedules.go, GetOrCreateScheduledSession) when it
+	// cannot find the legacy copy under that id.
+	sharedStore := api.agentLoop.GetSessionStore()
+	require.NotNil(t, sharedStore)
+	sharedMeta, err := sharedStore.GetOrCreateScheduledSession(legacyMeta.ID, agentID)
+	require.NoError(t, err)
+	require.Equal(t, legacyMeta.ID, sharedMeta.ID,
+		"the dual-copy setup requires an identical session id in both stores")
+
+	// Seed the workspace on disk with the heartbeat pointing at that shared
+	// (now-live) id — same id the legacy copy also uses.
+	wsDir := filepath.Join(api.homePath, "workspaces")
+	require.NoError(t, os.MkdirAll(wsDir, 0o700))
+	ws := workspace.Workspace{
+		ID: wsID, Name: "Dual Copy WS", Status: "active",
+		CoreTeam: []string{agentID},
+		MemberConfigs: map[string]workspace.MemberConfig{
+			agentID: {Heartbeat: &workspace.MemberHeartbeat{
+				Enabled:         true,
+				IntervalMinutes: 10,
+				Body:            "Check.",
+				SessionID:       legacyMeta.ID,
+			}},
+		},
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+	}
+	wsData, err := json.MarshalIndent(ws, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, wsID+".json"), wsData, 0o600))
+
+	// Seed the cron job too, keeping this test structurally aligned with its
+	// two siblings above (not itself under test here).
+	everyMS := int64(10) * 60_000
+	enabled := true
+	cronJobName := heartbeatJobName(wsID, agentID)
+	_, err = cs.AddJobFull(cron.JobSpec{
+		Name:      cronJobName,
+		Schedule:  cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
+		Message:   "Check.",
+		AgentID:   agentID,
+		SessionID: legacyMeta.ID,
+		Enabled:   &enabled,
+	})
+	require.NoError(t, err, "seed heartbeat cron job")
+	for _, j := range cs.ListJobs(true) {
+		if j.Name == cronJobName {
+			j.Payload.Kind = heartbeatJobKind
+			require.NoError(t, cs.UpdateJob(&j))
+		}
+	}
+
+	// Verify setup: BOTH copies exist before delete.
+	legacyStore := api.agentLoop.GetAgentStore(agentID)
+	require.NotNil(t, legacyStore)
+	_, err = legacyStore.GetMeta(legacyMeta.ID)
+	require.NoError(t, err, "legacy copy must exist before workspace delete")
+	_, err = sharedStore.GetMeta(legacyMeta.ID)
+	require.NoError(t, err, "shared copy must exist before workspace delete")
+
+	// DELETE /api/v1/workspaces/{wsID}
+	w := deleteWorkspaceViaAPI(t, api, wsID)
+	require.Equal(t, http.StatusNoContent, w.Code, "DELETE workspace must return 204; body=%s", w.Body.String())
+
+	// FIX 1: BOTH copies must be gone — not just the shared one.
+	_, sharedErrAfter := sharedStore.GetMeta(legacyMeta.ID)
+	assert.Error(t, sharedErrAfter, "shared copy must be deleted by cascade delete")
+	_, legacyErrAfter := legacyStore.GetMeta(legacyMeta.ID)
+	assert.Error(t, legacyErrAfter,
+		"FIX 1: legacy copy must ALSO be deleted by cascade delete — the pre-fix short-circuit "+
+			"returned as soon as the shared copy succeeded and left this one orphaned forever")
 }
 
 // ---------------------------------------------------------------------------
@@ -799,8 +1077,9 @@ func TestWorkspacePUT_DisableReleasesSession(t *testing.T) {
 	sess1 := *miaConfig1.Heartbeat.SessionId
 	require.NotEmpty(t, sess1, "session_id must be set after enable")
 
-	// Verify the session exists.
-	store := api.agentLoop.GetAgentStore(agentID)
+	// Verify the session exists — in the SHARED store (eager creation targets
+	// GetSessionStore(), see the FIX comment in HandleWorkspaces).
+	store := api.agentLoop.GetSessionStore()
 	require.NotNil(t, store)
 	_, err = store.GetMeta(sess1)
 	require.NoError(t, err, "heartbeat session must exist after enable")

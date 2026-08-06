@@ -44,10 +44,35 @@ type fakeRelay struct {
 	// packet counts frozen across ticks — zero value matches every existing
 	// caller's prior "always webrtc.Stats{}" expectation).
 	stats webrtc.Stats
+	// viewerOfferErr, when set, is returned by HandleViewerOffer instead of a
+	// success answer — 2026-07-28 incident coverage (ingest-timeout
+	// classification, TestHandleWebRTCOffer_ViewerOfferFailed_*): lets tests
+	// exercise the offerErr branch of handleWebRTCOffer with a controlled
+	// error (e.g. one wrapping webrtc.ErrNoIngestVideoTrack) without waiting
+	// out a real waitForTracksTimeout. nil (the zero value) preserves every
+	// existing caller's "always succeeds" expectation.
+	viewerOfferErr error
+	// viewerOfferBlock, when non-nil, makes HandleViewerOffer wait on it
+	// before returning (FIX WAVE A finding 1 coverage): simulates a slow
+	// negotiation — the real relay's waitForTracks can legitimately wait up
+	// to waitForTracksTimeout — so a test can prove readLoop's own goroutine
+	// is NOT blocked by it. nil (the zero value) preserves every existing
+	// caller's "returns immediately" expectation.
+	viewerOfferBlock chan struct{}
 }
 
 func (f *fakeRelay) HandleIngestOffer(sdp string) (string, error) { return "ingest-answer", nil }
 func (f *fakeRelay) HandleViewerOffer(viewerID, sdp string) (string, error) {
+	f.mu.Lock()
+	err := f.viewerOfferErr
+	block := f.viewerOfferBlock
+	f.mu.Unlock()
+	if block != nil {
+		<-block
+	}
+	if err != nil {
+		return "", err
+	}
 	return "viewer-answer-" + viewerID, nil
 }
 
@@ -164,7 +189,7 @@ func TestHandleWebRTCOffer_GateLadder_DisabledByConfig(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "webrtc_enabled=false must report available=false")
@@ -178,7 +203,7 @@ func TestHandleWebRTCOffer_GateLadder_InvalidFrame(t *testing.T) {
 
 	wc := newTestBrowserWSConn()
 	var state browserConnState
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", []byte("not json"), al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", []byte("not json"), al.GetConfig(), 0)
 
 	raw := drainOneFrame(t, wc)
 	var f struct {
@@ -204,7 +229,7 @@ func TestHandleWebRTCOffer_GateLadder_MissingFields(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
 
 	raw := drainOneFrame(t, wc)
 	var f struct {
@@ -233,7 +258,7 @@ func TestHandleWebRTCOffer_GateLadder_UnknownAgent(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
 
 	raw := drainOneFrame(t, wc)
 	var f struct {
@@ -286,7 +311,7 @@ func TestHandleWebRTCOffer_GateLadder_NotCapable(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available)
@@ -372,7 +397,7 @@ func TestHandleWebRTCOffer_CapableButLaunchFails(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "a launch failure must degrade to available=false, never break the JPEG fallback")
@@ -386,17 +411,26 @@ func TestHandleWebRTCOffer_DetachClearsViewerState(t *testing.T) {
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
 
-	// Fabricate a webrtc-attached state (as if handleWebRTCOffer had
-	// succeeded) using a fake CaptureSession, and verify detachWebRTCViewer
-	// tears it down cleanly — this is the readLoop defer / browser_detach
-	// cleanup path (browser_ws.go), tested here without a live relay.
+	// Fabricate a webrtc-attached state as if handleWebRTCOffer had ACTUALLY
+	// succeeded — i.e. via AddViewer + HandleViewerOffer, exactly like
+	// handleWebRTCOffer's own call sequence, so the resulting
+	// *browser.ViewerAttachHandle is real and detachWebRTCViewer's
+	// identity-checked CleanupViewerOffer(att.handle) has something genuine
+	// to act on (fix-wave GAP 1: detachWebRTCViewer no longer tears down via
+	// the bare, viewerID-only Relay().CloseViewer/RemoveViewer pair — see its
+	// doc comment) — and verify detachWebRTCViewer still tears a normal
+	// (non-superseded) attachment down cleanly — this is the readLoop defer /
+	// browser_detach cleanup path (browser_ws.go), tested here without a live
+	// relay.
 	var calls int32
 	relay := &fakeRelay{}
 	cs, err := browser.NewCaptureSessionWithDeps(nil, defaultAgent.ID, relay, fakeEncoderStarter(&calls, nil), nil)
 	require.NoError(t, err)
-	cs.AddViewer("viewer-1")
+	gen := cs.AddViewer("viewer-1")
+	_, handle, err := cs.HandleViewerOffer("viewer-1", "offer-sdp", gen)
+	require.NoError(t, err)
 
-	state := browserConnState{webrtc: &webrtcAttachment{agentID: defaultAgent.ID, capture: cs}}
+	state := browserConnState{webrtc: &webrtcAttachment{agentID: defaultAgent.ID, capture: cs, handle: handle}}
 	handler.detachWebRTCViewer(&state, "viewer-1")
 
 	require.Nil(t, state.webrtc)
@@ -405,6 +439,68 @@ func TestHandleWebRTCOffer_DetachClearsViewerState(t *testing.T) {
 	closed := append([]string(nil), relay.closedViewers...)
 	relay.mu.Unlock()
 	require.Equal(t, []string{"viewer-1"}, closed)
+}
+
+// TestHandleWebRTCOffer_DetachOfStaleAttachmentDoesNotClobberNewerOfferSameViewerID
+// is GAP 1's OTHER direction: detachWebRTCViewer must not undo a NEWER,
+// still-live registration for the same viewerID when the thing it is
+// actually tearing down (state.webrtc) is an OLDER, already-superseded
+// attachment. This reproduces the traced race directly: offer A commits (its
+// *ViewerAttachHandle lands in state.webrtc); a second offer B for the SAME
+// viewerID (e.g. an ICE-restart reconnect) then registers its own,
+// independent AddViewer generation + relay connection — but has NOT yet
+// itself committed into state.webrtc (commitWebRTCAttachment/webrtcEpoch only
+// guard the single-slot state.webrtc field, not CaptureSession.viewers or the
+// relay's own registry — see detachWebRTCViewer's doc comment). A detach or
+// connection-close then arrives and pulls out A (the still-committed
+// attachment) via takeWebRTCAttachment.
+//
+// Before the GAP 1 fix, detachWebRTCViewer called
+// att.capture.RemoveViewer(viewerID) — UNCONDITIONAL, viewerID-only — which
+// would have deleted B's CaptureSession-level registration too (ViewerCount
+// dropping to 0 while B is still live). CleanupViewerOffer(att.handle) is
+// gen-checked (RemoveViewerIfCurrent) and must leave B's registration
+// completely untouched.
+func TestHandleWebRTCOffer_DetachOfStaleAttachmentDoesNotClobberNewerOfferSameViewerID(t *testing.T) {
+	handler, al := newBrowserWSTestHandler(t, nil)
+	t.Cleanup(handler.Wait)
+
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, defaultAgent)
+
+	const viewerID = "viewer-reconnect-race"
+	var calls int32
+	relay := &fakeRelay{}
+	cs, err := browser.NewCaptureSessionWithDeps(nil, defaultAgent.ID, relay, fakeEncoderStarter(&calls, nil), nil)
+	require.NoError(t, err)
+
+	// Offer A: dispatched first, committed into state.webrtc (the ONLY thing
+	// this connection currently believes is its live WebRTC attachment).
+	genA := cs.AddViewer(viewerID)
+	_, handleA, err := cs.HandleViewerOffer(viewerID, "offer-sdp-a", genA)
+	require.NoError(t, err)
+	state := browserConnState{webrtc: &webrtcAttachment{agentID: defaultAgent.ID, capture: cs, handle: handleA}}
+
+	// Offer B: a SEPARATE, later offer for the SAME viewerID that has ALSO
+	// registered successfully (superseding A's generation in
+	// CaptureSession.viewers) but has NOT itself committed into state.webrtc
+	// yet — modeling the exact window handleWebRTCOffer's own goroutine
+	// occupies between HandleViewerOffer returning and commitWebRTCAttachment
+	// running.
+	genB := cs.AddViewer(viewerID)
+	require.NotEqual(t, genA, genB, "setup: AddViewer must mint a distinct generation per call")
+	_, _, err = cs.HandleViewerOffer(viewerID, "offer-sdp-b", genB)
+	require.NoError(t, err)
+	require.Equal(t, 1, cs.ViewerCount(), "setup: B's registration must be live before the detach races in")
+
+	// A detach (or the connection closing) arrives, targeting the connection's
+	// SINGLE committed attachment — which is still A, since B hasn't
+	// committed.
+	handler.detachWebRTCViewer(&state, viewerID)
+
+	require.Nil(t, state.webrtc, "detach must always clear the connection's committed attachment slot")
+	require.Equal(t, 1, cs.ViewerCount(),
+		"A's stale cleanup must not clobber B's newer, still-live registration for the same viewerID")
 }
 
 // ---------------------------------------------------------------------------
@@ -463,6 +559,35 @@ func TestBrowserInputFrameToLiveInput_TableParity(t *testing.T) {
 			name:  "explicit 0,0 coordinates ARE HasXY=true (distinguishable from omitted)",
 			frame: generated.BrowserInputFrame{Kind: "mouse_move", X: f64(0), Y: f64(0)},
 			want:  browser.LiveInput{Kind: "mouse_move", X: 0, Y: 0, HasXY: true},
+		},
+		{
+			// Root-cause doc Fault 3
+			// (docs/internal/browser-viewport-input-rootcause-2026-07-31.md):
+			// capture_width/capture_height carry the intrinsic pixel size of
+			// the capture frame the client mapped x/y into, so
+			// dispatchInput can rescale into the tab's real CSS viewport.
+			name: "mouse_move with capture_width/capture_height set",
+			frame: generated.BrowserInputFrame{
+				Kind: "mouse_move", X: f64(100), Y: f64(79),
+				CaptureWidth: f64(319), CaptureHeight: f64(158),
+			},
+			want: browser.LiveInput{
+				Kind: "mouse_move", X: 100, Y: 79, HasXY: true,
+				CaptureWidth: 319, CaptureHeight: 158,
+			},
+		},
+		{
+			// Omitted capture_width/capture_height (older client, or a
+			// server that never populated them) must convert to the zero
+			// value, not some sentinel — dispatchInput's rescale gate
+			// (CaptureWidth > 0 && CaptureHeight > 0) relies on exactly
+			// this to mean "dispatch unscaled".
+			name:  "mouse_down with capture_width/capture_height omitted",
+			frame: generated.BrowserInputFrame{Kind: "mouse_down", X: f64(5), Y: f64(6), Button: str("left")},
+			want: browser.LiveInput{
+				Kind: "mouse_down", X: 5, Y: 6, HasXY: true, Button: "left",
+				CaptureWidth: 0, CaptureHeight: 0,
+			},
 		},
 	}
 
@@ -811,7 +936,7 @@ func TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "an actively-viewed conflicting capture must deny the offer")
@@ -892,14 +1017,22 @@ func TestHandleWebRTCOffer_OtherAgentViewerlessCapture_Superseded(t *testing.T) 
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
 
-	select {
-	case <-otherCS.Done():
-		// superseded — the fence stopped the viewerless leftover and moved on.
-	default:
-		t.Fatal("a viewerless conflicting capture must be superseded (stopped), not left to deny the offer")
-	}
+	// FIX WAVE A finding 3: otherCS.Stop() now runs off h.captureFenceMu
+	// (fired via `go otherCS.Stop()` so one agent's teardown can't block a
+	// DIFFERENT agent's fence acquisition) — so the supersede is no longer
+	// guaranteed to have completed the INSTANT handleWebRTCOffer returns.
+	// Poll instead of a bare non-blocking select.
+	require.Eventually(t, func() bool {
+		select {
+		case <-otherCS.Done():
+			return true
+		default:
+			return false
+		}
+	}, 2*time.Second, 5*time.Millisecond,
+		"a viewerless conflicting capture must be superseded (stopped), not left to deny the offer")
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "this chrome-less harness must then fail at launch (the fence itself passed)")
 	require.Equal(t, "error", got.Reason)

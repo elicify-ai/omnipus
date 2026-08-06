@@ -18,6 +18,7 @@ import { Route as AppAgentsRouteImport } from './routes/_app/agents'
 import { Route as AppAutomationsRouteImport } from './routes/_app/automations'
 import { Route as AppBrowserLiveRouteImport } from './routes/_app/browser-live'
 import { Route as AppConnectorsRouteImport } from './routes/_app/connectors'
+import { Route as AppLibraryRouteImport } from './routes/_app/library'
 import { Route as AppPoliciesRouteImport } from './routes/_app/policies'
 import { Route as AppProfileRouteImport } from './routes/_app/profile'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
@@ -35,6 +36,7 @@ import { Route as AppWorkspacesWorkspaceIdCalendarRouteImport } from './routes/_
 import { Route as AppWorkspacesWorkspaceIdChatRouteImport } from './routes/_app/workspaces.$workspaceId.chat'
 import { Route as AppWorkspacesWorkspaceIdGraphRouteImport } from './routes/_app/workspaces.$workspaceId.graph'
 import { Route as AppWorkspacesWorkspaceIdListRouteImport } from './routes/_app/workspaces.$workspaceId.list'
+import { Route as AppWorkspacesWorkspaceIdMediaRouteImport } from './routes/_app/workspaces.$workspaceId.media'
 import { Route as AppWorkspacesWorkspaceIdSettingsRouteImport } from './routes/_app/workspaces.$workspaceId.settings'
 import { Route as AppWorkspacesWorkspaceIdTeamRouteImport } from './routes/_app/workspaces.$workspaceId.team'
 
@@ -80,6 +82,11 @@ const AppBrowserLiveRoute = AppBrowserLiveRouteImport.update({
 const AppConnectorsRoute = AppConnectorsRouteImport.update({
   id: '/connectors',
   path: '/connectors',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppLibraryRoute = AppLibraryRouteImport.update({
+  id: '/library',
+  path: '/library',
   getParentRoute: () => AppRoute,
 } as any)
 const AppPoliciesRoute = AppPoliciesRouteImport.update({
@@ -174,6 +181,12 @@ const AppWorkspacesWorkspaceIdListRoute =
     path: '/list',
     getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
   } as any)
+const AppWorkspacesWorkspaceIdMediaRoute =
+  AppWorkspacesWorkspaceIdMediaRouteImport.update({
+    id: '/media',
+    path: '/media',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
 const AppWorkspacesWorkspaceIdSettingsRoute =
   AppWorkspacesWorkspaceIdSettingsRouteImport.update({
     id: '/settings',
@@ -196,6 +209,7 @@ export interface FileRoutesByFullPath {
   '/automations': typeof AppAutomationsRoute
   '/browser-live': typeof AppBrowserLiveRoute
   '/connectors': typeof AppConnectorsRoute
+  '/library': typeof AppLibraryRoute
   '/policies': typeof AppPoliciesRoute
   '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
@@ -212,6 +226,7 @@ export interface FileRoutesByFullPath {
   '/workspaces/$workspaceId/chat': typeof AppWorkspacesWorkspaceIdChatRoute
   '/workspaces/$workspaceId/graph': typeof AppWorkspacesWorkspaceIdGraphRoute
   '/workspaces/$workspaceId/list': typeof AppWorkspacesWorkspaceIdListRoute
+  '/workspaces/$workspaceId/media': typeof AppWorkspacesWorkspaceIdMediaRoute
   '/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
   '/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
   '/workspaces/$workspaceId/': typeof AppWorkspacesWorkspaceIdIndexRoute
@@ -223,6 +238,7 @@ export interface FileRoutesByTo {
   '/automations': typeof AppAutomationsRoute
   '/browser-live': typeof AppBrowserLiveRoute
   '/connectors': typeof AppConnectorsRoute
+  '/library': typeof AppLibraryRoute
   '/policies': typeof AppPoliciesRoute
   '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
@@ -239,6 +255,7 @@ export interface FileRoutesByTo {
   '/workspaces/$workspaceId/chat': typeof AppWorkspacesWorkspaceIdChatRoute
   '/workspaces/$workspaceId/graph': typeof AppWorkspacesWorkspaceIdGraphRoute
   '/workspaces/$workspaceId/list': typeof AppWorkspacesWorkspaceIdListRoute
+  '/workspaces/$workspaceId/media': typeof AppWorkspacesWorkspaceIdMediaRoute
   '/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
   '/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
   '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdIndexRoute
@@ -253,6 +270,7 @@ export interface FileRoutesById {
   '/_app/automations': typeof AppAutomationsRoute
   '/_app/browser-live': typeof AppBrowserLiveRoute
   '/_app/connectors': typeof AppConnectorsRoute
+  '/_app/library': typeof AppLibraryRoute
   '/_app/policies': typeof AppPoliciesRoute
   '/_app/profile': typeof AppProfileRoute
   '/_app/settings': typeof AppSettingsRoute
@@ -270,6 +288,7 @@ export interface FileRoutesById {
   '/_app/workspaces/$workspaceId/chat': typeof AppWorkspacesWorkspaceIdChatRoute
   '/_app/workspaces/$workspaceId/graph': typeof AppWorkspacesWorkspaceIdGraphRoute
   '/_app/workspaces/$workspaceId/list': typeof AppWorkspacesWorkspaceIdListRoute
+  '/_app/workspaces/$workspaceId/media': typeof AppWorkspacesWorkspaceIdMediaRoute
   '/_app/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
   '/_app/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
   '/_app/workspaces/$workspaceId/': typeof AppWorkspacesWorkspaceIdIndexRoute
@@ -285,6 +304,7 @@ export interface FileRouteTypes {
     | '/automations'
     | '/browser-live'
     | '/connectors'
+    | '/library'
     | '/policies'
     | '/profile'
     | '/settings'
@@ -301,6 +321,7 @@ export interface FileRouteTypes {
     | '/workspaces/$workspaceId/chat'
     | '/workspaces/$workspaceId/graph'
     | '/workspaces/$workspaceId/list'
+    | '/workspaces/$workspaceId/media'
     | '/workspaces/$workspaceId/settings'
     | '/workspaces/$workspaceId/team'
     | '/workspaces/$workspaceId/'
@@ -312,6 +333,7 @@ export interface FileRouteTypes {
     | '/automations'
     | '/browser-live'
     | '/connectors'
+    | '/library'
     | '/policies'
     | '/profile'
     | '/settings'
@@ -328,6 +350,7 @@ export interface FileRouteTypes {
     | '/workspaces/$workspaceId/chat'
     | '/workspaces/$workspaceId/graph'
     | '/workspaces/$workspaceId/list'
+    | '/workspaces/$workspaceId/media'
     | '/workspaces/$workspaceId/settings'
     | '/workspaces/$workspaceId/team'
     | '/workspaces/$workspaceId'
@@ -341,6 +364,7 @@ export interface FileRouteTypes {
     | '/_app/automations'
     | '/_app/browser-live'
     | '/_app/connectors'
+    | '/_app/library'
     | '/_app/policies'
     | '/_app/profile'
     | '/_app/settings'
@@ -358,6 +382,7 @@ export interface FileRouteTypes {
     | '/_app/workspaces/$workspaceId/chat'
     | '/_app/workspaces/$workspaceId/graph'
     | '/_app/workspaces/$workspaceId/list'
+    | '/_app/workspaces/$workspaceId/media'
     | '/_app/workspaces/$workspaceId/settings'
     | '/_app/workspaces/$workspaceId/team'
     | '/_app/workspaces/$workspaceId/'
@@ -433,6 +458,13 @@ declare module '@tanstack/react-router' {
       path: '/connectors'
       fullPath: '/connectors'
       preLoaderRoute: typeof AppConnectorsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/library': {
+      id: '/_app/library'
+      path: '/library'
+      fullPath: '/library'
+      preLoaderRoute: typeof AppLibraryRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/policies': {
@@ -554,6 +586,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWorkspacesWorkspaceIdListRouteImport
       parentRoute: typeof AppWorkspacesWorkspaceIdRoute
     }
+    '/_app/workspaces/$workspaceId/media': {
+      id: '/_app/workspaces/$workspaceId/media'
+      path: '/media'
+      fullPath: '/workspaces/$workspaceId/media'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdMediaRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
     '/_app/workspaces/$workspaceId/settings': {
       id: '/_app/workspaces/$workspaceId/settings'
       path: '/settings'
@@ -591,6 +630,7 @@ interface AppWorkspacesWorkspaceIdRouteChildren {
   AppWorkspacesWorkspaceIdChatRoute: typeof AppWorkspacesWorkspaceIdChatRoute
   AppWorkspacesWorkspaceIdGraphRoute: typeof AppWorkspacesWorkspaceIdGraphRoute
   AppWorkspacesWorkspaceIdListRoute: typeof AppWorkspacesWorkspaceIdListRoute
+  AppWorkspacesWorkspaceIdMediaRoute: typeof AppWorkspacesWorkspaceIdMediaRoute
   AppWorkspacesWorkspaceIdSettingsRoute: typeof AppWorkspacesWorkspaceIdSettingsRoute
   AppWorkspacesWorkspaceIdTeamRoute: typeof AppWorkspacesWorkspaceIdTeamRoute
   AppWorkspacesWorkspaceIdIndexRoute: typeof AppWorkspacesWorkspaceIdIndexRoute
@@ -604,6 +644,7 @@ const AppWorkspacesWorkspaceIdRouteChildren: AppWorkspacesWorkspaceIdRouteChildr
     AppWorkspacesWorkspaceIdChatRoute: AppWorkspacesWorkspaceIdChatRoute,
     AppWorkspacesWorkspaceIdGraphRoute: AppWorkspacesWorkspaceIdGraphRoute,
     AppWorkspacesWorkspaceIdListRoute: AppWorkspacesWorkspaceIdListRoute,
+    AppWorkspacesWorkspaceIdMediaRoute: AppWorkspacesWorkspaceIdMediaRoute,
     AppWorkspacesWorkspaceIdSettingsRoute:
       AppWorkspacesWorkspaceIdSettingsRoute,
     AppWorkspacesWorkspaceIdTeamRoute: AppWorkspacesWorkspaceIdTeamRoute,
@@ -620,6 +661,7 @@ interface AppRouteChildren {
   AppAutomationsRoute: typeof AppAutomationsRoute
   AppBrowserLiveRoute: typeof AppBrowserLiveRoute
   AppConnectorsRoute: typeof AppConnectorsRoute
+  AppLibraryRoute: typeof AppLibraryRoute
   AppPoliciesRoute: typeof AppPoliciesRoute
   AppProfileRoute: typeof AppProfileRoute
   AppSettingsRoute: typeof AppSettingsRoute
@@ -637,6 +679,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAutomationsRoute: AppAutomationsRoute,
   AppBrowserLiveRoute: AppBrowserLiveRoute,
   AppConnectorsRoute: AppConnectorsRoute,
+  AppLibraryRoute: AppLibraryRoute,
   AppPoliciesRoute: AppPoliciesRoute,
   AppProfileRoute: AppProfileRoute,
   AppSettingsRoute: AppSettingsRoute,

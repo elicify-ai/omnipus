@@ -1673,6 +1673,42 @@ func (e McpServerCreateTransport) Valid() bool {
 	}
 }
 
+// Defines values for MediaLibraryEntrySource.
+const (
+	ToolOutput MediaLibraryEntrySource = "tool_output"
+	UserUpload MediaLibraryEntrySource = "user_upload"
+)
+
+// Valid indicates whether the value is a known member of the MediaLibraryEntrySource enum.
+func (e MediaLibraryEntrySource) Valid() bool {
+	switch e {
+	case ToolOutput:
+		return true
+	case UserUpload:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MediaLibraryEntryStatus.
+const (
+	Available MediaLibraryEntryStatus = "available"
+	Stranded  MediaLibraryEntryStatus = "stranded"
+)
+
+// Valid indicates whether the value is a known member of the MediaLibraryEntryStatus enum.
+func (e MediaLibraryEntryStatus) Valid() bool {
+	switch e {
+	case Available:
+		return true
+	case Stranded:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageAttachmentsType.
 const (
 	MessageAttachmentsTypeAudio MessageAttachmentsType = "audio"
@@ -1985,6 +2021,33 @@ const (
 func (e MessageParentQuestionKind) Valid() bool {
 	switch e {
 	case MessageParentQuestionKindQuestion:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelCapabilitiesModalities.
+const (
+	ModelCapabilitiesModalitiesAudio ModelCapabilitiesModalities = "audio"
+	ModelCapabilitiesModalitiesImage ModelCapabilitiesModalities = "image"
+	ModelCapabilitiesModalitiesPdf   ModelCapabilitiesModalities = "pdf"
+	ModelCapabilitiesModalitiesText  ModelCapabilitiesModalities = "text"
+	ModelCapabilitiesModalitiesVideo ModelCapabilitiesModalities = "video"
+)
+
+// Valid indicates whether the value is a known member of the ModelCapabilitiesModalities enum.
+func (e ModelCapabilitiesModalities) Valid() bool {
+	switch e {
+	case ModelCapabilitiesModalitiesAudio:
+		return true
+	case ModelCapabilitiesModalitiesImage:
+		return true
+	case ModelCapabilitiesModalitiesPdf:
+		return true
+	case ModelCapabilitiesModalitiesText:
+		return true
+	case ModelCapabilitiesModalitiesVideo:
 		return true
 	default:
 		return false
@@ -3586,22 +3649,22 @@ func (e SessionCreateRequestType) Valid() bool {
 
 // Defines values for SessionDetailMessagesAttachmentsType.
 const (
-	Audio SessionDetailMessagesAttachmentsType = "audio"
-	File  SessionDetailMessagesAttachmentsType = "file"
-	Image SessionDetailMessagesAttachmentsType = "image"
-	Video SessionDetailMessagesAttachmentsType = "video"
+	SessionDetailMessagesAttachmentsTypeAudio SessionDetailMessagesAttachmentsType = "audio"
+	SessionDetailMessagesAttachmentsTypeFile  SessionDetailMessagesAttachmentsType = "file"
+	SessionDetailMessagesAttachmentsTypeImage SessionDetailMessagesAttachmentsType = "image"
+	SessionDetailMessagesAttachmentsTypeVideo SessionDetailMessagesAttachmentsType = "video"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesAttachmentsType enum.
 func (e SessionDetailMessagesAttachmentsType) Valid() bool {
 	switch e {
-	case Audio:
+	case SessionDetailMessagesAttachmentsTypeAudio:
 		return true
-	case File:
+	case SessionDetailMessagesAttachmentsTypeFile:
 		return true
-	case Image:
+	case SessionDetailMessagesAttachmentsTypeImage:
 		return true
-	case Video:
+	case SessionDetailMessagesAttachmentsTypeVideo:
 		return true
 	default:
 		return false
@@ -4922,6 +4985,72 @@ func (e TaskCreateRequestTriggerType) Valid() bool {
 	}
 }
 
+// Defines values for TaskOccurrenceSetOccurrenceRunsStatus.
+const (
+	TaskOccurrenceSetOccurrenceRunsStatusDone       TaskOccurrenceSetOccurrenceRunsStatus = "done"
+	TaskOccurrenceSetOccurrenceRunsStatusFailed     TaskOccurrenceSetOccurrenceRunsStatus = "failed"
+	TaskOccurrenceSetOccurrenceRunsStatusInProgress TaskOccurrenceSetOccurrenceRunsStatus = "in_progress"
+	TaskOccurrenceSetOccurrenceRunsStatusSkipped    TaskOccurrenceSetOccurrenceRunsStatus = "skipped"
+)
+
+// Valid indicates whether the value is a known member of the TaskOccurrenceSetOccurrenceRunsStatus enum.
+func (e TaskOccurrenceSetOccurrenceRunsStatus) Valid() bool {
+	switch e {
+	case TaskOccurrenceSetOccurrenceRunsStatusDone:
+		return true
+	case TaskOccurrenceSetOccurrenceRunsStatusFailed:
+		return true
+	case TaskOccurrenceSetOccurrenceRunsStatusInProgress:
+		return true
+	case TaskOccurrenceSetOccurrenceRunsStatusSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskRunKind.
+const (
+	TaskRunKindManual    TaskRunKind = "manual"
+	TaskRunKindScheduled TaskRunKind = "scheduled"
+)
+
+// Valid indicates whether the value is a known member of the TaskRunKind enum.
+func (e TaskRunKind) Valid() bool {
+	switch e {
+	case TaskRunKindManual:
+		return true
+	case TaskRunKindScheduled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskRunStatus.
+const (
+	TaskRunStatusDone       TaskRunStatus = "done"
+	TaskRunStatusFailed     TaskRunStatus = "failed"
+	TaskRunStatusInProgress TaskRunStatus = "in_progress"
+	TaskRunStatusSkipped    TaskRunStatus = "skipped"
+)
+
+// Valid indicates whether the value is a known member of the TaskRunStatus enum.
+func (e TaskRunStatus) Valid() bool {
+	switch e {
+	case TaskRunStatusDone:
+		return true
+	case TaskRunStatusFailed:
+		return true
+	case TaskRunStatusInProgress:
+		return true
+	case TaskRunStatusSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskUpdateRequestCriteriaAuthorKind.
 const (
 	TaskUpdateRequestCriteriaAuthorKindAgent TaskUpdateRequestCriteriaAuthorKind = "agent"
@@ -5071,22 +5200,22 @@ func (e TaskUpdateRequestTodosStatus) Valid() bool {
 
 // Defines values for TaskUpdateRequestTriggerType.
 const (
-	Every     TaskUpdateRequestTriggerType = "every"
-	Manual    TaskUpdateRequestTriggerType = "manual"
-	Once      TaskUpdateRequestTriggerType = "once"
-	Recurring TaskUpdateRequestTriggerType = "recurring"
+	TaskUpdateRequestTriggerTypeEvery     TaskUpdateRequestTriggerType = "every"
+	TaskUpdateRequestTriggerTypeManual    TaskUpdateRequestTriggerType = "manual"
+	TaskUpdateRequestTriggerTypeOnce      TaskUpdateRequestTriggerType = "once"
+	TaskUpdateRequestTriggerTypeRecurring TaskUpdateRequestTriggerType = "recurring"
 )
 
 // Valid indicates whether the value is a known member of the TaskUpdateRequestTriggerType enum.
 func (e TaskUpdateRequestTriggerType) Valid() bool {
 	switch e {
-	case Every:
+	case TaskUpdateRequestTriggerTypeEvery:
 		return true
-	case Manual:
+	case TaskUpdateRequestTriggerTypeManual:
 		return true
-	case Once:
+	case TaskUpdateRequestTriggerTypeOnce:
 		return true
-	case Recurring:
+	case TaskUpdateRequestTriggerTypeRecurring:
 		return true
 	default:
 		return false
@@ -6584,6 +6713,9 @@ type AttachmentType string
 
 // AuditEntry A single audit log record from the JSONL audit log file (~/.omnipus/system/audit.jsonl). Matches the Go pkg/audit.Entry struct.
 type AuditEntry struct {
+	// Actor Authenticated username that performed the change. Present on security_setting_change records (see pkg/audit.SecurityChangeRecord); may be absent for other event types.
+	Actor *string `json:"actor,omitempty"`
+
 	// AgentId ID of the agent that triggered the event. May be absent.
 	AgentId *string `json:"agent_id,omitempty"`
 
@@ -6599,11 +6731,20 @@ type AuditEntry struct {
 	// Event Event type identifier. Well-known values: tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown. Custom values are permitted for extensibility — must match ^[a-z_]+$ (lowercase letters and underscores only).
 	Event string `json:"event"`
 
+	// NewValue The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
+	NewValue *map[string]interface{} `json:"new_value,omitempty"`
+
+	// OldValue The config value before the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
+	OldValue *map[string]interface{} `json:"old_value,omitempty"`
+
 	// Parameters Tool call parameters or other event-specific key-value pairs.
 	Parameters *map[string]interface{} `json:"parameters,omitempty"`
 
 	// PolicyRule Policy rule that produced this decision. May be absent.
 	PolicyRule *string `json:"policy_rule,omitempty"`
+
+	// Resource Dotted identifier of the config key that was mutated. Present on security_setting_change records, e.g. "gateway.god_mode". May be absent for other event types.
+	Resource *string `json:"resource,omitempty"`
 
 	// SessionId Session ID associated with the event. May be absent.
 	SessionId *string `json:"session_id,omitempty"`
@@ -6631,6 +6772,9 @@ type AuditLogResponse struct {
 
 	// Entries Recent audit entries, reverse-chronological, max 100.
 	Entries []struct {
+		// Actor Authenticated username that performed the change. Present on security_setting_change records (see pkg/audit.SecurityChangeRecord); may be absent for other event types.
+		Actor *string `json:"actor,omitempty"`
+
 		// AgentId ID of the agent that triggered the event. May be absent.
 		AgentId *string `json:"agent_id,omitempty"`
 
@@ -6646,11 +6790,20 @@ type AuditLogResponse struct {
 		// Event Event type identifier. Well-known values: tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown. Custom values are permitted for extensibility — must match ^[a-z_]+$ (lowercase letters and underscores only).
 		Event string `json:"event"`
 
+		// NewValue The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
+		NewValue *map[string]interface{} `json:"new_value,omitempty"`
+
+		// OldValue The config value before the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
+		OldValue *map[string]interface{} `json:"old_value,omitempty"`
+
 		// Parameters Tool call parameters or other event-specific key-value pairs.
 		Parameters *map[string]interface{} `json:"parameters,omitempty"`
 
 		// PolicyRule Policy rule that produced this decision. May be absent.
 		PolicyRule *string `json:"policy_rule,omitempty"`
+
+		// Resource Dotted identifier of the config key that was mutated. Present on security_setting_change records, e.g. "gateway.god_mode". May be absent for other event types.
+		Resource *string `json:"resource,omitempty"`
 
 		// SessionId Session ID associated with the event. May be absent.
 		SessionId *string `json:"session_id,omitempty"`
@@ -7055,6 +7208,37 @@ type CriterionVerdict struct {
 
 	// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
 	Reason string `json:"reason"`
+}
+
+// DayBucket One aggregated day of a recurring task's occurrences, returned by `GET /api/v1/tasks/occurrences` when a query-tz day has more than 3 occurrences in an overview-range (span > 8×24h) request (D6). Occurrence counting and `day_start_ms` are both evaluated in the query's `tz` (the viewer's zone) regardless of the rule's own `tz` — the day-boundary authority for bucketing is always the caller's zone.
+type DayBucket struct {
+	// Count Number of occurrences of the task on this day.
+	Count int32 `json:"count"`
+
+	// DayEndMs Exclusive end of this bucket's window: the QUERY `tz`'s civil next midnight after `day_start_ms` (`civilDayNext` in `pkg/gateway/task_occurrences.go`), DST-aware (23h/25h on a transition day) — NOT a fixed `day_start_ms + 24h` offset. This is the SAME window boundary `populateBucketRunCounts` uses to tally `run_counts`, carried on the wire so the client never recomputes it (delta-review HIGH: a client-side fixed-24h recomputation diverges from this DST-aware value on transition days, disagreeing with `run_counts` and the drilled-in run list). The client MUST use this value verbatim as the exclusive upper bound when filtering/joining runs for this bucket.
+	DayEndMs int64 `json:"day_end_ms"`
+
+	// DayStartMs Midnight of this day in the QUERY `tz` (the viewer's zone), Unix epoch milliseconds.
+	DayStartMs int64 `json:"day_start_ms"`
+
+	// FirstMs The first occurrence instant on this day, Unix epoch milliseconds. Consumed by the aggregated-chip tooltip ("first at 09:00").
+	FirstMs int64 `json:"first_ms"`
+
+	// IntervalMs Fixed spacing between this day's occurrences in milliseconds, when the rule is regular (used to derive the client label "· every 30 min"). null when the rule is irregular (BY*-modified) and spacing varies — the client falls back to a "· {count}×/day" label.
+	IntervalMs *int64 `json:"interval_ms"`
+
+	// RunCounts Additive per-day run-status tally (ADR-050 RD6 / task-run-history-spec §3.7), computed by scanning this day's actual TaskRun records — NOT by enumerating RRULE members. Read-only, purely additive (ADR-050 RD11 — no migration); absent until the occurrence-overlay handler populates it. The client's worst-wins glyph (failed > skipped > in_progress > done > scheduled) and tooltip breakdown read this object when present.
+	RunCounts *struct {
+		Done       int32 `json:"done"`
+		Failed     int32 `json:"failed"`
+		InProgress int32 `json:"in_progress"`
+
+		// Scheduled Occurrences on this day with no run yet (future, or "no record").
+		Scheduled int32 `json:"scheduled"`
+
+		// Skipped Occurrences on this day whose fire was skipped by the overlap guard (the previous occurrence was still in_progress).
+		Skipped int32 `json:"skipped"`
+	} `json:"run_counts,omitempty"`
 }
 
 // DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Two published launch profiles (`utility`/`specialist`, see `DelegateRunAction.launch_profile`) govern visibility/steering/ child_messaging; illegal combinations are rejected at the handler, not by this schema alone.
@@ -7924,6 +8108,9 @@ type GodModeStatus struct {
 	// Enabled Current runtime god-mode state — whether the override is ACTIVE in this process right now. Always false when `available` is false (the switch is a no-op without availability). Can differ from the last value POSTed to this endpoint immediately after an enable that returned restart_required=true in GodModeUpdateResponse: the config write succeeded, but availability is boot-frozen, so the override does not become active until the gateway restarts.
 	Enabled bool `json:"enabled"`
 
+	// Persisted The raw persisted config intent — sandbox.god_mode as currently held in config, read directly and NOT gated by `available`. This is what lets a client distinguish "never armed" (persisted=false, available=false) from "armed via the UI, pending restart" (persisted=true, available=false): `enabled` collapses both of those to false, so it alone cannot tell them apart. Once `available` is also true, `persisted` and `enabled` agree (the override is both authorized-intended and live). A UI control that lets the operator arm/disarm god mode should bind its visual on/off state to `persisted`, not `enabled` — otherwise a pending-restart arm renders as if the switch were off, and clicking it again re-arms instead of disarming.
+	Persisted bool `json:"persisted"`
+
 	// Supported Whether this build supports god mode AT ALL — false only when compiled with the nogodmode build tag. Independent of runtime authorization: POST .../god-mode with enabled=true is permitted whenever `supported` is true, even if `available` is currently false (enabling then persists authorization to config and requires a gateway restart to actually take effect). When `supported` is false, enabling always returns 403 regardless of any authorization source.
 	Supported bool `json:"supported"`
 }
@@ -8050,6 +8237,136 @@ type JudgeVerdict struct {
 
 // JudgeVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type JudgeVerdictScope string
+
+// LibraryContentRequest Request body for PUT /api/v1/library/{workspace_id}/content. Writes text content to a file at the given workspace-relative path (library-spec.md D-5 editing scope), creating the file if it does not already exist and overwriting any existing content entirely. The path's parent directory must already exist within the workspace's work tree.
+type LibraryContentRequest struct {
+	// Content Full replacement text content for the file, UTF-8. Maximum 10485760 bytes (10 MB) — matches the threshold GET .../content uses to set too_large=true, so a file this endpoint can write is always one the read endpoint can subsequently render inline.
+	Content string `json:"content"`
+
+	// Path Workspace-relative path of the file to write, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints).
+	Path string `json:"path"`
+}
+
+// LibraryContentResponse Response from GET /api/v1/library/{workspace_id}/content — the text content of one file for the SPA editor/viewer (library-spec.md D-5). Carries explicit is_text / too_large flags so the SPA can fall back to the download endpoint rather than guessing from the content field.
+type LibraryContentResponse struct {
+	// Content File text content, UTF-8. Present only when is_text is true and too_large is false; absent otherwise. The SPA MUST check both flags before rendering this field rather than treating an absent/empty value as "the file is empty."
+	Content *string `json:"content,omitempty"`
+
+	// IsText Whether the server sniffed this file as text (not binary). False for images, video, and other binary formats — the SPA renders a metadata card + download link instead (library-spec.md section 4 scope table).
+	IsText bool `json:"is_text"`
+
+	// Mime Best-effort MIME type sniffed from the file extension/content.
+	Mime *string `json:"mime,omitempty"`
+
+	// Path Workspace-relative path echoed back from the request.
+	Path string `json:"path"`
+
+	// Size Actual file size in bytes, provided even when content is omitted.
+	Size int64 `json:"size"`
+
+	// TooLarge Whether the file exceeds the server's inline-text-editing size threshold — the same 10485760-byte (10 MB) threshold enforced as LibraryContentRequest.content's maxLength, so a file this endpoint reports as editable is always one the write endpoint can accept back. When true, content is omitted even for a text file.
+	TooLarge bool `json:"too_large"`
+}
+
+// LibraryEntry One file-explorer entry inside a workspace's work tree (library-spec.md D-2: "the Library is a file explorer over workspace trees, not a blob list" — entries are workspace-relative PATHS, not UUIDs, distinct from MediaLibraryEntry which is UUID-keyed). Returned by GET /api/v1/library/{workspace_id}/entries (directory listing), and echoed back by the write/rename/upload operations that produce or mutate a single entry.
+type LibraryEntry struct {
+	// IsDir True when this entry is a directory.
+	IsDir bool `json:"is_dir"`
+
+	// IsHidden True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
+	IsHidden bool `json:"is_hidden"`
+
+	// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
+	IsTextEditable bool `json:"is_text_editable"`
+
+	// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
+	Mime *string `json:"mime,omitempty"`
+
+	// ModifiedAt RFC3339 UTC last-modified timestamp of the underlying file or directory.
+	ModifiedAt time.Time `json:"modified_at"`
+
+	// Name Base filename or directory name (final path segment).
+	Name string `json:"name"`
+
+	// Path Workspace-relative path from the work-tree root (workspaces/<id>/work/, the root the Library explorer shows in full — not merely the reserved work/.library/ upload directory), forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
+	Path string `json:"path"`
+
+	// Size File size in bytes. Always 0 for directories.
+	Size int64 `json:"size"`
+}
+
+// LibraryMkdirRequest Request body for POST /api/v1/library/{workspace_id}/mkdir. Creates a directory at path within the workspace's work tree, creating any missing intermediate directories along the way (mkdir -p semantics) — the sole directory-creation primitive the Library API exposes. Added to close a UAT gap: without it, there was no way to create a folder at all, and a clean, non-malicious nested Move/Copy destination whose parent didn't exist yet (e.g. "subfolder/test.txt") had no path to success — see POST /api/v1/library/move and POST /api/v1/library/copy, which deliberately still require the destination's immediate parent directory to already exist rather than auto-creating it (matching `mv`/`cp` semantics — this endpoint is the explicit, deliberate way to create that folder first). Idempotent: if a directory already exists at path, the request succeeds (200) rather than erroring; rejected 409 if a regular FILE already exists there.
+type LibraryMkdirRequest struct {
+	// Path Workspace-relative directory path to create, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). May name a nested path whose intermediate directories do not exist yet — all of them are created, matching `mkdir -p`.
+	Path string `json:"path"`
+}
+
+// LibraryRenameRequest Request body for POST /api/v1/library/{workspace_id}/rename. Renames or moves a file or directory within the workspace's work tree — "to" may name a different parent directory than "from", so this operation doubles as a move.
+type LibraryRenameRequest struct {
+	// From Current workspace-relative path of the file or directory, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints).
+	From string `json:"from"`
+
+	// To New workspace-relative path, same constraints as "from". Rejected (409) if an entry already exists at this path.
+	To string `json:"to"`
+}
+
+// LibraryTransferRequest Request body shared by POST /api/v1/library/move and POST /api/v1/library/copy. Deliberately NOT scoped under {workspace_id} like the other Library operations — source and destination MAY be different workspaces, so both workspace ids are modelled explicitly here rather than one in the path and one in the body, making the two-workspace-capable shape obvious from the schema alone. A same-workspace move/copy is simply the case where from_workspace_id equals to_workspace_id (this is also what POST /api/v1/library/{workspace_id}/rename does under the hood — kept as same-workspace sugar over /move, see its own description).
+// Cross-workspace transfer is a USER-facing capability only: reachable exclusively from the authenticated UI/CLI caller's own request, never invoked by an agent tool — agents remain confined to their own workspace's work tree. This is enforced server-side; it is stated here so no future caller wires an agent-facing tool to this operation.
+type LibraryTransferRequest struct {
+	// FromPath Workspace-relative path of the file or directory within from_workspace_id's work tree (workspaces/<from_workspace_id>/work/), forward-slash separated. Never absolute and never containing a ".." segment.
+	FromPath string `json:"from_path"`
+
+	// FromWorkspaceId Workspace ID that currently owns the file or directory.
+	FromWorkspaceId string `json:"from_workspace_id"`
+
+	// ToPath Destination workspace-relative path within to_workspace_id's work tree, same constraints as from_path. Rejected (409) if an entry already exists at this path.
+	ToPath string `json:"to_path"`
+
+	// ToWorkspaceId Destination workspace ID. Equal to from_workspace_id for a same-workspace move/copy.
+	ToWorkspaceId string `json:"to_workspace_id"`
+}
+
+// LibraryUploadResponse Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201). Returns the work-tree entries created by the upload — mirrors UploadFilesResponse's shape for the session-scoped uploader, but with LibraryEntry (path-keyed) items rather than UploadedFile.
+type LibraryUploadResponse struct {
+	// Entries Entries created by this upload, in the order the multipart parts were received.
+	Entries []struct {
+		// IsDir True when this entry is a directory.
+		IsDir bool `json:"is_dir"`
+
+		// IsHidden True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
+		IsHidden bool `json:"is_hidden"`
+
+		// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
+		IsTextEditable bool `json:"is_text_editable"`
+
+		// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
+		Mime *string `json:"mime,omitempty"`
+
+		// ModifiedAt RFC3339 UTC last-modified timestamp of the underlying file or directory.
+		ModifiedAt time.Time `json:"modified_at"`
+
+		// Name Base filename or directory name (final path segment).
+		Name string `json:"name"`
+
+		// Path Workspace-relative path from the work-tree root (workspaces/<id>/work/, the root the Library explorer shows in full — not merely the reserved work/.library/ upload directory), forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
+		Path string `json:"path"`
+
+		// Size File size in bytes. Always 0 for directories.
+		Size int64 `json:"size"`
+	} `json:"entries"`
+}
+
+// LibraryWorkspaceNode One workspace as a node in the Library's virtual root listing (GET /api/v1/library/workspaces) — the sidebar entry point (library-spec.md D-3: "two entry points, one component"). Drilling into a node scopes all subsequent Library operations to that workspace's work tree via {workspace_id}.
+type LibraryWorkspaceNode struct {
+	// EntryCount Number of direct entries (files and directories) at the root of this workspace's work tree (workspaces/<id>/work/ — the same root GET .../entries lists), counted non-recursively so this stays cheap across every workspace on one request. Counts only non-hidden entries (see LibraryEntry.is_hidden), matching what the default (include_hidden=false) directory listing shows — the reserved work/.library/ upload directory is excluded from this count even though it exists. 0 when the work tree does not exist yet or has no visible entries.
+	EntryCount int32 `json:"entry_count"`
+
+	// Id Workspace identifier (matches Workspace.id).
+	Id string `json:"id"`
+
+	// Name Human-readable workspace name (matches Workspace.name).
+	Name string `json:"name"`
+}
 
 // LoginRequest Credentials for authenticating an existing user.
 type LoginRequest struct {
@@ -8237,7 +8554,7 @@ type McpServerCreate struct {
 // McpServerCreateTransport Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).
 type McpServerCreateTransport string
 
-// McpServerTestResponse Result of POST /mcp-servers/{id}/test — an on-demand connectivity probe that attempts to connect to the configured MCP server (without changing any state) and reports whether it succeeded and which tools it exposed.
+// McpServerTestResponse Result of POST /mcp-servers/{id}/test — an on-demand connectivity probe that attempts to connect to the configured MCP server via a temporary connection and reports whether it succeeded and which tools it exposed. On success, if the server is enabled in config, the global MCP kill-switch (tools.mcp.enabled) is also on, and the server is not currently connected in the live manager, this additionally triggers a live reconciliation pass to bring the real connection in line with what the test just proved reachable. When the global kill-switch is off, the message notes that MCP is globally disabled instead of silently skipping reconciliation. A failed test never changes any state.
 type McpServerTestResponse struct {
 	// Message Human-readable result (connection summary, or the failure reason).
 	Message string `json:"message"`
@@ -8324,6 +8641,54 @@ type McpToolsListResponse_Item struct {
 	Name                 string                 `json:"name"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
+
+// MediaAttachmentRequest Request to attach an existing workspace media-library entry to a chat message without uploading the file again.
+type MediaAttachmentRequest struct {
+	// MediaId UUID of the MediaLibraryEntry to attach.
+	MediaId openapi_types.UUID `json:"media_id"`
+}
+
+// MediaLibraryEntry Metadata for one persistent file in a workspace media library. Raw bytes are stored separately and verified against sha256 before presentation.
+type MediaLibraryEntry struct {
+	// Filename Original user-visible filename. Server-side trim+reject for control characters and path separators; the 256-char cap mirrors POSIX filename limits.
+	Filename string `json:"filename"`
+
+	// Id UUID media identifier within the workspace library.
+	Id *openapi_types.UUID `json:"id,omitempty"`
+
+	// LastRefcountSeenAt RFC3339 UTC timestamp of the latest refcount observation. Required on every entry (Wave 1 TD-M2).
+	LastRefcountSeenAt *time.Time `json:"last_refcount_seen_at,omitempty"`
+
+	// Mime MIME type sniffed from the stored bytes.
+	Mime *string `json:"mime,omitempty"`
+
+	// Refcount Server-maintained count of persisted message or session references. Required on every entry (FR-007a / Wave 1 TD-M2).
+	Refcount *int `json:"refcount,omitempty"`
+
+	// Sha256 Lowercase hexadecimal SHA-256 digest verified on every read.
+	Sha256 *string `json:"sha256,omitempty"`
+
+	// Size Raw file size in bytes. Server-enforced 100 MB cap (maxUploadFileSize per ADR-051 Rev 4).
+	Size *int64 `json:"size,omitempty"`
+
+	// Source Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). The internal-only test_fixture source used by pkg/media/library test helpers is NOT a production wire value (Wave 1 TD-m1).
+	Source MediaLibraryEntrySource `json:"source"`
+
+	// Status Server-computed presentation state; never persisted as real entry state (it is derived at read time from the library's internal corruption registry). "stranded" marks an entry whose manifest record still exists but whose raw bytes are unreachable at their normal on-disk location after a prior compound rollback failure — the file is NOT usable and the UI should not offer open/attach/download for it. Only GET .../media (list) annotates a stranded entry this way; the single-entry read/attach/delete endpoints refuse a stranded entry outright (500, "media entry is in an inconsistent state") rather than returning it with this field set, so "stranded" is never observed from those responses — this field is "available" everywhere except a stranded row in the list.
+	Status *MediaLibraryEntryStatus `json:"status,omitempty"`
+
+	// UploadedAt RFC3339 UTC upload timestamp.
+	UploadedAt *time.Time `json:"uploaded_at,omitempty"`
+
+	// WorkspaceId Workspace identifier that owns this library entry. Existing Omnipus workspaces use ULIDs; the cross-workspace guard (FR-028a) compares this value to the workspace segment in media://workspace/<workspace_id>/<id>. Server-assigned from the caller workspace context (FR-007a / Wave 1 TD-M2).
+	WorkspaceId *string `json:"workspace_id,omitempty"`
+}
+
+// MediaLibraryEntrySource Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). The internal-only test_fixture source used by pkg/media/library test helpers is NOT a production wire value (Wave 1 TD-m1).
+type MediaLibraryEntrySource string
+
+// MediaLibraryEntryStatus Server-computed presentation state; never persisted as real entry state (it is derived at read time from the library's internal corruption registry). "stranded" marks an entry whose manifest record still exists but whose raw bytes are unreachable at their normal on-disk location after a prior compound rollback failure — the file is NOT usable and the UI should not offer open/attach/download for it. Only GET .../media (list) annotates a stranded entry this way; the single-entry read/attach/delete endpoints refuse a stranded entry outright (500, "media entry is in an inconsistent state") rather than returning it with this field set, so "stranded" is never observed from those responses — this field is "available" everywhere except a stranded row in the list.
+type MediaLibraryEntryStatus string
 
 // MemorySettings Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields.
 type MemorySettings struct {
@@ -8653,6 +9018,18 @@ type MessageParentResponse struct {
 	// MessageId The (possibly server-generated) `message_id` assigned to this message.
 	MessageId *string `json:"message_id,omitempty"`
 }
+
+// ModelCapabilities A single model's declared input-modality capabilities, as returned by GET /providers/model-capabilities (D18). Model vision capability is not knowable client-side at all otherwise — the SPA uses this to show a non-blocking warning toast before sending a vision attachment (e.g. a live-browser annotation, or an image attached via the composer) to an agent whose resolved model cannot accept images. This is advisory only: the reactive, server-side capability gate (pkg/agent/media_present.go) remains the authoritative backstop regardless of what the client shows.
+type ModelCapabilities struct {
+	// Id Canonical model identifier as used in the capability catalog — the bare model slug (no provider prefix), matching Agent.model, e.g. "gemini-2.5-flash" or "glm-5.2".
+	Id string `json:"id"`
+
+	// Modalities Input modalities this model accepts. A model with no "image" entry cannot process image attachments.
+	Modalities []ModelCapabilitiesModalities `json:"modalities"`
+}
+
+// ModelCapabilitiesModalities defines model for ModelCapabilities.Modalities.
+type ModelCapabilitiesModalities string
 
 // ModelTokens Per-model token breakdown within a session or usage summary.
 type ModelTokens struct {
@@ -9978,6 +10355,12 @@ type RevisionEntryVerb string
 type RotateTokenResponse struct {
 	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
+}
+
+// RunNowRequest Body for POST /tasks/{id}/runs ("Run now", ADR-050 RD7). Optional — an empty body re-runs a normal/once task.
+type RunNowRequest struct {
+	// OccurrenceMs The scheduled RRULE occurrence instant to run (materialize-on-demand for a recurring series). Omit or null to re-run a normal/once task as a fresh run.
+	OccurrenceMs *int64 `json:"occurrence_ms,omitempty"`
 }
 
 // RunnerTestResponse Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the agent's configured external CLI (claude-code, codex, opencode) is present on PATH, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
@@ -11824,13 +12207,17 @@ type Task struct {
 	//   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
 	//                   interval in milliseconds (required, min 1000). Each fire spawns
 	//                   a FRESH run (fresh session + run history + pause).
-	//   - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
-	//                   expression (required). Each fire spawns a FRESH run.
+	//   - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
+	//                   `cron_expr` (legacy, 5/6-field cron expression, still accepted
+	//                   and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
+	//                   `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
+	//                   siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
+	//                   Each fire spawns a FRESH run.
 	//
 	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
 	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 		Config Task_Trigger_Config `json:"config"`
 
 		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
@@ -11877,16 +12264,25 @@ type TaskSurface string
 // TaskTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskTodosStatus string
 
-// Task_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// Task_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 type Task_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
 
-	// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+	// CronExpr Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
 	CronExpr *string `json:"cron_expr,omitempty"`
 
+	// DtstartMs Anchor instant for `rrule` — the first occurrence's wall-clock moment, Unix epoch milliseconds. Required sibling of `rrule`; ignored otherwise.
+	DtstartMs *int64 `json:"dtstart_ms,omitempty"`
+
 	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-	EveryMs              *int64                 `json:"every_ms,omitempty"`
+	EveryMs *int64 `json:"every_ms,omitempty"`
+
+	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+	Rrule *string `json:"rrule,omitempty"`
+
+	// Tz IANA timezone name in which `rrule`'s wall-clock times are interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`; ignored otherwise. Occurrences are wall-clock in this zone across DST transitions (Timezone Semantics).
+	Tz                   *string                `json:"tz,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
@@ -12015,13 +12411,17 @@ type TaskCreateRequest struct {
 	//   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
 	//                   interval in milliseconds (required, min 1000). Each fire spawns
 	//                   a FRESH run (fresh session + run history + pause).
-	//   - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
-	//                   expression (required). Each fire spawns a FRESH run.
+	//   - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
+	//                   `cron_expr` (legacy, 5/6-field cron expression, still accepted
+	//                   and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
+	//                   `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
+	//                   siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
+	//                   Each fire spawns a FRESH run.
 	//
 	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
 	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 		Config TaskCreateRequest_Trigger_Config `json:"config"`
 
 		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
@@ -12056,21 +12456,130 @@ type TaskCreateRequestSurface string
 // TaskCreateRequestTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskCreateRequestTodosStatus string
 
-// TaskCreateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// TaskCreateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 type TaskCreateRequest_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
 
-	// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+	// CronExpr Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
 	CronExpr *string `json:"cron_expr,omitempty"`
 
+	// DtstartMs Anchor instant for `rrule` — the first occurrence's wall-clock moment, Unix epoch milliseconds. Required sibling of `rrule`; ignored otherwise.
+	DtstartMs *int64 `json:"dtstart_ms,omitempty"`
+
 	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-	EveryMs              *int64                 `json:"every_ms,omitempty"`
+	EveryMs *int64 `json:"every_ms,omitempty"`
+
+	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+	Rrule *string `json:"rrule,omitempty"`
+
+	// Tz IANA timezone name in which `rrule`'s wall-clock times are interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`; ignored otherwise. Occurrences are wall-clock in this zone across DST transitions (Timezone Semantics).
+	Tz                   *string                `json:"tz,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
 // TaskCreateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskCreateRequestTriggerType string
+
+// TaskOccurrenceSet The server-expanded occurrence set of one recurring-capable task within the queried range, returned by `GET /api/v1/tasks/occurrences`. Covers all trigger flavors that can recur (`rrule` via rrule-go, legacy `cron_expr` via gronx in the server zone, and `every_ms` as a forward-only projection off the live job's next-run instant — FR-008a). Only tasks the scheduler would actually arm are expanded (non-terminal, non-`heartbeat`-surface); tasks with zero occurrences in range are omitted from the response array entirely — an empty result is `[]`, never null.
+type TaskOccurrenceSet struct {
+	// DayBuckets Aggregated days — only populated for overview-range queries (span > 8×24h) on query-tz days with more than 3 occurrences (D6).
+	DayBuckets []struct {
+		// Count Number of occurrences of the task on this day.
+		Count int32 `json:"count"`
+
+		// DayEndMs Exclusive end of this bucket's window: the QUERY `tz`'s civil next midnight after `day_start_ms` (`civilDayNext` in `pkg/gateway/task_occurrences.go`), DST-aware (23h/25h on a transition day) — NOT a fixed `day_start_ms + 24h` offset. This is the SAME window boundary `populateBucketRunCounts` uses to tally `run_counts`, carried on the wire so the client never recomputes it (delta-review HIGH: a client-side fixed-24h recomputation diverges from this DST-aware value on transition days, disagreeing with `run_counts` and the drilled-in run list). The client MUST use this value verbatim as the exclusive upper bound when filtering/joining runs for this bucket.
+		DayEndMs int64 `json:"day_end_ms"`
+
+		// DayStartMs Midnight of this day in the QUERY `tz` (the viewer's zone), Unix epoch milliseconds.
+		DayStartMs int64 `json:"day_start_ms"`
+
+		// FirstMs The first occurrence instant on this day, Unix epoch milliseconds. Consumed by the aggregated-chip tooltip ("first at 09:00").
+		FirstMs int64 `json:"first_ms"`
+
+		// IntervalMs Fixed spacing between this day's occurrences in milliseconds, when the rule is regular (used to derive the client label "· every 30 min"). null when the rule is irregular (BY*-modified) and spacing varies — the client falls back to a "· {count}×/day" label.
+		IntervalMs *int64 `json:"interval_ms"`
+
+		// RunCounts Additive per-day run-status tally (ADR-050 RD6 / task-run-history-spec §3.7), computed by scanning this day's actual TaskRun records — NOT by enumerating RRULE members. Read-only, purely additive (ADR-050 RD11 — no migration); absent until the occurrence-overlay handler populates it. The client's worst-wins glyph (failed > skipped > in_progress > done > scheduled) and tooltip breakdown read this object when present.
+		RunCounts *struct {
+			Done       int32 `json:"done"`
+			Failed     int32 `json:"failed"`
+			InProgress int32 `json:"in_progress"`
+
+			// Scheduled Occurrences on this day with no run yet (future, or "no record").
+			Scheduled int32 `json:"scheduled"`
+
+			// Skipped Occurrences on this day whose fire was skipped by the overlap guard (the previous occurrence was still in_progress).
+			Skipped int32 `json:"skipped"`
+		} `json:"run_counts,omitempty"`
+	} `json:"day_buckets"`
+
+	// OccurrenceRuns Additive per-occurrence run overlay (ADR-050 RD6 / task-run-history-spec §3.7), scoped strictly to this set's individual `occurrences_ms[]` instants (never bucket members — inherits the existing ≤500/task cap, no new cap). Read-only, purely additive (ADR-050 RD11 — no migration); absent (or empty) until the occurrence-overlay handler populates it.
+	OccurrenceRuns *[]struct {
+		// HasResult Whether the matched run carries a non-empty result. The full result text is fetched per-run (not inlined here) via GET /tasks/{id}/runs.
+		HasResult bool `json:"has_result"`
+
+		// OccurrenceMs The occurrence instant (from occurrences_ms[]) this overlay entry describes.
+		OccurrenceMs int64 `json:"occurrence_ms"`
+
+		// RunId The matched run's ID (ULID).
+		RunId string `json:"run_id"`
+
+		// SessionId The matched run's chat session ID.
+		SessionId string `json:"session_id"`
+
+		// Status The matched run's status.
+		Status TaskOccurrenceSetOccurrenceRunsStatus `json:"status"`
+	} `json:"occurrence_runs,omitempty"`
+
+	// OccurrencesMs Individual occurrence instants (Unix epoch milliseconds) not folded into a day bucket — every day in range when the query span is ≤ 8×24h (Week/Day views), or days with ≤ 3 occurrences when the span is > 8×24h (overview ranges, e.g. Month). Capped at 500 per task per request.
+	OccurrencesMs []int64 `json:"occurrences_ms"`
+
+	// TaskId The task this occurrence set belongs to.
+	TaskId string `json:"task_id"`
+
+	// Truncated True when the 500-instant cap or the 10,000-computed-occurrence per-task iteration budget was hit before fully covering the requested range. The client renders a "more occurrences not shown" marker on the last covered day. False for provably regular triggers (fixed-interval `every_ms` or a plain `rrule` with no BY* modifiers), whose bucket counts and positions are derived arithmetically rather than iterated.
+	Truncated bool `json:"truncated"`
+}
+
+// TaskOccurrenceSetOccurrenceRunsStatus The matched run's status.
+type TaskOccurrenceSetOccurrenceRunsStatus string
+
+// TaskRun One execution record for a task (ADR-050 / docs/internal/specs/task-run-history-spec.md §2.1) — a purely additive record layer. Runs are append-only and event-sourced: an "open" record is written when a dispatch is claimed (`status: in_progress`, `ended_at: null`) and a "close" record carrying the SAME `run_id` is appended when it finishes (`status: done|failed`, `result`, `ended_at`). Readers fold by `run_id`, last record wins. `Task.status`/`result`/`session_id` keep their existing behaviour completely unchanged (RD2) — TaskRun is read by the calendar occurrence overlay (`occurrence_runs` on TaskOccurrenceSet, `run_counts` on DayBucket) and the task-detail run-history list. Returned by GET /tasks/{id}/runs.
+type TaskRun struct {
+	// EndedAt RFC 3339 timestamp when the run closed. Null while in_progress.
+	EndedAt *time.Time `json:"ended_at"`
+
+	// Kind How the run started — an automatic trigger fire, or a user Run-now.
+	Kind TaskRunKind `json:"kind"`
+
+	// OccurrenceMs The scheduled RRULE instant this run realizes (the calendar join key, Unix epoch milliseconds). Null for an ad-hoc/once/manual run.
+	OccurrenceMs *int64 `json:"occurrence_ms"`
+
+	// Result Terminal-run output text. Absent while the run is `in_progress` (mirrors Task.result's own "absent while running" convention).
+	Result *string `json:"result,omitempty"`
+
+	// RunId Stable ULID identifying this run across its open and close records.
+	RunId string `json:"run_id"`
+
+	// SessionId The chat session this run produced. Minted at open time, unlike Task.session_id (which is only set once a task has ever run) — a TaskRun always has one from creation onward, EXCEPT a `status: skipped` record: the overlap guard's scheduled fire never started a session, so a skipped run's `session_id` is always the empty string.
+	SessionId string `json:"session_id"`
+
+	// StartedAt RFC 3339 timestamp when the run opened (also the on-disk day-partition key for the open record).
+	StartedAt time.Time `json:"started_at"`
+
+	// Status Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+	Status TaskRunStatus `json:"status"`
+
+	// TaskId The task this run belongs to.
+	TaskId string `json:"task_id"`
+}
+
+// TaskRunKind How the run started — an automatic trigger fire, or a user Run-now.
+type TaskRunKind string
+
+// TaskRunStatus Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+type TaskRunStatus string
 
 // TaskTrigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
 // ## Tier 2 (now) `type` is one of:
@@ -12082,29 +12591,42 @@ type TaskCreateRequestTriggerType string
 //   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
 //     interval in milliseconds (required, min 1000). Each fire spawns
 //     a FRESH run (fresh session + run history + pause).
-//   - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
-//     expression (required). Each fire spawns a FRESH run.
+//   - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
+//     `cron_expr` (legacy, 5/6-field cron expression, still accepted
+//     and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
+//     `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
+//     siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
+//     Each fire spawns a FRESH run.
 //
 // `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
 // ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 type TaskTrigger struct {
-	// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+	// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 	Config TaskTrigger_Config `json:"config"`
 
 	// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 	Type TaskTriggerType `json:"type"`
 }
 
-// TaskTrigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// TaskTrigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 type TaskTrigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
 
-	// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+	// CronExpr Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
 	CronExpr *string `json:"cron_expr,omitempty"`
 
+	// DtstartMs Anchor instant for `rrule` — the first occurrence's wall-clock moment, Unix epoch milliseconds. Required sibling of `rrule`; ignored otherwise.
+	DtstartMs *int64 `json:"dtstart_ms,omitempty"`
+
 	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-	EveryMs              *int64                 `json:"every_ms,omitempty"`
+	EveryMs *int64 `json:"every_ms,omitempty"`
+
+	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+	Rrule *string `json:"rrule,omitempty"`
+
+	// Tz IANA timezone name in which `rrule`'s wall-clock times are interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`; ignored otherwise. Occurrences are wall-clock in this zone across DST transitions (Timezone Semantics).
+	Tz                   *string                `json:"tz,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
@@ -12235,13 +12757,17 @@ type TaskUpdateRequest struct {
 	//   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
 	//                   interval in milliseconds (required, min 1000). Each fire spawns
 	//                   a FRESH run (fresh session + run history + pause).
-	//   - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
-	//                   expression (required). Each fire spawns a FRESH run.
+	//   - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
+	//                   `cron_expr` (legacy, 5/6-field cron expression, still accepted
+	//                   and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
+	//                   `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
+	//                   siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
+	//                   Each fire spawns a FRESH run.
 	//
 	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
 	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 		Config TaskUpdateRequest_Trigger_Config `json:"config"`
 
 		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
@@ -12273,16 +12799,25 @@ type TaskUpdateRequestSurface string
 // TaskUpdateRequestTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskUpdateRequestTodosStatus string
 
-// TaskUpdateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// TaskUpdateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 type TaskUpdateRequest_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
 
-	// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+	// CronExpr Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
 	CronExpr *string `json:"cron_expr,omitempty"`
 
+	// DtstartMs Anchor instant for `rrule` — the first occurrence's wall-clock moment, Unix epoch milliseconds. Required sibling of `rrule`; ignored otherwise.
+	DtstartMs *int64 `json:"dtstart_ms,omitempty"`
+
 	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-	EveryMs              *int64                 `json:"every_ms,omitempty"`
+	EveryMs *int64 `json:"every_ms,omitempty"`
+
+	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+	Rrule *string `json:"rrule,omitempty"`
+
+	// Tz IANA timezone name in which `rrule`'s wall-clock times are interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`; ignored otherwise. Occurrences are wall-clock in this zone across DST transitions (Timezone Semantics).
+	Tz                   *string                `json:"tz,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
@@ -12781,6 +13316,45 @@ type RotateCredentials200JSONResponseBodyStatus string
 // DeleteCredential200JSONResponseBodyStatus defines parameters for DeleteCredential.
 type DeleteCredential200JSONResponseBodyStatus string
 
+// GetLibraryContentParams defines parameters for GetLibraryContent.
+type GetLibraryContentParams struct {
+	// Path Workspace-relative path of the file to read.
+	Path string `form:"path" json:"path"`
+}
+
+// DownloadLibraryFileParams defines parameters for DownloadLibraryFile.
+type DownloadLibraryFileParams struct {
+	// Path Workspace-relative path of the file to download.
+	Path string `form:"path" json:"path"`
+}
+
+// DeleteLibraryEntryParams defines parameters for DeleteLibraryEntry.
+type DeleteLibraryEntryParams struct {
+	// Path Workspace-relative path of the file or directory to delete.
+	Path string `form:"path" json:"path"`
+}
+
+// ListLibraryEntriesParams defines parameters for ListLibraryEntries.
+type ListLibraryEntriesParams struct {
+	// Path Workspace-relative directory path to list. Empty or absent lists the work-tree root.
+	Path *string `form:"path,omitempty" json:"path,omitempty"`
+
+	// IncludeHidden When true, also returns entries whose name begins with a dot (".") — e.g. the reserved work/.library/ upload directory. Defaults to false (hidden entries omitted) so the explorer's default view matches a conventional file browser.
+	IncludeHidden *bool `form:"include_hidden,omitempty" json:"include_hidden,omitempty"`
+}
+
+// UploadLibraryFilesMultipartBody defines parameters for UploadLibraryFiles.
+type UploadLibraryFilesMultipartBody struct {
+	// Files One or more files to upload.
+	Files *[]openapi_types.File `json:"files,omitempty"`
+}
+
+// UploadLibraryFilesParams defines parameters for UploadLibraryFiles.
+type UploadLibraryFilesParams struct {
+	// Path Workspace-relative directory to upload into. Empty or absent uploads into the work-tree root.
+	Path *string `form:"path,omitempty" json:"path,omitempty"`
+}
+
 // RestoreBackup200JSONResponseBodyStatus defines parameters for RestoreBackup.
 type RestoreBackup200JSONResponseBodyStatus string
 
@@ -12864,6 +13438,21 @@ type ListTasksParamsStatus string
 
 // ListTasksParamsSurface defines parameters for ListTasks.
 type ListTasksParamsSurface string
+
+// ListTaskOccurrencesParams defines parameters for ListTaskOccurrences.
+type ListTaskOccurrencesParams struct {
+	// WorkspaceId Workspace to expand occurrences for. Tasks are workspace-scoped.
+	WorkspaceId string `form:"workspace_id" json:"workspace_id"`
+
+	// FromMs Start of the query range, Unix epoch milliseconds, inclusive (half-open range start).
+	FromMs int64 `form:"from_ms" json:"from_ms"`
+
+	// ToMs End of the query range, Unix epoch milliseconds, exclusive (half-open range end). Must be strictly greater than `from_ms`; `from_ms >= to_ms` is rejected with 400. A span greater than 400 days is also rejected with 400.
+	ToMs int64 `form:"to_ms" json:"to_ms"`
+
+	// Tz IANA timezone name of the viewer (e.g. the browser's resolved zone) — the day-boundary authority for occurrence bucketing. Unloadable `tz` is rejected with 400.
+	Tz string `form:"tz" json:"tz"`
+}
 
 // SetTaskDependenciesJSONBody defines parameters for SetTaskDependencies.
 type SetTaskDependenciesJSONBody = []string
@@ -12955,6 +13544,24 @@ type SetGodModeJSONRequestBody = GodModeUpdateRequest
 // UpdateIntegrationProviderJSONRequestBody defines body for UpdateIntegrationProvider for application/json ContentType.
 type UpdateIntegrationProviderJSONRequestBody = IntegrationProviderUpdateRequest
 
+// CopyLibraryEntryJSONRequestBody defines body for CopyLibraryEntry for application/json ContentType.
+type CopyLibraryEntryJSONRequestBody = LibraryTransferRequest
+
+// MoveLibraryEntryJSONRequestBody defines body for MoveLibraryEntry for application/json ContentType.
+type MoveLibraryEntryJSONRequestBody = LibraryTransferRequest
+
+// PutLibraryContentJSONRequestBody defines body for PutLibraryContent for application/json ContentType.
+type PutLibraryContentJSONRequestBody = LibraryContentRequest
+
+// CreateLibraryDirectoryJSONRequestBody defines body for CreateLibraryDirectory for application/json ContentType.
+type CreateLibraryDirectoryJSONRequestBody = LibraryMkdirRequest
+
+// RenameLibraryEntryJSONRequestBody defines body for RenameLibraryEntry for application/json ContentType.
+type RenameLibraryEntryJSONRequestBody = LibraryRenameRequest
+
+// UploadLibraryFilesMultipartRequestBody defines body for UploadLibraryFiles for multipart/form-data ContentType.
+type UploadLibraryFilesMultipartRequestBody UploadLibraryFilesMultipartBody
+
 // AddMcpServerJSONRequestBody defines body for AddMcpServer for application/json ContentType.
 type AddMcpServerJSONRequestBody = McpServerCreate
 
@@ -13039,6 +13646,9 @@ type UpdateTaskJSONRequestBody = TaskUpdateRequest
 // SetTaskDependenciesJSONRequestBody defines body for SetTaskDependencies for application/json ContentType.
 type SetTaskDependenciesJSONRequestBody = SetTaskDependenciesJSONBody
 
+// RunTaskNowJSONRequestBody defines body for RunTaskNow for application/json ContentType.
+type RunTaskNowJSONRequestBody = RunNowRequest
+
 // SetTaskTodosJSONRequestBody defines body for SetTaskTodos for application/json ContentType.
 type SetTaskTodosJSONRequestBody = SetTaskTodosJSONBody
 
@@ -13068,6 +13678,9 @@ type UpdateWorkspaceDelegationJSONRequestBody = WorkspaceDelegationUpdateRequest
 
 // PutWorkspaceInstructionsJSONRequestBody defines body for PutWorkspaceInstructions for application/json ContentType.
 type PutWorkspaceInstructionsJSONRequestBody = WorkspaceInstructionsRequest
+
+// CreateWorkspaceMediaAttachmentJSONRequestBody defines body for CreateWorkspaceMediaAttachment for application/json ContentType.
+type CreateWorkspaceMediaAttachmentJSONRequestBody = MediaAttachmentRequest
 
 // CreateWorkspacePlanJSONRequestBody defines body for CreateWorkspacePlan for application/json ContentType.
 type CreateWorkspacePlanJSONRequestBody = PlanCreateRequest
@@ -13483,12 +14096,36 @@ func (a *Task_Trigger_Config) UnmarshalJSON(b []byte) error {
 		delete(object, "cron_expr")
 	}
 
+	if raw, found := object["dtstart_ms"]; found {
+		err = json.Unmarshal(raw, &a.DtstartMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'dtstart_ms': %w", err)
+		}
+		delete(object, "dtstart_ms")
+	}
+
 	if raw, found := object["every_ms"]; found {
 		err = json.Unmarshal(raw, &a.EveryMs)
 		if err != nil {
 			return fmt.Errorf("error reading 'every_ms': %w", err)
 		}
 		delete(object, "every_ms")
+	}
+
+	if raw, found := object["rrule"]; found {
+		err = json.Unmarshal(raw, &a.Rrule)
+		if err != nil {
+			return fmt.Errorf("error reading 'rrule': %w", err)
+		}
+		delete(object, "rrule")
+	}
+
+	if raw, found := object["tz"]; found {
+		err = json.Unmarshal(raw, &a.Tz)
+		if err != nil {
+			return fmt.Errorf("error reading 'tz': %w", err)
+		}
+		delete(object, "tz")
 	}
 
 	if len(object) != 0 {
@@ -13524,10 +14161,31 @@ func (a Task_Trigger_Config) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if a.DtstartMs != nil {
+		object["dtstart_ms"], err = json.Marshal(a.DtstartMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'dtstart_ms': %w", err)
+		}
+	}
+
 	if a.EveryMs != nil {
 		object["every_ms"], err = json.Marshal(a.EveryMs)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
+		}
+	}
+
+	if a.Rrule != nil {
+		object["rrule"], err = json.Marshal(a.Rrule)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'rrule': %w", err)
+		}
+	}
+
+	if a.Tz != nil {
+		object["tz"], err = json.Marshal(a.Tz)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'tz': %w", err)
 		}
 	}
 
@@ -13581,12 +14239,36 @@ func (a *TaskCreateRequest_Trigger_Config) UnmarshalJSON(b []byte) error {
 		delete(object, "cron_expr")
 	}
 
+	if raw, found := object["dtstart_ms"]; found {
+		err = json.Unmarshal(raw, &a.DtstartMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'dtstart_ms': %w", err)
+		}
+		delete(object, "dtstart_ms")
+	}
+
 	if raw, found := object["every_ms"]; found {
 		err = json.Unmarshal(raw, &a.EveryMs)
 		if err != nil {
 			return fmt.Errorf("error reading 'every_ms': %w", err)
 		}
 		delete(object, "every_ms")
+	}
+
+	if raw, found := object["rrule"]; found {
+		err = json.Unmarshal(raw, &a.Rrule)
+		if err != nil {
+			return fmt.Errorf("error reading 'rrule': %w", err)
+		}
+		delete(object, "rrule")
+	}
+
+	if raw, found := object["tz"]; found {
+		err = json.Unmarshal(raw, &a.Tz)
+		if err != nil {
+			return fmt.Errorf("error reading 'tz': %w", err)
+		}
+		delete(object, "tz")
 	}
 
 	if len(object) != 0 {
@@ -13622,10 +14304,31 @@ func (a TaskCreateRequest_Trigger_Config) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if a.DtstartMs != nil {
+		object["dtstart_ms"], err = json.Marshal(a.DtstartMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'dtstart_ms': %w", err)
+		}
+	}
+
 	if a.EveryMs != nil {
 		object["every_ms"], err = json.Marshal(a.EveryMs)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
+		}
+	}
+
+	if a.Rrule != nil {
+		object["rrule"], err = json.Marshal(a.Rrule)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'rrule': %w", err)
+		}
+	}
+
+	if a.Tz != nil {
+		object["tz"], err = json.Marshal(a.Tz)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'tz': %w", err)
 		}
 	}
 
@@ -13679,12 +14382,36 @@ func (a *TaskTrigger_Config) UnmarshalJSON(b []byte) error {
 		delete(object, "cron_expr")
 	}
 
+	if raw, found := object["dtstart_ms"]; found {
+		err = json.Unmarshal(raw, &a.DtstartMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'dtstart_ms': %w", err)
+		}
+		delete(object, "dtstart_ms")
+	}
+
 	if raw, found := object["every_ms"]; found {
 		err = json.Unmarshal(raw, &a.EveryMs)
 		if err != nil {
 			return fmt.Errorf("error reading 'every_ms': %w", err)
 		}
 		delete(object, "every_ms")
+	}
+
+	if raw, found := object["rrule"]; found {
+		err = json.Unmarshal(raw, &a.Rrule)
+		if err != nil {
+			return fmt.Errorf("error reading 'rrule': %w", err)
+		}
+		delete(object, "rrule")
+	}
+
+	if raw, found := object["tz"]; found {
+		err = json.Unmarshal(raw, &a.Tz)
+		if err != nil {
+			return fmt.Errorf("error reading 'tz': %w", err)
+		}
+		delete(object, "tz")
 	}
 
 	if len(object) != 0 {
@@ -13720,10 +14447,31 @@ func (a TaskTrigger_Config) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if a.DtstartMs != nil {
+		object["dtstart_ms"], err = json.Marshal(a.DtstartMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'dtstart_ms': %w", err)
+		}
+	}
+
 	if a.EveryMs != nil {
 		object["every_ms"], err = json.Marshal(a.EveryMs)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
+		}
+	}
+
+	if a.Rrule != nil {
+		object["rrule"], err = json.Marshal(a.Rrule)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'rrule': %w", err)
+		}
+	}
+
+	if a.Tz != nil {
+		object["tz"], err = json.Marshal(a.Tz)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'tz': %w", err)
 		}
 	}
 
@@ -13777,12 +14525,36 @@ func (a *TaskUpdateRequest_Trigger_Config) UnmarshalJSON(b []byte) error {
 		delete(object, "cron_expr")
 	}
 
+	if raw, found := object["dtstart_ms"]; found {
+		err = json.Unmarshal(raw, &a.DtstartMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'dtstart_ms': %w", err)
+		}
+		delete(object, "dtstart_ms")
+	}
+
 	if raw, found := object["every_ms"]; found {
 		err = json.Unmarshal(raw, &a.EveryMs)
 		if err != nil {
 			return fmt.Errorf("error reading 'every_ms': %w", err)
 		}
 		delete(object, "every_ms")
+	}
+
+	if raw, found := object["rrule"]; found {
+		err = json.Unmarshal(raw, &a.Rrule)
+		if err != nil {
+			return fmt.Errorf("error reading 'rrule': %w", err)
+		}
+		delete(object, "rrule")
+	}
+
+	if raw, found := object["tz"]; found {
+		err = json.Unmarshal(raw, &a.Tz)
+		if err != nil {
+			return fmt.Errorf("error reading 'tz': %w", err)
+		}
+		delete(object, "tz")
 	}
 
 	if len(object) != 0 {
@@ -13818,10 +14590,31 @@ func (a TaskUpdateRequest_Trigger_Config) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if a.DtstartMs != nil {
+		object["dtstart_ms"], err = json.Marshal(a.DtstartMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'dtstart_ms': %w", err)
+		}
+	}
+
 	if a.EveryMs != nil {
 		object["every_ms"], err = json.Marshal(a.EveryMs)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
+		}
+	}
+
+	if a.Rrule != nil {
+		object["rrule"], err = json.Marshal(a.Rrule)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'rrule': %w", err)
+		}
+	}
+
+	if a.Tz != nil {
+		object["tz"], err = json.Marshal(a.Tz)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'tz': %w", err)
 		}
 	}
 

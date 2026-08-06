@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -111,8 +112,73 @@ exit 0
 	require.Equal(t, http.StatusOK, code, "domain failure still responds 200 per schema convention")
 	assert.False(t, resp.Ok)
 	require.NotNil(t, resp.Error)
-	assert.Equal(t, "boom happened", *resp.Error)
+	// Wave 1 (ADR-051 §RD5 MAJ-005): the response body's error field is
+	// operator-visible and MUST be the sanitized generic copy, NEVER the
+	// raw CLI stderr. "boom happened" is unknown-classification and maps
+	// to the generic user-message copy. The raw stderr stays in
+	// gateway.log only.
+	want := "From the model: it didn’t complete this turn. Retry. " +
+		"If it keeps failing, open Technical details (Verbose chat) or switch models."
+	assert.Equal(t, want, *resp.Error,
+		"smoke-test response body must carry the sanitized generic copy, not the raw CLI stderr")
+	assert.NotEqual(t, "boom happened", *resp.Error,
+		"raw CLI stderr must NOT leak to the smoke-test response body (sanitizer regression)")
 	assert.Nil(t, resp.ResponseText)
+}
+
+// --- Wave 1: sanitizer unit test (ADR-051 §RD5 MAJ-005) ---
+
+// TestSanitizeSmokeTestErrorMessage_UnknownReturnsGenericCopy is the
+// fail-closed invariant: when the classifier returns CodeUnknown (the
+// raw stderr shape isn't matched by any pinned phrase), the smoke-test
+// response carries a fixed generic copy — never the raw stderr verbatim.
+//
+// A regression here would re-leak raw CLI/provider text to operators
+// hitting /api/v1/agents/executor-smoke-test, the same D-B incident
+// shape ADR-051 was written to close.
+func TestSanitizeSmokeTestErrorMessage_UnknownReturnsGenericCopy(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "totally novel raw stderr",
+			raw:  "some brand new error shape nobody has seen before 12345",
+		},
+		{
+			name: "empty raw",
+			raw:  "",
+		},
+		{
+			name: "raw with provider identity leak",
+			raw:  "xai/grok: connection refused at api.x.ai",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeSmokeTestErrorMessage(tc.raw)
+			assert.NotEmpty(t, got, "sanitized message must never be empty")
+			if tc.raw != "" {
+				assert.NotEqual(t, tc.raw, got,
+					"raw input must not be returned verbatim — sanitization regression")
+			}
+			// Must be one of the canonical generic copies (either the
+			// classifier's CodeUnknown fallback or another generic
+			// user-message). Never raw.
+			isKnown := false
+			for _, code := range []agent.LLMErrorCode{
+				agent.CodeMediaUnsupported, agent.CodeProviderRejected, agent.CodeRateLimited,
+				agent.CodeNetwork, agent.CodeContentPolicy, agent.CodeContextTooLong, agent.CodeUnknown,
+			} {
+				if got == agent.UserMessageForCode(code) {
+					isKnown = true
+					break
+				}
+			}
+			assert.True(t, isKnown || got == "The external CLI failed. See gateway.log for details.",
+				"sanitized message must be a generic user-message copy or the fail-closed fallback; got=%q", got)
+		})
+	}
 }
 
 // --- (c) a run that never terminates within the (shortened) timeout ---

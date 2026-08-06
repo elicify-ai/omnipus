@@ -1,15 +1,30 @@
 // Unit tests for the workspace-session memory additions to session.ts:
 //   - sessionByWorkspace: Record<string, WorkspaceSessionDescriptor | null>
 //   - enterWorkspaceChat(workspaceId): restores or freshes per workspace
+//   - resolveWorkspaceSessionFromServer (D4 fix): server-derived restore when
+//     sessionByWorkspace has no local descriptor for a workspace — covers the
+//     cold-reload case where the in-memory pointer was wiped but the server's
+//     sessions are still intact.
 //
 // All tests verify STATE OUTCOMES (not spy call counts) to avoid Zustand
 // singleton spy-accumulation issues across tests.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { useSessionStore, registerChatResetForReplay } from './session'
 import { useWorkspacesStore } from './workspacesStore'
 import { useConnectionStore } from './connection'
 import { useUiStore } from './ui'
+import type { Session } from '@/lib/api'
+
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchSessions: vi.fn(),
+  }
+})
+
+import { fetchSessions } from '@/lib/api'
+import { useSessionStore, registerChatResetForReplay } from './session'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -22,6 +37,7 @@ function resetAll() {
     attachedSessionType: null,
     attachedTaskTitle: null,
     sessionByWorkspace: {},
+    resolvingSessionForWorkspace: {},
   })
   useWorkspacesStore.setState({
     activeWorkspaceId: null,
@@ -36,6 +52,55 @@ function resetAll() {
     reconnectAttempt: 0,
     liteMode: false,
   })
+  vi.mocked(fetchSessions).mockReset()
+  // Cross-context session-bleed fix: sessionByWorkspace is now mirrored into
+  // localStorage (keyed `omnipus.sessionByWorkspace.v1`) so a real reload can
+  // tell "this browser has been here before" apart from "brand-new context".
+  // Without clearing it here, a workspace id reused across describe blocks
+  // in THIS file (most use 'ws-1') would leak an earlier test's persisted
+  // decision into a later one — exactly the bleed this fix closes at the
+  // browser level, so the unit tests must not reintroduce it at the suite
+  // level.
+  localStorage.clear()
+}
+
+/** Minimal structural echo of session.ts's private WorkspaceSessionDescriptor —
+ *  not imported (the interface isn't exported), just structurally compatible. */
+type Descriptor = { id: string; type: Session['type']; title: string | null; agentId: string | null }
+
+/**
+ * Simulates a real page reload: in-memory Zustand state resets to its
+ * cold-boot shape (exactly what a fresh module load produces), but
+ * localStorage — and the server — are left untouched. Use this AFTER
+ * establishing state via the real public actions (attachToSession,
+ * startNewSession, setWorkspaceSessionDescriptor) to test what a genuine
+ * reload of THIS SAME browser restores, as opposed to `resetAll()` (which
+ * also clears localStorage, simulating a brand-new browser/context).
+ */
+function simulateReload() {
+  useSessionStore.setState({
+    activeSessionId: null,
+    activeAgentId: null,
+    activeAgentType: null,
+    attachedSessionType: null,
+    attachedTaskTitle: null,
+    sessionByWorkspace: {},
+    resolvingSessionForWorkspace: {},
+  })
+}
+
+/**
+ * Establishes "this browser previously attached to `descriptor` in
+ * `workspaceId`" (persisting it, via the real setWorkspaceSessionDescriptor
+ * action) and then simulates the reload that wipes the in-memory pointer —
+ * the exact precondition `enterWorkspaceChat`'s remembered-session branch is
+ * built for.
+ */
+function rememberSessionAcrossReload(workspaceId: string, descriptor: Descriptor | null) {
+  useWorkspacesStore.setState({ activeWorkspaceId: workspaceId })
+  useSessionStore.getState().setWorkspaceSessionDescriptor(workspaceId, descriptor)
+  simulateReload()
+  useWorkspacesStore.setState({ activeWorkspaceId: workspaceId })
 }
 
 function makeMockConnection() {
@@ -43,6 +108,19 @@ function makeMockConnection() {
     send: vi.fn().mockReturnValue(true),
     close: vi.fn(),
     isConnected: true,
+  }
+}
+
+function makeSession(overrides: Partial<Session> = {}): Session {
+  return {
+    id: 'sess-default',
+    agent_id: 'mia',
+    title: 'A session',
+    type: 'chat',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    message_count: 1,
+    ...overrides,
   }
 }
 
@@ -188,33 +266,312 @@ describe('enterWorkspaceChat — legacy "__pending" descriptor (defense-in-depth
   })
 })
 
-describe('enterWorkspaceChat — first visit (no descriptor)', () => {
+describe('enterWorkspaceChat — first visit / no local descriptor (browser has never decided)', () => {
   beforeEach(resetAll)
 
-  it('calls startNewSession when activeSessionId is non-null on first visit', () => {
+  // Cross-context session-bleed fix: `descriptor === undefined` used to
+  // ALWAYS ask the server "what's most recent in this workspace" (the
+  // original D4 fix), because a cold reload produces the exact same local
+  // state (`{}`) as a real first visit. That question is answerable
+  // regardless of whether THIS BROWSER has ever opened the workspace, which
+  // is exactly what let a brand-new context inherit a totally different
+  // browser/tab/e2e-spec's conversation. Now, `undefined` in-memory AND no
+  // localStorage entry for the workspace means "this browser has never
+  // decided anything here" — land on blank WITHOUT ever asking the server.
+
+  it('stays fresh WITHOUT querying the server when this browser has no persisted decision for the workspace', async () => {
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
     // Simulate a session from a different context being active
     useSessionStore.setState({ activeSessionId: 'other-sess', sessionByWorkspace: {} })
 
-    useSessionStore.getState().enterWorkspaceChat('ws-1')
+    await useSessionStore.getState().enterWorkspaceChat('ws-1')
 
-    // startNewSession sets activeSessionId to null
+    // The defining behavior of this fix: no network round-trip at all.
+    expect(fetchSessions).not.toHaveBeenCalled()
     expect(useSessionStore.getState().activeSessionId).toBeNull()
+    // Explicitly recorded as null (not left `undefined`) so a same-tab
+    // re-entry doesn't re-derive it every time.
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
   })
 
-  it('is a no-op (activeSessionId stays null) when already null on first visit', () => {
+  it('is a no-op (activeSessionId stays null) when already null and this browser has no persisted decision', async () => {
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
     useSessionStore.setState({ activeSessionId: null, sessionByWorkspace: {} })
 
-    useSessionStore.getState().enterWorkspaceChat('ws-1')
+    await useSessionStore.getState().enterWorkspaceChat('ws-1')
 
-    // No startNewSession call should have occurred — activeSessionId stays null
-    // and sessionByWorkspace still has no entry for ws-1 (startNewSession would
-    // have written null for ws-1 if it was called).
+    expect(fetchSessions).not.toHaveBeenCalled()
     expect(useSessionStore.getState().activeSessionId).toBeNull()
-    // startNewSession would record null for ws-1 in sessionByWorkspace, so if it
-    // was called, ws-1 would be in the map. Since it should NOT be called, it stays absent.
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+  })
+
+  it(
+    'REGRESSION REPRO: does NOT inherit a session that exists server-side for the workspace when THIS browser never visited it',
+    async () => {
+      // BDD: Given the SERVER has a real, recently-updated session for
+      //   ws-1 (created by a DIFFERENT browser/tab/e2e-spec — the gateway
+      //   and workspace are shared; `playwright.config.ts` runs
+      //   `workers: 1` against one gateway per CI shard),
+      //   When THIS browser — which has no localStorage record of ever
+      //   having been in ws-1 — calls enterWorkspaceChat('ws-1') for the
+      //   first time,
+      //   Then it must land on a blank composer and must NEVER have asked
+      //   the server, which previously would have handed back that
+      //   session and silently continued a conversation this browser never
+      //   started. This is the exact shape of the CI regression across
+      //   chat.spec.ts (d), open-in-chat.spec.ts (b),
+      //   delegation-hidden.spec.ts, handoff.spec.ts, and subagent.spec.ts.
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+      useSessionStore.setState({ activeSessionId: null, sessionByWorkspace: {} })
+      vi.mocked(fetchSessions).mockResolvedValue([
+        makeSession({
+          id: 'sess-from-another-browser',
+          workspace_id: 'ws-1',
+          updated_at: '2026-07-27T00:00:00Z',
+        }),
+      ])
+
+      await useSessionStore.getState().enterWorkspaceChat('ws-1')
+
+      expect(fetchSessions).not.toHaveBeenCalled()
+      expect(useSessionStore.getState().activeSessionId).toBeNull()
+      expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+    },
+  )
+
+  it('after landing on fresh once, a SAME-TAB re-entry stays fresh too (no repeated fetch attempts)', async () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    useSessionStore.setState({ activeSessionId: null, sessionByWorkspace: {} })
+
+    await useSessionStore.getState().enterWorkspaceChat('ws-1')
+    await useSessionStore.getState().enterWorkspaceChat('ws-1')
+
+    expect(fetchSessions).not.toHaveBeenCalled()
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
+  })
+})
+
+describe('enterWorkspaceChat — remembered-session restore after reload (browser-scoped fix)', () => {
+  beforeEach(resetAll)
+
+  it(
+    'REVERT-PROOF: restores the EXACT session this browser was attached to, after a simulated reload',
+    async () => {
+      // BDD: Given THIS browser previously attached to a real session in
+      //   ws-1 (attachToSession — persists the decision to localStorage),
+      //   When the page reloads — wiping sessionByWorkspace back to `{}`,
+      //   but leaving localStorage and the server-side session intact,
+      //   Then entering the workspace must restore that exact session
+      //   rather than silently landing on the blank "Select an agent"
+      //   Welcome screen (the original D4 defect: 3 UAT testers).
+      rememberSessionAcrossReload('ws-1', {
+        id: 'sess-restored',
+        type: 'chat',
+        title: 'Reloaded conversation',
+        agentId: 'jim',
+      })
+      vi.mocked(fetchSessions).mockResolvedValue([
+        makeSession({
+          id: 'sess-restored',
+          type: 'chat',
+          title: 'Reloaded conversation',
+          agent_id: 'jim',
+          workspace_id: 'ws-1',
+          updated_at: '2026-07-27T12:00:00Z',
+        }),
+      ])
+
+      await useSessionStore.getState().enterWorkspaceChat('ws-1')
+
+      expect(useSessionStore.getState().activeSessionId).toBe('sess-restored')
+      expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toEqual({
+        id: 'sess-restored',
+        type: 'chat',
+        title: 'Reloaded conversation',
+        agentId: 'jim',
+      })
+    },
+  )
+
+  it(
+    'REGRESSION REPRO: an explicit "New chat" survives a reload — never resurrects the session just left',
+    async () => {
+      // BDD: Given THIS browser attached to a real session in ws-1, then
+      //   the user clicked "New chat" (startNewSession — persists `null`),
+      //   When the page reloads before the user sends anything in the new,
+      //   still-sessionless conversation,
+      //   Then entering the workspace must stay fresh and must NEVER ask
+      //   the server — which would happily report the OLD session as
+      //   "most recently updated" (nothing newer was ever created) and
+      //   resurrect exactly the conversation the user walked away from.
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+      useSessionStore.getState().attachToSession('sess-old', 'chat', 'Old conversation', 'jim')
+      useSessionStore.getState().startNewSession()
+      simulateReload()
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+
+      vi.mocked(fetchSessions).mockResolvedValue([
+        makeSession({
+          id: 'sess-old',
+          workspace_id: 'ws-1',
+          updated_at: '2026-07-27T12:00:00Z',
+        }),
+      ])
+
+      await useSessionStore.getState().enterWorkspaceChat('ws-1')
+
+      expect(fetchSessions).not.toHaveBeenCalled()
+      expect(useSessionStore.getState().activeSessionId).toBeNull()
+      expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+    },
+  )
+
+  it('sets resolvingSessionForWorkspace while the verification fetch is in flight, and clears it after', async () => {
+    rememberSessionAcrossReload('ws-1', { id: 'sess-remembered', type: 'chat', title: null, agentId: 'mia' })
+    let resolveFetch: (sessions: Session[]) => void = () => {}
+    vi.mocked(fetchSessions).mockReturnValue(
+      new Promise((resolve) => { resolveFetch = resolve })
+    )
+
+    const pending = useSessionStore.getState().enterWorkspaceChat('ws-1')
+    // Microtask tick so the async function body runs up to the `await`.
+    await Promise.resolve()
+    expect(useSessionStore.getState().resolvingSessionForWorkspace['ws-1']).toBe(true)
+
+    resolveFetch([])
+    await pending
+
+    expect(useSessionStore.getState().resolvingSessionForWorkspace['ws-1']).toBeUndefined()
+  })
+
+  it('restores the REMEMBERED session by id, NOT simply whichever is most-recently-updated in the workspace', async () => {
+    // BDD: two sessions exist for ws-1 server-side — the one THIS browser
+    // actually had open (older updated_at) and a newer one that belongs to
+    // a different browser/tab. The old "most recent wins" heuristic would
+    // pick the wrong one; the fix must match by remembered id.
+    rememberSessionAcrossReload('ws-1', { id: 'sess-mine', type: 'chat', title: null, agentId: 'mia' })
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 'sess-mine', workspace_id: 'ws-1', updated_at: '2026-01-01T00:00:00Z' }),
+      makeSession({ id: 'sess-someone-elses', workspace_id: 'ws-1', updated_at: '2026-07-27T00:00:00Z' }),
+    ])
+
+    await useSessionStore.getState().enterWorkspaceChat('ws-1')
+
+    expect(useSessionStore.getState().activeSessionId).toBe('sess-mine')
+  })
+
+  it('gracefully falls back to fresh when the remembered session id no longer exists server-side (deleted)', async () => {
+    rememberSessionAcrossReload('ws-1', { id: 'sess-deleted-elsewhere', type: 'chat', title: null, agentId: 'mia' })
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 'sess-unrelated', workspace_id: 'ws-1', updated_at: '2026-07-27T00:00:00Z' }),
+    ])
+
+    await useSessionStore.getState().enterWorkspaceChat('ws-1')
+
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+  })
+
+  it('does not clobber a descriptor another code path already wrote while the fetch was in flight', async () => {
+    rememberSessionAcrossReload('ws-1', { id: 'sess-remembered', type: 'chat', title: null, agentId: 'mia' })
+    let resolveFetch: (sessions: Session[]) => void = () => {}
+    vi.mocked(fetchSessions).mockReturnValue(
+      new Promise((resolve) => { resolveFetch = resolve })
+    )
+
+    const pending = useSessionStore.getState().enterWorkspaceChat('ws-1')
+    await Promise.resolve()
+
+    // Something else (e.g. a deep-link route, or the user picking a session
+    // from the Sidebar) claims the workspace first.
+    useSessionStore.getState().setWorkspaceSessionDescriptor('ws-1', {
+      id: 'sess-claimed-first',
+      type: 'chat',
+      title: 'Claimed by another path',
+      agentId: 'ava',
+    })
+
+    // The server resolution now lands — must not overwrite the one that was
+    // already claimed, even though the remembered id IS in the response.
+    resolveFetch([
+      makeSession({ id: 'sess-remembered', workspace_id: 'ws-1', updated_at: '2026-07-27T00:00:00Z' }),
+    ])
+    await pending
+
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toEqual({
+      id: 'sess-claimed-first',
+      type: 'chat',
+      title: 'Claimed by another path',
+      agentId: 'ava',
+    })
+  })
+
+  it('records the descriptor but does NOT attach when the user has navigated to a different workspace before resolution lands', async () => {
+    rememberSessionAcrossReload('ws-1', { id: 'sess-ws1-late', type: 'chat', title: null, agentId: 'mia' })
+    let resolveFetch: (sessions: Session[]) => void = () => {}
+    vi.mocked(fetchSessions).mockReturnValue(
+      new Promise((resolve) => { resolveFetch = resolve })
+    )
+
+    const pending = useSessionStore.getState().enterWorkspaceChat('ws-1')
+    await Promise.resolve()
+
+    // User navigates away to ws-2 before the fetch for ws-1 resolves.
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-2' })
+    useSessionStore.setState({ activeSessionId: 'sess-ws2-active' })
+
+    resolveFetch([
+      makeSession({ id: 'sess-ws1-late', workspace_id: 'ws-1', updated_at: '2026-07-27T00:00:00Z' }),
+    ])
+    await pending
+
+    // Descriptor recorded for ws-1 so a later re-entry finds it...
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toEqual({
+      id: 'sess-ws1-late',
+      type: 'chat',
+      title: 'A session',
+      agentId: 'mia',
+    })
+    // ...but activeSessionId (ws-2's session) must NOT have been clobbered.
+    expect(useSessionStore.getState().activeSessionId).toBe('sess-ws2-active')
+  })
+
+  it('does not re-fetch while a resolution for the same workspace is already in flight (de-dupe)', async () => {
+    rememberSessionAcrossReload('ws-1', { id: 'sess-deduped', type: 'chat', title: null, agentId: 'mia' })
+    let resolveFetch: (sessions: Session[]) => void = () => {}
+    vi.mocked(fetchSessions).mockReturnValue(
+      new Promise((resolve) => { resolveFetch = resolve })
+    )
+
+    const first = useSessionStore.getState().enterWorkspaceChat('ws-1')
+    await Promise.resolve()
+    const second = useSessionStore.getState().enterWorkspaceChat('ws-1')
+
+    resolveFetch([
+      makeSession({ id: 'sess-deduped', workspace_id: 'ws-1', updated_at: '2026-07-27T00:00:00Z' }),
+    ])
+    await Promise.all([first, second])
+
+    expect(fetchSessions).toHaveBeenCalledTimes(1)
+    expect(useSessionStore.getState().activeSessionId).toBe('sess-deduped')
+  })
+
+  it('gracefully falls back (toast, no crash, stays retryable) when the server fetch fails', async () => {
+    useUiStore.setState({ toasts: [] })
+    rememberSessionAcrossReload('ws-1', { id: 'sess-remembered', type: 'chat', title: null, agentId: 'mia' })
+    vi.mocked(fetchSessions).mockRejectedValue(new Error('network down'))
+
+    await useSessionStore.getState().enterWorkspaceChat('ws-1')
+
+    // No crash, activeSessionId stays null (Welcome renders).
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
+    // Left `undefined` (NOT `null`) — retryable on the next enterWorkspaceChat,
+    // unlike the genuinely-empty case which is permanently `null`.
     expect('ws-1' in useSessionStore.getState().sessionByWorkspace).toBe(false)
+    // User-visible feedback, not a silent failure.
+    const toasts = useUiStore.getState().toasts
+    expect(toasts.length).toBeGreaterThan(0)
+    expect(toasts.some((t) => /restore|conversation/i.test(t.message))).toBe(true)
   })
 })
 

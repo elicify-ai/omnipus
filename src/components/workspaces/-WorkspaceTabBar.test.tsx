@@ -121,6 +121,7 @@ describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
       'chat',
       'board',
       'calendar',
+      'media',
       'team',
     ])
   })

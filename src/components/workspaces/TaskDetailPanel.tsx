@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
+import { Link } from '@tanstack/react-router'
 import {
   fetchAgents,
   buildTaskAssigneeItems,
@@ -12,9 +12,9 @@ import {
   fetchTaskVerdicts,
   updateTask,
   deleteTask,
-  setTaskTodos,
   setTaskDependencies,
   stopTaskGoalLoop,
+  runTaskNow,
   isApiError,
   workspacesQueryKeys,
   tasksQueryKeys,
@@ -22,7 +22,7 @@ import {
   taskEvidenceQueryKeys,
   taskVerdictsQueryKeys,
 } from '@/lib/api'
-import type { Task, TaskUpdateRequest, Todo, TaskTrigger } from '@/lib/api'
+import type { Task, TaskUpdateRequest } from '@/lib/api'
 import { TagInput } from '@/components/workspaces/TagInput'
 import { AcceptanceCriteriaEditor } from '@/components/workspaces/AcceptanceCriteriaEditor'
 import { CriteriaVerdictList } from '@/components/workspaces/CriteriaVerdictList'
@@ -35,7 +35,6 @@ import {
 } from '@/components/ui/sheet'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { Textarea } from '@/components/ui/textarea'
-import { Input } from '@/components/ui/input'
 import { DateTimePicker } from '@/components/ui/date-time-picker'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -56,6 +55,12 @@ import type { AutoSaveStatus } from '@/hooks/useAutoSave'
 import { canDropTransition } from '@/components/workspaces/BoardView'
 import { useUiStore } from '@/store/ui'
 import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
+import { TaskChecklistField } from '@/components/workspaces/TaskChecklistField'
+import { TaskResultField } from '@/components/workspaces/TaskResultField'
+import { OpenInChatButton } from '@/components/workspaces/OpenInChatButton'
+import { TaskRunsList } from '@/components/workspaces/TaskRunsList'
+import { STATUS_OPTIONS, STATUS_BADGE } from '@/components/workspaces/taskStatusConfig'
+import { formatDateTime } from '@/lib/dateFormat'
 import {
   Play,
   Stop,
@@ -64,14 +69,10 @@ import {
   Check,
   Robot,
   X,
-  ChatCircle,
   ArrowCounterClockwise,
-  CheckSquare,
-  Square,
-  CircleHalf,
   Trash,
-  Plus,
   CaretDown,
+  CalendarBlank,
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import {
@@ -81,29 +82,14 @@ import {
   datetimeLocalToIso,
   datetimeLocalToDate,
   dateToDatetimeLocal,
+  isRecurringTrigger,
+  recurringTriggerSummary,
 } from '@/components/workspaces/taskFormFields'
 
 // ── Status config ──────────────────────────────────────────────────────────────
-
-// User-settable status options (blocked is excluded — it is backend-derived and read-only)
-// Theme-token colours. `text-[color:…]` keeps these as inline-var text colours
-// (no raw Tailwind palette) so the panel tracks "The Sovereign Deep" tokens.
-const STATUS_OPTIONS: { value: Task['status']; label: string; color: string }[] = [
-  { value: 'inbox',       label: 'Inbox',       color: 'text-[var(--color-muted)]' },
-  { value: 'next',        label: 'Next',        color: 'text-[color:var(--color-accent)]' },
-  { value: 'in_progress', label: 'In Progress', color: 'text-[color:var(--color-warning)]' },
-  { value: 'done',        label: 'Done',        color: 'text-[color:var(--color-success)]' },
-  { value: 'failed',      label: 'Failed',      color: 'text-[color:var(--color-error)]' },
-]
-
-const STATUS_BADGE: Record<string, string> = {
-  inbox:       'text-[var(--color-muted)] bg-white/5',
-  next:        'text-[color:var(--color-accent)] bg-[var(--color-accent)]/10',
-  in_progress: 'text-[color:var(--color-warning)] bg-[var(--color-warning)]/10',
-  blocked:     'text-[color:var(--color-warning)] bg-[var(--color-warning)]/10',
-  done:        'text-[color:var(--color-success)] bg-[var(--color-success)]/10',
-  failed:      'text-[color:var(--color-error)] bg-[var(--color-error)]/10',
-}
+// STATUS_OPTIONS / STATUS_BADGE live in taskStatusConfig.ts — single source
+// of truth shared with TaskRunStatusField (the calendar's read-only status
+// badge). See that file for details.
 
 const PRIORITY_CONFIG: Record<number, { label: string; color: string }> = {
   1: { label: 'P1 — Critical',  color: 'text-[color:var(--color-error)]' },
@@ -129,12 +115,10 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const { addToast } = useUiStore()
   const username = useAuthStore((s) => s.username)
   const queryClient = useQueryClient()
-  const navigate = useNavigate()
 
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [newTodo, setNewTodo] = useState('')
   // Inline field errors — surfaced instead of silently discarding invalid input.
   const [triggerError, setTriggerError] = useState('')
   const [dueError, setDueError] = useState('')
@@ -163,7 +147,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   useEffect(() => {
     setPromptDraft(task?.prompt ?? '')
     setEditingPrompt(false)
-    setNewTodo('')
     setTriggerError('')
     setDueError('')
     setStatusError('')
@@ -176,7 +159,8 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   // one-time trigger changes — including the same-identity resync described
   // above (a due/trigger PATCH's own success should still reflect the saved
   // value once the query refetches). Split out from the effect above so this
-  // resync can never touch promptDraft/editingPrompt/todos/errors.
+  // resync can never touch promptDraft/editingPrompt/errors (todos are now
+  // TaskChecklistField's own state, keyed on task.id).
   useEffect(() => {
     setTriggerAtDraft(typeof task?.trigger?.config?.at_ms === 'number' ? new Date(task.trigger.config.at_ms) : null)
     setDueDraft(datetimeLocalToDate(task?.due))
@@ -303,18 +287,8 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     },
   })
 
-  // Todos checklist — replace atomically via PUT /tasks/{id}/todos
-  const { mutate: doSetTodos } = useMutation({
-    mutationFn: (todos: Todo[]) => {
-      if (!task) return Promise.reject(new Error('No task selected'))
-      return setTaskTodos(task.id, todos)
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
-    },
-    onError: (err: unknown) =>
-      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update checklist', variant: 'error' }),
-  })
+  // Todos checklist — see TaskChecklistField (shared with the calendar's
+  // recurring-task edit slide-over) for the setTaskTodos mutation + handlers.
 
   // Dependencies — replace atomically via PUT /tasks/{id}/dependencies
   const { mutate: doSetDeps } = useMutation({
@@ -344,19 +318,28 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to start task', variant: 'error' }),
   })
 
-  // Retry = move failed task back to next
+  // Retry = re-run a failed task via a FRESH run (ADR-050 RD7 / spec §3.4,
+  // §4.4). POST /tasks/{id}/runs with occurrence_ms omitted opens a new run
+  // and dispatches it — the prior failed run's status/result/session stay
+  // exactly as they are, now visible in the Runs section below. This
+  // replaces the old `updateTask(status:'next')` PATCH, which was the
+  // pre-ADR-050 "fresh-run reset" that overwrote the failed attempt instead
+  // of preserving it (the defect ADR-050 exists to fix — see Acceptance
+  // Scenario 3). The visible label stays "Retry" (least surprising for a
+  // failed task); only the wiring changed.
   const { mutate: doRetry, isPending: isRetrying } = useMutation({
     mutationFn: () => {
       if (!task) return Promise.reject(new Error('No task selected'))
-      return updateTask(task.id, { status: 'next' })
+      return runTaskNow(task.id)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
       queryClient.invalidateQueries({ queryKey: ['workspaces'] })
-      addToast({ message: 'Task retried — moved to Next.', variant: 'success' })
+      if (task) queryClient.invalidateQueries({ queryKey: tasksQueryKeys.runs(task.id) })
+      addToast({ message: 'Task re-run started.', variant: 'success' })
     },
     onError: (err: unknown) =>
-      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to retry task', variant: 'error' }),
+      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to re-run task', variant: 'error' }),
   })
 
   // Stop/Clear (D8) — halts this task's own goal loop (ADR-049).
@@ -400,33 +383,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     setEditingPrompt(false)
   }
 
-  function handleToggleTodo(index: number) {
-    if (!task) return
-    const todos = (task.todos ?? []).map((t, i) => {
-      if (i !== index) return t
-      // Cycle: completed → pending; anything else → completed.
-      // in_progress is shown distinctly but clicking it marks it completed.
-      const next = t.status === 'completed' ? 'pending' : 'completed'
-      return { ...t, status: next } as Todo
-    })
-    doSetTodos(todos)
-  }
-
-  function handleAddTodo() {
-    if (!task) return
-    const text = newTodo.trim()
-    if (!text) return
-    const todos = [...(task.todos ?? []), { text, status: 'pending' as const }]
-    doSetTodos(todos)
-    setNewTodo('')
-  }
-
-  function handleRemoveTodo(index: number) {
-    if (!task) return
-    const todos = (task.todos ?? []).filter((_, i) => i !== index)
-    doSetTodos(todos)
-  }
-
   function handleToggleDep(id: string) {
     if (!task) return
     const current = task.blocked_by ?? []
@@ -436,21 +392,19 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     doSetDeps(next)
   }
 
+  // FR-011/D3/FR-005: the generic detail panel edits manual/once triggers
+  // only — recurring-trigger editing exists exclusively in the calendar
+  // editor. (This handler is unreachable for every/recurring tasks: the
+  // Trigger field renders the FR-023 defensive read-only guard for those,
+  // never this SmartSelect.)
   function handleTriggerKindChange(kind: TriggerKind) {
     if (!task) return
-    // Preserve existing config where it still applies, otherwise sensible defaults.
-    const cfg = task.trigger?.config ?? {}
-    let trigger: TaskTrigger
     if (kind === 'once') {
-      trigger = buildTrigger('once', { at_ms: typeof cfg.at_ms === 'number' ? cfg.at_ms : Date.now() + 3_600_000 })
-    } else if (kind === 'every') {
-      trigger = buildTrigger('every', { every_ms: typeof cfg.every_ms === 'number' ? cfg.every_ms : 3_600_000 })
-    } else if (kind === 'recurring') {
-      trigger = buildTrigger('recurring', { cron_expr: typeof cfg.cron_expr === 'string' && cfg.cron_expr ? cfg.cron_expr : '0 9 * * MON' })
+      const cfg = task.trigger?.config ?? {}
+      doUpdate({ trigger: buildTrigger('once', { at_ms: typeof cfg.at_ms === 'number' ? cfg.at_ms : Date.now() + 3_600_000 }) })
     } else {
-      trigger = buildTrigger('manual', {})
+      doUpdate({ trigger: buildTrigger('manual', {}) })
     }
-    doUpdate({ trigger })
   }
 
   function handleTriggerAtChange(value: string) {
@@ -461,24 +415,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     }
     setTriggerError('')
     doUpdate({ trigger: buildTrigger('once', { at_ms: at }) })
-  }
-
-  function handleTriggerEveryChange(minutes: number) {
-    if (!Number.isFinite(minutes) || minutes < 1) {
-      setTriggerError('Interval must be at least 1 minute.')
-      return
-    }
-    setTriggerError('')
-    doUpdate({ trigger: buildTrigger('every', { every_ms: minutes * 60_000 }) })
-  }
-
-  function handleTriggerCronChange(cron: string) {
-    if (!cron.trim()) {
-      setTriggerError('Enter a cron expression for the recurring trigger.')
-      return
-    }
-    setTriggerError('')
-    doUpdate({ trigger: buildTrigger('recurring', { cron_expr: cron.trim() }) })
   }
 
   function handleDueChange(value: string) {
@@ -519,16 +455,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     doUpdate({ status: target })
   }
 
-  async function handleCopyResult() {
-    if (!task?.result) return
-    try {
-      await navigator.clipboard.writeText(task.result)
-      addToast({ message: 'Result copied to clipboard.', variant: 'success' })
-    } catch {
-      addToast({ message: 'Failed to copy to clipboard.', variant: 'error' })
-    }
-  }
-
   async function handleCopyPath(path: string) {
     try {
       await navigator.clipboard.writeText(path)
@@ -536,11 +462,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     } catch {
       addToast({ message: 'Failed to copy path.', variant: 'error' })
     }
-  }
-
-  function formatDate(iso?: string) {
-    if (!iso) return '—'
-    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso))
   }
 
   if (!task) return null
@@ -558,12 +479,8 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const isStartable = task.status === 'inbox' || task.status === 'next'
   const isFailed = task.status === 'failed'
   const isRunning = task.status === 'in_progress'
-  const showResult = (task.status === 'done' || task.status === 'failed') && !!task.result
-  const todos = task.todos ?? []
-  const doneTodos = todos.filter((t: Todo) => t.status === 'completed').length
   const blockedBy = task.blocked_by ?? []
   const triggerKind: TriggerKind = task.trigger?.type ?? 'manual'
-  const triggerCfg = task.trigger?.config ?? {}
 
   return (
     <div className="space-y-5">
@@ -806,55 +723,61 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         ) : null}
       </Field>
 
-      {/* Trigger (editable) */}
+      {/* Trigger — FR-023 defensive guard: Board/List already exclude
+          every/recurring tasks (BoardView/ListView's isRecurringTrigger
+          filter), so this panel should never receive one in practice. If it
+          somehow does (stale cache / race), render a READ-ONLY plain-English
+          summary + a link to the workspace calendar instead of the editable
+          picker — never a raw cron/rule string, never trigger editing here.
+          Recurring-trigger editing exists only in the calendar editor
+          (FR-005). Otherwise (manual/once, the normal case), the picker
+          below offers only those two kinds — the same trim as the generic
+          create form (FR-011/D3). */}
       <Field label="Trigger">
-        <SmartSelect
-          value={triggerKind}
-          onValueChange={(val) => handleTriggerKindChange(val as TriggerKind)}
-          triggerClassName="h-8 text-xs"
-          ariaLabel="Trigger"
-          items={[
-            { value: 'manual', label: 'None (manual)', className: 'text-xs' },
-            { value: 'once', label: 'Once (at a time)', className: 'text-xs' },
-            { value: 'every', label: 'Every (interval)', className: 'text-xs' },
-            { value: 'recurring', label: 'Recurring (cron)', className: 'text-xs' },
-          ]}
-        />
-        {triggerKind === 'once' && (
-          <DateTimePicker
-            aria-label="Trigger date and time"
-            value={triggerAtDraft}
-            onChange={(d) => {
-              setTriggerAtDraft(d)
-              scheduleDateCommit('triggerAt', () => handleTriggerAtChange(dateToDatetimeLocal(d)))
-            }}
-            className="mt-1.5"
-          />
-        )}
-        {triggerKind === 'every' && (
-          <div className="mt-1.5 flex items-center gap-2">
-            <Input
-              aria-label="Interval in minutes"
-              type="number"
-              min={1}
-              defaultValue={typeof triggerCfg.every_ms === 'number' ? String(Math.round(triggerCfg.every_ms / 60_000)) : '60'}
-              onBlur={(e) => handleTriggerEveryChange(parseInt(e.target.value, 10))}
-              className="text-xs w-28"
-            />
-            <span className="text-xs text-[var(--color-muted)]">minutes</span>
+        {isRecurringTrigger(task.trigger) ? (
+          <div className="space-y-1.5">
+            <p className="text-xs text-[var(--color-secondary)]">
+              {recurringTriggerSummary(task.trigger)}
+            </p>
+            {task.workspace_id && (
+              <Link
+                to="/workspaces/$workspaceId/calendar"
+                params={{ workspaceId: task.workspace_id }}
+                tabIndex={0}
+                className="inline-flex items-center gap-1 text-xs text-[color:var(--color-accent)] hover:underline"
+              >
+                <CalendarBlank size={12} />
+                Edit in workspace calendar
+              </Link>
+            )}
           </div>
-        )}
-        {triggerKind === 'recurring' && (
-          <Input
-            aria-label="Cron expression"
-            defaultValue={typeof triggerCfg.cron_expr === 'string' ? triggerCfg.cron_expr : '0 9 * * MON'}
-            onBlur={(e) => handleTriggerCronChange(e.target.value)}
-            placeholder="0 9 * * MON"
-            className="mt-1.5 text-xs font-mono"
-          />
-        )}
-        {triggerError && (
-          <p className="text-xs text-[var(--color-error)] mt-1.5">{triggerError}</p>
+        ) : (
+          <>
+            <SmartSelect
+              value={triggerKind}
+              onValueChange={(val) => handleTriggerKindChange(val as TriggerKind)}
+              triggerClassName="h-8 text-xs"
+              ariaLabel="Trigger"
+              items={[
+                { value: 'manual', label: 'None (manual)', className: 'text-xs' },
+                { value: 'once', label: 'Once (at a time)', className: 'text-xs' },
+              ]}
+            />
+            {triggerKind === 'once' && (
+              <DateTimePicker
+                aria-label="Trigger date and time"
+                value={triggerAtDraft}
+                onChange={(d) => {
+                  setTriggerAtDraft(d)
+                  scheduleDateCommit('triggerAt', () => handleTriggerAtChange(dateToDatetimeLocal(d)))
+                }}
+                className="mt-1.5"
+              />
+            )}
+            {triggerError && (
+              <p className="text-xs text-[var(--color-error)] mt-1.5">{triggerError}</p>
+            )}
+          </>
         )}
       </Field>
 
@@ -945,78 +868,9 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         )}
       </Field>
 
-      {/* Todos checklist (editable: add / toggle / remove) */}
-      <Field label={`Checklist${todos.length > 0 ? ` (${doneTodos}/${todos.length})` : ''}`}>
-        <div className="space-y-1">
-          {todos.map((todo: Todo, idx: number) => (
-            <div
-              key={idx}
-              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs"
-            >
-              <button tabIndex={0}
-                type="button"
-                onClick={() => handleToggleTodo(idx)}
-                aria-label={`Toggle ${todo.text}`}
-                role="checkbox"
-                aria-checked={
-                  todo.status === 'completed' ? true : todo.status === 'in_progress' ? 'mixed' : false
-                }
-                className="flex items-center gap-2 flex-1 text-left hover:opacity-80 transition-opacity"
-              >
-                {todo.status === 'completed' ? (
-                  <CheckSquare size={13} className="shrink-0 text-[color:var(--color-success)]" />
-                ) : todo.status === 'in_progress' ? (
-                  <CircleHalf size={13} className="shrink-0 text-[color:var(--color-warning)]" />
-                ) : (
-                  <Square size={13} className="shrink-0 text-[var(--color-muted)]" />
-                )}
-                <span className={cn(
-                  'flex-1 text-[var(--color-secondary)]',
-                  todo.status === 'completed' && 'line-through text-[var(--color-muted)]',
-                  todo.status === 'in_progress' && 'text-[color:var(--color-warning)]',
-                )}>
-                  {todo.text}
-                </span>
-              </button>
-              <button tabIndex={0}
-                type="button"
-                onClick={() => handleRemoveTodo(idx)}
-                aria-label={`Remove checklist item ${todo.text}`}
-                className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
-              >
-                <Trash size={12} />
-              </button>
-            </div>
-          ))}
-        </div>
-        <div className="flex items-center gap-2 mt-1.5">
-          <Input
-            aria-label="New checklist item"
-            value={newTodo}
-            onChange={(e) => setNewTodo(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                handleAddTodo()
-              }
-            }}
-            placeholder="Add a checklist item…"
-            maxLength={500}
-            className="text-xs flex-1 h-8"
-          />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 px-2 shrink-0"
-            onClick={handleAddTodo}
-            aria-label="Add checklist item"
-            disabled={!newTodo.trim()}
-          >
-            <Plus size={13} />
-          </Button>
-        </div>
-      </Field>
+      {/* Todos checklist (editable: add / toggle / remove) — shared with the
+          calendar's recurring-task edit slide-over (TaskChecklistField). */}
+      <TaskChecklistField task={task} />
 
       {/* Start button — inbox / next tasks */}
       {isStartable && (
@@ -1043,40 +897,27 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         </Button>
       )}
 
-      {/* Open in Chat — when session_id is set */}
-      {task.session_id && (
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full gap-2 text-xs h-8"
-          onClick={() => {
-            void navigate({ to: '/sessions/$sessionId', params: { sessionId: task.session_id! } })
-            onClose()
-          }}
-        >
-          <ChatCircle size={13} />
-          Open in Chat
-        </Button>
-      )}
+      {/* Open in Chat — when session_id is set — shared with the calendar's
+          recurring-task edit slide-over (OpenInChatButton). */}
+      <OpenInChatButton task={task} onNavigate={onClose} />
 
-      {/* Result section — done or failed */}
-      {showResult && task.result && (
-        <Field label="Result">
-          <div className={cn('relative', isFailed && 'ring-1 ring-[var(--color-error)]/30 rounded-md')}>
-            <pre className="text-xs font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-3 max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words leading-relaxed">
-              {task.result}
-            </pre>
-            <button tabIndex={0}
-              type="button"
-              onClick={handleCopyResult}
-              className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)] transition-colors"
-              aria-label="Copy result"
-            >
-              <Copy size={11} /> Copy
-            </button>
-          </div>
-        </Field>
-      )}
+      {/* Result section — done or failed — shared with the calendar's
+          recurring-task edit slide-over (TaskResultField). */}
+      <TaskResultField task={task} />
+
+      {/* Runs — per-execution run history (ADR-050 / task-run-history-spec
+          §4.4). Shared TaskRunsList component (also embedded by the
+          calendar occurrence slide-over) — do not fork/duplicate its
+          rendering here. Recurring tasks are excluded from Board/List
+          (ADR-049 D3), so every task reaching this panel is normal/once/
+          manual — this section's value is exactly the re-run-after-failure
+          history (Retry above opens a fresh run via runTaskNow; the prior
+          attempt stays listed here, each with Open-in-Chat). */}
+      <TaskRunsList
+        taskId={task.id}
+        onNavigate={onClose}
+        className="pt-2 border-t border-[var(--color-border)]"
+      />
 
       {/* Artifacts */}
       {(task.artifacts?.length ?? 0) > 0 && (
@@ -1131,10 +972,10 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {/* Metadata */}
       <div className="pt-2 border-t border-[var(--color-border)] space-y-1.5">
         {task.created_by && <MetaRow label="Created by" value={task.created_by} />}
-        <MetaRow label="Created" value={formatDate(task.created_at)} />
-        <MetaRow label="Updated" value={formatDate(task.updated_at)} />
-        <MetaRow label="Started" value={formatDate(task.started_at)} />
-        <MetaRow label="Completed" value={formatDate(task.completed_at)} />
+        <MetaRow label="Created" value={formatDateTime(task.created_at)} />
+        <MetaRow label="Updated" value={formatDateTime(task.updated_at)} />
+        <MetaRow label="Started" value={formatDateTime(task.started_at)} />
+        <MetaRow label="Completed" value={formatDateTime(task.completed_at)} />
       </div>
 
       {/* Delete button (danger zone) — confirmed via AlertDialog (was firing

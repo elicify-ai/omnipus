@@ -3,6 +3,7 @@ import {
   mapClientToDevice,
   mapClientToDeviceVideo,
   computeModifiers,
+  computeObjectContainRect,
   mapMouseButton,
   isPrintableKey,
   mapClientToFramePixels,
@@ -414,5 +415,67 @@ describe('scaleCropToImagePixels', () => {
   it('is a no-op for video-mode when videoWidth/videoHeight match the dimensions the crop rect was computed against (the common case — no recapture mid-drag)', () => {
     const rect = { x: 100, y: 50, width: 40, height: 30 }
     expect(scaleCropToImagePixels(rect, 1920, 1080, 1920, 1080)).toEqual(rect)
+  })
+})
+
+// BUG 1 fix (live UAT re-run 2026-07-28) — the pop-out route's media element
+// now fills its container (`object-fit: contain`) instead of being capped at
+// intrinsic size, which can introduce a letterbox/pillarbox gap between the
+// container's bounding rect and the actually-visible content whenever their
+// aspect ratios differ. `computeObjectContainRect` is what
+// BrowserLiveView.mapPointerToDeviceCoords routes every raw
+// getBoundingClientRect() through before handing it to mapClientToDevice*,
+// so these are the load-bearing geometry assertions for that fix.
+describe('computeObjectContainRect', () => {
+  it('is a no-op when the box aspect ratio already matches the content (the historical docked-panel layout)', () => {
+    const box = { left: 10, top: 20, width: 1280, height: 720 }
+    expect(computeObjectContainRect(box, 1280, 720)).toEqual(box)
+    // Also a no-op at a different (but still matching) scale.
+    const box2 = { left: 0, top: 0, width: 640, height: 360 }
+    expect(computeObjectContainRect(box2, 1280, 720)).toEqual(box2)
+  })
+
+  it('pillarboxes (left/right bars) when the content is relatively taller/narrower than the box', () => {
+    // Box is 2:1, content is 16:9 (≈1.778:1) — content is "narrower" than the box.
+    const box = { left: 0, top: 0, width: 1000, height: 500 }
+    const result = computeObjectContainRect(box, 1280, 720)
+    expect(result.top).toBe(0)
+    expect(result.height).toBe(500)
+    expect(result.width).toBeCloseTo(888.89, 1)
+    expect(result.left).toBeCloseTo(55.56, 1)
+    // The visible content rect must stay fully inside the original box.
+    expect(result.left).toBeGreaterThan(box.left)
+    expect(result.left + result.width).toBeLessThan(box.left + box.width)
+  })
+
+  it('letterboxes (top/bottom bars) when the content is relatively wider than the box', () => {
+    // Box is a 1:1 square, content is 16:9 — content is "wider" than the box.
+    const box = { left: 0, top: 0, width: 720, height: 720 }
+    const result = computeObjectContainRect(box, 1280, 720)
+    expect(result.left).toBe(0)
+    expect(result.width).toBe(720)
+    expect(result.height).toBeCloseTo(405, 0)
+    expect(result.top).toBeCloseTo(157.5, 1)
+    expect(result.top).toBeGreaterThan(box.top)
+    expect(result.top + result.height).toBeLessThan(box.top + box.height)
+  })
+
+  it('reproduces the live-UAT pop-out measurement direction: a much bigger box than the old capped video never shrinks the visible area below the box', () => {
+    // The tester measured 639×316 rendered inside a 1600×880 window under
+    // the OLD (uncorrected, intrinsic-capped) layout. Under the fix, a
+    // fillContainer box this size with 16:9-ish content fills almost the
+    // entire window (only a thin pillarbox), nowhere close to 639×316.
+    const box = { left: 0, top: 0, width: 1600, height: 880 }
+    const result = computeObjectContainRect(box, 1280, 720)
+    expect(result.width).toBeGreaterThan(1500)
+    expect(result.height).toBe(880)
+  })
+
+  it('returns the box unchanged for a non-positive box or content dimension (no measurable size to compute)', () => {
+    const zeroWidthBox = { left: 0, top: 0, width: 0, height: 500 }
+    expect(computeObjectContainRect(zeroWidthBox, 1280, 720)).toEqual(zeroWidthBox)
+    const box = { left: 0, top: 0, width: 1000, height: 500 }
+    expect(computeObjectContainRect(box, 0, 720)).toEqual(box)
+    expect(computeObjectContainRect(box, 1280, 0)).toEqual(box)
   })
 })

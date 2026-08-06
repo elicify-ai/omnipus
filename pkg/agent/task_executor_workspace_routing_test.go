@@ -104,7 +104,7 @@ func TestExecuteTask_NativeDispatch_RootsAtTaskWorkspaceID_WhenAgentBelongsToMul
 	}
 	require.NoError(t, al.taskStore.Create(tk))
 
-	require.NoError(t, al.taskExecutor.ExecuteTask(context.Background(), tk.ID))
+	require.NoError(t, al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil))
 	final := waitForCompletionContractTerminal(t, al, tk.ID)
 	require.Equal(t, task.StatusDone, final.Status, "task did not complete Done (result: %s)", final.Result)
 

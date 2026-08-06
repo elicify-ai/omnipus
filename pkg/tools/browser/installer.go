@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5" //nolint:gosec // integrity check only (matches the GCS-published Content-MD5), not a security signature — see verifyGoogHashMD5.
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +21,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/chromeintegrity"
 )
 
 const (
@@ -93,6 +97,23 @@ func (b chromiumBuild) subdir(platform string) string {
 // platform, honoring b's own on-disk layout.
 func (b chromiumBuild) binaryFullPath(versionDir, platform string) string {
 	return filepath.Join(versionDir, b.subdir(platform), b.binaryPath())
+}
+
+// sha256Path returns the path of b's companion integrity manifest file
+// (chrome.sha256) under installRoot — the manifest the package-build
+// pipeline writes alongside the package Chrome per ADR-052 M2, mirroring the
+// SHA-pinned install contract the runtime-download path already verifies via
+// verifyGoogHashMD5. The companion file is named chrome.sha256 (NOT
+// per-build) on purpose — it is a per-binary integrity attestation written by
+// the goreleaser post-step, not by the runtime, and one binary per
+// installRoot is the supported layout. Returns the empty string if installRoot
+// is empty (defensive — the path is just a Join and would land at "<root>/
+// chrome.sha256" otherwise).
+func (b chromiumBuild) sha256Path(installRoot string) string {
+	if installRoot == "" {
+		return ""
+	}
+	return filepath.Join(installRoot, "chrome.sha256")
 }
 
 // EnsureChromiumBuild ensures a managed Chromium binary is present under
@@ -199,10 +220,31 @@ func EnsureChromiumBuild(ctx context.Context, installRoot string, build chromium
 	zipPath := filepath.Join(versionDir, build.downloadID+"-"+platform+".zip")
 	if dlErr := downloadFile(ctx, zipURL, zipPath); dlErr != nil {
 		_ = os.Remove(zipPath)
+		cleanupPartialInstall(versionDir, build, platform)
 		return "", fmt.Errorf("browser: download %s: %w", zipURL, dlErr)
 	}
 
 	if extractErr := extractZip(zipPath, versionDir); extractErr != nil {
+		// FIX-CRIT-001: a disk-full, killed-mid-extract, or otherwise
+		// partial extraction can leave the build's subdirectory containing
+		// a PARTIAL but already-executable binary — extractZip sets the
+		// exec bit from the zip entry's own mode at file-creation time,
+		// before the io.Copy that can later fail mid-write. Without this
+		// cleanup, findInstalledBuild's permissive-missing-manifest
+		// posture (CORR-007 — deliberately permissive so genuine
+		// pre-ADR-052 installs that predate a manifest aren't refused)
+		// would treat that partial tree as "installed" on every
+		// subsequent boot, forever — this is the exact mechanism behind a
+		// real incident where a full disk during extraction accumulated
+		// unusable, unverifiable, but "executable-looking" partial
+		// installs. Remove only THIS build's own extraction subdirectory
+		// (never the whole versionDir, which a sibling build — e.g. the
+		// other dual-download flavor — may already legitimately occupy)
+		// plus the zip itself, so a failed install can never be mistaken
+		// for a working one. See installer_test.go's
+		// TestInstaller_ExtractFailure_CleansUpPartialInstall.
+		_ = os.Remove(zipPath)
+		cleanupPartialInstall(versionDir, build, platform)
 		return "", fmt.Errorf("browser: extract %s: %w", zipPath, extractErr)
 	}
 	_ = os.Remove(zipPath)
@@ -210,12 +252,41 @@ func EnsureChromiumBuild(ctx context.Context, installRoot string, build chromium
 	binaryPath := build.binaryFullPath(versionDir, platform)
 	info, err := os.Stat(binaryPath)
 	if err != nil {
+		// Extraction reported success but the expected binary isn't where
+		// this build's layout says it should be (e.g. a CfT layout change,
+		// or a zip that extracted other entries but not this one). Same
+		// "never leave a partial, misleading tree behind" rationale as the
+		// extract-failure branch above.
+		cleanupPartialInstall(versionDir, build, platform)
 		return "", fmt.Errorf("browser: extracted archive missing %s: %w", binaryPath, err)
 	}
 	if info.Mode()&0o111 == 0 {
 		if err := os.Chmod(binaryPath, info.Mode()|0o755); err != nil {
 			return "", fmt.Errorf("browser: chmod +x %s: %w", binaryPath, err)
 		}
+	}
+
+	// FIX-CRIT-001: write the chrome.sha256 integrity manifest that THIS
+	// installRoot's findInstalledBuild will read back on every future
+	// resolution (chromiumBuild.sha256Path — one manifest per installRoot,
+	// the same contract the package-Chrome path uses). Before this,
+	// EnsureChromiumBuild never wrote the manifest it reads, so every
+	// managed download landed in CORR-007's permissive "manifest missing"
+	// branch forever — there was nothing for a LATER call to verify
+	// against, even on a perfectly healthy install. This closes that gap
+	// for every install performed by a binary carrying this fix; it does
+	// NOT retroactively add a manifest to installs performed by an older
+	// binary — those remain in the permissive back-compat branch exactly
+	// as before (CORR-007 is unchanged). Best-effort/non-fatal: by this
+	// point the binary is already verified via the MD5-checked download
+	// plus a clean extraction, so a manifest-write hiccup (e.g. the disk
+	// filling up at this exact instant) must not fail an otherwise-good
+	// installation — it only means the NEXT findInstalledBuild call falls
+	// back to the same permissive posture every pre-this-fix install has
+	// always had, not a regression.
+	if manErr := writeManagedInstallManifest(build, installRoot, binaryPath); manErr != nil {
+		logger.WarnCF("browser", "failed to write chrome.sha256 integrity manifest for managed chromium install",
+			map[string]any{"binary": binaryPath, "error": manErr.Error()})
 	}
 
 	logger.InfoCF("browser", "Chromium install complete",
@@ -226,6 +297,65 @@ func EnsureChromiumBuild(ctx context.Context, installRoot string, build chromium
 		})
 
 	return binaryPath, nil
+}
+
+// cleanupPartialInstall removes build's own extraction subdirectory under
+// versionDir (NOT versionDir itself, which a sibling build — the other
+// dual-download flavor, or a different already-installed version — may
+// legitimately occupy) after a failed download or extraction, so a partial
+// or corrupted install can never be mistaken for a working one by a later
+// findInstalledBuild call. Best-effort: a removal failure is logged, never
+// returned — the caller is already unwinding a real error and must not mask
+// it with a cleanup failure.
+func cleanupPartialInstall(versionDir string, build chromiumBuild, platform string) {
+	buildDir := filepath.Join(versionDir, build.subdir(platform))
+	if err := os.RemoveAll(buildDir); err != nil {
+		logger.ErrorCF("browser", "failed to clean up partial chromium install after a failed download/extract",
+			map[string]any{"dir": buildDir, "error": err.Error()})
+	}
+}
+
+// writeManagedInstallManifest computes binaryPath's SHA-256 and writes it to
+// build's manifest location under installRoot (chromiumBuild.sha256Path),
+// atomically (temp file + rename, mirroring downloadFile's own atomic-write
+// discipline) so a crash mid-write can never leave a half-written,
+// unparseable manifest where a clean absence used to be.
+func writeManagedInstallManifest(build chromiumBuild, installRoot, binaryPath string) error {
+	shaPath := build.sha256Path(installRoot)
+	if shaPath == "" {
+		return fmt.Errorf("empty install root, cannot place chrome.sha256 manifest")
+	}
+
+	f, err := os.Open(binaryPath)
+	if err != nil {
+		return fmt.Errorf("open %s for hashing: %w", binaryPath, err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, copyErr := io.Copy(h, f); copyErr != nil {
+		return fmt.Errorf("hash %s: %w", binaryPath, copyErr)
+	}
+	digest := hex.EncodeToString(h.Sum(nil))
+
+	tmp, err := os.CreateTemp(installRoot, "chrome.sha256.part-*")
+	if err != nil {
+		return fmt.Errorf("create temp manifest in %s: %w", installRoot, err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.WriteString(digest + "\n"); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("write temp manifest: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close temp manifest: %w", err)
+	}
+	if err := os.Rename(tmpPath, shaPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename temp manifest to %s: %w", shaPath, err)
+	}
+	return nil
 }
 
 // EnsureChromium ensures the agent's default managed Chromium binary is
@@ -267,22 +397,40 @@ func zipURLForPlatform(downloads []cftManifestDownloadRef, platform string) stri
 	return ""
 }
 
+// selectDownloadBuildGOOS is the test seam for selectDownloadBuild's per-OS
+// branch (mirrors capability.go's goosForCapability and package_chrome.go's
+// layoutsGOOS). Production uses runtime.GOOS; tests inject a foreign GOOS
+// (e.g. "darwin" or "windows") to exercise both branches of the switch on a
+// linux CI host — the only way to cover the darwin→fullChrome and
+// other→headlessShell cases without a macOS/Windows runner.
+var selectDownloadBuildGOOS = runtime.GOOS
+
 // selectDownloadBuild decides which CfT build the agent's default
 // EnsureChromium download (nothing of either flavor cached yet) should
-// fetch. WebRTC tabCapture (video+audio) requires the full "chrome" build
-// and is only ever video-capable on linux (ClassifyVideoCapability) — so
-// linux defaults to fullChromeBuild(), and every other platform (which will
-// never be video-capable) defaults to the lighter headlessShellBuild()
-// rather than paying for a full-Chrome download it can't use for capture.
-// EnsureChromiumBuild's own fallback separately drops linux to
-// headlessShellBuild() gracefully when the full build is missing from the
-// manifest or unavailable for the current platform — that's a distinct,
-// later fallback from this initial platform-based selection.
+// fetch. WebRTC tabCapture (video+audio) requires the full "chrome" build.
+// linux defaults to fullChromeBuild() (the only platform the managed
+// full-Chrome capture path is validated against — ClassifyVideoCapability).
+// darwin ALSO defaults to fullChromeBuild() per ADR-052 Phase 3 / C3 option
+// (ii): the Google-signed full Chrome ships as the bundled sibling helper
+// beside the gateway .app, and the capture-capable build must be in
+// position for the AC-4 gate relaxation once the darwinAudioVerified audio
+// spike (AC-1) proves audio. This download choice does NOT by itself flip
+// capability — ClassifyVideoCapability's videoCapableOS gate still requires
+// darwinAudioVerified=true before advertising Capable, so a darwin host
+// with the full build installed but the spike still pending correctly stays
+// not-capable (AC-5). Windows and every other platform stay on the lighter
+// headlessShellBuild() until Phase 4. EnsureChromiumBuild's own fallback
+// separately drops linux/darwin to headlessShellBuild() gracefully when the
+// full build is missing from the manifest or unavailable for the current
+// platform — that's a distinct, later fallback from this initial
+// platform-based selection. The per-OS switch consults selectDownloadBuildGOOS.
 func selectDownloadBuild() chromiumBuild {
-	if runtime.GOOS == "linux" {
+	switch selectDownloadBuildGOOS {
+	case "linux", "darwin":
 		return fullChromeBuild()
+	default:
+		return headlessShellBuild()
 	}
-	return headlessShellBuild()
 }
 
 // findInstalledBinary scans installRoot's version directories for an
@@ -301,11 +449,56 @@ func findInstalledBinary(installRoot, platform string) string {
 // findInstalledBuild scans installRoot's version directories for an
 // already-extracted, executable binary of the given build and returns the
 // most-recently-modified match, or "" if none exists.
+//
+// ADR-052 M2 (integrity): when a sibling chrome.sha256 integrity manifest is
+// present at installRoot (the package-build pipeline writes one alongside the
+// package Chrome per ADR-052 D2), the candidate binary's actual SHA-256 is
+// verified against the manifest before being returned. A present-and-
+// mismatching manifest hard-fails (treated as "not installed") so the
+// managed download path kicks in, exactly mirroring the runtime-download
+// path's verifyGoogHashMD5 hard-fail behavior (SEC-ADR052-001 — no silent
+// default fallback). A MISSING manifest stays permissive on this path —
+// the runtime-download path doesn't ship one by default and older managed
+// installs predate ADR-052 entirely; refusing them would be a back-compat
+// regression. (The package Chrome path is stricter — see findPackageChrome
+// in package_chrome.go, which requires chrome.sha256.)
+//
+// CORR-007 deliberate asymmetry: this permissive-missing-manifest posture
+// is INTENTIONAL and tracks the runtime-download-path contract. A later
+// release may close the back-compat window after pre-ADR-052 installs pass
+// their retention horizon.
+//
+// SEC-ADR052-005/006 hardening: installRoot is Lstat-checked before any
+// candidate is read (refuses a symlinked install root, refuses a
+// world-writable install root — see TestFindInstalledBuild_*). Each
+// candidate binary is also Lstat-checked (refuses a symlinked leaf
+// binary). The winning candidate's manifest verification re-lstats both
+// the binary and the manifest (chromeintegrity.VerifyChromeSHA256's own
+// guards). A symlinked binary or a symlinked manifest is rejected.
 func findInstalledBuild(installRoot, platform string, build chromiumBuild) string {
+	// SEC-ADR052-005/006: refuse a symlinked or world-writable install
+	// root before walking its entries (the world-writable guard mirrors
+	// findPackageChrome's; the symlinked-root guard is new for this
+	// path so the managed install can't be redirected to an attacker-
+	// controlled tree).
+	rootInfo, lerr := os.Lstat(installRoot)
+	if lerr != nil {
+		return ""
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 {
+		return ""
+	}
+	if rootInfo.Mode()&0o002 != 0 {
+		logger.WarnCF("browser",
+			"managed Chrome install root is world-writable — refusing to use it",
+			map[string]any{"install_root": installRoot})
+		return ""
+	}
 	entries, err := os.ReadDir(installRoot)
 	if err != nil {
 		return ""
 	}
+	shaPath := build.sha256Path(installRoot)
 	// Walk version directories newest-first by ModTime so we pick the most
 	// recently installed build when multiple coexist.
 	type cand struct {
@@ -318,11 +511,24 @@ func findInstalledBuild(installRoot, platform string, build chromiumBuild) strin
 			continue
 		}
 		bin := build.binaryFullPath(filepath.Join(installRoot, e.Name()), platform)
-		info, statErr := os.Stat(bin)
-		if statErr != nil || info.Mode()&0o111 == 0 {
+		// SEC-ADR052-005: refuse a symlinked binary at the leaf. os.Stat
+		// follows symlinks (so info.Mode()&0o111 would reflect the
+		// target's mode, not the leaf's), and an attacker who can write
+		// the install root can substitute a symlink to an arbitrary
+		// binary. Lstat gives us the leaf's mode directly.
+		linfo, lerr := os.Lstat(bin)
+		if lerr != nil {
 			continue
 		}
-		cands = append(cands, cand{path: bin, mod: info.ModTime()})
+		if linfo.Mode()&os.ModeSymlink != 0 {
+			logger.WarnCF("browser", "installed Chrome binary is a symlink — refusing to use it",
+				map[string]any{"binary": bin})
+			continue
+		}
+		if linfo.Mode()&0o111 == 0 {
+			continue
+		}
+		cands = append(cands, cand{path: bin, mod: linfo.ModTime()})
 	}
 	if len(cands) == 0 {
 		return ""
@@ -331,6 +537,34 @@ func findInstalledBuild(installRoot, platform string, build chromiumBuild) strin
 	for _, c := range cands[1:] {
 		if c.mod.After(best.mod) {
 			best = c
+		}
+	}
+	// ADR-052 M2 integrity verification (only when a manifest is present —
+	// see this function's doc comment for why missing is permissive here).
+	if shaPath != "" {
+		if _, statErr := os.Lstat(shaPath); statErr == nil {
+			if verr := chromeintegrity.VerifyChromeSHA256(best.path, shaPath); verr != nil {
+				// A present-but-malformed/mismatching manifest hard-fails
+				// (SEC-ADR052-001 — no silent default). Missing manifests
+				// are NOT a failure on this path (the runtime-download
+				// path doesn't ship one); the sentinel
+				// chromeintegrity.ErrSHA256ManifestMissing is what the
+				// verifier returns, and we specifically accept it here
+				// so the back-compat case stays permissive. Any other
+				// error is a hard fail (mismatch, malformed, symlink).
+				if !errors.Is(verr, chromeintegrity.ErrSHA256ManifestMissing) {
+					logger.WarnCF(
+						"browser",
+						"installed Chrome failed integrity verification — treating as not installed so managed download will retry",
+						map[string]any{
+							"binary":     best.path,
+							"sha256_man": shaPath,
+							"error":      verr.Error(),
+						},
+					)
+					return ""
+				}
+			}
 		}
 	}
 	return best.path

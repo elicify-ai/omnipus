@@ -249,7 +249,7 @@ func TestValidateKey_UnicodeBodyNoPanic(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(403) // region block, no credential marker → Restricted
-		//nolint:gosmopolitan // intentional non-ASCII body: this test asserts unicode bodies classify without panic
+
 		_, _ = w.Write([]byte(`{"error":{"message":"このキーはこの地域でブロックされています 🚫"}}`))
 	}))
 	defer srv.Close()

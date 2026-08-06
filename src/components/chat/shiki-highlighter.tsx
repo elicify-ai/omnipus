@@ -2,13 +2,19 @@
 // AssistantUI calls SyntaxHighlighter for every code block; CopyCodeHeader
 // renders the language label + copy button above each block.
 // Special case: language "mermaid" renders MermaidDiagram instead of Shiki.
+//
+// The actual Shiki rendering (theme, styling) lives in markdown-shared.tsx's
+// ShikiCodeBlock — shared with historical-markdown.tsx's finalized-message
+// renderer (library-spec D-6) so highlighting doesn't vanish when a message
+// finalizes or the page reloads. Only the mermaid/useMessage streaming-status
+// branch stays here — see ShikiCodeBlock's doc comment for why it can't share.
 
 import { useState, useRef, useEffect } from 'react'
-import { ShikiHighlighter } from 'react-shiki'
 import { Copy, Check } from '@phosphor-icons/react'
 import { useMessage } from '@assistant-ui/react'
 import type { SyntaxHighlighterProps, CodeHeaderProps } from '@assistant-ui/react-markdown'
 import { MermaidDiagram } from './mermaid-renderer'
+import { ShikiCodeBlock } from './markdown-shared'
 import { useUiStore } from '@/store/ui'
 
 // ── Live mermaid block ────────────────────────────────────────────────────────
@@ -31,23 +37,7 @@ export function SyntaxHighlighter({ language, code }: Omit<SyntaxHighlighterProp
     return <LiveMermaidBlock code={code} />
   }
 
-  return (
-    <ShikiHighlighter
-      language={language || 'text'}
-      theme="vitesse-dark"
-      addDefaultStyles={false}
-      className="!bg-[var(--color-surface-2)] !rounded-b-md overflow-x-auto block w-full"
-      style={{
-        padding: '0.75rem 1rem',
-        fontSize: '11px',
-        lineHeight: '1.65',
-        fontFamily: '"JetBrains Mono", "Fira Code", monospace',
-        margin: 0,
-      }}
-    >
-      {code}
-    </ShikiHighlighter>
-  )
+  return <ShikiCodeBlock language={language} code={code} />
 }
 
 // ── Copy button header ────────────────────────────────────────────────────────

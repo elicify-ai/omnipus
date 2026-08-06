@@ -15,6 +15,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/pathsafe"
 )
 
 // IsPrivateLiteralHost returns true when the host is a literal IP that maps
@@ -67,16 +68,40 @@ func IsAudioFile(filename, contentType string) bool {
 
 // SanitizeFilename removes potentially dangerous characters from a filename
 // and returns a safe version for local filesystem storage.
+//
+// This is one of the call sites that genuinely CANNOT reject: it sanitizes
+// a filename an inbound channel attachment (Discord, Feishu, …) already
+// carries from a remote server, and the bytes must be stored somehow
+// regardless of what the sender named them. It therefore routes through
+// pkg/pathsafe.SanitizeComponent — the shared, cross-platform-safe,
+// single-pass rewriter every filename-accepting surface in Omnipus now
+// uses — rather than this function's own former ad hoc, iterative
+// substring removal (`strings.ReplaceAll(base, "..", "")` followed by
+// separate slash/backslash replacement), which could reconstitute a
+// dangerous sequence: four dots ("....") reduces, after removing two
+// non-overlapping ".." matches, to nothing, but a name like "....//" was
+// left as "//" by that first pass alone, relying entirely on the SEPARATE
+// slash-replacement pass below it to finish the job — fragile, and exactly
+// the "replace-by-substring" bug class pathsafe's package doc calls out.
+// pathsafe.SanitizeComponent treats both '/' and '\' as separators
+// unconditionally (not gated on runtime.GOOS, unlike path/filepath's own
+// Base) — a filename arriving from a remote channel is not a local OS
+// path, so it must be neutralized identically regardless of which OS the
+// Omnipus binary happens to be running on.
+//
+// A caller can never be told "please rename your attachment and resend"
+// (Sanitize can only rewrite, not reject), so any actual change is logged
+// at WARN — never a silent swap — so an operator can trace an unexpected
+// stored filename back to the original the sender used.
 func SanitizeFilename(filename string) string {
-	// Get the base filename without path
-	base := filepath.Base(filename)
-
-	// Remove any directory traversal attempts
-	base = strings.ReplaceAll(base, "..", "")
-	base = strings.ReplaceAll(base, "/", "_")
-	base = strings.ReplaceAll(base, "\\", "_")
-
-	return base
+	sanitized, changed := pathsafe.SanitizeComponent(filename)
+	if changed {
+		logger.WarnCF("utils", "sanitized unsafe filename for local storage", map[string]any{
+			"original":  filename,
+			"sanitized": sanitized,
+		})
+	}
+	return sanitized
 }
 
 // DownloadOptions holds optional parameters for downloading files

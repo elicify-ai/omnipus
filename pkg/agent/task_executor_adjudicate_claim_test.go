@@ -47,7 +47,7 @@ func TestTaskExecutor_AdjudicateClaim_EmptyClaimFailsClosedWithoutVerifierDispat
 		t.Fatalf("create task: %v", err)
 	}
 
-	redispatch := al.taskExecutor.adjudicateClaim(context.Background(), tk, "", "   ")
+	redispatch := al.taskExecutor.adjudicateClaim(context.Background(), tk, "", "   ", nil)
 
 	if fake.callCount() != 0 {
 		t.Fatalf("an empty completion claim must never dispatch the verifier; callCount=%d", fake.callCount())
@@ -105,7 +105,7 @@ func TestTaskExecutor_AdjudicateClaim_FR014_DropsStaleVerdictAfterConcurrentStop
 
 	done := make(chan string, 1)
 	go func() {
-		done <- al.taskExecutor.adjudicateClaim(context.Background(), tk, "", "I finished the thing")
+		done <- al.taskExecutor.adjudicateClaim(context.Background(), tk, "", "I finished the thing", nil)
 	}()
 
 	<-registered

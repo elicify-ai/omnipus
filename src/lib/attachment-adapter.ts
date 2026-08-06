@@ -22,9 +22,13 @@ import type {
   PendingAttachment,
 } from "@assistant-ui/react";
 
-import { createSession, uploadFiles } from "@/lib/api";
+import { createSession, uploadFiles, fetchModelCapabilities, modelLacksImageCapability, ApiSchemaError } from "@/lib/api";
+import type { Agent } from "@/lib/api";
+import { mediaRefURL } from "@/lib/library-attachment";
+import { queryClient } from "@/lib/queryClient";
 import { useSessionStore } from "@/store/session";
 import { useUiStore } from "@/store/ui";
+import { useWorkspacesStore } from "@/store/workspacesStore";
 import { isImageAttachment } from "@/components/chat/AttachmentCard";
 
 /** A resolved upload: the agent-facing media ref plus display metadata. */
@@ -194,9 +198,55 @@ export const omnipusAttachmentAdapter = {
       return failedComplete;
     }
 
+    // D18: model vision capability is not knowable client-side at all — warn
+    // (non-blocking) BEFORE uploading when this is an image attachment and
+    // the active agent's resolved model is known to lack the "image"
+    // modality, mirroring the identical check in browserAnnotate.ts (the
+    // live-browser annotation send path — the two share the decision helper
+    // in api.ts). Best-effort: any failure resolving the agent's model or
+    // fetching the capability catalog must never block the send — the
+    // reactive server-side explanation (loop_media.go) remains the backstop
+    // either way.
+    if (attachment.type === "image") {
+      try {
+        const agentId = useSessionStore.getState().activeAgentId;
+        const agents = agentId ? queryClient.getQueryData<Agent[]>(["agents"]) : undefined;
+        const agentModel = agents?.find((a) => a.id === agentId)?.model;
+        if (agentModel) {
+          const caps = await fetchModelCapabilities();
+          if (modelLacksImageCapability(agentModel, caps)) {
+            useUiStore.getState().addToast({
+              message: `${agentModel} may not support image input — it might not be able to see "${attachment.name}".`,
+              variant: "warning",
+            });
+          }
+        }
+      } catch (err) {
+        // Best-effort — a failure here must never block the send. But it
+        // must not vanish into console.debug either: an ApiSchemaError
+        // means the vision pre-send warning is DISABLED FOR EVERY MODEL
+        // until the contract drift is fixed (Constraint #8 requires
+        // schema-validation failures to be visible, not silently
+        // swallowed to a success-shaped no-op), which is a materially
+        // different -- and more urgent -- signal than an ordinary
+        // network hiccup. Distinguish the two rather than flattening
+        // both to the same log line (mirrors browserAnnotate.ts's
+        // identical D18 capability-check catch).
+        if (err instanceof ApiSchemaError) {
+          console.warn(
+            "[attachment] model-capability check failed schema validation — the vision pre-send warning is disabled for ALL models until this contract drift is fixed:",
+            err,
+          );
+        } else {
+          console.warn("[attachment] model-capability check failed (best-effort, send proceeds regardless):", err);
+        }
+      }
+    }
+
     let uploadResult: Awaited<ReturnType<typeof uploadFiles>>;
     try {
-      uploadResult = await uploadFiles(sessionId, [attachment.file]);
+      const workspaceId = useWorkspacesStore.getState().activeWorkspaceId ?? undefined;
+      uploadResult = await uploadFiles(sessionId, [attachment.file], workspaceId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       useUiStore.getState().addToast({ message: `Upload failed for "${attachment.name}": ${msg}`, variant: "error" });
@@ -224,10 +274,16 @@ export const omnipusAttachmentAdapter = {
 
     stashResolvedUpload(attachment.id, {
       ref,
-      // URL uses the server-sanitized name, but display uses the ORIGINAL
-      // filename (the server appends a uniqueness suffix, e.g.
-      // report_1780….docx, which is ugly in the chat).
-      url: `/api/v1/uploads/${sessionId}/${uploaded.name}`,
+      // D16 fix: build the preview URL from the returned media ref
+      // (mediaRefURL), not a hardcoded `/api/v1/uploads/${sessionId}/${name}`
+      // string. A workspace-scoped upload (uploadFiles called with
+      // workspaceId below) is routed into the workspace media library and
+      // returns a `media://workspace/<ws>/<id>` ref — the legacy
+      // uploads/{session}/{filename} path is never written for that case, so
+      // the hardcoded URL 404s. mediaRefURL derives the correct route from
+      // the ref itself, mirroring the Go-side mediaRefURL in
+      // webchat_channel.go.
+      url: mediaRefURL(ref),
       filename: attachment.name,
       contentType: uploaded.content_type,
     });

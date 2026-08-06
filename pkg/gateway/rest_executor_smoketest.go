@@ -111,6 +111,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -524,7 +525,7 @@ func (a *restAPI) runExecutorSmokeTest(
 		runner.ConsentDispatcher(runCtx, evCh, driver, runID, "", nil, out)
 	}()
 
-	responseText, ok, errMsg := drainSmokeTestRun(runCtx, out)
+	responseText, ok, errMsg := drainSmokeTestRun(runCtx, runID, out)
 
 	// If runCtx ended (client disconnect, or this handler's own
 	// smokeTestDrainGrace backstop — NOT the normal "the run finished"
@@ -553,8 +554,19 @@ func (a *restAPI) runExecutorSmokeTest(
 		resp = smokeTestFail(errMsg, durationMs(), usedAgentWorkspace)
 	}
 
-	slog.Info("executor-smoke-test: run finished",
-		"run_id", runID, "cli", cli, "ok", ok, "duration_ms", resp.DurationMs)
+	// The response body's Error field is already sanitized (never raw
+	// provider/CLI text — see sanitizeSmokeTestErrorMessage's doc), so it is
+	// safe to fold into this log line even though gateway.log can end up in
+	// operator hands more broadly than the HTTP response. It is what lets
+	// "see gateway.log for details" (the sanitized copy told to the caller)
+	// actually resolve to something here; the RAW message (when it differs)
+	// is logged separately, tied to the same run_id, inside
+	// drainSmokeTestRun's EventKindError case below.
+	finishArgs := []any{"run_id", runID, "cli", cli, "ok", ok, "duration_ms", resp.DurationMs}
+	if !ok && resp.Error != nil {
+		finishArgs = append(finishArgs, "error", *resp.Error)
+	}
+	slog.Info("executor-smoke-test: run finished", finishArgs...)
 
 	return resp, resolvedBinary
 }
@@ -565,6 +577,44 @@ func (a *restAPI) runExecutorSmokeTest(
 // run failed rather than seeing the generic timeout message a silently
 // dropped permission-request event would otherwise fall through to.
 const smokeTestPermissionDeniedErr = "the CLI attempted a tool call, which is denied by default for this test"
+
+// sanitizeSmokeTestErrorMessage is the fail-closed sanitizer between a
+// runner's raw error text and the smoke-test response body. The smoke
+// test's response body is operator-visible (POST /api/v1/agents/executor-smoke-test
+// returns it directly) — Wave 1 (ADR-051 §RD5 MAJ-005) requires it to
+// carry only generic, classifier-routed copy, NEVER raw provider/CLI text.
+//
+// The classifier runs on a synthetic ProviderError carrying only the
+// message (no status — runner ev.Err has no HTTP context); the result's
+// Message is one of the userMessages entries, generic over server text.
+// For the unclassified case (CodeUnknown or empty classifier output) the
+// function emits a fixed, deliberately generic fallback — the load-bearing
+// invariant: the smoke-test response NEVER carries raw provider/CLI text,
+// regardless of classification outcome.
+//
+// Two shapes are short-circuited before the classifier (both indicate
+// smoke-test-internal sentinels, not external provider text):
+//   - the literal smokeTestPermissionDeniedErr passes through verbatim
+//     (deny-by-default — the operator must be told exactly why).
+//   - any message containing "timeout" is emitted as a generic timeout
+//     copy (the prior "The AI service encountered an error." generic
+//     message swallowed the load-bearing timing signal).
+func sanitizeSmokeTestErrorMessage(rawMessage string) string {
+	if rawMessage == "" {
+		return "The external CLI failed. See gateway.log for details."
+	}
+	if rawMessage == smokeTestPermissionDeniedErr {
+		return smokeTestPermissionDeniedErr
+	}
+	if strings.Contains(strings.ToLower(rawMessage), "timeout") {
+		return "The smoke test hit the timeout bound before completing. See gateway.log for details."
+	}
+	llm := agent.TranslateLLMError(&agent.ProviderError{Body: rawMessage, Err: nil}, rawMessage)
+	if llm.Message == "" {
+		return "The external CLI failed. See gateway.log for details."
+	}
+	return llm.Message
+}
 
 // drainSmokeTestRun consumes the CONSENT-ROUTED event stream (ch is the `out`
 // channel runner.ConsentDispatcher forwards to — see runExecutorSmokeTest),
@@ -597,7 +647,11 @@ const smokeTestPermissionDeniedErr = "the CLI attempted a tool call, which is de
 //   - ctx.Done() fires before any of the above: ok=false with a
 //     timeout-shaped error (the backstop path — see smokeTestDrainGrace's
 //     doc).
-func drainSmokeTestRun(ctx context.Context, ch <-chan runner.RunEvent) (responseText string, ok bool, errMsg string) {
+func drainSmokeTestRun(
+	ctx context.Context,
+	runID string,
+	ch <-chan runner.RunEvent,
+) (responseText string, ok bool, errMsg string) {
 	var sb strings.Builder
 	for {
 		select {
@@ -623,7 +677,30 @@ func drainSmokeTestRun(ctx context.Context, ch <-chan runner.RunEvent) (response
 				if ev.Err != nil && ev.Err.Message != "" {
 					msg = ev.Err.Message
 				}
-				return strings.TrimSpace(sb.String()), false, msg
+				sanitized := sanitizeSmokeTestErrorMessage(msg)
+				if sanitized != msg {
+					// The response body is sanitized on purpose (Wave 1 /
+					// ADR-051 §RD5 MAJ-005 — never leak raw provider/CLI text
+					// to the operator-visible response), but that sanitizer's
+					// whole job is throwing the raw text away — if it is
+					// thrown away here too, "See gateway.log for details"
+					// (the sanitized copy the caller is told) is a dead end:
+					// there is nothing in gateway.log to find. Log the raw
+					// message server-side only, tied to run_id so it
+					// correlates with the "run finished" completion log line
+					// in runExecutorSmokeTest.
+					//
+					// Re-review FIX 1: this was a bare slog.Warn — self-
+					// defeating, since slog.SetDefault is never called
+					// anywhere in this repo, so log/slog.Default() never
+					// reaches $OMNIPUS_HOME/logs/gateway.log on a
+					// backgrounded gateway. The response's "See gateway.log
+					// for details" pointed nowhere. Route through pkg/logger
+					// instead — see rest_executor_smoketest_rawlog_test.go.
+					logger.WarnCF("executor-smoketest", "run failed (raw error, server-side only)",
+						map[string]any{"run_id": runID, "cli_error_raw": msg})
+				}
+				return strings.TrimSpace(sb.String()), false, sanitized
 			case runner.EventKindPermissionRequest:
 				return strings.TrimSpace(sb.String()), false, smokeTestPermissionDeniedErr
 			}

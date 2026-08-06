@@ -21,7 +21,7 @@ import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { expectA11yClean } from './fixtures/a11y'
-import { chatInput, sendButton } from './fixtures/selectors'
+import { chatInput, sendButton, waitForConnected } from './fixtures/selectors'
 import { enableVerboseChat } from './fixtures/verbose-chat'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -222,6 +222,11 @@ async function waitForWsConnected(page: Page): Promise<void> {
   // "Connecting to gateway..." to an agent-specific prompt.
   // Wait for the textarea to be enabled (not disabled), indicating WS is connected.
   await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
+  // toBeEnabled() alone no longer implies "connected" since the #105
+  // offline-queue fix (2fa26e6a) also enables the composer while
+  // reconnecting/queueing — see waitForConnected's doc comment in
+  // fixtures/selectors.ts. Confirm the socket is genuinely open.
+  await waitForConnected(page, { timeout: 15_000 })
 }
 
 /**
@@ -238,6 +243,10 @@ async function waitForWsConnected(page: Page): Promise<void> {
  */
 async function waitForReplayDone(page: Page): Promise<void> {
   await expect(chatInput(page)).toBeEnabled({ timeout: 30_000 })
+  // toBeEnabled() alone conflates "replay done" with "connected" — it no
+  // longer implies the latter (2fa26e6a, #105 fix; see waitForConnected's
+  // doc comment in fixtures/selectors.ts).
+  await waitForConnected(page, { timeout: 30_000 })
 }
 
 // ── Test (a): tool-call fidelity on reopen ────────────────────────────────────
@@ -517,6 +526,9 @@ test(
 
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 10_000 })
+    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+    // see waitForConnected's doc comment in fixtures/selectors.ts).
+    await waitForConnected(page, { timeout: 10_000 })
     await input.fill(prompt)
     const sendStart = Date.now()
     await input.press('Enter')
@@ -649,6 +661,9 @@ test(
     // and the LLM streamed only thinking-mode placeholders without producing final text.
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 10_000 })
+    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+    // see waitForConnected's doc comment in fixtures/selectors.ts).
+    await waitForConnected(page, { timeout: 10_000 })
     await input.fill(
       'Echo this token back to me verbatim, on its own line, with no other words: continuation confirmed',
     )
@@ -937,7 +952,11 @@ test(
 
     // After replay completes (done frame arrives, isReplaying → false), input must be enabled.
     // Traces to: Scenario 10 When "replay's done frame arrives → send button becomes enabled".
-    await expect(input).toBeEnabled({ timeout: 30_000 })
+    // Routed through the shared waitForReplayDone helper (also confirms the
+    // socket is genuinely connected, not just enabled-while-queueing — see
+    // waitForConnected's doc comment in fixtures/selectors.ts) for
+    // consistency with every other replay-done gate in this file.
+    await waitForReplayDone(page)
 
     // After replay, verify the send button enables when text is typed.
     // (ComposerPrimitive.Send is also disabled on empty input — typing enables it.)

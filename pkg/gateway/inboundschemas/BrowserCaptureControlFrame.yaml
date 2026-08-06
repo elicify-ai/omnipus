@@ -28,3 +28,21 @@ properties:
     type: string
     maxLength: 512
     description: Optional human-readable context for the action (e.g. shutdown cause).
+  expected_width:
+    type: integer
+    minimum: 1
+    maximum: 16384
+    description: >-
+      recapture only, server → extension: the CDP-verified CSS viewport width
+      the tab was just resized to (SetViewport's getLayoutMetrics read-back).
+      chrome.tabs.get lags the OS window reflow, so a recapture racing a
+      resize can pin the whole stream to a stale size (measured live
+      2026-07-31: capture stuck at launch geometry while the tab was already
+      verified at 615x744). With this present the encoder polls tabs.get
+      until it converges on the expected size, falling back to the expected
+      value itself on timeout — it is the CDP-verified truth.
+  expected_height:
+    type: integer
+    minimum: 1
+    maximum: 16384
+    description: 'recapture only: expected CSS viewport height. See expected_width.'

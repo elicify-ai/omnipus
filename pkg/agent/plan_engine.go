@@ -85,7 +85,7 @@ type planJudge interface {
 // planTaskDispatcher is the narrow interface *TaskExecutor satisfies, for
 // the same reason as planJudge above.
 type planTaskDispatcher interface {
-	ExecuteTask(ctx context.Context, taskID string) error
+	ExecuteTask(ctx context.Context, taskID string, occurrenceMs *int64) error
 	// ClearEvidenceGateStreak resets taskID's in-memory evidence-marker-gate
 	// rejection streak (ADR-052 Fix-Wave-2/fix-wave item ii). cancelMemberLocked
 	// (this file, US-6/US-7 Stop) marks a task `failed` via a direct store

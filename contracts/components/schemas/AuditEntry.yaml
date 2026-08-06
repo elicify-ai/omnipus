@@ -72,3 +72,31 @@ properties:
     type: object
     description: Event-specific metadata. Structure varies by event type.
     additionalProperties: true
+  actor:
+    type: string
+    description: >
+      Authenticated username that performed the change. Present on
+      security_setting_change records (see
+      pkg/audit.SecurityChangeRecord); may be absent for other event types.
+    example: admin
+  resource:
+    type: string
+    description: >
+      Dotted identifier of the config key that was mutated. Present on
+      security_setting_change records, e.g. "gateway.god_mode". May be
+      absent for other event types.
+    example: gateway.god_mode
+  old_value:
+    type: object
+    description: >
+      The config value before the change, recursively redacted for
+      sensitive keys. Present on security_setting_change records. May be
+      absent for other event types.
+    additionalProperties: true
+  new_value:
+    type: object
+    description: >
+      The config value after the change, recursively redacted for
+      sensitive keys. Present on security_setting_change records. May be
+      absent for other event types.
+    additionalProperties: true

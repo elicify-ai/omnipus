@@ -105,7 +105,20 @@ export function IntegrationsSection() {
                 </Badge>
               ) : p.requires_key ? (
                 <Badge variant="muted">Needs API key</Badge>
-              ) : null}
+              ) : (
+                // D14 fix: a keyless provider (requires_key:false) that also
+                // isn't configured yet — e.g. SearXNG (needs a base_url) or
+                // audio-model (needs a voice.model_name) — previously fell
+                // through both branches above and rendered NO badge at all,
+                // leaving the row looking inert/unstatused next to every
+                // other provider. There is no UI path to set SearXNG's
+                // base_url today (no `base_url` field on
+                // IntegrationProviderUpdateRequest), so this is status-only;
+                // wiring an action is a separate, out-of-scope contract change.
+                <Badge variant="muted" data-testid={`needs-config-${p.id}`}>
+                  Needs configuration
+                </Badge>
+              )}
             </div>
           </div>
 

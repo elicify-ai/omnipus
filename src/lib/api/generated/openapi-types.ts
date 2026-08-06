@@ -1546,6 +1546,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/providers/model-capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List declared input-modality capabilities per model
+         * @description Returns the in-repo capability catalog (pkg/providers/capabilities) as a flat list of {id, modalities} pairs (D18). Model vision capability is not knowable client-side at all otherwise — the SPA resolves the target agent's model against this list to show a non-blocking warning before sending a vision attachment (e.g. a live-browser annotation, or an image attached via the composer) to a model that cannot accept images. Returns an empty array when the catalog is not constructed (never a 500) — the catalog is optional and the server-side capability gate remains the authoritative backstop regardless.
+         */
+        get: operations["listModelCapabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/commands": {
         parameters: {
             query?: never;
@@ -1846,6 +1866,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tasks/occurrences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Expand recurring task occurrences in a date range
+         * @description Server-side occurrence expansion for the workspace calendar (Calendar Recurrence Redesign). Expands every recurring-capable trigger the scheduler would actually arm — non-terminal AND not `surface: heartbeat`, the same predicate `OnTaskUpserted` applies before registering a job — covering `rrule` (rrule-go, normalized per the Timezone Semantics DST policy), legacy `cron_expr` (gronx, expanded in the server's local zone, display-only per D8), and `every_ms` (a forward-only projection off the live job's next-run instant, FR-008a). `tz` is the viewer's IANA zone and is the day-boundary authority for bucketing — the >3-occurrences-per-day threshold and `day_start_ms` are evaluated on days in this zone for every trigger flavor, regardless of each rule's own `tz`. Range is half-open `[from_ms, to_ms)`. Responses are bucketed: spans ≤ 8×24h return raw instants for every day (Week/Day views); spans > 8×24h return one `DayBucket` per query-tz day with more than 3 occurrences, raw instants for days with 3 or fewer (Month/overview views, D6). Capped at 500 instants per task per request plus a 10,000-computed- occurrence total iteration budget per task per request (arithmetic derivation, not iteration, for provably regular triggers); `truncated` signals either cap was hit. Tasks with zero occurrences in range are omitted; the result is `[]`, never null. Read-only; no state change. Rate-limited by a dedicated `taskReadLimiter` (240 requests/min), distinct from `configLimiter` and from the unthrottled task CRUD routes.
+         */
+        get: operations["listTaskOccurrences"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tasks/{id}": {
         parameters: {
             query?: never;
@@ -1948,6 +1988,30 @@ export interface paths {
         get: operations["listTaskEvidence"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a task's run history
+         * @description Returns every execution record (TaskRun) for a task, newest first (ADR-050 / task-run-history-spec §3.6) — the authoritative history list, independent of whether the task's current trigger can still project a run's occurrence_ms (a series whose schedule was edited still lists every past run). Retention-bounded (day-partitioned sweep with a keep-newest-day floor); full result strings. Read-only; no state change. Rate-limited by the same dedicated taskReadLimiter (240 requests/min) as GET /tasks/occurrences.
+         */
+        get: operations["listTaskRuns"];
+        put?: never;
+        /**
+         * Start a task run now ("Run now")
+         * @description Opens a new run for the task and dispatches it immediately (ADR-050 RD7 / task-run-history-spec §3.4). With `occurrence_ms`, runs that specific recurring occurrence (materialize-on-demand); without it, re-runs a normal/once task as a fresh run (prior runs are preserved). Idempotent per (task, occurrence_ms) against a concurrent scheduler fire. Returns 202 — the run executes asynchronously; observe progress via the task_run_status WS frame or GET /tasks/{id}/runs.
+         */
+        post: operations["runTaskNow"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2166,6 +2230,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/media/workspace/{workspace_id}/{media_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Serve a workspace media-library file by workspace + media ID
+         * @description Resolves a media://workspace/<workspace_id>/<media_id> ref through the owning workspace's media library and streams the underlying file with the correct Content-Type (FR-028). The split path shape keeps the workspace and media IDs independently validated while preserving the opaque ref for resolution. Returns 403 if the caller is not scoped to the owning workspace, 404 if the ref is unknown or no workspace library is available for it, and 500 if the workspace library exists but could not be opened (a genuine backend failure, distinct from a routine absent ref) or if the entry is stranded (manifest present, bytes quarantined — a server-side data-integrity fault).
+         */
+        get: operations["serveWorkspaceMediaFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/schedules": {
         parameters: {
             query?: never;
@@ -2341,8 +2425,257 @@ export interface paths {
         /** Update a workspace (partial update — absent fields unchanged) */
         put: operations["updateWorkspace"];
         post?: never;
-        /** Delete a workspace and cascade-delete its tasks and session links */
+        /**
+         * Delete a workspace and cascade-delete its tasks and session links
+         * @description The workspace record itself is removed atomically under a per-ID lock. Task-scan and channel-unbind cascade failures abort the whole delete (500) before that removal happens. A media-library cascade failure is detected AFTER the workspace record is already gone (best-effort cleanup step) — a genuine cascade failure (the media library could not be opened, or the manifest itself could not be updated) also returns 500, but unlike the two HARD steps above, the workspace itself has already been deleted by the time it is reported; a follow-up GET on the same id returns 404. A cascade outcome where the manifest was fully and correctly updated but a final on-disk cleanup step for an already-removed entry failed is NOT reported as a failure (204): every such leftover lives under the workspace's own directory, which this same delete unconditionally removes immediately afterward, so it never survives the request.
+         */
         delete: operations["deleteWorkspace"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List workspace media-library entries */
+        get: operations["listWorkspaceMedia"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/media/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a chat attachment from a workspace library entry
+         * @description Verifies the referenced entry exists, increments its refcount, and returns the updated MediaLibraryEntry — the handler re-reads the entry after the increment so the response reflects the new refcount/last_refcount_seen_at rather than a stale pre-increment projection.
+         */
+        post: operations["createWorkspaceMediaAttachment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/media/{media_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a workspace media-library entry */
+        get: operations["getWorkspaceMedia"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a workspace media-library entry (FR-008)
+         * @description Removes a single media-library entry (raw bytes + manifest entry) from the workspace library. Emits a media.delete audit event (FR-033). Idempotent against a concurrently-deleted entry (404 if not found). Returns the deleted entry's projection — including a degraded-success case where the manifest entry was committed-removed but the final on-disk unlink of the already-quarantined file failed; from the client's perspective the item is gone (a follow-up GET 404s) even though a 500 is not returned for it, so the body is the only signal of exactly what was deleted.
+         */
+        delete: operations["deleteWorkspaceMedia"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List every workspace as a Library virtual-root node
+         * @description Backs the Library sidebar entry point (library-spec.md D-3): every workspace the caller can browse, as a top-level node. Drilling into one node scopes subsequent Library calls to that workspace via {workspace_id} — see GET /library/{workspace_id}/entries.
+         */
+        get: operations["listLibraryWorkspaces"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Move a file or directory, optionally across two workspaces
+         * @description Moves the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id == to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `mv` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+         */
+        post: operations["moveLibraryEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copy a file or directory, optionally across two workspaces
+         * @description Copies the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `cp` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+         */
+        post: operations["copyLibraryEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a directory inside a workspace's work tree
+         * @description Lists the entries directly inside the given workspace-relative directory path (library-spec.md D-2 — entries are paths, not UUIDs). Omit path or pass an empty string to list the work-tree root — the Library explorer shows the WHOLE work/ directory, not merely the reserved work/.library/ upload directory (that is just one entry inside it). By default, entries whose name begins with a dot (".") are omitted from the listing — see include_hidden to include them and LibraryEntry.is_hidden for the definition. Returns 403 if path resolves outside the workspace's work tree (traversal or an out-of-root symlink); 404 if the workspace or the directory itself does not exist.
+         */
+        get: operations["listLibraryEntries"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a file or directory from a workspace's work tree
+         * @description Deletes the file or directory at the given workspace-relative path. Deleting a directory removes it and everything under it. Returns 403 if path resolves outside the workspace's work tree; 404 if nothing exists at path.
+         */
+        delete: operations["deleteLibraryEntry"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a file's text content for the Library editor/viewer
+         * @description Returns the text content of the file at path for the SPA editor (library-spec.md D-5), with explicit is_text / too_large fields so the SPA falls back to GET .../download rather than guessing from the content field. Returns 403 if path resolves outside the workspace's work tree; 404 if path does not exist or names a directory.
+         */
+        get: operations["getLibraryContent"];
+        /**
+         * Write a file's text content from the Library editor
+         * @description Writes text content to the file at the given workspace-relative path (library-spec.md D-5), creating the file if it does not already exist and overwriting any existing content entirely. Returns 403 if path resolves outside the workspace's work tree; 404 if the path's parent directory does not exist.
+         */
+        put: operations["putLibraryContent"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload files into a directory in a workspace's work tree
+         * @description Streams a multipart upload directly into the given workspace-relative directory (library-spec.md D-1 — uploads land as real, named files inside the work tree, de-duplicated with a numeric suffix on collision). Omit path or pass an empty string to upload into the work-tree root. Returns 403 if path resolves outside the workspace's work tree; 404 if the target directory does not exist.
+         */
+        post: operations["uploadLibraryFiles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/mkdir": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a directory in a workspace's work tree
+         * @description Creates the directory at path, creating any missing intermediate directories along the way (mkdir -p semantics) — the sole directory-creation primitive the Library API exposes. Idempotent: returns 200 if a directory already exists at path; 201 if a new directory (or chain of directories) was created. Returns 403 if path resolves outside the workspace's work tree; 409 if a regular FILE already exists at path.
+         */
+        post: operations["createLibraryDirectory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/rename": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rename or move a file or directory within one workspace
+         * @description Renames or moves the entry at "from" to "to" within this single workspace's work tree (library-spec.md D-2). "to" may name a different parent directory than "from", so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id == to_workspace_id == {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if "to" begins with a ".." segment anywhere in the path (rejected outright as a sanity check — such a name isn't a traversal, but this package's hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace's work tree; 404 if nothing exists at "from" OR "to"'s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at "to".
+         */
+        post: operations["renameLibraryEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download the raw bytes of a file in a workspace's work tree
+         * @description Streams the raw bytes of the file at path with a best-effort Content-Type and a Content-Disposition attachment filename. The binary counterpart to GET .../content — used for non-text files and for text files GET .../content reports as too_large. Returns 403 if path resolves outside the workspace's work tree; 404 if path does not exist or names a directory.
+         */
+        get: operations["downloadLibraryFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3120,6 +3453,270 @@ export interface components {
              * @example text/plain
              */
             mime_type: string;
+        };
+        /**
+         * MediaLibraryEntry
+         * @description Metadata for one persistent file in a workspace media library. Raw bytes are stored separately and verified against sha256 before presentation.
+         */
+        MediaLibraryEntry: {
+            /**
+             * Format: uuid
+             * @description UUID media identifier within the workspace library.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            readonly id: string;
+            /**
+             * @description Workspace identifier that owns this library entry. Existing Omnipus workspaces use ULIDs; the cross-workspace guard (FR-028a) compares this value to the workspace segment in media://workspace/<workspace_id>/<id>. Server-assigned from the caller workspace context (FR-007a / Wave 1 TD-M2).
+             * @example 01KY6SHW51CV7FMMHP5Y9SWB7P
+             */
+            readonly workspace_id: string;
+            /**
+             * @description Original user-visible filename. Server-side trim+reject for control characters and path separators; the 256-char cap mirrors POSIX filename limits.
+             * @example diagram.png
+             */
+            filename: string;
+            /**
+             * @description MIME type sniffed from the stored bytes.
+             * @example image/png
+             */
+            readonly mime: string;
+            /**
+             * Format: int64
+             * @description Raw file size in bytes. Server-enforced 100 MB cap (maxUploadFileSize per ADR-051 Rev 4).
+             * @example 204800
+             */
+            readonly size: number;
+            /**
+             * @description Lowercase hexadecimal SHA-256 digest verified on every read.
+             * @example 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+             */
+            readonly sha256: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC upload timestamp.
+             * @example 2026-07-22T14:22:00Z
+             */
+            readonly uploaded_at: string;
+            /**
+             * @description Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). The internal-only test_fixture source used by pkg/media/library test helpers is NOT a production wire value (Wave 1 TD-m1).
+             * @example user_upload
+             * @enum {string}
+             */
+            source: "user_upload" | "tool_output";
+            /** @description Server-maintained count of persisted message or session references. Required on every entry (FR-007a / Wave 1 TD-M2). */
+            readonly refcount?: number;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC timestamp of the latest refcount observation. Required on every entry (Wave 1 TD-M2).
+             */
+            readonly last_refcount_seen_at?: string;
+            /**
+             * @description Server-computed presentation state; never persisted as real entry state (it is derived at read time from the library's internal corruption registry). "stranded" marks an entry whose manifest record still exists but whose raw bytes are unreachable at their normal on-disk location after a prior compound rollback failure — the file is NOT usable and the UI should not offer open/attach/download for it. Only GET .../media (list) annotates a stranded entry this way; the single-entry read/attach/delete endpoints refuse a stranded entry outright (500, "media entry is in an inconsistent state") rather than returning it with this field set, so "stranded" is never observed from those responses — this field is "available" everywhere except a stranded row in the list.
+             * @example available
+             * @enum {string}
+             */
+            readonly status: "available" | "stranded";
+        };
+        /**
+         * MediaAttachmentRequest
+         * @description Request to attach an existing workspace media-library entry to a chat message without uploading the file again.
+         */
+        MediaAttachmentRequest: {
+            /**
+             * Format: uuid
+             * @description UUID of the MediaLibraryEntry to attach.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            media_id: string;
+        };
+        /**
+         * LibraryWorkspaceNode
+         * @description One workspace as a node in the Library's virtual root listing (GET /api/v1/library/workspaces) — the sidebar entry point (library-spec.md D-3: "two entry points, one component"). Drilling into a node scopes all subsequent Library operations to that workspace's work tree via {workspace_id}.
+         */
+        LibraryWorkspaceNode: {
+            /**
+             * @description Workspace identifier (matches Workspace.id).
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            id: string;
+            /**
+             * @description Human-readable workspace name (matches Workspace.name).
+             * @example website-api
+             */
+            name: string;
+            /**
+             * Format: int32
+             * @description Number of direct entries (files and directories) at the root of this workspace's work tree (workspaces/<id>/work/ — the same root GET .../entries lists), counted non-recursively so this stays cheap across every workspace on one request. Counts only non-hidden entries (see LibraryEntry.is_hidden), matching what the default (include_hidden=false) directory listing shows — the reserved work/.library/ upload directory is excluded from this count even though it exists. 0 when the work tree does not exist yet or has no visible entries.
+             * @example 12
+             */
+            entry_count: number;
+        };
+        /**
+         * LibraryEntry
+         * @description One file-explorer entry inside a workspace's work tree (library-spec.md D-2: "the Library is a file explorer over workspace trees, not a blob list" — entries are workspace-relative PATHS, not UUIDs, distinct from MediaLibraryEntry which is UUID-keyed). Returned by GET /api/v1/library/{workspace_id}/entries (directory listing), and echoed back by the write/rename/upload operations that produce or mutate a single entry.
+         */
+        LibraryEntry: {
+            /**
+             * @description Base filename or directory name (final path segment).
+             * @example report.md
+             */
+            name: string;
+            /**
+             * @description Workspace-relative path from the work-tree root (workspaces/<id>/work/, the root the Library explorer shows in full — not merely the reserved work/.library/ upload directory), forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
+             * @example notes/report.md
+             */
+            path: string;
+            /**
+             * @description True when this entry is a directory.
+             * @example false
+             */
+            is_dir: boolean;
+            /**
+             * @description True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
+             * @example false
+             */
+            is_hidden: boolean;
+            /**
+             * Format: int64
+             * @description File size in bytes. Always 0 for directories.
+             * @example 4096
+             */
+            size: number;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC last-modified timestamp of the underlying file or directory.
+             * @example 2026-07-28T10:15:00Z
+             */
+            modified_at: string;
+            /**
+             * @description Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
+             * @example text/markdown
+             */
+            mime?: string;
+            /**
+             * @description Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
+             * @example true
+             */
+            is_text_editable: boolean;
+        };
+        /**
+         * LibraryContentResponse
+         * @description Response from GET /api/v1/library/{workspace_id}/content — the text content of one file for the SPA editor/viewer (library-spec.md D-5). Carries explicit is_text / too_large flags so the SPA can fall back to the download endpoint rather than guessing from the content field.
+         */
+        LibraryContentResponse: {
+            /**
+             * @description Workspace-relative path echoed back from the request.
+             * @example uploads/report.md
+             */
+            path: string;
+            /**
+             * @description File text content, UTF-8. Present only when is_text is true and too_large is false; absent otherwise. The SPA MUST check both flags before rendering this field rather than treating an absent/empty value as "the file is empty."
+             * @example # Report
+             *
+             *     Status: green.
+             */
+            content?: string;
+            /**
+             * Format: int64
+             * @description Actual file size in bytes, provided even when content is omitted.
+             * @example 2048
+             */
+            size: number;
+            /**
+             * @description Whether the server sniffed this file as text (not binary). False for images, video, and other binary formats — the SPA renders a metadata card + download link instead (library-spec.md section 4 scope table).
+             * @example true
+             */
+            is_text: boolean;
+            /**
+             * @description Whether the file exceeds the server's inline-text-editing size threshold — the same 10485760-byte (10 MB) threshold enforced as LibraryContentRequest.content's maxLength, so a file this endpoint reports as editable is always one the write endpoint can accept back. When true, content is omitted even for a text file.
+             * @example false
+             */
+            too_large: boolean;
+            /**
+             * @description Best-effort MIME type sniffed from the file extension/content.
+             * @example text/markdown
+             */
+            mime?: string;
+        };
+        /**
+         * LibraryContentRequest
+         * @description Request body for PUT /api/v1/library/{workspace_id}/content. Writes text content to a file at the given workspace-relative path (library-spec.md D-5 editing scope), creating the file if it does not already exist and overwriting any existing content entirely. The path's parent directory must already exist within the workspace's work tree.
+         */
+        LibraryContentRequest: {
+            /**
+             * @description Workspace-relative path of the file to write, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints).
+             * @example uploads/report.md
+             */
+            path: string;
+            /**
+             * @description Full replacement text content for the file, UTF-8. Maximum 10485760 bytes (10 MB) — matches the threshold GET .../content uses to set too_large=true, so a file this endpoint can write is always one the read endpoint can subsequently render inline.
+             * @example # Report
+             *
+             *     Status: green.
+             */
+            content: string;
+        };
+        /**
+         * LibraryRenameRequest
+         * @description Request body for POST /api/v1/library/{workspace_id}/rename. Renames or moves a file or directory within the workspace's work tree — "to" may name a different parent directory than "from", so this operation doubles as a move.
+         */
+        LibraryRenameRequest: {
+            /**
+             * @description Current workspace-relative path of the file or directory, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints).
+             * @example uploads/draft.md
+             */
+            from: string;
+            /**
+             * @description New workspace-relative path, same constraints as "from". Rejected (409) if an entry already exists at this path.
+             * @example uploads/report.md
+             */
+            to: string;
+        };
+        /**
+         * LibraryUploadResponse
+         * @description Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201). Returns the work-tree entries created by the upload — mirrors UploadFilesResponse's shape for the session-scoped uploader, but with LibraryEntry (path-keyed) items rather than UploadedFile.
+         */
+        LibraryUploadResponse: {
+            /** @description Entries created by this upload, in the order the multipart parts were received. */
+            entries: components["schemas"]["LibraryEntry"][];
+        };
+        /**
+         * LibraryTransferRequest
+         * @description Request body shared by POST /api/v1/library/move and POST /api/v1/library/copy. Deliberately NOT scoped under {workspace_id} like the other Library operations — source and destination MAY be different workspaces, so both workspace ids are modelled explicitly here rather than one in the path and one in the body, making the two-workspace-capable shape obvious from the schema alone. A same-workspace move/copy is simply the case where from_workspace_id equals to_workspace_id (this is also what POST /api/v1/library/{workspace_id}/rename does under the hood — kept as same-workspace sugar over /move, see its own description).
+         *     Cross-workspace transfer is a USER-facing capability only: reachable exclusively from the authenticated UI/CLI caller's own request, never invoked by an agent tool — agents remain confined to their own workspace's work tree. This is enforced server-side; it is stated here so no future caller wires an agent-facing tool to this operation.
+         */
+        LibraryTransferRequest: {
+            /**
+             * @description Workspace ID that currently owns the file or directory.
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            from_workspace_id: string;
+            /**
+             * @description Workspace-relative path of the file or directory within from_workspace_id's work tree (workspaces/<from_workspace_id>/work/), forward-slash separated. Never absolute and never containing a ".." segment.
+             * @example notes/draft.md
+             */
+            from_path: string;
+            /**
+             * @description Destination workspace ID. Equal to from_workspace_id for a same-workspace move/copy.
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            to_workspace_id: string;
+            /**
+             * @description Destination workspace-relative path within to_workspace_id's work tree, same constraints as from_path. Rejected (409) if an entry already exists at this path.
+             * @example reports/report.md
+             */
+            to_path: string;
+        };
+        /**
+         * LibraryMkdirRequest
+         * @description Request body for POST /api/v1/library/{workspace_id}/mkdir. Creates a directory at path within the workspace's work tree, creating any missing intermediate directories along the way (mkdir -p semantics) — the sole directory-creation primitive the Library API exposes. Added to close a UAT gap: without it, there was no way to create a folder at all, and a clean, non-malicious nested Move/Copy destination whose parent didn't exist yet (e.g. "subfolder/test.txt") had no path to success — see POST /api/v1/library/move and POST /api/v1/library/copy, which deliberately still require the destination's immediate parent directory to already exist rather than auto-creating it (matching `mv`/`cp` semantics — this endpoint is the explicit, deliberate way to create that folder first). Idempotent: if a directory already exists at path, the request succeeds (200) rather than erroring; rejected 409 if a regular FILE already exists there.
+         */
+        LibraryMkdirRequest: {
+            /**
+             * @description Workspace-relative directory path to create, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). May name a nested path whose intermediate directories do not exist yet — all of them are created, matching `mkdir -p`.
+             * @example projects/2026/reports
+             */
+            path: string;
         };
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
@@ -4509,6 +5106,24 @@ export interface components {
             details?: {
                 [key: string]: unknown;
             };
+            /**
+             * @description Authenticated username that performed the change. Present on security_setting_change records (see pkg/audit.SecurityChangeRecord); may be absent for other event types.
+             * @example admin
+             */
+            actor?: string;
+            /**
+             * @description Dotted identifier of the config key that was mutated. Present on security_setting_change records, e.g. "gateway.god_mode". May be absent for other event types.
+             * @example gateway.god_mode
+             */
+            resource?: string;
+            /** @description The config value before the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types. */
+            old_value?: {
+                [key: string]: unknown;
+            };
+            /** @description The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types. */
+            new_value?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * AuditLogResponse
@@ -4696,6 +5311,11 @@ export interface components {
              * @example false
              */
             enabled: boolean;
+            /**
+             * @description The raw persisted config intent — sandbox.god_mode as currently held in config, read directly and NOT gated by `available`. This is what lets a client distinguish "never armed" (persisted=false, available=false) from "armed via the UI, pending restart" (persisted=true, available=false): `enabled` collapses both of those to false, so it alone cannot tell them apart. Once `available` is also true, `persisted` and `enabled` agree (the override is both authorized-intended and live). A UI control that lets the operator arm/disarm god mode should bind its visual on/off state to `persisted`, not `enabled` — otherwise a pending-restart arm renders as if the switch were off, and clicking it again re-arms instead of disarming.
+             * @example false
+             */
+            persisted: boolean;
             /**
              * @description Whether god mode is ACTIVE-CAPABLE in this boot: the build supports it (`supported` is true) AND authorization was granted before this process started, either via the legacy --allow-god-mode boot flag or via sandbox.god_mode_allowed persisted config (set by a prior UI enable + restart). Authorization is evaluated once at boot, so granting it via the UI (POST enabled=true while available=false) does not flip this to true until the gateway restarts — see GodModeUpdateResponse.restart_required.
              * @example false
@@ -4925,6 +5545,26 @@ export interface components {
              */
             error?: string;
             validation?: components["schemas"]["ProviderValidation"];
+        };
+        /**
+         * ModelCapabilities
+         * @description A single model's declared input-modality capabilities, as returned by GET /providers/model-capabilities (D18). Model vision capability is not knowable client-side at all otherwise — the SPA uses this to show a non-blocking warning toast before sending a vision attachment (e.g. a live-browser annotation, or an image attached via the composer) to an agent whose resolved model cannot accept images. This is advisory only: the reactive, server-side capability gate (pkg/agent/media_present.go) remains the authoritative backstop regardless of what the client shows.
+         */
+        ModelCapabilities: {
+            /**
+             * @description Canonical model identifier as used in the capability catalog — the bare model slug (no provider prefix), matching Agent.model, e.g. "gemini-2.5-flash" or "glm-5.2".
+             * @example gemini-2.5-flash
+             */
+            id: string;
+            /**
+             * @description Input modalities this model accepts. A model with no "image" entry cannot process image attachments.
+             * @example [
+             *       "text",
+             *       "image",
+             *       "pdf"
+             *     ]
+             */
+            modalities: ("text" | "image" | "pdf" | "audio" | "video")[];
         };
         /** @description Body for POST /auth/reauth. Re-verifies the single user's one password before a sensitive settings change is permitted (FR-12.2). This is a consent primitive, NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). A successful re-auth mints a short-lived re-auth token the SPA attaches to the subsequent sensitive request. */
         ReAuthRequest: {
@@ -5706,7 +6346,7 @@ export interface components {
         };
         /**
          * McpServerTestResponse
-         * @description Result of POST /mcp-servers/{id}/test — an on-demand connectivity probe that attempts to connect to the configured MCP server (without changing any state) and reports whether it succeeded and which tools it exposed.
+         * @description Result of POST /mcp-servers/{id}/test — an on-demand connectivity probe that attempts to connect to the configured MCP server via a temporary connection and reports whether it succeeded and which tools it exposed. On success, if the server is enabled in config, the global MCP kill-switch (tools.mcp.enabled) is also on, and the server is not currently connected in the live manager, this additionally triggers a live reconciliation pass to bring the real connection in line with what the test just proved reachable. When the global kill-switch is off, the message notes that MCP is globally disabled instead of silently skipping reconciliation. A failed test never changes any state.
          */
         McpServerTestResponse: {
             /**
@@ -6901,8 +7541,12 @@ export interface components {
          *       - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
          *                       interval in milliseconds (required, min 1000). Each fire spawns
          *                       a FRESH run (fresh session + run history + pause).
-         *       - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
-         *                       expression (required). Each fire spawns a FRESH run.
+         *       - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
+         *                       `cron_expr` (legacy, 5/6-field cron expression, still accepted
+         *                       and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
+         *                       `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
+         *                       siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
+         *                       Each fire spawns a FRESH run.
          *
          *     `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
          *     ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
@@ -6914,7 +7558,7 @@ export interface components {
              * @enum {string}
              */
             type: "manual" | "once" | "every" | "recurring";
-            /** @description Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape. */
+            /** @description Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape. */
             config: {
                 /**
                  * Format: int64
@@ -6929,13 +7573,215 @@ export interface components {
                  */
                 every_ms?: number;
                 /**
-                 * @description Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+                 * @description Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
                  * @example 0 9 * * MON
                  */
                 cron_expr?: string;
+                /**
+                 * @description RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+                 * @example FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10
+                 */
+                rrule?: string;
+                /**
+                 * Format: int64
+                 * @description Anchor instant for `rrule` — the first occurrence's wall-clock moment, Unix epoch milliseconds. Required sibling of `rrule`; ignored otherwise.
+                 * @example 1784624400000
+                 */
+                dtstart_ms?: number;
+                /**
+                 * @description IANA timezone name in which `rrule`'s wall-clock times are interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`; ignored otherwise. Occurrences are wall-clock in this zone across DST transitions (Timezone Semantics).
+                 * @example Europe/Berlin
+                 */
+                tz?: string;
             } & {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * TaskOccurrenceSet
+         * @description The server-expanded occurrence set of one recurring-capable task within the queried range, returned by `GET /api/v1/tasks/occurrences`. Covers all trigger flavors that can recur (`rrule` via rrule-go, legacy `cron_expr` via gronx in the server zone, and `every_ms` as a forward-only projection off the live job's next-run instant — FR-008a). Only tasks the scheduler would actually arm are expanded (non-terminal, non-`heartbeat`-surface); tasks with zero occurrences in range are omitted from the response array entirely — an empty result is `[]`, never null.
+         */
+        TaskOccurrenceSet: {
+            /**
+             * @description The task this occurrence set belongs to.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            task_id: string;
+            /**
+             * @description Individual occurrence instants (Unix epoch milliseconds) not folded into a day bucket — every day in range when the query span is ≤ 8×24h (Week/Day views), or days with ≤ 3 occurrences when the span is > 8×24h (overview ranges, e.g. Month). Capped at 500 per task per request.
+             * @example [
+             *       1784620800000,
+             *       1785225600000
+             *     ]
+             */
+            occurrences_ms: number[];
+            /** @description Aggregated days — only populated for overview-range queries (span > 8×24h) on query-tz days with more than 3 occurrences (D6). */
+            day_buckets: components["schemas"]["DayBucket"][];
+            /** @description Additive per-occurrence run overlay (ADR-050 RD6 / task-run-history-spec §3.7), scoped strictly to this set's individual `occurrences_ms[]` instants (never bucket members — inherits the existing ≤500/task cap, no new cap). Read-only, purely additive (ADR-050 RD11 — no migration); absent (or empty) until the occurrence-overlay handler populates it. */
+            occurrence_runs?: {
+                /**
+                 * Format: int64
+                 * @description The occurrence instant (from occurrences_ms[]) this overlay entry describes.
+                 * @example 1784620800000
+                 */
+                occurrence_ms: number;
+                /**
+                 * @description The matched run's status.
+                 * @example done
+                 * @enum {string}
+                 */
+                status: "in_progress" | "done" | "failed" | "skipped";
+                /**
+                 * @description The matched run's ID (ULID).
+                 * @example 01J8Z3K2R9G4S6M0N1P2Q3R4S5
+                 */
+                run_id: string;
+                /**
+                 * @description The matched run's chat session ID.
+                 * @example session-uuid
+                 */
+                session_id: string;
+                /**
+                 * @description Whether the matched run carries a non-empty result. The full result text is fetched per-run (not inlined here) via GET /tasks/{id}/runs.
+                 * @example true
+                 */
+                has_result: boolean;
+            }[];
+            /**
+             * @description True when the 500-instant cap or the 10,000-computed-occurrence per-task iteration budget was hit before fully covering the requested range. The client renders a "more occurrences not shown" marker on the last covered day. False for provably regular triggers (fixed-interval `every_ms` or a plain `rrule` with no BY* modifiers), whose bucket counts and positions are derived arithmetically rather than iterated.
+             * @example false
+             */
+            truncated: boolean;
+        };
+        /**
+         * DayBucket
+         * @description One aggregated day of a recurring task's occurrences, returned by `GET /api/v1/tasks/occurrences` when a query-tz day has more than 3 occurrences in an overview-range (span > 8×24h) request (D6). Occurrence counting and `day_start_ms` are both evaluated in the query's `tz` (the viewer's zone) regardless of the rule's own `tz` — the day-boundary authority for bucketing is always the caller's zone.
+         */
+        DayBucket: {
+            /**
+             * Format: int64
+             * @description Midnight of this day in the QUERY `tz` (the viewer's zone), Unix epoch milliseconds.
+             * @example 1784592000000
+             */
+            day_start_ms: number;
+            /**
+             * Format: int64
+             * @description Exclusive end of this bucket's window: the QUERY `tz`'s civil next midnight after `day_start_ms` (`civilDayNext` in `pkg/gateway/task_occurrences.go`), DST-aware (23h/25h on a transition day) — NOT a fixed `day_start_ms + 24h` offset. This is the SAME window boundary `populateBucketRunCounts` uses to tally `run_counts`, carried on the wire so the client never recomputes it (delta-review HIGH: a client-side fixed-24h recomputation diverges from this DST-aware value on transition days, disagreeing with `run_counts` and the drilled-in run list). The client MUST use this value verbatim as the exclusive upper bound when filtering/joining runs for this bucket.
+             * @example 1784678400000
+             */
+            day_end_ms: number;
+            /**
+             * Format: int32
+             * @description Number of occurrences of the task on this day.
+             * @example 48
+             */
+            count: number;
+            /**
+             * Format: int64
+             * @description The first occurrence instant on this day, Unix epoch milliseconds. Consumed by the aggregated-chip tooltip ("first at 09:00").
+             * @example 1784620800000
+             */
+            first_ms: number;
+            /**
+             * Format: int64
+             * @description Fixed spacing between this day's occurrences in milliseconds, when the rule is regular (used to derive the client label "· every 30 min"). null when the rule is irregular (BY*-modified) and spacing varies — the client falls back to a "· {count}×/day" label.
+             * @example 1800000
+             */
+            interval_ms: number | null;
+            /** @description Additive per-day run-status tally (ADR-050 RD6 / task-run-history-spec §3.7), computed by scanning this day's actual TaskRun records — NOT by enumerating RRULE members. Read-only, purely additive (ADR-050 RD11 — no migration); absent until the occurrence-overlay handler populates it. The client's worst-wins glyph (failed > skipped > in_progress > done > scheduled) and tooltip breakdown read this object when present. */
+            run_counts?: {
+                /**
+                 * Format: int32
+                 * @description Occurrences on this day with no run yet (future, or "no record").
+                 * @example 26
+                 */
+                scheduled: number;
+                /**
+                 * Format: int32
+                 * @example 0
+                 */
+                in_progress: number;
+                /**
+                 * Format: int32
+                 * @example 12
+                 */
+                done: number;
+                /**
+                 * Format: int32
+                 * @example 2
+                 */
+                failed: number;
+                /**
+                 * Format: int32
+                 * @description Occurrences on this day whose fire was skipped by the overlap guard (the previous occurrence was still in_progress).
+                 * @example 0
+                 */
+                skipped: number;
+            };
+        };
+        /**
+         * TaskRun
+         * @description One execution record for a task (ADR-050 / docs/internal/specs/task-run-history-spec.md §2.1) — a purely additive record layer. Runs are append-only and event-sourced: an "open" record is written when a dispatch is claimed (`status: in_progress`, `ended_at: null`) and a "close" record carrying the SAME `run_id` is appended when it finishes (`status: done|failed`, `result`, `ended_at`). Readers fold by `run_id`, last record wins. `Task.status`/`result`/`session_id` keep their existing behaviour completely unchanged (RD2) — TaskRun is read by the calendar occurrence overlay (`occurrence_runs` on TaskOccurrenceSet, `run_counts` on DayBucket) and the task-detail run-history list. Returned by GET /tasks/{id}/runs.
+         */
+        TaskRun: {
+            /**
+             * @description Stable ULID identifying this run across its open and close records.
+             * @example 01J8Z3K2R9G4S6M0N1P2Q3R4S5
+             */
+            run_id: string;
+            /**
+             * @description The task this run belongs to.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            task_id: string;
+            /**
+             * Format: int64
+             * @description The scheduled RRULE instant this run realizes (the calendar join key, Unix epoch milliseconds). Null for an ad-hoc/once/manual run.
+             * @example 1784620800000
+             */
+            occurrence_ms: number | null;
+            /**
+             * @description Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+             * @example done
+             * @enum {string}
+             */
+            status: "in_progress" | "done" | "failed" | "skipped";
+            /**
+             * @description Terminal-run output text. Absent while the run is `in_progress` (mirrors Task.result's own "absent while running" convention).
+             * @example Found 3 anomalies in the gateway logs.
+             */
+            result?: string;
+            /**
+             * @description The chat session this run produced. Minted at open time, unlike Task.session_id (which is only set once a task has ever run) — a TaskRun always has one from creation onward, EXCEPT a `status: skipped` record: the overlap guard's scheduled fire never started a session, so a skipped run's `session_id` is always the empty string.
+             * @example session-uuid
+             */
+            session_id: string;
+            /**
+             * @description How the run started — an automatic trigger fire, or a user Run-now.
+             * @example scheduled
+             * @enum {string}
+             */
+            kind: "scheduled" | "manual";
+            /**
+             * Format: date-time
+             * @description RFC 3339 timestamp when the run opened (also the on-disk day-partition key for the open record).
+             * @example 2026-07-20T09:00:00Z
+             */
+            started_at: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339 timestamp when the run closed. Null while in_progress.
+             * @example 2026-07-20T09:05:30Z
+             */
+            ended_at: string | null;
+        };
+        /** @description Body for POST /tasks/{id}/runs ("Run now", ADR-050 RD7). Optional — an empty body re-runs a normal/once task. */
+        RunNowRequest: {
+            /**
+             * Format: int64
+             * @description The scheduled RRULE occurrence instant to run (materialize-on-demand for a recurring series). Omit or null to re-run a normal/once task as a fresh run.
+             */
+            occurrence_ms?: number | null;
         };
         /**
          * ProviderUpdateRequest
@@ -13465,6 +14311,27 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
         };
     };
+    listModelCapabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Array of per-model capability entries. Empty when the catalog is unavailable. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCapabilities"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
     listCommands: {
         parameters: {
             query?: {
@@ -13975,6 +14842,47 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
         };
     };
+    listTaskOccurrences: {
+        parameters: {
+            query: {
+                /** @description Workspace to expand occurrences for. Tasks are workspace-scoped. */
+                workspace_id: string;
+                /**
+                 * @description Start of the query range, Unix epoch milliseconds, inclusive (half-open range start).
+                 * @example 1784592000000
+                 */
+                from_ms: number;
+                /**
+                 * @description End of the query range, Unix epoch milliseconds, exclusive (half-open range end). Must be strictly greater than `from_ms`; `from_ms >= to_ms` is rejected with 400. A span greater than 400 days is also rejected with 400.
+                 * @example 1787270400000
+                 */
+                to_ms: number;
+                /**
+                 * @description IANA timezone name of the viewer (e.g. the browser's resolved zone) — the day-boundary authority for occurrence bucketing. Unloadable `tz` is rejected with 400.
+                 * @example Europe/Berlin
+                 */
+                tz: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One TaskOccurrenceSet per task with at least one occurrence in range. Tasks with zero occurrences in range are omitted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskOccurrenceSet"][];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            429: components["responses"]["429TooManyRequests"];
+        };
+    };
     getTask: {
         parameters: {
             query?: never;
@@ -14164,6 +15072,74 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+        };
+    };
+    listTaskRuns: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Array of run records, newest first. Empty array when the task has no runs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRun"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+        };
+    };
+    runTaskNow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RunNowRequest"];
+            };
+        };
+        responses: {
+            /** @description Run accepted and dispatched asynchronously. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid task ID or request body. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            /** @description Task executor unavailable (gateway degraded). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     listTaskVerdicts: {
@@ -14549,6 +15525,75 @@ export interface operations {
             };
         };
     };
+    serveWorkspaceMediaFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID that owns the media-library entry.
+                 * @example ws-123
+                 */
+                workspace_id: string;
+                /**
+                 * @description The opaque media-library entry ID (not a path — no slashes or dots).
+                 * @example a1b2c3d4-e5f6-4789-a123-b4c5d6e7f890
+                 */
+                media_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Media file content streamed with appropriate Content-Type. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Bad request — invalid workspace_id or media_id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden — caller workspace does not own this media ref. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["404NotFound"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            /** @description Media store not available. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     listSchedules: {
         parameters: {
             query?: never;
@@ -14912,6 +15957,486 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    listWorkspaceMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace media-library entries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaLibraryEntry"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    createWorkspaceMediaAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MediaAttachmentRequest"];
+            };
+        };
+        responses: {
+            /** @description The library entry was accepted as a chat attachment. Body is the updated MediaLibraryEntry (post-increment refcount). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaLibraryEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    getWorkspaceMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+                /** @description Media-library entry ID. */
+                media_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace media-library entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaLibraryEntry"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteWorkspaceMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+                /** @description Media-library entry ID. */
+                media_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The media-library entry (bytes + manifest) was deleted. Body is the deleted entry's projection. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaLibraryEntry"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    listLibraryWorkspaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every workspace as a Library virtual-root node. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryWorkspaceNode"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    moveLibraryEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryTransferRequest"];
+            };
+        };
+        responses: {
+            /** @description The moved entry, at its new workspace and path. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    copyLibraryEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryTransferRequest"];
+            };
+        };
+        responses: {
+            /** @description The new copy, at its destination workspace and path. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    listLibraryEntries: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Workspace-relative directory path to list. Empty or absent lists the work-tree root.
+                 * @example notes
+                 */
+                path?: string;
+                /**
+                 * @description When true, also returns entries whose name begins with a dot (".") — e.g. the reserved work/.library/ upload directory. Defaults to false (hidden entries omitted) so the explorer's default view matches a conventional file browser.
+                 * @example false
+                 */
+                include_hidden?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entries directly inside the requested directory. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"][];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    deleteLibraryEntry: {
+        parameters: {
+            query: {
+                /**
+                 * @description Workspace-relative path of the file or directory to delete.
+                 * @example uploads/draft.md
+                 */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getLibraryContent: {
+        parameters: {
+            query: {
+                /**
+                 * @description Workspace-relative path of the file to read.
+                 * @example uploads/report.md
+                 */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description File text content (or the is_text/too_large signal that it cannot be inlined). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryContentResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    putLibraryContent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryContentRequest"];
+            };
+        };
+        responses: {
+            /** @description The written file's updated entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    uploadLibraryFiles: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Workspace-relative directory to upload into. Empty or absent uploads into the work-tree root.
+                 * @example uploads
+                 */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** @description One or more files to upload. */
+                    files?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Files uploaded successfully. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryUploadResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    createLibraryDirectory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryMkdirRequest"];
+            };
+        };
+        responses: {
+            /** @description The directory already existed — no change made. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"];
+                };
+            };
+            /** @description The directory (and any missing intermediate directories) was created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    renameLibraryEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryRenameRequest"];
+            };
+        };
+        responses: {
+            /** @description The renamed entry, reflecting its new path. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    downloadLibraryFile: {
+        parameters: {
+            query: {
+                /**
+                 * @description Workspace-relative path of the file to download.
+                 * @example uploads/Copy of elicify_company_profile.pptx
+                 */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description File content streamed with a best-effort Content-Type. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     getWorkspaceDelegation: {
@@ -15365,6 +16890,16 @@ export type SessionRenameRequest = components["schemas"]["SessionRenameRequest"]
 export type Message = components["schemas"]["Message"];
 export type ToolCall = components["schemas"]["ToolCall"];
 export type Attachment = components["schemas"]["Attachment"];
+export type MediaLibraryEntry = components["schemas"]["MediaLibraryEntry"];
+export type MediaAttachmentRequest = components["schemas"]["MediaAttachmentRequest"];
+export type LibraryWorkspaceNode = components["schemas"]["LibraryWorkspaceNode"];
+export type LibraryEntry = components["schemas"]["LibraryEntry"];
+export type LibraryContentResponse = components["schemas"]["LibraryContentResponse"];
+export type LibraryContentRequest = components["schemas"]["LibraryContentRequest"];
+export type LibraryRenameRequest = components["schemas"]["LibraryRenameRequest"];
+export type LibraryUploadResponse = components["schemas"]["LibraryUploadResponse"];
+export type LibraryTransferRequest = components["schemas"]["LibraryTransferRequest"];
+export type LibraryMkdirRequest = components["schemas"]["LibraryMkdirRequest"];
 export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
 export type AgentRateLimits = components["schemas"]["AgentRateLimits"];
@@ -15419,6 +16954,7 @@ export type GatewayStatus = components["schemas"]["GatewayStatus"];
 export type PerformanceSettings = components["schemas"]["PerformanceSettings"];
 export type PerformanceSettingsUpdate = components["schemas"]["PerformanceSettingsUpdate"];
 export type Provider = components["schemas"]["Provider"];
+export type ModelCapabilities = components["schemas"]["ModelCapabilities"];
 export type ReAuthRequest = components["schemas"]["ReAuthRequest"];
 export type ReAuthResponse = components["schemas"]["ReAuthResponse"];
 export type IntegrationProvider = components["schemas"]["IntegrationProvider"];
@@ -15484,6 +17020,10 @@ export type TaskCreateRequest = components["schemas"]["TaskCreateRequest"];
 export type TaskUpdateRequest = components["schemas"]["TaskUpdateRequest"];
 export type Todo = components["schemas"]["Todo"];
 export type TaskTrigger = components["schemas"]["TaskTrigger"];
+export type TaskOccurrenceSet = components["schemas"]["TaskOccurrenceSet"];
+export type DayBucket = components["schemas"]["DayBucket"];
+export type TaskRun = components["schemas"]["TaskRun"];
+export type RunNowRequest = components["schemas"]["RunNowRequest"];
 export type ProviderUpdateRequest = components["schemas"]["ProviderUpdateRequest"];
 export type ProviderValidation = components["schemas"]["ProviderValidation"];
 export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"];

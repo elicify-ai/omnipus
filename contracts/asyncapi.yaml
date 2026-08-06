@@ -1,59 +1,40 @@
 asyncapi: 3.0.0
-
 info:
   title: Omnipus WebSocket API
   version: 0.1.0
-  description: >
-    Bidirectional WebSocket protocol for the Omnipus gateway.
-
-    The SPA (browser client) connects to /api/v1/chat/ws, authenticates
-    with an auth frame, then exchanges structured JSON frames for chat
-    streaming, tool call tracking, session replay, tool approvals,
-    rate limiting, and cancel progress.
-
-    All frames are JSON objects with a "type" discriminator field.
-
-    Frame naming convention:
-      Client → server ("send" from SPA perspective)
-      Server → client ("receive" from SPA perspective)
-
-    Nil-safety contract (Ava-chat bug lesson):
-      Fields that the SPA reads via Object.keys(), .map(), .length, or spread
-      MUST be required and typed as object/array in this spec so the contract
-      test (Phase 4) catches any backend regression where Go emits null.
-      Specifically: args in ToolApprovalRequiredFrame, pending_approvals in
-      SessionStateFrame, parts in MediaFrame, params in ToolCallStartFrame.
-
+  description: "Bidirectional WebSocket protocol for the Omnipus gateway.\nThe SPA (browser client) connects to /api/v1/chat/ws,\
+    \ authenticates with an auth frame, then exchanges structured JSON frames for chat streaming, tool call tracking, session\
+    \ replay, tool approvals, rate limiting, and cancel progress.\nAll frames are JSON objects with a \"type\" discriminator\
+    \ field.\nFrame naming convention:\n  Client → server (\"send\" from SPA perspective)\n  Server → client (\"receive\"\
+    \ from SPA perspective)\n\nNil-safety contract (Ava-chat bug lesson):\n  Fields that the SPA reads via Object.keys(),\
+    \ .map(), .length, or spread\n  MUST be required and typed as object/array in this spec so the contract\n  test (Phase\
+    \ 4) catches any backend regression where Go emits null.\n  Specifically: args in ToolApprovalRequiredFrame, pending_approvals\
+    \ in\n  SessionStateFrame, parts in MediaFrame, params in ToolCallStartFrame.\n"
   contact:
     name: Omnipus contributors
     url: https://omnipus.ai
   license:
     name: MIT
-
 servers:
   gateway:
     host: localhost:6060
     pathname: /api/v1/chat/ws
     protocol: ws
-    description: >
-      Main WebSocket endpoint. Serves the SPA chat stream. The host and port
-      are governed by gateway.port in config.json (default 6060). For TLS
-      deployments behind a reverse proxy, this becomes wss:// at the public
-      hostname.
+    description: 'Main WebSocket endpoint. Serves the SPA chat stream. The host and port are governed by gateway.port in config.json
+      (default 6060). For TLS deployments behind a reverse proxy, this becomes wss:// at the public hostname.
 
+      '
 defaultContentType: application/json
-
 channels:
   chat:
     address: /api/v1/chat/ws
-    description: >
-      Primary bidirectional chat channel. Carries all client→server send frames
-      and all server→client receive frames. Upgraded from HTTP by the gateway
-      on GET /api/v1/chat/ws with Upgrade: websocket.
+    description: 'Primary bidirectional chat channel. Carries all client→server send frames and all server→client receive
+      frames. Upgraded from HTTP by the gateway on GET /api/v1/chat/ws with Upgrade: websocket.
+
+      '
     servers:
-      - $ref: '#/servers/gateway'
+    - $ref: '#/servers/gateway'
     messages:
-      # ── Client → server ───────────────────────────────────────────────────────
       AuthFrame:
         $ref: '#/components/messages/AuthFrame'
       MessageFrame:
@@ -70,7 +51,6 @@ channels:
         $ref: '#/components/messages/SessionCloseFrame'
       WhatsAppPairingSubscribeFrame:
         $ref: '#/components/messages/WhatsAppPairingSubscribeFrame'
-      # ── Server → client ───────────────────────────────────────────────────────
       SessionStartedFrame:
         $ref: '#/components/messages/SessionStartedFrame'
       TokenFrame:
@@ -93,6 +73,8 @@ channels:
         $ref: '#/components/messages/SubagentEndFrame'
       TaskStatusChangedFrame:
         $ref: '#/components/messages/TaskStatusChangedFrame'
+      TaskRunStatusFrame:
+        $ref: '#/components/messages/TaskRunStatusFrame'
       ReplayMessageFrame:
         $ref: '#/components/messages/ReplayMessageFrame'
       ReplayErrorFrame:
@@ -131,18 +113,18 @@ channels:
         $ref: '#/components/messages/PlanStatusFrame'
       JudgeVerdictFrame:
         $ref: '#/components/messages/JudgeVerdictFrame'
-
+      ReplayErrorTypedFrame:
+        $ref: '#/components/messages/ReplayErrorTypedFrame'
   browser:
     address: /api/v1/browser/ws
-    description: >
-      Live interactive browser channel (ADR-038). A dedicated WebSocket, separate
-      from the chat channel, carrying CDP screencast frames (server → client) and
-      viewer input / control frames (client → server) for the live browser panel.
+    description: 'Live interactive browser channel (ADR-038). A dedicated WebSocket, separate from the chat channel, carrying
+      CDP screencast frames (server → client) and viewer input / control frames (client → server) for the live browser panel.
       Authenticated with the same first-message auth frame as the chat channel.
+
+      '
     servers:
-      - $ref: '#/servers/gateway'
+    - $ref: '#/servers/gateway'
     messages:
-      # ── Client → server ───────────────────────────────────────────────────────
       AuthFrame:
         $ref: '#/components/messages/AuthFrame'
       BrowserAttachFrame:
@@ -155,9 +137,10 @@ channels:
         $ref: '#/components/messages/BrowserDetachFrame'
       BrowserTabActionFrame:
         $ref: '#/components/messages/BrowserTabActionFrame'
+      BrowserViewportFrame:
+        $ref: '#/components/messages/BrowserViewportFrame'
       BrowserWebRTCOfferFrame:
         $ref: '#/components/messages/BrowserWebRTCOfferFrame'
-      # ── Server → client ───────────────────────────────────────────────────────
       ErrorFrame:
         $ref: '#/components/messages/ErrorFrame'
       BrowserScreencastFrame:
@@ -170,203 +153,180 @@ channels:
         $ref: '#/components/messages/BrowserWebRTCAnswerFrame'
       BrowserWebRTCStateFrame:
         $ref: '#/components/messages/BrowserWebRTCStateFrame'
-
   browserCaptureIngest:
     address: /api/v1/browser/capture-ingest
-    description: >
-      Capture-ingest channel (ADR-047 D2/D6). A loopback-only WebSocket
-      between the gateway and the gateway-owned tabCapture MV3 extension's
-      encoder page (chrome-extension://<id>/encoder.html) running inside
-      the managed headless Chrome — never exposed to agents or reachable
-      from outside the host. Not a trust boundary by network position
-      alone: every connection authenticates with a per-stream capability
-      token (browser_capture_hello) minted by the gateway and injected via
-      CDP Page.addScriptToEvaluateOnNewDocument. Carries the ingest leg's
-      non-trickle SDP offer/answer and lifecycle control (recapture on
-      active-tab switch, shutdown, health-check ping).
+    description: 'Capture-ingest channel (ADR-047 D2/D6). A loopback-only WebSocket between the gateway and the gateway-owned
+      tabCapture MV3 extension''s encoder page (chrome-extension://<id>/encoder.html) running inside the managed headless
+      Chrome — never exposed to agents or reachable from outside the host. Not a trust boundary by network position alone:
+      every connection authenticates with a per-stream capability token (browser_capture_hello) minted by the gateway and
+      injected via CDP Page.addScriptToEvaluateOnNewDocument. Carries the ingest leg''s non-trickle SDP offer/answer and lifecycle
+      control (recapture on active-tab switch, shutdown, health-check ping).
+
+      '
     servers:
-      - $ref: '#/servers/gateway'
+    - $ref: '#/servers/gateway'
     messages:
-      # ── Client (extension) → server (gateway) ───────────────────────────────
       BrowserCaptureHelloFrame:
         $ref: '#/components/messages/BrowserCaptureHelloFrame'
       BrowserCaptureOfferFrame:
         $ref: '#/components/messages/BrowserCaptureOfferFrame'
-      # ── Server (gateway) → client (extension) ────────────────────────────────
       ErrorFrame:
         $ref: '#/components/messages/ErrorFrame'
       BrowserCaptureAnswerFrame:
         $ref: '#/components/messages/BrowserCaptureAnswerFrame'
-      # ── Bidirectional: server→client (recapture/shutdown) and
-      #    client→server (ping health beacon) both carry this same frame ──────
       BrowserCaptureControlFrame:
         $ref: '#/components/messages/BrowserCaptureControlFrame'
-
 operations:
-  # ── Client → server (action: send from SPA perspective) ─────────────────────
-
   sendAuth:
     action: send
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Authenticate the WebSocket connection. Must be the first frame sent
-      after the connection opens. The server validates the token and emits a
-      session_state frame on success, or an error frame on failure.
-    messages:
-      - $ref: '#/channels/chat/messages/AuthFrame'
+    summary: 'Authenticate the WebSocket connection. Must be the first frame sent after the connection opens. The server validates
+      the token and emits a session_state frame on success, or an error frame on failure.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/AuthFrame'
   sendMessage:
     action: send
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Send a user chat message. Omit session_id to start a new session
-      (server responds with session_started); include session_id to continue
-      an existing session.
-    messages:
-      - $ref: '#/channels/chat/messages/MessageFrame'
+    summary: 'Send a user chat message. Omit session_id to start a new session (server responds with session_started); include
+      session_id to continue an existing session.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/MessageFrame'
   sendCancel:
     action: send
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Request cancellation of the in-progress agent turn for a session. The
-      server responds with cancel_stage frames (graceful → hard → detached)
-      and eventually a done frame.
-    messages:
-      - $ref: '#/channels/chat/messages/CancelFrame'
+    summary: 'Request cancellation of the in-progress agent turn for a session. The server responds with cancel_stage frames
+      (graceful → hard → detached) and eventually a done frame.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/CancelFrame'
   sendPing:
     action: send
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Heartbeat ping sent every 30 seconds by the SPA to keep the connection
-      alive through proxies. The server responds with a PongFrame so the SPA
-      observes a server-originated frame during idle periods (without it, the
-      client liveness check would force-close after 60 s of silence). The
-      gorilla/websocket protocol-level ping/pong cycle continues to run
+    summary: 'Heartbeat ping sent every 30 seconds by the SPA to keep the connection alive through proxies. The server responds
+      with a PongFrame so the SPA observes a server-originated frame during idle periods (without it, the client liveness
+      check would force-close after 60 s of silence). The gorilla/websocket protocol-level ping/pong cycle continues to run
       independently as defense-in-depth NAT-keepalive.
-    messages:
-      - $ref: '#/channels/chat/messages/PingFrame'
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/PingFrame'
   sendAttachSession:
     action: send
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Attach to an existing session and replay its transcript. The server
-      emits replay_message, tool_call_start, tool_call_result, subagent_start,
-      subagent_end, and media frames in order, then a done frame.
-    messages:
-      - $ref: '#/channels/chat/messages/AttachSessionFrame'
+    summary: 'Attach to an existing session and replay its transcript. The server emits replay_message, tool_call_start, tool_call_result,
+      subagent_start, subagent_end, and media frames in order, then a done frame.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/AttachSessionFrame'
   sendDevicePairingResponse:
     action: send
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Admin's approval or rejection of a pending device pairing request.
-      Sent in response to a device_pairing_request frame.
-    messages:
-      - $ref: '#/channels/chat/messages/DevicePairingResponseFrame'
+    summary: 'Admin''s approval or rejection of a pending device pairing request. Sent in response to a device_pairing_request
+      frame.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/DevicePairingResponseFrame'
   sendSessionClose:
     action: send
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Explicit session close request. The server unregisters the session,
-      fires CloseSession on the agent loop, and responds with session_close_ack.
-    messages:
-      - $ref: '#/channels/chat/messages/SessionCloseFrame'
+    summary: 'Explicit session close request. The server unregisters the session, fires CloseSession on the agent loop, and
+      responds with session_close_ack.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/SessionCloseFrame'
   sendWhatsAppPairingSubscribe:
     action: send
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Start or stop receiving whatsapp_pairing (QR/status) frames for a channel
-      on THIS connection. The SPA sends active:true when an operator opens a
-      channel's pairing UI and active:false when they leave, so the QR pairing
-      secret is delivered only to the connection that is watching it (#283).
+    summary: 'Start or stop receiving whatsapp_pairing (QR/status) frames for a channel on THIS connection. The SPA sends
+      active:true when an operator opens a channel''s pairing UI and active:false when they leave, so the QR pairing secret
+      is delivered only to the connection that is watching it (#283).
+
+      '
     messages:
-      - $ref: '#/channels/chat/messages/WhatsAppPairingSubscribeFrame'
-
-  # ── Server → client (action: receive from SPA perspective) ──────────────────
-
+    - $ref: '#/channels/chat/messages/WhatsAppPairingSubscribeFrame'
   receiveSessionStarted:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      New session ID minted by the server. Emitted when the SPA sent a message
-      frame without a session_id. The SPA must store this as activeSessionId.
-    messages:
-      - $ref: '#/channels/chat/messages/SessionStartedFrame'
+    summary: 'New session ID minted by the server. Emitted when the SPA sent a message frame without a session_id. The SPA
+      must store this as activeSessionId.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/SessionStartedFrame'
   receiveToken:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Partial LLM response text. Multiple token frames are emitted per turn.
-      The SPA appends each to the current assistant message bubble.
-    messages:
-      - $ref: '#/channels/chat/messages/TokenFrame'
+    summary: 'Partial LLM response text. Multiple token frames are emitted per turn. The SPA appends each to the current assistant
+      message bubble.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/TokenFrame'
   receiveDone:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Terminal frame for a turn (live or replay). Exactly one done frame per
-      turn. Contains per-turn token/cost/duration statistics.
-    messages:
-      - $ref: '#/channels/chat/messages/DoneFrame'
+    summary: 'Terminal frame for a turn (live or replay). Exactly one done frame per turn. Contains per-turn token/cost/duration
+      statistics.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/DoneFrame'
   receiveError:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Error notification. May be global (auth failure) or session-scoped. Does
-      NOT terminate the WebSocket connection.
-    messages:
-      - $ref: '#/channels/chat/messages/ErrorFrame'
+    summary: 'Error notification. May be global (auth failure) or session-scoped. Does NOT terminate the WebSocket connection.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/ErrorFrame'
   receiveToolCallStart:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      A tool execution has begun. The SPA renders a "running" tool call badge
-      on the current assistant message.
-    messages:
-      - $ref: '#/channels/chat/messages/ToolCallStartFrame'
+    summary: 'A tool execution has begun. The SPA renders a "running" tool call badge on the current assistant message.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/ToolCallStartFrame'
   receiveToolCallResult:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      A tool execution has completed. The SPA updates the badge status to
-      success or error and records the result.
-    messages:
-      - $ref: '#/channels/chat/messages/ToolCallResultFrame'
+    summary: 'A tool execution has completed. The SPA updates the badge status to success or error and records the result.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/ToolCallResultFrame'
   receiveSubagentStart:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Opening bracket of a subagent span (FR-H-004). The SPA creates a
-      collapsible span container in the assistant message.
-    messages:
-      - $ref: '#/channels/chat/messages/SubagentStartFrame'
+    summary: 'Opening bracket of a subagent span (FR-H-004). The SPA creates a collapsible span container in the assistant
+      message.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/SubagentStartFrame'
   receiveSubagentMessage:
     action: receive
     channel:
@@ -379,7 +339,6 @@ operations:
       full-fidelity data is fetched via delegate.inbox/peek.
     messages:
       - $ref: '#/channels/chat/messages/SubagentMessageFrame'
-
   receiveSubagentState:
     action: receive
     channel:
@@ -391,174 +350,173 @@ operations:
       subagent_start/subagent_end brackets.
     messages:
       - $ref: '#/channels/chat/messages/SubagentStateFrame'
-
   receiveSubagentEnd:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Closing bracket of a subagent span (FR-H-004). The SPA transitions the
-      span to a terminal status with duration and optional result.
-    messages:
-      - $ref: '#/channels/chat/messages/SubagentEndFrame'
+    summary: 'Closing bracket of a subagent span (FR-H-004). The SPA transitions the span to a terminal status with duration
+      and optional result.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/SubagentEndFrame'
   receiveTaskStatusChanged:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      A task's status changed. The SPA invalidates its tasks query cache.
-    messages:
-      - $ref: '#/channels/chat/messages/TaskStatusChangedFrame'
+    summary: 'A task''s status changed. The SPA invalidates its tasks query cache.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/TaskStatusChangedFrame'
+  receiveTaskRunStatus:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'A task RUN''s status changed (open or close), stamped with its occurrence_ms when it realizes a scheduled recurring
+      instant (ADR-050 / task-run-history-spec §3.8). Distinct from TaskStatusChangedFrame: a recurring occurrence''s queued→in_progress→
+      done transition does not move Task.status between distinct values the calendar reads, so this additive frame is what
+      drives a live per-occurrence chip update. The SPA invalidates its task-occurrences and task-runs query caches on receipt.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/TaskRunStatusFrame'
   receiveReplayMessage:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      One replayed transcript entry during a session attach. The SPA
-      reconstructs the conversation from these frames.
-    messages:
-      - $ref: '#/channels/chat/messages/ReplayMessageFrame'
-      - $ref: '#/channels/chat/messages/ReplayErrorFrame'
+    summary: 'One replayed transcript entry during a session attach. The SPA reconstructs the conversation from these frames.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/ReplayMessageFrame'
+    - $ref: '#/channels/chat/messages/ReplayErrorFrame'
   receiveRateLimit:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      A rate-limit denial was applied to an agent action (SEC-26). The SPA
-      displays an inline rate-limit indicator.
-    messages:
-      - $ref: '#/channels/chat/messages/RateLimitFrame'
+    summary: 'A rate-limit denial was applied to an agent action (SEC-26). The SPA displays an inline rate-limit indicator.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/RateLimitFrame'
   receiveMedia:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      One or more media attachments generated by a tool. The SPA renders
-      them inline in the assistant message bubble.
-    messages:
-      - $ref: '#/channels/chat/messages/MediaFrame'
+    summary: 'One or more media attachments generated by a tool. The SPA renders them inline in the assistant message bubble.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/MediaFrame'
   receiveAgentSwitched:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      The active agent for a session changed (handoff or return_to_default).
-      The SPA updates the active agent in the session store.
-    messages:
-      - $ref: '#/channels/chat/messages/AgentSwitchedFrame'
+    summary: 'The active agent for a session changed (handoff or return_to_default). The SPA updates the active agent in the
+      session store.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/AgentSwitchedFrame'
   receiveToolApprovalRequired:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      A tool call is paused for ask-policy approval (FR-011, FR-082). The SPA
-      enqueues it in the tool approval store and shows a modal to the admin.
-      CRITICAL: args must never be null — see nil-safety contract in schema.
-    messages:
-      - $ref: '#/channels/chat/messages/ToolApprovalRequiredFrame'
+    summary: 'A tool call is paused for ask-policy approval (FR-011, FR-082). The SPA enqueues it in the tool approval store
+      and shows a modal to the admin. CRITICAL: args must never be null — see nil-safety contract in schema.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/ToolApprovalRequiredFrame'
   receiveSessionState:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      One-shot approval state snapshot emitted on every WS reconnect (FR-052,
-      FR-073, FR-081). The SPA reconciles its approval store against this.
-      pending_approvals is always an array, never null.
-    messages:
-      - $ref: '#/channels/chat/messages/SessionStateFrame'
+    summary: 'One-shot approval state snapshot emitted on every WS reconnect (FR-052, FR-073, FR-081). The SPA reconciles
+      its approval store against this. pending_approvals is always an array, never null.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/SessionStateFrame'
   receiveSystemOverload:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      System at capacity — an agent action was blocked (FR-016, MAJ-009). The
-      SPA shows a warning toast.
-    messages:
-      - $ref: '#/channels/chat/messages/SystemOverloadFrame'
+    summary: 'System at capacity — an agent action was blocked (FR-016, MAJ-009). The SPA shows a warning toast.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/SystemOverloadFrame'
   receiveReplayWarning:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Transcript contained duplicate tool_call_ids. Emitted just before
-      the terminal done frame during replay. The SPA shows a one-shot warning
-      toast.
-    messages:
-      - $ref: '#/channels/chat/messages/ReplayWarningFrame'
+    summary: 'Transcript contained duplicate tool_call_ids. Emitted just before the terminal done frame during replay. The
+      SPA shows a one-shot warning toast.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/ReplayWarningFrame'
   receiveCancelStage:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Cancel progress notification (B3). Three stages: graceful → hard →
-      detached. The SPA updates the stop-button label based on the stage.
-      CRITICAL: stage must be validated — invalid values are dropped by isValidFrame().
-    messages:
-      - $ref: '#/channels/chat/messages/CancelStageFrame'
+    summary: 'Cancel progress notification (B3). Three stages: graceful → hard → detached. The SPA updates the stop-button
+      label based on the stage. CRITICAL: stage must be validated — invalid values are dropped by isValidFrame().
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/CancelStageFrame'
   receivePong:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Pong response to a client PingFrame. Lets the SPA's liveness check see a
-      server-originated frame during idle so it does not force-close after 60 s
-      of inactivity. Carries no payload beyond the type discriminator.
-    messages:
-      - $ref: '#/channels/chat/messages/PongFrame'
+    summary: 'Pong response to a client PingFrame. Lets the SPA''s liveness check see a server-originated frame during idle
+      so it does not force-close after 60 s of inactivity. Carries no payload beyond the type discriminator.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/PongFrame'
   receiveSessionCloseAck:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      Acknowledgement of a session_close client request. The server confirms
-      the session has been closed.
-    messages:
-      - $ref: '#/channels/chat/messages/SessionCloseAckFrame'
+    summary: 'Acknowledgement of a session_close client request. The server confirms the session has been closed.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/SessionCloseAckFrame'
   receiveDevicePairingRequest:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      A remote device is requesting pairing and needs admin approval. The SPA
-      shows a pairing modal. The admin responds with device_pairing_response.
-    messages:
-      - $ref: '#/channels/chat/messages/DevicePairingRequestFrame'
+    summary: 'A remote device is requesting pairing and needs admin approval. The SPA shows a pairing modal. The admin responds
+      with device_pairing_response.
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/DevicePairingRequestFrame'
   receiveWhatsAppPairing:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      The WhatsApp native/QR channel published a pairing update (a QR code to scan
-      or a status change). The SPA renders the QR and live waiting → linked status
-      (#283).
-    messages:
-      - $ref: '#/channels/chat/messages/WhatsAppPairingFrame'
+    summary: 'The WhatsApp native/QR channel published a pairing update (a QR code to scan or a status change). The SPA renders
+      the QR and live waiting → linked status (#283).
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/WhatsAppPairingFrame'
   receiveNotification:
     action: receive
     channel:
       $ref: '#/channels/chat'
-    summary: >
-      A notification was raised for the authenticated user (e.g. a scheduled
-      run failed). The SPA adds it to the header notification center and bumps
-      the unread badge. Delivered only to the recipient user's connections (#264).
-    messages:
-      - $ref: '#/channels/chat/messages/NotificationFrame'
+    summary: 'A notification was raised for the authenticated user (e.g. a scheduled run failed). The SPA adds it to the header
+      notification center and bumps the unread badge. Delivered only to the recipient user''s connections (#264).
 
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/NotificationFrame'
   receiveGoalStatus:
     action: receive
     channel:
@@ -602,193 +560,182 @@ operations:
       same shape so they cannot silently disagree.
     messages:
       - $ref: '#/channels/chat/messages/JudgeVerdictFrame'
-
   # ── Browser live channel (ADR-038) ──────────────────────────────────────────
-
   sendBrowserAttach:
     action: send
     channel:
       $ref: '#/channels/browser'
-    summary: >
-      Bind this browser-live connection to a session's browser and start the
-      screencast. Sent after the auth frame. The server responds with
-      browser_status(attached) then a stream of browser_screencast frames.
-    messages:
-      - $ref: '#/channels/browser/messages/BrowserAttachFrame'
+    summary: 'Bind this browser-live connection to a session''s browser and start the screencast. Sent after the auth frame.
+      The server responds with browser_status(attached) then a stream of browser_screencast frames.
 
+      '
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserAttachFrame'
   sendBrowserInput:
     action: send
     channel:
       $ref: '#/channels/browser'
-    summary: >
-      Inject a viewer input event (mouse/wheel/key/text) into the live browser.
-      Honoured only while the viewer holds control (browser_control action=take).
-    messages:
-      - $ref: '#/channels/browser/messages/BrowserInputFrame'
+    summary: 'Inject a viewer input event (mouse/wheel/key/text) into the live browser. Honoured only while the viewer holds
+      control (browser_control action=take).
 
+      '
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserInputFrame'
   sendBrowserControl:
     action: send
     channel:
       $ref: '#/channels/browser'
-    summary: >
-      Take or release interactive control of the live browser. The server replies
-      with browser_status(controlling) or browser_status(released).
-    messages:
-      - $ref: '#/channels/browser/messages/BrowserControlFrame'
+    summary: 'Take or release interactive control of the live browser. The server replies with browser_status(controlling)
+      or browser_status(released).
 
+      '
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserControlFrame'
   sendBrowserDetach:
     action: send
     channel:
       $ref: '#/channels/browser'
-    summary: >
-      Detach this viewer; the server stops the screencast when the last viewer
-      leaves. Sent when the live panel closes.
-    messages:
-      - $ref: '#/channels/browser/messages/BrowserDetachFrame'
+    summary: 'Detach this viewer; the server stops the screencast when the last viewer leaves. Sent when the live panel closes.
 
+      '
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserDetachFrame'
   sendBrowserTabAction:
     action: send
     channel:
       $ref: '#/channels/browser'
-    summary: >
-      Switch the active tab, close a tab, or open a new blank tab in this
-      session's browsing context. The server replies with browser_tabs. Switch
-      re-binds the live screencast to the new active tab. See ADR-041.
-    messages:
-      - $ref: '#/channels/browser/messages/BrowserTabActionFrame'
+    summary: 'Switch the active tab, close a tab, or open a new blank tab in this session''s browsing context. The server
+      replies with browser_tabs. Switch re-binds the live screencast to the new active tab. See ADR-041.
 
+      '
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserTabActionFrame'
+  sendBrowserViewport:
+    action: send
+    channel:
+      $ref: '#/channels/browser'
+    summary: 'Report the panel''s render box so the gateway can size the captured tab to match it. Sent on attach and
+      debounced on resize. The server applies the metrics and triggers a recapture so the encoder rebuilds at the new
+      geometry.
+
+      '
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserViewportFrame'
   receiveBrowserScreencast:
     action: receive
     channel:
       $ref: '#/channels/browser'
-    summary: >
-      One CDP screencast frame (JPEG + coordinate metadata) for the live browser.
-      Repaint-driven, not fixed-FPS. The SPA blits it and maps input coordinates.
-    messages:
-      - $ref: '#/channels/browser/messages/BrowserScreencastFrame'
+    summary: 'One CDP screencast frame (JPEG + coordinate metadata) for the live browser. Repaint-driven, not fixed-FPS. The
+      SPA blits it and maps input coordinates.
 
+      '
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserScreencastFrame'
   receiveBrowserStatus:
     action: receive
     channel:
       $ref: '#/channels/browser'
-    summary: >
-      Lifecycle / control status for the live browser (attached, controlling,
-      released, detached, idle, error).
-    messages:
-      - $ref: '#/channels/browser/messages/BrowserStatusFrame'
+    summary: 'Lifecycle / control status for the live browser (attached, controlling, released, detached, idle, error).
 
+      '
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserStatusFrame'
   receiveBrowserTabs:
     action: receive
     channel:
       $ref: '#/channels/browser'
-    summary: >
-      The current set of open tabs + the active index, broadcast on any tab
-      open/close/switch/title-change. The SPA renders the tab strip; the live
-      screencast always reflects the active tab. See ADR-041.
-    messages:
-      - $ref: '#/channels/browser/messages/BrowserTabsFrame'
+    summary: 'The current set of open tabs + the active index, broadcast on any tab open/close/switch/title-change. The SPA
+      renders the tab strip; the live screencast always reflects the active tab. See ADR-041.
 
+      '
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserTabsFrame'
   sendBrowserWebRTCOffer:
     action: send
     channel:
       $ref: '#/channels/browser'
-    summary: >
-      Offer to start (or restart) WebRTC media for this live-browser
-      connection. Sent after browser_attach, once browser_webrtc_state has
-      reported available=true. The server responds with
-      browser_webrtc_answer, or a browser_webrtc_state frame reporting why
-      it could not honour the offer. See ADR-047 D1/D4.
-    messages:
-      - $ref: '#/channels/browser/messages/BrowserWebRTCOfferFrame'
+    summary: 'Offer to start (or restart) WebRTC media for this live-browser connection. Sent after browser_attach, once browser_webrtc_state
+      has reported available=true. The server responds with browser_webrtc_answer, or a browser_webrtc_state frame reporting
+      why it could not honour the offer. See ADR-047 D1/D4.
 
+      '
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserWebRTCOfferFrame'
   receiveBrowserWebRTCAnswer:
     action: receive
     channel:
       $ref: '#/channels/browser'
-    summary: >
-      Pion SDP answer to a browser_webrtc_offer. Once applied, the SPA's
-      viewer PeerConnection begins receiving media (and the "input" data
-      channel opens for viewer input). See ADR-047 D1/D4.
-    messages:
-      - $ref: '#/channels/browser/messages/BrowserWebRTCAnswerFrame'
+    summary: 'Pion SDP answer to a browser_webrtc_offer. Once applied, the SPA''s viewer PeerConnection begins receiving media
+      (and the "input" data channel opens for viewer input). See ADR-047 D1/D4.
 
+      '
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserWebRTCAnswerFrame'
   receiveBrowserWebRTCState:
     action: receive
     channel:
       $ref: '#/channels/browser'
-    summary: >
-      Availability / lifecycle state for the WebRTC media path: whether the
-      SPA may offer WebRTC at all, whether it is currently active, and
-      whether the captured tab currently has audio. The JPEG
-      browser_screencast path keeps streaming regardless, so this frame
-      only ever moves the SPA between "prefer WebRTC" and "fall back to
-      JPEG" — it never gates baseline browsing. See ADR-047 D1/D3.
+    summary: 'Availability / lifecycle state for the WebRTC media path: whether the SPA may offer WebRTC at all, whether it
+      is currently active, and whether the captured tab currently has audio. The JPEG browser_screencast path keeps streaming
+      regardless, so this frame only ever moves the SPA between "prefer WebRTC" and "fall back to JPEG" — it never gates baseline
+      browsing. See ADR-047 D1/D3.
+
+      '
     messages:
-      - $ref: '#/channels/browser/messages/BrowserWebRTCStateFrame'
-
-  # ── Capture-ingest channel (ADR-047 D2/D6) ──────────────────────────────────
-
+    - $ref: '#/channels/browser/messages/BrowserWebRTCStateFrame'
   sendBrowserCaptureHello:
     action: send
     channel:
       $ref: '#/channels/browserCaptureIngest'
-    summary: >
-      Authenticate the capture-ingest connection. Must be the first frame
-      sent by the encoder page after the connection opens. The gateway
-      validates the per-stream capability token and audits the outcome;
-      an invalid/missing/expired token closes the connection. See
-      ADR-047 D6.
-    messages:
-      - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureHelloFrame'
+    summary: 'Authenticate the capture-ingest connection. Must be the first frame sent by the encoder page after the connection
+      opens. The gateway validates the per-stream capability token and audits the outcome; an invalid/missing/expired token
+      closes the connection. See ADR-047 D6.
 
+      '
+    messages:
+    - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureHelloFrame'
   sendBrowserCaptureOffer:
     action: send
     channel:
       $ref: '#/channels/browserCaptureIngest'
-    summary: >
-      SDP offer from the encoder page's self-consuming tabCapture
-      PeerConnection, sent after a successful browser_capture_hello. The
-      gateway responds with browser_capture_answer. See ADR-047 D1/D2.
-    messages:
-      - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureOfferFrame'
+    summary: 'SDP offer from the encoder page''s self-consuming tabCapture PeerConnection, sent after a successful browser_capture_hello.
+      The gateway responds with browser_capture_answer. See ADR-047 D1/D2.
 
+      '
+    messages:
+    - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureOfferFrame'
   receiveBrowserCaptureAnswer:
     action: receive
     channel:
       $ref: '#/channels/browserCaptureIngest'
-    summary: >
-      Pion SDP answer to a browser_capture_offer. Once applied, the
-      encoder page's captured media (video, plus audio when present)
-      flows into the gateway's shared relay tracks. See ADR-047 D1/D2.
-    messages:
-      - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureAnswerFrame'
+    summary: 'Pion SDP answer to a browser_capture_offer. Once applied, the encoder page''s captured media (video, plus audio
+      when present) flows into the gateway''s shared relay tracks. See ADR-047 D1/D2.
 
+      '
+    messages:
+    - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureAnswerFrame'
   sendBrowserCaptureControl:
     action: send
     channel:
       $ref: '#/channels/browserCaptureIngest'
-    summary: >
-      Gateway → encoder page control command: recapture (the agent's
-      active tab changed and the tabCapture stream must be re-bound) or
-      shutdown (the capture session is ending). See ADR-047 D2.
-    messages:
-      - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureControlFrame'
+    summary: 'Gateway → encoder page control command: recapture (the agent''s active tab changed and the tabCapture stream
+      must be re-bound) or shutdown (the capture session is ending). See ADR-047 D2.
 
+      '
+    messages:
+    - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureControlFrame'
   receiveBrowserCaptureControl:
     action: receive
     channel:
       $ref: '#/channels/browserCaptureIngest'
-    summary: >
-      Encoder page → gateway health beacon (action=ping), sent
-      periodically so the gateway's reconnect watchdog can detect a stuck
-      or crashed encoder page. See ADR-047 D2.
-    messages:
-      - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureControlFrame'
+    summary: 'Encoder page → gateway health beacon (action=ping), sent periodically so the gateway''s reconnect watchdog can
+      detect a stuck or crashed encoder page. See ADR-047 D2.
 
+      '
+    messages:
+    - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureControlFrame'
 components:
   messages:
-    # ── Client → server messages ───────────────────────────────────────────────
-
     AuthFrame:
       name: AuthFrame
       title: auth
@@ -796,7 +743,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/AuthFrame'
-
     MessageFrame:
       name: MessageFrame
       title: message
@@ -804,7 +750,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/MessageFrame'
-
     CancelFrame:
       name: CancelFrame
       title: cancel
@@ -812,7 +757,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/CancelFrame'
-
     PingFrame:
       name: PingFrame
       title: ping
@@ -820,7 +764,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/PingFrame'
-
     AttachSessionFrame:
       name: AttachSessionFrame
       title: attach_session
@@ -828,7 +771,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/AttachSessionFrame'
-
     DevicePairingResponseFrame:
       name: DevicePairingResponseFrame
       title: device_pairing_response
@@ -836,7 +778,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/DevicePairingResponseFrame'
-
     SessionCloseFrame:
       name: SessionCloseFrame
       title: session_close
@@ -844,7 +785,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SessionCloseFrame'
-
     WhatsAppPairingSubscribeFrame:
       name: WhatsAppPairingSubscribeFrame
       title: whatsapp_pairing_subscribe
@@ -852,9 +792,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/WhatsAppPairingSubscribeFrame'
-
-    # ── Server → client messages ───────────────────────────────────────────────
-
     SessionStartedFrame:
       name: SessionStartedFrame
       title: session_started
@@ -862,7 +799,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SessionStartedFrame'
-
     TokenFrame:
       name: TokenFrame
       title: token
@@ -870,7 +806,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/TokenFrame'
-
     DoneFrame:
       name: DoneFrame
       title: done
@@ -878,7 +813,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/DoneFrame'
-
     ErrorFrame:
       name: ErrorFrame
       title: error
@@ -886,7 +820,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ErrorFrame'
-
     ToolCallStartFrame:
       name: ToolCallStartFrame
       title: tool_call_start
@@ -894,7 +827,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ToolCallStartFrame'
-
     ToolCallResultFrame:
       name: ToolCallResultFrame
       title: tool_call_result
@@ -902,7 +834,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ToolCallResultFrame'
-
     SubagentStartFrame:
       name: SubagentStartFrame
       title: subagent_start
@@ -910,7 +841,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SubagentStartFrame'
-
     SubagentMessageFrame:
       name: SubagentMessageFrame
       title: subagent_message
@@ -920,7 +850,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SubagentMessageFrame'
-
     SubagentStateFrame:
       name: SubagentStateFrame
       title: subagent_state
@@ -930,7 +859,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SubagentStateFrame'
-
     SubagentEndFrame:
       name: SubagentEndFrame
       title: subagent_end
@@ -938,7 +866,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SubagentEndFrame'
-
     TaskStatusChangedFrame:
       name: TaskStatusChangedFrame
       title: task_status_changed
@@ -946,7 +873,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/TaskStatusChangedFrame'
-
+    TaskRunStatusFrame:
+      name: TaskRunStatusFrame
+      title: task_run_status
+      summary: A task run opened or closed (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/TaskRunStatusFrame'
     ReplayMessageFrame:
       name: ReplayMessageFrame
       title: replay_message
@@ -954,21 +887,18 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ReplayMessageFrame'
-
     ReplayErrorFrame:
       name: ReplayErrorFrame
       title: replay_error
-      summary: >
-        Replayed system-error transcript entry (server → client). Emitted by
-        the replay path when the underlying TranscriptEntry is a system error
-        (Status="error"). The SPA renders a typed error component based on
-        the `kind` discriminant (rate_limit → rate-limit banner, error →
-        generic error component) instead of falling back to a regular
-        assistant message render (the previous bug).
+      summary: 'Replayed system-error transcript entry (server → client). Emitted by the replay path when the underlying TranscriptEntry
+        is a system error (Status="error"). The SPA renders a typed error component based on the `kind` discriminant (rate_limit
+        → rate-limit banner, error → generic error component) instead of falling back to a regular assistant message render
+        (the previous bug).
+
+        '
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ReplayErrorFrame'
-
     RateLimitFrame:
       name: RateLimitFrame
       title: rate_limit
@@ -976,7 +906,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/RateLimitFrame'
-
     MediaFrame:
       name: MediaFrame
       title: media
@@ -984,7 +913,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/MediaFrame'
-
     AgentSwitchedFrame:
       name: AgentSwitchedFrame
       title: agent_switched
@@ -992,7 +920,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/AgentSwitchedFrame'
-
     ToolApprovalRequiredFrame:
       name: ToolApprovalRequiredFrame
       title: tool_approval_required
@@ -1000,7 +927,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ToolApprovalRequiredFrame'
-
     SessionStateFrame:
       name: SessionStateFrame
       title: session_state
@@ -1008,7 +934,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SessionStateFrame'
-
     SystemOverloadFrame:
       name: SystemOverloadFrame
       title: system_overload
@@ -1016,7 +941,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SystemOverloadFrame'
-
     ReplayWarningFrame:
       name: ReplayWarningFrame
       title: replay_warning
@@ -1024,7 +948,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ReplayWarningFrame'
-
     CancelStageFrame:
       name: CancelStageFrame
       title: cancel_stage
@@ -1032,7 +955,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/CancelStageFrame'
-
     PongFrame:
       name: PongFrame
       title: pong
@@ -1040,7 +962,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/PongFrame'
-
     SessionCloseAckFrame:
       name: SessionCloseAckFrame
       title: session_close_ack
@@ -1048,7 +969,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SessionCloseAckFrame'
-
     DevicePairingRequestFrame:
       name: DevicePairingRequestFrame
       title: device_pairing_request
@@ -1056,7 +976,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/DevicePairingRequestFrame'
-
     WhatsAppPairingFrame:
       name: WhatsAppPairingFrame
       title: whatsapp_pairing
@@ -1064,7 +983,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/WhatsAppPairingFrame'
-
     NotificationFrame:
       name: NotificationFrame
       title: notification
@@ -1072,7 +990,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/NotificationFrame'
-
     GoalStatusFrame:
       name: GoalStatusFrame
       title: goal_status
@@ -1080,7 +997,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/GoalStatusFrame'
-
     LoopStatusFrame:
       name: LoopStatusFrame
       title: loop_status
@@ -1088,7 +1004,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/LoopStatusFrame'
-
     PlanStatusFrame:
       name: PlanStatusFrame
       title: plan_status
@@ -1096,7 +1011,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/PlanStatusFrame'
-
     JudgeVerdictFrame:
       name: JudgeVerdictFrame
       title: judge_verdict
@@ -1104,9 +1018,7 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/JudgeVerdictFrame'
-
     # ── Browser live channel (ADR-038) ─────────────────────────────────────────
-
     BrowserAttachFrame:
       name: BrowserAttachFrame
       title: browser_attach
@@ -1114,7 +1026,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserAttachFrame'
-
     BrowserInputFrame:
       name: BrowserInputFrame
       title: browser_input
@@ -1122,7 +1033,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserInputFrame'
-
     BrowserControlFrame:
       name: BrowserControlFrame
       title: browser_control
@@ -1130,7 +1040,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserControlFrame'
-
     BrowserDetachFrame:
       name: BrowserDetachFrame
       title: browser_detach
@@ -1138,7 +1047,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserDetachFrame'
-
     BrowserTabActionFrame:
       name: BrowserTabActionFrame
       title: browser_tab_action
@@ -1146,7 +1054,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserTabActionFrame'
-
+    BrowserViewportFrame:
+      name: BrowserViewportFrame
+      title: browser_viewport
+      summary: Report the live-browser panel's render box so the capture can match it (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserViewportFrame'
     BrowserScreencastFrame:
       name: BrowserScreencastFrame
       title: browser_screencast
@@ -1154,7 +1068,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserScreencastFrame'
-
     BrowserStatusFrame:
       name: BrowserStatusFrame
       title: browser_status
@@ -1162,7 +1075,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserStatusFrame'
-
     BrowserTabsFrame:
       name: BrowserTabsFrame
       title: browser_tabs
@@ -1170,7 +1082,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserTabsFrame'
-
     BrowserWebRTCOfferFrame:
       name: BrowserWebRTCOfferFrame
       title: browser_webrtc_offer
@@ -1178,7 +1089,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserWebRTCOfferFrame'
-
     BrowserWebRTCAnswerFrame:
       name: BrowserWebRTCAnswerFrame
       title: browser_webrtc_answer
@@ -1186,7 +1096,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserWebRTCAnswerFrame'
-
     BrowserWebRTCStateFrame:
       name: BrowserWebRTCStateFrame
       title: browser_webrtc_state
@@ -1194,9 +1103,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserWebRTCStateFrame'
-
-    # ── Capture-ingest channel messages (ADR-047 D2/D6) ────────────────────────
-
     BrowserCaptureHelloFrame:
       name: BrowserCaptureHelloFrame
       title: browser_capture_hello
@@ -1204,7 +1110,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserCaptureHelloFrame'
-
     BrowserCaptureOfferFrame:
       name: BrowserCaptureOfferFrame
       title: browser_capture_offer
@@ -1212,7 +1117,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserCaptureOfferFrame'
-
     BrowserCaptureAnswerFrame:
       name: BrowserCaptureAnswerFrame
       title: browser_capture_answer
@@ -1220,7 +1124,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserCaptureAnswerFrame'
-
     BrowserCaptureControlFrame:
       name: BrowserCaptureControlFrame
       title: browser_capture_control
@@ -1228,72 +1131,81 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserCaptureControlFrame'
-
+    ReplayErrorTypedFrame:
+      name: ReplayErrorTypedFrame
+      title: replay_error
+      summary: Replay-typed system error using the ReplayErrorFrame payload contract.
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ReplayErrorFrame'
   schemas:
     WsFrameType:
       title: WsFrameType
       description: Enum of all WebSocket frame type discriminator strings.
       type: string
       enum:
-        - auth
-        - message
-        - cancel
-        - ping
-        - attach_session
-        - device_pairing_response
-        - session_close
-        - session_started
-        - token
-        - done
-        - error
-        - tool_call_start
-        - tool_call_result
-        - subagent_start
-        - subagent_end
-        - task_status_changed
-        - replay_message
-        - replay_error
-        - rate_limit
-        - media
-        - agent_switched
-        - tool_approval_required
-        - session_state
-        - system_overload
-        - replay_warning
-        - cancel_stage
-        - pong
-        - session_close_ack
-        - device_pairing_request
-        - whatsapp_pairing
-        - whatsapp_pairing_subscribe
-        - notification
-        - browser_attach
-        - browser_input
-        - browser_control
-        - browser_detach
-        - browser_screencast
-        - browser_status
-        - browser_tab_action
-        - browser_tabs
-        - browser_webrtc_offer
-        - browser_webrtc_answer
-        - browser_webrtc_state
-        - browser_capture_hello
-        - browser_capture_offer
-        - browser_capture_answer
-        - browser_capture_control
-        - goal_status
-        - loop_status
-        - plan_status
-        - judge_verdict
-
+      - auth
+      - message
+      - cancel
+      - ping
+      - attach_session
+      - device_pairing_response
+      - session_close
+      - session_started
+      - token
+      - done
+      - error
+      - tool_call_start
+      - tool_call_result
+      - subagent_start
+      - subagent_message
+      - subagent_state
+      - subagent_end
+      - task_status_changed
+      - task_run_status
+      - replay_message
+      - replay_error
+      - rate_limit
+      - media
+      - agent_switched
+      - tool_approval_required
+      - session_state
+      - system_overload
+      - replay_warning
+      - cancel_stage
+      - pong
+      - session_close_ack
+      - device_pairing_request
+      - whatsapp_pairing
+      - whatsapp_pairing_subscribe
+      - notification
+      - browser_attach
+      - browser_input
+      - browser_control
+      - browser_detach
+      - browser_screencast
+      - browser_status
+      - browser_tab_action
+      - browser_tabs
+      - browser_viewport
+      - browser_webrtc_offer
+      - browser_webrtc_answer
+      - browser_webrtc_state
+      - browser_capture_hello
+      - browser_capture_offer
+      - browser_capture_answer
+      - browser_capture_control
+      - goal_status
+      - loop_status
+      - plan_status
+      - judge_verdict
     AuthFrame:
       title: AuthFrame
       description: Client → server authentication frame.
       type: object
       required:
-        - type
-        - token
+      - type
+      - token
       additionalProperties: false
       properties:
         type:
@@ -1303,26 +1215,39 @@ components:
           type: string
           minLength: 72
           maxLength: 81
-          pattern: '^omnipus_([a-f0-9]{8}_)?[a-f0-9]{64}$'
-          description: Bearer token from /api/v1/auth/login. Id-tagged "omnipus_<8hex>_<64hex>" (81) or legacy "omnipus_<64hex>" (72).
-
+          pattern: ^omnipus_([a-f0-9]{8}_)?[a-f0-9]{64}$
+          description: Bearer token from /api/v1/auth/login. Id-tagged "omnipus_<8hex>_<64hex>" (81) or legacy "omnipus_<64hex>"
+            (72).
     MessageFrame:
       title: MessageFrame
       description: >
         Client → server user chat message. Omit session_id to start a new
-        session; include to continue an existing one.
+        session; include to continue an existing one. content must always
+        be present as a key, but MAY be an empty string when media is also
+        present and non-empty — an attachment-only send legitimately has no
+        caption (UAT Issue 5). The anyOf below enforces the actual
+        invariant: content has at least 1 character, OR media has at least
+        1 entry — a message with neither is still rejected.
       type: object
       required:
-        - type
-        - content
+      - type
+      - content
       additionalProperties: false
+      anyOf:
+      - properties:
+          content:
+            minLength: 1
+      - required:
+        - media
+        properties:
+          media:
+            minItems: 1
       properties:
         type:
           type: string
           const: message
         content:
           type: string
-          minLength: 1
           maxLength: 5242880
         session_id:
           type: string
@@ -1334,12 +1259,11 @@ components:
           maxLength: 128
         media:
           type: array
-          description: >
-            Optional media:// refs for files the user attached to this message
-            (e.g. images uploaded via POST /api/v1/upload). The server threads
-            each ref into the LLM content array as a multimodal content block so
-            the agent can see the attachment. Empty or omitted for text-only
-            messages.
+          description: 'Optional media:// refs for files the user attached to this message (e.g. images uploaded via POST
+            /api/v1/upload). The server threads each ref into the LLM content array as a multimodal content block so the agent
+            can see the attachment. Empty or omitted for text-only messages.
+
+            '
           maxItems: 16
           items:
             type: string
@@ -1347,66 +1271,53 @@ components:
             maxLength: 256
         metadata:
           type: object
-          # additionalProperties: true — forward-compat. The metadata
-          # object is the wire's extension channel (currently model_name,
-          # but future fields like request_id, traceparent, etc. land
-          # here). strict() would silently reject future fields and break
-          # the SPA mid-rollout.
           additionalProperties: true
-          description: >
-            Optional per-message metadata. Typed keys today: `model_name`
-            (Phase 1, FR-010) — when the user picks a model in the chat
-            composer, the picker value is sent as `metadata.model_name` so
-            the server routes this turn to the chosen model, falling back to
-            the agent's `model` config when absent; `workspace_id` — the
-            active workspace this chat belongs to; and
-            `workspace_setup_kickoff` (boolean) — a one-time marker that this
-            message is the workspace setup kickoff for
-            `metadata.workspace_id`.
+          description: 'Optional per-message metadata. Typed keys today: `model_name` (Phase 1, FR-010) — when the user picks
+            a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes this turn
+            to the chosen model, falling back to the agent''s `model` config when absent; `workspace_id` — the active workspace
+            this chat belongs to; and `workspace_setup_kickoff` (boolean) — a one-time marker that this message is the workspace
+            setup kickoff for `metadata.workspace_id`.
+
+            '
           properties:
             model_name:
               type: string
               minLength: 1
               maxLength: 256
-              description: >
-                Model identifier for this turn. Server honors when present,
-                falls back to agent config otherwise. Empty string is
-                treated as absent.
-              example: "z-ai/glm-5-turbo"
+              description: 'Model identifier for this turn. Server honors when present, falls back to agent config otherwise.
+                Empty string is treated as absent.
+
+                '
+              example: z-ai/glm-5-turbo
             workspace_id:
               type: string
               minLength: 1
               maxLength: 128
-              description: >
-                Active workspace this chat belongs to (M4 workspace→turn binding).
-                When the user sends a message from a workspace chat, the SPA sets
-                this so the server tags the session with the workspace and any task
-                the agent creates during the turn (task_create / delegation) lands on
-                THIS workspace's board instead of the agent's default workspace.
-                Stamped onto the session meta on first use; absent for the global
-                (non-workspace) chat, where created tasks fall back to the default
-                workspace.
-              example: "01JXDEFAULT000000000000001"
+              description: 'Active workspace this chat belongs to (M4 workspace→turn binding). When the user sends a message
+                from a workspace chat, the SPA sets this so the server tags the session with the workspace and any task the
+                agent creates during the turn (task_create / delegation) lands on THIS workspace''s board instead of the agent''s
+                default workspace. Stamped onto the session meta on first use; absent for the global (non-workspace) chat,
+                where created tasks fall back to the default workspace.
+
+                '
+              example: 01JXDEFAULT000000000000001
             workspace_setup_kickoff:
               type: boolean
-              description: >
-                One-time marker that this message is the workspace-setup kickoff
-                turn for `metadata.workspace_id`. When true, the server treats the
-                frame as the one-time workspace-setup kickoff — the frame's
-                `content` is ignored and replaced by a server-composed
-                instruction; a system-role entry is recorded; the workspace's
-                `setup_pending` flag is cleared exactly once (idempotency-guarded);
-                duplicate and malformed kickoffs are rejected with an error frame.
-                Absent/false for ordinary messages.
-              example: true
+              description: 'One-time marker that this message is the workspace-setup kickoff turn for `metadata.workspace_id`.
+                When true, the server treats the frame as the one-time workspace-setup kickoff — the frame''s `content` is
+                ignored and replaced by a server-composed instruction; a system-role entry is recorded; the workspace''s `setup_pending`
+                flag is cleared exactly once (idempotency-guarded); duplicate and malformed kickoffs are rejected with an
+                error frame. Absent/false for ordinary messages.
 
+                '
+              example: true
     CancelFrame:
       title: CancelFrame
       description: Client → server cancel in-progress turn.
       type: object
       required:
-        - type
-        - session_id
+      - type
+      - session_id
       additionalProperties: false
       properties:
         type:
@@ -1416,46 +1327,43 @@ components:
           type: string
           minLength: 1
           maxLength: 128
-
     PingFrame:
       title: PingFrame
       description: Client → server heartbeat.
       type: object
       required:
-        - type
+      - type
       additionalProperties: false
       properties:
         type:
           type: string
           const: ping
-
     PongFrame:
       title: PongFrame
-      description: >
-        Server → client heartbeat acknowledgement. Emitted in response to every
-        client PingFrame so the SPA's "any frame received recently" liveness
-        check observes a server frame during idle and does not force-close after
-        60 s of silence.
+      description: 'Server → client heartbeat acknowledgement. Emitted in response to every client PingFrame so the SPA''s
+        "any frame received recently" liveness check observes a server frame during idle and does not force-close after 60
+        s of silence.
+
+        '
       type: object
       required:
-        - type
+      - type
       additionalProperties: false
       properties:
         type:
           type: string
           const: pong
-
     AttachSessionFrame:
       title: AttachSessionFrame
-      description: >
-        Client → server request to attach to an existing session.
-        When `since` is provided, the server skips replay frames whose
-        timestamp <= `since`, sending only frames the SPA has not yet seen.
-        Omitting `since` requests a full replay (legacy behaviour).
+      description: 'Client → server request to attach to an existing session. When `since` is provided, the server skips replay
+        frames whose timestamp <= `since`, sending only frames the SPA has not yet seen. Omitting `since` requests a full
+        replay (legacy behaviour).
+
+        '
       type: object
       required:
-        - type
-        - session_id
+      - type
+      - session_id
       additionalProperties: false
       properties:
         type:
@@ -1468,20 +1376,19 @@ components:
         since:
           type: string
           format: date-time
-          description: >
-            ISO 8601 timestamp of the most recent frame the SPA has already
-            processed. Server replays only frames with timestamp > this value.
-            Used to keep reconnect replay traffic O(missed window) instead of
-            O(full session history).
+          description: 'ISO 8601 timestamp of the most recent frame the SPA has already processed. Server replays only frames
+            with timestamp > this value. Used to keep reconnect replay traffic O(missed window) instead of O(full session
+            history).
 
+            '
     DevicePairingResponseFrame:
       title: DevicePairingResponseFrame
       description: Client → server device pairing decision.
       type: object
       required:
-        - type
-        - device_id
-        - decision
+      - type
+      - device_id
+      - decision
       additionalProperties: false
       properties:
         type:
@@ -1493,9 +1400,8 @@ components:
         decision:
           type: string
           enum:
-            - approve
-            - reject
-
+          - approve
+          - reject
     SessionStartedFrame:
       title: SessionStartedFrame
       description: >
@@ -1505,8 +1411,8 @@ components:
         producing_session_id is absent (FR-013).
       type: object
       required:
-        - type
-        - session_id
+      - type
+      - session_id
       additionalProperties: false
       properties:
         type:
@@ -1523,7 +1429,6 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (b) (FR-089): absent for this frame type.
-
     TokenFrame:
       title: TokenFrame
       description: >
@@ -1532,9 +1437,9 @@ components:
         ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
       type: object
       required:
-        - type
-        - session_id
-        - content
+      - type
+      - session_id
+      - content
       additionalProperties: false
       properties:
         type:
@@ -1556,12 +1461,12 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (a) (FR-089): the child turn's own session id when this
             frame crosses the wire from a delegated child.
-
     DoneStats:
       title: DoneStats
-      description: >
-        Per-turn statistics in a done frame. additionalProperties are allowed
-        for replay extras (frames_emitted, orphan_count, etc.).
+      description: 'Per-turn statistics in a done frame. additionalProperties are allowed for replay extras (frames_emitted,
+        orphan_count, etc.).
+
+        '
       type: object
       additionalProperties: true
       properties:
@@ -1593,7 +1498,6 @@ components:
           type: boolean
         turn_failed:
           type: boolean
-
     DoneFrame:
       title: DoneFrame
       description: >
@@ -1602,8 +1506,8 @@ components:
         (FR-089) — genuinely child-turn-produced.
       type: object
       required:
-        - type
-        - session_id
+      - type
+      - session_id
       additionalProperties: false
       properties:
         type:
@@ -1621,14 +1525,76 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (a) (FR-089): the child turn's own session id when this
             frame crosses the wire from a delegated child.
-
-    ErrorFrame:
-      title: ErrorFrame
-      description: Server → client error notification.
+    LLMError:
+      title: LLMError
+      description: Translated provider/LLM error safe for the live WebSocket boundary.
       type: object
       required:
-        - type
-        - message
+      - code
+      - message
+      - retryable
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          enum:
+          - media_unsupported
+          - provider_rejected
+          - rate_limited
+          - network
+          - content_policy
+          - context_too_long
+          - tool_args
+          - schema
+          - unknown
+        message:
+          type: string
+          minLength: 1
+          maxLength: 4096
+        retryable:
+          type: boolean
+        detail:
+          type: string
+          maxLength: 2048
+          description: Live-only technical detail; never persisted or replayed.
+    LLMErrorReplay:
+      title: LLMErrorReplay
+      description: Replay-safe translated provider/LLM error with live-only detail omitted.
+      type: object
+      required:
+      - code
+      - message
+      - retryable
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          enum:
+          - media_unsupported
+          - provider_rejected
+          - rate_limited
+          - network
+          - content_policy
+          - context_too_long
+          - tool_args
+          - schema
+          - unknown
+        message:
+          type: string
+          minLength: 1
+          maxLength: 4096
+        retryable:
+          type: boolean
+    ErrorFrame:
+      title: ErrorFrame
+      description: 'Server → client. Error notification. May be global (no session_id, e.g., auth failure) or session-scoped.
+        The SPA displays the message as a toast or inline error. Does NOT terminate the WebSocket connection.
+
+        '
+      type: object
+      required:
+      - type
+      - message
       additionalProperties: false
       properties:
         type:
@@ -1637,11 +1603,30 @@ components:
         session_id:
           type: string
           maxLength: 128
+          description: 'Session this error relates to. Optional: global errors (auth, connection) are not tied to a specific
+            session.
+
+            '
         message:
           type: string
           minLength: 1
           maxLength: 4096
-
+          description: Human-readable error description.
+        payload:
+          # Inline mirror of components.schemas.ErrorPayload
+          # (contracts/components/schemas/ErrorPayload.yaml). Kept inline
+          # because the Zod codegen evaluates schemas eagerly at module load
+          # (Zod expressions, not lazy type aliases) — a $ref forward reference
+          # trips a TDZ error in generated schemas.ts. The Go-side pointer fix
+          # lives in asyncapi_types.gen.go (hand-adjusted Payload → *ErrorPayload
+          # so omitempty works; search for the ADR-051 B2 comment there).
+          type: object
+          required:
+          - llm_error
+          additionalProperties: false
+          properties:
+            llm_error:
+              $ref: '#/components/schemas/LLMError'
     ToolCallStartFrame:
       title: ToolCallStartFrame
       description: >
@@ -1651,11 +1636,11 @@ components:
         W5 audit (FR-089) — genuinely child-turn-produced.
       type: object
       required:
-        - type
-        - session_id
-        - tool
-        - call_id
-        - params
+      - type
+      - session_id
+      - tool
+      - call_id
+      - params
       additionalProperties: false
       properties:
         type:
@@ -1687,15 +1672,14 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (a) (FR-089): the child turn's own session id when this
             frame crosses the wire from a delegated child.
-
     TruncatedResult:
       title: TruncatedResult
       description: Sentinel for tool results exceeding 1 MiB (FR-I-011).
       type: object
       required:
-        - _truncated
-        - original_size_bytes
-        - preview
+      - _truncated
+      - original_size_bytes
+      - preview
       additionalProperties: false
       properties:
         _truncated:
@@ -1705,30 +1689,29 @@ components:
           type: integer
         preview:
           type: string
-
     MarshalErrorResult:
       title: MarshalErrorResult
       description: Sentinel for tool results that failed json.Marshal.
       type: object
       required:
-        - _marshal_error
+      - _marshal_error
       additionalProperties: false
       properties:
         _marshal_error:
           type: string
           minLength: 1
-
     ToolResultRef:
       title: ToolResultRef
-      description: >
-        Sentinel for tool results > 50 KiB but <= 1 MiB whose full body is
-        preserved server-side. SPA fetches via GET /api/v1/tool-results/{ref}.
+      description: 'Sentinel for tool results > 50 KiB but <= 1 MiB whose full body is preserved server-side. SPA fetches
+        via GET /api/v1/tool-results/{ref}.
+
+        '
       type: object
       required:
-        - _ref
-        - ref
-        - original_size_bytes
-        - preview
+      - _ref
+      - ref
+      - original_size_bytes
+      - preview
       additionalProperties: false
       properties:
         _ref:
@@ -1743,26 +1726,22 @@ components:
           minimum: 0
         preview:
           type: string
-
     DelegationFailure:
       title: DelegationFailure
-      description: >
-        Structured tool-result payload emitted in the `result` field of a
-        tool_call_result frame (status="error") when a delegation tool
-        (spawn / subagent / task_create) is denied by the delegation policy
-        (trust set / mode / depth). The SPA matches on the fixed
-        error="delegation_denied" discriminator, but (policy 2026-07-16) only
-        renders a distinct delegation-failure block in verbose chat or an
-        ActivityPanel step context — the default thread presentation is the
-        calling agent's own narration of the denial, not a dedicated
-        SPA-rendered block. The frame's top-level `error` field carries the
-        same `reason`.
+      description: 'Structured tool-result payload emitted in the `result` field of a tool_call_result frame (status="error")
+        when a delegation tool (spawn / subagent / task_create) is denied by the delegation policy (trust set / mode / depth).
+        The SPA matches on the fixed error="delegation_denied" discriminator, but (policy 2026-07-16) only renders a distinct
+        delegation-failure block in verbose chat or an ActivityPanel step context — the default thread presentation is the
+        calling agent''s own narration of the denial, not a dedicated SPA-rendered block. The frame''s top-level `error` field
+        carries the same `reason`.
+
+        '
       type: object
       required:
-        - error
-        - reason
-        - policy
-        - tool
+      - error
+      - reason
+      - policy
+      - tool
       additionalProperties: false
       properties:
         error:
@@ -1776,14 +1755,14 @@ components:
         policy:
           type: string
           enum:
-            - trust_set
-            - mode
-            - depth
-          description: >
-            The delegation-policy axis that rejected the call. trust_set = target
-            not in the caller's 'to' allowlist (or no permitted targets); mode =
-            the delegation mode (await/background/task) is not permitted; depth =
-            the delegation-chain depth cap was reached.
+          - trust_set
+          - mode
+          - depth
+          description: 'The delegation-policy axis that rejected the call. trust_set = target not in the caller''s ''to''
+            allowlist (or no permitted targets); mode = the delegation mode (await/background/task) is not permitted; depth
+            = the delegation-chain depth cap was reached.
+
+            '
         tool:
           type: string
           minLength: 1
@@ -1791,7 +1770,6 @@ components:
         target_agent_id:
           type: string
           description: The requested delegation target, when one was named.
-
     ToolCallResultFrame:
       title: ToolCallResultFrame
       description: >
@@ -1800,12 +1778,12 @@ components:
         ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
       type: object
       required:
-        - type
-        - session_id
-        - tool
-        - call_id
-        - result
-        - status
+      - type
+      - session_id
+      - tool
+      - call_id
+      - result
+      - status
       additionalProperties: false
       properties:
         type:
@@ -1823,20 +1801,27 @@ components:
           type: string
           minLength: 1
         result:
-          description: >
-            Tool return value. Any JSON type or null (null is the contract for error frames).
-            Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes.
+          description: 'Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult,
+            MarshalErrorResult, and ToolResultRef are alternative shapes.
+
+            '
           oneOf:
-            - type: ["object", "array", "string", "number", "boolean", "null"]
-            - $ref: '#/components/schemas/TruncatedResult'
-            - $ref: '#/components/schemas/MarshalErrorResult'
-            - $ref: '#/components/schemas/ToolResultRef'
-            - $ref: '#/components/schemas/DelegationFailure'
+          - type:
+            - object
+            - array
+            - string
+            - number
+            - boolean
+            - 'null'
+          - $ref: '#/components/schemas/TruncatedResult'
+          - $ref: '#/components/schemas/MarshalErrorResult'
+          - $ref: '#/components/schemas/ToolResultRef'
+          - $ref: '#/components/schemas/DelegationFailure'
         status:
           type: string
           enum:
-            - success
-            - error
+          - success
+          - error
         duration_ms:
           type: integer
         error:
@@ -1852,7 +1837,6 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (a) (FR-089): the child turn's own session id when this
             frame crosses the wire from a delegated child.
-
     SubagentStartFrame:
       title: SubagentStartFrame
       description: >
@@ -1864,11 +1848,11 @@ components:
         therefore absent (FR-013's "iff it differs").
       type: object
       required:
-        - type
-        - session_id
-        - span_id
-        - parent_call_id
-        - task_label
+      - type
+      - session_id
+      - span_id
+      - parent_call_id
+      - task_label
       additionalProperties: false
       properties:
         type:
@@ -1895,7 +1879,6 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (b) (FR-089): absent for this frame type — producing ==
             routing by construction (FR-017).
-
     SubagentEndFrame:
       title: SubagentEndFrame
       description: >
@@ -1911,10 +1894,10 @@ components:
         ADR-057 UAT defect C2 fix).
       type: object
       required:
-        - type
-        - session_id
-        - span_id
-        - status
+      - type
+      - session_id
+      - span_id
+      - status
       additionalProperties: false
       properties:
         type:
@@ -1942,10 +1925,10 @@ components:
         reason:
           type: string
           enum:
-            - parent_timeout
-            - parent_cancelled
-            - parent_done_early
-            - unknown
+          - parent_timeout
+          - parent_cancelled
+          - parent_done_early
+          - unknown
         agent_id:
           type: string
         parent_call_id:
@@ -1959,7 +1942,6 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (b) (FR-089): absent for this frame type — producing ==
             routing by construction (FR-017).
-
     SubagentMessageFrame:
       title: SubagentMessageFrame
       description: >
@@ -2075,7 +2057,6 @@ components:
         created_at:
           type: string
           format: date-time
-
     TaskStatusChangedFrame:
       title: TaskStatusChangedFrame
       description: >
@@ -2085,10 +2066,10 @@ components:
         producing_session_id for this type until the audit classifies it.
       type: object
       required:
-        - type
-        - session_id
-        - task_id
-        - status
+      - type
+      - session_id
+      - task_id
+      - status
       additionalProperties: false
       properties:
         type:
@@ -2117,7 +2098,45 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
             (FR-089) — see TaskStatusChangedFrame's description.
+    TaskRunStatusFrame:
+      title: TaskRunStatusFrame
+      description: 'Server → client task RUN status updated (open or close). Additive alongside TaskStatusChangedFrame (ADR-050
+        / task-run-history-spec §3.8) — emitted at run open and close so the calendar''s per-occurrence chip can update live
+        without a full refetch.
 
+        '
+      type: object
+      required:
+      - type
+      - task_id
+      - run_id
+      - status
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: task_run_status
+        task_id:
+          type: string
+          minLength: 1
+        run_id:
+          type: string
+          minLength: 1
+        occurrence_ms:
+          type: integer
+          format: int64
+          nullable: true
+          description: 'The scheduled RRULE instant this run realizes (the calendar join key). Null for an ad-hoc/once/manual
+            run.
+
+            '
+        status:
+          type: string
+          enum:
+          - in_progress
+          - done
+          - failed
+          - skipped
     ReplayMessageFrame:
       title: ReplayMessageFrame
       description: >
@@ -2127,10 +2146,10 @@ components:
         not by a turn, so producing_session_id is absent (FR-013).
       type: object
       required:
-        - type
-        - session_id
-        - content
-        - role
+      - type
+      - session_id
+      - content
+      - role
       additionalProperties: false
       properties:
         type:
@@ -2144,10 +2163,10 @@ components:
         role:
           type: string
           enum:
-            - user
-            - assistant
-            - system
-            - turn_canceled
+          - user
+          - assistant
+          - system
+          - turn_canceled
         id:
           type: string
         timestamp:
@@ -2158,17 +2177,15 @@ components:
         model:
           type: string
           maxLength: 256
-          description: >
-            Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014).
-            Omitted for legacy entries written before per-turn model recording landed.
+          description: 'Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy
+            entries written before per-turn model recording landed.
+
+            '
         turn_id:
           type: string
-          description: >
-            Turn-correlation identifier (from TranscriptEntry.TurnID), stamped on
-            assistant entries and turn-cancellation entries. Lets the client match
-            a replayed turn_canceled entry to the specific preceding assistant
-            message it cancels, without relying on stream adjacency (async
-            delegation can interleave other agents'/turns' frames in between).
+          description: 'Turn-correlation identifier (from TranscriptEntry.TurnID), stamped on assistant entries and turn-cancellation
+            entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels,
+            without relying on stream adjacency (async delegation can interleave other agents''/turns'' frames in between).
             Omitted for legacy entries written before turn-id stamping landed.
         producing_session_id:
           type: string
@@ -2178,22 +2195,27 @@ components:
             Class (b) (FR-089): absent for this frame type — emitted by the
             gateway replay path, not by a turn.
 
+            '
     ReplayErrorFrame:
       title: ReplayErrorFrame
-      description: >
-        Server → client. Replay of a system-error transcript entry (Phase 1B,
-        FR-014). The SPA renders this frame's `kind` discriminant to dispatch
-        to the rate-limit banner or generic error component — without this
-        typed frame the SPA previously rendered rate-limit text as a regular
-        assistant message (Role="" fallback path).
+      description: 'Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). Emitted by the replay path
+        when the server encounters a TranscriptEntry with Type=system AND Status="error" — produced by appendErrorTranscript
+        for rate-limit denials (kind=rate_limit) and provider LLM call failures (kind=error).
+
+        The SPA uses this frame''s `kind` discriminant to render the rate-limit-denial component or the generic error component
+        instead of falling back to the default "assistant" bubble render path. Without this typed frame, replay treats the
+        entry as a normal assistant message (the previous bug — empty Role falls back to "assistant" via ReplayMessageFrame.Role,
+        so the SPA renders rate-limit text as a regular assistant message).
+
+        '
       type: object
       required:
-        - type
-        - session_id
-        - entry_id
-        - timestamp
-        - kind
-        - message
+      - type
+      - session_id
+      - entry_id
+      - timestamp
+      - kind
+      - message
       additionalProperties: false
       properties:
         type:
@@ -2202,37 +2224,54 @@ components:
         session_id:
           type: string
           minLength: 1
+          description: Session being replayed.
         entry_id:
           type: string
+          description: 'Server-assigned transcript entry ID. Matches TranscriptEntry.ID from the JSONL partition so the SPA
+            can dedup against live entries on WS reconnect.
+
+            '
         timestamp:
           type: string
           format: date-time
+          description: ISO-8601 timestamp of the original error event.
         kind:
           type: string
           enum:
-            - rate_limit
-            - error
+          - rate_limit
+          - error
+          description: 'Error category. The SPA renders a different component per kind: "rate_limit" → rate-limit-denial banner
+            with retry-after countdown, "error" → generic error component. Add new kinds here as new error categories are
+            introduced (the enum keeps the wire contract tight).
+
+            '
         message:
           type: string
+          minLength: 1
+          maxLength: 4096
+          description: 'Human-readable error description (the same text previously written to TranscriptEntry.Content). Kept
+            verbatim for backward compat with the existing replay_message rendering path.
+
+            '
         agent_id:
           type: string
+          description: Agent that was active when the error fired.
         payload:
+          # Inline mirror of components.schemas.ReplayErrorPayload
+          # (contracts/components/schemas/ReplayErrorPayload.yaml). Kept inline
+          # because the Zod codegen evaluates schemas eagerly at module load
+          # (Zod expressions, not lazy type aliases) — a $ref forward reference
+          # trips a TDZ error in generated schemas.ts. The Go-side pointer fix
+          # lives in asyncapi_types.gen.go (hand-adjusted Payload →
+          # *ReplayErrorPayload so omitempty works; search for the ADR-051 B2
+          # comment there).
           type: object
+          required:
+          - llm_error
           additionalProperties: false
           properties:
-            retry_after_seconds:
-              type: number
-            policy_rule:
-              type: string
-            scope:
-              type: string
-            resource:
-              type: string
-            tool:
-              type: string
-            stage:
-              type: string
-
+            llm_error:
+              $ref: '#/components/schemas/LLMErrorReplay'
     RateLimitFrame:
       title: RateLimitFrame
       description: >
@@ -2248,12 +2287,12 @@ components:
         this schema.
       type: object
       required:
-        - type
-        - session_id
-        - scope
-        - resource
-        - policy_rule
-        - retry_after_seconds
+      - type
+      - session_id
+      - scope
+      - resource
+      - policy_rule
+      - retry_after_seconds
       additionalProperties: false
       properties:
         type:
@@ -2264,9 +2303,9 @@ components:
         scope:
           type: string
           enum:
-            - agent
-            - channel
-            - global
+          - agent
+          - channel
+          - global
         resource:
           type: string
           minLength: 1
@@ -2281,25 +2320,24 @@ components:
         tool:
           type: string
           maxLength: 128
-
     MediaPart:
       title: MediaPart
       description: One media attachment.
       type: object
       required:
-        - type
-        - url
-        - filename
-        - content_type
+      - type
+      - url
+      - filename
+      - content_type
       additionalProperties: false
       properties:
         type:
           type: string
           enum:
-            - image
-            - audio
-            - video
-            - file
+          - image
+          - audio
+          - video
+          - file
         url:
           type: string
           minLength: 1
@@ -2311,7 +2349,6 @@ components:
           minLength: 1
         caption:
           type: string
-
     MediaFrame:
       title: MediaFrame
       description: >
@@ -2321,9 +2358,9 @@ components:
         W5 audit (FR-089) — genuinely child-turn-produced.
       type: object
       required:
-        - type
-        - session_id
-        - parts
+      - type
+      - session_id
+      - parts
       additionalProperties: false
       properties:
         type:
@@ -2345,7 +2382,6 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (a) (FR-089): the child turn's own session id when this
             frame crosses the wire from a delegated child.
-
     AgentSwitchedFrame:
       title: AgentSwitchedFrame
       description: >
@@ -2355,8 +2391,8 @@ components:
         producing_session_id for this type until the audit classifies it.
       type: object
       required:
-        - type
-        - session_id
+      - type
+      - session_id
       additionalProperties: false
       properties:
         type:
@@ -2375,7 +2411,6 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
             (FR-089) — see this frame's description.
-
     ToolApprovalRequiredFrame:
       title: ToolApprovalRequiredFrame
       description: >
@@ -2386,15 +2421,15 @@ components:
         per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
       type: object
       required:
-        - type
-        - approval_id
-        - tool_call_id
-        - tool_name
-        - args
-        - agent_id
-        - session_id
-        - turn_id
-        - expires_in_ms
+      - type
+      - approval_id
+      - tool_call_id
+      - tool_name
+      - args
+      - agent_id
+      - session_id
+      - turn_id
+      - expires_in_ms
       additionalProperties: false
       properties:
         type:
@@ -2413,9 +2448,10 @@ components:
         args:
           type: object
           additionalProperties: true
-          description: >
-            Tool invocation arguments. Always object, never null. Required +
-            object type so the Phase 4 contract test catches any nil regression.
+          description: 'Tool invocation arguments. Always object, never null. Required + object type so the Phase 4 contract
+            test catches any nil regression.
+
+            '
         agent_id:
           type: string
           minLength: 1
@@ -2436,17 +2472,16 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (a) (FR-089): the child turn's own session id when this
             frame crosses the wire from a delegated child.
-
     SessionStatePendingApproval:
       title: SessionStatePendingApproval
       description: One pending approval entry in a SessionStateFrame.
       type: object
       required:
-        - approval_id
-        - session_id
-        - tool_name
-        - agent_id
-        - expires_in_ms
+      - approval_id
+      - session_id
+      - tool_name
+      - agent_id
+      - expires_in_ms
       additionalProperties: false
       properties:
         approval_id:
@@ -2466,19 +2501,18 @@ components:
           type: integer
           minimum: 0
           maximum: 86400000
-
     SessionStateFrame:
       title: SessionStateFrame
-      description: >
-        Server → client reconnect approval snapshot (FR-052, FR-073, FR-081).
-        pending_approvals MUST be an array (never null). Backend coerces nil → [].
-        SPA calls pending_approvals.map() — null crashes at render time.
+      description: 'Server → client reconnect approval snapshot (FR-052, FR-073, FR-081). pending_approvals MUST be an array
+        (never null). Backend coerces nil → []. SPA calls pending_approvals.map() — null crashes at render time.
+
+        '
       type: object
       required:
-        - type
-        - user_id
-        - pending_approvals
-        - emitted_at
+      - type
+      - user_id
+      - pending_approvals
+      - emitted_at
       additionalProperties: false
       properties:
         type:
@@ -2495,7 +2529,6 @@ components:
         emitted_at:
           type: string
           format: date-time
-
     SystemOverloadFrame:
       title: SystemOverloadFrame
       description: >
@@ -2506,8 +2539,8 @@ components:
         classifies it.
       type: object
       required:
-        - type
-        - session_id
+      - type
+      - session_id
       additionalProperties: false
       properties:
         type:
@@ -2524,7 +2557,6 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
             (FR-089) — see this frame's description.
-
     ReplayWarningStats:
       title: ReplayWarningStats
       description: Diagnostic counters in a ReplayWarningFrame.
@@ -2533,15 +2565,14 @@ components:
       properties:
         duplicate_tool_call_id_count:
           type: integer
-
     ReplayWarningFrame:
       title: ReplayWarningFrame
       description: Server → client duplicate tool_call_ids detected.
       type: object
       required:
-        - type
-        - session_id
-        - message
+      - type
+      - session_id
+      - message
       additionalProperties: false
       properties:
         type:
@@ -2555,7 +2586,6 @@ components:
           minLength: 1
         stats:
           $ref: '#/components/schemas/ReplayWarningStats'
-
     CancelStageFrame:
       title: CancelStageFrame
       description: >
@@ -2567,9 +2597,9 @@ components:
         audit classifies it.
       type: object
       required:
-        - type
-        - session_id
-        - stage
+      - type
+      - session_id
+      - stage
       additionalProperties: false
       properties:
         type:
@@ -2590,7 +2620,6 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
             (FR-089) — see this frame's description.
-
     SessionCloseAckFrame:
       title: SessionCloseAckFrame
       description: >
@@ -2600,8 +2629,8 @@ components:
         output, so producing_session_id is absent (FR-013).
       type: object
       required:
-        - type
-        - session_id
+      - type
+      - session_id
       additionalProperties: false
       properties:
         type:
@@ -2618,14 +2647,13 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (b) (FR-089): absent for this frame type.
-
     DevicePairingRequestFrame:
       title: DevicePairingRequestFrame
       description: Server → client device pairing request needs admin approval.
       type: object
       required:
-        - type
-        - device_id
+      - type
+      - device_id
       additionalProperties: false
       properties:
         type:
@@ -2642,17 +2670,17 @@ components:
           type: string
         session_id:
           type: string
-
     WhatsAppPairingFrame:
       title: WhatsAppPairingFrame
-      description: >
-        Server → client WhatsApp native/QR pairing update (QR code + live status)
-        so the SPA can pair in-browser without the gateway terminal (#283).
+      description: 'Server → client WhatsApp native/QR pairing update (QR code + live status) so the SPA can pair in-browser
+        without the gateway terminal (#283).
+
+        '
       type: object
       required:
-        - type
-        - channel_id
-        - status
+      - type
+      - channel_id
+      - status
       additionalProperties: false
       properties:
         type:
@@ -2664,23 +2692,22 @@ components:
         status:
           type: string
           enum:
-            - waiting
-            - code
-            - linked
-            - timeout
-            - error
+          - waiting
+          - code
+          - linked
+          - timeout
+          - error
         qr:
           type: string
         message:
           type: string
-
     SessionCloseFrame:
       title: SessionCloseFrame
       description: Client → server explicit session close request.
       type: object
       required:
-        - type
-        - session_id
+      - type
+      - session_id
       additionalProperties: false
       properties:
         type:
@@ -2689,18 +2716,17 @@ components:
         session_id:
           type: string
           minLength: 1
-
     WhatsAppPairingSubscribeFrame:
       title: WhatsAppPairingSubscribeFrame
-      description: >
-        Client → server. Registers or clears this connection's interest in a
-        channel's whatsapp_pairing frames so the QR is delivered only to the
-        operator viewing that channel's pairing UI (#283).
+      description: 'Client → server. Registers or clears this connection''s interest in a channel''s whatsapp_pairing frames
+        so the QR is delivered only to the operator viewing that channel''s pairing UI (#283).
+
+        '
       type: object
       required:
-        - type
-        - channel_id
-        - active
+      - type
+      - channel_id
+      - active
       additionalProperties: false
       properties:
         type:
@@ -2711,22 +2737,21 @@ components:
           minLength: 1
         active:
           type: boolean
-
     NotificationFrame:
       title: NotificationFrame
-      description: >
-        Server → client. A notification raised for the recipient user (e.g. a
-        scheduled run failed). Delivered only to that user's connections; the SPA
-        adds it to the header notification center (#264).
+      description: 'Server → client. A notification raised for the recipient user (e.g. a scheduled run failed). Delivered
+        only to that user''s connections; the SPA adds it to the header notification center (#264).
+
+        '
       type: object
       required:
-        - type
-        - id
-        - notification_type
-        - title
-        - severity
-        - read
-        - created_at_ms
+      - type
+      - id
+      - notification_type
+      - title
+      - severity
+      - read
+      - created_at_ms
       additionalProperties: false
       properties:
         type:
@@ -2738,7 +2763,7 @@ components:
         notification_type:
           type: string
           enum:
-            - schedule_failed
+          - schedule_failed
         title:
           type: string
           minLength: 1
@@ -2747,9 +2772,9 @@ components:
         severity:
           type: string
           enum:
-            - info
-            - warning
-            - error
+          - info
+          - warning
+          - error
         read:
           type: boolean
         created_at_ms:
@@ -2761,24 +2786,19 @@ components:
           type: string
         agent_id:
           type: string
-
-    # ── Browser live channel schemas (ADR-038) ─────────────────────────────────
-
     BrowserAttachFrame:
       title: BrowserAttachFrame
-      description: >
-        Client → server. Binds this browser-live WebSocket connection to a
-        session's browser and starts the screencast. Per ADR-043 agents browse
-        concurrently in isolated per-agent browser contexts within one shared
-        Chrome; agent_id is the binding key (selects which agent's
-        BrowserManager + browser context the live view attaches to), and
-        session_id is correlation-only (the server binds to the active tab in
-        that agent's context).
+      description: 'Client → server. Binds this browser-live WebSocket connection to a session''s browser and starts the screencast.
+        Per ADR-043 agents browse concurrently in isolated per-agent browser contexts within one shared Chrome; agent_id is
+        the binding key (selects which agent''s BrowserManager + browser context the live view attaches to), and session_id
+        is correlation-only (the server binds to the active tab in that agent''s context).
+
+        '
       type: object
       required:
-        - type
-        - session_id
-        - agent_id
+      - type
+      - session_id
+      - agent_id
       additionalProperties: false
       properties:
         type:
@@ -2792,18 +2812,18 @@ components:
           type: string
           minLength: 1
           maxLength: 128
-
     BrowserInputFrame:
       title: BrowserInputFrame
-      description: >
-        Client → server. A viewer input event to inject into the live browser via
-        CDP Input.dispatch*. Only honoured while the viewer holds control
-        (browser_control action=take). Coordinates are device (CSS) pixels of the
-        screencast frame.
+      description: 'Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured
+        while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the screencast
+        frame, UNLESS capture_width/capture_height are present — then x/y are in that capture-frame pixel space and the
+        server rescales them into the tab''s real CSS viewport before dispatch (root cause 2026-07-31, fault 3).
+
+        '
       type: object
       required:
-        - type
-        - kind
+      - type
+      - kind
       additionalProperties: false
       properties:
         type:
@@ -2812,29 +2832,41 @@ components:
         kind:
           type: string
           enum:
-            - mouse_move
-            - mouse_down
-            - mouse_up
-            - wheel
-            - key_down
-            - key_up
-            - text
-            - navigate
-            - navigate_back
-            - reload
+          - mouse_move
+          - mouse_down
+          - mouse_up
+          - wheel
+          - key_down
+          - key_up
+          - text
+          - navigate
+          - navigate_back
+          - reload
         x:
           type: number
         y:
           type: number
+        capture_width:
+          type: number
+          minimum: 1
+          maximum: 16384
+          description: Intrinsic pixel width of the capture frame the client mapped x/y into (the <video>'s videoWidth in
+            WebRTC mode). With capture_height, the server rescales x/y into the tab's actual CSS viewport before CDP
+            dispatch. Absent (older client) means x/y are already CSS pixels.
+        capture_height:
+          type: number
+          minimum: 1
+          maximum: 16384
+          description: Intrinsic pixel height of the capture frame the client mapped x/y into. See capture_width.
         button:
           type: string
           enum:
-            - none
-            - left
-            - middle
-            - right
-            - back
-            - forward
+          - none
+          - left
+          - middle
+          - right
+          - back
+          - forward
         delta_x:
           type: number
         delta_y:
@@ -2849,10 +2881,8 @@ components:
           type: integer
           minimum: 0
           maximum: 255
-          description: >-
-            Windows virtual key code for key_down/key_up (DOM
-            KeyboardEvent.keyCode) — required for CDP to perform editing/nav key
-            actions and modifier shortcuts. See ADR-039.
+          description: Windows virtual key code for key_down/key_up (DOM KeyboardEvent.keyCode) — required for CDP to perform
+            editing/nav key actions and modifier shortcuts. See ADR-039.
         text:
           type: string
           maxLength: 8192
@@ -2863,17 +2893,16 @@ components:
         url:
           type: string
           maxLength: 2048
-
     BrowserControlFrame:
       title: BrowserControlFrame
-      description: >
-        Client → server. Take or release interactive control of the live browser.
-        While a viewer holds control, the agent's own browser tools defer
-        (cooperative turn-coordination, ADR-038 D6).
+      description: 'Client → server. Take or release interactive control of the live browser. While a viewer holds control,
+        the agent''s own browser tools defer (cooperative turn-coordination, ADR-038 D6).
+
+        '
       type: object
       required:
-        - type
-        - action
+      - type
+      - action
       additionalProperties: false
       properties:
         type:
@@ -2882,18 +2911,17 @@ components:
         action:
           type: string
           enum:
-            - take
-            - release
-
+          - take
+          - release
     BrowserDetachFrame:
       title: BrowserDetachFrame
-      description: >
-        Client → server. Detach this viewer from the live browser; the server
-        stops the screencast when the last viewer detaches. Sent when the panel
-        closes.
+      description: 'Client → server. Detach this viewer from the live browser; the server stops the screencast when the last
+        viewer detaches. Sent when the panel closes.
+
+        '
       type: object
       required:
-        - type
+      - type
       additionalProperties: false
       properties:
         type:
@@ -2902,21 +2930,20 @@ components:
         session_id:
           type: string
           maxLength: 128
-
     BrowserScreencastFrame:
       title: BrowserScreencastFrame
-      description: >
-        Server → client. One CDP screencast frame (a JPEG snapshot of the live
-        browser tab) plus the metadata needed to map viewer input coordinates back
-        to the page. Screencast is repaint-driven, not fixed-FPS.
+      description: 'Server → client. One CDP screencast frame (a JPEG snapshot of the live browser tab) plus the metadata
+        needed to map viewer input coordinates back to the page. Screencast is repaint-driven, not fixed-FPS.
+
+        '
       type: object
       required:
-        - type
-        - session_id
-        - seq
-        - data
-        - width
-        - height
+      - type
+      - session_id
+      - seq
+      - data
+      - width
+      - height
       additionalProperties: false
       properties:
         type:
@@ -2946,17 +2973,16 @@ components:
           type: number
         scroll_offset_y:
           type: number
-
     BrowserStatusFrame:
       title: BrowserStatusFrame
-      description: >
-        Server → client. Lifecycle / control status for the live browser
-        connection. state=controlling means this viewer holds interactive control;
-        released means control was dropped; error carries a human-readable message.
+      description: 'Server → client. Lifecycle / control status for the live browser connection. state=controlling means this
+        viewer holds interactive control; released means control was dropped; error carries a human-readable message.
+
+        '
       type: object
       required:
-        - type
-        - state
+      - type
+      - state
       additionalProperties: false
       properties:
         type:
@@ -2965,12 +2991,12 @@ components:
         state:
           type: string
           enum:
-            - attached
-            - idle
-            - controlling
-            - released
-            - detached
-            - error
+          - attached
+          - idle
+          - controlling
+          - released
+          - detached
+          - error
         message:
           type: string
           maxLength: 512
@@ -2979,32 +3005,69 @@ components:
           maxLength: 128
         controlled_by_other:
           type: boolean
-          description: >-
-            Server-computed per-connection: true when some OTHER connection on
-            this session holds interactive control. Keeps the docked panel and
-            the pop-out window in agreement about who is driving.
+          description: 'Server-computed per-connection: true when some OTHER connection on this session holds interactive
+            control. Keeps the docked panel and the pop-out window in agreement about who is driving.'
         control_only:
           type: boolean
-          description: >-
-            True on a frame whose sole purpose is to update control-ownership on
-            other viewers (take/release/detach) — carries no lifecycle/error
-            meaning; the SPA applies only controlled_by_other and leaves its
-            status/error banner untouched.
+          description: True on a frame whose sole purpose is to update control-ownership on other viewers (take/release/detach)
+            — carries no lifecycle/error meaning; the SPA applies only controlled_by_other and leaves its status/error banner
+            untouched.
         session_id:
           type: string
+    BrowserViewportFrame:
+      title: BrowserViewportFrame
+      description: 'Client → server. Reports the live-browser panel''s current render box so the gateway can size the
+        captured tab to match it. The captured tab was pinned to a hardcoded 1280x720 while the docked panel is an
+        arbitrary resizable shape, so object-fit:contain could only ever fill one dimension and letterboxed the rest
+        (operator UAT 2026-07-31). device_scale_factor addresses the same report''s second half, blur: the managed
+        headless Chrome renders at DPR 1, so a capture displayed larger than its CSS size upscales. Sent on attach and
+        debounced on resize; the server applies the metrics then triggers browser_capture_control{action: recapture} so
+        the encoder rebuilds its stream at the new geometry (capture constraints are pinned per stream).
 
-    BrowserTabActionFrame:
-      title: BrowserTabActionFrame
-      description: >
-        Client → server. A tab-management action on a live-browser session:
-        switch the active tab, close a tab, or open a new (blank) tab. Honoured
-        the same way as browser_input/browser_control — switch/close target the
-        active browsing context's tab set. index is required for switch/close,
-        ignored for open. See ADR-041.
+        '
       type: object
       required:
-        - type
-        - action
+      - type
+      - width
+      - height
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_viewport
+        session_id:
+          type: string
+        agent_id:
+          type: string
+        width:
+          type: integer
+          minimum: 1
+          maximum: 8192
+          description: Panel render-box width in CSS pixels. Bounded so a malformed or hostile frame cannot ask Chromium
+            for an absurd allocation.
+        height:
+          type: integer
+          minimum: 1
+          maximum: 8192
+          description: Panel render-box height in CSS pixels.
+        device_scale_factor:
+          type: number
+          minimum: 1
+          maximum: 3
+          description: Viewer devicePixelRatio, used as Chromium's deviceScaleFactor so the capture renders at display
+            resolution rather than upscaling. Capped at 3 because cost scales with the SQUARE of this value. Omitted
+            means 1.
+    BrowserTabActionFrame:
+      title: BrowserTabActionFrame
+      description: 'Client → server. A tab-management action on a live-browser session: switch the active tab, close a tab,
+        or open a new (blank) tab. Honoured the same way as browser_input/browser_control — switch/close target the active
+        browsing context''s tab set. index is required for switch/close, ignored for open. See ADR-041.
+
+        '
+      type: object
+      required:
+      - type
+      - action
       additionalProperties: false
       properties:
         type:
@@ -3019,28 +3082,26 @@ components:
         action:
           type: string
           enum:
-            - switch
-            - close
-            - open
+          - switch
+          - close
+          - open
         index:
           type: integer
           minimum: 0
           description: Tab index for switch/close (ignored for open).
-
     BrowserTabsFrame:
       title: BrowserTabsFrame
-      description: >
-        Server → client. The current set of open tabs for a live-browser session
-        and which one is active, broadcast whenever a tab is opened (e.g. a
-        target=_blank click or window.open the agent/user followed), closed,
-        switched, or its title/url changes. The SPA renders this as the panel's
-        tab strip; the live screencast always reflects the active tab. See
-        ADR-041.
+      description: 'Server → client. The current set of open tabs for a live-browser session and which one is active, broadcast
+        whenever a tab is opened (e.g. a target=_blank click or window.open the agent/user followed), closed, switched, or
+        its title/url changes. The SPA renders this as the panel''s tab strip; the live screencast always reflects the active
+        tab. See ADR-041.
+
+        '
       type: object
       required:
-        - type
-        - tabs
-        - active_index
+      - type
+      - tabs
+      - active_index
       additionalProperties: false
       properties:
         type:
@@ -3059,17 +3120,15 @@ components:
           items:
             type: object
             required:
-              - index
+            - index
             additionalProperties: false
             properties:
               index:
                 type: integer
                 minimum: 0
-                description: >-
-                  0-based position of this tab in the CURRENT tab list. NOT a
-                  persistent identifier — indices shift down when an earlier tab
-                  closes; always re-read from the latest browser_tabs /
-                  browser_list_tabs before acting on a specific index.
+                description: 0-based position of this tab in the CURRENT tab list. NOT a persistent identifier — indices shift
+                  down when an earlier tab closes; always re-read from the latest browser_tabs / browser_list_tabs before
+                  acting on a specific index.
               title:
                 type: string
                 maxLength: 512
@@ -3081,30 +3140,23 @@ components:
               active:
                 type: boolean
                 description: True for the active tab (mirrors active_index).
-
-    # ── Browser WebRTC signaling (ADR-047 D1/D4) ────────────────────────────────
-
     BrowserWebRTCOfferFrame:
       title: BrowserWebRTCOfferFrame
-      description: >
-        Client → server. Viewer SDP offer to start (or restart) a WebRTC
-        media session for a session's live browser, sent on the existing
-        /api/v1/browser/ws channel after browser_attach. Non-trickle: the
-        SPA gathers all ICE candidates locally before sending, so `sdp` is
-        the complete offer. The gateway's Pion relay (ADR-047 D1) treats
-        agent_id as the binding key exactly like browser_attach (ADR-043
-        per-agent browser contexts) — it ensures/creates that agent's
-        capture session (starting the tabCapture encoder page on first
-        WebRTC-capable viewer offer, ADR-047 D2) and creates a new viewer
-        PeerConnection fed from the shared media tracks. session_id is
-        correlation-only, echoed back on browser_webrtc_answer /
-        browser_webrtc_state. See ADR-047 D1/D4.
+      description: 'Client → server. Viewer SDP offer to start (or restart) a WebRTC media session for a session''s live browser,
+        sent on the existing /api/v1/browser/ws channel after browser_attach. Non-trickle: the SPA gathers all ICE candidates
+        locally before sending, so `sdp` is the complete offer. The gateway''s Pion relay (ADR-047 D1) treats agent_id as
+        the binding key exactly like browser_attach (ADR-043 per-agent browser contexts) — it ensures/creates that agent''s
+        capture session (starting the tabCapture encoder page on first WebRTC-capable viewer offer, ADR-047 D2) and creates
+        a new viewer PeerConnection fed from the shared media tracks. session_id is correlation-only, echoed back on browser_webrtc_answer
+        / browser_webrtc_state. See ADR-047 D1/D4.
+
+        '
       type: object
       required:
-        - type
-        - agent_id
-        - session_id
-        - sdp
+      - type
+      - agent_id
+      - session_id
+      - sdp
       additionalProperties: false
       properties:
         type:
@@ -3119,31 +3171,26 @@ components:
           type: string
           minLength: 1
           maxLength: 128
-          description: >-
-            The client's chat session id, carried for context/correlation
-            and logging only — echoed back on browser_webrtc_answer /
-            browser_webrtc_state so the client can match them to this
-            offer. Does not select the browsing context; agent_id is the
-            binding key (mirrors BrowserAttachFrame).
+          description: The client's chat session id, carried for context/correlation and logging only — echoed back on browser_webrtc_answer
+            / browser_webrtc_state so the client can match them to this offer. Does not select the browsing context; agent_id
+            is the binding key (mirrors BrowserAttachFrame).
         sdp:
           type: string
           minLength: 1
           maxLength: 131072
-          description: >-
-            Complete SDP offer (application/sdp body), gathered with ICE
-            candidates already resolved (non-trickle, ADR-047 D4).
-
+          description: Complete SDP offer (application/sdp body), gathered with ICE candidates already resolved (non-trickle,
+            ADR-047 D4).
     BrowserWebRTCAnswerFrame:
       title: BrowserWebRTCAnswerFrame
-      description: >
-        Server → client. Pion SDP answer to a browser_webrtc_offer, sent
-        once the gateway's relay has created the viewer PeerConnection and
-        gathered its own ICE candidates (non-trickle — the answer is
-        complete, no separate candidate frames follow). See ADR-047 D1/D4.
+      description: 'Server → client. Pion SDP answer to a browser_webrtc_offer, sent once the gateway''s relay has created
+        the viewer PeerConnection and gathered its own ICE candidates (non-trickle — the answer is complete, no separate candidate
+        frames follow). See ADR-047 D1/D4.
+
+        '
       type: object
       required:
-        - type
-        - sdp
+      - type
+      - sdp
       additionalProperties: false
       properties:
         type:
@@ -3152,36 +3199,28 @@ components:
         session_id:
           type: string
           maxLength: 128
-          description: >-
-            Echoes the session_id from the triggering browser_webrtc_offer,
-            for client-side correlation only.
+          description: Echoes the session_id from the triggering browser_webrtc_offer, for client-side correlation only.
         sdp:
           type: string
           minLength: 1
           maxLength: 131072
-          description: >-
-            Complete SDP answer (application/sdp body) from the gateway's
-            Pion viewer PeerConnection, ICE-gathering-complete (non-trickle).
-
+          description: Complete SDP answer (application/sdp body) from the gateway's Pion viewer PeerConnection, ICE-gathering-complete
+            (non-trickle).
     BrowserWebRTCStateFrame:
       title: BrowserWebRTCStateFrame
-      description: >
-        Server → client. Availability / lifecycle state for the WebRTC
-        media path on a live-browser connection, distinct from the general
-        lifecycle carried by browser_status. `available` tells the SPA
-        whether it may attempt a browser_webrtc_offer at all (feature flag
-        off, platform/build not capable, or a runtime error takes it out of
-        service); `active` tells the SPA whether a WebRTC session is
-        currently flowing media for this connection. Per ADR-047 D3, the
-        JPEG browser_screencast path keeps running unconditionally as the
-        automatic fallback tier — the SPA falls back to it whenever
-        available=false or active drops to false after being true (e.g.
-        ICE failure), with no separate error frame needed. See ADR-047
-        D1/D3/D7 (lite builds compile WebRTC out entirely).
+      description: 'Server → client. Availability / lifecycle state for the WebRTC media path on a live-browser connection,
+        distinct from the general lifecycle carried by browser_status. `available` tells the SPA whether it may attempt a
+        browser_webrtc_offer at all (feature flag off, platform/build not capable, or a runtime error takes it out of service);
+        `active` tells the SPA whether a WebRTC session is currently flowing media for this connection. Per ADR-047 D3, the
+        JPEG browser_screencast path keeps running unconditionally as the automatic fallback tier — the SPA falls back to
+        it whenever available=false or active drops to false after being true (e.g. ICE failure), with no separate error frame
+        needed. See ADR-047 D1/D3/D7 (lite builds compile WebRTC out entirely).
+
+        '
       type: object
       required:
-        - type
-        - available
+      - type
+      - available
       additionalProperties: false
       properties:
         type:
@@ -3190,69 +3229,48 @@ components:
         session_id:
           type: string
           maxLength: 128
-          description: >-
-            Echoes the session_id from the triggering browser_webrtc_offer
-            / browser_attach, for client-side correlation only.
+          description: Echoes the session_id from the triggering browser_webrtc_offer / browser_attach, for client-side correlation
+            only.
         available:
           type: boolean
-          description: >-
-            True if the gateway currently offers WebRTC for this
-            connection (the webrtc_enabled config flag is on, the
-            platform/build supports it, and no runtime error has taken it
-            out of service). False means the SPA must not send
-            browser_webrtc_offer and should rely on the JPEG
-            browser_screencast path only.
+          description: True if the gateway currently offers WebRTC for this connection (the webrtc_enabled config flag is
+            on, the platform/build supports it, and no runtime error has taken it out of service). False means the SPA must
+            not send browser_webrtc_offer and should rely on the JPEG browser_screencast path only.
         reason:
           type: string
           enum:
-            - disabled
-            - not_capable
-            - lite_build
-            - error
-          description: >-
-            Present when available=false (or when active unexpectedly
-            drops to false): disabled = tools.browser.webrtc_enabled is
-            off; not_capable = platform/managed-Chrome capability
-            classification is below WebRTC eligibility (ADR-047 D5, e.g.
-            chrome-headless-shell only, no full Chrome); lite_build =
-            binary built with -tags lite (Pion compiled out, ADR-047 D7);
-            error = a runtime failure (capture/encoder/ICE) took the
-            WebRTC path out of service for this session.
+          - disabled
+          - not_capable
+          - lite_build
+          - error
+          description: 'Present when available=false (or when active unexpectedly drops to false): disabled = tools.browser.webrtc_enabled
+            is off; not_capable = platform/managed-Chrome capability classification is below WebRTC eligibility (ADR-047 D5,
+            e.g. chrome-headless-shell only, no full Chrome); lite_build = binary built with -tags lite (Pion compiled out,
+            ADR-047 D7); error = a runtime failure (capture/encoder/ICE) took the WebRTC path out of service for this session.'
         has_audio:
           type: boolean
-          description: >-
-            True if the active (or about-to-be-offered) media includes an
-            audio track from the captured tab. Absent/false when audio is
-            unavailable or not yet known.
+          description: True if the active (or about-to-be-offered) media includes an audio track from the captured tab. Absent/false
+            when audio is unavailable or not yet known.
         active:
           type: boolean
-          description: >-
-            True while a WebRTC PeerConnection for this viewer is
-            currently connected and flowing media. False (or absent) means
-            the viewer is on the JPEG fallback tier, whether by choice, by
-            availability, or after an ICE/connection failure.
-
-    # ── Capture-ingest channel (ADR-047 D2/D6) ──────────────────────────────────
-
+          description: True while a WebRTC PeerConnection for this viewer is currently connected and flowing media. False
+            (or absent) means the viewer is on the JPEG fallback tier, whether by choice, by availability, or after an ICE/connection
+            failure.
     BrowserCaptureHelloFrame:
       title: BrowserCaptureHelloFrame
-      description: >
-        Client (capture extension) → server (gateway). First frame on the
-        loopback-only /api/v1/browser/capture-ingest WebSocket, analogous
-        to AuthFrame on the public channels. `token` is the per-stream
-        capability token the gateway minted for this capture session and
-        injected into the extension's encoder page out-of-band via CDP
-        Page.addScriptToEvaluateOnNewDocument — never a URL query param,
-        never recoverable from the CDP transport. Loopback is NOT a trust
-        boundary (a co-tenant process could reach it), so this token is
-        mandatory; the gateway audits any hello with a
-        missing/invalid/expired token as a rejected ingest-auth attempt and
-        closes the connection. See ADR-047 D6.
+      description: 'Client (capture extension) → server (gateway). First frame on the loopback-only /api/v1/browser/capture-ingest
+        WebSocket, analogous to AuthFrame on the public channels. `token` is the per-stream capability token the gateway minted
+        for this capture session and injected into the extension''s encoder page out-of-band via CDP Page.addScriptToEvaluateOnNewDocument
+        — never a URL query param, never recoverable from the CDP transport. Loopback is NOT a trust boundary (a co-tenant
+        process could reach it), so this token is mandatory; the gateway audits any hello with a missing/invalid/expired token
+        as a rejected ingest-auth attempt and closes the connection. See ADR-047 D6.
+
+        '
       type: object
       required:
-        - type
-        - token
-        - ext_version
+      - type
+      - token
+      - ext_version
       additionalProperties: false
       properties:
         type:
@@ -3262,34 +3280,26 @@ components:
           type: string
           minLength: 16
           maxLength: 256
-          description: >-
-            Opaque per-stream capability token minted by the gateway for
-            this capture session (not the SPA bearer auth token — a
-            distinct, single-purpose credential scoped to one ingest
-            connection). See ADR-047 D6.
+          description: Opaque per-stream capability token minted by the gateway for this capture session (not the SPA bearer
+            auth token — a distinct, single-purpose credential scoped to one ingest connection). See ADR-047 D6.
         ext_version:
           type: string
           minLength: 1
           maxLength: 32
-          description: >-
-            The capture extension's manifest version string, reported so
-            the gateway can log/reject a mismatched build (e.g. after a
-            seeded extension upgrade) without guessing from behavior.
-
+          description: The capture extension's manifest version string, reported so the gateway can log/reject a mismatched
+            build (e.g. after a seeded extension upgrade) without guessing from behavior.
     BrowserCaptureOfferFrame:
       title: BrowserCaptureOfferFrame
-      description: >
-        Client (capture extension) → server (gateway). SDP offer from the
-        encoder page's self-consuming tabCapture PeerConnection (ADR-047
-        D2), sent after a successful browser_capture_hello. Non-trickle:
-        the encoder page gathers all ICE candidates before sending, so
-        `sdp` is the complete offer. The gateway's Pion relay answers with
-        browser_capture_answer and publishes the resulting media/audio
-        tracks to every attached viewer PC. See ADR-047 D1/D2/D6.
+      description: 'Client (capture extension) → server (gateway). SDP offer from the encoder page''s self-consuming tabCapture
+        PeerConnection (ADR-047 D2), sent after a successful browser_capture_hello. Non-trickle: the encoder page gathers
+        all ICE candidates before sending, so `sdp` is the complete offer. The gateway''s Pion relay answers with browser_capture_answer
+        and publishes the resulting media/audio tracks to every attached viewer PC. See ADR-047 D1/D2/D6.
+
+        '
       type: object
       required:
-        - type
-        - sdp
+      - type
+      - sdp
       additionalProperties: false
       properties:
         type:
@@ -3299,24 +3309,20 @@ components:
           type: string
           minLength: 1
           maxLength: 131072
-          description: >-
-            Complete SDP offer (application/sdp body) from the encoder
-            page's ingest PeerConnection, ICE-gathering-complete
+          description: Complete SDP offer (application/sdp body) from the encoder page's ingest PeerConnection, ICE-gathering-complete
             (non-trickle).
-
     BrowserCaptureAnswerFrame:
       title: BrowserCaptureAnswerFrame
-      description: >
-        Server (gateway) → client (capture extension). Pion SDP answer to
-        a browser_capture_offer, completing the ingest leg's non-trickle
-        offer/answer exchange. Once applied, the encoder page's tabCapture
-        MediaStream (video, plus audio when the tab produces sound) flows
-        into the gateway's shared TrackLocalStaticRTP tracks for relay to
-        viewers. See ADR-047 D1/D2.
+      description: 'Server (gateway) → client (capture extension). Pion SDP answer to a browser_capture_offer, completing
+        the ingest leg''s non-trickle offer/answer exchange. Once applied, the encoder page''s tabCapture MediaStream (video,
+        plus audio when the tab produces sound) flows into the gateway''s shared TrackLocalStaticRTP tracks for relay to viewers.
+        See ADR-047 D1/D2.
+
+        '
       type: object
       required:
-        - type
-        - sdp
+      - type
+      - sdp
       additionalProperties: false
       properties:
         type:
@@ -3326,28 +3332,22 @@ components:
           type: string
           minLength: 1
           maxLength: 131072
-          description: >-
-            Complete SDP answer (application/sdp body) from the gateway's
-            Pion ingest PeerConnection, ICE-gathering-complete
+          description: Complete SDP answer (application/sdp body) from the gateway's Pion ingest PeerConnection, ICE-gathering-complete
             (non-trickle).
-
     BrowserCaptureControlFrame:
       title: BrowserCaptureControlFrame
-      description: >
-        Bidirectional control frame on the /api/v1/browser/capture-ingest
-        channel. Server (gateway) → client (extension) for `recapture`
-        (the agent's active tab changed — chrome.tabs.query({active:true})
-        must be re-bound, the onTabsChanged/rebindScreencast analog for
-        the WebRTC path, ADR-047 D2) and `shutdown` (the capture session
-        is ending — last viewer detached past the grace period, or the
-        gateway is stopping the stream); client (extension) → server
-        (gateway) for `ping`, the encoder page's periodic health beacon /
-        reconnect-watchdog signal. `reason` is an optional human-readable
-        note (e.g. why shutdown was requested).
+      description: 'Bidirectional control frame on the /api/v1/browser/capture-ingest channel. Server (gateway) → client (extension)
+        for `recapture` (the agent''s active tab changed — chrome.tabs.query({active:true}) must be re-bound, the onTabsChanged/rebindScreencast
+        analog for the WebRTC path, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer detached past
+        the grace period, or the gateway is stopping the stream); client (extension) → server (gateway) for `ping`, the encoder
+        page''s periodic health beacon / reconnect-watchdog signal. `reason` is an optional human-readable note (e.g. why
+        shutdown was requested).
+
+        '
       type: object
       required:
-        - type
-        - action
+      - type
+      - action
       additionalProperties: false
       properties:
         type:
@@ -3356,13 +3356,25 @@ components:
         action:
           type: string
           enum:
-            - recapture
-            - shutdown
-            - ping
+          - recapture
+          - shutdown
+          - ping
         reason:
           type: string
           maxLength: 512
           description: Optional human-readable context for the action (e.g. shutdown cause).
+        expected_width:
+          type: integer
+          minimum: 1
+          maximum: 16384
+          description: 'recapture only, server → extension: the CDP-verified CSS viewport width the tab was just resized
+            to. chrome.tabs.get lags the OS window reflow, so a recapture racing a resize can pin the stream to a stale
+            size — the encoder polls tabs.get until it converges on this, falling back to it on timeout.'
+        expected_height:
+          type: integer
+          minimum: 1
+          maximum: 16384
+          description: 'recapture only: expected CSS viewport height. See expected_width.'
 
     # ── Planning & Goals (ADR-049) ──────────────────────────────────────────────
 
@@ -3620,3 +3632,24 @@ components:
           format: date-time
         judge_agent_id:
           type: string
+
+    ErrorPayload:
+      title: ErrorPayload
+      description: Structured payload for a live error frame.
+      type: object
+      required:
+      - llm_error
+      additionalProperties: false
+      properties:
+        llm_error:
+          $ref: '#/components/schemas/LLMError'
+    ReplayErrorPayload:
+      title: ReplayErrorPayload
+      description: Structured replay-safe payload for a replay error frame.
+      type: object
+      required:
+      - llm_error
+      additionalProperties: false
+      properties:
+        llm_error:
+          $ref: '#/components/schemas/LLMErrorReplay'

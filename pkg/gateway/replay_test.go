@@ -26,11 +26,14 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
+func TestReplay_MediaRefURL(t *testing.T) {
+	assert.Equal(t, "/api/v1/media/workspace/ws-1/abc", mediaRefURL("media://workspace/ws-1/abc"))
+	assert.Equal(t, "/api/v1/media/uuid-1", mediaRefURL("media://uuid-1"))
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Test helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-// sliceSink accumulates emitted frames as JSON bytes; safe for single-goroutine use.
 // It stores raw JSON so that tests are not coupled to the internal Go frame type —
 // any generated type emitted through streamReplay can be decoded here.
 type sliceSink struct {
@@ -1421,9 +1424,6 @@ func TestReplay_SystemErrorRateLimit_EmitsReplayErrorFrame(t *testing.T) {
 		"replay_error.kind must be \"rate_limit\" when content starts with \"rate limit:\"")
 	assert.Contains(t, typed.Message, "rate limit",
 		"replay_error.message must carry the original transcript content verbatim")
-	require.NotNil(t, typed.Payload.RetryAfterSeconds,
-		"rate_limit error payload must include retry_after_seconds")
-	assert.InDelta(t, 30.0, *typed.Payload.RetryAfterSeconds, 0.0001)
 }
 
 // TestReplay_SystemErrorGeneric_EmitsReplayErrorFrame verifies that a system

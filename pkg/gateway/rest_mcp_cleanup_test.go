@@ -23,18 +23,21 @@ import (
 // TestAddMCPServer_SSE_ValidHTTPS verifies that POST /api/v1/mcp-servers with
 // transport=sse and a valid https:// URL returns 201 and persists the url field
 // in tools.mcp_servers. This guards the exact regression where the url value
-// was not being stored.
+// was not being stored. The URL is an unroutable loopback address (127.0.0.1:1,
+// valid per mcpURLSchemeValid since https accepts any host) rather than a real
+// external hostname so the live reconcile the POST triggers fails instantly
+// instead of attempting real DNS/network egress.
 //
 // BDD:
 //
 //	Given a running gateway with a writable config,
-//	When POST /api/v1/mcp-servers with transport=sse and url="https://mcp.example.com/sse",
-//	Then 201 is returned and tools.mcp.servers[name].url == "https://mcp.example.com/sse".
+//	When POST /api/v1/mcp-servers with transport=sse and url="https://127.0.0.1:1/sse",
+//	Then 201 is returned and tools.mcp.servers[name].url == "https://127.0.0.1:1/sse".
 func TestAddMCPServer_SSE_ValidHTTPS(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	transport := gen.McpServerCreateTransportSse
-	mcpURL := "https://mcp.example.com/sse"
+	mcpURL := "https://127.0.0.1:1/sse"
 	body := gen.McpServerCreate{
 		Name:      "my-sse-server",
 		Transport: transport,
@@ -139,18 +142,20 @@ func TestAddMCPServer_SSE_NonHTTPS_NonLoopback(t *testing.T) {
 }
 
 // TestAddMCPServer_SSE_HTTP_Loopback verifies that POST with transport=sse and
-// an http:// loopback URL is accepted (returns 201).
+// an http:// loopback URL is accepted (returns 201). Uses 127.0.0.1:1 (nothing
+// listens there) rather than a plausible dev-server port so the live reconcile
+// the POST triggers fails instantly instead of stalling on a connection attempt.
 //
 // BDD:
 //
 //	Given a running gateway,
-//	When POST /api/v1/mcp-servers with transport=sse and url="http://localhost:3000/sse",
+//	When POST /api/v1/mcp-servers with transport=sse and url="http://127.0.0.1:1/sse",
 //	Then 201 is returned (loopback http is whitelisted).
 func TestAddMCPServer_SSE_HTTP_Loopback(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	transport := gen.McpServerCreateTransportSse
-	mcpURL := "http://localhost:3000/sse"
+	mcpURL := "http://127.0.0.1:1/sse"
 	body := gen.McpServerCreate{
 		Name:      "loopback-server",
 		Transport: transport,

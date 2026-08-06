@@ -19,7 +19,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, agentPicker, assistantMessages, selectAgent } from './fixtures/selectors'
+import { chatInput, agentPicker, assistantMessages, selectAgent, waitForConnected } from './fixtures/selectors'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -164,6 +164,70 @@ function safeMtimeMs(p: string): number {
 // ── Shared helper: switch to Jim and trigger a long-running turn ──────────────
 
 /**
+ * A prompt that reliably produces multi-second, tool-free streaming output.
+ *
+ * Forbidding tools and demanding inline prose: on a bare "write 500 words" prompt,
+ * gemini-2.5-flash intermittently shortcuts to the write_file TOOL (Jim has an
+ * explicit "allow" policy entry for it), which ends the turn instantly with
+ * zero inline stream and no cancellable window. Forcing long inline prose
+ * keeps stop-btn live for several seconds so Stop/Escape/cancel land mid-stream.
+ * The explicit high word count ("700-word essay ... beginning immediately and
+ * continuing without stopping") guarantees hundreds of words of remaining
+ * generation budget once a cancel is fired — see waitForActiveStream's doc
+ * comment for why that headroom is what makes cancel timing deterministic
+ * under load, regardless of how slow the environment is.
+ */
+const LONG_PROSE_PROMPT =
+  'Do not use any tools. Reply only with inline prose, no files. Write a detailed ' +
+  '700-word essay about renewable energy, beginning immediately and continuing ' +
+  'without stopping until you reach 700 words.'
+
+/**
+ * Wait until a turn is OBSERVABLY ACTIVE: the stop button is visible AND the
+ * live streaming message has accumulated a substantial chunk of real text —
+ * not just the pre-first-token placeholder.
+ *
+ * Why both conditions, and why "substantial text" rather than merely "stop
+ * button rendered": the stop button (and even the streaming-message
+ * placeholder) can appear BEFORE the first token arrives, and under a loaded
+ * shard the WS event that drives the frontend's "isStreaming" state can lag
+ * the true backend state — in either direction, by seconds. A cancel fired
+ * the instant the stop button appears can therefore land in one of two bad
+ * windows:
+ *   (a) zero tokens produced yet — the turn aborts with an empty message and
+ *       nothing is ever marked "(interrupted)" (observed T23 flake: token
+ *       count 0, empty thread).
+ *   (b) the backend turn has ALREADY FINISHED by the time the cancel request
+ *       lands server-side (observed T26 flake under a loaded shard: audit log
+ *       records turn.cancel.attempt with was_fired:false — "no turn was
+ *       active" — the whole run just took ~10x longer than in isolation, so
+ *       by the time Playwright's click reached the backend the short turn
+ *       had already completed).
+ * Requiring a substantial (>80 char) chunk of REAL accumulated text proves the
+ * turn is genuinely mid-generation right now, and — combined with
+ * LONG_PROSE_PROMPT's enforced word count — guarantees hundreds of words of
+ * remaining output, so the turn cannot plausibly finish between this check
+ * and the cancel click landing server-side, no matter how loaded the shard
+ * is. This is a wait-on-condition (page.waitForFunction polls until true, no
+ * fixed sleep), not a race against a timer.
+ */
+async function waitForActiveStream(page: Page): Promise<void> {
+  // Wait for the stop button (request in-flight)…
+  const stopBtn = page.locator('[data-testid="stop-btn"]')
+  await expect(stopBtn).toBeVisible({ timeout: 30_000 })
+
+  // …AND for the assistant to have actually STREAMED real text.
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('[data-testid="streaming-message-anchor"]')
+      const text = (el?.textContent ?? '').replace(/\s+/g, ' ').trim()
+      return text.length > 80
+    },
+    { timeout: 30_000 },
+  )
+}
+
+/**
  * Switch the agent picker to Jim (who generates long inline prose) and send
  * a prompt that reliably produces multi-second streaming output.
  * Returns once a message is ACTIVELY streaming (stop button visible AND the live
@@ -173,6 +237,12 @@ function safeMtimeMs(p: string): number {
 async function triggerLongStreamingTurn(page: Page): Promise<void> {
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 20_000 })
+  // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+  // see waitForConnected's doc comment in fixtures/selectors.ts). Without
+  // this, the long-streaming prompt below can land in the outbound queue
+  // instead of the wire, and every T2x test built on this helper hangs
+  // waiting for a stop-btn that never appears.
+  await waitForConnected(page, { timeout: 20_000 })
 
   // Switch to Jim — long inline generation, multi-second stream window.
   const picker = agentPicker(page)
@@ -181,39 +251,13 @@ async function triggerLongStreamingTurn(page: Page): Promise<void> {
   await page.getByRole('menuitem', { name: /Jim/i }).click()
   await expect(picker).toContainText(/Jim/i, { timeout: 5_000 })
 
-  // Forbid tools and demand inline prose: on a bare "write 500 words" prompt,
-  // gemini-2.5-flash intermittently shortcuts to the write_file TOOL (Jim has an
-  // explicit "allow" policy entry for it), which ends the turn instantly with
-  // zero inline stream and no cancellable window. Forcing long inline prose
-  // keeps stop-btn live for several seconds so Stop/Escape/cancel land mid-stream.
-  await input.fill(
-    'Do not use any tools. Reply only with inline prose, no files. Write a detailed ' +
-      '700-word essay about renewable energy, beginning immediately and continuing ' +
-      'without stopping until you reach 700 words.',
-  )
+  await input.fill(LONG_PROSE_PROMPT)
   await input.press('Enter')
 
-  // Wait for the stop button (request in-flight)…
-  const stopBtn = page.locator('[data-testid="stop-btn"]')
-  await expect(stopBtn).toBeVisible({ timeout: 30_000 })
-
-  // …AND for the assistant to have actually STREAMED real text. The stop button
-  // (and even the streaming-message placeholder) appear BEFORE the first token; a
-  // cancel fired in that gap aborts the turn with zero tokens and removes the empty
-  // message, so nothing is ever marked "(interrupted)" (observed T23 flake: token
-  // count 0, empty thread). Waiting until the live streaming message has accumulated
-  // a substantial chunk of text (well beyond the short agent label) guarantees there
-  // is a real, incomplete message to interrupt. The 700-word prompt ensures the
-  // stream keeps going for seconds afterwards, so the cancel lands comfortably
-  // mid-stream.
-  await page.waitForFunction(
-    () => {
-      const el = document.querySelector('[data-testid="streaming-message-anchor"]')
-      const text = (el?.textContent ?? '').replace(/\s+/g, ' ').trim()
-      return text.length > 80
-    },
-    { timeout: 30_000 },
-  )
+  // Wait until the turn is observably active (see waitForActiveStream's doc
+  // comment) before returning — a subsequent cancel always has a real,
+  // in-flight turn with hundreds of words of runway left.
+  await waitForActiveStream(page)
 }
 
 // ── T21: Web stop button cancels turn within 5 seconds (US-1.1, SC-1) ─────────
@@ -391,6 +435,9 @@ async function assertCancelCascadesToSubagent(
 
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 20_000 })
+  // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+  // see waitForConnected's doc comment in fixtures/selectors.ts).
+  await waitForConnected(page, { timeout: 20_000 })
 
   // ── ORDER IS LOAD-BEARING: switch the agent FIRST, then `/new`. ───────────
   //
@@ -597,10 +644,29 @@ async function assertCancelCascadesToSubagent(
   await expect(interruptedLabels.first()).toBeVisible({ timeout: 10_000 })
 
   // Assert transcript.jsonl contains {type: "turn_canceled"} entry with a
-  // non-empty descendants_canceled array. Allow a short settling window (max 3s)
-  // for the transcript write to flush.
-  await page.waitForTimeout(3_000)
-
+  // non-empty descendants_canceled array.
+  //
+  // POLL for it rather than sleeping a fixed window then scanning once. Root
+  // cause (live-reproduced locally, server-side instrumented, 2026-07-27):
+  // RequestCancel's "graceful" cascade does not always write the
+  // turn_canceled entry quickly. When the cancel lands while the LLM still
+  // owes a response, the turn loop's gracefulTerminal branch (pkg/agent/loop.go,
+  // guarded by turnState.gracefulInterruptRequested) makes ONE more real LLM
+  // call — interruptHintMessage(), "Stop scheduling tools and provide a short
+  // final summary" — and only once THAT call returns does Finish() run and
+  // pkg/agent/cancel.go's onCancelFinish callback append the turn_canceled
+  // entry. That extra round-trip's latency is real, variable LLM latency, not
+  // bounded by the 3s/8s hard-abort escalation timers (those only fire the
+  // hard-abort *signal* at those marks — PHASE B/C in RequestCancel — the
+  // transcript write still waits for Finish() to actually run afterward).
+  // Locally reproduced latency for this exact scenario ranged from ~3ms to
+  // ~12.56s across otherwise-identical runs (same test, same prompts) — a
+  // fixed 3s sleep-then-check races that variance directly and is the
+  // confirmed cause of T24a/T24b's historical flakiness (fails, then often
+  // passes on retry — never a real absence of the cascade, always a
+  // too-early read). Poll on a ceiling well past the observed worst case
+  // instead of asserting less.
+  //
   // Discover this turn's session by diffing the sessions dir. A delegated
   // sub-turn can spawn its own ephemeral session dir, so there may be more than
   // one new dir — scan them (newest first) for the one whose transcript actually
@@ -609,39 +675,59 @@ async function assertCancelCascadesToSubagent(
   // (day-partitioned JSONL); the legacy transcript.jsonl name is also tried.
   const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
   const sessionsDir = path.join(OMNIPUS_HOME, 'sessions')
-  const sessionsAfter = listSessionDirs(OMNIPUS_HOME)
-  const newSessions = sessionsAfter.filter((s) => !sessionsBefore.has(s))
-  // Prefer newly-created dirs; fall back to all sessions if the diff is empty
-  // (e.g. the session dir already existed). Newest mtime first.
-  const scanList = (newSessions.length > 0 ? newSessions : sessionsAfter)
-    .map((s) => ({ s, m: safeMtimeMs(path.join(sessionsDir, s)) }))
-    .sort((a, b) => b.m - a.m)
-    .map((x) => x.s)
 
-  let entries: TranscriptEntry[] = []
-  let chosenSession = ''
-  for (const sid of scanList) {
-    const dir = path.join(sessionsDir, sid)
-    const files = [path.join(dir, `${today}.jsonl`), path.join(dir, 'transcript.jsonl')]
-    let parsed: TranscriptEntry[] = []
-    for (const f of files) {
-      const p = readJsonl<TranscriptEntry>(f)
-      if (p.length > 0) {
-        parsed = p
+  function scanForCancelEntry(): {
+    entries: TranscriptEntry[]
+    chosenSession: string
+    scanList: string[]
+    newSessions: string[]
+  } {
+    const sessionsAfter = listSessionDirs(OMNIPUS_HOME)
+    const newSessions = sessionsAfter.filter((s) => !sessionsBefore.has(s))
+    // Prefer newly-created dirs; fall back to all sessions if the diff is empty
+    // (e.g. the session dir already existed). Newest mtime first.
+    const scanList = (newSessions.length > 0 ? newSessions : sessionsAfter)
+      .map((s) => ({ s, m: safeMtimeMs(path.join(sessionsDir, s)) }))
+      .sort((a, b) => b.m - a.m)
+      .map((x) => x.s)
+
+    let entries: TranscriptEntry[] = []
+    let chosenSession = ''
+    for (const sid of scanList) {
+      const dir = path.join(sessionsDir, sid)
+      const files = [path.join(dir, `${today}.jsonl`), path.join(dir, 'transcript.jsonl')]
+      let parsed: TranscriptEntry[] = []
+      for (const f of files) {
+        const p = readJsonl<TranscriptEntry>(f)
+        if (p.length > 0) {
+          parsed = p
+          break
+        }
+      }
+      if (parsed.some((e) => e.type === 'turn_canceled')) {
+        entries = parsed
+        chosenSession = sid
         break
       }
+      // Keep the first non-empty transcript as a fallback for the error message.
+      if (entries.length === 0 && parsed.length > 0) {
+        entries = parsed
+        chosenSession = sid
+      }
     }
-    if (parsed.some((e) => e.type === 'turn_canceled')) {
-      entries = parsed
-      chosenSession = sid
-      break
-    }
-    // Keep the first non-empty transcript as a fallback for the error message.
-    if (entries.length === 0 && parsed.length > 0) {
-      entries = parsed
-      chosenSession = sid
-    }
+    return { entries, chosenSession, scanList, newSessions }
   }
+
+  // 30s ceiling: comfortably past the ~12.56s worst case observed locally,
+  // with headroom for CI-under-load variance, while staying well inside
+  // T24a/T24b's own 360s/420s test.setTimeout budgets.
+  const pollDeadline = Date.now() + 30_000
+  let scan = scanForCancelEntry()
+  while (!scan.entries.some((e) => e.type === 'turn_canceled') && Date.now() < pollDeadline) {
+    await page.waitForTimeout(500)
+    scan = scanForCancelEntry()
+  }
+  const { entries, chosenSession, scanList, newSessions } = scan
 
   const cancelledEntry = entries.find((e) => e.type === 'turn_canceled')
   if (!cancelledEntry) {

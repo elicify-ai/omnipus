@@ -26,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
@@ -34,6 +35,15 @@ import (
 // errWorkspaceNotFound is returned by readWorkspaceFile when the workspace file
 // does not exist on disk. Callers use errors.Is(err, errWorkspaceNotFound).
 var errWorkspaceNotFound = errors.New("workspace not found")
+
+// removeAllFn indirects os.RemoveAll so tests can inject a deterministic
+// failure. A chmod-based test (make the parent dir r-x so its contents cannot
+// be unlinked) only produces EACCES for an unprivileged uid — CI runs as root,
+// which bypasses DAC permission checks entirely, so RemoveAll there succeeds and
+// the handler correctly returns 204. That made the delete-failure regression
+// test pass locally (uid 1000) and fail in CI. Mirrors the same seam in
+// pkg/session/unified.go.
+var removeAllFn = os.RemoveAll
 
 // defaultWorkspaceSeedMu serializes concurrent calls to ensureDefaultWorkspace
 // (e.g. from two racing gateway boots) so exactly one default workspace is created.
@@ -920,11 +930,12 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	var sessionsCreated []sessionCreated
 	rollbackCreatedSessions := func() {
 		for _, sc := range sessionsCreated {
-			if st := a.agentLoop.GetAgentStore(sc.agentID); st != nil {
-				if delErr := st.DeleteSession(sc.sessionID); delErr != nil {
-					slog.Warn("rest: workspace PUT: rollback session delete failed",
-						"agent_id", sc.agentID, "session_id", sc.sessionID, "error", delErr)
-				}
+			// Shared-store-first, per-agent-fallback delete — see
+			// deleteHeartbeatSessionAnyStore's doc for why (matches where the
+			// eager-creation call below now writes).
+			if delErr := deleteHeartbeatSessionAnyStore(a.agentLoop, sc.agentID, sc.sessionID); delErr != nil {
+				slog.Warn("rest: workspace PUT: rollback session delete failed",
+					"agent_id", sc.agentID, "session_id", sc.sessionID, "error", delErr)
 			}
 		}
 	}
@@ -1028,16 +1039,31 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 				incomingMC[agentID] = mc
 				continue
 			}
-			sessStore := a.agentLoop.GetAgentStore(agentID)
+			// FIX (pre-existing defect, confirmed against loop.go's own
+			// GetSessionStore/GetAgentStore doc comment): eager creation MUST use
+			// the shared session store, not the legacy per-agent store. The
+			// heartbeat cron's continue-mode session lookup (pickSession in
+			// schedules.go) resolves the stored session_id exclusively via
+			// al.GetSessionStore().GetOrCreateScheduledSession — a session minted
+			// in the per-agent store is invisible to that lookup, so the first
+			// heartbeat fire silently created a second, empty session under the
+			// SAME id in the shared store while this eagerly-created one (holding
+			// the WorkspaceID stamp) sat orphaned. Mirrors the shared-store-
+			// primary/per-agent-fallback idiom createSessionHTTP (rest.go) already
+			// uses for the joined session model.
+			sessStore := a.agentLoop.GetSessionStore()
+			if sessStore == nil {
+				sessStore = a.agentLoop.GetAgentStore(agentID)
+			}
 			if sessStore == nil {
 				// HIGH-3: nil store is an internal inconsistency (agent passed
 				// CoreTeam validation, so it must be registered). Persisting
 				// enabled=true with an empty session_id is invalid state — roll
 				// back any sessions created so far and return 500.
-				slog.Error("rest: workspace PUT: agent store unavailable for heartbeat session",
+				slog.Error("rest: workspace PUT: session store unavailable for heartbeat session",
 					"workspace_id", id, "agent_id", agentID)
 				rollbackCreatedSessions()
-				jsonErr(w, http.StatusInternalServerError, "agent store unavailable for heartbeat session")
+				jsonErr(w, http.StatusInternalServerError, "session store unavailable for heartbeat session")
 				return
 			}
 			meta, sessErr := sessStore.NewHeartbeatSession(id, agentID)
@@ -1117,16 +1143,15 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 			for _, removedID := range removed {
 				if oldMC, had := ws.MemberConfigs[removedID]; had &&
 					oldMC.Heartbeat != nil && oldMC.Heartbeat.SessionID != "" {
-					if st := a.agentLoop.GetAgentStore(removedID); st != nil {
-						if delErr := st.DeleteSession(oldMC.Heartbeat.SessionID); delErr != nil {
-							slog.Warn("rest: workspace PUT: GC session release failed",
-								"workspace_id", id, "agent_id", removedID,
-								"session_id", oldMC.Heartbeat.SessionID, "error", delErr)
-						} else {
-							slog.Info("rest: workspace PUT: GC released heartbeat session",
-								"workspace_id", id, "agent_id", removedID,
-								"session_id", oldMC.Heartbeat.SessionID)
-						}
+					if delErr := deleteHeartbeatSessionAnyStore(
+						a.agentLoop, removedID, oldMC.Heartbeat.SessionID); delErr != nil {
+						slog.Warn("rest: workspace PUT: GC session release failed",
+							"workspace_id", id, "agent_id", removedID,
+							"session_id", oldMC.Heartbeat.SessionID, "error", delErr)
+					} else {
+						slog.Info("rest: workspace PUT: GC released heartbeat session",
+							"workspace_id", id, "agent_id", removedID,
+							"session_id", oldMC.Heartbeat.SessionID)
 					}
 				}
 			}
@@ -1144,16 +1169,15 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 				for _, removedID := range removed {
 					if oldMC, had := ws.MemberConfigs[removedID]; had &&
 						oldMC.Heartbeat != nil && oldMC.Heartbeat.SessionID != "" {
-						if st := a.agentLoop.GetAgentStore(removedID); st != nil {
-							if delErr := st.DeleteSession(oldMC.Heartbeat.SessionID); delErr != nil {
-								slog.Warn("rest: workspace PUT: core_team shrink session release failed",
-									"workspace_id", id, "agent_id", removedID,
-									"session_id", oldMC.Heartbeat.SessionID, "error", delErr)
-							} else {
-								slog.Info("rest: workspace PUT: core_team shrink released heartbeat session",
-									"workspace_id", id, "agent_id", removedID,
-									"session_id", oldMC.Heartbeat.SessionID)
-							}
+						if delErr := deleteHeartbeatSessionAnyStore(
+							a.agentLoop, removedID, oldMC.Heartbeat.SessionID); delErr != nil {
+							slog.Warn("rest: workspace PUT: core_team shrink session release failed",
+								"workspace_id", id, "agent_id", removedID,
+								"session_id", oldMC.Heartbeat.SessionID, "error", delErr)
+						} else {
+							slog.Info("rest: workspace PUT: core_team shrink released heartbeat session",
+								"workspace_id", id, "agent_id", removedID,
+								"session_id", oldMC.Heartbeat.SessionID)
 						}
 					}
 				}
@@ -1313,8 +1337,81 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// remains the authoritative delete, and a stale directory left behind on
 	// a RemoveAll failure is not fatal. Runs unlocked (see restructure note
 	// above) — it is best-effort and never touches workspaces/{id}.json.
+	//
+	// FR-009: cascade-delete the workspace's media library BEFORE the
+	// directory wipe so the library's CascadeDelete API can emit the
+	// media.cascade_delete audit event with the full deleted-entry summary
+	// (media_ids, filenames, bytes_freed). The actor is the authenticated
+	// principal that triggered DELETE — empty string when no principal is
+	// resolved (e.g. unauthenticated dev-mode bypass) — sourced from the
+	// same r.Context() lookup the sibling media-delete handler
+	// (rest_workspace_media.go's handleWorkspaceMediaDelete) already uses,
+	// rather than a hardcoded "" that made every bulk cascade-delete
+	// unattributable regardless of who was actually authenticated. The hook
+	// opens a fresh library instance because the original lib (if any) was
+	// held by the request scope, not the delete handler's scope.
+	actor := a.callerIdentity(r).Username
+	mediaCascadeFailed := false
+	if hookErr := workspace.WorkspaceDeleteHook(a.homePath, id, actor, a.auditor); hookErr != nil {
+		if errors.Is(hookErr, workspace.ErrCascadeStraggler) {
+			// Re-review FIX 2: library.CascadeDelete's two-phase commit only
+			// returns a non-nil error together with a fully-populated
+			// deleted/bytesFreed summary when the manifest was already
+			// committed and the sole remaining failure is a final on-disk
+			// unlink of an already-quarantined file. WorkspaceDeleteHook
+			// (pkg/workspace/media_delete.go) detects exactly that and wraps
+			// it in workspace.ErrCascadeStraggler. Every quarantine path
+			// lives under wsDir/media/, and the unconditional
+			// os.RemoveAll(wsDir) below always cleans it up moments later
+			// regardless of this branch — so it must NOT be reported to the
+			// client as a failed delete (that used to 500 a delete that
+			// fully succeeded). Logged at Warn for operator visibility only;
+			// the media.cascade_delete audit event WorkspaceDeleteHook
+			// already emitted still records Decision=error for this moment
+			// in time (see logCascadeAuditEvent's doc).
+			logger.WarnCF("rest", "delete workspace: media cascade-delete straggler (self-healed by directory wipe)",
+				map[string]any{"id": id, "actor": actor, "error": hookErr.Error()})
+		} else {
+			mediaCascadeFailed = true
+			// Re-review FIX 1: was a bare slog.Error, invisible on a
+			// backgrounded gateway (slog.SetDefault is never called anywhere
+			// in this repo). Route through pkg/logger instead.
+			logger.ErrorCF("rest", "delete workspace: media cascade-delete",
+				map[string]any{"id": id, "actor": actor, "error": hookErr.Error()})
+		}
+	}
+
+	// The directory wipe below runs UNCONDITIONALLY even when the cascade
+	// above failed. This is safe, not merely convenient: CascadeDelete's own
+	// atomicity (library.CascadeDelete's doc) means a mid-cascade failure
+	// rolls back the in-memory manifest AND best-effort-restores any
+	// already-quarantined files back to their original names; even in the
+	// worst case where that best-effort restore itself also fails and
+	// leaves stray quarantine files behind, those files are still inside
+	// wsDir/media/, which this RemoveAll deletes wholesale regardless of
+	// the library's internal bookkeeping. There is no code path where a
+	// cascade failure leaves workspace media bytes OUTSIDE wsDir, so
+	// proceeding here cannot orphan a file onto disk — skipping RemoveAll
+	// on cascade failure would only leave MORE behind, not less. The real
+	// gap a failed cascade used to leave was an audit one (a cascade that
+	// failed before deleting anything produced zero audit trail), which
+	// WorkspaceDeleteHook now closes by always emitting a
+	// media.cascade_delete event (DecisionError on failure) regardless of
+	// how many entries were actually removed.
 	wsDir := workspace.WorkspaceDir(a.homePath, id)
-	if err := os.RemoveAll(wsDir); err != nil {
+	// FIX 3: RemoveAll's own failure (e.g. EBUSY/permission on
+	// workspaces/<id>/work/, which a live agent turn may still be writing
+	// to) used to only reach a slog.Warn — the response gate below checked
+	// solely mediaCascadeFailed, so a real leftover-directory failure was
+	// still reported to the caller as a 204 "fully deleted" while wsDir was
+	// still (partially) on disk. dirRemoveFailed threads that outcome into
+	// the same gate, alongside — not merged into — mediaCascadeFailed, so
+	// the existing straggler-vs-hard-cascade-failure distinction above is
+	// unaffected: this only tracks whether the directory wipe itself, run
+	// unconditionally regardless of that distinction, actually succeeded.
+	dirRemoveFailed := false
+	if err := removeAllFn(wsDir); err != nil {
+		dirRemoveFailed = true
 		slog.Warn("rest: delete workspace: cascade dir", "id", id, "dir", wsDir, "error", err)
 	}
 
@@ -1323,21 +1420,53 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 			&audit.Entry{
 				Event:    "workspace.delete",
 				Decision: audit.DecisionAllow,
-				Details:  map[string]any{"id": id},
+				Details: map[string]any{
+					"id":                   id,
+					"actor":                actor,
+					"media_cascade_failed": mediaCascadeFailed,
+					"dir_remove_failed":    dirRemoveFailed,
+				},
 			},
 		); err != nil {
 			slog.Warn("audit write failed", "event", "workspace.delete", "id", id, "error", err)
 		}
+	}
+
+	// The workspace record itself IS gone at this point (the authoritative
+	// delete happened earlier, under the lock, and already released it) —
+	// a 404/409 here would misrepresent that. But a failed media cascade OR
+	// a failed directory wipe is a genuine partial failure the caller must
+	// be able to see, not a blank 204 implying total success (FIX-4: a
+	// silent 204 here is exactly what let every media-cascade failure go
+	// unnoticed; FIX 3 closes the same gap for a RemoveAll failure, which
+	// used to bypass this gate entirely). 500 is consistent with the two
+	// HARD cascade steps earlier in this same handler (task scan, channel
+	// unbind), which already return this status for cascade failures on
+	// this endpoint. The caller can confirm the workspace itself is gone
+	// via a follow-up GET (404) and inspect whatever survives on disk /
+	// in the media library via GET /workspaces/{id}/media.
+	if mediaCascadeFailed || dirRemoveFailed {
+		msg := "workspace deleted, but media library cleanup failed; see server logs"
+		switch {
+		case mediaCascadeFailed && dirRemoveFailed:
+			msg = "workspace deleted, but media library cleanup and on-disk directory removal both failed; see server logs"
+		case dirRemoveFailed:
+			msg = "workspace record deleted, but the on-disk workspace directory could not be fully removed; see server logs"
+		}
+		jsonErr(w, http.StatusInternalServerError, msg)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // releaseHeartbeatSessionsForWorkspace deletes the standing heartbeat session for
 // every member of ws that has a heartbeat with a non-empty session_id. These
-// sessions live in per-agent session stores (not under the workspace directory),
-// so the workspace-directory RemoveAll does NOT remove them. Best-effort per
-// session: a failure is logged and skipped so one bad session does not block the
-// rest of the cascade.
+// sessions live in a session store (the shared store for every heartbeat
+// created after the eager-creation fix below, or the legacy per-agent store
+// for one created before it — see deleteHeartbeatSessionAnyStore), never under
+// the workspace directory, so the workspace-directory RemoveAll does NOT
+// remove them. Best-effort per session: a failure is logged and skipped so
+// one bad session does not block the rest of the cascade.
 //
 // Called from handleWorkspaceDelete before the workspace file is removed (we need
 // member_configs to find which sessions to release).
@@ -1346,14 +1475,7 @@ func releaseHeartbeatSessionsForWorkspace(al agentLoopAccessor, ws storedWorkspa
 		if mc.Heartbeat == nil || mc.Heartbeat.SessionID == "" {
 			continue
 		}
-		sessStore := al.GetAgentStore(agentID)
-		if sessStore == nil {
-			slog.Warn("heartbeat cascade: agent store not found; heartbeat session orphaned",
-				"workspace_id", ws.ID, "agent_id", agentID,
-				"session_id", mc.Heartbeat.SessionID)
-			continue
-		}
-		if err := sessStore.DeleteSession(mc.Heartbeat.SessionID); err != nil {
+		if err := deleteHeartbeatSessionAnyStore(al, agentID, mc.Heartbeat.SessionID); err != nil {
 			slog.Warn("heartbeat cascade: failed to delete heartbeat session",
 				"workspace_id", ws.ID, "agent_id", agentID,
 				"session_id", mc.Heartbeat.SessionID, "error", err)
@@ -1362,9 +1484,92 @@ func releaseHeartbeatSessionsForWorkspace(al agentLoopAccessor, ws storedWorkspa
 }
 
 // agentLoopAccessor is the minimal interface required by
-// releaseHeartbeatSessionsForWorkspace.  *agent.AgentLoop satisfies it.
+// releaseHeartbeatSessionsForWorkspace and deleteHeartbeatSessionAnyStore.
+// *agent.AgentLoop satisfies it.
 type agentLoopAccessor interface {
 	GetAgentStore(agentID string) *session.UnifiedStore
+	GetSessionStore() *session.UnifiedStore
+}
+
+// deleteHeartbeatSessionAnyStore deletes a standing heartbeat session,
+// checking BOTH the shared session store and the agent's legacy per-agent
+// store UNCONDITIONALLY (no short-circuit) — every heartbeat session is
+// created in the shared store as of the eager-creation fix (see the FIX
+// comment on the enable-path NewHeartbeatSession call above in
+// HandleWorkspaces), but an install that had already provisioned a session
+// under the OLD code (legacy per-agent store) before that fix shipped can end
+// up with the SAME session ID present in BOTH stores: the first heartbeat
+// fire's pickSession calls GetOrCreateScheduledSession(id, owner) against the
+// SHARED store, which does not find the legacy copy (different store
+// instance) and mints a second, independent session directory under the
+// identical ID instead. From that point the shared copy is the live one, but
+// the legacy copy still sits on disk and must also be released — a
+// short-circuit "return as soon as one store succeeds" leaves it there
+// forever the moment the shared delete succeeds first, which defeats the
+// whole point of this fallback (it exists precisely to migrate that
+// dual-copy population, not just the simpler single-copy one).
+//
+// Each store is checked for the session's existence before attempting a
+// delete on it, so "this store never had the session" is distinguished from
+// "this store had it and failed to remove it": DeleteSession's not-found
+// error carries no sentinel to test against (a plain fmt.Errorf), so
+// existence is determined here directly via os.Stat against the store's own
+// BaseDir() rather than parsed out of an error string. This also fixes the
+// masking defect in the previous version: there, if the shared store's
+// delete failed for a REAL reason (I/O error, permission error) while the
+// legacy store happened to also hold a copy and deleted cleanly, the
+// function returned nil (success) and the real shared-store failure was
+// silently swallowed. Now a genuine failure in either store is always
+// surfaced, regardless of what the other store did.
+//
+// Returns nil once every store that HAD the session successfully released
+// it (a store that never had it is not an error). Returns a joined error if
+// any store's stat or delete genuinely failed. Returns an error if neither
+// store had the session at all (nothing to migrate, but also nothing
+// released — worth the caller's existing log-and-continue Warn).
+func deleteHeartbeatSessionAnyStore(al agentLoopAccessor, agentID, sessionID string) error {
+	// Reject IDs that could escape a store's base directory before ever
+	// stat-ing them. Mirrors session.validateSessionID's rules; that
+	// function is unexported and applied inside DeleteSession itself, but
+	// existence here is checked directly against each store's BaseDir()
+	// below (ahead of any call into DeleteSession), so the same rejection
+	// is duplicated narrowly at this boundary rather than relied upon from
+	// across the package.
+	if sessionID == "" || strings.Contains(sessionID, "/") || strings.Contains(sessionID, "\\") ||
+		strings.Contains(sessionID, "..") {
+		return fmt.Errorf("invalid heartbeat session id %q for agent %q", sessionID, agentID)
+	}
+
+	tryDelete := func(store *session.UnifiedStore) (deleted bool, err error) {
+		if store == nil {
+			return false, nil
+		}
+		dir := filepath.Join(store.BaseDir(), sessionID)
+		if _, statErr := os.Stat(dir); statErr != nil {
+			if os.IsNotExist(statErr) {
+				return false, nil // absent from this store: not a failure
+			}
+			return false, fmt.Errorf("stat session %q: %w", sessionID, statErr)
+		}
+		if delErr := store.DeleteSession(sessionID); delErr != nil {
+			return false, fmt.Errorf("delete session %q: %w", sessionID, delErr)
+		}
+		return true, nil
+	}
+
+	// Both stores are always attempted — the dual-copy case (the entire
+	// reason this fallback exists) requires both deletes to run every time,
+	// not just until the first one succeeds.
+	sharedDeleted, sharedErr := tryDelete(al.GetSessionStore())
+	legacyDeleted, legacyErr := tryDelete(al.GetAgentStore(agentID))
+
+	if sharedErr != nil || legacyErr != nil {
+		return errors.Join(sharedErr, legacyErr)
+	}
+	if !sharedDeleted && !legacyDeleted {
+		return fmt.Errorf("no session store had session %q for agent %q", sessionID, agentID)
+	}
+	return nil
 }
 
 // deduplicateStrings removes duplicate strings (case-sensitive) while preserving

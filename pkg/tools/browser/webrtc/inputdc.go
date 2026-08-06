@@ -3,6 +3,7 @@
 package webrtc
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -15,7 +16,57 @@ import (
 // consumer keeping pace drains this in well under a second even at a heavy
 // input rate) while still bounding memory for a viewer whose sink has
 // genuinely wedged.
-const inputQueueCapacity = 64
+// Raised 64 -> 512 (2026-07-30 UAT). The "~21ms p95 CDP round trip" premise
+// above did not hold in the field: a live operator session logged 816
+// "input queue full" drops, i.e. the queue saturated and stayed saturated.
+// A trackpad/mouse emits pointermove at 60-120Hz while each dispatch costs a
+// real CDP round trip, so the producer outruns the consumer by an order of
+// magnitude and 64 slots fill in well under a second. Capacity alone does
+// not fix that (a sustained flood overruns any finite buffer) — see
+// isCoalescableInputKind for the part that actually does — but a deeper
+// buffer absorbs normal bursts so shedding is reserved for real congestion.
+const inputQueueCapacity = 512
+
+// isCoalescableInputKind reports whether an input event is positional/
+// continuous ("shed me first") rather than discrete and semantically
+// essential.
+//
+// 2026-07-30 UAT — the bug this exists to fix: enqueueInput's original
+// backpressure policy dropped the OLDEST queued event, whatever it was. That
+// is correct ONLY if every event is equally disposable, which is exactly
+// wrong for input. mouse_move dominates the stream by volume, so under
+// congestion a mouse_down/key_down that had been queued got evicted by the
+// next flood of moves before the worker ever reached it. The operator's
+// symptom was precisely this asymmetry: scrolling still moved the page
+// (wheel carries deltas, so even a decimated stream visibly works) while
+// clicks and keystrokes did nothing at all — they were being shed as
+// collateral, never dispatched.
+//
+// Discrete events (mouse_down/up, key_down/up) are unique, unrepeatable, and
+// meaningless if lost: dropping one is not "degraded input", it is a click
+// that never happened. Positional ones (mouse_move, wheel) are a sampled
+// stream where the freshest sample supersedes older ones, so shedding them
+// costs smoothness, not correctness.
+//
+// The package still does not depend on pkg/api/generated (see
+// wireInputDataChannel's doc comment): it peeks at ONE field, `kind`, via a
+// local struct, rather than decoding the frame. Any unrecognized or
+// unparseable kind is treated as NON-coalescable — the safe default, since
+// misclassifying a discrete event as sheddable is the failure this fixes.
+func isCoalescableInputKind(raw []byte) bool {
+	var probe struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return false
+	}
+	switch probe.Kind {
+	case "mouse_move", "wheel":
+		return true
+	default:
+		return false
+	}
+}
 
 // wireInputDataChannel is called from a viewer PeerConnection's
 // OnDataChannel callback when the browser's "input" data channel arrives.
@@ -47,10 +98,137 @@ const inputQueueCapacity = 64
 // behind is more useful caught up on the FRESHEST state than stalled
 // replaying a backlog), and the worker goroutine that actually calls
 // s.sink runs independently of Pion's dispatch goroutine.
+// pushOutcome reports what enqueueInput's backpressure policy did.
+type pushOutcome int
+
+const (
+	pushAccepted pushOutcome = iota
+	pushShedOldestPositional
+	pushDroppedIncomingPositional
+	pushDroppedIncomingDiscrete
+	pushClosed
+)
+
+// inputQueue is one viewer's pending input-event backlog: a mutex-guarded
+// deque with a coalescing wakeup signal.
+//
+// It replaced a plain `chan []byte` on 2026-07-31 after review found a real
+// reordering bug. The old design had TWO goroutines receiving from the same
+// channel: the drain worker (runInputQueue) and the producer's eviction path
+// (which drained the channel into a slice, dropped one item, and re-pushed
+// the rest). Go guarantees buffered values are handed out in send order, but
+// NOT which of two concurrent receivers gets any given value — so the worker
+// could take an item mid-eviction while the eviction loop retained and
+// re-appended items that were originally AHEAD of it. Result: a mouse_up
+// dispatched before its mouse_down, or a key_up before its key_down — exactly
+// the drag/keystroke corruption the shedding policy exists to prevent, and
+// invisible to the existing tests because none of them ran a concurrent
+// consumer.
+//
+// Here there is exactly ONE dequeuer (runInputQueue), and the shed decision
+// is made under the SAME lock as the append, so the queue is never observed
+// in a partially-drained state. Ordering is total and obvious.
+type inputQueue struct {
+	mu     sync.Mutex
+	items  [][]byte
+	closed bool
+	// notify has capacity 1 and coalesces: it signals "there may be work",
+	// never carries the work itself. pop re-checks under the lock, so a
+	// spurious or missed-then-recovered wakeup is harmless.
+	notify chan struct{}
+}
+
+func newInputQueue() *inputQueue {
+	return &inputQueue{notify: make(chan struct{}, 1)}
+}
+
+// signalLocked wakes a waiting pop. Non-blocking, so it is safe to call with
+// q.mu held.
+func (q *inputQueue) signalLocked() {
+	select {
+	case q.notify <- struct{}{}:
+	default:
+	}
+}
+
+// push appends raw, applying the type-aware backpressure policy when the
+// queue is at capacity. Never blocks — the caller is Pion's OnMessage
+// goroutine and must not be stalled.
+//
+// Policy when full: shed the OLDEST POSITIONAL (mouse_move/wheel) entry to
+// make room, wherever it sits in the backlog — never the head, which may be a
+// discrete event. Applying this to positional arrivals too preserves the
+// property that for a cursor stream the FRESHEST sample is the valuable one.
+// If nothing positional exists to shed, the backlog is entirely discrete and
+// the INCOMING event is dropped, which keeps the queued events a contiguous
+// in-order prefix rather than punching a hole in a keystroke sequence.
+func (q *inputQueue) push(raw []byte, capacity int) pushOutcome {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return pushClosed
+	}
+	if len(q.items) < capacity {
+		q.items = append(q.items, raw)
+		q.signalLocked()
+		return pushAccepted
+	}
+	for i, it := range q.items {
+		if isCoalescableInputKind(it) {
+			q.items = append(q.items[:i], q.items[i+1:]...)
+			q.items = append(q.items, raw)
+			q.signalLocked()
+			return pushShedOldestPositional
+		}
+	}
+	if isCoalescableInputKind(raw) {
+		return pushDroppedIncomingPositional
+	}
+	return pushDroppedIncomingDiscrete
+}
+
+// pop blocks until an item is available or the queue is closed. Returns
+// (nil, false) once closed AND drained — so a viewer's final queued events
+// are still delivered before the worker exits.
+func (q *inputQueue) pop() ([]byte, bool) {
+	for {
+		q.mu.Lock()
+		if len(q.items) > 0 {
+			it := q.items[0]
+			q.items[0] = nil // release the reference for GC
+			q.items = q.items[1:]
+			q.mu.Unlock()
+			return it, true
+		}
+		closed := q.closed
+		q.mu.Unlock()
+		if closed {
+			return nil, false
+		}
+		<-q.notify
+	}
+}
+
+// close marks the queue closed and wakes any waiting pop. Idempotent at this
+// level; callers also guard with sync.Once.
+func (q *inputQueue) close() {
+	q.mu.Lock()
+	q.closed = true
+	q.signalLocked()
+	q.mu.Unlock()
+}
+
+// Len reports the current backlog depth (test/diagnostic use).
+func (q *inputQueue) Len() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.items)
+}
+
 func (s *Session) wireInputDataChannel(prefix, viewerID string, dc *webrtc.DataChannel) {
-	queue := make(chan []byte, inputQueueCapacity)
+	queue := newInputQueue()
 	var closeQueueOnce sync.Once
-	closeQueue := func() { closeQueueOnce.Do(func() { close(queue) }) }
+	closeQueue := func() { closeQueueOnce.Do(queue.close) }
 
 	go s.runInputQueue(viewerID, queue)
 
@@ -88,32 +266,56 @@ func (s *Session) wireInputDataChannel(prefix, viewerID string, dc *webrtc.DataC
 // Session's normal logf (the gateway's webrtcRelayLogf classifies a line
 // with neither "failed" nor "warning" in it to Debug, matching the fix's
 // "log drops at Debug" requirement).
-func (s *Session) enqueueInput(prefix, viewerID string, queue chan []byte, raw []byte) {
-	for {
-		select {
-		case queue <- raw:
-			return
-		default:
-			select {
-			case <-queue:
-				s.logf("%s input queue full for viewer %s, dropped oldest queued event", prefix, viewerID)
-			default:
-			}
-		}
+// Revised 2026-07-30 (UAT): the shed decision is now TYPE-AWARE — see
+// isCoalescableInputKind for the failure that forced this. A full queue no
+// longer blindly evicts whatever is at the head:
+//
+//   - An incoming COALESCABLE event (mouse_move/wheel) is dropped outright.
+//     It must never evict a queued click or keystroke; the next move is
+//     along in ~10ms and supersedes it anyway.
+//   - An incoming DISCRETE event (mouse_down/up, key_down/up) always gets
+//     in, evicting the head to make room. Under the flood that causes
+//     congestion the head is overwhelmingly a move, so in practice this
+//     sheds a move to admit a click — exactly the intended trade.
+//
+// Order is still preserved (the queue is only ever appended to at the tail
+// and consumed from the head), and the function is still non-blocking, so
+// Pion's OnMessage callback is never stalled.
+func (s *Session) enqueueInput(prefix, viewerID string, queue *inputQueue, raw []byte) {
+	switch queue.push(raw, inputQueueCapacity) {
+	case pushAccepted, pushClosed:
+		return
+	case pushShedOldestPositional:
+		// Normal, expected backpressure under a sustained cursor stream.
+		s.logf("%s input queue full for viewer %s, shed oldest positional event to admit a newer one", prefix, viewerID)
+	case pushDroppedIncomingPositional:
+		s.logf(
+			"%s input queue full for viewer %s, dropped incoming positional event (backlog is all discrete)",
+			prefix,
+			viewerID,
+		)
+	case pushDroppedIncomingDiscrete:
+		// Real input loss, not routine backpressure — WARNING so
+		// webrtcRelayLogf escalates it above debug.
+		s.logf("%s WARNING: input queue full for viewer %s, dropped a discrete input event", prefix, viewerID)
 	}
 }
 
-// runInputQueue is the single goroutine that drains one viewer's input data-
-// channel queue and invokes the Session's InputSink for each message IN
-// ORDER, until queue is closed (dc.OnClose) -- draining whatever remains
-// queued first so a viewer's very last few input events right before
-// disconnect are not silently discarded. A slow InputSink call here (the
-// gateway's real CDP round trip) only delays the NEXT queued message for
-// THIS viewer; it never blocks Pion's OnMessage callback (enqueueInput is
-// always non-blocking) and never blocks any OTHER viewer's own queue
-// (each data channel gets its own worker/queue pair).
-func (s *Session) runInputQueue(viewerID string, queue chan []byte) {
-	for raw := range queue {
+// runInputQueue is the SINGLE goroutine that drains one viewer's input queue
+// and invokes the Session's InputSink for each message IN ORDER, until the
+// queue is closed (dc.OnClose) — draining whatever remains queued first so a
+// viewer's last few events before disconnect are not discarded.
+//
+// It is the ONLY dequeuer. That is the whole point of the inputQueue type
+// (see its doc comment): the previous implementation used a Go channel that
+// this worker AND the producer's eviction path both received from, which
+// could reorder events.
+func (s *Session) runInputQueue(viewerID string, queue *inputQueue) {
+	for {
+		raw, ok := queue.pop()
+		if !ok {
+			return
+		}
 		if s.sink != nil {
 			s.sink(viewerID, raw)
 		}

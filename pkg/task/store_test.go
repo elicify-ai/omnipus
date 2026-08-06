@@ -6,8 +6,10 @@ package task
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -103,6 +105,154 @@ func TestUpdatePartial(t *testing.T) {
 	// Unspecified fields preserved.
 	if got.WorkspaceID != "ws" || got.Action != ActionLLM {
 		t.Fatalf("update clobbered other fields: %+v", got)
+	}
+}
+
+// TestStoreListWithUnreadable verifies the H2 fix's new method: List
+// continues to silently skip a present-but-unreadable task file (unchanged
+// behavior), while ListWithUnreadable additionally surfaces its ID so a
+// caller (the trigger scheduler's Reconcile/RunRecoverySweep) can act on it.
+func TestStoreListWithUnreadable(t *testing.T) {
+	s := newStore(t)
+
+	good := mkTask("good", "ws-1")
+	if err := s.Create(good); err != nil {
+		t.Fatalf("Create good: %v", err)
+	}
+
+	// Simulate a corrupted/unparsable task file directly on disk — the
+	// shape store.load() cannot recover from (json.Unmarshal failure).
+	const corruptID = "corrupt-task-id"
+	corruptPath := filepath.Join(s.dir, corruptID+".json")
+	if err := os.WriteFile(corruptPath, []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("write corrupt file: %v", err)
+	}
+
+	tasks, unreadable, err := s.ListWithUnreadable(Filter{})
+	if err != nil {
+		t.Fatalf("ListWithUnreadable: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != good.ID {
+		t.Fatalf("expected exactly the good task in the readable set, got %+v", tasks)
+	}
+	if len(unreadable) != 1 || unreadable[0] != corruptID {
+		t.Fatalf("expected unreadable = [%q], got %v", corruptID, unreadable)
+	}
+
+	// List (pre-existing, widely-called method) must behave exactly as
+	// before: silently skip the corrupt file, no error.
+	listOnly, err := s.List(Filter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listOnly) != 1 || listOnly[0].ID != good.ID {
+		t.Fatalf("List regressed: expected exactly the good task, got %+v", listOnly)
+	}
+}
+
+// TestStoreUpdateWithPrior_ConcurrentAtomicity proves the M-BE1 fix: because
+// UpdateWithPrior loads `prior` inside the SAME per-task-lock critical
+// section that performs the write, N concurrent UpdateWithPrior calls
+// against the same task form one unbroken chain — each call's `prior` title
+// equals either the task's original title or some other call's `updated`
+// title, and exactly one call (the lock's first winner) has prior == the
+// original title. A separate pre-write Get (the pre-fix pattern) cannot
+// guarantee this: two goroutines can both read the same state before either
+// has written, so a later writer's recorded "prior" would not reflect an
+// earlier writer's already-landed write even though the writes themselves
+// were correctly serialized.
+func TestStoreUpdateWithPrior_ConcurrentAtomicity(t *testing.T) {
+	s := newStore(t)
+	initial := mkTask("chain-start", "ws-1")
+	if err := s.Create(initial); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	const n = 20
+	type transition struct {
+		priorTitle   string
+		updatedTitle string
+	}
+	var (
+		mu    sync.Mutex
+		chain []transition
+		wg    sync.WaitGroup
+	)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			newTitle := fmt.Sprintf("title-%02d", i)
+			updated, prior, err := s.UpdateWithPrior(initial.ID, Patch{Title: &newTitle})
+			if err != nil {
+				t.Errorf("UpdateWithPrior(%d): %v", i, err)
+				return
+			}
+			mu.Lock()
+			chain = append(chain, transition{priorTitle: prior.Title, updatedTitle: updated.Title})
+			mu.Unlock()
+		}(i)
+	}
+	wg.Wait()
+
+	if len(chain) != n {
+		t.Fatalf("expected %d recorded transitions, got %d", n, len(chain))
+	}
+
+	// Every recorded `prior` must be either the original title or some other
+	// transition's `updated` title — never a value no write ever actually
+	// produced (which would indicate a stale, non-atomic read).
+	validPriors := map[string]bool{initial.Title: true}
+	for _, tr := range chain {
+		validPriors[tr.updatedTitle] = true
+	}
+	firstCount := 0
+	for i, tr := range chain {
+		if !validPriors[tr.priorTitle] {
+			t.Errorf("transition %d: prior %q was never a real prior state", i, tr.priorTitle)
+		}
+		if tr.priorTitle == tr.updatedTitle {
+			t.Errorf("transition %d: prior == updated (%q) — no actual write observed", i, tr.priorTitle)
+		}
+		if tr.priorTitle == initial.Title {
+			firstCount++
+		}
+	}
+	if firstCount != 1 {
+		t.Errorf("expected exactly 1 transition whose prior is the original title (the lock's first winner), got %d",
+			firstCount)
+	}
+
+	// Every `updated` title must be some OTHER transition's `prior`, except
+	// for whichever call is chronologically last (no successor yet exists).
+	usedAsPrior := map[string]int{}
+	for _, tr := range chain {
+		usedAsPrior[tr.priorTitle]++
+	}
+	missingSuccessor := 0
+	for _, tr := range chain {
+		if usedAsPrior[tr.updatedTitle] == 0 {
+			missingSuccessor++
+		}
+	}
+	if missingSuccessor != 1 {
+		t.Errorf("expected exactly 1 transition with no successor (the last writer), got %d", missingSuccessor)
+	}
+
+	final, err := s.Get(initial.ID)
+	if err != nil {
+		t.Fatalf("Get final: %v", err)
+	}
+	lastTitle := final.Title
+	found := false
+	for _, tr := range chain {
+		if tr.updatedTitle == lastTitle {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("final persisted title %q does not match any recorded transition's updated title", lastTitle)
 	}
 }
 
@@ -466,11 +616,15 @@ func TestTriggerValidation(t *testing.T) {
 	every := int64(3600000)
 	tooFast := int64(500)
 	cron := "0 9 * * MON"
+	rruleBody := "FREQ=WEEKLY;BYDAY=MO;COUNT=5"
+	rruleDtstart := time.Date(2026, 8, 3, 9, 0, 0, 0, time.UTC).UnixMilli()
+	rruleTz := "Europe/Berlin"
 	good := []*Trigger{
 		{Type: TriggerManual},
 		{Type: TriggerOnce, Config: TriggerConfig{AtMs: &at}},
 		{Type: TriggerEvery, Config: TriggerConfig{EveryMs: &every}},
 		{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}},
+		{Type: TriggerRecurring, Config: TriggerConfig{Rrule: &rruleBody, DtstartMs: &rruleDtstart, Tz: &rruleTz}},
 	}
 	for _, tr := range good {
 		if err := ValidateTrigger(tr); err != nil {
@@ -495,6 +649,7 @@ func TestTriggerPersisted(t *testing.T) {
 	s := newStore(t)
 	cron := "0 9 * * MON"
 	tk := mkTask("recurring", "ws")
+	tk.AgentID = "agent-1"
 	tk.Trigger = &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
 	if err := s.Create(tk); err != nil {
 		t.Fatal(err)
@@ -506,6 +661,180 @@ func TestTriggerPersisted(t *testing.T) {
 	if got.Trigger.Config.CronExpr == nil || *got.Trigger.Config.CronExpr != cron {
 		t.Fatalf("trigger config not persisted: %+v", got.Trigger.Config)
 	}
+}
+
+// TestTriggerPersisted_Rrule is TestTriggerPersisted's RRULE counterpart —
+// store_test.go's own Store.Create/Store.Get round trip only ever exercised
+// CronExpr; the rrule/dtstart_ms/tz trio (Calendar Recurrence Redesign) had
+// no isolated Store-level coverage independent of the gateway layer.
+func TestTriggerPersisted_Rrule(t *testing.T) {
+	s := newStore(t)
+	rruleBody := "FREQ=WEEKLY;BYDAY=MO;COUNT=5"
+	dtstartMs := time.Date(2026, 8, 3, 9, 0, 0, 0, time.UTC).UnixMilli()
+	tz := "Europe/Berlin"
+
+	tk := mkTask("recurring-rrule", "ws")
+	tk.AgentID = "agent-1"
+	tk.Trigger = &Trigger{
+		Type:   TriggerRecurring,
+		Config: TriggerConfig{Rrule: &rruleBody, DtstartMs: &dtstartMs, Tz: &tz},
+	}
+	if err := ValidateTrigger(tk.Trigger); err != nil {
+		t.Fatalf("test setup: rrule trigger should be valid: %v", err)
+	}
+	if err := s.Create(tk); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Trigger == nil || got.Trigger.Type != TriggerRecurring {
+		t.Fatalf("trigger not persisted: %+v", got.Trigger)
+	}
+	if got.Trigger.Config.Rrule == nil || *got.Trigger.Config.Rrule != rruleBody {
+		t.Fatalf("trigger config.rrule not persisted: %+v", got.Trigger.Config)
+	}
+	if got.Trigger.Config.DtstartMs == nil || *got.Trigger.Config.DtstartMs != dtstartMs {
+		t.Fatalf("trigger config.dtstart_ms not persisted: %+v", got.Trigger.Config)
+	}
+	if got.Trigger.Config.Tz == nil || *got.Trigger.Config.Tz != tz {
+		t.Fatalf("trigger config.tz not persisted: %+v", got.Trigger.Config)
+	}
+	// cron_expr must NOT have been silently populated alongside rrule.
+	if got.Trigger.Config.CronExpr != nil {
+		t.Fatalf("trigger config.cron_expr unexpectedly set: %+v", got.Trigger.Config)
+	}
+}
+
+// TestScheduledAgentAssignment covers validateScheduledAgentAssignment: an
+// auto-firing trigger (once/every/recurring) on an llm task fires with no
+// human present, so it must carry an assigned agent — reject at Create AND
+// Update, on both packages' entry points (normalize/updateLocked). `manual`
+// (or no trigger) starts only when a human explicitly runs it, so an empty
+// AgentID there is a legitimate human-only task and must NOT be rejected.
+func TestScheduledAgentAssignment(t *testing.T) {
+	at := int64(1781000000000)
+	cron := "0 9 * * MON"
+
+	t.Run("create: once/recurring + llm + no agent is rejected", func(t *testing.T) {
+		s := newStore(t)
+		for _, tr := range []*Trigger{
+			{Type: TriggerOnce, Config: TriggerConfig{AtMs: &at}},
+			{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}},
+		} {
+			tk := mkTask("scheduled-no-agent", "ws")
+			tk.Trigger = tr
+			err := s.Create(tk)
+			if err == nil {
+				t.Fatalf("trigger %q: expected error, task created with empty agent_id", tr.Type)
+			}
+			if !errors.Is(err, ErrValidation) {
+				t.Fatalf("trigger %q: expected ErrValidation, got %v", tr.Type, err)
+			}
+		}
+	})
+
+	t.Run("create: once/recurring + llm + agent is accepted", func(t *testing.T) {
+		s := newStore(t)
+		for _, tr := range []*Trigger{
+			{Type: TriggerOnce, Config: TriggerConfig{AtMs: &at}},
+			{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}},
+		} {
+			tk := mkTask("scheduled-with-agent", "ws")
+			tk.AgentID = "agent-1"
+			tk.Trigger = tr
+			if err := s.Create(tk); err != nil {
+				t.Fatalf("trigger %q: unexpected error: %v", tr.Type, err)
+			}
+		}
+	})
+
+	t.Run("create: manual + no agent is accepted (human-only task)", func(t *testing.T) {
+		s := newStore(t)
+		tk := mkTask("manual-no-agent", "ws")
+		tk.Trigger = &Trigger{Type: TriggerManual}
+		if err := s.Create(tk); err != nil {
+			t.Fatalf("manual trigger with no agent should be accepted: %v", err)
+		}
+		// No trigger at all (nil) must also be accepted with no agent.
+		tk2 := mkTask("no-trigger-no-agent", "ws")
+		if err := s.Create(tk2); err != nil {
+			t.Fatalf("task with no trigger and no agent should be accepted: %v", err)
+		}
+	})
+
+	t.Run("update: arming a recurring trigger on an agentless task is rejected", func(t *testing.T) {
+		s := newStore(t)
+		tk := mkTask("becomes-scheduled", "ws")
+		if err := s.Create(tk); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		tr := &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
+		_, err := s.Update(tk.ID, Patch{Trigger: &tr})
+		if err == nil {
+			t.Fatal("expected error arming a recurring trigger on an agentless task")
+		}
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("expected ErrValidation, got %v", err)
+		}
+	})
+
+	t.Run("update: clearing the agent off an already-scheduled task is rejected", func(t *testing.T) {
+		s := newStore(t)
+		tk := mkTask("scheduled", "ws")
+		tk.AgentID = "agent-1"
+		tk.Trigger = &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
+		if err := s.Create(tk); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		empty := ""
+		_, err := s.Update(tk.ID, Patch{AgentID: &empty})
+		if err == nil {
+			t.Fatal("expected error clearing agent_id off a scheduled task")
+		}
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("expected ErrValidation, got %v", err)
+		}
+	})
+
+	t.Run("update: assigning an agent to an already-scheduled task succeeds", func(t *testing.T) {
+		s := newStore(t)
+		// Task was never persisted agentless-and-scheduled (Create would reject
+		// that combination) — build it up via Update from a manual task instead,
+		// mirroring how the SPA/API would legitimately reach this state: create
+		// manual, then arm the trigger and assign the agent together.
+		tk := mkTask("becomes-assigned", "ws")
+		if err := s.Create(tk); err != nil {
+			t.Fatalf("create manual precursor: %v", err)
+		}
+		agentID := "agent-1"
+		everyTrigger := &Trigger{Type: TriggerEvery, Config: TriggerConfig{EveryMs: ptr(int64(60000))}}
+		got, err := s.Update(tk.ID, Patch{AgentID: &agentID, Trigger: &everyTrigger})
+		if err != nil {
+			t.Fatalf("assigning agent alongside the trigger should succeed: %v", err)
+		}
+		if got.AgentID != agentID || got.Trigger == nil || got.Trigger.Type != TriggerEvery {
+			t.Fatalf("update did not persist trigger+agent together: %+v", got)
+		}
+	})
+
+	t.Run("update: manual task stays valid with no agent", func(t *testing.T) {
+		s := newStore(t)
+		tk := mkTask("manual-update", "ws")
+		if err := s.Create(tk); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		newTitle := "renamed"
+		got, err := s.Update(tk.ID, Patch{Title: &newTitle})
+		if err != nil {
+			t.Fatalf("no-op-trigger update on an agentless manual task should succeed: %v", err)
+		}
+		if got.Title != newTitle {
+			t.Fatalf("title not updated: %+v", got)
+		}
+	})
 }
 
 // --- workspace scoping ---

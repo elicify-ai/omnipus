@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -225,6 +226,38 @@ func (c *WeComChannel) Send(ctx context.Context, msg bus.OutboundMessage) error 
 	return nil
 }
 
+// classifyWeComMediaFailure reclassifies a mid-loop SendMedia failure through
+// channels.ClassifyMediaSendError, based on how many of THIS message's parts
+// (sentCount) already reached the platform.
+//
+// Unlike qq/weixin (whose low-level send helpers return raw, unclassified
+// errors), WeCom's writeAndWaitAck already wraps every command failure with
+// channels.ErrTemporary (or, for a local marshal failure, ErrSendFailed)
+// before SendMedia ever sees it. Feeding an already-ErrTemporary-wrapped
+// error straight into ClassifyMediaSendError would still be functionally
+// safe — sendMediaWithRetry checks for ErrSendFailed before it ever considers
+// ErrTemporary (manager.go's sendMediaWithRetry), so the added permanent
+// marker always wins — but it leaves the resulting error ambiguously
+// matching BOTH sentinels, which is needless noise for callers/logging that
+// inspect errors.Is directly. So:
+//   - if err is ALREADY permanent (errors.Is(err, channels.ErrSendFailed) —
+//     e.g. the defensive "empty chat ID"/"outbound media is nil" checks),
+//     return it as-is: these are unconditionally non-retryable regardless of
+//     sentCount, so no reclassification is needed or wanted.
+//   - otherwise, reclassify by MESSAGE only (errors.New(err.Error()), not
+//     %w) so the old ErrTemporary wrap is not carried into the new chain —
+//     the result then carries exactly one retry-relevant sentinel, matching
+//     the qq/weixin/telegram/slack convention.
+func classifyWeComMediaFailure(sentCount int, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, channels.ErrSendFailed) {
+		return err
+	}
+	return channels.ClassifyMediaSendError("wecom", sentCount, errors.New(err.Error()))
+}
+
 func (c *WeComChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
 	if !c.IsRunning() {
 		return channels.ErrNotRunning
@@ -236,17 +269,33 @@ func (c *WeComChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessa
 		chatID = msg.ChatID
 	}
 
+	sentCount := 0
 	for _, part := range msg.Parts {
 		if strings.TrimSpace(part.Ref) == "" {
 			if caption := strings.TrimSpace(part.Caption); caption != "" {
 				if err := c.sendActivePush(chatID, chatType, caption); err != nil {
-					return err
+					// CRITICAL fix (retry-duplication, sendfile-fix review):
+					// writeAndWaitAck classifies WeCom ack-errcode/timeout/
+					// disconnect failures as channels.ErrTemporary
+					// unconditionally, with no awareness of how many parts of
+					// THIS message already reached the platform. sendMedia
+					// WithRetry has no per-part resume — a retry re-invokes
+					// SendMedia with the same, unmutated part list from the
+					// top — so if an earlier part already sent (sentCount >
+					// 0), a bare ErrTemporary here would cause that earlier
+					// part to be redelivered too. classifyWeComMediaFailure
+					// upgrades the failure to permanent (ErrSendFailed) in
+					// that case; when sentCount == 0 (nothing sent yet from
+					// this message) it keeps the normal ErrTemporary retry
+					// classification.
+					return classifyWeComMediaFailure(sentCount, err)
 				}
 			}
+			sentCount++
 			continue
 		}
 
-		localPath, filename, contentType, cleanup, err := c.resolveOutboundPart(ctx, part)
+		localPath, filename, contentType, cleanup, err := c.resolveOutboundPart(ctx, part, msg.WorkspaceID)
 		if err != nil {
 			return fmt.Errorf("wecom resolve media %q: %v: %w", part.Ref, err, channels.ErrSendFailed)
 		}
@@ -292,10 +341,28 @@ func (c *WeComChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessa
 			}
 		}()
 		if err != nil {
-			return err
+			// Same reasoning as the empty-ref branch above: whatever failed
+			// here (the finish-stream chunk, the upload-failure placeholder
+			// push, the actual media send, or the post-media caption push)
+			// travels through writeAndWaitAck and is already classified
+			// ErrTemporary/ErrSendFailed with no sentCount awareness.
+			// Reclassify through sentCount so a failure after an earlier
+			// part in THIS message already sent (sentCount > 0) does not
+			// cause sendMediaWithRetry to redeliver it.
+			return classifyWeComMediaFailure(sentCount, err)
 		}
+		sentCount++
 	}
 
+	// Unlike Telegram/Feishu/Matrix/Slack, WeCom never `continue`s past a
+	// per-part failure — every failure path above returns immediately (a
+	// local resolve failure is already permanent, wrapped in
+	// channels.ErrSendFailed, and returned directly; a genuine ack/upload/
+	// send API failure returns via ClassifyMediaSendError above), so
+	// sentCount == len(msg.Parts) is guaranteed whenever this point is
+	// reached and no post-loop shortfall guard (as Telegram/Feishu/Matrix/
+	// Slack need for their `continue`-based local-failure handling) applies
+	// here.
 	return nil
 }
 

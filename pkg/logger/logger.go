@@ -202,7 +202,8 @@ func getCallerSkip() int {
 		// bypass common loggers
 		if strings.HasSuffix(file, "/logger.go") ||
 			strings.HasSuffix(file, "/logger_3rd_party.go") ||
-			strings.HasSuffix(file, "/log.go") {
+			strings.HasSuffix(file, "/log.go") ||
+			strings.HasSuffix(file, "/slog_bridge.go") {
 			continue
 		}
 

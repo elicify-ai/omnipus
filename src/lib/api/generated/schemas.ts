@@ -151,6 +151,19 @@ type SessionPage = {
   next_cursor?: string | undefined;
   partial_errors?: Array<string> | undefined;
 };
+type LibraryUploadResponse = {
+  entries: Array<LibraryEntry>;
+};
+type LibraryEntry = {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  is_hidden: boolean;
+  size: number;
+  modified_at: string;
+  mime?: string | undefined;
+  is_text_editable: boolean;
+};
 type Agent = {
   id: string;
   name: string;
@@ -408,6 +421,10 @@ type AuditEntry = {
   parameters?: {} | undefined;
   policy_rule?: string | undefined;
   details?: {} | undefined;
+  actor?: string | undefined;
+  resource?: string | undefined;
+  old_value?: {} | undefined;
+  new_value?: {} | undefined;
 };
 type Provider = {
   id: string;
@@ -522,6 +539,9 @@ type TaskTrigger = {
       at_ms: number;
       every_ms: number;
       cron_expr: string;
+      rrule: string;
+      dtstart_ms: number;
+      tz: string;
     } & {
       [key: string]: any;
     }
@@ -671,6 +691,37 @@ type TaskUpdateRequest = Partial<{
   started_at: string;
   completed_at: string;
 }>;
+type TaskOccurrenceSet = {
+  task_id: string;
+  occurrences_ms: Array<number>;
+  day_buckets: Array<DayBucket>;
+  occurrence_runs?:
+    | Array<{
+        occurrence_ms: number;
+        status: "in_progress" | "done" | "failed" | "skipped";
+        run_id: string;
+        session_id: string;
+        has_result: boolean;
+      }>
+    | undefined;
+  truncated: boolean;
+};
+type DayBucket = {
+  day_start_ms: number;
+  day_end_ms: number;
+  count: number;
+  first_ms: number;
+  interval_ms: number | null;
+  run_counts?:
+    | {
+        scheduled: number;
+        in_progress: number;
+        done: number;
+        failed: number;
+        skipped: number;
+      }
+    | undefined;
+};
 type ChannelConfigureRequest = Partial<
   {
     instance_id: string;
@@ -2260,6 +2311,10 @@ export const AuditEntry: z.ZodType<AuditEntry> = z
     parameters: z.object({}).partial().passthrough().optional(),
     policy_rule: z.string().optional(),
     details: z.object({}).partial().passthrough().optional(),
+    actor: z.string().optional(),
+    resource: z.string().optional(),
+    old_value: z.object({}).partial().passthrough().optional(),
+    new_value: z.object({}).partial().passthrough().optional(),
   })
   .passthrough();
 export const AuditLogResponse: z.ZodType<AuditLogResponse> = z.object({
@@ -2408,6 +2463,7 @@ export const GatewayRestartResponse = z
   .passthrough();
 export const GodModeStatus = z.object({
   enabled: z.boolean(),
+  persisted: z.boolean(),
   available: z.boolean(),
   supported: z.boolean(),
 });
@@ -2471,6 +2527,10 @@ export const ProviderUpdateRequest = z
     models: z.array(z.string().min(1).max(256)).max(500),
   })
   .partial();
+export const ModelCapabilities = z.object({
+  id: z.string(),
+  modalities: z.array(z.enum(["text", "image", "pdf", "audio", "video"])),
+});
 export const SlashCommand = z.object({
   name: z.string(),
   label: z.string(),
@@ -2621,6 +2681,9 @@ export const TaskTrigger: z.ZodType<TaskTrigger> = z.object({
       at_ms: z.number().int(),
       every_ms: z.number().int().gte(1000),
       cron_expr: z.string(),
+      rrule: z.string().max(512),
+      dtstart_ms: z.number().int(),
+      tz: z.string(),
     })
     .partial()
     .passthrough(),
@@ -2713,6 +2776,39 @@ export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
   source_channel: z.string().optional(),
   source_chat_id: z.string().optional(),
 });
+export const DayBucket: z.ZodType<DayBucket> = z.object({
+  day_start_ms: z.number().int(),
+  day_end_ms: z.number().int(),
+  count: z.number().int(),
+  first_ms: z.number().int(),
+  interval_ms: z.number().int().nullable(),
+  run_counts: z
+    .object({
+      scheduled: z.number().int(),
+      in_progress: z.number().int(),
+      done: z.number().int(),
+      failed: z.number().int(),
+      skipped: z.number().int(),
+    })
+    .optional(),
+});
+export const TaskOccurrenceSet: z.ZodType<TaskOccurrenceSet> = z.object({
+  task_id: z.string(),
+  occurrences_ms: z.array(z.number().int()),
+  day_buckets: z.array(DayBucket),
+  occurrence_runs: z
+    .array(
+      z.object({
+        occurrence_ms: z.number().int(),
+        status: z.enum(["in_progress", "done", "failed", "skipped"]),
+        run_id: z.string(),
+        session_id: z.string(),
+        has_result: z.boolean(),
+      })
+    )
+    .optional(),
+  truncated: z.boolean(),
+});
 export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
   .object({
     title: z.string().min(1).max(200),
@@ -2760,6 +2856,20 @@ export const EvidenceRecord = z.object({
   policy_denied: z.boolean(),
   recorded_at: z.string().datetime({ offset: true }),
 });
+export const TaskRun = z.object({
+  run_id: z.string(),
+  task_id: z.string(),
+  occurrence_ms: z.number().int().nullable(),
+  status: z.enum(["in_progress", "done", "failed", "skipped"]),
+  result: z.string().max(50000).optional(),
+  session_id: z.string(),
+  kind: z.enum(["scheduled", "manual"]),
+  started_at: z.string().datetime({ offset: true }),
+  ended_at: z.string().datetime({ offset: true }).nullable(),
+});
+export const RunNowRequest = z
+  .object({ occurrence_ms: z.number().int().nullable() })
+  .partial();
 export const McpServer = z
   .object({
     id: z.string(),
@@ -2970,6 +3080,67 @@ export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> = z
   })
   .partial()
   .passthrough();
+export const MediaLibraryEntry = z.object({
+  id: z.string().uuid(),
+  workspace_id: z.string().min(1).max(64),
+  filename: z.string().min(1).max(256),
+  mime: z.string(),
+  size: z.number().int().gte(0).lte(104857600),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  uploaded_at: z.string().datetime({ offset: true }),
+  source: z.enum(["user_upload", "tool_output"]),
+  refcount: z.number().int().gte(0).optional(),
+  last_refcount_seen_at: z.string().datetime({ offset: true }).optional(),
+  status: z.enum(["available", "stranded"]),
+}).strict();
+export const MediaAttachmentRequest = z.object({
+  media_id: z.string().max(36).uuid(),
+}).strict();
+export const LibraryWorkspaceNode = z.object({
+  id: z.string(),
+  name: z.string(),
+  entry_count: z.number().int().gte(0),
+});
+export const LibraryTransferRequest = z.object({
+  from_workspace_id: z.string(),
+  from_path: z.string().min(1),
+  to_workspace_id: z.string(),
+  to_path: z.string().min(1),
+});
+export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
+  name: z.string().min(1),
+  path: z.string().min(1),
+  is_dir: z.boolean(),
+  is_hidden: z.boolean(),
+  size: z.number().int().gte(0),
+  modified_at: z.string().datetime({ offset: true }),
+  mime: z.string().optional(),
+  is_text_editable: z.boolean(),
+});
+export const LibraryContentResponse = z.object({
+  path: z.string(),
+  content: z.string().optional(),
+  size: z.number().int().gte(0),
+  is_text: z.boolean(),
+  too_large: z.boolean(),
+  mime: z.string().optional(),
+});
+export const LibraryContentRequest = z.object({
+  path: z.string().min(1),
+  content: z.string().max(10485760),
+});
+export const uploadLibraryFiles_Body = z
+  .object({ files: z.array(z.instanceof(File)) })
+  .partial()
+  .passthrough();
+export const LibraryUploadResponse: z.ZodType<LibraryUploadResponse> = z.object(
+  { entries: z.array(LibraryEntry) }
+);
+export const LibraryMkdirRequest = z.object({ path: z.string().min(1) });
+export const LibraryRenameRequest = z.object({
+  from: z.string().min(1),
+  to: z.string().min(1),
+});
 export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
   z.object({
     from_agent: z.string().min(1),
@@ -5261,6 +5432,527 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "get",
+    path: "/library/:workspace_id/content",
+    alias: "getLibraryContent",
+    description: `Returns the text content of the file at path for the SPA editor (library-spec.md D-5), with explicit is_text / too_large fields so the SPA falls back to GET .../download rather than guessing from the content field. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if path does not exist or names a directory.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: LibraryContentResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/library/:workspace_id/content",
+    alias: "putLibraryContent",
+    description: `Writes text content to the file at the given workspace-relative path (library-spec.md D-5), creating the file if it does not already exist and overwriting any existing content entirely. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if the path&#x27;s parent directory does not exist.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: LibraryContentRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: LibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/download",
+    alias: "downloadLibraryFile",
+    description: `Streams the raw bytes of the file at path with a best-effort Content-Type and a Content-Disposition attachment filename. The binary counterpart to GET .../content — used for non-text files and for text files GET .../content reports as too_large. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if path does not exist or names a directory.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/entries",
+    alias: "listLibraryEntries",
+    description: `Lists the entries directly inside the given workspace-relative directory path (library-spec.md D-2 — entries are paths, not UUIDs). Omit path or pass an empty string to list the work-tree root — the Library explorer shows the WHOLE work/ directory, not merely the reserved work/.library/ upload directory (that is just one entry inside it). By default, entries whose name begins with a dot (&quot;.&quot;) are omitted from the listing — see include_hidden to include them and LibraryEntry.is_hidden for the definition. Returns 403 if path resolves outside the workspace&#x27;s work tree (traversal or an out-of-root symlink); 404 if the workspace or the directory itself does not exist.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string().optional().default(""),
+      },
+      {
+        name: "include_hidden",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+    ],
+    response: z.array(LibraryEntry),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/library/:workspace_id/entries",
+    alias: "deleteLibraryEntry",
+    description: `Deletes the file or directory at the given workspace-relative path. Deleting a directory removes it and everything under it. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at path.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/mkdir",
+    alias: "createLibraryDirectory",
+    description: `Creates the directory at path, creating any missing intermediate directories along the way (mkdir -p semantics) — the sole directory-creation primitive the Library API exposes. Idempotent: returns 200 if a directory already exists at path; 201 if a new directory (or chain of directories) was created. Returns 403 if path resolves outside the workspace&#x27;s work tree; 409 if a regular FILE already exists at path.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ path: z.string().min(1) }),
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: LibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/rename",
+    alias: "renameLibraryEntry",
+    description: `Renames or moves the entry at &quot;from&quot; to &quot;to&quot; within this single workspace&#x27;s work tree (library-spec.md D-2). &quot;to&quot; may name a different parent directory than &quot;from&quot;, so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id &#x3D;&#x3D; to_workspace_id &#x3D;&#x3D; {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if &quot;to&quot; begins with a &quot;..&quot; segment anywhere in the path (rejected outright as a sanity check — such a name isn&#x27;t a traversal, but this package&#x27;s hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at &quot;from&quot; OR &quot;to&quot;&#x27;s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at &quot;to&quot;.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: LibraryRenameRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: LibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/upload",
+    alias: "uploadLibraryFiles",
+    description: `Streams a multipart upload directly into the given workspace-relative directory (library-spec.md D-1 — uploads land as real, named files inside the work tree, de-duplicated with a numeric suffix on collision). Omit path or pass an empty string to upload into the work-tree root. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if the target directory does not exist.
+`,
+    requestFormat: "form-data",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: uploadLibraryFiles_Body,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string().optional().default(""),
+      },
+    ],
+    response: LibraryUploadResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/copy",
+    alias: "copyLibraryEntry",
+    description: `Copies the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;cp&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: LibraryTransferRequest,
+      },
+    ],
+    response: LibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/move",
+    alias: "moveLibraryEntry",
+    description: `Moves the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id &#x3D;&#x3D; to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;mv&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: LibraryTransferRequest,
+      },
+    ],
+    response: LibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/workspaces",
+    alias: "listLibraryWorkspaces",
+    description: `Backs the Library sidebar entry point (library-spec.md D-3): every workspace the caller can browse, as a top-level node. Drilling into one node scopes subsequent Library calls to that workspace via {workspace_id} — see GET /library/{workspace_id}/entries.
+`,
+    requestFormat: "json",
+    response: z.array(LibraryWorkspaceNode),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/mailboxes",
     alias: "listMailboxes",
     description: `Returns every configured mailbox account (one per (agent, workspace) pair). The mailbox password is never returned; each entry&#x27;s &#x60;configured&#x60; flag reports whether a password is on file in the credential store. An empty list means no mailbox is configured — this endpoint never 404s, so the SPA can show mailbox status without per-agent probe requests.
@@ -5476,6 +6168,59 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Media store not available.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/media/workspace/:workspace_id/:media_id",
+    alias: "serveWorkspaceMediaFile",
+    description: `Resolves a media://workspace/&lt;workspace_id&gt;/&lt;media_id&gt; ref through the owning workspace&#x27;s media library and streams the underlying file with the correct Content-Type (FR-028). The split path shape keeps the workspace and media IDs independently validated while preserving the opaque ref for resolution. Returns 403 if the caller is not scoped to the owning workspace, 404 if the ref is unknown or no workspace library is available for it, and 500 if the workspace library exists but could not be opened (a genuine backend failure, distinct from a routine absent ref) or if the entry is stranded (manifest present, bytes quarantined — a server-side data-integrity fault).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "media_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — invalid workspace_id or media_id.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Forbidden — caller workspace does not own this media ref.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
       {
@@ -5991,6 +6736,22 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       },
     ],
     response: OperationResult,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/providers/model-capabilities",
+    alias: "listModelCapabilities",
+    description: `Returns the in-repo capability catalog (pkg/providers/capabilities) as a flat list of {id, modalities} pairs (D18). Model vision capability is not knowable client-side at all otherwise — the SPA resolves the target agent&#x27;s model against this list to show a non-blocking warning before sending a vision attachment (e.g. a live-browser annotation, or an image attached via the composer) to a model that cannot accept images. Returns an empty array when the catalog is not constructed (never a 500) — the catalog is optional and the server-side capability gate remains the authoritative backstop regardless.
+`,
+    requestFormat: "json",
+    response: z.array(ModelCapabilities),
     errors: [
       {
         status: 401,
@@ -7687,6 +8448,90 @@ Polled by the SPA StatusBar every 15 seconds.
     ],
   },
   {
+    method: "get",
+    path: "/tasks/:id/runs",
+    alias: "listTaskRuns",
+    description: `Returns every execution record (TaskRun) for a task, newest first (ADR-050 / task-run-history-spec §3.6) — the authoritative history list, independent of whether the task&#x27;s current trigger can still project a run&#x27;s occurrence_ms (a series whose schedule was edited still lists every past run). Retention-bounded (day-partitioned sweep with a keep-newest-day floor); full result strings. Read-only; no state change. Rate-limited by the same dedicated taskReadLimiter (240 requests/min) as GET /tasks/occurrences.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(TaskRun),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/tasks/:id/runs",
+    alias: "runTaskNow",
+    description: `Opens a new run for the task and dispatches it immediately (ADR-050 RD7 / task-run-history-spec §3.4). With &#x60;occurrence_ms&#x60;, runs that specific recurring occurrence (materialize-on-demand); without it, re-runs a normal/once task as a fresh run (prior runs are preserved). Idempotent per (task, occurrence_ms) against a concurrent scheduler fire. Returns 202 — the run executes asynchronously; observe progress via the task_run_status WS frame or GET /tasks/{id}/runs.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z
+          .object({ occurrence_ms: z.number().int().nullable() })
+          .partial()
+          .optional(),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Invalid task ID or request body.`,
+        schema: z.void(),
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Task executor unavailable (gateway degraded).`,
+        schema: z.void(),
+      },
+    ],
+  },
+  {
     method: "post",
     path: "/tasks/:id/stop",
     alias: "stopTask",
@@ -7813,6 +8658,54 @@ Polled by the SPA StatusBar every 15 seconds.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/tasks/occurrences",
+    alias: "listTaskOccurrences",
+    description: `Server-side occurrence expansion for the workspace calendar (Calendar Recurrence Redesign). Expands every recurring-capable trigger the scheduler would actually arm — non-terminal AND not &#x60;surface: heartbeat&#x60;, the same predicate &#x60;OnTaskUpserted&#x60; applies before registering a job — covering &#x60;rrule&#x60; (rrule-go, normalized per the Timezone Semantics DST policy), legacy &#x60;cron_expr&#x60; (gronx, expanded in the server&#x27;s local zone, display-only per D8), and &#x60;every_ms&#x60; (a forward-only projection off the live job&#x27;s next-run instant, FR-008a). &#x60;tz&#x60; is the viewer&#x27;s IANA zone and is the day-boundary authority for bucketing — the &gt;3-occurrences-per-day threshold and &#x60;day_start_ms&#x60; are evaluated on days in this zone for every trigger flavor, regardless of each rule&#x27;s own &#x60;tz&#x60;. Range is half-open &#x60;[from_ms, to_ms)&#x60;. Responses are bucketed: spans ≤ 8×24h return raw instants for every day (Week/Day views); spans &gt; 8×24h return one &#x60;DayBucket&#x60; per query-tz day with more than 3 occurrences, raw instants for days with 3 or fewer (Month/overview views, D6). Capped at 500 instants per task per request plus a 10,000-computed- occurrence total iteration budget per task per request (arithmetic derivation, not iteration, for provably regular triggers); &#x60;truncated&#x60; signals either cap was hit. Tasks with zero occurrences in range are omitted; the result is &#x60;[]&#x60;, never null. Read-only; no state change. Rate-limited by a dedicated &#x60;taskReadLimiter&#x60; (240 requests/min), distinct from &#x60;configLimiter&#x60; and from the unthrottled task CRUD routes.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Query",
+        schema: z.string(),
+      },
+      {
+        name: "from_ms",
+        type: "Query",
+        schema: z.number().int(),
+      },
+      {
+        name: "to_ms",
+        type: "Query",
+        schema: z.number().int(),
+      },
+      {
+        name: "tz",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(TaskOccurrenceSet),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
     ],
@@ -8358,6 +9251,8 @@ Returns HTTP 201 on success.
     method: "delete",
     path: "/workspaces/:id",
     alias: "deleteWorkspace",
+    description: `The workspace record itself is removed atomically under a per-ID lock. Task-scan and channel-unbind cascade failures abort the whole delete (500) before that removal happens. A media-library cascade failure is detected AFTER the workspace record is already gone (best-effort cleanup step) — a genuine cascade failure (the media library could not be opened, or the manifest itself could not be updated) also returns 500, but unlike the two HARD steps above, the workspace itself has already been deleted by the time it is reported; a follow-up GET on the same id returns 404. A cascade outcome where the manifest was fully and correctly updated but a final on-disk cleanup step for an already-removed entry failed is NOT reported as a failure (204): every such leftover lives under the workspace&#x27;s own directory, which this same delete unconditionally removes immediately afterward, so it never survives the request.
+`,
     requestFormat: "json",
     parameters: [
       {
@@ -8381,6 +9276,11 @@ Returns HTTP 201 on success.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -8544,6 +9444,139 @@ Returns HTTP 201 on success.
   },
   {
     method: "get",
+    path: "/workspaces/:id/media",
+    alias: "listWorkspaceMedia",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(MediaLibraryEntry),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/media/:media_id",
+    alias: "getWorkspaceMedia",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "media_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: MediaLibraryEntry,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/workspaces/:id/media/:media_id",
+    alias: "deleteWorkspaceMedia",
+    description: `Removes a single media-library entry (raw bytes + manifest entry) from the workspace library. Emits a media.delete audit event (FR-033). Idempotent against a concurrently-deleted entry (404 if not found). Returns the deleted entry&#x27;s projection — including a degraded-success case where the manifest entry was committed-removed but the final on-disk unlink of the already-quarantined file failed; from the client&#x27;s perspective the item is gone (a follow-up GET 404s) even though a 500 is not returned for it, so the body is the only signal of exactly what was deleted.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "media_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: MediaLibraryEntry,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/media/attachments",
+    alias: "createWorkspaceMediaAttachment",
+    description: `Verifies the referenced entry exists, increments its refcount, and returns the updated MediaLibraryEntry — the handler re-reads the entry after the increment so the response reflects the new refcount/last_refcount_seen_at rather than a stale pre-increment projection.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ media_id: z.string().max(36).uuid() }).strict(),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: MediaLibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/workspaces/:id/plans",
     alias: "listWorkspacePlans",
     description: `Returns every Plan whose workspace_id matches, newest-first by created_at, with &#x60;progress&#x60;/&#x60;plan_phase&#x60;/&#x60;failed_reason&#x60; server-computed (ADR-049 D1, mirrors the removed MilestoneListResponse).
@@ -8626,7 +9659,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
 
 export const AuthFrame = z
   .object({
@@ -8635,10 +9668,10 @@ export const AuthFrame = z
   })
   .strict();
 
-export const MessageFrame = z
+export const MessageFrameBase = z
   .object({
     type: z.literal("message"),
-    content: z.string().min(1).max(5242880),
+    content: z.string().max(5242880),
     session_id: z.string().min(1).max(128).optional(),
     agent_id: z.string().min(1).max(128).optional(),
     media: z.array(z.string().min(1).max(256)).max(16).optional(),
@@ -8651,6 +9684,10 @@ export const MessageFrame = z
     .passthrough().optional(),
   })
   .strict();
+
+export const MessageFrame = MessageFrameBase.refine((v) => ((typeof v["content"] === "string" && v["content"].length >= 1)) || ((Array.isArray(v["media"]) && v["media"].length >= 1)), {
+  message: "does not satisfy the schema's anyOf constraint",
+});
 
 // ── Validation policy note (mirrors MessageFrame.yaml) ────────────────────────
 // Outer MessageFrame is .strict(): unknown top-level keys are rejected (a
@@ -8743,11 +9780,33 @@ export const DoneFrame = z
   })
   .strict();
 
+export const LLMError = z
+  .object({
+    code: z.enum(["media_unsupported", "provider_rejected", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "unknown"]),
+    message: z.string().min(1).max(4096),
+    retryable: z.boolean(),
+    detail: z.string().max(2048).optional(),
+  })
+  .strict();
+
+export const LLMErrorReplay = z
+  .object({
+    code: z.enum(["media_unsupported", "provider_rejected", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "unknown"]),
+    message: z.string().min(1).max(4096),
+    retryable: z.boolean(),
+  })
+  .strict();
+
 export const ErrorFrame = z
   .object({
     type: z.literal("error"),
     session_id: z.string().max(128).optional(),
     message: z.string().min(1).max(4096),
+    payload: z
+    .object({
+      llm_error: LLMError,
+    })
+    .strict().optional(),
   })
   .strict();
 
@@ -8884,6 +9943,16 @@ export const TaskStatusChangedFrame = z
   })
   .strict();
 
+export const TaskRunStatusFrame = z
+  .object({
+    type: z.literal("task_run_status"),
+    task_id: z.string().min(1),
+    run_id: z.string().min(1),
+    occurrence_ms: z.number().int().optional(),
+    status: z.enum(["in_progress", "done", "failed", "skipped"]),
+  })
+  .strict();
+
 export const ReplayMessageFrame = z
   .object({
     type: z.literal("replay_message"),
@@ -8895,7 +9964,6 @@ export const ReplayMessageFrame = z
     agent_id: z.string().optional(),
     model: z.string().max(256).optional(),
     turn_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -8906,16 +9974,11 @@ export const ReplayErrorFrame = z
     entry_id: z.string(),
     timestamp: z.string(),
     kind: z.enum(["rate_limit", "error"]),
-    message: z.string(),
+    message: z.string().min(1).max(4096),
     agent_id: z.string().optional(),
     payload: z
     .object({
-      retry_after_seconds: z.number().optional(),
-      policy_rule: z.string().optional(),
-      scope: z.string().optional(),
-      resource: z.string().optional(),
-      tool: z.string().optional(),
-      stage: z.string().optional(),
+      llm_error: LLMErrorReplay,
     })
     .strict().optional(),
   })
@@ -9105,6 +10168,8 @@ export const BrowserInputFrame = z
     kind: z.enum(["mouse_move", "mouse_down", "mouse_up", "wheel", "key_down", "key_up", "text", "navigate", "navigate_back", "reload"]),
     x: z.number().optional(),
     y: z.number().optional(),
+    capture_width: z.number().min(1).max(16384).optional(),
+    capture_height: z.number().min(1).max(16384).optional(),
     button: z.enum(["none", "left", "middle", "right", "back", "forward"]).optional(),
     delta_x: z.number().optional(),
     delta_y: z.number().optional(),
@@ -9155,6 +10220,17 @@ export const BrowserStatusFrame = z
     controlled_by_other: z.boolean().optional(),
     control_only: z.boolean().optional(),
     session_id: z.string().optional(),
+  })
+  .strict();
+
+export const BrowserViewportFrame = z
+  .object({
+    type: z.literal("browser_viewport"),
+    session_id: z.string().optional(),
+    agent_id: z.string().optional(),
+    width: z.number().int().min(1).max(8192),
+    height: z.number().int().min(1).max(8192),
+    device_scale_factor: z.number().min(1).max(3).optional(),
   })
   .strict();
 
@@ -9239,6 +10315,8 @@ export const BrowserCaptureControlFrame = z
     type: z.literal("browser_capture_control"),
     action: z.enum(["recapture", "shutdown", "ping"]),
     reason: z.string().max(512).optional(),
+    expected_width: z.number().int().min(1).max(16384).optional(),
+    expected_height: z.number().int().min(1).max(16384).optional(),
   })
   .strict();
 
@@ -9304,11 +10382,23 @@ export const JudgeVerdictFrame = z
   })
   .strict();
 
+export const ErrorPayload = z
+  .object({
+    llm_error: LLMError,
+  })
+  .strict();
+
+export const ReplayErrorPayload = z
+  .object({
+    llm_error: LLMErrorReplay,
+  })
+  .strict();
+
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
   AuthFrame,
-  MessageFrame,
+  MessageFrameBase,
   CancelFrame,
   PingFrame,
   PongFrame,
@@ -9325,6 +10415,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   SubagentMessageFrame,
   SubagentStateFrame,
   TaskStatusChangedFrame,
+  TaskRunStatusFrame,
   ReplayMessageFrame,
   ReplayErrorFrame,
   RateLimitFrame,
@@ -9347,6 +10438,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   BrowserDetachFrame,
   BrowserScreencastFrame,
   BrowserStatusFrame,
+  BrowserViewportFrame,
   BrowserTabActionFrame,
   BrowserTabsFrame,
   BrowserWebRTCOfferFrame,

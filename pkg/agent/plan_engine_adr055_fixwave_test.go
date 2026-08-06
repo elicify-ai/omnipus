@@ -58,7 +58,7 @@ type turnBoundDispatcher struct {
 	storeErr error
 }
 
-func (d *turnBoundDispatcher) ExecuteTask(ctx context.Context, taskID string) error {
+func (d *turnBoundDispatcher) ExecuteTask(ctx context.Context, taskID string, _ *int64) error {
 	return d.executeTaskPlanVerified(ctx, taskID)
 }
 

@@ -1,0 +1,16 @@
+title: LibraryUploadResponse
+description: >
+  Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201).
+  Returns the work-tree entries created by the upload — mirrors
+  UploadFilesResponse's shape for the session-scoped uploader, but with
+  LibraryEntry (path-keyed) items rather than UploadedFile.
+type: object
+additionalProperties: false
+required:
+  - entries
+properties:
+  entries:
+    type: array
+    description: Entries created by this upload, in the order the multipart parts were received.
+    items:
+      $ref: './LibraryEntry.yaml'

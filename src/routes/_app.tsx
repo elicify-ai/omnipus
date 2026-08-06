@@ -1,6 +1,7 @@
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { AppShell } from '@/components/layout/AppShell'
 import { fetchAppState, validateToken } from '@/lib/api'
+import { forceLogout } from '@/lib/authLogout'
 import { checkTokenValidity, resetTokenValidationCache } from './authValidation'
 
 // Re-exported so the login flow (and tests) can reset the validation cache (#359).
@@ -37,6 +38,21 @@ export const Route = createFileRoute('/_app')({
     const verdict = await checkTokenValidity(validateToken)
     if (verdict === 'unauthorized') {
       console.warn('[auth] Session validation failed (401) — redirecting to login')
+      // D2 fix: this branch used to `throw redirect(...)` directly, which
+      // navigates to /login but never clears the Zustand auth store — the
+      // Sidebar kept showing "logged in as X" (stale) through the bounce.
+      // Route through the shared forceLogout() so this path clears the
+      // store AND stashes a LogoutReason for the login screen, exactly like
+      // the queryClient 401 / WS 1008 paths. forceLogout's own debounce
+      // (authLogout.ts) makes it safe to call this on every re-run of
+      // beforeLoad (e.g. TanStack Router's defaultPreload:'intent' re-running
+      // this on link hover). The explicit `throw redirect` below is kept
+      // too — it is the router-native abort-navigation signal beforeLoad is
+      // expected to throw; it's redundant with forceLogout's own
+      // window.location.hash write (both land on /login), but dropping it
+      // would leave beforeLoad falling through to `component: AppShell`
+      // instead of aborting the in-flight route resolution.
+      forceLogout('expired')
       throw redirect({ to: '/login' })
     }
     // 'ok' or 'transient' → proceed into the app.

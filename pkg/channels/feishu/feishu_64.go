@@ -363,29 +363,87 @@ func (c *FeishuChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 		return fmt.Errorf("no media store available: %w", channels.ErrSendFailed)
 	}
 
+	sentCount := 0
 	for _, part := range msg.Parts {
-		if err := c.sendMediaPart(ctx, msg.ChatID, part, store); err != nil {
-			return err
+		sent, err := c.sendMediaPart(ctx, msg.ChatID, part, store, msg.WorkspaceID)
+		if err != nil {
+			// CRITICAL fix (retry-duplication, sendfile-fix review):
+			// sendMediaPart returns the raw send/upload error, unclassified,
+			// precisely so classification can happen here where sentCount
+			// is known. If an earlier part in this message already sent
+			// (sentCount > 0), retrying the whole message would re-send
+			// it, duplicating it for the user, so ClassifyMediaSendError
+			// makes the failure permanent in that case instead of the bare
+			// ErrTemporary this used to return unconditionally. The real
+			// API error is preserved in the chain either way.
+			return channels.ClassifyMediaSendError("feishu", sentCount, err)
 		}
+		if sent {
+			sentCount++
+		}
+	}
+
+	// sentCount < len(msg.Parts) means at least one part could not be
+	// resolved or opened locally (sendMediaPart returns (false, nil) for
+	// those; a genuine send/upload API failure returns a non-nil error
+	// above and is propagated immediately instead via
+	// ClassifyMediaSendError, never reaching here).
+	//
+	// Review re-fix: the original guard only caught sentCount==0 (total
+	// loss), so a PARTIAL failure — e.g. 2 of 3 parts delivered — returned
+	// nil and left the caller's (pkg/agent/loop.go) pre-baked success text
+	// untouched; neither the user nor the LLM learned a part never arrived.
+	// Reporting any shortfall closes that gap. Wrapping in
+	// channels.ErrSendFailed additionally marks it permanent: a local
+	// resolve/open failure will not succeed on a bare retry with the same
+	// ref, so pkg/channels/manager.go's sendMediaWithRetry must not
+	// re-attempt it — retrying would also re-deliver the parts that already
+	// succeeded, duplicating them for the user.
+	if sentCount < len(msg.Parts) {
+		return fmt.Errorf("feishu: %d of %d media parts failed to send: %w",
+			len(msg.Parts)-sentCount, len(msg.Parts), channels.ErrSendFailed)
 	}
 
 	return nil
 }
 
-// sendMediaPart resolves and sends a single media part.
+// sendMediaPart resolves and sends a single media part. It returns
+// (false, nil) when the part could not be resolved or opened locally — the
+// failure is logged and the part is skipped, matching the "skip this part"
+// convention used by resolve/open failures elsewhere (Discord/Slack/
+// Telegram) — and a non-nil error only for an actual send/upload failure.
+// That error is the raw, unclassified cause (not wrapped in
+// channels.ErrTemporary/ErrSendFailed): the caller (SendMedia) knows how
+// many earlier parts already sent successfully and applies
+// channels.ClassifyMediaSendError so a mid-loop failure after a partial
+// success does not trigger a retry that would re-deliver those parts.
 func (c *FeishuChannel) sendMediaPart(
 	ctx context.Context,
 	chatID string,
 	part bus.MediaPart,
 	store media.MediaStore,
-) error {
-	localPath, err := store.Resolve(part.Ref)
+	callerWorkspace string,
+) (bool, error) {
+	localPath, _, err := store.ResolveWithCallerWorkspace(part.Ref, callerWorkspace)
 	if err != nil {
-		logger.ErrorCF("feishu", "Failed to resolve media ref", map[string]any{
-			"ref":   part.Ref,
-			"error": err.Error(),
-		})
-		return nil // skip this part
+		// FR-028a: distinguish the caller-workspace membership guard's
+		// denial (a security-relevant Spoofing rejection) from a routine
+		// stale/missing ref, so it's greppable/auditable separately instead
+		// of folding into the same undifferentiated "part skipped" handling
+		// as any other resolve failure.
+		if media.IsCallerWorkspaceDenied(err) {
+			logger.WarnCF("feishu", "Media ref denied by caller-workspace guard", map[string]any{
+				"ref":              part.Ref,
+				"caller_workspace": callerWorkspace,
+				"error":            err.Error(),
+			})
+		} else {
+			logger.ErrorCF("feishu", "Failed to resolve media ref", map[string]any{
+				"ref":   part.Ref,
+				"error": err.Error(),
+			})
+		}
+		return false, nil // skip this part
 	}
 
 	file, err := os.Open(localPath)
@@ -394,7 +452,7 @@ func (c *FeishuChannel) sendMediaPart(
 			"path":  localPath,
 			"error": err.Error(),
 		})
-		return nil // skip this part
+		return false, nil // skip this part
 	}
 	defer file.Close()
 
@@ -414,9 +472,9 @@ func (c *FeishuChannel) sendMediaPart(
 			"type":  part.Type,
 			"error": err.Error(),
 		})
-		return fmt.Errorf("feishu send media: %w", channels.ErrTemporary)
+		return false, fmt.Errorf("send media (%s): %w", part.Type, err)
 	}
-	return nil
+	return true, nil
 }
 
 // --- Inbound message handling ---

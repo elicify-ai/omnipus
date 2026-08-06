@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/pathsafe"
 )
 
 // TestLoad_CorruptFileSelfHeals asserts that a corrupt history file does NOT
@@ -250,6 +252,55 @@ func TestCreate_EmptyRecipient(t *testing.T) {
 	s := newTestStore(t)
 	if _, err := s.Create(Notification{Title: "x"}); err == nil {
 		t.Fatal("expected error for empty recipient")
+	}
+}
+
+// TestSanitize_CrossPlatformSafety covers the pkg/pathsafe layer added onto
+// the recipient->filename token (Windows reserved device names — a
+// recipient literally named "con" or "com1" must not map to a token that,
+// once userFile appends ".json", would address the CON/COM1 device rather
+// than a regular file — plus a conservative length cap). The pre-existing
+// allowlist ([A-Za-z0-9._-] -> '_') already handles path separators and
+// traversal, so those cases are not repeated here.
+func TestSanitize_CrossPlatformSafety(t *testing.T) {
+	cases := []struct {
+		name          string
+		in            string
+		wantUnchanged bool
+	}{
+		{"ordinary username unchanged", "alice", true},
+		{"ordinary username with dots and dashes unchanged", "alice.smith-2", true},
+		{"reserved device name defused", "con", false},
+		{"reserved device name defused mixed case", "CoM1", false},
+		{"not reserved: prefix only", "console", true},
+		{"very long username truncated", strings.Repeat("a", 300), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitize(tc.in)
+			if tc.wantUnchanged {
+				if got != tc.in {
+					t.Fatalf("sanitize(%q) = %q, want unchanged", tc.in, got)
+				}
+			}
+			if err := pathsafe.ValidateComponent(got); err != nil {
+				t.Fatalf("sanitize(%q) = %q must itself be a valid component: %v", tc.in, got, err)
+			}
+		})
+	}
+}
+
+// TestSanitize_DifferentCaseUsernames_StayDistinct confirms this package
+// deliberately does NOT case-fold recipients into the same storage slot —
+// two differently-cased usernames are different accounts, not a filename
+// collision to merge (see sanitize's doc for why this differs from
+// pkg/library's rename/move/copy handling, which DOES treat case-different
+// names as the same slot).
+func TestSanitize_DifferentCaseUsernames_StayDistinct(t *testing.T) {
+	alice := sanitize("Alice")
+	aliceLower := sanitize("alice")
+	if alice == aliceLower {
+		t.Fatalf("expected distinct tokens for differently-cased usernames, got %q for both", alice)
 	}
 }
 

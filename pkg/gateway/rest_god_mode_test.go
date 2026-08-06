@@ -218,3 +218,61 @@ func TestGodMode_GET_ReportsUnavailable(t *testing.T) {
 		assert.True(t, resp.Supported, "supported must be true on the default build even when unavailable")
 	}
 }
+
+// TestGodMode_GET_PersistedIndependentOfAvailability proves the GET handler's
+// `persisted` field reports the raw sandbox.god_mode config value directly,
+// NOT gated by `available` (D1/D19). This is what lets a client distinguish
+// S0 (never armed: persisted=false, available=false) from S1 (armed via the
+// UI, pending restart: persisted=true, available=false) — `enabled` alone
+// collapses both states to false, which is exactly the bug that made the
+// GodModeControl UI's toggle compute `!enabled` forever true once armed,
+// with no way to disarm from the UI.
+func TestGodMode_GET_PersistedIndependentOfAvailability(t *testing.T) {
+	if !sandbox.GodModeAvailable {
+		t.Skip("requires GodModeAvailable=true (default build)")
+	}
+	api := newTestRestAPIWithHome(t)
+	api.allowGodMode = false // this boot is not authorized — available stays false throughout
+
+	// S0: fresh install, never armed.
+	getS0 := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/god-mode", nil)
+	wS0 := httptest.NewRecorder()
+	api.HandleGodMode(wS0, getS0)
+	require.Equal(t, http.StatusOK, wS0.Code)
+	var respS0 struct {
+		Enabled   bool `json:"enabled"`
+		Available bool `json:"available"`
+		Persisted bool `json:"persisted"`
+	}
+	require.NoError(t, json.Unmarshal(wS0.Body.Bytes(), &respS0))
+	assert.False(t, respS0.Available, "S0: available must be false (boot not authorized)")
+	assert.False(t, respS0.Enabled, "S0: enabled must be false")
+	assert.False(t, respS0.Persisted, "S0: persisted must be false — nothing has ever been armed")
+
+	// Arm via the UI-driven POST flow. This boot cannot activate it live
+	// (available stays false — boot-frozen), but the config write DOES
+	// persist sandbox.god_mode=true.
+	postReq := httptest.NewRequest(http.MethodPost, "/api/v1/gateway/god-mode", strings.NewReader(`{"enabled":true}`))
+	postReq.Header.Set("Content-Type", "application/json")
+	postReq = withReAuthAdmin(t, api, postReq)
+	postW := httptest.NewRecorder()
+	api.HandleGodMode(postW, postReq)
+	require.Equal(t, http.StatusOK, postW.Code, "body: %s", postW.Body.String())
+
+	// S1: armed via the UI, pending restart.
+	getS1 := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/god-mode", nil)
+	wS1 := httptest.NewRecorder()
+	api.HandleGodMode(wS1, getS1)
+	require.Equal(t, http.StatusOK, wS1.Code)
+	var respS1 struct {
+		Enabled   bool `json:"enabled"`
+		Available bool `json:"available"`
+		Persisted bool `json:"persisted"`
+	}
+	require.NoError(t, json.Unmarshal(wS1.Body.Bytes(), &respS1))
+	assert.False(t, respS1.Available, "S1: available must still be false — this boot's authorization is frozen")
+	assert.False(t, respS1.Enabled, "S1: enabled must still be false — the override has no live effect yet")
+	assert.True(t, respS1.Persisted,
+		"S1: persisted must be true — the config write DID succeed and must be visible "+
+			"so a UI client can distinguish this state from S0 (never armed) and offer a disarm affordance")
+}

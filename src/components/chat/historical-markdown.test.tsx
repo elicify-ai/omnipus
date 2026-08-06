@@ -1,16 +1,27 @@
 /**
- * historical-markdown.tsx — Mermaid rendering in FINALIZED chat messages.
+ * historical-markdown.tsx — Mermaid AND Shiki-highlighting parity in FINALIZED
+ * chat messages.
  *
  * This is the renderer ChatScreen uses for every already-streamed assistant
  * message (ChatScreen.tsx:688). It is a SEPARATE renderer from the live
  * AssistantUI path (markdown-text.tsx → SyntaxHighlighter → MermaidDiagram):
  * once a turn finishes streaming, the message re-renders through THIS component.
  *
- * Regression target: a ```mermaid fence used to revert to a plain <pre><code>
- * here (mermaid worked only while streaming, then silently disappeared on
- * finalize/reload). These tests render through the REAL react-markdown so the
- * `code`/`pre` overrides actually fire on a real fenced block — the earlier
- * shiki-highlighter tests only exercised the live path and missed this entirely.
+ * Regression target #1 (fixed in 3ed49f01): a ```mermaid fence used to revert to
+ * a plain <pre><code> here (mermaid worked only while streaming, then silently
+ * disappeared on finalize/reload).
+ *
+ * Regression target #2 (library-spec D-6): non-mermaid block code used to render
+ * as a plain, unhighlighted <pre><code> here too — Shiki was wired into the LIVE
+ * path only, so highlighting vanished the instant a message finalized or the page
+ * reloaded. `HistoricalCodeBlock` now renders through the same `ShikiCodeBlock`
+ * (markdown-shared.tsx) the live path uses. react-shiki itself is mocked below
+ * (as in shiki-highlighter.mermaid.test.tsx) — these tests assert ROUTING
+ * (Shiki vs. mermaid vs. inline), not real Shiki tokenization.
+ *
+ * These tests render through the REAL react-markdown so the `code`/`pre`
+ * overrides actually fire on a real fenced block — the earlier shiki-highlighter
+ * tests only exercised the live path and missed this entirely.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -34,6 +45,18 @@ vi.mock('./image-lightbox', () => ({ ImageLightbox: () => null }))
 // fence's code. The real MermaidDiagram is unit-tested in mermaid-renderer.test.tsx.
 vi.mock('./mermaid-renderer', () => ({
   MermaidDiagram: ({ code }: { code: string }) => <div data-testid="mermaid-diagram">{code}</div>,
+}))
+
+// Sentinel for the (real, non-mermaid) block-code path: proves HistoricalCodeBlock
+// now routes through ShikiCodeBlock/ShikiHighlighter instead of a manual
+// <pre><code className="language-...">. Mirrors the mock in
+// shiki-highlighter.mermaid.test.tsx — real Shiki tokenization is not exercised
+// in unit tests anywhere in this codebase (WASM grammar loading is slow and
+// non-deterministic across environments); only the routing is asserted here.
+vi.mock('react-shiki', () => ({
+  ShikiHighlighter: ({ children }: { children?: React.ReactNode }) => (
+    <pre data-testid="shiki">{children}</pre>
+  ),
 }))
 
 // Stub copyText so we can assert the text it was called with without needing
@@ -67,20 +90,26 @@ describe('HistoricalMessageMarkdown — Mermaid in finalized messages', () => {
     expect(document.querySelector('pre')).toBeNull()
   })
 
-  it('renders a non-mermaid fence as a plain code block (not a diagram)', () => {
+  it('renders a non-mermaid fence through Shiki, not a diagram (library-spec D-6)', () => {
     render(<HistoricalMessageMarkdown content={'```ts\nconst x = 1\n```'} />)
 
-    const pre = document.querySelector('pre')
-    expect(pre).toBeInTheDocument()
-    expect(pre).toHaveTextContent('const x = 1')
-    expect(pre?.querySelector('code')?.className).toContain('language-ts')
+    // Routes through ShikiCodeBlock (react-shiki mocked above) — the parity fix:
+    // this used to be a manual <pre><code class="language-ts"> with no highlighting.
+    const shiki = screen.getByTestId('shiki')
+    expect(shiki).toBeInTheDocument()
+    expect(shiki).toHaveTextContent('const x = 1')
     expect(screen.queryByTestId('mermaid-diagram')).toBeNull()
+    // Regression guard: must NOT fall back to the old manual, unhighlighted
+    // <code class="language-ts"> node — that WAS the bug (highlighting present
+    // while streaming, silently gone the instant the message finalized).
+    expect(document.querySelector('code')).toBeNull()
   })
 
   it('does not double-wrap block code in nested <pre> elements', () => {
     // Regression: the old renderer let react-markdown's default <pre> wrap the
     // override's own <pre>, producing invalid <pre><pre>. The `pre` pass-through
-    // fixes that — exactly one <pre> per fenced block.
+    // fixes that — exactly one <pre> per fenced block (now Shiki's own, via the
+    // mocked ShikiHighlighter).
     render(<HistoricalMessageMarkdown content={'```ts\nconst x = 1\n```'} />)
 
     const pres = document.querySelectorAll('pre')
@@ -102,14 +131,14 @@ describe('HistoricalMessageMarkdown — Mermaid in finalized messages', () => {
   // render as <pre><code> with whitespace preserved. Before the fix, `isBlock` was
   // false for these (no `language-` class), so they fell to the inline branch and
   // the pass-through `pre` dropped the wrapper entirely, collapsing newlines.
-  it('renders a bare (no-language) multi-line fence inside a <pre> (regression guard)', () => {
+  it('renders a bare (no-language) multi-line fence through Shiki (regression guard)', () => {
     render(<HistoricalMessageMarkdown content={'```\nline one\nline two\n```'} />)
 
-    const pre = document.querySelector('pre')
-    expect(pre).toBeInTheDocument()
-    expect(pre).toHaveTextContent('line one')
-    expect(pre).toHaveTextContent('line two')
-    // Exactly one <pre>, no diagram
+    const shiki = screen.getByTestId('shiki')
+    expect(shiki).toBeInTheDocument()
+    expect(shiki).toHaveTextContent('line one')
+    expect(shiki).toHaveTextContent('line two')
+    // Exactly one <pre> (Shiki's own), no diagram
     expect(document.querySelectorAll('pre')).toHaveLength(1)
     expect(screen.queryByTestId('mermaid-diagram')).toBeNull()
   })

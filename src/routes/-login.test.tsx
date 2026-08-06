@@ -268,3 +268,63 @@ describe('#27 — _app beforeLoad redirects to /onboarding before auth check', (
     expect((thrown as { to: string }).to).toBe('/onboarding')
   })
 })
+
+// ---------------------------------------------------------------------------
+// D2 — login screen displays (and clears) a stashed LogoutReason.
+//
+// Coverage gap closed: before this fix, nothing asserted the login page
+// communicates WHY the user landed there after an involuntary logout — that
+// silence is exactly what let D2 ship. Uses the REAL authLogout module (not
+// mocked in this file) so the sessionStorage read/clear round-trip is
+// exercised for real, not just asserted against a mock.
+// ---------------------------------------------------------------------------
+describe('D2 — login screen shows the involuntary-logout reason', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    sessionStorage.clear()
+  })
+
+  it('renders no banner on a normal load — no LogoutReason was stashed', async () => {
+    const { LOGOUT_REASON_KEY } = await import('@/lib/authLogout')
+    expect(sessionStorage.getItem(LOGOUT_REASON_KEY)).toBeNull()
+
+    renderLogin()
+    expect(screen.queryByTestId('logout-notice')).toBeNull()
+  })
+
+  it('displays the "elsewhere" message and clears the key when forceLogout() stashed it with no argument', async () => {
+    const { LOGOUT_REASON_KEY, LOGOUT_REASON_MESSAGE } = await import('@/lib/authLogout')
+    sessionStorage.setItem(LOGOUT_REASON_KEY, 'elsewhere')
+
+    renderLogin()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('logout-notice')).toHaveTextContent(LOGOUT_REASON_MESSAGE.elsewhere)
+    })
+    // One-shot: the key must be cleared so a later manual sign-out (or a
+    // reload of the login tab) never re-shows this banner.
+    expect(sessionStorage.getItem(LOGOUT_REASON_KEY)).toBeNull()
+  })
+
+  it('displays the "expired" message when _app.tsx\'s beforeLoad stashed it', async () => {
+    const { LOGOUT_REASON_KEY, LOGOUT_REASON_MESSAGE } = await import('@/lib/authLogout')
+    sessionStorage.setItem(LOGOUT_REASON_KEY, 'expired')
+
+    renderLogin()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('logout-notice')).toHaveTextContent(LOGOUT_REASON_MESSAGE.expired)
+    })
+  })
+
+  it('a manual sign-out never shows the banner — no reason key is ever stashed for it (D2 fix #3)', async () => {
+    // Sidebar.tsx's handleLogout calls clearAuth()/navigate() directly, never
+    // forceLogout() — so simulating "arriving at /login after a deliberate
+    // sign-out" is simply: sessionStorage has no reason key at all.
+    const { LOGOUT_REASON_KEY } = await import('@/lib/authLogout')
+    expect(sessionStorage.getItem(LOGOUT_REASON_KEY)).toBeNull()
+
+    renderLogin()
+    expect(screen.queryByTestId('logout-notice')).toBeNull()
+  })
+})

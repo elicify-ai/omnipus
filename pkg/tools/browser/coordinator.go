@@ -63,11 +63,13 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -113,10 +115,16 @@ type BrowserCoordinator struct {
 	homeDir string // $OMNIPUS_HOME; ownership marker + profile dir root
 	cfg     BrowserConfig
 
-	// maxTotalTabs is the global cross-agent tab budget (spec D7, default 30).
-	// A browser_open_tab that would exceed it is denied by TryOpenTab. Mutable
-	// under c.mu — SetMaxTotalTabs/ApplyRuntimeConfig update it on reload so a
-	// config change to max_total_tabs takes effect without a gateway restart.
+	// maxTotalTabs is the global cross-agent tab budget (spec D7). <=0 means
+	// UNLIMITED — the default as of the "remove the global cap" change: Chrome
+	// itself has no fixed tab maximum, and the real bound is host RAM, not a
+	// counter (measured 74-268MB RSS per renderer on the UAT box). A positive
+	// value opts back into a hard ceiling for operators who want one.
+	// TryOpenTab short-circuits (no budget arithmetic at all) when this is
+	// <=0 — see defaultTotalTabs' removal comment below for why unlimited is
+	// safe now. Mutable under c.mu — SetMaxTotalTabs/ApplyRuntimeConfig update
+	// it on reload so a config change to max_total_tabs takes effect without a
+	// gateway restart, in EITHER direction (capped -> unlimited included).
 	maxTotalTabs int
 	// reservedTabs counts in-flight tab RESERVATIONS (I-1/W3/C1): each
 	// TryOpenTab that passes the budget check increments this BEFORE the
@@ -201,11 +209,23 @@ type BrowserCoordinator struct {
 
 // NewBrowserCoordinator constructs a coordinator. homeDir is $OMNIPUS_HOME (the
 // ownership marker lands at <homeDir>/browser/shared-chrome.pid; the profile
-// dir comes from cfg.ProfileDir). maxTotalTabs is the global tab budget (0 →
-// defaultDefaultTotalTabs).
+// dir comes from cfg.ProfileDir). maxTotalTabs is the global tab budget: <=0
+// means UNLIMITED (the default — see the removed-cap rationale below);
+// a positive value opts back into a hard ceiling. Negative input normalizes
+// to 0 rather than being rejected.
+// startPageURL mirrors BrowserManager.StartPageURL for the coordinator's own
+// target-creation path, which builds targets from c.cfg rather than through a
+// manager. Same fallback: about:blank when nothing is configured.
+func (c *BrowserCoordinator) startPageURL() string {
+	if u := strings.TrimSpace(c.cfg.StartPageURL); u != "" {
+		return u
+	}
+	return BlankPageURL
+}
+
 func NewBrowserCoordinator(homeDir string, cfg BrowserConfig, maxTotalTabs int) *BrowserCoordinator {
-	if maxTotalTabs <= 0 {
-		maxTotalTabs = defaultTotalTabs
+	if maxTotalTabs < 0 {
+		maxTotalTabs = 0
 	}
 	c := &BrowserCoordinator{
 		homeDir:      homeDir,
@@ -216,13 +236,47 @@ func NewBrowserCoordinator(homeDir string, cfg BrowserConfig, maxTotalTabs int) 
 		pipeLauncher: launchManagedPipe,
 	}
 	c.launchDone = sync.NewCond(&c.mu)
+	// Surface the effective budget at construction. The default changed from a
+	// hard 30 to UNLIMITED, and max_total_tabs was never seeded into anyone's
+	// config.json — it only ever existed as a runtime fallback — so an
+	// upgrading operator gets the new behavior with no config diff and no
+	// other signal. One line at boot is what makes that visible instead of
+	// silent. Also states the real bound, since "unlimited" is only true of the
+	// counter: RAM is the limit, at 74-268MB RSS per renderer as measured.
+	if maxTotalTabs <= 0 {
+		logger.InfoCF("browser", "global tab budget: UNLIMITED (tools.browser.max_total_tabs unset or <=0)",
+			map[string]any{
+				"max_total_tabs":   "unlimited",
+				"per_agent_cap":    cfg.MaxTabs,
+				"idle_ttl":         cfg.IdleTTL.String(),
+				"real_bound":       "host RAM — idle reaping does not bound tabs kept actively in use",
+				"set_a_ceiling_by": "tools.browser.max_total_tabs > 0",
+			})
+	} else {
+		logger.InfoCF("browser", "global tab budget: capped by operator config",
+			map[string]any{"max_total_tabs": maxTotalTabs, "per_agent_cap": cfg.MaxTabs})
+	}
 	return c
 }
 
-// defaultTotalTabs is the global cross-agent tab budget default (spec D7),
-// sized from the measured ~91 MB Chrome baseline + a blended per-tab average to
-// keep total browsing RSS under ~2.5 GB on a typical 8 GB+ host. Tunable.
-const defaultTotalTabs = 30
+// There is no defaultTotalTabs constant anymore. Spec D7 originally seeded a
+// global cross-agent budget of 30, sized from the measured ~91 MB Chrome
+// baseline + a blended per-tab average to keep total browsing RSS under
+// ~2.5 GB on a typical 8 GB+ host — but that number was a proxy for a memory
+// guard, not a correctness guard (ADR-043: the coordinator owns ONE shared
+// Chrome; managers are per agent), and Chrome itself has no fixed tab
+// maximum. The operator directive is to behave like Chrome: unlimited tabs
+// cross-agent, bounded only by host RAM (measured 74-268MB RSS per renderer
+// on the UAT box), while keeping the PER-AGENT courtesy cap (BrowserConfig.
+// MaxTabs, default 5, enforced in manager.go — untouched by this change).
+// This is safe alongside a companion change (same wave, manager.go) that
+// drops the idle-context reaper from a 30-minute sweep to a 5-minute,
+// PER-TAB TTL: steady-state tab count (and therefore RSS) stays low without a
+// global ceiling to fall back on. The two changes are load-bearing together
+// — do not remove the global cap without also keeping the tighter reaper.
+// See maxTotalTabs' field doc and TryOpenTab for the enforcement
+// side; NewBrowserCoordinator/SetMaxTotalTabs for how <=0 now means
+// unlimited instead of falling back to a hardcoded number.
 
 // Register associates mgr with the coordinator and returns the coordinator's
 // SHARED root chromedp context (rootCtx) + the agent's STABLE browser-context
@@ -246,6 +300,14 @@ const defaultTotalTabs = 30
 // CDP handshake for seconds). Concurrent Register callers serialize on the
 // single-flight launch (c.launching / c.launchDone); the winner launches, the
 // losers wait and then observe c.launched.
+//
+// createTargetParamsForTest, when non-nil, is invoked with the fully-built
+// target.CreateTargetParams for the per-agent window right before it is
+// sent over CDP (D17 test seam — see the call site inside Register). Nil
+// in production; tests restore it via t.Cleanup, matching this package's
+// other for-test seams (e.g. package_chrome.go's packageChromeRootForTest).
+var createTargetParamsForTest func(*target.CreateTargetParams)
+
 func (c *BrowserCoordinator) Register(
 	ctx context.Context,
 	agentID string,
@@ -358,10 +420,42 @@ func (c *BrowserCoordinator) Register(
 			bcErr,
 		)
 	}
-	tid, ctErr := target.CreateTarget("about:blank").
+	// D17: pin the new window's size to the screencast cap (live.go) instead
+	// of leaving it at Chrome's version/platform-dependent new-window
+	// default. Without this, --window-size=1280,720
+	// (chromeHardeningBaseFlags, exec_resolver.go) only ever sizes the
+	// FIRST window Chrome opens at process start; every subsequent
+	// per-agent window created here (one per Register call) got whatever
+	// size Chrome picked on its own, then that size was cached for the
+	// agent's whole lifetime (c.contexts, below) — reproduced in the field
+	// as a live-browser panel that sometimes filled the panel and sometimes
+	// shrank to a ~320x155 letterboxed rectangle, with no visible trigger
+	// (just "which agent/session got created first"). WithWidth/WithHeight
+	// requires newWindow:true (CreateTargetParams doc comment), already
+	// satisfied by WithNewWindow(true) below — purely additive, keeps
+	// window size and the screencast's own cap in lockstep so there is no
+	// separate magic-number size to drift out of sync.
+	// Start page rather than about:blank (see BrowserManager.StartPageURL):
+	// a blank void reads as "the panel is broken", which is precisely the
+	// confusion this surface does not need. Falls back to about:blank when no
+	// start page is configured, preserving the historical behavior exactly.
+	ctParams := target.CreateTarget(c.startPageURL()).
 		WithBrowserContextID(bid).
 		WithNewWindow(true).
-		Do(cdp.WithExecutor(rootCtx, rc.Browser))
+		WithWidth(agentWindowWidth).
+		WithHeight(agentWindowHeight)
+	// createTargetParamsForTest (D17 test seam, nil in production) lets
+	// tests assert the Width/Height pinning directly on the outgoing CDP
+	// params, without depending on any particular Chrome build/platform's
+	// new-window default actually differing when the fields are absent —
+	// on the Chrome build this fix shipped from, headless new-window sizing
+	// already happened to default to 1280x720, so a live-Chrome
+	// window-bounds assertion alone could not distinguish fixed from
+	// unfixed code. See TestCoordinator_Register_CreateTargetParams_PinsWindowToScreencastCap.
+	if createTargetParamsForTest != nil {
+		createTargetParamsForTest(ctParams)
+	}
+	tid, ctErr := ctParams.Do(cdp.WithExecutor(rootCtx, rc.Browser))
 	if ctErr != nil {
 		_ = target.DisposeBrowserContext(bid).Do(cdp.WithExecutor(rootCtx, rc.Browser))
 		return nil, "", fmt.Errorf("browser: coordinator: failed to open first tab for agent %q: %w", agentID, ctErr)
@@ -529,11 +623,18 @@ func (c *BrowserCoordinator) RegisteredAgents() []string {
 // SetMaxTotalTabs updates the global tab budget at runtime (MED-1). Cheap and
 // live: TryOpenTab reads c.maxTotalTabs under c.mu on every open, so a reload
 // that changes tools.browser.max_total_tabs takes effect immediately — no
-// gateway restart needed. Bounds n to >=1 to avoid an accidental zero disabling
-// all tab opens.
+// gateway restart needed. n<=0 means UNLIMITED (the default — matches
+// NewBrowserCoordinator's constructor semantics), so a reload can move the
+// budget in EITHER direction: capping down to a positive ceiling, or back up
+// to unlimited by unsetting/zeroing tools.browser.max_total_tabs. Negative
+// input normalizes to 0 (unlimited) rather than being rejected. This
+// intentionally no longer special-cases n<=0 as "ignore the update" — under
+// the old always-30-if-unset semantics that guard prevented an accidental
+// zero from silently blocking every open; under the new semantics 0 is a
+// valid, deliberate target state, not an accident.
 func (c *BrowserCoordinator) SetMaxTotalTabs(n int) {
-	if n <= 0 {
-		return
+	if n < 0 {
+		n = 0
 	}
 	c.mu.Lock()
 	old := c.maxTotalTabs
@@ -584,6 +685,29 @@ func (c *BrowserCoordinator) ApplyRuntimeConfig(newCfg BrowserConfig, newMaxTota
 			nil,
 		)
 	}
+	// ADR-052 D2/M1 + SPEC-002: policy flips invalidate the resolved-path
+	// cache immediately. A cached PATH result can otherwise survive a toggle
+	// until the resolution negative TTL expires, defeating the new policy.
+	if oldCfg.PreferPackaged != newCfg.PreferPackaged || oldCfg.TrustPathChrome != newCfg.TrustPathChrome {
+		c.execPath.invalidate()
+		logger.InfoCF(
+			"browser",
+			"coordinator: browser resolution policy changed; exec-path cache invalidated, next resolution uses the new policy",
+			map[string]any{
+				"prefer_packaged_old":   oldCfg.PreferPackaged,
+				"prefer_packaged_new":   newCfg.PreferPackaged,
+				"trust_path_chrome_old": oldCfg.TrustPathChrome,
+				"trust_path_chrome_new": newCfg.TrustPathChrome,
+			},
+		)
+	}
+	// Persist the new config on the coordinator so subsequent
+	// reloads compare against the latest-applied state. Without this,
+	// a back-to-back reload with the same config would re-log the
+	// change (because oldCfg would be the original, not the latest).
+	c.mu.Lock()
+	c.cfg = newCfg
+	c.mu.Unlock()
 }
 
 // captureSharedContextResolved returns the effective ADR-048
@@ -643,16 +767,30 @@ func (c *BrowserCoordinator) CaptureSharedContextEnabled() bool {
 // (totalOpenTabsLocked — the sum of every registered manager's OpenTabCount)
 // PLUS in-flight reservations (c.reservedTabs — slots held by openers between
 // this reserve and their createTab completing). Returns (allowed, reason). The
-// per-agent manager still enforces its own MaxTabs courtesy cap. The caller
-// MUST return the slot via ReleaseTab when the open SUCCEEDS, or via the
-// manager's releaseGlobalTab when the open FAILS after reserve succeeded.
+// per-agent manager still enforces its own MaxTabs courtesy cap (default 5,
+// LEFT ALONE by this change — only the cross-agent budget below is affected).
+// The caller MUST return the slot via ReleaseTab when the open SUCCEEDS, or
+// via the manager's releaseGlobalTab when the open FAILS after reserve
+// succeeded — in BOTH the capped and unlimited paths below, so the
+// reserve/release pairing never drifts regardless of mode.
+//
+// c.maxTotalTabs<=0 means UNLIMITED (the default): short-circuit before any
+// budget arithmetic — no totalOpenTabsLocked() sum, no comparison — and just
+// reserve+allow. See maxTotalTabs' field doc / the removed defaultTotalTabs
+// comment above for why an unbounded cross-agent count is safe now (paired
+// with the tightened per-tab idle reaper).
 func (c *BrowserCoordinator) TryOpenTab(agentID string) (bool, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.maxTotalTabs <= 0 {
+		c.reservedTabs++
+		return true, ""
+	}
 	if c.totalOpenTabsLocked()+c.reservedTabs >= c.maxTotalTabs {
 		return false, fmt.Sprintf(
 			"global tab budget reached (tools.browser.max_total_tabs=%d); close a tab with browser_close_tab first",
-			c.maxTotalTabs)
+			c.maxTotalTabs,
+		)
 	}
 	c.reservedTabs++
 	return true, ""
@@ -726,6 +864,31 @@ func (c *BrowserCoordinator) KillCount() int {
 	return c.killCount
 }
 
+// loadExtensionDefaultTimeout bounds LoadExtension's Extensions.loadUnpacked
+// CDP call when the caller's own ctx carries no deadline of its own (see
+// boundedCallContext). 20s matches cdppipe's own defaultDialTimeout (the
+// bound on actually launching + dialing Chrome, which by the time
+// LoadExtension runs has already succeeded) and capture_session.go's sibling
+// captureStartTimeout, which bounds the very next step (encoder-page
+// inject+navigate) in the one production flow that calls this with a
+// meaningful caller ctx (defaultEncoderStarter) — that constant's own doc
+// comment describes its budget as "generous for a cold managed-Chrome
+// extension load", i.e. sized for exactly the operation this constant now
+// bounds.
+const loadExtensionDefaultTimeout = 20 * time.Second
+
+// boundedCallContext returns a context to use for a one-shot bounded CDP
+// call: ctx unchanged (wrapped in a no-op cancel for a uniform, always-safe
+// `defer cancel()`) when it already carries a deadline — honoring the
+// caller's own bound, however short or long — otherwise a child of ctx
+// bounded by def. ctx must not be nil (callers normalize it first).
+func boundedCallContext(ctx context.Context, def time.Duration) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, def)
+}
+
 // LoadExtension installs the unpacked extension at c.cfg.ExtensionDir into the
 // shared Chrome via CDP Extensions.loadUnpacked — requires the running Chrome
 // to have been launched with --remote-debugging-pipe (always true here) and
@@ -742,6 +905,9 @@ func (c *BrowserCoordinator) KillCount() int {
 // extension id Chrome assigned, which should match cfg.ExtensionID when the
 // manifest pins a "key" (wave-plan key decision 1).
 func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	c.mu.Lock()
 	rootCtx := c.rootCtx
 	dir := c.cfg.ExtensionDir
@@ -756,6 +922,28 @@ func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) 
 	if rc == nil || rc.Browser == nil {
 		return "", fmt.Errorf("browser: coordinator: shared Chrome browser handle unavailable")
 	}
+
+	// Bound the CDP round trip and HONOR the caller's own context — before
+	// this fix, ctx was accepted as a parameter but referenced NOWHERE in
+	// this function's body: the actual CDP call ran against c.rootCtx (the
+	// coordinator's long-lived, deadline-free context) instead, so a
+	// caller-supplied deadline/cancellation (e.g. capture_session.go's
+	// defaultEncoderStarter, which forwards its own request-scoped ctx) had
+	// no effect whatsoever, and the call could only ever be unblocked by the
+	// coordinator itself shutting down.
+	//
+	// boundedCallContext(ctx, loadExtensionDefaultTimeout) honors ctx as-is
+	// when it already carries a deadline (however short or long the caller
+	// chose), and falls back to the 20s default otherwise (e.g.
+	// launchChrome's best-effort auto-load below, which passes
+	// context.Background()). Unlike createTab's target-attach (manager.go's
+	// runFirstAttach), Extensions.loadUnpacked has no long-lived background
+	// goroutine bound to its call context — chromedp.Browser.execute's
+	// per-command listener (browser.go) is scoped to just this one round
+	// trip — so wrapping ctx directly in a plain deadline is safe here; no
+	// racing-goroutine trick is needed.
+	callCtx, cancel := boundedCallContext(ctx, loadExtensionDefaultTimeout)
+	defer cancel()
 	// WithEnableInIncognito(true) (WebRTC build W2-A, corrected per ADR-048):
 	// every per-agent browser context this coordinator creates is a raw CDP
 	// target.CreateBrowserContext — which cdproto's own doc comment
@@ -787,8 +975,27 @@ func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) 
 	// remains useful even then: it is what lets the extension's
 	// chrome.tabs.query resolve the RIGHT tab (the attached agent's) among
 	// whichever tabs currently live in the default context.
-	id, err := extensions.LoadUnpacked(dir).WithEnableInIncognito(true).Do(cdp.WithExecutor(rootCtx, rc.Browser))
+	id, err := extensions.LoadUnpacked(dir).WithEnableInIncognito(true).Do(cdp.WithExecutor(callCtx, rc.Browser))
 	if err != nil {
+		// Name the bound when it was OURS that fired. A bare "context deadline
+		// exceeded" leaves an operator unable to tell a wedged CDP transport
+		// from this call's own budget expiring, or to know how long it waited
+		// — and this call sits on the WebRTC cold-start critical path, where
+		// that distinction is exactly what a timeout investigation needs.
+		// Only claim the default bound when the caller supplied no earlier
+		// deadline of its own; otherwise the caller's budget is what expired.
+		if errors.Is(err, context.DeadlineExceeded) {
+			if _, callerHadDeadline := ctx.Deadline(); !callerHadDeadline {
+				return "", fmt.Errorf(
+					"browser: coordinator: Extensions.loadUnpacked timed out after %s (Chrome may be unresponsive): %w",
+					loadExtensionDefaultTimeout, err,
+				)
+			}
+			return "", fmt.Errorf(
+				"browser: coordinator: Extensions.loadUnpacked exceeded the caller's deadline (Chrome may be unresponsive): %w",
+				err,
+			)
+		}
 		return "", fmt.Errorf("browser: coordinator: Extensions.loadUnpacked failed: %w", err)
 	}
 	c.mu.Lock()
@@ -872,6 +1079,28 @@ func (c *BrowserCoordinator) Shutdown() {
 			"kill_count": c.killCount,
 		},
 	)
+}
+
+// WarmUp ensures the shared Chrome process is launched and ready (CDP pipe
+// live, and — when tools.browser.* configured an ExtensionDir/ExtensionID —
+// the capture extension loaded, via launchChrome's existing best-effort
+// auto-load) WITHOUT registering any agent or creating a per-agent browser
+// context. This is the gateway's boot-time warm-up hook: instead of leaving
+// Chrome launch, first tab, and extension load entirely lazy until an
+// agent's first browser tool call (the unbounded cold start recorded at
+// 30-60s historically), the gateway calls this once at boot so the first
+// real interaction finds Chrome already up.
+//
+// Thin public wrapper over the exact same ensureLaunched every Register call
+// already funnels through: single-flight (a concurrent WarmUp racing a real
+// Register serializes on the same c.launching/c.launchDone latch — whichever
+// wins launches, the other observes c.launched), idempotent (a no-op once
+// Chrome is already live), and panic-safe (ensureLaunched's own deferred
+// cleanup). A per-agent Chrome pool (one Chrome per agent) is explicitly out
+// of scope here — tracked separately as issue #570; this warms only the ONE
+// shared, gateway-scoped Chrome this file documents (D1/D4).
+func (c *BrowserCoordinator) WarmUp(ctx context.Context) error {
+	return c.ensureLaunched(ctx)
 }
 
 // --- internals ------------------------------------------------------------
@@ -1012,7 +1241,7 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 		return fmt.Errorf("browser: coordinator: cannot locate chromium: %w", err)
 	}
 
-	cmdline := managedExecAllocatorOpts(c.cfg)
+	cmdline := managedExecAllocatorOpts(c.cfg, chromeMajorVersion(ctx, execPath))
 
 	// Launch over the pipe (fail closed — err reports launch + CDP
 	// connectivity failure directly). The launcher is a seam so tests never

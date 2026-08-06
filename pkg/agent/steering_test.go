@@ -307,7 +307,7 @@ func TestAgentLoop_Continue_NoMessages(t *testing.T) {
 		t.Fatal("expected provider to be initialized")
 	}
 
-	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1")
+	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 
 	al.Steer(providers.Message{Role: "user", Content: "new direction"})
 
-	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1")
+	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1121,13 +1121,21 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 
 	store := media.NewFileMediaStore()
 	pngPath := filepath.Join(tmpDir, "steer.png")
+	// Real 1x1 RGBA PNG bytes (Go image/png encoder output). The previous
+	// hand-rolled byte block was a malformed PNG that the normalizer
+	// (correctly) rejected as decode-failed; the real bytes below always
+	// decode to a 1x1 transparent-gray image.
 	pngHeader := []byte{
 		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-		0x00, 0x00, 0x00, 0x0D,
-		0x49, 0x48, 0x44, 0x52,
-		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
-		0x00, 0x00, 0x00,
-		0x90, 0x77, 0x53, 0xDE,
+		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+		0xDE, 0x00, 0x00, 0x00, 0x10, 0x49, 0x44, 0x41,
+		0x54, 0x78, 0x9C, 0x62, 0x6A, 0x68, 0x68, 0x00,
+		0x04, 0x00, 0x00, 0xFF, 0xFF, 0x03, 0x0C, 0x01,
+		0x83, 0x71, 0x4B, 0xD2, 0x4E, 0x00, 0x00, 0x00,
+		0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60,
+		0x82,
 	}
 	if err = os.WriteFile(pngPath, pngHeader, 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
@@ -1161,7 +1169,7 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 		t.Fatalf("Steer failed: %v", err)
 	}
 
-	resp, err := al.Continue(context.Background(), sessionKey, "test", "chat1")
+	resp, err := al.Continue(context.Background(), sessionKey, "test", "chat1", "")
 	if err != nil {
 		t.Fatalf("Continue failed: %v", err)
 	}

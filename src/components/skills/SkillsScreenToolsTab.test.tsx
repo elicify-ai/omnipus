@@ -152,6 +152,33 @@ describe('SkillsScreen — Built-in Tools tab overview (US-E2, #338)', () => {
     })
   })
 
+  it('D12: renders proper Title Case labels for underscore/multi-word categories (mcp, tool_discovery)', async () => {
+    // D12 regression: the raw category string was rendered with a CSS
+    // `capitalize` class, which only uppercases the first letter of each
+    // WHITESPACE-separated word — underscores aren't word boundaries in CSS,
+    // so 'tool_discovery' rendered as "Tool_discovery" and 'mcp' rendered as
+    // "Mcp" instead of the correct all-caps initialism "MCP". The fix imports
+    // the same CATEGORY_LABELS map ToolPolicyEditor already uses correctly.
+    vi.mocked(fetchTools).mockResolvedValueOnce([
+      { name: 'mcp_github_search', scope: 'general', category: 'mcp', description: 'Search GitHub via MCP', source: 'builtin' },
+      { name: 'tool_search', scope: 'general', category: 'tool_discovery', description: 'Discover tools', source: 'builtin' },
+    ])
+    const user = userEvent.setup()
+    renderScreen()
+    await screen.findByText('Skills & Tools')
+    await user.click(screen.getByRole('tab', { name: /Built-in Tools/i }))
+    await waitFor(() => {
+      expect(screen.getByText('MCP')).toBeInTheDocument()
+      expect(screen.getByText('Tool Discovery')).toBeInTheDocument()
+    })
+    // The raw un-labeled category text — what the OLD `capitalize`-CSS
+    // approach actually left in the DOM (CSS text-transform never touches
+    // the real text node, only the visual glyphs) — must be gone now that
+    // the mapped label is rendered in its place.
+    expect(screen.queryByText('mcp')).not.toBeInTheDocument()
+    expect(screen.queryByText('tool_discovery')).not.toBeInTheDocument()
+  })
+
   it('no edit controls (buttons/checkboxes for policy) are present in the tab', async () => {
     const user = userEvent.setup()
     renderScreen()

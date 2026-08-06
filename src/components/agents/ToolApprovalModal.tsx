@@ -67,6 +67,7 @@ import {
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { submitToolApproval, isApiError } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { forceLogout } from '@/lib/authLogout'
 
 function useCountdown(expiresAt: number): { remainingMs: number; progressPct: number; totalMs: number } {
   const [remainingMs, setRemainingMs] = useState(() => Math.max(0, expiresAt - Date.now()))
@@ -161,10 +162,17 @@ function ToolApprovalCard({
       } catch (err) {
         if (isApiError(err)) {
           if (err.status === 401) {
+            // D9 fix: this POST bypasses React Query entirely (raw await), so
+            // queryClient.ts's global 401 subscriber never saw it — the rest
+            // of the app (Sidebar's "logged in as X", every other open
+            // screen) kept looking logged-in while this modal alone knew the
+            // session was dead. Route through the same forced-logout path
+            // every other 401 uses instead of a toast-only dead end.
             addToast({
               message: 'Session expired — please log in again to approve tool calls.',
               variant: 'error',
             })
+            forceLogout()
           } else if (err.status === 403) {
             addToast({
               message: 'You must be an admin to approve this tool.',

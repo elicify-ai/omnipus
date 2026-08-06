@@ -118,9 +118,14 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-// Provide the active workspace via the container's context hook.
+// Provide the active workspace via the container's context hook. A `vi.fn()`
+// (not a bare arrow function) so the D3-residual workspace-switch test below
+// can reprogram it mid-test to simulate a switch WITHOUT unmounting
+// WorkspaceTeamTab — mirroring the real router, which keeps this component
+// mounted across a `$workspaceId` param change (the component ignores its
+// own `workspaceId` PROP — see `_props` below — and reads this hook instead).
 vi.mock('./WorkspaceTabContainer', () => ({
-  useActiveWorkspace: () => WORKSPACE,
+  useActiveWorkspace: vi.fn(() => WORKSPACE),
 }))
 
 // AgentProfile pulls a wide tree of queries; stub it to a marker so the Team tab
@@ -155,6 +160,7 @@ import {
   updateWorkspaceDelegation,
   workspacesQueryKeys,
 } from '@/lib/api'
+import { useActiveWorkspace } from './WorkspaceTabContainer'
 import { WorkspaceTeamTab } from './WorkspaceTeamTab'
 
 function renderTab(seed?: (client: QueryClient) => void) {
@@ -181,6 +187,10 @@ beforeEach(() => {
   // with unsaved pending changes.
   vi.clearAllMocks()
   capturedGraphProps = null
+  // `vi.clearAllMocks()` clears call history but NOT a `mockImplementation`
+  // set by an earlier test — restore the default here so the workspace-switch
+  // test's reprogrammed implementation never leaks into a later test.
+  vi.mocked(useActiveWorkspace).mockImplementation(() => WORKSPACE)
   vi.mocked(fetchAgents).mockResolvedValue(AGENTS)
   vi.mocked(fetchWorkspaceDelegation).mockResolvedValue(DELEGATION)
   // Safe defaults so any save path that fires resolves instead of hitting an
@@ -259,25 +269,53 @@ describe('WorkspaceTeamTab', () => {
     })
   })
 
-  it('flags an edgeless, non-core member as unsaved after it is added', async () => {
+  it('D7: an edgeless, non-core member shows the transient "not saved yet" hint AND still autosaves core_team', async () => {
+    // D7 regression. Root cause: saveBody only watched `edges`
+    // (`buildSaveEdges(editState)`), so adding a member with NO incident edge
+    // produced a byte-identical saveBody before/after — useAutoSave's change
+    // detection (JSON-compares consecutive `data` snapshots) never saw a
+    // diff, so the debounced save (and the unmount flush / pagehide beacon,
+    // which gate on the same comparison) never fired at all. The member
+    // silently vanished on the next refetch despite `saveFn` being fully
+    // capable of persisting it (it PUTs the whole current member list to
+    // core_team, edge or no edge).
     renderTab()
     await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('team-add-agent'))
     await waitFor(() =>
       expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
     )
-    // Add Ray (not in core_team ['mia','jim'], no incident edge) → unsaved hint.
+    // Add Ray (not in core_team ['mia','jim'], no incident edge).
     fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
     await waitFor(() => {
       expect(screen.getByTestId('team-unsaved-members')).toHaveTextContent(/Ray/)
     })
-    expect(screen.getByTestId('team-unsaved-members')).toHaveTextContent(
+    // The copy no longer implies membership is lost without a delegation edge
+    // — it's a transient "will autosave" state, not a hard requirement.
+    expect(screen.getByTestId('team-unsaved-members')).toHaveTextContent(/not saved yet/)
+    expect(screen.getByTestId('team-unsaved-members')).not.toHaveTextContent(
       /not connected yet/,
     )
-    // This banner reflects a real, still-current limitation (edges-only PUT):
-    // an edgeless, non-core member never triggers the debounced auto-save at
-    // all, so it is never persisted on its own — see the next test for what
-    // DOES persist it (drawing a delegation edge to it).
+
+    // Past the 500ms debounce, the autosave MUST have fired and persisted the
+    // full current membership (mia, jim, planner, ray) via updateWorkspace —
+    // on the unfixed code this assertion times out because updateWorkspace is
+    // never called for an edgeless-only change.
+    await waitFor(
+      () => {
+        expect(updateWorkspace).toHaveBeenCalledWith('ws-1', {
+          core_team: ['mia', 'jim', 'planner', 'ray'],
+        })
+      },
+      { timeout: 3000 },
+    )
+
+    // Drain pending microtasks so the fade-timer arm doesn't leak into a
+    // later test (mirrors the P0 test's flush below).
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
   })
 
   it('P0 regression: add a non-core agent, draw a delegation edge to it, save — persists core_team via updateWorkspace BEFORE the edges PUT', async () => {
@@ -390,6 +428,22 @@ describe('WorkspaceTeamTab', () => {
       'planner',
       'ray',
     ])
+
+    // Drain further microtasks under these REAL timers (this test never
+    // switches to fake timers) before it ends. Every assertion above checks
+    // cache writes that happen INSIDE saveFn itself — i.e. BEFORE saveFn's
+    // promise resolves back to useAutoSave's doSave(), which is what
+    // actually runs the post-save bookkeeping (status→'saved', and the 2s
+    // "fade to idle" setTimeout it arms). None of the assertions above give
+    // a causal guarantee that the fade-timer arm has completed. Without
+    // this flush, that arm can race past this test's end and RTL's
+    // afterEach cleanup() (src/test/setup.ts), leaking a genuine setTimeout
+    // that fires ~2s later during a LATER test and throws on this
+    // already-unmounted component. See useAutoSave.ts's fade-timer comment.
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
   })
 
   it('partial-failure ordering: updateWorkspace rejects — updateWorkspaceDelegation is never called and status becomes error', async () => {

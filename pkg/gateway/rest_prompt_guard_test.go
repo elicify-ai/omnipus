@@ -7,12 +7,14 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // promptGuardPUT is a test helper that issues an authenticated admin PUT to
@@ -187,6 +190,78 @@ func TestHandlePromptGuard_EmitsAuditEntry(t *testing.T) {
 	assert.Contains(t, content, "sandbox.prompt_injection_level")
 	assert.Contains(t, content, "security_setting_change")
 	assert.Contains(t, content, "high")
+}
+
+// TestHandlePromptGuard_ReloadTimeout_LogsDistinctWarning is the migration
+// regression test for putPromptGuard's call site (rest_prompt_guard.go):
+// before migrating from triggerReloadAndWait to triggerReloadAndWaitOutcome,
+// a reload that timed out without ever confirming was completely silent on
+// the success path — the old `if reloadErr := a.triggerReloadAndWait();
+// reloadErr != nil` guard never fires when the error is nil, which it always
+// is on a timeout, so nothing distinguished an unconfirmed reload from a
+// genuinely confirmed one anywhere in the logs. This proves the new
+// confirmed==false branch logs a distinct WARN naming the prompt-guard level
+// that did not confirm, and that the wire response is byte-for-byte
+// unchanged from before the migration (still 200, requires_restart:false,
+// no warning field) — this migration is a log-only fix, mirroring
+// TestHandleChangePassword_ReloadTimeout_LogsDistinctWarning in
+// rest_auth_test.go for the one call site FIX 4 already migrated.
+func TestHandlePromptGuard_ReloadTimeout_LogsDistinctWarning(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	prevDeadline := reloadWaitTimeout
+	reloadWaitTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { reloadWaitTimeout = prevDeadline })
+
+	// Wire a reload func that marks the reload pending (mirroring production
+	// — see TriggerReload's own doc comment for why TriggerReload itself
+	// deliberately does not) and deliberately never clear the pending flag,
+	// so triggerReloadAndWaitOutcome (called from inside putPromptGuard) runs
+	// out the (shortened) poll window with confirmed=false.
+	api.agentLoop.SetReloadFunc(func() error {
+		api.agentLoop.MarkReloadPending()
+		return nil
+	})
+	t.Cleanup(func() { api.agentLoop.ClearReloadPending() })
+
+	logFile := filepath.Join(t.TempDir(), "prompt-guard-reload-timeout.log")
+	prevLevel := logger.GetLevel()
+	logger.DisableConsole()
+	logger.SetLevel(logger.WARN)
+	require.NoError(t, logger.EnableFileLogging(logFile))
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(prevLevel)
+	})
+	// In production this reaches gateway.log because RunContextWithOptions
+	// installs the slog→logger bridge at boot (FIX 1) before any handler can
+	// run; this test binary never calls RunContextWithOptions, so the bridge
+	// must be installed explicitly here — same pattern as
+	// TestHandleChangePassword_ReloadTimeout_LogsDistinctWarning.
+	prevDefault := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+	installSlogBridge()
+
+	w := promptGuardPUT(t, api, "high")
+
+	// The wire response is unaffected by the migration — still 200 with
+	// requires_restart:false and no warning: the confirmed==false branch
+	// only logs, then falls through to the exact same success response
+	// putPromptGuard returned before this migration.
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, false, resp["requires_restart"])
+	assert.Equal(t, "high", resp["applied_level"])
+	assert.Nil(t, resp["warning"], "the response shape must be unchanged by this log-only fix")
+
+	logged, readErr := os.ReadFile(logFile)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(logged), "did not confirm within the poll window",
+		"a reload that timed out unconfirmed must now be logged distinctly, "+
+			"not silently indistinguishable from a confirmed reload")
+	assert.Contains(t, string(logged), "prompt guard level update",
+		"the warning must name the specific setting whose reload did not confirm")
 }
 
 // TestHandlePromptGuard_PersistsCorrectJSONPath verifies that after a PUT with

@@ -38,6 +38,14 @@ test(
     // Wait for the chat input to be enabled (WS connected).
     const chatInput = page.locator('textarea').first()
     await expect(chatInput).toBeEnabled({ timeout: 15_000 })
+    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix):
+    // the composer is also enabled while reconnectPhase is 'reconnecting' or
+    // 'slow', so it can look ready immediately after page load even during a
+    // transient first-connect blip. Confirm genuine connectivity — via the
+    // absence of the SAME reconnect-banner this test asserts on below — so
+    // the WebSocket-stubbing steps that follow start from a real, stable
+    // connection rather than a mid-reconnect one.
+    await expect(page.getByTestId('reconnect-banner')).toBeHidden({ timeout: 15_000 })
 
     // Step 1a: Stub the WebSocket constructor so any reconnect attempt
     // produces a never-opens socket. page.route() does NOT intercept
@@ -166,14 +174,40 @@ test(
 
     const chatInput = page.locator('textarea').first()
     await expect(chatInput).toBeEnabled({ timeout: 15_000 })
+    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix)
+    // — confirm the socket is genuinely open before this test deliberately
+    // drops it below, so the subsequent "banner appears / composer stays
+    // enabled" assertions measure a real transition rather than racing an
+    // already-in-progress reconnect from page load.
+    await expect(page.getByTestId('reconnect-banner')).toBeHidden({ timeout: 15_000 })
 
     // Step 1: Set the browser context offline (network unavailable).
     // This will cause the existing WS to disconnect (TCP reset).
     await page.context().setOffline(true)
 
     // Wait briefly for the WS to detect the disconnect and the UI to update.
-    // The chat input becomes disabled when isConnected=false.
-    await expect(chatInput).toBeDisabled({ timeout: 10_000 })
+    // The reconnect banner (data-testid="reconnect-banner") is the
+    // ground-truth "disconnected" signal — driven by isConnected/
+    // reconnectPhase in the connection store, independent of the composer's
+    // own enabled/disabled state.
+    //
+    // NOTE (offline send queue, #105): the chat input intentionally does NOT
+    // become disabled here (a previous version of this test asserted
+    // `toBeDisabled`). ChatScreen.tsx's `inputEnabled` allows typing/sending
+    // while reconnectPhase is 'reconnecting' or 'slow' so a message composed
+    // during a transient outage is buffered (useChatStore's outboundQueue)
+    // and sent automatically once the connection recovers, instead of being
+    // silently blocked — see tests/e2e/chat.spec.ts "(f) queue-on-disconnect"
+    // for that behavior itself. This test only needs to verify the
+    // disconnect is detected and that the `online` event drives recovery, so
+    // it asserts on the banner instead, and additionally pins that the
+    // composer stays enabled throughout (a regression that re-disabled it
+    // during reconnect would break the queue feature silently).
+    await expect(
+      page.getByTestId('reconnect-banner'),
+      'reconnect banner must appear once the WS disconnects',
+    ).toBeVisible({ timeout: 10_000 })
+    await expect(chatInput, 'composer must stay usable during the reconnect-retry window (#105 offline queue)').toBeEnabled()
 
     // Step 2: Restore network (setOffline=false) to simulate the device coming
     // back online. This fires the browser's 'online' event, which ws.ts should
@@ -181,15 +215,16 @@ test(
     await page.context().setOffline(false)
 
     // Step 3: Assert the connection was restored.
-    // When the 'online' event fires the reconnect, ws.ts re-establishes the WS
-    // and isConnected flips to true, which re-enables the chat input.
+    // When the 'online' event fires the reconnect, ws.ts re-establishes the WS,
+    // isConnected flips to true, and the reconnect banner clears.
     await expect(
-      chatInput,
+      page.getByTestId('reconnect-banner'),
       [
-        'Chat input must re-enable after network is restored via the `online` event.',
+        'Reconnect banner must clear after network is restored via the `online` event.',
         'If this fails, ws.ts does not listen to `window.addEventListener("online", ...)`,',
         'or the reconnect triggered by the online event is not completing.',
       ].join(' '),
-    ).toBeEnabled({ timeout: 20_000 })
+    ).not.toBeVisible({ timeout: 20_000 })
+    await expect(chatInput).toBeEnabled()
   },
 )

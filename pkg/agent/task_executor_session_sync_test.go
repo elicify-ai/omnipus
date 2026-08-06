@@ -56,7 +56,7 @@ func TestExecuteTask_SessionIDAssignedSynchronouslyBeforeReturn(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -101,7 +101,7 @@ func TestExecuteTask_EndToEndStillCompletes_AfterM1Refactor(t *testing.T) {
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 	final := waitForCompletionContractTerminal(t, al, tk.ID)

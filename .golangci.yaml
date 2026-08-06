@@ -149,6 +149,11 @@ linters:
           - maintidx
           - gocognit
           - gocyclo
+          # Test-file noise: near-identical table/subtest bodies (dupl) and
+          # deliberate time.Local use for server-zone assertions (gosmopolitan)
+          # are normal and expected in tests.
+          - dupl
+          - gosmopolitan
         path: _test\.go$
       - linters:
           - golines

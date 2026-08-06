@@ -623,45 +623,44 @@ describe('CreateTaskSlideOver — full task UX fields (trigger / depends-on / du
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
   })
 
-  it('posts an every trigger with every_ms derived from minutes', async () => {
-    vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask() as never)
+  // FR-011/US-3.3 (test 23): recurring trigger options are removed from the
+  // generic create form entirely — recurring tasks are calendar-only (D3),
+  // created/edited exclusively via the calendar's event slide-over. The two
+  // tests that used to post `every`/`recurring` triggers from this form are
+  // replaced by the trim-verification tests below; `every`/`recurring`
+  // remain wire-legal (no enum change) but no form produces them anymore.
+  it('the Trigger dropdown offers only "None (manual)" and "Once (at a time)" — no recurring options', async () => {
     Element.prototype.scrollIntoView = vi.fn()
     renderSlideOver()
 
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Every task' } })
     fireEvent.click(document.getElementById('ct-trigger') as HTMLElement)
-    fireEvent.click(await screen.findByText(/every \(interval\)/i))
 
-    const minutes = await screen.findByLabelText(/interval in minutes/i)
-    fireEvent.change(minutes, { target: { value: '30' } })
-
-    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
-    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
-
-    const body = vi.mocked(createTask).mock.calls[0][0]
-    expect(body.trigger?.type).toBe('every')
-    expect(body.trigger?.config.every_ms).toBe(30 * 60_000)
+    // Query by role="option" — the closed trigger's own selected-value
+    // display ALSO reads "None (manual)" (the default), so a plain
+    // getByText would ambiguously match both it and the open option.
+    expect(await screen.findByRole('option', { name: /none \(manual\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /once \(at a time\)/i })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /every \(interval\)/i })).toBeNull()
+    expect(screen.queryByRole('option', { name: /recurring \(cron\)/i })).toBeNull()
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
   })
 
-  it('posts a recurring trigger with the cron expression', async () => {
-    vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask() as never)
+  it('renders no cron input or interval input anywhere in the form, regardless of trigger selection', async () => {
     Element.prototype.scrollIntoView = vi.fn()
     renderSlideOver()
 
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Cron task' } })
+    // Default (manual) — no trigger-related date/cron/interval controls.
+    expect(screen.queryByLabelText(/cron expression/i)).toBeNull()
+    expect(screen.queryByLabelText(/interval in minutes/i)).toBeNull()
+
+    // Switch to the only other offered kind, "Once" — still no cron/interval
+    // input; only the date/time picker appears.
     fireEvent.click(document.getElementById('ct-trigger') as HTMLElement)
-    fireEvent.click(await screen.findByText(/recurring \(cron\)/i))
+    fireEvent.click(await screen.findByText(/once \(at a time\)/i))
 
-    const cron = await screen.findByLabelText(/cron expression/i)
-    fireEvent.change(cron, { target: { value: '0 8 * * *' } })
-
-    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
-    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
-
-    const body = vi.mocked(createTask).mock.calls[0][0]
-    expect(body.trigger?.type).toBe('recurring')
-    expect(body.trigger?.config.cron_expr).toBe('0 8 * * *')
+    expect(await screen.findByRole('button', { name: /trigger date and time/i })).toBeInTheDocument()
+    expect(screen.queryByLabelText(/cron expression/i)).toBeNull()
+    expect(screen.queryByLabelText(/interval in minutes/i)).toBeNull()
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
   })
 

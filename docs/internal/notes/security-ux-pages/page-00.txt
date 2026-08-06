@@ -1,0 +1,20 @@
+# Settings → Security: analysis & UX recommendations
+
+_Note for reading outside the TUI. Written 2026-07-13 from codebase walk of Settings → Security, sandbox, tool policy, god mode._
+
+---
+
+## 1. How security actually works (layered model)
+
+Omnipus uses **several independent fences**, not one “security switch.” An agent action has to pass the ones that apply.
+
+```
+User message → Agent turn → wants tool X
+        │
+        ▼
+┌───────────────────────────────────────┐
+│ 0. God mode (Gateway tab)             │  If ON: floors tools to allow,
+│    global bypass (restart to arm)     │  kills kernel sandbox, opens egress,
+└───────────────────────────────────────┘  kills shell-guard. Audit/prompt-guard/
+        │                                  rate limits stay on.
+        ▼

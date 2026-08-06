@@ -18,6 +18,12 @@
 //   - type: boolean → bool (or *bool if optional)
 //   - $ref → resolved type name
 //   - Cross-schema $ref → resolved Go type name
+//   - inline-payload short-circuit: a property whose inline shape is structurally
+//     identical to a sibling named schema `<OwnerWithoutFrame><PascalCase(propName)>`
+//     is emitted as a pointer to (or value of, when required) that named type — this
+//     preserves the hand-adjusted `*ErrorPayload` / `*ReplayErrorPayload` shape that
+//     the Zod TDZ workaround previously required (see contracts/asyncapi.yaml comments
+//     at ErrorFrame.payload / ReplayErrorFrame.payload).
 //
 // Required maps and slices are never nil — they use map[string]any and []T directly
 // (not pointers) so the nil-safety contract from the AsyncAPI spec is upheld in Go.
@@ -27,7 +33,9 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"maps"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -88,6 +96,7 @@ type schema struct {
 	title           string
 	description     string
 	schemaType      string // "object", "string", "integer", "number", "boolean", "array", ""
+	format          string // e.g. "int64", "date-time" — refines schemaType
 	properties      map[string]*schema
 	propertyOrder   []string // preserves YAML key order
 	required        map[string]bool
@@ -143,6 +152,9 @@ func parseSchema(name string, raw any) (*schema, error) {
 	}
 	if v, ok := m["type"].(string); ok {
 		s.schemaType = v
+	}
+	if v, ok := m["format"].(string); ok {
+		s.format = v
 	}
 	if v, ok := m["const"].(string); ok {
 		s.constValue = v
@@ -386,9 +398,13 @@ func writeStruct(buf *bytes.Buffer, goName string, s *schema, allSchemas map[str
 		ps := s.properties[propName]
 		isRequired := s.required[propName]
 		fieldName := fieldNames[propName]
-		goType, err := resolveGoType(ps, propName, isRequired, allSchemas)
-		if err != nil {
-			return fmt.Errorf("field %s: %w", propName, err)
+		goType, matched := matchingNamedInlineGoType(goName, propName, ps, isRequired, allSchemas)
+		if !matched {
+			var err error
+			goType, err = resolveGoType(ps, propName, isRequired, allSchemas)
+			if err != nil {
+				return fmt.Errorf("field %s: %w", propName, err)
+			}
 		}
 		tag := buildTag(propName, isRequired, ps)
 		if ps.description != "" {
@@ -404,6 +420,97 @@ func writeStruct(buf *bytes.Buffer, goName string, s *schema, allSchemas map[str
 
 	fmt.Fprintf(buf, "}\n")
 	return nil
+}
+
+// matchingNamedInlineGoType returns a pointer to (or value of, when required) a
+// sibling named schema when a property's inline shape is structurally identical
+// to that named schema.
+//
+// The naming convention is `<OwnerGoName without "Frame" suffix><PascalCase(propName)>`
+// — e.g. owner `ErrorFrame` + prop `payload` → candidate `ErrorPayload`. This matches
+// the project's stable convention (grep `\b[A-Z][a-zA-Z]+Frame\b` against
+// contracts/asyncapi.yaml to verify if it ever changes); a future rename of the
+// suffix (e.g. to `Message`) would require updating this function.
+//
+// Returns ("", false) when:
+//   - the property is a $ref (already resolves through resolveGoType's ref branch), or
+//   - the property has no nested properties (primitives/arrays don't carry a mirror-able shape), or
+//   - no sibling schema with the candidate name exists, or
+//   - the shapes diverge (sameSchemaShape returns false — silent fallback to anonymous
+//     struct is the safe default; see SFH-01 in the Wave 0 review for the cost of this
+//     drift visibility gap).
+//
+// Returns ("*Name", true) for optional fields (with the matching pointer shape)
+// and ("Name", true) for required fields (the Zod validator distinguishes the
+// two via the field's required-status; see TestGenerate_RequiredMatchingPropertyReturnsValueType).
+func matchingNamedInlineGoType(
+	ownerGoName string,
+	propName string,
+	property *schema,
+	isRequired bool,
+	allSchemas map[string]*schema,
+) (string, bool) {
+	if property.ref != "" || len(property.properties) == 0 {
+		return "", false
+	}
+	candidateName := strings.TrimSuffix(ownerGoName, "Frame") + toPascalCase(propName)
+	candidate, ok := allSchemas[candidateName]
+	if !ok || !sameSchemaShape(property, candidate) {
+		return "", false
+	}
+	if isRequired {
+		return candidateName, true
+	}
+	return "*" + candidateName, true
+}
+
+// sameSchemaShape reports whether two schemas are structurally identical for the
+// purposes of Go-emit reuse (i.e. the inline mirror can be safely replaced by a
+// pointer/value of the named type without changing the generated wire shape).
+//
+// Comparison is strictly structural — `description`, `title`, and `default` are
+// intentionally NOT compared. Drift in those text fields is a maintenance hazard
+// (see SFH-02) but is a CI-lint concern, not a generator-emit concern: two
+// structurally-identical schemas that differ only in description text can be
+// safely emitted through the same Go type because the generated Zod validator
+// reads only the structural fields.
+func sameSchemaShape(left, right *schema) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	if left.schemaType != right.schemaType ||
+		left.format != right.format ||
+		left.ref != right.ref ||
+		left.additionalProps != right.additionalProps ||
+		left.constValue != right.constValue ||
+		left.isEnum != right.isEnum ||
+		!slices.Equal(left.enum, right.enum) ||
+		!maps.Equal(left.required, right.required) ||
+		len(left.properties) != len(right.properties) ||
+		len(left.oneOf) != len(right.oneOf) ||
+		len(left.anyOf) != len(right.anyOf) {
+		return false
+	}
+	for name, leftProperty := range left.properties {
+		rightProperty, ok := right.properties[name]
+		if !ok || !sameSchemaShape(leftProperty, rightProperty) {
+			return false
+		}
+	}
+	if !sameSchemaShape(left.items, right.items) {
+		return false
+	}
+	for index := range left.oneOf {
+		if !sameSchemaShape(left.oneOf[index], right.oneOf[index]) {
+			return false
+		}
+	}
+	for index := range left.anyOf {
+		if !sameSchemaShape(left.anyOf[index], right.anyOf[index]) {
+			return false
+		}
+	}
+	return true
 }
 
 // resolveGoType returns the Go type string for a property schema.
@@ -446,6 +553,16 @@ func resolveGoType(ps *schema, propName string, isRequired bool, allSchemas map[
 		return "*string", nil
 
 	case "integer":
+		// format: int64 must map to Go int64 — plain "int" is 32-bit on
+		// mipsle/arm targets (shipped, see CLAUDE.md Tech Stack), so an
+		// epoch-millisecond value wraps. Mirrors oapi-codegen's own
+		// int64-format handling on the OpenAPI side (openapi_types.gen.go).
+		if ps.format == "int64" {
+			if isRequired {
+				return "int64", nil
+			}
+			return "*int64", nil
+		}
 		if isRequired {
 			return "int", nil
 		}

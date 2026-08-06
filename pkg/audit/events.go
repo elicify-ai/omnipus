@@ -241,6 +241,22 @@ const (
 	// Stop()->onStopped hook). Fields: {agent_id, session_id, error}.
 	EventBrowserWebRTCStreamStartFailed = "browser.webrtc.stream_start_failed"
 
+	// EventBrowserWarmUpFailed — WARN. The boot-time shared-Chrome warm-up
+	// (tools.browser.warm_at_boot, default true) failed or panicked. NOT
+	// fatal: warm-up is best-effort by contract (Hard Constraint #4) and
+	// Chrome still launches lazily at the first browser tool call — this
+	// records that the operator paid for that lazy cold start (ADR-042:
+	// historically ~30-60s on a fresh install) instead of a warm one.
+	//
+	// Exists because every other browser-lifecycle failure in this package is
+	// auditable (StreamStartFailed, IngestAuthRejected, ViewerOfferFailed)
+	// while warm-up was log-only, so an operator reconstructing "did Chrome
+	// come up at boot?" from the audit trail found nothing at all — silence
+	// that is indistinguishable from "warm-up was disabled" and from
+	// "warm-up succeeded". Fields: {reason} where reason is "error" or
+	// "panic", plus {error}.
+	EventBrowserWarmUpFailed = "browser.warm_up_failed"
+
 	// EventBrowserWebRTCIngestAuthRejected — WARN. A connection to the
 	// loopback-only /api/v1/browser/capture-ingest endpoint was rejected:
 	// either the RemoteAddr was not loopback, or the first frame's
@@ -249,6 +265,24 @@ const (
 	// gateway audits any hello with a missing/invalid/expired token as a
 	// rejected ingest-auth attempt"). Fields: {remote_addr, reason}.
 	EventBrowserWebRTCIngestAuthRejected = "browser.webrtc.ingest_auth_rejected"
+
+	// EventBrowserWebRTCViewerOfferFailed — WARN. A viewer's
+	// browser_webrtc_offer was accepted (the capability gate passed and the
+	// agent's CaptureSession started/already existed) but
+	// CaptureSession.HandleViewerOffer itself failed — distinct from
+	// EventBrowserWebRTCStreamStartFailed (which is specifically cs.Start()
+	// failing to bring the encoder page up at all). Added 2026-07-28: before
+	// this event existed, a failed viewer offer was visible only as an
+	// unstructured slog.Warn line (pkg/gateway/browser_webrtc.go's
+	// handleWebRTCOffer) with no audit trail and no way to distinguish a
+	// genuinely transient ingest-track race from a real defect without
+	// reading raw logs. reason classifies the failure: "ingest_timeout" when
+	// the underlying error is webrtc.ErrNoIngestVideoTrack (waitForTracks
+	// gave up before the encoder's video track arrived — see that sentinel's
+	// doc comment for the incident this closes), "error" for every other
+	// HandleViewerOffer failure (bad SDP, closed session, PC/track
+	// negotiation). Fields: {agent_id, session_id, viewer_id, reason, error}.
+	EventBrowserWebRTCViewerOfferFailed = "browser.webrtc.viewer_offer_failed"
 
 	// EventChannelInstanceConfigured — INFO. An operator created or updated a
 	// channel instance's configuration via PUT /api/v1/channels/{id}/configure
@@ -264,6 +298,26 @@ const (
 	// be removed and is now orphaned in the store (matches its sibling event
 	// EventChannelInstanceDeleted's field name for the same concept).
 	EventChannelInstanceConfigured = "channel.instance.configured"
+
+	// EventMediaDelete — INFO. A workspace library file was explicitly deleted
+	// by an operator (FR-008). Emitted by pkg/media/library/library.go's
+	// Delete method (the per-file delete API surface; the REST handler will
+	// pass through to this surface in a later slice). Fields: {actor,
+	// workspace_id, media_id, filename, bytes_freed, mime, sha256}. Matches
+	// the workspace.delete precedent in shape (Details carries the
+	// event-specific fields; the top-level `event` field IS the FR-033
+	// "action" discriminator).
+	EventMediaDelete = "media.delete"
+
+	// EventMediaCascadeDelete — INFO. A workspace's media library was
+	// cascade-deleted as part of workspace deletion (FR-009). Emitted by
+	// pkg/workspace/media_delete.go's WorkspaceDeleteHook after the library's
+	// CascadeDelete() returned the deleted-entry summary. ONE event per
+	// cascade operation (NOT one per file) — the spec calls for a list of
+	// media_ids and filenames. Fields: {actor, workspace_id, media_ids,
+	// filenames, bytes_freed, count}. Same shape convention as
+	// EventMediaDelete / workspace.delete.
+	EventMediaCascadeDelete = "media.cascade_delete"
 )
 
 // ---------------------------------------------------------------------------

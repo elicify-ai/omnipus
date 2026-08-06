@@ -47,6 +47,7 @@ import { useUiStore } from '@/store/ui'
 import { SkillBrowser } from '@/components/skills/SkillBrowser'
 import { McpServerModal } from '@/components/skills/McpServerModal'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
+import { CATEGORY_LABELS } from '@/lib/toolCategories'
 
 export function SkillsScreen() {
   const { addToast } = useUiStore()
@@ -90,10 +91,28 @@ export function SkillsScreen() {
     },
   })
 
+  /**
+   * Invalidate every cache an MCP server mutation can affect, beyond the
+   * server list itself. Delete/toggle/test all reconcile the live MCP
+   * manager server-side (connect/disconnect + tool registration), which
+   * changes what the central tool registry and per-agent tool lists report —
+   * so the policy editors (Settings → Security, ToolsAndPermissions) and
+   * this screen's own tools tab must refetch too, or they keep showing
+   * stale (pre-reconcile) tool counts / MCP sections. Mirrors the
+   * equivalent helper in McpServerModal.tsx (add/edit paths).
+   */
+  function invalidateMcpToolCaches() {
+    queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
+    queryClient.invalidateQueries({ queryKey: ['tools-builtin'] }) // SecuritySection global editor
+    queryClient.invalidateQueries({ queryKey: ['registry-tools'] }) // ToolsAndPermissions per-agent editor
+    queryClient.invalidateQueries({ queryKey: ['agent-tools'] }) // prefix match — every agent
+    queryClient.invalidateQueries({ queryKey: ['tools'] }) // this screen's own tools tab
+  }
+
   const { mutate: doDeleteMcp } = useMutation({
     mutationFn: (id: string) => deleteMcpServer(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
+      invalidateMcpToolCaches()
       addToast({ message: 'MCP server removed', variant: 'success' })
       setConfirmDeleteMcp(null)
     },
@@ -107,7 +126,7 @@ export function SkillsScreen() {
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
       updateMcpServer(id, { enabled }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
+      invalidateMcpToolCaches()
     },
     onError: (err: Error) => {
       addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' })
@@ -119,7 +138,7 @@ export function SkillsScreen() {
     try {
       const result = await testMcpServer(id)
       if (result.success) {
-        queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
+        invalidateMcpToolCaches()
         addToast({
           message: `Connected — ${result.tool_count ?? 0} tool${(result.tool_count ?? 0) !== 1 ? 's' : ''}`,
           variant: 'success',
@@ -551,8 +570,8 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                   data-testid={`tool-category-toggle-${cat}`}
                 >
                   <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium text-[var(--color-secondary)] capitalize">
-                      {cat}
+                    <span className="text-sm font-medium text-[var(--color-secondary)]">
+                      {CATEGORY_LABELS[cat] ?? cat}
                     </span>
                     <p className="text-xs text-[var(--color-muted)] mt-0.5">
                       {description}

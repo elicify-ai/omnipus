@@ -51,7 +51,7 @@ func TestEvidenceGate_BareClaimRejectedWithoutConsumingAttempt(t *testing.T) {
 	}
 
 	resp := "I finished the work.\nTASK_STATUS: success\n"
-	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, "", resp, nil, "")
+	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, "", resp, nil, "", nil)
 
 	if redispatch == "" {
 		t.Fatal("expected a non-empty re-dispatch id — a bare claim must be actively re-prompted, not silently dropped")
@@ -101,7 +101,7 @@ func TestEvidenceGate_FailureClaimAlsoRequiresEvidence(t *testing.T) {
 	}
 
 	resp := "I could not finish.\nTASK_STATUS: failure\n"
-	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, "", resp, nil, "")
+	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, "", resp, nil, "", nil)
 
 	if redispatch == "" {
 		t.Fatal("expected a non-empty re-dispatch id for a bare failure claim too")
@@ -144,7 +144,7 @@ func TestEvidenceGate_ScratchpadTaskExempt(t *testing.T) {
 	}
 
 	resp := "noted.\nTASK_STATUS: success\n"
-	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, "", resp, nil, "")
+	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, "", resp, nil, "", nil)
 	if redispatch != "" {
 		t.Errorf("redispatch = %q, want \"\" — a Scratchpad claim is trusted directly, no re-prompt loop", redispatch)
 	}
@@ -188,7 +188,7 @@ func TestEvidenceGate_ClaimWithGenuineEvidenceReachesVerifier(t *testing.T) {
 	resp := "I verified the output against the spec.\n" +
 		"[goal:evidence] compared output to acceptance criterion c1, matches\n" +
 		"TASK_STATUS: success\n"
-	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, "", resp, nil, "")
+	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, "", resp, nil, "", nil)
 
 	if !called {
 		t.Fatal("a claim WITH a genuine evidence marker must reach the verifier")
@@ -237,7 +237,7 @@ func TestEvidenceGate_SteeringDeliveredToRedispatchedPrompt(t *testing.T) {
 	}
 
 	resp := "I finished the work.\nTASK_STATUS: success\n"
-	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, "", resp, nil, "")
+	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, "", resp, nil, "", nil)
 	if redispatch == "" {
 		t.Fatal("expected a non-empty re-dispatch id")
 	}
@@ -287,7 +287,7 @@ func TestEvidenceGate_NeverEmittedMarker_TerminatesWithinBudget(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -387,7 +387,7 @@ func TestEvidenceGate_ConsecutiveRejectionsRouteThroughAttemptBudgetOnSecond(t *
 			t.Fatalf("re-read task before attempt %d: %v", i, gerr)
 		}
 		if redispatch := al.taskExecutor.finishTaskRun(
-			context.Background(), current, taskSessionID, resp, nil, "",
+			context.Background(), current, taskSessionID, resp, nil, "", nil,
 		); redispatch == "" {
 			t.Fatalf("attempt %d: expected a re-dispatch id", i)
 		}

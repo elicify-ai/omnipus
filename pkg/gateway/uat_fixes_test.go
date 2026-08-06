@@ -415,9 +415,19 @@ func TestParseDelegationFailure(t *testing.T) {
 func seedProviderConfig(t *testing.T, api *restAPI, entries ...map[string]any) {
 	t.Helper()
 	// Wire a reload func that re-reads the providers list from config.json into
-	// the live config — the PUT provider handler calls TriggerReload and returns
-	// 500 if it errors (it does not tolerate ErrReloadNotConfigured).
+	// the live config — the PUT provider handler calls triggerReloadAndWait,
+	// which tolerates ErrReloadNotConfigured but still POLLS IsReloadPending()
+	// (up to 5s) for a genuinely-wired reload func to finish. This func runs
+	// synchronously (no goroutine, unlike production's async pipeline) so it
+	// MUST call ClearReloadPending itself when done — production's
+	// executeReload does this via defer after the real registry swap
+	// completes, and TriggerReload sets reloadPending=true before invoking
+	// this func in the first place. Without the explicit clear here,
+	// triggerReloadAndWait would busy-poll for the full 5s timeout on every
+	// PUT that reaches this point (it never fails, so IsReloadPending would
+	// never observe a clear) — turning fast unit tests into multi-second ones.
 	api.agentLoop.SetReloadFunc(func() error {
+		defer api.agentLoop.ClearReloadPending()
 		raw, rErr := os.ReadFile(api.configPath())
 		if rErr != nil {
 			return rErr

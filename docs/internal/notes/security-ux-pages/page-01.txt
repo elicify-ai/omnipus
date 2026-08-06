@@ -1,0 +1,20 @@
+┌───────────────────────────────────────┐
+│ 1. Tool policy (allow / ask / deny)   │  Global + per-agent. Global Deny wins.
+│    Explicit per tool — no default     │  "ask" → human approval modal.
+│    fallback (Constraint #6)           │
+└───────────────────────────────────────┘
+        │  (if shell / bash)
+        ▼
+┌───────────────────────────────────────┐
+│ 2. Shell-specific gates               │  exec approval, binary allowlist,
+│                                       │  deny-pattern regexes, timeouts
+└───────────────────────────────────────┘
+        │
+        ▼
+┌───────────────────────────────────────┐
+│ 3. Process sandbox (kernel / app)     │  Landlock FS + seccomp (Linux),
+│    mode: enforce | permissive | off   │  Job Objects (Windows), or weak
+│                                       │  env-var fallback
+└───────────────────────────────────────┘
+        │  (if network / HTTP)
+        ▼

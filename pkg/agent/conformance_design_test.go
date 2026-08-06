@@ -769,7 +769,7 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 
 	// (2) 1st bare claim → evidence-gate rejects pre-Judge, free steer, attempt 0.
 	bare := "done.\nTASK_STATUS: success\n"
-	if redis := al.taskExecutor.finishTaskRun(context.Background(), current, taskSessionID, bare, nil, ""); redis == "" {
+	if redis := al.taskExecutor.finishTaskRun(context.Background(), current, taskSessionID, bare, nil, "", nil); redis == "" {
 		t.Fatal("(2) 1st bare claim must be re-prompted (free steer), got empty redispatch")
 	}
 	after2, _ := taskStore.Get(tk.ID)
@@ -785,7 +785,7 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 		t.Fatalf("(3) re-claim: %v", claimErr3)
 	}
 	current, _ = taskStore.Get(tk.ID)
-	if redis := al.taskExecutor.finishTaskRun(context.Background(), current, taskSessionID, bare, nil, ""); redis == "" {
+	if redis := al.taskExecutor.finishTaskRun(context.Background(), current, taskSessionID, bare, nil, "", nil); redis == "" {
 		t.Fatal("(3) 2nd bare claim must be re-prompted too")
 	}
 	after3, _ := taskStore.Get(tk.ID)
@@ -802,7 +802,7 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	}
 	current, _ = taskStore.Get(tk.ID)
 	withEvidence := "verified output matches c1.\n[goal:evidence] compared to acceptance criterion c1, matches\nTASK_STATUS: success\n"
-	if redis := al.taskExecutor.finishTaskRun(context.Background(), current, taskSessionID, withEvidence, nil, ""); redis != "" {
+	if redis := al.taskExecutor.finishTaskRun(context.Background(), current, taskSessionID, withEvidence, nil, "", nil); redis != "" {
 		t.Fatalf("(4) a met claim must NOT re-dispatch, got redispatch=%q", redis)
 	}
 	if judgeInst.Provider.(*fakeJudgeProvider).callCount() != 1 {

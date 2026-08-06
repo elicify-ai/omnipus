@@ -29,7 +29,9 @@ import {
   getConfigCoercionCount,
   resetConfigCoercionCount,
   fetchCommands,
+  modelLacksImageCapability,
 } from './api'
+import type { ModelCapabilities } from './api'
 import * as telemetry from './telemetry'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -354,6 +356,14 @@ function make204Response(): Response {
   return new Response(null, { status: 204 })
 }
 
+// make202Response models the real gateway response for POST /tasks/{id}/runs
+// ("Run now", ADR-050 RD7): 202 Accepted, no body — the run is dispatched
+// asynchronously (observe progress via the task_run_status WS frame or a
+// GET /tasks/{id}/runs refetch, never this response).
+function make202Response(): Response {
+  return new Response(null, { status: 202 })
+}
+
 describe('Security API helpers', () => {
   let fetchSpy: ReturnType<typeof vi.fn>
 
@@ -547,6 +557,121 @@ describe('Security API helpers', () => {
 
       const { deleteTask } = await import('./api')
       await expect(deleteTask('task-1')).rejects.toThrow('400')
+    })
+  })
+
+  // ── Task run history (ADR-050 / task-run-history-spec §4.1) ────────────────
+
+  describe('fetchTaskRuns', () => {
+    it('GET /api/v1/tasks/{id}/runs — returns the TaskRun array', async () => {
+      const runs = [
+        {
+          run_id: 'run-2',
+          task_id: 'task-1',
+          occurrence_ms: null,
+          status: 'done',
+          result: 'Finished.',
+          session_id: 'sess-2',
+          kind: 'manual',
+          started_at: '2026-07-20T09:00:00Z',
+          ended_at: '2026-07-20T09:05:00Z',
+        },
+        {
+          run_id: 'run-1',
+          task_id: 'task-1',
+          occurrence_ms: 1784620800000,
+          status: 'failed',
+          result: 'Boom.',
+          session_id: 'sess-1',
+          kind: 'scheduled',
+          started_at: '2026-07-19T09:00:00Z',
+          ended_at: '2026-07-19T09:05:00Z',
+        },
+      ]
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(runs))
+
+      const { fetchTaskRuns } = await import('./api')
+      const result = await fetchTaskRuns('task-1')
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/tasks/task-1/runs')
+      expect((init.method ?? 'GET').toUpperCase()).toBe('GET')
+      expect(result).toEqual(runs)
+    })
+
+    it('throws ApiSchemaError when a run fails TaskRun schema validation', async () => {
+      // Missing required `session_id` — schema-invalid.
+      fetchSpy.mockResolvedValueOnce(makeOkResponse([{
+        run_id: 'run-1',
+        task_id: 'task-1',
+        occurrence_ms: null,
+        status: 'done',
+        kind: 'manual',
+        started_at: '2026-07-20T09:00:00Z',
+        ended_at: '2026-07-20T09:05:00Z',
+      }]))
+
+      const { fetchTaskRuns, ApiSchemaError: ApiSchemaErrorCtor } = await import('./api')
+      await expect(fetchTaskRuns('task-1')).rejects.toBeInstanceOf(ApiSchemaErrorCtor)
+    })
+
+    it('propagates a typed error on 404 (unknown task)', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('not found', { status: 404 }))
+
+      const { fetchTaskRuns } = await import('./api')
+      await expect(fetchTaskRuns('missing-task')).rejects.toThrow('404')
+    })
+  })
+
+  describe('runTaskNow', () => {
+    it('POST /api/v1/tasks/{id}/runs — sends {occurrence_ms} when provided and resolves on 202', async () => {
+      fetchSpy.mockResolvedValueOnce(make202Response())
+
+      const { runTaskNow } = await import('./api')
+      await expect(runTaskNow('task-1', 1784620800000)).resolves.toBeUndefined()
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/tasks/task-1/runs')
+      expect((init.method ?? '').toUpperCase()).toBe('POST')
+      expect(JSON.parse(init.body as string)).toEqual({ occurrence_ms: 1784620800000 })
+      const headers = new Headers(init.headers as HeadersInit)
+      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
+    })
+
+    it('sends {occurrence_ms: null} when explicitly passed null (re-run signal, not omission)', async () => {
+      fetchSpy.mockResolvedValueOnce(make202Response())
+
+      const { runTaskNow } = await import('./api')
+      await runTaskNow('task-1', null)
+
+      const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(JSON.parse(init.body as string)).toEqual({ occurrence_ms: null })
+    })
+
+    it('sends an empty body when occurrenceMs is omitted (re-run a normal/once task)', async () => {
+      fetchSpy.mockResolvedValueOnce(make202Response())
+
+      const { runTaskNow } = await import('./api')
+      await runTaskNow('task-1')
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/tasks/task-1/runs')
+      expect((init.method ?? '').toUpperCase()).toBe('POST')
+      expect(init.body).toBeUndefined()
+    })
+
+    it('throws a typed error on 404 (unknown task)', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('not found', { status: 404 }))
+
+      const { runTaskNow } = await import('./api')
+      await expect(runTaskNow('missing-task')).rejects.toThrow('404')
+    })
+
+    it('throws a typed error on 503 (executor unavailable)', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('gateway degraded', { status: 503 }))
+
+      const { runTaskNow } = await import('./api')
+      await expect(runTaskNow('task-1')).rejects.toThrow('503')
     })
   })
 
@@ -1137,10 +1262,17 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
     expect(messages[0].id).toBe('cancel_xyz')
   })
 
-  it('rejects unknown entry type with ApiSchemaError', async () => {
-    // Negative direction: a type value outside the enum must fail validation
-    // so a future code change emitting a new EntryType without updating the
-    // schema is caught loudly rather than silently.
+  it('degrades an unknown entry type to a placeholder instead of rejecting the whole list (Issue 3 / library-uat HIGH)', async () => {
+    // Updated for the per-item resilience fix. Previously this asserted
+    // fetchSessionMessages REJECTED the whole array on a single out-of-enum
+    // `type` value — that all-or-nothing behaviour is exactly the bug the
+    // live UAT reproduced (one malformed attachment `type` made an entire
+    // session permanently unloadable, Retry included). The contract-drift
+    // signal is preserved (still counted via getApiSchemaErrorCount, so a
+    // future EntryType added without a schema update is NOT silently
+    // invisible) but a single bad row must no longer take the whole
+    // transcript down — see the block comment above placeholderMessage()
+    // in src/lib/api.ts for the full rationale.
     const wirePayload = [
       {
         id: 'msg_x',
@@ -1155,8 +1287,234 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
         headers: { 'Content-Type': 'application/json' },
       }),
     )
+    const { fetchSessionMessages, getApiSchemaErrorCount: count } = await import('./api')
+    const messages = await fetchSessionMessages('sid-unknown')
+    expect(messages).toHaveLength(1)
+    expect(messages[0].role).toBe('system')
+    expect(messages[0].content).toBe('This message could not be displayed.')
+    expect(count()).toBe(1)
+  })
+
+  it('keeps the valid messages and replaces only the malformed one when a list is mixed (Issue 3 / library-uat HIGH)', async () => {
+    // Reproduces the exact live-server shape from the UAT finding: an
+    // attachment `type` of "document", which is outside the Attachment
+    // enum (image|audio|video|file). Sits between two otherwise-valid
+    // messages so we can assert order, count, and content are all correct.
+    const wirePayload = [
+      {
+        id: 'msg-before',
+        agent_id: 'agent-1',
+        role: 'user',
+        content: 'here is a file',
+        timestamp: '2026-07-20T10:00:00Z',
+        status: 'ok',
+      },
+      {
+        id: 'msg-bad-attachment',
+        agent_id: 'agent-1',
+        role: 'assistant',
+        content: 'got it',
+        timestamp: '2026-07-20T10:00:01Z',
+        status: 'ok',
+        attachments: [
+          { type: 'document', path: '/work/spec.docx', size: 1024, mime_type: 'application/msword' },
+        ],
+      },
+      {
+        id: 'msg-after',
+        agent_id: 'agent-1',
+        role: 'assistant',
+        content: 'anything else?',
+        timestamp: '2026-07-20T10:00:02Z',
+        status: 'ok',
+      },
+    ]
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionMessages, getApiSchemaErrorCount: count } = await import('./api')
+    const messages = await fetchSessionMessages('sid-mixed')
+
+    // All three positions are present — the bad one is a visible placeholder,
+    // not a silently vanished row (see the judgment-call comment in api.ts).
+    expect(messages).toHaveLength(3)
+    expect(messages[0].id).toBe('msg-before')
+    expect(messages[0].content).toBe('here is a file')
+    expect(messages[1].id).toBe('msg-bad-attachment')
+    expect(messages[1].role).toBe('system')
+    expect(messages[1].content).toBe('This message could not be displayed.')
+    expect(messages[2].id).toBe('msg-after')
+    expect(messages[2].content).toBe('anything else?')
+
+    // Counted through the existing _recordApiSchemaError path (no parallel counter).
+    expect(count()).toBe(1)
+  })
+
+  it('leaves a fully valid list completely unaffected — no drops counted', async () => {
+    const wirePayload = [
+      {
+        id: 'msg-a',
+        agent_id: 'agent-1',
+        role: 'user',
+        content: 'hello',
+        timestamp: '2026-07-20T10:00:00Z',
+        status: 'ok',
+      },
+      {
+        id: 'msg-b',
+        agent_id: 'agent-1',
+        role: 'assistant',
+        content: 'hi there',
+        timestamp: '2026-07-20T10:00:01Z',
+        status: 'ok',
+        attachments: [
+          { type: 'image', path: '/work/photo.png', size: 2048, mime_type: 'image/png' },
+        ],
+      },
+    ]
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionMessages, getApiSchemaErrorCount: count } = await import('./api')
+    const messages = await fetchSessionMessages('sid-all-valid')
+    expect(messages).toHaveLength(2)
+    expect(messages.map((m) => m.id)).toEqual(['msg-a', 'msg-b'])
+    expect(count()).toBe(0)
+  })
+
+  it('still throws ApiSchemaError when the body is not an array at all (genuine contract break, not a list-item defect)', async () => {
+    // Scoping guard: per-item recovery is for LIST responses only. A
+    // response that isn't even shaped like a list (e.g. an error object)
+    // is a real contract break and must still fail loudly.
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'not a list' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
     const { fetchSessionMessages, ApiSchemaError } = await import('./api')
-    await expect(fetchSessionMessages('sid-unknown')).rejects.toBeInstanceOf(ApiSchemaError)
+    await expect(fetchSessionMessages('sid-not-array')).rejects.toBeInstanceOf(ApiSchemaError)
+  })
+})
+
+// ── fetchSessionDetail: per-item message resilience (Issue 3 / library-uat HIGH) ──
+//
+// GET /sessions/{id} (SessionDetail) nests the SAME messages array inside its
+// body. Mirrors the fetchSessionMessages coverage above: the `session`
+// object (single-object response) still fails loudly, while the nested
+// `messages` list degrades per-item.
+
+describe('fetchSessionDetail: per-item message resilience', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  function stubCookieLocal(value: string) {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => value,
+    })
+  }
+
+  function restoreCookieLocal() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (document as any).cookie
+  }
+
+  const validSession = {
+    id: 'sid-detail',
+    agent_id: 'agent-1',
+    title: 'Test session',
+    status: 'active',
+    created_at: '2026-07-20T09:00:00Z',
+    updated_at: '2026-07-20T09:00:00Z',
+    stats: {
+      tokens_in: 0,
+      tokens_out: 0,
+      tokens_total: 0,
+      cost: 0,
+      tool_calls: 0,
+      message_count: 2,
+    },
+    channel: 'webchat',
+    partitions: ['2026-07-20'],
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    stubCookieLocal('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookieLocal()
+    vi.resetModules()
+  })
+
+  it('keeps the valid session and messages, replacing only the malformed message', async () => {
+    const wirePayload = {
+      session: validSession,
+      messages: [
+        {
+          id: 'msg-ok',
+          agent_id: 'agent-1',
+          role: 'user',
+          content: 'hi',
+          timestamp: '2026-07-20T10:00:00Z',
+          status: 'ok',
+        },
+        {
+          id: 'msg-bad',
+          agent_id: 'agent-1',
+          role: 'assistant',
+          content: 'here',
+          timestamp: '2026-07-20T10:00:01Z',
+          status: 'ok',
+          attachments: [
+            { type: 'document', path: '/work/spec.docx', size: 1024, mime_type: 'application/msword' },
+          ],
+        },
+      ],
+    }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionDetail, getApiSchemaErrorCount: count } = await import('./api')
+    const detail = await fetchSessionDetail('sid-detail')
+    expect(detail.session.id).toBe('sid-detail')
+    expect(detail.messages).toHaveLength(2)
+    expect(detail.messages[0].id).toBe('msg-ok')
+    expect(detail.messages[1].id).toBe('msg-bad')
+    expect(detail.messages[1].role).toBe('system')
+    expect(detail.messages[1].content).toBe('This message could not be displayed.')
+    expect(count()).toBe(1)
+  })
+
+  it('still throws ApiSchemaError when the session object itself is malformed (single-object response — not degraded)', async () => {
+    // Scoping guard: the `session` field is a single object, not a list.
+    // Per-item recovery must NOT extend to it — a malformed session is a
+    // real contract break and should still fail loudly.
+    const wirePayload = {
+      session: { ...validSession, id: undefined }, // id is required — malformed
+      messages: [],
+    }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionDetail, ApiSchemaError } = await import('./api')
+    await expect(fetchSessionDetail('sid-bad-session')).rejects.toBeInstanceOf(ApiSchemaError)
   })
 })
 
@@ -2276,5 +2634,57 @@ describe('fetchWorkspaceInstructions / updateWorkspaceInstructions', () => {
       const { updateWorkspaceInstructions } = await import('./api')
       await expect(updateWorkspaceInstructions('ws-abc', 'x')).rejects.toThrow('400')
     })
+  })
+})
+
+// ── modelLacksImageCapability: provider-prefix stripped-lookup fallback ─────
+//
+// Mirrors pkg/providers/capabilities/catalog.go's Catalog.Resolve fix
+// (Resolve/resolveStrippedPrefix + regression tests
+// TestCatalog_Resolve_ProviderPrefixedModel_MatchesBareEntry /
+// _DoublePrefixedModel_MatchesBareEntry / _BareModelUnaffectedByPrefixFallback).
+// Agents' models are provider-prefixed ("z-ai/glm-5.2"); the
+// /providers/model-capabilities catalog is keyed by the BARE id ("glm-5.2").
+// An exact-string-only lookup never matches a prefixed id, so it always fell
+// through to the FR-026 optimistic "assume capable" default and the pre-send
+// warning never fired — the same bug the Go Resolve fix closed, mirrored
+// here so the client and server agree on how a slug resolves.
+//
+// REVERT-PROOF: every "must report lacking" case below fails against the
+// pre-fix exact-match-only implementation (it returns false — optimistic
+// default — instead of true) and passes once the stripped-prefix fallback
+// is added.
+describe('modelLacksImageCapability: provider-prefix fallback (mirrors Go Catalog.Resolve)', () => {
+  const textOnlyGlm: ModelCapabilities = { id: 'glm-5.2', modalities: ['text'] }
+  const gpt4o: ModelCapabilities = { id: 'gpt-4o', modalities: ['text', 'image'] }
+
+  it('resolves a single provider-prefixed id ("z-ai/glm-5.2") against a bare catalog entry ("glm-5.2")', () => {
+    // Live-verified shape (2026-07-28 UAT): GET /agents returns model
+    // "z-ai/glm-5.2"; GET /providers/model-capabilities returns bare "glm-5.2".
+    expect(modelLacksImageCapability('z-ai/glm-5.2', [textOnlyGlm])).toBe(true)
+  })
+
+  it('resolves the double-prefixed onboarding artifact ("openrouter/z-ai/glm-5.2") against the bare entry', () => {
+    // normalizeModel-adjacent onboarding artifact — the fallback must strip
+    // BOTH segments, not just the first, to reach the bare catalog id.
+    expect(modelLacksImageCapability('openrouter/z-ai/glm-5.2', [textOnlyGlm])).toBe(true)
+  })
+
+  it('still resolves exactly for a genuine bare id ("gpt-4o") with no vendor prefix — no over-matching', () => {
+    // gpt-4o supports image — must NOT be reported as lacking it, and the
+    // exact match must win outright without ever reaching the fallback.
+    expect(modelLacksImageCapability('gpt-4o', [gpt4o])).toBe(false)
+  })
+
+  it('does not report lacking capability for a truly unknown model (FR-026 optimistic default preserved)', () => {
+    expect(modelLacksImageCapability('some-vendor/unknown-model-xyz', [textOnlyGlm, gpt4o])).toBe(false)
+  })
+
+  it('does not crash or over-match on a trailing-slash edge case ("z-ai/")', () => {
+    expect(modelLacksImageCapability('z-ai/', [textOnlyGlm])).toBe(false)
+  })
+
+  it('returns false (optimistic) when modelId is undefined', () => {
+    expect(modelLacksImageCapability(undefined, [textOnlyGlm])).toBe(false)
   })
 })

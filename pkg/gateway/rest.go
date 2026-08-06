@@ -51,16 +51,19 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/mcp"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/library"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	wkspace "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // Version is set at build time via -ldflags "-X github.com/elicify-ai/omnipus/pkg/gateway.Version=x.y.z".
@@ -1552,19 +1555,99 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 	})
 }
 
+// listAgentSessions returns the union of an agent's sessions from both
+// session stores, deduplicated by session ID. Ordinary chat sessions moved
+// to the shared store (AgentLoop.GetSessionStore — "the shared store for new
+// sessions") some time ago; AgentLoop.GetAgentStore's own doc marks it "kept
+// for legacy per-agent session access". This endpoint used to read
+// GetAgentStore exclusively, so it silently omitted every session minted
+// after that move.
+//
+// This does not call AgentLoop.ListAllSessions: that helper merges the
+// shared store with EVERY registered agent's legacy store to build a
+// cross-agent list, which would mean opening and reading every OTHER
+// agent's session directory off disk just to filter the result back down to
+// this one agent — needless I/O for a single-agent-scoped endpoint. Instead
+// this inlines the same shared-primary/per-agent-secondary merge idiom
+// ListAllSessions and createSessionHTTP already use, scoped to just the two
+// stores that can hold this agent's sessions.
 func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	// agentID is already validated by HandleAgents before reaching here.
-	store := a.agentLoop.GetAgentStore(agentID)
-	if store == nil {
-		jsonOK(w, []gen.Session{})
+	seen := make(map[string]bool)
+	var metas []*session.UnifiedMeta
+	var errs []error
+
+	if shared := a.agentLoop.GetSessionStore(); shared != nil {
+		sharedMetas, err := shared.ListSessions()
+		if err != nil {
+			// Logged and collected. This used to be treated as non-fatal
+			// whenever the OTHER store still produced data, on the theory
+			// that a partial list beats an empty one — but the shared store
+			// is the PRIMARY home for sessions minted after the migration
+			// described in this function's doc comment, so "legacy store
+			// still has data" typically means "most of this agent's real
+			// sessions are the ones now missing". A 200 built from whatever
+			// the healthy store returned would look complete to the caller
+			// (the SPA has no way to tell "all sessions" from "some
+			// sessions") while silently omitting the majority — reintroducing
+			// one level up the exact bug this function was written to fix.
+			// See the escalation check after both scans: ANY store error now
+			// aborts with 500 rather than risk a caller trusting an
+			// incomplete list as complete.
+			slog.Warn("rest: list agent sessions: shared store", "agent_id", agentID, "error", err)
+			errs = append(errs, fmt.Errorf("shared: %w", err))
+		}
+		for _, m := range sharedMetas {
+			// The shared store holds sessions for every agent; membership is
+			// AgentIDs (PostLoad-backfilled from the legacy single AgentID
+			// field on every read, so this is never empty for a real session).
+			if slices.Contains(m.AgentIDs, agentID) {
+				metas = append(metas, m)
+				seen[m.ID] = true
+			}
+		}
+	}
+
+	if legacy := a.agentLoop.GetAgentStore(agentID); legacy != nil {
+		legacyMetas, err := legacy.ListSessions()
+		if err != nil {
+			slog.Warn("rest: list agent sessions: legacy store", "agent_id", agentID, "error", err)
+			errs = append(errs, fmt.Errorf("legacy: %w", err))
+		}
+		for _, m := range legacyMetas {
+			// A session can exist in both stores (a pre-fix duplicate-mint bug
+			// produced exactly that) — the shared-store copy wins.
+			if !seen[m.ID] {
+				metas = append(metas, m)
+				seen[m.ID] = true
+			}
+		}
+	}
+
+	// ANY store read failure escalates to a 500, even when the OTHER store
+	// produced data. The wire shape for this endpoint is a bare
+	// `type: array, items: Session` (contracts/openapi.yaml) — unlike e.g.
+	// ChannelEntry's per-entry Degraded/DegradedReason fields (rest.go's
+	// applyDegradedOverlay), a JSON array has no sibling slot to carry a
+	// "this list is incomplete" signal, and changing the response to a
+	// wrapped object would be a breaking wire-shape change for every
+	// existing caller. Given that choice, silently returning whatever the
+	// healthy store has — indistinguishable on the wire from "this really is
+	// the complete list" — is worse than an honest 500: a partial 200 here
+	// would repeat, one layer up, the exact bug this function was written to
+	// fix (see the doc comment above). A future wire-shape change to carry an
+	// explicit partial/degraded flag is a legitimate alternative but requires
+	// a coordinated SPA update, not a decision to make unilaterally here.
+	if len(errs) > 0 {
+		slog.Error("rest: list agent sessions: store read failed", "agent_id", agentID, "errors", errs)
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list sessions: %v", errors.Join(errs...)))
 		return
 	}
-	metas, err := store.ListSessions()
-	if err != nil {
-		slog.Error("rest: list agent sessions", "agent_id", agentID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list sessions: %v", err))
-		return
-	}
+
+	sort.Slice(metas, func(i, j int) bool {
+		return metas[i].UpdatedAt.After(metas[j].UpdatedAt)
+	})
+
 	// Route every session through unifiedMetaToGenSession so required arrays
 	// (Partitions) marshal as [] not null — Zod requires type:array on the SPA.
 	genSessions := make([]gen.Session, 0, len(metas))
@@ -2874,8 +2957,11 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 	// triggerReloadAndWait polls until reload completes (or 5s deadline) so the in-memory config is
 	// updated before the 204 response is sent back to the caller (prevents a
 	// race where an immediate GET /sessions/:id still sees agent_removed=false).
-	if err := a.triggerReloadAndWait(); err != nil {
+	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Error("rest: deleteAgent: reload failed", "agent_id", id, "error", err)
+	} else if !confirmed {
+		slog.Warn("rest: deleteAgent: reload did not confirm within the poll window; "+
+			"deleted agent may still be resolvable in the runtime registry", "agent_id", id)
 	}
 	// Audit the destructive action. Emitted after the write succeeds; a
 	// failed audit write is logged (not silently discarded) so audit-log
@@ -4986,6 +5072,29 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 		})
 	}
 
+	// D6: God mode armed. Triggered on the raw persisted intent
+	// (cfg.Sandbox.GodMode), NOT on cfg.Sandbox.GodModeAllowed alone —
+	// GodModeAllowed being true (S3: authorized in the past, currently
+	// disabled) is a genuinely inert state and must not false-positive here.
+	// cfg.Sandbox.GodMode true covers both S1 (armed via the UI, pending
+	// restart — the config write already happened even though this boot
+	// hasn't activated it) and S2 (live-active): either way an operator has
+	// committed to disabling the kernel sandbox, egress restrictions, and
+	// the shell guard, which is strictly worse than the sandbox-disabled
+	// check above (that one only concerns the sandbox; god mode disables
+	// three controls simultaneously), hence "high" not "medium".
+	if cfg.Sandbox.GodMode {
+		issues = append(issues, map[string]any{
+			"id":             "god-mode-armed",
+			"severity":       "high",
+			"title":          "God-mode is armed",
+			"description":    "God-mode is enabled or pending activation. It bypasses every permission prompt and disables the kernel sandbox, outbound-network restrictions, and the shell guard for every agent.",
+			"recommendation": "Go to Settings → Security → Danger zone and turn god-mode off, unless this is intentional.",
+			"action_link":    "/settings?tab=security",
+			"action_label":   "Open security settings",
+		})
+	}
+
 	return issues
 }
 
@@ -5054,6 +5163,23 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 		a.withAuth(withRateLimit(cliValidateLimiter, a.HandleSystemCliValidate)),
 	)
 	cm.RegisterHTTPHandler("/api/v1/status", a.withAuth(a.HandleStatus))
+	// GET /api/v1/tasks/occurrences — Calendar Recurrence Redesign occurrence
+	// expansion endpoint (FR-008, contracts/openapi.yaml operationId
+	// listTaskOccurrences). Registered as an EXACT pattern, independent of
+	// registration order relative to the "/api/v1/tasks/" prefix route
+	// below: dynamicServeMux.ServeHTTP (pkg/channels/dynamic_mux.go) always
+	// checks its handlers map for an exact path match FIRST, falling back
+	// to the longest trailing-slash PREFIX match only when no exact match
+	// exists — so this exact "occurrences" registration always wins over
+	// HandleTasks' ID-parsing branch (which would otherwise 404 it as
+	// task-not-found, per the spec's "Routing note"). Wrapped in the
+	// DEDICATED taskReadLimiter (240/min, rest_auth.go) — NOT configLimiter
+	// and NOT plain withAuth like the task CRUD routes immediately below
+	// (which carry no limiter).
+	cm.RegisterHTTPHandler(
+		"/api/v1/tasks/occurrences",
+		a.withAuth(withRateLimit(taskReadLimiter, a.HandleTaskOccurrences)),
+	)
 	cm.RegisterHTTPHandler("/api/v1/tasks", a.withAuth(a.HandleTasks))
 	cm.RegisterHTTPHandler("/api/v1/tasks/", a.withAuth(a.HandleTasks))
 	// Plans REST surface (ADR-049 D1, Wave 2-C1). GET/POST /workspaces/{id}/plans
@@ -5063,6 +5189,14 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/plans/", a.withAuth(a.HandlePlans))
 	cm.RegisterHTTPHandler("/api/v1/workspaces", a.withAuth(withRateLimit(configLimiter, a.HandleWorkspaces)))
 	cm.RegisterHTTPHandler("/api/v1/workspaces/", a.withAuth(withRateLimit(configLimiter, a.HandleWorkspaces)))
+	// Library file explorer (rest_library.go). withUploadAuth, not plain
+	// withAuth: /library/{id}/upload streams multipart straight through this
+	// dispatcher, and withAuth's body limit would truncate it. Every JSON
+	// route behind this dispatcher is still independently capped at 1MB by
+	// decodeAndValidate, so relaxing the outer limit does not widen the
+	// attack surface for the non-upload operations.
+	cm.RegisterHTTPHandler("/api/v1/library", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
+	cm.RegisterHTTPHandler("/api/v1/library/", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
 	cm.RegisterHTTPHandler("/api/v1/providers", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/providers/", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/mcp-servers", a.withAuth(a.HandleMCPServers))
@@ -5150,6 +5284,9 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// Chain: withAuth (verifies token) → handler.
 	cm.RegisterHTTPHandler("/api/v1/credentials", a.withAuth(a.HandleCredentials))
 	cm.RegisterHTTPHandler("/api/v1/credentials/", a.withAuth(a.HandleCredentials))
+	// Option A keeps workspace and media IDs as separately validated path segments;
+	// the legacy global media route remains below for backward compatibility.
+	cm.RegisterHTTPHandler("/api/v1/media/workspace/", a.withOptionalAuth(a.HandleMediaByRef))
 	cm.RegisterHTTPHandler("/api/v1/media/", a.withOptionalAuth(a.HandleMedia))
 	cm.RegisterHTTPHandler("/api/v1/backup", a.withAuth(a.HandleCreateBackup))
 	cm.RegisterHTTPHandler("/api/v1/backups", a.withAuth(a.HandleListBackups))
@@ -5792,6 +5929,73 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonOK(w, providers)
 
+	case r.Method == http.MethodGet && sub == "model-capabilities":
+		// GET /api/v1/providers/model-capabilities (D18) — flat list of
+		// {id, modalities} from the in-repo capability catalog
+		// (pkg/providers/capabilities), so the SPA can warn — client-side,
+		// non-blocking — before sending a vision attachment to a model that
+		// cannot see images. Model vision capability is not knowable
+		// client-side at all otherwise. The catalog is optional: a nil
+		// catalog (not yet constructed, e.g. degraded boot) returns an
+		// empty list, never a 500 — the reactive server-side capability
+		// gate (pkg/agent/media_present.go) remains the authoritative
+		// backstop regardless of what this endpoint returns.
+		var catalog *capabilities.Catalog
+		if a.agentLoop != nil {
+			catalog = a.agentLoop.GetCapabilityCatalog()
+		} else {
+			// NewAgentLoop always wires the embedded-seed catalog (loop.go
+			// ~:645), so a.agentLoop == nil is a genuine degraded-boot
+			// shape, never a normal path. The client's
+			// modelLacksImageCapability treats an ABSENT catalog entry as
+			// "assume it can" (FR-026's intentional optimistic default),
+			// so an empty [] response here is wire-identical to "the
+			// catalog legitimately has no entries" — a degraded boot
+			// would otherwise silently produce a blanket all-clear (no
+			// vision warnings for anyone) with zero server-side signal
+			// anywhere. Log it so the degraded state is observable; the
+			// response contract itself is unchanged (still [], never a
+			// 500 — this is an advisory endpoint).
+			slog.Warn("rest: model-capabilities requested with no AgentLoop wired — degraded boot, " +
+				"serving an empty catalog (client-side vision warnings will not fire for any model " +
+				"until this is resolved)")
+		}
+		capsOut := make([]gen.ModelCapabilities, 0)
+		if catalog != nil {
+			for _, snap := range catalog.Models() {
+				modalities := snap.Handle.InputModalities()
+				wireModalities := make([]gen.ModelCapabilitiesModalities, 0, len(modalities))
+				for _, m := range modalities {
+					// The INTERNAL Modality type is deliberately open —
+					// pkg/providers/capabilities/modality.go accepts any
+					// non-empty unknown value so an operator can seed a
+					// modality ("3d", "hologram") ahead of runtime support
+					// (asserted by TestParseSeed_AcceptsUnknownModalities).
+					// The WIRE enum is closed. Casting straight across put an
+					// out-of-enum value on the wire, and the SPA validates with
+					// z.array(z.enum(...)), which rejects the ENTIRE array on a
+					// single bad element — so one forward-compat modality
+					// anywhere in the catalog silently disabled the vision
+					// pre-send warning for EVERY model (both call sites swallow
+					// the failure to console.debug). Drop unrepresentable
+					// values instead: a model with ["text","3d"] correctly
+					// reports ["text"], which is exactly right for this
+					// endpoint's advisory purpose — it lacks "image", so the
+					// warning still fires.
+					wm := gen.ModelCapabilitiesModalities(m)
+					if !wm.Valid() {
+						continue
+					}
+					wireModalities = append(wireModalities, wm)
+				}
+				capsOut = append(capsOut, gen.ModelCapabilities{
+					Id:         snap.ID,
+					Modalities: wireModalities,
+				})
+			}
+		}
+		jsonOK(w, capsOut)
+
 	case r.Method == http.MethodPut && sub != "" && !strings.HasSuffix(sub, "/test"):
 		// PUT /api/v1/providers/{id} — update or insert a provider entry.
 		// Allow unauthenticated access during onboarding so the wizard can
@@ -6012,13 +6216,26 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 			return
 		}
-		// Reload so the in-memory config picks up the new API key. Waiting (not
-		// the bare TriggerReload) because the 500 below promises the caller the
-		// key is NOT live yet — that promise is only meaningful if we actually
-		// waited for the reload to finish. It also stops a request that arrived
-		// mid-reload from being silently dropped (services.beginReload
-		// coalescing) and returning 200 with the old key still in force.
-		if err := a.triggerReloadAndWait(); err != nil {
+		// Trigger reload AND WAIT for it (triggerReloadAndWaitOutcome, not a bare
+		// TriggerReload — mirrors createAgent/updateAgent/deleteAgent/
+		// updateAgentTools): a bare TriggerReload only enqueues the reload and
+		// returns before the registry actually swaps. Per updateAgent's
+		// model-apply doc comment a few hundred lines up, persisting +
+		// SwapConfig alone does NOT touch an already-constructed agent
+		// instance's cached provider/model client — only the async
+		// TriggerReload → executeReload → ReloadProviderAndConfig →
+		// NewAgentRegistry rebuild does. Without waiting, a client that fixes a
+		// revoked/invalid API key here and immediately sends a chat message
+		// could still be served by the stale cached client (and the old,
+		// possibly-compromised key) for as long as that goroutine takes to
+		// run. triggerReloadAndWaitOutcome absorbs ErrReloadNotConfigured (unit tests
+		// / minimal embeddings without the full reload pipeline wired)
+		// internally as a no-op, so a non-nil error here is always a genuine
+		// reload failure — preserving the existing 500 semantics below (the
+		// key IS persisted; only the live application failed). The confirmed
+		// bool additionally distinguishes a genuine timeout (agents may still
+		// be served by the stale cached provider client) from a hard failure.
+		if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 			slog.Error("config reload after provider update failed", "error", err)
 			jsonErr(
 				w,
@@ -6026,6 +6243,9 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("provider updated but config reload failed: %v", err),
 			)
 			return
+		} else if !confirmed {
+			slog.Warn("rest: reload after provider update did not confirm within the poll window; "+
+				"agents may still be served by the stale cached provider client", "provider_id", providerID)
 		}
 		hasEndpoint := providers_pkg.GetDefaultAPIBase(providerID) != ""
 		respModels := []string{}
@@ -6423,7 +6643,7 @@ func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 		a.addMCPServer(w, r)
 
 	case r.Method == http.MethodDelete && sub != "" && subSuffix == "":
-		a.deleteMCPServer(w, serverID)
+		a.deleteMCPServer(w, r, serverID)
 
 	case r.Method == http.MethodGet && serverID != "" && subSuffix == "tools":
 		a.listMCPServerTools(w, serverID)
@@ -6444,17 +6664,42 @@ func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 // while leaving real config I/O / parse failures to surface as 500.
 var errMCPNotFound = errors.New("mcp server not found")
 
+// mcpLiveStatus maps AgentLoop.MCPServerStatus's live status string
+// ("connected"|"error"|"disconnected") to the generated McpServerStatus enum,
+// alongside the live tool_count (entries this server has in the central MCP
+// registry; 0 when unset or not connected). addMCPServer, patchMCPServer, and
+// listMCPServers all derive status/tool_count through this single path so the
+// three endpoints never disagree on what "connected" means.
+func (a *restAPI) mcpLiveStatus(name string) (gen.McpServerStatus, int) {
+	status, toolCount, _ := a.agentLoop.MCPServerStatus(name)
+	switch status {
+	case "connected":
+		return gen.McpServerStatusConnected, toolCount
+	case "error":
+		return gen.McpServerStatusError, toolCount
+	default:
+		return gen.McpServerStatusDisconnected, toolCount
+	}
+}
+
 // listMCPServers reads configured MCP servers from config and returns them as
-// McpServer[] (contracts/components/schemas/McpServer.yaml). G6: status reflects
-// the live MCP manager (a server present in the manager is "connected"), and
-// tool_count is the number of tools that server registered in the MCP registry
-// (matching GET /mcp-servers/{id}/tools). When MCP is disabled / not yet
-// connected, status is "disconnected" with tool_count 0.
+// McpServer[] (contracts/components/schemas/McpServer.yaml). G6: status comes from
+// mcpLiveStatus (AgentLoop.MCPServerStatus), the SAME live-reconciliation state
+// addMCPServer/patchMCPServer/deleteMCPServer read back after a config write — a
+// server actually connected via the live manager reports "connected", a server
+// that failed to connect reports "error", and anything else (disabled,
+// reconciliation never ran) reports "disconnected". tool_count is sourced from
+// a.mcpRegistry directly (matching GET /mcp-servers/{id}/tools) rather than
+// mcpLiveStatus's own tool_count — see the inline comment below. tools (sorted
+// tool names) is populated from the same a.mcpRegistry pass, and omitted when
+// the server has no registered tools.
 func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
-	cfg := a.agentLoop.GetConfig()
-	mgr := a.agentLoop.GetMCPManager()
-	result := make([]gen.McpServer, 0, len(cfg.Tools.MCP.Servers))
-	for name, srv := range cfg.Tools.MCP.Servers {
+	// MCPServersSnapshot (not GetConfig().Tools.MCP.Servers) — ranging the live
+	// map directly races the sysagent config-mutation path, which mutates it
+	// in place while holding the agent loop's write lock.
+	servers := a.agentLoop.MCPServersSnapshot()
+	result := make([]gen.McpServer, 0, len(servers))
+	for name, srv := range servers {
 		transport := gen.McpServerTransportStdio
 		switch srv.Type {
 		case "sse":
@@ -6464,17 +6709,21 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 		}
 		enabled := srv.Enabled
 
-		status := gen.McpServerStatusDisconnected
-		if mgr != nil {
-			if _, ok := mgr.GetServer(name); ok {
-				status = gen.McpServerStatusConnected
-			}
-		}
+		// Status comes from the same live-reconciliation state add/patch/delete
+		// read back (mcpLiveStatus), but tool_count is sourced from a.mcpRegistry
+		// directly — as before this fix — rather than mcpLiveStatus's own
+		// tool_count (which reads the AgentLoop's central registry). In production
+		// these are the SAME registry instance (gateway.go wires both to
+		// centralMCPReg), but keeping this path independent matches the existing
+		// GET /mcp-servers/{id}/tools contract, which also reads a.mcpRegistry.
+		status, _ := a.mcpLiveStatus(name)
 		toolCount := 0
+		var toolNames []string
 		if a.mcpRegistry != nil {
 			for _, e := range a.mcpRegistry.Describe() {
 				if e.ServerID == name {
 					toolCount++
+					toolNames = append(toolNames, e.Name)
 				}
 			}
 		}
@@ -6486,6 +6735,10 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 			Status:    status,
 			ToolCount: toolCount,
 			Enabled:   &enabled,
+		}
+		if len(toolNames) > 0 {
+			sort.Strings(toolNames)
+			entry.Tools = &toolNames
 		}
 		// Non-secret config fields for edit pre-fill (#437).
 		if srv.Command != "" {
@@ -6533,8 +6786,11 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 // If the server has no registered tools (e.g. not yet connected), returns an empty list.
 // 404 if serverID is not present in the config.
 func (a *restAPI) listMCPServerTools(w http.ResponseWriter, serverID string) {
-	cfg := a.agentLoop.GetConfig()
-	if _, exists := cfg.Tools.MCP.Servers[serverID]; !exists {
+	// MCPServersSnapshot (not GetConfig().Tools.MCP.Servers) — indexing the
+	// live map directly races the sysagent config-mutation path, which
+	// mutates it in place while holding the agent loop's write lock.
+	servers := a.agentLoop.MCPServersSnapshot()
+	if _, exists := servers[serverID]; !exists {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("mcp server %q not found", serverID))
 		return
 	}
@@ -6553,6 +6809,9 @@ func (a *restAPI) listMCPServerTools(w http.ResponseWriter, serverID string) {
 // addMCPServer handles POST /api/v1/mcp-servers.
 // Accepts McpServerCreate (contracts/components/schemas/McpServerCreate.yaml).
 // Transport must be one of: stdio, sse, http (enforced by enum validation).
+// After the config write, live-reconciles the MCP manager (AgentLoop.ReconcileMCP)
+// so the server actually connects and its tools register before the response is
+// built — status/tool_count reflect the real outcome, not a hardcoded placeholder.
 // Returns the new McpServer entry shaped per contracts/components/schemas/McpServer.yaml.
 func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 	var req gen.McpServerCreate
@@ -6629,6 +6888,12 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		if _, exists := servers[req.Name]; exists {
 			return fmt.Errorf("mcp server %q already exists", req.Name)
 		}
+		// Adding a server is explicit operator intent to use MCP — flip the global
+		// kill-switch on in the same write so ReconcileMCP's desired set isn't
+		// forced empty by a still-false tools.mcp.enabled (default on fresh
+		// installs). PATCH/delete deliberately do NOT touch this flag: turning
+		// MCP off globally is a separate, explicit action.
+		mcp["enabled"] = true
 		entry := map[string]any{
 			"enabled": true,
 			"type":    transport,
@@ -6665,6 +6930,16 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
+	// Config write succeeded — reconcile the live manager so the server actually
+	// connects instead of sitting "disconnected" until a full gateway
+	// restart. Best-effort: a reconcile failure/timeout does not undo the config
+	// write or fail the request — the operator can retry via PATCH/reload, and the
+	// response status below honestly reflects whatever the live state ended up as.
+	rctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	if err := a.agentLoop.ReconcileMCP(rctx); err != nil {
+		slog.Warn("rest: add mcp server: live reconcile failed", "server", req.Name, "error", err)
+	}
+	cancel()
 	// Map the transport string to the generated enum value for the response.
 	var respTransport gen.McpServerTransport
 	switch transport {
@@ -6675,12 +6950,13 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 	default:
 		respTransport = gen.McpServerTransportStdio
 	}
+	status, toolCount := a.mcpLiveStatus(req.Name)
 	resp := gen.McpServer{
 		Id:        req.Name,
 		Name:      req.Name,
 		Transport: respTransport,
-		Status:    gen.McpServerStatusDisconnected,
-		ToolCount: 0,
+		Status:    status,
+		ToolCount: toolCount,
 	}
 	jsonCreated(w, resp)
 }
@@ -6715,7 +6991,11 @@ func mcpURLSchemeValid(rawURL string) bool {
 	}
 }
 
-func (a *restAPI) deleteMCPServer(w http.ResponseWriter, id string) {
+// deleteMCPServer handles DELETE /api/v1/mcp-servers/{id}. Removes the server
+// from config, then live-reconciles the MCP manager (AgentLoop.ReconcileMCP) so
+// a connected server is actually disconnected and its tools evicted from the
+// central/per-agent registries, rather than lingering live until restart.
+func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid server id")
 		return
@@ -6748,23 +7028,64 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, id string) {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("mcp server %q not found", id))
 		return
 	}
+	// Config write succeeded — reconcile the live manager so the removed server is
+	// actually disconnected (DisconnectServer) and its tools evicted from the
+	// central/per-agent registries, rather than lingering connected until restart.
+	rctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	if err := a.agentLoop.ReconcileMCP(rctx); err != nil {
+		slog.Warn("rest: delete mcp server: live reconcile failed", "server", id, "error", err)
+	}
+	cancel()
 	jsonOK(w, map[string]string{"status": "removed", "id": id})
 }
 
 // testMCPServer handles POST /api/v1/mcp-servers/{id}/test (G7).
 // Opens a temporary MCP manager, attempts to connect to the configured server,
-// reports the result, then closes the manager. No persistent state is changed.
-// Returns McpServerTestResponse: success=true on live connection, success=false (HTTP 200)
-// when the server is unreachable or misconfigured.
-func (a *restAPI) testMCPServer(w http.ResponseWriter, _ *http.Request, id string) {
+// and reports the result, then closes the temporary manager. The test
+// connection itself changes no persistent state beyond the heal described
+// below. Returns McpServerTestResponse: success=true on live connection,
+// success=false (HTTP 200) when the server is unreachable or misconfigured
+// (including a relative env_file the gateway cannot resolve).
+//
+// Heal on success: a successful test proves the server is reachable, so if it
+// is enabled in config, the global tools.mcp.enabled kill-switch is ALSO on,
+// and it is not yet connected in the live manager (e.g. it failed to connect
+// at boot, or was added before the kill-switch was flipped on), this triggers
+// a real AgentLoop.ReconcileMCP pass to bring the live state in line with what
+// the test just proved works — a manual "Test" click on a stuck server
+// doubles as an unstick, instead of leaving the operator to separately toggle
+// enabled off/on to force a reconnect. When the global flag is off, no
+// reconcile can bring the server live (ReconcileMCP's desired set is forced
+// empty), so the success message says so instead of silently doing nothing.
+// This is the ONLY state change the endpoint makes, and only follows from
+// success; a failed test never triggers reconciliation.
+func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid server id")
 		return
 	}
-	cfg := a.agentLoop.GetConfig()
-	srv, exists := cfg.Tools.MCP.Servers[id]
+	// MCPServersSnapshot (not GetConfig().Tools.MCP.Servers) — ranging/indexing
+	// the live map directly races the sysagent config-mutation path, which
+	// mutates it in place while holding the agent loop's write lock.
+	servers := a.agentLoop.MCPServersSnapshot()
+	srv, exists := servers[id]
 	if !exists {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("mcp server %q not found", id))
+		return
+	}
+
+	// Resolve a relative env_file against the same workspace path production
+	// reconciliation uses, so the throwaway test connection sees the same
+	// environment a real connect would — otherwise "Test" could report success
+	// for a server that fails to actually connect once reconciled (or vice
+	// versa). A resolution error is a test failure, not a 500: it is exactly
+	// the misconfiguration the test button exists to surface.
+	resolvedSrv, err := mcp.ResolveServerEnvFile(srv, a.agentLoop.MCPWorkspacePath())
+	if err != nil {
+		jsonOK(w, gen.McpServerTestResponse{
+			Success: false,
+			Message: fmt.Sprintf("env_file: %s", err.Error()),
+		})
 		return
 	}
 
@@ -6778,7 +7099,7 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, _ *http.Request, id strin
 		}
 	}()
 
-	if err := tmpMgr.ConnectServer(ctx, id, srv); err != nil {
+	if err := tmpMgr.ConnectServer(ctx, id, resolvedSrv); err != nil {
 		resp := gen.McpServerTestResponse{
 			Success: false,
 			Message: fmt.Sprintf("connection failed: %s", err.Error()),
@@ -6805,6 +7126,27 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, _ *http.Request, id strin
 	sort.Strings(toolNames)
 
 	msg := fmt.Sprintf("connected successfully; %d tool(s) available", toolCount)
+
+	// Heal: the throwaway connection just proved the server is reachable. If
+	// config still has it enabled, the global kill-switch is on, and the LIVE
+	// manager doesn't have it up (status != "connected"), run a real reconcile
+	// so this success is not wasted — the operator's next GET reflects a
+	// genuinely connected server instead of "disconnected"/"error" despite the
+	// test that just passed. When the global flag is off, ReconcileMCP's
+	// desired set would be empty regardless of this server's own Enabled bit,
+	// so a reconcile here would be a silent no-op — skip it and say so instead.
+	if srv.Enabled {
+		if !a.agentLoop.GetConfig().Tools.MCP.Enabled {
+			msg += " (MCP is globally disabled — enable tools.mcp.enabled to connect)"
+		} else if status, _, _ := a.agentLoop.MCPServerStatus(id); status != "connected" {
+			rctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+			if err := a.agentLoop.ReconcileMCP(rctx); err != nil {
+				slog.Warn("rest: test mcp server: heal reconcile failed", "id", id, "error", err)
+			}
+			cancel()
+		}
+	}
+
 	resp := gen.McpServerTestResponse{
 		Success:   true,
 		Message:   msg,
@@ -6817,7 +7159,12 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, _ *http.Request, id strin
 // patchMCPServer handles PATCH /api/v1/mcp-servers/{id} (G8).
 // Merges the provided (non-nil) fields from McpServerUpdate into the stored config
 // entry; omitted fields are preserved. Validates transport-specific constraints
-// when URL is changed.
+// when URL is changed. An explicit {enabled: true} also flips the global
+// tools.mcp.enabled kill-switch on in the same write (mirrors addMCPServer;
+// {enabled: false} and any other field never touch the global flag). After the
+// config write, live-reconciles the MCP manager (AgentLoop.ReconcileMCP) so the
+// live connection is reconnected with the new config (or disconnected, if the
+// patch disabled it) before the response is built.
 func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid server id")
@@ -6919,6 +7266,18 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		}
 		servers[id] = updatedMap
 		updatedEntry = current
+
+		// An explicit PATCH {enabled: true} is operator intent to (re)connect
+		// this server, exactly like addMCPServer's own auto-enable — flip the
+		// global kill-switch on in the same write so ReconcileMCP's desired set
+		// isn't forced empty by a still-false tools.mcp.enabled (the
+		// upgraded-install trap: an operator re-enables a server that was
+		// disabled before the global flag existed, Test succeeds, but nothing
+		// ever connects because the flag itself was never on). Any other PATCH
+		// — including {enabled: false} — leaves the global flag untouched.
+		if req.Enabled != nil && *req.Enabled {
+			mcpSection["enabled"] = true
+		}
 		return nil
 	}); err != nil {
 		if mcpPatchValidationMsg != "" {
@@ -6933,6 +7292,15 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
+	// Config write succeeded — reconcile the live manager so an edited server
+	// (changed command/url/args/env/headers, or toggled enabled) is reconnected
+	// with the new config, or disconnected if the patch disabled it, instead of
+	// the live connection silently drifting from what config.json now says.
+	rctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	if err := a.agentLoop.ReconcileMCP(rctx); err != nil {
+		slog.Warn("rest: patch mcp server: live reconcile failed", "server", id, "error", err)
+	}
+	cancel()
 
 	transport := gen.McpServerTransportStdio
 	switch updatedEntry.Type {
@@ -6942,12 +7310,13 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		transport = gen.McpServerTransportHttp
 	}
 	enabled := updatedEntry.Enabled
+	status, toolCount := a.mcpLiveStatus(id)
 	resp := gen.McpServer{
 		Id:        id,
 		Name:      id,
 		Transport: transport,
-		Status:    gen.McpServerStatusDisconnected,
-		ToolCount: 0,
+		Status:    status,
+		ToolCount: toolCount,
 		Enabled:   &enabled,
 	}
 	jsonOK(w, resp)
@@ -7231,22 +7600,25 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
-	// Trigger a reload so the agent's atomic toolPolicy pointer
-	// (pkg/agent/instance.go:290 — populated by ReloadProviderAndConfig)
-	// is swapped to the new policy. Without this the next turn's
-	// resolveToolPolicyAtExec / FilterToolsByPolicy still sees the previous
-	// snapshot, and (e.g.) an exec call freshly bumped to "ask" runs as
-	// "allow" because LoadToolPolicy returns the stale pointer. The earlier
-	// "no reload needed" claim was wrong — config-on-disk and the in-memory
-	// pointer are decoupled. Reload is cheap and idempotent.
-	//
-	// triggerReloadAndWait (not the bare TriggerReload): this is a fail-open
-	// authorization path. Returning 200 while the rebuild is still queued means
-	// a tool freshly bumped to "deny"/"ask" keeps executing as "allow" for the
-	// duration. It also folds in the ErrReloadNotConfigured no-op for unit
-	// tests, and — with services.beginReload's coalescing — a request that
-	// arrives mid-reload is served by a follow-up reload rather than dropped.
-	if err := a.triggerReloadAndWait(); err != nil {
+	// Trigger a reload AND WAIT for it (triggerReloadAndWaitOutcome, not a bare
+	// TriggerReload — mirrors createAgent/updateAgent/deleteAgent) so the
+	// agent's atomic toolPolicy pointer (pkg/agent/instance.go:290 —
+	// populated by ReloadProviderAndConfig) is actually swapped to the new
+	// policy before this handler responds. A bare TriggerReload only
+	// enqueues the reload and returns before the registry swap happens —
+	// without waiting, the next turn's resolveToolPolicyAtExec /
+	// FilterToolsByPolicy could still see the previous snapshot for as long
+	// as that swap takes to land, and (e.g.) an exec call freshly bumped to
+	// "ask" would run as "allow" because LoadToolPolicy returns the stale
+	// pointer. triggerReloadAndWaitOutcome already treats
+	// ErrReloadNotConfigured (unit tests without the full gateway reload
+	// pipeline wired) as a no-op, so a non-nil error here is always a genuine
+	// reload failure. This is a fail-open authorization path — returning 200
+	// while the rebuild is still queued means a tool freshly bumped to
+	// "deny"/"ask" keeps executing as "allow" for the duration — so the
+	// confirmed bool below also surfaces an unconfirmed (timed-out) reload as
+	// a warning rather than silently claiming success.
+	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Error("agent tools update: reload failed — in-memory policy not updated",
 			"agent_id", agentID, "error", err)
 		if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
@@ -7261,6 +7633,9 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		jsonErr(w, http.StatusServiceUnavailable,
 			"config saved but in-memory reload failed; restart the gateway or retry")
 		return
+	} else if !confirmed {
+		slog.Warn("rest: agent tools update: reload did not confirm within the poll window; "+
+			"in-memory tool policy may not yet reflect the new config", "agent_id", agentID)
 	}
 	// Use HandleAgentToolsRegistry so the PUT response emits `tools` (not
 	// `effective_tools`) — both paths must share the same wire shape to match
@@ -8218,13 +8593,16 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 	// unit-test environment TriggerReload is a no-op (ErrReloadNotConfigured), so
 	// this is safe to call unconditionally.
 	if a.agentLoop != nil {
-		if err := a.triggerReloadAndWait(); err != nil {
+		if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 			// A genuine reload failure means the (now config-less) channel may still
 			// be running. Log it but continue the teardown — we must still remove the
 			// credentials/state the operator asked to delete, and the config entry is
 			// already gone so a subsequent reload will converge.
 			slog.Error("rest: delete channel instance: reload after config removal failed",
 				"id", channelID, "error", err)
+		} else if !confirmed {
+			slog.Warn("rest: delete channel instance: reload did not confirm within the poll window; "+
+				"the now config-less channel instance may still be running", "id", channelID)
 		}
 	}
 
@@ -8335,7 +8713,7 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 	// error on a genuine reload failure, which we surface rather than reporting a false
 	// success (the flag persisted but the channel did not start).
 	if a.agentLoop != nil {
-		if err := a.triggerReloadAndWait(); err != nil {
+		if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 			verb := "start"
 			if !enabled {
 				verb = "stop"
@@ -8345,6 +8723,14 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 			jsonErr(w, http.StatusInternalServerError,
 				fmt.Sprintf("channel %s saved but failed to %s: %v", channelID, verb, err))
 			return
+		} else if !confirmed {
+			verb := "start"
+			if !enabled {
+				verb = "stop"
+			}
+			slog.Warn("rest: channel reload after enable toggle did not confirm within the poll window; "+
+				"channel may not yet have finished attempting to "+verb,
+				"channel", channelID, "enabled", enabled)
 		}
 	}
 	jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: enabled})
@@ -8969,6 +9355,12 @@ func (a *restAPI) withUploadAuth(handler http.HandlerFunc) http.HandlerFunc {
 // Files are stored at ~/.omnipus/uploads/{session_id}/{sanitized_filename}.
 // Max file size per part: 100 MB. Data is streamed directly to disk; the full
 // file is never buffered in memory.
+//
+// ADR-051 Rev 4 (FR-001): when the request carries a workspace_id (query param
+// or form field before the file parts), files are routed to the workspace's
+// persistent media library (workspaces/<ws>/media/) via library.Upload instead
+// of the legacy session-scoped uploads dir. When no workspace_id is present,
+// the legacy path is used unchanged (backward compat).
 func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -8978,6 +9370,9 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// session_id may come from either a query parameter or a form field that
 	// appears before any file parts. We prefer the query param for simplicity.
 	sessionID := r.URL.Query().Get("session_id")
+	// workspace_id (ADR-051 Rev 4 FR-001) follows the same pattern: query
+	// param first, form field as fallback before the file parts.
+	workspaceID := r.URL.Query().Get("workspace_id")
 
 	// Parse the multipart stream without buffering file content in memory.
 	reader, err := r.MultipartReader()
@@ -8988,6 +9383,12 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var resp gen.UploadFilesResponse
+
+	// workspaceLib is resolved lazily on the first file part when workspace_id
+	// is set. A nil workspaceLib means workspace routing is unavailable, so the
+	// handler falls back to the legacy session-scoped path (graceful
+	// degradation — the file still uploads, just not to the library).
+	var workspaceLib *library.Library
 
 	for {
 		part, err := reader.NextPart()
@@ -9003,7 +9404,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		formName := part.FormName()
 		fileName := part.FileName()
 
-		// Non-file field — check for session_id override (only if not already set).
+		// Non-file field — check for session_id / workspace_id overrides.
 		if fileName == "" {
 			if formName == "session_id" && sessionID == "" {
 				buf, readErr := io.ReadAll(io.LimitReader(part, 256))
@@ -9014,6 +9415,15 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				sessionID = strings.TrimSpace(string(buf))
+			} else if formName == "workspace_id" && workspaceID == "" {
+				buf, readErr := io.ReadAll(io.LimitReader(part, 256))
+				part.Close()
+				if readErr != nil {
+					slog.Warn("rest: upload: read workspace_id field", "error", readErr)
+					jsonErr(w, http.StatusBadRequest, "could not read workspace_id field")
+					return
+				}
+				workspaceID = strings.TrimSpace(string(buf))
 			} else {
 				// Discard unrecognized non-file fields.
 				if _, discardErr := io.Copy(io.Discard, part); discardErr != nil {
@@ -9023,6 +9433,160 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
+
+		// --- Workspace media library path (ADR-051 Rev 4, FR-001) ---
+		//
+		// When a workspace_id is present and the workspace library can be
+		// resolved, stream the file directly into the workspace's persistent
+		// media library (workspaces/<ws>/media/) via library.Upload instead
+		// of the legacy session-scoped uploads dir. The library handles
+		// filename normalization, MIME sniffing, sha256, the per-file size
+		// limit (100 MB), and an atomic write+manifest commit — so this path
+		// does not need to replicate any of that.
+		if workspaceID != "" {
+			if err := validateEntityID(workspaceID); err != nil {
+				part.Close()
+				jsonErr(w, http.StatusBadRequest, "invalid workspace_id")
+				return
+			}
+			if workspaceLib == nil && a.agentLoop != nil {
+				workspaceLib = a.agentLoop.GetWorkspaceLibrary(workspaceID)
+				if workspaceLib == nil {
+					// GetWorkspaceLibrary (pkg/agent/media_present.go) collapses
+					// two very different conditions into the same nil signal:
+					// "workspace library genuinely not configured" and "library
+					// exists but failed to load" (corrupt manifest, permission
+					// error, disk I/O). Silently falling back to the legacy
+					// session-scoped path here would mask a real failure behind
+					// a plausible 201 — the file would never appear in
+					// GET /workspaces/{id}/media, get no refcount/orphan-GC/
+					// cascade-delete coverage, and never resolve via
+					// media://workspace/... . Re-derive the real cause the same
+					// way rest_workspace_media.go's openLibraryForWorkspace
+					// does: call library.New directly. It NEVER returns
+					// (nil, nil) — every call either succeeds with a valid
+					// *Library or fails with a concrete error (verified by
+					// reading library.New's full body) — so this
+					// deterministically separates the two cases without
+					// needing to change GetWorkspaceLibrary's signature (out
+					// of scope here: pkg/agent/).
+					lib, libErr := library.New(a.homePath, workspaceID)
+					if libErr != nil {
+						part.Close()
+						// Re-review FIX 1: was a bare slog.Error, invisible on a
+						// backgrounded gateway (slog.SetDefault is never called
+						// anywhere in this repo, so log/slog.Default() never
+						// reaches $OMNIPUS_HOME/logs/gateway.log). Route through
+						// pkg/logger instead.
+						logger.ErrorCF("rest", "upload: workspace library load failed",
+							map[string]any{"workspace_id": workspaceID, "error": libErr})
+						jsonErr(w, http.StatusInternalServerError,
+							fmt.Sprintf("workspace media library unavailable: %v", libErr))
+						return
+					}
+					workspaceLib = lib
+				}
+			}
+			if workspaceLib != nil {
+				ref, projection, uploadErr := workspaceLib.Upload(fileName, gen.UserUpload, part)
+				part.Close()
+				if uploadErr != nil {
+					slog.Error("rest: upload: workspace library store failed",
+						"workspace_id", workspaceID, "filename", fileName, "error", uploadErr)
+					// Remove previously uploaded workspace files in this batch.
+					a.cleanupWorkspaceUploads(&resp, workspaceLib)
+					switch {
+					case errors.Is(uploadErr, library.ErrFileTooLarge):
+						jsonErr(w, http.StatusRequestEntityTooLarge,
+							fmt.Sprintf("file %q exceeds 100 MB limit", fileName))
+					case errors.Is(uploadErr, library.ErrInvalidFilename):
+						jsonErr(w, http.StatusBadRequest,
+							fmt.Sprintf("invalid filename: %q", fileName))
+					default:
+						jsonErr(w, http.StatusInternalServerError,
+							fmt.Sprintf("workspace media store failed: %v", uploadErr))
+					}
+					return
+				}
+
+				var size int64
+				if projection.Size != nil {
+					size = *projection.Size
+				}
+				mimeStr := ""
+				if projection.Mime != nil {
+					mimeStr = *projection.Mime
+				}
+				// Relative path for the response — informational; the SPA
+				// serves workspace media via the media://workspace/ ref, not
+				// the /api/v1/uploads/{session_id}/{filename} URL.
+				_, mediaID, _ := media.ParseWorkspaceRef(ref)
+				relativePath := filepath.Join("workspaces", workspaceID, "media", mediaID)
+
+				// D-1 (library-spec, 2026-07-29 UAT): the media-library blob
+				// above lives in workspaces/<id>/media/ — a SIBLING of work/,
+				// structurally unreachable by every agent file tool (they
+				// open an os.Root at work/ and cannot escape it by
+				// construction, ADR-046). Dual-write the SAME bytes as a
+				// real, named file inside workspaces/<id>/work/.library/ so
+				// library_read/read_file can actually find it — this is the
+				// single change that makes the agent-visibility requirement
+				// satisfiable. The media-library entry above remains the
+				// metadata index (mime/size/sha256/refcount/source); this is
+				// purely an additional copy, never a replacement. A failure
+				// here means the upload as a whole does NOT satisfy "the
+				// agent can read this file", so it is treated as a hard
+				// upload failure — the just-created library entry is rolled
+				// back rather than left as a half-satisfied promise.
+				workRelPath, stageErr := a.stageWorkspaceUploadCopy(workspaceID, mediaID, fileName, workspaceLib)
+				if stageErr != nil {
+					logger.ErrorCF("rest", "upload: could not stage workspace library copy for agent access",
+						map[string]any{
+							"workspace_id": workspaceID, "media_id": mediaID,
+							"filename": fileName, "error": stageErr.Error(),
+						})
+					if _, delErr := workspaceLib.Delete(mediaID); delErr != nil {
+						slog.Warn("rest: upload: rollback of media-library entry failed after stage failure",
+							"media_id", mediaID, "error", delErr)
+					}
+					a.cleanupWorkspaceUploads(&resp, workspaceLib)
+					jsonErr(w, http.StatusInternalServerError,
+						fmt.Sprintf("could not stage uploaded file for agent access: %v", stageErr))
+					return
+				}
+				agent.RecordUploadWorkPath(ref, workRelPath)
+
+				var refPtr *string
+				if ref != "" {
+					refCopy := ref
+					refPtr = &refCopy
+				}
+				resp.Files = append(resp.Files, gen.UploadedFile{
+					ContentType: mimeStr,
+					Name:        projection.Filename,
+					Path:        relativePath,
+					Ref:         refPtr,
+					Size:        size,
+				})
+
+				slog.Info(
+					"rest: upload: file stored in workspace library",
+					"workspace_id", workspaceID,
+					"filename", projection.Filename,
+					"size", size,
+					"content_type", mimeStr,
+					"media_ref", ref,
+					"work_path", workRelPath,
+				)
+				continue
+			}
+			// workspace_id set but library unavailable → fall through to the
+			// legacy session-scoped path (graceful degradation).
+			slog.Warn("rest: upload: workspace library unavailable, falling back to session-scoped path",
+				"workspace_id", workspaceID)
+		}
+
+		// --- Legacy session-scoped path ---
 
 		// Validate session_id before the first file write.
 		if sessionID == "" {
@@ -9187,6 +9751,123 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	jsonCreated(w, resp)
 }
 
+// cleanupWorkspaceUploads removes previously uploaded workspace library files
+// from this batch when a later file in the same request fails. The failing
+// file's own cleanup is handled transactionally by library.Upload; this only
+// removes files that already succeeded. Best-effort — errors are logged.
+// stageWorkspaceUploadCopy performs the D-1 (library-spec) dual-write: it
+// reads back the just-uploaded file's bytes from the workspace media
+// library (lib.Read, which sha256-verifies on read) and writes them a
+// SECOND time into the SAME workspace's work/.library/ directory — a real,
+// named file inside the os.Root every agent file tool is confined to
+// (ADR-046), unlike workspaces/<id>/media/ which is a sibling those tools
+// cannot reach by construction. De-duplicates a filename collision with a
+// human-readable " (N)" numeric suffix, mirroring the legacy session-scoped
+// upload path's own collision handling further down in HandleUpload.
+//
+// Returns the workspace-relative announced path (".library/<name>",
+// agent.LibraryDirName()-prefixed) on success. On any failure, the
+// caller MUST treat the whole upload as failed (see HandleUpload's use)
+// rather than leaving a media-library entry the agent still cannot read —
+// stageWorkspaceUploadCopy itself removes any partially-written destination
+// file before returning an error, so the caller does not need to.
+func (a *restAPI) stageWorkspaceUploadCopy(
+	workspaceID, mediaID, filename string,
+	lib *library.Library,
+) (string, error) {
+	sanitized, err := agent.SanitizeUploadFilename(filename)
+	if err != nil {
+		return "", fmt.Errorf("sanitize filename: %w", err)
+	}
+	workDir, err := wkspace.SafeWorkDir(a.homePath, workspaceID)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace work dir: %w", err)
+	}
+	libraryDir := filepath.Join(workDir, agent.LibraryDirName())
+	if mkErr := os.MkdirAll(libraryDir, 0o700); mkErr != nil {
+		return "", fmt.Errorf("create workspace library dir: %w", mkErr)
+	}
+
+	// Read back the FULL, sha256-verified bytes rather than tee-ing the
+	// original multipart reader — the multipart part is already fully
+	// consumed by lib.Upload above by the time this is called, and
+	// re-reading through the library's own integrity-checked Read keeps this
+	// function's contract simple (one clear source of truth for "what did we
+	// actually store") at the cost of one extra full read, bounded by the
+	// same 100 MB library.MaxFileSize every upload is already capped at.
+	data, _, err := lib.Read(mediaID)
+	if err != nil {
+		return "", fmt.Errorf("read back uploaded bytes: %w", err)
+	}
+
+	ext := filepath.Ext(sanitized)
+	base := strings.TrimSuffix(sanitized, ext)
+	const maxDedupAttempts = 1000
+
+	destName := sanitized
+	var destFile *os.File
+	var destPath string
+	for attempt := 1; ; attempt++ {
+		destPath = filepath.Join(libraryDir, destName)
+		f, openErr := os.OpenFile(destPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if openErr == nil {
+			destFile = f
+			break
+		}
+		if !os.IsExist(openErr) {
+			return "", fmt.Errorf("create workspace library file: %w", openErr)
+		}
+		if attempt > maxDedupAttempts {
+			return "", fmt.Errorf("too many filename collisions for %q in workspace library", sanitized)
+		}
+		destName = fmt.Sprintf("%s (%d)%s", base, attempt, ext)
+	}
+
+	// keepFile flips to true only once the write AND close both succeed —
+	// any earlier return leaves it false, so the deferred cleanup below
+	// removes the just-created (possibly empty or partially-written) file
+	// rather than stranding it.
+	keepFile := false
+	defer func() {
+		if !keepFile {
+			if rmErr := os.Remove(destPath); rmErr != nil && !os.IsNotExist(rmErr) {
+				logger.WarnCF("rest", "upload: cleanup partial workspace library file failed",
+					map[string]any{"path": destPath, "error": rmErr.Error()})
+			}
+		}
+	}()
+
+	if _, writeErr := destFile.Write(data); writeErr != nil {
+		destFile.Close()
+		return "", fmt.Errorf("write workspace library file: %w", writeErr)
+	}
+	if closeErr := destFile.Close(); closeErr != nil {
+		return "", fmt.Errorf("close workspace library file: %w", closeErr)
+	}
+	keepFile = true
+
+	return agent.LibraryDirName() + "/" + destName, nil
+}
+
+func (a *restAPI) cleanupWorkspaceUploads(resp *gen.UploadFilesResponse, lib *library.Library) {
+	if lib == nil {
+		return
+	}
+	for _, prev := range resp.Files {
+		if prev.Ref == nil || !strings.HasPrefix(*prev.Ref, "media://workspace/") {
+			continue
+		}
+		_, mediaID, ok := media.ParseWorkspaceRef(*prev.Ref)
+		if !ok {
+			continue
+		}
+		if _, err := lib.Delete(mediaID); err != nil {
+			slog.Warn("rest: upload: cleanup workspace file failed",
+				"media_id", mediaID, "error", err)
+		}
+	}
+}
+
 // HandleServeUpload serves uploaded files for display in chat.
 // GET /api/v1/uploads/{session_id}/{filename}
 // Authentication is optional — browsers must be able to load image URLs directly.
@@ -9243,8 +9924,8 @@ func (a *restAPI) HandleServeUpload(w http.ResponseWriter, r *http.Request) {
 
 // --- Media ---
 
-// HandleMedia serves a media file by its ref ID extracted from the URL path
-// (e.g. /api/v1/media/abc123 resolves "media://abc123" via MediaStore).
+// HandleMedia serves a legacy global media file by its ref ID extracted from
+// the URL path (e.g. /api/v1/media/abc123 resolves "media://abc123").
 func (a *restAPI) HandleMedia(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -9252,9 +9933,44 @@ func (a *restAPI) HandleMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	a.setCORSHeaders(w, r)
 
-	// Always read the current store via the agent loop. The store is replaced
-	// on every restartServices, so a.mediaStore would go stale after the first
-	// reload (screenshots stored in the new store are invisible to the old one).
+	refID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/media/"), "/")
+	if refID == "" || strings.ContainsAny(refID, "/\\") || strings.Contains(refID, "..") {
+		jsonErr(w, http.StatusBadRequest, "invalid media ref")
+		return
+	}
+
+	a.serveMedia(w, r, "media://"+refID, media.ResolveOpts{}, refID)
+}
+
+// HandleMediaByRef serves workspace-library media through the split path shape
+// /api/v1/media/workspace/{workspace}/{id}; the split keeps each path segment
+// independently validated while preserving the opaque media ref for resolution.
+func (a *restAPI) HandleMediaByRef(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	a.setCORSHeaders(w, r)
+
+	const prefix = "/api/v1/media/workspace/"
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, prefix), "/")
+	if len(parts) != 2 || validateEntityID(parts[0]) != nil || validateEntityID(parts[1]) != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid media ref")
+		return
+	}
+
+	workspaceID, mediaID := parts[0], parts[1]
+	ref := media.WorkspaceRefPrefix + workspaceID + "/" + mediaID
+	a.serveMedia(w, r, ref, media.WithCallerWorkspace(workspaceID), ref)
+}
+
+func (a *restAPI) serveMedia(
+	w http.ResponseWriter,
+	r *http.Request,
+	ref string,
+	opts media.ResolveOpts,
+	logRef string,
+) {
 	store := a.agentLoop.GetMediaStore()
 	if store == nil {
 		store = a.mediaStore
@@ -9264,16 +9980,64 @@ func (a *restAPI) HandleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	refID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/media/"), "/")
-	if refID == "" || strings.ContainsAny(refID, "/\\") || strings.Contains(refID, "..") {
-		jsonErr(w, http.StatusBadRequest, "invalid media ref")
-		return
-	}
-
-	localPath, meta, err := store.ResolveWithMeta("media://" + refID)
+	localPath, meta, err := store.ResolveWithMetaOpts(ref, opts)
 	if err != nil {
-		slog.Warn("rest: media ref not found", "ref", refID, "error", err.Error())
-		jsonErr(w, http.StatusNotFound, "media not found")
+		if errors.Is(err, media.ErrCrossWorkspaceRef) || errors.Is(err, library.ErrWorkspaceMismatch) {
+			slog.Warn("rest: media ref not found", "ref", logRef, "error", err.Error())
+			jsonErr(w, http.StatusForbidden, "media access denied")
+			return
+		}
+		if errors.Is(err, library.ErrEntryStranded) {
+			// See rest_workspace_media.go's handleWorkspaceMediaGet/Delete for
+			// the identical branch and its full rationale: ErrEntryStranded
+			// means the manifest still claims the entry is present while its
+			// bytes are actually quarantined at an internal path — a
+			// server-side data-integrity failure, not a routine absent ref.
+			// Folding it into the catch-all below would report it as 404
+			// ("this ref never existed"), which is a lie; 500 with an
+			// attributable message keeps this path coherent with the
+			// workspace-media handlers' mapping for the same sentinel.
+			//
+			// library.ErrIntegrityCheckFailed (sha256 mismatch) deliberately
+			// gets no analogous branch here: it is only ever returned by
+			// Library.Read/ResolveWithWorkspace (the bytes-returning,
+			// integrity-checked path), never by ResolvePathWithCaller (the
+			// path-only resolver this handler's workspace-ref route reaches
+			// through FileMediaStore.resolveWorkspaceRef) or by the legacy
+			// registry lookup the non-workspace route uses — so it cannot
+			// reach this catch in practice. Should the resolution path ever
+			// change to route through the integrity-checked reader, this
+			// error deserves the same non-404 treatment as ErrEntryStranded.
+			slog.Error("rest: media: entry stranded (manifest/disk diverged)", "ref", logRef, "error", err.Error())
+			jsonErr(w, http.StatusInternalServerError, "media entry is in an inconsistent state")
+			return
+		}
+		if errors.Is(err, media.ErrNotFound) || errors.Is(err, library.ErrNotFound) {
+			// Both sentinels mean the same thing at two different layers:
+			// media.ErrNotFound is FileMediaStore's own "no provider/resolver
+			// wired, or the ref is absent from the legacy global registry"
+			// (see FileMediaStore.resolveWorkspaceRef/resolveLegacyWithMeta);
+			// library.ErrNotFound is the owning workspace library reporting
+			// its manifest has no such id (Library.ResolvePathWithCaller).
+			// Either way this is a genuine, routine absent ref — 404 is
+			// correct and matches the workspace-media handlers' own mapping
+			// for the same library.ErrNotFound sentinel
+			// (rest_workspace_media.go's handleWorkspaceMediaGet/Delete).
+			slog.Warn("rest: media ref not found", "ref", logRef, "error", err.Error())
+			jsonErr(w, http.StatusNotFound, "media not found")
+			return
+		}
+		// Anything else is a genuine resolution FAILURE, not a routine
+		// absent ref — most notably FileMediaStore.resolveWorkspaceRef's
+		// "workspace library %q unavailable: %w" when a wired provider
+		// itself errors (disk/library-open failure). Collapsing that into
+		// the same 404 the block above returns would report "this media
+		// never existed" for what is actually "the server could not check".
+		// media.ErrNotFound is deliberately NEVER used to wrap that error —
+		// see its doc comment — so this catch-all is unreachable for a
+		// routine absent ref and only fires on a real backend fault.
+		slog.Error("rest: media: resolve failed", "ref", logRef, "error", err.Error())
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 

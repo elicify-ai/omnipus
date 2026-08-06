@@ -456,12 +456,26 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 
 	sentCount := 0
 	for _, part := range msg.Parts {
-		localPath, err := store.Resolve(part.Ref)
+		localPath, _, err := store.ResolveWithCallerWorkspace(part.Ref, msg.WorkspaceID)
 		if err != nil {
-			logger.ErrorCF("telegram", "Failed to resolve media ref", map[string]any{
-				"ref":   part.Ref,
-				"error": err.Error(),
-			})
+			// FR-028a: distinguish the caller-workspace membership guard's
+			// denial (a security-relevant Spoofing rejection) from a
+			// routine stale/missing ref, so it's greppable/auditable
+			// separately instead of folding into the same undifferentiated
+			// "N of M media parts failed to send" count as any other
+			// resolve failure.
+			if media.IsCallerWorkspaceDenied(err) {
+				logger.WarnCF("telegram", "Media ref denied by caller-workspace guard", map[string]any{
+					"ref":              part.Ref,
+					"caller_workspace": msg.WorkspaceID,
+					"error":            err.Error(),
+				})
+			} else {
+				logger.ErrorCF("telegram", "Failed to resolve media ref", map[string]any{
+					"ref":   part.Ref,
+					"error": err.Error(),
+				})
+			}
 			continue
 		}
 
@@ -486,7 +500,10 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 			if err != nil && strings.Contains(err.Error(), "PHOTO_INVALID_DIMENSIONS") {
 				if _, seekErr := file.Seek(0, io.SeekStart); seekErr != nil {
 					file.Close()
-					return fmt.Errorf("telegram rewind media after photo failure: %w", channels.ErrTemporary)
+					return channels.ClassifyMediaSendError(
+						"telegram", sentCount,
+						fmt.Errorf("rewind media after photo failure: %w", seekErr),
+					)
 				}
 
 				docParams := &telego.SendDocumentParams{
@@ -543,13 +560,42 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 				"type":  part.Type,
 				"error": err.Error(),
 			})
-			return fmt.Errorf("telegram send media: %w", channels.ErrTemporary)
+			// CRITICAL fix (retry-duplication, sendfile-fix review): a
+			// genuine send API failure here does NOT return a bare
+			// ErrTemporary anymore. ClassifyMediaSendError checks sentCount
+			// — if an earlier part in this same message already reached
+			// Telegram, retrying the whole message (sendMediaWithRetry has
+			// no per-part resume) would re-send it, duplicating it for the
+			// user. In that case the failure is classified permanent
+			// (ErrSendFailed) so the manager does not retry at all. Only
+			// when nothing has been sent yet (sentCount == 0) does the
+			// failure keep its normal ErrTemporary retry classification.
+			// The real API error is preserved in the chain either way, so
+			// it no longer gets flattened to an opaque "temporary failure".
+			return channels.ClassifyMediaSendError("telegram", sentCount, err)
 		}
 		sentCount++
 	}
 
-	if sentCount == 0 {
-		return fmt.Errorf("telegram: all %d media parts failed", len(msg.Parts))
+	// sentCount < len(msg.Parts) means at least one part failed to resolve
+	// or open locally (the loop above only `continue`s past those
+	// failures; a genuine send API failure returns immediately above via
+	// ClassifyMediaSendError, never reaching here).
+	//
+	// Review fix (parity with Feishu/Matrix/Slack, which shared this same
+	// convention): the original guard only caught sentCount==0 (total
+	// loss), so a PARTIAL failure — e.g. 2 of 3 parts delivered — returned
+	// nil and left the caller's (pkg/agent/loop.go) pre-baked success text
+	// untouched; neither the user nor the LLM learned a part never arrived.
+	// Reporting any shortfall closes that gap. Wrapping in
+	// channels.ErrSendFailed additionally marks it permanent: a local
+	// resolve/open failure will not succeed on a bare retry with the same
+	// ref, so pkg/channels/manager.go's sendMediaWithRetry must not
+	// re-attempt it — retrying would also re-send the parts that already
+	// succeeded, duplicating them for the user.
+	if sentCount < len(msg.Parts) {
+		return fmt.Errorf("telegram: %d of %d media parts failed to send: %w",
+			len(msg.Parts)-sentCount, len(msg.Parts), channels.ErrSendFailed)
 	}
 	return nil
 }

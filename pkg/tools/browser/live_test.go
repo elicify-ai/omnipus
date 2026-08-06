@@ -135,29 +135,37 @@ func TestLiveView_HandleScreencastEvent_IgnoresOtherEventTypes(t *testing.T) {
 	require.False(t, called, "a non-screencast CDP event must not be delivered as a frame")
 }
 
-// --- input gated by control (ADR-038 D6) ---
+// --- input is NEVER gated by control (operator directive, 2026-08-03) ---
+//
+// This suite previously asserted the opposite (ADR-038 D6's exclusive
+// single-controller lock: "input must be refused when nobody holds control").
+// That model was removed: the live panel is a REAL BROWSER the human uses
+// normally, and the agent can steer it too — concurrently. The lock made a
+// second panel, a pop-out, or a stale automation session silently disable the
+// actual user's mouse, keyboard and omnibox while the UI said "Someone else is
+// driving".
 
-func TestLiveView_DispatchInput_RequiresControl(t *testing.T) {
+func TestLiveView_DispatchInput_NeverRequiresControl(t *testing.T) {
 	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
 
+	// Nobody holds control at all. The input must still reach the dispatch
+	// step — proven by it failing on the UNATTACHED SESSION (nil tabCtx)
+	// rather than on a control rejection.
 	err := lv.dispatchInput("viewerA", LiveInput{Kind: "mouse_move", X: 1, Y: 2})
-	require.Error(t, err, "input must be refused when nobody holds control")
-	require.Contains(t, err.Error(), "does not hold control")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not attached",
+		"input must never be refused for lack of a control lock — it has to reach dispatch")
+	require.NotContains(t, err.Error(), "does not hold control")
 
+	// Someone else holds control. A different viewer's input must STILL get
+	// through: this is precisely the case that left a real human with a dead
+	// mouse and keyboard.
 	require.True(t, lv.takeControl("viewerA"))
-
-	// viewerB never took control — still refused even though SOMEONE holds it.
 	err = lv.dispatchInput("viewerB", LiveInput{Kind: "mouse_move", X: 1, Y: 2})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "does not hold control")
-
-	// viewerA holds control but the session was never attached (tabCtx is
-	// nil) — proves the request passed the control gate and reached the
-	// dispatch step, which then fails closed on the missing session rather
-	// than panicking or silently no-op'ing.
-	err = lv.dispatchInput("viewerA", LiveInput{Kind: "mouse_move", X: 1, Y: 2})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "not attached")
+	require.Contains(t, err.Error(), "not attached",
+		"a viewer must be able to act while ANOTHER viewer holds control — control is shared, not exclusive")
+	require.NotContains(t, err.Error(), "does not hold control")
 }
 
 func TestLiveView_DispatchInput_RateLimited(t *testing.T) {
@@ -169,7 +177,7 @@ func TestLiveView_DispatchInput_RateLimited(t *testing.T) {
 	// which point the error message changes to the rate-limit message —
 	// proving allowInputLocked is consulted before the tabCtx check.
 	var lastErr error
-	for i := 0; i < maxInputEventsPerSecond+5; i++ {
+	for i := 0; i < maxCoalescibleInputEventsPerSecond+5; i++ {
 		lastErr = lv.dispatchInput("viewerA", LiveInput{Kind: "mouse_move"})
 	}
 	require.Error(t, lastErr)
@@ -376,30 +384,28 @@ func TestLiveView_DispatchInput_Navigate_ValidURLPassesSSRFAndDispatches(t *test
 // to the new "navigate" kind exactly like every other kind — and, since the
 // control check runs before the SSRF check, an uncontrolled/wrong-viewer
 // navigate never even reaches ValidateURL or CDP.
-func TestLiveView_DispatchInput_Navigate_RequiresControl(t *testing.T) {
+func TestLiveView_DispatchInput_Navigate_NeverRequiresControl(t *testing.T) {
 	var dispatched bool
 	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error {
 		dispatched = true
 		return nil
 	})
 
-	// Nobody holds control yet.
+	// Nobody holds control — navigation must still go through. This is the
+	// omnibox case from the 2026-08-03 recording: the user typed a URL and
+	// pressing Enter did nothing at all, because submit was gated on the lock.
 	err := lv.dispatchInput("viewerA", LiveInput{Kind: "navigate", URL: "http://8.8.8.8/"})
-	require.Error(t, err)
-	require.True(t, IsBenignLiveInputError(err), "not-controller is the benign, high-frequency rejection kind")
-	require.Contains(t, err.Error(), "does not hold control")
-	require.False(t, dispatched)
+	require.NoError(t, err)
+	require.True(t, dispatched, "navigate must dispatch without any control lock")
 
+	// Someone ELSE holds control — a second viewer's navigation must still
+	// work. Control is shared.
+	dispatched = false
 	require.True(t, lv.takeControl("viewerA"))
-
-	// viewerB never took control — still refused even though someone holds
-	// it, and the SSRF gate is never reached even for a URL that would
-	// otherwise pass it.
 	err = lv.dispatchInput("viewerB", LiveInput{Kind: "navigate", URL: "http://8.8.8.8/"})
-	require.Error(t, err)
-	require.True(t, IsBenignLiveInputError(err))
-	require.Contains(t, err.Error(), "does not hold control")
-	require.False(t, dispatched)
+	require.NoError(t, err)
+	require.True(t, dispatched,
+		"a viewer must be able to navigate while ANOTHER viewer holds control")
 }
 
 func TestLiveView_AllowInputLocked_CapsPerSecond(t *testing.T) {
@@ -409,17 +415,64 @@ func TestLiveView_AllowInputLocked_CapsPerSecond(t *testing.T) {
 	defer lv.mu.Unlock()
 
 	allowed := 0
-	for i := 0; i < maxInputEventsPerSecond+10; i++ {
-		if lv.allowInputLocked() {
+	for i := 0; i < maxCoalescibleInputEventsPerSecond+10; i++ {
+		if lv.allowInputLocked("mouse_move") {
 			allowed++
 		}
 	}
-	require.Equal(t, maxInputEventsPerSecond, allowed,
+	require.Equal(t, maxCoalescibleInputEventsPerSecond, allowed,
 		"allowInputLocked must allow exactly the configured cap within one window")
 
 	// Simulate the window rolling over: a stale window start must reset.
 	lv.inputWindowStart = time.Now().Add(-2 * time.Second)
-	require.True(t, lv.allowInputLocked(), "a new window must reset the counter")
+	require.True(t, lv.allowInputLocked("mouse_move"), "a new window must reset the counter")
+}
+
+// TestLiveView_AllowInputLocked_MoveFloodCannotStarveButtonRelease pins the
+// reason the budget is split at all.
+//
+// A dropped mouse_move is self-healing — the next one supersedes it. A dropped
+// mouse_up is not: the remote page goes on believing the button is held, so the
+// user gets a stuck drag or a runaway selection and nothing in the UI says why.
+// Under the previous single shared counter, a sustained pointer stream (which
+// now legitimately comes from several concurrent drivers at once, the exclusive
+// control lock having been removed) could exhaust the whole allowance and the
+// button release that followed was refused.
+func TestLiveView_AllowInputLocked_MoveFloodCannotStarveButtonRelease(t *testing.T) {
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+
+	// Saturate the coalescible bucket well past its cap.
+	for i := 0; i < maxCoalescibleInputEventsPerSecond*2; i++ {
+		lv.allowInputLocked("mouse_move")
+	}
+	require.False(t, lv.allowInputLocked("wheel"),
+		"wheel shares the coalescible bucket and must be throttled once it is exhausted")
+
+	require.True(t, lv.allowInputLocked("mouse_up"),
+		"a button RELEASE must survive a move flood — this is the stuck-button bug")
+	require.True(t, lv.allowInputLocked("mouse_down"), "and so must a press")
+	require.True(t, lv.allowInputLocked("key_down"), "and key transitions")
+}
+
+// The discrete bucket is still bounded — splitting the budget must not create
+// an unmetered path for a runaway client.
+func TestLiveView_AllowInputLocked_DiscreteBucketStillBounded(t *testing.T) {
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+
+	allowed := 0
+	for i := 0; i < maxDiscreteInputEventsPerSecond+25; i++ {
+		if lv.allowInputLocked("mouse_down") {
+			allowed++
+		}
+	}
+	require.Equal(t, maxDiscreteInputEventsPerSecond, allowed,
+		"discrete transitions must remain capped, just on their own budget")
 }
 
 // --- viewer refcount: screencast stops only when the last viewer detaches ---
@@ -850,6 +903,98 @@ func TestBuildInputAction_KeyEventCarriesVirtualKeyCode(t *testing.T) {
 	}
 }
 
+// TestBuildInputAction_KeyDown_EnterPerformsDefaultAction — live UAT
+// 2026-07-31: typing into a remote search box then pressing Enter did
+// nothing, because key_down always dispatched CDP "rawKeyDown" with empty
+// text. rawKeyDown delivers the DOM event only; "keyDown" with text is what
+// runs text processing and default actions (form submit). Mirrors
+// Puppeteer's convention: Enter synthesizes text "\r" and upgrades to
+// keyDown; textless keys stay rawKeyDown; key_up is unaffected.
+func TestBuildInputAction_KeyDown_EnterPerformsDefaultAction(t *testing.T) {
+	// Enter with no client-supplied text: synthesized "\r", type keyDown.
+	action, err := buildInputAction(LiveInput{Kind: "key_down", Key: "Enter", Code: "Enter", KeyCode: 13})
+	require.NoError(t, err)
+	p := action.(*input.DispatchKeyEventParams)
+	require.Equal(t, input.KeyDown, p.Type, "Enter must dispatch as keyDown, not rawKeyDown")
+	require.Equal(t, "\r", p.Text, "Enter must carry the CR text that triggers default actions")
+
+	// Client-supplied text also upgrades to keyDown, verbatim.
+	action, err = buildInputAction(LiveInput{Kind: "key_down", Key: "a", Code: "KeyA", KeyCode: 65, Text: "a"})
+	require.NoError(t, err)
+	p = action.(*input.DispatchKeyEventParams)
+	require.Equal(t, input.KeyDown, p.Type)
+	require.Equal(t, "a", p.Text)
+
+	// A textless non-Enter key stays rawKeyDown (no text processing to run).
+	action, err = buildInputAction(LiveInput{Kind: "key_down", Key: "ArrowDown", Code: "ArrowDown", KeyCode: 40})
+	require.NoError(t, err)
+	p = action.(*input.DispatchKeyEventParams)
+	require.Equal(t, input.KeyRawDown, p.Type)
+	require.Empty(t, p.Text)
+
+	// key_up never synthesizes text, even for Enter.
+	action, err = buildInputAction(LiveInput{Kind: "key_up", Key: "Enter", Code: "Enter", KeyCode: 13})
+	require.NoError(t, err)
+	p = action.(*input.DispatchKeyEventParams)
+	require.Equal(t, input.KeyUp, p.Type)
+	require.Empty(t, p.Text)
+}
+
+// TestRescaleInputCoords covers the pure-math half of the root-cause doc's
+// Fault 3 fix (docs/internal/browser-viewport-input-rootcause-2026-07-31.md):
+// mapping a viewer's capture-frame pixel coordinates into the tab's CSS
+// pixel space. No CDP/Chromium involved — see rescaleInputCoords's doc
+// comment for why the math is factored out on its own.
+func TestRescaleInputCoords(t *testing.T) {
+	tests := []struct {
+		name         string
+		x, y         float64
+		capW, capH   float64
+		cssW, cssH   float64
+		wantX, wantY float64
+	}{
+		{
+			name: "identity when capture size equals CSS viewport size",
+			x:    100, y: 200,
+			capW: 1280, capH: 720,
+			cssW: 1280, cssH: 720,
+			wantX: 100, wantY: 200,
+		},
+		{
+			// The exact root-cause doc measurement: a 319x158 capture stream
+			// against a real ~1280x720 page — clicks were landing ~4x off.
+			name: "root-cause scenario: 319x158 capture vs 1280x720 css",
+			x:    100, y: 79, // roughly mid-frame in capture space
+			capW: 319, capH: 158,
+			cssW: 1280, cssH: 720,
+			wantX: 100 * 1280.0 / 319.0, wantY: 79 * 720.0 / 158.0,
+		},
+		{
+			// DPR-style: capture delivered at 2x the CSS viewport (a
+			// high-DPI capture path), so coordinates must be halved.
+			name: "capture at 2x css (DPR-style downscale)",
+			x:    400, y: 300,
+			capW: 2560, capH: 1440,
+			cssW: 1280, cssH: 720,
+			wantX: 200, wantY: 150,
+		},
+		{
+			name: "zero origin stays at zero origin regardless of scale",
+			x:    0, y: 0,
+			capW: 319, capH: 158,
+			cssW: 1280, cssH: 720,
+			wantX: 0, wantY: 0,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotX, gotY := rescaleInputCoords(tc.x, tc.y, tc.capW, tc.capH, tc.cssW, tc.cssH)
+			require.InDelta(t, tc.wantX, gotX, 0.0001, "x")
+			require.InDelta(t, tc.wantY, gotY, 0.0001, "y")
+		})
+	}
+}
+
 // TestIsBenignLiveInputError verifies the benign/real classification
 // (ADR-038 finding #4) that browser_ws.go's handleInput relies on to decide
 // whether a dispatchInput failure is worth a browser_status(error) frame.
@@ -1137,4 +1282,408 @@ func TestLiveView_OnTabsChanged_ActiveTabSwitch_TriggersCaptureSessionRecapture(
 		relay.recaptureCount(),
 		"an active-tab switch must call cs.Recapture(), which signals the relay",
 	)
+}
+
+// ---------------------------------------------------------------------------
+// 2026-07-31 fix wave (post-UAT-v24 live evidence + 5-reviewer gate):
+//   1. SetViewport chrome-delta compensation (the 87px HEIGHT deficit fix)
+//   2. cache invalidation on a failed/degenerate SetViewport read-back
+//   3. rescaleToCSSViewport's cache-miss fetch timeout + failure backoff
+//   4. windowBoundsAction/layoutMetricsAction test seams (routes SetViewport
+//      through lv.runCDP; makes the folded CDP calls inspectable/scriptable)
+// See docs/internal/browser-viewport-input-rootcause-2026-07-31.md.
+// ---------------------------------------------------------------------------
+
+// findMouseEvent locates the *input.DispatchMouseEventParams among the
+// actions captured by a scripted runCDP stub, failing the test if none (or
+// more than one) is found.
+func findMouseEvent(t *testing.T, actions []chromedp.Action) *input.DispatchMouseEventParams {
+	t.Helper()
+	var found *input.DispatchMouseEventParams
+	for _, a := range actions {
+		if p, ok := a.(*input.DispatchMouseEventParams); ok {
+			require.Nil(t, found, "expected exactly one dispatched mouse event action")
+			found = p
+		}
+	}
+	require.NotNil(t, found, "no *input.DispatchMouseEventParams was dispatched")
+	return found
+}
+
+// TestLiveView_DispatchInput_RescaleGate is the table test for item 6a: which
+// LiveInput kinds dispatchInput actually routes through rescaleToCSSViewport,
+// and the two degenerate-CaptureWidth/Height guards (zero-valued — an older
+// client — and one-dim-present) that must dispatch unscaled rather than
+// divide by zero or apply a bogus scale factor. cssViewportW/H is
+// pre-populated on every case so a pointer-position kind that DOES rescale
+// hits the cache (no extra runCDP call), keeping "exactly one action
+// dispatched" a valid proxy for "no rescale fetch happened" across every
+// case, not just the non-pointer kinds.
+func TestLiveView_DispatchInput_RescaleGate(t *testing.T) {
+	const cssW, cssH = 1280.0, 720.0
+
+	tests := []struct {
+		name  string
+		in    LiveInput
+		check func(t *testing.T, actions []chromedp.Action)
+	}{
+		{
+			name: "wheel rescales X/Y but leaves DeltaX/DeltaY untouched",
+			in: LiveInput{
+				Kind: "wheel", HasXY: true, X: 100, Y: 79,
+				DeltaX: 3, DeltaY: -4,
+				CaptureWidth: 319, CaptureHeight: 158,
+			},
+			check: func(t *testing.T, actions []chromedp.Action) {
+				require.Len(t, actions, 1, "a cache hit must never trigger an extra rescale fetch")
+				p := findMouseEvent(t, actions)
+				require.InDelta(t, 100*cssW/319.0, p.X, 0.0001, "X must be rescaled")
+				require.InDelta(t, 79*cssH/158.0, p.Y, 0.0001, "Y must be rescaled")
+				require.InDelta(
+					t,
+					3.0,
+					p.DeltaX,
+					0.0001,
+					"DeltaX must never be rescaled (it's a delta, not a position)",
+				)
+				require.InDelta(t, -4.0, p.DeltaY, 0.0001, "DeltaY must never be rescaled")
+			},
+		},
+		{
+			name: "mouse_move rescales X/Y",
+			in: LiveInput{
+				Kind: "mouse_move", HasXY: true, X: 100, Y: 79,
+				CaptureWidth: 319, CaptureHeight: 158,
+			},
+			check: func(t *testing.T, actions []chromedp.Action) {
+				require.Len(t, actions, 1)
+				p := findMouseEvent(t, actions)
+				require.InDelta(t, 100*cssW/319.0, p.X, 0.0001)
+				require.InDelta(t, 79*cssH/158.0, p.Y, 0.0001)
+			},
+		},
+		{
+			name: "key_down never rescales (no coordinates to rescale)",
+			in:   LiveInput{Kind: "key_down", Key: "a", Code: "KeyA", CaptureWidth: 319, CaptureHeight: 158},
+			check: func(t *testing.T, actions []chromedp.Action) {
+				require.Len(t, actions, 1, "key_down must never trigger a layout-metrics rescale fetch")
+			},
+		},
+		{
+			name: "text never rescales (no coordinates to rescale)",
+			in:   LiveInput{Kind: "text", Text: "hi", CaptureWidth: 319, CaptureHeight: 158},
+			check: func(t *testing.T, actions []chromedp.Action) {
+				require.Len(t, actions, 1, "text must never trigger a layout-metrics rescale fetch")
+			},
+		},
+		{
+			name: "navigate never rescales (no coordinates to rescale)",
+			in:   LiveInput{Kind: "navigate", URL: "http://8.8.8.8/", CaptureWidth: 319, CaptureHeight: 158},
+			check: func(t *testing.T, actions []chromedp.Action) {
+				require.Len(t, actions, 1, "navigate must never trigger a layout-metrics rescale fetch")
+			},
+		},
+		{
+			name: "zero-valued capture dims (older client) dispatch unscaled, no divide-by-zero",
+			in: LiveInput{
+				Kind: "mouse_move", HasXY: true, X: 42, Y: 17,
+				CaptureWidth: 0, CaptureHeight: 0,
+			},
+			check: func(t *testing.T, actions []chromedp.Action) {
+				require.Len(t, actions, 1, "zero capture dims must never trigger a rescale fetch")
+				p := findMouseEvent(t, actions)
+				require.InDelta(t, 42.0, p.X, 0.0001, "zero capture dims must dispatch the raw X unscaled")
+				require.InDelta(t, 17.0, p.Y, 0.0001, "zero capture dims must dispatch the raw Y unscaled")
+			},
+		},
+		{
+			name: "one-dim-present (width only) dispatches unscaled",
+			in: LiveInput{
+				Kind: "mouse_down", HasXY: true, X: 42, Y: 17, Button: "left",
+				CaptureWidth: 319, CaptureHeight: 0,
+			},
+			check: func(t *testing.T, actions []chromedp.Action) {
+				require.Len(t, actions, 1, "one-dim-present must never trigger a rescale fetch")
+				p := findMouseEvent(t, actions)
+				require.InDelta(t, 42.0, p.X, 0.0001)
+				require.InDelta(t, 17.0, p.Y, 0.0001)
+			},
+		},
+		{
+			name: "one-dim-present (height only) dispatches unscaled",
+			in: LiveInput{
+				Kind: "mouse_up", HasXY: true, X: 42, Y: 17, Button: "left",
+				CaptureWidth: 0, CaptureHeight: 158,
+			},
+			check: func(t *testing.T, actions []chromedp.Action) {
+				require.Len(t, actions, 1, "one-dim-present must never trigger a rescale fetch")
+				p := findMouseEvent(t, actions)
+				require.InDelta(t, 42.0, p.X, 0.0001)
+				require.InDelta(t, 17.0, p.Y, 0.0001)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var actions []chromedp.Action
+			lv := newNavigateTestLiveView(t, func(_ context.Context, _ time.Duration, acts ...chromedp.Action) error {
+				mu.Lock()
+				actions = append(actions, acts...)
+				mu.Unlock()
+				return nil
+			})
+			lv.cssViewportW = int(cssW)
+			lv.cssViewportH = int(cssH)
+			require.True(t, lv.takeControl("viewerA"))
+
+			err := lv.dispatchInput("viewerA", tc.in)
+			require.NoError(t, err)
+
+			mu.Lock()
+			defer mu.Unlock()
+			tc.check(t, actions)
+		})
+	}
+}
+
+// newViewportTestLiveView builds a bare LiveView + LiveViewRegistry pair for
+// SetViewport's orchestration tests: tabCtx is a plain context.Background()
+// (never dialed — SetViewport's own bounds validation happens before any CDP
+// call, and every CDP call itself goes through the scripted runCDP stub, so
+// no real chromedp/Chromium connection is needed).
+func newViewportTestLiveView(
+	runCDP func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error,
+) (*LiveViewRegistry, *LiveView) {
+	lv := &LiveView{
+		sessionID: "s1",
+		viewers:   make(map[string]FrameSink),
+		tabCtx:    context.Background(),
+		runCDP:    runCDP,
+	}
+	reg := &LiveViewRegistry{views: map[string]*LiveView{"s1": lv}}
+	return reg, lv
+}
+
+// TestLiveViewRegistry_SetViewport_Orchestration is the table test for item
+// 6b: SetViewport's full compensation orchestration — the happy path, the
+// chrome-delta compensation re-apply triggered by an over-tolerance drift
+// (live evidence, UAT v24: requested 615x744, actual 615x657 — an 87px
+// HEIGHT deficit), and the two cache-invalidation paths (hard read-back
+// failure, degenerate read-back). Each subtest scripts LiveView.runCDP by
+// the POSITION of the call in SetViewport's fixed sequence (apply -> first
+// read-back -> [compensate -> second read-back]), since that sequence is
+// deterministic and well-known — no real chromedp/Chromium connection is
+// needed (see this file's header comment).
+func TestLiveViewRegistry_SetViewport_Orchestration(t *testing.T) {
+	t.Run("happy path: cache equals the actual read-back, no compensation", func(t *testing.T) {
+		var calls [][]chromedp.Action
+		runCDP := func(_ context.Context, timeout time.Duration, actions ...chromedp.Action) error {
+			calls = append(calls, actions)
+			switch len(calls) {
+			case 1: // initial apply: [windowBoundsAction, emulation action]
+				require.Len(t, actions, 2)
+				require.Equal(t, viewportSetTimeout, timeout)
+				return nil
+			case 2: // first read-back
+				require.Equal(t, viewportSetTimeout, timeout)
+				lm := actions[0].(layoutMetricsAction)
+				*lm.w, *lm.h = 615, 744
+				return nil
+			}
+			t.Fatalf(
+				"unexpected extra runCDP call (drift was within tolerance, no compensation expected): %#v",
+				actions,
+			)
+			return nil
+		}
+		reg, lv := newViewportTestLiveView(runCDP)
+		lv.cssViewportW, lv.cssViewportH = 999, 999 // stale — must be overwritten, not merely left alone
+
+		applied, err := reg.SetViewport("s1", 615, 744, 1)
+		require.NoError(t, err)
+		require.True(t, applied)
+		require.Len(t, calls, 2, "happy path must not trigger compensation")
+
+		lv.mu.Lock()
+		defer lv.mu.Unlock()
+		require.Equal(t, 615, lv.cssViewportW)
+		require.Equal(t, 744, lv.cssViewportH)
+	})
+
+	t.Run("drift over tolerance triggers exactly one compensation and caches the final read-back", func(t *testing.T) {
+		var calls [][]chromedp.Action
+		var compensationBounds windowBoundsAction
+		runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
+			calls = append(calls, actions)
+			switch len(calls) {
+			case 1: // initial apply
+				return nil
+			case 2: // first read-back — the live UAT v24 evidence: 615x744 requested, 615x657 actual
+				lm := actions[0].(layoutMetricsAction)
+				*lm.w, *lm.h = 615, 657
+				return nil
+			case 3: // compensation re-apply
+				compensationBounds = actions[0].(windowBoundsAction)
+				return nil
+			case 4: // second (post-compensation) read-back — now exact
+				lm := actions[0].(layoutMetricsAction)
+				*lm.w, *lm.h = 615, 744
+				return nil
+			}
+			t.Fatalf("unexpected extra runCDP call: %#v", actions)
+			return nil
+		}
+		reg, lv := newViewportTestLiveView(runCDP)
+
+		applied, err := reg.SetViewport("s1", 615, 744, 1)
+		require.NoError(t, err)
+		require.True(t, applied)
+		require.Len(t, calls, 4, "drift over tolerance must trigger exactly one compensation re-apply + re-read")
+
+		require.Equal(t, 615, compensationBounds.width,
+			"compensated width = requested + (requested - actual) = 615 + (615-615)")
+		require.Equal(t, 744+87, compensationBounds.height,
+			"compensated height = requested + (requested - actual) = 744 + (744-657)")
+
+		lv.mu.Lock()
+		defer lv.mu.Unlock()
+		require.Equal(t, 615, lv.cssViewportW, "cache must hold the FINAL (post-compensation) read-back")
+		require.Equal(t, 744, lv.cssViewportH)
+	})
+
+	t.Run("read-back failure invalidates a stale cache instead of leaving it", func(t *testing.T) {
+		simulatedErr := fmt.Errorf("simulated GetLayoutMetrics failure")
+		var calls [][]chromedp.Action
+		runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
+			calls = append(calls, actions)
+			switch len(calls) {
+			case 1:
+				return nil
+			case 2:
+				return simulatedErr
+			}
+			t.Fatalf("unexpected extra runCDP call after a read-back failure: %#v", actions)
+			return nil
+		}
+		reg, lv := newViewportTestLiveView(runCDP)
+		lv.cssViewportW, lv.cssViewportH = 1280, 720 // pre-existing, stale cache
+
+		applied, err := reg.SetViewport("s1", 615, 744, 1)
+		require.NoError(t, err, "a read-back failure is best-effort — SetViewport itself must not error")
+		require.True(t, applied, "the window resize itself already succeeded")
+
+		lv.mu.Lock()
+		defer lv.mu.Unlock()
+		require.Equal(t, 0, lv.cssViewportW, "a failed read-back must invalidate the cache, not leave the stale value")
+		require.Equal(t, 0, lv.cssViewportH)
+	})
+
+	t.Run("zero-valued read-back invalidates a stale cache", func(t *testing.T) {
+		var calls [][]chromedp.Action
+		runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
+			calls = append(calls, actions)
+			switch len(calls) {
+			case 1:
+				return nil
+			case 2:
+				lm := actions[0].(layoutMetricsAction)
+				*lm.w, *lm.h = 0, 0 // degenerate — e.g. cssLayoutViewport was nil
+				return nil
+			}
+			t.Fatalf("unexpected extra runCDP call after a degenerate read-back: %#v", actions)
+			return nil
+		}
+		reg, lv := newViewportTestLiveView(runCDP)
+		lv.cssViewportW, lv.cssViewportH = 1280, 720
+
+		applied, err := reg.SetViewport("s1", 615, 744, 1)
+		require.NoError(t, err)
+		require.True(t, applied)
+
+		lv.mu.Lock()
+		defer lv.mu.Unlock()
+		require.Equal(t, 0, lv.cssViewportW, "a degenerate read-back must invalidate the cache")
+		require.Equal(t, 0, lv.cssViewportH)
+	})
+}
+
+// TestLiveView_RescaleToCSSViewport is the branch test for item 6c: cache
+// hit (no CDP call at all), cache miss + fetch success (cache populated,
+// coordinates scaled), and cache miss + fetch failure (unscaled coordinates,
+// cache stays empty, and the failure backoff suppresses an immediate retry).
+func TestLiveView_RescaleToCSSViewport(t *testing.T) {
+	t.Run("cache hit never calls runCDP", func(t *testing.T) {
+		var calls int
+		lv := &LiveView{
+			sessionID:    "s1",
+			cssViewportW: 1280,
+			cssViewportH: 720,
+			runCDP: func(context.Context, time.Duration, ...chromedp.Action) error {
+				calls++
+				return nil
+			},
+		}
+		x, y, ok := lv.rescaleToCSSViewport(context.Background(), 100, 79, 319, 158)
+		require.True(t, ok, "a cache hit must be mappable")
+		require.InDelta(t, 100*1280.0/319.0, x, 0.0001)
+		require.InDelta(t, 79*720.0/158.0, y, 0.0001)
+		require.Zero(t, calls, "a cache hit must never call runCDP")
+	})
+
+	t.Run("cache miss + fetch success populates the cache and scales", func(t *testing.T) {
+		var calls int
+		lv := &LiveView{
+			sessionID: "s1",
+			runCDP: func(_ context.Context, timeout time.Duration, actions ...chromedp.Action) error {
+				calls++
+				require.Equal(t, viewportInputFetchTimeout, timeout,
+					"the input-path fetch must use the short viewportInputFetchTimeout, not viewportSetTimeout")
+				lm := actions[0].(layoutMetricsAction)
+				*lm.w, *lm.h = 1280, 720
+				return nil
+			},
+		}
+		x, y, ok := lv.rescaleToCSSViewport(context.Background(), 100, 79, 319, 158)
+		require.True(t, ok, "a successful fetch must be mappable")
+		require.InDelta(t, 100*1280.0/319.0, x, 0.0001)
+		require.InDelta(t, 79*720.0/158.0, y, 0.0001)
+		require.Equal(t, 1, calls)
+
+		lv.mu.Lock()
+		defer lv.mu.Unlock()
+		require.Equal(t, 1280, lv.cssViewportW)
+		require.Equal(t, 720, lv.cssViewportH)
+	})
+
+	// Rewritten 2026-08-03. This previously asserted that a failed fetch
+	// "dispatches unscaled", on the reasoning that a slightly-off click beats a
+	// dead panel. Measurement disproved the premise: the capture frame and the
+	// CSS viewport differed by 562 vs 369 px, so an unscaled coordinate lands
+	// ~34% off — reliably on the WRONG element. A mis-aimed click can navigate
+	// away, delete or submit; a dropped one is a no-op the user retries.
+	t.Run("cache miss + fetch failure DROPS the event and backs off the next call", func(t *testing.T) {
+		var calls int
+		lv := &LiveView{
+			sessionID: "s1",
+			runCDP: func(context.Context, time.Duration, ...chromedp.Action) error {
+				calls++
+				return fmt.Errorf("simulated CDP hiccup")
+			},
+		}
+		_, _, ok := lv.rescaleToCSSViewport(context.Background(), 100, 79, 319, 158)
+		require.False(t, ok, "a failed fetch must report the event as UNMAPPABLE, not dispatch it unscaled")
+		require.Equal(t, 1, calls)
+
+		lv.mu.Lock()
+		require.Equal(t, 0, lv.cssViewportW, "cache must stay empty after a failed fetch")
+		require.Equal(t, 0, lv.cssViewportH)
+		lv.mu.Unlock()
+
+		// Immediately call again — the backoff window must suppress a retry.
+		_, _, ok2 := lv.rescaleToCSSViewport(context.Background(), 50, 30, 319, 158)
+		require.False(t, ok2, "inside the backoff window the event must still be dropped, not dispatched unscaled")
+		require.Equal(t, 1, calls, "a second call within the backoff window must not re-invoke runCDP")
+	})
 }

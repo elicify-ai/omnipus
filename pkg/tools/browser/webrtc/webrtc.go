@@ -34,6 +34,28 @@ import "errors"
 // lite build; callers fall back to the JPEG screencast path.
 var ErrUnavailable = errors.New("browser webrtc: not available in this build (lite)")
 
+// ErrNoIngestVideoTrack is the sentinel HandleViewerOffer wraps (via %w) when
+// waitForTracks times out with no video track ever having arrived. Exported
+// so pkg/gateway/browser_webrtc.go can classify this SPECIFIC failure mode
+// (errors.Is) separately from every other HandleViewerOffer error (bad SDP,
+// closed session, PC/track-negotiation failures) for logging/audit
+// observability — distinguishing "the capture pipeline just hadn't produced
+// a frame yet" from a generic runtime error, per the 2026-07-28 incident
+// (see waitForTracksTimeout's doc comment): a viewer-offer failure of THIS
+// specific shape is not a capability gate (disabled/not_capable/lite_build)
+// and not necessarily a real defect either — it can be a legitimate,
+// transient cold-start race — but it deserves its own name in logs/audit
+// rather than being indistinguishable from every other "error".
+//
+// This lives HERE, in the build-tag-free file, rather than alongside
+// waitForTracks in ingest.go (//go:build !lite), because pkg/gateway
+// references it UNCONDITIONALLY — an errors.Is classification that must
+// compile in every build. Defining it in the !lite file broke the
+// lite/mipsle link check ("undefined: webrtc.ErrNoIngestVideoTrack"). Keep
+// every exported symbol the gateway names in a file both builds compile,
+// the same way ErrUnavailable above already is.
+var ErrNoIngestVideoTrack = errors.New("no ingest video track")
+
 // Config configures a Session's ICE behavior.
 type Config struct {
 	// StunServer is a STUN server URL, e.g. "stun:stun.l.google.com:19302".

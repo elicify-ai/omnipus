@@ -132,7 +132,7 @@ func TestAttemptsVsRounds_DistinctBrakes(t *testing.T) {
 		}
 
 		// Sole AttemptCount writer, verdict=nil (no-signal unmet outcome).
-		al.taskExecutor.consumeAttemptOrExhaust(context.Background(), fresh, "", "claim summary", nil)
+		al.taskExecutor.consumeAttemptOrExhaust(context.Background(), fresh, "", "claim summary", nil, nil)
 
 		// The TASK failed on attempts (the attempts brake tripped for ITS scope).
 		final, err := al.taskStore.Get(tk.ID)

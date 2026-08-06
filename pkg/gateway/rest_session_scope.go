@@ -101,7 +101,8 @@ func (a *restAPI) putSessionScope(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if reloadErr := a.triggerReloadAndWait(); reloadErr != nil {
+	confirmed, reloadErr := a.triggerReloadAndWaitOutcome()
+	if reloadErr != nil {
 		if a.agentLoop != nil {
 			if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
 				if err := audit.EmitSecuritySettingChange(
@@ -121,6 +122,16 @@ func (a *restAPI) putSessionScope(w http.ResponseWriter, r *http.Request) {
 			Warning:         &warnMsg,
 		})
 		return
+	}
+	if !confirmed {
+		// Session routing already requires a restart regardless (cached at
+		// boot — see this handler's doc comment), but the in-memory config
+		// itself may not yet reflect dm_scope for any other consumer that
+		// reads it live. Name the setting so an operator grepping
+		// gateway.log can tell this specific change is the one still
+		// unconfirmed, distinct from an unrelated concurrent reload.
+		slog.Warn("rest: hot-reload after session dm_scope update did not confirm within the poll window",
+			"dm_scope", string(body.DmScope))
 	}
 
 	if a.agentLoop != nil {

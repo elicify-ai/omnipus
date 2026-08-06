@@ -20,17 +20,28 @@ This file tracks features referenced by E2E tests that are not yet implemented i
   `AgentProfile.tsx:353`) — the name input is never rendered, so there is nothing to
   assert as readOnly. The "read-only" badge exists but is insufficient for the test intent.
 
-- [ ] **"Agent removed" banner on deleted-agent session** (`agents.spec.ts (g)`)
-  ChatScreen does not check `agent_removed` in the session response and does not render
-  a `data-testid="agent-removed-banner"` or disable the composer for ghost sessions.
+- [x] **"Agent removed" banner on deleted-agent session** (`agents.spec.ts (g)`)
+  RESOLVED: the backend's `getSession` handler (`pkg/gateway/rest.go`) sets `agent_removed`
+  on `SessionDetail` when the session's agent no longer resolves; `ChatScreen` renders
+  `data-testid="agent-removed-banner"` and disables the composer. Issue #103 closed.
 
-- [ ] **Deleted-agent branded 404** (`agents.spec.ts (e)`)
-  Navigating to `/agents/:nonexistent-slug` fetches the agent and renders a generic error
-  state — no "Back to Agents" link with that exact text, no branded 404 component.
+- [x] **Deleted-agent not-found affordance** (`agents.spec.ts (e)`)
+  RESOLVED, in a different shape than originally specced: there is no dedicated branded
+  404 route — the transient `/_app/agents/$agentId` route opens the AgentProfile
+  slide-over and replaces the URL back to `/agents`. The slide-over itself renders a real
+  "Agent not found" state with a "Back to Agents" button (`AgentProfile.tsx`'s `isNotFound`
+  branch) — the test now asserts that affordance instead of a standalone page. Issue #427
+  closed as "different design, not a gap".
 
-- [ ] **Offline send queue** (`chat.spec.ts (f)`)
-  The chat store (`useChatStore`) does not implement a message queue for offline mode.
-  Messages sent while `context.setOffline(true)` are dropped rather than queued.
+- [x] **Offline send queue** (`chat.spec.ts (f)`)
+  RESOLVED: the store-level queue (`useChatStore`'s `outboundQueue`/`pendingDrainQueue`/
+  `enqueueOutboundMessage`/`drainOutboundQueue`) was already fully implemented and unit-tested
+  — the actual gap was `ChatScreen.tsx`'s `inputEnabled` gate requiring strict `isConnected`,
+  which silently blocked the only real-UI path into the queue during the
+  `reconnecting`/`slow` retry window. Fixed: the composer stays usable while reconnecting
+  (matching the pre-existing `composerPlaceholder`/banner/aria-label affordances that already
+  assumed this), so messages typed during `context.setOffline(true)` are genuinely queued and
+  auto-sent in order on reconnect. Issue #105 closed.
 
 - [x] **Subagent collapsed block UI** (`handoff.spec.ts (b)`, `subagent.spec.ts`)
   RESOLVED by Sprint H (H1+H2): `SubagentBlock.tsx` implements `data-testid="subagent-collapsed"`

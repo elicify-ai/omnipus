@@ -394,8 +394,19 @@ func (te *TaskExecutor) ClearEvidenceGateStreak(taskID string) {
 // it to the agent in a goroutine, gated by per-agent and global concurrency
 // controls. For a plan member task (PlanID != ""), it also enforces
 // requirePlanExecuting's plan-state gate — see that method's doc comment.
-func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
-	return te.executeTask(ctx, taskID, false)
+//
+// occurrenceMs (ADR-050 RD3/RD5, task-run-history-spec.md §3.2) is the
+// scheduled RRULE instant this dispatch realizes — threaded through from the
+// trigger fire (TaskTriggerScheduler.RunScheduled -> SpawnTriggeredRun) so
+// the TaskRun opened for this execution carries the same calendar join key
+// the occurrence overlay reads. nil for every non-recurring-fire caller
+// (redispatch, plan-engine dispatch, auto-advance, heartbeat) — an ad-hoc/
+// manual run keyed only by "an open run exists" for this task. Every dispatch
+// through this entry point records task.RunKindScheduled; StartTaskNow/
+// StartOccurrenceRun (the user-initiated launch paths) record
+// task.RunKindManual instead.
+func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string, occurrenceMs *int64) error {
+	return te.executeTask(ctx, taskID, occurrenceMs, task.RunKindScheduled, false)
 }
 
 // executeTaskPlanVerified is the ONE documented bypass of the plan-state gate
@@ -425,7 +436,9 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
 // caller of a dispatch primitive must go through ExecuteTask/StartTaskNow and
 // pay the real requirePlanExecuting check.
 func (te *TaskExecutor) executeTaskPlanVerified(ctx context.Context, taskID string) error {
-	return te.executeTask(ctx, taskID, true)
+	// Plan-member dispatch is never tied to a recurring occurrence — nil,
+	// task.RunKindScheduled (matching every other non-manual dispatch path).
+	return te.executeTask(ctx, taskID, nil, task.RunKindScheduled, true)
 }
 
 // executeTask is ExecuteTask's real body. planVerifiedUnderDecisionMu is true
@@ -435,7 +448,9 @@ func (te *TaskExecutor) executeTaskPlanVerified(ctx context.Context, taskID stri
 // method has exactly those two callers in this file — there is no exported
 // or otherwise-reachable way to pass true from outside — so the bypass
 // cannot be reached by accident.
-func (te *TaskExecutor) executeTask(ctx context.Context, taskID string, planVerifiedUnderDecisionMu bool) error {
+func (te *TaskExecutor) executeTask(
+	ctx context.Context, taskID string, occurrenceMs *int64, kind task.RunKind, planVerifiedUnderDecisionMu bool,
+) error {
 	t, err := te.store.Get(taskID)
 	if err != nil {
 		return fmt.Errorf("task_executor: get task %q: %w", taskID, err)
@@ -538,7 +553,7 @@ func (te *TaskExecutor) executeTask(ctx context.Context, taskID string, planVeri
 	te.running[taskID] = &taskSlot{cancel: cancel, reserved: false}
 	te.mu.Unlock()
 
-	go te.runTask(taskCtx, t, taskSessionID, cancel, release)
+	go te.runTask(taskCtx, t, taskSessionID, cancel, release, occurrenceMs, kind)
 	return nil
 }
 
@@ -616,7 +631,10 @@ func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
 // already run: calling ExecuteTask while this goroutine still held its own
 // dispatch-sema slot would need two slots at once for an instant and could
 // spuriously hit the concurrency cap.
-func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, taskSessionID string, cancel context.CancelFunc, release func()) {
+func (te *TaskExecutor) runTask(
+	ctx context.Context, t *task.Task, taskSessionID string, cancel context.CancelFunc, release func(),
+	occurrenceMs *int64, kind task.RunKind,
+) {
 	var redispatchTaskID string
 	defer func() {
 		release()
@@ -625,10 +643,41 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, taskSessionID
 		delete(te.running, t.ID)
 		te.mu.Unlock()
 		if redispatchTaskID != "" {
-			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil && !isRoutineAutoDispatchRefusal(err) {
+			// The redispatch reuses the SAME occurrenceMs/kind as this attempt —
+			// ADR-050 RD5/RD7: a goal-loop redispatch (steering-and-retry) is
+			// another attempt at the SAME execution episode, not a new one, and
+			// openRun's (taskID, occurrenceMs) idempotency means the redispatch's
+			// own runTask call reopens (not duplicates) the still-open run this
+			// attempt leaves behind — see finishTaskRun/consumeAttemptOrExhaust's
+			// own doc comments for why intermediate redispatches do not close it.
+			if err := te.ExecuteTask(context.Background(), redispatchTaskID, occurrenceMs); err != nil && !isRoutineAutoDispatchRefusal(err) {
 				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
 					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
 			}
+		}
+	}()
+
+	// run is populated once openRun below succeeds. Declared here (rather than
+	// via := at the openRun call site) so the panic-recovery defer immediately
+	// below closes over this SAME variable and observes whatever it holds at
+	// the moment of a panic — nil (closeRun no-ops) if the panic happened
+	// before openRun ran, the real handle otherwise.
+	//
+	// L5 (operator decision 2026-07-20): the ADR-050 RD10 stuck-run reaper was
+	// removed — there is no backstop besides this goroutine's own top-level
+	// recover (matching the pattern in session_end.go's runRecap,
+	// subturn.go's spawnSubTurn, hooks.go's runObserver, and this file's own
+	// notifyParentIfAllSiblingsDone). A panic here that left an open TaskRun
+	// un-closed would strand it in_progress forever. Logs and returns rather
+	// than re-panicking — this goroutine has no caller to propagate to
+	// (launched via `go te.runTask(...)`).
+	var run *activeRun
+	defer func() {
+		if r := recover(); r != nil {
+			logger.ErrorCF("task_executor",
+				"Panic in runTask — closing its TaskRun as failed (no reaper backstop exists)",
+				map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "panic": r})
+			te.closeRun(t.ID, run, task.StatusFailed, fmt.Sprintf("panic during task execution: %v", r))
 		}
 	}()
 
@@ -652,6 +701,13 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, taskSessionID
 		te.goroutineCtxHook(ctx, t.ID)
 		return
 	}
+
+	// ADR-050 RD5 run-open (task-run-history-spec.md §3.2): now that
+	// taskSessionID is settled (created successfully, or left empty on a
+	// session-store failure), open this execution's TaskRun record using the
+	// session the dispatch actually minted — see openRun's own doc comment
+	// for why run-open cannot happen any earlier than this point.
+	run = te.openRun(t.ID, occurrenceMs, kind, taskSessionID)
 
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
 	if t.WorkspaceID != "" {
@@ -680,7 +736,7 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, taskSessionID
 		taskChatID = "task:" + t.ID
 	}
 	resp, err := te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
-	redispatchTaskID = te.finishTaskRun(ctx, t, taskSessionID, resp, err, "")
+	redispatchTaskID = te.finishTaskRun(ctx, t, taskSessionID, resp, err, "", run)
 }
 
 // finishTaskRun handles the shared post-execution logic for both runTask and
@@ -728,7 +784,7 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, taskSessionID
 // runTaskFromInProgress: runTask logs-and-continues on NewSession failure while
 // runTaskFromInProgress aborts; that divergence is intentional and load-bearing.
 func (te *TaskExecutor) finishTaskRun(
-	ctx context.Context, t *task.Task, taskSessionID, resp string, err error, logSuffix string,
+	ctx context.Context, t *task.Task, taskSessionID, resp string, err error, logSuffix string, run *activeRun,
 ) (redispatchTaskID string) {
 	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
 
@@ -763,6 +819,7 @@ func (te *TaskExecutor) finishTaskRun(
 		failedTask := *t
 		failedTask.Status = task.StatusFailed
 		failedTask.Result = fmt.Sprintf("execution error: %v", err)
+		te.closeRun(t.ID, run, task.StatusFailed, failedTask.Result)
 		te.notifySourceChannel(&failedTask)
 		return ""
 	}
@@ -785,6 +842,12 @@ func (te *TaskExecutor) finishTaskRun(
 	if lerr != nil {
 		logger.WarnCF("task_executor", "Could not re-read task after execution",
 			map[string]any{"task_id": t.ID, "error": lerr.Error()})
+		// M1: this early return used to leave any open run stranded in_progress
+		// forever (no reaper backstop) — close it best-effort as failed, since
+		// the task's real outcome cannot be determined without the re-read
+		// that just failed.
+		te.closeRun(t.ID, run, task.StatusFailed,
+			fmt.Sprintf("execution finished but the task record could not be re-read to resolve its outcome: %v", lerr))
 		return ""
 	}
 
@@ -806,6 +869,11 @@ func (te *TaskExecutor) finishTaskRun(
 		// the task terminal — mirror that outcome onto the durable lifecycle
 		// record too (see finalizeTaskLifecycle's doc comment).
 		te.finalizeTaskLifecycle(taskSessionID, current.Status)
+		// The agent already called update_task — its tool call is the mirror
+		// write; run-close here is purely additive to it (ADR-050 RD5,
+		// task-run-history-spec.md §3.3), which is exactly why update_task/
+		// update_task_in_workspace need no change of their own.
+		te.closeRun(t.ID, run, current.Status, current.Result)
 		te.notifySourceChannel(current)
 		return ""
 	}
@@ -826,7 +894,7 @@ func (te *TaskExecutor) finishTaskRun(
 			logger.WarnCF("task_executor", "Could not clear pending judge claim",
 				map[string]any{"task_id": t.ID, "error": cerr.Error()})
 		}
-		return te.adjudicateClaim(ctx, current, taskSessionID, claimText)
+		return te.adjudicateClaim(ctx, current, taskSessionID, claimText, run)
 	}
 
 	// ADR-052 FR-035 (evidence-marker gate, R3-13): scan resp for the gate
@@ -853,7 +921,7 @@ func (te *TaskExecutor) finishTaskRun(
 	// exactly that livelock).
 	if !current.Scratchpad {
 		if gate := checkEvidenceMarkerGate(resp); gate.Applicable && !gate.Honored {
-			return te.rejectBareEvidenceClaim(ctx, current, taskSessionID, gate.SteeringText)
+			return te.rejectBareEvidenceClaim(ctx, current, taskSessionID, gate.SteeringText, run)
 		}
 	}
 	// Gate is no longer being violated for this run (honored, not
@@ -887,25 +955,25 @@ func (te *TaskExecutor) finishTaskRun(
 		if current.Scratchpad {
 			// FR-048: Scratchpad (set_todos) tasks are exempt from the goal
 			// loop entirely — today's exact fail-closed-immediately behavior.
-			te.completeTaskWithResult(current, taskSessionID, task.StatusInProgress, false, reason)
+			te.completeTaskWithResult(current, taskSessionID, task.StatusInProgress, false, reason, run)
 			return ""
 		}
 		// FR-045: for a real task, no signal is an UNMET claim (attempt
 		// consumed) — NOT an immediate terminal failure.
-		return te.consumeAttemptOrExhaust(ctx, current, taskSessionID, reason, nil)
+		return te.consumeAttemptOrExhaust(ctx, current, taskSessionID, reason, nil, run)
 	}
 
 	if current.Scratchpad || signal.Status() == task.StatusFailed {
 		// FR-048 (Scratchpad: exempt from the goal loop entirely, even for a
 		// success marker — trust it directly) OR SD-B1 (an explicit failure
 		// marker is an accepted give-up: terminal immediately, no judge).
-		te.completeTaskWithResult(current, taskSessionID, task.StatusInProgress, signal.Status() == task.StatusDone, signal.Result)
+		te.completeTaskWithResult(current, taskSessionID, task.StatusInProgress, signal.Status() == task.StatusDone, signal.Result, run)
 		return ""
 	}
 
 	// signal.Status() == task.StatusDone, non-Scratchpad: a success CLAIM —
 	// route to the evidence-ladder judge (US-5/US-6).
-	return te.adjudicateClaim(ctx, current, taskSessionID, signal.Result)
+	return te.adjudicateClaim(ctx, current, taskSessionID, signal.Result, run)
 }
 
 // adjudicateClaim routes a worker's SUCCESS claim through the evidence-ladder
@@ -918,7 +986,7 @@ func (te *TaskExecutor) finishTaskRun(
 // missing Judge in that specific combination is a structural/environment
 // gap, not a transient D7 "unavailable" cause.
 func (te *TaskExecutor) adjudicateClaim(
-	ctx context.Context, t *task.Task, taskSessionID, claimSummary string,
+	ctx context.Context, t *task.Task, taskSessionID, claimSummary string, run *activeRun,
 ) (redispatchTaskID string) {
 	if strings.TrimSpace(claimSummary) == "" {
 		// ADR-052 (7-reviewer gate item 3): an empty completion claim has
@@ -927,7 +995,7 @@ func (te *TaskExecutor) adjudicateClaim(
 		// claim carrying no content to check evidence against.
 		reason := "worker reported a completion signal with an empty claim summary — " +
 			"nothing to adjudicate (fail-closed, no verifier dispatched)"
-		return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, reason, nil)
+		return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, reason, nil, run)
 	}
 
 	criteria := t.Criteria
@@ -942,7 +1010,7 @@ func (te *TaskExecutor) adjudicateClaim(
 	if len(criteria) == 0 {
 		// Structurally empty task (no criteria, no prompt, no title/description
 		// text worth judging) — nothing to judge; trust the claim.
-		te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary)
+		te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary, run)
 		return ""
 	}
 
@@ -952,7 +1020,7 @@ func (te *TaskExecutor) adjudicateClaim(
 				"goal-loop: Judge System Agent not configured; trusting the worker's claim "+
 					"directly for this criteria-less task",
 				map[string]any{"task_id": t.ID})
-			te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary)
+			te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary, run)
 			return ""
 		}
 	}
@@ -975,6 +1043,16 @@ func (te *TaskExecutor) adjudicateClaim(
 		// D7: the judge itself is unavailable and JudgeCriteria's own
 		// internal backoff loop gave up only because ctx was canceled — do
 		// NOT consume the attempt or record a verdict; abandon this run.
+		//
+		// ADR-050: deliberately does NOT closeRun here — the task's own
+		// Task.status also stays in_progress (nothing was written), so the
+		// run correctly mirrors that same "genuinely unresolved, paused"
+		// reality. A LATER retry of this same task re-enters runTask, whose
+		// openRun call is idempotent on (taskID, occurrenceMs) and simply
+		// resumes this SAME still-open run rather than creating a stray
+		// second one. If the task is never retried, boot reconciliation
+		// (reconcileStuckTaskRuns) is the accepted backstop (spec §3.5) —
+		// there is no dedicated in-process reaper.
 		logger.WarnCF("task_executor",
 			"goal-loop: judge cycle abandoned (context canceled during backoff)",
 			map[string]any{"task_id": t.ID, "reason": result.Reason})
@@ -992,6 +1070,11 @@ func (te *TaskExecutor) adjudicateClaim(
 	// silently overwritten by a stale verdict, and must never have an
 	// attempt "consumed" for a run that was actually cancelled.
 	if !te.taskVerdictStillApplicable(t.ID) {
+		// ADR-050: same rationale as the D7 branch above — no closeRun. A
+		// concurrent Stop already moved the task out of in_progress by some
+		// OTHER writer, so this run's fate is that writer's responsibility;
+		// boot reconciliation (reconcileStuckTaskRuns) is the accepted
+		// backstop if it leaves the run open.
 		logger.InfoCF("task_executor",
 			"judge verdict dropped: task left in_progress during adjudication (Stop landed concurrently)",
 			map[string]any{"task_id": t.ID})
@@ -1002,11 +1085,11 @@ func (te *TaskExecutor) adjudicateClaim(
 	te.writeJudgeVerdictTranscript(t, taskSessionID, verdict)
 
 	if verdict.Met {
-		te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary)
+		te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary, run)
 		return ""
 	}
 
-	return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, claimSummary, verdict)
+	return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, claimSummary, verdict, run)
 }
 
 // taskVerdictStillApplicable re-reads taskID's CURRENT status directly from
@@ -1061,6 +1144,7 @@ func (te *TaskExecutor) consumeAttemptOrExhaust(
 	taskSessionID string,
 	claimSummary string,
 	verdict *task.JudgeVerdict,
+	run *activeRun,
 ) (redispatchTaskID string) {
 	var planningCfg config.PlanningConfig
 	if cfg := te.agentLoop.GetConfig(); cfg != nil {
@@ -1082,6 +1166,12 @@ func (te *TaskExecutor) consumeAttemptOrExhaust(
 	updated, uerr := te.store.UpdateIfStatus(t.ID, task.StatusInProgress, task.Patch{AttemptCount: &newAttempt, Status: &nextStatus})
 	if uerr != nil {
 		if errors.Is(uerr, task.ErrStatusConflict) {
+			// ADR-050: deliberately does NOT closeRun — a concurrent Stop
+			// already moved the task out of in_progress by some OTHER writer
+			// (that writer's own outcome is authoritative), so this run's
+			// fate is that writer's responsibility; boot reconciliation
+			// (reconcileStuckTaskRuns) is the accepted backstop if it leaves
+			// the run open (spec §3.5 — no dedicated in-process reaper).
 			logger.WarnCF("task_executor",
 				"goal-loop: dropping unmet outcome — task left in_progress before the attempt could be "+
 					"recorded (Stop landed concurrently); not re-dispatching",
@@ -1091,7 +1181,9 @@ func (te *TaskExecutor) consumeAttemptOrExhaust(
 		logger.ErrorCF("task_executor",
 			"goal-loop: could not persist attempt increment; failing the run closed",
 			map[string]any{"task_id": t.ID, "error": uerr.Error()})
-		te.failTask(t.ID, fmt.Sprintf("goal-loop: could not persist attempt increment: %v", uerr))
+		reason := fmt.Sprintf("goal-loop: could not persist attempt increment: %v", uerr)
+		te.failTask(t.ID, reason)
+		te.closeRun(t.ID, run, task.StatusFailed, reason)
 		return ""
 	}
 
@@ -1104,6 +1196,13 @@ func (te *TaskExecutor) consumeAttemptOrExhaust(
 		// comment for why this is a direct SetMeta, not just the lifecycle
 		// mediator.
 		te.supersedeTaskSession(updated.AgentID, taskSessionID)
+		// ADR-050: deliberately does NOT closeRun — this is a goal-loop
+		// redispatch of the SAME execution episode (steering fed forward,
+		// another attempt at the same claim), not a new one. runTask's own
+		// redispatch defer re-enters ExecuteTask with THIS SAME occurrenceMs,
+		// and openRun's (taskID, occurrenceMs) idempotency means that call
+		// resumes this same still-open run rather than opening a second one —
+		// see runTask's redispatch-defer doc comment.
 		return updated.ID
 	}
 
@@ -1115,7 +1214,7 @@ func (te *TaskExecutor) consumeAttemptOrExhaust(
 	// cannot land on a `next` task at all — see completeTaskWithResult's
 	// `expected` parameter doc).
 	handover := buildHandover(updated, claimSummary, verdict, maxAttempts)
-	if te.completeTaskWithResult(updated, taskSessionID, task.StatusNext, false, handover) {
+	if te.completeTaskWithResult(updated, taskSessionID, task.StatusNext, false, handover, run) {
 		te.wakeOwnerAttemptsExhausted(updated, taskSessionID, handover)
 	}
 	return ""
@@ -1182,7 +1281,7 @@ func (te *TaskExecutor) writeSteeringPrompt(
 // Every rejection (bounded or not) is logged at Warn with the consecutive
 // count, per Fix-Wave-2's "make it loud" requirement.
 func (te *TaskExecutor) rejectBareEvidenceClaim(
-	ctx context.Context, t *task.Task, taskSessionID, steeringText string,
+	ctx context.Context, t *task.Task, taskSessionID, steeringText string, run *activeRun,
 ) (redispatchTaskID string) {
 	streak := te.bumpEvidenceRejectStreak(t.ID)
 	logger.WarnCF("task_executor",
@@ -1196,7 +1295,7 @@ func (te *TaskExecutor) rejectBareEvidenceClaim(
 				"treating as an unmet attempt instead of re-dispatching for free",
 			streak,
 		)
-		return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, reason, nil)
+		return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, reason, nil, run)
 	}
 
 	// ADR-052 FR-014/§6.4(b) TOCTOU fix: this is the FREE re-dispatch write
@@ -1209,6 +1308,10 @@ func (te *TaskExecutor) rejectBareEvidenceClaim(
 	updated, uerr := te.store.UpdateIfStatus(t.ID, task.StatusInProgress, task.Patch{Status: &nextStatus})
 	if uerr != nil {
 		if errors.Is(uerr, task.ErrStatusConflict) {
+			// ADR-050: deliberately does NOT closeRun — same rationale as
+			// consumeAttemptOrExhaust's identical CAS-conflict branch (a
+			// concurrent Stop is authoritative; boot reconciliation is the
+			// accepted backstop).
 			logger.WarnCF("task_executor",
 				"evidence-marker gate: dropping free re-dispatch — task left in_progress concurrently "+
 					"(Stop landed); not re-dispatching",
@@ -1218,7 +1321,9 @@ func (te *TaskExecutor) rejectBareEvidenceClaim(
 		logger.ErrorCF("task_executor",
 			"evidence-marker gate: could not persist re-dispatch status; failing the run closed",
 			map[string]any{"task_id": t.ID, "error": uerr.Error()})
-		te.failTask(t.ID, fmt.Sprintf("evidence-marker gate: could not persist re-dispatch status: %v", uerr))
+		reason := fmt.Sprintf("evidence-marker gate: could not persist re-dispatch status: %v", uerr)
+		te.failTask(t.ID, reason)
+		te.closeRun(t.ID, run, task.StatusFailed, reason)
 		return ""
 	}
 
@@ -1248,6 +1353,10 @@ func (te *TaskExecutor) rejectBareEvidenceClaim(
 	// session's own status/lifecycle untouched otherwise. See
 	// supersedeTaskSession's doc comment for the full rationale.
 	te.supersedeTaskSession(updated.AgentID, taskSessionID)
+	// ADR-050: deliberately does NOT closeRun — same rationale as
+	// consumeAttemptOrExhaust's redispatch branch (this is another attempt at
+	// the SAME execution episode; the redispatch reopens this same run via
+	// openRun's idempotency, it does not need it pre-closed).
 	return updated.ID
 }
 
@@ -1443,7 +1552,7 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 // (belt-and-suspenders) rather than relying solely on that earlier,
 // separately-timed re-check. Returns whether the write actually landed.
 func (te *TaskExecutor) completeTaskWithResult(
-	t *task.Task, taskSessionID string, expected task.Status, success bool, result string,
+	t *task.Task, taskSessionID string, expected task.Status, success bool, result string, run *activeRun,
 ) (applied bool) {
 	// Fix-Wave-2: this is a terminal write for t.ID — any evidence-marker-gate
 	// rejection streak still tracked for it is now moot (and, left uncleared,
@@ -1469,6 +1578,12 @@ func (te *TaskExecutor) completeTaskWithResult(
 				"goal-loop: dropping completion outcome — task left its expected status concurrently "+
 					"(Stop landed); the task's own outcome is authoritative",
 				map[string]any{"task_id": t.ID, "expected_status": string(expected), "target_status": string(status)})
+			// M5: close the run here too, with the outcome this function was
+			// asked to write — the Task mirror write was dropped (a concurrent
+			// Stop is authoritative), but run-history has nowhere else to
+			// record this execution's own completion, and there is no reaper
+			// backstop to fall back on if it is left in_progress.
+			te.closeRun(t.ID, run, status, result)
 			return false
 		}
 		// Known, accepted limitation (ADR-043 §3): the task is left stuck at
@@ -1482,6 +1597,10 @@ func (te *TaskExecutor) completeTaskWithResult(
 		// stuck task (e.g. via a direct store fix or `omnipus` CLI update).
 		logger.ErrorCF("task_executor", "Completion update failed",
 			map[string]any{"task_id": t.ID, "status": string(status), "error": uerr.Error()})
+		// M5: close the run here too — unlike the Task mirror, run-history has
+		// nowhere else to record this completion, and there is no reaper
+		// backstop to fall back on if we leave it in_progress.
+		te.closeRun(t.ID, run, status, result)
 		return false
 	}
 	if taskSessionID != "" && sessStore != nil {
@@ -1497,6 +1616,7 @@ func (te *TaskExecutor) completeTaskWithResult(
 	// dropped-conflict early returns), exactly like the UnifiedMeta archive
 	// this line sits next to.
 	te.finalizeTaskLifecycle(taskSessionID, status)
+	te.closeRun(t.ID, run, status, result)
 	te.recordEvidenceBoundary(final)
 	te.onTaskComplete(final)
 	te.notifySourceChannel(final)
@@ -1907,7 +2027,7 @@ func (te *TaskExecutor) readyBlockedCandidates(completedTaskID string) []string 
 // their BlockedBy set — ExecuteTask itself now refuses that dispatch.
 func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID string) {
 	for _, taskID := range te.readyBlockedCandidates(completedTaskID) {
-		if err := te.ExecuteTask(ctx, taskID); err != nil {
+		if err := te.ExecuteTask(ctx, taskID, nil); err != nil {
 			if !isRoutineAutoDispatchRefusal(err) {
 				logger.WarnCF("task_executor", "Orchestrator: advance dispatch failed",
 					map[string]any{"task_id": taskID, "error": err.Error()})
@@ -1948,6 +2068,117 @@ func (te *TaskExecutor) emitStatusChanged(t *task.Task, status task.Status) {
 		Status:    string(status),
 		SessionID: sessionID,
 		AgentID:   t.AgentID,
+	})
+}
+
+// activeRun carries the identity of an open TaskRun record (ADR-050, an
+// additive record layer — docs/internal/specs/task-run-history-spec.md
+// §3.2/3.3) from the point it is opened in runTask or runTaskFromInProgress
+// (right after each function's own session is available — see openRun's own
+// doc comment for why run-open cannot happen any earlier) through to the
+// point it is closed in finishTaskRun / completeTaskWithResult.
+//
+// nil means "no run is being tracked for this execution": openRun's own call
+// to Store.OpenRun failed (openRun degrades to nil rather than aborting the
+// dispatch) — the ONE remaining nil case now that runTaskFromInProgress/
+// StartTaskNow also opens a run (BLK-3, operator decision 2026-07-20; every
+// production dispatch path participates in run-history today). Test-only
+// direct calls into finishTaskRun/completeTaskWithResult (see
+// task_completion_contract_test.go) also legitimately pass nil.
+// Task.status/result/session_id keep their exact existing behavior
+// regardless of whether a run is being tracked (RD2) — activeRun only ever
+// ADDS a parallel record, never gates or alters the mirror.
+type activeRun struct {
+	runID        string
+	occurrenceMs *int64
+}
+
+// openRun best-effort opens (or, per Store.OpenRun's own idempotency,
+// transparently reuses) the TaskRun record for (taskID, occurrenceMs) —
+// ADR-050 RD5/RD7. Called from runTask AFTER the task's session has been
+// created so the run's session_id is the session the dispatch actually
+// minted (task-run-history-spec.md §3.2: "the run's session_id is the one
+// the dispatch already mints"). Run-open cannot happen any earlier than that
+// point without either duplicating session creation or leaving the run's
+// session_id permanently empty: Store.OpenRun's signature requires a
+// session_id at open time (a close record cannot amend it later — see
+// TaskRun's own doc comment on why folding is last-record-wins with no
+// field-level merge), and pkg/session.UnifiedStore.NewSession always
+// self-mints its own ID — there is no way to pre-select one from outside
+// pkg/session.
+//
+// A run-store failure here is logged and degrades to nil (no run tracked
+// for this execution) rather than failing the task dispatch — TaskRun is a
+// purely additive record layer (RD2); a run-history I/O problem must never
+// prevent or fail a real agent execution.
+func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.RunKind, sessionID string) *activeRun {
+	run, _, err := te.store.OpenRun(taskID, occurrenceMs, kind, sessionID)
+	if err != nil {
+		// M3-log: escalated from Warn to Error — a failed open means no run
+		// will ever be tracked for this execution, and there is no reaper to
+		// notice or retry it later.
+		logger.ErrorCF("task_executor", "Could not open task run record",
+			map[string]any{"task_id": taskID, "kind": string(kind), "error": err.Error()})
+		return nil
+	}
+	te.emitRunStatus(taskID, run.RunID, run.OccurrenceMs, task.StatusInProgress)
+	return &activeRun{runID: run.RunID, occurrenceMs: run.OccurrenceMs}
+}
+
+// closeRun best-effort closes run's TaskRun record with the given terminal
+// status/result (ADR-050 RD5) — a no-op when run is nil (openRun degraded,
+// or this execution never opened one). Called from finishTaskRun and
+// completeTaskWithResult always AFTER the existing Task.status/result mirror
+// write those functions already perform, so run-history strictly observes
+// the SAME completion signal, never a second source of truth for it.
+//
+// closeRun can legitimately be invoked TWICE for the same run (delta-review
+// Fix 2, 2026-07-20): runTask's own top-level panic-recovery defer
+// (~line 218) closes over the SAME *activeRun completeTaskWithResult already
+// closed, and re-invokes closeRun if a panic occurs in POST-completion
+// housekeeping (onTaskComplete / notifyParentIfAllSiblingsDone) that runs
+// AFTER completeTaskWithResult's own successful closeRun call. That second
+// call hits task.ErrRunAlreadyClosed — the record is correctly terminal, not
+// stranded — so it is logged at Info, not Error: an ERROR log here reading
+// "permanently strands" would fire a false on-call alert for a run that
+// closed successfully the first time.
+func (te *TaskExecutor) closeRun(taskID string, run *activeRun, status task.Status, result string) {
+	if run == nil || run.runID == "" {
+		return
+	}
+	if err := te.store.CloseRun(taskID, run.runID, status, result); err != nil {
+		if errors.Is(err, task.ErrRunAlreadyClosed) {
+			logger.InfoCF(
+				"task_executor",
+				"Task run already closed by an earlier step; ignoring duplicate close from panic-recovery/housekeeping",
+				map[string]any{"task_id": taskID, "run_id": run.runID, "attempted_status": string(status)},
+			)
+			return
+		}
+		// M3-log: escalated from Warn to Error — a failed close permanently
+		// strands this run in_progress; there is no reaper to close it later.
+		logger.ErrorCF("task_executor", "Could not close task run record",
+			map[string]any{"task_id": taskID, "run_id": run.runID, "error": err.Error()})
+		return
+	}
+	te.emitRunStatus(taskID, run.runID, run.occurrenceMs, status)
+}
+
+// emitRunStatus publishes a TaskRun open/close transition (ADR-050
+// Consequences "Realtime", task-run-history-spec.md §3.8) onto
+// the agent event bus via AgentLoop.EmitTaskRunStatus — the same
+// emitEvent-based mechanism emitStatusChanged above uses for Task.status
+// transitions. Best-effort; a nil agentLoop (test seams that construct a
+// bare TaskExecutor) is silently skipped.
+func (te *TaskExecutor) emitRunStatus(taskID, runID string, occurrenceMs *int64, status task.Status) {
+	if te.agentLoop == nil {
+		return
+	}
+	te.agentLoop.EmitTaskRunStatus(TaskRunStatusPayload{
+		TaskID:       taskID,
+		RunID:        runID,
+		OccurrenceMs: occurrenceMs,
+		Status:       string(status),
 	})
 }
 
@@ -2147,6 +2378,20 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 // StartTaskNow. The session has already been created and the session_id
 // persisted; it skips the session-creation block that runTask performs and
 // goes straight to execution, reusing the shared completion logic.
+//
+// BLK-3 (operator decision 2026-07-20): it DOES open an ADR-050 RD5/RD7
+// TaskRun record (task-run-history-spec.md §3.2), threading the resulting
+// *activeRun into finishTaskRun so completion closes it. This was previously
+// out of scope — StartTaskNow's raw-PATCH entry point is distinct from the
+// ClaimForRun/SpawnReset-guarded paths §3.2 originally scoped run-open to —
+// but the gateway's "Start Task" and "Create & Run now" UI actions BOTH
+// PATCH→in_progress→StartTaskNow→runTaskFromInProgress, making this the most
+// common launch path in practice; leaving it unrecorded meant the majority
+// of real runs recorded no history at all. kind is always RunKindManual
+// (every launch through here is user-initiated) with occurrenceMs always nil
+// (no recurring-fire context reaches this entry point). StartOccurrenceRun
+// below is the OTHER run-aware manual entry point — the calendar's
+// per-occurrence Run-now.
 func (te *TaskExecutor) runTaskFromInProgress(
 	ctx context.Context,
 	t *task.Task,
@@ -2162,10 +2407,26 @@ func (te *TaskExecutor) runTaskFromInProgress(
 		delete(te.running, t.ID)
 		te.mu.Unlock()
 		if redispatchTaskID != "" {
-			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil && !isRoutineAutoDispatchRefusal(err) {
+			// occurrenceMs is always nil here — see this function's own doc
+			// comment (no recurring-fire context reaches StartTaskNow).
+			if err := te.ExecuteTask(context.Background(), redispatchTaskID, nil); err != nil && !isRoutineAutoDispatchRefusal(err) {
 				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
 					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
 			}
+		}
+	}()
+
+	// run is populated once openRun below succeeds. Declared here (rather than
+	// via := at the openRun call site) so the panic-recovery defer immediately
+	// below closes over this SAME variable — see runTask's identical
+	// declaration for the full rationale (no reaper backstop).
+	var run *activeRun
+	defer func() {
+		if r := recover(); r != nil {
+			logger.ErrorCF("task_executor",
+				"Panic in runTaskFromInProgress — closing its TaskRun as failed (no reaper backstop exists)",
+				map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "panic": r})
+			te.closeRun(t.ID, run, task.StatusFailed, fmt.Sprintf("panic during task execution: %v", r))
 		}
 	}()
 
@@ -2180,6 +2441,9 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	// Test seam: when goroutineCtxHook is set, invoke it and return without
 	// performing real agent execution. The hook receives the goroutine's context so
 	// tests can assert it is not canceled by the originating request context.
+	// Deliberately BEFORE the run-open below: this seam never reaches
+	// finishTaskRun, so opening a run here would create one that this
+	// (never-executing) test double can never close.
 	if te.goroutineCtxHook != nil {
 		te.goroutineCtxHook(ctx, t.ID)
 		return
@@ -2187,6 +2451,12 @@ func (te *TaskExecutor) runTaskFromInProgress(
 
 	logger.InfoCF("task_executor", "runTaskFromInProgress started",
 		map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "session_id": taskSessionID})
+
+	// ADR-050 RD5/RD7 run-open (task-run-history-spec.md §3.2): taskSessionID
+	// was already created and persisted synchronously by StartTaskNow before
+	// this goroutine was launched (unlike runTask, which must wait for its
+	// own session-creation block to settle), so it is available immediately.
+	run = te.openRun(t.ID, nil, task.RunKindManual, taskSessionID)
 
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
 	if t.WorkspaceID != "" {
@@ -2209,7 +2479,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 		taskChatID = "task:" + t.ID
 	}
 	resp, err := te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
-	redispatchTaskID = te.finishTaskRun(ctx, t, taskSessionID, resp, err, " (StartTaskNow path)")
+	redispatchTaskID = te.finishTaskRun(ctx, t, taskSessionID, resp, err, " (StartTaskNow path)", run)
 }
 
 // SpawnTriggeredRun dispatches a fresh run of a task that a time trigger just
@@ -2230,8 +2500,44 @@ func (te *TaskExecutor) runTaskFromInProgress(
 // primitive-level fix (this file, requirePlanExecuting) closes that gap;
 // this comment is updated to describe the CURRENT, actually-gated behavior
 // rather than repeat a claim that had quietly stopped being true.
-func (te *TaskExecutor) SpawnTriggeredRun(ctx context.Context, taskID string) error {
-	return te.ExecuteTask(ctx, taskID)
+func (te *TaskExecutor) SpawnTriggeredRun(ctx context.Context, taskID string, occurrenceMs *int64) error {
+	return te.ExecuteTask(ctx, taskID, occurrenceMs)
+}
+
+// StartOccurrenceRun is the calendar's per-occurrence Run-now entry point
+// (ADR-050 RD7, task-run-history-spec.md §3.4) — POST /api/v1/tasks/{id}/runs
+// (handleTaskRunNow, pkg/gateway/rest_task_runs.go). With occurrenceMs it
+// materializes-on-demand that specific recurring occurrence; without it, it
+// re-runs a normal/once task as a fresh run (the prior run is preserved, not
+// overwritten — this supersedes the old ADR-049 fresh-run reset, which
+// clobbered it). occurrenceMs is threaded straight into the dispatch as the
+// TaskRun's calendar join key, with kind always task.RunKindManual (every
+// launch through here is user-initiated) — see runTaskFromInProgress's own
+// doc comment for why StartTaskNow (the OTHER manual entry point) hardcodes
+// occurrenceMs=nil instead.
+//
+// SpawnReset first resets the task to `next` — mirrors TaskTriggerScheduler.
+// RunScheduled's own reset-then-dispatch sequence (task_trigger.go) so this
+// entry point can claim a task that is not necessarily `next` yet (a
+// recurring task's Status does not cycle the same way a once task's does
+// between fires). Returns task.ErrAlreadyRunning if the task is currently
+// in_progress — a concurrent scheduler fire or an earlier Run-now already
+// claimed it; the caller (handleTaskRunNow) surfaces this as an error rather
+// than silently double-dispatching.
+//
+// Dispatch then reuses executeTask's exact claim (ClaimForRun)-and-launch
+// path ExecuteTask uses — the same exactly-once dispatch guard a scheduled
+// fire relies on — so a concurrent scheduler fire for the SAME occurrence and
+// this manual Run-now cannot both win the claim. OpenRun's own
+// (taskID, occurrenceMs) idempotency (called from inside the launched
+// goroutine, not here) is what then makes this idempotent against a run
+// either side already opened — see
+// TestStartOccurrenceRun_IdempotentAgainstConcurrentSchedulerFire.
+func (te *TaskExecutor) StartOccurrenceRun(ctx context.Context, taskID string, occurrenceMs *int64) error {
+	if _, err := te.store.SpawnReset(taskID); err != nil {
+		return fmt.Errorf("task_executor: StartOccurrenceRun: reset task %q: %w", taskID, err)
+	}
+	return te.executeTask(ctx, taskID, occurrenceMs, task.RunKindManual, false)
 }
 
 // ResizeDispatchSema updates the global dispatch semaphore capacity.
@@ -2581,7 +2887,7 @@ func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 			continue
 		}
 
-		if err := te.ExecuteTask(ctx, t.ID); err != nil && !isRoutineAutoDispatchRefusal(err) {
+		if err := te.ExecuteTask(ctx, t.ID, nil); err != nil && !isRoutineAutoDispatchRefusal(err) {
 			// A plan-gate refusal is already logged by requirePlanExecuting at
 			// its own correct level (see isPlanGateRefusal's doc) — this
 			// branch's own plan-gate pre-filter above means THAT case should

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useSettledFlag } from '@/hooks/useSettledFlag'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -69,6 +70,7 @@ import { shouldRenderSubagentSpan, shouldRenderToolCall, shouldRenderJudgeVerdic
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
+import { ComposerMediaLibraryButton, LibraryAttachmentChips } from './ComposerMediaLibrary'
 import { cn, initialOf } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
@@ -229,6 +231,12 @@ const THINKING_MESSAGES = [
   'Analyzing…',
   'Generating…',
 ]
+
+// ADR-051 — cap on the verbose-only "Technical details" disclosure content
+// in VirtualAssistantMessageRow (historical/replay render path). Mirrors
+// MessageItem.tsx's cap (live render path) so live and replay show the same
+// truncated length when a provider's error payload is verbose.
+const ERROR_DETAIL_MAX_CHARS = 512
 
 function ThinkingIndicator() {
   const [msgIndex, setMsgIndex] = useState(0)
@@ -1008,6 +1016,43 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
           <span className="text-[10px] text-[var(--color-muted)] italic px-1">(interrupted)</span>
         )}
 
+        {/* ADR-051 — verbose-only "Technical details" disclosure for typed
+            LLM errors. Parity with MessageItem.tsx's live-render disclosure:
+            mounted ONLY when (status==='error' && errorCode && verbose &&
+            errorDetail), ABSENT from the DOM otherwise. Replay frames carry
+            no errorDetail (gateway strips it before persisting), so on the
+            historical path this effectively fires only when a live error
+            bubble with detail set is still in the ring buffer after a
+            reload. `verboseChatEnabled` is already read at the top of this
+            row (the tool-call visibility gate uses the same hook). */}
+        {message.status === 'error'
+          && message.errorCode
+          && verboseChatEnabled
+          && message.errorDetail
+          && message.errorDetail.length > 0 && (
+          <details className="px-1 mt-1" data-testid="error-detail-disclosure">
+            <summary
+              tabIndex={0}
+              className={cn(
+                'text-[10px] text-[var(--color-muted)] cursor-pointer select-none',
+                'inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors',
+              )}
+            >
+              Technical details
+            </summary>
+            <pre
+              className={cn(
+                'mt-1 px-2 py-1.5 rounded-md',
+                'bg-[var(--color-surface-2)] text-[var(--color-secondary)]',
+                'font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all',
+                'max-h-40 overflow-y-auto',
+              )}
+            >
+              {message.errorDetail.slice(0, ERROR_DETAIL_MAX_CHARS)}
+            </pre>
+          </details>
+        )}
+
         {/* Per-turn model record (FR-014). Mirrors MessageItem.tsx so
             replay sessions show the same model footer as the live
             AssistantUI render. */}
@@ -1460,6 +1505,21 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const reconnectPhase = useConnectionStore((s) => s.reconnectPhase)
   const reconnectAttempt = useConnectionStore((s) => s.reconnectAttempt)
   const reconnect = useConnectionStore((s) => s.reconnect)
+  // Operator report 2026-07-31: a red "Disconnected" banner flashed top-left
+  // for a split second whenever the socket blipped and immediately recovered.
+  // The drop is real (the gateway logs 1006 abnormal closures on the
+  // Batam<->Frankfurt path) but a self-healing sub-second reconnect is not
+  // actionable, and an error-coloured banner for it reads as a fault. Gate
+  // BOTH transient banners — the amber "Reconnecting…" and the red
+  // reconnectPhase===null limbo one — on the disconnect having actually
+  // persisted. Reconnect logic itself is untouched and still fires instantly;
+  // only the rendering waits. A genuine outage still surfaces after 2s, and
+  // the terminal "gave_up" banner below is deliberately NOT gated — that one
+  // is already late by construction and always needs to be seen.
+  const showTransientDisconnect = useSettledFlag(
+    !isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow',
+    2000,
+  )
   const outboundQueue = useChatStore((s) => s.outboundQueue)
   // BUG FIX (2026-07): messages moved out of outboundQueue by drainOutboundQueue
   // are sent one at a time (see maybeDrainNext in store/chat.ts) rather than all
@@ -1480,13 +1540,25 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // so we only fire one toast per paste/input event that exceeds 1MB.
   const hasWarnedLargeInput = useRef(false)
 
-  // Input is enabled unless: agent removed, replaying, uploading, or gave up on reconnect.
-  // While reconnecting (fast or slow phase), input stays enabled — messages go to the queue.
-  // When the WS drops (network offline, gateway restart), the textarea must
-  // also disable, not just the Send button. Letting the user type into an input
-  // that can't dispatch is misleading; the "Connection lost" banner alone is
-  // easy to miss when the textarea looks fully interactive.
-  const inputEnabled = !agentRemoved && !isReplaying && !(reconnectPhase === 'gave_up') && isConnected
+  // Input is enabled unless: agent removed, replaying, or gave up on reconnect.
+  // While reconnecting (fast or slow phase), input stays enabled — messages go to the
+  // outbound queue (useChatStore's outboundQueue/enqueueOutboundMessage) and are sent
+  // automatically once the connection recovers (drainOutboundQueue, wired in
+  // OmnipusRuntimeProvider's onConnected). See the outbound-queue-indicator banner
+  // below and composerPlaceholder's `canSendOrQueue` argument, both of which already
+  // treated "connected OR reconnecting/slow" as usable — but this flag itself required
+  // strict `isConnected`, so the actual `disabled` attribute silently blocked the very
+  // typing/sending those UI affordances promised, leaving the whole queue mechanism
+  // unreachable from real user interaction (#105). Only a fully-lost connection with no
+  // more automatic retries (`gave_up`), or the brief pre-first-connect / just-dropped
+  // window (isConnected:false with reconnectPhase still null — "Connecting to
+  // gateway..."), leaves the composer disabled; see tests/e2e/chat.spec.ts "(f)
+  // queue-on-disconnect" and ChatScreen.outbound-queue.test.tsx for regression coverage.
+  const inputEnabled =
+    !agentRemoved &&
+    !isReplaying &&
+    !(reconnectPhase === 'gave_up') &&
+    (isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow')
 
   // Attach affordance gate — shared by the AddAttachment button AND the
   // drag-drop handlers/overlay below (same read-only conditions: agent
@@ -1911,7 +1983,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           </button>
         </div>
       )}
-      {(reconnectPhase === 'reconnecting' || reconnectPhase === 'slow') && (
+      {showTransientDisconnect && (reconnectPhase === 'reconnecting' || reconnectPhase === 'slow') && (
         <div
           data-testid="reconnect-banner"
           className="mb-2 text-xs text-[var(--color-warning)] flex items-center gap-1.5"
@@ -1922,7 +1994,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             : `Reconnecting… (attempt ${reconnectAttempt})`}
         </div>
       )}
-      {!isConnected && reconnectPhase === null && (
+      {showTransientDisconnect && !isConnected && reconnectPhase === null && (
         <div data-testid="reconnect-banner" className="mb-2 text-xs text-[var(--color-error)] flex items-center gap-1">
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-error)] inline-block" />
           Disconnected — reconnecting...
@@ -2275,6 +2347,11 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             <Plus size={16} />
           </ComposerPrimitive.AddAttachment>
 
+          {/* ADR-051 Rev 4 (Slice H) — attach an existing workspace-library
+              entry without re-uploading (FR-022). Disabled alongside the file
+              attach button in read-only / disconnected sessions. */}
+          <ComposerMediaLibraryButton disabled={attachDisabled} tabIndex={5} />
+
           {/* Ghost text wrapper — positioned overlay approach */}
           <div className="relative flex-1 min-w-0">
             <ComposerPrimitive.Input
@@ -2552,9 +2629,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         {/* Pending attachments — native AssistantUI composer attachments. Shows a
             chip for each attached file (via the attach (+) button, drag-drop, or
             paste); the AttachmentAdapter (src/lib/attachment-adapter.ts) uploads
-            them on send and threads the media:// ref into our transport via onNew. */}
+            them on send and threads the media:// ref into our transport via onNew.
+            LibraryAttachmentChips renders staged workspace-library reuse refs
+            (ADR-051 Rev 4 / Slice H) alongside them. */}
         <div className="flex flex-wrap gap-2 px-2 empty:hidden [&:has(*)]:pb-2">
           <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />
+          <LibraryAttachmentChips />
         </div>
 
       </div>

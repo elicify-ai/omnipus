@@ -236,6 +236,40 @@ func loadEnvFile(path string) (map[string]string, error) {
 	return envVars, nil
 }
 
+// ResolveServerEnvFile resolves a server config's relative EnvFile path
+// against workspacePath and returns a COPY of cfg with EnvFile updated; no
+// other field is touched. An absolute or empty EnvFile is returned
+// unchanged. A relative EnvFile with an empty workspacePath cannot be
+// resolved and is reported as an error — the caller decides what to do with
+// an unresolvable server (skip it, fail a connectivity test, etc.); this
+// function does not have enough context to make that call itself.
+//
+// This is the single resolution authority for relative env_file paths:
+// pkg/agent's MCP reconciliation (building its desired-server set) and the
+// gateway's MCP-server test endpoint both call it, so a server's env_file
+// resolves identically whether it is being connected live or just tested.
+// The semantics mirror LoadFromMCPConfig's original per-server resolution
+// above (workspace-relative Join, empty-workspace error) so config drift
+// detection (which compares against the resolved config a server was
+// connected with) stays consistent across both callers.
+func ResolveServerEnvFile(
+	cfg config.MCPServerConfig,
+	workspacePath string,
+) (config.MCPServerConfig, error) {
+	if cfg.EnvFile == "" || filepath.IsAbs(cfg.EnvFile) {
+		return cfg, nil
+	}
+	if workspacePath == "" {
+		return cfg, fmt.Errorf(
+			"workspace path is empty while resolving relative env_file %q",
+			cfg.EnvFile,
+		)
+	}
+	resolved := cfg
+	resolved.EnvFile = filepath.Join(workspacePath, cfg.EnvFile)
+	return resolved, nil
+}
+
 // buildStdioServerEnv computes the environment slice for a spawned stdio MCP
 // server subprocess, applying the C7 secret-scrub and the documented override
 // semantics. It is extracted from ConnectServer so the scrub is unit-testable
@@ -308,6 +342,10 @@ type ServerConnection struct {
 	Client  *mcp.Client
 	Session *mcp.ClientSession
 	Tools   []*mcp.Tool
+	// Config is the configuration snapshot ConnectServer connected with. Used
+	// by reconciliation to detect config drift (reflect.DeepEqual against the
+	// desired config) without re-reading config.json.
+	Config config.MCPServerConfig
 }
 
 // Manager manages multiple MCP server connections
@@ -447,6 +485,14 @@ func (m *Manager) ConnectServer(
 	name string,
 	cfg config.MCPServerConfig,
 ) error {
+	// Belt-and-braces: reject up front on an already-closed manager so a
+	// racing reconcile pass cannot start a connect attempt against a
+	// manager that is tearing down. This does not by itself close the
+	// close/connect race — see the re-check at the store site below.
+	if m.closed.Load() {
+		return fmt.Errorf("manager is closed")
+	}
+
 	logger.InfoCF("mcp", "Connecting to MCP server",
 		map[string]any{
 			"server":     name,
@@ -535,7 +581,20 @@ func (m *Manager) ConnectServer(
 		// exec.CommandContext + mcp.CommandTransport path bypassed
 		// StartLocked, so the fork happened on an unrestricted worker thread
 		// and the child silently escaped the kernel sandbox.
-		cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
+		//
+		// Deliberately exec.Command, NOT exec.CommandContext(ctx, ...): ctx
+		// here bounds only this ConnectServer call, i.e. the handshake below
+		// (client.Connect). Tying the child's os/exec lifetime to it would
+		// SIGKILL the subprocess the moment ctx ends — including the routine
+		// case of a short-lived per-connect timeout whose deferred cancel()
+		// fires right after a successful connect, which silently killed every
+		// stdio server reconciliation touched. The child's actual lifetime is
+		// owned by sandboxedStdioConn.Close's reap (Wait -> SIGTERM ->
+		// SIGKILL), invoked when the session is closed — via DisconnectServer,
+		// Manager.Close, or (on a failed/timed-out handshake) the SDK's own
+		// Client.Connect error path, which calls ClientSession.Close on every
+		// failure branch after the transport connects successfully.
+		cmd := exec.Command(cfg.Command, cfg.Args...)
 
 		env, err := buildStdioServerEnv(name, cfg)
 		if err != nil {
@@ -589,15 +648,84 @@ func (m *Manager) ConnectServer(
 			})
 	}
 
-	// Store connection
+	// Store connection. Re-check closed here, not just at the top of this
+	// method: Close() drains m.servers to empty exactly once, under this
+	// same lock. If Close() ran the drain before we reach this critical
+	// section, storing anyway would leak a live session into a manager that
+	// already believes it holds none — nothing will ever close it. Closing
+	// the session we just created and returning an error keeps that
+	// impossible.
 	m.mu.Lock()
+	if m.closed.Load() {
+		m.mu.Unlock()
+		if cerr := session.Close(); cerr != nil {
+			logger.ErrorCF("mcp", "Failed to close session after connecting to an already-closed manager",
+				map[string]any{
+					"server": name,
+					"error":  cerr.Error(),
+				})
+		}
+		return fmt.Errorf("manager is closed")
+	}
 	m.servers[name] = &ServerConnection{
 		Name:    name,
 		Client:  client,
 		Session: session,
 		Tools:   tools,
+		Config:  cfg,
 	}
 	m.mu.Unlock()
+
+	return nil
+}
+
+// DisconnectServer closes and removes one server connection. Idempotent:
+// returns nil if the server is not connected. Safe for concurrent use with
+// CallTool/GetServers.
+//
+// Closed-manager handling deliberately differs from CallTool: CallTool
+// returns an error on a closed manager because the caller wants an action to
+// happen and none can. DisconnectServer's contract is the opposite — the
+// caller wants the server to end up disconnected, and Close() already drains
+// m.servers to empty, so "manager closed" and "server not connected" are the
+// same end state. The fast m.closed check below is just that idempotent path
+// taken early; it is not a distinct error case.
+//
+// The entry is looked up and removed from m.servers under m.mu, then the
+// lock is released BEFORE Session.Close() runs — Close() can block on I/O
+// (subprocess teardown / network round trip) and must not hold up
+// GetServers/CallTool/ConnectServer for other servers while it drains. One
+// consequence: a CallTool already in flight against this server when
+// DisconnectServer runs may surface a transport error once Close() tears
+// the session down underneath it; wg-based draining in Close() is
+// manager-global, so a per-server drain here is out of scope.
+func (m *Manager) DisconnectServer(name string) error {
+	if m.closed.Load() {
+		return nil
+	}
+
+	m.mu.Lock()
+	conn, ok := m.servers[name]
+	if !ok {
+		m.mu.Unlock()
+		return nil
+	}
+	delete(m.servers, name)
+	m.mu.Unlock()
+
+	logger.InfoCF("mcp", "Disconnecting MCP server",
+		map[string]any{
+			"server": name,
+		})
+
+	if err := conn.Session.Close(); err != nil {
+		logger.ErrorCF("mcp", "Failed to close server connection",
+			map[string]any{
+				"server": name,
+				"error":  err.Error(),
+			})
+		return fmt.Errorf("failed to close server %s: %w", name, err)
+	}
 
 	return nil
 }

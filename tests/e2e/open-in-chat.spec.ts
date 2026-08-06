@@ -28,7 +28,7 @@
 
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { assistantMessages } from './fixtures/selectors'
+import { assistantMessages, waitForConnected } from './fixtures/selectors'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
@@ -116,6 +116,9 @@ test(
     const chatInput = page.locator('[data-testid="chat-input"]').first()
     await expect(chatInput).toBeVisible({ timeout: 15_000 })
     await expect(chatInput).toBeEnabled({ timeout: 10_000 })
+    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+    // see waitForConnected's doc comment in fixtures/selectors.ts).
+    await waitForConnected(page, { timeout: 10_000 })
 
     // Send a message and assert a streamed assistant token appears
     await chatInput.fill('Say exactly: "ping"')
@@ -172,6 +175,9 @@ test(
 
     const chatInput = page.locator('[data-testid="chat-input"]').first()
     await expect(chatInput).toBeEnabled({ timeout: 15_000 })
+    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+    // see waitForConnected's doc comment in fixtures/selectors.ts).
+    await waitForConnected(page, { timeout: 15_000 })
 
     // Step 1: Send a normal first message so a REAL session is established (the
     // gateway mints a session_id, history exists, the socket is live). Wait for
@@ -183,6 +189,12 @@ test(
       timeout: 90_000,
     })
     await expect(chatInput).toBeEnabled({ timeout: 90_000 })
+    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+    // see waitForConnected's doc comment in fixtures/selectors.ts). This
+    // gate matters here specifically: the 2nd message below relies on the
+    // socket being the SAME still-open one the test's WebSocket wrapper is
+    // watching for its one-shot failure marker.
+    await waitForConnected(page, { timeout: 15_000 })
 
     // Step 2: Arm the one-shot, then send the second message. Its send() throws
     // exactly once → WsConnection.send() catches the throw and reports the send as
