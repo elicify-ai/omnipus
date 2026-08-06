@@ -239,7 +239,7 @@ func NewBrowserCoordinator(homeDir string, cfg BrowserConfig, maxTotalTabs int) 
 	// Surface the effective budget at construction. The default changed from a
 	// hard 30 to UNLIMITED, and max_total_tabs was never seeded into anyone's
 	// config.json — it only ever existed as a runtime fallback — so an
-	// upgrading operator gets the new behaviour with no config diff and no
+	// upgrading operator gets the new behavior with no config diff and no
 	// other signal. One line at boot is what makes that visible instead of
 	// silent. Also states the real bound, since "unlimited" is only true of the
 	// counter: RAM is the limit, at 74-268MB RSS per renderer as measured.

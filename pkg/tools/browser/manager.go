@@ -994,11 +994,11 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 			// possible future refinement; out of scope here — an active tab
 			// dying out from under the manager, as opposed to an explicit
 			// CloseTab, is not the case ADR-041 targets.)
-			// Collected, NOT cancelled, while m.mu is held — see cancelBounded.
+			// Collected, NOT canceled, while m.mu is held — see cancelBounded.
 			// This is the hottest path in the file (every browser_* tool call
 			// resolves through Session()) AND it fires precisely when a tab's
 			// context has already died, which is the condition most likely to
-			// wedge a chromedp cancel. Cancelling here under the lock would
+			// wedge a chromedp cancel. Canceling here under the lock would
 			// freeze every browser tool call for every agent on this manager,
 			// with no error and no log — a harder failure than the reaper's,
 			// because nothing would even warn.
@@ -1616,8 +1616,11 @@ func (m *BrowserManager) activateTabInChrome(tabCtx context.Context, sessionID s
 		}))
 	}
 	if err != nil {
-		logger.WarnCF("browser", "switch tab: bring new active tab to front failed (WebRTC capture may keep streaming the previous tab)",
-			map[string]any{"error": err.Error(), "session_id": sessionID, "index": index})
+		logger.WarnCF(
+			"browser",
+			"switch tab: bring new active tab to front failed (WebRTC capture may keep streaming the previous tab)",
+			map[string]any{"error": err.Error(), "session_id": sessionID, "index": index},
+		)
 	}
 }
 
@@ -1728,8 +1731,8 @@ func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
 		// owner so the reservation is returned exactly once, by whichever of
 		// close/reap retires this tab.
 		m.mu.Lock()
-		if se := m.sessions[sessionID]; se != nil {
-			if t := se.active(); t != nil {
+		if first := m.sessions[sessionID]; first != nil {
+			if t := first.active(); t != nil {
 				t.holdsGlobalReservation = true
 			}
 		}
@@ -2480,7 +2483,7 @@ type reapedSessionInfo struct {
 // all, however many times they are called.
 //
 // The real exposure is narrow: a context that owns an allocation, whose
-// Allocate() never ran, cancelled a SECOND time — the first call drains the
+// Allocate() never ran, canceled a SECOND time — the first call drains the
 // single buffered token and nothing refills or closes the channel. That is
 // reachable for browserCancel after a failed bootstrap, not for tabs.
 //
@@ -2630,7 +2633,10 @@ func (m *BrowserManager) ReapIdleSessions() []string {
 				continue
 			}
 			if se.browserCancel != nil {
-				reapedBrowsers = append(reapedBrowsers, reapedSessionInfo{sessionID: sessionID, cancel: se.browserCancel})
+				reapedBrowsers = append(
+					reapedBrowsers,
+					reapedSessionInfo{sessionID: sessionID, cancel: se.browserCancel},
+				)
 			}
 			delete(m.sessions, sessionID)
 			reapedSessions = append(reapedSessions, sessionID)
@@ -2673,7 +2679,10 @@ func (m *BrowserManager) ReapIdleSessions() []string {
 			// behavior for a fully idle session. browserCancel is likewise
 			// deferred past the unlock, for the same reason as the tabs.
 			if se.browserCancel != nil {
-				reapedBrowsers = append(reapedBrowsers, reapedSessionInfo{sessionID: sessionID, cancel: se.browserCancel})
+				reapedBrowsers = append(
+					reapedBrowsers,
+					reapedSessionInfo{sessionID: sessionID, cancel: se.browserCancel},
+				)
 			}
 			delete(m.sessions, sessionID)
 			reapedSessions = append(reapedSessions, sessionID)
@@ -2723,8 +2732,11 @@ func (m *BrowserManager) ReapIdleSessions() []string {
 		cancelBounded(rb.cancel, map[string]any{"session_id": rb.sessionID})
 	}
 	for _, sessionID := range reapedSessions {
-		logger.InfoCF("browser", "reaped idle browsing context (last tab closed; no viewer and no agent activity within idle_ttl)",
-			map[string]any{"session_id": sessionID, "idle_ttl": ttl.String()})
+		logger.InfoCF(
+			"browser",
+			"reaped idle browsing context (last tab closed; no viewer and no agent activity within idle_ttl)",
+			map[string]any{"session_id": sessionID, "idle_ttl": ttl.String()},
+		)
 	}
 	return reapedSessions
 }
@@ -2996,7 +3008,7 @@ func (m *BrowserManager) invalidateConnection() {
 	// Cancels are COLLECTED here and run after the lock is dropped — see
 	// cancelBounded. This path runs on coordinator-detected crash recovery,
 	// i.e. exactly when a chromedp cancel is most likely to be wedged, so
-	// cancelling under m.mu would freeze every browser tool call for every
+	// canceling under m.mu would freeze every browser tool call for every
 	// agent on this manager.
 	var pending []func()
 	m.mu.Lock()

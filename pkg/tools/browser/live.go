@@ -640,12 +640,16 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 		// than leaving a stale value in place; see
 		// invalidateCSSViewportCache's doc comment for why that matters.
 		lv.invalidateCSSViewportCache()
-		logger.WarnCF("browser", "live view: set viewport applied but could not read back the actual CSS viewport to verify it — cache invalidated, input coordinates will re-fetch it on the next event", map[string]any{
-			"error":            readErr.Error(),
-			"session_id":       sessionID,
-			"requested_width":  width,
-			"requested_height": height,
-		})
+		logger.WarnCF(
+			"browser",
+			"live view: set viewport applied but could not read back the actual CSS viewport to verify it — cache invalidated, input coordinates will re-fetch it on the next event",
+			map[string]any{
+				"error":            readErr.Error(),
+				"session_id":       sessionID,
+				"requested_width":  width,
+				"requested_height": height,
+			},
+		)
 		return true, nil
 	}
 
@@ -662,7 +666,7 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 	//
 	// The second setWindowBounds changes NOTHING: the post-compensation
 	// read-back equals the pre-compensation one exactly. Chrome is ignoring the
-	// resize outright, not partially honouring it — so a convergence loop would
+	// resize outright, not partially honoring it — so a convergence loop would
 	// merely repeat a no-op N times and burn CDP round trips. (A loop was built
 	// and reverted twice on this evidence; do not reintroduce one without first
 	// showing that a SECOND setWindowBounds moves the viewport at all.)
@@ -675,17 +679,22 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 	// undersized — a cosmetic shrink, not mis-aimed clicks.
 	compensated := false
 	var compensatedAskW, compensatedAskH int
-	if viewportDeltaPx(width, actualW) > viewportDriftTolerancePx || viewportDeltaPx(height, actualH) > viewportDriftTolerancePx {
+	if viewportDeltaPx(width, actualW) > viewportDriftTolerancePx ||
+		viewportDeltaPx(height, actualH) > viewportDriftTolerancePx {
 		compW := clampViewportDim(width + (width - int(actualW)))
 		compH := clampViewportDim(height + (height - int(actualH)))
 		compensatedAskW, compensatedAskH = compW, compH
 		if err := lv.runCDP(tabCtx, viewportSetTimeout, windowBoundsAction{width: compW, height: compH}); err != nil {
-			logger.WarnCF("browser", "live view: set viewport — chrome-delta compensation re-apply failed, keeping the pre-compensation read-back", map[string]any{
-				"error":              err.Error(),
-				"session_id":         sessionID,
-				"compensated_width":  compW,
-				"compensated_height": compH,
-			})
+			logger.WarnCF(
+				"browser",
+				"live view: set viewport — chrome-delta compensation re-apply failed, keeping the pre-compensation read-back",
+				map[string]any{
+					"error":              err.Error(),
+					"session_id":         sessionID,
+					"compensated_width":  compW,
+					"compensated_height": compH,
+				},
+			)
 		} else {
 			compW2, compH2, compErr := readBack()
 			if compErr == nil && (compW2 <= 0 || compH2 <= 0) {
@@ -693,14 +702,18 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 			}
 			if compErr != nil {
 				lv.invalidateCSSViewportCache()
-				logger.WarnCF("browser", "live view: set viewport — could not read back the CSS viewport after chrome-delta compensation — cache invalidated, input coordinates will re-fetch it on the next event", map[string]any{
-					"error":              compErr.Error(),
-					"session_id":         sessionID,
-					"requested_width":    width,
-					"requested_height":   height,
-					"compensated_width":  compW,
-					"compensated_height": compH,
-				})
+				logger.WarnCF("browser",
+					"live view: set viewport — could not read back the CSS viewport after "+
+						"chrome-delta compensation — cache invalidated, input coordinates will "+
+						"re-fetch it on the next event",
+					map[string]any{
+						"error":              compErr.Error(),
+						"session_id":         sessionID,
+						"requested_width":    width,
+						"requested_height":   height,
+						"compensated_width":  compW,
+						"compensated_height": compH,
+					})
 				return true, nil
 			}
 			// Keep the CLOSEST read-back, not merely the latest: if the
@@ -730,12 +743,17 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 		"compensated_ask_width":  compensatedAskW,
 		"compensated_ask_height": compensatedAskH,
 	}
-	if viewportDeltaPx(width, actualW) > viewportDriftTolerancePx || viewportDeltaPx(height, actualH) > viewportDriftTolerancePx {
+	if viewportDeltaPx(width, actualW) > viewportDriftTolerancePx ||
+		viewportDeltaPx(height, actualH) > viewportDriftTolerancePx {
 		// The silent-success failure mode the root-cause doc documents:
 		// every prior layer reported success while the capture never
 		// actually reshaped. Loud enough here that it can't be missed the
 		// way it was during the 2026-07-31 UAT.
-		logger.WarnCF("browser", "live view: set viewport — window resize not fully reflected in the tab's CSS viewport", fields)
+		logger.WarnCF(
+			"browser",
+			"live view: set viewport — window resize not fully reflected in the tab's CSS viewport",
+			fields,
+		)
 	} else {
 		logger.InfoCF("browser", "live view: viewport applied", fields)
 	}
@@ -816,6 +834,9 @@ func (a layoutMetricsAction) Do(ctx context.Context) error {
 // protocol call instead of two near-identical duplicated closures (review
 // MEDIUM finding).
 func readCSSLayoutViewport(ctx context.Context) (w, h int64, err error) {
+	// CDP GetLayoutMetrics returns 7 values and only two are meaningful here;
+	// naming five throwaways would be noisier than the blanks.
+	//nolint:dogsled // see above
 	_, _, _, cssLayout, _, _, lerr := page.GetLayoutMetrics().Do(ctx)
 	if lerr != nil {
 		return 0, 0, lerr
@@ -2171,9 +2192,14 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 				lv.mu.Unlock()
 				if failures >= viewportFetchFailureEscalation {
 					return realInputError(
-						"browser live: cannot read the tab's CSS viewport after %d consecutive attempts — the browser tab may have crashed or the CDP transport is wedged", failures)
+						"browser live: cannot read the tab's CSS viewport after %d consecutive attempts — the browser tab may have crashed or the CDP transport is wedged",
+						failures,
+					)
 				}
-				return benignInputError("browser live: viewport unknown, dropped %s to avoid a mis-aimed dispatch", in.Kind)
+				return benignInputError(
+					"browser live: viewport unknown, dropped %s to avoid a mis-aimed dispatch",
+					in.Kind,
+				)
 			}
 			in.X, in.Y = rx, ry
 		}
@@ -2275,10 +2301,14 @@ func (lv *LiveView) rescaleToCSSViewport(tabCtx context.Context, x, y, capW, cap
 		var w, h int64
 		err := lv.runCDP(tabCtx, viewportInputFetchTimeout, layoutMetricsAction{w: &w, h: &h})
 		if err != nil || w <= 0 || h <= 0 {
-			logger.WarnCF("browser", "live view: input rescale — could not read the tab's CSS viewport, DROPPING this positional event (backing off further fetches)", map[string]any{
-				"session_id":      lv.sessionID,
-				"backoff_seconds": viewportInputFetchBackoff.Seconds(),
-			})
+			logger.WarnCF(
+				"browser",
+				"live view: input rescale — could not read the tab's CSS viewport, DROPPING this positional event (backing off further fetches)",
+				map[string]any{
+					"session_id":      lv.sessionID,
+					"backoff_seconds": viewportInputFetchBackoff.Seconds(),
+				},
+			)
 			lv.mu.Lock()
 			lv.nextFetchAfter = time.Now().Add(viewportInputFetchBackoff)
 			lv.viewportFetchFailures++

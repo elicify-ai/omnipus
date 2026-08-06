@@ -603,7 +603,11 @@ func TestReapIdleSessions_ExternallyDeadContext_StillSweptWithoutPanic(t *testin
 
 	killUnderlyingContext() // simulate an external death — never touches tabEntry.cancel
 	require.Error(t, tabs[0].ctx.Err(), "sanity: the underlying context is now dead")
-	assert.Zero(t, tracker.count(tabs[0].targetID), "the external death must not itself invoke the tab's cancel wrapper")
+	assert.Zero(
+		t,
+		tracker.count(tabs[0].targetID),
+		"the external death must not itself invoke the tab's cancel wrapper",
+	)
 
 	setTabActivity(m, tabs[0], *clock)
 	*clock = clock.Add(6 * time.Minute)

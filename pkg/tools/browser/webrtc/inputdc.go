@@ -289,7 +289,11 @@ func (s *Session) enqueueInput(prefix, viewerID string, queue *inputQueue, raw [
 		// Normal, expected backpressure under a sustained cursor stream.
 		s.logf("%s input queue full for viewer %s, shed oldest positional event to admit a newer one", prefix, viewerID)
 	case pushDroppedIncomingPositional:
-		s.logf("%s input queue full for viewer %s, dropped incoming positional event (backlog is all discrete)", prefix, viewerID)
+		s.logf(
+			"%s input queue full for viewer %s, dropped incoming positional event (backlog is all discrete)",
+			prefix,
+			viewerID,
+		)
 	case pushDroppedIncomingDiscrete:
 		// Real input loss, not routine backpressure — WARNING so
 		// webrtcRelayLogf escalates it above debug.

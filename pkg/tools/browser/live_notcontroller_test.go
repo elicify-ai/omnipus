@@ -24,7 +24,9 @@ func TestNotControllerInputError_IsDistinguishable(t *testing.T) {
 		t.Error("not-controller must remain BENIGN — it is high-frequency and must not log a warning per event")
 	}
 	if !IsNotControllerLiveInputError(err) {
-		t.Error("not-controller must be individually identifiable so the gateway can correct the client's control state")
+		t.Error(
+			"not-controller must be individually identifiable so the gateway can correct the client's control state",
+		)
 	}
 	if !errors.Is(err, ErrViewerNotController) {
 		t.Error("errors.Is must see through LiveInputError.Unwrap to the sentinel")

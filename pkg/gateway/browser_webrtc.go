@@ -936,69 +936,6 @@ func (h *BrowserWSHandler) webrtcInputSink(mgr *browser.BrowserManager, cfg *con
 	}
 }
 
-// surfaceWebRTCInputError pushes a browser_status(error) frame to viewerID's
-// main WS connection (looked up via h.viewerConns — the viewer driving over
-// the data channel always has one, registered by handleWebRTCOffer). Fix 7:
-// previously a non-benign DC input dispatch error was logged at Warn
-// server-side and otherwise silently dropped — the WS input path's
-// handleInput surfaces the identical class of failure to the user via
-// sessionErrorStatus, and the DC path had no equivalent. Applies the SAME
-// content-aware throttle discipline handleInput uses (minInputErrorInterval;
-// discrete kinds — navigate/navigate_back/reload — are never throttled) so a
-// dead/crashed tab failing every DC input event can't flood the viewer with
-// one error frame per event. A no-op if viewerID has no registered
-// connection (e.g. the viewer detached between the DC message arriving and
-// this dispatch completing).
-// correctViewerControlState pushes a browser_status{state:"released"} frame
-// to viewerID's main WS connection after that viewer sent input without
-// holding the control lock (see the call site for the UAT this fixes).
-//
-// "released" is the same frame the explicit release path sends, so the SPA
-// already knows how to handle it: it drops out of you-driving mode. That is
-// precisely the correction needed — with its drive mode reset, the client's
-// next click runs takeWheelIfNeeded and re-acquires the lock properly,
-// instead of skipping the take because it wrongly believed it still held it.
-//
-// Throttled per viewer via the SAME lastErrAt/lastErrMsg window
-// surfaceWebRTCInputError uses: a rejected cursor stream produces hundreds
-// of these per second, and one correction is enough — the client only needs
-// telling once per window that it is not driving.
-func (h *BrowserWSHandler) correctViewerControlState(viewerID string) {
-	v, ok := h.viewerConns.Load(viewerID)
-	if !ok {
-		return
-	}
-	vc, ok := v.(*webrtcViewerConn)
-	if !ok {
-		return
-	}
-
-	const marker = "__control_state_correction__"
-	vc.mu.Lock()
-	now := time.Now()
-	throttled := vc.lastErrMsg == marker && now.Sub(vc.lastErrAt) < minInputErrorInterval
-	if !throttled {
-		vc.lastErrAt = now
-		vc.lastErrMsg = marker
-	}
-	sessionID := vc.sessionID
-	wc := vc.wc
-	vc.mu.Unlock()
-	if throttled || wc == nil {
-		return
-	}
-
-	slog.Warn(
-		"browser-webrtc: viewer sent input without holding control — pushing authoritative released state so its UI corrects",
-		"viewer_id", viewerID,
-	)
-	wc.sendCriticalGen(generated.BrowserStatusFrame{
-		Type:      string(generated.WsFrameTypeBrowserStatus),
-		State:     "released",
-		SessionId: &sessionID,
-	}, dropContext(sessionID, viewerID, "control-state-correction"))
-}
-
 func (h *BrowserWSHandler) surfaceWebRTCInputError(viewerID, kind string, dispatchErr error) {
 	v, ok := h.viewerConns.Load(viewerID)
 	if !ok {

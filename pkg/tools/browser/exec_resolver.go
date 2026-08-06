@@ -211,7 +211,7 @@ func chromeMajorVersion(ctx context.Context, path string) string {
 
 // chromeMajorFromVersionOutput extracts the major version from `chrome
 // --version` output ("Google Chrome for Testing 151.0.7922.71" → "151").
-// Returns "" when the shape is unrecognised, which callers treat as "no
+// Returns "" when the shape is unrecognized, which callers treat as "no
 // launch-level User-Agent override" rather than guessing a number.
 func chromeMajorFromVersionOutput(out string) string {
 	for _, field := range strings.Fields(out) {

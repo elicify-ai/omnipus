@@ -1339,7 +1339,13 @@ func TestLiveView_DispatchInput_RescaleGate(t *testing.T) {
 				p := findMouseEvent(t, actions)
 				require.InDelta(t, 100*cssW/319.0, p.X, 0.0001, "X must be rescaled")
 				require.InDelta(t, 79*cssH/158.0, p.Y, 0.0001, "Y must be rescaled")
-				require.InDelta(t, 3.0, p.DeltaX, 0.0001, "DeltaX must never be rescaled (it's a delta, not a position)")
+				require.InDelta(
+					t,
+					3.0,
+					p.DeltaX,
+					0.0001,
+					"DeltaX must never be rescaled (it's a delta, not a position)",
+				)
 				require.InDelta(t, -4.0, p.DeltaY, 0.0001, "DeltaY must never be rescaled")
 			},
 		},
@@ -1486,7 +1492,10 @@ func TestLiveViewRegistry_SetViewport_Orchestration(t *testing.T) {
 				*lm.w, *lm.h = 615, 744
 				return nil
 			}
-			t.Fatalf("unexpected extra runCDP call (drift was within tolerance, no compensation expected): %#v", actions)
+			t.Fatalf(
+				"unexpected extra runCDP call (drift was within tolerance, no compensation expected): %#v",
+				actions,
+			)
 			return nil
 		}
 		reg, lv := newViewportTestLiveView(runCDP)

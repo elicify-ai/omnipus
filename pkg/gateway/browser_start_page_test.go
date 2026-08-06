@@ -84,8 +84,12 @@ func TestBrowserStartPage_IsSelfContained(t *testing.T) {
 		}
 		isNamespace := strings.Contains(line, `xmlns="http://www.w3.org/2000/svg"`)
 		isFormAction := strings.Contains(line, "<form") && strings.Contains(line, "action=")
-		assert.True(t, isNamespace || isFormAction,
-			"unexpected remote reference on line %q — only the SVG xmlns and the search form action may contain a URL", line)
+		assert.True(
+			t,
+			isNamespace || isFormAction,
+			"unexpected remote reference on line %q — only the SVG xmlns and the search form action may contain a URL",
+			line,
+		)
 	}
 }
 
@@ -101,7 +105,7 @@ func TestBrowserStartPage_RendersTheOmnipusLogo(t *testing.T) {
 	assert.Contains(t, body, `viewBox="0 0 640 570"`,
 		"the inlined mark must be the real omnipus-logo.svg (its viewBox), not a substitute drawing")
 	assert.Contains(t, body, `fill="#D4AF37"`, "the mark must render in Forge Gold")
-	assert.Contains(t, body, `aria-label="Omnipus"`, "the mark must be labelled for screen readers")
+	assert.Contains(t, body, `aria-label="Omnipus"`, "the mark must be labeled for screen readers")
 }
 
 // TestBrowserStartPage_HasSearchBox — the operator asked for a Google-style

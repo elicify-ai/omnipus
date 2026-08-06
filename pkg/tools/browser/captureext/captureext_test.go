@@ -351,10 +351,20 @@ func TestEmbeddedAssetsRequireVersionBump(t *testing.T) {
 	got := embeddedContentHash(t)
 	want, ok := versionContentHashes[Version]
 	if !ok {
-		t.Fatalf("no pinned content hash for Version %q — add {%q: %q} to versionContentHashes (and confirm the Version bump is real)", Version, Version, got)
+		t.Fatalf(
+			"no pinned content hash for Version %q — add {%q: %q} to versionContentHashes (and confirm the Version bump is real)",
+			Version,
+			Version,
+			got,
+		)
 	}
 	if got != want {
-		t.Fatalf("embedded extension content changed but Version is still %q (hash %s, pinned %s) — bump Version in captureext.go AND embedded/manifest.json, then add the new entry to versionContentHashes", Version, got, want)
+		t.Fatalf(
+			"embedded extension content changed but Version is still %q (hash %s, pinned %s) — bump Version in captureext.go AND embedded/manifest.json, then add the new entry to versionContentHashes",
+			Version,
+			got,
+			want,
+		)
 	}
 	// The manifest's own version string must ride along, or Chrome sees a
 	// stale extension version even after a reseed.
@@ -367,6 +377,10 @@ func TestEmbeddedAssetsRequireVersionBump(t *testing.T) {
 		t.Fatalf("parse embedded manifest: %v", err)
 	}
 	if doc.Version != Version {
-		t.Fatalf("embedded/manifest.json version %q != captureext.Version %q — they must be bumped together", doc.Version, Version)
+		t.Fatalf(
+			"embedded/manifest.json version %q != captureext.Version %q — they must be bumped together",
+			doc.Version,
+			Version,
+		)
 	}
 }

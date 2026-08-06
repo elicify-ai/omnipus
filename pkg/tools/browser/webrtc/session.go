@@ -203,7 +203,6 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 	return s
 }
 
-// log writes a structured log line if a logf was supplied to NewSession.
 // SetOnIngestLost registers cb, invoked when the installed ingest connection
 // dies (failed/closed/disconnected). The owner uses it to ask the encoder for a
 // fresh capture — without it a dead ingest is never noticed and every later PLI

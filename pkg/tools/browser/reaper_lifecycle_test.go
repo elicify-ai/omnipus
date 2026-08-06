@@ -1,4 +1,4 @@
-// reaper_lifecycle_test.go — coverage for the four behaviours added in the
+// reaper_lifecycle_test.go — coverage for the four behaviors added in the
 // reviewer fix wave (4d6719bd) that shipped with no tests of their own:
 // the zero-tab-session escape hatch, the bounded cancel, and the
 // cancel-outside-the-lock discipline on the reaper and on Shutdown.
@@ -26,7 +26,9 @@ import (
 // blockingTabFactory builds fake tabs whose cancel blocks until release is
 // closed, so a test can hold a teardown mid-flight and observe what the rest of
 // the manager can still do meanwhile.
-func blockingTabFactory(release <-chan struct{}) (func(context.Context, target.ID) (*tabEntry, error), *sync.WaitGroup) {
+func blockingTabFactory(
+	release <-chan struct{},
+) (func(context.Context, target.ID) (*tabEntry, error), *sync.WaitGroup) {
 	var entered sync.WaitGroup
 	var n int
 	fn := func(_ context.Context, targetID target.ID) (*tabEntry, error) {
@@ -105,7 +107,7 @@ func TestReapIdleSessions_StrandedEmptySession_ReapedAfterTTL(t *testing.T) {
 	*clock = clock.Add(2 * time.Minute)
 	assert.Equal(t, []string{DefaultSessionID}, m.ReapIdleSessions(),
 		"a session stranded empty for a whole TTL must be reaped — it holds a live browsing context")
-	assert.True(t, browserCancelled, "the stranded browsing context must actually be cancelled")
+	assert.True(t, browserCancelled, "the stranded browsing context must actually be canceled")
 	assert.NotContains(t, m.sessions, DefaultSessionID)
 }
 
@@ -204,13 +206,13 @@ func TestShutdown_CancelDoesNotHoldTheManagerLock(t *testing.T) {
 
 	entered.Wait()
 	assert.True(t, canLockWithin(m, 3*time.Second),
-		"Shutdown must release m.mu before cancelling — it is reached on hot-reload and at gateway close")
+		"Shutdown must release m.mu before canceling — it is reached on hot-reload and at gateway close")
 	close(release)
 }
 
 // CloseSession has no production caller today, which makes it a landmine rather
 // than a live bug: it sits beside the others and silently signals that
-// cancelling under the lock is fine here.
+// canceling under the lock is fine here.
 func TestCloseSession_CancelDoesNotHoldTheManagerLock(t *testing.T) {
 	release := make(chan struct{})
 	m := newTestManagerWithFakeTabs(t, 5)
@@ -223,6 +225,6 @@ func TestCloseSession_CancelDoesNotHoldTheManagerLock(t *testing.T) {
 
 	entered.Wait()
 	assert.True(t, canLockWithin(m, 3*time.Second),
-		"CloseSession must release m.mu before cancelling")
+		"CloseSession must release m.mu before canceling")
 	close(release)
 }
