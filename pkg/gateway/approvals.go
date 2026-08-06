@@ -14,7 +14,7 @@
 //	pending → approved            (approve action)
 //	pending → denied_user         (deny action)
 //	pending → denied_cancel       (cancel action)
-//	pending → denied_timeout      (timer fires, configurable, default 300 s)
+//	pending → denied_timeout      (timer fires, configurable, default 600 s)
 //	pending → denied_restart      (gateway shutdown)
 //	pending → denied_saturated    (skip-pending path when cap exceeded)
 //	pending → denied_batch_short_circuit (sibling in same batch denied/canceled)
@@ -145,7 +145,7 @@ type approvalEntry struct {
 // ApprovalOutcome is the result delivered to the blocked agent loop goroutine.
 type ApprovalOutcome struct {
 	Approved bool
-	Reason   string // one of "approved","user","timeout","cancel","restart","saturated","batch_short_circuit"
+	Reason   string // one of "approved","user","timeout","cancel","restart","saturated","batch_short_circuit","internal_error","session canceled"
 }
 
 // Denial-reason literals emitted by this file (ADR-058 spec §2.2, FR-058-04).
@@ -169,23 +169,54 @@ const (
 	denialReasonRestart           = "restart"
 
 	// denialReasonInternalError mirrors the literal returned by
-	// policy_approver.go:58 ("internal_error") — a denial reason produced
-	// OUTSIDE this file (ADR-058 spec §2.2) by policyApproverAdapter's
-	// defensive nil-entry branch. It is collected into
-	// allApprovalDenialReasons here rather than replacing the literal in
-	// policy_approver.go, which is outside this unit's ownership (ADR-058
-	// spec §9, work unit W3) and is left unchanged.
+	// policy_approver.go::policyApproverAdapter.RequestApproval's nil-entry
+	// branch ("internal_error") — a denial reason produced OUTSIDE this file
+	// (ADR-058 spec §2.2) by policyApproverAdapter's defensive nil-entry
+	// branch. It is collected into allApprovalDenialReasons here rather than
+	// replacing the literal in policy_approver.go, which is outside this
+	// unit's ownership (ADR-058 spec §9, work unit W3) and is left unchanged.
 	denialReasonInternalError = "internal_error"
+
+	// denialReasonSessionCanceled mirrors the literal
+	// pkg/agent/cancel.go::AgentLoop.RequestCancel passes as the reason
+	// argument to hooks.CancelPendingApprovals — which, via
+	// pkg/gateway/websocket.go's buildCancelHooks closure, reaches this
+	// package's cancelAllPendingForSession(s) as its reason parameter and is
+	// delivered verbatim in ApprovalOutcome.Reason. Unlike
+	// denialReasonSaturated/Timeout/User/Cancel/BatchShortCircuit/Restart,
+	// this is NOT a literal this file emits itself: cancelAllPendingForSessions
+	// accepts reason as a caller-supplied parameter (see its doc comment) and
+	// "session canceled" is simply the one value every known production
+	// caller passes today. It is collected here, mirroring
+	// denialReasonInternalError's out-of-file pattern, rather than by
+	// replacing the literal in cancel.go, which is outside this unit's
+	// ownership.
+	denialReasonSessionCanceled = "session canceled"
 )
 
 // allApprovalDenialReasons is every denial reason this package can hand to
-// agent.ClassifyDenial (ADR-058 FR-058-04): the six literals emitted in this
-// file plus internal_error (policy_approver.go:58). "approved" is excluded
-// (see above) because it is not a denial. A pkg/gateway test
+// agent.ClassifyDenial (ADR-058 FR-058-04): the six literals emitted
+// directly in this file, plus internal_error
+// (policy_approver.go::policyApproverAdapter.RequestApproval's nil-entry
+// branch) and session canceled (pkg/agent/cancel.go::AgentLoop.RequestCancel,
+// via cancelAllPendingForSessions's caller-supplied reason parameter).
+// "approved" is excluded (see above) because it is not a denial.
+//
+// Coverage caveat, stated honestly rather than implied: this slice is
+// exhaustive over the reasons THIS FILE's own call sites are known to
+// produce today — the six inline literals plus the two out-of-file values
+// above, each traced to its actual caller. It is NOT exhaustive over every
+// string cancelAllPendingForSessions could theoretically be called with:
+// that function's reason parameter is caller-supplied (see its doc
+// comment) and nothing in this package enumerates or restricts what a
+// future caller might pass. A pkg/gateway test
 // (approval_denial_classification_test.go) asserts agent.ClassifyDenial(r)
-// returns known == true for every member of this slice, so a new reason
-// added here with no matching pkg/agent/tool_denial.go table row fails a
-// test rather than defaulting silently.
+// returns known == true for every member of THIS SLICE, so a new reason
+// added to the slice with no matching pkg/agent/tool_denial.go table row
+// fails a test rather than defaulting silently — but a new caller of
+// cancelAllPendingForSessions passing a reason never added here is
+// invisible to that guard, exactly as session canceled itself was before
+// this comment was corrected.
 var allApprovalDenialReasons = []string{
 	denialReasonSaturated,
 	denialReasonTimeout,
@@ -194,6 +225,7 @@ var allApprovalDenialReasons = []string{
 	denialReasonBatchShortCircuit,
 	denialReasonRestart,
 	denialReasonInternalError,
+	denialReasonSessionCanceled,
 }
 
 // approvalRegistryV2 is the central in-process approval registry (FR-016, FR-070).
@@ -232,9 +264,10 @@ type approvalRegistryV2 struct {
 	// An entry with an empty SessionID is unreachable by cancellation:
 	// cancelAllPendingForSessions matches by exact equality, and no caller
 	// ever asks to cancel "". Such an entry therefore survives every Stop and
-	// only resolves when the 300 s timeout fires — a hung turn with no signal.
-	// Counting it turns that into an observable defect rather than a mystery
-	// stall, and the counter is asserted by test rather than a log scrape.
+	// only resolves when the gateway.go::defaultToolApprovalTimeout timeout
+	// fires — a hung turn with no signal. Counting it turns that into an
+	// observable defect rather than a mystery stall, and the counter is
+	// asserted by test rather than a log scrape.
 	missingActingSessionID atomic.Int64
 }
 
@@ -361,7 +394,7 @@ func (r *approvalRegistryV2) requestApproval(
 		resultCh:   make(chan ApprovalOutcome, 1),
 	}
 
-	// Arm the timeout timer (FR-016, SC-006: default 300 s).
+	// Arm the timeout timer (FR-016, SC-006: default gateway.go::defaultToolApprovalTimeout).
 	e.timer = time.AfterFunc(r.timeout, func() {
 		r.fireTimeout(e.ApprovalID)
 	})
@@ -545,7 +578,8 @@ func (r *approvalRegistryV2) cancelAllPendingForRestart() []approvalEntry {
 // child's pending entry carries the CHILD's own acting session id (FR-080),
 // not the chat's. A chat-level Stop that passed only the chat id would
 // therefore match nothing inside any child, and the child's goroutine would
-// stay blocked until its 300 s approval timeout fired. Callers MUST pass the
+// stay blocked until its gateway.go::defaultToolApprovalTimeout approval
+// timeout fired. Callers MUST pass the
 // cancelled session's DESCENDANT SET — the session itself plus every session
 // beneath it — which is why the parameter is a slice.
 //

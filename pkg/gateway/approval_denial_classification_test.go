@@ -20,14 +20,14 @@
 // (reg.cancelBatchShortCircuit), never through a turn — ADR-058 spec §2.4
 // F1 established cancelBatchShortCircuit has zero production callers, so a
 // turn-level test would misrepresent a dead control as reachable. Precedent:
-// approvals_test.go:89 (TestApprovalRegistry_BatchShortCircuitDeletesEntry).
+// approvals_test.go::TestApprovalRegistry_BatchShortCircuitDeletesEntry.
 //
-// internal_error (policy_approver.go:58) is policyApproverAdapter's
-// defensive nil-entry branch — requestApproval always returns a non-nil
-// entry today, so there is no real flow to drive it through either; it is
-// asserted at the classifier only, honestly, for the same reason (spec
-// classification-table row 7: "defensive branch; [UNVERIFIED] whether
-// reachable in practice").
+// internal_error (policy_approver.go::policyApproverAdapter.RequestApproval's
+// nil-entry branch) is policyApproverAdapter's defensive nil-entry branch —
+// requestApproval always returns a non-nil entry today, so there is no real
+// flow to drive it through either; it is asserted at the classifier only,
+// honestly, for the same reason (spec classification-table row 7: "defensive
+// branch; [UNVERIFIED] whether reachable in practice").
 package gateway
 
 import (
@@ -45,8 +45,8 @@ import (
 // no matching pkg/agent/tool_denial.go table row must fail THIS test, not
 // default silently at runtime.
 func TestAllApprovalDenialReasons_EveryMemberClassifiesAsKnown(t *testing.T) {
-	require.Len(t, allApprovalDenialReasons, 7,
-		"six approvals.go literals + internal_error; approved must stay excluded")
+	require.Len(t, allApprovalDenialReasons, 8,
+		"six approvals.go literals + internal_error + session canceled; approved must stay excluded")
 
 	seen := make(map[string]bool, len(allApprovalDenialReasons))
 	for _, reason := range allApprovalDenialReasons {
@@ -69,9 +69,10 @@ func TestAllApprovalDenialReasons_EveryMemberClassifiesAsKnown(t *testing.T) {
 
 // TestClassifyDenial_ApprovedIsNotAKnownDenial is the negative control for
 // the loop above: "approved" is deliberately absent from
-// allApprovalDenialReasons because resolve's ApprovalActionApprove branch
-// sets Approved:true (see :428). A classifier that returned known=true
-// unconditionally — which would still pass the loop above — fails this.
+// allApprovalDenialReasons because approvals.go::approvalRegistryV2.resolve's
+// ApprovalActionApprove branch sets Approved:true. A classifier that
+// returned known=true unconditionally — which would still pass the loop
+// above — fails this.
 func TestClassifyDenial_ApprovedIsNotAKnownDenial(t *testing.T) {
 	_, known := agent.ClassifyDenial("approved")
 	assert.False(t, known, `"approved" is not a denial reason and must not classify as known`)
@@ -217,11 +218,44 @@ func TestApprovalDenialReasons_Restart_RealRegistry(t *testing.T) {
 	assert.True(t, cls.Permanent)
 }
 
+// TestApprovalDenialReasons_SessionCanceled_RealRegistry drives the actual
+// production path for denialReasonSessionCanceled: cancelAllPendingForSessions
+// with the literal reason pkg/agent/cancel.go::AgentLoop.RequestCancel passes
+// through hooks.CancelPendingApprovals (see denialReasonSessionCanceled's
+// doc comment). This is not a fixed literal emitted inside approvals.go
+// itself — cancelAllPendingForSessions's reason parameter is caller-supplied
+// — so this test drives it with the exact value the real caller uses rather
+// than asserting the constant in isolation.
+func TestApprovalDenialReasons_SessionCanceled_RealRegistry(t *testing.T) {
+	reg := newApprovalRegistryV2(64, 300*time.Second)
+
+	entry, accepted := reg.requestApproval(
+		"tc-w3-session-canceled", "web_fetch",
+		map[string]any{"url": "https://example.invalid/session-canceled"},
+		"agent-w3-session-canceled", "sess-w3-session-canceled", "turn-w3-session-canceled",
+	)
+	require.True(t, accepted)
+
+	count := reg.cancelAllPendingForSessions([]string{"sess-w3-session-canceled"}, denialReasonSessionCanceled)
+	require.Equal(t, 1, count)
+
+	outcome := drainOutcome(t, entry.resultCh)
+	require.False(t, outcome.Approved)
+	assert.Equal(t, denialReasonSessionCanceled, outcome.Reason)
+	assert.Equal(t, "session canceled", outcome.Reason,
+		`the production caller's literal must remain exactly "session canceled"`)
+
+	cls, known := agent.ClassifyDenial(outcome.Reason)
+	assert.True(t, known, "session canceled must classify as known once pkg/agent/tool_denial.go carries its table row")
+	assert.True(t, cls.Permanent)
+}
+
 // TestApprovalDenialReasons_BatchShortCircuit_RealRegistry_NeverThroughATurn
 // drives cancelBatchShortCircuit directly at the registry, matching
-// approvals_test.go:89's precedent. ADR-058 spec §2.4 F1: this control has
-// zero production callers, so it must never be exercised via a simulated
-// turn — that would misrepresent a dead control as reachable.
+// approvals_test.go::TestApprovalRegistry_BatchShortCircuitDeletesEntry's
+// precedent. ADR-058 spec §2.4 F1: this control has zero production
+// callers, so it must never be exercised via a simulated turn — that would
+// misrepresent a dead control as reachable.
 func TestApprovalDenialReasons_BatchShortCircuit_RealRegistry_NeverThroughATurn(t *testing.T) {
 	reg := newApprovalRegistryV2(64, 300*time.Second)
 
@@ -272,13 +306,14 @@ func TestApprovalDenialReasons_Timeout_RealRegistry_FireTimeoutUnchanged(t *test
 }
 
 // TestApprovalDenialReasons_InternalError_ClassifierOnly asserts the one
-// member of allApprovalDenialReasons that this package cannot drive
-// through a real flow: internal_error is policyApproverAdapter's defensive
-// nil-entry branch (policy_approver.go:58), reached only when
-// requestApproval returns a nil entry — which it never does today. Rather
-// than fabricate that condition, this test honestly classifies the literal
-// value directly, matching the spec's classification-table row 7
-// ("defensive branch; [UNVERIFIED] whether reachable in practice").
+// member of allApprovalDenialReasons that this package cannot drive through
+// a real flow: internal_error is
+// policy_approver.go::policyApproverAdapter.RequestApproval's defensive
+// nil-entry branch, reached only when requestApproval returns a nil entry —
+// which it never does today. Rather than fabricate that condition, this
+// test honestly classifies the literal value directly, matching the spec's
+// classification-table row 7 ("defensive branch; [UNVERIFIED] whether
+// reachable in practice").
 func TestApprovalDenialReasons_InternalError_ClassifierOnly(t *testing.T) {
 	require.Contains(t, allApprovalDenialReasons, denialReasonInternalError)
 	assert.Equal(t, "internal_error", denialReasonInternalError)
