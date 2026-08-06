@@ -3027,10 +3027,6 @@ type GatewayConfig struct {
 	// approvals before new requests are auto-denied (FR-016, MAJ-009).
 	// 0 uses the spec default (64). Negative values are rejected at startup.
 	ToolApprovalMaxPending int `json:"tool_approval_max_pending,omitempty" env:"OMNIPUS_TOOL_APPROVAL_MAX_PENDING"`
-	// TurnSyntheticErrorFloor is the number of consecutive synthetic-deny tool
-	// results in a single turn that triggers a turn abort (FR-084). Default: 8.
-	// Set to 0 to disable. Negative values are treated as the default (8).
-	TurnSyntheticErrorFloor int `json:"turn_synthetic_error_floor,omitempty" env:"OMNIPUS_TURN_SYNTHETIC_ERROR_FLOOR"`
 
 	// ValidateInbound enables server-side JSON Schema validation of REST request
 	// bodies against the OpenAPI component schemas before the body is decoded into

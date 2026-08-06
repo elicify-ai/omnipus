@@ -7602,7 +7602,8 @@ turnLoop:
 		// FilterToolsByPolicy enforces global × agent deny>ask>allow resolution and
 		// the ScopeCore-on-custom-agent gate before the tool list reaches the LLM.
 		// Tools with effective policy "ask" are included — the mid-turn policy snapshot
-		// (FR-041) handles human-in-the-loop confirmation; see recordSyntheticDeny.
+		// (FR-041) handles human-in-the-loop confirmation; see the ADR-058
+		// quarantine gate and recordToolDenial (tool_denial.go).
 		allAgentTools := ts.agent.Tools.GetAll()
 		policyFilteredTools, filterTimePolicyMap := tools.FilterToolsByPolicy(allAgentTools, ts.agent.AgentType, ts.agent.LoadToolPolicy())
 
@@ -7629,10 +7630,16 @@ turnLoop:
 				ts.agent.Sessions.AddFullMessage(ts.sessionKey, syntheticDenyMsg)
 				ts.recordPersistedMessage(syntheticDenyMsg)
 			}
-			if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
-				turnStatus = TurnEndStatusAborted
-				return al.abortTurn(ts, "synthetic_error_floor", abortMsg)
-			}
+			// ADR-058 §3.2/§10.A3: this branch used to also invoke FR-084's
+			// per-turn synthetic-deny counter-and-abort helper before
+			// returning below. FR-084 is deleted in full — this was its only
+			// call site that could ever fire
+			// (every other call site's shouldAbort path was reachable; this
+			// one always returns unconditionally on the very next line, so
+			// its counter could reach at most 1 and a floor of 8 was
+			// structurally unreachable, issue #595). Nothing behavioural is
+			// lost: the turn already terminates unconditionally below.
+			//
 			// Fail the LLM call for this iteration by returning an error turn result.
 			turnStatus = TurnEndStatusError
 			return turnResult{status: TurnEndStatusError, finalContent: denyMsg}, dedupErr
@@ -8715,6 +8722,42 @@ turnLoop:
 			toolName := ts.agent.Tools.UnsanitizeToolName(tc.Name)
 			toolArgs := cloneStringAnyMap(tc.Arguments)
 
+			// ADR-058 FR-058-11: the quarantine gate. A tool that has already
+			// produced one PERMANENT denial earlier in this turn is answered
+			// from the cached payload here — before hooks.BeforeTool, the
+			// TOCTOU re-check, and the approval path, so none of them run for
+			// this call: no hook call, no policy re-resolution, no
+			// CheckGrantOrRequestApproval, no RequestApproval, no
+			// tool_approval_required frame. The turn CONTINUES (D5 rejected
+			// removing the tool from tools[]; the advertised tool set stays
+			// stable and this gate is what makes offering it again safe).
+			if payload, qReason, quarantined := ts.quarantinedDenialFor(toolName); quarantined {
+				al.emitPolicyDenyAudit(ts, toolName, "quarantined", qReason)
+				deniedMsg := providers.Message{
+					Role:       "tool",
+					Content:    payload,
+					ToolCallID: tc.ID,
+				}
+				messages = append(messages, deniedMsg)
+				if !ts.opts.NoHistory {
+					ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
+					ts.recordPersistedMessage(deniedMsg)
+				}
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: fmt.Sprintf("permission_denied (quarantined: %s)", qReason),
+					},
+				)
+				if used, exhausted := ts.recordQuarantineReplay(toolName); exhausted {
+					turnStatus = TurnEndStatusAborted
+					return al.abortTurnForToolDenialBudget(ts, toolName, qReason, used)
+				}
+				continue
+			}
+
 			if al.hooks != nil {
 				toolReq, decision := al.hooks.BeforeTool(turnCtx, &ToolCallHookRequest{
 					Meta:      ts.eventMeta("runTurn", "turn.tool.before"),
@@ -8816,7 +8859,16 @@ turnLoop:
 			toctouPolicy := al.resolveToolPolicyAtExec(ts, toolName, filterTimePolicyMap)
 			if toctouPolicy == "deny" {
 				// Policy flipped to deny between filter-time and exec-time.
-				denyMsg := fmt.Sprintf(`{"error":"permission_denied","message":"Tool execution denied by policy.","tool":%q}`, toolName)
+				// ADR-058 site 1: this branch has no approver-supplied
+				// reason at all, so it uses the fixed loop pseudo-reason
+				// "policy_denied" (spec §4.1 row 9) — the one table row that
+				// exists purely so this site can be uniformly rewired
+				// through denialPayloadJSON/ClassifyDenial without changing
+				// what the model reads (ModelMessage is unchanged from the
+				// pre-existing literal, "already true" per ADR D2).
+				const policyDeniedReason = "policy_denied"
+				cls, _ := ClassifyDenial(policyDeniedReason)
+				denyMsg := denialPayloadJSON(toolName, policyDeniedReason, cls)
 				al.emitPolicyDenyAudit(ts, toolName, "deny", "mid_turn_policy_change")
 				deniedMsg := providers.Message{
 					Role:       "tool",
@@ -8836,9 +8888,9 @@ turnLoop:
 						Reason: "permission_denied (mid-turn policy change)",
 					},
 				)
-				if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
+				if used, exhausted := ts.recordToolDenial(toolName, policyDeniedReason, cls.Permanent, denyMsg); exhausted {
 					turnStatus = TurnEndStatusAborted
-					return al.abortTurn(ts, "synthetic_error_floor", abortMsg)
+					return al.abortTurnForToolDenialBudget(ts, toolName, policyDeniedReason, used)
 				}
 				continue
 			}
@@ -8848,7 +8900,17 @@ turnLoop:
 				// ever issuing an approval request — the run must never stall.
 				if ts.opts.AutoDenyAsk {
 					const denialReason = "auto-denied: ask-policy tool not allowed in a headless scheduled run"
-					denyMsg := fmt.Sprintf(`{"error":"permission_denied","message":"User denied tool execution.","tool":%q,"reason":%q}`, toolName, denialReason)
+					// ADR-058: this literal has no dedicated row in the
+					// ten-row classification table (spec §4.1) — it goes
+					// through ClassifyDenial's unknown-reason fallback, which
+					// already returns Permanent: true with an honest,
+					// conservative "do not retry" message (FR-058-03). That
+					// is the correct classification here regardless (ADR D1
+					// row 9): a headless scheduled run has no operator by
+					// construction, for the whole run, so there is nothing to
+					// retry toward.
+					cls, _ := ClassifyDenial(denialReason)
+					denyMsg := denialPayloadJSON(toolName, denialReason, cls)
 					// Build optional extra Details for the deny.attempted entry so
 					// both correlated records carry the schedule identity (O-3 / F-13
 					// / issue #342). scheduledJobContextFrom is a no-op read — safe to
@@ -8892,9 +8954,9 @@ turnLoop:
 							Reason: fmt.Sprintf("permission_denied (ask auto-denied: %s)", denialReason),
 						},
 					)
-					if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
+					if used, exhausted := ts.recordToolDenial(toolName, denialReason, cls.Permanent, denyMsg); exhausted {
 						turnStatus = TurnEndStatusAborted
-						return al.abortTurn(ts, "synthetic_error_floor", abortMsg)
+						return al.abortTurnForToolDenialBudget(ts, toolName, denialReason, used)
 					}
 					continue
 				}
@@ -8935,7 +8997,16 @@ turnLoop:
 					// thread and on replay.
 					settleAskToolCallTranscript(
 						ts, session.ToolCallID(tc.ID), toolName, toolArgs, denialReason)
-					denyMsg := fmt.Sprintf(`{"error":"permission_denied","message":"User denied tool execution.","tool":%q,"reason":%q}`, toolName, denialReason)
+					// ADR-058 site 3 — the original defect: denialReason here
+					// is verbatim from CheckGrantOrRequestApproval, so it is
+					// classified for real rather than assumed to be a user
+					// "no". ClassifyDenial covers every reason this call can
+					// produce (user, timeout, saturated, cancel, restart,
+					// batch_short_circuit, internal_error,
+					// no_approver_configured, "") via the ten-row table; an
+					// unrecognised value still fails safe (Permanent: true).
+					cls, _ := ClassifyDenial(denialReason)
+					denyMsg := denialPayloadJSON(toolName, denialReason, cls)
 					al.emitPolicyDenyAudit(ts, toolName, "ask", denialReason)
 					deniedMsg := providers.Message{
 						Role:       "tool",
@@ -8955,9 +9026,14 @@ turnLoop:
 							Reason: fmt.Sprintf("permission_denied (ask denied: %s)", denialReason),
 						},
 					)
-					if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
+					// ADR-058 §3.5 (R5, Binding Rule 4 — the positive lower
+					// bound): cls.Permanent is false ONLY for "saturated", so
+					// recordToolDenial never quarantines it here — a later
+					// call to the same tool in the same turn is free to reach
+					// the approver and execute (AC-06).
+					if used, exhausted := ts.recordToolDenial(toolName, denialReason, cls.Permanent, denyMsg); exhausted {
 						turnStatus = TurnEndStatusAborted
-						return al.abortTurn(ts, "synthetic_error_floor", abortMsg)
+						return al.abortTurnForToolDenialBudget(ts, toolName, denialReason, used)
 					}
 					continue
 				}
@@ -9768,69 +9844,45 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 	return turnResult{status: TurnEndStatusAborted}, err
 }
 
-// defaultSyntheticErrorFloor is the default value of
-// gateway.turn_synthetic_error_floor (FR-084). After this many consecutive
-// synthetic-deny tool results in a single turn, the turn is aborted.
-const defaultSyntheticErrorFloor = 8
-
-// syntheticErrorFloor returns the configured synthetic-error floor for the
-// current loop config. Negative values return the default. 0 means disabled.
-func (al *AgentLoop) syntheticErrorFloor() int {
-	cfg := al.GetConfig()
-	n := cfg.Gateway.TurnSyntheticErrorFloor
-	if n < 0 {
-		return defaultSyntheticErrorFloor
-	}
-	return n
-}
-
-// recordSyntheticDeny increments the turn's consecutive-synthetic-deny counter
-// and returns true when the turn should be aborted (FR-084). It also appends a
-// system message to the session documenting the abort reason so the LLM can
-// observe it on the next prompt.
+// abortTurnForToolDenialBudget is the ONE place a turn is aborted for
+// exhausting its aggregate per-turn tool-denial budget (ADR-058 FR-058-13,
+// turnDenialBudget = 10). All four call sites that can exhaust the budget —
+// the quarantine-gate replay and the three permission_denied emit sites —
+// route through this single function rather than each constructing its own
+// abort, so the audit entry and the abort reason can never diverge between
+// them (the same "one renderer" discipline this ADR uses for the denial
+// payload itself).
 //
-// Returns (shouldAbort bool, abortMsg string). The caller is responsible for
-// appending abortMsg to messages and calling abortTurn if shouldAbort is true.
-func (al *AgentLoop) recordSyntheticDeny(ts *turnState) (shouldAbort bool, abortMsg string) {
-	ts.syntheticErrorCount++
-	floor := al.syntheticErrorFloor()
-	if floor <= 0 || ts.syntheticErrorCount < floor {
-		return false, ""
-	}
-	msg := fmt.Sprintf(
-		`{"role":"system","type":"turn_aborted","reason":"synthetic_error_loop","count":%d}`,
-		ts.syntheticErrorCount,
-	)
-	if !ts.opts.NoHistory {
-		ts.agent.Sessions.AddMessage(ts.sessionKey, "system", msg)
-		if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
-			logger.WarnCF("agent", "FR-084: failed to persist turn_aborted message",
-				map[string]any{"session_key": ts.sessionKey, "error": err.Error()})
-		}
-	}
-	// CRIT-6 + typed-Decision/Event migration: route through audit.EmitEntry
-	// so Log failure bumps the audit-skipped counter; use the typed
-	// EventTurnAbortedSyntheticLoop and DecisionDeny constants.
+// Replaces FR-084's now-deleted per-turn synthetic-deny helper, which
+// emitted its own audit entry immediately before calling abortTurn (§10.A3,
+// spec §3.3): this does the same, with the new
+// audit.EventTurnAbortedToolDenialBudget event in place of FR-084's retired
+// audit event constant.
+func (al *AgentLoop) abortTurnForToolDenialBudget(ts *turnState, tool, reason string, denialsUsed int) (turnResult, error) {
 	audit.EmitEntry(al.auditLogger, &audit.Entry{
-		Event:     audit.EventTurnAbortedSyntheticLoop,
+		Event:     audit.EventTurnAbortedToolDenialBudget,
 		Decision:  audit.DecisionDeny,
 		AgentID:   ts.agentID,
+		Tool:      tool,
 		SessionID: ts.sessionKey,
 		User:      ts.auditUser(), // FR-017
 		Details: map[string]any{
-			"turn_id":               ts.turnID,
-			"synthetic_error_count": ts.syntheticErrorCount,
-			"floor":                 floor,
+			"turn_id":       ts.turnID,
+			"denial_reason": reason,
+			"denials_used":  denialsUsed,
+			"budget":        turnDenialBudget,
 		},
 	})
-	logger.WarnCF("agent", "FR-084: synthetic-error floor reached — aborting turn",
+	logger.WarnCF("agent", "ADR-058: aggregate tool-denial budget exhausted — aborting turn",
 		map[string]any{
-			"agent_id":    ts.agentID,
-			"session_key": ts.sessionKey,
-			"count":       ts.syntheticErrorCount,
-			"floor":       floor,
+			"agent_id":     ts.agentID,
+			"session_key":  ts.sessionKey,
+			"tool":         tool,
+			"reason":       reason,
+			"denials_used": denialsUsed,
+			"budget":       turnDenialBudget,
 		})
-	return true, msg
+	return al.abortTurn(ts, "tool_denial_budget", toolDenialAbortReason(tool, reason, ts.agentID, turnDenialBudget))
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {

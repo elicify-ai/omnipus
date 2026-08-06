@@ -352,13 +352,6 @@ type turnState struct {
 	// carry the correct agent_id in the transcript.
 	activeAgentResolver func() string
 
-	// syntheticErrorCount tracks consecutive synthetic-deny tool results within
-	// this turn. When it reaches the configured floor (FR-084,
-	// gateway.turn_synthetic_error_floor, default 8), the turn is aborted with
-	// a system message {type: "turn_aborted", reason: "synthetic_error_loop"}.
-	// The counter resets per turn (initialized to zero here).
-	syntheticErrorCount int
-
 	// denialLedger is ADR-058's per-turn tool-denial state (FR-058-09): an
 	// aggregate count of every denial response handed to the model in this
 	// turn (real or replayed from the quarantine cache), and a map of tools

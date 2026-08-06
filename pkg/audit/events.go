@@ -90,10 +90,19 @@ const (
 	// value. The gateway exits non-zero after emitting this event. FR-016.
 	EventGatewayConfigInvalidValue = "gateway.config.invalid_value"
 
-	// EventTurnAbortedSyntheticLoop — WARN. The loop aborted a turn after
-	// observing N consecutive synthetic-deny tool results (default N=8;
-	// `gateway.turn_synthetic_error_floor`). FR-084.
-	EventTurnAbortedSyntheticLoop = "turn.aborted_synthetic_loop"
+	// EventTurnAbortedToolDenialBudget — WARN. The loop aborted a turn after
+	// its aggregate per-turn tool-denial budget (turnDenialBudget = 10,
+	// pkg/agent/tool_denial.go) was exhausted — every denial response handed
+	// to the model in the turn, real or served from the ADR-058 quarantine
+	// cache, regardless of tool or reason. Replaces FR-084's retired
+	// synthetic-loop abort event (ADR-058 §10.A3, spec §3.3): that
+	// mechanism's one surviving call site could never fire more than once per
+	// turn (#595), so it was deleted rather than repaired. Emitted directly
+	// via audit.EmitEntry from AgentLoop.abortTurn's "tool_denial_budget"
+	// caller — there is no dedicated Emit* helper for this event, matching
+	// how the code it replaces was already emitted (F2: its Emit* helper had
+	// zero callers).
+	EventTurnAbortedToolDenialBudget = "turn.aborted_tool_denial_budget"
 
 	// EventApproverFallback — HIGH. The agent loop hit `nopPolicyApprover`
 	// in a default (production) build, meaning `SetToolApprover` was never
@@ -706,20 +715,5 @@ func EmitGatewayConfigInvalidValue(ctx context.Context, logger *Logger, configKe
 		"config_key": configKey,
 		"value":      value,
 		"reason":     reason,
-	})
-}
-
-// EmitTurnAbortedSyntheticLoop — WARN. FR-084.
-func EmitTurnAbortedSyntheticLoop(
-	ctx context.Context,
-	logger *Logger,
-	agentID, sessionID, turnID string,
-	syntheticErrorCount int,
-) {
-	Emit(ctx, logger, EventTurnAbortedSyntheticLoop, SeverityWarn, map[string]any{
-		"agent_id":              agentID,
-		"session_id":            sessionID,
-		"turn_id":               turnID,
-		"synthetic_error_count": syntheticErrorCount,
 	})
 }

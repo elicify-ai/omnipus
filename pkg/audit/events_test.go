@@ -91,7 +91,14 @@ func TestPolicyEngine_AuditEmissions(t *testing.T) {
 	EmitGatewayStartupGuardDisabled(ctx, lg, "gateway.tool_approval_max_pending")
 	EmitGatewayConfigInvalidValue(ctx, lg, "gateway.tool_approval_max_pending",
 		"-1", "negative")
-	EmitTurnAbortedSyntheticLoop(ctx, lg, "agent-1", "sess-1", "turn-1", 8)
+	// EventTurnAbortedToolDenialBudget (ADR-058, replaces FR-084's deleted
+	// synthetic-loop abort event and its Emit* helper) has no dedicated
+	// Emit* helper of its own — pkg/agent/loop.go's abortTurn caller emits it
+	// directly via audit.EmitEntry, matching how its predecessor was already
+	// emitted (F2). Catalog membership is covered by
+	// TestIsValidEventName_ExhaustiveOverEventConsts
+	// (events_exhaustive_test.go), which reflects over every declared Event*
+	// constant, so no call here is needed to exercise it.
 
 	// Force flush via Close.
 	if err := lg.Close(); err != nil {
@@ -123,7 +130,6 @@ func TestPolicyEngine_AuditEmissions(t *testing.T) {
 		{EventMCPServerRenamed, SeverityHigh, "new_name"},
 		{EventGatewayStartupGuardDisabled, SeverityWarn, "config_key"},
 		{EventGatewayConfigInvalidValue, SeverityHigh, "value"},
-		{EventTurnAbortedSyntheticLoop, SeverityWarn, "synthetic_error_count"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("record count: got %d, want %d", len(got), len(want))

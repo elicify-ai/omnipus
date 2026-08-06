@@ -132,7 +132,7 @@ func IsValidEventName(e EventName) bool {
 		EventMCPServerRenamed,
 		EventGatewayStartupGuardDisabled,
 		EventGatewayConfigInvalidValue,
-		EventTurnAbortedSyntheticLoop,
+		EventTurnAbortedToolDenialBudget,
 		EventApproverFallback,
 		// Channel workspace-binding events (ADR-029).
 		// EventChannelRoutingDriftDrop is emitted when a workspace-bound instance's
