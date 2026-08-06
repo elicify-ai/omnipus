@@ -339,20 +339,58 @@ func TestNestedDelegationGating_Unchanged(t *testing.T) {
 // from many goroutines at once and asserts the admitted count never exceeds
 // cap at any observed point — the core safety property FR-069's refusal
 // depends on.
+//
+// REGRESSION NOTE (2026-08-06): the original version of this test had every
+// admitted goroutine time.Sleep(1ms) and then call its own release()
+// WHILE the other 199 goroutines were still being scheduled, then asserted
+// admittedCount == rootCap (exact equality, total across the whole run).
+// That is not the safety property FR-069 requires (the doc comment above
+// only ever promised "never exceeds cap at any observed point", i.e. an
+// upper bound on concurrently-active admits — the same invariant
+// TestAdmissionController_TryAdmit_NoOvercommit checks for the sibling
+// AdmissionController primitive). On a CPU-constrained runner under -race
+// (race-detector instrumentation plus 4 vCPUs on GitHub's ubuntu-latest,
+// contending with the rest of this package's ~213s parallel suite), 200
+// goroutines do not all get an OS thread inside 1ms: some of the first 8
+// admits legitimately sleep, release, and free their slot before the
+// remaining goroutines have even reached their first TryAdmit call, letting
+// a 9th/10th/13th caller be admitted after a real release — which is a
+// semaphore working exactly as designed, not an overcommit. Reproduced
+// locally 3/30 runs under `GOMAXPROCS=4 -race -count=30`
+// (admittedCount observed at 10 and 13 twice), while a diagnostic patch
+// logging maxObservedActive alongside admittedCount showed
+// maxObservedActive pinned at exactly rootCap (8) on all 40 additional
+// runs — i.e. the actual safety property never broke; only the test's
+// stricter, timing-dependent extra assertion did.
+//
+// Fixed by removing the in-goroutine sleep+release entirely: every admitted
+// caller holds its slot until the whole burst has finished attempting
+// admission (mirroring TestAdmissionController_TryAdmit_NoOvercommit's
+// "collect releases, call them all after wg.Wait()" shape), so no slot can
+// ever free up mid-burst. With that, EXACTLY rootCap of the 200 concurrent
+// attempts can succeed regardless of scheduling — the equality assertion is
+// now a deterministic consequence of the design, not a timing bet. A
+// startGate channel additionally makes the "all 200 attempt admission at
+// once" intent explicit rather than relying on goroutine-launch ordering.
 func TestRootDelegationAdmission_ConcurrentAdmitNeverExceedsCap(t *testing.T) {
 	const rootCap = 8
 	const attempts = 200
 	gate := NewRootDelegationAdmission(rootCap)
 
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var admittedCount int
-	var maxObservedActive int
+	var (
+		wg                sync.WaitGroup
+		startGate         = make(chan struct{})
+		mu                sync.Mutex
+		admittedCount     int
+		maxObservedActive int
+		releases          []func()
+	)
 
 	for i := 0; i < attempts; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			<-startGate
 			ok, release := gate.TryAdmit()
 			if !ok {
 				return
@@ -362,11 +400,11 @@ func TestRootDelegationAdmission_ConcurrentAdmitNeverExceedsCap(t *testing.T) {
 			if a := gate.Active(); a > maxObservedActive {
 				maxObservedActive = a
 			}
+			releases = append(releases, release)
 			mu.Unlock()
-			time.Sleep(time.Millisecond)
-			release()
 		}()
 	}
+	close(startGate) // unleash all 200 attempts simultaneously
 	wg.Wait()
 
 	if admittedCount != rootCap {
@@ -374,6 +412,15 @@ func TestRootDelegationAdmission_ConcurrentAdmitNeverExceedsCap(t *testing.T) {
 	}
 	if maxObservedActive > rootCap {
 		t.Fatalf("observed Active() = %d, exceeds cap %d", maxObservedActive, rootCap)
+	}
+
+	// Only now — after every attempt has resolved — release the admitted
+	// slots. Releasing earlier (e.g. from inside each goroutine) would let a
+	// still-pending attempt be admitted into a freed slot, which is correct
+	// semaphore behaviour but would make admittedCount's total exceed
+	// rootCap for reasons unrelated to the safety property under test.
+	for _, release := range releases {
+		release()
 	}
 	if gate.Active() != 0 {
 		t.Fatalf("Active() = %d after every admitted caller released, want 0", gate.Active())

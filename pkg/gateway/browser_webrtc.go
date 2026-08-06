@@ -514,7 +514,25 @@ const encoderLivenessVideoStallTicks = 2
 // checks while a viewer is attached (fix-wave HIGH addition, see that
 // const's doc comment).
 func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agentID string) {
-	ticker := time.NewTicker(encoderLivenessCheckInterval)
+	// Snapshot BOTH test-shrinkable knobs ONCE, synchronously, on entry —
+	// never re-read the package-level vars later in this function. checkInterval
+	// was already effectively snapshotted this way (time.NewTicker evaluates
+	// its argument immediately), but staleAfter used to be re-read from the
+	// live global on every tick, for the lifetime of this goroutine — which
+	// this loop runs until cs.Stop() (any cause). cs.Stop() closing cs.Done()
+	// does not block for THIS goroutine to observe it and return, so a test
+	// that calls cs.Stop() in a Cleanup and then restores
+	// encoderLivenessStaleAfter/encoderLivenessCheckInterval in an
+	// earlier-registered (so later-run, LIFO) Cleanup can race this loop's
+	// still-in-flight tick — a genuine data race (WARNING: DATA RACE,
+	// browser_webrtc.go:568 vs browser_webrtc_fixwave2_test.go:328, caught
+	// under `go test -race`), not a flake. Capturing both up front removes
+	// every later read of the package vars from this function; production
+	// behavior is unchanged since neither var is ever mutated outside tests.
+	checkInterval := encoderLivenessCheckInterval
+	staleAfter := encoderLivenessStaleAfter
+
+	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
 	var (
@@ -555,7 +573,7 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 					"stall_ticks",
 					stallTicks,
 					"check_interval",
-					encoderLivenessCheckInterval,
+					checkInterval,
 				)
 				cs.Stop()
 				return
@@ -565,7 +583,7 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 			if last.IsZero() {
 				continue // encoder hasn't bound the ingest connection yet
 			}
-			if time.Since(last) > encoderLivenessStaleAfter {
+			if time.Since(last) > staleAfter {
 				slog.Warn(
 					"browser-webrtc: encoder liveness watchdog — no ping beacon received, stopping capture session",
 					"agent_id",
@@ -573,7 +591,7 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 					"last_ping_at",
 					last,
 					"stale_after",
-					encoderLivenessStaleAfter,
+					staleAfter,
 				)
 				cs.Stop()
 				return

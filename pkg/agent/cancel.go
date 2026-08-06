@@ -644,7 +644,27 @@ func (al *AgentLoop) RequestCancel(
 	// is a flat Range match on routingSessionID (see collectDescendantTurnIDs,
 	// steering.go) — never a graph walk — so there is no cycle or
 	// unbounded-recursion hazard in calling it again at each checkpoint.
-	time.AfterFunc(cancelHardAbortDelay, func() {
+	// Snapshot BOTH escalation delays synchronously, on THIS goroutine, before
+	// scheduling PHASE B's timer — never re-read the package-level vars from
+	// inside the async callback below. cancelHardAbortDelay was already safe
+	// (time.AfterFunc evaluates its first argument immediately, in the
+	// caller's goroutine), but cancelDetachDelay was read directly at PHASE
+	// C's own time.AfterFunc call INSIDE the PHASE-B callback — i.e. ~150ms
+	// (test-shrunk) or ~3s (production) after RequestCancel returned. Tests
+	// that shrink these vars restore them via t.Cleanup the moment they
+	// observe hardAbortRequested() flip true (PHASE B's FIRST externally
+	// visible side effect, set a few lines above the old cancelDetachDelay
+	// read) — but the SAME callback goroutine keeps running past that point
+	// to reach the old read, with no happens-before edge to the test's
+	// Cleanup. That let one test's teardown race a PRIOR (or this test's own,
+	// still in-flight) PHASE-B callback's read of the global — a genuine
+	// data race (WARNING: DATA RACE, cancel.go:697 vs cancel_chain_reaction_
+	// test.go:98/101), not a flake. Capturing both delays up front removes
+	// the later read entirely; production behavior is unchanged since these
+	// vars are never mutated outside tests.
+	hardAbortDelay := cancelHardAbortDelay
+	detachDelay := cancelDetachDelay
+	time.AfterFunc(hardAbortDelay, func() {
 		defer func() {
 			if r := recover(); r != nil {
 				slog.Error("agent: RequestCancel: timer panic",
@@ -694,7 +714,7 @@ func (al *AgentLoop) RequestCancel(
 		// detach any turn CURRENTLY live in sessionID's tree (same fresh
 		// re-scan discipline as PHASE B; see above) ---
 		hardAt := time.Now()
-		time.AfterFunc(cancelDetachDelay, func() {
+		time.AfterFunc(detachDelay, func() {
 			defer func() {
 				if r := recover(); r != nil {
 					slog.Error("agent: RequestCancel: timer panic",

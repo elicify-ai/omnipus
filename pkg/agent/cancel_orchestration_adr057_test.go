@@ -21,6 +21,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -514,15 +516,15 @@ func TestU15OrphanWatchdog_DefersWhileCriticalDelegateAlive(t *testing.T) {
 	childTS := u15RegisterChildTurn(t, al, sessionID, sessionID+"-u15-critical-child",
 		"turn-u15-orphan-critical-child", "turn-u15-orphan-root", 1, true)
 
-	var reapCalled bool
+	var reapCalled atomic.Bool
 	al.ArmOrphanForegroundTurnWatch(sessionID, 1,
-		func(reason string) { reapCalled = true },
+		func(reason string) { reapCalled.Store(true) },
 		alwaysOrphaned,
 	)
 
 	time.Sleep(1500 * time.Millisecond) // past the 1s grace, with margin
 
-	assert.False(t, reapCalled,
+	assert.False(t, reapCalled.Load(),
 		"BDD-26: reap must be deferred entirely while a live Critical delegate survives on the session")
 	assert.True(t, rootTS.IsAlive())
 	assert.True(t, childTS.IsAlive())
@@ -538,26 +540,46 @@ func TestU15OrphanWatchdog_FiresAfterDelegateFinishes(t *testing.T) {
 	childTS := u15RegisterChildTurn(t, al, sessionID, sessionID+"-u15-critical-child2",
 		"turn-u15-orphan-critical-child2", "turn-u15-orphan-root2", 1, true)
 
-	var reapCalledWhileAlive bool
+	// reapCalledWhileAlive/reapCalled/reapReason are written by the watchdog's
+	// own timer goroutine (fireOrphanForegroundTurnWatch, orphan_watch.go) and
+	// read from this test's goroutine (directly, or indirectly via testify's
+	// require.Eventually, which polls its condition func from its own
+	// goroutine) — a plain bool/string here is a genuine data race (WARNING:
+	// DATA RACE, cancel_orchestration_adr057_test.go:556 vs :560/:562, caught
+	// under `go test -race`), not a flake: even once require.Eventually
+	// observes reapCalled flip true, nothing establishes a happens-before
+	// edge to the callback's LATER write of reapReason on the SAME goroutine
+	// without also synchronizing that second variable. Fixed to mirror the
+	// established pattern in the sibling file (orphan_watch_test.go's
+	// atomic.Bool reapCalled + mutex-guarded lastReason).
+	var reapCalledWhileAlive atomic.Bool
 	al.ArmOrphanForegroundTurnWatch(sessionID, 1,
-		func(reason string) { reapCalledWhileAlive = true },
+		func(reason string) { reapCalledWhileAlive.Store(true) },
 		alwaysOrphaned,
 	)
 	time.Sleep(1500 * time.Millisecond)
-	require.False(t, reapCalledWhileAlive, "precondition: must not have reaped while the delegate was still alive")
+	require.False(t, reapCalledWhileAlive.Load(), "precondition: must not have reaped while the delegate was still alive")
 
 	// The Critical delegate completes.
 	childTS.isFinished.Store(true)
 	require.False(t, childTS.IsAlive(), "precondition: the delegate must now report finished")
 
+	var reapCalled atomic.Bool
+	var reasonMu sync.Mutex
 	var reapReason string
-	var reapCalled bool
 	al.ArmOrphanForegroundTurnWatch(sessionID, 1,
-		func(reason string) { reapCalled = true; reapReason = reason },
+		func(reason string) {
+			reasonMu.Lock()
+			reapReason = reason
+			reasonMu.Unlock()
+			reapCalled.Store(true)
+		},
 		alwaysOrphaned,
 	)
 
-	require.Eventually(t, func() bool { return reapCalled }, 3*time.Second, 50*time.Millisecond,
+	require.Eventually(t, func() bool { return reapCalled.Load() }, 3*time.Second, 50*time.Millisecond,
 		"BDD-27: once the Critical delegate finishes, the watchdog must fire and reap the root")
+	reasonMu.Lock()
 	assert.Equal(t, "orphan_timeout", reapReason)
+	reasonMu.Unlock()
 }

@@ -3216,6 +3216,26 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 	// if the span is not closed first. On timeout it synthesizes subagent_end and logs.
 	// W1-9: the goroutine also exits cleanly when wc.doneCh is closed (connection torn down).
 	startOrphanWatchdog := func(entry *openSpanEntry, reason string) {
+		// Snapshot BOTH test-shrinkable knobs ONCE, synchronously, before
+		// spawning the goroutine below — never re-read the package-level vars
+		// from inside it. This goroutine loops (reschedule on "still active")
+		// for however long a genuine delegate keeps running, re-arming
+		// time.After(orphanWatchdogTimeout) and re-checking the reschedule
+		// count against orphanWatchdogMaxRechecks on every iteration —
+		// potentially for the lifetime of a long test. A test that shrinks
+		// these vars via
+		// SetOrphanWatchdogTimeoutForTest/SetOrphanWatchdogMaxRechecksForTest
+		// and restores them (defer/t.Cleanup) the moment its OWN foreground
+		// assertions pass has no happens-before edge to this still-running
+		// goroutine's later reads — a genuine data race (WARNING: DATA RACE,
+		// websocket.go:3229 vs export_test.go:29, caught under
+		// `go test -race`, TestOrphanWatchdog_GenuinelyActiveDelegate_
+		// NeverSynthesizesInterrupted), not a flake. Capturing both up front
+		// removes every later read of the package vars from this goroutine;
+		// production behavior is unchanged since neither var is ever mutated
+		// outside tests.
+		watchdogTimeout := orphanWatchdogTimeout
+		maxRechecks := orphanWatchdogMaxRechecks
 		go func() {
 			rechecks := 0
 			for {
@@ -3226,7 +3246,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				case <-wc.doneCh:
 					// Connection closed while waiting — exit cleanly without emitting.
 					return
-				case <-time.After(orphanWatchdogTimeout):
+				case <-time.After(watchdogTimeout):
 					// Span is still open after timeout. Before declaring it
 					// orphaned, confirm the real sub-turn genuinely isn't
 					// still running.
@@ -3260,7 +3280,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 					forceCeiling := false
 					if stillActive {
 						rechecks++
-						if rechecks > orphanWatchdogMaxRechecks {
+						if rechecks > maxRechecks {
 							// Ceiling exceeded: a genuinely wedged/deadlocked
 							// turn — a goroutine that neither returns nor
 							// panics, e.g. blocked on a tool call not
@@ -3282,7 +3302,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 								"parent_call_id", entry.parentCallID,
 								"reason", reason,
 								"rechecks", rechecks,
-								"max_rechecks", orphanWatchdogMaxRechecks,
+								"max_rechecks", maxRechecks,
 							)
 						} else {
 							// Escalate Debug -> Warn once the loop has
@@ -3302,7 +3322,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 								"parent_call_id", entry.parentCallID,
 								"reason", reason,
 								"rechecks", rechecks,
-								"max_rechecks", orphanWatchdogMaxRechecks,
+								"max_rechecks", maxRechecks,
 							)
 							continue
 						}
