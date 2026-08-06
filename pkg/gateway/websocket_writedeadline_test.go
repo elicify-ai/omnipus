@@ -73,6 +73,7 @@ func setupBackpressureWS(t *testing.T) (wc *wsConn, wpDone chan struct{}) {
 		}
 		if tcpConn, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
 			_ = tcpConn.SetWriteBuffer(4096) // best-effort; ignore failure
+			saturateTCPSendPath(tcpConn)     // deterministic, platform-independent backpressure
 		}
 		srvConn = &wsConn{conn: conn, sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
 		close(connReady) // happens-before the receive below (Go memory model)
@@ -103,6 +104,55 @@ func setupBackpressureWS(t *testing.T) (wc *wsConn, wpDone chan struct{}) {
 
 	<-connReady
 	return srvConn, wpDone
+}
+
+// saturateTCPSendPath actively fills the kernel send/receive buffer pipeline
+// between tcpConn and its (deliberately non-reading) peer by writing raw
+// bytes directly on the underlying socket — bypassing gorilla/websocket
+// entirely — until a short-deadlined Write blocks. This makes the very next
+// write issued through writePump block almost immediately, so wsWriteWait's
+// own 10s deadline (not an unbounded flood) is what determines how long the
+// test takes, regardless of platform-specific default socket buffer sizes.
+//
+// Root cause this replaces (2026-08-06, `matrix (macos-latest, arm64)`, PR
+// #597): TestWritePumpEnforcesWriteDeadline_Ping used to rely SOLELY on
+// flooding many 2-byte PingMessage frames through writePump itself to
+// organically fill an UNKNOWN-sized OS buffer — the SetWriteBuffer/
+// SetReadBuffer(4096) hints above are best-effort and are not guaranteed to
+// actually shrink the kernel's buffers on every platform. On macOS CI that
+// flood never once blocked within the test's 45s outer bound, producing
+// `--- FAIL: TestWritePumpEnforcesWriteDeadline_Ping (45.03s)` with the
+// message "missing SetWriteDeadline before wc.conn.WriteMessage
+// (websocket.PingMessage, nil) in writePump" — even though writePump's ping
+// branch already has, and per `git log -L` has had since commit 7da86809
+// (long before this failure), its own SetWriteDeadline immediately before
+// that exact call; a scoped local run confirms
+// TestWritePumpEnforcesWriteDeadline_Ping passes today at HEAD in ~15s. The
+// neighboring TestWritePumpEnforcesWriteDeadline_TextMessage test did NOT
+// fail on the same CI run: its 256 KiB payloads saturate any realistic
+// buffer in a handful of writes regardless of platform, so it never
+// depended on this throughput assumption. Pre-saturating the pipe here
+// removes the same platform-variable throughput dependency without diluting
+// what the ping test proves: the feeder it drives still enqueues PURE ping
+// sentinels (see TestWritePumpEnforcesWriteDeadline_Ping below), so the
+// write that ultimately blocks and times out is still, specifically,
+// writePump's PingMessage branch. Mixing in large payloads instead (the
+// pattern TestBrowserWritePumpEnforcesWriteDeadline_Ping already uses) was
+// considered and rejected here: browser_ws.go's writePump has a single
+// SetWriteDeadline call shared by both branches, so a large payload
+// exercises the same call a ping would; websocket.go's writePump (this
+// file) has TWO SEPARATE SetWriteDeadline calls, one per branch, so a test
+// that always blocks on a large payload instead of a ping could pass even
+// if a regression removed only the ping branch's own deadline call.
+func saturateTCPSendPath(tcpConn *net.TCPConn) {
+	_ = tcpConn.SetWriteDeadline(time.Now().Add(300 * time.Millisecond))
+	chunk := make([]byte, 128*1024)
+	for i := 0; i < 128; i++ { // up to 16 MiB — far beyond any realistic default socket buffer
+		if _, err := tcpConn.Write(chunk); err != nil {
+			break // pipe is now full; deadline fired as intended
+		}
+	}
+	_ = tcpConn.SetWriteDeadline(time.Time{}) // clear before handing off to writePump/gorilla
 }
 
 // TestWritePumpEnforcesWriteDeadline_TextMessage proves that writePump's
@@ -169,10 +219,16 @@ func TestWritePumpEnforcesWriteDeadline_TextMessage(t *testing.T) {
 // silently starved when an earlier write on the same single writer
 // goroutine blocked forever.
 //
-// Because a single ping frame carries no application payload (~2 bytes on
-// the wire), the feeder floods many ping sentinels to actually exhaust the
-// (shrunk) socket buffers — this test allows a longer, but still bounded,
-// outer timeout to accommodate that.
+// setupBackpressureWS pre-saturates the connection's send/receive pipeline
+// (saturateTCPSendPath) before this test's feeder ever runs, so the FIRST
+// ping write attempt blocks almost immediately — the elapsed time is
+// governed by wsWriteWait's own deadline, not by how many 2-byte ping
+// frames it takes to organically overflow a platform-specific, best-effort-
+// shrunk OS buffer (the previous mechanism, which never once blocked within
+// 45s on macOS CI — see saturateTCPSendPath's doc comment for the full
+// root-cause account). The feeder below still enqueues PURE ping sentinels
+// (no payload mixed in), so the write that ultimately blocks and times out
+// is still, specifically, writePump's PingMessage branch.
 //
 // Traces to: pkg/gateway/websocket.go writePump (PingMessage branch).
 func TestWritePumpEnforcesWriteDeadline_Ping(t *testing.T) {
@@ -194,17 +250,18 @@ func TestWritePumpEnforcesWriteDeadline_Ping(t *testing.T) {
 	select {
 	case <-wpDone:
 		elapsed := time.Since(start)
-		assert.LessOrEqualf(t, elapsed, 25*time.Second,
-			"writePump must return within wsWriteWait(%s)+slack even when saturated purely by tiny "+
-				"keepalive ping frames, took %s", wsWriteWait, elapsed)
-		assert.GreaterOrEqualf(t, elapsed, 3*time.Second,
+		assert.LessOrEqualf(t, elapsed, wsWriteWait+15*time.Second,
+			"writePump must return within wsWriteWait(%s)+slack once the pre-saturated pipe makes the "+
+				"first ping write block, took %s", wsWriteWait, elapsed)
+		assert.GreaterOrEqualf(t, elapsed, wsWriteWait-3*time.Second,
 			"writePump returned after only %s — expected it to actually block until close to "+
-				"wsWriteWait(%s) before the deadline fires; a near-instant return suggests the buffers "+
-				"were never actually saturated", elapsed, wsWriteWait)
-	case <-time.After(45 * time.Second):
-		t.Fatal("writePump did not return within 45s while flooded with ping frames against a " +
-			"non-reading client — the ping write deadline is not being enforced (regression: missing " +
-			"SetWriteDeadline before wc.conn.WriteMessage(websocket.PingMessage, nil) in writePump)")
+				"wsWriteWait(%s) before the deadline fires; a near-instant return suggests the pipe "+
+				"was never actually saturated before the feeder started", elapsed, wsWriteWait)
+	case <-time.After(wsWriteWait + 30*time.Second):
+		t.Fatal("writePump did not return within wsWriteWait+30s while flooded with ping frames against " +
+			"a non-reading, pre-saturated client — the ping write deadline is not being enforced " +
+			"(regression: missing SetWriteDeadline before wc.conn.WriteMessage(websocket.PingMessage, " +
+			"nil) in writePump)")
 	}
 	<-feederDone
 }

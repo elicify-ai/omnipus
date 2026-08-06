@@ -297,6 +297,29 @@ func ResolvePath(
 		return nil, fmt.Errorf("%w: %v", ErrPathInvalid, err)
 	}
 
+	// realWorkDir is policy.WorkDir resolved through the exact same
+	// symlink-following, walk-up-on-not-exist logic used for realAbs below
+	// (HIGH, macOS CI: pkg/gateway matrix job, PR #597). fspolicy.FSPolicy's
+	// own doc comment documents WorkDir as already "the realpath (symlinks
+	// resolved)", and fspolicy.EffectiveFSPolicy — the sole constructor every
+	// real production caller reaches ResolvePath through — upholds that by
+	// calling its own realpath() before returning. But ResolvePath is FR-003's
+	// single MANDATORY chokepoint, not a function entitled to blindly trust an
+	// invariant it cannot itself enforce: fspolicy.FSPolicy.Validate's own doc
+	// comment carves out "the direct-construction shape several resolver-level
+	// unit tests use", i.e. constructing an FSPolicy{WorkDir: ...} by hand
+	// without going through EffectiveFSPolicy — and on macOS, t.TempDir()
+	// returns a path under /var, itself a symlink to /private/var. Without
+	// this, realAbs (always resolved, a few lines below) and an unresolved
+	// policy.WorkDir never share a prefix, and isWithinWorkspace falsely
+	// rejects every legitimate in-workspace path as escaping scope. Resolving
+	// unconditionally here is idempotent (a no-op) when the caller already
+	// resolved WorkDir, and closes the gap when it didn't.
+	realWorkDir, err := resolveRealpathUnderWorkDir(policy.WorkDir, "")
+	if err != nil {
+		return nil, fmt.Errorf("%w: resolve working directory %q: %v", ErrPathInvalid, policy.WorkDir, err)
+	}
+
 	realAbs, err := resolveRealpathUnderWorkDir(rawPath, policy.WorkDir)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrPathInvalid, err)
@@ -306,7 +329,7 @@ func ResolvePath(
 		return nil, ErrCarveOut
 	}
 
-	if !isWithinWorkspace(realAbs, policy.WorkDir) {
+	if !isWithinWorkspace(realAbs, realWorkDir) {
 		switch policy.Scope {
 		case fspolicy.FSScopeConfined:
 			return nil, fmt.Errorf("%w: %q resolves to %q, outside the effective working directory %q",
@@ -321,9 +344,49 @@ func ResolvePath(
 		}
 	}
 
-	rel, err := safeRelPath(policy.WorkDir, rawPath)
-	if err != nil {
-		return nil, err
+	// rel is computed against realWorkDir (resolved), not the possibly-
+	// unresolved policy.WorkDir — the second half of the same fix: even when
+	// policy.WorkDir already arrives pre-resolved (production's normal
+	// EffectiveFSPolicy path), rawPath is whatever spelling the caller
+	// supplied and is NEVER resolved by ResolvePath itself — an absolute
+	// rawPath built from the pre-resolution spelling of the workspace (e.g.
+	// under /var on macOS) would trip the exact same false "escapes the
+	// working directory" rejection this fix closes for isWithinWorkspace
+	// above.
+	//
+	// Critically, rawPath itself (not realAbs) is still what safeRelPath
+	// resolves against: safeRelPath only ever resolves rawPath's ANCESTOR
+	// (dirname) chain, via resolveAncestorRealpath, never its final
+	// component. Passing realAbs here instead — which resolveRealpathUnderWorkDir
+	// resolves in full, following a symlink AT THE LEAF too — was tried and
+	// reverted: it collapsed a leaf like "toctou_link" to whatever it
+	// happened to point at when ResolvePath ran, baking that target into rel
+	// and handing os.Root a path that no longer even names the symlink,
+	// which silently defeats FR-006's TOCTOU protection (proven by
+	// TestResolvePath_IOThroughOsRoot_NoTOCTOU: the swapped-symlink read
+	// started succeeding instead of being refused fresh at I/O time). Only
+	// the ancestor prefix needs normalizing to fix the macOS bug; the leaf
+	// must stay exactly as the caller spelled it so os.Root re-resolves it
+	// fresh at I/O time, symlink swap and all.
+	//
+	// realAbs == realWorkDir is handled separately, short-circuiting straight
+	// to rel="." rather than through safeRelPath's ancestor-preserving logic:
+	// when rawPath names the workspace root itself (e.g. list_directory
+	// called with no path, or with the root's own — possibly unresolved —
+	// spelling), there IS no leaf below the root to protect, but
+	// resolveAncestorRealpath unconditionally treats rawPath's OWN final
+	// path segment as one, walking one directory too far up (proven by
+	// TestFilesystemTool_ListDir_Success, which passes the workspace root as
+	// "path" and, without this, was rejected as "../<root's own name>
+	// escapes the working directory" even with no symlink involved at all).
+	var rel string
+	if realAbs == realWorkDir {
+		rel = "."
+	} else {
+		rel, err = safeRelPath(realWorkDir, rawPath)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	root, err := os.OpenRoot(policy.WorkDir)
@@ -442,23 +505,71 @@ func resolveRealpathUnderWorkDir(rawPath, workDir string) (string, error) {
 	}
 }
 
+// resolveAncestorRealpath resolves ONLY the ancestor (dirname) chain of an
+// absolute path, walking up exactly like resolveRealpathUnderWorkDir's own
+// not-yet-existing-leaf fallback does, while leaving the final component (and
+// everything below whichever ancestor first resolves) exactly as given.
+//
+// Unlike resolveRealpathUnderWorkDir, this NEVER takes a "resolve the whole
+// path" fast path even when absPath exists and its own leaf happens to be a
+// symlink. That distinction matters: safeRelPath (the sole caller) uses this
+// to normalize an absolute rawPath's ancestor prefix against a realpath-
+// resolved workspace root, and the resulting relative path is what
+// ResolvePath ultimately hands to an os.Root-backed I/O call. If the leaf
+// were resolved here too, that call would receive the leaf's symlink TARGET
+// baked in instead of its name — silently defeating FR-006's TOCTOU
+// protection, which depends on os.Root re-resolving the leaf fresh, at the
+// moment of the actual syscall, not at this earlier lexical check.
+func resolveAncestorRealpath(absPath string) (resolvedDir, remainder string, err error) {
+	dir := filepath.Dir(absPath)
+	remainder = filepath.Base(absPath)
+	for {
+		resolved, evalErr := filepath.EvalSymlinks(dir)
+		if evalErr == nil {
+			return filepath.Clean(resolved), remainder, nil
+		}
+		if !os.IsNotExist(evalErr) {
+			return "", "", fmt.Errorf("resolve ancestor %q: %w", dir, evalErr)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", "", fmt.Errorf("no existing ancestor found for %q", absPath)
+		}
+		remainder = filepath.Join(filepath.Base(dir), remainder)
+		dir = parent
+	}
+}
+
 // safeRelPath computes the os.Root-relative path for rawPath under workDir,
 // the same contract the pre-ADR-046 getSafeRelPath (filesystem.go:1263,
 // deleted) provided: an absolute rawPath is made relative to workDir; the
 // result must be a "local" path (filepath.IsLocal) — no leading ".." escape
 // — or the call is refused. Called only after ResolvePath has already
-// established (via the realpath check) that the target lies within workDir,
-// so in practice this is a second, lexical, defense-in-depth check on the
-// ORIGINAL (not realpath-resolved) rawPath — os.Root re-resolves rel itself
-// at I/O time, following any symlinks fresh at that moment (FR-006).
+// established (via the realpath check) that the target lies within workDir.
+//
+// workDir MUST already be realpath-resolved (ResolvePath passes realWorkDir,
+// never the possibly-unresolved policy.WorkDir — HIGH, macOS CI regression,
+// PR #597): for an absolute rawPath, only its ANCESTOR chain is resolved
+// (via resolveAncestorRealpath) before being compared against workDir — the
+// final path component is left exactly as the caller spelled it, matching
+// resolveRealpathUnderWorkDir's own not-yet-existing-leaf contract. This is a
+// second, lexical, defense-in-depth check — os.Root re-resolves rel itself
+// at I/O time, following any symlinks (leaf included) fresh at that moment
+// (FR-006) — so leaving the leaf unresolved here is required, not merely
+// permitted: resolving it here instead would bake in whatever it pointed to
+// at check time, defeating that re-resolution's TOCTOU protection.
 func safeRelPath(workDir, rawPath string) (string, error) {
 	rel := filepath.Clean(rawPath)
 	if filepath.IsAbs(rel) {
-		var err error
-		rel, err = filepath.Rel(workDir, rel)
+		resolvedDir, remainder, err := resolveAncestorRealpath(rel)
 		if err != nil {
 			return "", fmt.Errorf("%w: %v", ErrPathInvalid, err)
 		}
+		relDir, err := filepath.Rel(workDir, resolvedDir)
+		if err != nil {
+			return "", fmt.Errorf("%w: %v", ErrPathInvalid, err)
+		}
+		rel = filepath.Join(relDir, remainder)
 	}
 	if !filepath.IsLocal(rel) {
 		return "", fmt.Errorf("%w: %q escapes the working directory", ErrOutsideScope, rawPath)
