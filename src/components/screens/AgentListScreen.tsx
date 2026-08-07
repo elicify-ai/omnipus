@@ -502,41 +502,6 @@ function AgentsLibraryView({
             )}
           </section>
 
-          {/* Built-in roster */}
-          {builtInAgents.length > 0 && (
-            <section data-testid="built-in-agents-section">
-              <Accordion
-                type="single"
-                collapsible
-                value={builtInOpen}
-                onValueChange={setBuiltInOpen}
-              >
-                <AccordionItem value="built-in">
-                  <AccordionTrigger data-testid="built-in-agents-trigger">
-                    <div className="text-left">
-                      <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
-                        Built-in roster
-                      </h2>
-                      <p className="text-xs text-[var(--color-muted)] mt-0.5">
-                        Core agents — Mia, Jim, Ava, Ray and any other locked system roster.
-                      </p>
-                    </div>
-                  </AccordionTrigger>
-                  <AccordionContent>
-                    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 pt-2">
-                      {builtInAgents.map((agent) => (
-                        <AgentCard
-                          key={agent.id}
-                          agent={agent}
-                          onSetDefault={() => onSetDefault(agent)}
-                        />
-                      ))}
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
-              </Accordion>
-            </section>
-          )}
 
           {/* System agents — ADR-049 D3/FR-095/SD-C16: a locked, non-chat,
               non-delegable roster (the seeded Judge). Cloned from the
