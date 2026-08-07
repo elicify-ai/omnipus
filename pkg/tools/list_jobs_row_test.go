@@ -319,7 +319,7 @@ func TestLabel_ShortSecretBelowFilterMinLength(t *testing.T) {
 	// 9 BYTES and therefore are NOT bypassed, which is exactly the contrast
 	// with the 7-byte ASCII case above. Replacing it with ASCII would delete
 	// half of what this test proves.
-	const shortCJK = "秘密鍵" //nolint:gosmopolitan // deliberate multi-byte corpus
+	const shortCJK = "秘密鍵"
 
 	cfg := &config.Config{}
 	cfg.Tools.FilterSensitiveData = true
@@ -379,7 +379,7 @@ func TestTruncateField_RuneBoundaryAndByteBound(t *testing.T) {
 		{"ascii", strings.Repeat("a", 5_000)},
 		// A 3-byte-rune corpus proves the rune bound and the byte bound are
 		// enforced independently.
-		{"cjk 3-byte runes", strings.Repeat("漢", 5_000)}, //nolint:gosmopolitan // deliberate multi-byte corpus
+		{"cjk 3-byte runes", strings.Repeat("漢", 5_000)},
 		{"emoji 4-byte runes", strings.Repeat("🐙", 5_000)},
 		{"json-hostile", strings.Repeat(`"\`+"\n", 5_000)},
 	} {
