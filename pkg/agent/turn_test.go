@@ -556,12 +556,23 @@ func newTestAgentLoopForRateLimit(t *testing.T) (*AgentLoop, *turnState) {
 
 // newRateLimitTranscript wires a real UnifiedStore + session for the
 // turn so appendErrorTranscript actually persists.
+//
+// ADR-057 U2: appendErrorTranscript writes through
+// UnifiedStore.AppendTranscriptStrict, which refuses a write against a
+// session id with no meta.json on disk rather than minting an orphan
+// directory for it (the exact lenient-MkdirAll defect class this migration
+// closes — see AppendTranscriptStrict's doc comment). A bare, never-created
+// id string here would make every append silently fail (WARN-logged, not
+// propagated), leaving the transcript empty and this test's assertion
+// unfalsifiable-false — so a real session must be minted first.
 func newRateLimitTranscript(t *testing.T, ts *turnState) (*session.UnifiedStore, string) {
 	t.Helper()
 	baseDir := t.TempDir()
 	store, err := session.NewUnifiedStore(baseDir)
 	require.NoError(t, err)
+	meta, err := store.NewSession(session.SessionTypeChat, "test", ts.agentID)
+	require.NoError(t, err)
 	ts.transcriptStore = store
-	ts.transcriptSessionID = "test-rate-limit-session"
+	ts.transcriptSessionID = meta.ID
 	return store, ts.transcriptSessionID
 }

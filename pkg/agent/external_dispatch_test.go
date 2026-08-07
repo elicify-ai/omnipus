@@ -865,9 +865,19 @@ func TestExternalDispatch_SanitizesRunnerError(t *testing.T) {
 
 	// Wire a real UnifiedStore so appendIntermediateAssistantTranscript
 	// actually persists the sanitized message — we read it back below.
+	// ADR-057 U2: both appendIntermediateAssistantTranscript and
+	// appendErrorTranscript write through AppendTranscriptStrict, which
+	// refuses (WARN-logged, not propagated) a write against a session id
+	// with no meta.json on disk rather than minting an orphan directory —
+	// see AppendTranscriptStrict's doc comment. A bare, never-created id
+	// string here would make every append silently fail, leaving the
+	// transcript empty and this test's assertions unfalsifiable-false — so
+	// a real session must be minted first.
 	store, err := session.NewUnifiedStore(t.TempDir() + "/sessions")
 	require.NoError(t, err)
-	const sessionID = "session_ext_sanitize_test"
+	meta, err := store.NewSession(session.SessionTypeChat, "test", ts.agentID)
+	require.NoError(t, err)
+	sessionID := meta.ID
 	ts.transcriptStore = store
 	ts.transcriptSessionID = sessionID
 

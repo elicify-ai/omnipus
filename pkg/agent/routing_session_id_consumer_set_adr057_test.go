@@ -46,16 +46,33 @@
 // generative spirit ("prove the search is live" applies as much to a count
 // that looks settled in prose as to a zero-assertion).
 //
+// Post-merge addition (2026-08, commit 7f4eab0b): RequestCancel's descendant-
+// cancellation cascade gained a fallback, turn.go's claimAnyTurnForSession
+// (:819), for the case where the single hook GetActiveTurnHookForSession
+// resolved could not be claimed (already fired from an earlier, unrelated
+// cancel) while a different, live, never-canceled descendant still shares
+// the session — see claimAnyTurnForSession's own doc comment. That fallback
+// predicate was originally written pre-identity-split matching
+// transcriptSessionID; rebased in the same commit onto routingSessionID
+// (post-D1 a delegated child's transcriptSessionID is its own id, so the old
+// match could never find the live background/Critical delegate this
+// fallback exists for) — "the same rebase every other role-B cancel
+// predicate received," per that function's comment. This is a NINTH role-B
+// predicate, contributing ONE read (a single SelectorExpr at :819), making
+// this an intentional, reviewed addition to the FR-014 reader set rather
+// than a violation of it.
+//
 // The four buckets that partition the closed set, each verified by file:line
 // below (u19ExpectedRoutingSessionIDReads is the single source of truth a
 // reviewer can diff against a future re-derivation):
 //
-//   - role-B predicates (8): steering.go's 4 post-W13-collapse predicates
+//   - role-B predicates (9): steering.go's 4 post-W13-collapse predicates
 //     (collectDescendantTurnIDs, resolveInterruptAnchors,
 //     sessionTurnsStillAlive, hasLiveCriticalDelegate — one read each) +
-//     turn.go's 3 predicates (GetActiveTurnHookForSession — 1 read;
+//     turn.go's 4 predicates (GetActiveTurnHookForSession — 1 read;
 //     resolveSessionIDByChannelChat — 2 reads; getActiveRootTurnStateForSession
-//     — 1 read).
+//     — 1 read; claimAnyTurnForSession — 1 read, added 2026-08 per commit
+//     7f4eab0b, see above).
 //   - pre-arm keys (3): cancel_prearm.go's 2 direct reads + subturn.go's 1
 //     (pendingSpawnKeysForThisCall) — FR-016's "three reads across five
 //     sites" (the other two sites are transitive: a parameter and a call
@@ -86,7 +103,7 @@
 //     a judgment call, mirroring how U11 recorded system_overload's
 //     "COULD NOT DETERMINE" rather than silently guessing.
 //
-// K = 8 + 3 + 4 + 1 = 16.
+// K = 9 + 3 + 4 + 1 = 17.
 package agent
 
 import (
@@ -223,6 +240,15 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 		switch r.funcName {
 		case "GetActiveTurnHookForSession", "resolveSessionIDByChannelChat", "getActiveRootTurnStateForSession":
 			return u19BucketRoleB
+		case "claimAnyTurnForSession":
+			// Added 2026-08 (commit 7f4eab0b): RequestCancel's descendant-
+			// cancel fallback, rebased from transcriptSessionID onto
+			// routingSessionID — the same role-B cancel-reachability
+			// predicate class as the other three turn.go entries above. See
+			// the file header's "Post-merge addition" note and
+			// claimAnyTurnForSession's own doc comment (turn.go:~776) for
+			// the full justification.
+			return u19BucketRoleB
 		}
 	case "cancel_prearm.go":
 		// FR-016's two direct citations both live in the same pre-arm
@@ -257,13 +283,20 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 				// so it does not additionally move this one. Still the same
 				// single site (pendingSpawnKeysForThisCall := pendingSpawnKeys(...)).
 				return u19BucketPreArm
-			case 1174, 1222:
+			case 1174, 1222, 1270:
 				// Cancel-gate fix: shifted 1174 -> 1222 (+48 total — the
 				// +17 ErrSessionCancelling declaration plus the ~31-line
 				// gate check block, both ahead of this site). Still the same
 				// single site (childTS.routingSessionID = parentTS.routingSessionID).
+				//
+				// Post-merge CI-fix pass (2026-08-07): shifted again, 1222
+				// -> 1270 (+48), re-verified directly against the current
+				// tree while closing out release/v0.1.1's remaining CI
+				// failures — same +48 magnitude as the WS-stamping sites'
+				// latest shift below, consistent with new lines landing
+				// ahead of all three sites together in this same fix pass.
 				return u19BucketInheritance
-			case 1327, 1375, 1612, 1630, 1678:
+			case 1327, 1375, 1423, 1612, 1630, 1678, 1726:
 				// C2/M4 (2026-08-04): the SubTurnEndPayload.SessionID site
 				// shifted from line 1573 to 1612 — pkg/agent/subturn.go grew
 				// ~39 lines earlier in spawnSubTurn (the lastTurnStatus
@@ -290,6 +323,13 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 				// SAME two single sites — no new consumer was added, only
 				// relocated. Every historical value is kept (not replaced)
 				// as a record of the shift history.
+				//
+				// Post-merge CI-fix pass (2026-08-07): both sites shifted
+				// again by the same +48 as the inheritance copy above —
+				// SubTurnSpawnPayload.SessionID 1375 -> 1423, SubTurnEndPayload.
+				// SessionID 1678 -> 1726 — re-verified directly against the
+				// current tree while closing out release/v0.1.1's remaining
+				// CI failures. Still the SAME two single sites.
 				return u19BucketWSStamping
 			}
 		}
@@ -379,10 +419,11 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 
 	// --- Per-bucket exact counts, each independently a positive lower bound
 	// (and here also an upper bound, since the set is closed). ---
-	if got := counts[u19BucketRoleB]; got != 8 {
-		t.Errorf("role-B predicate reads = %d, want 8 (steering.go's 4 post-W13 predicates + "+
-			"turn.go's 3 predicates, one of which — resolveSessionIDByChannelChat — contains 2 reads, "+
-			"not 1; see this file's header comment for the verified discrepancy against the spec's "+
+	if got := counts[u19BucketRoleB]; got != 9 {
+		t.Errorf("role-B predicate reads = %d, want 9 (steering.go's 4 post-W13 predicates + "+
+			"turn.go's 4 predicates, one of which — resolveSessionIDByChannelChat — contains 2 reads, "+
+			"not 1; plus claimAnyTurnForSession, added 2026-08 per commit 7f4eab0b's cancel-fallback "+
+			"rebase; see this file's header comment for the verified discrepancy against the spec's "+
 			"pre-verification worked total of 7)", got)
 	}
 	if got := counts[u19BucketPreArm]; got != 3 {
@@ -397,7 +438,7 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"childTS.routingSessionID = parentTS.routingSessionID)", got)
 	}
 
-	const wantTotal = 16
+	const wantTotal = 17
 	if len(all) != wantTotal {
 		t.Fatalf("total routingSessionID reads = %d, want exactly %d (the closed consumer set) — "+
 			"either a new read was added outside the four named buckets, or one of the buckets "+

@@ -986,16 +986,20 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 								"workspace_id", id, "agent_id", agentID, "error", perr)
 						}
 					}
-					if st := a.agentLoop.GetAgentStore(agentID); st != nil {
-						if delErr := st.DeleteSession(stored.Heartbeat.SessionID); delErr != nil {
-							slog.Warn("rest: workspace PUT: disable-path session release failed",
-								"workspace_id", id, "agent_id", agentID,
-								"session_id", stored.Heartbeat.SessionID, "error", delErr)
-						} else {
-							slog.Info("rest: workspace PUT: released heartbeat session on disable",
-								"workspace_id", id, "agent_id", agentID,
-								"session_id", stored.Heartbeat.SessionID)
-						}
+					// Shared-store-first, per-agent-fallback delete — mirrors
+					// eager creation above and rollbackCreatedSessions below.
+					// A direct GetAgentStore(agentID).DeleteSession() here
+					// misses sessions minted in the shared store (the
+					// eager-creation default per the FIX comment above),
+					// leaving the standing session orphaned on disable.
+					if delErr := deleteHeartbeatSessionAnyStore(a.agentLoop, agentID, stored.Heartbeat.SessionID); delErr != nil {
+						slog.Warn("rest: workspace PUT: disable-path session release failed",
+							"workspace_id", id, "agent_id", agentID,
+							"session_id", stored.Heartbeat.SessionID, "error", delErr)
+					} else {
+						slog.Info("rest: workspace PUT: released heartbeat session on disable",
+							"workspace_id", id, "agent_id", agentID,
+							"session_id", stored.Heartbeat.SessionID)
 					}
 					// Clear the stored session_id from the incoming config so the
 					// persisted entry carries no stale session reference.
