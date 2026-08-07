@@ -3,8 +3,6 @@ import { motion } from 'framer-motion'
 import {
   ChatCircle,
   SquaresFour,
-  ListBullets,
-  Graph,
   CalendarBlank,
   UsersThree,
   Files,
@@ -20,14 +18,18 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 
-// The workspace container surface: 7 view tabs (+ the workspace-name →
+// The workspace container surface: 4 view tabs (+ the workspace-name →
 // settings item). Each tab is a deep-linkable sub-route under
 // /workspaces/$workspaceId. Chat is the default landing tab.
+//
+// ADR-051 D1 — "Tasks" screen: Board/List/Graph collapse into ONE screen
+// (WorkspaceTasksTab, rendered under the `board` route segment — kept
+// unchanged to avoid breaking deep links) with an in-screen view switcher.
+// The `list` and `graph` top-level tabs are retired; their route files now
+// redirect to `board` (see workspaces.$workspaceId.list.tsx / .graph.tsx).
 export const WORKSPACE_TABS = [
   { segment: 'chat', label: 'Chat', Icon: ChatCircle },
-  { segment: 'board', label: 'Board', Icon: SquaresFour },
-  { segment: 'list', label: 'List', Icon: ListBullets },
-  { segment: 'graph', label: 'Graph', Icon: Graph },
+  { segment: 'board', label: 'Tasks', Icon: SquaresFour },
   { segment: 'calendar', label: 'Calendar', Icon: CalendarBlank },
   // Renamed Media -> Library (library-spec.md supersedes the old workspace
   // Media tab / UUID-blob manifest surface entirely). The segment/route
@@ -65,7 +67,7 @@ export interface WorkspaceTab {
   Icon: Icon
 }
 
-/** Single source for every segment's display label — the six WORKSPACE_TABS
+/** Single source for every segment's display label — the four WORKSPACE_TABS
  * labels plus 'settings', which deliberately has no WORKSPACE_TABS entry. All
  * three usages of this map are inside the ONE compact dropdown (the
  * view-switcher trigger button + its settings menu entry, both below @6xl) —
@@ -100,7 +102,7 @@ interface WorkspaceTabBarProps {
  * that slides between tabs with a spring transition.
  *
  * Responsive strategy (container-query, relative to the @container top-bar):
- *   ≥ 72rem (1152px): full strip — 7 view tabs (+ the workspace-name →
+ *   ≥ 72rem (1152px): full strip — 4 view tabs (+ the workspace-name →
  *     settings item) (hidden @6xl:flex)
  *   < 72rem (1152px): single "Active ▾" view-switcher dropdown (flex
  *     @6xl:hidden) — also carries a settings entry, since narrow viewports
@@ -126,7 +128,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
           NO overflow-x-auto: a scrollable tablist let mouse-wheel/touch
           gestures scroll the menu itself up/down (overflow containers clip +
           scroll BOTH axes) — chrome must never move. The strip's content is
-          bounded (7 view tabs + the workspace-name → settings item, name
+          bounded (4 view tabs + the workspace-name → settings item, name
           truncated) so overflow can't occur. ─────── */}
       <div
         role="tablist"

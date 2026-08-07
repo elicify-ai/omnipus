@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package gateway — Spec-1 BE-fixes tests for issues #351 and #352.
 //
 // #351 (FR-104): HandleProviders GET reports Connected ONLY when the provider's

@@ -12,6 +12,7 @@ import { render, screen } from '@testing-library/react'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSessionStore } from '@/store/session'
+import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import * as api from '@/lib/api'
@@ -74,7 +75,17 @@ function renderPicker() {
 beforeEach(() => {
   vi.clearAllMocks()
   act(() => {
-    useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: 'sess_1' })
+    useSessionStore.setState({
+      activeAgentId: 'mia',
+      activeSessionId: 'sess_1',
+      activeAgentType: null,
+      // Clicking an agent now records an EXPLICIT selection (AGENT PRECEDENCE
+      // RULE, src/store/session.ts) — reset it, or one test's pick would
+      // change how the next test's session-derived writes resolve.
+      agentSelectionSource: 'auto',
+      agentSelectionWorkspaceId: null,
+    })
+    useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
     useUiStore.setState({ agentSelectorOpen: false })
     useWorkspacesStore.setState({ activeWorkspaceId: null })
   })
@@ -151,67 +162,108 @@ describe('AgentPicker — agentSelectorOpen controlled DropdownMenu', () => {
   })
 })
 
-// SC-005/US5.2: agent switch KEEPS the current session (setActiveSession called
-// with the same activeSessionId + new agentId — no new session is created).
-//
-// This test drives the REAL handleAgentSelect function by opening the Radix
-// DropdownMenu and clicking the Jim item. Radix portals to document.body in
-// jsdom (portal content IS rendered into the live DOM), so the Jim item is
-// reachable via userEvent.click on the trigger followed by a click on the item.
-//
-// The test MUST fail if handleAgentSelect is changed to pass null as the
-// session id (the new-session regression it guards against).
-describe('AgentPicker — handleAgentSelect keeps current session (SC-005/US5.2)', () => {
-  it('setActiveSession is called with the current activeSessionId when switching agents', async () => {
-    const setActiveSessionSpy = vi.fn()
-    const origSetActiveSession = useSessionStore.getState().setActiveSession
+// Drives the REAL handleAgentSelect by opening the Radix DropdownMenu and
+// clicking the Jim item. Radix portals to document.body in jsdom (portal
+// content IS rendered into the live DOM), so the item is reachable directly.
+async function pickJim() {
+  renderPicker()
+  await vi.waitFor(() => screen.getAllByText('Mia').length > 0)
+  // <DropdownMenu open={agentSelectorOpen}> is controlled by the ui store, so
+  // setting the flag renders the portal content into document.body.
+  await act(async () => {
+    useUiStore.getState().setAgentSelectorOpen(true)
+  })
+  const jimItem = await vi.waitFor(() => {
+    const items = screen.getAllByText('Jim')
+    if (items.length === 0) throw new Error('Jim not in DOM yet')
+    return items[0]
+  })
+  await act(async () => {
+    jimItem.click()
+  })
+}
 
-    // Seed the session store with a known session and agent BEFORE injecting spy
+/** What the picker actually says it is pointed at, read off the rendered trigger. */
+function pickerLabel(): string | null {
+  return screen.getByTestId('agent-picker-trigger').getAttribute('aria-label')
+}
+
+// SC-005/US5.2: an agent switch KEEPS the current session — no new session is
+// created — and the picker moves to the agent that was clicked.
+//
+// Asserted as OUTCOMES on the store + rendered trigger rather than by spying
+// on a specific store action: the previous version of this test asserted
+// `setActiveSession(sessionId, 'jim', 'core')` was called, which locked in the
+// very mechanism (routing an explicit user choice through the same
+// last-write-wins setter every background session sync uses) that made the
+// agent silently revertible. See the AGENT PRECEDENCE RULE in
+// src/store/session.ts.
+describe('AgentPicker — handleAgentSelect keeps current session (SC-005/US5.2)', () => {
+  it('switching agents keeps the current session and points the picker at the new agent', async () => {
     act(() => {
-      useSessionStore.setState({
-        activeAgentId: 'mia',
-        activeSessionId: 'sess_keep_me',
-        setActiveSession: setActiveSessionSpy,
+      useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: 'sess_keep_me' })
+    })
+
+    await pickJim()
+
+    // No new session — the SC-005 invariant.
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_keep_me')
+    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    expect(useSessionStore.getState().activeAgentType).toBe('core')
+    expect(pickerLabel()).toBe('Select agent (current: Jim)')
+  })
+})
+
+// The reverting-picker bug: a user picks Jim, a session attach lands moments
+// later carrying the session's own agent (Mia), and the picker flips back on
+// its own — with the user's next message going to Mia. Precedence rule 2 (an
+// explicit selection outranks a session's remembered agent) makes the pick
+// stick; this test asserts it on the RENDERED picker, which is where the user
+// saw it revert.
+describe('AgentPicker — an explicit pick survives a later session attach', () => {
+  it('a session attach carrying a different agent does not move the picker off the picked agent', async () => {
+    const mockSend = vi.fn().mockReturnValue(true)
+    act(() => {
+      useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: null })
+      useConnectionStore.setState({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        isConnected: true,
+      })
+    })
+
+    await pickJim()
+    expect(pickerLabel()).toBe('Select agent (current: Jim)')
+
+    // The SPA syncs to a backend-created session whose agent is Mia.
+    await act(async () => {
+      useSessionStore.getState().attachToSession('sess_backend_created', 'chat', undefined, 'mia')
+    })
+
+    // The picker still names Jim — and the attach itself still happened.
+    expect(pickerLabel()).toBe('Select agent (current: Jim)')
+    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_backend_created')
+  })
+
+  it('without a pick, the same attach DOES move the picker to the session\'s agent', async () => {
+    const mockSend = vi.fn().mockReturnValue(true)
+    act(() => {
+      useSessionStore.setState({ activeAgentId: 'jim', activeSessionId: null })
+      useConnectionStore.setState({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        isConnected: true,
       })
     })
 
     renderPicker()
+    await vi.waitFor(() => expect(pickerLabel()).toBe('Select agent (current: Jim)'))
 
-    // Wait for both Mia items (trigger label + Jim in content after open)
-    await vi.waitFor(() => screen.getAllByText('Mia').length > 0)
-
-    // Open the Radix DropdownMenu by setting the store flag — the component's
-    // <DropdownMenu open={agentSelectorOpen}> is controlled by this flag, so
-    // setting it true causes Radix to render the portal content into document.body.
     await act(async () => {
-      useUiStore.getState().setAgentSelectorOpen(true)
+      useSessionStore.getState().attachToSession('sess_backend_created', 'chat', undefined, 'mia')
     })
 
-    // Wait for Jim to appear in the portal content rendered into document.body.
-    // Radix renders DropdownMenuContent into document.body even in jsdom.
-    const jimItem = await vi.waitFor(() => {
-      // There should be exactly one "Jim" element — inside the dropdown content.
-      const items = screen.getAllByText('Jim')
-      if (items.length === 0) throw new Error('Jim not in DOM yet')
-      return items[0]
-    })
-
-    // Click the Jim DropdownMenuItem — this fires handleAgentSelect('jim')
-    // which calls setActiveSession(activeSessionId, 'jim', selected.type)
-    await act(async () => {
-      jimItem.click()
-    })
-
-    // The spy MUST have been called with the PRE-EXISTING activeSessionId
-    // ('sess_keep_me') not null — that is the SC-005 invariant.
-    expect(setActiveSessionSpy).toHaveBeenCalledTimes(1)
-    expect(setActiveSessionSpy).toHaveBeenCalledWith('sess_keep_me', 'jim', 'core')
-    // activeSessionId MUST NOT be null — verify arg 0 equals original session
-    expect(setActiveSessionSpy.mock.calls[0][0]).toBe('sess_keep_me')
-
-    // Restore original store function
-    act(() => {
-      useSessionStore.setState({ setActiveSession: origSetActiveSession })
-    })
+    expect(pickerLabel()).toBe('Select agent (current: Mia)')
   })
 })

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import React from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { queryClient } from '@/lib/queryClient'
 
 // Wave 5b spec tests — OnboardingWizard frontend tests
 // Traces to: wave5b-system-agent-spec.md — Onboarding Flow BDD scenarios
@@ -956,6 +957,48 @@ describe('OnboardingWizard — finish', () => {
       expect(screen.getByText(/meet your assistant|Mia — Assistant/i)).toBeInTheDocument()
     })
     expect(screen.getByRole('button', { name: /start chatting/i })).toBeInTheDocument()
+  })
+
+  // Slash-palette silent-empty bugfix: completeOnboardingTransaction is the
+  // FIRST point the omnipus-session cookie exists on a fresh install. The
+  // ['commands'] query (useSlashMenu.ts / ChatScreen.tsx) is behind withAuth
+  // and may have already 401'd — going permanently errored — from a
+  // composer that mounted before this cookie was set. Nothing else ever
+  // refetches it, so this transaction succeeding is the one point we KNOW
+  // the session just became valid.
+  it('invalidates the commands cache after completeOnboardingTransaction succeeds', async () => {
+    vi.mocked(configureProvider).mockResolvedValue({} as never)
+    vi.mocked(probeProvider).mockResolvedValue({ success: true })
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    await goToCompleteReady()
+    fireEvent.click(screen.getByRole('button', { name: /complete setup/i }))
+
+    await waitFor(() => {
+      expect(completeOnboardingTransaction).toHaveBeenCalledOnce()
+    })
+
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['commands'] }),
+    )
+  })
+
+  it('does NOT invalidate the commands cache when completeOnboardingTransaction fails', async () => {
+    vi.mocked(configureProvider).mockResolvedValue({} as never)
+    vi.mocked(probeProvider).mockResolvedValue({ success: true })
+    vi.mocked(completeOnboardingTransaction).mockRejectedValueOnce(new Error('server exploded'))
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    await goToCompleteReady()
+    fireEvent.click(screen.getByRole('button', { name: /complete setup/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('onboarding-error')).toBeInTheDocument()
+    })
+
+    expect(invalidateSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['commands'] }),
+    )
   })
 
   it('Start chatting on Meet your Assistant navigates to root', async () => {

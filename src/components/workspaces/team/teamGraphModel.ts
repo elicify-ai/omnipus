@@ -1,6 +1,7 @@
 import dagre from '@dagrejs/dagre'
 import type { Agent, WorkspaceDelegationEdge } from '@/lib/api'
 import { isWorker } from '@/lib/api'
+import { isSystemType } from '@/lib/agentKind'
 
 // ── Workspace Team delegation-graph model (M5 / Sprint 4 Team tab) ───────────
 //
@@ -147,6 +148,20 @@ export interface TeamNodeModel {
   isWorker: boolean
   /** True when no backing agent exists for this id (referenced but deleted). */
   isGhost: boolean
+  /**
+   * True for a System agent (the Judge, ADR-049 D3) rendered as an IMPLICIT
+   * team member. Backend model (`pkg/workspace/find_for_agent.go`'s
+   * `isImplicitMember`): every System agent is an implicit member of EVERY
+   * workspace — it can never be added to or removed from `core_team` (the
+   * gateway 400s that attempt), so membership is resolved implicitly
+   * everywhere. RENDER-ONLY: an implicit node is synthesised fresh from the
+   * global agents list on every `buildTeamGraphModel` call (see
+   * `implicitSystemNodes`) — it is never folded into `TeamEditState.members`
+   * and therefore structurally cannot leak into `buildSaveEdges` /
+   * `updateWorkspace`'s `core_team` payload (both only ever read
+   * `TeamEditState.members`/`.edges`).
+   */
+  isImplicit: boolean
   position: { x: number; y: number }
 }
 
@@ -259,9 +274,43 @@ export function layoutTeamGraph(
 }
 
 /**
+ * System agents (the Judge, ADR-049 D3) rendered as implicit, non-removable
+ * team-graph nodes. See `TeamNodeModel.isImplicit` for the backend model and
+ * the render-only/never-persisted guarantee. `excludeIds` is the real node
+ * set already computed from `state` — a System agent can never legitimately
+ * land there (AddAgentPicker excludes `type: 'system'` from the add flow,
+ * and the backend rejects a `core_team` write containing one), but the guard
+ * keeps this function correct even against a hand-built/legacy edit state.
+ */
+function implicitSystemNodes(
+  agents: Agent[],
+  excludeIds: ReadonlySet<string>,
+): TeamNodeModel[] {
+  return agents
+    .filter((a) => isSystemType(a.type) && !excludeIds.has(a.id))
+    .map((a) => ({
+      id: a.id,
+      name: a.name,
+      type: 'system' as NonNullable<Agent['type']>,
+      role: roleLabel(a),
+      color: a.color,
+      icon: a.icon,
+      isDefault: false,
+      isWorker: false,
+      isGhost: false,
+      isImplicit: true,
+      position: { x: 0, y: 0 },
+    }))
+}
+
+/**
  * Build the full render model (nodes + edges + layout) from the edit state and
  * the agents cache. Members with no backing agent become ghost nodes so a
- * dangling edge stays visible (and deletable) instead of being dropped.
+ * dangling edge stays visible (and deletable) instead of being dropped. Every
+ * System agent is additionally appended as an implicit, render-only node (see
+ * `implicitSystemNodes`) so the Judge is never invisible — it is never part of
+ * `state`, so it is included in `nodes` for display but plays no part in the
+ * edge/save model above.
  */
 export function buildTeamGraphModel(
   state: TeamEditState,
@@ -289,6 +338,7 @@ export function buildTeamGraphModel(
         isDefault: false,
         isWorker: false,
         isGhost: true,
+        isImplicit: false,
         position: { x: 0, y: 0 },
       }
     }
@@ -302,9 +352,12 @@ export function buildTeamGraphModel(
       isDefault: a.default === true,
       isWorker: isWorker(a),
       isGhost: false,
+      isImplicit: false,
       position: { x: 0, y: 0 },
     }
   })
+
+  const allNodes: TeamNodeModel[] = [...baseNodes, ...implicitSystemNodes(agents, nodeIds)]
 
   const edges: TeamEdgeModel[] = state.edges.map((e) => ({
     id: teamEdgeId(e.from, e.to),
@@ -315,8 +368,8 @@ export function buildTeamGraphModel(
     unknownEndpoint: !byId.has(e.from) || !byId.has(e.to),
   }))
 
-  const positions = layoutTeamGraph(baseNodes, edges)
-  const nodes = baseNodes
+  const positions = layoutTeamGraph(allNodes, edges)
+  const nodes = allNodes
     .map((n) => ({ ...n, position: positions[n.id] ?? n.position }))
     // Tab order must follow the VISUAL (top-down) layout, not the member/edge
     // fetch order — otherwise Tab jumps around the canvas unpredictably. Sort
@@ -328,12 +381,13 @@ export function buildTeamGraphModel(
 
 // ── Mutations (immutable) ────────────────────────────────────────────────────
 
-export type ConnectionRejection = 'self-edge' | 'duplicate' | 'not-member'
+export type ConnectionRejection = 'self-edge' | 'duplicate' | 'not-member' | 'system-target'
 
 /**
  * Validate a candidate edge from → to against the current edit state.
  *   - no self-edges (A → A)
  *   - both endpoints must be team members
+ *   - target must not be a System agent (ADR-049 D3/SD-C17)
  *   - no duplicate (from, to) pair
  *
  * Delegation is BOUNDED, not tier-gated: the Sprint-3 backend unlocked onward
@@ -344,15 +398,25 @@ export type ConnectionRejection = 'self-edge' | 'duplicate' | 'not-member'
  * NOT block a worker source — doing so would make the FE unable to draw the very
  * Planner→Researcher edge the backend seeds. The trailing `workerIds` param is
  * kept for signature stability with the call sites but no longer gates the edge.
+ *
+ * `isSystemTarget` (SD-C17, defense-in-depth): a System agent (the Judge)
+ * cannot become a team member through the supported flow at all
+ * (`AddAgentPicker.tsx` already excludes `type: 'system'`), so this branch is
+ * normally unreachable — but `validateConnection` had no type gate of its
+ * own, so a hand-constructed/legacy edge targeting a System agent would have
+ * silently validated. Optional (defaults to `false`) so existing callers that
+ * don't yet resolve a target's type keep their current behavior.
  */
 export function validateConnection(
   from: string,
   to: string,
   state: TeamEditState,
   _workerIds?: ReadonlySet<string>,
+  isSystemTarget?: boolean,
 ): ConnectionRejection | null {
   if (from === to) return 'self-edge'
   if (!state.members.includes(from) || !state.members.includes(to)) return 'not-member'
+  if (isSystemTarget) return 'system-target'
   if (state.edges.some((e) => e.from === from && e.to === to)) return 'duplicate'
   return null
 }
@@ -362,6 +426,7 @@ export const REJECTION_MESSAGE: Record<ConnectionRejection, string> = {
   'self-edge': 'An agent cannot delegate to itself.',
   duplicate: 'That delegation edge already exists.',
   'not-member': 'Both agents must be on the team first.',
+  'system-target': 'System agents cannot be a delegation target.',
 }
 
 /**
@@ -388,10 +453,11 @@ export function rejectionMessageForFailedConnection(
   isValid: boolean | null,
   state: TeamEditState,
   workerIds?: ReadonlySet<string>,
+  isSystemTarget?: boolean,
 ): string | null {
   if (isValid !== false) return null
   if (!fromId || !toId) return null
-  const reason = validateConnection(fromId, toId, state, workerIds)
+  const reason = validateConnection(fromId, toId, state, workerIds, isSystemTarget)
   if (reason === null) return null
   return REJECTION_MESSAGE[reason] ?? 'Connection not allowed.'
 }

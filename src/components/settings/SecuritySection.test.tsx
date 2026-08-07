@@ -86,7 +86,6 @@ const MINIMAL_CONFIG = {
   security: {
     policy_mode: 'deny' as const,
     exec_approval: 'ask' as const,
-    daily_cost_cap: 10,
     exec_timeout_seconds: 0,
     max_background_seconds: 0,
     enable_deny_patterns: false,
@@ -880,24 +879,40 @@ describe('SecuritySection — credential vault re-auth gate (B4)', () => {
 
 // D3 (UAT v0.1.1 defects) — hydration must never trigger a spurious PUT.
 //
-// Root cause: `dailyCostCap` (and 7 sibling fields) start at hardcoded
+// Root cause: the security fields (execTimeoutSecs and siblings) start at hardcoded
 // useState defaults (''). Before this fix, useAutoSave's `disabled` option
 // here was `!config` — but `config` turns truthy in the SAME commit the
 // hydration effect is SCHEDULED, one render before the effect's own
 // setState calls actually land. So `disabled` flipped false one render too
 // early, useAutoSave captured the hardcoded '' default as its baseline,
-// and the LATER commit where the real persisted value hydrates (10, per
-// MINIMAL_CONFIG.security.daily_cost_cap) looked like a genuine edit —
+// and the LATER commit where the real persisted value hydrates (45, per
+// this test's exec_timeout_seconds override) looked like a genuine edit —
+// (probe retargeted from daily_cost_cap after ADR-053 D12 retired it) —
 // firing a spurious `updateConfig` that echoes the fetched value straight
 // back. This does NOT cover `GlobalToolPoliciesSection`'s own separate
 // useAutoSave (already gated correctly via `isDraftReady` before this fix
 // — confirmed safe, untouched).
 describe('SecuritySection — D3: hydration must not trigger a spurious PUT', () => {
-  it('loading a daily cost cap that differs from the hardcoded "" default never calls updateConfig, even after the debounce window elapses (REVERT-PROOF: fails without the securityHydrated gate)', async () => {
-    renderSection() // beforeEach already stubs fetchConfig with MINIMAL_CONFIG (daily_cost_cap: 10)
+  it('loading an exec timeout that differs from the hardcoded "" default never calls updateConfig, even after the debounce window elapses (REVERT-PROOF: fails without the securityHydrated gate)', async () => {
+    // Local override: a distinctive hydrating value on a SURVIVING field
+    // (daily_cost_cap was retired by ADR-053 D12 — the component no longer
+    // renders it, so it can no longer serve as the hydration probe).
+    vi.mocked(fetchConfig).mockResolvedValue({
+      ...MINIMAL_CONFIG,
+      security: { ...MINIMAL_CONFIG.security, exec_timeout_seconds: 45 },
+    } as never)
+    renderSection()
+
+    // Wait for the component to settle (config fetched, disclosure rendered).
+    await waitFor(() => {
+      expect(screen.getByTestId('security-health-header')).toBeInTheDocument()
+    })
+    // The numeric security fields render inside the collapsed
+    // AdvancedDisclosure — expand it so the hydrated value is in the DOM.
+    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue('10')).toBeInTheDocument()
+      expect(screen.getByDisplayValue('45')).toBeInTheDocument()
     })
 
     // PASSIVE idle wait — no interaction at all — comfortably past the

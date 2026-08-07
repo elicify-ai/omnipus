@@ -83,13 +83,6 @@ type AgentInstance struct {
 	// construction; never mutated after creation.
 	AgentType string
 
-	// IsRoutingDefault records whether this agent was marked Default=true in
-	// its AgentConfig at construction time. Used by GetDefaultAgent to make the
-	// per-agent routing-default flag the single canonical source of truth (F3),
-	// so SPA WebSocket chat and channel routing both converge on the same agent.
-	// Read-only after construction.
-	IsRoutingDefault bool
-
 	// toolPolicy holds the per-agent tool policy snapshot used by
 	// FilterToolsByPolicy at LLM-call assembly time (FR-003, FR-020, FR-041).
 	// Populated at construction from config.AgentConfig.Tools and the global
@@ -197,6 +190,10 @@ func NewAgentInstance(
 		// agent declares no allowlist → unrestricted; a non-nil list restricts
 		// resolution and progressive disclosure to exactly those skills.
 		contextBuilder.WithSkillAllowlist(agentCfg.Skills)
+		// ADR-052 FR-039: per-agent memory gate (nil = enabled). The Judge
+		// verifier runs memoryless for impartial, reproducible verdicts —
+		// its seed leaves MemoryEnabled=false; every other agent defaults on.
+		contextBuilder.WithMemoryEnabled(agentCfg.MemoryEnabledEffective())
 	}
 
 	// Memory tools (FR-016, FR-017): register remember, recall_memory, and
@@ -339,11 +336,17 @@ func NewAgentInstance(
 			resolvedAgentType = "custom"
 		}
 	}
-	// A worker is never the routing default — it is not a chat target. Even if a
-	// tampered config marked a worker Default=true, refuse to carry that into the
-	// runtime so GetDefaultAgent can never select it (defense in depth; the
-	// config-load repair and the PUT handler also reject it).
-	isRoutingDefault := agentCfg != nil && agentCfg.Default && !agentCfg.IsWorker()
+	// NOTE (ADR-054 D6.4): this constructor used to also derive an
+	// IsRoutingDefault bool from agentCfg.Default here and store it on the
+	// instance. That field is removed: splitting agents into independent
+	// per-entity files means two concurrent agent writes could each set
+	// Default=true with no shared lock to serialize them (each delta is
+	// individually valid, the composition is not — ADR-054 D6 rule 4). The
+	// single "default agent" pointer now lives exclusively in the settings
+	// singleton (config.Agents.Defaults.DefaultAgentID, already existed) and
+	// is consulted directly by AgentRegistry.GetDefaultAgent /
+	// RouteResolver.resolveDefaultAgentID — see those functions' doc
+	// comments for the current (3-priority) ladder.
 	inst := &AgentInstance{
 		ID:                        agentID,
 		Name:                      agentName,
@@ -370,7 +373,6 @@ func NewAgentInstance(
 		LightProvider:             lightProvider,
 		TimeoutSeconds:            timeoutSeconds,
 		AgentType:                 resolvedAgentType,
-		IsRoutingDefault:          isRoutingDefault,
 	}
 	// Publish the eagerly-built pool. StoreProviderPool uses the atomic
 	// pointer; calling it here (vs. direct field assignment) keeps the
@@ -539,7 +541,6 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 		Candidates:                candidates,
 		TimeoutSeconds:            a.TimeoutSeconds,
 		AgentType:                 a.AgentType,
-		IsRoutingDefault:          a.IsRoutingDefault,
 		Router:                    a.Router,
 		LightCandidates:           a.LightCandidates,
 		LightProvider:             a.LightProvider,

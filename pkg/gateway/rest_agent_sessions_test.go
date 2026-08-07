@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_agent_sessions_test.go — regression tests for listAgentSessions'
 // shared-store merge.
 //

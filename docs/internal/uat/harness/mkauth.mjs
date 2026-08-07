@@ -30,22 +30,39 @@ try {
   const { token } = await lr.json();
   if (!token) throw new Error('login response missing token');
 
-  // 3. Extract CSRF cookie from context state.
-  let csrf = null;
+  // 3. Carry over EVERY cookie login set — not just CSRF.
+  //
+  // WHY THIS MATTERS (2026-07-26): /auth/login sets TWO cookies —
+  //   omnipus-session=... ; HttpOnly   <-- WebSocket auth depends on this
+  //   csrf=...
+  // This function used to keep only `csrf`. The SPA's WS client
+  // (src/lib/ws.ts) authenticates via the omnipus-session cookie the browser
+  // auto-attaches on the upgrade request — post-Wave-1 it deliberately sends
+  // NO {type:'auth'} frame. Server-side, authenticateWS
+  // (pkg/gateway/websocket.go) tries ResolveUserFromCookie FIRST and only
+  // falls through to the legacy frame path when that fails. With the session
+  // cookie dropped, that fallback demanded a frame the SPA will never send, so
+  // the socket was closed and reconnected forever and CHAT WAS DEAD — in the
+  // harness only. A UAT tester reported it as a product S1; it was this.
+  // REST was unaffected (it uses the localStorage bearer token), which is why
+  // only chat looked broken.
   const st = await ctx.storageState();
-  for (const c of st.cookies) {
-    if (c.name === '__Host-csrf' || c.name === 'csrf') { csrf = c.value; break; }
-  }
-
   const url = new URL(baseURL);
   const secure = url.protocol === 'https:';
-  const cookies = csrf
-    ? [{
-        name: secure ? '__Host-csrf' : 'csrf', value: csrf,
-        domain: url.hostname, path: '/', expires: -1,
-        httpOnly: false, secure, sameSite: 'Strict',
-      }]
-    : [];
+  const cookies = st.cookies.map((c) => ({
+    name: c.name,
+    value: c.value,
+    domain: c.domain || url.hostname,
+    path: c.path || '/',
+    expires: -1,
+    httpOnly: c.httpOnly ?? false,
+    secure: c.secure ?? secure,
+    sameSite: c.sameSite || 'Strict',
+  }));
+  const csrf = cookies.find((c) => c.name === '__Host-csrf' || c.name === 'csrf')?.value ?? null;
+  if (!cookies.some((c) => c.name === 'omnipus-session')) {
+    console.warn('WARNING: no omnipus-session cookie captured — WebSocket auth (chat) will fail.');
+  }
 
   const storageState = {
     cookies,

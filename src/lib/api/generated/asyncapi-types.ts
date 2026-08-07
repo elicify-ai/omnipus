@@ -21,6 +21,8 @@ export type WsFrameType =
   | "tool_call_start"
   | "tool_call_result"
   | "subagent_start"
+  | "subagent_message"
+  | "subagent_state"
   | "subagent_end"
   | "task_status_changed"
   | "task_run_status"
@@ -55,7 +57,11 @@ export type WsFrameType =
   | "browser_capture_hello"
   | "browser_capture_offer"
   | "browser_capture_answer"
-  | "browser_capture_control";
+  | "browser_capture_control"
+  | "goal_status"
+  | "loop_status"
+  | "plan_status"
+  | "judge_verdict";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -107,6 +113,7 @@ export interface SessionStartedFrame {
   type: "session_started";
   session_id: string;
   agent_id?: string;
+  producing_session_id?: string;
 }
 
 export interface TokenFrame {
@@ -114,6 +121,7 @@ export interface TokenFrame {
   session_id: string;
   content: string;
   agent_id?: string;
+  producing_session_id?: string;
 }
 
 export interface DoneStats {
@@ -134,6 +142,7 @@ export interface DoneFrame {
   type: "done";
   session_id: string;
   stats?: DoneStats;
+  producing_session_id?: string;
 }
 
 export interface LLMError {
@@ -168,6 +177,7 @@ export interface ToolCallStartFrame {
   };
   parent_call_id?: string;
   agent_id?: string;
+  producing_session_id?: string;
 }
 
 export interface TruncatedResult {
@@ -206,6 +216,7 @@ export interface ToolCallResultFrame {
   error?: string;
   parent_call_id?: string;
   agent_id?: string;
+  producing_session_id?: string;
 }
 
 export interface SubagentStartFrame {
@@ -215,27 +226,56 @@ export interface SubagentStartFrame {
   parent_call_id: string;
   task_label: string;
   agent_id?: string;
+  producing_session_id?: string;
 }
 
 export interface SubagentEndFrame {
   type: "subagent_end";
   session_id: string;
   span_id: string;
-  status: "success" | "error" | "cancelled" | "interrupted" | "timeout";
+  status: "success" | "error" | "cancelled" | "interrupted" | "timeout" | "parked";
   duration_ms?: number;
   final_result?: string;
   reason?: "parent_timeout" | "parent_cancelled" | "parent_done_early" | "unknown";
   agent_id?: string;
   parent_call_id?: string;
   message?: string;
+  producing_session_id?: string;
+}
+
+export interface SubagentMessageFrame {
+  type: "subagent_message";
+  session_id: string;
+  span_id: string;
+  message_id: string;
+  kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond";
+  text?: string;
+  pct?: number;
+  correlation_id?: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  created_at: string;
+}
+
+export interface SubagentStateFrame {
+  type: "subagent_state";
+  session_id: string;
+  span_id: string;
+  state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+  steering_receipt?: {
+    correlation_id: string;
+    applied_at: string;
+  };
+  created_at: string;
 }
 
 export interface TaskStatusChangedFrame {
   type: "task_status_changed";
   session_id: string;
   task_id: string;
-  status: "inbox" | "next" | "planning" | "in_progress" | "blocked" | "done" | "failed";
+  status: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
   agent_id?: string;
+  producing_session_id?: string;
 }
 
 export interface TaskRunStatusFrame {
@@ -294,6 +334,7 @@ export interface MediaFrame {
   type: "media";
   session_id: string;
   parts: Array<MediaPart>;
+  producing_session_id?: string;
 }
 
 export interface AgentSwitchedFrame {
@@ -301,6 +342,7 @@ export interface AgentSwitchedFrame {
   session_id: string;
   agent_id?: string;
   message?: string;
+  producing_session_id?: string;
 }
 
 export interface ToolApprovalRequiredFrame {
@@ -315,6 +357,7 @@ export interface ToolApprovalRequiredFrame {
   session_id: string;
   turn_id: string;
   expires_in_ms: number;
+  producing_session_id?: string;
 }
 
 export interface SessionStatePendingApproval {
@@ -336,6 +379,7 @@ export interface SystemOverloadFrame {
   type: "system_overload";
   session_id: string;
   message?: string;
+  producing_session_id?: string;
 }
 
 export interface ReplayWarningStats {
@@ -354,12 +398,14 @@ export interface CancelStageFrame {
   type: "cancel_stage";
   session_id: string;
   stage: "graceful" | "hard" | "detached";
+  producing_session_id?: string;
 }
 
 export interface SessionCloseAckFrame {
   type: "session_close_ack";
   session_id: string;
   id?: string;
+  producing_session_id?: string;
 }
 
 export interface DevicePairingRequestFrame {
@@ -536,6 +582,58 @@ export interface BrowserCaptureControlFrame {
   expected_height?: number;
 }
 
+export interface GoalStatusFrame {
+  type: "goal_status";
+  session_id: string;
+  goal_id?: string;
+  condition: string;
+  round: number;
+  max_rounds: number;
+  latest_reason: string;
+  active_loops: number;
+  cap: number;
+  state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared";
+  producing_session_id?: string;
+}
+
+export interface LoopStatusFrame {
+  type: "loop_status";
+  session_id: string;
+  mode: "interval" | "self_paced";
+  run: number;
+  max_runs: number;
+  next_delay?: number;
+  state: string;
+  producing_session_id?: string;
+}
+
+export interface PlanStatusFrame {
+  type: "plan_status";
+  plan_id: string;
+  state: "draft" | "approved" | "running" | "done" | "failed";
+  plan_phase: "dispatching" | "judging" | "synthesizing" | "idle" | "awaiting_supervision" | "stalled";
+  progress: number;
+  paused_reason?: string;
+}
+
+export interface JudgeVerdictFrame {
+  type: "judge_verdict";
+  id: string;
+  scope: "task" | "plan" | "goal";
+  task_id?: string;
+  plan_id?: string;
+  round: number;
+  met: boolean;
+  per_criterion: Array<{
+    criterion_id: string;
+    met: boolean;
+    reason: string;
+  }>;
+  model: string;
+  judged_at: string;
+  judge_agent_id: string;
+}
+
 export interface ErrorPayload {
   llm_error: LLMError;
 }
@@ -562,6 +660,8 @@ export type WsFrame =
   | ToolCallResultFrame
   | SubagentStartFrame
   | SubagentEndFrame
+  | SubagentMessageFrame
+  | SubagentStateFrame
   | TaskStatusChangedFrame
   | TaskRunStatusFrame
   | ReplayMessageFrame
@@ -595,7 +695,11 @@ export type WsFrame =
   | BrowserCaptureHelloFrame
   | BrowserCaptureOfferFrame
   | BrowserCaptureAnswerFrame
-  | BrowserCaptureControlFrame;
+  | BrowserCaptureControlFrame
+  | GoalStatusFrame
+  | LoopStatusFrame
+  | PlanStatusFrame
+  | JudgeVerdictFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -631,6 +735,8 @@ export type ServerFrame =
   | ToolCallResultFrame
   | SubagentStartFrame
   | SubagentEndFrame
+  | SubagentMessageFrame
+  | SubagentStateFrame
   | TaskStatusChangedFrame
   | TaskRunStatusFrame
   | ReplayMessageFrame
@@ -657,4 +763,8 @@ export type ServerFrame =
   | BrowserCaptureHelloFrame
   | BrowserCaptureOfferFrame
   | BrowserCaptureAnswerFrame
-  | BrowserCaptureControlFrame;
+  | BrowserCaptureControlFrame
+  | GoalStatusFrame
+  | LoopStatusFrame
+  | PlanStatusFrame
+  | JudgeVerdictFrame;

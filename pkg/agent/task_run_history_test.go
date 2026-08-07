@@ -163,6 +163,7 @@ func TestTaskTrigger_RunScheduled_ThreadsOccurrenceMsToDispatch(t *testing.T) {
 func TestTaskRunHistory_OpenedAtClaim_ClosedOnMarkerCompletion(t *testing.T) {
 	provider := &scriptedProvider{
 		responseBody: "Implemented the thing.\n" +
+			"[goal:evidence] verified the implementation against the task\n" +
 			"TASK_STATUS: success\n" +
 			"TASK_SUMMARY: All done.",
 	}
@@ -286,6 +287,7 @@ func TestTaskRunHistory_OpenedAtClaim_ClosedOnUpdateTaskToolCompletion(t *testin
 func TestTaskRunHistory_MirrorStillCyclesAndEmitsRunStatusFrames(t *testing.T) {
 	provider := &scriptedProvider{
 		responseBody: "Done.\n" +
+			"[goal:evidence] verified the completion\n" +
 			"TASK_STATUS: success\n" +
 			"TASK_SUMMARY: mirror regression check.",
 	}
@@ -356,7 +358,7 @@ func TestTaskRunHistory_MirrorStillCyclesAndEmitsRunStatusFrames(t *testing.T) {
 // task.RunKindManual.
 func TestTaskRunHistory_ScheduledVsManualKind(t *testing.T) {
 	provider := &scriptedProvider{
-		responseBody: "Done.\nTASK_STATUS: success\nTASK_SUMMARY: kind check.",
+		responseBody: "Done.\n[goal:evidence] verified\nTASK_STATUS: success\nTASK_SUMMARY: kind check.",
 	}
 	al := newNativeTaskCompletionTestLoop(t, provider)
 
@@ -406,7 +408,7 @@ func TestTaskRunHistory_ScheduledVsManualKind(t *testing.T) {
 // close.
 func TestStartOccurrenceRun_IdempotentAgainstConcurrentSchedulerFire(t *testing.T) {
 	provider := &scriptedProvider{
-		responseBody: "Done.\nTASK_STATUS: success\nTASK_SUMMARY: idempotency check.",
+		responseBody: "Done.\n[goal:evidence] verified\nTASK_STATUS: success\nTASK_SUMMARY: idempotency check.",
 	}
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	tk := newCompletionContractTask(t, al, "native-agent", "occurrence idempotency")
@@ -458,7 +460,7 @@ func TestStartOccurrenceRun_IdempotentAgainstConcurrentSchedulerFire(t *testing.
 // §3.7's occurrence overlay ultimately reads.
 func TestTaskRunHistory_SchedulerFire_RecordsOccurrenceMsAndScheduledKind(t *testing.T) {
 	provider := &scriptedProvider{
-		responseBody: "Done.\nTASK_STATUS: success\nTASK_SUMMARY: occurrence handled.",
+		responseBody: "Done.\n[goal:evidence] verified\nTASK_STATUS: success\nTASK_SUMMARY: occurrence handled.",
 	}
 	al := newNativeTaskCompletionTestLoop(t, provider)
 
@@ -670,10 +672,19 @@ func TestTaskRunHistory_NoMarkerFailClosedBranch_ClosesRunAsFailed(t *testing.T)
 // occurrence_ms=nil (no recurring-fire context).
 func TestTaskRunHistory_StartTaskNow_OpensAndClosesManualRun(t *testing.T) {
 	provider := &scriptedProvider{
-		responseBody: "Done.\nTASK_STATUS: success\nTASK_SUMMARY: start task now run history.",
+		responseBody: "Done.\n[goal:evidence] verified\nTASK_STATUS: success\nTASK_SUMMARY: start task now run history.",
 	}
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	tk := newCompletionContractTask(t, al, "native-agent", "start task now run history")
+
+	// StartTaskNow's own doc comment: it launches "without requiring the task
+	// to be in next first (the caller has already transitioned it to
+	// in_progress via a PATCH)" — mirrors the real REST caller
+	// (rest_tasks.go's PATCH-to-in_progress handler) and the established
+	// createInProgressTask pattern (start_task_now_test.go).
+	if _, err := al.taskStore.Update(tk.ID, task.Patch{Status: ptrStatus(task.StatusInProgress)}); err != nil {
+		t.Fatalf("advance task to in_progress before StartTaskNow: %v", err)
+	}
 
 	sessionID, err := al.taskExecutor.StartTaskNow(context.Background(), tk.ID)
 	if err != nil {

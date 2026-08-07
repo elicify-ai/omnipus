@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -19,8 +17,12 @@ import (
 
 // rest_rate_limits.go — rate-limits endpoint.
 //
-// GET  /api/v1/security/rate-limits — returns current config + live daily cost.
-// PUT  /api/v1/security/rate-limits — partial update to config.sandbox.rate_limits.
+// GET  /api/v1/security/rate-limits — returns current per-agent sliding-window
+//                                      rate-limit config.
+// PUT  /api/v1/security/rate-limits — partial update to the same.
+//
+// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
+// This endpoint handles ONLY per-agent sliding-window rate limits (LLM/hr, tool/min).
 //
 // PUT requires authentication only (single-user model). Strict type
 // validation rejects JSON strings in numeric fields, floats in integer
@@ -40,24 +42,14 @@ func (a *restAPI) HandleRateLimits(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// getRateLimits returns the current rate-limit config and live daily cost.
+// getRateLimits returns the current per-agent sliding-window rate-limit config.
 func (a *restAPI) getRateLimits(w http.ResponseWriter, r *http.Request) {
 	rlCfg := a.agentLoop.GetConfig().Sandbox.RateLimits
-	enabled := rlCfg.DailyCostCapUSD > 0 ||
-		rlCfg.MaxAgentLLMCallsPerHour > 0 ||
+	enabled := rlCfg.MaxAgentLLMCallsPerHour > 0 ||
 		rlCfg.MaxAgentToolCallsPerMinute > 0
-
-	var dailyCost float64
-	if registry := a.agentLoop.RateLimiter(); registry != nil {
-		dailyCost = registry.GetDailyCost()
-	} else {
-		enabled = false
-	}
 
 	jsonOK(w, gen.RateLimitsResponse{
 		Enabled:                    enabled,
-		DailyCostUsd:               dailyCost,
-		DailyCostCap:               rlCfg.DailyCostCapUSD,
 		MaxAgentLlmCallsPerHour:    int64(rlCfg.MaxAgentLLMCallsPerHour),
 		MaxAgentToolCallsPerMinute: int64(rlCfg.MaxAgentToolCallsPerMinute),
 	})
@@ -80,18 +72,24 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse and validate each present field.
-	var newCap *float64
-	var newLLM, newTool *int64
-
-	if v, ok := raw["daily_cost_cap_usd"]; ok {
-		f, err := parseFloat64Field("daily_cost_cap_usd", v)
-		if err != nil {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		newCap = &f
+	// ADR-053 D12: reject any daily_cost_cap_usd field. The SEC-26 USD cap
+	// was retired; TokenBudget (set via /api/v1/settings/token-budget) is
+	// the sole app-level spend brake. Operators who set this field get a
+	// clear 400 instead of a silent no-op.
+	//
+	// SECURITY: do NOT echo the raw field value back into the response body.
+	// MaxBytesReader caps the body at 1<<20 — a crafted payload could land up
+	// to ~1 MB of arbitrary content inside the 400. The field name + ADR
+	// cite is enough for operators to find the migration path.
+	if _, ok := raw["daily_cost_cap_usd"]; ok {
+		jsonErr(w, http.StatusBadRequest,
+			"daily_cost_cap_usd: SEC-26 USD cap retired per ADR-053 D12; "+
+				"use /api/v1/settings/token-budget to set the app-level OVERALL token budget")
+		return
 	}
+
+	// Parse and validate each present field.
+	var newLLM, newTool *int64
 
 	if v, ok := raw["max_agent_llm_calls_per_hour"]; ok {
 		i, err := parseInt64Field("max_agent_llm_calls_per_hour", v)
@@ -111,14 +109,15 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		newTool = &i
 	}
 
-	// Snapshot old values for the audit entry before mutation.
+	// Snapshot old values for the audit entry IMMEDIATELY before the mutation
+	// (snapshot ordering: read → mutate → reload → audit). Holding the snapshot
+	// across the prepare hook would race with concurrent REST config writes that
+	// mutate the same Sandbox.RateLimits map via safeUpdateConfigJSON; reading
+	// right before the call closes that TOCTOU window.
 	oldCfg := a.agentLoop.GetConfig().Sandbox.RateLimits
 
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		rl := ensureMap(m, "sandbox", "rate_limits")
-		if newCap != nil {
-			rl["daily_cost_cap_usd"] = *newCap
-		}
 		if newLLM != nil {
 			rl["max_agent_llm_calls_per_hour"] = *newLLM
 		}
@@ -132,26 +131,42 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	newCfg := a.agentLoop.GetConfig().Sandbox.RateLimits
+
+	// Audit the config write itself, unconditionally — mirrors
+	// rest_prompt_guard.go's putPromptGuard (emit-then-reload, not gated
+	// behind the reload's own outcome). The write has already landed on disk
+	// at this point regardless of whether the follow-up hot-reload confirms
+	// in time; the security_setting_change record documents WHAT changed,
+	// not whether the in-memory rebuild kept up.
+	if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
+		// ADR-053 D12: daily_cost_cap_usd is retired from this struct
+		// entirely (rejected with 400 above, before this point is ever
+		// reached) — the audit before/after snapshot only ever covers the
+		// two sliding-window fields that still exist on
+		// OmnipusRateLimitsConfig.
+		if err := audit.EmitSecuritySettingChange(
+			r.Context(), auditLogger, "sandbox.rate_limits",
+			map[string]any{
+				"max_agent_llm_calls_per_hour":    oldCfg.MaxAgentLLMCallsPerHour,
+				"max_agent_tool_calls_per_minute": oldCfg.MaxAgentToolCallsPerMinute,
+			},
+			map[string]any{
+				"max_agent_llm_calls_per_hour":    newCfg.MaxAgentLLMCallsPerHour,
+				"max_agent_tool_calls_per_minute": newCfg.MaxAgentToolCallsPerMinute,
+			},
+		); err != nil {
+			slog.Error("rest: audit log rate limits update", "error", err)
+		}
+	}
+
 	confirmed, reloadErr := a.triggerReloadAndWaitOutcome()
 	if reloadErr != nil {
-		if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
-			newCfg := a.agentLoop.GetConfig().Sandbox.RateLimits
-			if err := audit.EmitSecuritySettingChange(
-				r.Context(), auditLogger, "sandbox.rate_limits",
-				map[string]any{
-					"daily_cost_cap_usd":              oldCfg.DailyCostCapUSD,
-					"max_agent_llm_calls_per_hour":    oldCfg.MaxAgentLLMCallsPerHour,
-					"max_agent_tool_calls_per_minute": oldCfg.MaxAgentToolCallsPerMinute,
-				},
-				map[string]any{
-					"daily_cost_cap_usd":              newCfg.DailyCostCapUSD,
-					"max_agent_llm_calls_per_hour":    newCfg.MaxAgentLLMCallsPerHour,
-					"max_agent_tool_calls_per_minute": newCfg.MaxAgentToolCallsPerMinute,
-				},
-			); err != nil {
-				slog.Error("rest: audit log rate limits update", "error", err)
-			}
-		}
+		slog.Warn("rest: rate limits saved but hot-reload failed; restart required",
+			"reload_error", reloadErr,
+			"max_agent_llm_calls_per_hour", newCfg.MaxAgentLLMCallsPerHour,
+			"max_agent_tool_calls_per_minute", newCfg.MaxAgentToolCallsPerMinute,
+		)
 		warnMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
 		jsonOK(w, gen.RateLimitsUpdateResponse{
 			Saved:           true,
@@ -163,37 +178,12 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 	if !confirmed {
 		slog.Warn("rest: hot-reload after rate limits update did not confirm within the poll window; "+
 			"running agents may still be enforcing the previous rate limits",
-			"daily_cost_cap_usd", oldCfg.DailyCostCapUSD,
 			"max_agent_llm_calls_per_hour", oldCfg.MaxAgentLLMCallsPerHour,
 			"max_agent_tool_calls_per_minute", oldCfg.MaxAgentToolCallsPerMinute,
 		)
 	}
 
-	// Build new snapshot for audit and response.
-	newCfg := a.agentLoop.GetConfig().Sandbox.RateLimits
-
-	if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
-		if err := audit.EmitSecuritySettingChange(
-			r.Context(),
-			auditLogger,
-			"sandbox.rate_limits",
-			map[string]any{
-				"daily_cost_cap_usd":              oldCfg.DailyCostCapUSD,
-				"max_agent_llm_calls_per_hour":    oldCfg.MaxAgentLLMCallsPerHour,
-				"max_agent_tool_calls_per_minute": oldCfg.MaxAgentToolCallsPerMinute,
-			},
-			map[string]any{
-				"daily_cost_cap_usd":              newCfg.DailyCostCapUSD,
-				"max_agent_llm_calls_per_hour":    newCfg.MaxAgentLLMCallsPerHour,
-				"max_agent_tool_calls_per_minute": newCfg.MaxAgentToolCallsPerMinute,
-			},
-		); err != nil {
-			slog.Error("rest: audit log rate limits update", "error", err)
-		}
-	}
-
 	slog.Info("rest: rate limits updated",
-		"daily_cost_cap_usd", newCfg.DailyCostCapUSD,
 		"max_agent_llm_calls_per_hour", newCfg.MaxAgentLLMCallsPerHour,
 		"max_agent_tool_calls_per_minute", newCfg.MaxAgentToolCallsPerMinute,
 	)
@@ -204,39 +194,13 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		Saved:           true,
 		RequiresRestart: false,
 		Applied: &struct {
-			DailyCostCapUsd            *float64 `json:"daily_cost_cap_usd,omitempty"`
-			MaxAgentLlmCallsPerHour    *int64   `json:"max_agent_llm_calls_per_hour,omitempty"`
-			MaxAgentToolCallsPerMinute *int64   `json:"max_agent_tool_calls_per_minute,omitempty"`
+			MaxAgentLlmCallsPerHour    *int64 `json:"max_agent_llm_calls_per_hour,omitempty"`
+			MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
 		}{
-			DailyCostCapUsd:            &newCfg.DailyCostCapUSD,
 			MaxAgentLlmCallsPerHour:    &llmCalls,
 			MaxAgentToolCallsPerMinute: &toolCalls,
 		},
 	})
-}
-
-// parseFloat64Field decodes a JSON raw value as a strict float64.
-// Rejects: JSON strings, null, NaN, Inf, and negative values.
-func parseFloat64Field(name string, raw json.RawMessage) (float64, error) {
-	// Reject JSON strings and null.
-	if len(raw) > 0 && (raw[0] == '"' || string(raw) == "null") {
-		return 0, fmt.Errorf("%s: must be a non-negative number", name)
-	}
-	var n json.Number
-	if err := json.Unmarshal(raw, &n); err != nil {
-		return 0, fmt.Errorf("%s: must be a non-negative number", name)
-	}
-	f, err := n.Float64()
-	if err != nil {
-		return 0, fmt.Errorf("%s: must be a non-negative number", name)
-	}
-	if math.IsNaN(f) || math.IsInf(f, 0) {
-		return 0, fmt.Errorf("%s: NaN and Inf are not allowed", name)
-	}
-	if f < 0 {
-		return 0, fmt.Errorf("%s: must be >= 0 (0 = unlimited)", name)
-	}
-	return f, nil
 }
 
 // parseInt64Field decodes a JSON raw value as a strict int64.

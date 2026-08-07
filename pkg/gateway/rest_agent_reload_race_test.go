@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // This test file uses //go:build !cgo so it compiles when CGO is disabled.
 // When CGO is enabled, pkg/gateway imports pkg/channels/matrix which requires
 // the libolm system library (olm/olm.h). If that library is installed,

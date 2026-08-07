@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_executor_preview.go — POST /api/v1/agents/executor-preview.
 //
 // Stateless, agent-agnostic preview of the REAL command Omnipus would spawn

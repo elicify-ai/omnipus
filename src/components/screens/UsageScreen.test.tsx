@@ -24,10 +24,15 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchTokenStats: vi.fn(), fetchSessions: vi.fn() }
+  return {
+    ...actual,
+    fetchTokenStats: vi.fn(),
+    fetchSessions: vi.fn(),
+    fetchTokenBudgetStatus: vi.fn(),
+  }
 })
 
-import { fetchTokenStats, fetchSessions } from '@/lib/api'
+import { fetchTokenStats, fetchSessions, fetchTokenBudgetStatus } from '@/lib/api'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -125,6 +130,17 @@ describe('UsageScreen', () => {
   beforeEach(() => {
     vi.mocked(fetchTokenStats).mockResolvedValue(mockSummary)
     vi.mocked(fetchSessions).mockResolvedValue(mockSessions)
+    // FE-6: UsageScreen now mounts TokenBudgetSection, which fetches the
+    // app-level budget status. Give it a stable resolved mock so the budget
+    // card's own loading/error state doesn't bleed into the existing suites.
+    vi.mocked(fetchTokenBudgetStatus).mockResolvedValue({
+      budget: 0,
+      consumed: 0,
+      remaining: 0,
+      exhausted: false,
+      advisory: 'unbounded — set a budget',
+      by_scope: { owner: 0, member: 0, verifier: 0, judge: 0 },
+    })
   })
 
   it('shows loading skeleton while fetching', async () => {
@@ -296,5 +312,113 @@ describe('UsageScreen', () => {
     // No literal "cost" label (case-insensitive) in the visible stats area
     const heroRow = screen.getByTestId('usage-hero-row')
     expect(heroRow.textContent?.toLowerCase()).not.toContain('cost')
+  })
+
+  // ADR-052 FR-036 / SC-014 — UsageScreen must show verifier (Judge) LLM
+  // spend, unlike Sidebar/SearchModal which exclude it. Verified against
+  // pkg/gateway/rest_stats.go's HandleTokenStats: it aggregates every
+  // session type with no filter, so a verifier agent's entry in the
+  // fetchTokenStats response already surfaces here today — no
+  // include_verifier plumbing needed for THIS view.
+  describe('ADR-052 FR-036: verifier (Judge) spend visibility', () => {
+    it('shows a verifier-role agent entry in the "By agent" breakdown (aggregate spend is unfiltered by session type)', async () => {
+      vi.mocked(fetchTokenStats).mockResolvedValue({
+        ...mockSummary,
+        agents: [
+          ...mockSummary.agents!,
+          {
+            agent_id: 'judge',
+            agent_name: 'Judge',
+            tokens_in: 800,
+            tokens_out: 200,
+            tokens_total: 1000,
+          },
+        ],
+      })
+      renderUsage()
+      await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
+      // "By agent" is the default active tab.
+      expect(screen.getByTestId('tab-content-agent')).toHaveTextContent('Judge')
+      // Verifier spend is folded into the grand total too.
+      expect(screen.getByTestId('usage-hero-row')).toHaveTextContent(formatTokens(15000 + 3000 + 1000))
+    })
+
+    // ADR-057 FR-104 (M2-9, W16h): GET /sessions now defaults to ROOTS ONLY
+    // under US-19's nested-listing design, which would silently drop every
+    // delegated child's spend from this tab. This test is DELIBERATELY
+    // INVERTED (not deleted) from its pre-ADR-057 form, which asserted
+    // fetchSessions was called WITHOUT flat:true — that assertion is now
+    // the audit regression FR-104 exists to close. See the spec's
+    // "SPA tests that MUST be deliberately inverted" list.
+    it('the "By session" tab calls fetchSessions with includeVerifier:true AND flat:true so delegated-child spend stays auditable (SC-014, FR-104)', async () => {
+      renderUsage()
+      await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
+      expect(vi.mocked(fetchSessions)).toHaveBeenCalledWith(undefined, undefined, { includeVerifier: true, flat: true })
+    })
+
+    // ADR-057 BDD-111: the flat listing must actually surface child rows,
+    // not just be requested with the right flag — a mock that never returns
+    // any delegate-type session would let the assertion above pass while
+    // the real regression (child spend silently vanishing from this table)
+    // stayed live.
+    it('shows delegated child session rows in the "By session" tab when the flat listing includes them (FR-104)', async () => {
+      const user = userEvent.setup()
+      vi.mocked(fetchSessions).mockResolvedValue([
+        ...mockSessions,
+        {
+          id: 'sess-child-1',
+          agent_id: 'agent-1',
+          title: 'Delegated research task',
+          type: 'delegate',
+          parent_session_id: 'sess-1',
+          created_at: '2026-06-01T00:10:00Z',
+          updated_at: '2026-06-01T00:20:00Z',
+          message_count: 6,
+          total_tokens: 9000,
+        },
+      ])
+      renderUsage()
+      await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
+      await user.click(screen.getByTestId('tab-session'))
+      await waitFor(
+        () => expect(screen.getByTestId('sessions-table')).toBeInTheDocument(),
+        { timeout: 5000 },
+      )
+      expect(screen.getByText('Delegated research task')).toBeInTheDocument()
+    })
+
+    it('shows a verifier session row tagged "Verifier" in the "By session" tab', async () => {
+      const user = userEvent.setup()
+      vi.mocked(fetchSessions).mockResolvedValue([
+        ...mockSessions,
+        {
+          id: 'sess-judge',
+          agent_id: 'judge',
+          title: 'Verdict review',
+          type: 'verifier',
+          created_at: '2026-06-07T00:00:00Z',
+          updated_at: '2026-06-07T00:05:00Z',
+          message_count: 4,
+          total_tokens: 1000,
+        },
+      ])
+      renderUsage()
+      await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
+      await user.click(screen.getByTestId('tab-session'))
+      await waitFor(
+        () => expect(screen.getByTestId('sessions-table')).toBeInTheDocument(),
+        { timeout: 5000 },
+      )
+
+      expect(screen.getByText('Verdict review')).toBeInTheDocument()
+      const tag = screen.getByTestId('session-verifier-tag')
+      expect(tag).toBeInTheDocument()
+      expect(tag).toHaveTextContent('Verifier')
+
+      // Non-verifier rows must NOT carry the tag.
+      const rows = screen.getByTestId('sessions-table').querySelectorAll('tbody tr')
+      expect(rows).toHaveLength(3) // sess-1, sess-2, sess-judge (sess-3 has 0 tokens, excluded)
+      expect(screen.getAllByTestId('session-verifier-tag')).toHaveLength(1)
+    })
   })
 })

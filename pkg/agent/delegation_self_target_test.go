@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -28,6 +29,11 @@ import (
 //     path (TestTaskCreate_SelfAssignmentAllowedThroughRegisterSharedTools);
 //   - the cross-workspace task gate (NewSysagentDelegationDeny) enforces the same
 //     asymmetry (TestNewSysagentDelegationDeny_SelfAllowedNonSelfGated).
+//
+// create_task has a SECOND refusal — an unresolvable calling agent — which is
+// not a delegation decision at all and must never be mistaken for one. It is
+// pinned separately by TestTaskCreate_NoPrincipalRefusedThroughRegisterSharedTools
+// so the trust_set assertions above keep distinguishing the two.
 //
 // The task-mode-in-isolation "self-assignment IS allowed" property is also pinned by
 // TestDelegationDenyChecker_SelfAssignmentSkipsGraph (delegation_enforce_test.go),
@@ -201,11 +207,15 @@ func TestTaskCreate_SelfAssignmentAllowedThroughRegisterSharedTools(t *testing.T
 		t.Fatal("create_task tool not registered on agent (task tools require a task store)")
 	}
 
-	// Self-assignment: must SUCCEED (not delegation).
-	res := tool.Execute(context.Background(), map[string]any{
+	// Self-assignment: must SUCCEED (not delegation). WithAgentID mirrors real
+	// dispatch (the tool registry always injects the calling agent's own ID
+	// before Execute) — needed here because criteria authorship (FR-6/D5,
+	// review r1 M5) is server-set from ToolAgentID(ctx), never left blank.
+	res := tool.Execute(tools.WithAgentID(context.Background(), agentID), map[string]any{
 		"title":    "self task",
 		"prompt":   "do the thing myself",
 		"agent_id": agentID, // SELF
+		"criteria": []any{map[string]any{"kind": "prose", "text": "the thing is done"}},
 	})
 	if res == nil {
 		t.Fatal("nil result from create_task")
@@ -219,7 +229,19 @@ func TestTaskCreate_SelfAssignmentAllowedThroughRegisterSharedTools(t *testing.T
 	}
 
 	// Control — non-self, un-edged target (no mia→ava edge): real delegation, DENIED.
-	denRes := tool.Execute(context.Background(), map[string]any{
+	//
+	// WithAgentID here for the same reason as the self case above, and it is
+	// load-bearing rather than cosmetic: create_task fails CLOSED on an
+	// unresolvable caller BEFORE it consults the delegation gate, so driving this
+	// control with a bare context.Background() asserts on the empty-principal
+	// refusal and never reaches the trust_set path the control exists to pin.
+	// Production always supplies a principal — every dispatch path that can reach
+	// this tool stamps one (loop.go's turnCtx, the task executor's taskCtx, the
+	// judge's callCtx).
+	//
+	// Criteria are deliberately omitted: authorization is checked before the
+	// business-rule validation, so the trust_set denial must still win here.
+	denRes := tool.Execute(tools.WithAgentID(context.Background(), agentID), map[string]any{
 		"title":    "cross task",
 		"prompt":   "hand off to ava",
 		"agent_id": "ava",
@@ -229,6 +251,84 @@ func TestTaskCreate_SelfAssignmentAllowedThroughRegisterSharedTools(t *testing.T
 	}
 	if !strings.Contains(denRes.ForLLM, `"policy":"trust_set"`) {
 		t.Fatalf("expected trust_set denial for un-edged non-self assignment, got: %s", denRes.ForLLM)
+	}
+
+	// A denied delegation must persist nothing: exactly the self task survives.
+	rows, err := GetTaskStore(al).List(task.Filter{})
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Title != "self task" {
+		t.Fatalf("expected exactly the self-assigned task on disk, got %d rows: %+v", len(rows), rows)
+	}
+}
+
+// TestTaskCreate_NoPrincipalRefusedThroughRegisterSharedTools pins create_task's
+// OTHER refusal — an unresolvable calling agent — as a DISTINCT outcome from the
+// trust_set denial above, through the same real registerSharedTools wiring.
+//
+// The two are not interchangeable, and the ordering (principal guard first) is
+// load-bearing. The delegation gate's caller identity is baked in at WIRING time
+// (registerSharedTools hands buildDelegationDenyCheckerForTaskReassignment the
+// agent's own configured id), whereas the FR-037 provenance stamp and the
+// criteria authorship are read from the CONTEXT principal. So with no principal
+// the gate does not fail — it returns ALLOW, having authorized a caller the write
+// path cannot name; the create would only collapse later at Store.CreateByAgent's
+// own empty-agent-id rejection, after an authorization decision had been made for
+// an agent that does not exist, and after parseCriteriaArgs had stamped a
+// criterion author of "".
+//
+// The target is deliberately "ray", which the seed DOES task-edge from mia: the
+// delegation gate would allow it, so the principal guard is the only thing that
+// can refuse this call, and deleting the guard flips this test red rather than
+// leaving it green on a different denial.
+func TestTaskCreate_NoPrincipalRefusedThroughRegisterSharedTools(t *testing.T) {
+	const agentID = "mia"
+	seedWorkspaceGraph(t, testWS, true, []graphEdge{
+		edge("mia", "ray", []string{"task"}, nil), // TRUSTED target — the gate would allow
+	})
+	al, _ := wireTestLoopWithGraph(t, agentID)
+
+	inst, ok := al.GetRegistry().GetAgent(agentID)
+	if !ok || inst == nil {
+		t.Fatalf("agent %q not registered after loop init", agentID)
+	}
+	tool, ok := inst.Tools.Get("create_task")
+	if !ok {
+		t.Fatal("create_task tool not registered on agent (task tools require a task store)")
+	}
+
+	// Both shapes of "no principal": never injected, and injected blank.
+	for name, ctx := range map[string]context.Context{
+		"absent":     context.Background(),
+		"whitespace": tools.WithAgentID(context.Background(), "   "),
+	} {
+		res := tool.Execute(ctx, map[string]any{
+			"title":    "orphan task",
+			"prompt":   "work nobody can be credited with",
+			"agent_id": "ray", // trusted: the delegation gate is NOT what refuses this
+			"criteria": []any{map[string]any{"kind": "prose", "text": "the thing is done"}},
+		})
+		if res == nil || !res.IsError {
+			t.Fatalf("ctx=%s: create_task with an unresolvable caller must be refused, got: %+v", name, res)
+		}
+		if !strings.Contains(res.ForLLM, "cannot resolve the calling agent") {
+			t.Fatalf("ctx=%s: expected the unresolvable-principal refusal, got: %s", name, res.ForLLM)
+		}
+		// It must not masquerade as a delegation denial: that is a decision ABOUT
+		// a named caller, and this call has none to decide about.
+		if strings.Contains(res.ForLLM, "delegation_denied") {
+			t.Fatalf("ctx=%s: an unresolvable principal must not be reported as a delegation denial: %s",
+				name, res.ForLLM)
+		}
+	}
+
+	rows, err := GetTaskStore(al).List(task.Filter{})
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("expected zero tasks persisted for an unresolvable principal, got %d: %+v", len(rows), rows)
 	}
 }
 

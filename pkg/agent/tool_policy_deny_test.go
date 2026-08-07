@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package agent — ToolPolicyCfg governance tests.
 //
 // Verifies that the central tool registry governance contract holds: when

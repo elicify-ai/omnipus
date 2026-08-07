@@ -74,6 +74,40 @@ type ToolResult struct {
 	// (SubagentEndFrame.status, which does support "interrupted"), it does
 	// not change the outer badge.
 	Interrupted bool `json:"interrupted,omitempty"`
+
+	// ParksTurn signals that this tool call requires the ENCLOSING turn to
+	// stop immediately, without being treated as an error or an abort. Set
+	// exclusively by pkg/tools/message_parent.go on a successful kind=
+	// question, wait=true call — the exact moment it has parked the calling
+	// child's own durable LifecycleRecord into needs_input (ADR-053 §5.1,
+	// parkNeedsInput). pkg/agent/loop.go's runTurn tool-execution loop is the
+	// sole consumer (Correctness-C2, ADR-057 UAT 2026-08-03): on seeing this
+	// flag it finishes this tool call's own bookkeeping (transcript/message
+	// append) exactly as normal, marks any REMAINING queued tool calls in the
+	// same LLM batch as skipped (mirroring the graceful-interrupt skip path),
+	// and returns TurnEndStatusParked — deliberately WITHOUT the session
+	// rollback a hard-abort performs, so the durable needs_input record and
+	// the turn's own conversation history survive untouched, exactly as they
+	// were at park time, ready for `delegate respond` to resume. Every other
+	// tool/result constructor leaves this at its zero value (false); it must
+	// never be set for a failed/rejected park attempt (message_parent.go only
+	// sets it once inbox.Append AND parkNeedsInput have both already
+	// succeeded).
+	ParksTurn bool `json:"parks_turn,omitempty"`
+
+	// ExitCode is the real process exit code for a shell/bash foreground
+	// execution (pkg/tools/shell.go's foregroundResultFromSandbox /
+	// runUnconstrained), or nil when no real exit code is available (a
+	// timeout, a command blocked before it ever ran, or a non-shell tool).
+	// review r2 HIGH-1: this is the AUTHORITATIVE source for a machine-check
+	// criterion's verdict (pkg/agent/judge.go's interpretBashResult reads it
+	// directly) — unlike ForLLM's human-readable "[Command exited with code
+	// N]" text suffix, it is set directly from the real exit code and is
+	// never subject to output truncation or a worker's own command echoing a
+	// fake suffix into stdout/stderr. A pointer (not a bare int) because 0 is
+	// a valid, meaningful exit code that must be distinguishable from "not
+	// set".
+	ExitCode *int `json:"exit_code,omitempty"`
 }
 
 // ContentForLLM returns the normalized textual content to append to the

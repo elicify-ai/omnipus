@@ -14,9 +14,20 @@
 // can be a bash call as well as an agent span. Expanded native-agent rows
 // use the same indented border-l-2 accent line as SubagentBlock/ToolCallBadge
 // instead of the old bordered/backgrounded panel.
+//
+// ── ADR-057: the ADR-053 FE-5 "live session list" enrichment (lifecycle
+// badge + peek/reply/steer/stop affordances riding a pair of mid-span child
+// progress/lifecycle WS frame types) has been REMOVED. Those frame types
+// have zero Go emitters and are absent from the `WsFrameType` enum in
+// contracts, Go and TS (ADR-057 Explicit Non-Behaviors — see that section
+// for the frame type names) — the dedicated store that fed this block was
+// therefore permanently empty in production, making the entire block
+// (badge, peek, and all three reply/steer/stop buttons) unreachable dead
+// code. It is not being replaced; a real implementation would need a real
+// wire mechanism first.
 
 import { useState } from 'react'
-import { CaretDown, CaretUp } from '@phosphor-icons/react'
+import { CaretDown, CaretUp, Check, X } from '@phosphor-icons/react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Badge } from '@/components/ui/badge'
 import { ActivityAvatar } from './ActivityAvatar'
@@ -34,11 +45,17 @@ export interface ActivityPanelProps {
   recentlyFinished: ActivityItem[]
 }
 
-function ActivityRow({ item }: { item: ActivityItem }) {
+function ActivityRow({
+  item,
+}: {
+  item: ActivityItem
+}) {
   const [expanded, setExpanded] = useState(false)
   const config = getSpanStatusDot(item.status, { size: 12, runningLabel: 'running' })
-  const duration = formatDuration(item.durationMs)
-  const label = item.kind === 'bash' ? item.command : item.taskLabel
+  // JudgeActivityItem carries no durationMs (no wire-level "judge started"
+  // moment to measure elapsed time from — see its doc comment).
+  const duration = item.kind === 'judge' ? '' : formatDuration(item.durationMs)
+  const label = item.kind === 'bash' ? item.command : item.kind === 'judge' ? `Judge · ${item.scope} round ${item.round}` : item.taskLabel
   // Narrowed inline (not via a stored boolean) so `steps` stays typed without a cast.
   const steps = item.kind === 'agent' && item.agentType !== '3p' ? item.steps : null
   const show3pNotice = item.kind === 'agent' && item.agentType === '3p'
@@ -47,9 +64,18 @@ function ActivityRow({ item }: { item: ActivityItem }) {
   // card used to carry — see useRunningActivity.ts's AgentActivityItem.
   const finalResult = item.kind === 'agent' ? item.finalResult : undefined
   const interruptReason = item.kind === 'agent' ? item.interruptReason : undefined
+  // ADR-049 D2/D4/US-13: a judge row is ALWAYS expandable — it has no
+  // `steps` at all (there is no live "judge started" frame, only the
+  // completed verdict push), but the per-criterion list is exactly the
+  // "zero steps but a final result" case the BDD edge case calls out
+  // ("Judge span with zero steps but a verdict — must stay expandable").
+  const canExpandJudge = item.kind === 'judge'
+
   // A span with zero steps but a final result (e.g. a very short delegation)
   // must still be expandable, or the result would never be reachable.
-  const canExpand = steps != null && (steps.length > 0 || !!finalResult)
+  const canExpand =
+    canExpandJudge ||
+    (steps != null && (steps.length > 0 || !!finalResult))
 
   return (
     <div
@@ -99,7 +125,40 @@ function ActivityRow({ item }: { item: ActivityItem }) {
         )}
       </button>
 
-      {canExpand && expanded && steps && (
+      {canExpand && expanded && item.kind === 'judge' && (
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-2" data-testid="judge-verdict-detail">
+          {/* Per-criterion verdict list (ADR-049 D2/D4/US-13/SD-C11). `text`
+              is the raw criterion_id — this global feed has no title lookup
+              (see JudgeActivityItem's doc comment). */}
+          <ul className="space-y-1">
+            {item.criterionVerdicts.map((cv, idx) => (
+              <li key={idx} className="flex items-start gap-1.5 text-[10px]">
+                {cv.met ? (
+                  <Check size={11} weight="bold" className="shrink-0 mt-0.5 text-[color:var(--color-success)]" aria-hidden="true" />
+                ) : (
+                  <X size={11} weight="bold" className="shrink-0 mt-0.5 text-[color:var(--color-error)]" aria-hidden="true" />
+                )}
+                <div className="min-w-0">
+                  <p className="font-mono text-[var(--color-secondary)] truncate">{cv.text}</p>
+                  {cv.reason && <p className="text-[var(--color-muted)] whitespace-pre-wrap mt-0.5">{cv.reason}</p>}
+                </div>
+              </li>
+            ))}
+            {item.criterionVerdicts.length === 0 && (
+              <li className="text-[10px] text-[var(--color-muted)] italic">No per-criterion detail recorded.</li>
+            )}
+          </ul>
+          {/* Model + agent + spend footer — NFR-5 transparency. Spend is
+              deliberately omitted: JudgeVerdictFrame carries no tokens/cost
+              field on the wire today (contract gap flagged in this wave's
+              report; only the persisted Message twin carries tokens/cost). */}
+          <p className="text-[10px] text-[var(--color-muted)]">
+            {item.model} · judged by {item.judgeAgentId}
+          </p>
+        </div>
+      )}
+
+      {canExpand && expanded && item.kind !== 'judge' && steps && (
         <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-1">
           {/* surface="panel" (Fix 2, user-approved 2026-07-16): this panel is
               the designated home for the background/noisy step detail the
@@ -143,7 +202,12 @@ function ActivityRow({ item }: { item: ActivityItem }) {
   )
 }
 
-export function ActivityPanel({ open, onOpenChange, running, recentlyFinished }: ActivityPanelProps) {
+export function ActivityPanel({
+  open,
+  onOpenChange,
+  running,
+  recentlyFinished,
+}: ActivityPanelProps) {
   const isEmpty = running.length === 0 && recentlyFinished.length === 0
 
   return (

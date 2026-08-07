@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // browser_webrtc_fixwave_test.go — fix-wave BE findings coverage for
 // pkg/gateway/browser_webrtc.go: fix 1 (sticky failed capture Start), fix 3
 // (encoder-liveness watchdog + push-state-on-stop), fix 7 (DC input error
@@ -341,7 +339,7 @@ func TestWatchEncoderLiveness_StopsStaleSessionAndNotifiesAttachedViewer(t *test
 	// while encoderLivenessStaleAfter elapses.
 	cs.RecordPing()
 
-	go handler.watchEncoderLiveness(cs, "watchdog-agent")
+	go handler.watchEncoderLiveness(cs, "watchdog-agent", encoderLivenessCheckInterval, encoderLivenessStaleAfter)
 
 	require.Eventually(
 		t,
@@ -378,8 +376,9 @@ func TestWatchEncoderLiveness_ExitsOnDoneWithoutStopping(t *testing.T) {
 	require.NoError(t, err)
 
 	watchdogDone := make(chan struct{})
+	checkInterval, staleAfter := encoderLivenessCheckInterval, encoderLivenessStaleAfter
 	go func() {
-		handler.watchEncoderLiveness(cs, "watchdog-agent-2")
+		handler.watchEncoderLiveness(cs, "watchdog-agent-2", checkInterval, staleAfter)
 		close(watchdogDone)
 	}()
 

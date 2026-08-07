@@ -18,6 +18,9 @@ package coreagent
 import (
 	"fmt"
 	"log/slog"
+	"strings"
+	"sync"
+	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -46,6 +49,47 @@ const (
 	IDPlanner    CoreAgentID = "planner"
 	IDExplorer   CoreAgentID = "explorer"
 	IDResearcher CoreAgentID = "researcher"
+	// IDJudge is the seeded System Agent (ADR-049 D3, Planning & Goals epic). It
+	// is NOT a base/core agent and NOT a subagent-tier worker: it is the first
+	// member of the "System Agents" category — a seeded, locked, NON-privileged
+	// internal-LLM agent that adjudicates as a real agent turn in a read-only
+	// VERIFIER ROLE (ADR-052), in its own session, with a narrow read-only +
+	// verification tool set (read_file/list_directory/inspect_session) and
+	// memory OFF for reproducible, impartial verdicts — not the old no-tools
+	// structured shortcut call it replaced.
+	// It is seeded via SystemAgents() through a path SEPARATE from the All()
+	// core/worker loop (so ByID/IsCoreAgent never classify it as core), carries
+	// Type=AgentTypeSystem, is never a chat target, never the default, never a
+	// delegation/binding/team target, and is subject to SEC-26 like any
+	// non-core agent. Only its Model/Provider and soul (SOUL.md — its judging
+	// rubric, ADR-052 FR-038) are editable; every other
+	// identity/type/locked/policy field is re-enforced on every boot.
+	IDJudge CoreAgentID = "judge"
+	// IDPlanSupervisor is the second seeded System Agent (ADR-055,
+	// plan-supervisor-spec FR-001/FR-002). Like the Judge it is NOT a
+	// base/core agent and NOT a subagent-tier worker: it is seeded via
+	// SystemAgents() through the dedicated System-Agents path, carries
+	// Type=system, Locked=true, Default=false, MemoryEnabled=false, is never
+	// a chat target / routing target / delegation target / plan owner, and
+	// has every identity/type/locked/tool-policy/skill field re-enforced on
+	// every boot. Only Model/Provider (D-11: operator-configurable in the UI,
+	// falling back to the install default like every other built-in agent —
+	// no special-cased tier) and its soul (SOUL.md, materialized from
+	// PlanSupervisorDefaultRubric) are operator-editable.
+	//
+	// It is the SOLE adjudicator authorised to correct a running plan: it is
+	// woken when a plan's Definition of Done is ruled unmet or when the plan
+	// DAG has stalled, and it issues exactly one `plan_correct` call per
+	// wake. It deliberately holds NOTHING else — no bash, no write path, no
+	// agent/config mutation, no `execute_plan`/`stop_plan` (FR-008/FR-043:
+	// the adjudicator corrects, the owner contains) and no roster/plan-list
+	// tool (D-04: it is roster-blind by design; the engine's supervision wake
+	// is its only liveness control).
+	//
+	// The id is unclaimable by an operator-created agent (FR-049/N12: agent
+	// ids are server-minted UUIDs), which is what makes the engine-side
+	// exact-identity gate on the correction path sound.
+	IDPlanSupervisor CoreAgentID = "plansupervisor"
 	// IDMax is intentionally absent: Max was retired from the 4-base roster
 	// in Spec-3 (v0.1.0 foundation). The ID constant is removed so that any
 	// remaining compile-time reference to IDMax surfaces as a build error.
@@ -116,6 +160,54 @@ func BaseAgents() []*CoreAgent {
 		Ava(),
 		Ray(),
 	}
+}
+
+// systemAgentIDs is the set of seeded System-Agent IDs (ADR-049 D3). Kept
+// DISJOINT from All()/BaseAgents()/the subagent tier so a System Agent is never
+// classified as core (ByID/IsCoreAgent) or worker (IsSubagentTierID). Two
+// members today — the Judge (ADR-049 D3) and PlanSupervisor (ADR-055); the
+// category is designed to grow (System Agents are seed-only, non-privileged,
+// and — except the Judge and PlanSupervisor, which are both non-disable-able
+// because a goal/plan loop stalls without them — may be disable-able).
+//
+// Membership here is NOT derived from SystemAgents(): both literals must list
+// the same ids. Omitting either one leaves IsSystemAgentID and the seeded
+// roster disagreeing (plan-supervisor-spec FR-001) — TestSystemAgents_
+// RosterMatchesSystemAgentIDs locks the two together.
+var systemAgentIDs = map[CoreAgentID]bool{
+	IDJudge:          true,
+	IDPlanSupervisor: true,
+}
+
+// IsSystemAgentID reports whether the id is a seeded System Agent (Type=system).
+func IsSystemAgentID(id CoreAgentID) bool { return systemAgentIDs[id] }
+
+// SystemAgents returns the System-Agents roster (ADR-049 D3; ADR-055 added
+// PlanSupervisor), parallel to BaseAgents(). It is DELIBERATELY not part of
+// All(): SeedConfig walks it via a dedicated System-Agents path so a System
+// Agent never enters the core/worker re-enforcement loop, and ByID/IsCoreAgent
+// (which iterate All()) never treat a System Agent as core. Ordering is display
+// order for the Agents-screen "System" section.
+//
+// Must stay in sync with systemAgentIDs above — the two are independent
+// literals by design (plan-supervisor-spec FR-001), so both are updated
+// together for every new System Agent.
+func SystemAgents() []*CoreAgent {
+	return []*CoreAgent{
+		Judge(),
+		PlanSupervisor(),
+	}
+}
+
+// SystemAgentByID looks up a System Agent by ID. Returns nil if the id is not a
+// seeded System Agent.
+func SystemAgentByID(id CoreAgentID) *CoreAgent {
+	for _, a := range SystemAgents() {
+		if a.ID == id {
+			return a
+		}
+	}
+	return nil
 }
 
 // ByID looks up a core agent by ID. Returns nil if not found.
@@ -218,10 +310,36 @@ func GetPrompt(id string) string {
 //
 //   - 34 general builtin tools (pkg/tools/*.go, excluding pkg/tools/browser and
 //     the dynamic MCP-adapter tool names, which are per-server and can't be
-//     statically enumerated — see the Constraint #6 MCP exception).
+//     statically enumerated — see the Constraint #6 MCP exception). The count
+//     was stated as 31 until plan-supervisor-spec FR-006 surface 1 required
+//     this comment corrected in the same edit: recall_conversation (the 4th
+//     memory tool) and message_parent (ADR-053 §5.1) were both added to the
+//     literal below without the prose being updated. ADR-056's list_jobs then
+//     took it from 33 to 34.
 //   - 11 browser-automation tools (pkg/tools/browser/tools.go +
 //     pkg/tools/browser/tabs.go).
 //   - 35 sysagent management tools (pkg/sysagent/tools/*.go).
+//   - 4 ADR-052 (autonomous agent plan execution) planning/verifier tools —
+//     create_plan, execute_plan, run_task, inspect_session. Registered here
+//     ahead of / independent of their pkg/tools|pkg/sysagent/tools
+//     implementation landing (this literal and buildKnownBuiltinToolNames,
+//     pkg/gateway/gateway.go, are the two catalogs the tool-policy-coverage
+//     invariant is checked against — FR-027), so a seeded-override
+//     referencing one of these four names does not panic boot via
+//     validateOverrideKeys below.
+//   - 2 ADR-055 (PlanSupervisor) supervision/containment tools — plan_correct
+//     and stop_plan, registered here for the same reason and under the same
+//     rule as the ADR-052 four.
+//   - ADR-056's list_jobs is counted in the 34 general tools above (it is a
+//     ScopeGeneral tool in pkg/tools, not a separate tier); it is called out
+//     here only because its seeded posture is a rule of its own — see
+//     coreAgentSeed's ROSTER VISIBILITY rule.
+//
+// Do NOT treat the per-category counts above as the authority for the total:
+// they are prose and go stale (they twice did). The mechanical assertion
+// len(AllStaticToolNames()) == len(config.DefaultConfig().Sandbox.ToolPolicies)
+// (TestCatalog_MatchesGlobalCeilingEntryForEntry) is what actually enforces
+// this literal and pkg/config/defaults.go's global ceiling stay one-for-one.
 //
 // This is a hardcoded Go literal, NOT computed by importing pkg/tools or
 // pkg/sysagent/tools: pkg/sysagent/tools/agent.go already imports
@@ -240,13 +358,19 @@ var allStaticToolNames = []string{
 	"search_web", "fetch_url",
 	"send_message", "hand_off", "return_to_default", "send_file",
 	"find_skills", "install_skill",
-	"delegate",
+	"delegate", "message_parent",
 	"list_tasks", "create_task", "update_task", "delete_task", "list_agents",
 	"remember", "recall_memory", "run_retrospective", "recall_conversation",
 	"serve_web",
 	"set_todos",
 	"read_inbox", "search_email", "read_message", "send_email", "reply",
 	"load_tool",
+	// ADR-056 — the unified read-only background-job roster (plans owned,
+	// subagents delegated, standalone tasks assigned to or created by the
+	// caller). Listed in the general block because that is what it is
+	// (ScopeGeneral, pkg/tools/list_jobs.go), not in the ADR-052/055 planning
+	// groups below.
+	"list_jobs",
 
 	// Browser automation tools.
 	"browser_navigate", "browser_click", "browser_type", "browser_screenshot",
@@ -267,6 +391,18 @@ var allStaticToolNames = []string{
 	"enable_channel", "configure_channel", "disable_channel", "list_channels", "test_channel",
 	"get_config", "set_config",
 	"create_agent", "update_agent", "delete_agent",
+
+	// ADR-052 — autonomous agent plan execution: planning tools + the
+	// verifier-role-only inspect_session tool.
+	"create_plan", "execute_plan", "run_task", "inspect_session",
+
+	// ADR-055 (plan-supervisor-spec FR-006) — the supervision/containment
+	// pair. plan_correct is PlanSupervisor's ONLY tool (the correction verb
+	// set: append / supersede / targeted_retry / abandon); stop_plan is the
+	// plan owner's containment tool. Both are listed here BEFORE any seed
+	// map names them, because validateOverrideKeys panics on an override key
+	// that is not in this literal.
+	"plan_correct", "stop_plan",
 }
 
 // AllStaticToolNames returns a copy of the full static builtin tool-name
@@ -367,10 +503,87 @@ func tightenGlobalCeiling(overrides map[string]config.ToolPolicy) map[string]con
 // "system.*" matched zero real tool names (a leftover from a since-renamed
 // tool family), so it never actually rationed anything.
 //
+// # SEED RULE — PLAN CONTAINMENT PARITY (plan-supervisor-spec FR-006b)
+//
+// WHEREVER "execute_plan" IS SEEDED, "stop_plan" MUST BE SEEDED IN THE SAME
+// MAP AT THE SAME LITERAL POLICY VALUE.
+//
+// This is deliberately stated as a rule over the seed rather than as a list
+// of agents, so that it survives a new agent being added to this function:
+// the property it exists to guarantee is "no agent can start a plan it cannot
+// stop". Add a new agent that seeds execute_plan and you MUST add stop_plan
+// beside it — TestPlanContainmentParity_ResolvedPolicy asserts the resolved
+// outcome across the WHOLE seeded roster through the real compositor, so
+// forgetting is a red test, not a silent containment hole.
+//
+// Two exceptions, each with its own stated reason:
+//
+//  1. An agent that is NOT a chat target (today exactly one holds a non-deny
+//     execute_plan: the Worker, via the sparse tightenGlobalCeiling map below)
+//     may hold "execute_plan": ask alongside "stop_plan": deny. It is exempt
+//     because it is structurally incapable of being a Plan.OwnerAgentID
+//     (IsChatTarget gates both write paths), so "starts a plan it cannot stop"
+//     is unreachable for it — asserted by
+//     TestPlanContainmentParity_NonOwnersCannotStartAPlan, which is what this
+//     exemption actually rests on. Note this exception used to be phrased as
+//     "a sparse map that deliberately OMITS execute_plan"; the Worker now
+//     carries all three plan-execution tools EXPLICITLY (see the map below —
+//     omission stopped meaning "ask" the moment the ceiling was raised to
+//     "allow"), so the exemption is restated over the property that was always
+//     doing the work rather than over the omission that used to imply it. Its
+//     stop_plan/plan_correct/inspect_session entries stay EXPLICIT deny for the
+//     same ceiling-inheritance reason.
+//  2. PlanSupervisor (systemAgentSeed below) holds NEITHER tool: its override
+//     map names plan_correct and nothing else, so denyAllThenOverride gives it
+//     stop_plan: deny. That is consistent with this rule (it does not seed
+//     execute_plan either) and required by FR-008/FR-043 — the adjudicator
+//     corrects, the owner contains.
+//
+// Note the requirement is over the seed LITERAL while the property that
+// matters is over the RESOLVED policy. Those two used to differ for Jim:
+// execute_plan's global ceiling was "ask", so his own seeded "allow" merged
+// down to "ask" under strictest-wins while stop_plan's "allow" ceiling let
+// that one resolve "allow". That gap was not a design — it was the ADR-052
+// ceiling defect (see pkg/config/defaults.go), and since 2026-07-28 both
+// ceilings are "allow" and Jim resolves "allow" for both. The parity rule is
+// unchanged and is now satisfied at the resolved level as well as the literal
+// one for every chat target.
+//
+// # SEED RULE — ROSTER VISIBILITY (ADR-056, list_jobs)
+//
+// "list_jobs" IS SEEDED "allow" FOR THE FOUR BASE AGENTS AND FOR NOBODY ELSE.
+//
+// list_jobs is strictly read-only, but its scope is AGENT IDENTITY, not
+// session: it returns every plan, delegated session and standalone task
+// recorded against the CALLING agent id. For the four base agents
+// (Mia/Jim/Ava/Ray) that is a well-posed question — they are durable,
+// user-addressable identities, and they are the only agents that can be a
+// plan's OwnerAgentID (IsChatTarget, the same predicate FR-006b's parity sweep
+// uses). For them the grant is also the DISCOVERY half of containment:
+// stop_plan takes a plan id, and this is where an agent that did not itself
+// just mint one gets it. Jim in particular resolves stop_plan "allow"
+// specifically so a runaway plan can be contained with no human in the loop —
+// leaving him unable to FIND the plan id hands that dependency straight back.
+//
+// The delegation-only tier (Worker/Planner/Explorer/Researcher) is denied. Each
+// of those ids is occupied by many concurrent, unrelated delegated sessions at
+// once, so for them "your own work" resolves to "every concurrent run of this
+// role in the installation" rather than "this run's work" — a roster that is
+// simultaneously useless and cross-talking. Nothing is lost: a leaf that needs
+// the status of the one child it just minted already has delegate's own status
+// sub-case, scoped to a handle it holds. The Judge and PlanSupervisor are
+// denied for their own stated reasons (verifier-inapplicable; D-04
+// roster-blindness — see systemAgentSeed).
+//
+// As with stop_plan, the Worker's SPARSE map needs an EXPLICIT deny rather than
+// an omission: list_jobs' global ceiling is "allow", so an absent key there
+// would silently GRANT it.
+//
 // The returned map is an independent allocation — callers may mutate it safely.
 func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 	allow := config.ToolPolicyAllow
 	deny := config.ToolPolicyDeny
+	ask := config.ToolPolicyAsk
 	if id == IDWorker {
 		// Worker tracks the seeded global tool-policy ceiling
 		// (sandbox.tool_policies, pkg/config/defaults.go) for every tool NOT
@@ -418,6 +631,58 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"delete_workspace": deny,
 			"list_workspaces":  deny,
 			"get_workspace":    deny,
+			// --- ADR-052 planning/verifier tools ---
+			// create_plan/execute_plan/run_task are EXPLICIT "ask" here.
+			//
+			// They were deliberately ABSENT until 2026-07-28, inheriting
+			// "ask" from the global ceiling (DS-6) — correct only for as
+			// long as that ceiling stayed "ask". When the ceiling was
+			// raised to "allow" (so Jim's own seeded "allow" could finally
+			// resolve at all; see pkg/config/defaults.go's ADR-052 note),
+			// absence here would have silently GRANTED all three to the
+			// Worker: the exact "ceiling is allow, so absence GRANTS" trap
+			// that inspect_session, stop_plan/plan_correct and list_jobs
+			// below each already document, hit a fourth time. Caught by
+			// tool_policy_effective_resolution_test.go — which is why that
+			// test asserts the whole seeded roster, not just Jim.
+			//
+			// "ask", not "deny": this restores exactly the posture the
+			// Worker had before the ceiling moved. Tightening it further
+			// would be an unrelated policy change smuggled in on a bug fix.
+			"create_plan":  ask,
+			"execute_plan": ask,
+			"run_task":     ask,
+			// inspect_session, by contrast, is an EXPLICIT "deny" here
+			// (fix-wave finding #2) — NOT absent: the global ceiling now
+			// seeds inspect_session "allow" (raising the ceiling so the
+			// Judge's own "allow" resolves cleanly under strictest-wins,
+			// see defaults.go), so an absent entry here would silently
+			// inherit that "allow" instead of the deny every non-Judge
+			// agent must carry.
+			"inspect_session": deny,
+			// --- ADR-055 containment (FR-006b exception 1) ---
+			// stop_plan is an EXPLICIT "deny" here for exactly the
+			// inspect_session reason directly above, not for a new one:
+			// its global ceiling is "allow" (pkg/config/defaults.go), so
+			// leaving it ABSENT from this sparse map would silently GRANT
+			// it to the Worker. A Worker can never be a plan's
+			// owner_agent_id, so the grant would be unusable rather than
+			// dangerous — but "unusable grant" is not a posture this
+			// codebase ships (Constraint #6). plan_correct needs no entry
+			// of its own: it is not in this map either, and its ceiling
+			// grant is likewise held shut by the engine's exact-identity
+			// gate — but the same "explicit beats inherited" reasoning
+			// applies, so it is named too rather than left to inference.
+			"stop_plan":    deny,
+			"plan_correct": deny,
+			// --- ADR-056 roster visibility ---
+			// Same "ceiling is allow, so absence GRANTS" trap once more, and
+			// here the grant would not merely be unusable: the Worker id is
+			// occupied by every generic delegated session in the installation
+			// at once, so a Worker roster would enumerate sibling branches of
+			// unrelated parent turns rather than its own work. See
+			// coreAgentSeed's ROSTER VISIBILITY rule.
+			"list_jobs": deny,
 		})
 	}
 	// The delegation-only specialist tier (Planner/Explorer/Researcher) is a
@@ -426,9 +691,19 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 	// allowed. None of these ever get bash or any system-management tool
 	// (create_agent, set_config, add_mcp_server, …) — those stay denied.
 	if IsSubagentTierID(id) {
+		ask := config.ToolPolicyAsk
 		overrides := map[string]config.ToolPolicy{
 			// Every leaf reports its result back.
 			"send_message": allow,
+			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
+			// "ask" (never absent, never deny) for the three plan-execution
+			// tools — an operator-approval prompt gates any attempted use.
+			"create_plan":  ask,
+			"execute_plan": ask,
+			"run_task":     ask,
+			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
+			// same literal value. See coreAgentSeed's doc comment.
+			"stop_plan": ask,
 		}
 		switch id {
 		case IDPlanner:
@@ -447,6 +722,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			overrides["update_task"] = allow
 			overrides["list_tasks"] = allow
 			overrides["delegate"] = allow
+			overrides["message_parent"] = allow
 			overrides["remember"] = allow
 			overrides["recall_memory"] = allow
 			overrides["run_retrospective"] = allow
@@ -542,6 +818,20 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"update_workspace": allow,
 			"list_workspaces":  allow,
 			"get_workspace":    allow,
+			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
+			// "ask" (never absent, never deny) for the three plan-execution
+			// tools — an operator-approval prompt gates any attempted use.
+			"create_plan":  ask,
+			"execute_plan": ask,
+			"run_task":     ask,
+			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
+			// same literal value. See coreAgentSeed's doc comment.
+			"stop_plan": ask,
+			// ADR-056 roster visibility: Ava is a chat target and can therefore
+			// be a plan's owner (after an operator approves her "ask"), so she
+			// must be able to find the plan she owns in order to stop it. See
+			// coreAgentSeed's ROSTER VISIBILITY rule.
+			"list_jobs": allow,
 		})
 	case IDMia:
 		// Mia — the Assistant (default agent). LEAST-PRIVILEGE: deny-by-default,
@@ -579,6 +869,21 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"search_web":  allow,
 			"fetch_url":   allow,
 			"find_skills": allow,
+			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
+			// "ask" (never absent, never deny) for the three plan-execution
+			// tools — an operator-approval prompt gates any attempted use.
+			"create_plan":  ask,
+			"execute_plan": ask,
+			"run_task":     ask,
+			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
+			// same literal value. See coreAgentSeed's doc comment.
+			"stop_plan": ask,
+			// ADR-056 roster visibility: "what of mine is still running?" is an
+			// everyday-assistant question, and Mia already owns the task surface
+			// it reports on. She is a chat target, so she can also own a plan
+			// once an operator approves the "ask" above — and would then need
+			// this to find it. See coreAgentSeed's ROSTER VISIBILITY rule.
+			"list_jobs": allow,
 		})
 	case IDRay:
 		// Ray — the Scout / research analyst. LEAST-PRIVILEGE: deny-by-default,
@@ -586,6 +891,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		// drive a browser for interactive sources, write up findings to files,
 		// synthesize with memory, present with citations). No shell, no admin, no
 		// task/agent management — he researches and reports, he doesn't build or run.
+		ask := config.ToolPolicyAsk
 		return denyAllThenOverride(map[string]config.ToolPolicy{
 			// Web research.
 			"search_web": allow,
@@ -623,6 +929,10 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// (delegate → many workers/Researcher) and poll them, then synthesize.
 			// ADR-036 merged spawn/run_subagent/check_spawn_status into "delegate".
 			"delegate": allow,
+			// message_parent (ADR-053 §5.1): only actually callable when Ray
+			// himself is running as a delegated child session, but seeded
+			// allow here to mirror delegate's posture exactly.
+			"message_parent": allow,
 			// Present / route / share an artifact.
 			"send_message":      allow,
 			"hand_off":          allow,
@@ -631,6 +941,21 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// Working aids (his summarize skill; a research checklist).
 			"find_skills": allow,
 			"set_todos":   allow,
+			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
+			// "ask" (never absent, never deny) for the three plan-execution
+			// tools — an operator-approval prompt gates any attempted use.
+			"create_plan":  ask,
+			"execute_plan": ask,
+			"run_task":     ask,
+			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
+			// same literal value. See coreAgentSeed's doc comment.
+			"stop_plan": ask,
+			// ADR-056 roster visibility: Ray fans out parallel research
+			// subagents (delegate: allow above) and then synthesizes, so the
+			// "which of my delegated children are still running?" roster is
+			// directly on his critical path. See coreAgentSeed's ROSTER
+			// VISIBILITY rule.
+			"list_jobs": allow,
 		})
 	case IDJim:
 		// Jim — the Planner & Orchestrator. LEAST-PRIVILEGE: deny-by-default,
@@ -675,8 +1000,12 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"set_todos":           allow,
 			// Delegation — delegate to subagents, poll them, list who's available.
 			// ADR-036 merged spawn/run_subagent/check_spawn_status into "delegate".
-			"delegate":    allow,
-			"list_agents": allow,
+			"delegate": allow,
+			// message_parent (ADR-053 §5.1): only actually callable when Jim
+			// himself is running as a delegated child session, but seeded
+			// allow here to mirror delegate's posture exactly.
+			"message_parent": allow,
+			"list_agents":    allow,
 			// Task management (current workspace).
 			"create_task": allow,
 			"list_tasks":  allow,
@@ -718,12 +1047,332 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"delete_task_in_workspace": ask,
 			"delete_workspace":         ask,
 			"remove_mcp_server":        ask,
+			// ADR-052 FR-005/R2-06: Jim is the ONLY seeded agent granted
+			// unprompted plan-execution — consistent with his orchestrator
+			// role. Every other seeded agent gets an explicit "ask" instead
+			// (never absent, never deny); the Judge gets "deny"
+			// (systemAgentSeed, DS-6).
+			//
+			// These three RESOLVE to "allow" for Jim only because the global
+			// ceiling for them is also "allow" (pkg/config/defaults.go). It
+			// was "ask" until 2026-07-28, which — under the strictest-wins
+			// global x agent merge — silently overruled all three entries
+			// below and made this whole grant dead on every install. If you
+			// are tightening the ceiling for any of these, you are reverting
+			// that fix: tool_policy_effective_resolution_test.go will fail,
+			// and it is telling you the truth.
+			"create_plan":  allow,
+			"execute_plan": allow,
+			"run_task":     allow,
+			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
+			// same literal value — so the orchestrator who is the only agent
+			// seeded to START a plan unprompted is also the one seeded to STOP
+			// it unprompted. Its ceiling has always been "allow", so it kept
+			// resolving allow even while execute_plan's did not; both now do.
+			"stop_plan": allow,
+			// ADR-056 roster visibility: Jim is the only agent seeded to START
+			// a plan unprompted and the only one whose stop_plan actually
+			// RESOLVES allow, so he is the one agent for whom containment must
+			// work with no human in the loop — which needs a plan id he did not
+			// necessarily mint this turn. He is also the heaviest delegator.
+			// See coreAgentSeed's ROSTER VISIBILITY rule.
+			"list_jobs": allow,
 		})
 	}
 	// Defensive fallback for an ID outside the known roster (All() only ever
 	// passes Mia/Jim/Ava/Ray/Worker/Planner/Explorer/Researcher, so this branch
 	// should be unreachable) — deny every known tool, no implicit allow.
 	return denyAllThenOverride(nil)
+}
+
+// systemAgentSeed returns the constructor-seeded, fully-enumerated tool
+// policy for a System Agent (ADR-049 D3, redefined by ADR-052 R3-2/FR-027).
+//
+// The invariant is no longer "all-deny" — a System Agent now carries EXACTLY
+// its seeded tool set, re-enforced every boot: the Judge runs adjudication as
+// a real agent in a VERIFIER ROLE (ADR-052 FR-011/FR-012), in its own
+// session, with a narrow read-only + verification surface (`read_file`,
+// `list_directory`, and the verifier-role-only `inspect_session` — FR-033)
+// allowed; every OTHER static builtin name — including the three
+// plan-execution tools `create_plan`/`execute_plan`/`run_task`, which are
+// verifier-inapplicable — stays explicit "deny", never "ask" (DS-6). Building
+// the map via denyAllThenOverride (one literal entry per allStaticToolNames,
+// with the verifier overrides applied) keeps config.ValidateToolPolicyCoverage
+// gap-free for the System Agent under Constraint #6 (no default-policy
+// fallback): every (system-agent, tool) pair resolves from an explicit
+// literal entry, exactly like every core agent.
+//
+// Any System Agent without its own named case below falls back to all-deny
+// (the pre-ADR-052 invariant) until it is given one.
+//
+// The returned map is an independent allocation — callers may mutate it safely.
+func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
+	allow := config.ToolPolicyAllow
+	switch id {
+	case IDJudge:
+		return denyAllThenOverride(map[string]config.ToolPolicy{
+			"read_file":       allow,
+			"list_directory":  allow,
+			"inspect_session": allow,
+		})
+	case IDPlanSupervisor:
+		// ADR-055 / plan-supervisor-spec FR-008. PlanSupervisor's grant is
+		// EXACTLY ONE tool. Naming plan_correct here is not belt-and-braces:
+		// denyAllThenOverride stamps an explicit deny for every catalog name
+		// first, and a per-agent deny BEATS the global "allow" ceiling under
+		// strictest-wins — so an unnamed tool ships denied to PlanSupervisor
+		// itself and the correction loop would be dead on arrival on every
+		// fresh install.
+		//
+		// Everything else is deliberately withheld, and each omission is a
+		// decision rather than an oversight:
+		//
+		//   - No bash, no write_file/edit_file/append_file, no agent/config/
+		//     workspace/channel/provider mutation. The most privileged new
+		//     agent in the system gets the smallest possible surface.
+		//   - No read_file / list_directory. Every input PlanSupervisor needs
+		//     — the plan record, the Judge's per-criterion verdict, member
+		//     outcomes, the plan skill, its own soul — arrives in the wake or
+		//     via the ContextBuilder; none requires filesystem access. This
+		//     agent's Workspace is not re-enforced by seedSystemAgents, so a
+		//     read grant would have unspecified, operator-mutable reach —
+		//     which on an unconfined workspace includes $OMNIPUS_HOME with its
+		//     master.key, credentials.json and config.json. A future change
+		//     that wants either grant must FIRST state PlanSupervisor's
+		//     Workspace, add it to the re-enforced field set, and assert the
+		//     effective reach (a denied read outside the workspace) — not
+		//     merely the policy string.
+		//   - No inspect_session, even though the Judge holds it: it is
+		//     structurally inert here. The real control on that tool is the
+		//     engine-set, fail-closed verifier-session scope lock
+		//     (tools.VerifierSessionScopeAllows), and PlanSupervisor is not a
+		//     verifier and never runs through the verifier dispatch, so it
+		//     never holds the scope. The grant could never succeed; it would
+		//     only widen the seeded surface for zero capability.
+		//   - No execute_plan and no stop_plan (FR-043): the adjudicator
+		//     corrects, the owner contains. The FR-006b seed rule reaches the
+		//     same answer independently — execute_plan is not named here, so
+		//     stop_plan must not be either.
+		//   - No list_jobs / plan-list / roster tool (D-04): PlanSupervisor is
+		//     roster-blind BY DESIGN. As of ADR-056 list_jobs is a REAL catalog
+		//     name, so this bullet is now load-bearing rather than
+		//     anticipatory — the deny comes from denyAllThenOverride stamping
+		//     every unnamed catalog entry, and TestPlanSupervisorSeed_
+		//     ExactlyPlanCorrect names list_jobs in its withheld call-outs so
+		//     the omission cannot be re-read as an oversight. It cannot
+		//     enumerate the plans it
+		//     supervises; the engine's supervision wake deadline is the only
+		//     liveness control, and it is deliberately the engine's — an
+		//     adjudicator that could see it had three parked plans would have
+		//     a reason to act outside the wake it was given, which is the
+		//     opposite of "one correction per wake".
+		//
+		// TestPlanSupervisorSeed_ExactlyPlanCorrect asserts this as a
+		// COMPLEMENT (allow for plan_correct, deny for every other name in
+		// allStaticToolNames) rather than as a list, so a tool added to the
+		// catalog later can never silently land in PlanSupervisor's allow set.
+		// A future change that genuinely wants a second grant must amend that
+		// test deliberately — the complement failing is the guard working.
+		return denyAllThenOverride(map[string]config.ToolPolicy{
+			"plan_correct": allow,
+		})
+	default:
+		return denyAllThenOverride(nil)
+	}
+}
+
+// systemAgentSkills returns the seeded per-System-Agent skill allowlist.
+//
+// A nil return means "no allowlist seeded", which at skill-resolution time
+// (pkg/agent/instance.go) means UNRESTRICTED — every installed skill resolves.
+// That is why PlanSupervisor carries an EXPLICIT, non-nil allowlist
+// (plan-supervisor-spec FR-007/N3): a Judge-shaped nil would have granted the
+// single most privileged agent in the system every skill on the box, including
+// any an operator later installs from ClawHub.
+//
+// The Judge deliberately keeps nil here — that is its existing, shipped
+// behaviour and narrowing it is out of ADR-055's scope; it is recorded as a
+// known gap rather than silently changed under a PlanSupervisor commit.
+//
+// seedSystemAgents re-enforces a NON-NIL result on every boot (the allowlist
+// is part of a System Agent's role invariant, like its tool policy) and leaves
+// a nil result entirely alone, so this function is also the switch that
+// decides whether an operator's Skills edit survives.
+func systemAgentSkills(id CoreAgentID) []string {
+	switch id {
+	case IDPlanSupervisor:
+		// The plan skill carries the re-planning playbook (diagnose →
+		// classify → supersede / targeted-retry / append → record the
+		// falsified assumption → honest exit) that PlanSupervisorDefaultRubric
+		// is derived from rule-for-rule. It is the only skill the adjudicator
+		// has any use for.
+		return []string{"plan"}
+	default:
+		return nil
+	}
+}
+
+// JudgeDefaultRubric is the Judge System Agent's default system prompt /
+// judging rubric (ADR-049 D3; ADR-052 FR-038 soul/rubric unification —
+// R3-1 CLOSED). AgentConfig.Rubric was DELETED: there is now one unified
+// "soul" concept and the Judge's judging standards live in its SOUL.md like
+// any other agent's soul, EDITABLE by the operator while the Judge stays
+// otherwise locked. Exported (was unexported judgeDefaultRubric) so
+// pkg/agent can reference it: seedSystemAgents below deliberately does NOT
+// write SOUL.md itself — SeedConfig is documented, and relied on by its own
+// test suite (none of which sets OMNIPUS_HOME), as a PURE config-struct
+// mutation with zero filesystem side effects, so introducing a disk write
+// here would silently start touching the real machine's home directory on
+// every `go test ./pkg/coreagent/...` run. Two other places materialize
+// this constant into the Judge's actual SOUL.md instead, both via
+// pkg/agent's shared agent.SeedSystemAgentSoulFile so their write semantics
+// never diverge: (a) pkg/gateway's boot sequence (gateway.go's
+// seedSystemAgentEagerSouls, called right after coreagent.SeedConfig on every real
+// boot) backfills it EAGERLY, so a fresh install's Judge profile shows the
+// default standards immediately instead of staying blank until the first
+// judgment; (b) pkg/agent's ensureVerifierSoul (verifier_adjudication.go)
+// remains a LAZY backstop — mirroring how NewAgentInstance itself lazily
+// MkdirAlls an agent's workspace at construction time — for any path
+// (e.g. pkg/agent's own test harnesses) that constructs an AgentInstance
+// without ever running gateway boot. Neither path overwrites an operator's
+// own edit (the same "backfill only when empty/missing" rule the old
+// Rubric field used). The Judge engine renders this together with the
+// criteria/evidence/worker-summary and requires a strict per-criterion
+// {met, reason} JSON verdict; absence of evidence for a criterion is scored
+// unmet (fail-closed, NFR-2).
+const JudgeDefaultRubric = `You are the Judge — an impartial acceptance-criteria evaluator for the Omnipus Planning & Goals engine.
+
+You receive: a unit's acceptance criteria (machine-check evidence records and prose criteria), the relevant file diffs, and the worker's own last completion summary. The worker's summary is a CLAIM, never a verdict — judge only against the criteria and the real evidence.
+
+Rules:
+- Evaluate EACH criterion independently. For every criterion decide met=true or met=false and give a concise, specific reason grounded in the evidence.
+- A criterion with no supporting evidence is met=false (fail-closed). Never assume success from the worker's claim alone.
+- A machine check counts as met ONLY when its recorded evidence shows the expected exit code; a timed-out, denied, or oversize check is met=false.
+- Do not run tools, do not request more information, do not speculate. Judge only what you are given.
+- The overall verdict is met=true ONLY when every criterion is met=true.
+
+Return ONLY valid JSON of the shape:
+{"met": <bool>, "criteria": [{"id": "<criterion-id>", "met": <bool>, "reason": "<why>"}], "summary": "<one-line overall reason>"}`
+
+// PlanSupervisorDefaultRubric is the PlanSupervisor System Agent's default
+// system prompt / adjudication rubric (ADR-055; plan-supervisor-spec FR-005,
+// full text = spec §27 Appendix A, transcribed verbatim). It is the
+// PlanSupervisor's soul, not a separate "rubric" field: AgentConfig.Rubric was
+// deleted by ADR-052 FR-038, so a System Agent's standards live in its SOUL.md
+// like any other agent's soul — operator-EDITABLE while the agent itself stays
+// locked. This constant is only the DEFAULT.
+//
+// Derivation: every behavioural rule below is derived rule-for-rule from
+// pkg/skills/embedded/plan/SKILL.md's re-planning playbook (diagnose →
+// classify → supersede / targeted-retry / append → record the falsified
+// assumption → honest exit), which is also the one skill PlanSupervisor's
+// allowlist grants (systemAgentSkills above). THE TWO MUST NOT DRIFT: where
+// this rubric states a rule the skill also states, the SKILL is the source.
+// The only additions are facts the skill cannot know — the ROLE fact that the
+// corrector is a different actor from the plan's author, and the STALL wake,
+// which the skill does not cover. Marked in the spec as a first draft open to
+// tuning (RISK-12).
+//
+// HOW IT REACHES DISK. Exactly like JudgeDefaultRubric, and for the same two
+// reasons spelled out in that constant's doc comment: SeedConfig/
+// seedSystemAgents deliberately do NOT write it. SeedConfig is documented, and
+// relied on by its own test suite (none of which sets OMNIPUS_HOME), as a PURE
+// config-struct mutation with zero filesystem side effects — a disk write here
+// would start silently touching the real machine's home directory on every
+// `go test ./pkg/coreagent/...` run — and pkg/coreagent cannot resolve an
+// agent's REAL workspace path anyway (that lives in agent.ResolveAgentHome,
+// and pkg/coreagent cannot import pkg/agent without a cycle).
+//
+// The materialiser is therefore the GATEWAY-SIDE EAGER SEED at boot —
+// gateway.go's seedSystemAgentEagerSouls, which iterates SystemAgents() and
+// so covers this id by construction rather than by a second call site. It writes this constant into
+// plansupervisor/SOUL.md only when that file is missing or empty — never over
+// an operator edit. SystemAgentDefaultSoul below is the accessor that seam
+// reads, so the write helper stays id-generic instead of hardcoding a second
+// constant.
+//
+// There is deliberately NO lazy backstop, unlike the Judge (FR-005, rev 2
+// dropped it). The Judge's backstop, pkg/agent's ensureVerifierSoul, returns
+// immediately unless the instance id is the Judge's and is only ever called
+// from the Judge's verifier dispatch — PlanSupervisor is woken over the bus
+// into an ordinary agent turn and never reaches that file, so there is no
+// analogous hook to mirror; a backstop would need a NEW call site in the
+// ordinary instance-construction path. Accepted consequence, stated rather
+// than hidden: if an operator deletes plansupervisor/SOUL.md while the gateway
+// is running, it stays empty until the next restart. That is the same exposure
+// every other seeded-once artefact has.
+const PlanSupervisorDefaultRubric = `You are the Plan Supervisor — the sole adjudicator authorised to correct a running plan in the Omnipus Planning & Goals engine.
+
+You are woken for exactly one reason: a plan cannot move on its own. You did not author the plan. The agent that did is still running and is accountable to whoever asked for it — you are not that agent, you do not talk to the requester, and you do not write the plan's closing summary. Your entire job is to decide what single correction, if any, lets this plan reach its Definition of Done.
+
+WHAT YOU RECEIVE
+
+Two kinds of wake. Read which one you got before deciding anything.
+
+- DEFINITION-OF-DONE UNMET. The plan's members have all finished and the plan Judge ruled the DoD not met. You receive the Judge's per-criterion verdict with its reasons. Your job is to correct the plan's execution.
+- STALLED. The plan is still live but no member is dispatchable or in flight — the DAG cannot advance. You receive the stall reason. Your job is to diagnose why it cannot progress and correct the structure. Do NOT return a Definition-of-Done verdict for a stall wake; the DoD has not been evaluated and is not the question.
+
+Both wakes also carry the identifiers you need to act, and they are the ONLY place you will get them:
+
+- plan_id — the id of the plan this wake is about. Every plan_correct call requires it, including abandon.
+- A member list, one line per member: member_id | status | title. supersede names a member_id whose status is done; targeted_retry names a member_id whose status is failed.
+
+Use those ids verbatim. Do not infer an id from a plan or member title, and do not invent one — a call with the wrong id is rejected and the wake is spent.
+
+The wake gives you the diagnosis (the Judge's per-criterion reasons, or the stall reason) and the member list. It does not give you each member's full result text, and you have no tool that can fetch it. Decide from the diagnosis: it is what tells you which criterion actually failed and why. A member's own claim that it succeeded is a claim, not a verdict.
+
+THE ONE RULE THAT IS NOT NEGOTIABLE
+
+The Definition of Done is immutable. You cannot change it, and nothing you can call will let you. You change the plan's execution so it meets the criteria. You never change the criteria, reinterpret them more loosely, or argue that a criterion was unreasonable. If a criterion genuinely cannot be met, say so and abandon — do not quietly work around it.
+
+HOW TO DECIDE
+
+1. Diagnose. For each unmet criterion, identify which member's outcome is responsible. Name it to yourself before choosing a verb. If you cannot name one, the defect is a missing capability, not a bad outcome.
+
+2. Classify the failure.
+   - Wrong outcome — the member finished (done) but its result is incorrect → SUPERSEDE.
+   - Recoverable failure — the member failed on something transient (timeout, flake, a dependency that now exists) → TARGETED-RETRY.
+   - Missing capability — no member addresses this criterion at all → APPEND.
+   - Nothing fits — no legal target exists for any verb, or every remaining path depends on a frozen outcome that cannot be produced → ABANDON.
+
+3. Choose one verb and issue one plan_correct call.
+   - APPEND adds new tail member(s) and their dependency edges. Use it for work that does not exist yet.
+   - SUPERSEDE marks a done member's outcome ignored by the Judge; the record itself stays immutable. It MUST be accompanied by replacement work that carries the superseded member's acceptance criteria. This is enforced — a supersede with no replacement, or with a replacement that drops those criteria, is rejected before anything changes. That is deliberate: discounting failing evidence without producing better evidence is not a correction, it is lowering the bar, and it is the one thing you must never do.
+   - TARGETED-RETRY resets exactly one failed member. Use it when the work was right and the run was not.
+   - ABANDON ends the plan honestly with your reason. Use it when the DoD is genuinely unreachable.
+
+4. Know the side effects before you act. APPEND and SUPERSEDE auto-reset every other live-round failed member, giving them another attempt under the corrected plan; done members are frozen and are not re-run unless you supersede them. TARGETED-RETRY resets only the member you name. Edges you supply must point at real members and must not create a cycle.
+
+5. Record the falsified assumption. Every correction carries one: the specific assumption the original plan made that turned out to be wrong. "We assumed X; the evidence shows not-X; therefore Y." This is the audit trail an operator reads to answer "why did this plan change?" — write it for that reader, not for yourself. A vague assumption is a failed correction even if the verb was right.
+
+BOUNDARIES
+
+- One correction per wake. Decide, act once, stop. If it was not enough you will be woken again.
+- You have no way to satisfy a criterion yourself, and you must not try. Adding a member whose only purpose is to make a check pass without doing the underlying work is manufacturing a false success — worse than a stuck plan, because done is terminal.
+- If you are unsure between two verbs, prefer the one that adds work over the one that discounts it.
+- If you conclude the plan cannot reach its Definition of Done, abandon it and say why. An honest failure is a correct outcome. Silence is not — a plan you leave untouched is a plan nobody is working on.
+
+Return exactly one plan_correct tool call, using the plan_id and member_ids exactly as the wake gave them to you. Do not narrate and do not ask questions: the wake is your entire input, nothing will be added to it, and plan_correct is your only tool.`
+
+// SystemAgentDefaultSoul returns the compiled default soul text for a seeded
+// System Agent, or "" for an id that has none (including every core/worker
+// agent, whose prompts live in the prompts map instead).
+//
+// This exists so the soul-materialising seam — pkg/agent's shared write helper,
+// driven by pkg/gateway's boot-time eager seed — can stay id-generic
+// ("write the default soul for THIS System Agent, if its SOUL.md is missing or
+// empty") instead of growing one hardcoded constant reference per System Agent.
+// Adding a third System Agent with a default soul is then a change in this
+// file only.
+func SystemAgentDefaultSoul(id CoreAgentID) string {
+	switch id {
+	case IDJudge:
+		return JudgeDefaultRubric
+	case IDPlanSupervisor:
+		return PlanSupervisorDefaultRubric
+	default:
+		return ""
+	}
 }
 
 // coreAgentSkills returns the seeded per-agent skill allowlist (FR-9.4). The
@@ -887,6 +1536,16 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 // intPtr returns a pointer to v. Used to set DelegationPolicy.Depth in seeds.
 func intPtr(v int) *int { return &v }
 
+// boolPtr returns a pointer to v. Used to set AgentConfig.MemoryEnabled in
+// seeds (ADR-052 FR-039) — a pointer is required to distinguish "never set"
+// (nil, defaults to true) from an explicit false.
+func boolPtr(v bool) *bool { return &v }
+
+// timePtr returns a pointer to v. Used to set AgentConfig.CreatedAt in seeds
+// (ADR-054 D2) — a pointer is required to distinguish "never set" (nil, a
+// pre-ADR-054 record) from a genuinely-zero timestamp, mirroring UpdatedAt.
+func timePtr(v time.Time) *time.Time { return &v }
+
 // SeedDelegationEdges returns the seeded canonical delegation policy for a
 // core agent ID (ADR-037, Wave 2). AgentConfig.DelegationPolicy — the field
 // this used to be copied onto at boot — has been removed entirely; the
@@ -902,6 +1561,22 @@ func SeedDelegationEdges(id CoreAgentID) *config.DelegationPolicy {
 	return coreAgentDelegation(id)
 }
 
+// seedMu owns SeedConfig's read-all-then-append sequence (ADR-054 D6 rule 4,
+// M-7). SeedConfig builds an `existing` set from the current roster, then
+// appends any missing core agent — with no lock, two concurrent callers (e.g.
+// a boot racing a hot-reload re-seed, or two goroutines in a test) can each
+// observe "Mia missing" and both append her, leaving two "mia" entries.
+// Today's only production call site (pkg/gateway's boot sequence) invokes
+// SeedConfig once, single-threaded, before serving traffic — so this is a
+// defense-in-depth close of the race the ADR named, not a fix for an observed
+// double-seed in production. This is an IN-PROCESS mutex only; it does not
+// protect against two separate OS processes racing the same config.json —
+// that is the cross-process pidfile/lockfile concern D3/D4 assign elsewhere
+// (pkg/entity, out of this package's scope).
+//
+//nolint:gochecknoglobals
+var seedMu sync.Mutex
+
 // SeedConfig ensures all core agents exist in cfg.Agents.List with Locked=true
 // and with the correct constructor-seeded tool policy (FR-010, FR-022).
 //
@@ -912,6 +1587,9 @@ func SeedDelegationEdges(id CoreAgentID) *config.DelegationPolicy {
 //
 // Returns true if config was modified (caller should save).
 func SeedConfig(cfg *config.Config) bool {
+	seedMu.Lock()
+	defer seedMu.Unlock()
+
 	existing := make(map[string]bool, len(cfg.Agents.List))
 	for _, a := range cfg.Agents.List {
 		existing[a.ID] = true
@@ -934,6 +1612,30 @@ func SeedConfig(cfg *config.Config) bool {
 			cfg.Agents.Defaults.BootstrapRecapEnabled = true
 			modified = true
 		}
+	}
+
+	// RELEASE BLOCKER fix: Mia being "the default agent" on a fresh install
+	// was previously ONLY expressed via the per-entity AgentConfig.Default
+	// stamp on her fresh-seed record below (isDefault := ca.ID == IDMia) —
+	// but ADR-054 D6.4 moved default-agent RESOLUTION entirely to the
+	// settings singleton (cfg.Agents.Defaults.DefaultAgentID; see
+	// pkg/agent.AgentRegistry.GetDefaultAgent and
+	// pkg/routing.RouteResolver.resolveDefaultAgentID) and nothing ever seeded
+	// THAT field, so a fresh install had NO configured default at all:
+	// webchat and channel routing each fell back to a DIFFERENT priority-2/3
+	// default and disagreed. Seed the singleton here, on the exact same
+	// isFreshInstall gate the AutoRecap seed above uses, so a fresh install's
+	// actual resolved default matches the documented "Mia is default" intent.
+	// The per-entity Default:true stamp on Mia's fresh-seed record below is
+	// UNCHANGED (kept for backward display compatibility per config.go's
+	// ADR-054 D6.4 note) — this only adds the singleton write alongside it.
+	// Guarded by "still empty" so an operator's pre-boot env override
+	// (OMNIPUS_DEFAULT_AGENT_ID) is never clobbered, and so this is a
+	// fresh-install-only seed, not a re-enforcement that would overwrite an
+	// operator's later choice on every subsequent boot.
+	if isFreshInstall && strings.TrimSpace(cfg.Agents.Defaults.DefaultAgentID) == "" {
+		cfg.Agents.Defaults.DefaultAgentID = string(IDMia)
+		modified = true
 	}
 
 	// Re-enforce identity fields on existing core agents (tamper protection + rename).
@@ -1054,6 +1756,7 @@ func SeedConfig(cfg *config.Config) bool {
 			Type:        agentType,
 			Locked:      true,
 			Default:     isDefault,
+			CreatedAt:   timePtr(time.Now().UTC()),
 			// Per-agent skill allowlist (FR-9.4): default-DENY enforced at skill
 			// resolution. Nil for agents with no seeded skills (unrestricted).
 			Skills: coreAgentSkills(ca.ID),
@@ -1079,7 +1782,213 @@ func SeedConfig(cfg *config.Config) bool {
 		cfg.Agents.List = append(cfg.Agents.List, newAgent)
 		modified = true
 	}
+
+	// --- System Agents (ADR-049 D3) ---
+	// Seeded via a path SEPARATE from the All() core/worker loops above so a
+	// System Agent (the Judge) is never classified as core (ByID/IsCoreAgent
+	// iterate All(), which excludes SystemAgents()). Every identity/type/locked/
+	// tool-policy field is re-enforced on EVERY boot (tamper protection, mirrors
+	// the core re-enforcement loop); only Model/Provider and the soul
+	// (SOUL.md, lazily materialized from JudgeDefaultRubric — ADR-052 FR-038)
+	// are operator-editable and therefore preserved across boots.
+	if seedSystemAgents(cfg, existing) {
+		modified = true
+	}
+
 	return modified
+}
+
+// seedSystemAgents creates or re-enforces every System Agent (ADR-049 D3) in
+// cfg.Agents.List. `existing` is the fresh-boot presence set built at the top of
+// SeedConfig. Returns true when it modified cfg. Split out of SeedConfig so the
+// System-Agents path is testable and visibly independent of the core/worker
+// loops.
+func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
+	modified := false
+	for _, sa := range SystemAgents() {
+		policies := systemAgentSeed(sa.ID)
+		// Per-System-Agent skill allowlist. A nil allowlist means UNRESTRICTED
+		// at skill-resolution time, so PlanSupervisor carries an explicit,
+		// non-nil one (plan-supervisor-spec FR-007/N3) — note this is the ONLY
+		// place a System Agent's Skills field is ever populated: the
+		// core/worker re-enforcement loop in SeedConfig reads coreAgentSkills,
+		// which never sees a System Agent id because it is only reached via
+		// the two All() loops. Seeding a System Agent "like the Judge" (i.e.
+		// leaving Skills unset) would therefore have granted PlanSupervisor
+		// every installed skill.
+		skills := systemAgentSkills(sa.ID)
+		if !existing[string(sa.ID)] {
+			// Fresh seed: locked, non-default, Type=system. Tool policy is
+			// EXACTLY the seeded verifier set (ADR-052 R3-2 — read_file /
+			// list_directory / inspect_session allow for the Judge, else
+			// deny; see systemAgentSeed). No Rubric field to seed anymore
+			// (ADR-052 FR-038, R3-1 CLOSED: the field was deleted) — the
+			// Judge's soul (its default judging standards,
+			// JudgeDefaultRubric) is materialized into SOUL.md by
+			// pkg/gateway's eager boot-time seed (gateway.go's
+			// seedSystemAgentEagerSouls, right after this SeedConfig call returns)
+			// and, as a lazy backstop, by pkg/agent's ensureVerifierSoul on
+			// first real verifier dispatch — not here (SeedConfig stays a
+			// pure config-struct mutation with zero filesystem side
+			// effects; see JudgeDefaultRubric's doc comment above).
+			cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
+				ID:          string(sa.ID),
+				Name:        sa.Name,
+				Description: sa.Description,
+				Color:       sa.Color,
+				Icon:        sa.Icon,
+				Type:        config.AgentTypeSystem,
+				Locked:      true,
+				Default:     false,
+				CreatedAt:   timePtr(time.Now().UTC()),
+				// Explicit, non-nil for any System Agent that declares one
+				// (systemAgentSkills); nil — i.e. unrestricted — only for one
+				// that deliberately does not.
+				Skills: skills,
+				// ADR-052 FR-039: a verifier-role agent's evidence-in →
+				// verdict-out mapping must be reproducible and impartial —
+				// injected episodic memory would otherwise let the SAME
+				// evidence yield a DIFFERENT verdict across adjudications
+				// (the ContextBuilder's memory injection includes the
+				// shared workspace memory room, so memory-on is a real
+				// non-reproducibility channel, not a cosmetic default).
+				// Explicit false (never nil) so re-enforcement below can
+				// distinguish "seeded correctly" from a tampered/absent
+				// value.
+				MemoryEnabled: boolPtr(false),
+				Tools: &config.AgentToolsCfg{
+					Builtin: config.AgentBuiltinToolsCfg{
+						Policies: policies,
+					},
+				},
+			})
+			modified = true
+			continue
+		}
+		// Idempotent re-enforcement of an EXISTING System Agent (tamper
+		// protection). Find it by ID and repair every non-editable field.
+		for i := range cfg.Agents.List {
+			a := &cfg.Agents.List[i]
+			if a.ID != string(sa.ID) {
+				continue
+			}
+			if !a.Locked {
+				a.Locked = true
+				modified = true
+			}
+			if a.Type != config.AgentTypeSystem {
+				a.Type = config.AgentTypeSystem
+				modified = true
+			}
+			// A System Agent is never a chat target, so it can never be the
+			// routing default — clear a stray/tampered Default flag.
+			if a.Default {
+				a.Default = false
+				modified = true
+			}
+			if a.Name != sa.Name {
+				a.Name = sa.Name
+				modified = true
+			}
+			if a.Description != sa.Description {
+				a.Description = sa.Description
+				modified = true
+			}
+			if a.Color != sa.Color {
+				a.Color = sa.Color
+				modified = true
+			}
+			if a.Icon != sa.Icon {
+				a.Icon = sa.Icon
+				modified = true
+			}
+			// Re-enforce MemoryEnabled=false on EVERY boot (ADR-052 FR-039):
+			// this is an IMPARTIALITY PROPERTY of the verifier role, not an
+			// operator preference — unlike Model/Provider (which stay
+			// operator-editable below), a tampered/reset value (nil, which
+			// resolves true via MemoryEnabledEffective, or an explicit true)
+			// must be repaired in BOTH directions so the Judge's verdicts
+			// stay reproducible (same evidence -> same verdict) regardless
+			// of config-file edits or upgrade artifacts.
+			if a.MemoryEnabled == nil || *a.MemoryEnabled {
+				a.MemoryEnabled = boolPtr(false)
+				modified = true
+			}
+			// Re-enforce the seeded skill allowlist on EVERY boot, for the
+			// same reason the tool policy just below is re-enforced rather
+			// than preserved: for a System Agent the allowlist is a role
+			// invariant, not an operator preference. This is STRICTER than
+			// the core-agent loop, which seeds skills only when the entry
+			// declares none. It is also fail-closed in the direction that
+			// matters — a tampered/cleared allowlist would resolve to nil,
+			// i.e. UNRESTRICTED, handing the most privileged agent in the
+			// system every installed skill (plan-supervisor-spec FR-007/N3).
+			// A System Agent that declares no allowlist (nil) is left
+			// untouched, preserving the Judge's existing behaviour exactly.
+			if skills != nil && !stringSlicesEqual(a.Skills, skills) {
+				a.Skills = append([]string(nil), skills...)
+				modified = true
+			}
+			// Re-enforce the EXACT seeded tool policy on EVERY boot (ADR-052
+			// R3-2: "System Agents carry exactly their seeded tool set,
+			// re-enforced every boot" — no longer "all-deny re-enforced").
+			// This is stricter than the core-agent loop (which preserves
+			// operator tool edits) BECAUSE a System Agent's tool surface is a
+			// hard invariant of its role (e.g. the Judge's narrow verifier
+			// read-only + inspect_session set), not an operator preference —
+			// and it keeps ValidateToolPolicyCoverage gap-free.
+			if a.Tools == nil {
+				a.Tools = &config.AgentToolsCfg{}
+			}
+			if !toolPolicyMapsEqual(a.Tools.Builtin.Policies, policies) {
+				a.Tools.Builtin.Policies = policies
+				modified = true
+			}
+			// No Rubric field left to backfill (ADR-052 FR-038 deleted it —
+			// see the fresh-seed branch above and JudgeDefaultRubric's doc
+			// comment). Model/Provider are likewise left untouched here;
+			// the Judge's soul-file backfill-when-missing/empty happens
+			// eagerly at gateway boot (seedSystemAgentEagerSouls) and, as a lazy
+			// backstop, in pkg/agent's ensureVerifierSoul — never on this
+			// config-mutation path, and never for a soul that already has
+			// real (operator-edited) content, which this re-seed cycle must
+			// not touch.
+			break
+		}
+	}
+	return modified
+}
+
+// stringSlicesEqual reports whether two string slices are element-wise equal
+// (order-sensitive). Used by seedSystemAgents to re-enforce a System Agent's
+// seeded skill allowlist only when it actually drifted, avoiding a spurious
+// config write on every boot. Order-sensitive on purpose: the seed literal is
+// the canonical order, so a reordered allowlist is rewritten back to it.
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// toolPolicyMapsEqual reports whether two tool-policy maps have identical keys
+// and values. Used by seedSystemAgents to re-enforce the exact seeded policy
+// only when it actually drifted, avoiding a spurious config write on every boot.
+func toolPolicyMapsEqual(a, b map[string]config.ToolPolicy) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if bv, ok := b[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
 }
 
 // NewCustomAgentToolsCfg returns the default AgentToolsCfg for a newly created
@@ -1148,7 +2057,7 @@ func Jim() *CoreAgent {
 			"search_web", "fetch_url",
 			"send_message", "send_file",
 			"create_task", "update_task", "list_tasks",
-			"cron", "delegate",
+			"cron", "delegate", "message_parent",
 			"hand_off", "return_to_default",
 		},
 	}
@@ -1253,7 +2162,7 @@ func Planner() *CoreAgent {
 		DefaultTools: []string{
 			"read_file", "list_directory",
 			"create_task", "update_task", "list_tasks",
-			"delegate",
+			"delegate", "message_parent",
 			"remember", "recall_memory",
 			"send_message",
 		},
@@ -1297,6 +2206,74 @@ func Researcher() *CoreAgent {
 			"recall_memory", "remember",
 			"send_message",
 		},
+	}
+}
+
+// Judge returns the Judge System Agent (ADR-049 D3). It is a System Agent
+// (Type=system, seeded via SystemAgents()), NOT a core/base agent and NOT a
+// worker: locked identity, never a chat target, never the default, non-privileged
+// (subject to SEC-26). Its constructor-seeded tool policy is EXACTLY the
+// read-only verifier set (systemAgentSeed: read_file / list_directory /
+// inspect_session allow, everything else deny — ADR-052): the Judge executes
+// as a real agent turn in its own session, constrained to verification.
+// Its "prompt" is its soul (SOUL.md, lazily materialized from
+// JudgeDefaultRubric and operator-editable — ADR-052 FR-038), NOT a compiled
+// entry in the prompts map — which is why the Judge is deliberately excluded
+// from All() and from init()'s compiled-prompt invariant.
+func Judge() *CoreAgent {
+	return &CoreAgent{
+		ID:       IDJudge,
+		Name:     "Judge",
+		Subtitle: "Acceptance-Criteria Evaluator",
+		Description: "Impartial acceptance-criteria evaluator for the Planning & Goals engine. " +
+			"Adjudicates as a real agent in a read-only verifier role, in its own session; " +
+			"not a chat persona.",
+		Color: "#64748B",
+		Icon:  "gavel",
+		// DefaultTools is unused for the Judge (and every System Agent): its
+		// actual tool policy is systemAgentSeed's fully-enumerated verifier
+		// set (read_file/list_directory/inspect_session allow, else deny),
+		// not this field. Left nil rather than repeating that set here, to
+		// avoid two sources of truth drifting apart.
+		DefaultTools: nil,
+	}
+}
+
+// PlanSupervisor returns the PlanSupervisor System Agent (ADR-055;
+// plan-supervisor-spec FR-001/FR-002). Like the Judge it is a System Agent
+// (Type=system, seeded via SystemAgents()), NOT a core/base agent and NOT a
+// worker: locked identity, never a chat target, never the default, never a
+// delegation/binding/team target, never a plan's owner_agent_id,
+// memory-disabled, and non-privileged (subject to SEC-26).
+//
+// Its constructor-seeded tool policy is EXACTLY one allow — plan_correct —
+// with every other static builtin name explicit deny (systemAgentSeed above,
+// which carries the full rationale for each withheld grant). Its skill
+// allowlist is the explicit, non-nil ["plan"] (systemAgentSkills). Its prompt
+// is its soul (SOUL.md, materialized from PlanSupervisorDefaultRubric by the
+// gateway's boot-time eager seed and operator-editable), NOT a compiled entry
+// in the prompts map — which is why it is deliberately excluded from All() and
+// from init()'s compiled-prompt invariant, exactly like the Judge.
+//
+// Model/Provider are ordinary operator-configurable fields (D-11): left unset
+// by the seed so an unconfigured PlanSupervisor falls back to the install
+// default like every other built-in agent. There is no special-cased model
+// tier for this agent.
+func PlanSupervisor() *CoreAgent {
+	return &CoreAgent{
+		ID:       IDPlanSupervisor,
+		Name:     "Plan Supervisor",
+		Subtitle: "Plan Adjudicator",
+		Description: "Sole adjudicator authorised to correct a running plan. Woken when a plan's " +
+			"Definition of Done is ruled unmet or its DAG has stalled, it issues exactly one " +
+			"correction per wake; not a chat persona.",
+		Color: "#0F766E",
+		Icon:  "compass-tool",
+		// DefaultTools is unused for a System Agent — the real policy is
+		// systemAgentSeed's fully-enumerated map (plan_correct allow, else
+		// deny). Left nil rather than repeating it here, to avoid two sources
+		// of truth drifting apart.
+		DefaultTools: nil,
 	}
 }
 

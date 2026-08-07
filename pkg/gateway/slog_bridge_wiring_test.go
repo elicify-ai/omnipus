@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // slog_bridge_wiring_test.go — proof that installSlogBridge (called from
 // RunContextWithOptions immediately after logger.EnableFileLogging) actually
 // makes a bare `slog.Warn/Info/Error(...)` call land in the same file

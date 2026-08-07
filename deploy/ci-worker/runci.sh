@@ -13,6 +13,39 @@ set -uo pipefail
 REF="${1:-HEAD}"
 GATE="${2:-all}"
 REPO_DIR=/cache/omnipus   # on the persistent volume → clone survives stop/start
+
+# --- whole-run mutex ------------------------------------------------------
+# This worker is SHARED: every operator/session drives the same machine, and a
+# run's state is keyed by shard NAME, not by run. Two overlapping runs therefore
+# corrupt each other in at least three ways, all observed on 2026-07-26 when a
+# `<ref> e2e` run overlapped a `sendfile-fix all` run:
+#   1. $REPO_DIR — both hard-reset the SAME checkout to different SHAs, so the
+#      loser builds/tests the other run's code. The `HEAD:` line above proves
+#      only what was checked out at START, not that it survived the run.
+#   2. /tmp/omnipus-ci — the gateway BINARY both e2e gates build to. Rebuilt
+#      underneath a run already launching shards from it.
+#   3. /tmp/omnipus-e2e-<shard> — each shard `rm -rf`s its OMNIPUS_HOME and
+#      seeds a FRESH master key. Doing that under a live gateway from the other
+#      run yields exactly `credentials: decryption failed — wrong master key?`
+#      → provider injection rejected → `POST /auth/login` 500 → the shard fails
+#      at onboarding and reads as a code regression. It is not one.
+# Serialising whole runs fixes all three at once, and is far safer than
+# per-run path scoping (tests/e2e/setup.ts hardcodes /tmp/omnipus-ci).
+# FD 9 is held for the lifetime of this process; the lock releases on exit.
+_LOCKFILE=/tmp/runci.lock
+exec 9>"$_LOCKFILE" || { echo "cannot open $_LOCKFILE"; exit 2; }
+if ! flock -n 9; then
+  echo "another runci.sh is already running on this worker (lock: $_LOCKFILE):"
+  pgrep -af 'bash /cache/runci.sh' | grep -v "^$$ " || true
+  echo "waiting for it to finish (this run will start automatically)…"
+  # Bounded wait: better to queue than to silently corrupt both runs. If the
+  # holder is wedged, the timeout surfaces it instead of blocking forever.
+  if ! flock -w 5400 9; then
+    echo "timed out after 90m waiting for the worker lock — is a run wedged?" >&2
+    exit 2
+  fi
+fi
+echo "worker lock acquired (pid $$)"
 TAGS="goolm,stdjson"
 export PATH=/usr/local/go/bin:/cache/go/bin:$PATH
 export HOME="${HOME:-/root}"   # non-login SSH shell has no HOME; gen-contracts.sh uses set -u
@@ -107,16 +140,58 @@ run_gotest() {
   local out; out=$(GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 2 ./... 2>&1)
   local code=$?
   echo "$out"
+  # DATA RACE carve-out — checked BEFORE the exit-code short-circuit, because a
+  # race can be reported without flipping the overall `go test` exit code (a test
+  # that shells out with -race and only reads the child's stdout, for example).
+  # A race that vanishes under the isolated `-p 1` re-run is the TEXTBOOK
+  # signature of a real concurrency bug, not a flake, so it is never excused.
+  # Native bash substring match, NOT `echo | grep -q`: grep -q exits on the first
+  # match and closes the pipe, echo dies of SIGPIPE, and under `set -o pipefail`
+  # the pipeline status becomes 141 — the test would silently evaluate false on
+  # any multi-MB log. (Mirrors the same guard in .github/workflows/pr.yml.)
+  if [[ $out == *"DATA RACE"* ]]; then
+    echo ""
+    echo "=== DATA RACE detected — never excused by an isolated re-run ==="
+    echo "$out" | grep -aE '^FAIL[[:space:]]|DATA RACE' | head -20
+    return 1
+  fi
   [ $code -eq 0 ] && return 0
   local failed; failed=$(echo "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
   [ -z "$failed" ] && return $code
   echo ""; echo "=== FLAKE FILTER: re-running failed packages isolated (-p 1): $failed ==="
   local rc=0
   for p in $failed; do
+    # Which TESTS failed the contended run, for this package only. Go prefixes
+    # nothing package-scoped onto "--- FAIL:" lines, so scope by taking the
+    # slice of $out between this package's first failure and its "^FAIL <pkg>"
+    # summary line; simpler and good enough: collect all contended failures once
+    # and intersect per package below (a test name is unique enough in practice).
+    local run1; run1=$(echo "$out" | grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' | awk '{print $3}' | sort -u)
     if CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 1 "$p" >/tmp/rr.log 2>&1; then
       echo "FLAKE (passed isolated): $p"
+      echo "  contended-run failures (each one is a REAL BUG that has not been diagnosed yet):"
+      echo "$run1" | sed 's/^/    /'
     else
-      echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL' /tmp/rr.log | head; rc=1
+      local run2; run2=$(grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' /tmp/rr.log | awk '{print $3}' | sort -u)
+      local both; both=$(comm -12 <(echo "$run1") <(echo "$run2"))
+      if [ -n "$both" ]; then
+        echo "REAL FAILURE (same test failed BOTH runs): $p"
+        echo "$both" | sed 's/^/    /'
+      else
+        # Both runs failed, but on DIFFERENT tests. That is two independent
+        # flakes, NOT one deterministic failure — the old code called this
+        # "failed twice" and sent an investigation chasing a regression that
+        # did not exist. Still a gate failure; just labelled honestly.
+        echo "GATE FAILURE (different tests failed each run — two independent flakes, not one deterministic failure): $p"
+        echo "  contended run:"; echo "$run1" | sed 's/^/    /'
+        echo "  isolated run:";  echo "$run2" | sed 's/^/    /'
+      fi
+      # Full assertion text, not just the "--- FAIL" header. The header alone
+      # discards the indented failure message, which is the only thing that
+      # makes a failure diagnosable from CI output.
+      echo "  --- isolated-run detail ---"
+      grep -aA 12 -E '^\s*--- FAIL' /tmp/rr.log | head -120
+      rc=1
     fi
   done
   return $rc
@@ -194,8 +269,39 @@ _e2e_build() {
   # Force the chromium revision the installed @playwright/test expects (the caret range in
   # package.json may resolve past the image-baked revision). Cached after the first run;
   # shared by all shards via the image-level $PLAYWRIGHT_BROWSERS_PATH.
+  #
+  # Use the REPO-LOCAL playwright, never bare `npx` — the image bakes a pinned GLOBAL
+  # playwright at /usr/bin/playwright (Dockerfile: npm install -g @playwright/test@1.49.0).
+  # `npx playwright` can resolve that global binary, which installs the revision IT wants
+  # and exits 0, leaving the revision the test runner actually needs absent. That is not
+  # hypothetical: on 2026-07-26 the image held chromium 1148 (global 1.49.0) + 1228 while
+  # the local runner wanted 1223, and the whole e2e gate reported 48 phantom "failures"
+  # across 5 shards — every one of them `browserType.launch: Executable doesn't exist`,
+  # each "failing" in 4-6ms because no browser ever started. Infra noise indistinguishable
+  # from a real regression at a glance.
   log "e2e: install matching chromium"
-  npx playwright install chromium || return 1
+  local pw=./node_modules/.bin/playwright
+  [ -x "$pw" ] || { echo "e2e: $pw missing or not executable — npm ci must run first" >&2; return 1; }
+  # chromium_headless_shell is a SEPARATE download from chromium; the suite launches it
+  # directly, so installing only `chromium` leaves the headless path broken.
+  "$pw" install chromium chromium-headless-shell || return 1
+
+  # A zero exit above is NOT proof the right browser landed — installing the WRONG
+  # revision also exits 0. Verify the exact revision this runner resolves is on disk,
+  # and fail loudly (naming the path) rather than handing the shards a broken browser.
+  node -e '
+    const fs = require("fs"), path = require("path");
+    const root = process.env.PLAYWRIGHT_BROWSERS_PATH || "";
+    const want = require("./node_modules/playwright-core/browsers.json").browsers
+      .filter(b => b.name === "chromium" || b.name === "chromium-headless-shell");
+    let bad = 0;
+    for (const b of want) {
+      const dir = path.join(root, `${b.name.replace(/-/g, "_")}-${b.revision}`);
+      if (!fs.existsSync(dir)) { console.error(`MISSING ${b.name} rev ${b.revision} at ${dir}`); bad++; }
+      else console.log(`ok ${b.name} rev ${b.revision}`);
+    }
+    process.exit(bad ? 1 : 0);
+  ' || { echo "e2e: required browser revision absent after install — see MISSING above" >&2; return 1; }
 }
 
 # Reap any still-running shard gateways by EXACT pid from their pidfiles. Never
@@ -225,7 +331,18 @@ _e2e_run_shard() {
   local GATEWAY_PID=
 
   # Inlined (not a nested fn) so it can see the local GATEWAY_PID under `set -u`.
-  trap 'if [ -n "$GATEWAY_PID" ]; then kill "$GATEWAY_PID" 2>/dev/null; wait "$GATEWAY_PID" 2>/dev/null; fi; rm -f "$pidfile"' RETURN
+  #
+  # SELF-DISARMING (`trap - RETURN` as the handler's last act), and every local read
+  # defensively defaulted. A `trap … RETURN` is GLOBAL shell state, not function-local:
+  # installing it here leaves it installed after _e2e_run_shard returns, so it fires
+  # AGAIN for whichever function returns next. On the sharded path each _e2e_run_shard
+  # runs in a background subshell, so the trap dies with the subshell and the bug is
+  # invisible. On the SINGLE-GATEWAY path (E2E_SPECS=… or E2E_SHARDED=0) the call is
+  # in-process, so the trap survived into run_e2e and fired on ITS return — by which
+  # point GATEWAY_PID/pidfile were out of scope, and `set -u` turned that into
+  # "GATEWAY_PID: unbound variable", exit 1, AFTER the results had already printed.
+  # That manufactured a false RED on the exact path used for targeted re-verification.
+  trap 'if [ -n "${GATEWAY_PID:-}" ]; then kill "$GATEWAY_PID" 2>/dev/null; wait "$GATEWAY_PID" 2>/dev/null; fi; [ -n "${pidfile:-}" ] && rm -f "$pidfile"; trap - RETURN' RETURN
 
   rm -rf "$home"; mkdir -p "$home"
 

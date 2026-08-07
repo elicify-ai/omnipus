@@ -209,6 +209,11 @@ func TestWorkerToolPolicyTightensGlobalCeiling(t *testing.T) {
 		"create_task", "delete_task", "create_task_in_workspace", "update_task_in_workspace",
 		"delete_task_in_workspace", "list_tasks_in_workspace",
 		"create_workspace", "update_workspace", "delete_workspace", "list_workspaces", "get_workspace",
+		// inspect_session (fix-wave finding #2): the global ceiling now seeds
+		// "allow" for this tool (defaults.go), so an absent entry here would
+		// silently inherit that allow — the worker must tighten it to an
+		// explicit "deny" like every other seeded non-Judge agent.
+		"inspect_session",
 	} {
 		got, ok := pol[tool]
 		require.True(t, ok, "worker must have an explicit deny for tightened tool %q", tool)

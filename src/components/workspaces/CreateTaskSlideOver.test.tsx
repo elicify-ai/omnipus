@@ -97,7 +97,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchMilestones: vi.fn().mockResolvedValue([]),
     fetchTasks: vi.fn().mockResolvedValue([]),
     // Fix B: the assignee picker's workspace-team scoping — see the
     // "assignee picker is workspace-team-scoped" describe block below.
@@ -110,7 +109,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
       list: () => ['workspaces'],
       delegation: (id: string) => ['workspaces', id, 'delegation'],
     },
-    milestonesQueryKeys: { list: (id: string) => ['milestones', id] },
     isApiError: vi.fn().mockReturnValue(false),
   }
 })
@@ -119,7 +117,6 @@ import {
   createTask,
   updateTask,
   fetchAgents,
-  fetchMilestones,
   fetchTasks,
   fetchWorkspaceDelegation,
 } from '@/lib/api'
@@ -163,13 +160,13 @@ function renderSlideOver(props: Partial<{
   open: boolean
   onOpenChange: (open: boolean) => void
   workspaceId: string
-  milestoneId: string | null
+  planId: string | null
 }> = {}) {
   const defaults = {
     open: true,
     onOpenChange: vi.fn(),
     workspaceId: 'proj-test',
-    milestoneId: null,
+    planId: null,
   }
   const merged = { ...defaults, ...props }
   return render(
@@ -178,7 +175,7 @@ function renderSlideOver(props: Partial<{
         open={merged.open}
         onOpenChange={merged.onOpenChange}
         workspaceId={merged.workspaceId}
-        milestoneId={merged.milestoneId}
+        planId={merged.planId}
       />
     </QueryClientProvider>,
   )
@@ -188,7 +185,6 @@ function renderSlideOver(props: Partial<{
 
 beforeEach(() => {
   vi.mocked(fetchAgents).mockResolvedValue([])
-  vi.mocked(fetchMilestones).mockResolvedValue([])
   vi.mocked(fetchTasks).mockResolvedValue([])
   // Default: the workspace-team query fails (unmocked in most tests, which
   // don't care about team-scoping) — this is the DEGRADED fallback path
@@ -207,7 +203,7 @@ describe('CreateTaskSlideOver — renders all fields', () => {
   it('renders with all expected form fields and action buttons', async () => {
     // BDD: Given the CreateTaskSlideOver is open,
     // When it renders,
-    // Then Title, Prompt, Priority, Milestone placeholder, Agent, Create, and Create & Run are visible.
+    // Then Title, Prompt, Priority, Tags, Acceptance criteria, Agent, Create, and Create & Run are visible.
     renderSlideOver()
 
     // Title field — by label
@@ -219,8 +215,13 @@ describe('CreateTaskSlideOver — renders all fields', () => {
     // Priority label is present
     expect(screen.getByText(/priority/i)).toBeInTheDocument()
 
-    // "No milestones — create one first" message since fetchMilestones returns []
-    expect(await screen.findByText(/no milestones/i)).toBeInTheDocument()
+    // Tags input (ADR-049 — replaces the milestone selector). The "Add tag"
+    // text input and its adjacent add-button share the same accessible name
+    // ("Add tag"), so scope to the textbox role to avoid ambiguity.
+    expect(screen.getByRole('textbox', { name: /add tag/i })).toBeInTheDocument()
+
+    // Acceptance criteria editor is present
+    expect(screen.getByText(/acceptance criteria/i)).toBeInTheDocument()
 
     // Create button
     expect(screen.getByRole('button', { name: /^create$/i })).toBeInTheDocument()
@@ -697,6 +698,25 @@ describe('CreateTaskSlideOver — full task UX fields (trigger / depends-on / du
 
     const body = vi.mocked(createTask).mock.calls[0][0]
     expect(body.blocked_by).toEqual(['dep-a'])
+  })
+
+  it('lists only SAME-plan tasks as dependency candidates', async () => {
+    // A blocked_by edge must stay inside one plan's DAG — the picker offers
+    // only tasks in the plan this new task will join, not cross-plan or
+    // plan-less ones.
+    vi.mocked(fetchTasks).mockResolvedValue([
+      makeWsTask({ id: 'dep-same', title: 'Same Plan Task', plan_id: 'plan-x' }),
+      makeWsTask({ id: 'dep-other', title: 'Other Plan Task', plan_id: 'plan-y' }),
+      makeWsTask({ id: 'dep-none', title: 'No Plan Task', plan_id: undefined }),
+    ] as never)
+    renderSlideOver({ planId: 'plan-x' })
+
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Dependent' } })
+    fireEvent.click(await screen.findByText(/no dependencies/i))
+
+    expect(await screen.findByText('Same Plan Task')).toBeInTheDocument()
+    expect(screen.queryByText('Other Plan Task')).not.toBeInTheDocument()
+    expect(screen.queryByText('No Plan Task')).not.toBeInTheDocument()
   })
 
   it('posts due as an RFC3339 string when a due date is set', async () => {

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -12,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
@@ -243,12 +241,25 @@ func TestAgentToolsPUT_NoReAuthToken_Succeeds(t *testing.T) {
 	const agentID = "01JXTESTAGENTSTARTTEST001"
 	api := newTestRestAPIWithAgent(t)
 
-	// safeUpdateConfigJSON persists into the on-disk config.json, which the
-	// fixture seeds with an empty agents.list. Write the seeded agent there so the
-	// per-agent persist (which looks the agent up by id in the file) succeeds and
-	// the full happy path returns 200 — proving the gate is gone, not just bypassed.
-	onDisk := `{"version":1,"agents":{"defaults":{},"list":[{"id":"` + agentID + `","name":"Test Agent","type":"custom"}]},"providers":[]}`
-	require.NoError(t, os.WriteFile(filepath.Join(api.homePath, "config.json"), []byte(onDisk), 0o600))
+	// ADR-054: agents are per-entity records under entities/agents/<id>.json,
+	// not config.json's agents.list. updateAgentTools's persist step now
+	// writes through agentstore.Store.Update (rest.go's coverage-guard persist
+	// closure), which does a read-modify-write of a REAL entity record — it
+	// 500s with "not found in agent store" if none exists. newTestRestAPIWithAgent
+	// only seeds the in-memory cfg.Agents.List (sufficient for the handler's
+	// initial 404/locked/external-subagent lookup, which still reads
+	// a.agentLoop.GetConfig().Agents.List directly) — it does NOT create an
+	// entity record. The pre-ADR-054 fixture shape (a raw config.json splice
+	// with an agents.list entry) no longer has any effect on the persist path
+	// at all, since config.LoadConfig strips agents.list on every load and
+	// the persist step never reads config.json's raw map for this agent in
+	// the first place. Seed the real entity record instead.
+	store := agentstore.New(api.homePath)
+	require.NoError(t, store.Create(agentID, &config.AgentConfig{
+		ID:   agentID,
+		Name: "Test Agent",
+		Type: config.AgentTypeCustom,
+	}))
 
 	// There is no default_policy field on the wire any more (CLAUDE.md hard
 	// constraint 6) — this body used to send one (which decodes to a no-op
@@ -273,6 +284,17 @@ func TestAgentToolsPUT_NoReAuthToken_Succeeds(t *testing.T) {
 	api.updateAgentTools(w, r, agentID)
 	require.Equal(t, http.StatusOK, w.Code,
 		"agent tool-grant PUT must succeed without a re-auth token (gate removed per UAT); body=%s", w.Body.String())
+
+	// Persistence check (anti-shortcut): a 200 alone does not prove the write
+	// landed — read the entity record back and confirm the policies actually
+	// changed on disk, not just that the HTTP call was accepted.
+	updated, err := store.Get(agentID)
+	require.NoError(t, err)
+	require.NotNil(t, updated.Tools, "entity record must have a Tools block after the PUT")
+	assert.Equal(t, config.ToolPolicyAllow, updated.Tools.Builtin.Policies["bash"],
+		"tool policy sent in the request must be persisted to the entity record")
+	assert.Equal(t, config.ToolPolicyAllow, updated.Tools.Builtin.Policies["read_file"],
+		"tool policy sent in the request must be persisted to the entity record")
 }
 
 // --- Re-auth token TTL / expiry (Spec-6 FR-12.2) ---

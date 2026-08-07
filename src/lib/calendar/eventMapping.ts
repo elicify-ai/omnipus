@@ -19,13 +19,12 @@
  */
 
 import type { EventInput } from '@fullcalendar/core'
-import type { Task, Milestone } from '@/lib/api'
+import type { Task } from '@/lib/api'
 import type { TaskOccurrenceSet, DayBucket, TaskRun } from '@/lib/api/generated/openapi-types'
 import {
   CHIP_TEXT_COLOR,
   STATUS_STYLE,
   STATUS_STYLE_FALLBACK,
-  MILESTONE_STYLE,
   SCHEDULED_STYLE,
   NO_RECORD_STYLE,
   SKIPPED_STYLE,
@@ -71,9 +70,9 @@ export function parseLocalDate(s: string | null | undefined): Date | null {
 
 /**
  * Format a Date to `YYYY-MM-DD` using LOCAL date components.
- * Used to write milestone `due_date` on drag and to seed the create-form date
- * prefill (FR-015, F-06). Task `due` is RFC3339 date-time and is written via
- * `toISOString()`, NOT this helper. Never uses UTC methods — no off-by-one.
+ * Used to seed the create-form date prefill (FR-015, F-06). Task `due` is
+ * RFC3339 date-time and is written via `toISOString()`, NOT this helper.
+ * Never uses UTC methods — no off-by-one.
  */
 export function formatLocalDate(d: Date): string {
   const y = d.getFullYear()
@@ -102,7 +101,7 @@ export function parseMs(ms: number | null | undefined): Date | null {
  * mismatched/illegal extendedProps shape is now a compile error.
  *
  * `editable` defaults to `true` (drag enabled) so every pre-existing call site
- * (`:due`, `:fire`, `milestone`) is byte-for-byte unchanged. Recurring
+ * (`:due`, `:fire`) is byte-for-byte unchanged. Recurring
  * occurrence/aggregated/truncation-marker chips pass `false` explicitly
  * (FR-012 — not draggable; the Explicit Non-Behaviors section forbids
  * per-occurrence drag-reschedule).
@@ -381,7 +380,7 @@ function resolveBucketChip(
 // ─── Main mapping function ────────────────────────────────────────────────────
 
 /**
- * Map workspace tasks, milestones, and (optionally) server-expanded recurring
+ * Map workspace tasks and (optionally) server-expanded recurring
  * occurrences into FullCalendar EventInput objects.
  *
  * Rules (§6, FR-002/003/004/005, F-01/F-06/F-19):
@@ -389,9 +388,8 @@ function resolveBucketChip(
  *  - Task with parseable `due` → all-day `:due` event coloured by status.
  *  - Task with `once` trigger and `config.at_ms` → timed `:fire` event, Clock icon.
  *  - A task may yield BOTH a `:due` and a `:fire` event (F-19).
- *  - Milestone with parseable `due_date` → all-day `:milestone` event, gold + Flag.
  *  - Unparseable dates → silently skipped, never throw (FR-003).
- *  - Due/fire/milestone events are `editable: true` (drag enabled) — unchanged
+ *  - Due/fire events are `editable: true` (drag enabled) — unchanged
  *    regression baseline (Calendar Recurrence Redesign test 17).
  *
  * Occurrence rules (calendar-recurrence-redesign-spec.md, FR-008/009/012,
@@ -418,7 +416,6 @@ function resolveBucketChip(
  */
 export function mapToCalendarEvents(
   tasks: Task[],
-  milestones: Milestone[],
   occurrenceSets: TaskOccurrenceSet[] = [],
   /**
    * F-SFH4 defensive fallback: the instant to place the truncation marker on
@@ -593,20 +590,6 @@ export function mapToCalendarEvents(
     }
   }
 
-  // ── Milestone all-day events (FR-004) ────────────────────────────────────
-  for (const m of milestones) {
-    if (!m.due_date) continue
-    const dueDate = parseLocalDate(m.due_date)
-    if (dueDate === null) continue
-
-    events.push(
-      makeEvent(`milestone:${m.id}`, dueDate, m.name, MILESTONE_STYLE.bg, true, {
-        kind: 'milestone',
-        icon: 'Flag',
-        milestoneId: m.id,
-      }),
-    )
-  }
 
   return events
 }

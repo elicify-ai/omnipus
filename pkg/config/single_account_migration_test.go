@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // single_account_migration_test.go — Gateway.Users diagnostic tests.
 //
 // Covers warnAboutExtraUsers: a deliberately non-destructive diagnostic (see

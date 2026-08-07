@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // cli_token_migration_test.go — CLI-token relocation migration tests.
 //
 // Covers migrateCLITokenOutOfUsers / migrateCLITokenOnDisk: relocating a

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package gateway — multi-session WebSocket integration tests.
 //
 // Contract being pinned:

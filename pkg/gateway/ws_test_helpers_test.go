@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // ws_test_helpers_test.go — shared test-only type helpers for WebSocket tests.
 //
 // wsClientFrameTestHelper is a convenience struct for constructing client→server

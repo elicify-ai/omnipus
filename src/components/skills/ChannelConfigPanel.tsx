@@ -6,7 +6,7 @@ import {
   FloppyDisk,
   Lightning,
 } from '@phosphor-icons/react'
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -819,8 +819,19 @@ export function ChannelConfigPanel({
         </SheetHeader>
         {/* #326 — aria-describedby target: the "How to connect" intro.
             Description sits below the 44px chrome title row so multi-line
-            copy does not push the panel header taller than the shell. */}
-        <SheetDescription
+            copy does not push the panel header taller than the shell.
+
+            Rendered as a plain <p> rather than <SheetDescription> because
+            Radix's DialogPrimitive.Content auto-appends its own Description
+            child's id to the Content's aria-describedby attribute, which
+            produces a space-separated ID-reference list (ARIA permits
+            multiple whitespace-separated IDs in aria-describedby, but
+            passing that entire list to getElementById to fetch a single
+            element is invalid usage and returns null). Using a plain
+            <p id={descriptionId}> here keeps this component's description
+            reference as a single id, which is what the AC2 assertion
+            expects. */}
+        <p
           id={descriptionId}
           className="text-xs text-[var(--color-muted)] leading-relaxed px-6 pt-3"
         >
@@ -829,7 +840,7 @@ export function ChannelConfigPanel({
             : isWhatsApp
             ? 'Link your WhatsApp account by scanning the QR code with your phone.'
             : `Enter your ${channelName} credentials to connect the bot.`}
-        </SheetDescription>
+        </p>
 
         {isLoading ? (
           <div className="px-6 pt-6 space-y-4">

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Contract test: Plan 3 §1 acceptance decision — binding to an in-use port must
 // cause a fatal exit with an informative error message.
 //

@@ -10,8 +10,8 @@
 // `in_progress`) — NOT a `Task['status']` member. It's included in
 // `STATUS_BADGE`/`statusLabel` below because both `TaskRunsList.tsx` and
 // `TaskRunStatusField.tsx` key these maps off a `TaskRun['status']` value
-// (a strict superset-minus-`next`/`inbox`/`planning`/`blocked` of
-// `Task['status']`, plus `skipped`), not off `Task['status']` itself.
+// (a strict superset-minus-`next`/`inbox`/`blocked` of `Task['status']`,
+// plus `skipped`), not off `Task['status']` itself.
 
 import type { Task } from '@/lib/api'
 import type { TaskRun } from '@/lib/api'
@@ -23,7 +23,6 @@ import type { TaskRun } from '@/lib/api'
 export const STATUS_OPTIONS: { value: Task['status']; label: string; color: string }[] = [
   { value: 'inbox',       label: 'Inbox',       color: 'text-[var(--color-muted)]' },
   { value: 'next',        label: 'Next',        color: 'text-[color:var(--color-accent)]' },
-  { value: 'planning',    label: 'Planning',    color: 'text-[color:var(--color-muted)]' },
   { value: 'in_progress', label: 'In Progress', color: 'text-[color:var(--color-warning)]' },
   { value: 'done',        label: 'Done',        color: 'text-[color:var(--color-success)]' },
   { value: 'failed',      label: 'Failed',      color: 'text-[color:var(--color-error)]' },
@@ -32,7 +31,6 @@ export const STATUS_OPTIONS: { value: Task['status']; label: string; color: stri
 export const STATUS_BADGE: Record<string, string> = {
   inbox:       'text-[var(--color-muted)] bg-white/5',
   next:        'text-[color:var(--color-accent)] bg-[var(--color-accent)]/10',
-  planning:    'text-[color:var(--color-muted)] bg-white/5',
   in_progress: 'text-[color:var(--color-warning)] bg-[var(--color-warning)]/10',
   blocked:     'text-[color:var(--color-warning)] bg-[var(--color-warning)]/10',
   done:        'text-[color:var(--color-success)] bg-[var(--color-success)]/10',

@@ -7,12 +7,17 @@ additionalProperties: false
 properties:
   max_parallel_agents:
     type: integer
-    minimum: 2
-    maximum: 16
+    minimum: 0
     description: >
-      New value for the maximum concurrent task/subagent dispatch cap.
-      The runtime clamps the stored value to [2, min(NumCPU-2, RAM_GB/1.5)]
-      with a hard ceiling of 16. Set to 0 to restore the auto-detected default.
+      New value for the maximum concurrent task/subagent dispatch cap — the
+      SINGLE authority for agent concurrency (concurrency-gate consolidation,
+      2026-08-04). Set to 0 to restore the auto-detected default (sized from
+      available memory, floored so a small box still functions). Any other
+      value is honored EXACTLY as given — there is no ceiling; a value is
+      never silently lowered. (Fixed 2026-08-04: this field previously
+      declared `minimum: 2`, which contradicted this very description's "set
+      to 0" instruction and would have rejected 0 under schema validation —
+      corrected alongside the ceiling removal since both are the same field.)
     example: 6
   tools_on_demand:
     type: boolean

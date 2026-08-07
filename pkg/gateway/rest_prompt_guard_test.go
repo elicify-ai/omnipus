@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -211,14 +209,19 @@ func TestHandlePromptGuard_EmitsAuditEntry(t *testing.T) {
 func TestHandlePromptGuard_ReloadTimeout_LogsDistinctWarning(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	prevDeadline := reloadPollDeadline
-	reloadPollDeadline = 150 * time.Millisecond
-	t.Cleanup(func() { reloadPollDeadline = prevDeadline })
+	prevDeadline := reloadWaitTimeout
+	reloadWaitTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { reloadWaitTimeout = prevDeadline })
 
-	// Wire a reload func and deliberately never clear the pending flag, so
-	// triggerReloadAndWaitOutcome (called from inside putPromptGuard) runs
+	// Wire a reload func that marks the reload pending (mirroring production
+	// — see TriggerReload's own doc comment for why TriggerReload itself
+	// deliberately does not) and deliberately never clear the pending flag,
+	// so triggerReloadAndWaitOutcome (called from inside putPromptGuard) runs
 	// out the (shortened) poll window with confirmed=false.
-	api.agentLoop.SetReloadFunc(func() error { return nil })
+	api.agentLoop.SetReloadFunc(func() error {
+		api.agentLoop.MarkReloadPending()
+		return nil
+	})
 	t.Cleanup(func() { api.agentLoop.ClearReloadPending() })
 
 	logFile := filepath.Join(t.TempDir(), "prompt-guard-reload-timeout.log")

@@ -54,6 +54,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -212,6 +213,12 @@ func TestDelegateAsyncCompletion_ToolCallThenFinalAnswer_SurvivesParentFinish(t 
 
 	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
 	delegateTool.SetSpawner(NewSubTurnSpawner(al))
+	// ADR-057 U14 fixture repair: DelegateTool now refuses to start a
+	// delegated session without a durable lifecycle store wired (fail-closed
+	// rather than an untracked, unrecoverable session) — mirrors
+	// message_parent_real_context_test.go's wiring.
+	lifecycleStore := session.NewLifecycleStore(filepath.Join(t.TempDir(), "lifecycle"))
+	delegateTool.SetLifecycleStore(lifecycleStore)
 	delegateTool.SetDelegationDenyCheckerBackground(
 		func(context.Context, string) *tools.DelegationDenial { return nil },
 	)

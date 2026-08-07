@@ -4,7 +4,7 @@
 // Replaces the former month-grouped list. The grid ALWAYS renders (the empty-state
 // bug is gone); supports Month/Week/Day/Agenda, drag-to-reschedule + a keyboard
 // path, and click/slot-select to create. This file is the integration hub: it maps
-// tasks/milestones → events (pure fn), hosts the wrapper + toolbar, and owns the
+// tasks → events (pure fn), hosts the wrapper + toolbar, and owns the
 // handlers/mutations (optimistic move handled by FullCalendar; revert + undo + toast
 // here). It also owns the optimistic query-cache patch + per-item rollback layer that
 // keeps the TanStack Query cache in sync with FullCalendar's DOM move — cancelling
@@ -18,28 +18,22 @@ import type { EventClickArg, EventDropArg, DateSelectArg, EventInput } from '@fu
 import type { DateClickArg } from '@fullcalendar/interaction'
 import {
   fetchTasks,
-  fetchMilestones,
   fetchAgents,
   buildTaskAssigneeItems,
   updateTask,
-  updateMilestone,
   tasksQueryKeys,
-  milestonesQueryKeys,
   type Task,
-  type Milestone,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
-import { mapToCalendarEvents, formatLocalDate } from '@/lib/calendar/eventMapping'
+import { mapToCalendarEvents } from '@/lib/calendar/eventMapping'
 import { useOccurrences } from '@/lib/calendar/useOccurrences'
 import { FullCalendarView } from '@/components/calendar/FullCalendarView'
 import { CalendarToolbar } from '@/components/calendar/CalendarToolbar'
-import { MilestoneDatePopover } from '@/components/calendar/MilestoneDatePopover'
 import { AGENT_FILTER_ALL, filterEventsByAgent } from '@/components/calendar/calendarAgentFilter'
 import type {
   CalendarViewName,
   CalendarEventExtProps,
-  MilestoneTarget,
 } from '@/components/calendar/types'
 import { CalendarEventSlideOver } from '@/components/calendar/CalendarEventSlideOver'
 import { TaskDetailSlideOver } from '@/components/workspaces/TaskDetailSlideOver'
@@ -83,18 +77,6 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     enabled: !!workspaceId,
   })
 
-  const {
-    data: milestones = [],
-    isLoading: milestonesLoading,
-    isError: milestonesError,
-    refetch: refetchMilestones,
-  } = useQuery({
-    queryKey: milestonesQueryKeys.list(workspaceId),
-    queryFn: () => fetchMilestones(workspaceId),
-    staleTime: 30_000,
-    enabled: !!workspaceId,
-  })
-
   // ── Recurring-task occurrences (Calendar Recurrence Redesign, US-2, FR-008) ─
   // Keyed to FullCalendar's own visible range, reported via onDatesSet below.
   // `activeRange` starts null (no range known yet — before FullCalendar's
@@ -121,8 +103,8 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   }, [occurrencesError, addToast])
 
   const events = useMemo(
-    () => mapToCalendarEvents(tasks, milestones, occurrenceSets),
-    [tasks, milestones, occurrenceSets],
+    () => mapToCalendarEvents(tasks, occurrenceSets),
+    [tasks, occurrenceSets],
   )
 
   // ── Agent filter (FR-015 / US-4) ─────────────────────────────────────────
@@ -152,22 +134,22 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   // Keys off each event's underlying TASK `agent_id` (via `tasks`, already
   // fetched above) rather than per-chip data — see calendarAgentFilter.ts for
   // why this transparently covers Wave-2's recurring occurrence/aggregated
-  // chips too, with milestones exempt (US-4.3).
+  // chips too.
   const filteredEvents = useMemo(
     () => filterEventsByAgent(events, tasks, agentFilter),
     [events, tasks, agentFilter],
   )
 
-  const isLoading = tasksLoading || milestonesLoading
+  const isLoading = tasksLoading
   // D9 fix: FR-016/I-2's "degrade gracefully" contract is still honored for a
-  // PARTIAL failure (e.g. milestones failed but tasks loaded — there is real
+  // PARTIAL failure (e.g. occurrences failed but tasks loaded — there is real
   // data worth showing, so the grid renders it and a toast is enough). What
   // it never intended is a TOTAL failure silently reading as "no scheduled
   // items" — the UAT-reported bug. `isBlockingError` is true only when there
   // is genuinely nothing to render AND at least one query is the reason why
   // (as opposed to a genuinely empty, healthy workspace) — that is exactly
   // the case the Graph/Team/Board tabs already treat as a hard error state.
-  const hasQueryError = tasksError || milestonesError
+  const hasQueryError = tasksError
   const isTrulyEmpty = !isLoading && filteredEvents.length === 0
   const isEmpty = isTrulyEmpty && !hasQueryError
   const isBlockingError = isTrulyEmpty && hasQueryError
@@ -178,9 +160,6 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   useEffect(() => {
     if (tasksError) addToast({ message: "Couldn't load tasks", variant: 'error' })
   }, [tasksError, addToast])
-  useEffect(() => {
-    if (milestonesError) addToast({ message: "Couldn't load milestones", variant: 'error' })
-  }, [milestonesError, addToast])
 
   // ── Toolbar state (driven by FullCalendar's datesSet) ─────────────────────────
   const [currentView, setCurrentView] = useState<CalendarViewName>('dayGridMonth')
@@ -315,13 +294,11 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     endMs: number
   } | null>(null)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
-  const [milestoneTarget, setMilestoneTarget] = useState<MilestoneTarget | null>(null)
 
   const invalidate = useCallback(() => {
     void queryClient.invalidateQueries({
       queryKey: tasksQueryKeys.list({ workspace_id: workspaceId }),
     })
-    void queryClient.invalidateQueries({ queryKey: milestonesQueryKeys.list(workspaceId) })
     void queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] })
   }, [queryClient, workspaceId])
 
@@ -335,7 +312,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
 
   // ── Reschedule persistence (whole-trigger + date-format rules — F-05/F-06/F-08) ─
   // `ext` is the discriminated CalendarEventExtProps union; the switch narrows
-  // taskId/milestoneId with no defensive checks. NOT exhaustive over `kind` (a
+  // taskId with no defensive checks. NOT exhaustive over `kind` (a
   // pre-existing gap, not introduced here): task-occurrence/-agg/-more chips are
   // never draggable (eventMapping.ts sets `editable: false` on all three), and
   // now-marker is likewise `editable: false` (below), so `eventDrop` can never
@@ -347,12 +324,6 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     async (ext: CalendarEventExtProps, start: Date): Promise<void> => {
       switch (ext.kind) {
         case 'now-marker':
-          return
-        case 'milestone':
-          // Milestone due_date is a plain ISO date string → local YYYY-MM-DD.
-          await updateMilestone(workspaceId, ext.milestoneId, {
-            due_date: formatLocalDate(start),
-          })
           return
         case 'task-due':
           // Task `due` is RFC3339 date-time (contract: format date-time), so a
@@ -382,25 +353,6 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   // only the single changed row, so concurrent updates to other rows are never lost.
   const patchCacheDate = useCallback(
     (ext: CalendarEventExtProps, start: Date): (() => void) => {
-      if (ext.kind === 'milestone') {
-        const key = milestonesQueryKeys.list(workspaceId)
-        // Capture only the single prior item for a targeted rollback.
-        const prevItem = queryClient
-          .getQueryData<Milestone[]>(key)
-          ?.find((m) => m.id === ext.milestoneId)
-        queryClient.setQueryData<Milestone[]>(key, (current) =>
-          current?.map((m) =>
-            m.id === ext.milestoneId ? { ...m, due_date: formatLocalDate(start) } : m,
-          ),
-        )
-        return () => {
-          if (prevItem) {
-            queryClient.setQueryData<Milestone[]>(key, (current) =>
-              current?.map((m) => (m.id === ext.milestoneId ? prevItem : m)),
-            )
-          }
-        }
-      }
       // The Agenda "now" divider is `editable: false` (see the marker event
       // built above) — FullCalendar never fires `eventDrop`/reschedule for
       // it, so this branch never runs in practice. Guarded here only so the
@@ -445,15 +397,9 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     async (ext: CalendarEventExtProps, start: Date): Promise<void> => {
       // Cancel any in-flight query for the relevant key so a concurrent refetch
       // cannot overwrite the optimistic write we are about to make.
-      if (ext.kind === 'milestone') {
-        await queryClient.cancelQueries({
-          queryKey: milestonesQueryKeys.list(workspaceId),
-        })
-      } else {
-        await queryClient.cancelQueries({
-          queryKey: tasksQueryKeys.list({ workspace_id: workspaceId }),
-        })
-      }
+      await queryClient.cancelQueries({
+        queryKey: tasksQueryKeys.list({ workspace_id: workspaceId }),
+      })
       const rollback = patchCacheDate(ext, start)
       try {
         await persistReschedule(ext, start)
@@ -517,12 +463,6 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
         (raw?.closest('[tabindex]') as HTMLElement | null) ?? raw ?? null
       const ext = arg.event.extendedProps as CalendarEventExtProps
       switch (ext.kind) {
-        case 'milestone': {
-          const m = milestones.find((x) => x.id === ext.milestoneId)
-          if (m) setMilestoneTarget({ id: m.id, name: m.name, due_date: m.due_date ?? null })
-          else console.warn('[calendar] milestone event has no backing milestone', ext)
-          return
-        }
         case 'task-occurrence':
         case 'task-occurrence-agg': {
           const t = tasks.find((x) => x.id === ext.taskId)
@@ -563,7 +503,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
         }
       }
     },
-    [tasks, milestones],
+    [tasks],
   )
 
   // Open the calendar event slide-over in create mode, prefilled with a date
@@ -629,7 +569,6 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
             message="Couldn't load your calendar. Check your connection and try again."
             onRetry={() => {
               void refetchTasks()
-              void refetchMilestones()
             }}
             testId="calendar-error"
           />
@@ -673,16 +612,6 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
           setSelectedTask(null)
           restoreFocus()
         }}
-      />
-
-      <MilestoneDatePopover
-        workspaceId={workspaceId}
-        milestone={milestoneTarget}
-        onClose={() => {
-          setMilestoneTarget(null)
-          restoreFocus()
-        }}
-        onRescheduled={invalidate}
       />
     </div>
   )

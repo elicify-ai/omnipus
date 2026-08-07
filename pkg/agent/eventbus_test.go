@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -103,6 +104,163 @@ func TestEventBus_DropsWhenSubscriberIsFull(t *testing.T) {
 	}
 }
 
+// TestEventBus_MustNotDropEventKind_DeliversWithinRetryWindow proves the
+// 2026-07-31 burst-drop fix: a SubTurnSpawn/SubTurnEnd event that hits a
+// momentarily-full subscriber buffer is NOT dropped immediately (unlike every
+// other kind) as long as the subscriber drains in time to make room within
+// mustNotDropEventKindTimeout.
+func TestEventBus_MustNotDropEventKind_DeliversWithinRetryWindow(t *testing.T) {
+	eb := NewEventBus()
+	sub := eb.Subscribe(1)
+	defer eb.Unsubscribe(sub.ID)
+
+	eb.Emit(Event{Kind: EventKindLLMRequest}) // fills the 1-slot buffer
+
+	drained := make(chan struct{})
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		<-sub.C // frees the slot well within mustNotDropEventKindTimeout (250ms)
+		close(drained)
+	}()
+
+	start := time.Now()
+	eb.Emit(Event{Kind: EventKindSubTurnSpawn})
+	elapsed := time.Since(start)
+
+	<-drained
+
+	if elapsed >= mustNotDropEventKindTimeout {
+		t.Fatalf("expected Emit to succeed as soon as the subscriber drained, well under the %s retry window; took %s",
+			mustNotDropEventKindTimeout, elapsed)
+	}
+	if got := eb.Dropped(EventKindSubTurnSpawn); got != 0 {
+		t.Fatalf("expected the spawn event to be delivered via the bounded retry, not dropped; got %d drops", got)
+	}
+
+	select {
+	case evt := <-sub.C:
+		if evt.Kind != EventKindSubTurnSpawn {
+			t.Fatalf("expected the delivered event to be EventKindSubTurnSpawn, got %v", evt.Kind)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected the spawn event to be sitting in the subscriber buffer after Emit returned")
+	}
+}
+
+// TestEventBus_MustNotDropEventKind_BoundedThenDropped proves the other half
+// of the fix's contract: when the subscriber never drains, Emit still gives
+// up and drops the event — it must NOT block the calling (agent turn)
+// goroutine indefinitely just because one subscriber is stuck. The wait is
+// bounded to approximately mustNotDropEventKindTimeout, and the drop is still
+// counted so it's observable (Dropped()/WARN log).
+func TestEventBus_MustNotDropEventKind_BoundedThenDropped(t *testing.T) {
+	eb := NewEventBus()
+	sub := eb.Subscribe(1)
+	defer eb.Unsubscribe(sub.ID)
+
+	eb.Emit(Event{Kind: EventKindLLMRequest}) // fills the 1-slot buffer; never drained
+
+	start := time.Now()
+	eb.Emit(Event{Kind: EventKindSubTurnEnd})
+	elapsed := time.Since(start)
+
+	if elapsed < mustNotDropEventKindTimeout {
+		t.Fatalf("expected Emit to wait out the full %s retry window before giving up, only waited %s",
+			mustNotDropEventKindTimeout, elapsed)
+	}
+	if elapsed > mustNotDropEventKindTimeout+500*time.Millisecond {
+		t.Fatalf("expected Emit's blocking retry to stay bounded (~%s), took %s — this would stall the calling turn goroutine",
+			mustNotDropEventKindTimeout, elapsed)
+	}
+	if got := eb.Dropped(EventKindSubTurnEnd); got != 1 {
+		t.Fatalf("expected the timed-out spawn/end event to still be counted as dropped, got %d", got)
+	}
+}
+
+// TestEventBus_MustNotDropEventKind_ClosedBusStillCounts proves the 2026-07-31
+// review's Finding 1: Emit on an already-closed bus used to hit `if b.closed {
+// return }` with zero counter increment and zero log, for ANY event kind —
+// including a must-not-drop one arriving from a straggling sub-turn's
+// deferred cleanup racing AgentLoop.Close (subturns are not waited on by the
+// shutdown drain, per cancel_prearm.go). A dropped spawn/end during shutdown
+// must still be observable via Dropped(), the same invariant every other
+// drop path already honors.
+func TestEventBus_MustNotDropEventKind_ClosedBusStillCounts(t *testing.T) {
+	eb := NewEventBus()
+	eb.Close()
+
+	eb.Emit(Event{Kind: EventKindSubTurnEnd})
+
+	if got := eb.Dropped(EventKindSubTurnEnd); got != 1 {
+		t.Fatalf("expected a must-not-drop event emitted on a closed bus to still be counted, got %d", got)
+	}
+	// A non-must-not-drop kind on a closed bus stays silent-drop (unchanged,
+	// high-frequency kinds are lossy by design even when live).
+	eb.Emit(Event{Kind: EventKindLLMRequest})
+	if got := eb.Dropped(EventKindLLMRequest); got != 0 {
+		t.Fatalf("expected an ordinary event kind on a closed bus to stay uncounted (lossy by design), got %d", got)
+	}
+}
+
+// TestEventBus_MustNotDropEventKind_SharedDeadlineNotMultipliedAndDoesNotBlockOthers
+// proves the 2026-07-31 review's Findings 2 and 3 together:
+//   - Finding 3: N full subscribers must cost ONE mustNotDropEventKindTimeout
+//     total on the emitting goroutine, not N*timeout (the retry budget is a
+//     single shared deadline, not per-subscriber).
+//   - Finding 2: the retry must not hold EventBus.mu, so a concurrent
+//     Subscribe/Unsubscribe/Emit from another goroutine is never blocked
+//     behind one stuck subscriber's retry window.
+func TestEventBus_MustNotDropEventKind_SharedDeadlineNotMultipliedAndDoesNotBlockOthers(t *testing.T) {
+	eb := NewEventBus()
+	subA := eb.Subscribe(1)
+	subB := eb.Subscribe(1)
+	defer eb.Unsubscribe(subA.ID)
+	defer eb.Unsubscribe(subB.ID)
+
+	// Fill both subscribers' single-slot buffers; neither is ever drained, so
+	// both will need the full retry window.
+	eb.Emit(Event{Kind: EventKindLLMRequest})
+	eb.Emit(Event{Kind: EventKindLLMRequest})
+
+	// A third, unrelated subscriber must be able to Subscribe/Unsubscribe, and
+	// an unrelated Emit for it must complete immediately, WHILE the retry
+	// above is still in flight — proving the lock isn't held across the wait.
+	unblocked := make(chan time.Duration, 1)
+	go func() {
+		time.Sleep(20 * time.Millisecond) // let the retry above start first
+		start := time.Now()
+		subC := eb.Subscribe(1)
+		eb.Emit(Event{Kind: EventKindLLMRequest})
+		eb.Unsubscribe(subC.ID)
+		unblocked <- time.Since(start)
+	}()
+
+	start := time.Now()
+	eb.Emit(Event{Kind: EventKindSubTurnEnd})
+	elapsed := time.Since(start)
+
+	if elapsed > mustNotDropEventKindTimeout+500*time.Millisecond {
+		t.Fatalf("expected two full subscribers to cost ONE shared %s retry window, not one per subscriber; took %s",
+			mustNotDropEventKindTimeout, elapsed)
+	}
+	// The counter is per-subscriber-missed, not per-Emit-call (unchanged from
+	// the pre-fix design) — both subA and subB timed out, so 2, not 1.
+	if got := eb.Dropped(EventKindSubTurnEnd); got != 2 {
+		t.Fatalf("expected one drop counted per subscriber that missed the event (2 subscribers), got %d", got)
+	}
+
+	select {
+	case d := <-unblocked:
+		if d >= mustNotDropEventKindTimeout {
+			t.Fatalf("expected the concurrent Subscribe/Emit/Unsubscribe to complete near-instantly, "+
+				"not be blocked behind the other goroutine's retry; took %s", d)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent Subscribe/Emit/Unsubscribe never completed — likely blocked behind the retry's lock, " +
+			"which is exactly the writer-starvation stall this fix must avoid")
+	}
+}
+
 type scriptedToolProvider struct {
 	calls int
 }
@@ -137,11 +295,20 @@ func (m *scriptedToolProvider) GetDefaultModel() string {
 }
 
 func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-eventbus-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-eventbus-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -262,11 +429,20 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 }
 
 func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-eventbus-steering-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-eventbus-steering-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -397,11 +573,20 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 }
 
 func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-eventbus-compress-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-eventbus-compress-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -410,6 +595,21 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
+				// Explicit ContextWindow so the PROACTIVE budget check (loop.go
+				// isOverContextBudget, the preferred compression path per
+				// docs/internal/agent-refactor/context.md §"Compression paths")
+				// does NOT pre-empt the first LLM call. The default heuristic
+				// (MaxTokens*4 = 16384) is smaller than the seeded builtin tool
+				// catalog's ~12100 estimated tool-def tokens + this MaxTokens
+				// (4096), so without this override the proactive trim fires
+				// before the provider ever sees the request, emitting a
+				// `proactive_budget` compress event that shadows the
+				// `llm_retry` event this test exists to exercise. 32768 leaves
+				// the assembled request comfortably under budget on paper, so
+				// the mockProvider's context-limit error drives the REACTIVE
+				// retry-compress path — the documented fallback for when the
+				// estimate undershoots reality.
+				ContextWindow: 32768,
 			},
 		},
 	}
@@ -487,11 +687,20 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 }
 
 func TestAgentLoop_EmitsSessionSummarizeEvent(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-eventbus-summary-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-eventbus-summary-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -572,11 +781,20 @@ func TestAgentLoop_EmitsSessionSummarizeEvent(t *testing.T) {
 // Traces to: pkg/agent/loop.go:8385-8463 (summarizeBatch, Degraded return),
 // pkg/agent/events.go:262-276 (SessionSummarizePayload.Degraded doc comment).
 func TestAgentLoop_EmitsSessionSummarizeEvent_DegradedOnSummarizationFailure(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-eventbus-summary-degraded-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-eventbus-summary-degraded-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -667,11 +885,20 @@ func TestAgentLoop_EmitsSessionSummarizeEvent_DegradedOnSummarizationFailure(t *
 }
 
 func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-eventbus-followup-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-eventbus-followup-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{

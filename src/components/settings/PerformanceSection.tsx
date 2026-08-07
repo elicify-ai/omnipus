@@ -48,6 +48,23 @@ function Skeleton() {
 // Autosave debounce: wait 600 ms of inactivity before opening the reauth dialog.
 const AUTOSAVE_DEBOUNCE_MS = 600
 
+// Validation message shared by every path that rejects an invalid
+// max_parallel_agents input (triggerSave, the debounced autosave settle, and
+// the tools_on_demand toggle guard). Bounds mirror the backend contract
+// (contracts/components/schemas/PerformanceSettingsUpdate.yaml): minimum 0,
+// no ceiling — 0 (or a blank field) restores the auto-detected default, any
+// positive integer is honored exactly as configured.
+const INVALID_MAX_PARALLEL_MESSAGE =
+  'max_parallel_agents must be zero or a positive whole number (0 or blank restores the auto-detected default).'
+
+// physicalThreadCeiling mirrors pkg/config/config.go's
+// physicalConcurrencySafetyCeiling — the point above which the backend
+// itself logs a WARN (Go's runtime hard-aborts the process past 10,000 OS
+// threads; this leaves a 5x margin). It is NOT enforced as a limit — the
+// backend honors any explicit value in full — so the frontend must only ever
+// caution here, never claim the value will be lowered.
+const PHYSICAL_THREAD_CEILING = 2000
+
 export function PerformanceSection(): React.ReactElement {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
@@ -110,7 +127,11 @@ export function PerformanceSection(): React.ReactElement {
   ): PerformanceSettingsUpdate | null => {
     const raw = rawInput.trim()
     const parsed = raw === '' ? 0 : parseInt(raw, 10)
-    if (raw !== '' && (isNaN(parsed) || parsed < 2 || parsed > 16)) return null
+    // Backend bound (PerformanceSettingsUpdate.yaml): minimum 0, no ceiling.
+    // 0 (or blank, which we treat as 0 above) means "restore auto-detect";
+    // any positive integer is honored exactly as configured — there is no
+    // upper limit to validate against here.
+    if (raw !== '' && (isNaN(parsed) || parsed < 0)) return null
     return { max_parallel_agents: parsed, tools_on_demand: onDemand }
   }, [])
 
@@ -119,7 +140,7 @@ export function PerformanceSection(): React.ReactElement {
   const triggerSave = useCallback(() => {
     const body = buildBody(inputValue, toolsOnDemand)
     if (!body) {
-      addToast({ variant: 'error', message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).' })
+      addToast({ variant: 'error', message: INVALID_MAX_PARALLEL_MESSAGE })
       return
     }
     setPending(body)
@@ -144,7 +165,7 @@ export function PerformanceSection(): React.ReactElement {
         // silently no-op: no toast, no indication the value wasn't saved.
         // Mirror the same guidance triggerSave and the toggle path show.
         setSaveStatus('idle')
-        addToast({ variant: 'error', message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).' })
+        addToast({ variant: 'error', message: INVALID_MAX_PARALLEL_MESSAGE })
       }
     }, AUTOSAVE_DEBOUNCE_MS)
   }
@@ -168,7 +189,7 @@ export function PerformanceSection(): React.ReactElement {
       // spinner so it doesn't stick forever, and tell the user why.
       setToolsOnDemand(previousToolsOnDemand)
       setSaveStatus('idle')
-      addToast({ variant: 'error', message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).' })
+      addToast({ variant: 'error', message: INVALID_MAX_PARALLEL_MESSAGE })
     }
   }
 
@@ -196,29 +217,33 @@ export function PerformanceSection(): React.ReactElement {
 
   const effective = data?.effective_max_parallel_agents ?? '?'
 
-  // Live system recommendation. The browser exposes logical core count via
-  // navigator.hardwareConcurrency; the auto-detect formula clamps the
-  // configured value to [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16.
-  // The effective value returned by the API already applies this clamp, so we
-  // surface it as the recommended concurrency. RAM is not exposed to the
-  // browser for privacy reasons, so the recommendation is CPU-bounded here.
-  const cpuCores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : undefined
-  const cpuUpperBound = cpuCores ? Math.min(Math.max(cpuCores - 2, 2), 16) : undefined
-  const recommended = typeof effective === 'number' ? effective : cpuUpperBound
+  // Live system recommendation. The backend's auto-detect default is sized
+  // from available memory (availableRAM / ~3.5 MB per concurrent agent,
+  // floored at 2 — see autoDetectMaxParallel in pkg/config/config.go), which
+  // the browser cannot recompute itself: RAM isn't exposed to client-side JS
+  // for privacy reasons, and CPU core count no longer has any bearing on the
+  // formula (the old CPU-based heuristic this used to mirror is gone). So we
+  // surface the API's own resolved effective_max_parallel_agents directly —
+  // it already IS the auto-detected default whenever the operator hasn't set
+  // an explicit override, with no client-side recomputation needed.
+  const recommended = typeof effective === 'number' ? effective : undefined
 
-  // Over-limit warning: when the user has typed a value above the recommended
-  // ceiling, surface a yellow inline warning so they understand the runtime
-  // will clamp it down.
+  // High-value caution: when the typed value exceeds the physical OS-thread
+  // safety ceiling the backend itself warns about (physicalConcurrencySafetyCeiling,
+  // pkg/config/config.go), surface an inline caution. This does NOT mean the
+  // value will be lowered — explicit values have no ceiling and are always
+  // honored exactly as configured — it only flags the real thread-exhaustion
+  // risk the backend's own WARN log calls out at the same threshold.
   const inputValueNum = inputValue.trim() === '' ? null : parseInt(inputValue, 10)
-  const overLimit =
+  const exceedsPhysicalCeiling =
     inputValueNum !== null &&
     !isNaN(inputValueNum) &&
-    typeof recommended === 'number' &&
-    inputValueNum > recommended
+    inputValueNum > PHYSICAL_THREAD_CEILING
 
-  const coresPart = cpuCores ? `${cpuCores} cores` : 'cores unavailable'
-  const recPart = typeof recommended === 'number' ? `${recommended} parallel agents` : 'auto-detect'
-  const recommendationText = `Your system: ${coresPart} → Recommended: ${recPart}`
+  const recommendationText =
+    typeof recommended === 'number'
+      ? `Recommended: ${recommended} parallel agents (auto-detected from available memory)`
+      : 'Recommended: auto-detect'
 
   return (
     <div className="space-y-4">
@@ -239,7 +264,7 @@ export function PerformanceSection(): React.ReactElement {
             {recommendationText}
           </p>
           <p className="text-[11px] text-[var(--color-muted)] mt-0.5">
-            Auto-detected from CPU/RAM heuristics. The runtime clamps to <span className="font-mono">[2, min(NumCPU-2, RAM_GB/1.5)]</span> with a ceiling of 16.
+            Auto-detected from available memory (<span className="font-mono">~3.5 MB</span> per concurrent agent, floored at 2). An explicit value has no ceiling — it is always honored exactly as set.
           </p>
         </div>
       </div>
@@ -263,8 +288,7 @@ export function PerformanceSection(): React.ReactElement {
           </label>
           <Input
             type="number"
-            min={2}
-            max={16}
+            min={0}
             placeholder="auto"
             value={inputValue}
             onChange={(e) => handleInputChange(e.target.value)}
@@ -274,16 +298,23 @@ export function PerformanceSection(): React.ReactElement {
           />
         </div>
 
-        {/* Over-limit warning — yellow inline notice */}
-        {overLimit && (
+        {/* High-value caution — yellow inline notice. Unlike the old
+            over-limit warning this replaces, it does NOT claim the value
+            will be lowered: explicit values have no ceiling and are always
+            honored exactly as configured. It only surfaces the same
+            thread-exhaustion risk the backend's own WARN log calls out
+            above physicalConcurrencySafetyCeiling. */}
+        {exceedsPhysicalCeiling && (
           <div
-            data-testid="performance-over-limit-warning"
+            data-testid="performance-high-value-warning"
             className="flex items-start gap-2 p-2.5 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-xs text-[var(--color-warning)]"
           >
             <Warning size={14} className="mt-0.5 shrink-0" />
             <span>
-              {inputValueNum} exceeds the recommended {recommended}. The runtime will clamp
-              the effective value to {recommended} — consider lowering the setting.
+              {inputValueNum} will be honored exactly as set — there is no ceiling — but values
+              this high risk Go runtime thread exhaustion, which aborts the process. The
+              backend logs a warning above {PHYSICAL_THREAD_CEILING}; consider whether you
+              really need this many concurrent agents.
             </span>
           </div>
         )}

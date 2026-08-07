@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // T2.8: Boot_AbortsWhenResolvedModeDiffersFromApplied.
 //
 // Verifies that when the configured sandbox mode is "enforce" but

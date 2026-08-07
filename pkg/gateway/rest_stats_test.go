@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // BDD: token stats REST API tests.
 // Traces to: FR-013 (token usage stats, period validation, method enforcement).
 
@@ -14,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // TestHandleTokenStats_EmptyReturns200 verifies GET /api/v1/stats/tokens returns 200
@@ -105,30 +103,114 @@ func TestHandleTokenStats_MethodNotAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code, "POST /stats/tokens must return 405")
 }
 
-// writeTestSessionMeta writes a meta.json for a session into the shared session store directory
-// (filepath.Dir(homePath)/sessions/{sessionID}/). This matches where NewAgentLoop initializes
-// sharedSessionStore when cfg.Agents.Defaults.Home == homePath.
+// writeTestSessionMeta mints a REAL store-backed session (via
+// AgentLoop.GetSessionStore().NewSession) and records tokens_in/tokens_out
+// through the REAL production accumulation path
+// (session.UnifiedStore.AppendTranscriptStrict, mirroring what
+// pkg/agent/turn.go does after a real LLM call), rather than hand-writing a
+// fused meta.json with an embedded "stats" key.
+//
+// ADR-057 fixture repair: U5's meta split (readUnifiedMeta, FR-060) no
+// longer accepts a pre-split fused meta.json — a hand-written file like the
+// one this helper used to produce is read back with zero-valued Stats,
+// since stats now live in a SEPARATE stats.json group the split store reads
+// independently. AppendTranscriptStrict is the one true writer of both
+// groups, so driving it here (mirroring rest_stats_adr057_test.go's
+// u25RecordAssistantTokens / u25NewParentWithTokens) is what keeps this
+// fixture in sync with the real on-disk shape rather than the shape that
+// predates the split.
+//
+// entry.Timestamp (not time.Now()) drives meta.UpdatedAt (see
+// AppendTranscriptStrict), so callers can backdate a session's LAST-ACTIVITY
+// timestamp — but NOT to before its own creation time; see
+// writeTestSessionFilesDirect below for that case.
 func writeTestSessionMeta(
 	t *testing.T,
-	homePath, sessionID, agentID string,
+	api *restAPI,
+	agentID string,
 	tokensIn, tokensOut int,
 	updatedAt time.Time,
-) {
+) string {
 	t.Helper()
-	// The agent loop sets homePath = filepath.Dir(cfg.AgentHomeBasePath()) = filepath.Dir(homePath).
-	// sharedSessionStore is at agentLoopHome/sessions/ = filepath.Dir(homePath)/sessions/.
-	agentLoopHome := filepath.Dir(homePath)
+	store := api.agentLoop.GetSessionStore()
+	require.NotNil(t, store, "shared session store must be initialized")
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", agentID)
+	require.NoError(t, err, "store.NewSession must succeed")
+	if tokensIn > 0 {
+		require.NoError(t, store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
+			Role:      "user",
+			Content:   "test user message",
+			Timestamp: updatedAt,
+			Tokens:    tokensIn,
+			AgentID:   agentID,
+		}), "AppendTranscriptStrict (user) must succeed for session %q", meta.ID)
+	}
+	if tokensOut > 0 {
+		require.NoError(t, store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
+			Role:      "assistant",
+			Content:   "test assistant reply",
+			Timestamp: updatedAt,
+			Tokens:    tokensOut,
+			AgentID:   agentID,
+		}), "AppendTranscriptStrict (assistant) must succeed for session %q", meta.ID)
+	}
+	return meta.ID
+}
+
+// writeTestSessionFilesDirect writes meta.json + stats.json directly to a
+// session directory, entirely bypassing the store's write path, so the
+// resulting session's CreatedAt and composed UpdatedAt can genuinely predate
+// "now" — something no production write can do.
+//
+// Why this is necessary (found while repairing writeTestSessionMeta above):
+// U5's meta split makes a session's composed UpdatedAt
+// (u5LaterOf(identity.UpdatedAt, stats.UpdatedAt)) MONOTONIC —
+// u5WriteStatsLocked only advances the cached UpdatedAt when the new value
+// is After() the cached one (pkg/session/unified_meta_files.go). A session
+// minted via store.NewSession is cached with UpdatedAt=now the instant it's
+// created, so no later AppendTranscriptStrict call — no matter what
+// Timestamp it carries — can ever push the composed UpdatedAt BEFORE that
+// creation moment. That is intended: recency must never regress. It does
+// mean a genuinely out-of-period fixture (this file's only caller,
+// TestHandleTokenStats_ExcludesOutOfPeriodSessions) must be constructed as a
+// session that looks like it was created a month ago, which requires
+// writing its on-disk files directly, BEFORE the store's cache ever sees the
+// session — the very first read (inside HandleTokenStats) is then a genuine
+// cache-miss disk read that composes both backdated timestamps correctly.
+//
+// Field shapes mirror pkg/session/unified_meta_files.go's u5IdentityFile /
+// u5StatsFile (FR-053's meta.json/stats.json split) — those types are
+// unexported so this reproduces their JSON tags by hand rather than
+// importing them. goal.json/loop.json are deliberately omitted (U5's
+// "created lazily" contract: absent -> zero value, nil error).
+func writeTestSessionFilesDirect(
+	t *testing.T,
+	api *restAPI,
+	agentID string,
+	tokensIn, tokensOut int,
+	updatedAt time.Time,
+) string {
+	t.Helper()
+	sessionID := "sess-direct-" + agentID
+	agentLoopHome := filepath.Dir(api.homePath)
 	sessDir := filepath.Join(agentLoopHome, "sessions", sessionID)
 	require.NoError(t, os.MkdirAll(sessDir, 0o700))
-	meta := fmt.Sprintf(
+
+	metaJSON := fmt.Sprintf(
 		`{"id":%q,"agent_id":%q,"active_agent_id":%q,"status":"active","channel":"webchat","type":"chat",`+
-			`"created_at":%q,"updated_at":%q,"partitions":[],"stats":{"tokens_in":%d,"tokens_out":%d,"tokens_total":%d,"cost":0,"tool_calls":0,"message_count":0}}`,
+			`"created_at":%q,"updated_at":%q,"partitions":[]}`,
 		sessionID, agentID, agentID,
-		updatedAt.UTC().Format(time.RFC3339),
-		updatedAt.UTC().Format(time.RFC3339),
-		tokensIn, tokensOut, tokensIn+tokensOut,
+		updatedAt.Format(time.RFC3339), updatedAt.Format(time.RFC3339),
 	)
-	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "meta.json"), []byte(meta), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "meta.json"), []byte(metaJSON), 0o600))
+
+	statsJSON := fmt.Sprintf(
+		`{"tokens_in":%d,"tokens_out":%d,"tokens_total":%d,"cost":0,"tool_calls":0,"message_count":0,"updated_at":%q}`,
+		tokensIn, tokensOut, tokensIn+tokensOut, updatedAt.Format(time.RFC3339),
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "stats.json"), []byte(statsJSON), 0o600))
+
+	return sessionID
 }
 
 // TestHandleTokenStats_SingleAgent verifies GET /api/v1/stats/tokens aggregates tokens
@@ -143,7 +225,7 @@ func TestHandleTokenStats_SingleAgent(t *testing.T) {
 
 	// Write one session with tokens attributed to "agent-alpha".
 	now := time.Now().UTC()
-	writeTestSessionMeta(t, api.homePath, "sess-single-abc", "agent-alpha", 100, 50, now)
+	writeTestSessionMeta(t, api, "agent-alpha", 100, 50, now)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/stats/tokens?period=month", nil)
@@ -177,8 +259,8 @@ func TestHandleTokenStats_MultiAgent(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	now := time.Now().UTC()
-	writeTestSessionMeta(t, api.homePath, "sess-multi-1", "agent-beta", 200, 80, now)
-	writeTestSessionMeta(t, api.homePath, "sess-multi-2", "agent-alpha", 60, 30, now)
+	writeTestSessionMeta(t, api, "agent-beta", 200, 80, now)
+	writeTestSessionMeta(t, api, "agent-alpha", 60, 30, now)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/stats/tokens?period=month", nil)
@@ -236,11 +318,27 @@ func TestHandleTokenStats_ExcludesOutOfPeriodSessions(t *testing.T) {
 
 	// Step 1: Write a session meta file with updated_at in the current month (in-period).
 	inPeriod := time.Now().UTC()
-	writeTestSessionMeta(t, api.homePath, "sess-inperiod-001", "agent-1", 100, 50, inPeriod)
+	writeTestSessionMeta(t, api, "agent-1", 100, 50, inPeriod)
 
 	// Step 2: Write another session meta file with updated_at in the prior month (out-of-period).
+	//
+	// ADR-057 fixture repair, second-order finding: the store's composed
+	// UpdatedAt (u5LaterOf(identity.UpdatedAt, stats.UpdatedAt), U5's meta
+	// split) is monotonic — u5WriteStatsLocked only advances the CACHED
+	// UpdatedAt when the new value is After() the current one
+	// (unified_meta_files.go: "if meta.UpdatedAt.After(cached.UpdatedAt)").
+	// A session's recency can therefore never be pushed BEFORE its own
+	// creation time via the real write path: writeTestSessionMeta (which
+	// calls store.NewSession, stamping CreatedAt/UpdatedAt = now) followed by
+	// AppendTranscriptStrict(Timestamp: outOfPeriod) leaves the composed
+	// UpdatedAt at "now", because identity's real creation timestamp is
+	// later than the backdated stats timestamp and wins. This is intended
+	// production behavior (recency must not regress), not a bug — so
+	// simulating a genuinely out-of-period session requires writing its
+	// on-disk files directly, BEFORE the store ever caches it, exactly as a
+	// session created a month ago would look on disk.
 	outOfPeriod := time.Now().AddDate(0, -1, 0).UTC()
-	writeTestSessionMeta(t, api.homePath, "sess-outofperiod-002", "agent-2", 999, 999, outOfPeriod)
+	writeTestSessionFilesDirect(t, api, "agent-2", 999, 999, outOfPeriod)
 
 	// Step 3: Call GET /api/v1/stats/tokens?period=month.
 	w := httptest.NewRecorder()
@@ -318,46 +416,44 @@ func TestHandleTokenStats_StatusValidation(t *testing.T) {
 		"GET /stats/tokens?period=garbage must return 400; body=%s", wBad.Body.String())
 }
 
-// writeTestSessionMetaWithByModel writes a meta.json for a session that includes
-// per-model token breakdown in stats.by_model. The by_model map is a JSON object
-// whose keys are model names and whose values follow the ModelTokens shape
-// (cache_read, cache_write, in, out, total). This is used by the contract-drift
-// guard test below to exercise the by_model path in HandleTokenStats.
+// writeTestSessionMetaWithByModel mints a REAL store-backed session and
+// records a per-model token breakdown through the REAL production
+// accumulation path (session.UnifiedStore.AppendTranscriptStrict) — see
+// writeTestSessionMeta's doc comment for why a hand-written fused meta.json
+// no longer round-trips through readUnifiedMeta (FR-060, U5's meta split).
+//
+// One assistant TranscriptEntry is appended per model in byModel, carrying
+// that model's own Tokens/CacheReadTokens/CacheWriteTokens; the production
+// accumulation (AppendTranscriptStrict) derives both the per-model
+// Stats.ByModel entry AND the top-level Stats.TokensCacheRead/Write totals
+// from exactly those fields, so — unlike the old direct-write version —
+// there is no separate top-level cacheRead/cacheWrite parameter to keep in
+// sync by hand.
 func writeTestSessionMetaWithByModel(
 	t *testing.T,
-	homePath, sessionID, agentID string,
-	tokensIn, tokensOut, cacheRead, cacheWrite int,
+	api *restAPI,
+	agentID string,
 	byModel map[string]struct{ In, Out, CacheRead, CacheWrite, Total int },
 	updatedAt time.Time,
-) {
+) string {
 	t.Helper()
-	agentLoopHome := filepath.Dir(homePath)
-	sessDir := filepath.Join(agentLoopHome, "sessions", sessionID)
-	require.NoError(t, os.MkdirAll(sessDir, 0o700))
-
-	// Encode by_model as inline JSON.
-	byModelParts := make([]string, 0, len(byModel))
+	store := api.agentLoop.GetSessionStore()
+	require.NotNil(t, store, "shared session store must be initialized")
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", agentID)
+	require.NoError(t, err, "store.NewSession must succeed")
 	for model, mt := range byModel {
-		byModelParts = append(byModelParts, fmt.Sprintf(
-			"%q:{\"in\":%d,\"out\":%d,\"cache_read\":%d,\"cache_write\":%d,\"total\":%d}",
-			model, mt.In, mt.Out, mt.CacheRead, mt.CacheWrite, mt.Total,
-		))
+		require.NoError(t, store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
+			Role:             "assistant",
+			Content:          "test assistant reply",
+			Timestamp:        updatedAt,
+			Tokens:           mt.Total,
+			Model:            model,
+			CacheReadTokens:  mt.CacheRead,
+			CacheWriteTokens: mt.CacheWrite,
+			AgentID:          agentID,
+		}), "AppendTranscriptStrict must succeed for session %q model %q", meta.ID, model)
 	}
-	byModelJSON := "{" + strings.Join(byModelParts, ",") + "}"
-
-	meta := fmt.Sprintf(
-		`{"id":%q,"agent_id":%q,"active_agent_id":%q,"status":"active","channel":"webchat","type":"chat",`+
-			`"created_at":%q,"updated_at":%q,"partitions":[],`+
-			`"stats":{"tokens_in":%d,"tokens_out":%d,"tokens_total":%d,"cost":0,"tool_calls":0,"message_count":0,`+
-			`"tokens_cache_read":%d,"tokens_cache_write":%d,"by_model":%s}}`,
-		sessionID, agentID, agentID,
-		updatedAt.UTC().Format(time.RFC3339),
-		updatedAt.UTC().Format(time.RFC3339),
-		tokensIn, tokensOut, tokensIn+tokensOut,
-		cacheRead, cacheWrite,
-		byModelJSON,
-	)
-	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "meta.json"), []byte(meta), 0o600))
+	return meta.ID
 }
 
 // TestHandleTokenStats_WireShapeMatchesContract is the contract-drift guard for
@@ -409,11 +505,8 @@ func TestHandleTokenStats_WireShapeMatchesContract(t *testing.T) {
 	now := time.Now().UTC()
 	writeTestSessionMetaWithByModel(
 		t,
-		api.homePath,
-		"sess-contract-drift-guard",
+		api,
 		"agent-contract",
-		200, 100, // tokensIn, tokensOut
-		50, 20, // cacheRead, cacheWrite (top-level cache totals)
 		map[string]struct{ In, Out, CacheRead, CacheWrite, Total int }{
 			"test-model-a": {In: 0, Out: 0, CacheRead: 50, CacheWrite: 20, Total: 300},
 		},
@@ -543,7 +636,7 @@ func TestHandleTokenStats_PartialFlag(t *testing.T) {
 	t.Run("clean_no_partial", func(t *testing.T) {
 		api := newTestRestAPIWithHome(t)
 		now := time.Now().UTC()
-		writeTestSessionMeta(t, api.homePath, "sess-clean-001", "agent-clean", 100, 50, now)
+		writeTestSessionMeta(t, api, "agent-clean", 100, 50, now)
 
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet, "/api/v1/stats/tokens", nil)

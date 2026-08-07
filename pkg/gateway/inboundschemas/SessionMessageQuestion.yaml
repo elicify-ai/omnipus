@@ -1,0 +1,100 @@
+type: object
+title: SessionMessageQuestion
+description: >
+  SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract
+  Surface, R§8.2). Child -> parent. `wait: true` parks the child in
+  `needs_input` (native-only; 3P children never advertise this kind, D5).
+  `authority` is child-authored but NEVER trusted at face value — the
+  runtime's `deriveQuestionAuthority(q)` re-derives the effective authority
+  server-side (fail-closed default `owner_required` on omission; a child
+  can only be UPGRADED to `owner_required`, never downgraded to `self_ok`).
+  Envelope fields are duplicated inline (ADR-034 precedent, see
+  SessionMessageProgress for the rationale).
+required:
+  - message_id
+  - session_id
+  - direction
+  - kind
+  - depth
+  - created_at
+  - sender_identity
+  - untrusted_origin
+  - text
+  - wait
+  - correlation_id
+additionalProperties: false
+properties:
+  message_id:
+    type: string
+    minLength: 1
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WK"
+  session_id:
+    type: string
+    minLength: 1
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  parent_session_id:
+    type: string
+    nullable: true
+    example: "660e8400-e29b-41d4-a716-446655440000"
+  generation:
+    type: integer
+    minimum: 0
+    example: 0
+  direction:
+    type: string
+    enum:
+      - child_to_parent
+    example: "child_to_parent"
+  kind:
+    type: string
+    enum:
+      - question
+    example: "question"
+  depth:
+    type: integer
+    minimum: 0
+    maximum: 5
+    example: 0
+  created_at:
+    type: string
+    format: date-time
+    example: "2026-07-22T10:00:00Z"
+  sender_identity:
+    type: string
+    minLength: 1
+    example: "ray"
+  untrusted_origin:
+    type: boolean
+    example: true
+  text:
+    type: string
+    maxLength: 32768
+    description: Untrusted question text.
+    example: "Should I overwrite the existing config.json backup?"
+  wait:
+    type: boolean
+    description: >
+      True parks the child in `needs_input` awaiting a `respond` (native
+      only). False is a fire-and-forget question the child does not block
+      on.
+    example: true
+  correlation_id:
+    type: string
+    minLength: 1
+    description: >
+      Routes the eventual `respond`/`inbox_ack` back to this question.
+      Out-of-order answers are safe (V-3/M-3).
+    example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"
+  authority:
+    type: string
+    enum:
+      - self_ok
+      - owner_required
+    description: >
+      Child-authored authority tag. Untrusted (M3) — the runtime's
+      `deriveQuestionAuthority(q)` is the authoritative determination; an
+      omitted tag is treated as `owner_required` server-side (fail-closed
+      default is NOT a schema `default:` — it is applied at the handler,
+      per the project convention of never mixing `required` semantics with
+      a JSON-Schema `default` on a field the server overrides).
+    example: "self_ok"

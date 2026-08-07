@@ -110,6 +110,148 @@ func (g *TestGateway) ConfigPath() string { return g.configPath }
 // Empty string means the gateway is running without token auth (DevModeBypass=true).
 func (g *TestGateway) Token() string { return g.bearerToken }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Readiness polling — extracted so the decision logic is unit-testable without
+// booting a real gateway. See gateway_harness_poll_test.go.
+//
+// Background: the previous design polled /health against a single wall-clock
+// deadline (`if time.Now().After(deadline) { fail }`). That trusts elapsed
+// wall-clock time as the failure signal, which breaks down under a host
+// freeze (CI scheduling stall, IO stall): the ENTIRE deadline budget can be
+// consumed while zero probes run, and then the very next probe — which may
+// simply catch the gateway a few ms before its listener binds — is treated
+// as terminal, even though measured gateway boot cost is 0.22s p50 and only
+// 0.75s worst-case even at 8x CPU oversubscription (i.e. the gateway itself
+// is nowhere near actually failing). The failure message in that case was
+// also undiagnosable: "did not return 200 within 15000ms" looks identical
+// whether the gateway genuinely never boots or the host merely froze once.
+//
+// The fix: require a run of consecutive FAILED probes, not elapsed wall
+// time, as the primary failure signal. A freeze produces fewer probes, not
+// failed ones, so it can no longer masquerade as a boot failure — whenever
+// probing resumes and the gateway answers healthy, pollUntilReady succeeds
+// regardless of how much wall-clock time the freeze consumed. A boot error
+// captured from RunContext is checked every iteration (not only once the
+// old deadline had already expired), so a genuinely fast boot failure is
+// reported immediately with the real error instead of only after paying the
+// full timeout. An absolute wall-clock backstop remains as a ceiling — not
+// the primary signal — so a gateway that is truly wedged (e.g. accepting
+// probes that hang or fail slowly enough that the consecutive-failure count
+// would take unreasonably long to reach) still cannot hang CI forever.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// probeOutcome is the result of a single readiness probe attempt.
+// A nil err means the probe observed the gateway healthy.
+type probeOutcome struct {
+	err error
+}
+
+// pollOutcomeKind identifies why pollUntilReady stopped polling.
+type pollOutcomeKind int
+
+const (
+	// pollReady means the probe succeeded — the gateway is healthy.
+	pollReady pollOutcomeKind = iota
+	// pollFatalBootError means RunContext (or equivalent) reported a boot
+	// error before the gateway ever became healthy. Reported immediately,
+	// regardless of how little wall-clock time or how few attempts have
+	// elapsed — this is the fast-fail path.
+	pollFatalBootError
+	// pollConsecutiveFailures means consecutiveFailThreshold consecutive
+	// failed probes were observed. This is the primary failure signal for a
+	// genuinely-failed-to-become-healthy gateway.
+	pollConsecutiveFailures
+	// pollHardBackstop means the absolute wall-clock ceiling was hit before
+	// either of the above could resolve — e.g. individual probes are slow
+	// enough (a wedged gateway hanging on each request) that reaching
+	// consecutiveFailThreshold would take far longer than is reasonable to
+	// wait. This is a backstop, not the primary signal.
+	pollHardBackstop
+)
+
+// pollResult carries the outcome plus enough diagnostics (attempts + elapsed)
+// that a caller's failure message can distinguish "host froze" from "gateway
+// genuinely failed to boot" from "gateway is wedged" without re-running
+// anything.
+type pollResult struct {
+	kind             pollOutcomeKind
+	attempts         int
+	elapsed          time.Duration
+	consecutiveFails int
+	lastProbeErr     error
+	bootErr          error
+}
+
+// pollConfig parameterizes pollUntilReady. now/sleep/probe/bootErr are all
+// injectable so the decision logic can be unit-tested with a fake clock —
+// no real gateway, no real network, no real sleeping required.
+type pollConfig struct {
+	probe                    func() probeOutcome
+	bootErr                  func() error
+	interval                 time.Duration
+	consecutiveFailThreshold int
+	hardBackstop             time.Duration
+	now                      func() time.Time
+	sleep                    func(time.Duration)
+}
+
+// pollUntilReady polls cfg.probe at cfg.interval until it reports healthy.
+// See the package doc comment above for the rationale.
+func pollUntilReady(cfg pollConfig) pollResult {
+	start := cfg.now()
+	var attempts, consecutiveFails int
+	var lastErr error
+
+	for {
+		// Check every iteration — not only once a deadline has expired — so
+		// a fast boot failure is reported immediately with the real error.
+		if err := cfg.bootErr(); err != nil {
+			return pollResult{
+				kind:     pollFatalBootError,
+				attempts: attempts,
+				elapsed:  cfg.now().Sub(start),
+				bootErr:  err,
+			}
+		}
+
+		attempts++
+		outcome := cfg.probe()
+		if outcome.err == nil {
+			return pollResult{kind: pollReady, attempts: attempts, elapsed: cfg.now().Sub(start)}
+		}
+
+		lastErr = outcome.err
+		consecutiveFails++
+		elapsed := cfg.now().Sub(start)
+
+		// Backstop check first: it must fire regardless of how the failures
+		// are patterned (e.g. very few, very slow failures), since it exists
+		// purely to bound total wall-clock time.
+		if elapsed >= cfg.hardBackstop {
+			return pollResult{
+				kind:             pollHardBackstop,
+				attempts:         attempts,
+				elapsed:          elapsed,
+				consecutiveFails: consecutiveFails,
+				lastProbeErr:     lastErr,
+				bootErr:          cfg.bootErr(),
+			}
+		}
+		if consecutiveFails >= cfg.consecutiveFailThreshold {
+			return pollResult{
+				kind:             pollConsecutiveFailures,
+				attempts:         attempts,
+				elapsed:          elapsed,
+				consecutiveFails: consecutiveFails,
+				lastProbeErr:     lastErr,
+				bootErr:          cfg.bootErr(),
+			}
+		}
+
+		cfg.sleep(cfg.interval)
+	}
+}
+
 // StartTestGateway boots a real gateway via the registered RunContextFunc on
 // an ephemeral port and returns a TestGateway once the /health endpoint
 // responds 200.
@@ -247,37 +389,98 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 		}
 	}()
 
-	// Poll until /health returns 200 or the deadline expires. 15 s budget:
-	// GitHub-hosted CI runners under load can take 3-8 s to register all
-	// services + bind a port; the previous 5 s budget tripped intermittently
-	// on busy runners (TestSinceCursor_DifferentInputsDifferentOutputs in
-	// the Tests job on PR #178, while every matrix runner passed cleanly).
-	const bootDeadline = 15 * time.Second
-	deadline := time.Now().Add(bootDeadline)
-	for {
-		resp, httpErr := gw.HTTPClient.Get(baseURL + "/health")
-		if httpErr == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				break
+	// Poll until /health returns 200. See the pollUntilReady doc comment
+	// above (near the getter methods) for the full rationale. Summary of the
+	// constants below:
+	//
+	//   - healthProbeInterval (50ms): unchanged from the previous design.
+	//   - healthConsecutiveFailThreshold (300): 300 * 50ms == 15s of
+	//     CONTINUOUSLY failing probes — the same real-time budget the old
+	//     wall-clock deadline granted, except it can now only be consumed by
+	//     actual failed attempts, never by a frozen/stalled host doing
+	//     nothing. Measured gateway boot cost is 0.22s p50 and 0.75s
+	//     worst-case even at 8x CPU oversubscription (≈15 failed attempts at
+	//     this interval); the previous deadline comment also recorded busy
+	//     GitHub-hosted runners taking up to 3-8s (≈60-160 attempts) under
+	//     load. 300 leaves roughly 2x margin over that documented worst case.
+	//   - healthHardBackstop (30s): an absolute ceiling, not the primary
+	//     signal — protects against a gateway that is genuinely wedged (e.g.
+	//     accepting TCP connections but hanging on every request), where
+	//     each failed probe could itself take seconds, making
+	//     healthConsecutiveFailThreshold consecutive fails take far longer
+	//     than is reasonable to wait.
+	//   - healthProbeTimeout (2s): bounds a single health GET so one hung
+	//     request cannot silently eat most of healthHardBackstop by itself.
+	const (
+		healthProbeInterval            = 50 * time.Millisecond
+		healthConsecutiveFailThreshold = 300
+		healthHardBackstop             = 30 * time.Second
+		healthProbeTimeout             = 2 * time.Second
+	)
+
+	probeClient := &http.Client{Timeout: healthProbeTimeout}
+	result := pollUntilReady(pollConfig{
+		probe: func() probeOutcome {
+			resp, httpErr := probeClient.Get(baseURL + "/health")
+			if httpErr != nil {
+				return probeOutcome{err: httpErr}
 			}
-		}
-		if time.Now().After(deadline) {
-			// Surface any boot error for diagnostics.
-			var bootErrMsg string
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusOK {
+				return probeOutcome{err: fmt.Errorf("health endpoint returned status %d", resp.StatusCode)}
+			}
+			return probeOutcome{}
+		},
+		bootErr: func() error {
 			if p := gw.bootErr.Load(); p != nil {
-				bootErrMsg = fmt.Sprintf(": boot error: %v", *p)
+				return *p
 			}
-			cancel()
-			<-done
+			return nil
+		},
+		interval:                 healthProbeInterval,
+		consecutiveFailThreshold: healthConsecutiveFailThreshold,
+		hardBackstop:             healthHardBackstop,
+		now:                      time.Now,
+		sleep:                    time.Sleep,
+	})
+
+	if result.kind != pollReady {
+		cancel()
+		<-done
+
+		switch result.kind {
+		case pollFatalBootError:
 			t.Fatalf(
-				"testutil.StartTestGateway: gateway at %s did not become ready within %s%s",
-				baseURL,
-				bootDeadline,
-				bootErrMsg,
+				"testutil.StartTestGateway: gateway at %s failed to boot: %v "+
+					"(fast-fail: %d probe attempt(s), %s elapsed — this is a genuine boot "+
+					"error surfaced immediately, not a timeout)",
+				baseURL, result.bootErr, result.attempts, result.elapsed,
+			)
+		case pollConsecutiveFailures:
+			var bootErrMsg string
+			if result.bootErr != nil {
+				bootErrMsg = fmt.Sprintf("; boot error: %v", result.bootErr)
+			}
+			t.Fatalf(
+				"testutil.StartTestGateway: gateway at %s never became healthy after "+
+					"%d consecutive failed health probes (%s elapsed) — this indicates a "+
+					"genuine boot failure, not a scheduling stall (a frozen host would "+
+					"produce FEW probes, not failed ones); last probe error: %v%s",
+				baseURL, result.consecutiveFails, result.elapsed, result.lastProbeErr, bootErrMsg,
+			)
+		case pollHardBackstop:
+			var bootErrMsg string
+			if result.bootErr != nil {
+				bootErrMsg = fmt.Sprintf("; boot error: %v", result.bootErr)
+			}
+			t.Fatalf(
+				"testutil.StartTestGateway: gateway at %s hit the %s hard backstop after "+
+					"only %d probe attempt(s) (%s elapsed) without becoming healthy — this is "+
+					"the absolute ceiling, not the primary failure signal; probes are likely "+
+					"hanging (gateway wedged/hung, not merely slow to boot); last probe error: %v%s",
+				baseURL, healthHardBackstop, result.attempts, result.elapsed, result.lastProbeErr, bootErrMsg,
 			)
 		}
-		time.Sleep(50 * time.Millisecond)
 	}
 
 	t.Cleanup(func() {
@@ -478,38 +681,28 @@ func (g *TestGateway) SeedUser(ctx context.Context, u config.UserConfig, beforeW
 	}
 
 	// Trigger a gateway reload so the in-memory config picks up the new user.
-	// Retry on 500 "reload already in progress" — this is a transient race when
-	// onboarding's own reload (rest_onboarding.go::awaitReload) is still in
-	// flight. The reloading flag is cleared in executeReload's defer, so
-	// re-issuing /reload after a short backoff succeeds.
-	reloadDeadline := time.Now().Add(2 * time.Second)
-	var lastStatus int
-	for {
-		reloadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.URL+"/reload", nil)
-		if err != nil {
-			return fmt.Errorf("SeedUser: build reload request: %w", err)
-		}
-		reloadReq.Header.Set("Origin", g.URL)
-		reloadResp, err := g.HTTPClient.Do(reloadReq)
-		if err != nil {
-			return fmt.Errorf("SeedUser: POST /reload: %w", err)
-		}
-		_ = reloadResp.Body.Close()
-		lastStatus = reloadResp.StatusCode
-		if reloadResp.StatusCode == http.StatusOK {
-			break
-		}
-		if reloadResp.StatusCode != http.StatusInternalServerError || time.Now().After(reloadDeadline) {
-			return fmt.Errorf("SeedUser: POST /reload returned %d", reloadResp.StatusCode)
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf(
-				"SeedUser: context canceled during reload retry (last status %d): %w",
-				lastStatus, ctx.Err(),
-			)
-		case <-time.After(50 * time.Millisecond):
-		}
+	//
+	// No retry loop: this used to poll for up to 2s on 500 "reload already in
+	// progress", because the gateway's reload trigger rejected any request that
+	// arrived while another reload was running (e.g. onboarding's own reload via
+	// rest_onboarding.go::awaitReload). That trigger now COALESCES instead of
+	// rejecting — a mid-flight request is recorded and served by a follow-up
+	// reload that re-reads config from disk — so /reload answers 200 and the
+	// 500 this loop existed to absorb can no longer occur. Any non-200 here is
+	// now a genuine failure and must surface immediately rather than being
+	// retried for 2s and reported as something else.
+	reloadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.URL+"/reload", nil)
+	if err != nil {
+		return fmt.Errorf("SeedUser: build reload request: %w", err)
+	}
+	reloadReq.Header.Set("Origin", g.URL)
+	reloadResp, err := g.HTTPClient.Do(reloadReq)
+	if err != nil {
+		return fmt.Errorf("SeedUser: POST /reload: %w", err)
+	}
+	_ = reloadResp.Body.Close()
+	if reloadResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("SeedUser: POST /reload returned %d", reloadResp.StatusCode)
 	}
 
 	// Poll with the new user's token (if non-empty) until the auth middleware

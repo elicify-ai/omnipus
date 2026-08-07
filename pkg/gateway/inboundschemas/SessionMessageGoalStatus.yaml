@@ -1,0 +1,88 @@
+type: object
+title: SessionMessageGoalStatus
+description: >
+  SessionMessage `oneOf` variant, `kind: goal_status` (ADR-053 §Contract
+  Surface). Direction `session_to_ui`. This is the typed, engine-internal
+  propagation of the parsed `GOAL_STATUS:` marker (US-2) — DISTINCT from
+  the existing `GoalStatusFrame` WS frame (`contracts/asyncapi.yaml`),
+  which carries the 8-state DISPLAY pill (queued/active/waiting_on_user/
+  judge_unavailable/re-planning/judging/done/failed, R§8.10) plus
+  round/max_rounds/cap accounting. `SessionMessageGoalStatus.condition` is
+  the raw two-value marker outcome (`met`/`waiting_on_user`) the claim-or-
+  idle trigger consumes to decide whether to adjudicate or pause — it
+  feeds the pill, it is not the pill itself. Envelope fields are
+  duplicated inline (ADR-034 precedent, see SessionMessageProgress for
+  the rationale).
+required:
+  - message_id
+  - session_id
+  - direction
+  - kind
+  - depth
+  - created_at
+  - sender_identity
+  - untrusted_origin
+  - condition
+  - goal_id
+additionalProperties: false
+properties:
+  message_id:
+    type: string
+    minLength: 1
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WT"
+  session_id:
+    type: string
+    minLength: 1
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  parent_session_id:
+    type: string
+    nullable: true
+    example: null
+  generation:
+    type: integer
+    minimum: 0
+    example: 0
+  direction:
+    type: string
+    enum:
+      - session_to_ui
+    example: "session_to_ui"
+  kind:
+    type: string
+    enum:
+      - goal_status
+    example: "goal_status"
+  depth:
+    type: integer
+    minimum: 0
+    maximum: 5
+    example: 0
+  created_at:
+    type: string
+    format: date-time
+    example: "2026-07-22T10:00:00Z"
+  sender_identity:
+    type: string
+    minLength: 1
+    example: "jim"
+  untrusted_origin:
+    type: boolean
+    example: false
+  condition:
+    type: string
+    enum:
+      - met
+      - waiting_on_user
+    description: >
+      The typed `GOAL_STATUS:` marker outcome (US-2). No marker on a turn
+      means "not waiting" — a deterministic fallback, never inferred by a
+      prose classifier, and never represented as a third enum value here
+      (absence of this message IS the not-waiting state).
+    example: "met"
+  goal_id:
+    type: string
+    minLength: 1
+    description: >
+      The goal this condition applies to (R§8.11 — a session may carry
+      multiple independent goals, each keyed by goal-id).
+    example: "goal_01J3ZQK8N2H8VXNRP5T7C9M4WU"

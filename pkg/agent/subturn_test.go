@@ -8,9 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -120,15 +124,35 @@ func TestSpawnSubTurn(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// ADR-057 FR-005/FR-096 fixture repair `[grill C-1]`: spawnSubTurn's
+			// sharedStore.CreateSessionWithID(childID, parentTS.transcriptSessionID, ...)
+			// requires the parent id to resolve to a REAL session in
+			// al.GetSessionStore() — a bare turnState with no transcriptSessionID
+			// at all fails validateSessionID before ever reaching the LLM call,
+			// which the depth-limit/invalid-config error-path cases below don't
+			// notice (they error out even earlier) but the success-path cases
+			// need. Mint a fresh, real session per subtest.
+			store := al.GetSessionStore()
+			if store == nil {
+				t.Fatal("test harness did not wire a shared session store")
+			}
+			meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+			if err != nil {
+				t.Fatalf("store.NewSession: %v", err)
+			}
+
 			// Prepare parent Turn
 			parent := &turnState{
-				ctx:            context.Background(),
-				turnID:         "parent-1",
-				depth:          tt.parentDepth,
-				childTurnIDs:   []string{},
-				pendingResults: make(chan *tools.ToolResult, 10),
-				session:        &ephemeralSessionStore{},
-				agent:          al.registry.GetDefaultAgent(),
+				ctx:                 context.Background(),
+				turnID:              "parent-1",
+				depth:               tt.parentDepth,
+				childTurnIDs:        []string{},
+				pendingResults:      make(chan *tools.ToolResult, 10),
+				session:             &ephemeralSessionStore{},
+				agent:               al.registry.GetDefaultAgent(),
+				transcriptSessionID: meta.ID,
+				routingSessionID:    session.RoutingSessionID(meta.ID),
+				transcriptStore:     store,
 			}
 
 			// Subscribe to real EventBus to capture events
@@ -142,8 +166,25 @@ func TestSpawnSubTurn(t *testing.T) {
 				spawnCtx = withSpawnToolCallID(spawnCtx, "test-spawn-call-1")
 			}
 
+			// Pin an explicit, per-run-unique child session id (derived from
+			// the freshly-minted parent ULID above) rather than relying on
+			// spawnSubTurn's auto-generated "subturn-N" counter. newTestAgentLoop
+			// (loop_test.go) roots its shared session store at
+			// filepath.Dir(cfg.Agents.Defaults.Home) — for os.MkdirTemp("",
+			// "agent-test-*")'s flat tmp dirs, that resolves to the OS's shared
+			// /tmp, so a deterministic "subturn-1" can collide with a
+			// same-named directory left behind by any other test in this
+			// package that also let the counter default (verified: FR-096's
+			// new collision guard turned a previously-silent MkdirAll
+			// no-op into a loud "already exists" failure here). This is a
+			// pre-existing newTestAgentLoop hazard (loop_test.go, not owned by
+			// this fix) now surfaced by FR-096; work around it locally rather
+			// than editing the shared helper.
+			cfg := tt.config
+			cfg.DelegateSessionID = "subturn-test-" + meta.ID
+
 			// Execute spawnSubTurn
-			result, err := spawnSubTurn(spawnCtx, al, parent, tt.config)
+			result, err := spawnSubTurn(spawnCtx, al, parent, cfg)
 
 			// Assert errors
 			if tt.wantErr != nil {
@@ -236,16 +277,35 @@ func TestSpawnSubTurn_ResultDelivery(t *testing.T) {
 	_ = provider
 	defer cleanup()
 
-	parent := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-1",
-		depth:          0,
-		pendingResults: make(chan *tools.ToolResult, 1),
-		session:        &ephemeralSessionStore{},
+	// ADR-057 FR-005/FR-096 fixture repair: see the identical note in
+	// TestSpawnSubTurn above.
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
 	}
 
-	// Set Async=true to test async result delivery via pendingResults channel
-	cfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}, Async: true}
+	parent := &turnState{
+		ctx:                 context.Background(),
+		turnID:              "parent-1",
+		depth:               0,
+		pendingResults:      make(chan *tools.ToolResult, 1),
+		session:             &ephemeralSessionStore{},
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
+	}
+
+	// Set Async=true to test async result delivery via pendingResults channel.
+	// DelegateSessionID pinned explicitly (see TestSpawnSubTurn's identical
+	// note) to avoid colliding with newTestAgentLoop's shared-/tmp hazard.
+	cfg := SubTurnConfig{
+		Model: "gpt-4o-mini", Tools: []tools.Tool{}, Async: true,
+		DelegateSessionID: "subturn-test-" + meta.ID,
+	}
 
 	_, _ = spawnSubTurn(context.Background(), al, parent, cfg)
 
@@ -266,16 +326,34 @@ func TestSpawnSubTurn_ResultDeliverySync(t *testing.T) {
 	_ = provider
 	defer cleanup()
 
-	parent := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-sync-1",
-		depth:          0,
-		pendingResults: make(chan *tools.ToolResult, 1),
-		session:        &ephemeralSessionStore{},
+	// ADR-057 FR-005/FR-096 fixture repair: see the identical note in
+	// TestSpawnSubTurn above.
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
 	}
 
-	// Sync call (Async=false, the default) - result should be returned directly
-	cfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}, Async: false}
+	parent := &turnState{
+		ctx:                 context.Background(),
+		turnID:              "parent-sync-1",
+		depth:               0,
+		pendingResults:      make(chan *tools.ToolResult, 1),
+		session:             &ephemeralSessionStore{},
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
+	}
+
+	// Sync call (Async=false, the default) - result should be returned directly.
+	// DelegateSessionID pinned explicitly — see TestSpawnSubTurn's identical note.
+	cfg := SubTurnConfig{
+		Model: "gpt-4o-mini", Tools: []tools.Tool{}, Async: false,
+		DelegateSessionID: "subturn-test-" + meta.ID,
+	}
 
 	result, err := spawnSubTurn(context.Background(), al, parent, cfg)
 	if err != nil {
@@ -617,22 +695,37 @@ func TestNestedSubTurnHierarchy(t *testing.T) {
 		}
 	}()
 
+	// ADR-057 FR-005/FR-096 fixture repair: see the identical note in
+	// TestSpawnSubTurn above.
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
+	}
+
 	// Create a root turn
 	rootSession := &ephemeralSessionStore{}
 	rootTS := &turnState{
-		ctx:            context.Background(),
-		turnID:         "root-turn",
-		depth:          0,
-		session:        rootSession,
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, 5),
+		ctx:                 context.Background(),
+		turnID:              "root-turn",
+		depth:               0,
+		session:             rootSession,
+		pendingResults:      make(chan *tools.ToolResult, 16),
+		concurrencySem:      make(chan struct{}, 5),
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 	}
 
-	// Spawn a child (depth 1).
+	// Spawn a child (depth 1). DelegateSessionID pinned explicitly — see
+	// TestSpawnSubTurn's identical note on newTestAgentLoop's shared-/tmp hazard.
 	// W1-12: inject a parentSpawnCallID so span events are emitted.
-	childCfg := SubTurnConfig{Model: "gpt-4o-mini"}
+	childCfg := SubTurnConfig{Model: "gpt-4o-mini", DelegateSessionID: "subturn-test-" + meta.ID}
 	spawnCtx := withSpawnToolCallID(context.Background(), "nested-spawn-call-1")
-	_, err := spawnSubTurn(spawnCtx, al, rootTS, childCfg)
+	_, err = spawnSubTurn(spawnCtx, al, rootTS, childCfg)
 	if err != nil {
 		t.Fatalf("failed to spawn child: %v", err)
 	}
@@ -864,12 +957,31 @@ func TestSpawnSubTurn_PanicRecovery(t *testing.T) {
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), panicProvider)
 
+	// ADR-057 FR-005/FR-096 fixture repair `[grill C-1]`: without a real
+	// parent session, spawnSubTurn's sharedStore.CreateSessionWithID fails
+	// and returns BEFORE the defer block that emits EventKindSubTurnEnd and
+	// delivers to pendingResults is even registered — the panicProvider is
+	// never reached at all, and this test's real subject (recovery from an
+	// in-flight LLM panic) goes untested even though its "err != nil"
+	// assertion happens to still pass for the wrong reason.
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
+	}
+
 	parent := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-panic",
-		depth:          0,
-		pendingResults: make(chan *tools.ToolResult, 1),
-		session:        &ephemeralSessionStore{},
+		ctx:                 context.Background(),
+		turnID:              "parent-panic",
+		depth:               0,
+		pendingResults:      make(chan *tools.ToolResult, 1),
+		session:             &ephemeralSessionStore{},
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 	}
 
 	collector, collectCleanup := newEventCollector(t, al)
@@ -1434,23 +1546,41 @@ func TestEphemeralSession_AutoTruncate(t *testing.T) {
 func TestContextWrapping_SingleLayer(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Provider: "mock",
-			},
+			// Home MUST be a real, isolated dir — an empty Home resolves
+			// AgentHomeBasePath() (and the shared session store's baseDir) to
+			// the process's current working directory, shared by every test
+			// in this package/binary that also leaves it unset.
+			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
 		},
 	}
 	msgBus := bus.NewMessageBus()
 	provider := &simpleMockProviderAPI{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
+	// ADR-057 FR-005/FR-096 fixture repair `[grill C-1]`: spawnSubTurn's
+	// sharedStore.CreateSessionWithID(childID, parentTS.transcriptSessionID, ...)
+	// requires the parent id to resolve to a REAL session in
+	// al.GetSessionStore().
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
+	}
+
 	ctx := context.Background()
 	parentTS := &turnState{
-		ctx:            ctx,
-		turnID:         "parent-context-test",
-		depth:          0,
-		session:        newEphemeralSession(nil),
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		ctx:                 ctx,
+		turnID:              "parent-context-test",
+		depth:               0,
+		session:             newEphemeralSession(nil),
+		pendingResults:      make(chan *tools.ToolResult, 16),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 	}
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
 	defer parentTS.Finish(false)
@@ -1480,23 +1610,37 @@ func TestContextWrapping_SingleLayer(t *testing.T) {
 func TestSyncSubTurn_NoChannelDelivery(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Provider: "mock",
-			},
+			// Home MUST be a real, isolated dir — see TestContextWrapping_SingleLayer's
+			// identical note.
+			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
 		},
 	}
 	msgBus := bus.NewMessageBus()
 	provider := &simpleMockProviderAPI{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
+	// ADR-057 FR-005/FR-096 fixture repair: see the identical note in
+	// TestContextWrapping_SingleLayer above.
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
+	}
+
 	ctx := context.Background()
 	parentTS := &turnState{
-		ctx:            ctx,
-		turnID:         "parent-sync-test",
-		depth:          0,
-		session:        newEphemeralSession(nil),
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		ctx:                 ctx,
+		turnID:              "parent-sync-test",
+		depth:               0,
+		session:             newEphemeralSession(nil),
+		pendingResults:      make(chan *tools.ToolResult, 16),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 	}
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
 	defer parentTS.Finish(false)
@@ -1537,23 +1681,37 @@ func TestSyncSubTurn_NoChannelDelivery(t *testing.T) {
 func TestAsyncSubTurn_ChannelDelivery(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Provider: "mock",
-			},
+			// Home MUST be a real, isolated dir — see TestContextWrapping_SingleLayer's
+			// identical note.
+			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
 		},
 	}
 	msgBus := bus.NewMessageBus()
 	provider := &simpleMockProviderAPI{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
+	// ADR-057 FR-005/FR-096 fixture repair: see the identical note in
+	// TestContextWrapping_SingleLayer above.
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
+	}
+
 	ctx := context.Background()
 	parentTS := &turnState{
-		ctx:            ctx,
-		turnID:         "parent-async-test",
-		depth:          0,
-		session:        newEphemeralSession(nil),
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		ctx:                 ctx,
+		turnID:              "parent-async-test",
+		depth:               0,
+		session:             newEphemeralSession(nil),
+		pendingResults:      make(chan *tools.ToolResult, 16),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 	}
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
 	defer parentTS.Finish(false)
@@ -2080,67 +2238,158 @@ func TestSubTurn_IndependentContext(t *testing.T) {
 	}
 }
 
-// TestSubTurnInheritsTranscriptSessionID is T0 — the gate test for FR-6a.
+// TestSpawnSubTurn_TranscriptSessionIDIsChildsOwn_RoutingSessionIDInheritsFromParent
+// is the ADR-057 W22 inversion of the pre-ADR-057 T0 gate test for FR-6a
+// (formerly TestSubTurnInheritsTranscriptSessionID, which asserted the exact
+// OPPOSITE of the current contract: that the child's transcriptSessionID
+// equals the parent's).
 //
-// BDD: Given a parent turnState with transcriptSessionID "S",
-// When processOptions for a child (sub-turn) are built via the same code path
-// that spawnSubTurn uses (buildSubTurnOpts helper mirroring the production logic),
-// Then the child's transcriptSessionID equals "S".
+// BDD (current contract, ADR-057 D1/D2):
 //
-// This test MUST fail on the unpatched codebase (where subturn.go did not set
-// TranscriptSessionID on the child's processOptions) and MUST pass after the
-// FR-6a fix in subturn.go.
+//	Given a parent turnState whose OWN transcriptSessionID is a real,
+//	  store-backed session, and whose routingSessionID is a THIRD, distinct
+//	  value (simulating a parent that is itself mid-subtree — a delegated
+//	  child of some root chat — so the routing id can never be confused with
+//	  either session's own identity by coincidence),
+//	When spawnSubTurn — the REAL production function, not a hand-built
+//	  copy of its logic — spawns a child sub-turn,
+//	Then the child's OWN transcriptSessionID is a NEW, distinct, real
+//	  session (D1: "own identity" is never shared), while the child's
+//	  routingSessionID equals the PARENT's routingSessionID, inherited
+//	  verbatim (D2: the one field that stays inherited).
 //
-// Refs: docs/internal/specs/cancel-cross-channel-spec.md FR-6a, TDD Plan T0.
-func TestSubTurnInheritsTranscriptSessionID(t *testing.T) {
-	al, cleanup := newAL(t)
+// Why this replaces the old contract: pre-ADR-057, FR-6a made the CHILD's
+// transcriptSessionID EQUAL the parent's — one shared transcript file, one
+// shared identity serving both the "own identity" role and the
+// "cascade/routing" role. ADR-057 D1 splits those roles apart: D1 gives the
+// child its own real session for role A (pkg/agent/subturn.go:1113,
+// `TranscriptSessionID: childID`); D2 keeps ONLY the routing role (B/C)
+// inherited, under its own distinct field, routingSessionID
+// (pkg/agent/subturn.go:1130, `childTS.routingSessionID =
+// parentTS.routingSessionID`).
+//
+// Non-tautological by construction: the pre-inversion version of this test
+// hand-built a `childOpts` literal "mirroring the production logic" instead
+// of calling spawnSubTurn — it could never have failed on a production
+// regression, only on a regression to this test file itself. This version
+// calls the REAL spawnSubTurn, then reads back (a) the child's actual
+// persisted transcript file via the shared store (proving D1: a real,
+// distinct, store-backed session, not merely a different string) and (b) the
+// REAL EventKindSubTurnSpawn WS event payload the production code path
+// itself emits (proving D2: pkg/agent/events.go's SubTurnSpawnPayload.
+// SessionID doc comment names this exact field the "FROZEN CONTRACT" for
+// routing inheritance) — neither of which this test constructs itself.
+//
+// Traces to: ADR-057 D1, D2; subturn.go:1113 (own id), :1130 (routing
+// inheritance); events.go's SubTurnSpawnPayload.SessionID. Supersedes the
+// pre-ADR-057 TestSubTurnInheritsTranscriptSessionID (FR-6a T0 gate,
+// docs/internal/specs/cancel-cross-channel-spec.md; see also
+// docs/internal/specs/adr-057-session-unification-spec.md's Regression Test
+// Requirements table, which names this exact anchor for inversion: "The
+// child's transcript session id is its own; the routing id is inherited").
+func TestSpawnSubTurn_TranscriptSessionIDIsChildsOwn_RoutingSessionIDInheritsFromParent(t *testing.T) {
+	al, _, _, provider, cleanup := newTestAgentLoop(t)
+	_ = provider
 	defer cleanup()
 
-	const sid = "S"
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "test harness did not wire a shared session store")
 
-	// Construct a minimal parent processOptions with TranscriptSessionID set.
-	parentOpts := processOptions{
-		SessionKey:          "parent-session",
-		Channel:             "test",
-		ChatID:              "chat1",
-		TranscriptSessionID: sid,
-		// TranscriptStore intentionally nil — we only test the ID inheritance here.
+	// The parent's OWN real, store-backed session (role A). This is what
+	// spawnSubTurn's CreateSessionWithID validates against as "the parent".
+	parentMeta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	require.NoError(t, err, "store.NewSession (parent)")
+	parentSessionID := parentMeta.ID
+
+	// The routing key this parent was itself given — deliberately a THIRD,
+	// distinct literal (neither the parent's own session id nor anything
+	// spawnSubTurn could derive from it). This makes the inheritance proof
+	// unambiguous below: if the child's observed routing id equals this
+	// exact literal, it can only be because spawnSubTurn copied
+	// parentTS.routingSessionID verbatim.
+	const rootRoutingID = "root-chat-routing-key-distinct-from-any-session-id"
+	require.NotEqual(t, parentSessionID, rootRoutingID,
+		"test setup: routing key must be distinct from the parent's own session id")
+
+	parentTS := &turnState{
+		ctx:                 context.Background(),
+		turnID:              "parent-T0-inverted",
+		depth:               1, // itself a delegated child of the simulated root
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 4),
+		session:             &ephemeralSessionStore{},
+		agent:               al.registry.GetDefaultAgent(),
+		transcriptSessionID: parentSessionID,
+		routingSessionID:    session.RoutingSessionID(rootRoutingID),
+		transcriptStore:     store,
 	}
 
-	// Build a minimal parent turnState.
-	parentAgent := al.registry.GetDefaultAgent()
-	if parentAgent == nil {
-		t.Fatal("expected default agent from registry")
-	}
-	parentScope := al.newTurnEventScope(parentAgent.ID, parentOpts.SessionKey)
-	parentTS := newTurnState(parentAgent, parentOpts, parentScope)
+	collector, collectCleanup := newEventCollector(t, al)
+	defer collectCleanup()
 
-	// Verify the parent has transcriptSessionID set correctly.
-	if parentTS.transcriptSessionID != sid {
-		t.Fatalf("parent transcriptSessionID = %q, want %q", parentTS.transcriptSessionID, sid)
-	}
+	spawnCtx := withSpawnToolCallID(context.Background(), "test-spawn-call-T0")
+	// ADR-057 FR-005/FR-096 fixture note (same hazard U21/U30 fixed
+	// elsewhere): newTestAgentLoop's shared session store resolves to the
+	// OS's flat temp root, not a per-test directory, so spawnSubTurn's
+	// auto-generated "subturn-N" counter (al.generateSubTurnID()) can collide
+	// with an identically-numbered child left behind by an earlier test in
+	// the same process. Pin an explicit, per-run-unique DelegateSessionID
+	// derived from the freshly-minted parent ULID instead of relying on the
+	// counter.
+	expectedChildID := "child-of-" + parentSessionID
+	cfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}, DelegateSessionID: expectedChildID}
 
-	// Mirror the production processOptions construction from spawnSubTurn (subturn.go).
-	// This is the exact code path patched by FR-6a.
-	childOpts := processOptions{
-		SessionKey:              "child-session",
-		Channel:                 parentTS.channel,
-		ChatID:                  parentTS.chatID,
-		SenderID:                parentTS.opts.SenderID,
-		SenderDisplayName:       parentTS.opts.SenderDisplayName,
-		UserMessage:             "child task",
-		NoHistory:               true,
-		SkipInitialSteeringPoll: true,
-		TranscriptSessionID:     parentTS.transcriptSessionID, // FR-6a: must be set
-		TranscriptStore:         parentTS.transcriptStore,
-	}
+	result, err := spawnSubTurn(spawnCtx, al, parentTS, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, result, "expected the child's turn to actually run and return a result")
 
-	// Build the child turnState.
-	childScope := al.newTurnEventScope(parentAgent.ID, childOpts.SessionKey)
-	childTS := newTurnState(parentAgent, childOpts, childScope)
+	time.Sleep(10 * time.Millisecond) // let the event-collector goroutine flush
 
-	// Gate assertion: child must inherit parent's transcriptSessionID.
-	if childTS.transcriptSessionID != sid {
-		t.Fatalf("child transcriptSessionID = %q, want %q (FR-6a fix missing)", childTS.transcriptSessionID, sid)
+	// Extract the REAL production SubTurnSpawnPayload — not a value this test
+	// constructs — to learn the child's own id (Label) and observed routing
+	// id (SessionID), per events.go's documented field meanings.
+	var payload SubTurnSpawnPayload
+	var found bool
+	collector.mu.Lock()
+	for _, e := range collector.events {
+		if e.Kind == EventKindSubTurnSpawn {
+			p, ok := e.Payload.(SubTurnSpawnPayload)
+			require.True(t, ok, "EventKindSubTurnSpawn payload must be a SubTurnSpawnPayload, got %T", e.Payload)
+			payload = p
+			found = true
+			break
+		}
 	}
+	collector.mu.Unlock()
+	require.True(t, found, "spawnSubTurn must emit EventKindSubTurnSpawn")
+
+	childID := payload.Label
+	require.NotEmpty(t, childID, "child id (payload.Label) must be set")
+	require.Equal(t, expectedChildID, childID,
+		"payload.Label must be the exact DelegateSessionID this test pinned")
+
+	// ── D1: the child's transcriptSessionID is its OWN, distinct, real session ──
+	assert.NotEqual(t, parentSessionID, childID,
+		"ADR-057 D1: the child must NEVER share the parent's transcriptSessionID — this "+
+			"is the exact invariant the pre-ADR-057 test asserted the OPPOSITE of")
+
+	childEntries, err := store.ReadTranscript(childID)
+	require.NoError(t, err)
+	assert.NotEmpty(t, childEntries,
+		"the child's OWN transcript file must contain its own writes — proving childID "+
+			"names a real, distinct, store-backed session, not a placeholder value")
+
+	parentEntries, err := store.ReadTranscript(parentSessionID)
+	require.NoError(t, err)
+	assert.Empty(t, parentEntries,
+		"the parent's own transcript must contain NONE of the child's writes — the "+
+			"negative-space proof that the two are genuinely separate files, not merely "+
+			"differently-named views onto the same one")
+
+	// ── D2: the child's ROUTING id is the PARENT's routingSessionID, inherited verbatim ──
+	assert.Equal(t, rootRoutingID, payload.SessionID,
+		"ADR-057 D2: routingSessionID is the ONE field that stays inherited verbatim from "+
+			"the parent — SubTurnSpawnPayload.SessionID is FROZEN to carry exactly this "+
+			"value (events.go's doc comment); got %q, want the parent's routing key %q",
+		payload.SessionID, rootRoutingID)
 }

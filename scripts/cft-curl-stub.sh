@@ -98,9 +98,23 @@ if [ "$head_only" = "1" ]; then
   # sequence, then base64-encode. (A naive "hex-as-ASCII → base64" would
   # encode the ASCII of the hex digits — a 22-byte string of digits 0-9
   # + letters a-f — not the 16 raw bytes.)
+  #
+  # CORRECTNESS: the raw bytes from `printf '%b'` MUST flow straight into
+  # `base64` via a real pipe, in the SAME command substitution — never
+  # captured into an intermediate bash variable first. Bash string
+  # variables are NUL-terminated C strings under the hood: any md5 whose
+  # 16 raw bytes happen to contain a 0x00 (~6% of digests, by birthday
+  # odds) gets silently truncated at that byte ("command substitution:
+  # ignored null byte in input"), corrupting the hash the script encodes
+  # — this is exactly what intermittently broke the darwin/mac-x64 bats
+  # case (a real 0x00 byte in that fixture's md5) even though the
+  # underlying cft-bundle.sh platform mapping was correct throughout.
+  # Piping (not assigning) keeps the raw bytes inside kernel pipe buffers,
+  # which have no such NUL restriction — only base64's own ASCII output is
+  # ever captured into a variable. Mirrors the already-correct pattern
+  # cft-bundle_test.bats's setup() uses for the SAME reason.
   md5_hex=$(md5sum "$src" | awk '{print $1}')
-  md5_raw=$(printf '%b' "$(printf '%s' "$md5_hex" | sed 's/\(..\)/\\x\1/g')")
-  md5_b64=$(printf '%s' "$md5_raw" | base64 | tr -d '\n')
+  md5_b64=$(printf '%b' "$(printf '%s' "$md5_hex" | sed 's/\(..\)/\\x\1/g')" | base64 | tr -d '\n')
   crc32c_b64=$(printf 'fake-crc32c' | base64)
   printf 'HTTP/1.1 200 OK\r\n'
   printf 'X-Goog-Hash: crc32c=%s,md5=%s\r\n' "$crc32c_b64" "$md5_b64"

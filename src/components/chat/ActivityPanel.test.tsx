@@ -523,3 +523,11 @@ describe('ActivityPanel — bash-kind error state', () => {
     expect(dot?.getAttribute('class')).not.toContain('--color-cancelled')
   })
 })
+
+// ── ADR-057: the ADR-053 FE-5 Agent-View session list (lifecycle badge +
+// peek/reply/steer/stop affordances) has been removed as dead code — its
+// sole data source, mid-span `subagent_message`/`subagent_state` frames, has
+// zero Go emitters and can never be populated. See ActivityPanel.tsx's own
+// header comment. This describe block covered that removed surface and is
+// gone with it; makeAgentItem above no longer accepts the now-deleted
+// sessionMessages/lifecycleState/lifecycleSessionId/steeringReceipt fields.

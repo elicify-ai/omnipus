@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // browser_inspect_test.go — ADR-039 D-B3 (best-effort DOM inspect) tests for
 // pkg/gateway/browser_inspect.go's POST /api/v1/browser/inspect handler.
 //

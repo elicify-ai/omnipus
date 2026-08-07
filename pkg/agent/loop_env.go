@@ -2,7 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/envcontext"
@@ -211,16 +210,16 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 // wrote, and report a false location to the user (the file is actually,
 // correctly, under the workspace's shared directory the whole time).
 //
-// The lookup (workspace.FindForAgentPreferring + workspace.SafeWorkDir +
-// os.MkdirAll) is re-run on every call — not cached — mirroring
-// wireDelegationInjectors' per-turn freshness guarantee: CoreTeam membership
-// can change at runtime and must be reflected on the very next turn. Every
-// step here — including the MkdirAll call, whose failure pkg/agent/loop.go's
-// re-rooting block also treats as "fall back to the agent's own directory" —
-// is deliberately kept in lockstep with that block so what this injector
-// advertises matches what actually gets applied. The two remain independent
-// call sites, not one shared function, so this is a maintained invariant, not
-// a structural guarantee: keep them in sync if either changes.
+// The lookup (workspace.FindForAgentPreferring + workspace.EnsureWorkDir) is
+// re-run on every call — not cached — mirroring wireDelegationInjectors'
+// per-turn freshness guarantee: CoreTeam membership can change at runtime and
+// must be reflected on the very next turn. Every step here — including the
+// directory-creation call, whose failure pkg/agent/loop.go's re-rooting block
+// also treats as "fall back to the agent's own directory" — is deliberately
+// kept in lockstep with that block so what this injector advertises matches
+// what actually gets applied. The two remain independent call sites, not one
+// shared function, so this is a maintained invariant, not a structural
+// guarantee: keep them in sync if either changes.
 func wireWorkingDirInjectors(al *AgentLoop, registry *AgentRegistry) {
 	for _, agentID := range registry.ListAgentIDs() {
 		agentInst, ok := registry.GetAgent(agentID)
@@ -245,30 +244,28 @@ func wireWorkingDirInjectors(al *AgentLoop, registry *AgentRegistry) {
 				// block needed.
 				return ""
 			}
-			wsDir, err := workspace.SafeWorkDir(home, wsID)
-			if err != nil {
-				logger.WarnCF(
-					"agent.env",
-					"wireWorkingDirInjectors: invalid workspace id — omitting working-directory block",
-					map[string]any{"agent_id": id, "workspace_id": wsID, "error": err.Error()},
-				)
-				return ""
-			}
+			// workspace.EnsureWorkDir (SafeWorkDir + MkdirAll + idempotent
+			// git-evidence auto-init) replaces the former SafeWorkDir-then-
+			// MkdirAll pair so this call site also fires the work/-dir
+			// auto-init hook, keeping it in lockstep with
+			// pkg/agent/loop.go's re-rooting block (now migrated the same
+			// way in workspace_reroot.go's resolveTurnWorkDirOrRefuse) per
+			// this function's own "maintained invariant" doc comment above.
 			// pkg/agent/loop.go's actual re-rooting block only applies
-			// tools.WithTurnWorkspaceDir when BOTH SafeWorkDir AND this
-			// MkdirAll succeed — on an MkdirAll failure (disk full, a
+			// tools.WithTurnWorkspaceDir when the work dir is successfully
+			// resolved AND created — on a failure (invalid id, disk full, a
 			// non-directory file already at wsDir, permissions) it silently
 			// falls back to the agent's own private directory. Without this
 			// same check here, this injector could advertise the shared
 			// directory in a turn where the real tools stayed rooted at
 			// agents/<id>/ — reintroducing the exact false-location-report
-			// bug this feature exists to prevent. Mirrored exactly (same
-			// mode bits) so the two call sites can't silently diverge.
-			if mkErr := os.MkdirAll(wsDir, 0o700); mkErr != nil {
+			// bug this feature exists to prevent.
+			wsDir, err := workspace.EnsureWorkDir(home, wsID)
+			if err != nil {
 				logger.WarnCF(
 					"agent.env",
-					"wireWorkingDirInjectors: MkdirAll failed — omitting working-directory block",
-					map[string]any{"agent_id": id, "workspace_id": wsID, "dir": wsDir, "error": mkErr.Error()},
+					"wireWorkingDirInjectors: workspace work dir unavailable — omitting working-directory block",
+					map[string]any{"agent_id": id, "workspace_id": wsID, "error": err.Error()},
 				)
 				return ""
 			}

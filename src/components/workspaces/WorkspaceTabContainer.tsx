@@ -42,7 +42,7 @@ interface WorkspaceTabContainerProps {
  */
 export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProps) {
   const navigate = useNavigate()
-  const { activeWorkspaceId, setActiveWorkspaceId, setActiveMilestoneId } = useWorkspacesStore()
+  const { activeWorkspaceId, setActiveWorkspaceId, setActivePlanId } = useWorkspacesStore()
   const toggle = useSidebarStore((s) => s.toggle)
   const enterWorkspaceChat = useSessionStore((s) => s.enterWorkspaceChat)
 
@@ -78,10 +78,11 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
     }
   }, [workspaceId, activeWorkspaceId, setActiveWorkspaceId])
 
-  // Reset milestone filter on workspace change.
+  // Reset the plan scope on workspace change so the Board/Graph don't stay
+  // drilled into a plan that belongs to the previous workspace.
   useEffect(() => {
-    setActiveMilestoneId(null)
-  }, [workspaceId, setActiveMilestoneId])
+    setActivePlanId(null)
+  }, [workspaceId, setActivePlanId])
 
   // Bug 1 fix: manage session lifecycle at the workspace level.
   // Fires only on workspaceId change — tab switches don't re-run this.

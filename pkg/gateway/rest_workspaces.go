@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -23,6 +21,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -145,7 +144,7 @@ func listWorkspaceFiles(home string) ([]storedWorkspace, error) {
 }
 
 // scanTasks walks the unified tasks directory and calls fn for every file that
-// deserialises to a valid task (status in the 7-state vocabulary).
+// deserialises to a valid task (status in the 6-state vocabulary).
 // Returns the first I/O error; fn errors are not propagated.
 func scanTasks(home string, fn func(id string, t task.Task)) error {
 	dir := filepath.Join(home, "tasks")
@@ -506,12 +505,6 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	rest := strings.TrimPrefix(path, "/api/v1/workspaces")
 
-	// /api/v1/workspaces/{id}/milestones[/{milestoneId}] — delegate to HandleMilestones.
-	if strings.Contains(rest, "/milestones") {
-		a.HandleMilestones(w, r)
-		return
-	}
-
 	// /api/v1/workspaces/{id}/delegation — the per-workspace delegation graph (M5).
 	if strings.HasSuffix(rest, "/delegation") {
 		id := strings.TrimSuffix(strings.TrimPrefix(rest, "/"), "/delegation")
@@ -533,14 +526,21 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// /api/v1/workspaces/{id}/media[/{media_id}] — per-workspace media library (ADR-051 Rev 4).
-	// Segment-based, not strings.Contains: workspace IDs are server-generated
-	// uppercase ULIDs today, so a substring match on "/media" cannot
-	// currently collide with an ID — but Contains is fragile hardening debt
-	// (a hypothetical id containing "media" as a substring would misroute
-	// here), so this checks the actual second path segment instead.
-	if segs := strings.Split(strings.TrimPrefix(rest, "/"), "/"); len(segs) >= 2 && segs[1] == "media" {
-		a.HandleWorkspaceMedia(w, r)
+	// /api/v1/workspaces/{id}/plans — Plan entities scoped to this workspace
+	// (ADR-049 D1, Wave 2-C1 deferred REST paths; mirrors the removed
+	// /workspaces/{id}/milestones shape). GET/POST only; individual plan
+	// GET/PUT/DELETE and the /approve /stop actions live at
+	// /api/v1/plans/{id}... (HandlePlans, rest_plans.go).
+	if strings.HasSuffix(rest, "/plans") {
+		id := strings.TrimSuffix(strings.TrimPrefix(rest, "/"), "/plans")
+		switch r.Method {
+		case http.MethodGet:
+			a.handleWorkspacePlansList(w, id)
+		case http.MethodPost:
+			a.handleWorkspacePlanCreate(w, r, id)
+		default:
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
 		return
 	}
 
@@ -672,6 +672,14 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	if req.CoreTeam != nil && len(*req.CoreTeam) > 20 {
 		jsonErr(w, http.StatusBadRequest, "core_team may have at most 20 entries")
 		return
+	}
+	// review r1 major M4/Gap #6: reject an unregistered or System Agent id
+	// before any workspace/session side effects.
+	if req.CoreTeam != nil {
+		if vErr := validateCoreTeamMembers(a.agentLoop.GetConfig(), *req.CoreTeam); vErr != nil {
+			jsonErr(w, http.StatusBadRequest, vErr.Error())
+			return
+		}
 	}
 
 	// Stamp the creating user's username as owner (attribution only, not a gate).
@@ -875,6 +883,42 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
+	// review r1 major M4/Gap #6 (ADR-054 D6 rule 1: "validate the delta, not
+	// the world"): reject an unregistered or System Agent id — but only
+	// among members THIS WRITE INTRODUCES, not the whole incoming array.
+	//
+	// Why: core_team is a full-replacement field (a typical caller reads the
+	// current team, adds/removes one id, and PUTs the whole array back). The
+	// pre-fix version of this check ran validateCoreTeamMembers against the
+	// ENTIRE incoming *req.CoreTeam — so a workspace that already carried
+	// even one dangling member (e.g. an agent deleted after being added,
+	// which rule 2 says must be surfaced, never fatal) would have every
+	// future PUT rejected outright, because that same stale id keeps
+	// reappearing in every round-tripped array. This is the exact "permanently
+	// wedged workspace, no repair path" failure ADR-054 §1 documents. Diffing
+	// against the workspace's own pre-write ws.CoreTeam and validating only
+	// the introduced ids un-wedges it: a pre-existing dangling member is
+	// carried through untouched (still dangling, still reachable via
+	// RepairDanglingCoreTeamMembers below), while a genuinely new bad id is
+	// still rejected exactly as before.
+	if req.CoreTeam != nil {
+		newTeam := deduplicateStrings(*req.CoreTeam)
+		existingMembers := make(map[string]struct{}, len(ws.CoreTeam))
+		for _, memberID := range ws.CoreTeam {
+			existingMembers[memberID] = struct{}{}
+		}
+		var introduced []string
+		for _, memberID := range newTeam {
+			if _, alreadyMember := existingMembers[memberID]; !alreadyMember {
+				introduced = append(introduced, memberID)
+			}
+		}
+		if vErr := validateCoreTeamMembers(a.agentLoop.GetConfig(), introduced); vErr != nil {
+			jsonErr(w, http.StatusBadRequest, vErr.Error())
+			return
+		}
+	}
+
 	// HIGH-2: sessionsCreated tracks heartbeat sessions minted this request so
 	// they can be rolled back on any error path before the workspace is persisted.
 	// Declared at function scope so the writeWorkspaceFile error branch can also
@@ -928,8 +972,27 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 			if hb == nil || !hb.Enabled {
 				if stored, exists := ws.MemberConfigs[agentID]; exists &&
 					stored.Heartbeat != nil && stored.Heartbeat.SessionID != "" {
-					if delErr := deleteHeartbeatSessionAnyStore(
-						a.agentLoop, agentID, stored.Heartbeat.SessionID); delErr != nil {
+					// ADR-049 D4/FR-065: this codebase has no global per-agent
+					// enable/disable REST toggle — the per-workspace
+					// member-heartbeat flag (ADR-027) is the only one, so it
+					// is the wiring point for PausePlansOwnedBy/
+					// ResumePlansOwnedBy. A stored session_id here is the same
+					// "was previously enabled" signal the session-release
+					// logic immediately below already relies on. Best-effort:
+					// a pause failure is logged, never blocks the PUT.
+					if pe := agent.GetPlanEngine(a.agentLoop); pe != nil {
+						if perr := pe.PausePlansOwnedBy(agentID); perr != nil {
+							slog.Warn("rest: workspace PUT: pause plans on heartbeat disable failed",
+								"workspace_id", id, "agent_id", agentID, "error", perr)
+						}
+					}
+					// Shared-store-first, per-agent-fallback delete — mirrors
+					// eager creation above and rollbackCreatedSessions below.
+					// A direct GetAgentStore(agentID).DeleteSession() here
+					// misses sessions minted in the shared store (the
+					// eager-creation default per the FIX comment above),
+					// leaving the standing session orphaned on disable.
+					if delErr := deleteHeartbeatSessionAnyStore(a.agentLoop, agentID, stored.Heartbeat.SessionID); delErr != nil {
 						slog.Warn("rest: workspace PUT: disable-path session release failed",
 							"workspace_id", id, "agent_id", agentID,
 							"session_id", stored.Heartbeat.SessionID, "error", delErr)
@@ -954,6 +1017,20 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 				continue
 			}
 			// Enable path: hb != nil && hb.Enabled.
+			// ADR-049 D4/FR-065: resume any plan owned by this agent that was
+			// paused for owner_disabled (idempotent no-op when nothing was
+			// paused for that reason — see ResumePlansOwnedBy's doc comment).
+			// Fires unconditionally on every enabled=true entry in this PUT
+			// (not gated on the idempotent-enable early-continue below), so a
+			// re-submitted "already enabled" PUT still self-heals a plan that
+			// somehow stayed paused. Best-effort: a failure is logged, never
+			// blocks the PUT.
+			if pe := agent.GetPlanEngine(a.agentLoop); pe != nil {
+				if rerr := pe.ResumePlansOwnedBy(agentID); rerr != nil {
+					slog.Warn("rest: workspace PUT: resume plans on heartbeat enable failed",
+						"workspace_id", id, "agent_id", agentID, "error", rerr)
+				}
+			}
 			if hb.SessionID != "" {
 				continue
 			}
@@ -1167,7 +1244,7 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// stale copy after this delete removes the file. It is released
 	// IMMEDIATELY after the workspace file is gone via explicit unlock() calls
 	// at every exit from this section (no defer) — the remaining BEST-EFFORT
-	// cascade (cron jobs, heartbeat sessions, milestones, mailboxes, the
+	// cascade (cron jobs, heartbeat sessions, mailboxes, the
 	// workspace directory RemoveAll) never touches workspaces/{id}.json, so it
 	// does not need to serialize against it; running it after unlock avoids
 	// holding the lock across a potentially multi-second directory RemoveAll
@@ -1229,8 +1306,10 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	unlock()
 
 	// Best-effort cascade (order preserved from before this restructure):
-	// (1) heartbeat cron jobs → (2) heartbeat sessions → (3) milestones →
-	// (4) mailboxes → (5) workspace directory.
+	// (1) heartbeat cron jobs → (2) heartbeat sessions →
+	// (3) mailboxes → (4) workspace directory. Milestones (formerly step 3)
+	// were removed (ADR-049 D1) — tasks now carry workspace-scoped tags
+	// instead, which need no per-workspace cascade cleanup.
 	// FR-023/US-9: release all heartbeat cron jobs owned by this workspace.
 	// Best-effort (logged on failure).
 	if cs := a.cronService.Load(); cs != nil {
@@ -1244,8 +1323,6 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// member_configs needed to find which sessions to release. Best-effort
 	// per-session.
 	releaseHeartbeatSessionsForWorkspace(a.agentLoop, ws)
-
-	deleteMilestonesForWorkspace(a.homePath, id)
 
 	// M11: remove every mailbox (config.mailboxes entry + stored credential)
 	// bound to this workspace. Best-effort (logged on failure, never aborts
@@ -1386,30 +1463,6 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// deleteMilestonesForWorkspace removes all milestone files for the given workspace and
-// clears milestone_id on tasks that referenced them (cascade delete).
-// Best-effort: individual file errors are logged and skipped.
-func deleteMilestonesForWorkspace(home, workspaceID string) {
-	all, err := listMilestoneFiles(home)
-	if err != nil {
-		slog.Warn("rest: workspace cascade: could not list milestones for workspace",
-			"workspace_id", workspaceID, "error", err)
-		return
-	}
-	for _, m := range all {
-		if m.WorkspaceID != workspaceID {
-			continue
-		}
-		// Clear milestone_id on tasks referencing this milestone before deleting.
-		clearMilestoneOnTasks(home, m.ID)
-		path := filepath.Join(home, "milestones", m.ID+".json")
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			slog.Warn("rest: workspace cascade: failed to delete milestone",
-				"milestone_id", m.ID, "workspace_id", workspaceID, "error", err)
-		}
-	}
-}
-
 // releaseHeartbeatSessionsForWorkspace deletes the standing heartbeat session for
 // every member of ws that has a heartbeat with a non-empty session_id. These
 // sessions live in a session store (the shared store for every heartbeat
@@ -1538,6 +1591,97 @@ func deduplicateStrings(in []string) []string {
 		}
 	}
 	return out
+}
+
+// validateCoreTeamMembers rejects a core_team containing an id that is not a
+// registered agent, or that IS registered but is a System Agent
+// (AgentConfig.IsSystem, Type=="system", ADR-049 D3) — review r1 major
+// M4/Gap #6. System Agents (e.g. the Judge) are seeded, locked, no-tools
+// internal-LLM agents that are NEVER chat targets and are documented as
+// "excluded from ... team rosters" by AgentConfig.IsSystem's own doc comment
+// (pkg/config/config.go), but neither handleWorkspacePost nor
+// handleWorkspacePut enforced that at the write path before this fix — a
+// caller could silently add a System Agent (or a typo'd/nonexistent id) to a
+// workspace's core_team with zero validation. Returns nil for an empty
+// coreTeam (nothing to validate).
+//
+// This rejection stays exactly as it was even after ADR-052's Judge/verifier
+// fix made System Agents IMPLICIT members of EVERY workspace (operator
+// decision, 2026-07-21: "make the judge a member of every workspace, keep it
+// simple" — pkg/workspace's isImplicitMember, consulted by
+// FindForAgent/FindForAgentPreferring). Implicit membership everywhere makes
+// an EXPLICIT core_team entry for a System Agent strictly redundant, never
+// necessary — so this validation continues to reject one on write, rather
+// than being relaxed or repurposed.
+func validateCoreTeamMembers(cfg *config.Config, coreTeam []string) error {
+	if len(coreTeam) == 0 {
+		return nil
+	}
+	if cfg == nil {
+		return fmt.Errorf("core_team member %q is not a registered agent", coreTeam[0])
+	}
+	byID := make(map[string]*config.AgentConfig, len(cfg.Agents.List))
+	for i := range cfg.Agents.List {
+		byID[cfg.Agents.List[i].ID] = &cfg.Agents.List[i]
+	}
+	for _, id := range coreTeam {
+		ac, ok := byID[id]
+		if !ok {
+			return fmt.Errorf("core_team member %q is not a registered agent", id)
+		}
+		if ac.IsSystem() {
+			return fmt.Errorf(
+				"core_team member %q is a System Agent and cannot be added to a workspace team roster", id)
+		}
+	}
+	return nil
+}
+
+// RepairDanglingCoreTeamMembers is the first-class "drop dangling members"
+// repair operation ADR-054 D6 rule 3 requires: an explicit way to clean up a
+// core_team whose members no longer all resolve to a registered agent,
+// without hand-editing the workspace's JSON file. It is the counterpart to
+// validateCoreTeamMembers' reject-on-write behavior — where that function
+// stops a write from INTRODUCING a dangling reference, this function
+// removes ones that already got in (e.g. a workspace hand-edited outside the
+// API, or created before this write path existed).
+//
+// Only true dangling references — an id with no matching entry in
+// cfg.Agents.List at all — are dropped. A member id that resolves but is a
+// System Agent (which validateCoreTeamMembers separately rejects on write) is
+// NOT touched here: it is not "dangling" (the agent exists), so silently
+// removing it would be a different, unrelated correction this operation does
+// not claim to make. repaired preserves the original member order; dropped
+// lists exactly which ids were removed (also in original order) so the
+// caller can report/log/audit what changed. A nil/empty coreTeam, or a nil
+// cfg (nothing to resolve against), returns the input unchanged with a nil
+// dropped slice.
+//
+// Wiring a REST endpoint around this function (contract-first per
+// Constraint #8: a new wire shape needs an openapi.yaml schema + regenerated
+// types before any handler can use it) is left to the wave that owns the
+// REST conversion — this function is the tested, ready-to-call primitive
+// that endpoint would call.
+func RepairDanglingCoreTeamMembers(cfg *config.Config, coreTeam []string) (repaired []string, dropped []string) {
+	if len(coreTeam) == 0 {
+		return coreTeam, nil
+	}
+	if cfg == nil {
+		return nil, append([]string(nil), coreTeam...)
+	}
+	registered := make(map[string]struct{}, len(cfg.Agents.List))
+	for i := range cfg.Agents.List {
+		registered[cfg.Agents.List[i].ID] = struct{}{}
+	}
+	repaired = make([]string, 0, len(coreTeam))
+	for _, id := range coreTeam {
+		if _, ok := registered[id]; ok {
+			repaired = append(repaired, id)
+		} else {
+			dropped = append(dropped, id)
+		}
+	}
+	return repaired, dropped
 }
 
 // unbindChannelInstancesForWorkspace disables and unbinds every channel instance

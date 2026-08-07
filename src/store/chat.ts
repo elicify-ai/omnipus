@@ -8,7 +8,16 @@ import { queryClient } from '@/lib/queryClient'
 import { tasksQueryKeys } from '@/lib/api'
 import type { Message, ToolCall, AgentKind } from '@/lib/api'
 import type { WsReceiveFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
-import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame } from '@/lib/api/generated/asyncapi-types'
+import type {
+  ToolResultRef,
+  TruncatedResult,
+  WhatsAppPairingFrame,
+  NotificationFrame,
+  GoalStatusFrame,
+  LoopStatusFrame,
+  JudgeVerdictFrame,
+} from '@/lib/api/generated/asyncapi-types'
+import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -83,6 +92,22 @@ interface SubagentSpanBase {
    * delegate call's own agent_id param.
    */
   agentId?: string
+  /**
+   * ADR-057 FR-013/W5c: the real, store-backed child session this span's
+   * sub-turn ran as (`producing_session_id` off the subagent_start /
+   * subagent_end frame — present iff it differs from the routing
+   * `session_id`, which self-delegation and same-session edge cases can
+   * make equal). Absent on a pre-ADR-057 gateway that hasn't been upgraded
+   * yet (the field is optional on the wire), in which case this span has
+   * only its inline steps and no navigable child session. Populated so a
+   * renderer CAN link out to the drill-down surface
+   * (`/sessions/{childSessionId}`, FR-046) for the child's own full
+   * transcript — deliberately NOT derived from the mid-span child
+   * progress/lifecycle WS frame pair (ADR-053 FE-5), which have zero Go
+   * emitters (ADR-057 Explicit Non-Behaviors — see that section for the
+   * frame type names).
+   */
+  childSessionId?: string
 }
 
 export interface SubagentSpanRunning extends SubagentSpanBase {
@@ -90,7 +115,13 @@ export interface SubagentSpanRunning extends SubagentSpanBase {
 }
 
 export interface SubagentSpanTerminal extends SubagentSpanBase {
-  status: 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout'
+  /**
+   * 'parked' (ADR-057 UAT defect C2 fix): the child stopped because a
+   * message_parent(kind="question", wait=true) call parked it awaiting the
+   * parent's answer — not a success, error, cancellation, or timeout. See
+   * SubagentEndFrame.yaml for the full contract-level description.
+   */
+  status: 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout' | 'parked'
   durationMs: number
   finalResult?: string
   /** Reason populated when status is 'interrupted'. */
@@ -319,6 +350,25 @@ export interface SessionChatState {
    */
   spanByParentCallId: Record<string, { messageId: string; spanIdx: number }>
   /**
+   * O(1) index from span_id → { messageId, spanIdx }, mirroring
+   * spanByParentCallId above but keyed by the span's OWN id rather than its
+   * parent tool-call id. Added to address chat UI freeze under heavy
+   * subagent/delegation activity: the subagent_end handler used to locate
+   * its target span with a backward linear scan over
+   * `messageOrder × spans`, which re-ran on every subagent_end frame for
+   * the whole duration of a long turn. Written by subagent_start alongside
+   * spanByParentCallId; deleted the moment subagent_end consumes it (once a
+   * span is terminal it is never looked up by span_id again).
+   *
+   * Optional for the same fixture-compat reason as `toolCallOwnerMessageId`
+   * below: several existing test fixtures construct a SessionChatState-
+   * shaped bucket by hand, pre-dating this field. Every read site
+   * defensively falls back to `{}`/misses-and-falls-back-to-scan, and every
+   * write site (`emptySessionState`, the subagent_start handler) initializes
+   * or populates it.
+   */
+  spanBySpanId?: Record<string, { messageId: string; spanIdx: number }>
+  /**
    * Session-scoped record of every replay_message id that has EVER been
    * merged (via the `replay_message` same-turn/same-agent coalesce branch)
    * into ANY assistant bubble in this session — independent of which bubble
@@ -346,6 +396,62 @@ export interface SessionChatState {
    * `{}` / `false` and every write site initializes it first.
    */
   mergedReplayMessageIds?: Record<string, true>
+  /**
+   * ADR-049 D6/US-12: latest `goal_status` frame for this session, or
+   * null/undefined when no goal is active. Session-scoped — the frame
+   * always carries `session_id` (`goal_status` is in
+   * `SESSION_SCOPED_FRAME_TYPES`). Drives `GoalIndicator` (SD-C9): the
+   * reducer here just stores whatever frame arrives verbatim (mirrors
+   * `rateLimitEvent`'s "store the raw event, let the renderer decide"
+   * pattern) — it never nulls this out on a `'cleared'` (or any other
+   * terminal) state. CORRECTION (regression review, post-bc66345f):
+   * GoalIndicator does NOT special-case `'cleared'` by hiding — it renders
+   * a dedicated `cleared` branch via `describeNonActiveState` (a stale
+   * comment here previously claimed otherwise). This field is a single
+   * scalar (not a map), so it cannot leak the way `goalPills` below could;
+   * it simply reflects the latest frame across all of the session's goals
+   * until the next one arrives, with no cap/eviction needed.
+   *
+   * Optional for the same reason as `toolCallOwnerMessageId`/
+   * `mergedReplayMessageIds` above: several existing test fixtures construct
+   * a SessionChatState-shaped bucket by hand, pre-dating this field. Every
+   * read site defensively falls back to `null` and every write site
+   * (`emptySessionState`, the store's initial state) sets it explicitly.
+   */
+  goalStatus?: GoalStatusFrame | null
+  /**
+   * ADR-053 FE-1 / US-14: per-goal-id pill-state map. Each active goal in the
+   * session gets its own entry (keyed by `GoalStatusFrame.goal_id`, falling
+   * back to `'_default'` when the frame omits one), so a session carrying 2
+   * goals renders 2 pills + 2 timers. The bottom-right `GoalPillTray` reads
+   * this map; the legacy single `goalStatus` (above) is still maintained as a
+   * derived "latest frame" for back-compat with any reader that hasn't
+   * migrated yet. Optional for the same fixture-compat reason as
+   * `toolCallOwnerMessageId` above — pre-existing test fixtures construct a
+   * `SessionChatState`-shaped bucket by hand; every read site falls back to
+   * `{}` and every write site initializes it.
+   *
+   * BOUNDED (regression fix, bc66345f follow-up): before bc66345f the
+   * backend never emitted `goal_id`, so every frame landed on the shared
+   * `'_default'` key and simply overwrote it — cardinality was permanently
+   * 1. bc66345f correctly minted a stable, unique-per-generation `goal_id`
+   * (required for the multi-goal tray to work at all), which incidentally
+   * changed this map's cardinality to unbounded — nothing ever deleted an
+   * entry, so a long session accumulated one permanent, undismissable
+   * tombstone per completed/failed/cleared goal. `evictGoalPillsOverCap`
+   * (below) now caps cardinality at `GOAL_PILLS_CAP`, preferring to evict
+   * the oldest TERMINAL (`done`/`failed`/`cleared`) entries first — a
+   * terminal `goal_id` is retired for good (a new goal, `follow_up`, or
+   * Play always mints a fresh id rather than reusing one) so it can never
+   * receive another frame, making it safe to drop with no risk of
+   * clobbering a still-live goal. This is a memory-lifecycle bound, not a
+   * rendering decision: it does not touch whether/how a pill is displayed
+   * (that's `GoalPillTray`'s own short-lived display timer) — see the
+   * `case 'goal_status'` handler below for the full reasoning.
+   */
+  goalPills?: Record<string, GoalStatusFrame>
+  /** ADR-049 D6/US-12: latest `loop_status` frame for this session. Same session-scoped/store-verbatim/optional-for-fixture-compat pattern as `goalStatus`. */
+  loopStatus?: LoopStatusFrame | null
 }
 
 function emptySessionState(): SessionChatState {
@@ -367,7 +473,11 @@ function emptySessionState(): SessionChatState {
     cancelStage: null,
     lastReceivedEventTime: null,
     spanByParentCallId: {},
+    spanBySpanId: {},
     mergedReplayMessageIds: {},
+    goalStatus: null,
+    goalPills: {},
+    loopStatus: null,
   }
 }
 
@@ -613,6 +723,58 @@ export function makeBucketMessages(msgs: ChatMessage[]): Pick<SessionChatState, 
 }
 
 /**
+ * Filter a single span-index map (typed shape `{ messageId: string }`),
+ * returning a NEW map with all entries whose `messageId` is in
+ * `evictedMessageIds` removed. Used by `evictSpanIndexEntries` below to
+ * centralise the lockstep filtering of `spanByParentCallId` and
+ * `spanBySpanId`; not exported — call `evictSpanIndexEntries` instead.
+ *
+ * Returns the SAME reference (no allocation) when `index` is undefined so
+ * callers whose `spanBySpanId` was never populated (older test fixtures)
+ * stay undefined rather than being implicitly upgraded to `{}`.
+ */
+function filterSpanIndexByMessageId<T extends { messageId: string }>(
+  index: Record<string, T> | undefined,
+  evictedMessageIds: Set<string>,
+): Record<string, T> | undefined {
+  if (index === undefined) return undefined
+  const next: Record<string, T> = {}
+  for (const [k, v] of Object.entries(index)) {
+    if (!evictedMessageIds.has(v.messageId)) next[k] = v
+  }
+  return next
+}
+
+/**
+ * Filter BOTH span-index maps in lockstep, dropping entries whose
+ * `messageId` is in `evictedMessageIds`. The two maps
+ * (`spanByParentCallId` keyed by parent tool-call id, `spanBySpanId`
+ * keyed by the span's own id) must always be filtered by the SAME
+ * messageId set on every eviction path: each entry in either map points
+ * at a `messageId` in `messagesById`, and a dangling pointer — one map
+ * referencing an evicted message while the other has forgotten it — is a
+ * silent invariant break (the subagent_end handler's O(1) lookup reads
+ * `spanBySpanId` while the rest of the code reads `spanByParentCallId`,
+ * so they cannot drift). Centralising the filter here means a new
+ * eviction path cannot forget one of the two maps; the unit test
+ * `removes spanBySpanId entries pointing at the evicted message` locks
+ * the invariant end-to-end.
+ */
+function evictSpanIndexEntries(
+  spanByParentCallId: SessionChatState['spanByParentCallId'],
+  spanBySpanId: SessionChatState['spanBySpanId'] | undefined,
+  evictedMessageIds: Set<string>,
+): {
+  spanByParentCallId: SessionChatState['spanByParentCallId']
+  spanBySpanId: SessionChatState['spanBySpanId'] | undefined
+} {
+  return {
+    spanByParentCallId: filterSpanIndexByMessageId(spanByParentCallId, evictedMessageIds)!,
+    spanBySpanId: filterSpanIndexByMessageId(spanBySpanId, evictedMessageIds),
+  }
+}
+
+/**
  * Evict one message from a bucket, purging all dependent maps.
  *
  * Removes the message from messagesById/messageOrder, evicts its tool calls
@@ -640,12 +802,16 @@ export function evictMessageFromBucket(
     bucket.toolCallOrder = bucket.toolCallOrder.filter((id) => !evictedCallIds.has(id))
   }
 
-  // Evict spanByParentCallId entries pointing at this message.
-  for (const [parentCallId, entry] of Object.entries(bucket.spanByParentCallId)) {
-    if (entry.messageId === messageId) {
-      delete bucket.spanByParentCallId[parentCallId]
-    }
-  }
+  // Evict BOTH span-index maps in lockstep via the shared helper — the
+  // two maps must always be filtered together (see evictSpanIndexEntries'
+  // doc comment for the invariant).
+  const filtered = evictSpanIndexEntries(
+    bucket.spanByParentCallId,
+    bucket.spanBySpanId,
+    new Set([messageId]),
+  )
+  bucket.spanByParentCallId = filtered.spanByParentCallId
+  bucket.spanBySpanId = filtered.spanBySpanId
 }
 
 /**
@@ -663,6 +829,7 @@ function applyMessageArray(
   let textAtToolCallStartPatch: typeof bucket.textAtToolCallStart = { ...bucket.textAtToolCallStart }
   let toolCallOwnerMessageIdPatch: Record<string, string> = { ...bucket.toolCallOwnerMessageId }
   let spanByParentCallIdPatch: typeof bucket.spanByParentCallId = { ...bucket.spanByParentCallId }
+  let spanBySpanIdPatch: typeof bucket.spanBySpanId = { ...(bucket.spanBySpanId ?? {}) }
 
   if (msgs.length > MAX_MESSAGES_PER_SESSION) {
     const evictCount = msgs.length - MAX_MESSAGES_PER_SESSION
@@ -701,13 +868,13 @@ function applyMessageArray(
       toolCallOwnerMessageIdPatch = newOwner
     }
 
-    // Evict spanByParentCallId entries whose message is being evicted.
+    // Evict BOTH span-index maps in lockstep via the shared helper — the
+    // two maps must always be filtered together (see evictSpanIndexEntries'
+    // doc comment for the invariant).
     const evictedMessageIds = new Set(evicted.map((m) => m.id))
-    const newSpanIndex: typeof bucket.spanByParentCallId = {}
-    for (const [parentCallId, entry] of Object.entries(spanByParentCallIdPatch)) {
-      if (!evictedMessageIds.has(entry.messageId)) newSpanIndex[parentCallId] = entry
-    }
-    spanByParentCallIdPatch = newSpanIndex
+    const filtered = evictSpanIndexEntries(spanByParentCallIdPatch, spanBySpanIdPatch, evictedMessageIds)
+    spanByParentCallIdPatch = filtered.spanByParentCallId
+    spanBySpanIdPatch = filtered.spanBySpanId
   }
 
   const messagesById: Record<string, ChatMessage> = {}
@@ -726,6 +893,7 @@ function applyMessageArray(
     textAtToolCallStart: textAtToolCallStartPatch,
     toolCallOwnerMessageId: toolCallOwnerMessageIdPatch,
     spanByParentCallId: spanByParentCallIdPatch,
+    spanBySpanId: spanBySpanIdPatch,
   }
 }
 
@@ -747,8 +915,45 @@ interface ChatStore {
   // NOTE: `messages` is the COMPUTED ordered array derived from the active
   // bucket's messagesById + messageOrder. It is synced after every bucket
   // mutation. Consumers should NOT access sessionsById[id].messagesById or
-  // sessionsById[id].messageOrder directly — use getMessages(bucket) instead.
+  // sessionsById[id].messageOrder directly — use getMessages(bucket) instead
+  // (or `messagesById` immediately below, for a single-id lookup).
   messages: ChatMessage[]
+  /**
+   * O(1) per-id lookup companion to `messages` above — the active bucket's
+   * raw messagesById map, projected straight through (not rebuilt) by
+   * bucketToForeground/syncChatForeground. A component that only cares
+   * about ONE message should select `s.messagesById[id]` rather than
+   * `s.messages.find((m) => m.id === id)`: `messages` gets a brand-new
+   * array identity on every bucket mutation (bucketToForeground rebuilds it
+   * via getMessages() every time), so subscribing to it re-renders on every
+   * WS frame regardless of which message changed, and `.find()` re-scans
+   * the whole array every render. `messagesById[id]`, by contrast, keeps
+   * the SAME object reference across mutations that don't touch that
+   * specific message — see VirtualAssistantMessageRow's memo comment for
+   * the Immer structural-sharing guarantee this relies on. Added to address
+   * chat UI freeze under heavy subagent/delegation activity:
+   * AssistantMessage and SubagentSpansRenderer both used to subscribe to
+   * the whole `messages` array just to `.find()`/`.filter()` their own
+   * message out of it on every frame.
+   */
+  messagesById: Record<string, ChatMessage>
+  /**
+   * The id of the most recent assistant message in the active session's
+   * bucket (null when none exists), derived by bucketToForeground via
+   * findLastAssistantMessageId. Companion to `messagesById` for any
+   * consumer that previously did `[...messages].reverse().find((m) => m.role === 'assistant')`
+   * — the ARIA live-region hook in ChatScreen used to do exactly that on
+   * every WS frame: it subscribed to the whole `messages` array (which
+   * gets a brand-new array identity on every bucket mutation) and then
+   * allocated a reversed copy + linear scan per render. Selecting this
+   * single id instead skips both the per-frame re-render (the id only
+   * changes when the LAST assistant message itself changes — e.g. a new
+   * turn starts — not on every frame of the turn) and the array work.
+   * The full message object (for status reads) is then looked up via
+   * `messagesById[id]` — the same O(1)-lookup idiom AssistantMessage and
+   * SubagentSpansRenderer use.
+   */
+  lastAssistantMessageId: string | null
   isStreaming: boolean
   isReplaying: boolean
   replayCompletedForSession: string | null
@@ -758,6 +963,17 @@ interface ChatStore {
   sessionTokens: number
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
+  /** ADR-049 D6/US-12: active session's latest `goal_status` frame, or null/undefined. Drives `GoalIndicator`. Optional — see SessionChatState.goalStatus's doc comment (fixture-compat). */
+  goalStatus?: GoalStatusFrame | null
+  /**
+   * ADR-053 FE-1 / US-14: active session's per-goal-id pill-state map.
+   * Drives `GoalPillTray` (bottom-right, one pill per goal-id). Each entry
+   * is the latest `goal_status` frame for that goal-id. Empty object when
+   * no goals are active. Optional — see SessionChatState.goalPills (fixture-compat).
+   */
+  goalPills?: Record<string, GoalStatusFrame>
+  /** ADR-049 D6/US-12: active session's latest `loop_status` frame, or null/undefined. */
+  loopStatus?: LoopStatusFrame | null
   lastUserMessageAt: number | null
   /** B3: cancel progress stage for the active session, or null when idle. */
   cancelStage: 'graceful' | 'hard' | 'detached' | null
@@ -1073,6 +1289,13 @@ const SESSION_SCOPED_FRAME_TYPES = new Set([
   'agent_switched', 'task_status_changed',
   'tool_approval_required', 'rate_limit', 'media', 'session_started',
   'system_overload', 'session_close_ack', 'cancel_stage',
+  // ADR-049 R3: goal_status/loop_status always carry `session_id` (schema
+  // `min(1)`, required) — session-scoped like rate_limit. plan_status and
+  // judge_verdict deliberately do NOT carry session_id (correlated by
+  // plan_id/task_id instead, not any specific chat thread) and so are
+  // handled as GLOBAL frames below (like notification/whatsapp_pairing) —
+  // do not add them here.
+  'goal_status', 'loop_status',
 ])
 
 // F-S3: frame types that can carry a turn-cancellation acknowledgment
@@ -1106,6 +1329,89 @@ let unknownFrameCount = 0
 let agentIdAtLastMintSend: string | null = null
 const UNKNOWN_FRAME_TOAST_THRESHOLD = 5
 
+// ── goalPills bound (regression fix, bc66345f follow-up) ──────────────────
+//
+// Authoritative terminal-state set per the wire contract
+// (contracts/components/schemas/GoalStatusFrame.yaml `state` enum, 9
+// values): `done` (success), `failed` (a genuine budget/rounds-exhausted/
+// idle-expired brake), and `cleared` (a deliberate user-initiated stop —
+// added post-ADR-053 so it does NOT collapse into `failed`). All other
+// states (queued/active/waiting_on_user/judge_unavailable/re-planning/
+// judging) are non-terminal: the goal can still receive another frame.
+//
+// Exported (not just module-private) so `GoalPillTray.tsx` can key its own
+// short-lived "keep a terminal pill visible briefly, then stop rendering
+// it" display timer off the SAME authoritative set, rather than each site
+// maintaining its own copy of the enum that could drift.
+export const GOAL_TERMINAL_STATES: ReadonlySet<GoalStatusFrame['state']> = new Set([
+  'done',
+  'failed',
+  'cleared',
+])
+
+/**
+ * Hard cap on `goalPills`' cardinality. Before bc66345f every `goal_status`
+ * frame landed on the shared `'_default'` key (the backend never emitted
+ * `goal_id`), so this map's size was permanently 1. bc66345f correctly gave
+ * every goal a stable, unique-per-generation `goal_id` — required for the
+ * multi-goal pill tray to disambiguate goals at all — which incidentally
+ * changed the map's cardinality from 1 to UNBOUNDED: nothing ever deleted
+ * an entry, so a long-lived session accumulated one permanent,
+ * undismissable tombstone per completed/failed/cleared goal.
+ *
+ * 20 is comfortably above the backend's own global active-loop cap
+ * (`GoalStatusFrame.cap`, default 16 — the ceiling on simultaneously
+ * non-terminal goals+plans+loops), so under normal operation this never
+ * evicts a still-live (non-terminal) entry; it only ever trims accumulated
+ * terminal history once a session has run through more than 20 goals.
+ */
+const GOAL_PILLS_CAP = 20
+
+/**
+ * Bounds `goalPills` at `GOAL_PILLS_CAP`, called on every `goal_status`
+ * write (see `case 'goal_status'` below). This is a memory-lifecycle
+ * concern, NOT a rendering decision — it does not decide whether/how a
+ * pill is displayed (that stays `GoalPillTray`'s job, consistent with this
+ * file's "components decide whether/how to render each state" design). It
+ * decides only whether an entry is safe to garbage-collect, which is a
+ * question about the DATA's lifecycle (can this goal_id ever change again?)
+ * rather than the UI's (should this currently be shown?) — the two are
+ * orthogonal, and this function answers only the first.
+ *
+ * A terminal `goal_id` is retired for good (ADR-053: goal_id is unique per
+ * generation; a new goal, `follow_up`, or Play always mints a fresh id
+ * rather than reusing a terminated one), so it can never receive another
+ * frame — evicting the OLDEST terminal entries first (object key order —
+ * plain-string keys preserve insertion order) is therefore safe and can
+ * never clobber a still-live goal. Only if the map is still over cap after
+ * every terminal entry is gone (i.e. more non-terminal goals are
+ * simultaneously live than the cap allows, far beyond the backend's own
+ * default active-loop cap of 16) does this fall back to age-based eviction
+ * of the oldest entries regardless of state, so the bound holds
+ * unconditionally per requirement (b) — "regardless of" what the tray does.
+ */
+function evictGoalPillsOverCap(pills: Record<string, GoalStatusFrame>): Record<string, GoalStatusFrame> {
+  const keys = Object.keys(pills)
+  let overBy = keys.length - GOAL_PILLS_CAP
+  if (overBy <= 0) return pills
+  const next = { ...pills }
+  for (const key of keys) {
+    if (overBy <= 0) break
+    if (GOAL_TERMINAL_STATES.has(next[key].state)) {
+      delete next[key]
+      overBy--
+    }
+  }
+  if (overBy > 0) {
+    for (const key of Object.keys(next)) {
+      if (overBy <= 0) break
+      delete next[key]
+      overBy--
+    }
+  }
+  return next
+}
+
 export const useChatStore = create<ChatStore>((set, get) => {
   // ── Internal helpers that mutate a named session bucket ─────────────────────
   // These read/write sessionsById[sid] and then re-sync foreground fields.
@@ -1116,10 +1422,22 @@ export const useChatStore = create<ChatStore>((set, get) => {
     return useSessionStore.getState().activeSessionId ?? FALLBACK_SID
   }
 
-  /** Project a session bucket to foreground ChatStore fields (messagesById+messageOrder → messages[]). */
-  function bucketToForeground(bucket: SessionChatState): Omit<SessionChatState, 'messagesById' | 'messageOrder' | 'trimmedCount' | 'spanByParentCallId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[] } {
-    const { messagesById: _mb, messageOrder: _mo, trimmedCount: _tc, spanByParentCallId: _sp, toolCallOwnerMessageId: _tcm, ...rest } = bucket
-    return { ...rest, messages: getMessages(bucket) }
+  /**
+   * Project a session bucket to foreground ChatStore fields
+   * (messageOrder+messagesById → messages[], and messagesById passed
+   * through as-is for O(1) per-id lookups — see ChatStore.messagesById's
+   * doc comment). Also derives `lastAssistantMessageId` (see
+   * ChatStore.lastAssistantMessageId's doc comment) — a backward linear
+   * scan with early-exit, strictly dominated by the getMessages() O(N)
+   * build already happening here.
+   */
+  function bucketToForeground(bucket: SessionChatState): Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanByParentCallId' | 'spanBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null } {
+    const { messageOrder: _mo, trimmedCount: _tc, spanByParentCallId: _sp, spanBySpanId: _ssid, toolCallOwnerMessageId: _tcm, ...rest } = bucket
+    return {
+      ...rest,
+      messages: getMessages(bucket),
+      lastAssistantMessageId: findLastAssistantMessageId(bucket.messageOrder, bucket.messagesById),
+    }
   }
 
   /** Find or lazily create a bucket for sid. No-op if sid is null. */
@@ -1279,10 +1597,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     // Foreground selectors — derived from sessionsById[activeSessionId].
     // Initial values are the empty-session defaults projected through bucketToForeground.
-    // Note: we spread emptySessionState() here but consumers of messages: ChatMessage[]
-    // expect an array — the ring buffer fields (messagesById/messageOrder) are not
-    // exported on ChatStore; only messages (the derived array) is.
+    // Note: `messages` (the derived ordered array) and `messagesById` (the
+    // raw per-id map, for O(1) lookups) are both exported on ChatStore;
+    // messageOrder itself is not — see bucketToForeground.
     messages: [],
+    messagesById: {},
+    lastAssistantMessageId: null,
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: null,
@@ -1292,6 +1612,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
     sessionTokens: 0,
     sessionCost: 0,
     rateLimitEvent: null,
+    goalStatus: null,
+    goalPills: {},
+    loopStatus: null,
     lastUserMessageAt: null,
     cancelStage: null,
     lastReceivedEventTime: null,
@@ -3839,6 +4162,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 status: 'running',
                 steps: [],
                 agentId: sf.agent_id,
+                // ADR-057 FR-013/W5c: the child's own routable session id,
+                // when the gateway sent one (see SubagentSpanBase's doc).
+                childSessionId: sf.producing_session_id,
               }
               const bufferKey = `${targetSid}:${sf.parent_call_id}`
               const buffered = pendingByParentCallId[bufferKey] ?? []
@@ -3865,6 +4191,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
               if (!lastMsg.spans) lastMsg.spans = []
               lastMsg.spans.push(span)
               draft.spanByParentCallId[sf.parent_call_id] = { messageId: lastMsgId, spanIdx }
+              // Parallel index keyed by span_id, consumed by the
+              // subagent_end handler below for an O(1) lookup instead of a
+              // backward linear scan.
+              if (!draft.spanBySpanId) draft.spanBySpanId = {}
+              draft.spanBySpanId[sf.span_id] = { messageId: lastMsgId, spanIdx }
             }) as Partial<SessionChatState>
           })
           break
@@ -3875,14 +4206,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
           const ef = frame as WsSubagentEndFrame
           withBucket(targetSid, (b) => {
             return produce(b, (draft) => {
-              for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
-                const msgId = draft.messageOrder[i]
-                const msg = draft.messagesById[msgId]
-                if (msg.role !== 'assistant' || !msg.spans) continue
-                const spanIdx = msg.spans.findIndex((s) => s.spanId === ef.span_id)
-                if (spanIdx === -1) continue
-                const existingSpan = msg.spans[spanIdx]
-                const terminalSpan: SubagentSpanTerminal = {
+              // Builds the terminal span record from whichever running span
+              // (indexed or scanned) matched ef.span_id — shared by both
+              // resolution paths below so they can never diverge.
+              function buildTerminalSpan(existingSpan: SubagentSpan): SubagentSpanTerminal {
+                return {
                   spanId: existingSpan.spanId,
                   parentCallId: existingSpan.parentCallId,
                   taskLabel: existingSpan.taskLabel,
@@ -3891,13 +4219,48 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   // agent_id; prefer it if the server ever populates it, else
                   // keep the value already stamped by subagent_start.
                   agentId: ef.agent_id ?? existingSpan.agentId,
+                  // Same fallback shape for the child session id (FR-013):
+                  // prefer whatever subagent_end itself carries, else keep
+                  // what subagent_start already stamped.
+                  childSessionId: ef.producing_session_id ?? existingSpan.childSessionId,
                   status: ef.status,
                   durationMs: ef.duration_ms ?? 0,
                   finalResult: ef.final_result,
                   reason: ef.reason,
                 }
-                msg.spans[spanIdx] = terminalSpan
+              }
+
+              // O(1) lookup first (mirrors spanByParentCallId/
+              // hasOpenSpanFast). Re-verify the indexed span's own id still
+              // matches before trusting it — cheap, and guards against any
+              // staleness (e.g. an index entry surviving a code path that
+              // doesn't maintain it) rather than silently mutating the wrong
+              // span.
+              const indexEntry = draft.spanBySpanId?.[ef.span_id]
+              const indexedMsg = indexEntry ? draft.messagesById[indexEntry.messageId] : undefined
+              const indexedSpan = indexEntry ? indexedMsg?.spans?.[indexEntry.spanIdx] : undefined
+              if (indexEntry && indexedMsg?.spans && indexedSpan && indexedSpan.spanId === ef.span_id) {
+                indexedMsg.spans[indexEntry.spanIdx] = buildTerminalSpan(indexedSpan)
+                delete draft.spanByParentCallId[indexedSpan.parentCallId]
+                delete draft.spanBySpanId![ef.span_id]
+                return
+              }
+
+              // Fallback: O(N) scan (legacy path, index miss — e.g. a bucket
+              // built before this index existed, or an out-of-band mutation
+              // that didn't maintain it).
+              console.warn('[chat] subagent_end: span index miss, falling back to O(N) scan', { spanId: ef.span_id })
+              logDiagnostic('chatSubagentEndSpanIndexMiss', { spanId: ef.span_id, sessionId: targetSid })
+              for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+                const msgId = draft.messageOrder[i]
+                const msg = draft.messagesById[msgId]
+                if (msg.role !== 'assistant' || !msg.spans) continue
+                const spanIdx = msg.spans.findIndex((s) => s.spanId === ef.span_id)
+                if (spanIdx === -1) continue
+                const existingSpan = msg.spans[spanIdx]
+                msg.spans[spanIdx] = buildTerminalSpan(existingSpan)
                 delete draft.spanByParentCallId[existingSpan.parentCallId]
+                if (draft.spanBySpanId) delete draft.spanBySpanId[existingSpan.spanId]
                 return
               }
               console.warn('[chat] subagent_end received for unknown span_id', { spanId: ef.span_id })
@@ -3932,7 +4295,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
             const sessionStore = useSessionStore.getState()
             // Use the frame's session_id if present; fall back to active.
             const switchSid = frameSessionId ?? sessionStore.activeSessionId
-            sessionStore.setActiveSession(switchSid, newAgentId)
+            // Precedence rule 1 (src/store/session.ts's AGENT PRECEDENCE
+            // RULE): this frame reports a handover the BACKEND already
+            // performed, so it outranks an explicit user pick rather than
+            // being filtered out as a session-derived hint — the picker has
+            // to name whoever is actually answering.
+            sessionStore.applyServerAgentSwitch(switchSid, newAgentId)
           }
           queryClient.invalidateQueries({ queryKey: ['sessions'] })
           break
@@ -4465,6 +4833,78 @@ export const useChatStore = create<ChatStore>((set, get) => {
           armRateLimitClear(sid, event)
           break
         }
+
+        case 'goal_status': {
+          // ADR-049 D6/US-12 + ADR-053 FE-1/US-14: session-scoped (in
+          // SESSION_SCOPED_FRAME_TYPES above) — targetSid is already
+          // resolved/dropped per the routing rules at the top of handleFrame.
+          //
+          // PER-GOAL-ID pill map (FE-1): the frame carries `goal_id` (optional
+          // — the §6 compat shim may omit it for a single-goal session). Key
+          // the pill map by goal_id (falling back to '_default' when absent) so
+          // a session with 2 goals shows 2 pills. Also maintain the legacy
+          // single `goalStatus` (latest frame across all goals) for back-compat
+          // with GoalIndicator's loop-only rendering path. The tray/pill
+          // components still decide whether/how to RENDER each state — no
+          // special-casing of that kind here (GoalPillTray owns the "keep a
+          // terminal pill visible briefly, then stop showing it" behaviour).
+          //
+          // What IS special-cased here, deliberately: `evictGoalPillsOverCap`
+          // (regression fix, bc66345f follow-up — see goalPills' doc comment
+          // above and the function's own comment for the full reasoning).
+          // Before bc66345f every frame shared the `'_default'` key, so this
+          // map never grew past 1 entry; bc66345f's stable per-generation
+          // `goal_id` (a correct, necessary fix — the multi-goal tray cannot
+          // work without it) incidentally made this map's cardinality
+          // unbounded, leaking one permanent tombstone per terminated goal
+          // (done/failed/cleared) with no way for the user to dismiss it.
+          // This is a memory-bound/GC decision (is this entry ever going to
+          // change again?), not a render decision (should it be shown right
+          // now?) — the render policy the comment above still refers to is
+          // untouched.
+          if (!targetSid) break
+          const goalFrame = frame as GoalStatusFrame
+          const pillKey = goalFrame.goal_id && goalFrame.goal_id.length > 0 ? goalFrame.goal_id : '_default'
+          withBucket(targetSid, (b) => ({
+            goalStatus: goalFrame,
+            goalPills: evictGoalPillsOverCap({ ...(b.goalPills ?? {}), [pillKey]: goalFrame }),
+          }))
+          break
+        }
+
+        case 'loop_status': {
+          // ADR-049 D6/US-12: session-scoped, same store-verbatim pattern as goal_status.
+          if (!targetSid) break
+          const loopFrame = frame as LoopStatusFrame
+          withBucket(targetSid, () => ({ loopStatus: loopFrame }))
+          break
+        }
+
+        case 'plan_status': {
+          // ADR-049 R3/FR-099: GLOBAL frame — PlanStatusFrame carries no
+          // session_id (correlated by plan_id, not any chat thread), so it
+          // is NOT routed through targetSid/withBucket at all. Invalidate
+          // the plan/task query caches so PlansFilterBand/BoardView (which read
+          // Plan.state/plan_phase/paused_reason directly off the REST
+          // response, not off this frame) refetch and re-render with the
+          // new state — including the "paused — owner disabled" surfacing
+          // (US-10 AS-7), which is driven entirely by the refetched Plan
+          // object's own fields, not by anything stored from this frame.
+          queryClient.invalidateQueries({ queryKey: ['plans'] })
+          queryClient.invalidateQueries({ queryKey: ['tasks'] })
+          break
+        }
+
+        case 'judge_verdict': {
+          // ADR-049 D2/D4/US-13: GLOBAL frame (no session_id — correlated by
+          // task_id/plan_id) — feeds the ActivityPanel's judge row via a
+          // dedicated global store (mirrors the #283/#264
+          // whatsapp_pairing/notification pattern: accessed via getState()
+          // at frame time, never routed through a session bucket).
+          useJudgeActivityStore.getState().apply(frame as JudgeVerdictFrame)
+          break
+        }
+
         case 'whatsapp_pairing': {
           // #283: global (not session-tied) — record QR/status for the Channels
           // config panel. Accessed via getState() at frame time (not a hook
@@ -4554,8 +4994,9 @@ export function syncChatForeground(): void {
   const activeSid = useSessionStore.getState().activeSessionId ?? FALLBACK_SID
   useChatStore.setState((state) => {
     const fg = (activeSid ? state.sessionsById[activeSid] : null) ?? EMPTY_BUCKET
-    // Project messagesById+messageOrder → messages for foreground consumers.
-    const { messagesById: _mb, messageOrder: _mo, trimmedCount: _tc, spanByParentCallId: _sp, toolCallOwnerMessageId: _tcm, ...rest } = fg
+    // Project messageOrder+messagesById → messages for foreground consumers
+    // (messagesById itself passes through as-is — see bucketToForeground).
+    const { messageOrder: _mo, trimmedCount: _tc, spanByParentCallId: _sp, spanBySpanId: _ssid, toolCallOwnerMessageId: _tcm, ...rest } = fg
     return { ...rest, messages: getMessages(fg) }
   })
 }

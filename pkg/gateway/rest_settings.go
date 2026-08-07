@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -572,7 +570,7 @@ func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 		totalRemoved += n
 	}
 	resp := gen.ClearAllSessionsResponse{
-		Status: gen.Cleared,
+		Status: gen.ClearAllSessionsResponseStatusCleared,
 		Count:  totalRemoved,
 	}
 	if len(warnings) > 0 {

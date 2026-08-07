@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // cancel_abandoned_test.go — T7: verifies that after the hard-cancel timer
 // fires and Finish() runs, the turn is no longer "alive" and any subsequent
 // output emit is suppressed (abandoned flag set via MarkAbandoned).

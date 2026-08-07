@@ -1,0 +1,91 @@
+title: PlanCreateRequest
+description: >
+  Request body for POST /workspaces/{id}/plans (ADR-049 D1/FR-1, Wave 2-C1 —
+  the workspace-nested shape chosen for the deferred REST paths, mirroring the
+  removed Milestone's `POST /workspaces/{id}/milestones`). Creates a plan in
+  `draft` state. `workspace_id` is also required in the body (validated to
+  match the path); member tasks are linked afterward via `Task.plan_id`,
+  which is validated same-workspace.
+type: object
+required:
+  - workspace_id
+  - title
+  - owner_agent_id
+additionalProperties: false
+properties:
+  workspace_id:
+    type: string
+    description: >
+      Workspace this plan belongs to. Required — every plan is
+      workspace-scoped.
+    example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  title:
+    type: string
+    minLength: 1
+    maxLength: 200
+    description: Plan title.
+    example: "v1.0 Launch"
+  goal:
+    type: string
+    maxLength: 2000
+    description: Plain-prose objective (used by the plan judge when `dod` is empty).
+    example: "Ship the v1.0 release with all P0 issues closed and CI green."
+  description:
+    type: string
+    maxLength: 2000
+    description: Optional free-form description.
+    example: "Coordinates the v1.0 release train across backend and SPA."
+  owner_agent_id:
+    type: string
+    minLength: 1
+    description: Agent responsible for this plan.
+    example: "jim"
+  dod:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterion.yaml
+    description: >
+      Plan-level Definition of Done. Agent-created plans require at least
+      one criterion before approval (strict tier, ADR D5); human/UI creation
+      may leave this empty (soft tier — the plan judge then evaluates
+      against `title` + `goal`).
+  rationale:
+    type: string
+    maxLength: 4000
+    description: >
+      ADR-053 §Contract Surface — persisted planning rationale (the "why"
+      behind the plan's decomposition, e.g. the write-set/stream split
+      chosen and the join points authored). Plan-lint and the owner-loop
+      correction flow read this alongside `write_set`/`stream`/`is_join`
+      on member tasks. Optional — absent for simple plans with no
+      parallel-stream reasoning to record.
+    example: >
+      Split into two lint-disjoint worktree streams (schema + client) that
+      converge at a single merge member, per the shard+assemble topology.
+  bounds:
+    type: object
+    additionalProperties: false
+    description: Per-plan overrides of the global `PlanningConfig` bounds (FR-9).
+    properties:
+      plan_judge_max_rounds:
+        type: integer
+        minimum: 1
+        example: 20
+      idle_expiry_days:
+        type: integer
+        minimum: 1
+        example: 7
+      supervision_turn_timeout_seconds:
+        type: integer
+        minimum: 1
+        description: >
+          Override of FR-021's supervision observation deadline (global
+          default `planning.supervision_turn_timeout_seconds`, 600 s).
+        example: 600
+      supervision_max_attempts:
+        type: integer
+        minimum: 1
+        description: >
+          Override of FR-022's no-correction supervision attempt ceiling
+          (global default `planning.supervision_max_attempts`, 3).
+        example: 3

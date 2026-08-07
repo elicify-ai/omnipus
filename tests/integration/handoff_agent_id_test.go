@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // handoff_agent_id_test.go — regression test for Bug 1: post-handoff tool_call
 // entries in transcript.jsonl must carry the NEW agent's agent_id, not the
 // handing-off agent's id.

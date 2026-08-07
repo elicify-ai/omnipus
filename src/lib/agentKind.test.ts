@@ -5,7 +5,7 @@
 // standalone predicates it's built from.
 
 import { describe, it, expect } from 'vitest'
-import { agentKindFlags, isExternalType, isWorkerType } from './agentKind'
+import { agentKindFlags, isExternalType, isWorkerType, isSystemType } from './agentKind'
 
 describe('isWorkerType', () => {
   it('is true for Subagent, subagent_3p, and the legacy worker constant', () => {
@@ -41,6 +41,22 @@ describe('isExternalType', () => {
   })
 })
 
+describe('isSystemType', () => {
+  it('is true only for system', () => {
+    expect(isSystemType('system')).toBe(true)
+  })
+
+  it('is false for Main, core, worker types, and missing/null', () => {
+    expect(isSystemType('Main')).toBe(false)
+    expect(isSystemType('core')).toBe(false)
+    expect(isSystemType('Subagent')).toBe(false)
+    expect(isSystemType('subagent_3p')).toBe(false)
+    expect(isSystemType('worker')).toBe(false)
+    expect(isSystemType(undefined)).toBe(false)
+    expect(isSystemType(null)).toBe(false)
+  })
+})
+
 describe('agentKindFlags', () => {
   it('classifies a locked core agent', () => {
     expect(agentKindFlags({ type: 'core', locked: true })).toEqual({
@@ -48,6 +64,7 @@ describe('agentKindFlags', () => {
       isWorker: false,
       isExternal: false,
       isNativeWorker: false,
+      isSystem: false,
     })
   })
 
@@ -57,6 +74,7 @@ describe('agentKindFlags', () => {
       isWorker: false,
       isExternal: false,
       isNativeWorker: false,
+      isSystem: false,
     })
   })
 
@@ -66,6 +84,7 @@ describe('agentKindFlags', () => {
       isWorker: false,
       isExternal: false,
       isNativeWorker: false,
+      isSystem: false,
     })
   })
 
@@ -75,6 +94,7 @@ describe('agentKindFlags', () => {
       isWorker: true,
       isExternal: false,
       isNativeWorker: true,
+      isSystem: false,
     })
   })
 
@@ -86,6 +106,7 @@ describe('agentKindFlags', () => {
       isWorker: true,
       isExternal: true,
       isNativeWorker: false,
+      isSystem: false,
     })
     // Even a nonsensical native/absent executor on a subagent_3p agent
     // still resolves external — the type alone decides for this kind.
@@ -96,12 +117,14 @@ describe('agentKindFlags', () => {
       isWorker: true,
       isExternal: true,
       isNativeWorker: false,
+      isSystem: false,
     })
     expect(agentKindFlags({ type: 'subagent_3p', locked: false })).toEqual({
       isLocked: false,
       isWorker: true,
       isExternal: true,
       isNativeWorker: false,
+      isSystem: false,
     })
   })
 
@@ -111,6 +134,7 @@ describe('agentKindFlags', () => {
       isWorker: true,
       isExternal: false,
       isNativeWorker: true,
+      isSystem: false,
     })
     expect(
       agentKindFlags({ type: 'worker', locked: false, executor: { kind: 'native' } }),
@@ -119,6 +143,7 @@ describe('agentKindFlags', () => {
       isWorker: true,
       isExternal: false,
       isNativeWorker: true,
+      isSystem: false,
     })
   })
 
@@ -130,6 +155,7 @@ describe('agentKindFlags', () => {
       isWorker: true,
       isExternal: true,
       isNativeWorker: false,
+      isSystem: false,
     })
   })
 
@@ -139,12 +165,14 @@ describe('agentKindFlags', () => {
       isWorker: false,
       isExternal: false,
       isNativeWorker: false,
+      isSystem: false,
     })
     expect(agentKindFlags({ type: null })).toEqual({
       isLocked: false,
       isWorker: false,
       isExternal: false,
       isNativeWorker: false,
+      isSystem: false,
     })
   })
 
@@ -154,10 +182,21 @@ describe('agentKindFlags', () => {
       isWorker: false,
       isExternal: false,
       isNativeWorker: false,
+      isSystem: false,
     })
   })
 
   it('treats locked=null the same as locked=false — only locked===true counts', () => {
     expect(agentKindFlags({ type: 'core', locked: null }).isLocked).toBe(false)
+  })
+
+  it('classifies a locked System agent (ADR-049 D3, the Judge) — never a worker, never external', () => {
+    expect(agentKindFlags({ type: 'system', locked: true })).toEqual({
+      isLocked: true,
+      isWorker: false,
+      isExternal: false,
+      isNativeWorker: false,
+      isSystem: true,
+    })
   })
 })

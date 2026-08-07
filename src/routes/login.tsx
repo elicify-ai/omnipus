@@ -9,6 +9,7 @@ import { login, fetchAppState, isApiError } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
 import { consumeLogoutReason, LOGOUT_REASON_MESSAGE } from '@/lib/authLogout'
 import { resetTokenValidationCache } from './authValidation'
+import { queryClient } from '@/lib/queryClient'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 
 function LoginScreen() {
@@ -49,6 +50,17 @@ function LoginScreen() {
       // validation verdict so the /_app guard re-validates this session
       // immediately.
       resetTokenValidationCache()
+      // Bugfix (slash-palette silent-empty): the commands query
+      // (['commands','web'], src/hooks/useSlashMenu.ts + ChatScreen.tsx) is
+      // behind withAuth and may have 401'd — and gone permanently
+      // errored — before this session's cookie existed (e.g. a composer
+      // mounted mid-race on a fresh install). Nothing else ever refetches
+      // it, so a successful login is the one point we KNOW the session is
+      // now valid — invalidate here so every mounted observer of the shared
+      // ['commands', ...] cache entry (useSlashMenu, plus ChatScreen's own
+      // UserMessage/useSkillChipData queries) refetches without needing a
+      // full page reload.
+      queryClient.invalidateQueries({ queryKey: ['commands'] })
       // Check if onboarding is still needed
       const state = await fetchAppState()
       if (!state.onboarding_complete) {

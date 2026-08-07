@@ -98,8 +98,18 @@ type ProcessSession struct {
 	// set once at process-creation time and never mutated afterward, so reads
 	// elsewhere do not need to hold mu (mirrors StartTime's treatment in
 	// cleanupOldSessions). Populated by the tool that spawned the background
-	// process (bash/exec); left empty ("") for callers that don't track an
-	// owning session, in which case KillAllForSession never matches it.
+	// process (bash/exec) from ToolTranscriptSessionID(ctx) (shell.go's
+	// runBackground) — left empty ("") for callers that don't track an
+	// owning session, in which case neither KillAllForSession nor
+	// KillAllForSessions ever matches it.
+	//
+	// ADR-057 (FR-027): a delegated child stamps THIS FIELD from its OWN
+	// distinct transcript session id, not the root chat session's id it may
+	// previously have shared. A session-level cancel that must reach a
+	// child's background shells therefore cannot rely on ONE exact match
+	// against the root id — the caller resolves the full descendant set
+	// (root id plus every live descendant's own id) and passes it to
+	// KillAllForSessions, which cascades over the whole set.
 	OwnerSessionID string
 }
 
@@ -164,6 +174,45 @@ func (s *ProcessSession) SetExitCode(code int) {
 	s.ExitCode = code
 }
 
+// statusPriority ranks terminal SessionStatus values so KillAndRelabel can
+// tell a caller with a SPECIFIC terminal reason (canceled/killed/timeout)
+// apart from one with only a GENERIC fallback reason (done/exited — "no more
+// specific label to apply", see StatusDone's doc comment). Two independent
+// callers can legitimately race to be the one that transitions the SAME
+// ProcessSession out of StatusRunning — e.g. SessionManager.KillAll's
+// unconditional process-wide shutdown reaper racing SessionManager.
+// KillAllForSession's owner-scoped RequestCancel cascade for the same
+// session (this is not merely theoretical: in the pkg/agent test suite,
+// tools.GetSharedSessionManager() is ONE process-wide singleton shared by
+// every *AgentLoop any test constructs — see AgentLoop.Close's own
+// "LOAD-BEARING PRECONDITION" doc comment in pkg/agent/loop.go — so one
+// test's shutdown-driven KillAll() can race a DIFFERENT, concurrently
+// running test's own explicit-cancel KillAllForSession() for a session
+// neither test intended the other to touch). Whichever caller wins the
+// mutex first has, until now, permanently decided the label — if the
+// generic caller won, the specific caller's own KillAndRelabel call found
+// Status already non-running and silently gave up (ErrSessionDone, the
+// existing documented "benign lost race" no-op), leaving a canceled/killed/
+// timed-out session mislabeled with the generic fallback forever. See
+// KillAndRelabel's doc comment for how this ranking is used to fix that
+// without weakening the pre-existing "a genuinely already-terminal session
+// is left untouched" no-op guarantee every KillAllForSession/KillAll/
+// executeKill caller pre-checks for BEFORE ever reaching KillAndRelabel
+// (TestSessionManager_KillAllForSession's "skips already-done sessions"
+// case, TestSessionManager_KillAll's "already-terminal session must be left
+// untouched" case, and TestBash_KillRacingNaturalExit/MIN-002 all stop at
+// that earlier pre-check and never exercise this ranking at all).
+func statusPriority(s SessionStatus) int {
+	switch s {
+	case StatusKilled, StatusTimeout, StatusCanceled:
+		return 2 // a caller that knows WHY the session ended
+	case StatusDone, StatusExited:
+		return 1 // the generic fallback — no specific reason known
+	default: // StatusRunning, or any future/unrecognized value
+		return 0
+	}
+}
+
 // killProcessGroupFn indirects the OS-level process-group kill syscall
 // (killProcessGroup, session_process_unix.go/session_process_windows.go) so
 // tests can force a kill FAILURE deterministically. A real "fake" PID chosen
@@ -189,6 +238,31 @@ func (s *ProcessSession) KillAndRelabel(status SessionStatus) error {
 	defer s.mu.Unlock()
 
 	if s.Status != StatusRunning {
+		// Not running anymore. Every caller of KillAndRelabel (KillAllFor
+		// Session, KillAll's Kill(), the timeout guard, executeKill) already
+		// pre-checked GetStatus()/IsDone() before calling in, so reaching
+		// this branch means the session's terminal status was written by a
+		// DIFFERENT caller in the narrow window between that pre-check and
+		// this lock acquisition (every existing "leave an already-terminal
+		// session untouched" test — see statusPriority's doc comment —
+		// never reaches this branch at all; they stop at the pre-check).
+		// Default to the existing benign no-op UNLESS the racing writer only
+		// left the generic StatusDone/StatusExited fallback and THIS call
+		// carries a more specific terminal reason: then correct the label in
+		// place rather than silently discarding it. The process itself is
+		// already terminated (or a kill for it is already in flight) by
+		// construction of how the generic fallback gets set, so no further
+		// kill syscall is issued here — only the label is corrected.
+		// ExitCode is deliberately left untouched: whichever writer got
+		// there first may have recorded a real exit code (a natural exit)
+		// that remains the most accurate value available. A generic status
+		// can never downgrade an already-specific one, and two
+		// equally-specific statuses never flip-flop — the first specific
+		// writer still wins ties, exactly as before.
+		if statusPriority(status) > statusPriority(s.Status) {
+			s.Status = status
+			return nil
+		}
 		return ErrSessionDone
 	}
 
@@ -339,6 +413,46 @@ func (sm *SessionManager) cleanupOldSessions() {
 // RequestCancel, this cascades the cancel to any detached background bash/exec
 // work that session started.
 //
+// This is a single-id convenience wrapper around KillAllForSessions (below),
+// which carries the full doc comment for the cascade's locking and
+// benign-race semantics — nothing here duplicates that. Pre-ADR-057 callers
+// with exactly one owning session id (no descendant set to cascade over)
+// keep using this form unchanged; ADR-057 (FR-027) callers that must cascade
+// over a resolved descendant set (root id plus every live descendant's own
+// id — see OwnerSessionID's doc comment) call KillAllForSessions directly.
+func (sm *SessionManager) KillAllForSession(sessionID string) (killed, failed int) {
+	if sessionID == "" {
+		return 0, 0
+	}
+	return sm.KillAllForSessions([]string{sessionID})
+}
+
+// KillAllForSessions kills every currently-running ProcessSession whose
+// OwnerSessionID is present in sessionIDs and returns the total count of
+// sessions killed and failed across the whole set. KillAllForSession above
+// is the single-id convenience form; this is the general primitive both it
+// and any ADR-057 descendant-set cascade (FR-027) are built on.
+//
+// Why a set, not one id: before ADR-057, a delegated child shared the root
+// chat session's transcript id, so a single exact match against the root id
+// reached the child's background shells too. ADR-057 stamps each child's
+// OwnerSessionID from its OWN distinct session id (see OwnerSessionID's doc
+// comment), so that same single match against only the root id would no
+// longer reach a child's shells at all — silently orphaning them as detached
+// processes on a chat-level Stop. The fix is not in this function's match
+// predicate (still a plain equality check) but in what the CALLER passes:
+// the full descendant set — root id plus every live descendant's own id,
+// resolved by walking the session hierarchy — rather than the root id alone.
+//
+// Empty strings in sessionIDs are never matched — the same guard a lone
+// empty sessionID has always triggered on KillAllForSession above:
+// OwnerSessionID == "" marks a background process with no tracked owner
+// (ProcessSession.OwnerSessionID's doc comment), so treating "" as a real id
+// in the set would incorrectly sweep up ownerless sessions no session-level
+// cancel is entitled to touch. A sessionIDs set that is empty, nil, or
+// contains only empty strings is a no-op — (0, 0) — without ever scanning
+// sm.sessions.
+//
 // Locking mirrors cleanupOldSessions' two-phase pattern: candidate session IDs
 // are collected under sm.mu.RLock (keyed on OwnerSessionID, which is set once
 // at creation and never mutated, so it's safe to read without session.mu —
@@ -361,14 +475,33 @@ func (sm *SessionManager) cleanupOldSessions() {
 // failure" contract for this hook: killing an individual background session
 // that fails must not abort RequestCancel's own turn-cancellation flow).
 //
+// One refinement to "loses the race against another terminal-status writer"
+// above: if that other writer only left the generic StatusDone fallback (see
+// KillAll's shutdown reaper, which relabels unconditionally and without a
+// specific reason) and this call's KillAndRelabel(StatusCanceled) reaches
+// the session microseconds later, statusPriority lets the more specific
+// "canceled" label win and correct it in place — this call still counts it
+// as killed/logs it normally in that case (see KillAndRelabel's doc
+// comment). Only a same-or-more-specific existing label (canceled/killed/
+// timeout, or a session that was ALREADY non-running well before this scan
+// even started — the ordinary case this comment block otherwise describes)
+// is still treated as a benign no-op.
+//
 // Returns (killed, failed): killed is the count successfully terminated and
 // relabeled StatusCanceled (as before); failed is the count of REAL kill
 // failures (excluding the benign ErrSessionDone race above) — added so a
 // kill failure is visible to the caller (RequestCancel threads it into the
 // EventTurnCancelBackgroundKilled audit event as background_sessions_failed)
 // instead of being invisible outside a slog.Warn line.
-func (sm *SessionManager) KillAllForSession(sessionID string) (killed, failed int) {
-	if sessionID == "" {
+func (sm *SessionManager) KillAllForSessions(sessionIDs []string) (killed, failed int) {
+	want := make(map[string]struct{}, len(sessionIDs))
+	for _, id := range sessionIDs {
+		if id == "" {
+			continue
+		}
+		want[id] = struct{}{}
+	}
+	if len(want) == 0 {
 		return 0, 0
 	}
 
@@ -376,7 +509,7 @@ func (sm *SessionManager) KillAllForSession(sessionID string) (killed, failed in
 	sm.mu.RLock()
 	var candidates []string
 	for id, s := range sm.sessions {
-		if s.OwnerSessionID == sessionID {
+		if _, ok := want[s.OwnerSessionID]; ok {
 			candidates = append(candidates, id)
 		}
 	}
@@ -395,11 +528,13 @@ func (sm *SessionManager) KillAllForSession(sessionID string) (killed, failed in
 			continue // already done/killed — no-op for this candidate
 		}
 
-		// PID and StartTime are set once at process-creation time (before the
-		// session is registered with Add) and never mutated afterward — safe
-		// to read without session.mu, matching the OwnerSessionID doc comment.
+		// PID, StartTime and OwnerSessionID are set once at process-creation
+		// time (before the session is registered with Add) and never mutated
+		// afterward — safe to read without session.mu, matching the
+		// OwnerSessionID doc comment.
 		pid := s.PID
 		startTime := s.StartTime
+		ownerSessionID := s.OwnerSessionID
 
 		// KillAndRelabel kills AND relabels to StatusCanceled atomically under
 		// one lock acquisition (mirrors executeKill's "killed" relabel in
@@ -413,8 +548,8 @@ func (sm *SessionManager) KillAllForSession(sessionID string) (killed, failed in
 				continue
 			}
 			failed++
-			slog.Warn("tools: SessionManager.KillAllForSession: failed to kill background session",
-				"owner_session_id", sessionID,
+			slog.Warn("tools: SessionManager.KillAllForSessions: failed to kill background session",
+				"owner_session_id", ownerSessionID,
 				"session_id", id,
 				"pid", pid,
 				"error", err,
@@ -424,7 +559,7 @@ func (sm *SessionManager) KillAllForSession(sessionID string) (killed, failed in
 
 		elapsedSeconds := time.Now().Unix() - startTime
 		slog.Info("tools: SessionManager.KillAllForSession: killed background session on cancel cascade",
-			"owner_session_id", sessionID,
+			"owner_session_id", ownerSessionID,
 			"session_id", id,
 			"pid", pid,
 			"elapsed_seconds", elapsedSeconds,
@@ -545,6 +680,58 @@ func (sm *SessionManager) Get(sessionID string) (*ProcessSession, error) {
 		return nil, ErrSessionNotFound
 	}
 
+	return session, nil
+}
+
+// GetOwned is the caller-facing authorization gate for a single-session,
+// caller-supplied-ID lookup (M5 fix, live UAT 2026-07-31): it returns the
+// session with the given ID only when it is owned by callerSessionID
+// (ProcessSession.OwnerSessionID). This is what shell.go's getSessionArg
+// calls instead of the bare Get above for action=poll/read/kill — before
+// this fix, a caller from ANY chat/transcript session could address ANY
+// background bash job process-wide just by knowing its short session_id,
+// with zero ownership check anywhere in that path. Confirmed exploitable for
+// BOTH read (poll) and a DESTRUCTIVE action (kill: a foreign caller's kill
+// call terminated another session's real OS process, verified via
+// pidAlive) — not merely a theoretical read-only information leak.
+//
+// A session that exists but belongs to a DIFFERENT owner session returns the
+// SAME ErrSessionNotFound a genuinely-missing session would — never a
+// distinguishable "forbidden" error — so an unauthorized caller cannot use
+// this to enumerate/confirm the existence of another session's background
+// job. The mismatch is still logged at Warn (with both IDs) so operators
+// retain visibility into cross-session access attempts, mirroring this
+// file's existing pattern of logging real anomalies (KillAllForSessions's
+// failed-kill Warn line) without surfacing them to the caller.
+//
+// This is deliberately NOT the mechanism the legitimate cancel cascade uses.
+// KillAllForSession/KillAllForSessions (above) scan by OwnerSessionID
+// membership directly and never call Get/GetOwned at all, so a parent
+// canceling its own descendant's background jobs (stop_plan/delegate
+// cancel, resolving the full descendant set) is entirely unaffected by this
+// gate — it is not in that code path to begin with.
+//
+// callerSessionID is normally ToolTranscriptSessionID(ctx) at the tool-call
+// boundary. An empty callerSessionID only matches a session whose
+// OwnerSessionID is ALSO empty (an untracked-owner session — see
+// OwnerSessionID's own doc comment); it is never a wildcard that matches
+// every session regardless of owner. OwnerSessionID is set once at
+// process-creation time and never mutated afterward (see its own doc
+// comment), so reading it directly here — without session.mu — is safe and
+// matches KillAllForSessions' identical treatment above.
+func (sm *SessionManager) GetOwned(sessionID, callerSessionID string) (*ProcessSession, error) {
+	session, err := sm.Get(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if session.OwnerSessionID != callerSessionID {
+		slog.Warn("tools: SessionManager.GetOwned: cross-session access denied",
+			"session_id", sessionID,
+			"owner_session_id", session.OwnerSessionID,
+			"caller_session_id", callerSessionID,
+		)
+		return nil, ErrSessionNotFound
+	}
 	return session, nil
 }
 

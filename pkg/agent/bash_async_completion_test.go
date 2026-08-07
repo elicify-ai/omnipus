@@ -61,8 +61,9 @@ import (
 type sessionCapturingBash struct {
 	*tools.ExecTool
 
-	mu        sync.Mutex
-	sessionID string
+	mu                       sync.Mutex
+	sessionID                string
+	ownerTranscriptSessionID string
 }
 
 func (s *sessionCapturingBash) ExecuteAsync(
@@ -76,6 +77,14 @@ func (s *sessionCapturingBash) ExecuteAsync(
 		if err := json.Unmarshal([]byte(result.ForLLM), &resp); err == nil && resp.SessionID != "" {
 			s.mu.Lock()
 			s.sessionID = resp.SessionID
+			// Capture the REAL owning transcript session id that turn.go's
+			// turnCtx carried into this call (tools.WithTranscriptSessionID at
+			// loop.go:7127) — this is the exact value shell.go's runBackground
+			// stamps onto ProcessSession.OwnerSessionID (shell.go:571-572). A
+			// production kill of this session must present the SAME id via
+			// ToolTranscriptSessionID(ctx), or SessionManager.GetOwned (M5 fix,
+			// pkg/tools/session.go:722) denies it — see this file's kill test.
+			s.ownerTranscriptSessionID = tools.ToolTranscriptSessionID(ctx)
 			s.mu.Unlock()
 		}
 	}
@@ -86,6 +95,16 @@ func (s *sessionCapturingBash) capturedSessionID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sessionID
+}
+
+// capturedOwnerTranscriptSessionID returns the transcript session id that
+// owns the background session captured above — the value a legitimate kill
+// must present via tools.WithTranscriptSessionID for
+// SessionManager.GetOwned to authorize it.
+func (s *sessionCapturingBash) capturedOwnerTranscriptSessionID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ownerTranscriptSessionID
 }
 
 // newBashAsyncTestLoop builds a real AgentLoop wired with a real bash tool
@@ -255,11 +274,27 @@ func TestBashRunInBackground_KillReportsTermination(t *testing.T) {
 	sessionID := wrapper.capturedSessionID()
 	require.NotEmpty(t, sessionID, "the real run_in_background call must have produced a session_id")
 
+	ownerTranscriptSessionID := wrapper.capturedOwnerTranscriptSessionID()
+	require.NotEmpty(t, ownerTranscriptSessionID,
+		"the real run_in_background call must have carried an owning transcript session id "+
+			"(turn.go's turnCtx, stamped via tools.WithTranscriptSessionID at loop.go:7127)")
+
 	// Kill via the SAME registered tool instance — this is the real
 	// production executeKill code path, triggering the ALREADY-RUNNING
 	// completion goroutine (spawned by the turn-1 call above, holding the
 	// REAL production cb in its closure) to observe termination and fire it.
-	killResult := wrapper.Execute(context.Background(), map[string]any{
+	//
+	// The kill context MUST carry the session's OWNING transcript session id
+	// via tools.WithTranscriptSessionID, mirroring how a real caller invokes
+	// this: every production kill happens inside a turn, and turn.go's
+	// turnCtx always carries ToolTranscriptSessionID (loop.go:7127) before any
+	// tool executes. A bare context.Background() (no transcript session id)
+	// is not a shape any real caller produces — it made this test fail
+	// against SessionManager.GetOwned's M5 ownership gate (pkg/tools/session.go),
+	// which correctly denies a kill whose caller doesn't own the session (a
+	// confirmed real privilege-boundary fix, not a bug to route around).
+	killCtx := tools.WithTranscriptSessionID(context.Background(), ownerTranscriptSessionID)
+	killResult := wrapper.Execute(killCtx, map[string]any{
 		"action":     "kill",
 		"session_id": sessionID,
 	})
@@ -295,4 +330,87 @@ func TestBashRunInBackground_KillReportsTermination(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 3, provider.CallCount(),
 		"the kill notification must have triggered a genuine THIRD scripted provider call")
+}
+
+// TestBashRunInBackground_KillOwnershipGate_EndToEnd closes the exact
+// coverage gap that let commit c5ada0cb's M5 ownership fix (getSessionArg's
+// SessionManager.GetOwned call, pkg/tools/session.go:722) break
+// TestBashRunInBackground_KillReportsTermination unnoticed: nothing exercised
+// that the LEGITIMATE owner's kill still succeeds when driven through the
+// REAL agent-level wiring (ProcessDirectWithChannel -> turn.go's turnCtx,
+// stamped with ToolTranscriptSessionID at loop.go:7127 -> ExecTool.Execute).
+// pkg/tools/session_ownership_test.go's TestBash_CrossSessionPollReadKill_Denied
+// already covers denial directly against a bare *tools.ExecTool; this test
+// is its positive-path, agent-level counterpart (Binding Rule 4: pair a
+// negative assertion with a positive lower bound).
+//
+// Negative half: a kill presented with no owning transcript session id, and
+// one presented with a genuinely different (non-empty) one, are both denied
+// with the generic "session not found" message GetOwned uses to avoid
+// leaking a foreign session's existence.
+// Positive half: a kill presented with the SAME owning transcript session id
+// captured off the real turnCtx that started the session succeeds.
+func TestBashRunInBackground_KillOwnershipGate_EndToEnd(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses POSIX sleep")
+	}
+
+	provider := testutil.NewScenario().
+		WithToolCall("bash", `{"command":"sleep 30","run_in_background":true}`).
+		WithText("Started a long-running background job.")
+
+	al, _, wrapper := newBashAsyncTestLoop(t, provider)
+
+	ctx := context.Background()
+	firstTurnResp, err := al.ProcessDirectWithChannel(
+		ctx,
+		"please start a long background job",
+		"test-session-bash-ownership-gate",
+		"telegram",
+		"99999",
+	)
+	require.NoError(t, err)
+	assert.Contains(t, firstTurnResp, "Started")
+
+	sessionID := wrapper.capturedSessionID()
+	require.NotEmpty(t, sessionID, "the real run_in_background call must have produced a session_id")
+	ownerTranscriptSessionID := wrapper.capturedOwnerTranscriptSessionID()
+	require.NotEmpty(t, ownerTranscriptSessionID,
+		"the real run_in_background call must have carried an owning transcript session id")
+
+	// Negative: no transcript session id at all (the exact shape that broke
+	// TestBashRunInBackground_KillReportsTermination before this fix-wave —
+	// proving the gate STILL denies it is what guards against re-introducing
+	// that regression by weakening the gate instead of the fixture).
+	deniedEmpty := wrapper.Execute(context.Background(), map[string]any{
+		"action":     "kill",
+		"session_id": sessionID,
+	})
+	require.NotNil(t, deniedEmpty)
+	assert.True(t, deniedEmpty.IsError, "kill with no transcript session id must be denied")
+	assert.Contains(t, deniedEmpty.ForLLM, "session not found",
+		"denial must read as a generic not-found, never a distinguishable forbidden")
+
+	// Negative: a genuinely different (non-empty) transcript session id —
+	// proves the gate does a real equality check, not just an empty-string
+	// special case.
+	foreignCtx := tools.WithTranscriptSessionID(context.Background(), "some-other-unrelated-session-id")
+	deniedForeign := wrapper.Execute(foreignCtx, map[string]any{
+		"action":     "kill",
+		"session_id": sessionID,
+	})
+	require.NotNil(t, deniedForeign)
+	assert.True(t, deniedForeign.IsError, "kill from a genuinely foreign transcript session id must also be denied")
+	assert.Contains(t, deniedForeign.ForLLM, "session not found")
+
+	// Positive lower bound: the legitimate owner, driven through the exact
+	// real agent-level wiring that started the session, succeeds — this is
+	// the path that regressed and is the actual point of this test.
+	ownerCtx := tools.WithTranscriptSessionID(context.Background(), ownerTranscriptSessionID)
+	okResult := wrapper.Execute(ownerCtx, map[string]any{
+		"action":     "kill",
+		"session_id": sessionID,
+	})
+	require.NotNil(t, okResult)
+	assert.False(t, okResult.IsError, "kill from the OWNING transcript session id must succeed, got ForLLM=%q", okResult.ForLLM)
 }

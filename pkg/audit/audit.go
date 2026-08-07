@@ -132,7 +132,7 @@ func IsValidEventName(e EventName) bool {
 		EventMCPServerRenamed,
 		EventGatewayStartupGuardDisabled,
 		EventGatewayConfigInvalidValue,
-		EventTurnAbortedSyntheticLoop,
+		EventTurnAbortedToolDenialBudget,
 		EventApproverFallback,
 		// Channel workspace-binding events (ADR-029).
 		// EventChannelRoutingDriftDrop is emitted when a workspace-bound instance's
@@ -410,9 +410,13 @@ func NewLogger(cfg LoggerConfig) (*Logger, error) {
 		maxSize:  cfg.MaxSizeBytes,
 		retDays:  cfg.RetentionDays,
 		redactor: redactor,
-		chainKey: resolveChainKey(cfg.HMACKey),
 		prevHMAC: GenesisSeed(),
 	}
+	chainKey, keyErr := resolveChainKey(cfg.HMACKey)
+	if keyErr != nil {
+		return nil, &LoggerConstructionError{Dir: cfg.Dir, Err: keyErr}
+	}
+	l.chainKey = chainKey
 
 	l.recoverCorruption()
 

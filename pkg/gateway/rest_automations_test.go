@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Tests for GET /api/v1/automations — the trigger→action display projection
 // over schedules (W3-AC UI reframe).
 

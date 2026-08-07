@@ -1,0 +1,86 @@
+type: object
+title: SessionMessageRevisionEntry
+description: >
+  SessionMessage `oneOf` variant, `kind: revision_entry` (ADR-053
+  §Contract Surface). Direction `engine` (M8 — engine/owner-emitted
+  control kinds use `engine`, not `child_to_parent`/`parent_to_child`).
+
+  SHAPE DECISION (flagged for review): every other SessionMessage variant
+  flattens its payload fields directly onto the envelope (matching the
+  `AgentCreateRequestMain`/`Subagent` precedent). This variant instead
+  nests the full `RevisionEntry` record under a `revision` key. Reason:
+  the envelope's own `generation` field (SessionMessage lineage — which
+  session generation emitted this message) and RevisionEntry's own
+  `generation` field (which PLAN generation this correction was recorded
+  against) are two different counters that the design's field table lists
+  under the identical name `generation` for this row. Flattening them
+  would either collide (two properties named `generation` is not
+  representable in JSON Schema) or silently conflate two distinct
+  concepts. Nesting resolves the collision and keeps `RevisionEntry` the
+  single canonical schema for a revision record wherever it appears
+  (SessionMessage transport now; any future direct persistence read
+  later) — consistent with DoD-11 anti-drift.
+required:
+  - message_id
+  - session_id
+  - direction
+  - kind
+  - depth
+  - created_at
+  - sender_identity
+  - untrusted_origin
+  - revision
+additionalProperties: false
+properties:
+  message_id:
+    type: string
+    minLength: 1
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WS"
+  session_id:
+    type: string
+    minLength: 1
+    description: The plan-owner session this revision was recorded under.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  parent_session_id:
+    type: string
+    nullable: true
+    example: null
+  generation:
+    type: integer
+    minimum: 0
+    description: >
+      SessionMessage lineage generation (the owner SESSION's generation —
+      NOT the plan's generation; see `revision.generation` for that).
+    example: 0
+  direction:
+    type: string
+    enum:
+      - engine
+    example: "engine"
+  kind:
+    type: string
+    enum:
+      - revision_entry
+    example: "revision_entry"
+  depth:
+    type: integer
+    minimum: 0
+    maximum: 5
+    example: 0
+  created_at:
+    type: string
+    format: date-time
+    example: "2026-07-22T10:00:00Z"
+  sender_identity:
+    type: string
+    minLength: 1
+    description: Owner agent ID that authored this correction.
+    example: "jim"
+  untrusted_origin:
+    type: boolean
+    description: >
+      False for an owner-authored revision entry (trusted, not child
+      free-text) — included for envelope uniformity.
+    example: false
+  revision:
+    $ref: './RevisionEntry.yaml'

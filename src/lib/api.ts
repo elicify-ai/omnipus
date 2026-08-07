@@ -22,7 +22,7 @@
 // (or err.isAuthError() / err.isNotFound() / err.isRateLimited() / etc)
 // rather than regex-matching err.message — see src/lib/api-error.ts.
 
-import { ApiError, isApiError as isApiErrorFn } from './api-error'
+import { ApiError, isApiError as isApiErrorFn, getErrorMessage } from './api-error'
 export { ApiError, isApiError, getErrorMessage } from './api-error'
 import { maybeDevToast } from './dev-toast'
 import { logError } from './telemetry'
@@ -114,6 +114,10 @@ import {
   // Wire-shape schemas used for raw-to-SPA transform validation:
   Message as WireMessageSchema,
   Session as WireSessionSchema,
+  // ADR-057 FR-091/FR-098 (U10, W16e): GET /sessions now returns one named
+  // SessionPage envelope ({sessions, next_cursor?, partial_errors?}) instead
+  // of the retired two-variant oneOf (bare array | {sessions, partial_errors}).
+  SessionPage as WireSessionPageSchema,
   // Newly promoted from inline openapi.yaml schemas:
   SkillTrustUpdateResponse as SkillTrustUpdateResponseSchema,
   PromptGuardUpdateResponse as PromptGuardUpdateResponseSchema,
@@ -137,8 +141,12 @@ import {
   // Per-task run history (ADR-050 / task-run-history-spec §4.1):
   TaskRun as TaskRunSchema,
   TokenUsageSummary as TokenUsageSummarySchema,
-  // Milestones (contract-first #8):
-  Milestone as MilestoneSchema,
+  // Planning & Goals (ADR-049, contract-first #8):
+  Plan as PlanSchema,
+  // ADR-052 Wave 2 — plan execute/restart 400 error body (contract-first #8):
+  PlanApproveError as PlanApproveErrorSchema,
+  EvidenceRecord as EvidenceRecordSchema,
+  JudgeVerdict as JudgeVerdictSchema,
   // Spec-3 max-parallel + orchestrator (contract-first #8):
   PerformanceSettings as PerformanceSettingsSchema,
   // Spec-6 U5 — re-auth + Integrations + transcribe (contract-first #8):
@@ -160,6 +168,8 @@ import {
   SlashCommand as SlashCommandSchema,
   // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
   MemorySettings as MemorySettingsSchema,
+  // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
+  TokenBudgetStatus as TokenBudgetStatusSchema,
   // M11 per-(agent, workspace) email mailbox account (contract-first #8):
   Mailbox as MailboxSchema,
   MailboxListResponse as MailboxListResponseSchema,
@@ -368,6 +378,8 @@ import type {
   WorkspaceInstructionsResponse,
   WorkspaceInstructionsRequest,
   TokenUsageSummary,
+  // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
+  TokenBudgetStatus,
   // Unified task types (Sprint 2) — imported once here (Task was already imported above):
   TaskCreateRequest,
   TaskUpdateRequest,
@@ -378,11 +390,18 @@ import type {
   RunNowRequest,
   // #264 Notifications (contract-first #8):
   NotificationList,
-  // Milestones:
-  Milestone,
-  MilestoneCreateRequest,
-  MilestoneUpdateRequest,
-  MilestoneListResponse,
+  // Planning & Goals (ADR-049, contract-first #8) — Plan container, task
+  // acceptance criteria, evidence, and judge verdicts (replaces Milestones):
+  Plan,
+  PlanCreateRequest,
+  PlanUpdateRequest,
+  PlanListResponse,
+  // ADR-052 Wave 2 — plan execute/restart 400 error body (contract-first #8):
+  PlanApproveError,
+  AcceptanceCriterion,
+  EvidenceRecord,
+  JudgeVerdict,
+  CriterionVerdict,
   // Spec-3 max-parallel + orchestrator (contract-first #8):
   PerformanceSettings,
   PerformanceSettingsUpdate,
@@ -539,18 +558,30 @@ export type {
   WorkspaceInstructionsResponse,
   WorkspaceInstructionsRequest,
   TokenUsageSummary,
+  // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
+  TokenBudgetStatus,
   // Unified task types (Sprint 2) — Task already exported above, add new ones:
   TaskCreateRequest,
   TaskUpdateRequest,
   Todo,
   TaskTrigger,
-  // Per-task run history (ADR-050 / task-run-history-spec §4.1):
+  // Planning & Goals (ADR-049) — Plan container, task acceptance criteria,
+  // evidence, and judge verdicts (replaces Milestones — the Milestone schema
+  // family was deleted from contracts/ on this branch; do not reintroduce):
+  Plan,
+  PlanCreateRequest,
+  PlanUpdateRequest,
+  PlanListResponse,
+  // ADR-052 Wave 2 — plan execute/restart 400 error body:
+  PlanApproveError,
+  AcceptanceCriterion,
+  EvidenceRecord,
+  JudgeVerdict,
+  CriterionVerdict,
+  // Per-task run history (ADR-050 / task-run-history-spec §4.1) — additive,
+  // unrelated to the Plan/Milestone replacement above:
   TaskRun,
   RunNowRequest,
-  Milestone,
-  MilestoneCreateRequest,
-  MilestoneUpdateRequest,
-  MilestoneListResponse,
   // Spec-6 U5:
   ReAuthResponse,
   IntegrationProvider,
@@ -1009,7 +1040,13 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   id: string
   agent_id: string
   title: string
-  type: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat'
+  // 'verifier' (ADR-052 FR-036) tags a verifier-role adjudication session
+  // (the Judge). Hidden from GET /sessions by default; fetchSessions()'s
+  // includeVerifier opt-in surfaces it (UsageScreen's "By session" tab only).
+  // 'delegate' (ADR-057 FR-008/W2c) tags a subordinate session minted by a
+  // delegation — it always carries a non-empty parent_session_id below.
+  // Like 'scheduled'/'heartbeat'/'verifier' it is server-minted only.
+  type: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier' | 'delegate'
   status?: 'active' | 'archived' | 'interrupted'
   task_id?: string
   workspace_id?: string
@@ -1031,13 +1068,27 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // When true the SPA pins the session at the top of the panel and hides its
   // delete (trash) button; DELETE /sessions/{id} returns 409 server-side.
   protected?: boolean
+  // ADR-057 FR-008/FR-091. The direct parent's session id — present only on
+  // a subordinate ('delegate') session. Absent (never empty-string) on a
+  // root session. A session whose parent no longer resolves is surfaced by
+  // GET /sessions as a ROOT rather than being silently dropped (BDD-106) —
+  // so a session with parent_session_id set but not findable in a locally
+  // held tree should be treated as "not yet expanded into", never as an
+  // error.
+  parent_session_id?: string
+  // ADR-057 FR-091/FR-097/FR-104. Count of this session's DIRECT children,
+  // resolved server-side from the in-memory parent index in O(1) per row.
+  // Populated on GET /sessions (default roots-only listing, flat=true
+  // listing, and parent_session_id-filtered listing); zero for a session
+  // with no children. Not necessarily present on GET /sessions/{id} detail.
+  child_count?: number
 }
 
 interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that renames nested stats fields before public Session type; the wire shape is validated via WireSessionSchema, this type only models the pre-transform intermediate
   id: string
   agent_id: string
   title: string
-  type?: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat'
+  type?: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier' | 'delegate'
   status?: 'active' | 'archived' | 'interrupted'
   task_id?: string
   workspace_id?: string
@@ -1047,6 +1098,8 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   agent_ids?: string[]
   active_agent_id?: string
   protected?: boolean
+  parent_session_id?: string
+  child_count?: number
   stats?: {
     tokens_in: number
     tokens_out: number
@@ -1080,6 +1133,13 @@ function rawToSession(raw: RawSession): Session {
     active_agent_id: raw.active_agent_id,
     // Computed server-side: true while the heartbeat member is enabled (FR-028).
     protected: raw.protected,
+    // ADR-057 FR-008/FR-091/FR-097: passed through verbatim — a root session
+    // simply never has parent_session_id set (never empty-string per the
+    // contract, so no coercion needed), and child_count defaults via the
+    // consuming code's own `?? 0`, not here, so "absent" (detail endpoint)
+    // and "explicitly zero" (list endpoint) stay distinguishable.
+    parent_session_id: raw.parent_session_id,
+    child_count: raw.child_count,
   }
 }
 
@@ -1119,6 +1179,20 @@ interface MessageBase { // not-wire-format
    * text — just don't show anything when the field is empty).
    */
   model?: string
+  /**
+   * ADR-049 D2/SD-A14/SD-C10: classification carried through from the wire
+   * `Message.type` (generated `openapi-types.ts`) for the one variant SPA
+   * rendering cares about — `'judge_verdict'` — so the chat store/renderers
+   * can recognise a persisted judge-verdict transcript entry (cold-load or
+   * WS replay) and route it through `shouldRenderJudgeVerdictInThread`
+   * (toolVisibility.ts) instead of the normal role-based rows. Other wire
+   * `type` values ('message'/'compaction'/'system'/'tool_call'/
+   * 'turn_canceled') are not modeled here — this SPA-internal `Message`
+   * union already has its own, richer per-role shape for those.
+   */
+  type?: 'judge_verdict'
+  /** The verdict payload when `type === 'judge_verdict'` (wire `Message.verdict`, same shape as the live `JudgeVerdictFrame` push minus the `type`/`session_id` discriminator fields). */
+  verdict?: JudgeVerdict
 }
 
 export interface UserMessage extends MessageBase { // not-wire-format: SPA-internal user message. Status 'error' means the WS send failed; Retry button re-sends the content.
@@ -1361,31 +1435,229 @@ function rawToMessage(raw: RawMessage): Message {
   } satisfies AssistantMessage
 }
 
-export async function fetchSessions(agentId?: string, type?: Session['type']): Promise<Session[]> {
+// The 3rd-arg opts object is opt-in and additive only — every existing
+// zero/one/two-arg call site (Sidebar, SearchModal) is byte-for-byte
+// unaffected and keeps excluding verifier sessions (and getting the default
+// roots-only page) by construction, since `opts` is simply undefined.
+//
+// ADR-057 US-19/FR-091/FR-092/FR-104 (W16d/W16h): grew four more fields —
+//   - parentSessionId: GET /sessions?parent_session_id=<id> — that node's
+//     DIRECT children only, a page at a time, instead of roots. Mutually
+//     exclusive with `flat` (server 400s if both are supplied).
+//   - flat: GET /sessions?flat=true — every session (roots AND
+//     subordinates) as one flat paged list, child_count still populated.
+//     UsageScreen's "By session" tab passes this so delegated children's
+//     spend stays auditable (FR-104) instead of silently disappearing
+//     under the default roots-only listing.
+//   - limit / offset: ADR-057 FR-092/FR-098 paging. Omitted uses the
+//     server's default page size / first page.
+// includeVerifier maps 1:1 to the generated `include_verifier` query param
+// (contracts/openapi.yaml `listSessions`, ADR-052 FR-036): omitted/false
+// excludes type:"verifier" sessions from the response; true opts them in.
+// UsageScreen's "By session" tab is the one caller that passes true, so
+// verifier LLM spend is auditable per-session there (SC-014), not just in
+// the unfiltered token-stats aggregate.
+export interface FetchSessionsOptions { // not-wire-format: client-side call-options bag for fetchSessionPage/fetchSessions; each field becomes an individual query-string param on the request, never a serialized JSON object sent or received over the wire
+  includeVerifier?: boolean
+  /** ADR-057 FR-091/US-19: direct children of this session id, paged. */
+  parentSessionId?: string
+  /** ADR-057 FR-104: every session (roots + subordinates), flat, paged. */
+  flat?: boolean
+  /** ADR-057 FR-092: page size. Server default applies when omitted. */
+  limit?: number
+  /** ADR-057 FR-098: offset into the recency-ordered sequence, or a prior next_cursor's value. */
+  offset?: number
+}
+
+// ADR-057 FR-091/FR-098 (W16d): the paged envelope GET /sessions now always
+// returns — SPA-shaped (Session[], not RawSession[]) so callers never see
+// the wire's nested `stats`. This is the seam U24 consumes to drive the
+// sidebar/search session tree's "load next page" and "expand this node"
+// requests (cross-unit request, spec line ~1033) — fetchSessions() below
+// remains the simple array-returning convenience wrapper for callers that
+// don't need cursoring (Sidebar, SearchModal, UsageScreen all use that).
+export interface SessionListPage { // not-wire-format: SPA-internal paged envelope produced by fetchSessionPage() from the wire SessionPage; sessions is post-mapped Session[] (not RawSession[]) and fields are camelCase (nextCursor/partialErrors) vs the wire's next_cursor/partial_errors
+  sessions: Session[]
+  /** Present unless this is the last page. Opaque — pass back as `offset`. */
+  nextCursor?: string
+  /** Sanitized per-store failure tokens from a partial legacy-store merge (FR-098). */
+  partialErrors?: string[]
+}
+
+export async function fetchSessionPage(
+  agentId?: string,
+  type?: Session['type'],
+  opts?: FetchSessionsOptions,
+): Promise<SessionListPage> {
   const params: Record<string, string> = {}
   if (agentId) params.agent_id = agentId
   if (type) params.type = type
+  if (opts?.includeVerifier) params.include_verifier = 'true'
+  if (opts?.parentSessionId) params.parent_session_id = opts.parentSessionId
+  if (opts?.flat) params.flat = 'true'
+  if (opts?.limit !== undefined) params.limit = String(opts.limit)
+  if (opts?.offset !== undefined) params.offset = String(opts.offset)
   const qs = Object.keys(params).length > 0 ? '?' + new URLSearchParams(params).toString() : ''
-  // The OpenAPI contract for GET /sessions describes a oneOf response: a
-  // plain JSON array when there are no partial errors, OR
-  // {sessions: [...], partial_errors: [...]} when one or more agents failed
-  // to list. The previous code validated only the array variant — when
-  // partial_errors fired (e.g. a session with a missing .context entry),
-  // Zod rejected the whole response and the session panel showed empty.
-  // Accept both shapes so legitimate sessions still render alongside any
-  // partial-error info.
-  const unionSchema = z.union([
-    z.array(WireSessionSchema),
-    z.object({
-      sessions: z.array(WireSessionSchema),
-      partial_errors: z.array(z.string()).optional(),
-    }),
-  ])
-  const resp = await request<unknown>(`/sessions${qs}`, undefined, unionSchema as ZodType<unknown>)
-  const raw: RawSession[] = Array.isArray(resp)
-    ? (resp as RawSession[])
-    : ((resp as { sessions: RawSession[] }).sessions ?? [])
-  return raw.map(rawToSession)
+  // ADR-057 FR-091/grill2 M2-10: the historic two-variant oneOf (a bare
+  // Session array, or {sessions, partial_errors}) is retired — the wire now
+  // always returns one named SessionPage envelope
+  // ({sessions, next_cursor?, partial_errors?}), validated against U10's
+  // generated schema rather than a hand-rolled union.
+  const resp = await request<{ sessions: RawSession[]; next_cursor?: string; partial_errors?: string[] }>(
+    `/sessions${qs}`,
+    undefined,
+    WireSessionPageSchema as ZodType<{ sessions: RawSession[]; next_cursor?: string; partial_errors?: string[] }>,
+  )
+  // A non-empty `partial_errors` means one or more agents failed to list
+  // their sessions — `resp.sessions` is a real but INCOMPLETE enumeration,
+  // not a full one. Silently returning it made a partial listing read as
+  // complete everywhere fetchSessions is consulted (worst on UsageScreen's
+  // spend-audit tab, which sums sessions to report cost/usage). Surface it
+  // the same way a schema mismatch does (console.warn + dev toast) rather
+  // than dropping it on the floor.
+  if (resp.partial_errors && resp.partial_errors.length > 0) {
+    console.warn('[api] GET /sessions returned partial_errors — the list is incomplete:', resp.partial_errors)
+    void maybeDevToast(
+      `[api] Session list incomplete: ${resp.partial_errors.length} agent(s) failed to enumerate`,
+      'GET:/sessions:partial_errors',
+    )
+  }
+  return {
+    sessions: resp.sessions.map(rawToSession),
+    nextCursor: resp.next_cursor,
+    partialErrors: resp.partial_errors,
+  }
+}
+
+// ADR-057 FR-091/FR-098 (post-review fix): GET /sessions is paginated
+// server-side (default limit 50, pkg/gateway/rest.go's
+// u18DefaultSessionPageLimit) — a single fetchSessionPage() call is no longer
+// "every session". fetchSessions() is the "give me the COMPLETE set"
+// convenience wrapper its three production callers (Sidebar's workspace
+// accordion, SearchModal's cross-workspace search, UsageScreen's spend
+// audit) have always relied on since before pagination existed — none of
+// them implement their own paging loop, and two of them (SearchModal's find
+// results, UsageScreen's cost totals) actively regress into silent data loss
+// if handed only page 1. So this wrapper exhausts every page via
+// `next_cursor` (a numeric offset, re-sent as the next `offset`) before
+// returning, rather than reproducing the truncation one layer up.
+// fetchSessionPage() remains the single-page primitive for callers that DO
+// want to control paging themselves — SessionTree.tsx's useSessionForest
+// fetches one node's children a page at a time by design (BDD-103).
+export async function fetchSessions(
+  agentId?: string,
+  type?: Session['type'],
+  opts?: FetchSessionsOptions,
+): Promise<Session[]> {
+  const sessions: Session[] = []
+  let offset = opts?.offset
+  // Safety valve, not a normal exit: the server's own default page size is
+  // 50, so 1000 pages is 50,000 sessions — far past any real install. If a
+  // buggy/malicious server never stops returning next_cursor, this stops the
+  // tab from fetch-looping forever instead of quietly capping the result
+  // (callers must not mistake "we gave up" for "here is the complete set").
+  const MAX_PAGES = 1000
+  for (let i = 0; i < MAX_PAGES; i++) {
+    const page = await fetchSessionPage(agentId, type, { ...opts, offset })
+    sessions.push(...page.sessions)
+    if (!page.nextCursor) return sessions
+    offset = Number(page.nextCursor)
+  }
+  console.warn(`[api] fetchSessions: aborted after ${MAX_PAGES} pages — server kept returning next_cursor; result is INCOMPLETE`)
+  void maybeDevToast(
+    `[api] Session list exceeded ${MAX_PAGES} pages — showing a partial set`,
+    'GET:/sessions:max-pages',
+  )
+  return sessions
+}
+
+// ── Session tree assembly (ADR-057 US-19/FR-091/FR-097, W16d) ─────────────────
+//
+// GET /sessions never returns a whole forest — it pages over roots (or one
+// node's direct children via parentSessionId, or a flat list under
+// flat=true). The client assembles the tree incrementally as the user
+// expands nodes; these are the pure, exported primitives U24 (sidebar tree,
+// search tree — cross-unit request, spec line ~1033) builds that UI on top
+// of. All three are immutable (return a new tree) so they drop directly
+// into React/Zustand state without extra cloning at the call site.
+
+export interface SessionTreeNode { // not-wire-format: SPA-internal tree node assembled client-side from paged GET /sessions responses; childrenLoaded is a UI-only fetch-state flag with no wire counterpart, never sent to or received from the gateway
+  session: Session
+  children: SessionTreeNode[]
+  /**
+   * True once this node's children have actually been fetched (vs merely
+   * known about via child_count). A leaf (child_count === 0) starts
+   * "loaded" with an empty array — there is nothing to fetch.
+   */
+  childrenLoaded: boolean
+}
+
+/** Wraps a flat page of sessions (roots, or any page) as top-level tree nodes with no children fetched yet. */
+export function buildSessionTree(sessions: Session[]): SessionTreeNode[] {
+  return sessions.map((session) => ({
+    session,
+    children: [],
+    childrenLoaded: (session.child_count ?? 0) === 0,
+  }))
+}
+
+/**
+ * Finds the node for `sessionId` anywhere in the tree (any depth), or
+ * undefined if it is not present — e.g. a session known only by id from a
+ * search hit before its ancestor chain has been fetched.
+ */
+export function findSessionNode(tree: SessionTreeNode[], sessionId: string): SessionTreeNode | undefined {
+  for (const node of tree) {
+    if (node.session.id === sessionId) return node
+    const found = findSessionNode(node.children, sessionId)
+    if (found) return found
+  }
+  return undefined
+}
+
+/**
+ * Returns a NEW tree with `children` attached under the node whose session
+ * id is `parentId`, at whatever depth it is found (US-19 AS-3: a depth-3
+ * tree expands one level at a time, each expansion touching only that
+ * node). If `parentId` is not present anywhere in the tree, the tree is
+ * returned unchanged — callers should have inserted that node (e.g. via
+ * buildSessionTree for a freshly-expanded root, or insertOrphanSessionAsRoot
+ * for BDD-106's orphan case) before attaching its children.
+ */
+export function attachSessionChildren(
+  tree: SessionTreeNode[],
+  parentId: string,
+  children: Session[],
+): SessionTreeNode[] {
+  return tree.map((node) => {
+    if (node.session.id === parentId) {
+      return { ...node, children: buildSessionTree(children), childrenLoaded: true }
+    }
+    if (node.children.length > 0) {
+      const updatedChildren = attachSessionChildren(node.children, parentId, children)
+      if (updatedChildren !== node.children) {
+        return { ...node, children: updatedChildren }
+      }
+    }
+    return node
+  })
+}
+
+/**
+ * BDD-106: a session whose parent_session_id names a session that no longer
+ * resolves is shown as a root-level row rather than silently dropped — "a
+ * session that exists and is not reachable in the tree is the R-7 shape
+ * again". The default roots-only listing already satisfies this for the
+ * common case server-side (FR-091 returns such a session AS a root, so it
+ * simply appears in the normal root page). This helper covers the narrower
+ * client-side case: a session encountered as somebody's declared child (or
+ * a search hit) whose own id is not yet present anywhere in the local tree
+ * — it is appended as a new root rather than discarded. A no-op if the
+ * session is already present anywhere in the tree.
+ */
+export function insertOrphanSessionAsRoot(tree: SessionTreeNode[], orphan: Session): SessionTreeNode[] {
+  if (findSessionNode(tree, orphan.id)) return tree
+  return [...tree, ...buildSessionTree([orphan])]
 }
 
 // ── Per-item message-list resilience (Issue 3 / library-uat HIGH) ────────────
@@ -1613,7 +1885,9 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
     // endpoint since Wave 3. This field is still populated on read for
     // backward compatibility but must NOT be sent on updateConfig calls.
     prompt_injection_level?: 'off' | 'low' | 'medium' | 'high'
-    daily_cost_cap?: number
+    // ADR-053 D12 retired the SEC-26 USD cap; the app-level spend brake is
+    // now the token budget (set via /api/v1/settings/token-budget). The
+    // daily_cost_cap field is gone from both the wire types and this Config.
     exec_timeout_seconds?: number
     max_background_seconds?: number
     enable_deny_patterns?: boolean
@@ -1669,7 +1943,7 @@ function describeCoercedValue(value: unknown): string {
 // non-DEV (production) builds now get a rate-limited logError() telemetry
 // record instead — mirroring _recordApiSchemaError's pattern above — so a
 // wrong-shaped value silently substituted for a security-relevant field
-// (e.g. security.daily_cost_cap, security.rate_limits.*) is never a fully
+// (e.g. security.rate_limits.*) is never a fully
 // silent event in a production build. Previously this counter+console.warn
 // pair was the ONLY signal, and the console.warn was DEV-only, so a
 // production coercion of a guardrail field produced no observable trace
@@ -1782,7 +2056,7 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
       // corrupted-but-truthy value would silently NaN out and strip the
       // guardrail on the next PUT rather than failing loudly. Runtime-checked
       // and dropped to undefined (== "not configured") instead.
-      daily_cost_cap: castOptionalNumber(security.daily_cost_cap, 'security.daily_cost_cap'),
+      // ADR-053 D12: daily_cost_cap is gone — token budget is the sole brake.
       exec_timeout_seconds: castOptionalNumber(security.exec_timeout_seconds, 'security.exec_timeout_seconds'),
       max_background_seconds: castOptionalNumber(security.max_background_seconds, 'security.max_background_seconds'),
       enable_deny_patterns: security.enable_deny_patterns as boolean | undefined,
@@ -1848,7 +2122,9 @@ function frontendToRawConfig(data: Partial<Config>): Record<string, unknown> {
     if (data.security.policy_mode !== undefined) sec.policy_mode = data.security.policy_mode
     if (data.security.exec_approval !== undefined) sec.exec_approval = data.security.exec_approval
     // prompt_injection_level intentionally omitted — owned by PUT /security/prompt-guard.
-    if (data.security.daily_cost_cap !== undefined) sec.daily_cost_cap = data.security.daily_cost_cap
+    // daily_cost_cap intentionally omitted — ADR-053 D12 retired the SEC-26
+    // USD cap; the app-level spend brake is the token budget, set via
+    // PUT /api/v1/settings/token-budget.
     if (data.security.exec_timeout_seconds !== undefined) sec.exec_timeout_seconds = data.security.exec_timeout_seconds
     if (data.security.max_background_seconds !== undefined) sec.max_background_seconds = data.security.max_background_seconds
     if (data.security.enable_deny_patterns !== undefined) sec.enable_deny_patterns = data.security.enable_deny_patterns
@@ -2120,12 +2396,16 @@ export function rotateGatewayToken(): Promise<{ token: string }> {
 //   GET    /tasks/{id}/subtasks → Task[]
 //   PUT    /tasks/{id}/todos    → Task     (replace checklist atomically)
 //   PUT    /tasks/{id}/dependencies → Task (replace blocked_by atomically)
+//   POST   /tasks/{id}/stop     → Task     (Stop/Clear — `stopTask`, ADR-052)
+//   POST   /tasks/{id}/restart  → Task | 409 (▶ Play a Stopped task — `restartTask`, ADR-052 FR-026)
 //
-// "Start" semantics: there is no /start endpoint. Set status=in_progress via
-// PATCH to start a task (drag or Run button).
+// "Start"/"Run" semantics: there is no /start or /run endpoint for a
+// standalone task (`run_task` on the wire is an AGENT tool, not a REST
+// route — ADR-052 G4). Set status=in_progress via PATCH to start/run one
+// (drag, the board's Run button, or `runTask` below).
 
 export const tasksQueryKeys = {
-  list: (params?: { workspace_id?: string; status?: string; agent_id?: string; milestone_id?: string; surface?: string }) => {
+  list: (params?: { workspace_id?: string; status?: string; agent_id?: string; plan_id?: string; surface?: string }) => {
     const cleaned = params
       ? Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined))
       : {}
@@ -2143,19 +2423,19 @@ export const tasksQueryKeys = {
 // during the transition — it redirects to the same unified key space.
 export const boardTasksQueryKeys = tasksQueryKeys
 
-export function fetchTasks(params?: { workspace_id?: string; status?: string; agent_id?: string; milestone_id?: string; surface?: string }): Promise<Task[]> {
+export function fetchTasks(params?: { workspace_id?: string; status?: string; agent_id?: string; plan_id?: string; surface?: string }): Promise<Task[]> {
   const search = new URLSearchParams()
   if (params?.workspace_id) search.set('workspace_id', params.workspace_id)
   if (params?.status) search.set('status', params.status)
   if (params?.agent_id) search.set('agent_id', params.agent_id)
-  if (params?.milestone_id) search.set('milestone_id', params.milestone_id)
+  if (params?.plan_id) search.set('plan_id', params.plan_id)
   if (params?.surface) search.set('surface', params.surface)
   const qs = search.toString() ? '?' + search.toString() : ''
   return request<Task[]>(`/tasks${qs}`, undefined, z.array(TaskSchema) as ZodType<Task[]>)
 }
 
 // Keep fetchBoardTasks as an alias so existing call-sites compile during transition.
-export function fetchBoardTasks(params?: { workspace_id?: string; status?: string; agent_id?: string; milestone_id?: string }): Promise<Task[]> {
+export function fetchBoardTasks(params?: { workspace_id?: string; status?: string; agent_id?: string; plan_id?: string }): Promise<Task[]> {
   return fetchTasks(params)
 }
 
@@ -2185,6 +2465,233 @@ export function setTaskDependencies(taskId: string, blockedBy: string[]): Promis
 
 export function deleteTask(id: string): Promise<void> {
   return request<void>(`/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+/**
+ * Stop/Clear (D8) a task's own goal loop — POST /tasks/{id}/stop (ADR-049 —
+ * "clear affordances at every level", distinct from `stopPlan`, which stops
+ * a Plan's loop; ADR-052 FR-010/FR-022/US-7 — `RequestCancelForSession`
+ * reaches the worker turn + its subagents + its shells, the same chat
+ * cancel cascade `handleTaskStop` already uses).
+ */
+export function stopTask(id: string): Promise<Task> {
+  return request<Task>(`/tasks/${encodeURIComponent(id)}/stop`, { method: 'POST' }, TaskSchema as ZodType<Task>)
+}
+
+/** @deprecated Use `stopTask` — kept as an alias for callers not yet swept (e.g. `TaskDetailPanel.tsx`). Same signature/behavior. */
+export const stopTaskGoalLoop = stopTask
+
+/**
+ * Restart (▶ Play) a standalone task previously Stopped by the user — POST
+ * /tasks/{id}/restart (ADR-052 FR-026/US-9/US-10). Resets `attempt_count` to
+ * 0, clears `cancel_reason`, and transitions the task to `next` so the goal
+ * loop picks it up again and drives the FULL attempt loop (run -> judge ->
+ * retry to the limit — same as `run_task` / a plan member, A3).
+ *
+ * A `409` means "not restartable": the task belongs to a plan (an in-plan
+ * member restarts only via its plan — restart the plan instead, `restartPlan`),
+ * or the task isn't `failed`, or its `cancel_reason` isn't `stopped_by_user`.
+ * Rewritten into a specific, actionable message here rather than the generic
+ * "conflicts with current state" default.
+ */
+export async function restartTask(id: string): Promise<Task> {
+  try {
+    return await request<Task>(`/tasks/${encodeURIComponent(id)}/restart`, { method: 'POST' }, TaskSchema as ZodType<Task>)
+  } catch (err) {
+    throw friendlyConflictError(
+      err,
+      "This task is not restartable — it belongs to a plan (restart the plan instead), or wasn't Stopped by a user.",
+    )
+  }
+}
+
+/**
+ * Run a standalone task now (▶ Play on an idle task — ADR-052 FR-019/G4).
+ *
+ * There is NO dedicated REST route for this: `run_task` on the wire is an
+ * AGENT tool only (verified against the generated contract — no
+ * `/tasks/{id}/run` operation exists in `src/lib/api/generated/openapi-types.ts`).
+ * The UI's "run now" path is the SAME one the board's drag-to-`in_progress`
+ * move and `CreateTaskSlideOver`'s "Create & Run" already use ("Start"
+ * semantics, see the Tasks section header above): PATCH the task to
+ * `status: 'in_progress'`. The engine's goal loop then drives the task
+ * through the FULL attempt loop (run -> judge -> retry to the limit),
+ * identical to `run_task` / a plan member (A3) — this is not a lesser,
+ * single-shot run.
+ *
+ * The engine — not this call — rejects an in-plan member (G4: in-plan tasks
+ * start only via their plan); a `409` from that case is rewritten into a
+ * friendlier "not runnable" message rather than the generic conflict default.
+ */
+export async function runTask(id: string): Promise<Task> {
+  try {
+    return await updateTask(id, { status: 'in_progress' })
+  } catch (err) {
+    throw friendlyConflictError(
+      err,
+      "This task can't be run right now — it may already be running, or be an in-plan member (its plan drives its start, not a standalone run).",
+    )
+  }
+}
+
+// ── Board drag-to-column move: 409 message mapping (UAT round-2 N1/N2) ─────
+//
+// The board's drag-to-column move (BoardView.tsx -> WorkspaceTasksTab.tsx's
+// moveMutation) PATCHes `status` straight through `updateTask` above — it
+// does NOT go through `runTask`'s `friendlyConflictError` wrapper, so a plan
+// member dragged into `in_progress` hit the generic
+// `ApiError.fromResponse` 409 default ("This conflicts with the current
+// state. Please refresh and try again.") verbatim. That default is actively
+// WRONG for this endpoint's most common 409 cause (see below) — refreshing
+// can never fix it — so this is a dedicated mapper, not a reuse of
+// `friendlyConflictError` (whose single hardcoded string-per-endpoint
+// shape can't express "different message per plan state").
+//
+// pkg/gateway/rest_tasks.go's handleTaskPatch returns 409 from exactly two
+// call sites (verified by reading the handler, not assumed) when the PATCH
+// sets `status: in_progress` and StartTaskNow then fails:
+//   1. `agent.ErrDispatchCapReached` — the global dispatch semaphore is
+//      full. Genuinely transient congestion; retrying shortly can help.
+//   2. `agent.ErrPlanNotExecuting` / `agent.ErrPlanStateUnresolvable` — the
+//      S1 plan-state gate (pkg/agent/task_executor.go's
+//      `requirePlanExecuting`, commit 5d77f26a) refusing dispatch because
+//      the task's parent plan isn't `approved`/`running`-and-unpaused.
+//      Refreshing NEVER helps here — the plan itself has to change state
+//      (Execute a draft, restart an eligible stopped plan, or re-enable a
+//      disabled owner agent to clear a pause).
+// `pkg/task/store.go`'s plain `Update` (what this PATCH ultimately calls)
+// has no optimistic-concurrency/version check at all — illegal lifecycle
+// transitions there resolve to `task.ErrValidation` (400 Bad Request via
+// `isTaskValidationErr`), never 409 — so there is currently no THIRD,
+// generic-concurrency 409 cause on this endpoint to confuse with the above
+// two. (`src/lib/queryClient.ts`'s retry-exclusion comment already
+// documents this same overload for the RETRY question — that finding
+// stands; nothing here changes retry behavior, only display text, and both
+// causes are read from the same plain-text `{"error": string}` body that
+// comment says has "no machine-readable field distinguishing the two
+// cases" — true for a structured/typed field, but the two sentinel error
+// strings ARE textually distinguishable, which is all a display mapper
+// needs.)
+//
+// Exported (not `friendlyConflictError`-private) because BOTH the toast
+// (WorkspaceTasksTab's moveMutation.onError) and the screen-reader live
+// region (BoardView's own post-drop announcement) need the IDENTICAL text —
+// a screen-reader user must never hear a different reason than the sighted
+// toast shows for the same rejected drop.
+export function describeTaskMoveConflict(err: unknown, plans: Plan[]): string | undefined {
+  if (!isApiErrorFn(err) || err.status !== 409 || !err.body) return undefined
+
+  let raw = err.body
+  try {
+    const parsed = JSON.parse(err.body) as { error?: unknown; message?: unknown }
+    if (typeof parsed.error === 'string') raw = parsed.error
+    else if (typeof parsed.message === 'string') raw = parsed.message
+  } catch {
+    // Not JSON (H3-FE already guards the oversized/binary cases upstream in
+    // ApiError.fromResponse) — fall back to the raw text as-is.
+  }
+
+  if (raw.includes('global dispatch cap reached')) {
+    return 'Too many tasks are starting at once — the server is at its dispatch limit. Try moving this task again in a moment.'
+  }
+
+  // Mirrors task_executor.go's ErrPlanNotExecuting wrap exactly:
+  //   "...parent plan is not in a dispatchable state (approved/running, unpaused): plan "<id>" is <state> (paused_reason="<reason>")"
+  const gateMatch = raw.match(
+    /parent plan is not in a dispatchable state.*?: plan "([^"]*)" is (\w+) \(paused_reason="([^"]*)"\)/,
+  )
+  if (gateMatch) {
+    const [, planId, state, pausedReason] = gateMatch
+    // PermitsMemberDispatch (pkg/plan/plan.go) checks PausedReason FIRST,
+    // before State — a paused plan is refused regardless of state, so this
+    // takes precedence here too.
+    if (pausedReason) {
+      if (pausedReason === 'owner_disabled') {
+        return "This plan is paused because its owner agent is disabled — re-enable the agent to resume this plan's tasks."
+      }
+      return `This plan is paused (${pausedReason}) — resolve that before this task can run.`
+    }
+    switch (state) {
+      case 'draft':
+        return 'This plan is still a draft — Execute it (from the Plans band above) before this task can run.'
+      case 'done':
+        return "This plan has already finished — its tasks can't be started this way."
+      case 'failed': {
+        // Cross-reference the already-loaded plans list (BoardView already
+        // receives it) for `failed_reason` — the gate's own message doesn't
+        // carry it, and it's the difference between "Restart the plan" (a
+        // real, offered action for `stopped_by_user`) and "not restartable"
+        // (every other failure reason — PlanActionButton offers no restart
+        // for those either, US-9 Acceptance 2).
+        const plan = plans.find((p) => p.id === planId)
+        return plan?.failed_reason === 'stopped_by_user'
+          ? 'This plan was stopped — Restart it (from the Plans band above) before this task can run.'
+          : "This plan has failed and can't be restarted — its tasks can no longer run."
+      }
+      default:
+        // A future 6th plan state the client doesn't know about yet — fall
+        // through to the generic-but-honest 409 fallback below rather than
+        // guessing at a state-specific message we can't stand behind.
+        return undefined
+    }
+  }
+
+  // Mirrors ErrPlanStateUnresolvable's wrap: "...parent plan's state could not be verified: plan "<id>": <err>"
+  if (raw.includes("parent plan's state could not be verified")) {
+    return "This plan's current state couldn't be verified — try moving this task again in a moment."
+  }
+
+  return undefined
+}
+
+/**
+ * The single message both the move-conflict toast (WorkspaceTasksTab) and
+ * the drag-and-drop live-region announcement (BoardView) render for a failed
+ * board move — `describeTaskMoveConflict`'s specific mapping when it
+ * recognizes the 409 body, else an honest, non-committal fallback that never
+ * repeats `ApiError`'s generic 409 default ("refresh and try again") since
+ * that claim is exactly what's false for the plan-gate case above. Non-409
+ * errors (500s, network failures, etc.) fall through to the ordinary
+ * `getErrorMessage` priority (ApiError.userMessage > Error.message >
+ * fallback) unchanged.
+ */
+export function taskMoveErrorMessage(err: unknown, plans: Plan[]): string {
+  const specific = describeTaskMoveConflict(err, plans)
+  if (specific) return specific
+  if (isApiErrorFn(err) && err.status === 409) {
+    return 'This move was rejected by the server — the task or its plan may be in a state that does not allow it right now.'
+  }
+  return getErrorMessage(err, 'Failed to move task')
+}
+
+// ── Task evidence & judge verdicts (ADR-049 D2, Planning & Goals) ───────────
+//
+// Read-only surfaces backing the acceptance-criteria editor's evidence viewer
+// and per-attempt verdict list. See contracts/components/schemas/EvidenceRecord.yaml
+// / JudgeVerdict.yaml (contract rows C10/C11).
+
+export const taskEvidenceQueryKeys = {
+  list: (taskId: string) => ['tasks', taskId, 'evidence'] as const,
+}
+
+export const taskVerdictsQueryKeys = {
+  list: (taskId: string) => ['tasks', taskId, 'verdicts'] as const,
+}
+
+export function fetchTaskEvidence(taskId: string): Promise<EvidenceRecord[]> {
+  return request<EvidenceRecord[]>(
+    `/tasks/${encodeURIComponent(taskId)}/evidence`,
+    undefined,
+    z.array(EvidenceRecordSchema) as ZodType<EvidenceRecord[]>,
+  )
+}
+
+export function fetchTaskVerdicts(taskId: string): Promise<JudgeVerdict[]> {
+  return request<JudgeVerdict[]>(
+    `/tasks/${encodeURIComponent(taskId)}/verdicts`,
+    undefined,
+    z.array(JudgeVerdictSchema) as ZodType<JudgeVerdict[]>,
+  )
 }
 
 // ── Per-task run history (ADR-050 / task-run-history-spec §4.1) ────────────────
@@ -2509,9 +3016,24 @@ export async function fetchCommands(surface: 'web' | 'cli' | 'channel' = 'web'):
     if (parsed.success) out.push(parsed.data)
     else dropped++
   }
-  if (dropped > 0 && import.meta.env?.DEV) {
-    // eslint-disable-next-line no-console
-    console.warn(`fetchCommands: dropped ${dropped} command(s) that failed schema validation`)
+  if (dropped > 0) {
+    if (import.meta.env?.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn(`fetchCommands: dropped ${dropped} command(s) that failed schema validation`)
+    } else if (import.meta.env?.MODE !== 'test') {
+      // Bugfix (slash-palette silent-empty): this warning used to be DEV-only,
+      // so a production build that dropped a command for failing
+      // SlashCommandSchema had ZERO observable trace — the palette just
+      // looked short with no signal anywhere. Mirrors recordCoercion /
+      // _recordApiSchemaError's established DEV-console.warn-vs-production-
+      // logError split (this file, above).
+      logError({
+        event: 'commandSchemaDrop',
+        surface,
+        droppedCount: dropped,
+        totalCount: raw.length,
+      })
+    }
   }
   return out
 }
@@ -3770,54 +4292,203 @@ export function updateWorkspaceInstructions(
   )
 }
 
-// ── Milestones ────────────────────────────────────────────────────────────────
-//
-// Milestones are scoped to a workspace. All types are re-exported from generated
-// openapi-types (contract-first #8). See contracts/components/schemas/Milestone*.yaml.
-//
-// `progress` (0–1 completion fraction) is a generated, read-only field on Milestone:
-// computed server-side at read time (done/total over the milestone's GTD board tasks).
-// It is optional in the schema and absent on create/update echoes when no tasks exist.
-
-export const milestonesQueryKeys = {
-  list: (workspaceId: string) => ['milestones', workspaceId] as const,
-  detail: (workspaceId: string, milestoneId: string) => ['milestones', workspaceId, milestoneId] as const,
+/**
+ * Rewrite a `409 Conflict` into an action-specific, human-actionable message
+ * — the generic `ApiError` default for 409 ("This conflicts with the
+ * current state. Please refresh and try again.") doesn't say WHY a
+ * restart/run isn't possible right now. Only 409 is rewritten; every other
+ * status (400/401/404/network) and every non-`ApiError` passes through
+ * completely unchanged. Shared by `restartPlan`/`restartTask`/`runTask`
+ * (ADR-052 FR-016/FR-019/FR-026 — restart/run reject with 409 for "not
+ * restartable"/"not runnable" states).
+ */
+function friendlyConflictError(err: unknown, message: string): unknown {
+  if (isApiErrorFn(err) && err.status === 409) {
+    return new ApiError(409, message, { code: err.code, body: err.body, cause: err.cause })
+  }
+  return err
 }
 
-const MilestoneListResponseSchema = z.object({
-  milestones: z.array(MilestoneSchema),
+// ── Plans (ADR-049 D1/FR-1 — replaces Milestones; ADR-052 Wave 2 — agent plan
+// authoring & execution) ──────────────────────────────────────────────────
+//
+// A Plan is a first-class entity that groups an executable task DAG under a
+// goal, Definition of Done, owner agent, and 5-value state machine
+// (draft/approved/running/done/failed). Tasks join a plan via `Task.plan_id`
+// (same-workspace FK). Membership + `progress` are computed read-time by the
+// backend — never stored on the Plan record (mirrors the removed Milestone's
+// computeMilestoneCounts). See contracts/components/schemas/Plan*.yaml.
+//
+// Endpoints:
+//   GET    /workspaces/{id}/plans → PlanListResponse
+//   POST   /workspaces/{id}/plans → Plan   (createWorkspacePlan — the ONLY
+//                                           create route; bare POST /plans
+//                                           deliberately 405s [rest_plans.go]
+//                                           since creation/listing are
+//                                           workspace-nested. `workspace_id`
+//                                           is ALSO required in the body and
+//                                           validated to match the path.)
+//   PUT    /plans/{id}           → Plan   (partial update — title/goal/
+//                                           description/owner/dod/bounds
+//                                           ONLY. ADR-052 G2/FR-007: the SPA
+//                                           MUST NEVER send `state` here —
+//                                           PUT is not a gated transition
+//                                           entry point [it skips both the
+//                                           FR-084 criteria gate and the
+//                                           cap-16 admission check]. The
+//                                           single gated entry point into
+//                                           `approved` is POST .../approve.)
+//   POST   /plans/{id}/approve   → Plan | 400 PlanApproveError
+//                                           (executePlan — ADR-052 FR-003;
+//                                           the ONLY path draft->approved
+//                                           takes; the engine then promotes
+//                                           approved->running under the cap
+//                                           on its own tick)
+//   POST   /plans/{id}/stop      → Plan   (Stop/Clear a running plan, D8)
+//   POST   /plans/{id}/restart   → Plan | 409
+//                                           (restartPlan — ADR-052 FR-026,
+//                                           the ▶ Play route for a plan
+//                                           `failed`+`stopped_by_user`)
+//   DELETE /plans/{id}           → void   (rejected 400/409 while running)
+
+export const plansQueryKeys = {
+  list: (workspaceId: string) => ['plans', workspaceId] as const,
+  detail: (workspaceId: string, planId: string) => ['plans', workspaceId, planId] as const,
+}
+
+const PlanListResponseSchema = z.object({
+  plans: z.array(PlanSchema),
   total: z.number().int(),
 })
 
-export function fetchMilestones(workspaceId: string): Promise<Milestone[]> {
-  return request<{ milestones: Milestone[]; total: number }>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/milestones`,
+export function fetchPlans(workspaceId: string): Promise<Plan[]> {
+  return request<PlanListResponse>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/plans`,
     undefined,
-    MilestoneListResponseSchema,
-  ).then((res) => res.milestones)
+    PlanListResponseSchema as ZodType<PlanListResponse>,
+  ).then((res) => res.plans)
 }
 
-export function createMilestone(workspaceId: string, body: MilestoneCreateRequest): Promise<Milestone> {
-  return request<Milestone>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/milestones`,
+export function fetchPlan(id: string): Promise<Plan> {
+  return request<Plan>(`/plans/${encodeURIComponent(id)}`, undefined, PlanSchema as ZodType<Plan>)
+}
+
+/**
+ * Create a plan — POST /workspaces/{id}/plans (createWorkspacePlan). Bare
+ * POST /plans 405s (`rest_plans.go` HandlePlans: "Bare /plans has no
+ * GET/POST"); creation is workspace-nested, mirroring `fetchPlans`.
+ * `body.workspace_id` drives the path (also required/validated in the body).
+ */
+export function createPlan(body: PlanCreateRequest): Promise<Plan> {
+  return request<Plan>(
+    `/workspaces/${encodeURIComponent(body.workspace_id)}/plans`,
     { method: 'POST', body: JSON.stringify(body) },
-    MilestoneSchema,
+    PlanSchema as ZodType<Plan>,
   )
 }
 
-export function updateMilestone(workspaceId: string, milestoneId: string, body: MilestoneUpdateRequest): Promise<Milestone> {
-  return request<Milestone>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/milestones/${encodeURIComponent(milestoneId)}`,
-    { method: 'PUT', body: JSON.stringify(body) },
-    MilestoneSchema,
-  )
+/**
+ * Partial plan update — title/goal/description/owner_agent_id/dod/bounds
+ * ONLY. ADR-052 §6.3/FR-007 (G2 fix): the SPA must NEVER send `state` in this
+ * body — PUT is not, and must never become, a state-transition entry point
+ * (the backend endpoint that previously accepted `state` here bypassed both
+ * the FR-084 per-task criteria gate and the cap-16 admission check). Use
+ * `executePlan` / `stopPlan` / `restartPlan` for every state transition.
+ */
+export function updatePlan(id: string, body: Omit<PlanUpdateRequest, 'state'>): Promise<Plan> {
+  return request<Plan>(`/plans/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }, PlanSchema as ZodType<Plan>)
 }
 
-export function deleteMilestone(workspaceId: string, milestoneId: string): Promise<void> {
-  return request<void>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/milestones/${encodeURIComponent(milestoneId)}`,
-    { method: 'DELETE' },
-  )
+/**
+ * Execute (Approve) a draft plan — POST /plans/{id}/approve (ADR-052 FR-003/
+ * FR-007/FR-008/US-3/US-5). This is the SOLE gated entry point into
+ * `approved`: it runs the tiered Definition-of-Done check plus the
+ * unconditional per-member-task criteria gate (FR-084), then the single
+ * plan-engine instance promotes `approved` -> `running` under the global cap
+ * (16) on its own tick — this call returns once the plan reaches `approved`,
+ * it does not wait for a cap slot ("queued behind cap" is a normal outcome,
+ * not an error). SD-C4: confirm-on-success, no optimistic flip — a `400`
+ * carries a `PlanApproveError` body (`error` and/or `task_errors`); parse it
+ * with `parsePlanApproveTaskErrors`.
+ *
+ * Named `executePlan` (the ▶ Execute button's semantics — G4/FR-003) rather
+ * than the historical `approvePlan`, which used to PUT `{state:'approved'}`
+ * and — per the G2 bug this repoints — silently bypassed BOTH the criteria
+ * gate and the cap. `approvePlan` survives below as a deprecated alias for
+ * any not-yet-swept caller; new call sites should use `executePlan`.
+ */
+export function executePlan(id: string): Promise<Plan> {
+  return request<Plan>(`/plans/${encodeURIComponent(id)}/approve`, { method: 'POST' }, PlanSchema as ZodType<Plan>)
+}
+
+/** @deprecated Use `executePlan` — this name predates the ADR-052 G2 fix (PUT-based approve bypassed the criteria gate + cap). Same signature/behavior, POST /approve underneath. */
+export const approvePlan = executePlan
+
+/** Stop/Clear (D8) — stops a running plan's loop. May be optimistic (SD-C5): it cannot validation-fail like Approve. */
+export function stopPlan(id: string): Promise<Plan> {
+  return request<Plan>(`/plans/${encodeURIComponent(id)}/stop`, { method: 'POST' }, PlanSchema as ZodType<Plan>)
+}
+
+/**
+ * Restart (▶ Play) a plan previously Stopped by the user — POST
+ * /plans/{id}/restart (ADR-052 FR-016/FR-017/FR-026, US-9). Resets every
+ * non-`done` member to `next`/`blocked` with `attempt_count` reset to 0,
+ * resets the plan's `judge_rounds` to 0, preserves `done` members + their
+ * evidence, clears `failed_reason`, and returns the plan in `approved` state
+ * (NOT `running` — the engine promotes it under the cap on its own tick,
+ * exactly like a first execute, so a restart can never skip cap admission).
+ *
+ * A `409` means "not restartable": the plan isn't `failed`, or its
+ * `failed_reason` isn't `stopped_by_user` (a GENUINE failure —
+ * `judge_rounds_exhausted` / `idle_expired` — is a terminal state with no
+ * Play offered, FR-018). Rewritten into a specific, actionable message here
+ * rather than the generic "conflicts with current state" default.
+ */
+export async function restartPlan(id: string): Promise<Plan> {
+  try {
+    return await request<Plan>(`/plans/${encodeURIComponent(id)}/restart`, { method: 'POST' }, PlanSchema as ZodType<Plan>)
+  } catch (err) {
+    throw friendlyConflictError(
+      err,
+      'This plan is not restartable — it must have been Stopped by a user (not a genuine failure) to Play it again.',
+    )
+  }
+}
+
+export function deletePlan(id: string): Promise<void> {
+  return request<void>(`/plans/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+/**
+ * PlanApproveTaskError — one entry of the generated `PlanApproveError.task_errors`
+ * array (contracts/components/schemas/PlanApproveError.yaml — now a real,
+ * generated Constraint #8 wire type; this alias exists only so callers don't
+ * need to reach into `NonNullable<PlanApproveError['task_errors']>[number]`
+ * themselves).
+ */
+export type PlanApproveTaskError = NonNullable<PlanApproveError['task_errors']>[number]
+
+/**
+ * Parse a `POST /plans/{id}/approve` `400` body (`ApiError.body`) into the
+ * generated `PlanApproveError` shape, edge-validated with the generated Zod
+ * schema (Constraint #8 — no hand-rolled parsing of the response shape).
+ * Returns `null` when the body is empty, not JSON, doesn't validate against
+ * the schema, or validates but carries no `task_errors` — callers fall back
+ * to `err.userMessage` (which already carries the plan-level `error` string
+ * for the non-task-errors rejection case, e.g. an empty DoD).
+ */
+export function parsePlanApproveTaskErrors(body: string | undefined): PlanApproveTaskError[] | null {
+  if (!body) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return null
+  }
+  const result = PlanApproveErrorSchema.safeParse(parsed)
+  if (!result.success) return null
+  const taskErrors = result.data.task_errors
+  return taskErrors && taskErrors.length > 0 ? taskErrors : null
 }
 
 // ── Token Usage Stats ─────────────────────────────────────────────────────────
@@ -3865,5 +4536,36 @@ export function updateMemorySettings(body: MemorySettings): Promise<MemorySettin
     '/settings/memory',
     { method: 'PUT', body: JSON.stringify(body) },
     MemorySettingsSchema as ZodType<MemorySettings>,
+  )
+}
+
+// ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget for the Usage
+// screen. ONE shared pool across all workloads (owner/member/verifier/Judge);
+// no per-plan cap, no money/USD cap, no IsPrivilegedAgent exemption (D12).
+// GET returns the live spend accounting (TokenBudgetStatus). PUT persists the
+// operator-set ceiling; the ceiling is restart-gated (R§8.3e — a live ceiling
+// change would straddle two budgets, the N-15 hazard; the live lever for
+// runaway spend is the existing Stop/cancel cascade, NOT a live token cut).
+// The PUT body is the single operator-set field (`budget`; 0 = unbounded
+// sentinel, R§8.3a) — no hand-written request wire type; the response is
+// zod-validated against the landed TokenBudgetStatus schema (contract-first #8).
+// See contracts/components/schemas/TokenBudgetStatus.yaml.
+export const tokenBudgetQueryKeys = {
+  status: ['token-budget', 'status'] as const,
+}
+
+export function fetchTokenBudgetStatus(): Promise<TokenBudgetStatus> {
+  return request<TokenBudgetStatus>(
+    '/settings/token-budget',
+    undefined,
+    TokenBudgetStatusSchema as ZodType<TokenBudgetStatus>,
+  )
+}
+
+export function updateTokenBudget(budget: number): Promise<TokenBudgetStatus> {
+  return request<TokenBudgetStatus>(
+    '/settings/token-budget',
+    { method: 'PUT', body: JSON.stringify({ budget }) },
+    TokenBudgetStatusSchema as ZodType<TokenBudgetStatus>,
   )
 }

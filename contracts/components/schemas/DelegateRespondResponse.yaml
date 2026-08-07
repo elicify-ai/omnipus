@@ -1,0 +1,17 @@
+type: object
+title: DelegateRespondResponse
+description: >
+  Response to `delegate` `action: respond` (ADR-053 §5.1). Native:
+  acknowledgement only (the answer routes into the child's warm-resumed
+  turn). 3P: a new corrective session was spawned (D5) — see
+  `corrective_session` for its identity.
+required:
+  - acknowledged
+additionalProperties: false
+properties:
+  acknowledged:
+    type: boolean
+    description: True when the response was accepted and routed by `correlation_id`.
+    example: true
+  corrective_session:
+    $ref: './DelegateSessionResponse.yaml'

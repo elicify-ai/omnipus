@@ -23,6 +23,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // ---------------------------------------------------------------------------
@@ -31,7 +32,38 @@ import (
 
 func newCancelTestAgentLoop(t *testing.T) *AgentLoop {
 	t.Helper()
-	tmpDir := t.TempDir()
+	// os.MkdirTemp + a best-effort RemoveAll, NOT t.TempDir: AgentLoop's own
+	// background writers (recap drain, stats flusher, session bookkeeping)
+	// are only BOUNDED-drained by al.Close() (e.g. waitRecapDrain's 30s
+	// budget just logs a warning and proceeds on timeout — it does not
+	// guarantee every writer has actually stopped touching Home by the time
+	// Close() returns). t.TempDir()'s own cleanup calls os.RemoveAll and
+	// FAILS THE TEST (t.Errorf) if a straggling writer still has the
+	// directory non-empty at that instant — observed in practice as
+	// "TempDir RemoveAll cleanup: ...: directory not empty" on
+	// TestU15Cancel_KillsChildShellsNotSiblings_RealPIDs under full
+	// pkg/agent suite load (never in isolation, where there's no contention
+	// to delay the drain). plan_wake_delivery_test.go's newPlanWakeHarness
+	// documents and works around the identical hazard the same way: a
+	// plain, best-effort os.RemoveAll here silently tolerates the race
+	// instead of failing the test over a harness cleanup timing quirk that
+	// has nothing to do with the behavior under test.
+	//
+	// Nested under its own private outer container (not bare
+	// os.MkdirTemp("", ...)) so filepath.Dir(tmpDir) — what NewAgentLoop
+	// roots the shared session/task store at — stays THIS test's own
+	// private directory, never the shared OS temp root every test in this
+	// package that used to call os.MkdirTemp("", "agent-test-*") directly
+	// shared (see loop_test.go's newTestAgentLoop doc comment).
+	tmpDirOuter, err := os.MkdirTemp("", "agent-cancel-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDirOuter) })
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
@@ -157,9 +189,13 @@ func TestRequestCancel_ActiveTurn_FiredTrue(t *testing.T) {
 	al.auditLogger = newAuditLoggerForCancelTest(t, auditDir)
 
 	// Inject a minimal turnState for "sess-active" so RequestCancel finds it.
+	// ADR-057 fixture repair: the role-B predicates (GetActiveTurnHookForSession
+	// et al.) now match on routingSessionID, not transcriptSessionID — a
+	// hand-built literal that omits it is invisible to RequestCancel.
 	ts := &turnState{
 		turnID:              "turn-001",
 		transcriptSessionID: "sess-active",
+		routingSessionID:    session.RoutingSessionID("sess-active"),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 	}
@@ -201,9 +237,12 @@ func TestRequestCancel_TierBPath_ResolvesByChannelChat(t *testing.T) {
 	auditDir := t.TempDir()
 	al.auditLogger = newAuditLoggerForCancelTest(t, auditDir)
 
+	// ADR-057 fixture repair: resolveSessionIDByChannelChat (Tier B) also
+	// matches on routingSessionID.
 	ts := &turnState{
 		turnID:              "turn-tier-b",
 		transcriptSessionID: "sess-tier-b",
+		routingSessionID:    session.RoutingSessionID("sess-tier-b"),
 		channel:             "telegram",
 		chatID:              "chat-42",
 		depth:               0,
@@ -233,9 +272,11 @@ func TestRequestCancel_DoubleCancelReturnsFiredFalse(t *testing.T) {
 
 	al := newCancelTestAgentLoop(t)
 
+	// ADR-057 fixture repair: see TestRequestCancel_ActiveTurn_FiredTrue.
 	ts := &turnState{
 		turnID:              "turn-double",
 		transcriptSessionID: "sess-double",
+		routingSessionID:    session.RoutingSessionID("sess-double"),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 	}
@@ -261,9 +302,11 @@ func TestRequestCancel_HooksCalled(t *testing.T) {
 
 	al := newCancelTestAgentLoop(t)
 
+	// ADR-057 fixture repair: see TestRequestCancel_ActiveTurn_FiredTrue.
 	ts := &turnState{
 		turnID:              "turn-hooks",
 		transcriptSessionID: "sess-hooks",
+		routingSessionID:    session.RoutingSessionID("sess-hooks"),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 	}
@@ -313,18 +356,32 @@ func TestRequestCancel_HooksCalled(t *testing.T) {
 func TestRequestCancelForSession_EmptySessionID_ReturnsError(t *testing.T) {
 	t.Parallel()
 	al := newCancelTestAgentLoop(t)
-	_, err := al.RequestCancelForSession(context.Background(), "", "alice", "web")
+	_, _, err := al.RequestCancelForSession(context.Background(), "", "alice", "web")
 	require.Error(t, err)
 }
 
-// TestRequestCancelForSession_NoActiveTurn_ReturnsFalseFired verifies the adapter
-// propagates the "no active turn" no-op correctly.
-func TestRequestCancelForSession_NoActiveTurn_ReturnsFalseFired(t *testing.T) {
+// TestRequestCancelForSession_NoActiveTurn_ArmsLatch verifies the adapter
+// surfaces Armed rather than discarding it: with no turn registered yet for
+// sessionID, RequestCancel arms a pre-registration cancel latch
+// (cancel_prearm.go) instead of silently no-op'ing, and this primitive
+// adapter must carry that signal all the way through to the caller — the
+// exact structural gap the widened (fired, armed, err) signature closes
+// (finding: RequestCancelForSession used to flatten CancelOutcome to a bare
+// bool, discarding Armed at this adapter boundary).
+func TestRequestCancelForSession_NoActiveTurn_ArmsLatch(t *testing.T) {
 	t.Parallel()
 	al := newCancelTestAgentLoop(t)
-	fired, err := al.RequestCancelForSession(context.Background(), "sess-empty", "alice", "web")
+
+	// Construct the precondition turnImminentForIdentity now requires: a
+	// message genuinely in flight for this identity, not merely "no active
+	// turn registered" (see cancel_prearm_test.go's file-level PREMISE
+	// UPDATE comment).
+	primeImminentSessionWorker(al, "sess-empty")
+
+	fired, armed, err := al.RequestCancelForSession(context.Background(), "sess-empty", "alice", "web")
 	require.NoError(t, err)
-	assert.False(t, fired)
+	assert.False(t, fired, "no active turn exists — fired must be false")
+	assert.True(t, armed, "no active turn for a resolvable session id must arm a pre-registration cancel latch, and the adapter must report it")
 }
 
 // ---------------------------------------------------------------------------

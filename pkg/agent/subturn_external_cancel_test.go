@@ -111,6 +111,11 @@ func TestExternalCLISubTurn_CancelPropagates_Async(t *testing.T) {
 	al, childTS := newExternalTestLoop(t, "claude-code", "")
 	const sessionID = "session_ext_cancel_async"
 	childTS.transcriptSessionID = sessionID
+	// ADR-057 FR-011/FR-015 fixture repair: activeTurnStates is keyed by
+	// turnKey below (not sessionID), so al.Interrupt(sessionID, ...)
+	// (steering.go's resolveInterruptAnchors) falls through its direct-key
+	// Load to the Range fallback, which now matches on routingSessionID.
+	childTS.routingSessionID = session.RoutingSessionID(sessionID)
 	const turnKey = "child-async-1"
 	childTS.turnID = turnKey
 	// MED (7-reviewer gate follow-up): genuinely mirror what
@@ -147,10 +152,10 @@ func TestExternalCLISubTurn_CancelPropagates_Async(t *testing.T) {
 	}
 
 	// Drive the REAL graceful cancel cascade — NOT parentTS.Finish directly.
-	// Before the fix, childTS.providerCancel is nil and InterruptSession's
+	// Before the fix, childTS.providerCancel is nil and Interrupt's
 	// field-fire is a silent no-op.
-	if _, err := al.InterruptSession(sessionID, "test cancel (async)"); err != nil {
-		t.Fatalf("InterruptSession: %v", err)
+	if _, err := al.Interrupt(sessionID, ScopeSubtree, "test cancel (async)"); err != nil {
+		t.Fatalf("Interrupt: %v", err)
 	}
 
 	select {
@@ -162,7 +167,7 @@ func TestExternalCLISubTurn_CancelPropagates_Async(t *testing.T) {
 			t.Errorf("result.Err = %v, want context.Canceled", res.Err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("runExternalCLISubTurn did not return after InterruptSession — " +
+		t.Fatal("runExternalCLISubTurn did not return after Interrupt — " +
 			"cancel did not propagate to the external-cli child (async/background delegation)")
 	}
 
@@ -187,6 +192,9 @@ func TestExternalCLISubTurn_CancelPropagates_Sync(t *testing.T) {
 	al, childTS := newExternalTestLoop(t, "codex", "")
 	const sessionID = "session_ext_cancel_sync"
 	childTS.transcriptSessionID = sessionID
+	// ADR-057 FR-011/FR-015 fixture repair: see the identical note in
+	// TestExternalCLISubTurn_CancelPropagates_Async above.
+	childTS.routingSessionID = session.RoutingSessionID(sessionID)
 	const turnKey = "child-sync-1"
 	childTS.turnID = turnKey
 
@@ -205,7 +213,7 @@ func TestExternalCLISubTurn_CancelPropagates_Sync(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			return
 		}
-		if _, err := al.InterruptSessionHard(sessionID, "test cancel (sync)"); err != nil {
+		if _, err := al.InterruptSessionHard(sessionID, ScopeSubtree, "test cancel (sync)"); err != nil {
 			t.Errorf("InterruptSessionHard: %v", err)
 		}
 	}()
@@ -265,6 +273,9 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 
 	al, firstTS := newExternalTestLoop(t, "claude-code", sharedWorkDir)
 	firstTS.transcriptSessionID = "session_lock_first"
+	// ADR-057 FR-011/FR-015 fixture repair: see the identical note in
+	// TestExternalCLISubTurn_CancelPropagates_Async above.
+	firstTS.routingSessionID = session.RoutingSessionID("session_lock_first")
 	firstTS.turnID = "lock-first-1"
 
 	// A second turnState whose agent resolves to the SAME workspace work/ dir
@@ -296,6 +307,9 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 		agentID:             secondAgent.ID,
 		turnID:              "lock-second-1",
 		transcriptSessionID: "session_lock_second",
+		// ADR-057 FR-011/FR-015 fixture repair: see the identical note above
+		// on firstTS/newExternalTestLoop's callers in this file.
+		routingSessionID: session.RoutingSessionID("session_lock_second"),
 	}
 
 	// Track driver-factory calls so we can prove the SECOND (queued) run
@@ -350,7 +364,7 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 	// Fire the REAL hard-abort cascade against the SECOND session while it is
 	// queued behind the first (still-running, still-locked) same-workspace
 	// run.
-	if _, err := al.InterruptSessionHard(secondTS.transcriptSessionID, "test cancel while queued"); err != nil {
+	if _, err := al.InterruptSessionHard(secondTS.transcriptSessionID, ScopeSubtree, "test cancel while queued"); err != nil {
 		t.Fatalf("InterruptSessionHard (second, queued): %v", err)
 	}
 
@@ -374,7 +388,7 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 
 	// Clean up: cancel the FIRST run too so the test doesn't leak a blocked
 	// goroutine/driver.
-	if _, err := al.InterruptSessionHard(firstTS.transcriptSessionID, "test cleanup"); err != nil {
+	if _, err := al.InterruptSessionHard(firstTS.transcriptSessionID, ScopeSubtree, "test cleanup"); err != nil {
 		t.Fatalf("InterruptSessionHard (first, cleanup): %v", err)
 	}
 	select {
@@ -420,6 +434,10 @@ func TestExternalCLISubTurn_RequestCancelEndToEnd_ExternalCLIOnlySession(t *test
 
 	childTS.transcriptSessionID = sessionID
 	childTS.transcriptStore = store
+	// ADR-057 FR-011/FR-015 fixture repair: GetActiveTurnHookForSession (the
+	// role-B predicate RequestCancel's ClaimCancel gate uses) now matches on
+	// routingSessionID, not transcriptSessionID.
+	childTS.routingSessionID = session.RoutingSessionID(sessionID)
 	const turnKey = "child-e2e-1"
 	childTS.turnID = turnKey
 	// Model a genuine async delegate (MED finding, mirrored from the Async

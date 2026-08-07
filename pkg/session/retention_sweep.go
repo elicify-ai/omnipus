@@ -22,10 +22,30 @@ import (
 // content. This semantic is independent of the folder's mtime, which kernel-
 // level filesystems update to "now" the moment a child file is removed
 // (making any post-deletion mtime check incorrect).
+//
+// Locking (ADR-057 W15b, FR-050(a)): this method takes ALL 64 session shards,
+// in strictly ascending index order, via lockAllSessionShards — the SAME
+// FR-050(a) exception ClearAll uses, and for the same reason: this is a
+// full-store operation that can touch metaCache for an arbitrary number of
+// sessions, and FR-050 forbids ever holding two session shards in any order
+// OTHER than the fixed ascending-index one. This replaces the old narrow
+// us.mu.Lock()/Unlock() that used to wrap only the second pass's
+// directory-removal step. Holding every shard for the WHOLE sweep (including
+// the first-pass filesystem walk, not just the second pass) is a bigger
+// declared full-store stall than before, and it is DELIBERATELY accepted,
+// not an oversight: the spec's own resolution (ADR-057 Ambiguity item 13)
+// is "accept the stall; assert no deadlock and no dropped session — the
+// operation is already effectively store-global today [ClearAll already
+// holds one lock for its entire call], so 64-in-index-order is not a
+// regression" — and batching the shard acquisition would reintroduce the
+// exact lock-order question this design closes.
 func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	if retentionDays <= 0 {
 		return 0, nil
 	}
+
+	unlock := us.lockAllSessionShards()
+	defer unlock()
 
 	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
 	removed := 0
@@ -128,17 +148,21 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 		// play, an unguarded os.RemoveAll here would leave a stale cache
 		// entry pointing at a directory that no longer exists on disk
 		// (a phantom session that ListSessions/GetMeta would keep serving
-		// forever). Guard the decision + cache eviction with us.mu so the
-		// removal and the cache update are atomic with respect to every
-		// other UnifiedStore method. The first pass above (aged .jsonl file
-		// removal) never touches meta.json, so it stays unlocked as before.
+		// forever). The whole method already holds every session shard (see
+		// this function's doc comment, W15b) so no OTHER goroutine can be
+		// mid-mutation on sessID concurrently; the cache delete itself still
+		// goes through cacheMu, same as every other metaCache access. The
+		// first pass above (aged .jsonl file removal) never touches
+		// meta.json, so it needed no lock either, before or after W15b.
 		sessID := filepath.Base(sessDir)
-		us.mu.Lock()
 		dirRmErr := os.RemoveAll(sessDir)
 		if dirRmErr == nil {
+			us.cacheMu.Lock()
 			delete(us.metaCache, sessID)
+			delete(us.dirtyStats, sessID) // ADR-057 U6 W24: no dangling flush target
+			us.cacheMu.Unlock()
+			us.u4IndexEvict(sessID) // FR-097
 		}
-		us.mu.Unlock()
 		if dirRmErr != nil {
 			slog.Warn("session: retention_sweep: dir remove failed", "dir", sessDir, "error", dirRmErr)
 		}

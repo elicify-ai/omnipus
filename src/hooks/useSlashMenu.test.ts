@@ -65,33 +65,36 @@ let skillsOverride: typeof mockSkills | null = null
 // doesn't apply here either.
 let commandsQueryIsError = false
 
-// Race-window regression (sendfile-fix investigation): distinct from
-// commandsQueryIsError above — this simulates the query PENDING (in flight,
-// no data and no error yet), the ordinary state on every fresh page load
-// between the composer becoming enabled (gated only on the WS connecting,
-// ChatScreen.tsx's `inputEnabled` — NOT on this fetch) and the
-// `/api/v1/commands?surface=web` response landing. `commandsQueryIsError`
-// models a CONFIRMED, permanent failure (deliberately degrades to only the
-// two synthetic client-only entries per the "commandsError" describe block
-// below); this flag models the ordinary, transient, non-error "hasn't
-// resolved YET" window a fast typed "/new"+Enter can land inside.
-let commandsQueryStillLoading = false
+// Readiness-gate flag: simulates `fetchCommands('web')` still being in flight
+// (React Query `isLoading` — first fetch, no data yet). This is the window in
+// which a typed "/new" used to resolve against a list containing only the two
+// synthetic client-only entries and escape to the backend as chat text.
+let commandsQueryIsLoading = false
+
+// Round-1 review addition: mutable per-test override for the ['commands']
+// query, mirroring `mentionAgentsOverride`/`skillsOverride` above. Only the
+// argument_hint-ghost-for-agent-delivery-commands tests need commands beyond
+// the shared `mockCommands` fixture (whose one agent-delivery entry,
+// "/handoff", deliberately carries no argument_hint) — overriding here keeps
+// every other test's exact command-list/order assertions untouched.
+let commandsOverride: typeof mockCommands | null = null
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   return {
     ...actual,
     useQuery: (opts: { queryKey: unknown[]; enabled?: boolean }) => {
-      if (opts.enabled === false) return { data: [], isError: false, refetch: vi.fn() }
+      if (opts.enabled === false) return { data: [], isError: false, isLoading: false, refetch: vi.fn() }
       const key = opts.queryKey
       if (Array.isArray(key) && key[0] === 'commands') {
-        if (commandsQueryIsError) return { data: undefined, isError: true, refetch: vi.fn() }
-        if (commandsQueryStillLoading) return { data: undefined, isError: false, refetch: vi.fn() }
-        return { data: mockCommands, isError: false, refetch: vi.fn() }
+        if (commandsQueryIsLoading) return { data: undefined, isError: false, isLoading: true, refetch: vi.fn() }
+        return commandsQueryIsError
+          ? { data: undefined, isError: true, isLoading: false, refetch: vi.fn() }
+          : { data: commandsOverride ?? mockCommands, isError: false, isLoading: false, refetch: vi.fn() }
       }
-      if (Array.isArray(key) && key[0] === 'skills') return { data: skillsOverride ?? mockSkills, isError: false, refetch: vi.fn() }
-      if (Array.isArray(key) && key[0] === 'agents') return { data: mentionAgentsOverride ?? mockAgents, isError: false, refetch: vi.fn() }
-      return { data: [], isError: false, refetch: vi.fn() }
+      if (Array.isArray(key) && key[0] === 'skills') return { data: skillsOverride ?? mockSkills, isError: false, isLoading: false, refetch: vi.fn() }
+      if (Array.isArray(key) && key[0] === 'agents') return { data: mentionAgentsOverride ?? mockAgents, isError: false, isLoading: false, refetch: vi.fn() }
+      return { data: [], isError: false, isLoading: false, refetch: vi.fn() }
     },
   }
 })
@@ -112,13 +115,21 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
+// `send` is the real runtime method every submit path converges on
+// (ComposerPrimitive.Root's onSubmit, ComposerPrimitive.Send's onClick, and
+// ChatScreen's mid-stream path) — spying on it is how these tests observe
+// "this text was dispatched to the backend".
 function makeComposerRuntime(text = '') {
   return {
     getState: () => ({ text }),
     setText: vi.fn(),
     addAttachment: vi.fn(),
     subscribe: vi.fn(() => vi.fn()),
-  } as unknown as ComposerRuntime & { setText: ReturnType<typeof vi.fn> }
+    send: vi.fn(),
+  } as unknown as ComposerRuntime & {
+    setText: ReturnType<typeof vi.fn>
+    send: ReturnType<typeof vi.fn>
+  }
 }
 
 function baseParams(overrides: Partial<Parameters<typeof useSlashMenu>[0]> = {}) {
@@ -158,12 +169,19 @@ beforeEach(() => {
       activeAgentType: null,
       attachedSessionType: null,
       attachedTaskTitle: null,
+      // selectMentionAgent now records an EXPLICIT selection (see the AGENT
+      // PRECEDENCE RULE in src/store/session.ts) — reset it too, or one
+      // mention-selection test would leave a pin that changes how the next
+      // test's session-derived writes behave.
+      agentSelectionSource: 'auto',
+      agentSelectionWorkspaceId: null,
     })
   })
   commandsQueryIsError = false
-  commandsQueryStillLoading = false
+  commandsQueryIsLoading = false
   mentionAgentsOverride = null
   skillsOverride = null
+  commandsOverride = null
 })
 
 afterEach(() => {
@@ -542,6 +560,121 @@ describe('useSlashMenu — skill selection and ghost text', () => {
   })
 })
 
+// Round-1 review addition (SD-C7/R3): the SAME argument_hint ghost-text
+// mechanism the skill-selection tests above exercise also applies to
+// agent-delivery COMMANDS (executeSlashCommand's `def.delivery === 'agent'`
+// branch, useSlashMenu.ts:699-716) — e.g. `/goal` -> `<condition>`, `/loop`
+// -> a loop-config hint. The shared `mockCommands` fixture's one
+// agent-delivery entry ("/handoff") deliberately carries no argument_hint
+// (see the existing "inserts as text instead of running locally" test
+// above), so this uses `commandsOverride` to add agent-delivery commands
+// that DO declare one.
+describe('useSlashMenu — agent-delivery command argument_hint ghost text (SD-C7/R3)', () => {
+  const goalCommand = {
+    name: 'goal',
+    label: '/goal',
+    description: 'Run a goal-loop session',
+    delivery: 'agent',
+    available_while_streaming: false,
+    argument_hint: '<condition>',
+  }
+  const loopCommand = {
+    name: 'loop',
+    label: '/loop',
+    description: 'Run a bounded loop session',
+    delivery: 'agent',
+    available_while_streaming: false,
+    argument_hint: '<task description>',
+  }
+
+  it('selecting "/goal" (agent-delivery) shows its argument_hint as ghost text, same as a skill', () => {
+    commandsOverride = [...mockCommands, goalCommand, loopCommand]
+    const composerRuntime = makeComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('/goal'))
+    const item = result.current.slashItems.find((i) => i.key === '/goal')!
+    act(() => item.onSelect())
+
+    // executeSlashCommand's agent branch inserts "/goal " as text (does not
+    // send/clear) and arms the ghost — simulate the composer's own onChange
+    // firing with that inserted value, matching the skill-ghost tests' shape.
+    expect(composerRuntime.setText).toHaveBeenCalledWith('/goal ')
+    act(() => result.current.onInputChange('/goal '))
+    expect(result.current.showGhostText).toBe(true)
+    expect(result.current.ghostText).toBe('<condition>')
+  })
+
+  it('selecting "/loop" (agent-delivery) shows ITS OWN argument_hint, not /goal\'s (proves the hint is per-command, not a hardcoded string)', () => {
+    commandsOverride = [...mockCommands, goalCommand, loopCommand]
+    const composerRuntime = makeComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('/loop'))
+    const item = result.current.slashItems.find((i) => i.key === '/loop')!
+    act(() => item.onSelect())
+
+    expect(composerRuntime.setText).toHaveBeenCalledWith('/loop ')
+    act(() => result.current.onInputChange('/loop '))
+    expect(result.current.showGhostText).toBe(true)
+    expect(result.current.ghostText).toBe('<task description>')
+  })
+
+  it('an agent-delivery command with NO argument_hint ("/handoff") shows no ghost at all (unlike a skill, which falls back to the generic placeholder)', () => {
+    // executeSlashCommand's agent branch (useSlashMenu.ts:699-716) only arms
+    // ghostCommandLabel/ghostCommandArgumentHint when `def.argument_hint` is
+    // truthy; with no hint it explicitly nulls both rather than falling back
+    // to GHOST_TEXT_PLACEHOLDER the way completeSkillName does for skills —
+    // an intentional asymmetry between the two ghost pairs.
+    const composerRuntime = makeComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('/'))
+    const item = result.current.slashItems.find((i) => i.key === '/handoff')!
+    act(() => item.onSelect())
+
+    act(() => result.current.onInputChange('/handoff '))
+    expect(result.current.showGhostText).toBe(false)
+    expect(result.current.ghostText).toBe('')
+  })
+
+  it('the command ghost disappears once the user types past the exact "/<label> " value, same as the skill ghost', () => {
+    commandsOverride = [...mockCommands, goalCommand]
+    const composerRuntime = makeComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('/goal'))
+    const item = result.current.slashItems.find((i) => i.key === '/goal')!
+    act(() => item.onSelect())
+    act(() => result.current.onInputChange('/goal '))
+    expect(result.current.showGhostText).toBe(true)
+
+    act(() => result.current.onInputChange('/goal errors > 0'))
+    expect(result.current.showGhostText).toBe(false)
+  })
+
+  it('selecting a skill ghost then a command ghost switches to the NEW pair (SD-C7 mutual exclusivity)', () => {
+    commandsOverride = [...mockCommands, goalCommand]
+    const composerRuntime = makeComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+
+    // Arm the skill ghost first.
+    act(() => result.current.onInputChange('/web'))
+    const skillItem = result.current.slashItems.find((i) => i.key === 'web-research')!
+    act(() => skillItem.onSelect())
+    act(() => result.current.onInputChange('/web-research '))
+    expect(result.current.showGhostText).toBe(true)
+    expect(result.current.ghostText).toBe('<query>')
+
+    // Now select the agent-delivery command. `setInputValue` runs
+    // synchronously inside `onSelect` (executeSlashCommand), so the new
+    // command-ghost pair is already showing immediately — no separate
+    // onInputChange needed. Critically, the text is `<condition>` (the
+    // NEW pair), not a stale `<query>` left over from the skill selection.
+    act(() => result.current.onInputChange('/goal'))
+    const cmdItem = result.current.slashItems.find((i) => i.key === '/goal')!
+    act(() => cmdItem.onSelect())
+    expect(result.current.showGhostText).toBe(true)
+    expect(result.current.ghostText).toBe('<condition>')
+  })
+})
+
 describe('useSlashMenu — interceptClientCommand (send-path)', () => {
   it('intercepts an exact client-delivery command (canonical "/new") and runs it locally', () => {
     const composerRuntime = makeComposerRuntime('/new')
@@ -630,6 +763,149 @@ describe('useSlashMenu — interceptClientCommand (send-path)', () => {
     act(() => { intercepted = result.current.interceptClientCommand() })
 
     expect(intercepted).toBe(false)
+  })
+})
+
+// Readiness gate — a slash command submitted before GET /api/v1/commands has
+// resolved.
+//
+// Observed for real (CI trace): the fetch was issued at t=3424ms and "/new"
+// was submitted at t=3660ms, 236ms later. `allCommands` still held only the
+// two synthetic client-only entries, the lookup missed,
+// interceptClientCommand returned false, and the literal "/new" was
+// dispatched to the backend AS A CHAT MESSAGE — where a server-side command
+// handler answered it ("Chat history cleared!") and it was persisted into the
+// transcript as something the user "said".
+//
+// The outcome these tests lock: a "/"-prefixed submit in that window is NEVER
+// dispatched as chat, and nothing the user typed is dropped either.
+describe('useSlashMenu — interceptClientCommand readiness gate (commands still loading)', () => {
+  it('a "/new" typed before the command list resolves is never dispatched, then runs as the client command it always was', () => {
+    commandsQueryIsLoading = true
+    const composerRuntime = makeComposerRuntime('/new')
+    const startNewSession = vi.fn()
+    const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    // Held: the caller preventDefaults, so nothing reaches the backend...
+    expect(intercepted).toBe(true)
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+    // ...and nothing has run yet either — the answer isn't knowable yet.
+    expect(startNewSession).not.toHaveBeenCalled()
+
+    // The list lands.
+    commandsQueryIsLoading = false
+    act(() => { rerender() })
+
+    // "/new" runs locally, exactly as it would have a moment later.
+    expect(startNewSession).toHaveBeenCalledTimes(1)
+    expect(composerRuntime.setText).toHaveBeenCalledWith('')
+    // And it was never sent to the backend at any point.
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+  })
+
+  it('the legacy "/clear" alias is held and resolved the same way (aliases only exist on the fetched list)', () => {
+    commandsQueryIsLoading = true
+    const composerRuntime = makeComposerRuntime('/clear')
+    const startNewSession = vi.fn()
+    const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+    expect(intercepted).toBe(true)
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+
+    commandsQueryIsLoading = false
+    act(() => { rerender() })
+
+    expect(startNewSession).toHaveBeenCalledTimes(1)
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+  })
+
+  it('a held submit that turns out NOT to be a client command is delivered, not dropped', () => {
+    // The gate must not eat legitimate input: "/handoff …" is an
+    // agent-delivery command and belongs on the wire.
+    commandsQueryIsLoading = true
+    const composerRuntime = makeComposerRuntime('/handoff do the thing')
+    const startNewSession = vi.fn()
+    const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+
+    act(() => { result.current.interceptClientCommand() })
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+
+    commandsQueryIsLoading = false
+    act(() => { rerender() })
+
+    expect(composerRuntime.send).toHaveBeenCalledTimes(1)
+    expect(startNewSession).not.toHaveBeenCalled()
+    // Not cleared out from under the user before the send.
+    expect(composerRuntime.setText).not.toHaveBeenCalledWith('')
+  })
+
+  it('an unknown "/zzz hi" is likewise held and then delivered verbatim', () => {
+    commandsQueryIsLoading = true
+    const composerRuntime = makeComposerRuntime('/zzz hi')
+    const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+
+    act(() => { result.current.interceptClientCommand() })
+    commandsQueryIsLoading = false
+    act(() => { rerender() })
+
+    expect(composerRuntime.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('plain text is not held at all while the list loads — only "/"-prefixed input is', () => {
+    commandsQueryIsLoading = true
+    const composerRuntime = makeComposerRuntime('hello there')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(false)
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+  })
+
+  it('a client command that IS already resolvable (the synthetic "/resume") runs immediately, without waiting for the fetch', () => {
+    commandsQueryIsLoading = true
+    const composerRuntime = makeComposerRuntime('/resume')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(true)
+    expect(useUiStore.getState().searchModalOpen).toBe(true)
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+  })
+
+  it('nothing is flushed when no submit was held (a plain list load must not send the composer on its own)', () => {
+    commandsQueryIsLoading = true
+    const composerRuntime = makeComposerRuntime('/new')
+    const startNewSession = vi.fn()
+    const { rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+
+    commandsQueryIsLoading = false
+    act(() => { rerender() })
+
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+    expect(startNewSession).not.toHaveBeenCalled()
+  })
+
+  it('a held submit flushes exactly once, not again on every later render', () => {
+    commandsQueryIsLoading = true
+    const composerRuntime = makeComposerRuntime('/zzz hi')
+    const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+
+    act(() => { result.current.interceptClientCommand() })
+    commandsQueryIsLoading = false
+    act(() => { rerender() })
+    act(() => { rerender() })
+    act(() => { result.current.onInputChange('/zzz hi') })
+
+    expect(composerRuntime.send).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -861,90 +1137,16 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
 // agent back to the default — the exact "picker showed Jim, then the turn
 // ran as Mia" symptom from the T24a investigation.
 //
-// This is DISTINCT from the "commandsError" describe block above: that
-// block models a CONFIRMED, permanent query failure, where the team
-// deliberately decided most client commands should degrade (see its own
-// doc comment). This block models the ordinary, transient "hasn't resolved
-// YET" window, which is not a confirmed failure and was never a deliberate
+// Fixed via the readiness gate + deferred flush covered by the
+// "interceptClientCommand readiness gate (commands still loading)" describe
+// block above — a held submit is never dispatched to the backend and is
+// replayed for real once the list resolves. This is DISTINCT from the
+// "commandsError" describe block above that one: that block models a
+// CONFIRMED, permanent query failure, where the team deliberately decided
+// most client commands should degrade (see its own doc comment); the
+// readiness-gate block models the ordinary, transient "hasn't resolved YET"
+// window, which is not a confirmed failure and was never a deliberate
 // degradation — it is the actual bug.
-describe('useSlashMenu — client commands before the commands query resolves (loading-window race)', () => {
-  it('intercepts "/new" locally even though the commands query has not resolved yet', () => {
-    commandsQueryStillLoading = true
-    const composerRuntime = makeComposerRuntime('/new')
-    const startNewSession = vi.fn()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
-
-    let intercepted = false
-    act(() => { intercepted = result.current.interceptClientCommand() })
-
-    expect(intercepted).toBe(true)
-    expect(composerRuntime.setText).toHaveBeenCalledWith('')
-    expect(startNewSession).toHaveBeenCalledTimes(1)
-  })
-
-  it('intercepts the legacy "/clear" alias for "/new" while the commands query is still loading', () => {
-    commandsQueryStillLoading = true
-    const composerRuntime = makeComposerRuntime('/clear')
-    const startNewSession = vi.fn()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
-
-    let intercepted = false
-    act(() => { intercepted = result.current.interceptClientCommand() })
-
-    expect(intercepted).toBe(true)
-    expect(startNewSession).toHaveBeenCalledTimes(1)
-  })
-
-  it('intercepts "/cancel" while the commands query is still loading', () => {
-    commandsQueryStillLoading = true
-    const composerRuntime = makeComposerRuntime('/cancel')
-    const cancelIfStreaming = vi.fn()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, cancelIfStreaming })))
-
-    let intercepted = false
-    act(() => { intercepted = result.current.interceptClientCommand() })
-
-    expect(intercepted).toBe(true)
-    expect(cancelIfStreaming).toHaveBeenCalledTimes(1)
-  })
-
-  it('intercepts "/agents" (opens the picker) while the commands query is still loading', () => {
-    commandsQueryStillLoading = true
-    const composerRuntime = makeComposerRuntime('/agents')
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
-
-    let intercepted = false
-    act(() => { intercepted = result.current.interceptClientCommand() })
-
-    expect(intercepted).toBe(true)
-    expect(useUiStore.getState().agentSelectorOpen).toBe(true)
-  })
-
-  it('still does NOT intercept "/new" once the commands query has CONFIRMED errored (preserves the deliberate commandsError degradation above)', () => {
-    commandsQueryIsError = true
-    const composerRuntime = makeComposerRuntime('/new')
-    const startNewSession = vi.fn()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
-
-    let intercepted = false
-    act(() => { intercepted = result.current.interceptClientCommand() })
-
-    expect(intercepted).toBe(false)
-    expect(startNewSession).not.toHaveBeenCalled()
-  })
-
-  it('does not intercept an unknown slash token while the commands query is still loading', () => {
-    commandsQueryStillLoading = true
-    const composerRuntime = makeComposerRuntime('/zzz hi')
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
-
-    let intercepted = false
-    act(() => { intercepted = result.current.interceptClientCommand() })
-
-    expect(intercepted).toBe(false)
-    expect(composerRuntime.setText).not.toHaveBeenCalled()
-  })
-})
 
 describe('useSlashMenu — "@" agent-mention menu', () => {
   it('shows nothing for "@" mid-text — only a leading "@" triggers (same rule as "/")', () => {

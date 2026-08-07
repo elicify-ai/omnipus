@@ -1,0 +1,65 @@
+title: PlanStatusFrame
+description: >
+  Server → client. Status push for a Plan (ADR-049 D4/D7/US-7). Emitted on
+  phase change, state transition, progress change, and pause/resume. Not
+  session-scoped (a Plan is a standalone workspace-scoped entity, not tied
+  to one chat session). Canonical copy lives inline in
+  contracts/asyncapi.yaml components.schemas (AsyncAPI does not resolve
+  cross-file $ref for its own codegen) — this file exists for the
+  Constraint #8 5-step process and the inboundschemas sync; keep both in
+  sync by hand.
+type: object
+required:
+  - type
+  - plan_id
+  - state
+  - plan_phase
+  - progress
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: plan_status
+  plan_id:
+    type: string
+    description: Plan whose status changed.
+    example: "01J3ZQK8N2H8VXNRP5T7C9M4WE"
+  state:
+    type: string
+    enum:
+      - draft
+      - approved
+      - running
+      - done
+      - failed
+    description: >
+      The plan's canonical 5-value state (mirrors `Plan.state` — see
+      Plan.yaml for the full state-machine description).
+    example: "running"
+  plan_phase:
+    type: string
+    enum:
+      - dispatching
+      - judging
+      - synthesizing
+      - idle
+      - awaiting_supervision
+      - stalled
+    description: >
+      Runtime-only sub-phase while `state == running` (mirrors
+      `Plan.plan_phase`). `stalled` (swimlane-board UAT fix) — see
+      `Plan.plan_phase`'s doc comment for the full precedence rule against
+      `awaiting_supervision`.
+    example: "dispatching"
+  progress:
+    type: number
+    minimum: 0
+    maximum: 1
+    description: Completion fraction (0-1), mirrors `Plan.progress`.
+    example: 0.5
+  paused_reason:
+    type: string
+    description: >
+      Non-empty when the plan is paused or cap-waiting (mirrors
+      `Plan.paused_reason`). Absent when not paused.
+    example: "owner agent disabled"

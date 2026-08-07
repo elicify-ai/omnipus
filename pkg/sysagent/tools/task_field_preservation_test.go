@@ -28,13 +28,14 @@ import (
 
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestRegression_SysagentTaskUpdate_PreservesAllFields guards against the bug
 // where system.task.update used a minimal struct that silently dropped prompt,
-// priority, milestone_id, session_id, result, and owner on every write.
+// priority, tags, session_id, result, and owner on every write.
 //
-// BDD: Given a task on disk with prompt, priority, milestone_id,
+// BDD: Given a task on disk with prompt, priority, tags,
 //
 //	session_id, result, owner, and agent_id populated,
 //
@@ -58,7 +59,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 	const taskID = "01JXPRESERVE_TASK_0000001"
 	const wantPrompt = "Run the full regression suite with coverage"
 	const wantAgentID = "01JXPRESERVE_AGENT000001"
-	const wantMilestoneID = "01JXPRESERVE_MILE0000001"
+	wantTags := []string{"release-42"}
 	const wantSessionID = "preserve-session-42"
 	const wantOwner = "alice"
 	const wantResult = "42 tests passed, 0 failed"
@@ -72,7 +73,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 		Description: "Original description",
 		Prompt:      wantPrompt,
 		Priority:    wantPriority,
-		MilestoneID: wantMilestoneID,
+		Tags:        wantTags,
 		SessionID:   wantSessionID,
 		Result:      wantResult,
 		Status:      task.StatusInbox,
@@ -90,7 +91,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 	// Invoke system.task.update with ONLY a name change.
 	// Sprint 2: the tool uses "name" arg key (maps to Title internally).
 	tool := systools.NewTaskUpdateTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":   taskID,
 		"name": "Updated Name",
 	})
@@ -112,8 +113,8 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 	assert.Equal(t, wantPriority, got.Priority,
 		"priority must survive a partial system.task.update #404")
 
-	assert.Equal(t, wantMilestoneID, got.MilestoneID,
-		"milestone_id must survive a partial system.task.update #404")
+	assert.Equal(t, wantTags, got.Tags,
+		"tags must survive a partial system.task.update #404")
 
 	assert.Equal(t, wantSessionID, got.SessionID,
 		"session_id must survive a partial system.task.update #404")
@@ -133,7 +134,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 	// Differentiation test: a SECOND update with only "status" change must also
 	// preserve title (= "Updated Name") and all other fields. Two different inputs
 	// must produce two different outputs.
-	result2 := tool.Execute(context.Background(), map[string]any{
+	result2 := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     taskID,
 		"status": "next",
 	})
@@ -155,7 +156,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 
 	// Guard: agent_id:"" must NOT clear an existing agent_id.
 	// The new tool only applies agent_id when the value is non-empty (v != "").
-	result3 := tool.Execute(context.Background(), map[string]any{
+	result3 := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":       taskID,
 		"agent_id": "",
 	})
@@ -190,11 +191,17 @@ func TestRegression_SysagentTaskCreate_FieldsRoundTrip(t *testing.T) {
 	create := systools.NewTaskCreateTool(deps)
 
 	// Create task 1: name="Alpha", status="inbox", agent_id="agent-1"
-	r1 := create.Execute(context.Background(), map[string]any{
+	//
+	// WithAgentID mirrors real dispatch (the tool registry always injects the
+	// calling agent's own ID before Execute) — needed here because criteria
+	// authorship (FR-6/D5, review r1 M5) is server-set from
+	// tools.ToolAgentID(ctx), never left blank.
+	r1 := create.Execute(tools.WithAgentID(context.Background(), "creator-agent"), map[string]any{
 		"name":         "Alpha",
 		"status":       "inbox",
 		"agent_id":     "agent-1",
 		"workspace_id": testWorkspaceID,
+		"criteria":     workspaceCriteriaArg(),
 	})
 	require.False(t, r1.IsError, "create Alpha must succeed; got: %s", r1.ForLLM)
 	var resp1 map[string]any
@@ -203,11 +210,12 @@ func TestRegression_SysagentTaskCreate_FieldsRoundTrip(t *testing.T) {
 	require.True(t, ok, "create must return an id; got: %v", resp1)
 
 	// Create task 2: name="Beta", status="next", agent_id="agent-2"
-	r2 := create.Execute(context.Background(), map[string]any{
+	r2 := create.Execute(tools.WithAgentID(context.Background(), "creator-agent"), map[string]any{
 		"name":         "Beta",
 		"status":       "next",
 		"agent_id":     "agent-2",
 		"workspace_id": testWorkspaceID,
+		"criteria":     workspaceCriteriaArg(),
 	})
 	require.False(t, r2.IsError, "create Beta must succeed; got: %s", r2.ForLLM)
 	var resp2 map[string]any

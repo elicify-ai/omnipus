@@ -129,6 +129,12 @@ func TestRunTurn_SyncDelegate_PersistsResultOnReload(t *testing.T) {
 
 	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
 	delegateTool.SetSpawner(NewSubTurnSpawner(al))
+	// ADR-057 U14 fixture repair: DelegateTool now refuses to start a
+	// delegated session without a durable lifecycle store wired (fail-closed
+	// rather than an untracked, unrecoverable session) — mirrors
+	// message_parent_real_context_test.go's wiring.
+	lifecycleStore := session.NewLifecycleStore(filepath.Join(t.TempDir(), "lifecycle"))
+	delegateTool.SetLifecycleStore(lifecycleStore)
 	// Install BOTH gates (allow): async delegation uses the Background gate, but
 	// this test delegates synchronously (async=false), which is gated by the
 	// Await checker — without it the delegation is denied by default.

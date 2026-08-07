@@ -62,9 +62,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/stretchr/testify/require"
+
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -112,12 +114,24 @@ func (s *scriptedApprover) callCount() int {
 // newGrantChainAgentLoop builds an AgentLoop with a default (native) agent
 // plus two subagent_3p-style external-cli worker agents ("child-agent",
 // "grandchild-agent") for the grant-inheritance chain tests below. Real CLI
-// binaries are never invoked — each test installs a fake driver
-// (withFakeDriver) before dispatching to either worker.
+// binaries are never invoked — each test installs a fake/blocking driver
+// before dispatching to either worker.
+//
+// seedDistinctTestWorkspacesForIDs gives each worker its OWN solo workspace
+// (called BEFORE mustNewAgentLoop's own ensureTestWorkspaceMembership, which
+// leaves an already-covered id alone) — mirrors cancel_stress_test.go's
+// identical need: without it, both workers fall into ADR-046 P1's shared
+// default test-harness workspace and therefore the SAME resolved work/ dir,
+// so TestApprovalGrant_TransitiveAcrossThreeLevels's two concurrently-active
+// hops would serialize on external_dispatch.go's workspaceRunLocks — hop 2
+// would not even reach its own driver until hop 1's dispatch released the
+// lock, silently turning "prove the grant persists while BOTH hops are
+// active" into "prove it survives until hop 1 times out".
 func newGrantChainAgentLoop(t *testing.T) *AgentLoop {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
+	seedDistinctTestWorkspacesForIDs(t, []string{"child-agent", "grandchild-agent"})
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -152,54 +166,97 @@ func newGrantChainAgentLoop(t *testing.T) *AgentLoop {
 	return mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
 }
 
-// injectFakeCompletion sends a minimal successful output+end event pair into
-// fr, then cancels it (closing its event channel) — the same fire-and-forget
-// pattern pkg/agent/external_dispatch_test.go uses to let
-// runExternalCLISubTurn's drain loop terminate promptly.
-func injectFakeCompletion(fr *runner.FakeRunner, text string) {
-	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: text}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
-		fr.Cancel()
-	}()
-}
-
 // TestApprovalGrant_FullChainSpawnInheritDeny is the FR-D5 regression test:
-// it chains Record -> a REAL (not mocked) spawnSubTurn call -> Inherit,
+// it chains Record -> a REAL (not mocked) spawnSubTurn call -> InheritFrom,
 // proving the grant a parent holds is visible to the child it delegates to
 // via the actual production delegation path (spawnSubTurn), not merely a
-// hand-rolled Inherit() call as pkg/security/approvalgrants_test.go already
-// exercises in isolation.
+// hand-rolled InheritFrom() call as pkg/security/approvalgrants_test.go
+// already exercises in isolation.
 //
-// Traces to: agent-delegation-spec.md FR-D5, BDD "The combined end-to-end path".
+// ADR-057 W10/FR-031 inversion `[grill C-1]`: the single-key Inherit(sessionID,
+// srcAgentID, dstAgentID) this test used to drive was REMOVED, not
+// re-parameterised — subturn.go now calls the two-key
+// InheritFrom(parentTS.transcriptSessionID, parentTS.agentID, childID,
+// agent.ID), which UNIONS the grant into the CHILD'S OWN session
+// (subturn.go:939), never the shared parent session. The pre-ADR-057
+// contract this test pinned — "the child shows the grant under the SAME
+// session id the parent recorded it under" — is exactly what D1 (a
+// delegated child owns its own real session) makes false: a child's
+// transcriptSessionID is no longer the parent's shared id (FR-007/FR-009),
+// so IsAllowed's own consumer (loop.go:8617, `ts.transcriptSessionID`) would
+// look up the child's OWN session, not the parent's, when the delegate
+// itself calls a tool. This test is inverted to assert the NEW invariant:
+// the grant lands under the child's distinct session id, and — the negative
+// space the old assertion could never express — is NOT visible under the
+// parent's shared session for the child's identity, proving InheritFrom
+// genuinely re-keyed rather than merely also-wrote the old location.
+//
+// Traces to: agent-delegation-spec.md FR-D5, BDD "The combined end-to-end path";
+// ADR-057 spec Functional Requirements "Approvals and session teardown (W10)", FR-031.
+//
+// ADR-057 FR-033/W10d TIMING NOTE (found while inverting this test — not a
+// separate grill finding): CloseSession("delegate_terminal") clears the
+// CHILD's OWN grant set the instant its turn ends (subturn.go:1546) —
+// intentional, so an inherited "Always Allow" grant does not outlive the
+// child that received it. The pre-ADR-057 version of this test could check
+// the grant AFTER spawnSubTurn returned because it checked the PARENT's
+// session, which the child's own CloseSession never touches. Now that the
+// assertion is correctly keyed to the CHILD's OWN session, checking after a
+// synchronous spawnSubTurn call returns would be checking AFTER FR-033 has
+// already cleared it. This test uses a BLOCKING external-cli driver
+// (subturn_external_cancel_test.go's withBlockingDriver) to keep the child's
+// dispatch genuinely in flight, observes the grant DURING that window
+// (exactly like a real tool call the child makes mid-turn would), then
+// explicitly ends the child's turn and asserts FR-033's clearing as its own,
+// separate, consequential-semantics proof (US-18).
 func TestApprovalGrant_FullChainSpawnInheritDeny(t *testing.T) {
 	al := newGrantChainAgentLoop(t)
-	fr, restore := withFakeDriver(t)
+	driver, restore := withBlockingDriver(t)
 	defer restore()
 
-	const sessionID = "S1"
 	parentAgent := al.GetRegistry().GetDefaultAgent()
 	if parentAgent == nil {
 		t.Fatal("test setup: no default agent")
 	}
 
-	// 1. Parent records an "Always Allow" grant for "bash" in session S1.
-	al.ApprovalGrants().Record(sessionID, parentAgent.ID, "bash")
-	if !al.ApprovalGrants().IsAllowed(sessionID, parentAgent.ID, "bash") {
+	// ADR-057 FR-005/FR-096 fixture repair: spawnSubTurn's
+	// sharedStore.CreateSessionWithID(childID, parentTS.transcriptSessionID, ...)
+	// requires the parent id to resolve to a REAL session in
+	// al.GetSessionStore() — the old literal "S1" was never created there.
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "shared session store must be non-nil")
+	parentMeta, err := store.NewSession(session.SessionTypeChat, "test-channel", parentAgent.ID)
+	require.NoError(t, err)
+	parentSessionID := parentMeta.ID
+
+	// Corollary — distinct ids everywhere: the child's own session id is a
+	// deliberately DIFFERENT, non-equal value from the parent's, pinned via
+	// SubTurnConfig.DelegateSessionID so the test can assert on exactly which
+	// session the grant landed under.
+	const childSessionID = "grant-chain-child-1"
+	require.NotEqual(t, parentSessionID, childSessionID, "parent and child session ids must be distinct")
+
+	// 1. Parent records an "Always Allow" grant for "bash" in ITS OWN session.
+	al.ApprovalGrants().Record(parentSessionID, parentAgent.ID, "bash")
+	if !al.ApprovalGrants().IsAllowed(parentSessionID, parentAgent.ID, "bash") {
 		t.Fatal("setup: parent grant must be recorded before delegating")
 	}
 
-	// Sanity: the child must NOT already show the grant before any delegation
-	// happens — otherwise the assertion below would be vacuous.
-	if al.ApprovalGrants().IsAllowed(sessionID, "child-agent", "bash") {
+	// Sanity: the child must NOT already show the grant under its own
+	// (not-yet-created) session before any delegation happens — otherwise the
+	// assertion below would be vacuous.
+	if al.ApprovalGrants().IsAllowed(childSessionID, "child-agent", "bash") {
 		t.Fatal("setup invariant broken: child-agent must not already have the grant")
 	}
 
 	// 2. The parent delegates to "child-agent" (a subagent_3p external-cli
 	// worker) via a REAL spawnSubTurn call — async=false / await mode,
 	// matching delegate(async=false) exactly (the same function delegate's
-	// async mode also funnels through).
-	injectFakeCompletion(fr, "hop done")
+	// async mode also funnels through). Launched on a goroutine (spawnSubTurn
+	// itself blocks synchronously on the child's dispatch regardless of
+	// Async) so the test can observe the child's grant WHILE its turn is
+	// still genuinely active, before FR-033's terminal cleanup — see the
+	// TIMING NOTE above.
 	parentTS := &turnState{
 		ctx:                 context.Background(),
 		turnID:              "parent-grant-chain",
@@ -209,40 +266,57 @@ func TestApprovalGrant_FullChainSpawnInheritDeny(t *testing.T) {
 		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
 		session:             &ephemeralSessionStore{},
 		agent:               parentAgent,
-		transcriptSessionID: sessionID,
+		transcriptSessionID: parentSessionID,
+		routingSessionID:    session.RoutingSessionID(parentSessionID),
+		transcriptStore:     store,
 		agentID:             parentAgent.ID,
 	}
-	ctx := withSpawnToolCallID(context.Background(), "grant-chain-call-1")
-	_, err := spawnSubTurn(ctx, al, parentTS, SubTurnConfig{
-		Model:         "test-model",
-		SystemPrompt:  "do the thing",
-		TargetAgentID: "child-agent",
-		Async:         false,
-		Timeout:       5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("spawnSubTurn: %v", err)
+	spawnDone := make(chan struct{})
+	go func() {
+		defer close(spawnDone)
+		ctx := withSpawnToolCallID(context.Background(), "grant-chain-call-1")
+		_, _ = spawnSubTurn(ctx, al, parentTS, SubTurnConfig{
+			Model:             "test-model",
+			SystemPrompt:      "do the thing",
+			TargetAgentID:     "child-agent",
+			Async:             false,
+			Timeout:           5 * time.Second,
+			DelegateSessionID: childSessionID,
+		})
+	}()
+	select {
+	case <-driver.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("BLOCKED: child-agent's external-cli driver never started")
 	}
 
-	// 3. child-agent must now show the inherited "bash" grant — proving
-	// Inherit fired correctly through the REAL production spawnSubTurn path
-	// (parentTS.transcriptSessionID / parentTS.agentID -> the resolved
-	// child's agent.ID, which subturn.go's external-cli identity-fix rebases
-	// onto the TARGET's own ID), not just in a unit test that calls Inherit
-	// directly.
-	if !al.ApprovalGrants().IsAllowed(sessionID, "child-agent", "bash") {
-		t.Fatal("expected child-agent to inherit the parent's 'bash' grant via the real spawnSubTurn -> Inherit call")
+	// 3. child-agent must now show the inherited "bash" grant UNDER ITS OWN
+	// SESSION, while its turn is still genuinely active — proving InheritFrom
+	// fired correctly through the REAL production spawnSubTurn path
+	// (parentTS.transcriptSessionID/agentID as source, childID/agent.ID as
+	// destination — subturn.go:939), not just in a unit test that calls
+	// InheritFrom directly.
+	if !al.ApprovalGrants().IsAllowed(childSessionID, "child-agent", "bash") {
+		t.Fatal("expected child-agent to inherit the parent's 'bash' grant, keyed to its OWN session, via the real spawnSubTurn -> InheritFrom call")
+	}
+	// THE NEW-INVARIANT PROOF (negative space the pre-ADR-057 assertion could
+	// never express): the grant must NOT be visible under the shared PARENT
+	// session for the child's identity — InheritFrom re-keys to the child's
+	// own session, it does not also leave a copy under the parent's.
+	if al.ApprovalGrants().IsAllowed(parentSessionID, "child-agent", "bash") {
+		t.Fatal("child-agent's inherited grant must be keyed to its OWN session, not the shared parent session — " +
+			"this is the D1 identity split InheritFrom (FR-031) exists to honor")
 	}
 
 	// 4. THE END-TO-END PROOF (ADR-036 §3.4, FR-D5): drive the actual approval
 	// DECISION through AgentLoop.CheckGrantOrRequestApproval — the SOLE
 	// consultation point now that the legacy WS-frame gate is gone — using the
-	// child's REAL post-inheritance identity (sessionID, "child-agent"). A
-	// neverCallApprover that fails the test if invoked proves the inherited
+	// child's REAL post-inheritance identity (its OWN session, "child-agent").
+	// A neverCallApprover that fails the test if invoked proves the inherited
 	// grant auto-approves "bash" without ever re-prompting.
 	al.SetToolApprover(&neverCallApprover{t: t})
 	approved, denialReason := al.CheckGrantOrRequestApproval(
-		context.Background(), sessionID, "child-agent", "bash", "grant-chain-verify-1", "verify-turn-1", nil,
+		context.Background(), childSessionID, "child-agent", "bash", "grant-chain-verify-1", "verify-turn-1", nil,
 	)
 	if !approved {
 		t.Fatalf(
@@ -257,7 +331,7 @@ func TestApprovalGrant_FullChainSpawnInheritDeny(t *testing.T) {
 	scripted := &scriptedApprover{result: false, reason: "denied for test"}
 	al.SetToolApprover(scripted)
 	approved, denialReason = al.CheckGrantOrRequestApproval(
-		context.Background(), sessionID, "child-agent", "read_file", "grant-chain-verify-2", "verify-turn-1", nil,
+		context.Background(), childSessionID, "child-agent", "read_file", "grant-chain-verify-2", "verify-turn-1", nil,
 	)
 	if approved {
 		t.Fatal("expected an ungranted tool to require interactive approval, not auto-approve")
@@ -268,38 +342,88 @@ func TestApprovalGrant_FullChainSpawnInheritDeny(t *testing.T) {
 	if got := scripted.callCount(); got != 1 {
 		t.Fatalf("expected the approver to be consulted exactly once for an ungranted tool, got %d calls", got)
 	}
+
+	// 6. End the child's turn — direct point-lookup by its own session key
+	// (ScopeSelfOnly), mirroring session_messaging_wire.go's real
+	// delegate(action="cancel") wiring exactly (al.InterruptSessionHard(sessionKey, ScopeSelfOnly, hint)).
+	if _, err := al.InterruptSessionHard(childSessionID, ScopeSelfOnly, "test cleanup"); err != nil {
+		t.Fatalf("InterruptSessionHard: %v", err)
+	}
+	select {
+	case <-spawnDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("BLOCKED: spawnSubTurn did not return after canceling the child")
+	}
+	require.True(t, driver.ctxCanceled.Load(), "the child's external-cli driver ctx must have been canceled")
+
+	// 7. THE CONSEQUENTIAL-SEMANTICS PROOF (FR-033, US-18): once the child's
+	// turn has genuinely ended, its inherited grant must be cleared — it must
+	// not leak for the process lifetime of every ever-delegated child.
+	if al.ApprovalGrants().IsAllowed(childSessionID, "child-agent", "bash") {
+		t.Fatal("expected child-agent's inherited grant to be cleared once its turn ended (FR-033 CloseSession)")
+	}
 }
 
 // TestApprovalGrant_TransitiveAcrossThreeLevels is the FR-D8 regression test:
 // a grant held by a grandparent must be visible to a grandchild two
 // delegation hops away, proven via two REAL (not mocked) spawnSubTurn calls
 // chained end-to-end — grandparent delegates to parent (inherits), parent
-// delegates to grandchild (inherits transitively, since Inherit copies the
-// parent's ENTIRE current bucket, which already includes what it inherited).
+// delegates to grandchild (inherits transitively, since InheritFrom copies
+// the parent's ENTIRE current bucket, which already includes what it
+// inherited).
+//
+// ADR-057 W10/FR-031 inversion `[grill C-1]`: see the identical note on
+// TestApprovalGrant_FullChainSpawnInheritDeny above — the single-key Inherit
+// this test used to drive was removed for the two-key InheritFrom, which
+// re-keys onto each delegate's OWN session rather than the shared
+// grandparent session. Two consequences pinned here that a same-session
+// design could never distinguish: (1) hop 1's grant lands under child-agent's
+// OWN session, not the grandparent's; (2) hop 2's source read is therefore
+// child-agent's OWN session (its inherited bucket), matching D1's own rule
+// that a delegated child's transcriptSessionID is its own — hop2Parent below
+// is built with transcriptSessionID = the CHILD's session from hop 1, mirroring
+// exactly what the REAL childTS hop 1 produced would carry, not the
+// grandparent's shared id.
 //
 // Traces to: agent-delegation-spec.md FR-D8, BDD "A grant flows transitively
-// across a three-level delegation chain".
+// across a three-level delegation chain"; ADR-057 spec FR-031.
 func TestApprovalGrant_TransitiveAcrossThreeLevels(t *testing.T) {
 	al := newGrantChainAgentLoop(t)
 
-	const sessionID = "S1"
 	grandparentAgent := al.GetRegistry().GetDefaultAgent()
 	if grandparentAgent == nil {
 		t.Fatal("test setup: no default agent")
 	}
 
+	// ADR-057 FR-005/FR-096 fixture repair: see the identical note in
+	// TestApprovalGrant_FullChainSpawnInheritDeny above.
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "shared session store must be non-nil")
+	grandparentMeta, err := store.NewSession(session.SessionTypeChat, "test-channel", grandparentAgent.ID)
+	require.NoError(t, err)
+	grandparentSessionID := grandparentMeta.ID
+
+	// Corollary — distinct ids everywhere: three deliberately different,
+	// non-equal session ids across the chain.
+	const childSessionID = "grant-chain-child-2"
+	const grandchildSessionID = "grant-chain-grandchild-1"
+	require.NotEqual(t, grandparentSessionID, childSessionID)
+	require.NotEqual(t, childSessionID, grandchildSessionID)
+	require.NotEqual(t, grandparentSessionID, grandchildSessionID)
+
 	// 1. Grandparent (the default agent) records an "Always Allow" grant for
-	// "bash" in session S1.
-	al.ApprovalGrants().Record(sessionID, grandparentAgent.ID, "bash")
+	// "bash" in ITS OWN session.
+	al.ApprovalGrants().Record(grandparentSessionID, grandparentAgent.ID, "bash")
 
 	// 2. Hop 1 — grandparent delegates to "child-agent" via a REAL
-	// spawnSubTurn call (external-cli dispatch via a fake driver, so
+	// spawnSubTurn call (external-cli dispatch via a BLOCKING driver, so
 	// child-agent's own identity is genuinely distinct from the grandparent's
 	// — see the file-level DISCOVERY note on why native dispatch cannot be
-	// used to prove this).
-	fr1, restore1 := withFakeDriver(t)
+	// used to prove this — and its turn stays genuinely active long enough
+	// for hop 2 to delegate onward from it before FR-033 tears it down; see
+	// the TIMING NOTE on TestApprovalGrant_FullChainSpawnInheritDeny above).
+	driver1, restore1 := withBlockingDriver(t)
 	defer restore1()
-	injectFakeCompletion(fr1, "hop1 done")
 
 	hop1Parent := &turnState{
 		ctx:                 context.Background(),
@@ -310,41 +434,54 @@ func TestApprovalGrant_TransitiveAcrossThreeLevels(t *testing.T) {
 		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
 		session:             &ephemeralSessionStore{},
 		agent:               grandparentAgent,
-		transcriptSessionID: sessionID,
+		transcriptSessionID: grandparentSessionID,
+		routingSessionID:    session.RoutingSessionID(grandparentSessionID),
+		transcriptStore:     store,
 		agentID:             grandparentAgent.ID,
 	}
-	hop1Ctx := withSpawnToolCallID(context.Background(), "grant-chain-hop-1")
-	_, err := spawnSubTurn(hop1Ctx, al, hop1Parent, SubTurnConfig{
-		Model:         "test-model",
-		SystemPrompt:  "hop 1: delegate to child-agent",
-		TargetAgentID: "child-agent",
-		Async:         false,
-		Timeout:       5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("hop 1 spawnSubTurn: %v", err)
+	hop1Done := make(chan struct{})
+	go func() {
+		defer close(hop1Done)
+		hop1Ctx := withSpawnToolCallID(context.Background(), "grant-chain-hop-1")
+		_, _ = spawnSubTurn(hop1Ctx, al, hop1Parent, SubTurnConfig{
+			Model:             "test-model",
+			SystemPrompt:      "hop 1: delegate to child-agent",
+			TargetAgentID:     "child-agent",
+			Async:             false,
+			Timeout:           5 * time.Second,
+			DelegateSessionID: childSessionID,
+		})
+	}()
+	select {
+	case <-driver1.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("BLOCKED: hop 1's external-cli driver never started")
 	}
 
-	// Confirm hop 1's inheritance landed before proceeding to hop 2 — this is
-	// the same assertion TestApprovalGrant_FullChainSpawnInheritDeny makes,
-	// re-checked here because hop 2's correctness depends on it.
-	if !al.ApprovalGrants().IsAllowed(sessionID, "child-agent", "bash") {
-		t.Fatal("hop 1: child-agent must inherit the grandparent's grant before hop 2 can prove transitivity")
+	// Confirm hop 1's inheritance landed UNDER THE CHILD'S OWN SESSION before
+	// proceeding to hop 2 — this is the same assertion
+	// TestApprovalGrant_FullChainSpawnInheritDeny makes, re-checked here
+	// because hop 2's correctness depends on it.
+	if !al.ApprovalGrants().IsAllowed(childSessionID, "child-agent", "bash") {
+		t.Fatal("hop 1: child-agent must inherit the grandparent's grant, keyed to its OWN session, before hop 2 can prove transitivity")
 	}
 
-	// 3. Hop 2 — "child-agent" (now itself a delegator) delegates onward to
-	// "grandchild-agent" via a SECOND real spawnSubTurn call, using a fresh
-	// fake driver (a FakeRunner's event channel is single-shot; its Cancel in
-	// hop 1 closed it permanently). The turnState here represents the real
-	// child turn hop 1 produced: same session, agentID "child-agent" (the
-	// identity hop 1's external-cli rebase assigned it), depth 1.
+	// 3. Hop 2 — "child-agent" (now itself a delegator, still mid-turn)
+	// delegates onward to "grandchild-agent" via a SECOND real spawnSubTurn
+	// call, using its OWN blocking driver. The turnState here represents the
+	// real child turn hop 1 produced: transcriptSessionID is the CHILD'S OWN
+	// session (D1 — a delegated child's transcriptSessionID is its own, never
+	// the parent's shared id), routingSessionID inherited verbatim from the
+	// grandparent (FR-011, exactly as spawnSubTurn's own
+	// `childTS.routingSessionID = parentTS.routingSessionID` would have set
+	// it), agentID "child-agent" (the identity hop 1's external-cli rebase
+	// assigned it), depth 1.
 	childAgentInstance, ok := al.GetRegistry().GetAgent("child-agent")
 	if !ok {
 		t.Fatal("child-agent must be registered")
 	}
-	fr2, restore2 := withFakeDriver(t)
+	driver2, restore2 := withBlockingDriver(t)
 	defer restore2()
-	injectFakeCompletion(fr2, "hop2 done")
 
 	hop2Parent := &turnState{
 		ctx:                 context.Background(),
@@ -355,42 +492,62 @@ func TestApprovalGrant_TransitiveAcrossThreeLevels(t *testing.T) {
 		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
 		session:             &ephemeralSessionStore{},
 		agent:               childAgentInstance,
-		transcriptSessionID: sessionID,
+		transcriptSessionID: childSessionID,
+		routingSessionID:    session.RoutingSessionID(grandparentSessionID),
+		transcriptStore:     store,
 		agentID:             "child-agent",
 	}
-	hop2Ctx := withSpawnToolCallID(context.Background(), "grant-chain-hop-2")
-	_, err = spawnSubTurn(hop2Ctx, al, hop2Parent, SubTurnConfig{
-		Model:         "test-model",
-		SystemPrompt:  "hop 2: delegate to grandchild-agent",
-		TargetAgentID: "grandchild-agent",
-		Async:         false,
-		Timeout:       5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("hop 2 spawnSubTurn: %v", err)
+	hop2Done := make(chan struct{})
+	go func() {
+		defer close(hop2Done)
+		hop2Ctx := withSpawnToolCallID(context.Background(), "grant-chain-hop-2")
+		_, _ = spawnSubTurn(hop2Ctx, al, hop2Parent, SubTurnConfig{
+			Model:             "test-model",
+			SystemPrompt:      "hop 2: delegate to grandchild-agent",
+			TargetAgentID:     "grandchild-agent",
+			Async:             false,
+			Timeout:           5 * time.Second,
+			DelegateSessionID: grandchildSessionID,
+		})
+	}()
+	select {
+	case <-driver2.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("BLOCKED: hop 2's external-cli driver never started")
 	}
 
 	// 4. THE PROOF: grandchild-agent — two hops from the original grantor —
-	// must show the inherited "bash" grant, with NO new inheritance logic
-	// required (Inherit's copy-at-spawn semantics already carry it, since hop
-	// 2's Inherit call copies child-agent's ENTIRE current bucket, which by
-	// this point already includes what it inherited from the grandparent in hop 1).
-	if !al.ApprovalGrants().IsAllowed(sessionID, "grandchild-agent", "bash") {
+	// must show the inherited "bash" grant UNDER ITS OWN SESSION, while its
+	// own turn is still genuinely active, with NO new inheritance logic
+	// required (InheritFrom's copy-at-spawn semantics already carry it, since
+	// hop 2's InheritFrom call copies child-agent's ENTIRE current bucket —
+	// read from child-agent's OWN session — which by this point already
+	// includes what it inherited from the grandparent in hop 1).
+	if !al.ApprovalGrants().IsAllowed(grandchildSessionID, "grandchild-agent", "bash") {
 		t.Fatal(
-			"expected grandchild-agent to inherit the grandparent's 'bash' grant transitively across two real spawnSubTurn hops",
+			"expected grandchild-agent to inherit the grandparent's 'bash' grant transitively, keyed to its OWN session, across two real spawnSubTurn hops",
 		)
+	}
+	// THE NEW-INVARIANT PROOF (negative space): the grant must not be visible
+	// under either ancestor's shared session for the grandchild's identity.
+	if al.ApprovalGrants().IsAllowed(grandparentSessionID, "grandchild-agent", "bash") {
+		t.Fatal("grandchild-agent's inherited grant must be keyed to its OWN session, not the grandparent's")
+	}
+	if al.ApprovalGrants().IsAllowed(childSessionID, "grandchild-agent", "bash") {
+		t.Fatal("grandchild-agent's inherited grant must be keyed to its OWN session, not its direct parent's")
 	}
 
 	// 5. THE END-TO-END PROOF (ADR-036 §3.4): drive the actual approval
 	// DECISION for grandchild-agent through AgentLoop.CheckGrantOrRequestApproval
 	// — the SOLE consultation point now that the legacy WS-frame gate is gone
-	// — proving the transitively-inherited grant auto-approves "bash" two
-	// delegation hops away from the original grantor, without ever reaching
-	// the interactive approver.
+	// — using the grandchild's REAL post-inheritance identity (its OWN
+	// session), proving the transitively-inherited grant auto-approves "bash"
+	// two delegation hops away from the original grantor, without ever
+	// reaching the interactive approver.
 	al.SetToolApprover(&neverCallApprover{t: t})
 	approved, denialReason := al.CheckGrantOrRequestApproval(
 		context.Background(),
-		sessionID,
+		grandchildSessionID,
 		"grandchild-agent",
 		"bash",
 		"grant-chain-verify-transitive",
@@ -403,4 +560,34 @@ func TestApprovalGrant_TransitiveAcrossThreeLevels(t *testing.T) {
 			denialReason,
 		)
 	}
+
+	// 6. Teardown, deepest descendant first — cancel the grandchild, wait for
+	// hop 2 to return, then cancel the child, wait for hop 1 to return. Each
+	// cancel is a direct point-lookup by its own session key (ScopeSelfOnly),
+	// mirroring session_messaging_wire.go's real delegate(action="cancel")
+	// wiring.
+	if _, err := al.InterruptSessionHard(grandchildSessionID, ScopeSelfOnly, "test cleanup"); err != nil {
+		t.Fatalf("InterruptSessionHard (grandchild): %v", err)
+	}
+	select {
+	case <-hop2Done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("BLOCKED: hop 2 spawnSubTurn did not return after canceling the grandchild")
+	}
+	require.True(t, driver2.ctxCanceled.Load(), "the grandchild's external-cli driver ctx must have been canceled")
+	// FR-033 consequential-semantics proof for the grandchild (US-18) —
+	// mirrors TestApprovalGrant_FullChainSpawnInheritDeny's step 7.
+	if al.ApprovalGrants().IsAllowed(grandchildSessionID, "grandchild-agent", "bash") {
+		t.Fatal("expected grandchild-agent's inherited grant to be cleared once its turn ended (FR-033 CloseSession)")
+	}
+
+	if _, err := al.InterruptSessionHard(childSessionID, ScopeSelfOnly, "test cleanup"); err != nil {
+		t.Fatalf("InterruptSessionHard (child): %v", err)
+	}
+	select {
+	case <-hop1Done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("BLOCKED: hop 1 spawnSubTurn did not return after canceling the child")
+	}
+	require.True(t, driver1.ctxCanceled.Load(), "the child's external-cli driver ctx must have been canceled")
 }

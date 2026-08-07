@@ -73,10 +73,18 @@ function makeDrag(): TaskCardDrag {
   }
 }
 
+// ADR-052 §6.8: TaskCard now embeds a `TaskActionButton` (also role="button")
+// by default. These two describe blocks test the CARD ROOT's own keyboard
+// semantics (open vs. drag-lift) in isolation from that new, orthogonal
+// affordance — `showActions={false}` keeps `screen.getByRole('button')`
+// (no name filter) unambiguous, exactly as before this feature landed. The
+// action button's own isolation (a click on it never opens the card) is
+// covered separately in TaskCard.cancelled.test.tsx, and it needs no
+// QueryClientProvider here since `showActions={false}` means it never mounts.
 describe('TaskCard — keyboard activation, draggable (drag prop present)', () => {
   it('Enter opens the task via onClick', () => {
     const onClick = vi.fn()
-    render(<TaskCard task={baseTask()} onClick={onClick} drag={makeDrag()} />)
+    render(<TaskCard task={baseTask()} onClick={onClick} drag={makeDrag()} showActions={false} />)
 
     const card = screen.getByRole('button')
     fireEvent.keyDown(card, { key: 'Enter' })
@@ -86,7 +94,7 @@ describe('TaskCard — keyboard activation, draggable (drag prop present)', () =
 
   it('Space does NOT open the task — it is reserved for dnd-kit keyboard lift', () => {
     const onClick = vi.fn()
-    render(<TaskCard task={baseTask()} onClick={onClick} drag={makeDrag()} />)
+    render(<TaskCard task={baseTask()} onClick={onClick} drag={makeDrag()} showActions={false} />)
 
     const card = screen.getByRole('button')
     fireEvent.keyDown(card, { key: ' ' })
@@ -97,7 +105,7 @@ describe('TaskCard — keyboard activation, draggable (drag prop present)', () =
   it('still forwards Space to dnd-kit\'s own onKeyDown listener (the lift itself keeps working)', () => {
     const onClick = vi.fn()
     const drag = makeDrag()
-    render(<TaskCard task={baseTask()} onClick={onClick} drag={drag} />)
+    render(<TaskCard task={baseTask()} onClick={onClick} drag={drag} showActions={false} />)
 
     const card = screen.getByRole('button')
     fireEvent.keyDown(card, { key: ' ' })
@@ -109,7 +117,7 @@ describe('TaskCard — keyboard activation, draggable (drag prop present)', () =
 describe('TaskCard — keyboard activation, non-draggable (no drag prop, e.g. ExecutionView)', () => {
   it('Enter opens the task via onClick', () => {
     const onClick = vi.fn()
-    render(<TaskCard task={baseTask()} onClick={onClick} />)
+    render(<TaskCard task={baseTask()} onClick={onClick} showActions={false} />)
 
     const card = screen.getByRole('button')
     fireEvent.keyDown(card, { key: 'Enter' })
@@ -119,7 +127,7 @@ describe('TaskCard — keyboard activation, non-draggable (no drag prop, e.g. Ex
 
   it('Space ALSO opens the task — there is no drag context reserving it (WCAG 4.1.2)', () => {
     const onClick = vi.fn()
-    render(<TaskCard task={baseTask()} onClick={onClick} />)
+    render(<TaskCard task={baseTask()} onClick={onClick} showActions={false} />)
 
     const card = screen.getByRole('button')
     fireEvent.keyDown(card, { key: ' ' })
@@ -129,7 +137,7 @@ describe('TaskCard — keyboard activation, non-draggable (no drag prop, e.g. Ex
 
   it('a plain mouse click also opens the task', () => {
     const onClick = vi.fn()
-    render(<TaskCard task={baseTask()} onClick={onClick} />)
+    render(<TaskCard task={baseTask()} onClick={onClick} showActions={false} />)
 
     fireEvent.click(screen.getByRole('button'))
 
@@ -224,5 +232,71 @@ describe('TaskCard — keyboard event bubbling from nested subtask rows (altitud
     fireEvent.keyDown(subtaskButton, { key: ' ' })
 
     expect(drag.listeners.onKeyDown).not.toHaveBeenCalled()
+  })
+})
+
+// ── Long unbroken title containment (UAT Finding 2) ─────────────────────────
+//
+// UAT repro: a 200-char title with NO spaces (exactly the create-task form's
+// own `maxLength`) widened its Board column enough to push Done/Failed
+// entirely off-screen, with no horizontal scroll to reach them — because a
+// flex item's default `min-width: auto` resolves to its CONTENT's min-content
+// size, and for an unbroken string that's the string's full rendered width.
+// That inflated width cascades up through every ancestor flex container
+// (this `<p>` -> the title row -> the card -> StatusColumn, itself a flex
+// item of the columns row) unless something bounds it.
+//
+// jsdom has no real layout/intrinsic-sizing engine (`getBoundingClientRect`
+// et al. always report zero without help — see BoardViewDnd.test.tsx's
+// `withMockedBoardRects` for the lengths keyboard-DnD coverage goes to to
+// work around that), so this can't measure actual on-screen pixels. What IS
+// verifiable in jsdom: (a) the title element carries the two classes the fix
+// relies on, and (b) — via a real injected stylesheet + `getComputedStyle`,
+// not just a className string match — those classes resolve through jsdom's
+// real CSSOM cascade to the EXACT declarations Tailwind's own compiler emits
+// for them (confirmed directly against the installed `tailwindcss` v4
+// package: `grep -o 'overflow-wrap","anywhere' node_modules/tailwindcss/dist/lib.js`
+// matches). `overflow-wrap: anywhere` is the one wrapping mode the CSS Text
+// spec requires browsers to fold into MIN-CONTENT size calculations
+// themselves (unlike `break-word`, which they're allowed to ignore for
+// min-content) — that's the actual mechanism that stops the column blowout,
+// not a cosmetic wrapping preference.
+describe('TaskCard — long unbroken title containment (UAT Finding 2)', () => {
+  function injectRealTailwindDeclarations() {
+    const style = document.createElement('style')
+    style.textContent = '.wrap-anywhere{overflow-wrap:anywhere}.min-w-0{min-width:0px}'
+    document.head.appendChild(style)
+    return () => style.remove()
+  }
+
+  it('renders a 200-char unbroken title with wrap-anywhere + min-w-0, full text intact, and a tooltip carrying the whole string', () => {
+    const removeStyle = injectRealTailwindDeclarations()
+    try {
+      const longTitle = 'A'.repeat(200) // exactly the create-task form's maxLength, no spaces
+      render(<TaskCard task={baseTask({ title: longTitle })} onClick={vi.fn()} showActions={false} />)
+
+      const titleEl = screen.getByText(longTitle)
+      expect(titleEl.textContent).toBe(longTitle) // CSS (line-clamp) truncates the RENDER, not the DOM content
+      expect(titleEl).toHaveAttribute('title', longTitle) // native tooltip carries the full string
+      expect(titleEl).toHaveClass('wrap-anywhere')
+      expect(titleEl).toHaveClass('min-w-0')
+
+      // Real cascade resolution, not just a className string match: the
+      // injected stylesheet mirrors Tailwind's actual compiled output for
+      // these utilities, so this proves the classes take effect through
+      // jsdom's real CSSOM rather than merely being present in `className`.
+      const computed = getComputedStyle(titleEl)
+      expect(computed.overflowWrap).toBe('anywhere')
+      expect(computed.minWidth).toBe('0px')
+    } finally {
+      removeStyle()
+    }
+  })
+
+  it('short titles are unaffected — no visible change for normal-length content', () => {
+    render(<TaskCard task={baseTask({ title: 'Fix login bug' })} onClick={vi.fn()} showActions={false} />)
+    const titleEl = screen.getByText('Fix login bug')
+    expect(titleEl).toHaveAttribute('title', 'Fix login bug')
+    expect(titleEl).toHaveClass('wrap-anywhere', 'min-w-0', 'line-clamp-2')
   })
 })

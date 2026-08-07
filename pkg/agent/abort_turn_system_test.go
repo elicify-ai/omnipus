@@ -13,33 +13,42 @@
 //     TestAgentLoop_InterruptHard_RestoresSession (steering_test.go), which
 //     pins the nil-error behavior.
 //   - Case 2 (any other reason — reached via HookActionHardAbort decisions
-//     and recordSyntheticDeny's abort threshold): system-initiated abort —
-//     BEFORE 499b569f this silently returned turnResult{Aborted} with a NIL
-//     error, so the user saw absolutely nothing. 499b569f made abortTurn
-//     synthesize a real, non-nil error, emit an EventKindError, and append it
-//     to the transcript. Until this file, that branch had ZERO test coverage
-//     for either of its two production call-site families
-//     (HookActionHardAbort, recordSyntheticDeny) — confirmed by grep: neither
-//     symbol appeared in any _test.go file in this package.
+//     and, as of ADR-058, the aggregate tool-denial budget): system-initiated
+//     abort — BEFORE 499b569f this silently returned turnResult{Aborted}
+//     with a NIL error, so the user saw absolutely nothing. 499b569f made
+//     abortTurn synthesize a real, non-nil error, emit an EventKindError, and
+//     append it to the transcript. Until this file, that branch had ZERO test
+//     coverage for its HookActionHardAbort production call-site family —
+//     confirmed by grep: the symbol appeared in no _test.go file in this
+//     package.
 //
-// Traces to: pkg/agent/loop.go:7355-7434 (abortTurn + its doc comment).
+// Traces to: pkg/agent/loop.go::AgentLoop.abortTurn (+ its doc comment).
+// loop.go/turn.go line numbers churn fast (CLAUDE.md) — cite by symbol, not
+// by line range.
+//
+// ADR-058 note: this file used to also cover the mid-turn TOCTOU policy-deny
+// branch's system-initiated abort via FR-084's per-turn counter-and-floor
+// mechanism (config field default 2 in that test). ADR-058 deleted that
+// mechanism outright (issue #595) rather than repairing its inverted
+// sentinel: the one call site left standing after ADR-058's rewiring already
+// returns unconditionally on every path, so the counter could never reach a
+// floor greater than one. Under the ADR-058 replacement (quarantine-at-first,
+// aggregate per-turn denial budget), the first denial to that TOCTOU branch
+// now quarantines the tool and the turn CONTINUES rather than aborting — the
+// old test's premise (a 2nd denial aborting the turn) no longer holds, so it
+// was deleted with the mechanism rather than adapted. Replacement coverage
+// for the aggregate-budget abort path lives in
+// pkg/agent/loop_tool_denial_test.go and
+// pkg/agent/task_executor_tool_denial_test.go.
 
 package agent
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
-	"github.com/elicify-ai/omnipus/pkg/audit"
-	"github.com/elicify-ai/omnipus/pkg/bus"
-	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // hardAbortBeforeLLMHook always returns HookActionHardAbort from BeforeLLM
@@ -66,8 +75,10 @@ func (h *hardAbortBeforeLLMHook) AfterLLM(
 }
 
 // TestAgentLoop_AbortTurn_HookHardAbort_SurfacesSystemInitiatedError drives
-// one of the four HookActionHardAbort call sites (pkg/agent/loop.go:5637-5640,
-// the BeforeLLM decision point) and asserts abortTurn takes case 2: a real,
+// one of the four HookActionHardAbort call sites in
+// pkg/agent/loop.go::AgentLoop.runTurn (the BeforeLLM decision point — the
+// other three are the AfterLLM, before_tool, and after_tool HookActionHardAbort
+// cases in the same function) and asserts abortTurn takes case 2: a real,
 // non-nil error is returned AND surfaced via an EventKindError event, and the
 // turn ends with status Aborted.
 //
@@ -86,8 +97,9 @@ func (h *hardAbortBeforeLLMHook) AfterLLM(
 //
 // And the turn must end with TurnEndStatusAborted.
 //
-// Traces to: pkg/agent/loop.go:7355-7434 (abortTurn), :5614-5641 (BeforeLLM
-// HookActionHardAbort call site).
+// Traces to: pkg/agent/loop.go::AgentLoop.abortTurn, ::AgentLoop.runTurn's
+// BeforeLLM HookActionHardAbort call site. loop.go/turn.go line numbers
+// churn fast (CLAUDE.md) — cite by symbol, not by line range.
 func TestAgentLoop_AbortTurn_HookHardAbort_SurfacesSystemInitiatedError(t *testing.T) {
 	provider := &llmHookTestProvider{}
 	al, agent, cleanup := newHookTestLoop(t, provider)
@@ -141,165 +153,4 @@ func TestAgentLoop_AbortTurn_HookHardAbort_SurfacesSystemInitiatedError(t *testi
 	turnEndPayload, ok := turnEndEvt.Payload.(TurnEndPayload)
 	require.True(t, ok, "expected TurnEndPayload, got %T", turnEndEvt.Payload)
 	assert.Equal(t, TurnEndStatusAborted, turnEndPayload.Status)
-}
-
-// TestRunTurn_SyntheticDenyFloor_AbortsWithSurfacedError drives one of the
-// four recordSyntheticDeny call sites (pkg/agent/loop.go:6663-6665, the
-// mid-turn TOCTOU policy-deny branch) by scripting the LLM to repeatedly call
-// a tool the agent's policy denies. With TurnSyntheticErrorFloor=2, the 2nd
-// consecutive denial trips FR-084's abort threshold, driving abortTurn's
-// case-2 (system-initiated) branch exactly like the hook path above but via
-// a completely independent trigger.
-//
-// BDD: Given an agent whose tool policy denies "dangerous_tool" and a
-//
-//	synthetic-error floor of 2,
-//
-// When the LLM calls "dangerous_tool" twice in a row (each denied by the
-//
-//	mid-turn TOCTOU policy re-check),
-//
-// Then recordSyntheticDeny reports shouldAbort=true on the 2nd denial,
-// And abortTurn synthesizes a real, non-nil error referencing the
-//
-//	synthetic_error_floor stage,
-//
-// And the abort is attributed in the audit log to
-//
-//	audit.EventTurnAbortedSyntheticLoop with the actual denial count.
-//
-// Traces to: pkg/agent/loop.go:7452-7500 (recordSyntheticDeny), :6637-6667
-// (TOCTOU mid-turn-policy-change call site).
-func TestRunTurn_SyntheticDenyFloor_AbortsWithSurfacedError(t *testing.T) {
-	tmpHome := t.TempDir()
-	workspaceDir := filepath.Join(tmpHome, "workspace")
-	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
-
-	// Two consecutive tool-call steps for the SAME denied tool. If the loop
-	// requested a 3rd LLM turn, ScenarioProvider would return
-	// ErrNoMoreResponses — so CallCount()==2 below is a hard proof the abort
-	// fired exactly at the floor, not before and not after.
-	provider := testutil.NewScenario().
-		WithToolCall("dangerous_tool", `{}`).
-		WithToolCall("dangerous_tool", `{}`)
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              workspaceDir,
-				ModelName:         "scripted-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-		},
-		Sandbox: config.OmnipusSandboxConfig{
-			// Enable audit logging so recordSyntheticDeny's
-			// audit.EventTurnAbortedSyntheticLoop entry is written.
-			AuditLog: true,
-		},
-		Gateway: config.GatewayConfig{
-			TurnSyntheticErrorFloor: 2,
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-	defer al.Close()
-
-	stub := &dangerousStubTool{}
-	al.RegisterTool(stub)
-	for _, agentID := range al.GetRegistry().ListAgentIDs() {
-		agentInst, ok := al.GetRegistry().GetAgent(agentID)
-		if !ok {
-			continue
-		}
-		agentInst.StoreToolPolicy(&tools.ToolPolicyCfg{
-			Policies: map[string]config.ToolPolicy{
-				"dangerous_tool": "deny",
-			},
-		})
-	}
-
-	sub := al.SubscribeEvents(32)
-	defer al.UnsubscribeEvents(sub.ID)
-
-	finalContent, err := al.ProcessDirect(
-		context.Background(),
-		"please run dangerous_tool for me",
-		"test-session-synthetic-deny",
-	)
-
-	// Non-vacuous: if abortTurn's case 2 regressed to a nil error (the
-	// original bug this whole effort fixed), this would incorrectly report
-	// success instead of the real synthetic-error-floor abort.
-	require.Error(t, err,
-		"reaching the synthetic-error floor must surface a real, non-nil error — not silently succeed")
-	assert.Empty(t, finalContent)
-	assert.Contains(t, err.Error(), "synthetic_error_floor",
-		"error must name the synthetic_error_floor stage")
-	assert.Contains(t, err.Error(), "synthetic_error_loop",
-		"error must surface recordSyntheticDeny's own abort reason")
-	assert.Contains(t, err.Error(), `"count":2`,
-		"error must carry the actual denial count, not a hardcoded/generic message")
-
-	// Differentiation: exactly 2 LLM round trips happened — not 1 (would mean
-	// an immediate bail unrelated to the floor) and not 3+ (would mean the
-	// floor was never enforced and the scenario ran dry).
-	assert.Equal(t, 2, provider.CallCount(),
-		"expected exactly 2 LLM round trips before the floor aborted the turn")
-	assert.False(t, stub.wasCalled.Load(), "dangerous_tool.Execute must never run — policy denies it")
-
-	events := collectEventStream(sub.C)
-
-	skipped := 0
-	for _, evt := range events {
-		if evt.Kind != EventKindToolExecSkipped {
-			continue
-		}
-		payload, ok := evt.Payload.(ToolExecSkippedPayload)
-		require.True(t, ok, "expected ToolExecSkippedPayload, got %T", evt.Payload)
-		assert.Equal(t, "dangerous_tool", payload.Tool)
-		skipped++
-	}
-	assert.Equal(t, 2, skipped, "expected exactly 2 tool-exec-skipped events, one per denied call")
-
-	errEvt, ok := findEvent(events, EventKindError)
-	require.True(t, ok, "expected an EventKindError to be emitted for the synthetic-deny-floor abort")
-	errPayload, ok := errEvt.Payload.(ErrorPayload)
-	require.True(t, ok, "expected ErrorPayload, got %T", errEvt.Payload)
-	assert.Equal(t, "synthetic_error_floor", errPayload.Stage)
-	assert.Contains(t, errPayload.Message, "synthetic_error_loop")
-
-	turnEndEvt, ok := findEvent(events, EventKindTurnEnd)
-	require.True(t, ok, "expected a turn end event")
-	turnEndPayload, ok := turnEndEvt.Payload.(TurnEndPayload)
-	require.True(t, ok, "expected TurnEndPayload, got %T", turnEndEvt.Payload)
-	assert.Equal(t, TurnEndStatusAborted, turnEndPayload.Status)
-
-	// Audit trail: confirm the abort is attributed to the synthetic-error
-	// floor specifically, with the real denial count — not a generic entry.
-	auditPath := filepath.Join(tmpHome, "system", "audit.jsonl")
-	require.FileExists(t, auditPath, "audit.jsonl must exist — AuditLog=true")
-	entries, readErr := readAuditEntries(auditPath)
-	require.NoError(t, readErr, "audit.jsonl must be readable and contain valid JSONL")
-
-	var floorEntry map[string]any
-	for _, e := range entries {
-		if e["event"] == audit.EventTurnAbortedSyntheticLoop {
-			floorEntry = e
-			break
-		}
-	}
-	require.NotNil(
-		t,
-		floorEntry,
-		"audit log must contain a %q entry; entries: %v",
-		audit.EventTurnAbortedSyntheticLoop,
-		entries,
-	)
-	assert.Equal(t, audit.DecisionDeny, floorEntry["decision"])
-	details, ok := floorEntry["details"].(map[string]any)
-	require.True(t, ok, "expected a details map on the synthetic-loop audit entry")
-	assert.Equal(t, float64(2), details["synthetic_error_count"],
-		"audit entry must carry the actual denial count that tripped the floor")
 }

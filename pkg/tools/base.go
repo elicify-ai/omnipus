@@ -105,18 +105,20 @@ func (BaseTool) Category() ToolCategory { return CategoryCore }
 type toolCtxKey struct{ name string }
 
 var (
-	ctxKeyChannel             = &toolCtxKey{"channel"}
-	ctxKeyChatID              = &toolCtxKey{"chatID"}
-	ctxKeyAgentID             = &toolCtxKey{"agentID"}
-	ctxKeySessionKey          = &toolCtxKey{"sessionKey"}
-	ctxKeyTranscriptSessionID = &toolCtxKey{"transcriptSessionID"}
-	ctxKeyProcTracker         = &toolCtxKey{"procTracker"}
-	ctxKeySessionOwner        = &toolCtxKey{"sessionOwner"}
-	ctxKeyWorkspaceID         = &toolCtxKey{"workspaceID"}
-	ctxKeyTurnWorkspaceDir    = &toolCtxKey{"turnWorkspaceDir"}
-	ctxKeyCitationTracker     = &toolCtxKey{"citationTracker"}
-	ctxKeyDelegationDepth     = &toolCtxKey{"delegationDepth"}
-	ctxKeyToolCallID          = &toolCtxKey{"toolCallID"}
+	ctxKeyChannel              = &toolCtxKey{"channel"}
+	ctxKeyChatID               = &toolCtxKey{"chatID"}
+	ctxKeyAgentID              = &toolCtxKey{"agentID"}
+	ctxKeySessionKey           = &toolCtxKey{"sessionKey"}
+	ctxKeyTranscriptSessionID  = &toolCtxKey{"transcriptSessionID"}
+	ctxKeyProcTracker          = &toolCtxKey{"procTracker"}
+	ctxKeySessionOwner         = &toolCtxKey{"sessionOwner"}
+	ctxKeyWorkspaceID          = &toolCtxKey{"workspaceID"}
+	ctxKeyTurnWorkspaceDir     = &toolCtxKey{"turnWorkspaceDir"}
+	ctxKeyCitationTracker      = &toolCtxKey{"citationTracker"}
+	ctxKeyDelegationDepth      = &toolCtxKey{"delegationDepth"}
+	ctxKeyToolCallID           = &toolCtxKey{"toolCallID"}
+	ctxKeyRunningTaskID        = &toolCtxKey{"runningTaskID"}
+	ctxKeyVerifierSessionScope = &toolCtxKey{"verifierSessionScope"}
 )
 
 // ProcessTrackerFunc records a child PID spawned by a tool so a caller (e.g. the
@@ -289,6 +291,76 @@ func WithToolCallID(ctx context.Context, toolCallID string) context.Context {
 func ToolCallID(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyToolCallID).(string)
 	return v
+}
+
+// WithRunningTaskID returns a child context carrying the ID of the task
+// currently being executed by the task-run turn in progress (review r2,
+// Chunk 1). TaskExecutor stamps this onto the turn's tool ctx at
+// task-dispatch time (runTask / runTaskFromInProgress, task_executor.go) so a
+// task-update tool call can tell whether IT is genuinely part of THAT task's
+// own executor run — the only run whose completion (finishTaskRun) ever
+// adjudicates a staged PendingJudgeClaim. An out-of-band call (this context
+// carries no running task, or a different one) must never stage a claim:
+// nothing would ever adjudicate it, stranding the task non-terminal forever.
+// Empty ("") for every non-task-run turn — interactive chat, /goal, /loop,
+// scheduled runs, and sub-turns all leave this unset.
+func WithRunningTaskID(ctx context.Context, taskID string) context.Context {
+	return context.WithValue(ctx, ctxKeyRunningTaskID, taskID)
+}
+
+// ToolRunningTaskID extracts the currently-executing task's ID from ctx, or
+// "" if unset (no task run in progress for this turn). See WithRunningTaskID.
+func ToolRunningTaskID(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyRunningTaskID).(string)
+	return v
+}
+
+// WithVerifierSessionScope returns a child context carrying the set of
+// session IDs the CURRENT verifier turn is authorized to inspect via the
+// inspect_session tool (ADR-052 FR-033, R3-10/R3-11). The engine sets this
+// BEFORE dispatching a verifier turn — it is never client-suppliable and is
+// scoped per adjudication level: task verification -> that task's own
+// session; plan verification -> that plan's member sessions (there is no
+// "plan session" concept, GS-04); chat `/goal` verification -> that chat
+// session only. inspect_session refuses any session id outside this set,
+// unconditionally — the lock is enforced here (an engine-set context value),
+// NOT expressible via tool policy. Mirrors WithRunningTaskID's precedent
+// exactly: an engine-owned fact injected onto the turn context that a tool
+// reads but can never itself set.
+//
+// An empty/nil sessionIDs leaves ctx untouched (mirrors WithTurnWorkspaceDir's
+// "empty is unset" convention) so a normal (non-verifier) turn — which never
+// calls this — carries no scope at all; VerifierSessionScopeAllows then
+// fail-closed refuses every session id for that turn.
+func WithVerifierSessionScope(ctx context.Context, sessionIDs []string) context.Context {
+	if len(sessionIDs) == 0 {
+		return ctx
+	}
+	allowed := make(map[string]bool, len(sessionIDs))
+	for _, id := range sessionIDs {
+		if id != "" {
+			allowed[id] = true
+		}
+	}
+	if len(allowed) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyVerifierSessionScope, allowed)
+}
+
+// VerifierSessionScopeAllows reports whether sessionID is inside the
+// engine-set verifier target scope carried on ctx (WithVerifierSessionScope).
+// FAIL CLOSED: an unset scope (no WithVerifierSessionScope call on this
+// turn's context at all — every non-verifier turn) authorizes NOTHING, and
+// an empty sessionID is never authorized. This is deliberate: the
+// target-session lock has no tool-policy-expressible equivalent, so the
+// zero-value (unset context) must never accidentally mean "no restriction".
+func VerifierSessionScopeAllows(ctx context.Context, sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	allowed, _ := ctx.Value(ctxKeyVerifierSessionScope).(map[string]bool)
+	return allowed != nil && allowed[sessionID]
 }
 
 // CitationTracker is installed on the tool context by the agent loop so the

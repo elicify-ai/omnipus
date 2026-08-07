@@ -6,8 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -27,7 +31,10 @@ func (t *TaskListTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskListTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskListTool) Description() string {
-	return "List tasks. Use role='assignee' for tasks assigned to you, role='delegator' for tasks you created for other agents."
+	return "List tasks. Use role='assignee' for tasks assigned to you, role='delegator' for tasks you " +
+		"created for other agents. Scoped to your current workspace when this turn has one " +
+		"(workspace_scoped says which). Bounded to the 100 most recently updated matches; " +
+		"`truncated` and `matched` say when there were more."
 }
 
 func (t *TaskListTool) Parameters() map[string]any {
@@ -41,7 +48,7 @@ func (t *TaskListTool) Parameters() map[string]any {
 			},
 			"status": map[string]any{
 				"type":        "string",
-				"enum":        []string{"inbox", "next", "planning", "in_progress", "blocked", "done", "failed"},
+				"enum":        []string{"inbox", "next", "in_progress", "blocked", "done", "failed"},
 				"description": "Filter by status (optional)",
 			},
 		},
@@ -55,14 +62,45 @@ func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("role must be 'assignee' or 'delegator'")
 	}
 	status, _ := args["status"].(string)
-	agentID := ToolAgentID(ctx)
 
-	filter := task.Filter{Status: task.Status(status)}
+	// FAIL CLOSED on an unresolvable caller, exactly as list_jobs does.
+	// task.Filter treats every empty field as "filter off" (Filter.matches,
+	// pkg/task/store.go), so an empty agent id here does not narrow anything —
+	// it returns EVERY task in the store, across every workspace and every
+	// agent, straight into the model's context. list_tasks is seeded `allow`
+	// globally, so that is a cross-agent/cross-workspace disclosure reachable
+	// from any turn whose agent id failed to resolve.
+	//
+	// Never relax this into "return an empty list": a silent empty success is
+	// indistinguishable from genuinely having no tasks and hides the
+	// misconfiguration that produced it.
+	agentID := strings.TrimSpace(ToolAgentID(ctx))
+	if agentID == "" {
+		return ErrorResult("list_tasks: cannot resolve the calling agent; refusing to list tasks")
+	}
+
+	// ToolWorkspaceID is conditionally injected and is empty for any turn whose
+	// channel binding carries no workspace. That is a legitimate state, so —
+	// exactly as list_jobs documents — this is a deliberate exception to the
+	// fail-closed posture above: the list widens to every workspace FOR THIS
+	// PRINCIPAL ONLY, and says so through workspace_scoped rather than
+	// presenting a cross-workspace list as a scoped one.
+	workspaceID := strings.TrimSpace(ToolWorkspaceID(ctx))
+
+	filter := task.Filter{Status: task.Status(status), WorkspaceID: workspaceID}
 	switch role {
 	case "assignee":
 		filter.AgentID = agentID
 	case "delegator":
-		filter.CreatedBy = agentID
+		// CreatedByAgentID, not CreatedBy: CreatedBy is MIXED-NAMESPACE (a
+		// username on the REST path, an agent id on the tool path — see
+		// task.Task.CreatedBy) and must never be used as an ownership
+		// predicate, because a human user whose username happens to equal an
+		// agent id would have their tasks disclosed to that agent. The
+		// CreatedByAgentID filter routes through task.Task.CreatedByAgent,
+		// which fails closed on BOTH sides — an unattributed (REST-created)
+		// task never matches any agent.
+		filter.CreatedByAgentID = agentID
 	}
 
 	tasks, err := t.store.List(filter)
@@ -70,11 +108,134 @@ func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult(fmt.Sprintf("task_list failed: %v", err))
 	}
 
-	data, err := json.Marshal(tasks)
+	// Deterministic order BEFORE the bound, so which rows survive truncation is
+	// a stated rule (most recently updated first) rather than directory order.
+	sort.SliceStable(tasks, func(i, j int) bool {
+		if tasks[i].UpdatedAt != tasks[j].UpdatedAt {
+			return tasks[i].UpdatedAt > tasks[j].UpdatedAt
+		}
+		return tasks[i].ID > tasks[j].ID
+	})
+
+	matched := len(tasks)
+	truncated := matched > maxTaskListRows
+	if truncated {
+		tasks = tasks[:maxTaskListRows]
+	}
+
+	rows := make([]taskListRow, 0, len(tasks))
+	for i := range tasks {
+		rows = append(rows, projectTaskListRow(&tasks[i]))
+	}
+
+	resp := taskListResponse{
+		Tasks:           rows,
+		WorkspaceScoped: workspaceID != "",
+		Matched:         matched,
+		Returned:        len(rows),
+	}
+	if truncated {
+		resp.Truncated = true
+		resp.Note = fmt.Sprintf(
+			"showing the %d most recently updated of %d matching tasks — narrow with status",
+			len(rows), matched)
+	}
+
+	data, err := json.Marshal(resp)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("list_tasks: marshal: %v", err))
 	}
 	return NewToolResult(string(data))
+}
+
+// maxTaskListRows bounds one list_tasks response. The task store grows
+// monotonically and nothing sweeps it, so exceeding this on a long-lived
+// install is the steady state rather than the exception — which is why crossing
+// it is REPORTED (truncated + matched) rather than silently absorbed.
+const maxTaskListRows = 100
+
+// taskListRow is the ALLOWLIST projection list_tasks returns in place of the
+// on-disk task.Task struct.
+//
+// Allowlist, never denylist, and task.Task is never marshalled whole. task.Task
+// carries fields whose own doc comments declare them DISK-ONLY and forbid them
+// from crossing any boundary — CreatedByAgentID ("the REST mapper does NOT copy
+// it to the wire type, and it MUST NOT be added to any schema in contracts/"),
+// Scratchpad, PendingJudgeClaim, DelegationDepth — and a whole-struct marshal
+// shipped every one of them into an LLM's context. Because these rows are
+// already scoped to the caller this was never a cross-principal disclosure, but
+// the disk-only contract is a contract regardless of audience, and an allowlist
+// means a field added to task.Task tomorrow is not disclosed by default.
+//
+// Prompt and Result ARE carried: on a caller's own task they are the two fields
+// that make a row actionable ("what was I asked to do / what did I report"),
+// and the scoping above is what makes carrying them safe.
+type taskListRow struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Status      string `json:"status"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	AgentID     string `json:"agent_id,omitempty"`
+	PlanID      string `json:"plan_id,omitempty"`
+	// Priority, WriteSet, and Stream (M7 fix): create_task accepts all three,
+	// but before this fix nothing on this read surface ever showed them back
+	// to the calling agent — the exact gap that let the M2 priority-validation
+	// bug go unnoticed (a caller had no way to verify what was actually
+	// persisted). Priority uses EffectivePriority() (never 0) so a task
+	// created without an explicit priority still reads back a meaningful, real
+	// value (3), matching the REST read surface (toWireTask).
+	Priority    int      `json:"priority,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Prompt      string   `json:"prompt,omitempty"`
+	Result      string   `json:"result,omitempty"`
+	Due         string   `json:"due,omitempty"`
+	BlockedBy   []string `json:"blocked_by,omitempty"`
+	WriteSet    []string `json:"write_set,omitempty"`
+	Stream      string   `json:"stream,omitempty"`
+	CreatedAt   string   `json:"created_at,omitempty"`
+	UpdatedAt   string   `json:"updated_at,omitempty"`
+	CompletedAt string   `json:"completed_at,omitempty"`
+}
+
+// taskListResponse is the list_tasks envelope. `matched` and `truncated` exist
+// so a bounded list is never mistaken for a complete one, and workspace_scoped
+// so a narrowed list is never mistaken for the whole picture.
+//
+// Plan-member tasks are deliberately NOT excluded here, unlike list_jobs'
+// task collector. That exclusion is sound there and unsound here: list_jobs
+// drops plan members because the plan itself appears as its own row in the SAME
+// response, so nothing is hidden. list_tasks has no plan rows, so excluding
+// members would make an agent blind to its own plan work with no compensating
+// view in the same tool.
+type taskListResponse struct {
+	Tasks           []taskListRow `json:"tasks"`
+	WorkspaceScoped bool          `json:"workspace_scoped"`
+	Matched         int           `json:"matched"`
+	Returned        int           `json:"returned"`
+	Truncated       bool          `json:"truncated,omitempty"`
+	Note            string        `json:"note,omitempty"`
+}
+
+func projectTaskListRow(tk *task.Task) taskListRow {
+	return taskListRow{
+		ID:          tk.ID,
+		Title:       tk.Title,
+		Status:      string(tk.Status),
+		WorkspaceID: tk.WorkspaceID,
+		AgentID:     tk.AgentID,
+		PlanID:      tk.PlanID,
+		Priority:    tk.EffectivePriority(),
+		Description: tk.Description,
+		Prompt:      tk.Prompt,
+		Result:      tk.Result,
+		Due:         tk.Due,
+		BlockedBy:   tk.BlockedBy,
+		WriteSet:    tk.WriteSet,
+		Stream:      tk.Stream,
+		CreatedAt:   tk.CreatedAt,
+		UpdatedAt:   tk.UpdatedAt,
+		CompletedAt: tk.CompletedAt,
+	}
 }
 
 // TaskCreateTool creates a task and delegates it to another agent.
@@ -100,6 +261,14 @@ type TaskCreateTool struct {
 	// A→B→A task→task chain cannot recurse unboundedly. Set via
 	// SetMaxDelegationDepth; 0 disables the bound (no caller should leave it 0).
 	maxDelegationDepth int
+	// bashPolicyChecker resolves an assignee agent's effective "bash" tool
+	// policy (ADR-049 D2 rule 5, FR-017/052). Set via SetBashPolicyChecker.
+	bashPolicyChecker func(assigneeAgentID string) (policy string, ok bool)
+	// planStore, when set, backs the optional plan_id linkage arg (ADR-052
+	// FR-002): validates the same-workspace FK and rejects linking to a
+	// terminal plan (validateTaskPlanLinkage, plan.go). A nil planStore with
+	// a non-empty plan_id arg fails closed (see SetPlanStore).
+	planStore *plan.Store
 }
 
 func NewTaskCreateTool(store *task.Store) *TaskCreateTool {
@@ -133,6 +302,89 @@ func (t *TaskCreateTool) SetOnCreate(fn func(*task.Task)) {
 	t.onCreate = fn
 }
 
+// SetBashPolicyChecker installs the D2 rule 5 checker (ADR-049, FR-017/052):
+// resolves the assignee agent's effective "bash" tool policy so a create
+// whose criteria are ALL kind=check can be rejected as structurally
+// unsatisfiable when that policy is deny or ask (ask resolves to deny
+// unattended at judge time, D2 rule 2 — a machine check that can never even
+// run can never adjudicate MET). fn should return ok=false when the assignee
+// agent cannot be resolved at all.
+//
+// Mirrors the fail-closed-when-unwired discipline SetDelegationDenyChecker
+// documents above — an unwired checker is a configuration error, never a
+// permission grant. Do NOT default an unwired checker's outcome to "allow".
+func (t *TaskCreateTool) SetBashPolicyChecker(fn func(assigneeAgentID string) (policy string, ok bool)) {
+	t.bashPolicyChecker = fn
+}
+
+// SetPlanStore installs the plan store backing the optional plan_id linkage
+// arg (ADR-052 FR-002). Wired by the agent loop alongside the task store; a
+// nil (unwired) store makes any create_task(plan_id=...) call fail closed —
+// see validateTaskPlanLinkage (plan.go). create_task calls with no plan_id
+// are entirely unaffected by whether this is wired.
+func (t *TaskCreateTool) SetPlanStore(store *plan.Store) {
+	t.planStore = store
+}
+
+// parseCriteriaArgs converts the create_task tool's raw "criteria" argument
+// (a []any of map[string]any — the shape LLM tool-call arguments always
+// decode into) into []task.AcceptanceCriterion. Every criterion is
+// server-authored as the CALLING agent — agent-created criteria are, by
+// definition, agent-authored (SD-A7); author is never accepted from args.
+// Shape/length validation (kind enum, text bounds, check-shape-iff-kind,
+// ID/status defaulting) is left to the store's own normalizeCriteria,
+// invoked from Store.Create — this only handles the untyped-map decode.
+func parseCriteriaArgs(raw []any, authorAgentID string) ([]task.AcceptanceCriterion, error) {
+	out := make([]task.AcceptanceCriterion, 0, len(raw))
+	for i, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("criteria[%d]: must be an object", i)
+		}
+		kind, _ := m["kind"].(string)
+		text, _ := m["text"].(string)
+		c := task.AcceptanceCriterion{
+			Kind:   task.CriterionKind(kind),
+			Text:   text,
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: authorAgentID},
+		}
+		if chk, ok := m["check"].(map[string]any); ok {
+			command, _ := chk["command"].(string)
+			var expectedExitCode int
+			if v, ok := chk["expected_exit_code"].(float64); ok {
+				expectedExitCode = int(v)
+			}
+			c.Check = &task.CriterionCheck{Command: command, ExpectedExitCode: expectedExitCode}
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// allCheckCriteria reports whether criteria is non-empty and EVERY entry is
+// kind=check (ADR-049 D2 rule 5 gate condition).
+func allCheckCriteria(criteria []task.AcceptanceCriterion) bool {
+	if len(criteria) == 0 {
+		return false
+	}
+	for _, c := range criteria {
+		if c.Kind != task.KindCheck {
+			return false
+		}
+	}
+	return true
+}
+
+// describeBashPolicy renders a bashPolicyChecker result for an error message:
+// the resolved policy string, or "unresolvable" when the assignee agent
+// itself could not be found.
+func describeBashPolicy(policy string, ok bool) string {
+	if !ok {
+		return "unresolvable"
+	}
+	return policy
+}
+
 func (t *TaskCreateTool) Name() string           { return "create_task" }
 func (t *TaskCreateTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskCreateTool) Category() ToolCategory { return CategoryTasks }
@@ -163,17 +415,67 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 				"maximum":     5,
 				"description": "Priority 1 (highest) to 5 (lowest); default 3",
 			},
+			"due": map[string]any{
+				"type":        "string",
+				"description": "Due date/time in RFC 3339 format (optional)",
+			},
 			"parent_task_id": map[string]any{
 				"type":        "string",
 				"description": "ID of the parent task (optional) — set when this is a subtask of another task",
+			},
+			"plan_id": map[string]any{
+				"type":        "string",
+				"description": "ID of the Plan this task is a member of (optional). Must exist in the same workspace and must not be a terminal (done/failed) plan.",
+			},
+			"write_set": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Concrete paths this plan member creates/edits (optional). Meaningful only alongside plan_id; plan-lint reads this at approve to reject overlapping parallel streams. Empty/omitted for an exploratory member whose write footprint is unknowable up front.",
+			},
+			"stream": map[string]any{
+				"type":        "string",
+				"description": "The parallel-group id this plan member belongs to (optional). Members sharing a stream run serially within it; different streams may run concurrently provided their write_sets are disjoint.",
+			},
+			"is_join": map[string]any{
+				"type":        "boolean",
+				"description": "True marks this plan member as an authored join/assemble member with its own criteria, converging one or more parallel streams into a single artifact. Defaults to false.",
 			},
 			"blocked_by": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
 				"description": "Task IDs this task is blocked by (optional). Each blocker must exist and be in the same workspace; a cycle is rejected.",
 			},
+			"criteria": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"kind": map[string]any{
+							"type": "string",
+							"enum": []string{"check", "prose"},
+							"description": "check: a shell command verified via the assignee's own bash tool; " +
+								"prose: a free-text statement judged by the Judge System Agent",
+						},
+						"text": map[string]any{
+							"type":        "string",
+							"description": "The criterion statement (1-1000 characters)",
+						},
+						"check": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
+								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
+							},
+							"description": "Required when kind is \"check\"; must be omitted when kind is \"prose\"",
+						},
+					},
+					"required": []string{"kind", "text"},
+				},
+				"description": "Acceptance criteria (Definition of Done) for this task. REQUIRED: at least " +
+					"one criterion — an agent-created task with zero criteria is rejected.",
+			},
 		},
-		"required": []string{"title", "prompt", "agent_id"},
+		"required": []string{"title", "prompt", "agent_id", "criteria"},
 	}
 }
 
@@ -261,7 +563,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	title, _ := args["title"].(string)
 	prompt, _ := args["prompt"].(string)
 	agentID, _ := args["agent_id"].(string)
-	callerID := ToolAgentID(ctx)
+	callerID := strings.TrimSpace(ToolAgentID(ctx))
 
 	if title == "" {
 		return ErrorResult("title is required")
@@ -272,10 +574,23 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	if agentID == "" {
 		return ErrorResult("agent_id is required")
 	}
+	// FAIL CLOSED on an unresolvable caller. create_task is a delegation: it
+	// assigns work to ANOTHER agent, and both halves of that record — the
+	// delegation-policy decision and the FR-037 provenance stamp
+	// (Store.CreateByAgent, which itself rejects an empty agent id) — are
+	// meaningless without a principal. Refusing here keeps the two consistent
+	// rather than letting the policy gate run against an empty caller and then
+	// discovering the missing principal at write time.
+	if callerID == "" {
+		return ErrorResult("create_task: cannot resolve the calling agent; refusing to create a delegated task")
+	}
 
 	// Delegation policy gate (FR-6.2): trust set + modes ("task") + depth.
 	// ADR-037: the legacy boolean delegateCheck fallback is retired — this is
-	// now the only gate.
+	// now the only gate. Checked BEFORE the criteria validation below so an
+	// unauthorized caller always gets a consistent delegation-denied response
+	// regardless of what else they did or didn't supply (authorization first,
+	// business-rule validation second).
 	//
 	// FAIL CLOSED, not open, when no checker is wired: an unwired deny-checker
 	// is a configuration error, never a permission grant. Unreachable in
@@ -300,6 +615,53 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		})
 	}
 
+	// FR-6/D5 strict criteria enforcement (ADR-049, SD-A7, review r1 major
+	// M5): an agent-created task requires at least one acceptance criterion —
+	// human/UI creation (which never calls this tool) may still leave
+	// Criteria empty (the soft tier, judged against Prompt/title/description
+	// at judge time instead, ADR-049 D5). rawCriteria absent or an empty
+	// array both fail this check identically.
+	rawCriteria, _ := args["criteria"].([]any)
+	if len(rawCriteria) == 0 {
+		return ErrorResult(
+			"criteria is required: an agent-created task must supply at least one acceptance " +
+				"criterion (Definition of Done) — ADR-049 D5/SD-A7",
+		)
+	}
+	criteria, cErr := parseCriteriaArgs(rawCriteria, callerID)
+	if cErr != nil {
+		return ErrorResult(fmt.Sprintf("task_create failed: %v", cErr))
+	}
+
+	// D2 rule 5 (FR-017/052): an all-check criteria set can never be
+	// adjudicated MET if the assignee's effective bash policy is deny or ask
+	// (ask resolves to deny unattended at judge time, D2 rule 2) — the
+	// machine check could never even run. Reject at write time rather than
+	// let the task loop forever against a structurally unsatisfiable DoD.
+	if allCheckCriteria(criteria) {
+		if t.bashPolicyChecker == nil {
+			// FAIL CLOSED, not open, when no checker is wired — same rationale
+			// as the delegation gate above: an unwired checker is a
+			// configuration error, never a permission grant.
+			slog.Error("create_task: no bash-policy checker installed — denying an "+
+				"all-check criteria set by default",
+				"caller_id", callerID, "target_agent_id", agentID)
+			return ErrorResult(
+				"task_create failed: cannot verify the assignee's bash policy (D2 rule 5 checker not " +
+					"configured) — denying an all-machine-criteria create by default",
+			)
+		}
+		policy, ok := t.bashPolicyChecker(agentID)
+		if !ok || policy != string(config.ToolPolicyAllow) {
+			return ErrorResult(fmt.Sprintf(
+				"task_create failed: all criteria are machine-checkable (kind=check) but agent %q's "+
+					"effective bash policy is %q — this criteria set could never be satisfied "+
+					"(structurally unsatisfiable, ADR-049 D2 rule 5)",
+				agentID, describeBashPolicy(policy, ok),
+			))
+		}
+	}
+
 	// Task-mode recursion bound (SEC): a task_create issued from *within* a task
 	// run carries that run's delegation generation on the context. Each task→task
 	// hop increments the generation; reject once it would exceed the hard ceiling.
@@ -319,9 +681,36 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		})
 	}
 
+	// M2(a)/(b) fix: args["priority"] being PRESENT (ok==true) means the caller
+	// supplied an explicit value — including an explicit 0 — which must be
+	// validated and, if invalid, REJECTED rather than silently replaced with
+	// the default. The previous `ok && p >= 1 && p <= 5` guard let any
+	// out-of-range value (0, 6, negative...) simply fail the condition and
+	// fall through to priority=3 with no error at all: the caller received a
+	// success response with their input silently discarded. task.ValidatePriority
+	// is the same shared range-check update_task, create_task_in_workspace, and
+	// the REST create/update handlers all use, so this can't drift out of sync
+	// with them again.
 	priority := 3
-	if p, ok := args["priority"].(float64); ok && p >= 1 && p <= 5 {
-		priority = int(p)
+	if p, ok := args["priority"].(float64); ok {
+		pr := int(p)
+		if err := task.ValidatePriority(pr); err != nil {
+			return ErrorResult(fmt.Sprintf("task_create failed: %v", err))
+		}
+		priority = pr
+	}
+
+	// Optional due date (RFC 3339), mirroring update_task's own validation:
+	// due is a general task attribute, not gated behind plan_id the way
+	// write_set/stream/is_join are, so its absence here (while
+	// create_task_in_workspace and update_task both accept it) was a genuine
+	// schema-consistency gap rather than a deliberate restriction.
+	var due string
+	if d, ok := args["due"].(string); ok && d != "" {
+		if _, pErr := time.Parse(time.RFC3339, d); pErr != nil {
+			return ErrorResult(fmt.Sprintf("invalid due date %q (must be RFC 3339): %v", d, pErr))
+		}
+		due = d
 	}
 
 	parentTaskID, _ := args["parent_task_id"].(string)
@@ -341,10 +730,12 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		AgentID:         agentID,
 		CreatedBy:       callerID,
 		Priority:        priority,
+		Due:             due,
 		ParentTaskID:    parentTaskID,
 		WorkspaceID:     wsID,
 		Status:          task.StatusNext,
 		DelegationDepth: childDepth,
+		Criteria:        criteria,
 	}
 
 	// Propagate the originating channel so completed tasks can route results back.
@@ -368,7 +759,47 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		entity.BlockedBy = deps
 	}
 
-	if err := t.store.Create(entity); err != nil {
+	// Optional plan_id (ADR-052 FR-002): same-workspace FK + not-terminal
+	// (validateTaskPlanLinkage, plan.go). A create_task call with no plan_id
+	// is entirely unaffected — the check is a no-op for planID == "".
+	if planID, _ := args["plan_id"].(string); planID != "" {
+		if pErr := validateTaskPlanLinkage(t.planStore, planID, wsID); pErr != nil {
+			return ErrorResult(fmt.Sprintf("task_create failed: %v", pErr))
+		}
+		entity.PlanID = planID
+	}
+
+	// Optional write_set/stream/is_join (ADR-053 §Contract Surface, US-11
+	// G-16): meaningful only alongside plan_id, but accepted unconditionally
+	// (ignored by plan-lint on a standalone task) — matching the wire
+	// contract's own "meaningful only when plan_id is set" convention rather
+	// than rejecting a caller who supplies them without a plan_id.
+	if rawWriteSet, ok := args["write_set"].([]any); ok {
+		writeSet := make([]string, 0, len(rawWriteSet))
+		for _, p := range rawWriteSet {
+			if s, ok := p.(string); ok && s != "" {
+				writeSet = append(writeSet, s)
+			}
+		}
+		entity.WriteSet = writeSet
+	}
+	if stream, ok := args["stream"].(string); ok {
+		entity.Stream = stream
+	}
+	if isJoin, ok := args["is_join"].(bool); ok {
+		entity.IsJoin = isJoin
+	}
+
+	// CreateByAgent, not Create: this is the AGENT creation path, so the task
+	// carries FR-037 provenance (Task.CreatedByAgentID = the calling agent) in
+	// the agent-id namespace. That stamp is what makes the created task
+	// findable by its author — list_jobs' dispatched half and list_tasks
+	// role="delegator" both filter on it, and neither can use the
+	// mixed-namespace CreatedBy. callerID is guaranteed non-empty by the
+	// fail-closed guard at the top of Execute, so CreateByAgent's own
+	// empty-agent-id rejection is belt-and-suspenders here, not the primary
+	// gate.
+	if err := t.store.CreateByAgent(entity, callerID); err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			return ErrorResult(fmt.Sprintf("task_create failed: %v", err))
 		}
@@ -414,12 +845,34 @@ func (t *TaskUpdateTool) SetDelegationDenyChecker(
 	t.delegationDeny = fn
 }
 
+// deferDoneClaimToJudge reports whether an explicit update_task(status:"done")
+// call on t must be staged as a pending judge claim rather than written as a
+// terminal `done` immediately (ADR-049 C1/SD-B2, review r1 blocker). This is
+// the FR-041 evidence-ladder judge closing the #1 self-certification bypass:
+// a worker could previously call update_task(done) directly and skip the
+// judge entirely, even though the SAME claim arriving via the TASK_STATUS
+// completion marker (task_executor.go finishTaskRun/adjudicateClaim) was
+// always judged.
+//
+//   - A task with explicit acceptance criteria (hard tier, len(Criteria)>0)
+//     is ALWAYS judged — this returns true.
+//   - A criteria-less task (soft tier — ADR-049 D5 synthesizes an implicit
+//     prose criterion from Prompt/title/description at judge time) keeps
+//     today's exact behavior: an explicit done write is trusted immediately,
+//     unchanged by this fix (explicitly accepted scope per review r1 C1).
+//   - A Scratchpad task (FR-048, set_todos-created checklist tracking) is
+//     exempt from the goal loop entirely, mirroring finishTaskRun's own
+//     Scratchpad exemption — trusted immediately regardless of criteria.
+func deferDoneClaimToJudge(t *task.Task, newStatus task.Status) bool {
+	return newStatus == task.StatusDone && !t.Scratchpad && len(t.Criteria) > 0
+}
+
 func (t *TaskUpdateTool) Name() string           { return "update_task" }
 func (t *TaskUpdateTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskUpdateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskUpdateTool) Description() string {
-	return "Update a task assigned to you. Mark status (in_progress/done/failed) and optionally edit title, priority, due date, agent_id, or blocked_by. Only provided fields are updated."
+	return "Update a task assigned to you or that you created. Mark status (in_progress/done/failed) and optionally edit title, priority, due date, agent_id, or blocked_by. Only provided fields are updated."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -467,6 +920,19 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 				"items":       map[string]any{"type": "string"},
 				"description": "Array of task IDs this task is blocked by. Pass the full list to REPLACE the existing deps; pass [] to CLEAR; omit to leave unchanged. Each blocker must exist + be same-workspace; cycles rejected.",
 			},
+			"write_set": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Replacement set of concrete paths this plan member creates/edits. Pass the full list to REPLACE; pass [] to CLEAR; omit to leave unchanged. Meaningful only alongside plan_id.",
+			},
+			"stream": map[string]any{
+				"type":        "string",
+				"description": "New parallel-group id this plan member belongs to. Pass \"\" to CLEAR; omit to leave unchanged.",
+			},
+			"is_join": map[string]any{
+				"type":        "boolean",
+				"description": "Set/clear whether this plan member is an authored join/assemble member.",
+			},
 		},
 		"required": []string{"task_id"},
 	}
@@ -491,8 +957,17 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult(fmt.Sprintf("could not load task: %v", err))
 	}
 
-	if existing.AgentID != callerID {
-		return ErrorResult("you can only update tasks assigned to you")
+	// CreatedByAgent, never CreatedBy. Task.CreatedBy is MIXED-NAMESPACE
+	// (a human username on the REST path, an agent id on the tool path) and
+	// its own doc comment on Task.CreatedBy / Task.CreatedByAgent forbids
+	// using CreatedBy as an ownership predicate. CreatedByAgent reads the
+	// agent-id-namespaced CreatedByAgentID and fails closed on both sides,
+	// so a task's creator (the delegator) can update it even when it is
+	// assigned to a different agent — the same union check delete_task's
+	// gate applies. Reassignment of the assignee itself still routes
+	// through the separate delegationDeny gate below.
+	if existing.AgentID != callerID && !existing.CreatedByAgent(callerID) {
+		return ErrorResult("you can only update tasks you own or are assigned")
 	}
 
 	patch := task.Patch{}
@@ -506,15 +981,50 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		if !task.IsValidStatus(st) {
 			return ErrorResult(fmt.Sprintf("invalid status %q", statusStr))
 		}
-		patch.Status = &st
 		newStatus = st
 		updatedFields = append(updatedFields, "status")
+		if deferDoneClaimToJudge(existing, st) {
+			// review r2 Chunk 1: a hard-tier done claim is ONLY ever
+			// adjudicated inside THAT task's own executor run — finishTaskRun
+			// (task_executor.go) is the sole reader of Task.PendingJudgeClaim.
+			// An out-of-band call (this task is not the caller's
+			// currently-running task, e.g. a stale/idle criteria task nobody
+			// is executing, or a different agent poking at it) must be
+			// rejected outright rather than staged: nothing would ever
+			// adjudicate that claim, stranding the task non-terminal forever
+			// (bounded only by boot's reconcileStuckTasks). Status is
+			// deliberately left unpatched in the genuine in-run case too —
+			// the PendingJudgeClaim block after the result/artifacts fields
+			// stages the claim instead.
+			if ToolRunningTaskID(ctx) != taskID {
+				return ErrorResult("this task has acceptance criteria — completion is adjudicated by " +
+					"the judge during a task run; it cannot be force-completed here")
+			}
+		} else {
+			patch.Status = &st
+		}
 	}
 
 	// Result / artifacts — accepted with or without a status.
+	deferToJudge := deferDoneClaimToJudge(existing, newStatus)
+	var claimText string
 	if result, ok := args["result"].(string); ok && result != "" {
-		patch.Result = &result
-		updatedFields = append(updatedFields, "result")
+		claimText = result
+		if deferToJudge {
+			// Captured below as the judge's claim text (adjudicateClaim),
+			// NOT written to Task.Result directly — Task.Result stays the
+			// goal loop's own in-flight steering carrier between attempts
+			// (task_executor.go writeSteeringPrompt's doc comment) until the
+			// judge decides; completeTaskWithResult overwrites it with the
+			// real final result once terminal.
+		} else {
+			patch.Result = &result
+			updatedFields = append(updatedFields, "result")
+		}
+	}
+	if deferToJudge {
+		patch.PendingJudgeClaim = &claimText
+		updatedFields = append(updatedFields, "pending_judge_claim")
 	}
 	if rawArtifacts, ok := args["artifacts"].([]any); ok {
 		artifacts := make([]string, 0, len(rawArtifacts))
@@ -533,11 +1043,12 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		updatedFields = append(updatedFields, "title")
 	}
 
-	// Priority (1-5).
+	// Priority (1-5). Shared range-check with create_task/create_task_in_
+	// workspace/REST (task.ValidatePriority) — see its doc comment.
 	if p, ok := args["priority"].(float64); ok {
 		pr := int(p)
-		if pr < 1 || pr > 5 {
-			return ErrorResult(fmt.Sprintf("priority must be between 1 and 5, got %d", pr))
+		if pErr := task.ValidatePriority(pr); pErr != nil {
+			return ErrorResult(pErr.Error())
 		}
 		patch.Priority = &pr
 		updatedFields = append(updatedFields, "priority")
@@ -600,19 +1111,52 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		}
 	}
 
+	// write_set (ADR-053 §Contract Surface, US-11 G-16): three-way, mirroring
+	// blocked_by — provided-empty CLEARs the declared write-set (reverts to
+	// an exploratory member, D10), populated REPLACEs it, absent leaves it
+	// unchanged.
+	if rawWriteSet, ok := args["write_set"].([]any); ok {
+		writeSet := make([]string, 0, len(rawWriteSet))
+		for _, p := range rawWriteSet {
+			if s, ok := p.(string); ok && s != "" {
+				writeSet = append(writeSet, s)
+			}
+		}
+		patch.WriteSet = &writeSet
+		updatedFields = append(updatedFields, "write_set")
+	}
+
+	// stream (empty string CLEARs the label; absent leaves it unchanged).
+	if stream, ok := args["stream"].(string); ok {
+		patch.Stream = &stream
+		updatedFields = append(updatedFields, "stream")
+	}
+
+	// is_join (plain overwrite; absent leaves it unchanged).
+	if isJoin, ok := args["is_join"].(bool); ok {
+		patch.IsJoin = &isJoin
+		updatedFields = append(updatedFields, "is_join")
+	}
+
 	if len(updatedFields) == 0 {
 		return ErrorResult(
-			"no updatable fields provided (supply at least one of status, result, artifacts, title, priority, due, agent_id, blocked_by)",
+			"no updatable fields provided (supply at least one of status, result, artifacts, title, priority, due, agent_id, blocked_by, write_set, stream, is_join)",
 		)
 	}
 
-	// Timestamps keyed off status (unchanged behavior for the status path).
+	// Timestamps keyed off status (unchanged behavior for the status path). A
+	// deferred done-claim is NOT actually terminal yet (review r1 C1) — the
+	// judge decides — so CompletedAt is not stamped until adjudication lands
+	// (task_executor.go completeTaskWithResult stamps it then, via the normal
+	// Update path).
 	now := time.Now().UTC().Format(time.RFC3339)
 	switch newStatus {
 	case task.StatusInProgress:
 		patch.StartedAt = &now
 	case task.StatusDone, task.StatusFailed:
-		patch.CompletedAt = &now
+		if !deferToJudge {
+			patch.CompletedAt = &now
+		}
 	}
 
 	updated, err := t.store.Update(taskID, patch)
@@ -625,8 +1169,15 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// persisted, so this is best-effort: a storage fault here is surfaced to the
 	// caller as an advance_warning rather than turning a successful update into a
 	// failure (which would orphan dependents with no signal either way).
+	//
+	// A deferred done-claim (review r1 C1/SD-B2) must NOT advance dependents
+	// or fire onComplete here — the task has not actually reached `done`
+	// (patch.Status was deliberately left unset above), so newStatus=="done"
+	// alone is no longer sufficient to gate these; the judge
+	// (task_executor.go adjudicateClaim -> completeTaskWithResult) is the
+	// only path that may do so, once it actually adjudicates the claim MET.
 	var advanceWarning string
-	if newStatus == task.StatusDone {
+	if newStatus == task.StatusDone && !deferToJudge {
 		advanced, advErr := t.store.AdvanceBlockedDependents(taskID)
 		if advErr != nil {
 			// Storage fault advancing dependents — the update itself succeeded,
@@ -640,7 +1191,7 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		}
 	}
 
-	if task.IsTerminal(newStatus) && t.onComplete != nil {
+	if task.IsTerminal(newStatus) && !deferToJudge && t.onComplete != nil {
 		t.onComplete(updated)
 	}
 
@@ -649,7 +1200,19 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	updatedFieldsJSON, _ := json.Marshal(updatedFields)
 	result := fmt.Sprintf(`{"task_id":%q,"status":%q,"updated_fields":%s}`,
 		updated.ID, updated.Status, string(updatedFieldsJSON))
-	if advanceWarning != "" {
+	if deferToJudge {
+		// FR-041/SD-B2 (review r1 C1): tell the calling agent its done claim
+		// was received but is NOT yet final — this task has explicit
+		// acceptance criteria, so the evidence-ladder judge must adjudicate
+		// the claim (task_executor.go adjudicateClaim) before the task can
+		// actually reach `done`. Built with json.Marshal for safe escaping.
+		const pendingNote = "completion claim recorded — this task has acceptance criteria, so it is " +
+			"NOT yet done; the evidence-ladder judge will adjudicate your claim against the criteria " +
+			"before the task can reach a terminal status"
+		noteJSON, _ := json.Marshal(pendingNote)
+		result = fmt.Sprintf(`{"task_id":%q,"status":%q,"updated_fields":%s,"pending_judge_note":%s}`,
+			updated.ID, updated.Status, string(updatedFieldsJSON), string(noteJSON))
+	} else if advanceWarning != "" {
 		// Append the warning as an escaped string field so the LLM/user can see
 		// the dependents were not advanced. Built with json.Marshal so the error
 		// message is properly escaped into a JSON string literal.
@@ -694,7 +1257,7 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("task_id is required")
 	}
 
-	callerID := ToolAgentID(ctx)
+	callerID := strings.TrimSpace(ToolAgentID(ctx))
 	if callerID == "" {
 		return ErrorResult("agent ID not set in context; cannot verify task ownership")
 	}
@@ -707,7 +1270,23 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *Tool
 		}
 		return ErrorResult(fmt.Sprintf("could not load task: %v", err))
 	}
-	if existing.AgentID != callerID && existing.CreatedBy != callerID {
+	// CreatedByAgent, never CreatedBy. Task.CreatedBy is MIXED-NAMESPACE and its
+	// own doc comment states the rule this predicate used to break: it "MUST
+	// NEVER be used as an ownership or authorization predicate", because the
+	// REST path writes a human USERNAME into it (pkg/gateway/rest_tasks.go)
+	// while callerID is an agent id. A human who registers the username `jim`
+	// would otherwise have every task they created become deletable by the
+	// agent `jim` — and the base roster ids (mia/jim/ava/ray) are all plausible
+	// usernames. CreatedByAgent reads the agent-id-namespaced CreatedByAgentID
+	// and fails closed on BOTH sides, so "" is never a wildcard in either
+	// direction.
+	//
+	// This does NOT narrow the legitimate case: this file's own create_task
+	// persists through Store.CreateByAgent, which stamps CreatedByAgentID with
+	// the same callerID, so an agent can still delete what it created. What it
+	// drops is deletion of REST/human-created tasks, which carry no agent
+	// attribution at all and were never this caller's to delete.
+	if existing.AgentID != callerID && !existing.CreatedByAgent(callerID) {
 		return ErrorResult("you can only modify/delete tasks you own or are assigned")
 	}
 

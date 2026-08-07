@@ -84,10 +84,19 @@ func TestCancel_SubAgentCascade(t *testing.T) {
 	sessionID := meta.ID
 	require.NotEmpty(t, sessionID)
 
+	// ADR-057 FR-011/FR-015 fixture repair `[grill C-1]`: the cascade
+	// (GetActiveTurnHookForSession's claim + InterruptSession's whole-session
+	// Range walk, both role-B predicates) now matches on routingSessionID,
+	// not transcriptSessionID — a delegated child's transcriptSessionID is
+	// now its OWN real session id (D1), so the shared-session cascade this
+	// test proves survives only via the routing key both turns inherit
+	// verbatim.
+
 	// Inject a parent turnState (depth=0).
 	parentTS := &turnState{
 		turnID:              "turn-parent-T20b",
 		transcriptSessionID: sessionID,
+		routingSessionID:    session.RoutingSessionID(sessionID),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 		transcriptStore:     store,
@@ -99,6 +108,7 @@ func TestCancel_SubAgentCascade(t *testing.T) {
 	childTS := &turnState{
 		turnID:              "turn-child-T20b",
 		transcriptSessionID: sessionID,
+		routingSessionID:    session.RoutingSessionID(sessionID),
 		depth:               1,
 		parentTurnID:        "turn-parent-T20b",
 		finishedChan:        make(chan struct{}),

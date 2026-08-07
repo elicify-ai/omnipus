@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Tests for GET /api/v1/skills metadata enrichment (description/author/version/
 // source) and the built-in deletion guard. These verify the data path from the
 // REST handler through AgentLoop.ListSkillsDetailed() to the skills loader, and

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // logLatencyDistribution lives in a !cgo-tagged file because its only caller
 // (benchmark_per_turn_test.go) is !cgo-tagged. Keeping it here means it is
 // compiled — and therefore used — only in the build where it is referenced, so

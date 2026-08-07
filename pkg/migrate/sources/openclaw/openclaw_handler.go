@@ -1,12 +1,15 @@
 package openclaw
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/migrate/internal"
 )
 
@@ -110,7 +113,71 @@ func (o *OpenclawHandler) ExecuteConfigMigration(srcConfigPath, dstConfigPath st
 		return err
 	}
 
+	// ADR-054: agents are no longer entities inside config.json —
+	// AgentsConfig.List carries json:"-" precisely so config.SaveConfig
+	// below can never write incoming.Agents.List into config.json. That
+	// means it is the ENTITY STORE, not config.json, that must durably
+	// carry every migrated agent — do this BEFORE SaveConfig so a
+	// persistence failure here aborts the whole migration loudly instead
+	// of reporting success while every migrated agent silently
+	// evaporates on the very next config load (the bug this fixes: with
+	// no entity records written, a legacy agents.list blob previously
+	// landed in config.json where stripLegacyAgentsList would drop it on
+	// next load, "migrating" every agent straight into the void).
+	if err := persistMigratedAgents(dstConfigPath, incoming.Agents.List); err != nil {
+		return fmt.Errorf("persist migrated agents to entity store: %w", err)
+	}
+
 	return config.SaveConfig(dstConfigPath, incoming)
+}
+
+// persistMigratedAgents writes each migrated agent as its own per-entity
+// record via pkg/agentstore, rooted at $OMNIPUS_HOME (= filepath.Dir(dstConfigPath)
+// — the same derivation the real boot path uses, see
+// pkg/gateway.populateAgentsListFromEntityStoreStrict), so the
+// migrated roster is readable by the agent registry on first boot exactly
+// like any natively-created agent.
+//
+// Fails fast on the first error: a partially-migrated roster must never be
+// reported as a successful migration. entity.Store.Create already
+// write-then-verifies durability internally (ADR-054 D6 corollary), so a nil
+// error from Store.Create means the record is confirmed on disk.
+//
+// Re-running the migration (the config-conversion step has no --force gate
+// of its own — config.SaveConfig below always unconditionally overwrites
+// dstConfigPath) must not fail just because a previous run already created
+// the same agent IDs: an ErrAlreadyExists falls back to Update, overwriting
+// the existing record's fields with the freshly re-converted ones while
+// preserving its original ID/CreatedAt, mirroring the "always clobber on
+// re-migrate" semantics config.json itself already has.
+func persistMigratedAgents(dstConfigPath string, agents []config.AgentConfig) error {
+	if len(agents) == 0 {
+		return nil
+	}
+	store := agentstore.New(filepath.Dir(dstConfigPath))
+	for i := range agents {
+		ac := agents[i]
+		if ac.ID == "" {
+			continue
+		}
+		if err := store.Create(ac.ID, &ac); err != nil {
+			if errors.Is(err, entity.ErrAlreadyExists) {
+				if _, updateErr := store.Update(ac.ID, func(existing *config.AgentConfig) error {
+					createdAt := existing.CreatedAt
+					id := existing.ID
+					*existing = ac
+					existing.ID = id
+					existing.CreatedAt = createdAt
+					return nil
+				}); updateErr != nil {
+					return fmt.Errorf("update existing agent entity %q: %w", ac.ID, updateErr)
+				}
+				continue
+			}
+			return fmt.Errorf("create agent entity %q: %w", ac.ID, err)
+		}
+	}
+	return nil
 }
 
 func resolveSourceHome(override string) (string, error) {

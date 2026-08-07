@@ -1,5 +1,3 @@
-//go:build !cgo
-
 package gateway
 
 // Fix Wave B, Task 2 regression coverage: the shared Chrome coordinator must

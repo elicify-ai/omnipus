@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Tests for GET/PUT /api/v1/settings/memory (FR-019 / US-6, ADR-027).
 
 package gateway
@@ -58,7 +56,12 @@ func TestMemorySettings_PutUpdatesAndReturnsNewValues(t *testing.T) {
 	// Write a v1 config so config.LoadConfig treats it as CurrentVersion (no
 	// migration), preserving agents.defaults.auto_recap_enabled across the
 	// safeUpdateConfigJSON → refreshConfigAndRewireServices round-trip.
-	cfgJSON := `{"version":1,"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"test-agent","name":"Test Agent","type":"custom"}]}}`
+	// ADR-054: agents.list is json:"-" and can no longer be seeded via a raw
+	// config.json splice (silently stripped on load) — omitted here; the
+	// roster now lives in the entity store (seedAgentEntities below), which
+	// also protects the in-memory cfg.Agents.List from being silently wiped
+	// by the refreshConfigAndRewireServices reload this PUT triggers.
+	cfgJSON := `{"version":1,"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096}}}`
 	cfgPath := filepath.Join(tmpDir, "config.json")
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
@@ -75,6 +78,7 @@ func TestMemorySettings_PutUpdatesAndReturnsNewValues(t *testing.T) {
 			},
 		},
 	}
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
@@ -116,7 +120,9 @@ func TestMemorySettings_RecapModelRoundTrip(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", tmpDir)
 
-	cfgJSON := `{"version":1,"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"test-agent","name":"Test Agent","type":"custom"}]}}`
+	// ADR-054: agents.list is json:"-" — see TestMemorySettings_PutUpdatesAndReturnsNewValues
+	// for why the on-disk splice is omitted and seedAgentEntities is used instead.
+	cfgJSON := `{"version":1,"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096}}}`
 	cfgPath := filepath.Join(tmpDir, "config.json")
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
@@ -133,6 +139,7 @@ func TestMemorySettings_RecapModelRoundTrip(t *testing.T) {
 			},
 		},
 	}
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 

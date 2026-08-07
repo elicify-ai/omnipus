@@ -37,7 +37,9 @@ func TestIsCancelCommand_T11(t *testing.T) {
 }
 
 // TestDispatchCancelIfRecognized_NilInterceptorSafe ensures that a nil
-// interceptor does not panic and still returns true (message consumed).
+// interceptor does not panic and still returns true (message consumed). With
+// a nil interceptor the outcome is a genuine no-op (fired=false, armed=false),
+// so the ack is "Nothing to cancel" (Defect #29).
 func TestDispatchCancelIfRecognized_NilInterceptorSafe(t *testing.T) {
 	sent := ""
 	sendFn := func(_ context.Context, _, text string) error {
@@ -48,8 +50,8 @@ func TestDispatchCancelIfRecognized_NilInterceptorSafe(t *testing.T) {
 	if !got {
 		t.Fatal("expected true (message consumed) even with nil interceptor")
 	}
-	if sent != "⏸ Canceling..." {
-		t.Errorf("expected ack %q; got %q", "⏸ Canceling...", sent)
+	if sent != "Nothing to cancel" {
+		t.Errorf("expected ack %q for a nil-interceptor no-op; got %q", "Nothing to cancel", sent)
 	}
 }
 
@@ -57,9 +59,9 @@ func TestDispatchCancelIfRecognized_NilInterceptorSafe(t *testing.T) {
 // not panic when /cancel is matched.
 func TestDispatchCancelIfRecognized_NilSendFnSafe(t *testing.T) {
 	interrupted := false
-	interceptor := &mockInterceptor{onRequestCancel: func(ctx context.Context, channel, chatID, userID string) error {
+	interceptor := &mockInterceptor{onRequestCancel: func(ctx context.Context, channel, chatID, userID string) (bool, bool, error) {
 		interrupted = true
-		return nil
+		return false, false, nil
 	}}
 	got := channels.DispatchCancelIfRecognized(
 		context.Background(),
@@ -82,9 +84,9 @@ func TestDispatchCancelIfRecognized_NilSendFnSafe(t *testing.T) {
 // messages return false (caller should dispatch normally).
 func TestDispatchCancelIfRecognized_PassthroughOnNonCancel(t *testing.T) {
 	interrupted := false
-	interceptor := &mockInterceptor{onRequestCancel: func(_ context.Context, _, _, _ string) error {
+	interceptor := &mockInterceptor{onRequestCancel: func(_ context.Context, _, _, _ string) (bool, bool, error) {
 		interrupted = true
-		return nil
+		return false, false, nil
 	}}
 	for _, msg := range []string{"hello", "/cancel my order", "cancel", ""} {
 		got := channels.DispatchCancelIfRecognized(
@@ -109,10 +111,10 @@ func TestDispatchCancelIfRecognized_PassthroughOnNonCancel(t *testing.T) {
 // the channel and chatID fields passed to RequestCancelByChannelChat.
 func TestDispatchCancelIfRecognized_InterceptorCalledWithCorrectArgs(t *testing.T) {
 	var gotChannel, gotChatID string
-	interceptor := &mockInterceptor{onRequestCancel: func(ctx context.Context, channel, chatID, userID string) error {
+	interceptor := &mockInterceptor{onRequestCancel: func(ctx context.Context, channel, chatID, userID string) (bool, bool, error) {
 		gotChannel = channel
 		gotChatID = chatID
-		return nil
+		return false, false, nil
 	}}
 	channels.DispatchCancelIfRecognized(
 		context.Background(),
@@ -133,14 +135,14 @@ func TestDispatchCancelIfRecognized_InterceptorCalledWithCorrectArgs(t *testing.
 
 // mockInterceptor implements CancelInterceptor for testing.
 type mockInterceptor struct {
-	onRequestCancel func(ctx context.Context, channel, chatID, userID string) error
+	onRequestCancel func(ctx context.Context, channel, chatID, userID string) (bool, bool, error)
 }
 
-func (m *mockInterceptor) RequestCancelByChannelChat(ctx context.Context, channel, chatID, userID string) error {
+func (m *mockInterceptor) RequestCancelByChannelChat(ctx context.Context, channel, chatID, userID string) (bool, bool, error) {
 	if m.onRequestCancel != nil {
 		return m.onRequestCancel(ctx, channel, chatID, userID)
 	}
-	return nil
+	return false, false, nil
 }
 
 // TestDispatchCancelIfRecognized_UsesInstanceName is a regression test for
@@ -166,9 +168,9 @@ func TestDispatchCancelIfRecognized_UsesInstanceName(t *testing.T) {
 	// Simulate what the adapter call site does: pass c.Name() as the channel arg.
 	var gotChannel string
 	interceptor := &mockInterceptor{
-		onRequestCancel: func(_ context.Context, channel, _, _ string) error {
+		onRequestCancel: func(_ context.Context, channel, _, _ string) (bool, bool, error) {
 			gotChannel = channel
-			return nil
+			return false, false, nil
 		},
 	}
 
@@ -189,5 +191,42 @@ func TestDispatchCancelIfRecognized_UsesInstanceName(t *testing.T) {
 	if gotChannel != "whatsapp.eu" {
 		t.Errorf("interceptor called with channel=%q; want %q (instance key, not type literal)",
 			gotChannel, "whatsapp.eu")
+	}
+}
+
+// TestDispatchCancelIfRecognized_AckTextByOutcome pins Defect #29's three-way
+// ack: the user-facing text must distinguish a real cancel (fired), an armed
+// latch (armed — nothing running yet, will stop the instant it starts), and a
+// genuine no-op (neither). Before the widening, all three replied
+// "⏸ Canceling..." unconditionally.
+func TestDispatchCancelIfRecognized_AckTextByOutcome(t *testing.T) {
+	cases := []struct {
+		name    string
+		fired   bool
+		armed   bool
+		wantAck string
+	}{
+		{"fired", true, false, "⏸ Canceling..."},
+		{"armed", false, true, "⏸ Cancel acknowledged — nothing is running yet, but it will stop the instant it starts."},
+		{"noop", false, false, "Nothing to cancel"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sent := ""
+			sendFn := func(_ context.Context, _, text string) error {
+				sent = text
+				return nil
+			}
+			interceptor := &mockInterceptor{onRequestCancel: func(_ context.Context, _, _, _ string) (bool, bool, error) {
+				return tc.fired, tc.armed, nil
+			}}
+			channels.DispatchCancelIfRecognized(
+				context.Background(), "/cancel", "telegram", "chat1", "user1",
+				interceptor, sendFn,
+			)
+			if sent != tc.wantAck {
+				t.Errorf("ack for (fired=%v, armed=%v) = %q; want %q", tc.fired, tc.armed, sent, tc.wantAck)
+			}
+		})
 	}
 }

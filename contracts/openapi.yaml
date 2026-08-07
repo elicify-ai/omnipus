@@ -68,8 +68,10 @@ tags:
     The unified workspace task surface (Sprint 2) — one entity covering capture,
     triage, dependencies, todos, triggers, and delegation. Replaces the former
     split between workflow /tasks and GTD /board/tasks.
-- name: Milestones
-  description: Workspace milestones — group tasks under named milestones with optional due dates.
+- name: Plans
+  description: >
+    Plan entities (ADR-049) — group an executable task DAG under a goal,
+    Definition of Done, owner agent, and state machine. Replaces Milestones.
 - name: Stats
   description: Usage statistics and aggregations.
 - name: system
@@ -109,6 +111,49 @@ components:
       $ref: ./components/schemas/SessionStats.yaml
     SessionDetail:
       $ref: ./components/schemas/SessionDetail.yaml
+    # SessionPage is the paged envelope for GET /sessions (ADR-057 FR-091,
+    # grill2 M2-10). It REPLACES the historic two-variant oneOf (a bare
+    # Session array, or {sessions, partial_errors}) with one shape. Hosted
+    # INLINE here (not in its own contracts/components/schemas/ file),
+    # following the ADR-034 precedent for the AgentCreateRequest wrapper:
+    # this schema is no longer itself a oneOf, but the spec (ADR-057 FR-091)
+    # explicitly pins its physical location to match that precedent rather
+    # than introduce a new one.
+    SessionPage:
+      title: SessionPage
+      description: >
+        Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098).
+        `sessions` is this page's rows: root sessions by default, that
+        node's direct children when parent_session_id is supplied, or every
+        session (roots and subordinates) when flat=true (FR-104).
+        `partial_errors` composes with paging: a page whose merge hit a
+        failing legacy per-agent store still returns its healthy rows,
+        still returns next_cursor, and populates partial_errors — a failing
+        store contributes zero rows and does not halt the page or
+        invalidate the cursor (FR-098).
+      type: object
+      required:
+      - sessions
+      additionalProperties: false
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Session'
+        next_cursor:
+          type: string
+          description: >
+            Opaque pagination cursor for the next page. Absent when this is
+            the last page.
+          example: "20"
+        partial_errors:
+          type: array
+          items:
+            type: string
+          description: >
+            Opaque error tokens (agent ID + sanitized reason) from any
+            store that failed during this page's merge. Present only when
+            at least one store failed.
     SessionCreateRequest:
       $ref: ./components/schemas/SessionCreateRequest.yaml
     SessionRenameRequest:
@@ -572,32 +617,279 @@ components:
       $ref: ./components/schemas/WorkspaceDelegation.yaml
     WorkspaceDelegationUpdateRequest:
       $ref: ./components/schemas/WorkspaceDelegationUpdateRequest.yaml
-    Milestone:
-      $ref: ./components/schemas/Milestone.yaml
-    MilestoneCreateRequest:
-      $ref: ./components/schemas/MilestoneCreateRequest.yaml
-    MilestoneUpdateRequest:
-      $ref: ./components/schemas/MilestoneUpdateRequest.yaml
-    MilestoneListResponse:
-      type: object
-      description: List response for GET /workspaces/{id}/milestones
-      required:
-        - milestones
-        - total
-      properties:
-        milestones:
-          type: array
-          items:
-            $ref: '#/components/schemas/Milestone'
-        total:
-          type: integer
-          description: Total number of milestones for this workspace.
+    Plan:
+      $ref: ./components/schemas/Plan.yaml
+    PlanCreateRequest:
+      $ref: ./components/schemas/PlanCreateRequest.yaml
+    PlanUpdateRequest:
+      $ref: ./components/schemas/PlanUpdateRequest.yaml
+    PlanListResponse:
+      $ref: ./components/schemas/PlanListResponse.yaml
+    AcceptanceCriterion:
+      $ref: ./components/schemas/AcceptanceCriterion.yaml
+    EvidenceRecord:
+      $ref: ./components/schemas/EvidenceRecord.yaml
+    JudgeVerdict:
+      $ref: ./components/schemas/JudgeVerdict.yaml
+    CriterionVerdict:
+      $ref: ./components/schemas/CriterionVerdict.yaml
+    PlanApproveError:
+      $ref: ./components/schemas/PlanApproveError.yaml
     AgentTokenEntry:
       $ref: ./components/schemas/AgentTokenEntry.yaml
     TokenUsageSummary:
       $ref: ./components/schemas/TokenUsageSummary.yaml
     ModelTokens:
       $ref: ./components/schemas/ModelTokens.yaml
+
+    # ── ADR-053 unified goal/plan/subagent system — §6 wire-contract set ────
+    # docs/internal/specs/unified-goal-plan-subagent-spec.md §Contract
+    # Surface is the field-level source of truth. SessionMessage,
+    # DelegateActionRequest, and MessageParentRequest are discriminated
+    # unions hosted INLINE here (not in a schema file) — same ADR-034
+    # pattern as AgentCreateRequest above: oapi-codegen only generates
+    # named variant types + As/From accessors when the oneOf members are
+    # internal component refs; external file refs inside a oneOf are
+    # inlined as anonymous structs and the generated code does not
+    # compile. The variant files remain the single source of truth for
+    # each member's field set.
+    SessionMessage:
+      description: >
+        The typed, schema-validated envelope carried over the existing
+        pkg/bus MessageBus (no new transport) that derives every
+        control/visibility surface of the session-control plane (ADR-053
+        S6/US-6). Discriminated by `kind` — 12 variants covering
+        child->parent reporting (progress/checkpoint/artifact/blocker/
+        question/decision_request/error/handback), engine-emitted control
+        (revision_entry), session->UI propagation (goal_status), and
+        parent->child control (steer/respond). `direction` is one of
+        `child_to_parent | parent_to_child | session_to_ui | engine` — the
+        historical `human` value is dropped (M8); every kind variant maps
+        to exactly one of the four. Every field/kind/direction pairing is
+        the ratified shape from the spec's Contract Surface table — see
+        the individual variant files for full per-kind documentation and
+        caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16
+        KiB for steer; per-child unacked ceiling 20 open question+blocker,
+        D15).
+      oneOf:
+        - $ref: '#/components/schemas/SessionMessageProgress'
+        - $ref: '#/components/schemas/SessionMessageCheckpoint'
+        - $ref: '#/components/schemas/SessionMessageArtifact'
+        - $ref: '#/components/schemas/SessionMessageBlocker'
+        - $ref: '#/components/schemas/SessionMessageQuestion'
+        - $ref: '#/components/schemas/SessionMessageDecisionRequest'
+        - $ref: '#/components/schemas/SessionMessageError'
+        - $ref: '#/components/schemas/SessionMessageHandback'
+        - $ref: '#/components/schemas/SessionMessageRevisionEntry'
+        - $ref: '#/components/schemas/SessionMessageGoalStatus'
+        - $ref: '#/components/schemas/SessionMessageSteer'
+        - $ref: '#/components/schemas/SessionMessageRespond'
+      discriminator:
+        propertyName: kind
+        mapping:
+          progress: '#/components/schemas/SessionMessageProgress'
+          checkpoint: '#/components/schemas/SessionMessageCheckpoint'
+          artifact: '#/components/schemas/SessionMessageArtifact'
+          blocker: '#/components/schemas/SessionMessageBlocker'
+          question: '#/components/schemas/SessionMessageQuestion'
+          decision_request: '#/components/schemas/SessionMessageDecisionRequest'
+          error: '#/components/schemas/SessionMessageError'
+          handback: '#/components/schemas/SessionMessageHandback'
+          revision_entry: '#/components/schemas/SessionMessageRevisionEntry'
+          goal_status: '#/components/schemas/SessionMessageGoalStatus'
+          steer: '#/components/schemas/SessionMessageSteer'
+          respond: '#/components/schemas/SessionMessageRespond'
+    SessionMessageProgress:
+      $ref: ./components/schemas/SessionMessageProgress.yaml
+    SessionMessageCheckpoint:
+      $ref: ./components/schemas/SessionMessageCheckpoint.yaml
+    SessionMessageArtifact:
+      $ref: ./components/schemas/SessionMessageArtifact.yaml
+    SessionMessageBlocker:
+      $ref: ./components/schemas/SessionMessageBlocker.yaml
+    SessionMessageQuestion:
+      $ref: ./components/schemas/SessionMessageQuestion.yaml
+    SessionMessageDecisionRequest:
+      $ref: ./components/schemas/SessionMessageDecisionRequest.yaml
+    SessionMessageError:
+      $ref: ./components/schemas/SessionMessageError.yaml
+    SessionMessageHandback:
+      $ref: ./components/schemas/SessionMessageHandback.yaml
+    SessionMessageRevisionEntry:
+      $ref: ./components/schemas/SessionMessageRevisionEntry.yaml
+    SessionMessageGoalStatus:
+      $ref: ./components/schemas/SessionMessageGoalStatus.yaml
+    SessionMessageSteer:
+      $ref: ./components/schemas/SessionMessageSteer.yaml
+    SessionMessageRespond:
+      $ref: ./components/schemas/SessionMessageRespond.yaml
+    RevisionEntry:
+      $ref: ./components/schemas/RevisionEntry.yaml
+    SessionLifecycleRecord:
+      $ref: ./components/schemas/SessionLifecycleRecord.yaml
+    Goal:
+      $ref: ./components/schemas/Goal.yaml
+    TokenBudgetStatus:
+      $ref: ./components/schemas/TokenBudgetStatus.yaml
+    PlanRestartResponse:
+      $ref: ./components/schemas/PlanRestartResponse.yaml
+    # NOTE: SubagentMessageFrame/SubagentStateFrame are deliberately NOT
+    # listed here. Like GoalStatusFrame/SubagentStartFrame/SubagentEndFrame,
+    # they are WS-only frames whose canonical generated types come from
+    # asyncapi.yaml; the components/schemas/SubagentMessageFrame.yaml and
+    # SubagentStateFrame.yaml FILES still exist (referenced from
+    # asyncapi.yaml's inline copies' sibling documentation and synced to
+    # pkg/gateway/inboundschemas/ by gen-contracts.sh Step 5) but are not
+    # ALSO referenced here — doing so produces two independent TS
+    # declarations of the same exported name (one per generator pass) and
+    # a "Cannot redeclare block-scoped variable" compile error.
+
+    # Delegate action set (ADR-053 §5.1) — DelegateActionRequest is a
+    # discriminated union hosted INLINE, same ADR-034 pattern as
+    # SessionMessage above.
+    DelegateActionRequest:
+      description: >
+        The `delegate` tool call's argument shape, discriminated by
+        `action` — the corrected 9-action set (ADR-053 §5.1) replacing
+        the legacy `run | status` pair. `run` spawns a new child;
+        `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces;
+        `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Two
+        published launch profiles (`utility`/`specialist`, see
+        `DelegateRunAction.launch_profile`) govern visibility/steering/
+        child_messaging; illegal combinations are rejected at the
+        handler, not by this schema alone.
+      oneOf:
+        - $ref: '#/components/schemas/DelegateRunAction'
+        - $ref: '#/components/schemas/DelegateStatusAction'
+        - $ref: '#/components/schemas/DelegateInboxAction'
+        - $ref: '#/components/schemas/DelegateInboxAckAction'
+        - $ref: '#/components/schemas/DelegateSteerAction'
+        - $ref: '#/components/schemas/DelegateRespondAction'
+        - $ref: '#/components/schemas/DelegateCancelAction'
+        - $ref: '#/components/schemas/DelegateFollowUpAction'
+        - $ref: '#/components/schemas/DelegatePeekAction'
+      discriminator:
+        propertyName: action
+        mapping:
+          run: '#/components/schemas/DelegateRunAction'
+          status: '#/components/schemas/DelegateStatusAction'
+          inbox: '#/components/schemas/DelegateInboxAction'
+          inbox_ack: '#/components/schemas/DelegateInboxAckAction'
+          steer: '#/components/schemas/DelegateSteerAction'
+          respond: '#/components/schemas/DelegateRespondAction'
+          cancel: '#/components/schemas/DelegateCancelAction'
+          follow_up: '#/components/schemas/DelegateFollowUpAction'
+          peek: '#/components/schemas/DelegatePeekAction'
+    DelegateRunAction:
+      $ref: ./components/schemas/DelegateRunAction.yaml
+    DelegateStatusAction:
+      $ref: ./components/schemas/DelegateStatusAction.yaml
+    DelegateInboxAction:
+      $ref: ./components/schemas/DelegateInboxAction.yaml
+    DelegateInboxAckAction:
+      $ref: ./components/schemas/DelegateInboxAckAction.yaml
+    DelegateSteerAction:
+      $ref: ./components/schemas/DelegateSteerAction.yaml
+    DelegateRespondAction:
+      $ref: ./components/schemas/DelegateRespondAction.yaml
+    DelegateCancelAction:
+      $ref: ./components/schemas/DelegateCancelAction.yaml
+    DelegateFollowUpAction:
+      $ref: ./components/schemas/DelegateFollowUpAction.yaml
+    DelegatePeekAction:
+      $ref: ./components/schemas/DelegatePeekAction.yaml
+    DelegateSessionResponse:
+      $ref: ./components/schemas/DelegateSessionResponse.yaml
+    DelegateStatusResponse:
+      $ref: ./components/schemas/DelegateStatusResponse.yaml
+    # DelegateInboxResponse is hosted INLINE here (not in a schema file) for
+    # the same reason SessionMessage/DelegateActionRequest/MessageParentRequest
+    # are: its `messages` array items need an internal same-document `$ref`
+    # to `#/components/schemas/SessionMessage`. A separate external file
+    # cannot express that pointer — `#/components/schemas/...` only resolves
+    # within the SAME document, and a cross-file form
+    # (`../../openapi.yaml#/components/schemas/SessionMessage`) satisfies
+    # redocly's bundler but oapi-codegen rejects it outright ("unrecognized
+    # external reference ... please provide the known import for this
+    # reference using option --import-mapping") — confirmed empirically
+    # during Phase-0 authoring (flagged for review).
+    DelegateInboxResponse:
+      description: >
+        Response to `delegate` `action: inbox` (ADR-053 §5.1). Drains the
+        child->parent typed inbox. `messages` reuses the SAME
+        `SessionMessage` discriminated union used everywhere else a
+        SessionMessage crosses a boundary (DoD-11 — never a second,
+        narrower message shape here).
+      type: object
+      required:
+        - messages
+        - has_more
+      additionalProperties: false
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionMessage'
+          description: Messages after since_cursor, oldest first, capped at the request's max.
+        has_more:
+          type: boolean
+          description: True when more undelivered messages remain beyond this page.
+          example: false
+        next_cursor:
+          type: string
+          description: Opaque cursor to pass as since_cursor on the next drain.
+          example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WF"
+    DelegateRespondResponse:
+      $ref: ./components/schemas/DelegateRespondResponse.yaml
+    DelegatePeekResponse:
+      $ref: ./components/schemas/DelegatePeekResponse.yaml
+
+    # message_parent child tool (ADR-053 §5.1) — MessageParentRequest is a
+    # discriminated union hosted INLINE, same ADR-034 pattern as
+    # SessionMessage above. Payload-only variants (no envelope fields) —
+    # see MessageParentProgress.yaml for the request/record split
+    # rationale versus the SessionMessage* family.
+    MessageParentRequest:
+      description: >
+        The first-class child-side `message_parent` tool's argument
+        shape, discriminated by `kind` (ADR-053 §5.1). A child uses this
+        exactly ONE tool to push a typed message into its parent's inbox
+        — `progress | checkpoint | artifact | blocker | question |
+        handback`. `decision_request`/`error`/`revision_entry`/
+        `goal_status`/`steer`/`respond` are SessionMessage kinds the
+        child tool does NOT expose (decision_request is reserved for
+        future use; the other four are engine/parent-only or session-
+        internal).
+      oneOf:
+        - $ref: '#/components/schemas/MessageParentProgress'
+        - $ref: '#/components/schemas/MessageParentCheckpoint'
+        - $ref: '#/components/schemas/MessageParentArtifact'
+        - $ref: '#/components/schemas/MessageParentBlocker'
+        - $ref: '#/components/schemas/MessageParentQuestion'
+        - $ref: '#/components/schemas/MessageParentHandback'
+      discriminator:
+        propertyName: kind
+        mapping:
+          progress: '#/components/schemas/MessageParentProgress'
+          checkpoint: '#/components/schemas/MessageParentCheckpoint'
+          artifact: '#/components/schemas/MessageParentArtifact'
+          blocker: '#/components/schemas/MessageParentBlocker'
+          question: '#/components/schemas/MessageParentQuestion'
+          handback: '#/components/schemas/MessageParentHandback'
+    MessageParentProgress:
+      $ref: ./components/schemas/MessageParentProgress.yaml
+    MessageParentCheckpoint:
+      $ref: ./components/schemas/MessageParentCheckpoint.yaml
+    MessageParentArtifact:
+      $ref: ./components/schemas/MessageParentArtifact.yaml
+    MessageParentBlocker:
+      $ref: ./components/schemas/MessageParentBlocker.yaml
+    MessageParentQuestion:
+      $ref: ./components/schemas/MessageParentQuestion.yaml
+    MessageParentHandback:
+      $ref: ./components/schemas/MessageParentHandback.yaml
+    MessageParentResponse:
+      $ref: ./components/schemas/MessageParentResponse.yaml
   responses:
     400BadRequest:
       description: "Bad request \u2014 missing or invalid field."
@@ -1025,7 +1317,7 @@ paths:
     get:
       operationId: listSessions
       summary: List sessions across all agents
-      description: 'Returns all sessions visible to the authenticated user. Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the response still returns HTTP 200 but includes a partial_errors array alongside the sessions array.
+      description: 'Returns root sessions (parent_session_id == "") visible to the authenticated user, paged, each carrying a child_count (ADR-057 US-19/FR-091). Subordinate ("delegate") sessions are reached a page at a time via the parent_session_id filter, or all at once (roots and subordinates together) via flat=true (FR-104). Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the page still returns its healthy rows plus a populated partial_errors and a valid next_cursor (FR-098). Verifier-role sessions (type "verifier", ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier=true is passed, and are never counted in child_count unless it is passed.
 
         '
       tags:
@@ -1049,33 +1341,79 @@ paths:
           - task
           - channel
           - scheduled
+          - verifier
+          - delegate
         example: chat
+      - name: include_verifier
+        in: query
+        description: >
+          When true, includes sessions of type "verifier" in the response
+          (ADR-052 FR-036). Defaults to false so verifier-role adjudication
+          sessions stay hidden from the general session list (Sidebar,
+          SearchModal); UsageScreen passes true to surface verifier LLM
+          spend.
+        schema:
+          type: boolean
+          default: false
+        example: false
+      - name: parent_session_id
+        in: query
+        description: >
+          ADR-057 FR-091/US-19: return only the DIRECT children of this
+          session id, a page at a time, instead of the default roots-only
+          listing. A parent_session_id that does not resolve to any session
+          returns an empty page (HTTP 200), not a 404 — "no children" is not
+          distinguishable from "no such session" at this layer. Mutually
+          exclusive with flat=true (400 if both are supplied, FR-104).
+        schema:
+          type: string
+        example: "550e8400-e29b-41d4-a716-446655440000"
+      - name: flat
+        in: query
+        description: >
+          ADR-057 FR-104: when true, returns every session — roots AND
+          subordinates — as a single flat, paged list, with child_count
+          still populated on each row, instead of the default roots-only
+          nesting. Used by UsageScreen's "By session" tab so per-session
+          token/cost accounting for delegated children stays auditable
+          (ADR-052 SC-014). Mutually exclusive with parent_session_id (400
+          if both are supplied).
+        schema:
+          type: boolean
+          default: false
+        example: false
+      - name: limit
+        in: query
+        description: >
+          ADR-057 FR-092: maximum number of rows to return in this page.
+          The response body scales with limit, not with total session count.
+          Omitted/absent uses the server's default page size.
+        schema:
+          type: integer
+          minimum: 1
+        example: 20
+      - name: offset
+        in: query
+        description: >
+          ADR-057 FR-098: offset-based pagination — skip this many rows of
+          the recency-ordered (updated_at descending, session id stable
+          tiebreak) sequence before returning up to limit rows. Also
+          accepted opaquely as the value of a prior response's next_cursor.
+        schema:
+          type: integer
+          minimum: 0
+        example: 0
       responses:
         '200':
-          description: 'List of sessions. When partial errors occur, the response body is {"sessions": [...], "partial_errors": ["agent=X: session_list_failed"]}. When no errors, the response body is a plain JSON array of Session objects.
+          description: 'A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node''s direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one store failed during the merge; the page''s rows and next_cursor stay valid regardless (FR-098).
 
             '
           content:
             application/json:
               schema:
-                oneOf:
-                - type: array
-                  items:
-                    $ref: '#/components/schemas/Session'
-                - type: object
-                  required:
-                  - sessions
-                  - partial_errors
-                  properties:
-                    sessions:
-                      type: array
-                      items:
-                        $ref: '#/components/schemas/Session'
-                    partial_errors:
-                      type: array
-                      items:
-                        type: string
-                      description: Opaque error tokens (agent ID + sanitized reason).
+                $ref: '#/components/schemas/SessionPage'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '500':
@@ -2441,8 +2779,8 @@ paths:
       operationId: getPerformanceSettings
       summary: Get agent concurrency settings
       description: >
-        Returns the max-parallel-agents cap and the effective (clamped) value
-        currently in use.
+        Returns the max-parallel-agents cap and the effective (resolved,
+        auto-detected or explicit) value currently in use.
       tags:
         - Settings
       responses:
@@ -2464,10 +2802,12 @@ paths:
       operationId: updatePerformanceSettings
       summary: Update agent concurrency settings
       description: >
-        Updates max_parallel_agents. The effective value is clamped to
-        [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16. Requires a
-        gateway restart to take effect (requires_restart: false — the semaphore
-        is resized in-memory on PUT).
+        Updates max_parallel_agents. An explicit value is honored exactly as
+        given — there is no ceiling, only a floor of 1; a value is never
+        silently lowered. Set to 0 to restore the auto-detected default
+        (available memory / ~3.5 MB per agent, floored at 2, physically
+        bounded around 2000). Requires a gateway restart to take effect
+        (requires_restart: false — the semaphore is resized in-memory on PUT).
       tags:
         - Settings
       requestBody:
@@ -4339,7 +4679,7 @@ paths:
       operationId: listTasks
       summary: List tasks
       description: >
-        Returns tasks in a workspace, filterable by status, agent, milestone, and
+        Returns tasks in a workspace, filterable by status, agent, and
         surface. This is the unified task surface (Sprint 2) — it subsumes the
         former GTD /board/tasks listing. By default only top-level tasks
         (parent_task_id absent) and `surface: user` tasks are returned; use the
@@ -4365,24 +4705,17 @@ paths:
           enum:
             - inbox
             - next
-            - planning
             - in_progress
             - blocked
             - done
             - failed
-        description: Filter tasks by status (7-state lifecycle).
+        description: Filter tasks by status (6-state lifecycle, ADR-051 D5).
       - name: agent_id
         in: query
         required: false
         schema:
           type: string
         description: Filter by assigned agent ID.
-      - name: milestone_id
-        in: query
-        required: false
-        schema:
-          type: string
-        description: Filter by milestone ID.
       - name: surface
         in: query
         required: false
@@ -4746,6 +5079,42 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '409':
           $ref: '#/components/responses/409Conflict'
+  /tasks/{id}/evidence:
+    get:
+      operationId: listTaskEvidence
+      summary: List a task's judge-check evidence
+      description: >
+        Returns every persisted EvidenceRecord for this task (ADR-049 D2,
+        spec Part A §C) — one record per (criterion_id, attempt) machine-check
+        execution, redacted and size-capped at write time. Read-only surface;
+        evidence is written only by the evidence-ladder judge, never via this
+        endpoint. Returns an empty array for a task with no machine checks.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '200':
+          description: Evidence records for this task.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EvidenceRecord'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
   /tasks/{id}/runs:
     get:
       operationId: listTaskRuns
@@ -4826,6 +5195,116 @@ paths:
           $ref: '#/components/responses/429TooManyRequests'
         '503':
           description: Task executor unavailable (gateway degraded).
+  /tasks/{id}/verdicts:
+    get:
+      operationId: listTaskVerdicts
+      summary: List a task's judge verdicts
+      description: >
+        Returns every judge_verdict transcript entry recorded for this task's
+        goal-loop attempts (ADR-049 D2, spec Part A §C / Round-1
+        Reconciliation R3), oldest first. Read from the task's session
+        transcript (the durable carrier — the live JudgeVerdictFrame WS push
+        is the other, ephemeral carrier of the same shape). Returns an empty
+        array for a task that has not yet been judged (e.g. no criteria, or
+        no attempt has completed).
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '200':
+          description: Judge verdicts for this task, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/JudgeVerdict'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /tasks/{id}/stop:
+    post:
+      operationId: stopTask
+      summary: Stop a task's running goal-loop
+      description: >
+        Cancels the task's in-flight worker turn (if any, via the same
+        cancellation path as a chat /cancel) and transitions the task to
+        `failed` with a `stopped by user` result (SD-C5 — Stop/Clear may be
+        optimistic client-side, as this cannot validation-fail). Rejected 400
+        when the task is already terminal (`done`/`failed`) or `blocked`
+        (nothing running to stop).
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '200':
+          description: Stopped task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /tasks/{id}/restart:
+    post:
+      operationId: restartTask
+      summary: Restart a stopped standalone task
+      description: >
+        Restarts a standalone (non-plan-member) task previously stopped by
+        the user (`status: failed`, `cancel_reason: stopped_by_user`) — the
+        Play route (ADR-052 FR-026). Resets `attempt_count` to 0, clears
+        `cancel_reason`, and transitions the task to `next` so the goal loop
+        picks it up again. Rejected 409 when the task belongs to a plan
+        (restart the plan instead, via POST /plans/{id}/restart, which
+        re-runs its non-done members) or is not in a restartable state (not
+        `failed`, or `failed` for a reason other than `stopped_by_user`).
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '200':
+          description: Restarted task (status `next`, `cancel_reason` cleared).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
   /mcp-servers:
     get:
       operationId: listMcpServers
@@ -6451,12 +6930,16 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
-  /workspaces/{id}/milestones:
+  /workspaces/{id}/plans:
     get:
-      operationId: listWorkspaceMilestones
-      summary: List milestones for a workspace
+      operationId: listWorkspacePlans
+      summary: List plans in a workspace
+      description: >
+        Returns every Plan whose workspace_id matches, newest-first by
+        created_at, with `progress`/`plan_phase`/`failed_reason` server-computed
+        (ADR-049 D1, mirrors the removed MilestoneListResponse).
       tags:
-      - Milestones
+      - Plans
       security:
       - BearerAuth: []
       parameters:
@@ -6468,20 +6951,25 @@ paths:
         description: Workspace ID.
       responses:
         '200':
-          description: Milestone list with total count
+          description: Plans for this workspace.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MilestoneListResponse'
+                $ref: '#/components/schemas/PlanListResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
     post:
-      operationId: createWorkspaceMilestone
-      summary: Create a milestone for a workspace
+      operationId: createWorkspacePlan
+      summary: Create a plan in a workspace
+      description: >
+        Creates a new Plan in `draft` state (ADR-049 D1). Member tasks are
+        linked afterward via `Task.plan_id` (same-workspace FK, validated).
       tags:
-      - Milestones
+      - Plans
       security:
       - BearerAuth: []
       parameters:
@@ -6496,14 +6984,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/MilestoneCreateRequest'
+              $ref: '#/components/schemas/PlanCreateRequest'
       responses:
         '201':
-          description: Created milestone
+          description: Created plan.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Milestone'
+                $ref: '#/components/schemas/Plan'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -6511,12 +6999,15 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
 
-  /workspaces/{id}/milestones/{milestoneId}:
+  /plans/{id}:
     get:
-      operationId: getWorkspaceMilestone
-      summary: Get a milestone by ID
+      operationId: getPlan
+      summary: Get a plan by ID
+      description: >
+        Returns a single plan with `progress`/`plan_phase`/`failed_reason`
+        server-computed read-time (ADR-049 D1).
       tags:
-      - Milestones
+      - Plans
       security:
       - BearerAuth: []
       parameters:
@@ -6525,29 +7016,30 @@ paths:
         required: true
         schema:
           type: string
-        description: Workspace ID.
-      - name: milestoneId
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Milestone ID.
+        description: Plan ID.
       responses:
         '200':
-          description: Milestone
+          description: Plan.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Milestone'
+                $ref: '#/components/schemas/Plan'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
     put:
-      operationId: updateWorkspaceMilestone
-      summary: Update a milestone (partial update)
+      operationId: updatePlan
+      summary: Update a plan
+      description: >
+        Partially updates plan fields (PATCH semantics — only provided fields
+        change). `state` drives the canonical 5-value state machine; illegal
+        transitions are rejected 400. Use POST /plans/{id}/approve for the
+        tiered-DoD-checked draft->approved transition rather than setting
+        `state` directly here (this endpoint applies
+        `plan.ValidateStateTransition` with no DoD/criteria gating).
       tags:
-      - Milestones
+      - Plans
       security:
       - BearerAuth: []
       parameters:
@@ -6556,26 +7048,20 @@ paths:
         required: true
         schema:
           type: string
-        description: Workspace ID.
-      - name: milestoneId
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Milestone ID.
+        description: Plan ID.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/MilestoneUpdateRequest'
+              $ref: '#/components/schemas/PlanUpdateRequest'
       responses:
         '200':
-          description: Updated milestone
+          description: Updated plan.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Milestone'
+                $ref: '#/components/schemas/Plan'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -6583,10 +7069,14 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
     delete:
-      operationId: deleteWorkspaceMilestone
-      summary: Delete a milestone
+      operationId: deletePlan
+      summary: Delete a plan
+      description: >
+        Deletes a plan by ID. A `running` plan cannot be deleted (409) — stop
+        it first via POST /plans/{id}/stop. Deleting a non-running plan clears
+        `plan_id` on its member tasks (best-effort, SD-A5).
       tags:
-      - Milestones
+      - Plans
       security:
       - BearerAuth: []
       parameters:
@@ -6595,20 +7085,141 @@ paths:
         required: true
         schema:
           type: string
-        description: Workspace ID.
-      - name: milestoneId
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Milestone ID.
+        description: Plan ID.
       responses:
         '204':
-          description: Deleted
+          description: Plan deleted.
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+
+  /plans/{id}/approve:
+    post:
+      operationId: approvePlan
+      summary: Approve a draft plan
+      description: >
+        Transitions a `draft` plan to `approved` (ADR-049 D1/D5, Round-1 Grill
+        Reconciliation R1). Runs the tiered Definition-of-Done check (strict
+        for agent-authored plans, soft for human/UI-authored plans) and the
+        UNCONDITIONAL member-task-criteria gate (FR-084 — every member task
+        must carry >=1 criterion in every tier). On success the single
+        plan-engine instance auto-advances `approved` -> `running` on its next
+        tick and begins dispatch — there is no separate "start" action.
+      tags:
+      - Plans
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Plan ID.
+      responses:
+        '200':
+          description: Approved plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '400':
+          description: >
+            Approval rejected — either a plan-level gate (not in draft state,
+            or a strict-tier plan with an empty Definition of Done) or the
+            unconditional per-task criteria gate.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanApproveError'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /plans/{id}/stop:
+    post:
+      operationId: stopPlan
+      summary: Stop a running plan
+      description: >
+        Transitions a `running` plan to `failed` with
+        `failed_reason: stopped_by_user` (ADR-049 D4, SD-C5 — Stop/Clear may
+        be optimistic client-side, as this cannot validation-fail). Rejected
+        400 when the plan is not currently `running`.
+      tags:
+      - Plans
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Plan ID.
+      responses:
+        '200':
+          description: Stopped plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /plans/{id}/restart:
+    post:
+      operationId: restartPlan
+      summary: Restart a stopped plan
+      description: >
+        Restarts a plan previously stopped by the user (`state: failed`,
+        `failed_reason: stopped_by_user`) — the Play route (ADR-052
+        FR-026). Resets every non-`done` member task to `next`/`blocked`
+        with `attempt_count` reset to 0, resets the plan's `judge_rounds`
+        to 0, preserves `done` members and their evidence, clears
+        `failed_reason`, and transitions the plan to `approved` (NOT
+        directly to `running`) via a store-level reason-aware guard that
+        permits only `failed[stopped_by_user] -> approved` — the engine
+        then promotes `approved -> running` under the global active-loop
+        cap on its next tick, exactly like a first execute (restarting
+        straight to `running` would skip cap admission). Rejected 409 when
+        the plan is not `failed`, or its `failed_reason` is not
+        `stopped_by_user` (e.g. `judge_rounds_exhausted` or `idle_expired`
+        are not restartable — no Play offered for those). Rejected 400 on
+        a malformed request.
+      tags:
+      - Plans
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Plan ID.
+      responses:
+        '200':
+          description: Restarted plan (state `approved`, `failed_reason` cleared).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
 
   /stats/tokens:
     get:

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -19,9 +20,18 @@ func newHookTestLoop(
 ) (*AgentLoop, *AgentInstance, func()) {
 	t.Helper()
 
-	tmpDir, err := os.MkdirTemp("", "agent-hooks-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-hooks-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
 	}
 
 	cfg := &config.Config{
@@ -43,7 +53,7 @@ func newHookTestLoop(
 
 	return al, agent, func() {
 		al.Close()
-		_ = os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDirOuter)
 	}
 }
 

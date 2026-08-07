@@ -68,15 +68,32 @@ func TestSessionTurnsStillAlive_ReturnsOnlyAliveMatchingTurns(t *testing.T) {
 
 	const sid = "session-still-alive-unit"
 
-	root := &turnState{turnID: "root-1", transcriptSessionID: sid, finishedChan: make(chan struct{})}
+	// ADR-057 FR-011/FR-015 inversion `[grill C-1]`: sessionTurnsStillAlive
+	// (steering.go) is one of the seven role-B predicates — it now matches on
+	// routingSessionID, not transcriptSessionID, so the cascade this test
+	// proves ("looks at the whole session, not just one turn") survives the
+	// D1 identity split (a delegated child's transcriptSessionID becomes its
+	// own, no longer equal to the session the cascade is keyed by).
+	root := &turnState{
+		turnID:              "root-1",
+		transcriptSessionID: sid,
+		routingSessionID:    session.RoutingSessionID(sid),
+		finishedChan:        make(chan struct{}),
+	}
 	root.Finish(false) // root already finished — must NOT appear in the result
 
-	child := &turnState{turnID: "child-1", transcriptSessionID: sid, finishedChan: make(chan struct{})}
+	child := &turnState{
+		turnID:              "child-1",
+		transcriptSessionID: sid,
+		routingSessionID:    session.RoutingSessionID(sid),
+		finishedChan:        make(chan struct{}),
+	}
 	// child intentionally left unfinished (simulates the still-running orphan).
 
 	unrelated := &turnState{
 		turnID:              "unrelated-1",
 		transcriptSessionID: "other-session",
+		routingSessionID:    session.RoutingSessionID("other-session"),
 		finishedChan:        make(chan struct{}),
 	}
 
@@ -149,9 +166,15 @@ func TestRequestCancel_OrphanedBackgroundDelegate_HardAbortedAfterParentGraceful
 	rootTS := &turnState{
 		turnID:              "root-orphan-test",
 		transcriptSessionID: sessionID,
-		depth:               0,
-		finishedChan:        make(chan struct{}),
-		transcriptStore:     store,
+		// ADR-057 FR-011/FR-015 fixture repair: GetActiveTurnHookForSession
+		// (RequestCancel's claim gate) and sessionTurnsStillAlive (the PHASE
+		// B/C escalation gate this test exists to prove) are both role-B
+		// predicates that now match on routingSessionID, not
+		// transcriptSessionID.
+		routingSessionID: session.RoutingSessionID(sessionID),
+		depth:            0,
+		finishedChan:     make(chan struct{}),
+		transcriptStore:  store,
 	}
 	// Simulates the common case: the root's own in-flight call is aborted by
 	// InterruptSession's graceful cascade and the root wraps up almost
@@ -161,10 +184,15 @@ func TestRequestCancel_OrphanedBackgroundDelegate_HardAbortedAfterParentGraceful
 	childTS := &turnState{
 		turnID:              "child-orphan-delegate",
 		transcriptSessionID: sessionID, // shares the parent's session — this is what makes it a "descendant" for cascade purposes
-		depth:               1,
-		parentTurnID:        rootTS.turnID,
-		parentTurnState:     rootTS,
-		finishedChan:        make(chan struct{}),
+		// ADR-057 FR-011/FR-015: see the identical note on rootTS above —
+		// the child inherits routingSessionID verbatim from the parent
+		// (FR-011), exactly as spawnSubTurn's own
+		// `childTS.routingSessionID = parentTS.routingSessionID` would set it.
+		routingSessionID: session.RoutingSessionID(sessionID),
+		depth:            1,
+		parentTurnID:     rootTS.turnID,
+		parentTurnState:  rootTS,
+		finishedChan:     make(chan struct{}),
 		// providerCancel intentionally left nil: an orphaned background
 		// delegate that ignores its own graceful nudge (e.g. mid multi-tool
 		// task, not currently blocked on an interruptible LLM call) is

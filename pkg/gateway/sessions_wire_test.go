@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Wire-format conformance tests for the session REST handlers.
 //
 // These tests close the bug class that shipped to the public IP build on
@@ -391,9 +389,15 @@ func TestGetSessions_ScheduledTypeFilter_RoundTrip(t *testing.T) {
 	require.Equal(t, http.StatusOK, wAll.Code,
 		"GET /sessions must return 200; body=%s", wAll.Body.String())
 
-	var allSessions []map[string]any
-	require.NoError(t, json.Unmarshal(wAll.Body.Bytes(), &allSessions),
-		"GET /sessions response must be a JSON array")
+	// ADR-057 FR-091 (grill2 M2-10): listSessions now always returns the
+	// named gen.SessionPage envelope ({"sessions": [...], ...}), not a bare
+	// array — unwrap it before the same map[string]any assertions below.
+	var allPage struct {
+		Sessions []map[string]any `json:"sessions"`
+	}
+	require.NoError(t, json.Unmarshal(wAll.Body.Bytes(), &allPage),
+		"GET /sessions response must decode as a SessionPage envelope")
+	allSessions := allPage.Sessions
 
 	foundScheduledInAll := false
 	for _, s := range allSessions {
@@ -414,9 +418,12 @@ func TestGetSessions_ScheduledTypeFilter_RoundTrip(t *testing.T) {
 	require.Equal(t, http.StatusOK, wSched.Code,
 		"GET /sessions?type=scheduled must return 200; body=%s", wSched.Body.String())
 
-	var scheduledSessions []map[string]any
-	require.NoError(t, json.Unmarshal(wSched.Body.Bytes(), &scheduledSessions),
-		"GET /sessions?type=scheduled response must be a JSON array")
+	var schedPage struct {
+		Sessions []map[string]any `json:"sessions"`
+	}
+	require.NoError(t, json.Unmarshal(wSched.Body.Bytes(), &schedPage),
+		"GET /sessions?type=scheduled response must decode as a SessionPage envelope")
+	scheduledSessions := schedPage.Sessions
 
 	require.NotEmpty(t, scheduledSessions,
 		"GET /sessions?type=scheduled must return at least one session")
@@ -441,9 +448,12 @@ func TestGetSessions_ScheduledTypeFilter_RoundTrip(t *testing.T) {
 	require.Equal(t, http.StatusOK, wChat.Code,
 		"GET /sessions?type=chat must return 200; body=%s", wChat.Body.String())
 
-	var chatSessions []map[string]any
-	require.NoError(t, json.Unmarshal(wChat.Body.Bytes(), &chatSessions),
-		"GET /sessions?type=chat response must be a JSON array")
+	var chatPage struct {
+		Sessions []map[string]any `json:"sessions"`
+	}
+	require.NoError(t, json.Unmarshal(wChat.Body.Bytes(), &chatPage),
+		"GET /sessions?type=chat response must decode as a SessionPage envelope")
+	chatSessions := chatPage.Sessions
 
 	for _, s := range chatSessions {
 		assert.NotEqual(t, scheduledMeta.ID, s["id"],

@@ -122,7 +122,7 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 	// run resolves to THAT workspace's work/ dir, independent of agent.Home —
 	// resolve it the same way runExternalCLISubTurn itself does so this
 	// assertion doesn't hardcode the harness's internal seed-workspace id.
-	wantWorkDir, wsErr := resolveTurnWorkDirOrRefuse(ts.agent.ID, ts.opts.WorkspaceID)
+	wantWorkDir, wsErr := resolveTurnWorkDirOrRefuse(context.Background(), ts.agent.ID, ts.agent.Home, ts.opts.WorkspaceID)
 	if wsErr != nil {
 		t.Fatalf("resolveTurnWorkDirOrRefuse: %v", wsErr)
 	}
@@ -504,7 +504,7 @@ func TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly(t *testing.T) {
 	t.Setenv(config.EnvHome, home)
 
 	al, ts := newExternalTestLoop(t, "claude-code", "")
-	repo, wsErr := resolveTurnWorkDirOrRefuse(ts.agent.ID, ts.opts.WorkspaceID)
+	repo, wsErr := resolveTurnWorkDirOrRefuse(context.Background(), ts.agent.ID, ts.agent.Home, ts.opts.WorkspaceID)
 	if wsErr != nil {
 		t.Fatalf("resolveTurnWorkDirOrRefuse: %v", wsErr)
 	}
@@ -688,7 +688,16 @@ func newRecordResultTurnState(t *testing.T) (*turnState, *session.UnifiedStore, 
 	baseDir := filepath.Join(t.TempDir(), "sessions")
 	store, err := session.NewUnifiedStore(baseDir)
 	require.NoError(t, err)
-	const sessionID = "session_record_result_test"
+	// ADR-057 US-1/W3 fixture repair: AppendTranscript is now STRICT — it
+	// reads meta FIRST and fails loudly ("session ... does not exist")
+	// instead of silently creating an orphan directory (the old behavior
+	// this migration deliberately removed). A hand-picked literal session id
+	// that was never minted via NewSession no longer works; recordExternalToolResult's
+	// underlying AppendTranscript call would fail and lastToolCall would find
+	// an empty transcript.
+	meta, err := store.NewSession(session.SessionTypeChat, "", "ext-agent")
+	require.NoError(t, err)
+	sessionID := meta.ID
 	ts := &turnState{
 		agentID:             "ext-agent",
 		turnID:              "ext-run-result",
@@ -856,9 +865,19 @@ func TestExternalDispatch_SanitizesRunnerError(t *testing.T) {
 
 	// Wire a real UnifiedStore so appendIntermediateAssistantTranscript
 	// actually persists the sanitized message — we read it back below.
+	// ADR-057 U2: both appendIntermediateAssistantTranscript and
+	// appendErrorTranscript write through AppendTranscriptStrict, which
+	// refuses (WARN-logged, not propagated) a write against a session id
+	// with no meta.json on disk rather than minting an orphan directory —
+	// see AppendTranscriptStrict's doc comment. A bare, never-created id
+	// string here would make every append silently fail, leaving the
+	// transcript empty and this test's assertions unfalsifiable-false — so
+	// a real session must be minted first.
 	store, err := session.NewUnifiedStore(t.TempDir() + "/sessions")
 	require.NoError(t, err)
-	const sessionID = "session_ext_sanitize_test"
+	meta, err := store.NewSession(session.SessionTypeChat, "test", ts.agentID)
+	require.NoError(t, err)
+	sessionID := meta.ID
 	ts.transcriptStore = store
 	ts.transcriptSessionID = sessionID
 

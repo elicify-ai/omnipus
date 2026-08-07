@@ -657,6 +657,13 @@ func TestContract_SubagentEndFrame_ZeroValue(t *testing.T) {
 		"zero value has empty required type, session_id, span_id, status fields")
 }
 
+// TestContract_SubagentEndFrame_Parked proves the ADR-057 UAT defect C2 fix's
+// new "parked" status value is schema-valid — added to the enum alongside
+// success/error/cancelled/interrupted/timeout, not a parallel/undeclared value.
+func TestContract_SubagentEndFrame_Parked(t *testing.T) {
+	mustPassAsyncAPI(t, "SubagentEndFrame", FixtureSubagentEndFrame_Parked())
+}
+
 // ── ReplayMessageFrame ────────────────────────────────────────────────────────
 // Traces to: contracts/asyncapi.yaml components.schemas.ReplayMessageFrame
 
@@ -2899,6 +2906,58 @@ func TestContract_Task_PriorityOutOfRange(t *testing.T) {
 		"priority=6 must fail Task schema — maximum:5")
 }
 
+func TestContract_Task_TagsBoundary(t *testing.T) {
+	// ADR-049 D1: tags maxItems:16, each item maxLength:64.
+	base := func() map[string]any {
+		return map[string]any{
+			"id":           "task-uuid-1",
+			"title":        "Test task",
+			"action":       "llm",
+			"status":       "inbox",
+			"workspace_id": "ws-1",
+			"owner":        "alice",
+			"created_by":   "alice",
+			"created_at":   "2026-06-20T10:00:00Z",
+			"updated_at":   "2026-06-20T10:00:00Z",
+		}
+	}
+
+	within := base()
+	tags16 := make([]string, 16)
+	for i := range tags16 {
+		tags16[i] = fmt.Sprintf("tag-%d", i)
+	}
+	within["tags"] = tags16
+	rawWithin, err := json.Marshal(within)
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "Task", rawWithin),
+		"16 tags must pass Task schema — maxItems:16")
+
+	over := base()
+	tags17 := make([]string, 17)
+	for i := range tags17 {
+		tags17[i] = fmt.Sprintf("tag-%d", i)
+	}
+	over["tags"] = tags17
+	rawOver, err := json.Marshal(over)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "Task", rawOver),
+		"17 tags must FAIL Task schema — maxItems:16")
+
+	tooLong := base()
+	tooLong["tags"] = []string{strings.Repeat("x", 65)}
+	rawTooLong, err := json.Marshal(tooLong)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "Task", rawTooLong),
+		"a 65-char tag must FAIL Task schema — maxLength:64")
+}
+
+func TestContract_Task_CriteriaRoundtrip(t *testing.T) {
+	// Traces to: Task.yaml `criteria` (ADR-049 D2/D5/FR-3) — a Task fixture
+	// carrying a machine-check criterion must validate.
+	mustPassComponent(t, "Task", FixtureTask_Populated())
+}
+
 // ── ToolApprovalRequiredFrame expires_in_ms range ────────────────────────────
 // Traces to: contracts/components/schemas/ToolApprovalRequiredFrame.yaml
 //            (expires_in_ms: minimum:0, maximum:86400000)
@@ -3581,8 +3640,8 @@ func newTaskEntityFixture(status string) taskEntityFixture {
 }
 
 func TestContract_TaskEntity_AllStatusValues_Validate(t *testing.T) {
-	// Sprint 2 unified 7-state vocabulary.
-	allStatuses := []string{"inbox", "next", "planning", "in_progress", "blocked", "done", "failed"}
+	// Unified 6-state vocabulary (ADR-051 D5 removed `planning`).
+	allStatuses := []string{"inbox", "next", "in_progress", "blocked", "done", "failed"}
 	for _, status := range allStatuses {
 		t.Run(status, func(t *testing.T) {
 			raw, err := json.Marshal(newTaskEntityFixture(status))
@@ -3595,16 +3654,18 @@ func TestContract_TaskEntity_AllStatusValues_Validate(t *testing.T) {
 }
 
 func TestContract_TaskEntity_LegacyStatusValuesRejected(t *testing.T) {
-	// The legacy GTD/workflow vocabularies are gone. Any of these must FAIL —
-	// they are the canary catching a regression that re-introduces a dual enum.
-	legacy := []string{"queued", "assigned", "running", "completed", "active", "waiting"}
+	// The legacy GTD/workflow vocabularies (and, since ADR-051 D5, the removed
+	// `planning` status) are gone. Any of these must FAIL — they are the canary
+	// catching a regression that re-introduces a dual enum or resurrects
+	// `planning`.
+	legacy := []string{"queued", "assigned", "running", "completed", "active", "waiting", "planning"}
 	for _, status := range legacy {
 		t.Run(status, func(t *testing.T) {
 			raw, err := json.Marshal(newTaskEntityFixture(status))
 			require.NoError(t, err)
 			validationErr := validateAgainstComponentSchemaRawJSON(t, "Task", raw)
 			assert.Error(t, validationErr,
-				"legacy status=%q must FAIL the unified Task schema (7-state only)", status)
+				"legacy status=%q must FAIL the unified Task schema (6-state only)", status)
 		})
 	}
 }
@@ -3637,24 +3698,137 @@ func TestContract_TaskTrigger_AllKinds_Validate(t *testing.T) {
 	}
 }
 
-func TestContract_Milestone_Populated(t *testing.T) {
-	mustPassComponent(t, "Milestone", FixtureMilestone_Populated())
+// ── AcceptanceCriterion ──────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AcceptanceCriterion.yaml
+
+func TestContract_AcceptanceCriterion_Populated(t *testing.T) {
+	mustPassComponent(t, "AcceptanceCriterion", FixtureAcceptanceCriterion_Populated())
 }
 
-func TestContract_Milestone_ZeroValue(t *testing.T) {
-	mustFailComponent(t, "Milestone", FixtureMilestone_ZeroValue(),
-		"name is \"\" (minLength: 1)")
+func TestContract_AcceptanceCriterion_Prose(t *testing.T) {
+	mustPassComponent(t, "AcceptanceCriterion", FixtureAcceptanceCriterion_Prose())
 }
 
-func TestContract_Milestone_ProgressRange(t *testing.T) {
-	// progress must be within [0, 1]; a value outside the range must fail.
-	m := FixtureMilestone_Populated()
+func TestContract_AcceptanceCriterion_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "AcceptanceCriterion", FixtureAcceptanceCriterion_ZeroValue(),
+		"kind/author.kind/status are \"\" (not in enum) and author.id is \"\" (minLength: 1)")
+}
+
+// NOTE: kind==prose carrying a `check` object is a documented, server-enforced
+// 400 (ADR D2 SD-A9) — like TaskTrigger's per-type-required config keys, this
+// is a prose-only conditional, not a JSON Schema construct (OpenAPI 3.0 has no
+// if/then/else). There is intentionally no contract-level test asserting a
+// schema-validation failure here; server-side validation is Wave 1/2's job.
+
+// ── EvidenceRecord ───────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/EvidenceRecord.yaml
+
+func TestContract_EvidenceRecord_Populated(t *testing.T) {
+	mustPassComponent(t, "EvidenceRecord", FixtureEvidenceRecord_Populated())
+}
+
+func TestContract_EvidenceRecord_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "EvidenceRecord", FixtureEvidenceRecord_ZeroValue(),
+		"id/task_id/criterion_id/command/output/recorded_at are all \"\"")
+}
+
+// ── CriterionVerdict ─────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/CriterionVerdict.yaml
+
+func TestContract_CriterionVerdict_Populated(t *testing.T) {
+	mustPassComponent(t, "CriterionVerdict", FixtureCriterionVerdict_Populated())
+}
+
+func TestContract_CriterionVerdict_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "CriterionVerdict", FixtureCriterionVerdict_ZeroValue(),
+		"criterion_id/reason are \"\"")
+}
+
+// ── JudgeVerdict ─────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/JudgeVerdict.yaml
+
+func TestContract_JudgeVerdict_Populated(t *testing.T) {
+	mustPassComponent(t, "JudgeVerdict", FixtureJudgeVerdict_Populated())
+}
+
+func TestContract_JudgeVerdict_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "JudgeVerdict", FixtureJudgeVerdict_ZeroValue(),
+		"id/scope/model/judged_at/judge_agent_id are \"\" and round=0 (minimum:1)")
+}
+
+// ── Plan ─────────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/Plan.yaml
+
+func TestContract_Plan_Populated(t *testing.T) {
+	// Traces to: Plan.yaml — required: [id, workspace_id, title, state, owner_agent_id, owner, created_by, created_at, updated_at]
+	mustPassComponent(t, "Plan", FixturePlan_Populated())
+}
+
+func TestContract_Plan_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "Plan", FixturePlan_ZeroValue(),
+		"zero value has empty required fields; state is not a valid enum value")
+}
+
+func TestContract_Plan_ProgressRange(t *testing.T) {
+	// progress must be within [0, 1] — mirrors the removed Milestone.progress boundary.
+	p := FixturePlan_Populated()
 	bad := float32(1.5)
-	m.Progress = &bad
-	raw, err := json.Marshal(m)
+	p.Progress = &bad
+	raw, err := json.Marshal(p)
 	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "Milestone", raw),
-		"progress=1.5 must FAIL Milestone.yaml validation (maximum: 1)")
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "Plan", raw),
+		"progress=1.5 must FAIL Plan.yaml validation (maximum: 1)")
+}
+
+func TestContract_Plan_UnknownStateRejected(t *testing.T) {
+	// R1: PlanState is a closed 5-value enum (draft/approved/running/done/failed).
+	p := FixturePlan_Populated()
+	raw, err := json.Marshal(p)
+	require.NoError(t, err)
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(raw, &doc))
+	doc["state"] = "archived"
+	raw2, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "Plan", raw2),
+		"state=archived is not one of the 5 canonical PlanState values")
+}
+
+// ── PlanCreateRequest ────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/PlanCreateRequest.yaml
+
+func TestContract_PlanCreateRequest_Populated(t *testing.T) {
+	mustPassComponent(t, "PlanCreateRequest", FixturePlanCreateRequest_Populated())
+}
+
+func TestContract_PlanCreateRequest_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "PlanCreateRequest", FixturePlanCreateRequest_ZeroValue(),
+		"workspace_id/title/owner_agent_id are all \"\"")
+}
+
+// ── PlanUpdateRequest ────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/PlanUpdateRequest.yaml
+
+func TestContract_PlanUpdateRequest_Populated(t *testing.T) {
+	mustPassComponent(t, "PlanUpdateRequest", FixturePlanUpdateRequest_Populated())
+}
+
+func TestContract_PlanUpdateRequest_EmptyRejected(t *testing.T) {
+	// minProperties:1 — an empty patch is rejected.
+	mustFailComponent(t, "PlanUpdateRequest", FixturePlanUpdateRequest_Empty(),
+		"empty object violates minProperties:1")
+}
+
+// ── PlanListResponse ─────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/PlanListResponse.yaml
+
+func TestContract_PlanListResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "PlanListResponse", FixturePlanListResponse_Populated())
+}
+
+func TestContract_PlanListResponse_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "PlanListResponse", FixturePlanListResponse_ZeroValue(),
+		"plans is nil (marshals to null, schema requires array) and total is missing")
 }
 
 func TestContract_Workspace_Populated(t *testing.T) {
@@ -3706,14 +3880,34 @@ func TestContract_PerformanceSettings_ZeroValue(t *testing.T) {
 	mustPassComponent(t, "PerformanceSettings", FixturePerformanceSettings_ZeroValue())
 }
 
-func TestContract_PerformanceSettings_OutOfRange(t *testing.T) {
-	// max_parallel_agents must be within [2, 16].
+func TestContract_PerformanceSettings_LargeValueAccepted(t *testing.T) {
+	// 2026-08-04 concurrency-gate consolidation (commit 536b7340) removed the
+	// policy ceiling PerformanceSettings.yaml used to declare (`maximum: 16`):
+	// max_parallel_agents is now the single, UI-configurable authority for
+	// agent concurrency and an explicit operator value is never silently
+	// capped (see clampParallelExplicit, pkg/config/config.go). A large
+	// explicit value MUST validate — this replaces the old
+	// TestContract_PerformanceSettings_OutOfRange, which asserted the exact
+	// ceiling this change deliberately removed.
 	ps := FixturePerformanceSettings_Populated()
 	ps.MaxParallelAgents = intPtr(99)
 	raw, err := json.Marshal(ps)
 	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "PerformanceSettings", raw),
+		"max_parallel_agents=99 must PASS PerformanceSettings.yaml validation (no ceiling — only minimum:1 applies)")
+}
+
+func TestContract_PerformanceSettings_BelowFloorRejected(t *testing.T) {
+	// The floor still applies even though the ceiling is gone:
+	// max_parallel_agents must be >= 1 (PerformanceSettings.yaml `minimum: 1`).
+	// This is the guard that replaces the retired ceiling assertion — proves
+	// the schema still rejects SOMETHING, rather than accepting any integer.
+	ps := FixturePerformanceSettings_Populated()
+	ps.MaxParallelAgents = intPtr(0)
+	raw, err := json.Marshal(ps)
+	require.NoError(t, err)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "PerformanceSettings", raw),
-		"max_parallel_agents=99 must FAIL PerformanceSettings.yaml validation (maximum: 16)")
+		"max_parallel_agents=0 must FAIL PerformanceSettings.yaml validation (minimum: 1)")
 }
 
 // ── AgentCreateRequestMain / AgentCreateRequestSubagent / AgentCreateRequestSubagent3p ──

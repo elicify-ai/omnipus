@@ -178,19 +178,34 @@ func TestProcessSystemMessage_MediaToolDelivery_StampsWorkspaceID(t *testing.T) 
 func TestSpawnSubTurn_MediaToolDelivery_InheritsParentWorkspaceID(t *testing.T) {
 	al, defaultAgent, telegramChannel, _ := newMediaWorkspaceIDTestLoop(t, "telegram")
 
+	// spawnSubTurn's real production path mints the child via
+	// al.GetSessionStore().CreateSessionWithID(childID,
+	// parentTS.transcriptSessionID, ...) — FR-082 requires reading the
+	// PARENT's own meta.json to copy its Owner field, so the parent must be
+	// a REAL, store-backed session, not a bare/zero-value id (see the
+	// identical fix and rationale in admission_adr057_test.go). Leaving
+	// transcriptSessionID unset here is a stale test-harness shape, not a
+	// production one.
+	sharedStore := al.GetSessionStore()
+	require.NotNil(t, sharedStore, "AgentLoop has no shared session store")
+	parentMeta, err := sharedStore.NewSession(session.SessionTypeChannel, "telegram", defaultAgent.ID)
+	require.NoError(t, err, "mint a real parent session")
+
 	parentTS := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-1",
-		depth:          0,
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 4),
-		concurrencySem: make(chan struct{}, 4),
-		session:        &ephemeralSessionStore{},
-		agent:          defaultAgent,
-		agentID:        defaultAgent.ID,
-		channel:        "telegram",
-		chatID:         "chat1",
-		opts:           processOptions{WorkspaceID: "sales"},
+		ctx:                 context.Background(),
+		turnID:              "parent-1",
+		depth:               0,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 4),
+		concurrencySem:      make(chan struct{}, 4),
+		session:             &ephemeralSessionStore{},
+		agent:               defaultAgent,
+		agentID:             defaultAgent.ID,
+		channel:             "telegram",
+		chatID:              "chat1",
+		transcriptSessionID: parentMeta.ID,
+		routingSessionID:    session.RoutingSessionID(parentMeta.ID),
+		opts:                processOptions{WorkspaceID: "sales"},
 	}
 
 	ctx := withSpawnToolCallID(context.Background(), "call_research1")
@@ -213,18 +228,28 @@ func TestSpawnSubTurn_MediaToolDelivery_InheritsParentWorkspaceID(t *testing.T) 
 func TestSpawnSubTurn_MediaToolDelivery_UnboundParent_EmptyWorkspaceID(t *testing.T) {
 	al, defaultAgent, telegramChannel, _ := newMediaWorkspaceIDTestLoop(t, "telegram")
 
+	// See TestSpawnSubTurn_MediaToolDelivery_InheritsParentWorkspaceID's
+	// comment: the parent must be a REAL, store-backed session for
+	// spawnSubTurn's FR-082 parent-Owner read to succeed.
+	sharedStore := al.GetSessionStore()
+	require.NotNil(t, sharedStore, "AgentLoop has no shared session store")
+	parentMeta, err := sharedStore.NewSession(session.SessionTypeChannel, "telegram", defaultAgent.ID)
+	require.NoError(t, err, "mint a real parent session")
+
 	parentTS := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-1",
-		depth:          0,
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 4),
-		concurrencySem: make(chan struct{}, 4),
-		session:        &ephemeralSessionStore{},
-		agent:          defaultAgent,
-		agentID:        defaultAgent.ID,
-		channel:        "telegram",
-		chatID:         "chat1",
+		ctx:                 context.Background(),
+		turnID:              "parent-1",
+		depth:               0,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 4),
+		concurrencySem:      make(chan struct{}, 4),
+		session:             &ephemeralSessionStore{},
+		agent:               defaultAgent,
+		agentID:             defaultAgent.ID,
+		channel:             "telegram",
+		chatID:              "chat1",
+		transcriptSessionID: parentMeta.ID,
+		routingSessionID:    session.RoutingSessionID(parentMeta.ID),
 		// opts.WorkspaceID left unset.
 	}
 

@@ -62,6 +62,18 @@ export interface BehaviorFieldsProps {
   soulTestId?: string
   /** Optional data-testid for the voice block wrapper (wizard: "wizard-voice"). */
   voiceWrapperTestId?: string
+  /**
+   * ADR-052 FR-038 (soul/rubric unification): renders the soul textarea
+   * read-only (disabled, no upload button, no required marker/hint) instead
+   * of editable. AgentProfile passes this only for locked CORE agents
+   * (`soulReadOnly={isLocked && !isSystemAgent}` — `AgentProfile.tsx`);
+   * System Agents (e.g. the Judge) are the editable carve-out on BOTH sides
+   * of the wire — `pkg/gateway/rest.go`'s `updateAgent` only rejects `soul`
+   * on a locked agent when `!foundAgent.IsSystem()`, so a System Agent's
+   * soul persists even while locked. Defaults to false — the create wizard
+   * never passes this, so its behavior is unchanged.
+   */
+  soulReadOnly?: boolean
 }
 
 /**
@@ -137,10 +149,11 @@ export function BehaviorFields({
   soulRequired,
   soulTestId,
   voiceWrapperTestId,
+  soulReadOnly,
 }: BehaviorFieldsProps) {
   const handleSoul = onSoulChange ?? setSoul
   const handleVoice = onVoiceChange ?? setVoice
-  const required = soulRequired ?? isWorker
+  const required = (soulRequired ?? isWorker) && !soulReadOnly
   return (
     <div className="space-y-5">
       {/* SOUL.md / Task prompt — relabelled for workers.
@@ -179,7 +192,9 @@ export function BehaviorFields({
         <Textarea
           data-testid={soulTestId ?? (isWorker ? 'worker-task-prompt' : 'agent-soul')}
           value={soul}
-          onChange={(e) => handleSoul?.(e.target.value)}
+          disabled={soulReadOnly}
+          readOnly={soulReadOnly}
+          onChange={soulReadOnly ? undefined : (e) => handleSoul?.(e.target.value)}
           placeholder={
             isWorker
               ? "# Task prompt\n\nDefine how this worker should approach its delegated task..."
@@ -191,8 +206,10 @@ export function BehaviorFields({
           aria-required={required ? 'true' : 'false'}
         />
         {/* Upload sits BELOW the textarea — create/edit parity (the wizard
-            used to place its own duplicate above the box). */}
-        {renderUploadButton?.('soul', (v) => handleSoul?.(v))}
+            used to place its own duplicate above the box). Hidden when
+            read-only: uploading into a field that can't save is a dead
+            interaction. */}
+        {!soulReadOnly && renderUploadButton?.('soul', (v) => handleSoul?.(v))}
       </div>
 
       {/* W6-B4 / G1: Voice — per-agent persona voice identifier (TTS voice name

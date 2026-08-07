@@ -35,6 +35,34 @@ export interface ApiErrorOptions { // not-wire-format: constructor options for t
    * preservation. Surfaced via the standard `Error.cause` plumbing.
    */
   cause?: unknown
+  /**
+   * Milliseconds to wait before retrying, parsed from a `Retry-After`
+   * response header (see `parseRetryAfterMs`). Undefined when the header was
+   * absent, unparseable, or resolved to a non-positive delay. Consumers that
+   * retry (e.g. `queryClient.ts`'s mutation retry delay) should prefer this
+   * over a fixed backoff curve when present — the server is stating exactly
+   * how long its congestion/rate-limit condition is expected to last.
+   */
+  retryAfterMs?: number
+}
+
+/**
+ * Parses a `Retry-After` response header into milliseconds. RFC 9110 §10.2.3
+ * allows two forms: an integer number of seconds ("120") or an HTTP-date.
+ * Returns undefined for an absent/unparseable header, or one that resolves to
+ * a non-positive delay (already-past HTTP-date, or a zero/negative seconds
+ * value) — callers fall back to their own default backoff in that case.
+ */
+function parseRetryAfterMs(value: string | null): number | undefined {
+  if (value === null || value.trim() === '') return undefined
+  const seconds = Number(value)
+  if (Number.isFinite(seconds)) {
+    return seconds > 0 ? seconds * 1000 : undefined
+  }
+  const dateMs = Date.parse(value)
+  if (Number.isNaN(dateMs)) return undefined
+  const deltaMs = dateMs - Date.now()
+  return deltaMs > 0 ? deltaMs : undefined
 }
 
 /**
@@ -47,6 +75,7 @@ function defaultUserMessage(status: number): string {
   if (status === 401) return 'Your session has expired. Please log in again.'
   if (status === 403) return "You don't have permission to perform this action."
   if (status === 404) return 'The requested resource was not found.'
+  if (status === 408) return 'The request timed out. Please try again.'
   if (status === 409) return 'This conflicts with the current state. Please refresh and try again.'
   if (status === 410) return 'This item is no longer available.'
   if (status === 413) return 'The request is too large.'
@@ -76,6 +105,11 @@ export class ApiError extends Error {
    * Raw response body, if any. Use for debugging/logging only.
    */
   readonly body?: string
+  /**
+   * Milliseconds to wait before retrying, parsed from a `Retry-After`
+   * response header. See `ApiErrorOptions.retryAfterMs`.
+   */
+  readonly retryAfterMs?: number
 
   constructor(status: number, userMessage?: string, options?: ApiErrorOptions) {
     const message =
@@ -91,6 +125,7 @@ export class ApiError extends Error {
     this.code = options?.code
     this.userMessage = message
     this.body = options?.body
+    this.retryAfterMs = options?.retryAfterMs
     // Stabilise prototype for `instanceof` to work across realms / when minified.
     Object.setPrototypeOf(this, ApiError.prototype)
   }
@@ -133,6 +168,13 @@ export class ApiError extends Error {
    *     contain >5% non-printable bytes in the first 256 bytes, are rejected.
    */
   static async fromResponse(res: Response): Promise<ApiError> {
+    // Captured once, up front, so every return path below (including the
+    // early oversized/non-text/binary-body bailouts, which never reach the
+    // JSON parse further down) still carries it — a congestion/rate-limit
+    // response's Retry-After value must not be dropped just because its body
+    // happened to be big, non-JSON, or binary.
+    const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'))
+
     // H3-FE: Reject oversized bodies before reading.
     const MAX_BODY_BYTES = 4 * 1024 // 4 KiB
     const contentLengthHeader = res.headers.get('content-length')
@@ -142,7 +184,7 @@ export class ApiError extends Error {
         status: res.status,
         contentLength: declaredLength,
       })
-      return new ApiError(res.status, defaultUserMessage(res.status))
+      return new ApiError(res.status, defaultUserMessage(res.status), { retryAfterMs })
     }
 
     // H3-FE: Reject non-text, non-JSON content types before reading.
@@ -156,7 +198,7 @@ export class ApiError extends Error {
         status: res.status,
         contentType,
       })
-      return new ApiError(res.status, defaultUserMessage(res.status))
+      return new ApiError(res.status, defaultUserMessage(res.status), { retryAfterMs })
     }
 
     let bodyText = ''
@@ -175,7 +217,7 @@ export class ApiError extends Error {
         status: res.status,
         bodyLength: bodyText.length,
       })
-      return new ApiError(res.status, defaultUserMessage(res.status))
+      return new ApiError(res.status, defaultUserMessage(res.status), { retryAfterMs })
     }
 
     // H3-FE: Binary content sniff — check the first 256 chars for non-printable
@@ -197,7 +239,7 @@ export class ApiError extends Error {
           status: res.status,
           nonPrintableRatio: (nonPrintable / sample.length).toFixed(2),
         })
-        return new ApiError(res.status, defaultUserMessage(res.status))
+        return new ApiError(res.status, defaultUserMessage(res.status), { retryAfterMs })
       }
     }
 
@@ -223,12 +265,12 @@ export class ApiError extends Error {
     // current state. Please refresh and try again.") and surprises tests that
     // assume `userMessage` matches `defaultUserMessage(status)`. The raw
     // server text is still preserved on `body` and `message`.
-    const knownStatuses = new Set([0, 401, 403, 404, 409, 410, 413, 429])
+    const knownStatuses = new Set([0, 401, 403, 404, 408, 409, 410, 413, 429])
     const isKnown = knownStatuses.has(res.status) || (res.status >= 500 && res.status < 600)
     const userMessage = isKnown
       ? defaultUserMessage(res.status)
       : (parsedMessage ?? (bodyText.trim().length > 0 ? bodyText : defaultUserMessage(res.status)))
-    return new ApiError(res.status, userMessage, { code: parsedCode, body: bodyText })
+    return new ApiError(res.status, userMessage, { code: parsedCode, body: bodyText, retryAfterMs })
   }
 }
 

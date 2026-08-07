@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // replay_test.go — unit and integration tests for pkg/gateway/replay.go.
 //
 // TDD rows 1-17 from sprint-i-historical-replay-fidelity-spec.md.
@@ -1541,31 +1539,61 @@ func TestParseRetryAfterSeconds(t *testing.T) {
 func ptrF(f float64) *float64 { return &f }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// A-I4 live/reload parity — multi-step delegation must not flatten a child
-// sub-turn's own narration into top-level bubbles on replay.
+// ADR-057 D6 (greenfield) — the transcript visibility filter is deleted
+// outright; a legacy-shaped delegate-narration transcript is no longer
+// suppressed on replay. W22 inversion of the pre-ADR-057
+// TestReplay_MultiStepDelegation_ChildNarrationSuppressed.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestReplay_MultiStepDelegation_ChildNarrationSuppressed is the core
-// regression test for the A-I4 live/reload parity fix (live re-verification,
-// 2026-07-12): a delegated child sub-turn shares its parent's
-// transcriptSessionID, so its own intermediate narration and its own
-// final-turn text land in the SAME transcript as the delegator's real
-// messages. Before this fix, streamReplay flattened every entry with
-// non-empty Content into a top-level replay_message frame — doubling the
-// visible bubble count and leaking the delegate's raw internal report as if
-// it were separate top-level turns, none of which ever appeared live (see
-// wsStreamer.Update's shadow-stream ownership gate).
+// TestReplay_MultiStepDelegation_ChildNarrationSurfacesOnLegacyTranscript is
+// the ADR-057 W22 inversion of the pre-ADR-057 regression test for the A-I4
+// live/reload parity fix (live re-verification, 2026-07-12). That fix taught
+// streamReplay to suppress a delegate child's own intermediate narration and
+// final report whenever they were written into the SAME transcript.jsonl as
+// the delegator's own messages — pre-ADR-057, a child inherited the parent's
+// transcriptSessionID, so both wrote to one file, correlated via
+// ParentSpawnCallID and hidden by the now-deleted
+// session.TranscriptEntry.IsDelegateChildEntry() predicate.
+//
+// ADR-057 D1 gives every delegated child its OWN real, store-backed session
+// (its own transcriptSessionID) — so for any session CREATED AFTER the
+// cutover, a child's narration physically cannot land in the parent's
+// transcript.jsonl at all; there is nothing left for a filter to suppress
+// (see pkg/gateway/replay.go:41-48, whose doc comment this change rewrote).
+// D6 is the operator's explicit, accepted greenfield decision: rather than
+// keep a filter that is a no-op for every new session, IsDelegateChildEntry()
+// and all four filter sites are DELETED outright, no migration, no
+// back-compat. The ADR states the accepted consequence verbatim: "historical
+// chats will show previously-hidden delegate narration ... as top-level
+// bubbles." That is exactly the regression the original A-I4 fix existed to
+// suppress — now deliberately reintroduced for pre-cutover data (bounded by
+// R-16), in exchange for deleting a filter with no remaining non-legacy
+// purpose.
+//
+// This test constructs exactly that legacy shape: child entries carrying
+// ParentSpawnCallID hand-inserted into the SAME entries slice passed to
+// streamReplay — precisely the record layout a transcript.jsonl written
+// before ADR-057 landed would have (the only way this shape can occur
+// post-cutover, since spawnSubTurn now always mints the child its own
+// session; see pkg/agent/subturn_transcript_nesting_test.go's
+// TestSpawnSubTurn_MultiStepChild_StampsParentSpawnCallIDOnOwnNarration for
+// the sibling proof that a NEW session's parent transcript is empty of the
+// child's writes). Given that input, streamReplay must NOT special-case
+// ParentSpawnCallID any more — every entry with non-empty Content becomes
+// its own top-level replay_message, keeping its own AgentID/Model, exactly
+// like any other entry (FR-I-002, replay.go:281-327), because the code path
+// that used to intercept these specific entries no longer exists anywhere in
+// the read boundary.
 //
 // This scenario exercises a genuinely multi-step delegation: 5 nested tool
 // calls (web searches) interleaved with 4 rounds of the child's own
-// intermediate narration, plus the child's own final "raw report" text —
-// deliberately larger than the earlier A-I4 fix rounds' own coverage (a
-// 3-segment/2-tool-call case per the delivery report), which did not catch
-// this gap.
+// intermediate narration, plus the child's own final "raw report" text.
 //
-// Traces to: A-I4 (live vs. reload render parity), live re-verification
-// 2026-07-12.
-func TestReplay_MultiStepDelegation_ChildNarrationSuppressed(t *testing.T) {
+// Traces to: ADR-057 D6 (greenfield filter deletion), R-16 (accepted
+// un-hiding regression, bounded to pre-cutover sessions), replay.go:41-48.
+// Supersedes the pre-ADR-057 A-I4 assertions (live re-verification
+// 2026-07-12) of the test this replaces.
+func TestReplay_MultiStepDelegation_ChildNarrationSurfacesOnLegacyTranscript(t *testing.T) {
 	const spawnCallID = "c1"
 	const delegateAgentID = "researcher"
 
@@ -1657,43 +1685,66 @@ func TestReplay_MultiStepDelegation_ChildNarrationSuppressed(t *testing.T) {
 
 	replayMessages := filterByType(frames, "replay_message")
 
-	// Exactly 3 top-level replay_message frames: the user's own message, the
-	// delegator's kickoff bubble, and the delegator's own final synthesized
-	// answer — matching LIVE's "exactly 3 assistant bubbles" (the bug
-	// report's own reproduction). None of the 4 intermediate narration
-	// entries or the child's own final report entry (5 total suppressed
-	// entries) may leak through as a 4th/5th/6th/7th/8th bubble.
-	require.Len(t, replayMessages, 3,
-		"expected exactly 3 top-level replay_message frames (user + delegator kickoff + "+
-			"delegator final answer) — a regression that flattens the child sub-turn's own "+
-			"narration back into top-level bubbles would inflate this count; got %d: %+v",
-		len(replayMessages), replayMessages)
+	// ADR-057 D6 inversion: the pre-ADR-057 contract asserted exactly 3
+	// top-level frames (the now-deleted filter suppressed the 5
+	// child-authored entries). The filter is gone; streamReplay no longer
+	// special-cases ParentSpawnCallID at all, so all 8 content-bearing
+	// entries surface: the user message, the delegator's kickoff bubble, the
+	// 4 child narration rounds, the child's own final report, and the
+	// delegator's own final answer.
+	require.Len(t, replayMessages, 8,
+		"ADR-057 D6 deleted the transcript visibility filter outright — a legacy-shaped "+
+			"transcript (child entries carrying ParentSpawnCallID in the SAME file) must now "+
+			"surface ALL of its content-bearing entries as top-level replay_message frames, "+
+			"not just the delegator's own 3; got %d: %+v", len(replayMessages), replayMessages)
 
+	// The 4 narration rounds + the child's own final report (5 entries) now
+	// surface, each still attributed to the delegate's OWN identity — this
+	// is the positive proof of the new contract, not just a raised count.
+	var delegateAuthored []replayFrameDecoder
 	for _, m := range replayMessages {
-		assert.NotEqual(t, delegateAgentID, m.AgentID,
-			"no top-level replay_message may be attributed to the delegate's own identity — "+
-				"live rendering never produces a standalone bubble under the delegate's own "+
-				"name/avatar")
-		assert.Empty(t, m.Model,
-			"no top-level replay_message from this scenario may carry a model tag — live "+
-				"rendering never showed one for this delegation (only the top-nav model "+
-				"selector does)")
-		assert.NotContains(t, m.Content, "Executive Summary",
-			"the delegate's own raw internal report text must never surface as a top-level "+
-				"chat bubble")
-		assert.NotContains(t, m.Content, "Step 1:",
-			"the delegate's own intermediate narration must never surface as a top-level "+
-				"chat bubble")
+		if m.AgentID == delegateAgentID {
+			delegateAuthored = append(delegateAuthored, m)
+		}
 	}
+	require.Len(t, delegateAuthored, 5,
+		"expected the 4 child narration rounds + 1 child final report to surface as top-level "+
+			"bubbles attributed to the delegate's own agent id; got %d: %+v",
+		len(delegateAuthored), delegateAuthored)
+	for _, m := range delegateAuthored {
+		assert.Equal(t, "z-ai/glm-5.2", m.Model,
+			"a delegate-authored top-level bubble must carry its own recorded model — nothing "+
+				"in the read path strips it any more")
+	}
+	var delegateContent string
+	for _, m := range delegateAuthored {
+		delegateContent += m.Content + "\n"
+	}
+	assert.Contains(t, delegateContent, "Executive Summary",
+		"the delegate's own raw internal report text must now surface as a top-level chat "+
+			"bubble — this is the ADR-057 D6 accepted regression (R-16), not a leak")
+	assert.Contains(t, delegateContent, "Step 1:",
+		"the delegate's own intermediate narration must now surface as a top-level chat bubble")
 
-	// The genuine final answer is still present, byte-identical, at the end.
+	// The delegator's own genuine messages are unaffected by the filter's
+	// deletion — same content, same identity, same position.
+	assert.Equal(t, "user", replayMessages[0].Role)
+	assert.Equal(t, "please research topic X", replayMessages[0].Content)
+	assert.Equal(t, "jim", replayMessages[1].AgentID)
+	assert.Equal(t, "Let me delegate this to our researcher.", replayMessages[1].Content)
 	last := replayMessages[len(replayMessages)-1]
 	assert.Equal(t, "Here's what I found across the sources you asked about: ...", last.Content)
 	assert.Equal(t, "jim", last.AgentID)
+	assert.Empty(t, last.Model,
+		"the delegator's own final answer never carried a model tag and still doesn't — only "+
+			"the delegate-authored entries in this fixture do")
 
-	// The child's own tool calls are UNAFFECTED by this fix — still nested
-	// under exactly one subagent span, bracketed by subagent_start/
-	// subagent_end, with all 5 nested tool_call_start/result pairs present.
+	// The child's own tool calls are UNAFFECTED by D6 — ParentToolCallID
+	// nesting is a wholly separate correlation from the (now-deleted)
+	// ParentSpawnCallID content filter (replay.go's "Do not confuse it
+	// with..." note). Still nested under exactly one subagent span,
+	// bracketed by subagent_start/subagent_end, with all 5 nested
+	// tool_call_start/result pairs present.
 	require.Len(t, filterByType(frames, "subagent_start"), 1)
 	require.Len(t, filterByType(frames, "subagent_end"), 1)
 	nestedStarts := 0
@@ -1704,9 +1755,8 @@ func TestReplay_MultiStepDelegation_ChildNarrationSuppressed(t *testing.T) {
 	}
 	assert.Equal(t, 5, nestedStarts,
 		"all 5 nested web_search tool calls must still replay, correctly bracketed under the "+
-			"spawn span — this fix only suppresses ASSISTANT TEXT entries, never tool calls")
+			"spawn span — D6 only touches ASSISTANT TEXT entries, never tool calls")
 
-	// The done frame must still be exactly one, and framesEmitted must not
-	// count the 5 suppressed entries at all.
+	// The done frame must still be exactly one.
 	assert.Equal(t, "done", frames[len(frames)-1].Type)
 }

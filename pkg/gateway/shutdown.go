@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -62,6 +60,13 @@ func omnipusGracefulShutdown(
 	// have no turn side effects and stop later (step 4).
 	if runningServices.CronService != nil {
 		runningServices.CronService.Stop()
+	}
+	// ADR-049 D4: the plan engine dispatches member tasks (which spawn
+	// turns), so it stops alongside CronService — before draining active
+	// turns — for the exact same "no new activeRequests.Add after this
+	// point" reason the comment above documents for cron.
+	if runningServices.PlanEngine != nil {
+		runningServices.PlanEngine.Stop()
 	}
 
 	// US-7 / FR-008: Wait for active turns to complete before force-closing.

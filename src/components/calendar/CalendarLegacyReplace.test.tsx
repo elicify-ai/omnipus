@@ -67,7 +67,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
       { id: 'mia', name: 'Mia', type: 'core', locked: true, status: 'idle', soul: '' },
     ]),
     fetchSubtasks: vi.fn().mockResolvedValue([]),
-    fetchMilestones: vi.fn().mockResolvedValue([]),
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
     fetchTasks: vi.fn().mockResolvedValue([]),
     fetchWorkspaceDelegation: vi.fn(),
@@ -77,7 +76,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     setTaskTodos: vi.fn().mockResolvedValue({}),
     setTaskDependencies: vi.fn().mockResolvedValue({}),
     tasksQueryKeys: actual.tasksQueryKeys,
-    milestonesQueryKeys: actual.milestonesQueryKeys,
     workspacesQueryKeys: actual.workspacesQueryKeys,
   }
 })

@@ -15,10 +15,10 @@
  *   #14 drop success → success toast (variant 'success') + Undo action    FR-010
  *   #15 dateClick → opens CreateTaskSlideOver with initialDue             FR-012
  *   #17 eventClick(task) → TaskDetailSlideOver opens                      FR-009
- *   #18 eventClick(milestone) → MilestoneDatePopover opens                FR-009
- *   #20 milestones query rejects → error toast "Couldn't load milestones" FR-016
  *   #21 plus: eventDrop task-fire preserves sibling trigger.config keys   FR-008
- *   plus: eventDrop milestone → updateMilestone(workspaceId, id, …)       FR-008
+ *
+ * Milestone coverage (drop/click/query-failure) was removed with the milestone
+ * feature (ADR-049 — replaced by Plans/tags, not owned by this screen).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -161,34 +161,6 @@ vi.mock('@/components/workspaces/TaskDetailSlideOver', () => ({
   ),
 }))
 
-/**
- * MilestoneDatePopover stub: renders data-testid="milestone-date-popover" with
- * the milestone id when milestone is non-null.
- */
-vi.mock('@/components/calendar/MilestoneDatePopover', () => ({
-  MilestoneDatePopover: ({
-    milestone,
-    onClose,
-  }: {
-    milestone: { id: string; name: string; due_date: string | null } | null
-    onClose: () => void
-  }) => (
-    <div
-      data-testid="milestone-date-popover"
-      data-milestone-id={milestone?.id ?? ''}
-    >
-      {milestone && (
-        <>
-          <span data-testid="milestone-name">{milestone.name}</span>
-          <button onClick={onClose} data-testid="milestone-close">
-            close
-          </button>
-        </>
-      )}
-    </div>
-  ),
-}))
-
 // ── 4. Mock @/lib/api ─────────────────────────────────────────────────────────
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -196,23 +168,16 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchTasks: vi.fn(),
-    fetchMilestones: vi.fn(),
     updateTask: vi.fn(),
-    updateMilestone: vi.fn(),
     tasksQueryKeys: {
       list: (params?: Record<string, unknown>) => ['tasks', params ?? {}],
-    },
-    milestonesQueryKeys: {
-      list: (workspaceId: string) => ['milestones', workspaceId],
     },
   }
 })
 
 import {
   fetchTasks,
-  fetchMilestones,
   updateTask,
-  updateMilestone,
 } from '@/lib/api'
 
 // ── 5. Mock @/store/ui ────────────────────────────────────────────────────────
@@ -249,18 +214,6 @@ function makeTask(overrides: Record<string, unknown> = {}) {
     updated_at: '2026-06-20T10:00:00Z',
     surface: 'user' as const,
     due: '2026-06-20T00:00:00Z',
-    ...overrides,
-  }
-}
-
-function makeMilestone(overrides: Record<string, unknown> = {}) {
-  return {
-    id: 'ms-1',
-    name: 'Beta Release',
-    workspace_id: WORKSPACE_ID,
-    due_date: '2026-06-25',
-    created_at: '2026-06-01T00:00:00Z',
-    updated_at: '2026-06-01T00:00:00Z',
     ...overrides,
   }
 }
@@ -345,7 +298,6 @@ async function waitForQueriesLoaded() {
   await waitFor(
     () => {
       expect(vi.mocked(fetchTasks)).toHaveBeenCalled()
-      expect(vi.mocked(fetchMilestones)).toHaveBeenCalled()
       expect(_renderCount).toBeGreaterThanOrEqual(2)
       expect(capturedProps.onEventClick).not.toBeNull()
     },
@@ -368,9 +320,7 @@ beforeEach(() => {
 
   // Reset mocks
   vi.mocked(fetchTasks).mockResolvedValue([makeTask()])
-  vi.mocked(fetchMilestones).mockResolvedValue([makeMilestone()])
   vi.mocked(updateTask).mockResolvedValue(makeTask() as never)
-  vi.mocked(updateMilestone).mockResolvedValue(makeMilestone() as never)
   mockAddToast.mockReset()
 })
 
@@ -601,86 +551,6 @@ describe('CalendarScreen — eventDrop on a task-fire event (spec §9 #11)', () 
   })
 })
 
-// ── eventDrop: milestone → updateMilestone(workspaceId, id, { due_date }) ─────
-
-describe('CalendarScreen — eventDrop on a milestone event (spec §9 #12)', () => {
-  it('calls updateMilestone(workspaceId, milestoneId, { due_date }) with 3 args (F-09)', async () => {
-    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #12 / FR-008 / US-3/AS-3
-    // BDD: Given a milestone chip is dragged to 2026-06-28,
-    // When CalendarScreen.handleEventDrop fires,
-    // Then updateMilestone("ws-test-123", "ms-1", { due_date:"2026-06-28" }) is called.
-
-    vi.mocked(updateMilestone).mockResolvedValueOnce(makeMilestone() as never)
-    renderCalendarScreen()
-
-    await waitFor(() => expect(capturedProps.onEventDrop).not.toBeNull())
-
-    const newStart = new Date(2026, 5, 28, 0, 0, 0) // local Jun 28 2026
-    const oldStart = new Date(2026, 5, 25, 0, 0, 0)
-
-    const { arg } = makeDropArg(
-      {
-        kind: 'milestone',
-        milestoneId: 'ms-1',
-        icon: 'Flag',
-      },
-      newStart,
-      oldStart,
-    )
-
-    await act(async () => {
-      capturedProps.onEventDrop!(arg)
-    })
-
-    await waitFor(() => expect(vi.mocked(updateMilestone)).toHaveBeenCalledOnce())
-
-    const [wsId, msId, body] = vi.mocked(updateMilestone).mock.calls[0]
-    // Must use all 3 args (F-09)
-    expect(wsId).toBe(WORKSPACE_ID)
-    expect(msId).toBe('ms-1')
-    expect(body.due_date).toBe('2026-06-28')
-  })
-
-  it('differentiation: dragging to two different days sends two different due_date values', async () => {
-    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #12
-    // Anti-hardcode check: milestone drops to different dates send different due_dates.
-
-    vi.mocked(updateMilestone)
-      .mockResolvedValueOnce(makeMilestone() as never)
-      .mockResolvedValueOnce(makeMilestone() as never)
-
-    const { unmount } = renderCalendarScreen()
-
-    await waitFor(() => expect(capturedProps.onEventDrop).not.toBeNull())
-
-    // Drop 1: Jun 28
-    const { arg: arg1 } = makeDropArg(
-      { kind: 'milestone', milestoneId: 'ms-1', icon: 'Flag' },
-      new Date(2026, 5, 28, 0, 0, 0),
-      new Date(2026, 5, 25, 0, 0, 0),
-    )
-    await act(async () => { capturedProps.onEventDrop!(arg1) })
-    await waitFor(() => expect(vi.mocked(updateMilestone)).toHaveBeenCalledTimes(1))
-
-    // Drop 2: Jul 1
-    const { arg: arg2 } = makeDropArg(
-      { kind: 'milestone', milestoneId: 'ms-1', icon: 'Flag' },
-      new Date(2026, 6, 1, 0, 0, 0),
-      new Date(2026, 5, 28, 0, 0, 0),
-    )
-    await act(async () => { capturedProps.onEventDrop!(arg2) })
-    await waitFor(() => expect(vi.mocked(updateMilestone)).toHaveBeenCalledTimes(2))
-
-    const due1 = vi.mocked(updateMilestone).mock.calls[0][2].due_date
-    const due2 = vi.mocked(updateMilestone).mock.calls[1][2].due_date
-    expect(due1).toBe('2026-06-28')
-    expect(due2).toBe('2026-07-01')
-    expect(due1).not.toBe(due2)
-
-    unmount()
-  })
-})
-
 // ── dateClick → opens CreateTaskSlideOver ────────────────────────────────────
 
 describe('CalendarScreen — dateClick opens CalendarEventSlideOver (Calendar Recurrence Redesign, US-1)', () => {
@@ -814,60 +684,26 @@ describe('CalendarScreen — eventClick(task) opens TaskDetailSlideOver (spec §
   })
 })
 
-// ── eventClick(milestone) → MilestoneDatePopover ─────────────────────────────
-
-describe('CalendarScreen — eventClick(milestone) opens MilestoneDatePopover (spec §9 #18)', () => {
-  it('opens MilestoneDatePopover with the matching milestone', async () => {
-    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #18 / FR-009 / US-5/AS-2 / C-5
-    // BDD: Given a milestone chip is clicked,
-    // When eventClick fires,
-    // Then MilestoneDatePopover renders with that milestone's id/name.
-
-    const milestone = makeMilestone({ id: 'ms-click-1', name: 'Beta Launch' })
-    vi.mocked(fetchMilestones).mockResolvedValue([milestone] as never)
-
-    renderCalendarScreen()
-
-    // Wait for query data to load so `milestones` inside the click handler includes the milestone
-    await waitForQueriesLoaded()
-
-    // Confirm popover is closed initially
-    expect(screen.getByTestId('milestone-date-popover')).toHaveAttribute('data-milestone-id', '')
-
-    await act(async () => {
-      capturedProps.onEventClick!(makeClickArg({
-        kind: 'milestone',
-        milestoneId: 'ms-click-1',
-        icon: 'Flag',
-      }))
-    })
-
-    await waitFor(() => {
-      expect(screen.getByTestId('milestone-date-popover')).toHaveAttribute(
-        'data-milestone-id',
-        'ms-click-1',
-      )
-    })
-    expect(screen.getByTestId('milestone-name')).toHaveTextContent('Beta Launch')
-  })
-})
-
-// ── Tasks query rejection → error toast (FR-016 tasks-fail branch) ───────────
-
-describe('CalendarScreen — tasks query failure (spec §9 / FR-016 tasks-fail branch)', () => {
-  it('shows "Couldn\'t load tasks" error toast when fetchTasks rejects (milestones OK)', async () => {
-    // Traces to: workspace-calendar-fullcalendar-spec.md §9 / FR-016
-    // BDD: Given the tasks request returns 500 (milestones still succeed),
+// ── D9: tasks query failure → real blocking error state, not a silent "empty" grid ──
+//
+// UAT defect D9: when the tasks query fails, the old code only fired a toast —
+// filteredEvents stayed [], so isEmpty=true was passed to FullCalendarView,
+// which rendered its normal "No scheduled items" empty hint. A user who saw
+// that had no way to tell "you have nothing scheduled" apart from "we
+// couldn't load your schedule". Tasks is CalendarScreen's sole event source
+// (milestones were retired with ADR-049; occurrences degrade separately —
+// see CalendarScreen.occurrencesDegrade.test.tsx), so a tasks failure with no
+// events to show is a genuine total failure: this suite proves the calendar
+// renders the shared QueryErrorState instead of the deceptive empty grid.
+describe('CalendarScreen — tasks query failure renders a real blocking error state (spec §9 / FR-016 / D9)', () => {
+  it('shows "Couldn\'t load tasks" error toast AND renders QueryErrorState (not the FullCalendarView "empty" grid) when fetchTasks rejects', async () => {
+    // Traces to: workspace-calendar-fullcalendar-spec.md §9 / FR-016 / D9
+    // BDD: Given the tasks request returns 500,
     // When the calendar loads,
     // Then addToast is called with message "Couldn't load tasks" and variant "error",
-    //   AND the FullCalendarView stub still renders (degradation, not a crash).
-    //
-    // Only the milestones-fail branch was previously tested (#21). This covers the
-    // symmetric tasks-fail branch.
+    //   AND the shared QueryErrorState renders instead of the deceptive empty grid.
 
     vi.mocked(fetchTasks).mockRejectedValueOnce(new Error('500 Server Error'))
-    // Milestones still load fine — calendar must degrade gracefully
-    vi.mocked(fetchMilestones).mockResolvedValue([makeMilestone()] as never)
 
     renderCalendarScreen()
 
@@ -884,62 +720,6 @@ describe('CalendarScreen — tasks query failure (spec §9 / FR-016 tasks-fail b
     )
     expect(toastCall![0].variant).toBe('error')
 
-    // The calendar grid stub must still render — tasks failure must not crash the calendar
-    expect(screen.getByTestId('fullcalendar-stub')).toBeInTheDocument()
-  })
-})
-
-// ── Milestones query rejection → error toast ──────────────────────────────────
-
-describe('CalendarScreen — milestones query failure (spec §9 #21)', () => {
-  it('shows "Couldn\'t load milestones" error toast when fetchMilestones rejects', async () => {
-    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #21 / FR-016 / I-2
-    // BDD: Given the milestones request returns 500,
-    // When the calendar loads,
-    // Then addToast is called with message "Couldn't load milestones" and variant "error".
-
-    vi.mocked(fetchMilestones).mockRejectedValueOnce(new Error('500 Server Error'))
-    // Tasks still load fine — the grid must show tasks + toast for milestones
-    vi.mocked(fetchTasks).mockResolvedValue([makeTask()] as never)
-
-    renderCalendarScreen()
-
-    await waitFor(() => {
-      const calls = mockAddToast.mock.calls
-      const milestonesFailCall = calls.find(
-        (call) => call[0].message === "Couldn't load milestones",
-      )
-      expect(milestonesFailCall).toBeDefined()
-    })
-
-    const toastCall = mockAddToast.mock.calls.find(
-      (call) => call[0].message === "Couldn't load milestones",
-    )
-    expect(toastCall![0].variant).toBe('error')
-
-    // The calendar grid stub must still render (degradation — not a full failure screen)
-    expect(screen.getByTestId('fullcalendar-stub')).toBeInTheDocument()
-  })
-})
-
-// ── D9: total query failure → real blocking error state, not a silent "empty" grid ──
-//
-// UAT defect D9: when BOTH queries fail (or the one query with any data
-// fails), the old code only fired a toast — filteredEvents stayed [], so
-// isEmpty=true was passed to FullCalendarView, which rendered its normal "No
-// scheduled items" empty hint. A user who saw that had no way to tell "you
-// have nothing scheduled" apart from "we couldn't load your schedule". This
-// suite proves the calendar now renders the shared QueryErrorState instead
-// of the deceptive empty grid whenever a failure is the reason there's
-// nothing to show — while the two tests above (partial failure, real data
-// still available) continue to degrade gracefully per FR-016/I-2.
-describe('CalendarScreen — total query failure renders a real blocking error state (D9)', () => {
-  it('renders QueryErrorState (not the FullCalendarView "empty" grid) when BOTH tasks and milestones fail', async () => {
-    vi.mocked(fetchTasks).mockRejectedValueOnce(new Error('500 Server Error'))
-    vi.mocked(fetchMilestones).mockRejectedValueOnce(new Error('500 Server Error'))
-
-    renderCalendarScreen()
-
     await waitFor(() => {
       expect(screen.getByTestId('calendar-error')).toBeInTheDocument()
     })
@@ -948,9 +728,8 @@ describe('CalendarScreen — total query failure renders a real blocking error s
     expect(screen.queryByTestId('fullcalendar-stub')).not.toBeInTheDocument()
   })
 
-  it('clicking Retry re-invokes both fetchTasks and fetchMilestones', async () => {
+  it('clicking Retry re-invokes fetchTasks', async () => {
     vi.mocked(fetchTasks).mockRejectedValueOnce(new Error('500 Server Error'))
-    vi.mocked(fetchMilestones).mockRejectedValueOnce(new Error('500 Server Error'))
 
     renderCalendarScreen()
 
@@ -959,17 +738,14 @@ describe('CalendarScreen — total query failure renders a real blocking error s
     })
 
     const callsBeforeTasks = vi.mocked(fetchTasks).mock.calls.length
-    const callsBeforeMilestones = vi.mocked(fetchMilestones).mock.calls.length
 
-    // Queue up successful responses for the retry.
+    // Queue up a successful response for the retry.
     vi.mocked(fetchTasks).mockResolvedValueOnce([makeTask()])
-    vi.mocked(fetchMilestones).mockResolvedValueOnce([makeMilestone()])
 
     fireEvent.click(screen.getByRole('button', { name: /retry/i }))
 
     await waitFor(() => {
       expect(vi.mocked(fetchTasks).mock.calls.length).toBeGreaterThan(callsBeforeTasks)
-      expect(vi.mocked(fetchMilestones).mock.calls.length).toBeGreaterThan(callsBeforeMilestones)
     })
 
     // A successful retry replaces the error state with the grid again.
@@ -977,20 +753,6 @@ describe('CalendarScreen — total query failure renders a real blocking error s
       expect(screen.queryByTestId('calendar-error')).not.toBeInTheDocument()
       expect(screen.getByTestId('fullcalendar-stub')).toBeInTheDocument()
     })
-  })
-
-  it('does NOT render the blocking error state when only ONE query fails and the other has data (FR-016/I-2 partial-degrade still holds)', async () => {
-    // Same setup as the pre-existing "tasks query failure" test above — this
-    // asserts the D9 fix did not regress the intentional partial-degrade path.
-    vi.mocked(fetchTasks).mockRejectedValueOnce(new Error('500 Server Error'))
-    vi.mocked(fetchMilestones).mockResolvedValue([makeMilestone()] as never)
-
-    renderCalendarScreen()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('fullcalendar-stub')).toBeInTheDocument()
-    })
-    expect(screen.queryByTestId('calendar-error')).not.toBeInTheDocument()
   })
 })
 
@@ -1106,7 +868,6 @@ describe('CalendarScreen — isLoading and isEmpty props on FullCalendarView (sp
     let resolveTask: (v: never) => void
     const pendingPromise = new Promise<never>((res) => { resolveTask = res })
     vi.mocked(fetchTasks).mockReturnValueOnce(pendingPromise)
-    vi.mocked(fetchMilestones).mockReturnValueOnce(pendingPromise)
 
     renderCalendarScreen()
 
@@ -1121,20 +882,18 @@ describe('CalendarScreen — isLoading and isEmpty props on FullCalendarView (sp
     resolveTask!([] as never)
   })
 
-  it('passes isEmpty=true and isLoading=false after load with zero tasks and milestones', async () => {
+  it('passes isEmpty=true and isLoading=false after load with zero tasks', async () => {
     // Traces to: workspace-calendar-fullcalendar-spec.md §9 #20 / US-1/AS-6 / FR-001 / I-1
-    // BDD: After both queries resolve with empty arrays,
+    // BDD: After the query resolves with an empty array,
     // Then FullCalendarView receives isEmpty=true and isLoading=false.
 
     vi.mocked(fetchTasks).mockResolvedValue([] as never)
-    vi.mocked(fetchMilestones).mockResolvedValue([] as never)
 
     renderCalendarScreen()
 
     // Wait for queries to load (render count >= 2)
     await waitFor(() => {
       expect(vi.mocked(fetchTasks)).toHaveBeenCalled()
-      expect(vi.mocked(fetchMilestones)).toHaveBeenCalled()
       expect(_renderCount).toBeGreaterThanOrEqual(2)
     }, { timeout: 5000 })
 

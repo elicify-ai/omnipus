@@ -5,19 +5,18 @@
 // canonicalGatewayOrigin / CanonicalGatewayOrigin — the single derivation of
 // the browser-facing origin for the main gateway listener.
 //
-// This lives in its OWN file, deliberately WITHOUT the rest of
-// pkg/gateway/middleware's `//go:build !cgo` constraint, so it stays importable
-// under CGO_ENABLED=1 builds — specifically the `go test -race` gate (race
-// forces cgo). pkg/tools/web_serve.go depends on CanonicalGatewayOrigin for the
-// ADR-044 single-canonical-origin preview URLs; without this split that import
-// makes pkg/tools — and every race-tested package that transitively imports it,
-// e.g. pkg/sysagent/tools — fail to build under -race, because the otherwise
-// entirely-!cgo middleware package has zero files under cgo ("build constraints
-// exclude all Go files in .../pkg/gateway/middleware"). This function is pure
-// (config + stdlib only), so it is safe to compile under both cgo and !cgo, and
-// has no runtime effect (production always builds CGO_ENABLED=0). The genuinely
-// !cgo helpers (Origin/CSRF fence, session cookie, bypass gate) stay in their
-// own !cgo files.
+// This function is pure (config + stdlib only) and compiles under both
+// CGO_ENABLED=0 and CGO_ENABLED=1.
+//
+// It was originally split into its own file to escape the blanket
+// `//go:build !cgo` constraint that used to cover pkg/gateway and
+// pkg/gateway/middleware, which made those packages compile to nothing under
+// CGO_ENABLED=1 and so broke the `go test -race` gate (race forces cgo) for
+// pkg/tools/web_serve.go, which depends on CanonicalGatewayOrigin for the
+// ADR-044 single-canonical-origin preview URLs. That constraint has since been
+// removed package-wide: the pure-Go guarantee (CLAUDE.md constraint #2) is
+// enforced by building with CGO_ENABLED=0, not by a build tag. The split is
+// therefore no longer load-bearing; the file is kept as-is to avoid churn.
 
 package middleware
 

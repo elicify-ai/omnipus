@@ -100,10 +100,6 @@ vi.mock('@/components/workspaces/TaskDetailSlideOver', () => ({
   },
 }))
 
-vi.mock('@/components/calendar/MilestoneDatePopover', () => ({
-  MilestoneDatePopover: () => <div data-testid="milestone-date-popover" />,
-}))
-
 // ── 3. Mock @/lib/api ─────────────────────────────────────────────────────────
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -111,21 +107,16 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchTasks: vi.fn(),
-    fetchMilestones: vi.fn(),
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchWorkspaceDelegation: vi.fn().mockRejectedValue(new Error('not mocked')),
     updateTask: vi.fn(),
-    updateMilestone: vi.fn(),
     tasksQueryKeys: {
       list: (params?: Record<string, unknown>) => ['tasks', params ?? {}],
-    },
-    milestonesQueryKeys: {
-      list: (workspaceId: string) => ['milestones', workspaceId],
     },
   }
 })
 
-import { fetchTasks, fetchMilestones } from '@/lib/api'
+import { fetchTasks } from '@/lib/api'
 
 // ── 4. Mock useOccurrences (module boundary — no real fetch/URL parsing) ────
 
@@ -194,7 +185,6 @@ beforeEach(() => {
   capturedTaskDetailSlideOver.taskId = ''
 
   vi.mocked(fetchTasks).mockResolvedValue([makeTask()])
-  vi.mocked(fetchMilestones).mockResolvedValue([])
   mockAddToast.mockReset()
   mockUseOccurrences.mockReset()
 })
@@ -222,7 +212,7 @@ describe('CalendarScreen — occurrences query failure degrades without blanking
       expect(kinds).toContain('task-fire')
     })
 
-    // Non-blocking toast, distinct from the tasks/milestones degrade messages.
+    // Non-blocking toast, distinct from the tasks degrade message.
     await waitFor(() => {
       expect(mockAddToast).toHaveBeenCalledWith(
         expect.objectContaining({ message: "Couldn't load recurring occurrences", variant: 'error' }),

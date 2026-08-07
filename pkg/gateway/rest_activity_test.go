@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_activity_test.go — whole-codebase-review Backend-High finding #1:
 // HandleActivity computed a partial-failure session-listing warning but only
 // slog'd it, then always returned the bare events array — discarding the

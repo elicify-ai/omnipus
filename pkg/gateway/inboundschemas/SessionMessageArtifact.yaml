@@ -1,0 +1,74 @@
+type: object
+title: SessionMessageArtifact
+description: >
+  SessionMessage `oneOf` variant, `kind: artifact` (ADR-053 §Contract
+  Surface). Child -> parent. References output files the child produced.
+  Envelope fields are duplicated inline (ADR-034 precedent, see
+  SessionMessageProgress for the rationale).
+required:
+  - message_id
+  - session_id
+  - direction
+  - kind
+  - depth
+  - created_at
+  - sender_identity
+  - untrusted_origin
+  - paths
+additionalProperties: false
+properties:
+  message_id:
+    type: string
+    minLength: 1
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WG"
+  session_id:
+    type: string
+    minLength: 1
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  parent_session_id:
+    type: string
+    nullable: true
+    example: "660e8400-e29b-41d4-a716-446655440000"
+  generation:
+    type: integer
+    minimum: 0
+    example: 0
+  direction:
+    type: string
+    enum:
+      - child_to_parent
+    example: "child_to_parent"
+  kind:
+    type: string
+    enum:
+      - artifact
+    example: "artifact"
+  depth:
+    type: integer
+    minimum: 0
+    maximum: 5
+    example: 0
+  created_at:
+    type: string
+    format: date-time
+    example: "2026-07-22T10:00:00Z"
+  sender_identity:
+    type: string
+    minLength: 1
+    example: "ray"
+  untrusted_origin:
+    type: boolean
+    example: true
+  paths:
+    type: array
+    minItems: 1
+    items:
+      type: string
+    description: Paths to output files / artifact references produced by the child.
+    example:
+      - "work/report.pdf"
+  note:
+    type: string
+    maxLength: 4096
+    description: Untrusted free-text note about the artifact.
+    example: "Draft v1 — pending review."

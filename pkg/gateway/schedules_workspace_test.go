@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // schedules_workspace_test.go — regression coverage for the scheduled/
 // heartbeat workspace-threading gap: ProcessScheduled (pkg/agent/loop.go)
 // has always read transcriptStore.GetMeta(sessionID).WorkspaceID (its FIX-1

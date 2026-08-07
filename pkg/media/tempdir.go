@@ -1,6 +1,8 @@
 package media
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,4 +51,40 @@ func SessionUploadsDir(sessionID string) (string, bool) {
 		base = filepath.Join(os.TempDir(), "omnipus_uploads")
 	}
 	return filepath.Join(base, sessionID), true
+}
+
+// RemoveSessionUploadsTree removes the uploads directory for every session id
+// in ids, cascading a parent session's delete across all of its descendants
+// (ADR-057 US-16 / FR-071). Under the pre-ADR-057 world a delegation shared
+// its parent's transcript session id, so one delete already caught every
+// upload; ADR-057 gives each child its own session id and therefore its own
+// uploads directory, which nothing previously reached — this closes that gap.
+//
+// Each id is resolved independently via SessionUploadsDir, so a path-unsafe
+// or empty id is skipped rather than aborting the whole batch, mirroring
+// SessionUploadsDir's own ("", false) contract (BDD-79). A descendant that
+// never uploaded media (no directory on disk) is not an error — os.RemoveAll
+// is already a silent no-op against a path that does not exist.
+//
+// Errors actually removing an existing, resolvable directory are collected
+// and returned via errors.Join rather than swallowed: this primitive's whole
+// purpose is to close a silent disk leak (this spec's governing constraint —
+// "almost every failure in this migration is success-shaped"), so eating a
+// real removal error here would recreate that exact failure shape one layer
+// up. One id's failure does not stop the rest of the batch from being
+// attempted. RemoveSessionUploadsTree itself never logs; the caller (the
+// cascade-delete wiring that calls this primitive with the resolved
+// descendant set) decides how a non-nil return is surfaced.
+func RemoveSessionUploadsTree(ids []string) error {
+	var errs []error
+	for _, id := range ids {
+		dir, ok := SessionUploadsDir(id)
+		if !ok {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			errs = append(errs, fmt.Errorf("media: remove uploads tree for session %q: %w", id, err))
+		}
+	}
+	return errors.Join(errs...)
 }

@@ -2,11 +2,15 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"sync"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -204,6 +208,15 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 		Media:   append([]string(nil), msg.Media...),
 	}
 	return al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg)
+}
+
+// EnqueueSteeringMessage is the exported wrapper around enqueueSteeringMessage
+// for callers outside this package (pkg/tools/delegate.go's `steer` action —
+// tools cannot reach the unexported method directly, mirroring the existing
+// SubTurnSpawner-interface pattern used to avoid a tools<->agent import
+// cycle). Behavior is byte-for-byte identical to the internal method.
+func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
+	return al.enqueueSteeringMessage(scope, agentID, msg)
 }
 
 func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
@@ -415,9 +428,21 @@ func (al *AgentLoop) InterruptGraceful(hint string) error {
 }
 
 // collectDescendantTurnIDs walks activeTurnStates and returns the turn IDs of
-// every turnState whose transcriptSessionID matches sessionID. This is the
-// canonical session-match predicate shared by InterruptSession and
-// RequestCancel so both callers produce an identical descendants list.
+// every turnState whose routingSessionID matches sessionID. This is the
+// canonical session-match predicate shared by Interrupt's whole-chat cascade
+// and RequestCancel so both callers produce an identical descendants list.
+//
+// ADR-057 FR-015 (role-B predicate, one of the seven post-W13): rebased from
+// transcriptSessionID onto routingSessionID — see turnState.routingSessionID's
+// doc comment (turn.go) for the full identity-split rationale. Pre-D1 (before
+// pkg/agent/subturn.go, ADR-057 U7, overwrites a child's routingSessionID
+// onto its root's) this is behaviourally IDENTICAL to the old
+// transcriptSessionID match: routingSessionID defaults to a turn's own
+// transcriptSessionID at construction (newTurnState, turn.go), and every
+// descendant's transcriptSessionID is itself still inherited verbatim
+// pre-D1. Post-D1 it remains the correct match: routingSessionID keeps being
+// inherited verbatim through the whole subtree while transcriptSessionID
+// becomes each delegate's own distinct, store-backed session id.
 //
 // The returned slice is freshly allocated; modifying it does not affect the
 // sync.Map. Returns nil (not an error) when no matching turns are found.
@@ -425,7 +450,7 @@ func (al *AgentLoop) collectDescendantTurnIDs(sessionID string) []string {
 	var ids []string
 	al.activeTurnStates.Range(func(_, value any) bool {
 		ts := value.(*turnState)
-		if ts.transcriptSessionID == sessionID {
+		if string(ts.routingSessionID) == sessionID {
 			ids = append(ids, ts.turnID)
 		}
 		return true
@@ -433,48 +458,275 @@ func (al *AgentLoop) collectDescendantTurnIDs(sessionID string) []string {
 	return ids
 }
 
-// InterruptSession gracefully cancels the parent turn AND every sub-turn sharing
-// the given sessionID (transcriptSessionID match). FR-6, FR-10, FR-12a, FR-15.
+// InterruptScope names how far a graceful (Interrupt) or hard
+// (InterruptSessionHard) interrupt cascades from the turn(s) matching id.
+// ADR-057 D8/FR-041: this is the mandatory third argument that collapses the
+// four pre-existing entry points (InterruptSession, InterruptSessionHard,
+// InterruptBySessionKey, InterruptBySessionKeyHard) into two — one per
+// escalation stage — so the compiler forces every caller to name its
+// intent. There is no zero-value default that means "pick one for me": the
+// only two values are ScopeSubtree and ScopeSelfOnly, and every call site
+// must write one of them out.
+type InterruptScope int
+
+const (
+	// ScopeSubtree reaches the turn(s) matching id AND every turn currently
+	// descended from them, walked via the LIVE in-memory parentTurnID chain
+	// (collectLiveDescendantTurnStates). Rooted at a CHAT's own session id
+	// this reaches the whole delegation tree — byte-identical to the old
+	// InterruptSession/InterruptSessionHard cascade, because every member of
+	// a chat's tree shares that chat's routingSessionID (resolveInterruptAnchors's
+	// Range fallback already finds all of them directly; the descendant walk
+	// on top is redundant-but-harmless in that case). Rooted at a DELEGATE's
+	// own sessionKey (found via the point-lookup half of
+	// resolveInterruptAnchors) it reaches exactly that delegate and its own
+	// descendants — never the parent, never a sibling (FR-042, AC-8). This is
+	// the NEW capability D8/R-13 add: `delegate action=cancel` moves from
+	// "that one turn" to "that child's subtree", closing the
+	// grandchild/background-shell leak D4 names.
+	ScopeSubtree InterruptScope = iota
+	// ScopeSelfOnly reaches EXACTLY the turn(s) resolveInterruptAnchors finds
+	// for id — no descendant walk. This is the old
+	// InterruptBySessionKey/InterruptBySessionKeyHard direct point-lookup
+	// behaviour, byte-identical when id is a delegate's own sessionKey (the
+	// only shape any current caller uses it with).
+	ScopeSelfOnly
+)
+
+// String renders the scope for logs/audit trails.
+func (s InterruptScope) String() string {
+	switch s {
+	case ScopeSubtree:
+		return "subtree"
+	case ScopeSelfOnly:
+		return "self_only"
+	default:
+		return fmt.Sprintf("InterruptScope(%d)", int(s))
+	}
+}
+
+// resolveInterruptAnchors finds the LIVE turnState(s) that id addresses,
+// trying BOTH mechanisms the four now-collapsed functions used separately —
+// exactly the confusion class D8 exists to end, now unified behind one
+// resolver instead of left for a caller to pick between:
 //
-// The cascade walks activeTurnStates and, for each matching turnState, spawns a
-// goroutine that calls requestGracefulInterrupt AND providerCancel in parallel so
-// the in-flight LLM HTTP request is aborted immediately (FR-12a) rather than
-// waiting for the stream to drain naturally within the 3s graceful window.
+//  1. A direct point Load keyed by sessionKey — the exact mechanism
+//     InterruptBySessionKey/InterruptBySessionKeyHard used. Hits when id is
+//     a delegate's own sessionKey: pkg/agent/subturn.go registers a
+//     delegated child's turnState under its own child session id
+//     (SessionKey: childID), which is always unique per delegation
+//     regardless of the transcriptSessionID/routingSessionID identity split.
+//  2. Only if that misses, a Range matching string(ts.routingSessionID) ==
+//     id — the exact mechanism InterruptSession/InterruptSessionHard used
+//     (ADR-057 FR-015 role-B predicate, rebased from transcriptSessionID).
+//     Hits when id is a CHAT's own session id: a root chat turn is
+//     registered under a composite "agent:<id>:<peer>" sessionKey
+//     (pkg/routing.BuildAgentPeerSessionKey), never the plain session id, so
+//     a point Load with the plain id can never hit it — only the Range,
+//     matching on the field every member of that chat's tree shares.
 //
-// Returns the list of turn IDs that received the cancel signal (parent + sub-turns).
-// The cancel handler includes this in the turn_canceled audit/transcript entry.
-// Returns an error only if sessionID is empty. A session with no active turns is
-// not an error — cancel handlers treat it as a no-op (was_fired=false).
-func (al *AgentLoop) InterruptSession(sessionID, hint string) (descendants []string, err error) {
-	if sessionID == "" {
+// Trying the point Load first is deliberate and load-bearing, not an
+// optimization: a delegate's own routingSessionID is NOT its own distinct
+// id — it is inherited verbatim from the chat root (turnState.routingSessionID's
+// doc comment, turn.go) — so a Range-only lookup keyed on a delegate's own id
+// would find zero matches for a delegate address, and if it were instead
+// matched against the delegate's shared routingSessionID it would reach the
+// whole chat tree, exactly the sibling/cousin-reaching bug #577 fixed. The
+// point Load's key space (sessionKey) is the only namespace in which a
+// delegate's own address is genuinely unique.
+func (al *AgentLoop) resolveInterruptAnchors(id string) []*turnState {
+	if id == "" {
+		return nil
+	}
+	if val, ok := al.activeTurnStates.Load(id); ok {
+		ts, ok := val.(*turnState)
+		if !ok || ts == nil {
+			// A Load hit but the value is not a *turnState: activeTurnStates
+			// is keyed by sessionKey and every Store puts a *turnState in it
+			// (turn.go registerActiveTurn / clearActiveTurnStateEntry), so a
+			// non-conforming value means the registry is corrupted. Log the
+			// invariant violation at Error and fall through to "no anchor" —
+			// there is no live turn to interrupt via this path.
+			slog.Error("activeTurnStates contains non-*turnState value",
+				"session_key", id, "value_type", fmt.Sprintf("%T", val))
+			return nil
+		}
+		return []*turnState{ts}
+	}
+	var anchors []*turnState
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts := value.(*turnState)
+		if string(ts.routingSessionID) == id {
+			anchors = append(anchors, ts)
+		}
+		return true
+	})
+	return anchors
+}
+
+// collectLiveDescendantTurnStates returns every turnState currently
+// registered in al.activeTurnStates whose parentTurnID chain leads back to
+// rootTurnID — i.e. every LIVE turn descended, at any depth, from the turn
+// identified by rootTurnID. rootTurnID itself is never included.
+//
+// KNOWN LIMITATION, stated rather than silently shipped: this walk only
+// reaches a descendant through a chain of turnStates that are ALL still
+// live. If an intermediate delegate has already finished and been cleared
+// from activeTurnStates while ITS OWN child survives (an orphaned
+// background/Critical delegate — the exact scenario ADR-045's watchdog,
+// pkg/agent/orphan_watch.go, exists to police), that surviving grandchild is
+// unreachable through this chain alone. This is a non-issue for
+// ScopeSubtree rooted at a CHAT's own session id (the common case, and the
+// only shape any current caller uses): resolveInterruptAnchors's Range
+// fallback already finds every such orphan directly via its own
+// (permanently root-inherited) routingSessionID, with no chain-walk needed —
+// this function then only adds members the Range missed, which is nothing
+// in that case. It is a real, narrower gap for ScopeSubtree rooted at a
+// NON-root delegate whose own subtree contains a mid-chain orphan; no
+// FR/BDD/AC in ADR-057's W13 scope exercises that combination, and the
+// durable ParentDurableKey walk (D3/D7) — which does not have this gap,
+// because it is not in-memory — is reserved by D4 for non-turn resources
+// off the escalation path, not for this in-memory turn cascade.
+func (al *AgentLoop) collectLiveDescendantTurnStates(rootTurnID string) []*turnState {
+	if rootTurnID == "" {
+		return nil
+	}
+	// Snapshot every live turnState once so parentTurnID chains can be walked
+	// in memory without repeated sync.Map iteration.
+	var all []*turnState
+	al.activeTurnStates.Range(func(_, value any) bool {
+		if ts, ok := value.(*turnState); ok && ts != nil {
+			all = append(all, ts)
+		}
+		return true
+	})
+
+	// Fixed-point BFS from rootTurnID over the in-memory snapshot's
+	// parentTurnID edges. N (concurrently active turns) is small (bounded by
+	// agents.defaults.subturn.max_concurrent), so the repeated O(N) passes
+	// below cost nothing in practice.
+	reached := map[string]bool{rootTurnID: true}
+	var result []*turnState
+	for changed := true; changed; {
+		changed = false
+		for _, ts := range all {
+			if reached[ts.turnID] {
+				continue
+			}
+			if reached[ts.parentTurnID] {
+				reached[ts.turnID] = true
+				result = append(result, ts)
+				changed = true
+			}
+		}
+	}
+	return result
+}
+
+// resolveInterruptTargets resolves id + scope into the concrete set of LIVE
+// turnStates a caller's cascade must reach: exactly the anchor(s)
+// resolveInterruptAnchors finds for ScopeSelfOnly, or the anchor(s) PLUS
+// their live descendants (collectLiveDescendantTurnStates) for ScopeSubtree.
+// Shared by Interrupt and InterruptSessionHard so the two escalation stages
+// always agree on which turns are in scope (FR-042, AC-8).
+func (al *AgentLoop) resolveInterruptTargets(id string, scope InterruptScope) []*turnState {
+	anchors := al.resolveInterruptAnchors(id)
+	if len(anchors) == 0 || scope == ScopeSelfOnly {
+		return anchors
+	}
+	seen := make(map[string]bool, len(anchors))
+	targets := make([]*turnState, 0, len(anchors))
+	for _, ts := range anchors {
+		if !seen[ts.turnID] {
+			seen[ts.turnID] = true
+			targets = append(targets, ts)
+		}
+	}
+	for _, anchor := range anchors {
+		for _, d := range al.collectLiveDescendantTurnStates(anchor.turnID) {
+			if !seen[d.turnID] {
+				seen[d.turnID] = true
+				targets = append(targets, d)
+			}
+		}
+	}
+	return targets
+}
+
+// markTurnsCancelling sets turnState.cancelling on every turn in targets —
+// the GATE half of the chain-reaction supersession of ADR-057 FR-024 (see
+// that field's own doc comment, turn.go, for the full mechanism). Called by
+// BOTH Interrupt and InterruptSessionHard, right after resolving targets and
+// before any interrupt signal actually fires, so the two cancel surfaces that
+// share this resolution (RequestCancel's chat-wide Stop, and
+// `delegate action=cancel`'s per-delegate cascade — both ultimately call
+// Interrupt/InterruptSessionHard) get the gate uniformly with one change.
+// Idempotent: setting an already-true flag is harmless, so calling this from
+// both Interrupt (PHASE A) and InterruptSessionHard (PHASE B) for the SAME
+// target is not a bug — it is redundant-but-safe, exactly like this file's
+// existing resolveInterruptTargets sharing.
+func markTurnsCancelling(targets []*turnState) {
+	for _, ts := range targets {
+		ts.cancelling.Store(true)
+	}
+}
+
+// Interrupt gracefully cancels the turn(s) addressed by id, according to
+// scope. FR-6, FR-10, FR-12a, FR-15, FR-41.
+//
+// ADR-057 D8/FR-041 collapses the four pre-existing entry points
+// (InterruptSession, InterruptSessionHard, InterruptBySessionKey,
+// InterruptBySessionKeyHard) into this function (graceful) and
+// InterruptSessionHard (hard, same file), both now taking a mandatory
+// InterruptScope so the compiler forces every caller to name its intent —
+// see resolveInterruptAnchors and InterruptScope's doc comments for the full
+// mechanism and the #577 reconciliation.
+//
+// The cascade spawns a goroutine per resolved target that calls
+// requestGracefulInterrupt AND providerCancel in parallel so the in-flight
+// LLM HTTP request is aborted immediately (FR-12a) rather than waiting for
+// the stream to drain naturally within the 3s graceful window.
+//
+// Returns the list of turn IDs that received the cancel signal. The cancel
+// handler includes this in the turn_canceled audit/transcript entry when
+// scope is ScopeSubtree rooted at a chat. Returns an error only if id is
+// empty. No matching live turn is not an error — callers treat it as a
+// no-op (was_fired=false for a chat-wide Stop; "already terminated" for a
+// delegate cancel, whose caller ownership was already verified before
+// reaching here).
+func (al *AgentLoop) Interrupt(id string, scope InterruptScope, hint string) (descendants []string, err error) {
+	if id == "" {
 		return nil, fmt.Errorf("empty session_id")
 	}
 
-	// Collect all matching turn states before spawning goroutines so we hold the
-	// sync.Map range lock for as short a time as possible.
-	var matches []*turnState
-	al.activeTurnStates.Range(func(_, value any) bool {
-		ts := value.(*turnState)
-		if ts.transcriptSessionID == sessionID {
-			matches = append(matches, ts)
-			descendants = append(descendants, ts.turnID)
-		}
-		return true // continue walking — cascade to ALL matches (parent + sub-turns)
-	})
-
-	if len(matches) == 0 {
+	targets := al.resolveInterruptTargets(id, scope)
+	if len(targets) == 0 {
 		return nil, nil // no active turn — caller emits turn_cancel_attempt{was_fired:false}
+	}
+	// [Chain-reaction supersession of ADR-057 FR-024 — the GATE half] Mark
+	// every resolved target as cancelling FIRST, before anything else in this
+	// function — see turnState.cancelling's doc comment (turn.go) for the
+	// full mechanism. This is what actually closes the "a new child born
+	// during cancellation escapes it" race: recursion (the fresh re-scan/
+	// chain-reaction-latch machinery elsewhere in this file and cancel.go)
+	// only ever reaches a child that has ALREADY registered, or is ALREADY
+	// known to be imminent — it cannot stop a spawn that has not even been
+	// attempted yet. spawnSubTurn (subturn.go) checks this flag, walking the
+	// parentTurnState ancestor chain, before creating any new child.
+	markTurnsCancelling(targets)
+	for _, ts := range targets {
+		descendants = append(descendants, ts.turnID)
 	}
 
 	var wg sync.WaitGroup
-	for _, ts := range matches {
-		// capture loop variable
+	for _, ts := range targets {
+		// capture loop variable (Go 1.22+ per-iteration scoping)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					logger.ErrorCF("agent", "Panic in InterruptSession goroutine",
+					logger.ErrorCF("agent", "Panic in Interrupt goroutine",
 						map[string]any{"panic": r, "turn_id": ts.turnID})
 				}
 			}()
@@ -489,7 +741,7 @@ func (al *AgentLoop) InterruptSession(sessionID, hint string) (descendants []str
 			if ts.requestGracefulInterrupt(hint) {
 				al.emitEvent(
 					EventKindInterruptReceived,
-					ts.eventMeta("InterruptSession", "turn.interrupt.received"),
+					ts.eventMeta("Interrupt", "turn.interrupt.received"),
 					InterruptReceivedPayload{
 						Kind:    InterruptKindGraceful,
 						HintLen: len(hint),
@@ -502,32 +754,40 @@ func (al *AgentLoop) InterruptSession(sessionID, hint string) (descendants []str
 	return descendants, nil
 }
 
-// InterruptSessionHard escalates a previously-graceful cancel to a hard abort for
-// every turn matching sessionID. Called at t=3s after InterruptSession per FR-11.
-// See InterruptHard for the legacy single-turn path; this function is session-scoped.
+// InterruptSessionHard escalates a previously-graceful cancel to a hard
+// abort for the turn(s) addressed by id, according to scope. Called at t=3s
+// after Interrupt per FR-11. See InterruptHard (below) for the legacy
+// process-wide single-turn path, which takes no session id and is out of
+// scope for this collapse (FR-041).
+//
+// ADR-057 D8/FR-041: this is the hard-escalation half of the two-function
+// collapse — see Interrupt's doc comment for the full mechanism. It keeps
+// the name InterruptSessionHard (one of the four retired names) rather than
+// "InterruptHard" specifically to avoid colliding with the existing
+// zero-argument process-wide InterruptHard below.
 //
 // Returns the list of turn IDs that received the hard-abort signal.
-func (al *AgentLoop) InterruptSessionHard(sessionID, hint string) (descendants []string, err error) {
-	if sessionID == "" {
+func (al *AgentLoop) InterruptSessionHard(id string, scope InterruptScope, hint string) (descendants []string, err error) {
+	if id == "" {
 		return nil, fmt.Errorf("empty session_id")
 	}
 
-	var matches []*turnState
-	al.activeTurnStates.Range(func(_, value any) bool {
-		ts := value.(*turnState)
-		if ts.transcriptSessionID == sessionID {
-			matches = append(matches, ts)
-			descendants = append(descendants, ts.turnID)
-		}
-		return true
-	})
-
-	if len(matches) == 0 {
+	targets := al.resolveInterruptTargets(id, scope)
+	if len(targets) == 0 {
 		return nil, nil
+	}
+	// Chain-reaction supersession of ADR-057 FR-024 — GATE half; see
+	// Interrupt's identical call site (above) for the full rationale.
+	// Idempotent against a target Interrupt already marked moments earlier
+	// (the common PHASE-A-then-PHASE-B ordering) — atomic.Bool.Store(true)
+	// twice is harmless.
+	markTurnsCancelling(targets)
+	for _, ts := range targets {
+		descendants = append(descendants, ts.turnID)
 	}
 
 	var wg sync.WaitGroup
-	for _, ts := range matches {
+	for _, ts := range targets {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -541,11 +801,9 @@ func (al *AgentLoop) InterruptSessionHard(sessionID, hint string) (descendants [
 			// atomically (see turn.go:requestHardAbort). The else branch executes
 			// only when hardAbort was already true — meaning a concurrent caller
 			// already flipped the flag and fired providerCancel. We re-fire it here
-			// defensively in case its turnCancel pointer was reset between the two
-			// calls (e.g. a new turn started on the same turnState slot).
+			// defensively in case its providerCancel pointer was reset between the
+			// two calls (e.g. a new turn started on the same turnState slot).
 			if !ts.requestHardAbort() {
-				// Concurrent caller already set hardAbort — re-fire providerCancel
-				// in case the pointer was replaced since that call.
 				ts.mu.Lock()
 				pc := ts.providerCancel
 				ts.mu.Unlock()
@@ -567,12 +825,13 @@ func (al *AgentLoop) InterruptSessionHard(sessionID, hint string) (descendants [
 }
 
 // sessionTurnsStillAlive returns every turnState matching sessionID
-// (transcriptSessionID equality — the same predicate InterruptSession/
-// InterruptSessionHard/collectDescendantTurnIDs use) that has NOT yet
-// finished (turnState.IsAlive()).
+// (routingSessionID equality — ADR-057 FR-015 role-B predicate, rebased from
+// transcriptSessionID; the same predicate Interrupt/InterruptSessionHard's
+// whole-chat Range fallback and collectDescendantTurnIDs use) that has NOT
+// yet finished (turnState.IsAlive()).
 //
-// Root cause this closes (delegation-cancel bug, UAT persona "Alex"):
-// RequestCancel's PHASE B/C escalation timers (pkg/agent/cancel.go) used to
+// Root cause this closes: RequestCancel's PHASE B/C escalation timers
+// (pkg/agent/cancel.go) used to
 // gate hard-abort escalation on `activeTurn.IsAlive()` alone, where
 // activeTurn is the SINGLE hook resolved once via GetActiveTurnHookForSession
 // — which always prefers the ROOT turn when one exists (see that method's
@@ -583,7 +842,7 @@ func (al *AgentLoop) InterruptSessionHard(sessionID, hint string) (descendants [
 // own in-flight LLM call almost immediately), `activeTurn.IsAlive()` goes
 // false and the OLD code skipped InterruptSessionHard for the WHOLE
 // session — never reaching the still-running child at all. The child's own
-// graceful nudge (also delivered by InterruptSession's cascade) only aborts
+// graceful nudge (also delivered by Interrupt's cascade) only aborts
 // its CURRENT in-flight LLM call; because the retry loop only treats a
 // canceled call as terminal when THIS turn's own hardAbortRequested() is
 // true (pkg/agent/loop.go, the `errors.Is(err, context.Canceled)` checks),
@@ -602,7 +861,7 @@ func (al *AgentLoop) sessionTurnsStillAlive(sessionID string) []*turnState {
 	var alive []*turnState
 	al.activeTurnStates.Range(func(_, value any) bool {
 		ts := value.(*turnState)
-		if ts.transcriptSessionID == sessionID && ts.IsAlive() {
+		if string(ts.routingSessionID) == sessionID && ts.IsAlive() {
 			alive = append(alive, ts)
 		}
 		return true
@@ -644,7 +903,7 @@ func (al *AgentLoop) hasLiveCriticalDelegate(sessionID string) bool {
 	found := false
 	al.activeTurnStates.Range(func(_, value any) bool {
 		ts := value.(*turnState)
-		if ts.transcriptSessionID != sessionID {
+		if string(ts.routingSessionID) != sessionID {
 			return true
 		}
 		if ts.depth == 0 || ts.parentTurnID == "" {
@@ -667,8 +926,7 @@ func (al *AgentLoop) hasLiveCriticalDelegate(sessionID string) bool {
 // paragraph below). Returns false for an empty ID or when no matching
 // turnState is found in activeTurnStates.
 //
-// Root cause this closes (reload/replay fabricated-status bug, live UAT
-// re-verification 2026-07): async delegation (DelegateTool.executeAsync)
+// Root cause this closes: async delegation (DelegateTool.executeAsync)
 // persists a placeholder ack — Status="success", DurationMS≈0 — on the
 // spawning ToolCall record the instant the tool call itself returns, well
 // before the delegate's own sub-turn actually finishes (see
@@ -884,4 +1142,82 @@ func (al *AgentLoop) InjectFollowUp(msg providers.Message) error {
 // It injects a steering message into the currently running agent loop.
 func (al *AgentLoop) InjectSteering(msg providers.Message) error {
 	return al.Steer(msg)
+}
+
+// ====================== ADR-053 S3: Typed SessionMessage Transport ======================
+//
+// GENERALIZATION, not a new mechanism (BOM discipline, delivery brief
+// DoD-11): a parent->child `steer`/`respond` SessionMessage is translated
+// into the SAME providers.Message this file has always queued and injected
+// into the CHILD's steering-queue scope via the EXISTING
+// enqueueSteeringMessage — same MaxQueueSize, same drain-at-tool-boundary
+// semantics, same skip-remaining-batch behavior (INV-3). No second queue,
+// no second injection path is introduced.
+//
+// Correlation routing for `respond` (INV-4 — answers a parked `question` by
+// correlation_id, out-of-order safe) happens ONE LAYER UP, at the caller
+// (pkg/tools/delegate.go's respond action): it validates correlation_id
+// against the child's parked SessionLifecycleRecord.NeedsInput before ever
+// reaching here, and a native child parked on `question(wait=true)` has
+// exactly one open correlation at a time — so by the time
+// DeliverSessionMessage runs, "which question is this answering" is already
+// resolved; only the answer TEXT needs to reach the child's next turn.
+
+// ErrSessionMessageNotTurnInjectable is returned by DeliverSessionMessage
+// for any SessionMessage kind that is not a parent->child turn injection
+// (steer/respond). Every other kind — child->parent reporting
+// (progress/checkpoint/artifact/blocker/question/decision_request/error/
+// handback) and engine/session_to_ui kinds (revision_entry/goal_status) —
+// is inbox/UI delivery, not a turn injection, and must be routed to the
+// durable inbox (pkg/session.MessageInboxStore) or the bounded typed wake
+// (AsyncNotifier.WakeParent, async_notifier.go) instead. Distinguishable via
+// errors.Is so a bus-consumer wiring (another wave) can branch on it rather
+// than treating it as a hard failure.
+var ErrSessionMessageNotTurnInjectable = errors.New("agent: session message kind is not a turn injection")
+
+// sessionMessageEnvelope is the minimal shape every SessionMessage variant
+// flattens inline (ADR-034 precedent) — used here only to read
+// SessionId/Text for the two turn-injectable kinds without a full
+// per-variant switch.
+type sessionMessageTextEnvelope struct {
+	SessionID string `json:"session_id"`
+	Text      string `json:"text"`
+}
+
+// DeliverSessionMessage is the single entry point that turns a typed
+// ADR-053 SessionMessage into the appropriate EXISTING delivery mechanism.
+// For `kind: steer` and `kind: respond` (both parent->child), it enqueues
+// the message's Text as a providers.Message into the CHILD's steering-queue
+// scope (childSessionKey — the same "agent:<id>:<sid>" scope key runTurn
+// registers the active turn under, mirroring enqueueSteeringFromMessage's
+// own scope resolution) via the existing enqueueSteeringMessage, so it
+// lands at the child's next tool boundary exactly like a chat steer does
+// today. Any other kind returns ErrSessionMessageNotTurnInjectable — it is
+// the caller's job to route those to the inbox/wake mechanisms instead.
+func (al *AgentLoop) DeliverSessionMessage(_ context.Context, childSessionKey, childAgentID string, msg generated.SessionMessage) error {
+	kind, err := msg.Discriminator()
+	if err != nil {
+		return fmt.Errorf("agent: session message: malformed envelope: %w", err)
+	}
+
+	switch kind {
+	case "steer", "respond":
+		raw, merr := msg.MarshalJSON()
+		if merr != nil {
+			return fmt.Errorf("agent: session message: marshal: %w", merr)
+		}
+		var env sessionMessageTextEnvelope
+		if uerr := json.Unmarshal(raw, &env); uerr != nil {
+			return fmt.Errorf("agent: session message: kind %q: %w", kind, uerr)
+		}
+		if strings.TrimSpace(env.Text) == "" {
+			return fmt.Errorf("agent: session message: kind %q: empty text", kind)
+		}
+		return al.enqueueSteeringMessage(childSessionKey, childAgentID, providers.Message{
+			Role:    "user",
+			Content: env.Text,
+		})
+	default:
+		return fmt.Errorf("%w: kind %q", ErrSessionMessageNotTurnInjectable, kind)
+	}
 }

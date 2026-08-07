@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ChartBar, ChatCircle, CaretUp, CaretDown } from '@phosphor-icons/react'
+import { ChartBar, ChatCircle, CaretUp, CaretDown, Scales } from '@phosphor-icons/react'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
-import { fetchTokenStats, fetchSessions, tokenStatsQueryKeys, type TokenStatsPeriod } from '@/lib/api'
+import { Badge } from '@/components/ui/badge'
+import { fetchTokenStats, fetchSessions, tokenStatsQueryKeys, type TokenStatsPeriod, type Session } from '@/lib/api'
 import { formatTokens } from '@/lib/formatTokens'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
+import { TokenBudgetSection } from '@/components/screens/TokenBudgetSection'
 
 export { formatTokens }
 
@@ -124,6 +126,9 @@ interface SessionRow {
   id: string
   title: string
   tokens: number
+  // Session classification (ADR-052 FR-036) — used only to flag verifier
+  // (Judge) rows with a "Verifier" tag; sort/filter logic ignores it.
+  type: Session['type']
 }
 
 type SortKey = 'tokens' | 'title'
@@ -195,15 +200,27 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
         <tbody>
           {sorted.map((row) => (
             <tr key={row.id} className="border-b border-[var(--color-border)]/50 hover:bg-[var(--color-surface-1)] transition-colors">
-              <td className="py-2 pr-4 max-w-[200px] truncate text-[var(--color-secondary)]" title={row.title}>
-                <Link
-                  to="/sessions/$sessionId"
-                  params={{ sessionId: row.id }}
-                  tabIndex={0}
-                  className="hover:text-[var(--color-accent)] transition-colors"
-                >
-                  {row.title || 'Untitled'}
-                </Link>
+              <td className="py-2 pr-4 max-w-[200px] text-[var(--color-secondary)]">
+                <div className="flex items-center gap-1.5 min-w-0" title={row.title}>
+                  <Link
+                    to="/sessions/$sessionId"
+                    params={{ sessionId: row.id }}
+                    tabIndex={0}
+                    className="truncate min-w-0 hover:text-[var(--color-accent)] transition-colors"
+                  >
+                    {row.title || 'Untitled'}
+                  </Link>
+                  {row.type === 'verifier' && (
+                    <Badge
+                      variant="muted"
+                      data-testid="session-verifier-tag"
+                      className="shrink-0 gap-0.5 px-1.5 py-0 text-[9px] font-medium uppercase tracking-wider"
+                    >
+                      <Scales size={9} weight="bold" aria-hidden="true" />
+                      Verifier
+                    </Badge>
+                  )}
+                </div>
               </td>
               <td className="py-2 pl-4 text-right font-mono tabular-nums text-[var(--color-muted)]">
                 {formatTokens(row.tokens)}
@@ -231,6 +248,15 @@ export function UsageScreen() {
   const [period, setPeriod] = useState<TokenStatsPeriod>('month')
   const [breakdownTab, setBreakdownTab] = useState<'agent' | 'model' | 'session'>('agent')
 
+  // ADR-052 FR-036 / SC-014: UsageScreen is the ONE surface that must show
+  // verifier-role (the Judge) LLM spend, unlike Sidebar/SearchModal which
+  // exclude it. Verified against the live backend (pkg/gateway/rest_stats.go
+  // HandleTokenStats, 2026-07): it aggregates ALL sessions returned by
+  // ListAllSessions with NO session-type filter (it only excludes
+  // subagent_3p agents) — so the hero stats, "By agent", and "By model"
+  // breakdowns below already include the Judge's token/cost totals with
+  // ZERO changes needed here. `include_verifier` only affects the separate
+  // GET /sessions list endpoint.
   const {
     data: summary,
     isLoading: statsLoading,
@@ -240,12 +266,30 @@ export function UsageScreen() {
     queryFn: () => fetchTokenStats(period),
   })
 
+  // "By session" tab ONLY: built from GET /sessions, which excludes
+  // verifier-type sessions by default (FR-036) unless include_verifier=true
+  // is passed. This is the one caller in the app that opts in — Sidebar and
+  // SearchModal must keep excluding them — so individual verifier session
+  // rows appear here (tagged "Verifier", see SessionsTable), closing the
+  // SC-014 gap: their aggregate spend was already counted in the hero/
+  // by-agent/by-model views above via the unfiltered token-stats endpoint,
+  // and now the per-session row list is complete too.
+  //
+  // ADR-057 FR-104 (W16h): also passes flat:true. GET /sessions defaults to
+  // ROOTS ONLY under US-19's nested-listing design, which would silently
+  // drop every delegated child's spend from this per-session accounting —
+  // a real audit regression, not a display nuance (a chat that delegated
+  // most of its work would show only its own small share). flat:true
+  // returns every session — roots and subordinates — as one flat page, so
+  // the sum of per-session totals stays equal to the true total (BDD-111).
   const {
     data: sessions = [],
     isLoading: sessionsLoading,
+    isError: sessionsError,
+    refetch: refetchSessions,
   } = useQuery({
-    queryKey: ['sessions'],
-    queryFn: () => fetchSessions(),
+    queryKey: ['sessions', 'includeVerifier', 'flat'],
+    queryFn: () => fetchSessions(undefined, undefined, { includeVerifier: true, flat: true }),
     staleTime: 30_000,
   })
 
@@ -287,13 +331,15 @@ export function UsageScreen() {
     .sort((a, b) => b.tokens - a.tokens)
   const modelMax = modelItems[0]?.tokens ?? 0
 
-  // By-session items — use sessions list with total_tokens
+  // By-session items — use sessions list (includes verifier sessions, see
+  // the fetchSessions call above) with total_tokens.
   const sessionRows: SessionRow[] = sessions
     .filter((s) => s.total_tokens != null && s.total_tokens > 0)
     .map((s) => ({
       id: s.id,
       title: s.title || 'Untitled',
       tokens: s.total_tokens ?? 0,
+      type: s.type,
     }))
     .sort((a, b) => b.tokens - a.tokens)
     .slice(0, 50)
@@ -341,6 +387,12 @@ export function UsageScreen() {
             ))}
           </div>
         </div>
+
+        {/* ADR-053 D12 / FE-6 — app-level OVERALL token budget. Rendered
+            independently of the stats loading/empty states so the unbounded
+            advisory (R§8.3a) is persistent. The section owns its own
+            loading/error affordances. */}
+        <TokenBudgetSection />
 
         {/* Loading state */}
         {isLoading && <UsageSkeleton />}
@@ -444,7 +496,28 @@ export function UsageScreen() {
               </TabsContent>
 
               <TabsContent value="session" data-testid="tab-content-session">
-                <SessionsTable rows={sessionRows} />
+                {sessionsError ? (
+                  // Distinguish "the per-session fetch failed" from a
+                  // genuinely empty install — SessionsTable's own empty
+                  // state ("No session data.") is indistinguishable from an
+                  // HTTP failure unless this branch intercepts it first.
+                  <div
+                    className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 text-sm text-[var(--color-error)]"
+                    data-testid="usage-session-error"
+                    role="alert"
+                  >
+                    <span>Could not load per-session data.</span>
+                    <button tabIndex={0}
+                      type="button"
+                      onClick={() => void refetchSessions()}
+                      className="shrink-0 font-medium underline hover:no-underline"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : (
+                  <SessionsTable rows={sessionRows} />
+                )}
               </TabsContent>
             </Tabs>
           </>

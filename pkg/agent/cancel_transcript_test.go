@@ -89,9 +89,12 @@ func TestCancel_TranscriptTurnCancelledEntry(t *testing.T) {
 	// This simulates an in-flight turn — the cancel state machine requires
 	// an active turnState to fire (otherwise ClaimCancel returns false and
 	// no callback is registered).
+	// ADR-057 fixture repair: the role-B predicates (GetActiveTurnHookForSession
+	// et al.) match on routingSessionID, not transcriptSessionID.
 	ts := &turnState{
 		turnID:              "turn-T3-transcript",
 		transcriptSessionID: sessionID,
+		routingSessionID:    session.RoutingSessionID(sessionID),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 		transcriptStore:     store,
@@ -167,9 +170,11 @@ func TestCancel_TranscriptTurnCancelledEntry(t *testing.T) {
 	require.NoError(t, err)
 	sessionID2 := meta2.ID
 
+	// ADR-057 fixture repair: see the first turnState literal above.
 	ts2 := &turnState{
 		turnID:              "turn-T3-diff",
 		transcriptSessionID: sessionID2,
+		routingSessionID:    session.RoutingSessionID(sessionID2),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 		transcriptStore:     store,

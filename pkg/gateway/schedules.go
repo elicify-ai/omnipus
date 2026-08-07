@@ -1,5 +1,3 @@
-//go:build !cgo
-
 package gateway
 
 import (
@@ -301,14 +299,47 @@ func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan str
 				KillBackgroundSessions: func(sid string) (killed, failed int) {
 					return tools.GetSharedSessionManager().KillAllForSession(sid)
 				},
+				// OnLatchExpired: this force-abort found no active turn and
+				// (per outcome.Armed, logged just below) may have armed a
+				// pre-registration cancel latch (pkg/agent/cancel_prearm.go)
+				// in its place — deadline enforcement DEFERRED to the next
+				// turn to register under this session, not skipped. If that
+				// latch itself ages out (cancelPreArmTTL) with no turn ever
+				// registering, deferred became NEVER: the scheduled run's
+				// deadline was silently never enforced at all. There is no
+				// browser watching a cron run (unlike handleCancel's WS
+				// path), so an operator-visible log is this surface's only
+				// possible signal — notifyLatchExpired already logs a
+				// generic Warn unconditionally; this adds the cron-specific
+				// context (which run, which owner) so it is findable against
+				// "scheduled run exceeded deadline" above rather than an
+				// unattributed line.
+				OnLatchExpired: func(scope agent.CancelScope, canceller agent.CancelCanceller) {
+					logger.WarnCF("gateway", "scheduled run deadline force-abort's pre-registration cancel latch expired unconsumed — the run was never actually force-aborted",
+						map[string]any{
+							"session_id":        scope.SessionID,
+							"owner":             owner,
+							"canceller_channel": canceller.Channel,
+						})
+				},
 			})
 		if cancelErr == nil {
 			if !outcome.Fired {
 				// A force-abort that targeted no active turn is worth observing: the
 				// run may have already completed between the deadline check and the
 				// cancel, or the turn was never registered under this session id.
+				// outcome.Armed distinguishes the two (CancelOutcome.Armed doc
+				// comment, pkg/agent/cancel.go): true means RequestCancel latched a
+				// pre-registration cancel (pkg/agent/cancel_prearm.go) that fires
+				// the instant a turn registers under this session, bounded by the
+				// latch's TTL — deadline enforcement is DEFERRED, not skipped;
+				// false means there is genuinely nothing left to enforce against.
 				logger.DebugCF("gateway", "scheduled run force-abort hit no active turn",
-					map[string]any{"session_id": sessionID, "owner": owner})
+					map[string]any{"session_id": sessionID, "owner": owner, "armed": outcome.Armed})
+				if outcome.Armed {
+					logger.InfoCF("gateway", "scheduled run force-abort armed a pre-registration cancel latch — deadline enforcement deferred to the next turn registration for this session, bounded by the latch TTL",
+						map[string]any{"session_id": sessionID, "owner": owner})
+				}
 			}
 			// Observability fix: even when the run's own turn is already
 			// gone (!Fired — e.g. it dispatched a `bash

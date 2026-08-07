@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // cancel_transcript_test.go — T3 gateway placeholder.
 //
 // The authoritative T3 transcript test lives in:

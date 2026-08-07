@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -100,6 +101,12 @@ type Deps struct {
 	CredStore *credentials.Store
 	// ReloadFunc triggers a hot-reload of the agent loop so newly created agents
 	// become available immediately. Nil in tests or when not wired.
+	//
+	// AgentCreateTool/AgentUpdateTool prefer UpsertAgentFastFunc below when it
+	// is wired (issue #571, sysagent half) and fall back to this full reload
+	// only when UpsertAgentFastFunc is nil. AgentDeleteTool always uses this
+	// field — see UpsertAgentFastFunc's own doc comment for why delete is
+	// deliberately NOT fast-pathed.
 	ReloadFunc func() error
 	// ReconcileMCP triggers live MCP reconciliation (connect/disconnect servers
 	// and re-sync every agent's tool registry plus the central MCPRegistry)
@@ -122,6 +129,31 @@ type Deps struct {
 	//
 	// The gateway wires this to AgentLoop.MCPServerStatus.
 	MCPStatus func(name string) (status string, toolCount int, errMsg string)
+	// UpsertAgentFastFunc publishes a single agent create/update into the
+	// live AgentRegistry without restarting channels/cron/schedulers/the plan
+	// engine (issue #571's sysagent-facing half — the agent-facing
+	// counterpart of pkg/gateway/rest.go's fastAgentUpsert, which already
+	// does this for the REST create/update handlers). Given the just-
+	// created/updated agent's ID, the wired implementation must swap ONLY
+	// that agent's *AgentInstance into the live registry
+	// (AgentLoop.UpsertAgentFast) and rebuild the resolver/default-agent
+	// override so the agent is immediately resolvable via
+	// GetAgent/ResolveRoute/GetDefaultAgent — not merely present in a map
+	// (see pkg/agent/registry.go's UpsertAgentFast doc comment for the two
+	// traps that requires closing).
+	//
+	// Returns nil on success. The wired implementation is expected to fall
+	// back to the full reload path itself on failure (including when a full
+	// reload is already in flight and must be waited out rather than raced)
+	// and return that fallback's error, if any — so AgentCreateTool/
+	// AgentUpdateTool have a single hot-reload call site instead of
+	// duplicating the "try fast, fall back to full" decision here.
+	//
+	// Nil in tests or when not wired: AgentCreateTool/AgentUpdateTool fall
+	// back to ReloadFunc (the pre-existing full-reload behavior) in that
+	// case, never a silent no-op. The production gateway wires this next to
+	// ReloadFunc; see gateway.go where sysAgentDeps is constructed.
+	UpsertAgentFastFunc func(agentID string) error
 	// SkillsLoader provides access to the locally installed skills tree
 	// (workspace, global, and builtin skill directories). Nil in tests or when
 	// not wired — callers must nil-check before use.
@@ -157,6 +189,24 @@ type Deps struct {
 	// constructed.
 	DelegationDeny func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial
 
+	// ResolveBashPolicy resolves an assignee agent's effective "bash" tool
+	// policy (ADR-049 D2 rule 5, FR-017/052, review r1 major M5) — the SAME
+	// gate the plain create_task tool enforces (pkg/tools/task.go), needed so
+	// create_task_in_workspace can reject a create whose criteria are ALL
+	// kind=check when that policy is deny or ask (structurally unsatisfiable:
+	// the machine check could never even run). Returns ok=false when the
+	// assignee agent cannot be resolved at all.
+	//
+	// FAIL CLOSED, not open, when nil (tests / standalone): an unwired
+	// checker is a configuration error, never a permission grant — mirrors
+	// the plain create_task tool's own bashPolicyChecker discipline
+	// (pkg/tools/task.go SetBashPolicyChecker), NOT DelegationDeny's
+	// documented fail-open-when-unwired convention above (a separate,
+	// pre-existing policy axis this fix does not touch). The production
+	// gateway MUST wire this; see gateway.go where sysAgentDeps is
+	// constructed.
+	ResolveBashPolicy func(assigneeAgentID string) (policy string, ok bool)
+
 	// ListSessions returns all sessions across all stores (shared + legacy per-agent),
 	// deduplicating entries that appear in both. Errors are per-store and non-fatal;
 	// the slice may be partial on error. Nil when not wired — the get_usage tool
@@ -164,8 +214,28 @@ type Deps struct {
 	// dependency in production is a wiring bug that must fail loudly rather than
 	// returning an empty report indistinguishable from genuine zero usage.
 	//
-	// The production gateway wires this to agentLoop.ListAllSessions.
+	// ADR-057 U9 (FR-092/FR-098) changed AgentLoop.ListAllSessions' signature to
+	// (limit, offset int, parentSessionID string, flat bool) (session.SessionListPage,
+	// []error) — paginated and hierarchy-aware. This field's own zero-arg shape is
+	// intentionally UNCHANGED (ADR-057 U25, W16i, [grill2 C2-1]): get_usage always
+	// wants the whole session set for a correct aggregate and has no pagination
+	// concept of its own, so widening this field to mirror ListAllSessions'
+	// parameters would add knobs no caller can usefully vary. The production
+	// gateway wires this via u25AllSessionsForUsage (pkg/gateway/gateway.go),
+	// which calls ListAllSessions(0, 0, "", true) — flat=true is load-bearing, not
+	// a default of convenience: FR-104 warns that a roots-only listing silently
+	// drops delegated children's token spend from the merged set, which would
+	// make get_usage under-report real spend with a green build.
 	ListSessions func() ([]*session.UnifiedMeta, []error)
+
+	// PlanStore, when non-nil, backs create_task_in_workspace's optional
+	// plan_id linkage arg (ADR-052 FR-002): validates the same-workspace FK
+	// and rejects linking to a terminal (done/failed) plan. Mirrors the
+	// plain create_task tool's SetPlanStore (pkg/tools/task.go). A nil
+	// PlanStore with a non-empty plan_id arg fails closed — never a silent
+	// no-op linkage. The production gateway wires this to the same
+	// *plan.Store instance passed to the plain create_task tool.
+	PlanStore *plan.Store
 }
 
 // clearMaps recursively walks v and zeros every map field it finds. Called

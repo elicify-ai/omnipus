@@ -41,6 +41,8 @@ const agentDefaults = {
   max_tool_iterations: 20,
   heartbeat_enabled: false,
   heartbeat_interval: 300,
+  // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
+  memory_enabled: true,
 }
 
 const mockAgents = [

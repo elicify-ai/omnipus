@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -463,10 +461,17 @@ func newTestRestAPIWithValidationAndAgent(t *testing.T) *restAPI {
 			},
 		},
 	}
+	// ADR-054: agents.list is json:"-" and is silently stripped on load — the
+	// on-disk splice below no longer seeds anything; the roster now lives in
+	// the entity store (seedAgentEntities below). updateAgent's existence
+	// pre-check still reads cfg.Agents.List (in-memory, kept above), but its
+	// persist step (store.Update) resolves the agent store — a fixture with
+	// no real entity record for "test-agent-001" would 404/error there.
 	minimalCfg := []byte(
-		`{"version":1,"agents":{"defaults":{},"list":[{"id":"test-agent-001","name":"Test Agent","type":"custom"}]},"providers":[]}`,
+		`{"version":1,"agents":{"defaults":{}},"providers":[]}`,
 	)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})

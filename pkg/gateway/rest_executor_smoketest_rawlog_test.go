@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_executor_smoketest_rawlog_test.go — MEDIUM regression test.
 //
 // sanitizeSmokeTestErrorMessage strips raw provider/CLI text from the

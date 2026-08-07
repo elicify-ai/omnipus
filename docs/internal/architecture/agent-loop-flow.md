@@ -371,7 +371,7 @@ sequenceDiagram
     autonumber
     participant U as Canceller (SPA / cmd / channel)
     participant RC as RequestCancel
-    participant IS as InterruptSession*
+    participant IS as Interrupt / InterruptSessionHard
     participant TS as turnState
     participant Prov as in-flight LLM / tool
     participant Br as Browser
@@ -381,14 +381,14 @@ sequenceDiagram
     RC->>RC: audit turn.cancel.attempt, register onCancelFinish
 
     Note over RC,Prov: Stage 1 — GRACEFUL (immediate)
-    RC->>IS: InterruptSession(sessionID)
+    RC->>IS: Interrupt(sessionID, ScopeSubtree, hint)
     IS->>TS: providerCancel() first, then set gracefulInterrupt flag
     TS-->>Prov: in-flight HTTP stream aborted
     RC->>Br: cancel_stage {stage:"graceful"}
     RC->>RC: auto-deny pending approvals, session → interrupted
 
     Note over RC,Prov: Stage 2 — HARD (+3s, if still alive)
-    RC->>IS: InterruptSessionHard(sessionID)
+    RC->>IS: InterruptSessionHard(sessionID, ScopeSubtree, hint)
     IS->>TS: requestHardAbort(): set hardAbort, fire providerCancel + turnCancel
     TS-->>Prov: turn context cancelled (tools see ctx.Done())
     RC->>Br: cancel_stage {stage:"hard"}
@@ -399,14 +399,26 @@ sequenceDiagram
     RC->>RC: audit turn.cancel.stuck (warn)
 ```
 
-- **Graceful (immediate)** — `InterruptSession` (`steering.go:423`) walks every
-  turn whose `transcriptSessionID` matches (root **and** sub-turns) and, for
+> **Every interrupt entry point takes a mandatory `InterruptScope` (ADR-057 D8/FR-041).** There is no zero-value default meaning "pick one for me" — every call site writes one out (`steering.go:456-482`). Getting it wrong is silent, not loud: a wrong scope widens a targeted cancel into a whole-subtree sweep, or narrows a chat-wide Stop so it never reaches delegated sub-turns.
+>
+> | Scope | Reaches | Used by |
+> |---|---|---|
+> | `ScopeSubtree` (`steering.go:475`) | the turn(s) matching `id` **plus** every live descendant, walked via the in-memory `parentTurnID` chain. Rooted at a chat's session id this is the whole delegation tree; rooted at a delegate's own session key it is that delegate and its descendants only — never the parent, never a sibling (FR-042). | both `RequestCancel` stages (`cancel.go:453`, `:535`) |
+> | `ScopeSelfOnly` (`steering.go:481`) | exactly the turn(s) `resolveInterruptAnchors` finds for `id`, no descendant walk. | `delegate action=cancel` (`pkg/tools/delegate.go`) |
+>
+> Targets are matched on **`routingSessionID`**, not `transcriptSessionID` (`steering.go:609`, `:716`) — post-ADR-057 a delegated child owns its own transcript id, and `routingSessionID` is the id it inherits from its parent precisely so the cascade can still reach it. See ADR-057 and `turn.go:251-288`.
+
+- **Graceful (immediate)** — `Interrupt(id, scope, hint)` (`steering.go:667`), called
+  as `al.Interrupt(sessionID, ScopeSubtree, hint)` at `cancel.go:453`. It resolves
+  every target turn whose `routingSessionID` matches (root **and** sub-turns) and, for
   each, fires `providerCancel()` **first** so the in-flight HTTP stream aborts
   at once, then sets the graceful-interrupt flag the loop polls at its tool
   checkpoints. The turn stops cleanly between tools. The SPA gets a
   `cancel_stage {stage:"graceful"}` frame; pending approvals are auto-denied and
   the session is marked `interrupted`.
-- **Hard (+3 s, if still alive)** — `InterruptSessionHard` (`steering.go:492`)
+- **Hard (+3 s, if still alive)** — `InterruptSessionHard(id, scope, hint)`
+  (`steering.go:729`), called as `al.InterruptSessionHard(sessionID, ScopeSubtree, hint)`
+  at `cancel.go:535`. It
   calls `requestHardAbort`, which sets `hardAbort` and fires **both**
   `providerCancel` and `turnCancel`, cancelling the whole turn context. Running
   tools observe `ctx.Done()` via `ExecuteWithContext`. SPA gets
@@ -479,7 +491,7 @@ crash-recovery path doesn't try to resume a turn that was killed at exit.
 | `buildContinuationTarget` | `loop.go:1723` | scope for post-turn steering drain |
 | `markStreamed` / `Send` | `webchat_channel.go:45/62` | streamed-vs-published dedup |
 | `resolveSteeringTarget` | `loop.go:3066` | scope resolution for steering |
-| `maybeSummarize` / `forceCompression` | `loop.go:5231/5270` | background + emergency history compaction |
-| `RequestCancel` | `cancel.go:90` | canonical cancel state machine |
-| `InterruptSession` / `InterruptSessionHard` | `steering.go:423/492` | graceful / hard cascade to all turns |
-| `ClaimCancel` / `Finish` | `turn.go:282/672` | first-cancel-wins + exactly-once finish callback |
+| `maybeSummarize` / `windowTrim` | `loop.go::maybeSummarize` / `loop.go::windowTrim` | legacy LLM summarization (output renders inert, ADR-028) + the zero-LLM-call sliding-window trim that replaced the retired `forceCompression` |
+| `RequestCancel` | `cancel.go:212` | canonical cancel state machine |
+| `Interrupt` / `InterruptSessionHard` | `steering.go:667` / `steering.go:729` | graceful / hard cascade; **both take a mandatory `InterruptScope`** |
+| `ClaimCancel` / `Finish` | `turn.go::ClaimCancel` / `turn.go::Finish` | first-cancel-wins + exactly-once finish callback |

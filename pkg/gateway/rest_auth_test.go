@@ -1,5 +1,3 @@
-//go:build !cgo
-
 package gateway
 
 import (
@@ -1997,6 +1995,7 @@ func newTestRestAPIForReload(t *testing.T) (*restAPI, *agentLoopWrapper) {
 type agentLoopWrapper struct {
 	al interface {
 		SetReloadFunc(fn func() error)
+		MarkReloadPending()
 		ClearReloadPending()
 	}
 }
@@ -2011,10 +2010,13 @@ type agentLoopWrapper struct {
 func TestTriggerReloadAndWait_PollsUntilNotPending(t *testing.T) {
 	apiObj, wrap := newTestRestAPIForReload(t)
 
-	// reloadFunc simply returns nil; TriggerReload sets reloadPending=true before
-	// calling it. The goroutine below clears the flag after 50ms so the poll loop
-	// has something real to wait for.
+	// The reloadFunc marks the reload pending, mirroring production: the flag is
+	// set by the gateway's trigger (services.beginReload, under the mutex that
+	// clears it), NOT by TriggerReload. A fake that returned nil without marking
+	// would mean "no reload queued", and the poll loop would correctly return at
+	// once — leaving this test asserting nothing.
 	wrap.al.SetReloadFunc(func() error {
+		wrap.al.MarkReloadPending()
 		return nil
 	})
 
@@ -2028,11 +2030,11 @@ func TestTriggerReloadAndWait_PollsUntilNotPending(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.NoError(t, err, "triggerReloadAndWait must return nil when reload completes")
-	// Must have polled for at least 40ms (pending was set), but well under 5s deadline.
+	// Must have polled for at least 40ms (pending was set), but well under the deadline.
 	assert.GreaterOrEqual(t, elapsed.Milliseconds(), int64(40),
 		"triggerReloadAndWait must poll until the pending flag clears")
-	assert.Less(t, elapsed, 5*time.Second,
-		"triggerReloadAndWait must return well before the 5s deadline")
+	assert.Less(t, elapsed, reloadWaitTimeout,
+		"triggerReloadAndWait must return well before its deadline")
 }
 
 // TestTriggerReloadAndWait_AlreadyInProgress_PollsThrough verifies that when
@@ -2088,16 +2090,24 @@ func TestTriggerReloadAndWaitOutcome_ConfirmedReload_ReturnsConfirmedTrue(t *tes
 // within the poll window was indistinguishable from a confirmed one — both
 // triggerReloadAndWait return values were nil. Nothing ever calls
 // ClearReloadPending here, so IsReloadPending() stays true for the whole
-// (shortened, via reloadPollDeadline) poll window, forcing the timeout
+// (shortened, via reloadWaitTimeout) poll window, forcing the timeout
 // branch deterministically rather than relying on a slow real 5s wait.
 func TestTriggerReloadAndWaitOutcome_TimesOutStillPending_ReturnsUnconfirmed(t *testing.T) {
 	apiObj, wrap := newTestRestAPIForReload(t)
 
-	prevDeadline := reloadPollDeadline
-	reloadPollDeadline = 150 * time.Millisecond
-	t.Cleanup(func() { reloadPollDeadline = prevDeadline })
+	prevDeadline := reloadWaitTimeout
+	reloadWaitTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { reloadWaitTimeout = prevDeadline })
 
+	// The reloadFunc marks the reload pending, mirroring production: the flag
+	// is set by the gateway's trigger (services.beginReload), NOT by
+	// TriggerReload itself (see TriggerReload's own doc comment) — a fake
+	// that returned nil without marking would mean "no reload queued", and
+	// the poll loop would correctly return at once, leaving this test
+	// asserting nothing (see TestTriggerReloadAndWait_PollsUntilNotPending's
+	// identical setup above).
 	wrap.al.SetReloadFunc(func() error {
+		wrap.al.MarkReloadPending()
 		return nil
 	})
 	// Deliberately never call ClearReloadPending — the pending flag must
@@ -2131,14 +2141,19 @@ func TestTriggerReloadAndWaitOutcome_TimesOutStillPending_ReturnsUnconfirmed(t *
 func TestHandleChangePassword_ReloadTimeout_LogsDistinctWarning(t *testing.T) {
 	api, _ := newTestRestAPIWithUser(t, "cpuser-reload-timeout", "OldPass123")
 
-	prevDeadline := reloadPollDeadline
-	reloadPollDeadline = 150 * time.Millisecond
-	t.Cleanup(func() { reloadPollDeadline = prevDeadline })
+	prevDeadline := reloadWaitTimeout
+	reloadWaitTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { reloadWaitTimeout = prevDeadline })
 
-	// Wire a reload func and deliberately never clear the pending flag, so
-	// triggerReloadAndWaitOutcome (called from inside HandleChangePassword)
+	// Wire a reload func that marks the reload pending (mirroring production
+	// — see TriggerReload's own doc comment for why TriggerReload itself
+	// deliberately does not) and deliberately never clear the pending flag,
+	// so triggerReloadAndWaitOutcome (called from inside HandleChangePassword)
 	// runs out the (shortened) poll window with confirmed=false.
-	api.agentLoop.SetReloadFunc(func() error { return nil })
+	api.agentLoop.SetReloadFunc(func() error {
+		api.agentLoop.MarkReloadPending()
+		return nil
+	})
 	t.Cleanup(func() { api.agentLoop.ClearReloadPending() })
 
 	logFile := filepath.Join(t.TempDir(), "change-password-reload-timeout.log")

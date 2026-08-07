@@ -18,7 +18,11 @@
 
 package security
 
-import "sync"
+import (
+	"log/slog"
+	"sync"
+	"sync/atomic"
+)
 
 // grantKey scopes a set of always-allowed tool names to one (session, agent)
 // pair. Both fields participate in the key so a grant recorded for one agent
@@ -33,12 +37,37 @@ type grantKey struct {
 // Allow" tool-approval grants. The zero value is not usable — construct with
 // NewApprovalGrantStore. Every method is nil-receiver-safe: calling a method
 // on a nil *ApprovalGrantStore never panics and always resolves to the
-// fail-safe outcome (IsAllowed => false, i.e. "ask"; Record/Inherit/
+// fail-safe outcome (IsAllowed => false, i.e. "ask"; Record/InheritFrom/
 // ClearSession => no-op). This lets callers hold a possibly-unwired store
 // (e.g. in a test fixture) without an extra nil check at every call site.
 type ApprovalGrantStore struct {
 	mu     sync.Mutex
 	grants map[grantKey]map[string]struct{}
+
+	// inheritSourceMiss counts InheritFrom calls whose four key components
+	// were all non-empty but whose SOURCE key held no grants, so nothing was
+	// copied (ADR-057 FR-079). Read via InheritSourceMissCount.
+	//
+	// This counter — not the log level — is the FR-079 tripwire. A "no grants
+	// under the source key" outcome is ROUTINE (most agents never record an
+	// "Always Allow"), so logging it at Warn on every delegation would train
+	// operators to ignore Warns; the log record is therefore Debug and the
+	// counter is always on and assertable. Its purpose is to make ADR-057
+	// grill finding C-1 impossible to reproduce silently: a re-key that makes
+	// the source lookup miss when it should have hit shows up here as a
+	// climbing count with zero inherited grants, instead of as a delegation
+	// that hangs for 300 s with no signal anywhere.
+	inheritSourceMiss atomic.Int64
+
+	// inheritInvalidKey counts InheritFrom calls rejected before any lookup
+	// because at least one of the four key components was empty (ADR-057
+	// FR-079, dataset row 6). Read via InheritInvalidKeyCount.
+	//
+	// Unlike a source miss this is never routine: at spawn time every one of
+	// the four components is a resolved id, so an empty one means the CALLER
+	// is broken and the child will silently fall through to a fresh approval
+	// prompt. It is therefore logged at Warn as well as counted.
+	inheritInvalidKey atomic.Int64
 }
 
 // NewApprovalGrantStore creates an empty grant store.
@@ -98,36 +127,117 @@ func (s *ApprovalGrantStore) Record(sessionID, agentID, tool string) bool {
 	return true
 }
 
-// Inherit copies the parent agent's CURRENT grant set (for sessionID) into
-// the child agent's grant set — a union, not a replace, so any grant the
-// child already holds in its own right is preserved. This is copy-at-spawn
-// semantics: it snapshots the parent's grants at the moment of the call.
-// Grants the parent records AFTER a child has already been spawned are NOT
-// retroactively visible to that already-running child — this matches
-// "copy-at-spawn" as specified for delegation inheritance (spawn /
-// run_subagent), not a live/shared reference.
+// InheritFrom copies the grant set currently recorded under the SOURCE key
+// {srcSessionID, srcAgentID} into the DESTINATION key {dstSessionID,
+// dstAgentID} — a union, not a replace, so any grant the destination already
+// holds in its own right is preserved, and a copy, not a move, so the source
+// still resolves afterwards.
 //
-// No-op on a nil store, an empty sessionID / parentAgentID / childAgentID,
-// or when the parent currently holds no grants for this session.
-func (s *ApprovalGrantStore) Inherit(sessionID, parentAgentID, childAgentID string) {
-	if s == nil || sessionID == "" || parentAgentID == "" || childAgentID == "" {
+// This is copy-at-spawn semantics: it snapshots the source's grants at the
+// moment of the call. Grants recorded on the source AFTER a child has already
+// been spawned are NOT retroactively visible to that already-running child —
+// this matches "copy-at-spawn" as specified for delegation inheritance
+// (spawn / run_subagent), not a live/shared reference.
+//
+// # Why the operation takes TWO keys (ADR-057 FR-031, grill finding C-1)
+//
+// The predecessor of this method, Inherit(sessionID, parentAgentID,
+// childAgentID), used ONE session id for both the source lookup and the
+// destination write. That is correct only while parent and child share a
+// session id. ADR-057 gives every delegated child its OWN store-backed
+// session, so the parent's grants live under the parent's session id while
+// the child reads under its own — and "re-key Inherit's first argument to the
+// child" (the obvious one-line fix) makes the SOURCE lookup miss, returns
+// having done nothing, and reports success. The child then blocks on a fresh
+// approval prompt nobody is watching until the 300 s approval timeout fires.
+//
+// Source and destination are therefore separate parameters and MUST be passed
+// separately: at spawn, the SOURCE is the parent's session id + the parent's
+// agent id, and the DESTINATION is the child's OWN session id + the child's
+// agent id. Self-delegation is the same-agent, different-session case
+// (srcAgentID == dstAgentID, srcSessionID != dstSessionID) and is handled by
+// the same union.
+//
+// Both no-op branches are counted and logged rather than returning silently
+// (FR-079) — see inheritSourceMiss / inheritInvalidKey for why each has the
+// log level it has:
+//
+//   - a nil store: no state exists to count into, so it returns immediately;
+//   - any empty key component: counted in inheritInvalidKey, logged at Warn
+//     (a caller defect — every component is a resolved id at spawn);
+//   - a source key holding no grants: counted in inheritSourceMiss, logged at
+//     Debug (routine — most agents never record an "Always Allow").
+//
+// An identity call (source key == destination key) copies nothing because the
+// destination already holds exactly the source's set; it is neither an error
+// nor a miss and is not counted.
+func (s *ApprovalGrantStore) InheritFrom(srcSessionID, srcAgentID, dstSessionID, dstAgentID string) {
+	if s == nil {
 		return
 	}
+	if srcSessionID == "" || srcAgentID == "" || dstSessionID == "" || dstAgentID == "" {
+		total := s.inheritInvalidKey.Add(1)
+		slog.Warn("approvalgrants: InheritFrom skipped — empty key component, no grants inherited",
+			"src_session_id", srcSessionID,
+			"src_agent_id", srcAgentID,
+			"dst_session_id", dstSessionID,
+			"dst_agent_id", dstAgentID,
+			"invalid_key_total", total)
+		return
+	}
+
+	srcKey := grantKey{sessionID: srcSessionID, agentID: srcAgentID}
+	dstKey := grantKey{sessionID: dstSessionID, agentID: dstAgentID}
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	parentSet, ok := s.grants[grantKey{sessionID: sessionID, agentID: parentAgentID}]
-	if !ok || len(parentSet) == 0 {
+	srcSet := s.grants[srcKey]
+	if len(srcSet) == 0 {
+		s.mu.Unlock()
+		total := s.inheritSourceMiss.Add(1)
+		slog.Debug("approvalgrants: InheritFrom found no grants to inherit under the source key",
+			"src_session_id", srcSessionID,
+			"src_agent_id", srcAgentID,
+			"dst_session_id", dstSessionID,
+			"dst_agent_id", dstAgentID,
+			"source_miss_total", total)
 		return
 	}
-	childKey := grantKey{sessionID: sessionID, agentID: childAgentID}
-	childSet, ok := s.grants[childKey]
-	if !ok {
-		childSet = make(map[string]struct{}, len(parentSet))
-		s.grants[childKey] = childSet
+	// Identity: the destination set IS the source set. Ranging a map while
+	// writing the keys it already contains is safe, but short-circuiting says
+	// so explicitly instead of relying on that subtlety.
+	if srcKey != dstKey {
+		dstSet := s.grants[dstKey]
+		if dstSet == nil {
+			dstSet = make(map[string]struct{}, len(srcSet))
+			s.grants[dstKey] = dstSet
+		}
+		for tool := range srcSet {
+			dstSet[tool] = struct{}{}
+		}
 	}
-	for tool := range parentSet {
-		childSet[tool] = struct{}{}
+	s.mu.Unlock()
+}
+
+// InheritSourceMissCount returns the number of InheritFrom calls that resolved
+// a well-formed source key holding no grants (ADR-057 FR-079). Nil-safe.
+//
+// This is real store state, not instrumentation: a test asserts on it directly
+// to prove the empty-source branch is observable rather than silent.
+func (s *ApprovalGrantStore) InheritSourceMissCount() int64 {
+	if s == nil {
+		return 0
 	}
+	return s.inheritSourceMiss.Load()
+}
+
+// InheritInvalidKeyCount returns the number of InheritFrom calls rejected
+// because at least one of the four key components was empty (ADR-057 FR-079,
+// dataset row 6). Nil-safe.
+func (s *ApprovalGrantStore) InheritInvalidKeyCount() int64 {
+	if s == nil {
+		return 0
+	}
+	return s.inheritInvalidKey.Load()
 }
 
 // ClearSession removes every grant recorded for sessionID, across all

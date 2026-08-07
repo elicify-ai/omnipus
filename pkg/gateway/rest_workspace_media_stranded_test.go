@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_workspace_media_stranded_test.go — regression tests for the
 // ErrEntryStranded HTTP mapping (library.go's "compound rollback-of-rollback"
 // TD, closed alongside this file and pkg/workspace/media_delete.go).

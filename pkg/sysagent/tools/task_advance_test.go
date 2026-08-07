@@ -8,7 +8,6 @@ package systools_test
 // dependents (blocked→next) once all blocked_by deps are done.
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -69,7 +68,7 @@ func TestSysagentTaskUpdate_CompleteAdvancesDependent(t *testing.T) {
 	seedTask(t, home, depID, "Dependent", task.StatusBlocked, []string{blockerID})
 
 	tool := systools.NewTaskUpdateTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     blockerID,
 		"status": "done",
 	})
@@ -95,7 +94,7 @@ func TestSysagentTaskUpdate_CompleteWithUnsatisfiedDepStaysBlocked(t *testing.T)
 	seedTask(t, home, cID, "Dependent C", task.StatusBlocked, []string{aID, xID})
 
 	tool := systools.NewTaskUpdateTool(deps)
-	res := tool.Execute(context.Background(), map[string]any{"id": aID, "status": "done"})
+	res := tool.Execute(callerCtx("caller-agent"), map[string]any{"id": aID, "status": "done"})
 	require.False(t, res.IsError, "completing A must succeed; got %s", res.ForLLM)
 
 	require.Equal(t, task.StatusBlocked, diskTaskStatus(t, home, cID),

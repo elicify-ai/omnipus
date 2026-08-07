@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Per-workspace delegation graph tests (M5). Proves:
 //  1. GET on a fresh workspace → 200 with empty edges + computed team.
 //  2. PUT a valid edge set → 200 and GET round-trips it.
@@ -17,8 +15,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -37,19 +34,27 @@ import (
 // buildWorkspaceDelegationTestAPI builds a restAPI with a roster (jim, ava, ray,
 // planner) so delegation edge endpoints resolve targets, plus a pre-created
 // workspace whose id is returned.
+//
+// ADR-054 FIXTURE-VACUITY fix: this used to ALSO os.WriteFile a raw
+// config.json blob to cfgPath containing a non-empty "agents.list" JSON
+// array (jim/ava/ray/planner). That write was already 100% dead weight even
+// before ADR-054: handleWorkspaceDelegationGet/Put never load config.json
+// from disk at all — the API is built directly from the in-memory `cfg`
+// struct below via mustAgentLoop, and edge-endpoint validation
+// (workspaceTeamSet, rest_workspace_delegation.go) checks the WORKSPACE
+// file's core_team, never cfg.Agents.List or config.json. ADR-054 makes the
+// staleness explicit and permanent: config.LoadConfig now unconditionally
+// strips any on-disk "agents.list" content, so even a future code path that
+// started reading cfgPath would never see this roster again. Per the
+// operator's fixture-vacuity directive, the dead on-disk splice is replaced
+// with real entity records via agentstore.Create — the in-memory
+// cfg.Agents.List construction below (required for mustAgentLoop/registry
+// construction) is unchanged.
 func buildWorkspaceDelegationTestAPI(t *testing.T) (*restAPI, string) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
 	tmpDir := t.TempDir()
-	cfgPath := filepath.Join(tmpDir, "config.json")
-	cfgJSON := `{"version":1,"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096,"subturn":{"max_depth":3}},"list":[` +
-		`{"id":"jim","name":"Jim","type":"core"},` +
-		`{"id":"ava","name":"Ava","type":"core"},` +
-		`{"id":"ray","name":"Ray","type":"core"},` +
-		`{"id":"planner","name":"Planner","type":"worker"}` +
-		`]},"providers":[]}`
-	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
@@ -64,6 +69,18 @@ func buildWorkspaceDelegationTestAPI(t *testing.T) (*restAPI, string) {
 		},
 	}
 	cfg.Agents.Defaults.SubTurn.MaxDepth = 3
+
+	// Real entity records (ADR-054) — see the doc comment above for why this
+	// replaces the old dead on-disk config.json splice. Nothing in this
+	// file's handlers currently reads these back (see the doc comment), but
+	// seeding them keeps the fixture honest about where an agent record
+	// actually lives in production, per the operator's fixture-vacuity
+	// directive.
+	store := agentstore.New(tmpDir)
+	for i := range cfg.Agents.List {
+		ac := cfg.Agents.List[i]
+		require.NoError(t, store.Create(ac.ID, &ac), "seed agent entity record %q", ac.ID)
+	}
 
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 	api := &restAPI{

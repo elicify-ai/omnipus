@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // websocket_pingpong_test.go — regression tests for the application-layer
 // ping/pong heartbeat fix.
 //

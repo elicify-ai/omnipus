@@ -28,6 +28,7 @@ import {
   fetchConfig,
   getConfigCoercionCount,
   resetConfigCoercionCount,
+  fetchCommands,
   modelLacksImageCapability,
 } from './api'
 import type { ModelCapabilities } from './api'
@@ -2098,7 +2099,7 @@ describe('validEnum / _configCoercionCount', () => {
 //
 // Wave 2 added castString/castNumber/castOptionalNumber alongside validEnum to
 // runtime-check select Config scalar fields — including security-relevant
-// guardrails (security.daily_cost_cap, exec_timeout_seconds,
+// guardrails (security.exec_timeout_seconds,
 // max_background_seconds, rate_limits.*) — but had ZERO direct test coverage
 // of a wrong-shaped wire value actually reaching any of the three functions,
 // and the only production signal for a coercion was a silently-incremented
@@ -2152,13 +2153,16 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
     )
   }
 
-  it('castOptionalNumber: security.daily_cost_cap="unlimited" (wrong-typed) falls back to undefined, increments the counter, and calls logError in production', async () => {
+  it('castOptionalNumber: security.exec_timeout_seconds="unlimited" (wrong-typed) falls back to undefined, increments the counter, and calls logError in production', async () => {
     // "unlimited" is exactly the kind of wrong-shaped-but-truthy value that
     // used to pass straight through cast<T>() before Wave 2 — a string where
-    // a number spend cap was expected.
+    // a numeric guardrail was expected. (ADR-053 D12 retired the former
+    // daily_cost_cap field this test exercised; repurposed to the surviving
+    // exec_timeout_seconds castOptionalNumber guardrail so the coercion +
+    // production-telemetry coverage is preserved.)
     mockConfigResponse({
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask', daily_cost_cap: 'unlimited' },
+      security: { policy_mode: 'deny', exec_approval: 'ask', exec_timeout_seconds: 'unlimited' },
     })
 
     // Force the production (non-DEV) branch of recordCoercion so logError
@@ -2172,7 +2176,7 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
 
     // (a) safe fallback — an optional guardrail field drops to "unset"
     // rather than passing a corrupted string through.
-    expect(config.security.daily_cost_cap).toBeUndefined()
+    expect(config.security.exec_timeout_seconds).toBeUndefined()
     // (c) counter increments.
     expect(getConfigCoercionCount()).toBeGreaterThan(0)
     // (b) logError called with diagnostic context — field name + what was
@@ -2180,7 +2184,7 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
     expect(logErrorSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'configCoercion',
-        field: 'security.daily_cost_cap',
+        field: 'security.exec_timeout_seconds',
         coercedValue: JSON.stringify('unlimited'),
       }),
     )
@@ -2273,10 +2277,11 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
   it('DEV builds do NOT call logError for a coercion — console.warn only (production/DEV split preserved)', async () => {
     // Regression guard for the split this fix introduces: DEV must keep its
     // existing console.warn-only behaviour (no telemetry event), matching
-    // _recordApiSchemaError's established DEV/PROD split above.
+    // _recordApiSchemaError's established DEV/PROD split above. (Repurposed
+    // from the retired daily_cost_cap to exec_timeout_seconds per ADR-053 D12.)
     mockConfigResponse({
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask', daily_cost_cap: 'unlimited' },
+      security: { policy_mode: 'deny', exec_approval: 'ask', exec_timeout_seconds: 'unlimited' },
     })
 
     vi.stubEnv('DEV', true)
@@ -2286,16 +2291,95 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
 
     const config = await fetchConfig()
 
-    expect(config.security.daily_cost_cap).toBeUndefined()
+    expect(config.security.exec_timeout_seconds).toBeUndefined()
     expect(getConfigCoercionCount()).toBeGreaterThan(0)
     expect(logErrorSpy).not.toHaveBeenCalled()
     expect(warnSpy).toHaveBeenCalled()
-    const warned = warnSpy.mock.calls.some((call) => String(call[0]).includes('security.daily_cost_cap'))
+    const warned = warnSpy.mock.calls.some((call) => String(call[0]).includes('security.exec_timeout_seconds'))
     expect(warned).toBe(true)
   })
 })
 
 // ── Skill marketplace: searchSkills / installSkillBySlug ─────────────────────
+
+describe('fetchCommands: dropped-item production telemetry (slash-palette silent-empty bugfix)', () => {
+  // Same static-top-level-import rationale as the castString/castNumber
+  // block above (comment there explains why): `fetchCommands` and the
+  // `telemetry` namespace must stay bound to the file's original module
+  // instances, or `vi.spyOn(telemetry, 'logError')` silently observes zero
+  // calls against a disconnected module graph.
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+    sessionStorage.clear()
+  })
+
+  // Payload: one structurally valid SlashCommand + one missing the required
+  // `delivery` enum field — the exact shape of a backend/SPA contract drift
+  // that SlashCommandSchema.safeParse rejects per-item (fetchCommands must
+  // not let one bad item hide the whole list).
+  const payloadWithOneBadCommand = [
+    { name: 'new', label: '/new', description: 'Start a new conversation', delivery: 'client' },
+    { name: 'broken', label: '/broken', description: 'Malformed backend entry' },
+  ]
+
+  it('DEV builds keep the console.warn-only behaviour — no logError call (production/DEV split preserved)', async () => {
+    fetchSpy.mockResolvedValueOnce(makeOkResponse(payloadWithOneBadCommand))
+    vi.stubEnv('DEV', true)
+    vi.stubEnv('MODE', 'development')
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await fetchCommands('web')
+
+    expect(result.map((c) => c.name)).toEqual(['new'])
+    expect(logErrorSpy).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalled()
+  })
+
+  it('production builds call logError with the dropped-count diagnostic — bugfix: previously silent in production (DEV-only console.warn gate)', async () => {
+    fetchSpy.mockResolvedValueOnce(makeOkResponse(payloadWithOneBadCommand))
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('MODE', 'production')
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await fetchCommands('web')
+
+    // Safe fallback preserved: the good command survives, the bad one drops.
+    expect(result.map((c) => c.name)).toEqual(['new'])
+    // The bug: this used to have NO production-visible signal at all.
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(logErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'commandSchemaDrop',
+        surface: 'web',
+        droppedCount: 1,
+        totalCount: 2,
+      }),
+    )
+  })
+
+  it('does not call logError when every command validates', async () => {
+    fetchSpy.mockResolvedValueOnce(makeOkResponse([payloadWithOneBadCommand[0]]))
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('MODE', 'production')
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
+
+    const result = await fetchCommands('web')
+
+    expect(result).toHaveLength(1)
+    expect(logErrorSpy).not.toHaveBeenCalled()
+  })
+})
 
 describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
   let fetchSpy: ReturnType<typeof vi.fn>

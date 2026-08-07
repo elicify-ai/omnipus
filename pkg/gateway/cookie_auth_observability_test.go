@@ -1,10 +1,3 @@
-//go:build !cgo
-
-// This test file uses //go:build !cgo so it compiles when CGO is disabled.
-// When CGO is enabled, pkg/gateway imports pkg/channels/matrix which requires
-// the libolm system library (olm/olm.h). If that library is installed,
-// remove this build constraint and run tests normally.
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -284,26 +277,14 @@ func TestAuthenticateWS_LogsInvalidSessionCookie(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, authData),
 		"the frame-based fallback must still authenticate after an invalid cookie")
 
-	received := make(chan bus.InboundMessage, 1)
-	go func() {
-		select {
-		case msg := <-msgBus.InboundChan():
-			received <- msg
-		case <-time.After(3 * time.Second):
-		}
-	}()
 	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello after invalid cookie"}
 	msgData, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
 
-	select {
-	case msg := <-received:
-		assert.Equal(t, "ws-frame-user", msg.GatewayUserID,
-			"the connection must still authenticate via the frame fallback")
-	case <-time.After(3 * time.Second):
-		t.Fatal("message was not published to bus within 3 seconds — frame-fallback auth did not complete")
-	}
+	msg := awaitInboundMessage(t, msgBus, "frame-fallback auth must complete and publish the message")
+	assert.Equal(t, "ws-frame-user", msg.GatewayUserID,
+		"the connection must still authenticate via the frame fallback")
 
 	assert.True(t, recorder.contains("cookie present but invalid"),
 		"authenticateWS must log the SFH-1 signal for a present-but-invalid cookie before falling "+

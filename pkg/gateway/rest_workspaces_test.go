@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // BDD: workspace REST API tests.
 // Traces to: FR-001 (workspaces CRUD), FR-007 (cascade delete).
 
@@ -1063,11 +1061,14 @@ func TestHandleWorkspacePut_FullFieldRoundTrip(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	// Step 1: Create the workspace via POST to get a valid ULID id and timestamps.
+	// No core_team here (review r1 M4/Gap #6 now validates membership against
+	// registered agents, which newTestRestAPIWithHome's bare harness doesn't
+	// seed) — irrelevant to this step anyway, since Step 2 immediately
+	// overwrites the on-disk file wholesale, including core_team.
 	body := `{
 		"name": "Original Name",
 		"description": "original description",
-		"repository": "https://github.com/example/full-field",
-		"core_team": ["mia","jim","ava","ray"]
+		"repository": "https://github.com/example/full-field"
 	}`
 	wPost := httptest.NewRecorder()
 	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
@@ -1243,9 +1244,22 @@ func newTestRestAPIWithAvaRoster(t *testing.T) *restAPI {
 			},
 		},
 	}
+	// cfg.Agents.List no longer round-trips through this marshal (ADR-054:
+	// json:"-") — config.json on disk carries no "list" either way now, but
+	// writing it still exercises the same on-disk shape callers expect.
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), cfgJSON, 0o600))
+	// ADR-054 D2/D6: several tests using this roster (e.g.
+	// TestHandleWorkspacePut_DeltaValidation_PreExistingDanglingMemberDoesNotWedge)
+	// exercise workspace core_team validation purely against the in-memory
+	// cfg.Agents.List, which is unaffected either way — but persisting real
+	// entity records here means this roster survives intact even if a future
+	// test built on this helper calls a handler that reaches
+	// refreshConfigAndRewireServices (which repopulates cfg.Agents.List
+	// wholesale from the entity store, silently wiping an entity-less
+	// in-memory-only roster).
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 	return &restAPI{
@@ -1330,6 +1344,89 @@ func TestHandleWorkspacePost_ExplicitCoreTeam_HonoredVerbatim_NoSetupPending(t *
 	stored, err := readWorkspaceFile(api.homePath, ws.Id)
 	require.NoError(t, err)
 	assert.False(t, stored.SetupPending, "on-disk setup_pending must be false for an explicit-team workspace")
+}
+
+// TestHandleWorkspacePost_CoreTeam_RejectsSystemAgentAndUnregisteredID is
+// review r1 major M4/Gap #6: neither handleWorkspacePost nor
+// handleWorkspacePut validated core_team membership at all before this fix —
+// a caller could add a System Agent (never a chat target, excluded from team
+// rosters by design, AgentConfig.IsSystem's doc comment) or a
+// typo'd/nonexistent agent id with no rejection whatsoever.
+func TestHandleWorkspacePost_CoreTeam_RejectsSystemAgentAndUnregisteredID(t *testing.T) {
+	api := newTestRestAPIWithAvaRoster(t)
+	cfg := api.agentLoop.GetConfig()
+	cfg.Agents.List = append(cfg.Agents.List,
+		config.AgentConfig{ID: "judge", Name: "Judge", Type: config.AgentTypeSystem})
+
+	cases := []struct {
+		name      string
+		coreTeam  string
+		wantWords string
+	}{
+		{"system_agent_rejected", `["mia","judge"]`, "System Agent"},
+		{"unregistered_id_rejected", `["mia","nonexistent-agent"]`, "not a registered agent"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
+				strings.NewReader(`{"name":"`+tc.name+`","core_team":`+tc.coreTeam+`}`))
+			r.Header.Set("Content-Type", "application/json")
+			r.URL.Path = "/api/v1/workspaces"
+			api.HandleWorkspaces(w, r)
+
+			require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+			assert.Contains(t, w.Body.String(), tc.wantWords)
+		})
+	}
+}
+
+// TestHandleWorkspacePut_CoreTeam_RejectsSystemAgentAndUnregisteredID mirrors
+// the POST test above for the PUT path (review r1 major M4/Gap #6).
+func TestHandleWorkspacePut_CoreTeam_RejectsSystemAgentAndUnregisteredID(t *testing.T) {
+	api := newTestRestAPIWithAvaRoster(t)
+	cfg := api.agentLoop.GetConfig()
+	cfg.Agents.List = append(cfg.Agents.List,
+		config.AgentConfig{ID: "judge", Name: "Judge", Type: config.AgentTypeSystem})
+
+	// Create a valid workspace first.
+	wPost := httptest.NewRecorder()
+	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
+		strings.NewReader(`{"name":"PutRejectTest","core_team":["mia"]}`))
+	rPost.Header.Set("Content-Type", "application/json")
+	rPost.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(wPost, rPost)
+	require.Equal(t, http.StatusCreated, wPost.Code, "body=%s", wPost.Body.String())
+	var created gen.Workspace
+	require.NoError(t, json.Unmarshal(wPost.Body.Bytes(), &created))
+
+	cases := []struct {
+		name      string
+		coreTeam  string
+		wantWords string
+	}{
+		{"system_agent_rejected", `["mia","judge"]`, "System Agent"},
+		{"unregistered_id_rejected", `["mia","nonexistent-agent"]`, "not a registered agent"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+created.Id,
+				strings.NewReader(`{"core_team":`+tc.coreTeam+`}`))
+			r.Header.Set("Content-Type", "application/json")
+			r.URL.Path = "/api/v1/workspaces/" + created.Id
+			api.HandleWorkspaces(w, r)
+
+			require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+			assert.Contains(t, w.Body.String(), tc.wantWords)
+
+			// The workspace's on-disk core_team must be untouched by a rejected PUT.
+			stored, err := readWorkspaceFile(api.homePath, created.Id)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"mia"}, stored.CoreTeam,
+				"a rejected core_team update must not be persisted")
+		})
+	}
 }
 
 // TestHandleWorkspacePost_ExplicitEmptyCoreTeam_SeedsAvaOnly_SetupPending is a
@@ -1497,6 +1594,11 @@ func newTestRestAPIWithoutAva(t *testing.T) *restAPI {
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), cfgJSON, 0o600))
+	// ADR-054 D2/D6: see newTestRestAPIWithAvaRoster's identical comment —
+	// persist real entity records so this roster survives any future reload
+	// trigger, not just the in-memory cfg.Agents.List this package's current
+	// tests happen to rely on.
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 	return &restAPI{
@@ -1663,4 +1765,156 @@ func TestLogWorkspacelessAgents_WarnsOnlyForNonMembers(t *testing.T) {
 	}
 	logWorkspacelessAgents(home, cfg2)
 	assert.Empty(t, buf.String(), "must not log anything when every configured agent has a workspace")
+}
+
+// --- ADR-054 D6: referential integrity (validateCoreTeamMembers / RepairDanglingCoreTeamMembers) ---
+
+// TestValidateCoreTeamMembers_Unit exercises the pure validation function
+// directly: a fully-valid list passes, a dangling (unregistered) id is
+// rejected, a System Agent id is rejected, and an empty/nil list is always a
+// no-op (nothing to validate).
+func TestValidateCoreTeamMembers_Unit(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{
+				{ID: "mia", Type: config.AgentTypeCore},
+				{ID: "judge", Type: config.AgentTypeSystem},
+			},
+		},
+	}
+
+	assert.NoError(t, validateCoreTeamMembers(cfg, nil), "nil coreTeam must be a no-op")
+	assert.NoError(t, validateCoreTeamMembers(cfg, []string{}), "empty coreTeam must be a no-op")
+	assert.NoError(t, validateCoreTeamMembers(cfg, []string{"mia"}), "a valid, registered, non-system id must pass")
+
+	err := validateCoreTeamMembers(cfg, []string{"mia", "ghost"})
+	require.Error(t, err, "an unregistered id must be rejected")
+	assert.Contains(t, err.Error(), "not a registered agent")
+
+	err = validateCoreTeamMembers(cfg, []string{"mia", "judge"})
+	require.Error(t, err, "a System Agent id must be rejected")
+	assert.Contains(t, err.Error(), "System Agent")
+
+	assert.Error(t, validateCoreTeamMembers(nil, []string{"anything"}), "a nil cfg with a non-empty coreTeam must error, not panic")
+}
+
+// TestRepairDanglingCoreTeamMembers_Unit verifies the ADR-054 D6 rule 3
+// repair primitive: dangling (unregistered) ids are dropped, valid ids are
+// kept in their original order, and a System Agent id (which exists, so is
+// not "dangling") is left untouched — repair only removes references that no
+// longer resolve to anything, it does not re-implement
+// validateCoreTeamMembers' separate System Agent rejection.
+func TestRepairDanglingCoreTeamMembers_Unit(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{
+				{ID: "mia", Type: config.AgentTypeCore},
+				{ID: "jim", Type: config.AgentTypeCore},
+				{ID: "judge", Type: config.AgentTypeSystem},
+			},
+		},
+	}
+
+	repaired, dropped := RepairDanglingCoreTeamMembers(cfg, []string{"mia", "ghost-a", "jim", "ghost-b"})
+	assert.Equal(t, []string{"mia", "jim"}, repaired, "surviving members must keep their original order")
+	assert.Equal(t, []string{"ghost-a", "ghost-b"}, dropped, "dangling members must be reported, in order")
+
+	// A System Agent id is not dangling (it exists) — repair must not drop it.
+	repaired, dropped = RepairDanglingCoreTeamMembers(cfg, []string{"mia", "judge"})
+	assert.Equal(t, []string{"mia", "judge"}, repaired, "an existing System Agent id is not dangling; repair must not remove it")
+	assert.Empty(t, dropped)
+
+	// Nothing dangling: repaired == input, dropped is empty.
+	repaired, dropped = RepairDanglingCoreTeamMembers(cfg, []string{"mia", "jim"})
+	assert.Equal(t, []string{"mia", "jim"}, repaired)
+	assert.Empty(t, dropped)
+
+	// Nil/empty input and nil cfg edge cases.
+	repaired, dropped = RepairDanglingCoreTeamMembers(cfg, nil)
+	assert.Nil(t, repaired)
+	assert.Nil(t, dropped)
+
+	repaired, dropped = RepairDanglingCoreTeamMembers(nil, []string{"mia", "jim"})
+	assert.Nil(t, repaired, "a nil cfg has nothing to resolve against — every id is dropped")
+	assert.Equal(t, []string{"mia", "jim"}, dropped)
+}
+
+// TestHandleWorkspacePut_DeltaValidation_PreExistingDanglingMemberDoesNotWedge
+// is the direct regression test for the ADR-054 §1 failure: "a workspace
+// core_team referenced three agents that do not exist, and
+// validateCoreTeamMembers then rejected every subsequent write naming the
+// first missing one — permanently wedging the workspace with no repair
+// path."
+//
+// BDD:
+//
+//	Given a workspace whose core_team already contains a dangling member
+//	  (an agent id that existed when the team was set, but was since removed
+//	  from the roster — simulating a delete that happened outside this PUT),
+//	When a PUT request round-trips that SAME core_team plus one new, valid,
+//	  unrelated member (the realistic "add one member" client pattern),
+//	Then the request succeeds (200), the dangling member survives untouched
+//	  (D6 rule 2: surfaced, never fatal — it is not this write's job to prune
+//	  it), and the new member is added — proving the wedge described in the
+//	  ADR is gone.
+func TestHandleWorkspacePut_DeltaValidation_PreExistingDanglingMemberDoesNotWedge(t *testing.T) {
+	api := newTestRestAPIWithAvaRoster(t)
+	cfg := api.agentLoop.GetConfig()
+
+	// Create a workspace whose core_team includes "jim" while jim is still a
+	// registered agent.
+	wPost := httptest.NewRecorder()
+	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
+		strings.NewReader(`{"name":"WedgeRegressionTest","core_team":["mia","jim"]}`))
+	rPost.Header.Set("Content-Type", "application/json")
+	rPost.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(wPost, rPost)
+	require.Equal(t, http.StatusCreated, wPost.Code, "body=%s", wPost.Body.String())
+	var created gen.Workspace
+	require.NoError(t, json.Unmarshal(wPost.Body.Bytes(), &created))
+
+	// Simulate "jim" being deleted from the roster after the workspace was
+	// created — cfg.Agents.List no longer has an entry for "jim", but the
+	// workspace's on-disk core_team still names it. This is exactly the
+	// dangling-reference state ADR-054 §1 describes.
+	newList := make([]config.AgentConfig, 0, len(cfg.Agents.List))
+	for _, a := range cfg.Agents.List {
+		if a.ID != "jim" {
+			newList = append(newList, a)
+		}
+	}
+	cfg.Agents.List = newList
+
+	// A typical client reads the current team (["mia","jim"]) and PUTs it
+	// back with one new member appended ("ray") — this is the realistic
+	// "add a member" pattern that round-trips the dangling id.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+created.Id,
+		strings.NewReader(`{"core_team":["mia","jim","ray"]}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/workspaces/" + created.Id
+	api.HandleWorkspaces(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"a PUT that merely round-trips a PRE-EXISTING dangling member ('jim') alongside one new valid "+
+			"member ('ray') must succeed — rejecting it is the exact permanent-wedge bug ADR-054 fixes. body=%s",
+		w.Body.String())
+
+	var updated gen.Workspace
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	require.NotNil(t, updated.CoreTeam)
+	assert.ElementsMatch(t, []string{"mia", "jim", "ray"}, *updated.CoreTeam,
+		"the dangling member ('jim') survives untouched (surfaced, not pruned) and the new member ('ray') is added")
+
+	// A write that introduces a genuinely NEW bad id must still be rejected
+	// (delta validation still catches new problems — it only stops
+	// re-validating what was already there).
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+created.Id,
+		strings.NewReader(`{"core_team":["mia","jim","ray","brand-new-ghost"]}`))
+	r2.Header.Set("Content-Type", "application/json")
+	r2.URL.Path = "/api/v1/workspaces/" + created.Id
+	api.HandleWorkspaces(w2, r2)
+	require.Equal(t, http.StatusBadRequest, w2.Code, "a NEWLY introduced dangling id must still be rejected. body=%s", w2.Body.String())
+	assert.Contains(t, w2.Body.String(), "not a registered agent")
 }

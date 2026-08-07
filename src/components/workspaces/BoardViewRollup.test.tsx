@@ -10,10 +10,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BoardView } from './BoardView'
-import type { Task, Agent, Milestone } from '@/lib/api'
+import type { Task, Agent, Plan } from '@/lib/api'
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -81,9 +81,11 @@ const agentRay: Agent = {
   icon: 'MagnifyingGlass',
   timeout_seconds: 300,
   max_tool_iterations: 50,
+  // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
+  memory_enabled: true,
 }
 
-const milestones: Milestone[] = []
+const plans: Plan[] = []
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -97,20 +99,16 @@ function renderBoard(
   tasks: Task[],
   agents: Agent[] = [],
   altitude: 'top-level' | 'show-all' = 'top-level',
-  onAltitudeChange = vi.fn(),
 ) {
   const client = makeClient()
   return render(
     <QueryClientProvider client={client}>
       <BoardView
         tasks={tasks}
-        milestones={milestones}
+        plans={plans}
         agents={agents}
-        activeMilestoneId={null}
         altitude={altitude}
-        onAltitudeChange={onAltitudeChange}
         onTaskClick={vi.fn()}
-        onNewTask={vi.fn()}
       />
     </QueryClientProvider>,
   )
@@ -145,7 +143,7 @@ describe('BoardView delegation roll-up', () => {
     const parentWithRollup = baseTask({
       rollup: [
         { agent_id: 'ray', label: 'Research', status: 'in_progress' },
-        { agent_id: 'ava', label: 'Build', status: 'planning' },
+        { agent_id: 'ava', label: 'Build', status: 'next' },
       ],
     })
 
@@ -175,57 +173,34 @@ describe('BoardView delegation roll-up', () => {
     expect(childElements.length).toBe(0)
   })
 
-  it('altitude toggle "Show all" expands children inline; "Top-level" keeps them collapsed', async () => {
-    // Import the mock to set return value for fetchSubtasks
+  it("altitude 'show-all' expands children inline under the parent; 'top-level' keeps them collapsed", async () => {
+    // The AltitudeToggle control now lives in WorkspaceTasksTab's toolbar (a
+    // single toolbar row); BoardView is driven purely by the `altitude` prop.
+    // This verifies the prop-driven roll-up behaviour.
     const { fetchSubtasks } = await import('@/lib/api')
     const child = subtask({ id: 'task-child', title: 'Expanded child task', parent_task_id: 'task-parent' })
     vi.mocked(fetchSubtasks).mockResolvedValue([child])
 
     const parent = baseTask({ id: 'task-parent', title: 'Parent task with children' })
-    const onAltitudeChange = vi.fn()
 
-    const { rerender } = render(
-      <QueryClientProvider client={makeClient()}>
-        <BoardView
-          tasks={[parent]}
-          milestones={milestones}
-          agents={[]}
-          activeMilestoneId={null}
-          altitude="top-level"
-          onAltitudeChange={onAltitudeChange}
-          onTaskClick={vi.fn()}
-          onNewTask={vi.fn()}
-        />
-      </QueryClientProvider>,
-    )
+    // Top-level: children stay collapsed — no Subtasks list mounts.
+    const { rerender } = renderBoard([parent], [], 'top-level')
+    expect(screen.getByText('Parent task with children')).toBeDefined()
+    expect(screen.queryByRole('list', { name: /subtasks/i })).toBeNull()
 
-    // In top-level mode, clicking "Show all" should fire the callback
-    const showAllBtn = screen.getByRole('radio', { name: /show all/i })
-    fireEvent.click(showAllBtn)
-    expect(onAltitudeChange).toHaveBeenCalledWith('show-all')
-
-    // Rerender in show-all mode to verify TaskChildren is mounted under parent
+    // Show-all: TaskChildren mounts under the parent and renders the Subtasks list.
     rerender(
       <QueryClientProvider client={makeClient()}>
         <BoardView
           tasks={[parent]}
-          milestones={milestones}
+          plans={plans}
           agents={[]}
-          activeMilestoneId={null}
           altitude="show-all"
-          onAltitudeChange={onAltitudeChange}
           onTaskClick={vi.fn()}
-          onNewTask={vi.fn()}
         />
       </QueryClientProvider>,
     )
-
-    // The TaskChildren component is now mounted — it will fetch/render children.
-    // We verify the parent card is still present and a subtask-list container exists.
     expect(screen.getByText('Parent task with children')).toBeDefined()
-    // The subtask list container should be rendered (role=list aria-label=Subtasks)
-    // Allow a tick for the query to resolve (but we don't need to await here since
-    // we're only checking that the container rendered, not the data).
-    expect(screen.queryByRole('list', { name: /subtasks/i })).toBeDefined()
+    expect(await screen.findByRole('list', { name: /subtasks/i })).toBeInTheDocument()
   })
 })

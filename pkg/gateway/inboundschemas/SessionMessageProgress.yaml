@@ -1,0 +1,103 @@
+type: object
+title: SessionMessageProgress
+description: >
+  SessionMessage `oneOf` variant, `kind: progress` (ADR-053 §Contract
+  Surface — SessionMessage). Child -> parent. A lightweight in-flight
+  narration line; never a claim, never a checkpoint. Envelope fields are
+  duplicated inline on every variant (ADR-034 precedent — oapi-codegen
+  inlines `oneOf` members that are direct component refs into named
+  `As*`/`From*` accessors; a shared base composed via `allOf` across files
+  does not receive the same treatment, so each variant is flat, matching
+  `AgentCreateRequestMain`/`AgentCreateRequestSubagent`).
+required:
+  - message_id
+  - session_id
+  - direction
+  - kind
+  - depth
+  - created_at
+  - sender_identity
+  - untrusted_origin
+  - text
+additionalProperties: false
+properties:
+  message_id:
+    type: string
+    minLength: 1
+    description: >
+      Dedupe key. At-least-once delivery over the existing `pkg/bus`; the
+      runtime dedupes repeated deliveries of the same `message_id`.
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WE"
+  session_id:
+    type: string
+    minLength: 1
+    description: The durable session this message belongs to (SessionLifecycleRecord.session_id).
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  parent_session_id:
+    type: string
+    nullable: true
+    description: The parent session this child reports to. Null for a top-level session.
+    example: "660e8400-e29b-41d4-a716-446655440000"
+  generation:
+    type: integer
+    minimum: 0
+    description: >
+      Session generation this message was emitted under (resumed_from
+      lineage) — a message from a stale generation is inert.
+    example: 0
+  direction:
+    type: string
+    enum:
+      - child_to_parent
+    description: >
+      M8 — the unused `human` value is dropped. `progress` is always
+      child -> parent.
+    example: "child_to_parent"
+  kind:
+    type: string
+    enum:
+      - progress
+    description: Discriminator for the SessionMessage `oneOf`.
+    example: "progress"
+  depth:
+    type: integer
+    minimum: 0
+    maximum: 5
+    description: >
+      Message-hop cap (m7) — how many parent<->child hops this message has
+      traversed. Distinct from and independent of the spawn-nesting
+      delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3,
+      `pkg/agent/subturn.go`) — one caps message forwarding, the other caps
+      spawn nesting (m-5).
+    example: 0
+  created_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp this message was created.
+    example: "2026-07-22T10:00:00Z"
+  sender_identity:
+    type: string
+    minLength: 1
+    description: Agent ID (or "human") that authored this message.
+    example: "ray"
+  untrusted_origin:
+    type: boolean
+    description: >
+      True when this message's free-text content originated from a child
+      agent and must render in untrusted-content framing (FE-7/MAJ-12) —
+      plain text or sanctioned markdown only, no raw HTML, non-clickable
+      links.
+    example: true
+  text:
+    type: string
+    maxLength: 32768
+    description: >
+      Untrusted narration text. Capped at the 32 KiB child-send body cap
+      (session_messaging.child_send_body).
+    example: "Scanning pkg/plan for the write-set boundary..."
+  pct:
+    type: integer
+    minimum: 0
+    maximum: 100
+    description: Optional completion percentage estimate.
+    example: 40

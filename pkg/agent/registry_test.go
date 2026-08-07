@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 type mockRegistryProvider struct{}
@@ -145,9 +147,18 @@ func TestAgentRegistry_GetAgent_Normalize(t *testing.T) {
 	}
 }
 
-func TestAgentRegistry_GetDefaultAgent(t *testing.T) {
-	// F3: GetDefaultAgent must return the Default=true-flagged agent over
-	// DefaultAgentID/"main" — the per-agent routing-default flag is canonical.
+// TestAgentRegistry_GetDefaultAgent_EntityDefaultFlagIsInert is the ADR-054
+// D6.4 regression guard: AgentConfig.Default=true alone (no
+// SetDefaultAgentOverride, i.e. no config.Agents.Defaults.DefaultAgentID)
+// must NOT select "mia" — resolution falls through to the "main" sentinel
+// instead. The per-entity Default field was demoted from the resolution
+// ladder precisely because splitting agents into independent per-entity
+// files means two concurrent writes could each set it true with no shared
+// lock to serialize them; only the settings singleton
+// (SetDefaultAgentOverride / config.Agents.Defaults.DefaultAgentID) is
+// consulted now. See TestAgentRegistry_GetDefaultAgent_DefaultAgentIDOverride
+// for the positive case.
+func TestAgentRegistry_GetDefaultAgent_EntityDefaultFlagIsInert(t *testing.T) {
 	cfg := testCfg([]config.AgentConfig{
 		{ID: "alpha"},
 		{ID: "mia", Default: true},
@@ -158,12 +169,8 @@ func TestAgentRegistry_GetDefaultAgent(t *testing.T) {
 	if agent == nil {
 		t.Fatal("expected a default agent")
 	}
-	// Mia is flagged Default=true; she must win over "main".
-	if agent.ID != "mia" {
-		t.Errorf("GetDefaultAgent = %q, want %q (Default=true agent must take priority over main)", agent.ID, "mia")
-	}
-	if !agent.IsRoutingDefault {
-		t.Errorf("winning agent must have IsRoutingDefault=true")
+	if agent.ID != "main" {
+		t.Errorf("GetDefaultAgent = %q, want %q (AgentConfig.Default must be inert without SetDefaultAgentOverride)", agent.ID, "main")
 	}
 }
 
@@ -208,29 +215,34 @@ func TestAgentRegistry_GetDefaultAgent_DefaultAgentIDOverride(t *testing.T) {
 	}
 }
 
-// TestAgentRegistry_GetDefaultAgent_RoutingDefaultOverridesOverride verifies
-// that a Default=true agent takes priority even over the DefaultAgentID string
-// override set via SetDefaultAgentOverride.
-func TestAgentRegistry_GetDefaultAgent_RoutingDefaultOverridesOverride(t *testing.T) {
+// TestAgentRegistry_GetDefaultAgent_OverrideBeatsEntityDefaultFlag verifies
+// the ADR-054 D6.4 ladder: the SetDefaultAgentOverride setting (mirroring
+// config.Agents.Defaults.DefaultAgentID) wins over another agent's
+// AgentConfig.Default=true flag — the inverse of the pre-ADR-054 behavior,
+// where the per-entity flag was Priority 1. That priority was removed
+// entirely (not merely reordered) since a per-entity bool cannot be an
+// at-most-one singleton once agents split into independent files.
+func TestAgentRegistry_GetDefaultAgent_OverrideBeatsEntityDefaultFlag(t *testing.T) {
 	cfg := testCfg([]config.AgentConfig{
 		{ID: "mia", Default: true},
 		{ID: "beta"},
 	})
 	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
-	// Even with an explicit override pointing to "beta", Mia wins.
+	// Explicit override pointing to "beta" now wins, despite mia's inert
+	// Default=true flag.
 	registry.SetDefaultAgentOverride("beta")
 
 	agent := registry.GetDefaultAgent()
 	if agent == nil {
 		t.Fatal("expected a default agent")
 	}
-	if agent.ID != "mia" {
-		t.Errorf("GetDefaultAgent = %q, want %q (Default=true must beat SetDefaultAgentOverride)", agent.ID, "mia")
+	if agent.ID != "beta" {
+		t.Errorf("GetDefaultAgent = %q, want %q (SetDefaultAgentOverride must beat an inert AgentConfig.Default flag)", agent.ID, "beta")
 	}
 }
 
 // TestAgentRegistry_GetDefaultAgent_OverrideToWorkerSkipped verifies the
-// Priority-2 hardening: a legacy DefaultAgentID override pointing at a worker
+// Priority-1 hardening: a legacy DefaultAgentID override pointing at a worker
 // (hand-edited config) is skipped — a worker is never a chat target — and
 // resolution falls through to a non-worker agent, never the worker.
 func TestAgentRegistry_GetDefaultAgent_OverrideToWorkerSkipped(t *testing.T) {
@@ -248,16 +260,16 @@ func TestAgentRegistry_GetDefaultAgent_OverrideToWorkerSkipped(t *testing.T) {
 	}
 	if agent.ID == "worker" || agent.IsWorker() {
 		t.Fatalf(
-			"GetDefaultAgent returned a worker (%q) via the Priority-2 override — workers are not chat targets",
+			"GetDefaultAgent returned a worker (%q) via the Priority-1 override — workers are not chat targets",
 			agent.ID,
 		)
 	}
 }
 
 // TestAgentRegistry_GetDefaultAgent_OnlyWorkerAndBaseSkipsWorker verifies that
-// with only a worker and a base agent registered (no Default flag, no override),
-// GetDefaultAgent returns the base agent, never the worker. This exercises the
-// Priority-4 first-non-worker fallback.
+// with only a worker and a base agent registered (no override), GetDefaultAgent
+// returns the base agent, never the worker. This exercises the Priority-3
+// first-non-worker fallback.
 func TestAgentRegistry_GetDefaultAgent_OnlyWorkerAndBaseSkipsWorker(t *testing.T) {
 	cfg := testCfg([]config.AgentConfig{
 		{ID: "abase"},
@@ -314,5 +326,285 @@ func TestAgentInstance_FallbackExplicitEmpty(t *testing.T) {
 	agent, _ := registry.GetAgent("no-fallback")
 	if len(agent.Fallbacks) != 0 {
 		t.Errorf("expected 0 fallbacks (explicit empty), got %d: %v", len(agent.Fallbacks), agent.Fallbacks)
+	}
+}
+
+// --- ADR-054 §5: registry read-path / write-invalidation ---
+
+// TestAgentRegistry_UpsertAgent verifies a freshly-constructed instance
+// becomes visible via GetAgent/ListAgentIDs immediately, without rebuilding
+// the rest of the registry (ADR-054 §5's originally-envisioned zero-rebuild
+// write path). No production caller exists as of this commit — see
+// UpsertAgent's own doc comment for the honest status and why full
+// AgentLoop.ReloadProviderAndConfig is what production actually uses; this
+// test exists to keep the primitive itself correct for whenever a future
+// caller needs it.
+func TestAgentRegistry_UpsertAgent(t *testing.T) {
+	cfg := testCfg([]config.AgentConfig{{ID: "alpha"}})
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+
+	if _, ok := registry.GetAgent("newagent"); ok {
+		t.Fatal("newagent should not exist yet")
+	}
+
+	newCfg := &config.AgentConfig{ID: "newagent", Name: "New Agent"}
+	instance := NewAgentInstance(newCfg, &cfg.Agents.Defaults, cfg, &mockRegistryProvider{})
+	registry.UpsertAgent(instance)
+
+	got, ok := registry.GetAgent("newagent")
+	if !ok || got == nil {
+		t.Fatal("expected newagent to be present after UpsertAgent")
+	}
+	if got.Name != "New Agent" {
+		t.Errorf("got.Name = %q, want %q", got.Name, "New Agent")
+	}
+	// The pre-existing agent must be untouched (no wholesale rebuild).
+	if _, ok := registry.GetAgent("alpha"); !ok {
+		t.Fatal("expected pre-existing agent 'alpha' to remain registered")
+	}
+}
+
+// TestAgentRegistry_UpsertAgent_ReplacesExisting verifies UpsertAgent
+// replaces (not duplicates) an existing entry with the same ID.
+func TestAgentRegistry_UpsertAgent_ReplacesExisting(t *testing.T) {
+	cfg := testCfg([]config.AgentConfig{{ID: "alpha", Name: "Old Name"}})
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+
+	updatedCfg := &config.AgentConfig{ID: "alpha", Name: "New Name"}
+	instance := NewAgentInstance(updatedCfg, &cfg.Agents.Defaults, cfg, &mockRegistryProvider{})
+	registry.UpsertAgent(instance)
+
+	got, ok := registry.GetAgent("alpha")
+	if !ok {
+		t.Fatal("expected alpha to still be present")
+	}
+	if got.Name != "New Name" {
+		t.Errorf("got.Name = %q, want %q (UpsertAgent must replace, not duplicate)", got.Name, "New Name")
+	}
+	if len(registry.ListAgentIDs()) != 2 { // main + alpha
+		t.Errorf("ListAgentIDs = %v, want exactly 2 (main + alpha, no duplicate)", registry.ListAgentIDs())
+	}
+}
+
+// TestAgentRegistry_RemoveAgent verifies a removed agent disappears from
+// GetAgent/ListAgentIDs, and that the reserved "main" sentinel can never be
+// removed through this path.
+func TestAgentRegistry_RemoveAgent(t *testing.T) {
+	cfg := testCfg([]config.AgentConfig{{ID: "alpha"}})
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+
+	if ok := registry.RemoveAgent("alpha"); !ok {
+		t.Fatal("expected RemoveAgent(alpha) to report true")
+	}
+	if _, ok := registry.GetAgent("alpha"); ok {
+		t.Fatal("expected alpha to be gone after RemoveAgent")
+	}
+
+	if ok := registry.RemoveAgent("alpha"); ok {
+		t.Error("expected a second RemoveAgent(alpha) to report false (already gone)")
+	}
+
+	if ok := registry.RemoveAgent("main"); ok {
+		t.Error("expected RemoveAgent(main) to refuse removing the reserved sentinel")
+	}
+	if _, ok := registry.GetAgent("main"); !ok {
+		t.Fatal("main sentinel must survive an attempted RemoveAgent(main)")
+	}
+}
+
+// --- ADR-054 R3: default-agent degradation, availability not black-holing ---
+
+// TestAgentRegistry_EvaluateDefaultAgentHealth_DegradesOnSkippedRecord
+// verifies that when the configured default agent's entity record was
+// skipped at load time (exists but failed to parse), the registry is marked
+// degraded with a reason — this is a pure health-surface signal and must NOT
+// affect GetDefaultAgent's own resolution (which never consults it).
+func TestAgentRegistry_EvaluateDefaultAgentHealth_DegradesOnSkippedRecord(t *testing.T) {
+	cfg := testCfg([]config.AgentConfig{{ID: "alpha"}})
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+
+	if degraded, _ := registry.DefaultAgentDegraded(); degraded {
+		t.Fatal("registry must not start out degraded")
+	}
+
+	registry.EvaluateDefaultAgentHealth("mia", []string{"mia", "other-skipped"})
+
+	degraded, reason := registry.DefaultAgentDegraded()
+	if !degraded {
+		t.Fatal("expected DefaultAgentDegraded=true when the configured default is in the skipped set")
+	}
+	if reason == "" {
+		t.Error("expected a non-empty degraded reason")
+	}
+
+	// Resolution must still return a working agent — never black-holed.
+	agent := registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("GetDefaultAgent must still return a working agent while degraded (R3: availability, not fail-closed)")
+	}
+
+	registry.ClearDefaultAgentDegraded()
+	if degraded, _ := registry.DefaultAgentDegraded(); degraded {
+		t.Fatal("expected ClearDefaultAgentDegraded to reset the flag")
+	}
+}
+
+// TestAgentRegistry_EvaluateDefaultAgentHealth_NotDegradedWhenNeverConfigured
+// verifies the negative case: an empty default-agent-id (never configured)
+// must never raise the degraded flag — this is ordinary operation, not R3's
+// concern.
+func TestAgentRegistry_EvaluateDefaultAgentHealth_NotDegradedWhenNeverConfigured(t *testing.T) {
+	cfg := testCfg([]config.AgentConfig{{ID: "alpha"}})
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+
+	registry.EvaluateDefaultAgentHealth("", []string{"some-other-skipped-id"})
+	if degraded, _ := registry.DefaultAgentDegraded(); degraded {
+		t.Fatal("an empty/unconfigured default agent id must never raise degraded")
+	}
+}
+
+// TestAgentRegistry_EvaluateDefaultAgentHealth_NotDegradedWhenNeverExisted
+// verifies that a configured default agent id that simply was never created
+// (absent from the skipped set entirely — a config error, not a load
+// failure) does not raise degraded. Only "exists but failed to parse" does.
+func TestAgentRegistry_EvaluateDefaultAgentHealth_NotDegradedWhenNeverExisted(t *testing.T) {
+	cfg := testCfg([]config.AgentConfig{{ID: "alpha"}})
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+
+	registry.EvaluateDefaultAgentHealth("ghost-agent-never-created", nil)
+	if degraded, _ := registry.DefaultAgentDegraded(); degraded {
+		t.Fatal("a default agent id absent from the skipped set (never existed) must not raise degraded")
+	}
+}
+
+// --- Concurrency: two writers cannot both become "the" default ---
+
+// TestAgentRegistry_ConcurrentSetDefaultAgentOverride_NoSplitBrain is the
+// registry-level counterpart to the settings-scalar argument in
+// GetDefaultAgent's doc comment: config.Agents.Defaults.DefaultAgentID (and
+// its in-memory mirror, defaultAgentOverride) is a SINGLE string field, so
+// unlike the old per-entity AgentConfig.Default bool, there is no way for two
+// concurrent writers to leave the registry believing two different agents
+// are simultaneously "the" default — the last write under the mutex simply
+// wins, and every GetDefaultAgent call in between and after observes exactly
+// one well-defined answer. Run with -race: the assertion here is "no data
+// race and no panic", not which of the two concurrently-set IDs wins (that
+// is intentionally non-deterministic).
+func TestAgentRegistry_ConcurrentSetDefaultAgentOverride_NoSplitBrain(t *testing.T) {
+	cfg := testCfg([]config.AgentConfig{
+		{ID: "alpha"},
+		{ID: "beta"},
+	})
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				registry.SetDefaultAgentOverride("alpha")
+			} else {
+				registry.SetDefaultAgentOverride("beta")
+			}
+		}(i)
+	}
+	// Concurrent reads racing the writes above — must never observe a torn
+	// state (e.g. two agents both returned "the" default) or panic.
+	seen := make(map[string]bool)
+	var mu sync.Mutex
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			agent := registry.GetDefaultAgent()
+			if agent == nil {
+				t.Error("GetDefaultAgent returned nil during concurrent override writes")
+				return
+			}
+			mu.Lock()
+			seen[agent.ID] = true
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	// Exactly one of alpha/beta (or the transient default before any write
+	// landed) may have been observed — never more than the known candidate
+	// set, and never a corrupted/empty ID.
+	for id := range seen {
+		if id != "alpha" && id != "beta" && id != "main" {
+			t.Errorf("GetDefaultAgent returned unexpected id %q during concurrent writes", id)
+		}
+	}
+
+	// Final state is deterministic and single-valued.
+	final := registry.GetDefaultAgent()
+	if final == nil || (final.ID != "alpha" && final.ID != "beta") {
+		t.Fatalf("expected a definite final default of alpha or beta, got %v", final)
+	}
+}
+
+// TestNewAgentRegistry_MainSentinelDeniesHighImpactToolsByDefault is the
+// regression guard for the "main" sentinel tool-policy hole a security review
+// found: the sentinel used to be constructed with a nil Tools field, which
+// resolves to an empty per-agent policy map (agentToolsCfgToPolicy's a==""
+// branch), which in turn falls through to whatever the GLOBAL
+// sandbox.tool_policies floor says (pkg/tools/compositor.go's
+// resolveEffectivePolicyWith: g!="" && a=="" -> return g). Because the real
+// seeded global floor (pkg/config/defaults.go) allows several high-impact
+// tools (bash, write_file, edit_file, delegate, send_email), the sentinel
+// silently inherited "allow" for all of them with zero explicit policy entry
+// of its own — and "main" is never a member of cfg.Agents.List, so
+// config.ValidateToolPolicyCoverage's boot/write-time coverage gate (Hard
+// Constraint #6) never validated it either.
+//
+// This test reproduces that exact global floor (mirroring defaults.go's
+// seeded values for these five tools) and asserts the sentinel now resolves
+// DENY for every one of them, proving it carries its own explicit,
+// wildcard-free per-agent policy (coreagent.NewCustomAgentToolsCfg()) rather
+// than falling through to the permissive global ceiling.
+func TestNewAgentRegistry_MainSentinelDeniesHighImpactToolsByDefault(t *testing.T) {
+	cfg := testCfg(nil)
+	// Mirror the real seeded global floor (pkg/config/defaults.go) for the
+	// exact tools the security review flagged — these are ScopeGeneral tools,
+	// so the scope gate never blocks them; only the global x agent merge
+	// decides the verdict.
+	cfg.Sandbox.ToolPolicies = map[string]string{
+		"bash":       "allow",
+		"write_file": "allow",
+		"edit_file":  "allow",
+		"delegate":   "allow",
+		"send_email": "allow",
+	}
+
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+	main, ok := registry.GetAgent(DefaultAgentID)
+	if !ok || main == nil {
+		t.Fatal("expected to find the 'main' sentinel agent")
+	}
+
+	policy := main.LoadToolPolicy()
+	if policy == nil {
+		t.Fatal("expected 'main' to carry a non-nil tool-policy snapshot")
+	}
+
+	for _, toolName := range []string{"bash", "write_file", "edit_file", "delegate", "send_email"} {
+		got := tools.EffectiveToolPolicy(policy, tools.ScopeGeneral, main.AgentType, toolName)
+		if got != string(config.ToolPolicyDeny) {
+			t.Errorf("EffectiveToolPolicy(%q) = %q, want %q (sentinel must not inherit the permissive global floor)",
+				toolName, got, config.ToolPolicyDeny)
+		}
+	}
+
+	// Sanity check: the conservative allow-list NewCustomAgentToolsCfg grants
+	// still resolves allow, proving the sentinel isn't accidentally deny-all
+	// either — it has its own genuine, narrow allow-list.
+	for _, toolName := range []string{"read_file", "list_directory", "remember", "recall_memory"} {
+		got := tools.EffectiveToolPolicy(policy, tools.ScopeGeneral, main.AgentType, toolName)
+		if got != string(config.ToolPolicyAllow) {
+			t.Errorf("EffectiveToolPolicy(%q) = %q, want %q (sentinel's own conservative allow-list)",
+				toolName, got, config.ToolPolicyAllow)
+		}
 	}
 }

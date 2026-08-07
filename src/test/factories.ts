@@ -13,9 +13,10 @@
 // happily typecheck even if a genuinely-required field were missing.
 //
 // `makeAgent` fills every schema-required field (id, name, type, locked,
-// status, soul, timeout_seconds, max_tool_iterations) with a
-// realistic default so a test only has to specify what actually varies for
-// its scenario — the rest can't silently go missing from the fixture.
+// status, soul, timeout_seconds, max_tool_iterations, memory_enabled — the
+// last added by ADR-052 FR-039) with a realistic default so a test only has
+// to specify what actually varies for its scenario — the rest can't
+// silently go missing from the fixture.
 //
 // Deliberately NOT a counter-based id/name generator: every call site in
 // this codebase's tests passes an explicit `id`/`name` (needed for the
@@ -34,6 +35,8 @@ export function makeAgent(overrides: Partial<Agent> = {}): Agent {
     soul: '',
     timeout_seconds: 300,
     max_tool_iterations: 50,
+    // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
+    memory_enabled: true,
     ...overrides,
   }
 }

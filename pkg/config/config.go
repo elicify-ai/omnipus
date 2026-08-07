@@ -20,7 +20,6 @@ import (
 	mathrand "math/rand"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -158,10 +157,48 @@ type Config struct {
 	// Empty/disabled in Wave 1; parsed now so forward-compatible configs load cleanly.
 	Sandbox OmnipusSandboxConfig `json:"sandbox,omitempty" yaml:"-"`
 
+	// Planning holds the Planning & Goals epic's global loop bounds — Plan
+	// judge rounds, /goal, /loop, per-task attempt ceilings, the global
+	// active-loop admission cap, and the machine-check timeout (ADR-049 D7,
+	// spec Part A §G). Populated by DefaultConfig, range-validated at boot
+	// (validateBootConfig, mirrors OmnipusSandboxConfig/PortRange.Validate).
+	// Per-entity overrides (plan.PlanBounds, task.Task.MaxAttempts) take
+	// precedence over these global values. No token/money fields (NFR-1).
+	Planning PlanningConfig `json:"planning,omitempty" yaml:"-"`
+
+	// SessionMessaging holds the ADR-053 §8 session-control-plane operability
+	// config (FR-195's 21 keys): the global kill switch (enabled), the wake
+	// kill switch (wake_enabled), and the caps/tunables the S2/S3 transport,
+	// durable inbox, and bounded typed wake consult. Live-reload: the consumer
+	// and tools read Enabled/WakeEnabled per event via the Effective* methods
+	// (never a boot snapshot), so flipping session_messaging.enabled in
+	// config.json takes effect without a restart (FR-196, SC-015).
+	SessionMessaging SessionMessagingConfig `json:"session_messaging,omitempty" yaml:"-"`
+
 	// UnknownFields preserves JSON keys not recognized by this version of Omnipus.
 	// They are re-emitted verbatim during SaveConfig for round-trip safety (FR-004).
 	// Never serialized by json.Marshal or yaml.Marshal — only written back by MarshalJSON.
 	UnknownFields map[string]json.RawMessage `json:"-" yaml:"-"`
+
+	// SkippedAgentIDs holds the IDs of agent entity records that exist on
+	// disk (entities/agents/<id>.json, ADR-054 D2) but failed to load —
+	// unparseable JSON, I/O error, etc. — during the most recent boot or
+	// reload. Populated by the agent registry after it loads the roster from
+	// the per-entity store (pkg/agentstore/pkg/agent), never by pkg/config
+	// itself: config loading has no knowledge of entities/, a sibling
+	// on-disk tree that is not part of config.json. Transient (json:"-",
+	// never persisted) — mirrors UnknownFields' non-serialization contract.
+	//
+	// Consumed by RouteResolver (pkg/routing/route.go) to distinguish "this
+	// binding names an ID that never existed" (WARN + fall back to the
+	// default agent — a config error, not a security concern) from "this
+	// binding names an ID whose record exists but failed to load" (ADR-054
+	// D7/§9: fail CLOSED — Drop the route — because re-routing an
+	// operator-configured, deliberately-restrictive binding target to the
+	// default agent on load failure is a privilege change, not availability
+	// graceful degradation). Empty/nil is always safe: it simply disables
+	// the fail-closed branch, identical to pre-ADR-054 behavior.
+	SkippedAgentIDs []string `json:"-" yaml:"-"`
 
 	// cache for sensitive values and compiled regex (computed once)
 	sensitiveCache *SensitiveDataCache
@@ -293,8 +330,25 @@ type OmnipusChannelRoutingRule struct {
 // the clone and vice versa. Returns nil if marshaling or unmarshalling fails
 // (should never happen for a valid Config in practice).
 //
-// Clone does NOT copy the sensitiveCache or registeredSensitive fields — those
-// are runtime-only and must be re-registered on the clone if needed.
+// Clone carries the runtime-registered sensitive plaintexts (registeredSensitive,
+// populated by RegisterSensitiveValues) onto the clone — the JSON round-trip
+// below drops them because they are unexported, and a clone that loses them would
+// scrub nothing from LLM output/audit logs once published as the live config
+// (e.g. via AgentLoop.MutateConfig's copy-then-swap, or UpsertAgentFast's
+// rebase-then-publish). The compiled sensitiveCache is intentionally NOT shared:
+// it is invalidated on the clone so SensitiveDataReplacer rebuilds it lazily from
+// the carried set under the clone's own mutex.
+//
+// Agents.List is deliberately json:"-" on AgentsConfig (Bug 1 fix, see its
+// doc comment) so it never rides through Config's own JSON round-trip above
+// — but Clone's "fully independent deep copy" contract must still hold for
+// it: callers such as pkg/gateway's candidate-config validate-then-commit
+// pattern (cfg.Clone() -> mutate the candidate -> discard on validation
+// failure) rely on a mutated clone never reaching back into the original's
+// in-memory roster. List is therefore deep-copied via its own, independent
+// JSON round-trip below, unaffected by the "-" tag (which only governs how
+// AgentsConfig marshals AS A FIELD OF Config, not how []AgentConfig marshals
+// on its own).
 func (c *Config) Clone() (*Config, error) {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(c); err != nil {
@@ -303,6 +357,29 @@ func (c *Config) Clone() (*Config, error) {
 	clone := &Config{}
 	if err := json.NewDecoder(&buf).Decode(clone); err != nil {
 		return nil, fmt.Errorf("clone: unmarshal: %w", err)
+	}
+
+	if len(c.Agents.List) > 0 {
+		var listBuf bytes.Buffer
+		if err := json.NewEncoder(&listBuf).Encode(c.Agents.List); err != nil {
+			return nil, fmt.Errorf("clone: marshal agents.list: %w", err)
+		}
+		var listClone []AgentConfig
+		if err := json.NewDecoder(&listBuf).Decode(&listClone); err != nil {
+			return nil, fmt.Errorf("clone: unmarshal agents.list: %w", err)
+		}
+		clone.Agents.List = listClone
+	}
+	// Carry the runtime-registered sensitive plaintexts onto the clone. Read
+	// under the source's sensitiveMu so this races no concurrent
+	// RegisterSensitiveValues on c; install under the clone's own (fresh, zero)
+	// mutex via the established setter, which also invalidates the clone's cache
+	// so the next SensitiveDataReplacer rebuilds from this carried set.
+	c.sensitiveMu.RLock()
+	registered := append([]string(nil), c.registeredSensitive...)
+	c.sensitiveMu.RUnlock()
+	if len(registered) > 0 {
+		clone.RegisterSensitiveValues(registered)
 	}
 	return clone, nil
 }
@@ -345,21 +422,30 @@ func (c *Config) FilterSensitiveData(content string) string {
 // It is stored in config.json under the "performance" key and may also be overridden
 // at runtime via the OMNIPUS_MAX_PARALLEL_AGENTS env var.
 type PerformanceConfig struct {
-	// MaxParallelAgents is the maximum number of concurrent task/subagent dispatches.
-	// 0 means "use the auto-detected default" (clamped from CPU and RAM).
-	// The runtime clamps this to [2, min(NumCPU-2, RAM/1.5 GB)] ≤ 16.
-	// Overridden by OMNIPUS_MAX_PARALLEL_AGENTS env var when set.
+	// MaxParallelAgents is the maximum number of concurrent task/subagent
+	// dispatches. 0 means "use the auto-detected default", sized from
+	// available memory (see autoDetectMaxParallel) — floored so a small box
+	// still functions, and bounded only by a PHYSICAL OS-thread-safety
+	// ceiling (physicalConcurrencySafetyCeiling), never an arbitrary policy
+	// number. An explicit non-zero value here (or via
+	// OMNIPUS_MAX_PARALLEL_AGENTS) is a DEFAULT OVERRIDE: it always wins
+	// outright over the auto-detected value and is honored as configured —
+	// see clampParallelExplicit.
 	MaxParallelAgents int `json:"max_parallel_agents,omitempty" env:"OMNIPUS_MAX_PARALLEL_AGENTS"`
 }
 
-// EffectiveMaxParallelAgents returns the clamped, environment-override-aware
-// value for MaxParallelAgents. It applies:
+// EffectiveMaxParallelAgents returns the environment-override-aware value for
+// MaxParallelAgents. It applies, in priority order:
 //  1. An env-var override (OMNIPUS_MAX_PARALLEL_AGENTS) if set and valid.
-//  2. The configured value (p.MaxParallelAgents), if non-zero.
-//  3. An auto-detect heuristic: min(NumCPU-2, RAM_GB/1.5), floor 2, ceiling 16.
+//  2. The configured value (p.MaxParallelAgents), if non-zero — an EXPLICIT
+//     operator choice, honored as given (clampParallelExplicit floors it at 1
+//     but never lowers a large explicit value).
+//  3. An auto-detect DEFAULT: availableMemory / bytesPerAgent (see
+//     autoDetectMaxParallel) — used only when neither of the above is set.
 //
-// An explicit MaxParallelAgents=1 is honored — only the auto-detect path
-// enforces a floor of 2 (to prevent accidental single-flight on capable hardware).
+// Steps 1 and 2 both take precedence over step 3 unconditionally: this
+// function must never let the auto-detected default override an operator's
+// explicit choice, by config, env, or (via PUT /api/v1/performance) the UI.
 func (p PerformanceConfig) EffectiveMaxParallelAgents() int {
 	// Env-var override has highest priority.
 	if s := os.Getenv("OMNIPUS_MAX_PARALLEL_AGENTS"); s != "" {
@@ -368,57 +454,205 @@ func (p PerformanceConfig) EffectiveMaxParallelAgents() int {
 		}
 	}
 	if p.MaxParallelAgents > 0 {
-		// Explicit user-set value: allow 1 (single-flight); cap at 16.
+		// Explicit user-set value: honored as configured (see
+		// clampParallelExplicit's own doc comment for why there is no
+		// ceiling here).
 		return clampParallelExplicit(p.MaxParallelAgents)
 	}
 	return autoDetectMaxParallel()
 }
 
-// clampParallelExplicit clamps an explicitly configured value to [1, 16].
-// The floor is 1 so that a user who deliberately sets max_parallel_agents=1
-// gets single-flight behavior. Use autoDetectMaxParallel for the auto path
-// (which floors at 2 to avoid accidental single-flight on capable hardware).
+// clampParallelExplicit enforces only a floor (1, so an operator who
+// deliberately sets max_parallel_agents=1 gets single-flight behavior) on an
+// EXPLICITLY configured value (config.json or OMNIPUS_MAX_PARALLEL_AGENTS).
+//
+// There is deliberately NO ceiling here. Silently lowering an operator's
+// explicit choice is the exact ADR-037 "silent clamping" anti-pattern this
+// project bans (CLAUDE.md). When a configured value exceeds
+// physicalConcurrencySafetyCeiling, it is still honored in full — but a loud
+// WARN is logged, because Go's runtime hard-aborts the entire process (not a
+// graceful degradation) once it exceeds 10,000 OS threads, and concurrent
+// agent turns can each pin an OS thread on a blocking syscall (see
+// physicalConcurrencySafetyCeiling's doc comment for the measured basis).
+// The operator who set this value explicitly is assumed to have made that
+// trade-off knowingly; the warning exists so a value that was a fat-fingered
+// typo (e.g. an extra zero) is loudly diagnosable rather than a silent
+// eventual crash.
 func clampParallelExplicit(v int) int {
-	const minPar, maxPar = 1, 16
+	const minPar = 1
 	if v < minPar {
 		return minPar
 	}
-	if v > maxPar {
-		return maxPar
+	if v > physicalConcurrencySafetyCeiling {
+		if shouldLogExplicitCeilingWarn(time.Now()) {
+			logger.WarnCF("config",
+				"performance.max_parallel_agents is configured far above the physical OS-thread-safety ceiling — honoring it as configured (explicit values are never silently clamped), but this risks Go runtime thread exhaustion (a fatal process abort) under real concurrent load",
+				map[string]any{
+					"configured_value": v,
+					"safety_ceiling":   physicalConcurrencySafetyCeiling,
+				})
+		}
 	}
 	return v
 }
 
-// clampParallel clamps the auto-detected value to [2, 16].
-// Only used by autoDetectMaxParallel; explicit user values use clampParallelExplicit.
+// explicitCeilingWarnInterval bounds how often clampParallelExplicit's
+// above-physical-ceiling WARN is logged (code review 2026-08-04, MINOR:
+// config.go:487-493 was un-throttled). EffectiveMaxParallelAgents is invoked
+// on every new-session admission check, every dispatch capacity sync, and
+// every GET /api/v1/performance (see EffectiveMaxParallelAgents' own doc
+// comment) — an un-throttled WARN on that live-resolved path can flood
+// gateway.log under real traffic even though the underlying condition (an
+// operator's configured value exceeding physicalConcurrencySafetyCeiling) is
+// static for the life of the process. A bounded interval keeps the warning
+// loud enough to be diagnosable (CLAUDE.md/ADR-037: never silently swallow
+// it) without the volume, rather than moving it to a boot-time-only
+// diagnostic — EffectiveMaxParallelAgents is deliberately never cached
+// (config.go's own "known limitation" doc comment on availableRAMBytes), and
+// a boot-time-only warn would miss a value changed later via PUT
+// /api/v1/performance while the gateway is running.
+const explicitCeilingWarnInterval = 5 * time.Minute
+
+// lastExplicitCeilingWarnNano stores the UnixNano timestamp of the last
+// above-ceiling warning, 0 meaning "never logged yet". Package-level so the
+// throttle is shared across every call site of clampParallelExplicit.
+var lastExplicitCeilingWarnNano atomic.Int64
+
+// shouldLogExplicitCeilingWarn reports whether at least
+// explicitCeilingWarnInterval has elapsed since the last above-ceiling
+// warning and, if so, atomically claims the slot so concurrent callers (this
+// path is hit from concurrent session-admission checks) don't all log at
+// once. Split out from clampParallelExplicit so the throttle logic can be
+// tested deterministically (fake clock) without depending on capturing real
+// logger output.
+func shouldLogExplicitCeilingWarn(now time.Time) bool {
+	nowNano := now.UnixNano()
+	for {
+		last := lastExplicitCeilingWarnNano.Load()
+		if last != 0 && now.Sub(time.Unix(0, last)) < explicitCeilingWarnInterval {
+			return false
+		}
+		if lastExplicitCeilingWarnNano.CompareAndSwap(last, nowNano) {
+			return true
+		}
+	}
+}
+
+// clampParallel floors the AUTO-DETECTED default at autoDetectFloorParallel
+// (so a severely memory-constrained box still gets minimal concurrency) and
+// caps it at physicalConcurrencySafetyCeiling.
+//
+// Unlike clampParallelExplicit, this path DOES cap the ceiling: the
+// auto-detected value is a convenience default the system chose FOR the
+// operator, not something they explicitly asked for, so keeping it inside a
+// safe physical bound by construction is the appropriate default posture. An
+// operator who wants more than the physical ceiling can always set
+// max_parallel_agents explicitly (clampParallelExplicit path), which this
+// default never overrides (see EffectiveMaxParallelAgents).
 func clampParallel(v int) int {
-	const minPar, maxPar = 2, 16
-	if v < minPar {
-		return minPar
+	const autoDetectFloorParallel = 2
+	if v < autoDetectFloorParallel {
+		return autoDetectFloorParallel
 	}
-	if v > maxPar {
-		return maxPar
+	if v > physicalConcurrencySafetyCeiling {
+		return physicalConcurrencySafetyCeiling
 	}
 	return v
 }
 
-// autoDetectMaxParallel returns min(NumCPU-2, RAM_GB/1.5) clamped to [2, 16].
-// RAM_GB is derived from the virtual memory total reported by the OS.
+// physicalConcurrencySafetyCeiling bounds the AUTO-DETECTED default only
+// (clampParallel) — it never clamps an explicit operator value
+// (clampParallelExplicit honors any explicit value, warning loudly instead
+// of silently capping it).
+//
+// This is a PHYSICAL bound, not a policy number. Each concurrent agent
+// turn/sub-turn can end up blocked on a synchronous syscall (file fsync,
+// cgo, blocking DNS resolution) that parks its goroutine's OS thread rather
+// than Go's netpoller: prior measurement found ~1000 concurrent fsyncing
+// goroutines consumed ~999 OS threads. Go's runtime hard-aborts the entire
+// process — not a graceful degradation — once it exceeds 10,000 OS threads
+// ("runtime: program exceeds 10000-thread limit, fatal error: thread
+// exhaustion"). physicalConcurrencySafetyCeiling leaves a 5x margin below
+// that fatal threshold for every OTHER thread-consuming subsystem already
+// running in the process (channels, browser tooling, the HTTP server, GC,
+// etc.), so a default chosen automatically — without the operator's
+// explicit, informed sign-off — can never by itself push the process into
+// that fatal zone.
+const physicalConcurrencySafetyCeiling = 2000
+
+// bytesPerAgent is the assumed marginal memory cost of one concurrent agent
+// turn, used to size the auto-detected default from available memory.
+// Backed by live measurement, not a guess: gateway-RSS-only per-agent deltas
+// of 2.0-3.2 MB were measured across N=4/N=8/N=16 concurrency, for both a
+// browser-navigation workload and a bash-heavy workload (see
+// docs/internal/uat/parallelism-cost-browser-bash-2026-08-04.md and
+// docs/internal/uat/parallelism-cost-measurement-2026-08-04.md). 3.5 MB/agent
+// sits just above the observed range, leaving headroom without resurrecting
+// the old CPU/1.5GB-per-agent heuristic, which overestimated real per-agent
+// cost by roughly 500x.
+//
+// This deliberately does NOT budget for the separate, stochastic ~500 MB
+// Chromium/browser-tool event documented in the same measurement — that cost
+// is not proportional to agent count (it is one persistent, shared process
+// per agent identity, not N×), and sizing a per-agent constant around a
+// worst-case tail event would make the common case (no browser tool use)
+// wildly under-provisioned. A box that heavily uses browser tools at high
+// concurrency should set max_parallel_agents explicitly, lower than this
+// default — this is called out explicitly in this change's own report as an
+// operator-facing caveat, not silently absorbed into the constant.
+const bytesPerAgent = 3.5 * 1024 * 1024
+
+// autoDetectMaxParallel returns the DEFAULT (only) concurrency cap, sized as
+// availableMemory / bytesPerAgent and clamped by clampParallel. Used only
+// when the operator has not set an explicit performance.max_parallel_agents
+// (config or env) — see EffectiveMaxParallelAgents.
 func autoDetectMaxParallel() int {
-	cpuBased := runtime.NumCPU() - 2
-	ramBased := int(float64(totalRAMBytes()) / (1.5 * 1024 * 1024 * 1024))
-	val := cpuBased
-	if ramBased < val {
-		val = ramBased
-	}
+	avail := availableRAMBytes()
+	val := int(float64(avail) / bytesPerAgent)
 	return clampParallel(val)
 }
 
-// totalRAMBytes returns the total physical memory in bytes. It reads
-// /proc/meminfo on Linux and falls back to a conservative 4 GB constant
-// on other platforms.
-func totalRAMBytes() uint64 {
-	return readMemTotalBytes()
+// availableRAMBytes returns the current best estimate of memory available
+// for starting new work, in bytes. It combines two signals:
+//
+//  1. /proc/meminfo's MemAvailable (readMemAvailableBytes) — the kernel's own
+//     estimate, accounting for reclaimable page cache/slab (unlike MemFree).
+//  2. The process's cgroup memory limit minus current usage
+//     (readCgroupMemoryAvailableBytes), when a finite cgroup memory limit is
+//     configured — common in containerized deployments (Docker, Fly
+//     Machines, Kubernetes), where the cgroup limit is frequently far
+//     tighter than the host's own total memory and is a STABLE, explicitly
+//     configured ceiling rather than a live kernel heuristic.
+//
+// The smaller of the two is returned, so a tight container limit is never
+// exceeded by trusting an unconstrained host-wide reading.
+//
+// Known limitation, accepted deliberately (this sizes a DEFAULT ONLY — an
+// explicit performance.max_parallel_agents always overrides it, see
+// EffectiveMaxParallelAgents): MemAvailable can under-report for a period
+// after a fresh boot/container start before the page-cache subsystem has
+// warmed up (observed live: 28 MB measured on a box that settled at ~370 MB
+// once warm — docs/internal/uat/max-parallel-concurrency-gap-2026-07-31.md
+// G4, cross-referenced against parallelism-cost-measurement-2026-08-04.md's
+// clean-idle baseline). This is NOT "solved" by re-sampling with a short
+// in-process delay at boot — the warm-up lag observed is tied to the box's
+// actual workload history, not milliseconds, so a boot-time retry loop
+// would not reliably help and would only delay every gateway boot for no
+// real benefit. Instead, this value is deliberately never frozen at boot for
+// any live caller: every production call site either (a) re-invokes
+// EffectiveMaxParallelAgents() fresh on each use (pkg/agent's
+// getSubTurnConfig on every sub-turn spawn, the GET /api/v1/performance
+// handler), or (b) re-syncs its cached capacity against the current value on
+// every admission check (pkg/agent's AdmissionController live resolver and
+// TaskExecutor.syncDispatchCapacity) — so a transient low boot-time reading
+// self-corrects as soon as the host's real availability changes, with no
+// operator action required.
+func availableRAMBytes() uint64 {
+	avail := readMemAvailableBytes()
+	if cgAvail, ok := readCgroupMemoryAvailableBytes(); ok && cgAvail < avail {
+		avail = cgAvail
+	}
+	return avail
 }
 
 type HooksConfig struct {
@@ -502,7 +736,37 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 
 type AgentsConfig struct {
 	Defaults AgentDefaults `json:"defaults"`
-	List     []AgentConfig `json:"list,omitempty"`
+	// List is the live in-memory agent roster. Since ADR-054 (entity/config
+	// separation) it is populated exclusively by the roster bridge
+	// (pkg/gateway.populateAgentsListFromEntityStoreStrict, and
+	// cmd/omnipus's own loaders) from the per-entity agent store
+	// ($OMNIPUS_HOME/entities/agents/<id>.json, pkg/agentstore) — never from
+	// config.json. It remains a normal, heavily-read in-memory field (dozens
+	// of call sites across pkg/gateway, pkg/coreagent, pkg/routing,
+	// pkg/tools, pkg/agent range over cfg.Agents.List directly), but
+	// json:"-" makes its ABSENCE FROM THE WIRE STRUCTURAL rather than a
+	// convention every caller must remember: no json.Marshal(cfg) — SaveConfig,
+	// GET /api/v1/config's raw dump, the system.config.get/set dotGet/dotSet
+	// round-trip in pkg/sysagent/tools/config.go, or any future caller — can
+	// ever re-inject the roster into config.json, no matter how populated
+	// this field is at the time of the call. Before this fix, the field's
+	// ordinary `json:"list,omitempty"` tag meant ANY config.json write
+	// (e.g. a bare `system.config.set gateway.log_level`, or
+	// SaveConfigLocked) re-serialized the ENTIRE live roster back into
+	// config.json, silently degrading ADR-054's headline guarantee
+	// ("config.json no longer carries the roster") from a structural
+	// property into a best-effort self-healing loop.
+	//
+	// A legacy config.json still carrying an "agents.list" key from before
+	// ADR-054 is handled by legacy_agents_list.go's stripLegacyAgentsList —
+	// which, because this tag means typed unmarshal can never see that key
+	// in the first place, detects and drops it by reading the raw file
+	// bytes directly rather than inspecting this field.
+	//
+	// Config.Clone() (this file) deep-copies this field via its own
+	// independent JSON round-trip, since Config's own marshal/unmarshal no
+	// longer touches it — see Clone's doc comment.
+	List []AgentConfig `json:"-"`
 }
 
 // AgentModelConfig supports both string and structured model config.
@@ -801,6 +1065,16 @@ type AgentConfig struct {
 	// icon, prompt). Used by core agents to keep their identity stable.
 	// Users CAN still change model, remove tools, and set heartbeat.
 	Locked bool `json:"locked,omitempty"`
+	// MemoryEnabled gates whether this agent's ContextBuilder injects its
+	// episodic "# Memory" section into the system prompt (ADR-052 FR-039,
+	// Judge/Verifier architecture). Pointer so nil means "inherit the
+	// default" — true — distinguishing an operator who never set this field
+	// from one who explicitly re-enabled it. A verifier-role agent (e.g. the
+	// seeded Judge) is seeded false: its verdicts must be reproducible and
+	// impartial (same evidence -> same verdict) rather than drifting with
+	// accumulated episodic memory across adjudications. Every other agent
+	// defaults to true (unchanged behavior). See MemoryEnabledEffective.
+	MemoryEnabled *bool `json:"memory_enabled,omitempty"`
 	// Tools, when non-nil, overrides scope-based tool visibility for this agent.
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
@@ -808,12 +1082,30 @@ type AgentConfig struct {
 	// When non-nil, its settings are merged with the global ShellDenyPatterns
 	// at enforcement time.
 	ShellPolicy *AgentShellPolicy `json:"shell_policy,omitempty"`
+	// CreatedAt is the timestamp this agent record was created. Set once and
+	// never modified thereafter. Added by ADR-054 D2 (docs/internal/architecture/
+	// ADR-054-entity-config-separation.md) — the per-entity store's List()
+	// ordering contract is "sort by (created_at, id)", deliberately NOT a
+	// persisted sort_index (that would require a read-all-then-write on every
+	// create, re-serializing exactly the operation the ADR exists to
+	// parallelize, and would be an unowned global invariant). Pointer so
+	// omitempty distinguishes a pre-ADR-054 record (nil, never set) from a
+	// genuinely-zero timestamp, mirroring UpdatedAt immediately below.
+	CreatedAt *time.Time `json:"created_at,omitempty"`
 	// UpdatedAt is the timestamp of the last successful PUT /agents/{id} update.
 	// It is returned in list and detail responses and used for optimistic concurrency.
 	// Pointer so omitempty works; nil = never updated. A non-pointer time.Time
 	// is a struct type and always serializes (writing "0001-01-01T00:00:00Z"
 	// for agents that were never PUT-updated), defeating omitempty.
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// MemoryEnabledEffective resolves the memory-injection flag (ADR-052
+// FR-039): a non-nil MemoryEnabled wins; nil (the field was never set)
+// resolves to true, preserving pre-FR-039 behavior for every agent that
+// doesn't opt out.
+func (a AgentConfig) MemoryEnabledEffective() bool {
+	return a.MemoryEnabled == nil || *a.MemoryEnabled
 }
 
 // AgentType classifies an agent for scope-based tool visibility filtering.
@@ -912,12 +1204,26 @@ func (a AgentConfig) IsWorker() bool {
 	return a.Type == AgentTypeWorker
 }
 
+// IsSystem reports whether this agent is a System Agent (Type==system, ADR-049
+// D3) — a seeded, locked, non-privileged internal-LLM agent (e.g. the Judge)
+// that executes as a no-tools structured call. System Agents are NOT chat
+// targets and are excluded from default-fallback, routing bindings, delegation
+// pickers, and team rosters. Like IsWorker, this is an EXPLICIT classification
+// carried only via the Type field (System Agents are never inferred from an ID
+// list), so the check is safe to call without the isCoreAgent resolver.
+func (a AgentConfig) IsSystem() bool {
+	return a.Type == AgentTypeSystem
+}
+
 // IsChatTarget reports whether this agent may receive inbound channel messages
 // and be resolved as the default/routing agent. Every agent kind is a chat
-// target EXCEPT a worker. Routing (resolveDefaultAgentID, first-enabled
-// fallback) and the default-agent setter/repair use this to exclude workers.
+// target EXCEPT a worker and a System Agent. Routing (resolveDefaultAgentID,
+// first-enabled fallback) and the default-agent setter/repair use this to
+// exclude workers; System Agents are excluded for the same reason (ADR-049 D3):
+// the Judge is an out-of-turn internal-LLM agent, never a live persona a user
+// can address.
 func (a AgentConfig) IsChatTarget() bool {
-	return !a.IsWorker()
+	return !a.IsWorker() && !a.IsSystem()
 }
 
 // IsExternalCLIWorker reports whether this agent is a subagent_3p — a worker
@@ -1134,6 +1440,36 @@ type AgentBinding struct {
 type SessionConfig struct {
 	DMScope       string              `json:"dm_scope,omitempty"`
 	IdentityLinks map[string][]string `json:"identity_links,omitempty"`
+
+	// StatsFlushInterval controls how often UnifiedStore's periodic flusher
+	// persists a dirty session's stats.json to disk when no forced flush
+	// point (SetMeta/DeleteSession/Close/teardown) has fired (ADR-057 FR-067,
+	// promoted from the spec's only SHOULD to a MUST — grill m-5, operator
+	// decision 2). Zero means "unset" — EffectiveStatsFlushInterval
+	// substitutes DefaultSessionStatsFlushInterval (5s). Accepts a JSON
+	// string ("5s", "10s") or a bare number interpreted as seconds, mirroring
+	// SessionMessagingConfig's duration fields (CancelGrace, NeedsInputTTL).
+	// Owned by U28 (pkg/config/**); U6 (pkg/session/unified.go) reads it —
+	// U28 does not wire it into the store.
+	StatsFlushInterval duration `json:"stats_flush_interval,omitempty"`
+}
+
+// DefaultSessionStatsFlushInterval is the FR-067 default: unforced periodic
+// flush of a dirty session's stats.json fires every 5 seconds. Seeded
+// explicitly in DefaultConfig (defaults.go) so a fresh install's config.json
+// is self-documenting; EffectiveStatsFlushInterval re-applies it for any
+// zeroed-out value.
+const DefaultSessionStatsFlushInterval = 5 * time.Second
+
+// EffectiveStatsFlushInterval resolves the FR-067 stats-flush throttle
+// period: the configured value when positive, else the 5s default. A test
+// MUST be able to assert the key exists, defaults to 5s, and that a
+// non-default value is honoured end to end (#105, SC-048).
+func (c SessionConfig) EffectiveStatsFlushInterval() time.Duration {
+	if c.StatsFlushInterval > 0 {
+		return time.Duration(c.StatsFlushInterval)
+	}
+	return DefaultSessionStatsFlushInterval
 }
 
 // RoutingConfig controls the intelligent model routing feature.
@@ -1150,7 +1486,39 @@ type RoutingConfig struct {
 
 // SubTurnConfig configures the SubTurn execution system.
 type SubTurnConfig struct {
-	MaxDepth              int `json:"max_depth"               env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH"`
+	MaxDepth int `json:"max_depth"      env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH"`
+	// MaxConcurrent is an OPTIONAL per-delegation override of the concurrent
+	// fan-out cap. Both consumers below apply the SAME rule (concurrency-gate
+	// consolidation, 2026-08-04): Performance.EffectiveMaxParallelAgents() —
+	// the single, UI-configurable authority for agent concurrency
+	// (PerformanceSettings.max_parallel_agents) — is resolved LIVE whenever
+	// this field is <= 0 (unset, the shipped default: see DefaultConfig,
+	// defaults.go). A positive value here is an explicit, deliberate
+	// per-delegation override, honored exactly as configured — it may differ
+	// from the central value in either direction, an operator's own choice,
+	// never silently overridden. A negative value is a configuration error.
+	//   - getSubTurnConfig (pkg/agent/subturn.go) uses it, when > 0, as the
+	//     per-parent-turn in-turn fan-out semaphore, falling back to
+	//     Performance.EffectiveMaxParallelAgents() when <= 0.
+	//   - The W17 root-delegation admission gate (pkg/agent/admission.go,
+	//     ResolveRootDelegationCap) reads this field DIRECTLY and applies the
+	//     identical fallback, so the two consumers can never disagree about
+	//     what "unset" means.
+	//
+	// HISTORY (superseded 2026-08-04, commit 536b7340's follow-up fix): this
+	// field used to be seeded to a fixed 16 (the retired
+	// DefaultSubTurnMaxConcurrent constant) specifically so the root gate
+	// would never take the EffectiveMaxParallelAgents() fallback branch —
+	// reasoning that depended entirely on that function ALSO being
+	// hard-clamped to 16 by clampParallelExplicit at the time, making the two
+	// numbers coincidentally equal. Commit 536b7340 removed that ceiling
+	// (clampParallelExplicit now only floors at 1), which invalidated the
+	// premise: the fixed seed became a SECOND, independently-sized cap that
+	// silently disagreed with an operator's own max_parallel_agents setting
+	// once the two diverged — the exact ADR-037 "control that moves,
+	// persists and governs nothing" anti-pattern this project bans. The seed
+	// is removed; a fresh install now leaves this field at its Go zero value
+	// (0) so both consumers take the central-authority branch by design.
 	MaxConcurrent         int `json:"max_concurrent"          env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_CONCURRENT"`
 	DefaultTimeoutMinutes int `json:"default_timeout_minutes" env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TIMEOUT_MINUTES"`
 	DefaultTokenBudget    int `json:"default_token_budget"    env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TOKEN_BUDGET"`
@@ -2612,7 +2980,8 @@ type GatewayConfig struct {
 	// (b) is what protects a Critical/background delegate: RequestCancel's
 	// own PHASE-B/PHASE-C hard-abort escalation
 	// (InterruptSessionHard/sessionTurnsStillAlive) is SESSION-WIDE by
-	// construction — note PHASE-A/InterruptSession's own graceful cascade is
+	// construction — note PHASE-A's own graceful cascade (Interrupt; ADR-057
+	// FR-041 collapsed the retired InterruptSession into it) is
 	// ALSO session-wide, just harmless there because a Critical delegate is
 	// designed to ignore a mere graceful nudge — so rather than reuse it while
 	// a delegate is still working, the watchdog defers reaping entirely for
@@ -2649,16 +3018,15 @@ type GatewayConfig struct {
 
 	// Tool approval configuration (FR-016, SC-006).
 	// ToolApprovalTimeout is the seconds to wait for a user to approve/deny a
-	// tool call before auto-denying. 0 or negative uses the default (300 s).
+	// tool call before auto-denying. 0 or negative uses the default (600 s —
+	// gateway.go::defaultToolApprovalTimeout, raised from 300 s per #594).
+	// Expiry always fails CLOSED: the call is denied with reason "timeout",
+	// never approved.
 	ToolApprovalTimeout int `json:"tool_approval_timeout,omitempty" env:"OMNIPUS_TOOL_APPROVAL_TIMEOUT"`
 	// ToolApprovalMaxPending is the maximum number of concurrently-pending tool
 	// approvals before new requests are auto-denied (FR-016, MAJ-009).
 	// 0 uses the spec default (64). Negative values are rejected at startup.
 	ToolApprovalMaxPending int `json:"tool_approval_max_pending,omitempty" env:"OMNIPUS_TOOL_APPROVAL_MAX_PENDING"`
-	// TurnSyntheticErrorFloor is the number of consecutive synthetic-deny tool
-	// results in a single turn that triggers a turn abort (FR-084). Default: 8.
-	// Set to 0 to disable. Negative values are treated as the default (8).
-	TurnSyntheticErrorFloor int `json:"turn_synthetic_error_floor,omitempty" env:"OMNIPUS_TURN_SYNTHETIC_ERROR_FLOOR"`
 
 	// ValidateInbound enables server-side JSON Schema validation of REST request
 	// bodies against the OpenAPI component schemas before the body is decoded into
@@ -2965,6 +3333,43 @@ type ToolsConfig struct {
 	// sent as a full callable def every turn (legacy behavior; backward-compat
 	// kill-switch).
 	Manifest ManifestConfig `json:"manifest" yaml:"manifest,omitempty"`
+
+	// Delegate holds the operator controls for the `delegate` tool.
+	// Maps to config.json: tools.delegate.*
+	Delegate DelegateToolConfig `json:"delegate,omitempty" yaml:"-"`
+}
+
+// DelegateToolConfig holds operator controls for the `delegate` tool.
+// Maps to config.json: tools.delegate.*
+type DelegateToolConfig struct {
+	// RequireParentAgentID gates the fail-closed parent-agent-id guard
+	// (R2-MAJ-015): when it resolves TRUE (the default), a delegate call whose
+	// context carries no resolvable calling-agent id is REFUSED outright rather
+	// than minting a delegation record with an empty ParentAgentID — an
+	// unattributable delegation is a broken audit chain, and a broken audit
+	// chain is not a safe thing to persist.
+	//
+	// This exists because that guard's failure mode is "delegation stops
+	// entirely": a wiring bug anywhere upstream of ToolAgentID turns every
+	// delegate call in the install into an error, with no operator lever to
+	// get work moving again while the real bug is diagnosed. Setting this to
+	// FALSE downgrades the guard to a log-at-Error and mints with an empty
+	// parent id — deliberately degraded attribution, chosen consciously, never
+	// the default and never silent.
+	//
+	// Pointer + omitempty because the semantic default is TRUE: a plain bool
+	// would make an explicit `false` indistinguishable from "unset" after a
+	// round-trip through omitempty, so the kill switch could never actually be
+	// turned off. nil = unset = true; an explicit false wins. Resolve via
+	// EffectiveRequireParentAgentID, never by reading the pointer directly.
+	RequireParentAgentID *bool `json:"require_parent_agent_id,omitempty"`
+}
+
+// EffectiveRequireParentAgentID resolves tools.delegate.require_parent_agent_id
+// (R2-MAJ-015). An unset key resolves to TRUE — the fail-closed posture is the
+// default, and an operator must opt OUT of it explicitly.
+func (d DelegateToolConfig) EffectiveRequireParentAgentID() bool {
+	return ResolveBool(d.RequireParentAgentID, true)
 }
 
 // ManifestConfig holds settings for the tool-manifest optimization.
@@ -3494,16 +3899,42 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// the provider protocol set is consistent across model_list and agents.
 	migrateAgentPrimaryProvider(cfg)
 
-	// Enforce at-most-one Default=true invariant across cfg.Agents.List.
-	// Hand-edited configs may contain multiple defaults; repair them now so the
-	// registry's GetDefaultAgent sees a clean canonical state (F11).
-	RepairMultipleDefaults(cfg)
+	// ADR-054 D1/D2/§11 checklist item 8: agents are no longer entities inside
+	// config.json — drop any legacy agents.list content (loudly, in-memory AND
+	// best-effort on disk) so it never round-trips forward. Must run before
+	// RepairMultipleDefaults/RepairIncompleteToolPolicyCoverage below so those
+	// per-agent repairs operate on the post-cutover (now-empty, until the agent
+	// registry separately populates it from entities/agents/) list, never on
+	// stale legacy JSON content. See legacy_agents_list.go.
+	stripLegacyAgentsList(cfg, path, onSelfHeal)
+
+	// NOTE (ADR-054 D6.4): this used to call RepairMultipleDefaults(cfg) here
+	// to enforce an at-most-one AgentConfig.Default==true invariant (F11).
+	// That repair function — and the field's role in default-agent
+	// resolution — is retired: RepairMultipleDefaults and
+	// AgentInstance.IsRoutingDefault (which consumed it) are dead code and
+	// have been removed. Splitting agents into independent per-entity files
+	// means two concurrent writes to two different agents could each set
+	// Default=true with no shared lock to serialize them (each delta
+	// individually valid, the composition not). Rather than inventing a
+	// cross-entity lock for a single bool, "the one default" signal moved
+	// entirely to the settings singleton (Agents.Defaults.DefaultAgentID,
+	// which already existed) — a single string field the existing
+	// config-write lock already serializes, structurally incapable of having
+	// two winners. See pkg/agent.AgentRegistry.GetDefaultAgent and
+	// pkg/routing.RouteResolver.resolveDefaultAgentID for the current
+	// (settings-only) resolution ladder. AgentConfig.Default itself is left
+	// in place on the wire/struct (read/written by the REST agent
+	// create/PUT/list handlers) purely for backward display compatibility
+	// until those handlers are converted to the entity-store write path;
+	// it is no longer consulted by any resolution logic.
 
 	// ADR-029 FR-029/OBS-001: enforce the two-representation rule. A channel
 	// instance that carries BOTH a bound representation (WorkspaceID + Identity)
 	// AND a stale channel-wildcard AgentBinding in cfg.Bindings is inconsistent —
 	// the bound representation wins. Drop the stale wildcard binding so the
-	// on-disk state is self-consistent after this load (mirrors RepairMultipleDefaults).
+	// on-disk state is self-consistent after this load (mirrors the old
+	// RepairMultipleDefaults pattern this replaced).
 	RepairStaleChannelWildcardBindings(cfg)
 
 	// Apply schedules guardrail defaults (#264 FR-003/FR-007) so a loaded

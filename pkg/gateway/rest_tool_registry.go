@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -489,6 +487,11 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 				"agent_id", entry.AgentID,
 				"tool", entry.ToolName)
 		}
+		// Bug fix: also propagate the grant onto the durable identity the
+		// NEXT delegation will inherit from, so "Always Allow" clicked
+		// during a delegated child's own turn survives past that child's
+		// session lifetime. See recordGrantOnDelegationParent's doc comment.
+		a.recordGrantOnDelegationParent(entry, approvalID)
 	}
 
 	jsonOK(w, gen.ToolApprovalResponse{
@@ -496,6 +499,91 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		Action:     gen.ToolApprovalResponseAction(body.Action),
 		Status:     gen.Ok,
 	})
+}
+
+// recordGrantOnDelegationParent is the fix for the bug where an "Always
+// Allow" grant clicked during a DELEGATED CHILD's own turn evaporates on the
+// very next delegation.
+//
+// # The bug
+//
+// entry.SessionID is the ACTING session id (approvalEntry.SessionID's own
+// doc comment, approvals.go) — for a tool-approval request raised from
+// inside a delegated child's turn, that is the CHILD's OWN session id, never
+// the delegating parent's. HandleToolApprovals records the "always" grant
+// under exactly that key: (entry.SessionID, entry.AgentID). But
+// pkg/agent/subturn.go's spawnSubTurn calls
+// al.CloseSession(childID, "delegate_terminal") unconditionally in its
+// cleanup defer, which calls ApprovalGrants().ClearSession(childID) — wiping
+// every grant filed under the child's key the MOMENT this one delegation
+// ends. Since every delegation mints a brand-new, effectively single-use
+// child session id (subturn.go's childID), a grant recorded only under that
+// key can never survive to be inherited by the NEXT delegation: it is
+// written and cleared within the same delegation's own lifetime.
+//
+// InheritFrom (pkg/security/approvalgrants.go), the mechanism that seeds
+// each new child's grant set, always reads its SOURCE from the caller's own
+// (parentTS.transcriptSessionID, parentTS.agentID) — the DELEGATING PARENT's
+// own durable identity, per its own doc comment: "source = the PARENT's own
+// session id + the PARENT's agent id". A grant that only ever lives under
+// the CHILD's key is therefore invisible to every future InheritFrom call
+// that delegation makes, no matter how many more delegations follow in the
+// same chat — "Always Allow" silently re-prompts forever, exactly the
+// user-visible MAJOR regression this closes.
+//
+// # The fix
+//
+// In addition to the existing record under (entry.SessionID, entry.AgentID)
+// — which keeps the grant immediately effective for any further tool calls
+// within THIS SAME child turn — also record it under the acting session's
+// OWN immediate parent's (session id, resolved agent id), reconstructed via
+// the session store's ParentSessionID (ADR-057 FR-008) and AgentForSession.
+// That is, by construction, EXACTLY the key InheritFrom will read as SOURCE
+// the next time this same parent turn delegates again (whether to the same
+// target agent or another), so the grant is copied forward into every
+// sibling (and, transitively, every further descendant) delegation from
+// that point on — surviving past this one child's own "delegate_terminal"
+// teardown, which only ever clears the CHILD's own key.
+//
+// A no-op (nothing extra recorded) when the acting session is not itself a
+// delegated child (ParentSessionID == "", the common case for approvals
+// raised directly in a real user chat turn) — that case already resolves
+// correctly today, since entry.SessionID there already equals whatever
+// InheritFrom will read as source when THIS session itself later delegates.
+// Also a no-op, logged at Warn, when the parent session's owning agent
+// cannot be resolved (deleted agent, corrupt meta) — the immediate grant
+// above already succeeded, so the tool call itself is unaffected; only
+// future cross-delegation survival is missed.
+func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID string) {
+	store := a.agentLoop.GetSessionStore()
+	if store == nil {
+		return
+	}
+	meta, err := store.GetMeta(entry.SessionID)
+	if err != nil || meta.ParentSessionID == "" {
+		// Not a delegated child's session (or unresolvable) — nothing more
+		// to propagate; the direct record above already covers this case.
+		return
+	}
+	parentAgent, err := a.agentLoop.AgentForSession(meta.ParentSessionID)
+	if err != nil || parentAgent == nil {
+		slog.Warn("tool-approval: could not resolve the delegating parent's agent for grant inheritance; "+
+			"the grant recorded above will not survive this delegation's own teardown",
+			"approval_id", approvalID,
+			"child_session_id", entry.SessionID,
+			"parent_session_id", meta.ParentSessionID,
+			"error", err)
+		return
+	}
+	if a.agentLoop.ApprovalGrants().Record(meta.ParentSessionID, parentAgent.ID, entry.ToolName) {
+		slog.Info("tool-approval: also recorded Always-Allow grant on the delegating parent's durable identity "+
+			"so it survives this delegation's own teardown and is inherited by future sibling delegations",
+			"approval_id", approvalID,
+			"child_session_id", entry.SessionID,
+			"parent_session_id", meta.ParentSessionID,
+			"parent_agent_id", parentAgent.ID,
+			"tool", entry.ToolName)
+	}
 }
 
 // toolsCfgToPolicy converts a config.AgentToolsCfg to ToolPolicyCfg.

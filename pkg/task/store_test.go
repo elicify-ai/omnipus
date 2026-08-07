@@ -23,7 +23,12 @@ func removeFileRaw(s *Store, id string) error {
 
 func newStore(t *testing.T) *Store {
 	t.Helper()
-	return New(t.TempDir())
+	// "<home>/tasks" mirrors the universal convention every other call site in
+	// the codebase uses (task.New(filepath.Join(home, "tasks"))) — New derives
+	// home from this to run the milestone migration (migrate_milestones.go);
+	// keeping the convention here means the migration's sentinel/scratch
+	// writes land inside t.TempDir()'s own auto-cleaned tree.
+	return New(filepath.Join(t.TempDir(), "tasks"))
 }
 
 // mkTask returns a minimally-valid task in the given workspace.
@@ -1008,5 +1013,102 @@ func TestUpdate_BlockedByClear_TransitionsBlockedToNext(t *testing.T) {
 	}
 	if len(updated.BlockedBy) != 0 {
 		t.Errorf("expected blocked_by cleared, got %v", updated.BlockedBy)
+	}
+}
+
+// TestCreate_BlockedByRecompute_LandsBlocked is a regression test for S2 UAT
+// finding A's Create-time gap: Create() validated the blocked_by DAG but
+// never derived the `blocked` side-state, so a task created directly at
+// `next` (the shape the create_task agent tool, pkg/tools/task.go, uses — it
+// seeds new tasks straight into `next`, unlike the REST create path which
+// always lands `inbox`) with an unmet dependency landed on the dispatchable
+// `next` instead of `blocked`, contradicting Task.yaml's "set automatically
+// on an unmet dependency" contract.
+func TestCreate_BlockedByRecompute_LandsBlocked(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+
+	blocker := mkTask("blocker", "ws")
+	mustCreate(t, s, blocker)
+
+	dependent := mkTask("dependent", "ws")
+	dependent.Status = StatusNext
+	dependent.BlockedBy = []string{blocker.ID}
+	if err := s.Create(dependent); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if dependent.Status != StatusBlocked {
+		t.Fatalf("expected task created at next with an unmet dep to land blocked, got %q", dependent.Status)
+	}
+
+	got, err := s.Get(dependent.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != StatusBlocked {
+		t.Fatalf("persisted status must be blocked, got %q", got.Status)
+	}
+}
+
+// TestPatchStatusNext_DerivesBlocked_AndClearsOnDependencyDone is the DoD
+// end-to-end regression test for S2 UAT finding A: a task with an unmet
+// blocked_by dependency, triaged inbox -> next via a PLAIN status Patch (not
+// a BlockedBy patch — TestUpdate_BlockedByRecompute_TransitionsNextToBlocked
+// above already covers that half), must be surfaced as `blocked` rather than
+// silently landing `next`. It then proves the round trip: once the blocker
+// actually reaches `done`, AdvanceBlockedDependents — the exact mechanism
+// every production caller (task executor, plan engine, task tools) already
+// uses to promote a blocked dependent — returns the dependent to a normal
+// (`next`) lane.
+func TestPatchStatusNext_DerivesBlocked_AndClearsOnDependencyDone(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+
+	blocker := mkTask("blocker", "ws")
+	mustCreate(t, s, blocker)
+
+	dependent := mkTask("dependent", "ws")
+	dependent.BlockedBy = []string{blocker.ID}
+	mustCreate(t, s, dependent) // lands inbox (default); blocked_by is unmet but inbox is not next/blocked
+
+	if dependent.Status != StatusInbox {
+		t.Fatalf("dependent must start inbox, got %q", dependent.Status)
+	}
+
+	// Triage: PATCH status -> next while the blocker is still NOT done.
+	next := StatusNext
+	updated, err := s.Update(dependent.ID, Patch{Status: &next})
+	if err != nil {
+		t.Fatalf("Update status->next: %v", err)
+	}
+	if updated.Status != StatusBlocked {
+		t.Fatalf("expected dependent derived to blocked (blocker not done), got %q", updated.Status)
+	}
+	got, err := s.Get(dependent.ID)
+	if err != nil {
+		t.Fatalf("Get after triage: %v", err)
+	}
+	if got.Status != StatusBlocked {
+		t.Fatalf("persisted status must be blocked, got %q", got.Status)
+	}
+
+	// Complete the blocker, then run the production auto-advance mechanism.
+	done := StatusDone
+	if _, doneErr := s.Update(blocker.ID, Patch{Status: &done}); doneErr != nil {
+		t.Fatalf("Update blocker->done: %v", doneErr)
+	}
+	advanced, err := s.AdvanceBlockedDependents(blocker.ID)
+	if err != nil {
+		t.Fatalf("AdvanceBlockedDependents: %v", err)
+	}
+	if len(advanced) != 1 || advanced[0] != dependent.ID {
+		t.Fatalf("expected dependent advanced, got %v", advanced)
+	}
+	final, err := s.Get(dependent.ID)
+	if err != nil {
+		t.Fatalf("Get final: %v", err)
+	}
+	if final.Status != StatusNext {
+		t.Fatalf("expected dependent back in a normal (next) lane after dependency completed, got %q", final.Status)
 	}
 }

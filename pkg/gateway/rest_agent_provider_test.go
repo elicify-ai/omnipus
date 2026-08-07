@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // O3 two-field model: the agent {model, provider} pair round-trips through
 // create / get / update. Proves:
 //  1. POST with model+provider persists both and echoes provider.
@@ -20,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
@@ -53,13 +52,9 @@ func TestAgentProvider_CreateGetUpdateRoundTrip(t *testing.T) {
 	require.NotNil(t, created.Provider, "create response must echo provider")
 	assert.Equal(t, "openrouter", *created.Provider)
 
-	// Persisted under agents.list[*].model.provider.
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	prov := findModelProviderInConfig(t, m, created.Id)
-	assert.Equal(t, "openrouter", prov, "provider must persist to config.json")
+	// Persisted under the agent's own entity record (ADR-054), not config.json.
+	prov := findModelProviderInStore(t, api, created.Id)
+	assert.Equal(t, "openrouter", prov, "provider must persist to the agent entity record")
 
 	// 2. GET echoes it.
 	got := getAgentResp(t, api, created.Id)
@@ -78,7 +73,7 @@ func TestAgentProvider_CreateGetUpdateRoundTrip(t *testing.T) {
 		require.NotNil(t, updated.Provider)
 		assert.Equal(t, "anthropic", *updated.Provider)
 	}
-	assert.Equal(t, "anthropic", findModelProviderInConfig(t, readProviderTestConfigMap(t, api), created.Id))
+	assert.Equal(t, "anthropic", findModelProviderInStore(t, api, created.Id))
 
 	// 4. PUT provider:"" clears it.
 	{
@@ -91,29 +86,30 @@ func TestAgentProvider_CreateGetUpdateRoundTrip(t *testing.T) {
 		updated := decodeAgentResp(t, w.Body.Bytes())
 		assert.Nil(t, updated.Provider, "cleared provider must be absent on the wire")
 	}
-	assert.Equal(t, "", findModelProviderInConfig(t, readProviderTestConfigMap(t, api), created.Id),
-		"provider must be cleared from config.json")
+	// NOTE: against the retired config.json reader this assertion was VACUOUS —
+	// that helper always returned "" once agents.list stopped being persisted,
+	// so it passed whether or not the provider was actually cleared. Reading the
+	// entity record makes it a real check again.
+	assert.Equal(t, "", findModelProviderInStore(t, api, created.Id),
+		"provider must be cleared from the agent entity record")
 }
 
-// findModelProviderInConfig returns the agents.list[id].model.provider string, or
-// "" when absent.
-func findModelProviderInConfig(t *testing.T, m map[string]any, id string) string {
+// findModelProviderInStore returns the agent's model.provider from its
+// per-entity record (entities/agents/<id>.json), or "" when the agent, its
+// model block, or the provider field is absent.
+//
+// ADR-054: this replaced a config.json reader. The agent roster no longer
+// round-trips through config.json at all (config.AgentsConfig.List is
+// `json:"-"`), so the old agents.list[*].model.provider lookup could only ever
+// return "" — it did not fail loudly, it silently asserted against an empty
+// list. The entity store is the authoritative persistence location now.
+func findModelProviderInStore(t *testing.T, api *restAPI, id string) string {
 	t.Helper()
-	agents, _ := m["agents"].(map[string]any)
-	list, _ := agents["list"].([]any)
-	for _, e := range list {
-		entry, _ := e.(map[string]any)
-		if entry == nil || entry["id"] != id {
-			continue
-		}
-		model, _ := entry["model"].(map[string]any)
-		if model == nil {
-			return ""
-		}
-		p, _ := model["provider"].(string)
-		return p
+	rec, err := agentstore.New(api.homePath).Get(id)
+	if err != nil || rec == nil || rec.Model == nil {
+		return ""
 	}
-	return ""
+	return rec.Model.Provider
 }
 
 func readProviderTestConfigMap(t *testing.T, api *restAPI) map[string]any {

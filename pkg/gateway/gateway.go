@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -38,6 +36,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -61,6 +60,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/datamodel"
 	"github.com/elicify-ai/omnipus/pkg/devices"
 	"github.com/elicify-ai/omnipus/pkg/email"
+	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/health"
@@ -70,10 +70,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/media/library"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/state"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
@@ -87,6 +89,21 @@ const (
 	serviceShutdownTimeout  = 30 * time.Second
 	providerReloadTimeout   = 30 * time.Second
 	gracefulShutdownTimeout = 15 * time.Second
+
+	// defaultToolApprovalTimeout bounds how long an `ask`-gated tool call
+	// waits for a human before the approval registry fails it CLOSED (denied,
+	// reason "timeout") — never open. Applies only when
+	// `gateway.tool_approval_timeout` is unset; operators override it there or
+	// via OMNIPUS_TOOL_APPROVAL_TIMEOUT.
+	//
+	// Raised 300s -> 600s (issue #594). Five minutes was too short for a human
+	// who stepped away, and the expiry is indistinguishable to the agent from
+	// a real denial: a live UAT saw an agent re-request the same denied tool
+	// every ~5 minutes, once per expiry window, with no ceiling — the turn
+	// never terminated on its own. Ten minutes is a more honest "nobody is
+	// coming" signal. Note this only lengthens each window; it does NOT bound
+	// the retry loop, which is the other half of #594 and is fixed separately.
+	defaultToolApprovalTimeout = 600 * time.Second
 
 	logPath   = "logs"
 	panicFile = "gateway_panic.log"
@@ -166,6 +183,18 @@ type services struct {
 	// configured (the scanner is a no-op).
 	MailboxDrain *heartbeat.MailboxDrainService
 	MediaStore   media.MediaStore
+	// PlanEngine is the single hybrid plan-coordinator instance (ADR-049 D4,
+	// Wave 2-B). Constructed once at boot alongside planStore (both are
+	// process-lifetime singletons — a hot reload Stop()s/Start()s the SAME
+	// instance rather than reconstructing it, mirroring how taskStore/
+	// taskExecutor are stable across reload). Nil only if plan-engine
+	// construction failed at boot (a fatal error today — see
+	// setupAndStartServices).
+	PlanEngine *agent.PlanEngine
+	// LoopScheduler is the dedicated `/loop` time-driven scheduler (ADR-049
+	// D6/D7, Wave 2-C2), mirroring TaskTrigger's own dedicated-CronService
+	// pattern above. Constructed and Start()'d alongside TaskTrigger.
+	LoopScheduler *agent.LoopScheduler
 	// notifStore backs schedule-failure notifications and the header
 	// notification center (#264). Created once at boot, reused across reloads.
 	notifStore *notifications.Store
@@ -177,7 +206,33 @@ type services struct {
 	DeviceService    *devices.Service
 	HealthServer     *health.Server
 	manualReloadChan chan struct{}
-	reloading        atomic.Bool
+	// reloadCoalesceMu guards reloadInFlight and reloadRequested. Together they
+	// single-flight config reloads AND coalesce the requests that arrive while
+	// one is already running, instead of dropping them.
+	//
+	// RELEASE BLOCKER this replaced: reloadInFlight used to be a bare
+	// atomic.Bool, and a failed CompareAndSwap made reloadTrigger return
+	// "reload already in progress" — the request was DROPPED, and nothing ever
+	// re-queued it. The in-memory AgentRegistry is rebuilt by exactly one path
+	// (executeReload → restartServices → ReloadProviderAndConfig →
+	// NewAgentRegistry; AgentRegistry.UpsertAgent has no production callers), so
+	// a dropped request left an agent that POST /agents had already persisted
+	// (and answered 201 for) permanently invisible to AgentRegistry.GetAgent.
+	// The fingerprint: POST /plans accepted that agent (validatePlanOwnerAgent
+	// reads cfg.Agents.List, which SwapConfig had already updated) while
+	// POST /tasks rejected it as `agent "x" not found` (validateTaskAgentID
+	// reads the registry). Under load a reload takes tens of seconds instead of
+	// sub-second, so every concurrent create landed mid-reload and was silently
+	// dropped — deterministic, 9/9 in CI.
+	//
+	// reloadRequested is the coalescing flag: set when a reload is requested
+	// while one is in flight. The owning cycle then runs an ADDITIONAL reload
+	// with a config re-read from disk, because the in-flight reload's config
+	// snapshot was taken before the requester's write and therefore cannot
+	// serve it.
+	reloadCoalesceMu sync.Mutex
+	reloadInFlight   bool
+	reloadRequested  bool
 	reloadTrigger    func() error
 	credStore        *credentials.Store
 	// toolStore owns the on-disk tool-result offload directory. Exposed here
@@ -229,6 +284,24 @@ type services struct {
 	// homePath is the Omnipus home directory. Stored here so omnipusGracefulShutdown
 	// can remove the self-registered PID file without an additional parameter.
 	homePath string
+}
+
+// markReloadDegraded records a reload-adjacent failure so /health surfaces it
+// (503, "config reload failed: <err>") until the next successful reload
+// clears it (mirrors executeReload's own local markDegraded closure, which
+// writes the same two fields under the same reloadMu). Exists as a method —
+// rather than duplicating the lock/set/unlock pattern — so failure paths
+// that reject a candidate config BEFORE executeReload is even reached (the
+// manual-reload branch in RunContextWithOptions, and the file-watcher poller
+// in setupConfigWatcherPolling — both guarding
+// populateAgentsListFromEntityStoreStrict) can surface the same
+// operator-visible degraded signal without reaching into executeReload's
+// local closure or duplicating reloadMu handling at each call site.
+func (s *services) markReloadDegraded(err error) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	s.reloadDegraded = true
+	s.reloadError = err
 }
 
 type startupBlockedProvider struct {
@@ -692,6 +765,21 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 		for _, t := range systools.AllTools(nil, nil) {
 			out[t.Name()] = struct{}{}
 		}
+		// ADR-052 (autonomous agent plan execution, FR-027) — the four
+		// planning/verifier tool names (create_plan, execute_plan, run_task,
+		// inspect_session) are unioned in explicitly here, independent of
+		// their pkg/tools|pkg/sysagent/tools implementation landing, so the
+		// tool-policy coverage universe (config.ValidateToolPolicyCoverage /
+		// RepairIncompleteToolPolicyCoverage) recognizes them from the
+		// config-seeding side immediately. Mirrors
+		// pkg/coreagent/core.go's allStaticToolNames literal-for-literal
+		// (TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog
+		// enforces the two stay in sync). Once the real tool implementations
+		// register themselves via GeneralBuiltinMetadata/AllTools, this union
+		// is idempotent (same names, no duplicate entries in a set).
+		for _, name := range []string{"create_plan", "execute_plan", "run_task", "inspect_session"} {
+			out[name] = struct{}{}
+		}
 		knownBuiltinToolNamesCache = out
 	})
 	return knownBuiltinToolNamesCache
@@ -816,6 +904,273 @@ func pluralSuffix(n int) string {
 	return "ies"
 }
 
+// seedSystemAgentEagerSouls eagerly backfills EVERY seeded System Agent's
+// SOUL.md with its compiled default soul (coreagent.SystemAgentDefaultSoul —
+// JudgeDefaultRubric for the Judge, PlanSupervisorDefaultRubric for the
+// PlanSupervisor) at gateway boot, right after coreagent.SeedConfig has
+// ensured their AgentConfig entries exist.
+//
+// It iterates coreagent.SystemAgents() rather than naming ids, so adding a
+// System Agent with a default soul needs no edit here — a previous version
+// looped for the Judge alone, which is precisely how the PlanSupervisor's
+// rubric ended up existing only as a Go constant that never reached disk.
+//
+// FOR THE JUDGE this fixes an operator-reported UX gap: its soul used to
+// materialize ONLY lazily, on its first real verifier dispatch (pkg/agent's
+// ensureVerifierSoul) — but the soul is now operator-editable in the SPA
+// (judge_soul_editable_test.go), so a fresh install's Judge profile must show
+// the default standards immediately, not stay blank until the operator has
+// already triggered a judgment.
+//
+// FOR THE PLANSUPERVISOR this is not a UX nicety but the ONLY seed path
+// (plan-supervisor-spec FR-005 rev 2 deliberately adds no lazy backstop: the
+// Judge's backstop is Judge-gated and sits on the verifier-dispatch path,
+// which a bus-woken PlanSupervisor never reaches). If this call does not
+// fire, the adjudicator wakes with an EMPTY prompt.
+//
+// This call site — pkg/gateway's boot sequence — was chosen over folding
+// the write into coreagent.SeedConfig/seedSystemAgents themselves for two
+// independent reasons, both already true of the pre-existing lazy seed
+// (see ensureVerifierSoul's doc comment, verifier_adjudication.go):
+//
+//  1. coreagent.SeedConfig is documented, and relied on by its own test
+//     suite (none of which sets OMNIPUS_HOME), as a PURE config-struct
+//     mutation with zero filesystem side effects. Adding a disk write there
+//     would start silently touching the real machine's home directory on
+//     every `go test ./pkg/coreagent/...` run.
+//  2. pkg/coreagent cannot cleanly resolve a System Agent's REAL workspace
+//     path itself — that resolution (OMNIPUS_HOME lookup, the "main"-sentinel
+//     special case, ID sanitization/traversal guarding) lives in
+//     agent.ResolveAgentHome, and pkg/coreagent cannot import pkg/agent
+//     (pkg/agent already imports pkg/coreagent — that direction would be a
+//     cycle). Reimplementing the resolution a second time in pkg/coreagent
+//     would be a second source of truth that could silently drift from the
+//     path the agent's real AgentInstance.Home resolves to at runtime.
+//
+// pkg/gateway already imports both pkg/agent and pkg/coreagent, so it is
+// the cleanest place that can call the real, single-source-of-truth
+// agent.ResolveAgentHome and land each seed at EXACTLY the directory that
+// agent's own AgentInstance will later use — then delegates the actual
+// write (mkdir + backfill-only-when-missing/empty + atomic write) to
+// agent.SeedSystemAgentSoulFile, the same helper ensureVerifierSoul uses, so
+// the call sites can never diverge on write semantics. In particular the
+// "never overwrite existing non-empty content" rule lives THERE, which is
+// what keeps this safe to run on every boot: an operator's edited soul
+// survives a restart untouched, exactly like the identity/type/locked/
+// tool-policy re-enforcement in seedSystemAgents leaves Model/Provider alone.
+//
+// Non-fatal per agent: a failure is logged at WARN and boot continues, and
+// one agent's failure never skips the rest — an empty soul degrades that
+// agent, it is not a boot-blocking condition.
+func seedSystemAgentEagerSouls(cfg *config.Config) {
+	for _, sa := range coreagent.SystemAgents() {
+		if strings.TrimSpace(coreagent.SystemAgentDefaultSoul(sa.ID)) == "" {
+			// A System Agent with no compiled default soul has nothing to
+			// backfill (its prompt comes from elsewhere). Skipping here keeps
+			// SeedSystemAgentSoulFile's "no default soul" error a real,
+			// loud misconfiguration signal for other callers instead of a
+			// WARN this loop would emit on every boot forever.
+			continue
+		}
+		idx := -1
+		for i := range cfg.Agents.List {
+			if cfg.Agents.List[i].ID == string(sa.ID) {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			// coreagent.SeedConfig runs immediately before this and seeds
+			// every System Agent, so a missing entry means the roster and the
+			// System-Agents list have diverged — loud, because for the
+			// PlanSupervisor this loop is the ONLY path that gives it a prompt.
+			slog.Warn("gateway: System Agent missing from roster; default soul not seeded",
+				"agent_id", string(sa.ID))
+			continue
+		}
+		home := agent.ResolveAgentHome(&cfg.Agents.List[idx], &cfg.Agents.Defaults)
+		if err := agent.SeedSystemAgentSoulFile(home, sa.ID); err != nil {
+			slog.Warn("gateway: could not eagerly seed System Agent default soul",
+				"error", err, "agent_id", string(sa.ID), "workspace", home)
+		}
+	}
+}
+
+// lastNonEmptyRosters remembers, per home directory, the most recently
+// observed NON-EMPTY agent roster loaded by
+// populateAgentsListFromEntityStoreStrict. It backs that function's
+// regression guard: a fresh entity-store List() that comes back EMPTY for a
+// home directory that previously yielded a real roster is treated as a hard
+// failure rather than silently wiping the in-memory roster — see that
+// function's doc comment for the full rationale (an empty roster does not
+// merely mean "nothing to route to"; it promotes ALL traffic to an
+// unrestricted fallback agent).
+//
+// Keyed by homePath (never a single global) so multiple *config.Config
+// instances/tests rooted at different homes cannot cross-contaminate each
+// other's remembered roster. Process-lifetime only, in-memory — a
+// genuinely fresh process/home combination has no entry yet, so its first
+// (legitimately empty, pre-SeedConfig) population never trips the guard.
+var (
+	lastNonEmptyRostersMu sync.Mutex
+	lastNonEmptyRosters   = map[string][]config.AgentConfig{}
+)
+
+// forgetRosterBaseline drops the remembered non-empty roster for homePath so
+// the next populateAgentsListFromEntityStoreStrict call will not treat a
+// legitimately-shrunk roster as a regression.
+//
+// WHY THIS IS NEEDED, and why the guard alone is not enough: the regression
+// guard cannot distinguish "the store broke and handed back nothing" from
+// "the operator deleted the last agent" — both look like non-empty -> empty,
+// and an on-disk file count does not separate them either (a homePath that
+// resolves to the WRONG directory also reports zero records, which is the
+// precise failure the guard exists to catch). The authority on an INTENTIONAL
+// shrink is the mutation path, so deleteAgent tells the guard rather than the
+// guard trying to infer it.
+//
+// Without this, deleting the LAST agent wedged the running gateway: the entity
+// record was removed from disk, the post-delete reload was rejected by the
+// guard, and the in-memory roster kept serving the deleted agent until a
+// restart — permanent divergence between disk and memory. Regression coverage:
+// TestHandleAgentsDelete_OK (rest_clidetect_test.go) deletes the only agent and
+// asserts the subsequent GET is 404.
+//
+// The narrow trade-off is deliberate: if the store ALSO fails during the very
+// next reload after an intentional delete, that one reload accepts an empty
+// roster instead of rejecting it. The baseline re-establishes on the following
+// successful load, and an operator-initiated delete is a far weaker signal of
+// compromise than an unexplained disappearance.
+func forgetRosterBaseline(homePath string) {
+	lastNonEmptyRostersMu.Lock()
+	delete(lastNonEmptyRosters, homePath)
+	lastNonEmptyRostersMu.Unlock()
+}
+
+// populateAgentsListFromEntityStore — the legacy void, log-and-continue
+// bridge between the per-entity agent store (entities/agents/<id>.json) and
+// cfg.Agents.List — was DELETED (RELEASE BLOCKER security-fix follow-up,
+// 2026-07-26). It was kept only for pkg/gateway/rest.go's
+// populateAgentsListFromStore and rest_pending_restart.go's
+// HandlePendingRestart, which were out of this security-fix pass's original
+// file-ownership scope; once those call sites were fixed to call the strict,
+// fail-closed populateAgentsListFromEntityStoreStrict directly (same package,
+// no export needed) and reject on error instead of silently proceeding with
+// whatever roster the entity store handed back, nothing in the codebase
+// called this lenient wrapper anymore (verified: `grep -rn
+// "populateAgentsListFromEntityStore("` finds only the strict variant's own
+// definition). See populateAgentsListFromEntityStoreStrict's doc comment
+// immediately below for the full privilege-escalation rationale this
+// wrapper's removal closes off entirely rather than leaving as a
+// still-reachable, silently-permissive code path.
+
+// populateAgentsListFromEntityStoreStrict is populateAgentsListFromEntityStore's
+// fail-closed variant. It returns a non-nil error whenever the entity
+// store's state cannot be trusted enough to safely (re)populate
+// cfg.Agents.List, and on ANY error path it leaves cfg.Agents.List and
+// cfg.SkippedAgentIDs COMPLETELY UNTOUCHED — callers own the decision of
+// what "cannot trust this" means for them (boot aborts; a reload rejects the
+// candidate config and marks the service degraded via
+// (*services).markReloadDegraded rather than swapping it in).
+//
+// This distinction matters far more than it looks: an EMPTY cfg.Agents.List
+// does not merely mean "no agent to route a message to". Verified
+// 2026-07-26 as a real privilege-escalation chain, not a theoretical one:
+// pkg/agent/registry.go's NewAgentRegistry ALWAYS registers an unrestricted
+// "main" sentinel AgentConfig with no Tools/Policies at all, and
+// pkg/tools/compositor.go's global×agent policy merge
+// (resolveEffectivePolicyWith) falls through to the GLOBAL floor for every
+// tool an agent has no per-agent policy entry for — which is every tool,
+// for that sentinel. pkg/config/defaults.go seeds that global floor "allow"
+// for bash, write_file, edit_file, delegate, send_email, and more. So a
+// wiped roster silently promotes ALL routed traffic (via
+// AgentRegistry.GetDefaultAgent's fallback ladder) to an unrestricted
+// agent — and repairAndValidateToolPolicyCoverage (this file), which walks
+// cfg.Agents.List to find coverage gaps, finds ZERO agents to check and
+// vacuously PASSES an empty roster, so the existing coverage gate does not
+// catch this at all. Silently limping on with whatever (potentially empty)
+// roster the entity store handed back — the historical behavior, preserved
+// only in the legacy populateAgentsListFromEntityStore wrapper above — is
+// therefore never acceptable from a fresh call site.
+//
+// Three independent failure classes are rejected here:
+//
+//  1. A genuine entity.Store.List() error (e.g. EMFILE/ENFILE under fd
+//     pressure, EACCES after a restore with the wrong ownership, EIO,
+//     entities/agents shadowed by a regular file) — propagated directly.
+//     This is DIFFERENT from "the directory does not exist yet", which
+//     entity.Store.List() maps to (nil, nil, nil): a genuine fresh-install
+//     state, not an error.
+//  2. Every on-disk agent record failed to parse (List() succeeds, but
+//     every id it found landed in `skipped`, none in `agents`) — e.g. a
+//     breaking schema change. total := len(agents)+len(skipped) is the true
+//     on-disk record count (every id List() finds lands in exactly one of
+//     the two); total > 0 with zero LOADED agents must never be treated as
+//     "fresh install, nothing configured" (total == 0 is the genuine
+//     fresh-install case and is unaffected).
+//  3. A regression within this process's own lifetime: homePath previously
+//     yielded a non-empty roster (tracked in lastNonEmptyRosters) and this
+//     call now yields an empty one. A genuinely fresh process/home
+//     combination never has a prior entry, so this cannot fire on a real
+//     first boot — it only fires on a live process observing its own
+//     roster apparently disappear, e.g. homePath momentarily/incorrectly
+//     resolving to the wrong directory (see setupConfigWatcherPolling's
+//     homePath-threading fix) or a transient store hiccup that happened to
+//     return a clean empty list instead of a class-1 error.
+//
+// Also closes the ADR-054-era normalization gap: entity-loaded agents never
+// pass through loadConfigInternal's own NormalizeFallbacks /
+// migrateAgentPrimaryProvider passes (those only run against config.json's
+// agents.list inside config.LoadConfig*, which is stripped to empty before
+// this bridge ever runs) — config.NormalizeAgentRoster applies both to the
+// roster on every successful load here so an agent whose FallbackModel/
+// primary-model fields were written pre-split still resolves correctly.
+func populateAgentsListFromEntityStoreStrict(cfg *config.Config, homePath string) error {
+	agents, skipped, err := agentstore.New(homePath).List()
+	if err != nil {
+		logger.Errorf("gateway: agent entity store list failed at %q: %v", homePath, err)
+		return fmt.Errorf("gateway: could not list agent entity records at %q: %w", homePath, err)
+	}
+
+	if total := len(agents) + len(skipped); total > 0 && len(agents) == 0 {
+		logger.Errorf("gateway: agent entity store at %q has %d on-disk record(s), all %d "+
+			"unparseable — refusing to treat this as a fresh install", homePath, total, len(skipped))
+		return fmt.Errorf(
+			"gateway: entity store at %q has %d on-disk agent record(s), all %d unparseable — "+
+				"refusing to treat this as a fresh install with zero agents",
+			homePath, total, len(skipped),
+		)
+	}
+
+	if len(agents) == 0 {
+		lastNonEmptyRostersMu.Lock()
+		previous := lastNonEmptyRosters[homePath]
+		lastNonEmptyRostersMu.Unlock()
+		if len(previous) > 0 {
+			logger.Errorf("gateway: agent entity store at %q returned an EMPTY roster where a "+
+				"NON-EMPTY roster (%d agents) was previously loaded for this home — refusing to "+
+				"overwrite the in-memory roster", homePath, len(previous))
+			return fmt.Errorf(
+				"gateway: entity store at %q returned an EMPTY roster where a NON-EMPTY roster "+
+					"(%d agents) was previously loaded for this home", homePath, len(previous),
+			)
+		}
+	}
+
+	cfg.Agents.List = agents
+	cfg.SkippedAgentIDs = skipped
+	config.NormalizeAgentRoster(cfg)
+
+	if len(agents) > 0 {
+		rosterCopy := make([]config.AgentConfig, len(agents))
+		copy(rosterCopy, agents)
+		lastNonEmptyRostersMu.Lock()
+		lastNonEmptyRosters[homePath] = rosterCopy
+		lastNonEmptyRostersMu.Unlock()
+	}
+	return nil
+}
+
 // installSlogBridge installs logger.NewSlogHandler() as log/slog's
 // process-wide default handler, so every bare `slog.Warn/Info/Error(...)`
 // call site — ~1200 of them, across this package and every other package the
@@ -912,6 +1267,120 @@ func bootLoggingAndDataModel(homePath string) error {
 		return fmt.Errorf("directory initialization failed: %w", err)
 	}
 	return nil
+}
+
+// persistSeededCoreAgents persists every agent SeedConfig added-or-touched
+// via the agent store: Create for one with no existing record, Update (full-
+// record replace) for one that already has one — matching SeedConfig's own
+// "re-enforce identity fields on existing core agents" semantics. Extracted
+// from RunContextWithOptions as its own function so the fix below (a single
+// corrupt/unparseable entity record must degrade, never abort boot —
+// ADR-054 D7 + §0 R3) is directly unit-testable without spinning up the
+// full boot sequence (credentials, providers, agent loop).
+//
+// store.Get's error is explicitly classified rather than treated as a bare
+// "absent" signal: gating solely on "any error means create" (the previous
+// behavior) mis-handled a PARSE error (corrupt entities/agents/<id>.json)
+// identically to "record does not exist yet" — store.Create then hit
+// entity.ErrAlreadyExists (the file DOES exist, it just didn't parse) and
+// that error was propagated as a hard boot-abort. One unparseable agent
+// record made the entire gateway unbootable, inverting ADR-054's own D7
+// ("unparseable record -> skip + ERROR + mark degraded") and §0 R3, which
+// explicitly rejected fail-closed here because a single corrupt file
+// dropping ALL inbound traffic has no in-product repair path. Only a true
+// entity.ErrNotFound now takes the create path; anything else (a corrupt
+// record, a permission error, etc.) is skipped with an ERROR log so boot
+// continues — the entity's on-disk record is left exactly as it was rather
+// than being clobbered by a Create attempt that would only fail anyway.
+func persistSeededCoreAgents(homePath string, agents []config.AgentConfig) error {
+	store := agentstore.New(homePath)
+	for i := range agents {
+		seeded := agents[i]
+		_, getErr := store.Get(seeded.ID)
+		switch {
+		case getErr == nil:
+			// Record exists and parsed fine — re-enforce identity fields.
+			if _, updateErr := store.Update(seeded.ID, func(existing *config.AgentConfig) error {
+				*existing = seeded
+				return nil
+			}); updateErr != nil {
+				return fmt.Errorf("gateway: failed to persist seeded core agent %q: %w", seeded.ID, updateErr)
+			}
+		case errors.Is(getErr, entity.ErrNotFound):
+			// No record on disk yet — create it.
+			if createErr := store.Create(seeded.ID, &seeded); createErr != nil {
+				return fmt.Errorf("gateway: failed to persist seeded core agent %q: %w", seeded.ID, createErr)
+			}
+		default:
+			// Get failed for a reason OTHER than "not found" — most commonly a
+			// corrupt/unparseable record. Skip re-seeding this one agent rather
+			// than aborting the whole boot; see this function's doc comment.
+			logger.Errorf("gateway: seeded core agent %q record exists but could not be read "+
+				"(corrupt/unparseable?) — skipping re-seed for this agent; boot continues degraded "+
+				"for this agent only: %v", seeded.ID, getErr)
+		}
+	}
+	return nil
+}
+
+// persistFreshInstallDefaultAgentID writes agents.defaults.default_agent_id
+// into config.json's raw JSON map, preserving every other key exactly as-is —
+// unlike config.SaveConfig, which round-trips the whole typed Config struct
+// and can clobber SecureString-backed API keys (CLAUDE.md hard rule: "NEVER
+// use config.SaveConfig() — it corrupts API keys"). Mirrors
+// pkg/gateway/rest.go's updateConfigJSONLocked/ensureMap read-modify-write
+// convention. Called exactly once, at boot, immediately after
+// coreagent.SeedConfig sets this field in memory on a genuinely fresh
+// install (SeedConfig itself performs no file I/O by design) — see the call
+// site's doc comment for why this durability step cannot live inside
+// SeedConfig or persistSeededCoreAgents.
+func persistFreshInstallDefaultAgentID(configPath, agentID string) error {
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	var m map[string]any
+	if unmarshalErr := json.Unmarshal(raw, &m); unmarshalErr != nil {
+		return fmt.Errorf("parse config: %w", unmarshalErr)
+	}
+	ensureMap(m, "agents", "defaults")["default_agent_id"] = agentID
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("serialize config: %w", err)
+	}
+	if err := fileutil.WriteFileAtomic(configPath, out, 0o600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
+}
+
+// u25AllSessionsForUsage adapts AgentLoop.ListAllSessions' ADR-057/U9
+// paginated signature (limit, offset int, parentSessionID string, flat bool)
+// back to the zero-arg, "return everything" shape systools.Deps.ListSessions
+// still exposes (ADR-057 U25, W16i, [grill2 C2-1]).
+//
+// The single consumer of Deps.ListSessions is the get_usage tool
+// (pkg/sysagent/tools/diag.go's UsageQueryTool), which aggregates token
+// spend by period/agent/model/session with no pagination concept of its own
+// — it always wants the WHOLE session set in one pass, so widening its field
+// to accept limit/offset/parentSessionID would add parameters no caller can
+// ever usefully vary. flat=true is not a default of convenience: FR-104
+// warns explicitly that a roots-only listing silently DROPS a delegated
+// child's token spend from the merged set (Total.Sessions would only carry
+// parents), which would make get_usage under-report real spend with a green
+// build — exactly this ADR's defining defect class. limit=0/offset=0 mean
+// "no limit, from the start" (FR-098(b)), matching this method's pre-
+// pagination "collect every session, every store" behavior exactly. See
+// rest_stats_adr057_test.go's TestU25ListAllSessions_RootsOnly_
+// UndercountsDelegatedChildSpend (red) and
+// TestU25AllSessionsForUsage_FeedsGetUsageWithDelegatedChildSpend (green)
+// for the proof: roots-only under-counts a real delegated child's spend;
+// this flat=true wiring does not.
+func u25AllSessionsForUsage(al *agent.AgentLoop) func() ([]*session.UnifiedMeta, []error) {
+	return func() ([]*session.UnifiedMeta, []error) {
+		page, errs := al.ListAllSessions(0, 0, "", true)
+		return page.Sessions, errs
+	}
 }
 
 // RunContextWithOptions is the Sprint-J context-cancellable entry point.
@@ -1045,15 +1514,91 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		cfg.Agents.Defaults.ModelName = modelID
 	}
 
+	// ADR-054 D2/D3: bring in any agents already persisted as entity records
+	// (entities/agents/<id>.json) from a previous run BEFORE SeedConfig looks
+	// at cfg.Agents.List to decide which core agents are "already present" —
+	// otherwise every boot would look like a fresh install (cfg.Agents.List
+	// starts empty: config.LoadConfig strips config.json's legacy agents.list
+	// unconditionally, see legacy_agents_list.go) and SeedConfig would
+	// re-create core agents from their seed defaults on every restart,
+	// discarding any operator customization. Strict variant: a roster-
+	// population failure here (genuine store error, every on-disk record
+	// unparseable, or a same-process non-empty→empty regression) must abort
+	// boot rather than silently proceed with an empty/partial roster — see
+	// populateAgentsListFromEntityStoreStrict's doc for the verified
+	// privilege-escalation chain an empty roster otherwise opens up.
+	if rosterErr := populateAgentsListFromEntityStoreStrict(cfg, homePath); rosterErr != nil {
+		return fmt.Errorf("gateway: could not populate agent roster from entity store at boot: %w", rosterErr)
+	}
+
 	// Seed core agents into config on first boot. Core agents are stored in
 	// cfg.Agents.List with Locked=true so they appear alongside custom agents
 	// in the REST API with type "core". SeedConfig is idempotent — it only adds
 	// agents that are not already present (checked by ID).
 	if coreagent.SeedConfig(cfg) {
-		if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-			return fmt.Errorf("gateway: failed to persist seeded core agents: %w", saveErr)
+		// ADR-054 D2/§11: core agents now persist as entity records
+		// (entities/agents/<id>.json) — never back into config.json's
+		// agents.list. config.SaveConfig here would be a double violation:
+		// (a) it is the full-struct save CLAUDE.md forbids for exactly this
+		// reason ("corrupts API keys" via SecureString round-trip), and (b)
+		// anything it wrote to agents.list would be stripped again on the
+		// very next config.LoadConfig call, so it would not even survive.
+		// persistSeededCoreAgents persists every agent SeedConfig
+		// added-or-touched (its own "re-enforce identity fields on existing
+		// core agents" pass, and any brand-new core agent it appended) via
+		// the agent store — see its own doc comment for the corrupt-record
+		// handling that makes this safe against a single bad entity file.
+		if seedErr := persistSeededCoreAgents(homePath, cfg.Agents.List); seedErr != nil {
+			return seedErr
 		}
 	}
+
+	// RELEASE BLOCKER fix follow-up (2026-07-26): on a genuinely fresh
+	// install, coreagent.SeedConfig also sets the settings singleton
+	// (cfg.Agents.Defaults.DefaultAgentID = "mia") — the ONLY field
+	// agent.AgentRegistry.GetDefaultAgent and pkg/routing's
+	// resolveDefaultAgentID consult (ADR-054 D6.4). SeedConfig is a pure
+	// in-memory struct mutation by design, with zero filesystem side effects
+	// (mirrors why seedSystemAgentEagerSouls below is a separate call site
+	// rather than living inside SeedConfig itself) — so without persisting it here,
+	// the singleton lives only in THIS process's in-memory cfg. NewAgentLoop
+	// immediately below reads it fine, so THIS boot resolves correctly, but
+	// config.json on disk never gets it: the very next restart reloads an
+	// empty default_agent_id, isFreshInstall is now false (agents already
+	// exist), SeedConfig never re-seeds it, and the two resolution ladders'
+	// differing Priority-2 fallbacks silently disagree again — reopening the
+	// exact bug this fix closes, just delayed by one restart. Persist it
+	// directly into config.json's raw JSON map (mirrors rest.go's
+	// updateConfigJSONLocked/ensureMap convention — never config.SaveConfig,
+	// which round-trips the whole typed struct and can clobber
+	// SecureString-backed API keys, CLAUDE.md's hard rule). Runs once, here,
+	// strictly before the config-file watcher starts later in this function,
+	// so there is no self-write-registry race to account for. Best-effort:
+	// a write failure only means the in-memory resolution (correct for this
+	// boot) does not survive a restart — not a boot-time fatal, since the
+	// gateway is otherwise fully healthy.
+	if cfg.Agents.Defaults.DefaultAgentID != "" {
+		if persistErr := persistFreshInstallDefaultAgentID(configPath, cfg.Agents.Defaults.DefaultAgentID); persistErr != nil {
+			slog.Warn("gateway: could not persist fresh-install default_agent_id to config.json; "+
+				"in-memory resolution is correct for this boot but will not survive a restart",
+				"default_agent_id", cfg.Agents.Defaults.DefaultAgentID, "error", persistErr)
+		}
+	}
+
+	// Eagerly seed every System Agent's SOUL.md right after SeedConfig.
+	// For the Judge this closes an operator-reported UX gap: its soul only
+	// materialized lazily on its FIRST real verifier dispatch (pkg/agent's
+	// ensureVerifierSoul), so a fresh install's Judge profile showed an empty
+	// soul in the SPA — but the soul is now operator-editable there, so the
+	// operator must be able to see the default judging standards they'd be
+	// overriding before ever running a judgment. For the PlanSupervisor this
+	// is the ONLY seed path at all (plan-supervisor-spec FR-005 rev 2 adds no
+	// lazy backstop), so without this call the adjudicator would wake with an
+	// empty prompt. seedSystemAgentEagerSouls writes only to SOUL.md (plain
+	// file I/O, not config.json) so it needs no safeUpdateConfigJSON/configMu
+	// involvement at all. See its doc comment for why this call site — not
+	// coreagent.SeedConfig itself — is where it lives.
+	seedSystemAgentEagerSouls(cfg)
 
 	msgBus := bus.NewMessageBus()
 	var agentLoop *agent.AgentLoop
@@ -1579,8 +2124,52 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		SaveConfigLocked: func(c *config.Config) error {
 			return config.SaveConfig(configPath, c)
 		},
-		CredStore:       credStore,
-		ReloadFunc:      reloadTrigger,
+		CredStore:  credStore,
+		ReloadFunc: reloadTrigger,
+		// UpsertAgentFastFunc (issue #571, sysagent half): mirrors rest.go's
+		// fastAgentUpsert so system.agent.create/update (an agent creating or
+		// updating another agent) gets the same fast-path publish REST
+		// already has, instead of triggering the full restartServices
+		// cascade (channels/cron/plan-engine/schedulers) on every call. Defers
+		// to an already in-flight full reload rather than racing it, exactly
+		// like fastAgentUpsert's own IsReloadPending check; any fast-path
+		// failure falls back to the full reload trigger so the caller here
+		// still gets a single hot-reload call site to invoke.
+		//
+		// Unlike the REST path — where updateConfigJSONLocked's
+		// refreshConfigAndRewireServices has ALREADY re-derived
+		// cfg.Agents.List from the entity store by the time fastAgentUpsert
+		// runs — the sysagent tools (AgentCreateTool/AgentUpdateTool)
+		// persist straight to the entity store (agentstore.Store) and never
+		// touch config.json or al.cfg at all (ADR-054: agents are per-entity
+		// records, not config.json's agents.list). So al.cfg.Agents.List
+		// would still be missing the just-created/updated agent here unless
+		// this closure re-derives it first. Reuses
+		// populateAgentsListFromEntityStoreStrict — the SAME in-memory,
+		// no-service-restart "list agents from the entity store" step the
+		// REST refresh performs — via MutateConfig so the read-modify-write
+		// is serialized with every other al.mu-guarded reader/writer, rather
+		// than reloading config.json from disk or re-resolving credentials
+		// (neither of which agent CRUD via the entity store can affect).
+		UpsertAgentFastFunc: func(agentID string) error {
+			if agentLoop.IsReloadPending() {
+				return reloadTrigger()
+			}
+			if err := agentLoop.MutateConfig(func(cfg *config.Config) error {
+				return populateAgentsListFromEntityStoreStrict(cfg, homePath)
+			}); err != nil {
+				slog.Warn("gateway: sysagent fast agent upsert: could not refresh the agent roster "+
+					"from the entity store; falling back to full reload",
+					"agent_id", agentID, "error", err)
+				return reloadTrigger()
+			}
+			if _, err := agentLoop.UpsertAgentFast(agentLoop.GetConfig(), agentID); err != nil {
+				slog.Warn("gateway: sysagent fast agent upsert failed; falling back to full reload",
+					"agent_id", agentID, "error", err)
+				return reloadTrigger()
+			}
+			return nil
+		},
 		SkillsLoader:    sysSkillsLoader,
 		RegistryManager: sysRegistryManager,
 		SkillInstaller:  sysSkillInstaller,
@@ -1594,7 +2183,21 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// bound at construction). MUST be wired in production — leaving it nil
 		// fails OPEN.
 		DelegationDeny: agentLoop.NewSysagentDelegationDeny(),
-		ListSessions:   agentLoop.ListAllSessions,
+		// D2 rule 5 (FR-017/052, review r1 major M5): create_task_in_workspace
+		// parity with the plain create_task tool's own bash-policy checker —
+		// MUST be wired in production, leaving it nil fails CLOSED (unlike
+		// DelegationDeny above) per systools.Deps.ResolveBashPolicy's doc
+		// comment.
+		ResolveBashPolicy: agentLoop.NewSysagentBashPolicyResolver(),
+		// ADR-057 U9 changed ListAllSessions' signature to
+		// (limit, offset int, parentSessionID string, flat bool), so it can no
+		// longer be assigned here as a bare method value — this field's type
+		// is the zero-arg func() ([]*session.UnifiedMeta, []error) shape
+		// get_usage (the sole consumer) actually needs. See
+		// u25AllSessionsForUsage's doc comment for why flat=true is required
+		// here (FR-104: roots-only would silently under-count delegated
+		// children's token spend).
+		ListSessions: u25AllSessionsForUsage(agentLoop),
 		// Live MCP reconciliation: without these, add/remove_mcp_server
 		// only persist config — the server never actually connects and its tools never
 		// reach the central/per-agent registries until the next hot reload or process restart.
@@ -1697,15 +2300,41 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// GetSessionStore returns the shared UnifiedStore; when nil (misconfigured
 	// home) the goroutine is a no-op — getCfg returning a nil cfg is guarded
 	// inside executeSweepTick.
-	if sharedStore := agentLoop.GetSessionStore(); sharedStore != nil {
-		startRetentionSweepLoop(ctx, sharedStore, agentLoop.GetConfig, 24*time.Hour)
-	}
 	// Tool-result file sweep runs alongside the transcript sweep on the same
 	// retention window. setupAndStartServices already constructed the store.
+	//
+	// These assignments MUST stay ABOVE startRetentionSweepLoop. The sweep
+	// loop performs a deliberate boot-time sweep BEFORE its first ticker wait
+	// (retention_goroutine.go:81), so it reads retentionToolResultSweepFn AND
+	// retentionTaskRunSweepFn immediately — both are bare package-level funcs
+	// with no mutex or atomic. Assigning either one after the goroutine was
+	// launched is a real data race, caught by `-race` on tests/integration
+	// once the package became race-buildable:
+	//
+	//	Read at … executeSweepTick() retention_goroutine.go:145 (tool-result var)
+	//	Previous write at … RunContextWithOptions() gateway.go:1955
+	//
+	// The user-visible symptom is the boot-time sweep nondeterministically
+	// observing nil and silently skipping — which executeSweepTick's own
+	// comment used to excuse as "tests with a disabled toolStore" for the
+	// tool-result var. Ordering is sufficient rather than a mutex: these are
+	// the ONLY writers in the tree, so once the goroutine starts neither
+	// value ever changes.
+	//
+	// REGRESSION (found while chasing an unrelated tests/integration -race
+	// failure, 2026-08-07): retentionTaskRunSweepFn used to be wired in its
+	// own block AFTER startRetentionSweepLoop below — reintroducing the
+	// EXACT race this comment already documents fixing, just for the sibling
+	// var (WARNING: DATA RACE, retention_goroutine.go:161 vs this file's
+	// former line 2335). Per-task run-history pruning (ADR-050 RD9/RD10,
+	// pkg/gateway/retention_task_runs.go) could nondeterministically no-op on
+	// the very first boot-time tick in production, not just under -race —
+	// the race detector only makes an existing ordering bug loud, it doesn't
+	// create the bug. Moved up alongside the tool-result wiring so both
+	// hooks are fully wired before the sweep goroutine can ever read them.
 	if runningServices.toolStore != nil {
 		retentionToolResultSweepFn = runningServices.toolStore.retentionSweep
 	}
-
 	// Per-task run-history prune + stuck-run reaper (ADR-050 RD9/RD10) runs
 	// alongside the transcript sweep on the same retention window/cadence —
 	// see pkg/gateway/retention_task_runs.go. GetTaskStore returns nil only
@@ -1716,6 +2345,9 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			return pruneAllTaskRuns(tStore, cutoff)
 		}
 	}
+	if sharedStore := agentLoop.GetSessionStore(); sharedStore != nil {
+		startRetentionSweepLoop(ctx, sharedStore, agentLoop.GetConfig, 24*time.Hour)
+	}
 
 	// FR-031: Launch the nightly retro sweep goroutine alongside the session sweep.
 	// Iterates all agents and calls SweepRetros per MemoryStore.
@@ -1724,6 +2356,17 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// FR-032/FR-032a: Bootstrap recap pass — on gateway start, re-cap sessions
 	// that lack LAST_SESSION.md. Runs once in a goroutine.
 	go agentLoop.BootstrapRecapPass(ctx)
+
+	// ADR-053 Phase 2 on-ramp: start the SessionMessageChan kind-router
+	// consumer. This is the MISSING consumer for the bus's 4th channel — until
+	// it runs, SessionMessageChan() has no drainer and any publisher would
+	// block. The consumer dispatches by kind: steer/respond → child steering
+	// queue; child->parent kinds → durable inbox Append + bounded typed wake;
+	// engine kinds → WS frame. Bound to ctx so it shuts down with the gateway.
+	// Honors session_messaging.enabled live (read per event) — when false the
+	// consumer drains-and-discards (channel stays unblocked) but no-ops.
+	smConsumerCancel := agentLoop.StartSessionMessageConsumer(ctx)
+	defer smConsumerCancel()
 
 	// Wire a second degraded check: report 503 when the agent loop has died.
 	runningServices.HealthServer.SetDegradedFunc(func() (bool, string) {
@@ -1734,6 +2377,16 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		defer runningServices.reloadMu.Unlock()
 		if runningServices.reloadDegraded {
 			return true, fmt.Sprintf("config reload failed: %v", runningServices.reloadError)
+		}
+		// ADR-054 §0 R3: the configured default agent naming an entity record
+		// that failed to load is a degraded state, not a silent fallback —
+		// EvaluateDefaultAgentHealth (called from NewAgentRegistry) records it.
+		// SetDegradedFunc is a single-slot hook, so this COMPOSES with the
+		// checks above rather than replacing them.
+		if registry := agentLoop.GetRegistry(); registry != nil {
+			if degraded, reason := registry.DefaultAgentDegraded(); degraded {
+				return true, reason
+			}
 		}
 		return false, ""
 	})
@@ -1755,13 +2408,59 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	if cfg.Gateway.HotReload {
 		configReloadChan, stopWatch = setupConfigWatcherPolling(
 			configPath,
+			homePath,
 			debug,
 			credStore,
 			runningServices.selfWriteReg,
+			runningServices.markReloadDegraded,
 		)
 		logger.Info("Config hot reload enabled")
 	}
 	defer stopWatch()
+
+	// loadReloadConfig re-reads config.json for a reload. It backs the /reload
+	// path AND every coalesced follow-up reload — the latter MUST re-read from
+	// disk, since the whole reason a request was coalesced is that its write
+	// post-dates the running reload's snapshot.
+	//
+	// LoadConfigWithStoreAndSelfHealHook (not LoadConfigWithStore): this path
+	// bypasses safeUpdateConfigJSON's configMu + selfWriteReg registration, so
+	// if the single-user-model role self-heal writes config.json here, the write
+	// must be registered manually or the watcher's next tick would misidentify
+	// it as an external edit.
+	loadReloadConfig := func() (*config.Config, error) {
+		newCfg, err := config.LoadConfigWithStoreAndSelfHealHook(
+			configPath, credStore, selfHealWriteHook(runningServices.selfWriteReg),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("loading config for reload: %w", err)
+		}
+		// ADR-054 D2/D3: repopulate cfg.Agents.List from the agent store —
+		// config.LoadConfig* strips agents.list on every load
+		// (legacy_agents_list.go), and this reload path is a separate
+		// config-load call site from restAPI.refreshConfigAndRewireServices's
+		// own bridge. Strict variant: a roster-population failure here must
+		// reject this reload attempt exactly like the config-load/validation
+		// failures around it, not silently proceed with an empty/stale roster
+		// (see populateAgentsListFromEntityStoreStrict's doc for why) — and mark
+		// the service degraded so /health surfaces it.
+		if err = populateAgentsListFromEntityStoreStrict(newCfg, homePath); err != nil {
+			runningServices.markReloadDegraded(
+				fmt.Errorf("reload rejected: agent roster population failed: %w", err),
+			)
+			return nil, fmt.Errorf("agent roster population failed: %w", err)
+		}
+		if err = newCfg.ValidateProviders(); err != nil {
+			return nil, fmt.Errorf("config validation failed: %w", err)
+		}
+		return newCfg, nil
+	}
+
+	// runOneReload is the production executor handed to runReloadCycle. provider
+	// is captured by address because executeReload swaps it in place on success.
+	runOneReload := func(c *config.Config) error {
+		return executeReload(ctx, agentLoop, c, &provider, runningServices, msgBus, allowEmptyStartup)
+	}
 
 	for {
 		select {
@@ -1770,42 +2469,20 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			omnipusGracefulShutdown(runningServices, agentLoop, provider, cfg)
 			return nil
 		case newCfg := <-configReloadChan:
-			if !runningServices.reloading.CompareAndSwap(false, true) {
-				logger.Warn("Config reload skipped: another reload is in progress")
+			if !runningServices.beginReload(agentLoop.MarkReloadPending) {
+				// NOT a drop: beginReload recorded the request, and the cycle
+				// that owns the in-flight reload will run a follow-up reload
+				// that re-reads this file change from disk before it finishes.
+				logger.Info("Config reload coalesced into the in-flight reload")
 				continue
 			}
-			err := executeReload(ctx, agentLoop, newCfg, &provider, runningServices, msgBus, allowEmptyStartup)
-			if err != nil {
-				logger.Errorf("Config reload failed: %v", err)
-			}
+			runReloadCycle(agentLoop, runningServices, newCfg, runOneReload, loadReloadConfig)
 		case <-manualReloadChan:
+			// The slot was already claimed by reloadTrigger before it signalled
+			// this channel, so do NOT call beginReload here — runReloadCycle
+			// takes ownership of the release directly.
 			logger.Info("Manual reload triggered via /reload endpoint")
-			// LoadConfigWithStoreAndSelfHealHook (not LoadConfigWithStore): this
-			// path bypasses safeUpdateConfigJSON's configMu + selfWriteReg
-			// registration, so if the single-user-model role self-heal writes
-			// config.json here, the write must be registered manually or the
-			// watcher's next tick would misidentify it as an external edit.
-			newCfg, err := config.LoadConfigWithStoreAndSelfHealHook(
-				configPath, credStore, selfHealWriteHook(runningServices.selfWriteReg),
-			)
-			if err != nil {
-				logger.Errorf("Error loading config for manual reload: %v", err)
-				agentLoop.ClearReloadPending()
-				runningServices.reloading.Store(false)
-				continue
-			}
-			if err = newCfg.ValidateProviders(); err != nil {
-				logger.Errorf("Config validation failed: %v", err)
-				agentLoop.ClearReloadPending()
-				runningServices.reloading.Store(false)
-				continue
-			}
-			err = executeReload(ctx, agentLoop, newCfg, &provider, runningServices, msgBus, allowEmptyStartup)
-			if err != nil {
-				logger.Errorf("Manual reload failed: %v", err)
-			} else {
-				logger.Info("Manual reload completed successfully")
-			}
+			runReloadCycle(agentLoop, runningServices, nil, runOneReload, loadReloadConfig)
 		}
 	}
 }
@@ -1864,6 +2541,7 @@ type servicesSnapshot struct {
 	ChannelManager *channels.Manager
 	CronService    *cron.CronService
 	TaskTrigger    *agent.TaskTriggerScheduler
+	LoopScheduler  *agent.LoopScheduler
 	MediaStore     media.MediaStore
 	DeviceService  *devices.Service
 }
@@ -1874,6 +2552,7 @@ func snapshotServices(svc *services) servicesSnapshot {
 		ChannelManager: svc.ChannelManager,
 		CronService:    svc.CronService,
 		TaskTrigger:    svc.TaskTrigger,
+		LoopScheduler:  svc.LoopScheduler,
 		MediaStore:     svc.MediaStore,
 		DeviceService:  svc.DeviceService,
 	}
@@ -1884,8 +2563,192 @@ func restoreServices(svc *services, snap servicesSnapshot) {
 	svc.ChannelManager = snap.ChannelManager
 	svc.CronService = snap.CronService
 	svc.TaskTrigger = snap.TaskTrigger
+	svc.LoopScheduler = snap.LoopScheduler
 	svc.MediaStore = snap.MediaStore
 	svc.DeviceService = snap.DeviceService
+}
+
+// beginReload claims the single-flight reload slot.
+//
+// Returns true when the caller now OWNS the reload and must run a cycle
+// (runReloadCycle), which is then responsible for releasing the slot.
+//
+// Returns false when a reload is already in flight. The caller's request is NOT
+// dropped: it is recorded in reloadRequested, and the owning cycle runs an
+// additional reload — with a config re-read from disk — before releasing the
+// slot. Callers must therefore treat false as "accepted, will be served
+// shortly", never as an error.
+//
+// markPending (AgentLoop.MarkReloadPending in every caller) is invoked on BOTH
+// branches, under the lock, and is what closes the last stale-read window.
+// AgentLoop.TriggerReload has to set the pending flag before it can call
+// reloadFunc — so between those two steps a finishing cycle can see no
+// registered request, clear the flag, and release the slot; the request then
+// arrives with a cleared flag and its poller returns immediately against the
+// older config snapshot. Re-marking here makes "request registered" and "flag
+// set" one atomic step against finishReload/abandonReload's clear, which take
+// the same mutex. The resulting invariant is total: the pending flag is set on
+// every path that leaves the slot claimed or a request recorded, and the only
+// paths that clear it also release the slot, under this same lock.
+func (s *services) beginReload(markPending func()) bool {
+	s.reloadCoalesceMu.Lock()
+	defer s.reloadCoalesceMu.Unlock()
+	if s.reloadInFlight {
+		s.reloadRequested = true
+		markPending()
+		return false
+	}
+	s.reloadInFlight = true
+	s.reloadRequested = false
+	markPending()
+	return true
+}
+
+// finishReload decides the fate of the reload slot at the end of one reload,
+// atomically with respect to beginReload.
+//
+// Returns true when another reload was requested while the one that just
+// finished was running: the request is consumed, the slot is RETAINED, and the
+// caller must run one more reload. Retaining the slot rather than releasing and
+// re-acquiring is what makes a coalesced successor indivisible from its
+// predecessor.
+//
+// Returns false when nothing is outstanding. Only then does it invoke
+// clearPending — the agent loop's reload-pending flag, which
+// restAPI.triggerReloadAndWait polls — and release the slot, both under the
+// same lock acquisition as the check. Clearing that flag BETWEEN a reload and
+// its coalesced successor would release pollers against a registry rebuilt from
+// the older config snapshot: the very stale read this mechanism exists to
+// prevent, entered through a different door.
+//
+// Because the check, the clear and the release happen under one lock, a
+// concurrent beginReload either lands before it (and is observed as
+// reloadRequested) or after it (and claims the freed slot itself). It can never
+// fall between the two and be lost.
+func (s *services) finishReload(clearPending func()) bool {
+	s.reloadCoalesceMu.Lock()
+	defer s.reloadCoalesceMu.Unlock()
+	if s.reloadRequested {
+		s.reloadRequested = false
+		return true
+	}
+	clearPending()
+	s.reloadInFlight = false
+	return false
+}
+
+// abandonReload force-releases the slot without serving any outstanding
+// request. Used only on a cycle's abnormal exits (panic, or a follow-up config
+// load that failed), where continuing to hold the slot would wedge every future
+// reload for the process lifetime, and by the trigger's unreachable
+// channel-full fail-safe.
+//
+// clearPending may be nil (the trigger's fail-safe never owned the pending
+// flag). When non-nil it is invoked BEFORE the slot is released and under the
+// same lock, matching finishReload's ordering: releasing first would let a new
+// trigger claim the slot and then have its freshly-set pending flag cleared by
+// this call.
+func (s *services) abandonReload(clearPending func()) {
+	s.reloadCoalesceMu.Lock()
+	defer s.reloadCoalesceMu.Unlock()
+	if clearPending != nil {
+		clearPending()
+	}
+	s.reloadInFlight = false
+	s.reloadRequested = false
+}
+
+// newReloadTrigger builds the reload trigger closure wired into
+// AgentLoop.SetReloadFunc, health.Server.SetReloadFunc and the sysagent tool
+// deps. It claims the single-flight slot and hands the reload to the consumer
+// loop over manualReloadChan.
+//
+// It NEVER reports "reload already in progress" as an error any more. A request
+// that arrives while a reload is running is recorded by beginReload and served
+// by a follow-up reload; the caller is told nil, because the request really was
+// accepted. Returning an error there is what dropped the request outright and
+// produced the POST /agents 201 → POST /tasks "agent not found" blocker
+// documented on the services struct's reloadCoalesceMu field.
+func newReloadTrigger(runningServices *services, agentLoop *agent.AgentLoop) func() error {
+	return func() error {
+		if !runningServices.beginReload(agentLoop.MarkReloadPending) {
+			return nil
+		}
+		select {
+		case runningServices.manualReloadChan <- struct{}{}:
+			return nil
+		default:
+			// Unreachable in practice: the slot stays held until the consuming
+			// cycle finishes, which is strictly after the receive, so the cap-1
+			// channel is always drained whenever the slot is free. Kept as a
+			// fail-safe — release the slot rather than wedging every future
+			// reload behind a claim nobody will ever finish.
+			runningServices.abandonReload(nil)
+			return fmt.Errorf("reload already queued")
+		}
+	}
+}
+
+// runReloadCycle runs one config reload plus every reload coalesced into it
+// while it was running, then releases the single-flight slot and clears the
+// agent loop's reload-pending flag exactly once, at the very end.
+//
+// The caller MUST already own the slot — either beginReload returned true, or
+// the reloadTrigger closure claimed it before signalling manualReloadChan.
+//
+// first is the config for the initial reload (the file-watcher path already has
+// a candidate), or nil to load it from disk via loadNext (the /reload path).
+// Every coalesced follow-up always re-reads from disk: serving it from the
+// snapshot the previous reload used would defeat the entire point.
+//
+// exec runs one reload (executeReload in production) and loadNext re-reads
+// config.json; both are parameters so the coalescing contract can be tested
+// without standing up the full service-restart pipeline.
+func runReloadCycle(
+	agentLoop *agent.AgentLoop,
+	runningServices *services,
+	first *config.Config,
+	exec func(*config.Config) error,
+	loadNext func() (*config.Config, error),
+) {
+	slotHeld := true
+	defer func() {
+		// Abnormal exit only (panic, or a follow-up config load that failed).
+		// On the normal path finishReload already cleared the pending flag and
+		// released the slot, and slotHeld is false.
+		if slotHeld {
+			runningServices.abandonReload(agentLoop.ClearReloadPending)
+		}
+	}()
+
+	cfg := first
+	for {
+		if cfg == nil {
+			loaded, err := loadNext()
+			if err != nil {
+				logger.Errorf("Config reload aborted: %v", err)
+				return
+			}
+			cfg = loaded
+		}
+		if err := exec(cfg); err != nil {
+			logger.Errorf("Config reload failed: %v", err)
+		} else {
+			logger.Info("Config reload completed successfully")
+		}
+		if !runningServices.finishReload(agentLoop.ClearReloadPending) {
+			slotHeld = false
+			return
+		}
+		// A reload was requested while the one above was running. That
+		// requester's write landed AFTER the reload's config snapshot was taken,
+		// so the reload it just waited through cannot have picked it up. Re-read
+		// config from disk and reload again. We still hold the slot and the
+		// pending flag is still set, so a triggerReloadAndWait poller stays
+		// blocked across this boundary.
+		logger.Info("Serving coalesced config reload request")
+		cfg = nil
+	}
 }
 
 func executeReload(
@@ -1897,13 +2760,10 @@ func executeReload(
 	msgBus *bus.MessageBus,
 	allowEmptyStartup bool,
 ) error {
-	// Defers run LIFO: ClearReloadPending fires first (unblocks triggerReloadAndWait pollers),
-	// then reloading fires (allows the next CAS to succeed). A concurrent TriggerReload
-	// that races between these two defers gets ErrReloadAlreadyInProgress and polls — safe
-	// because triggerReloadAndWait polls through ErrReloadAlreadyInProgress so the pending
-	// flag is never cleared prematurely.
-	defer runningServices.reloading.Store(false)
-	defer agentLoop.ClearReloadPending()
+	// NOTE: this function deliberately does NOT release the reload slot or clear
+	// the agent loop's reload-pending flag. Its caller (runReloadCycle) owns
+	// both, because only the caller knows whether another reload was coalesced
+	// into this one and must therefore still run before pollers are released.
 
 	// Snapshot all service fields that restartServices mutates so they can be
 	// restored atomically if the reload fails. bundle and ChannelManager are
@@ -2178,6 +3038,22 @@ func setupAndStartServices(
 		fmt.Println("✓ Task trigger scheduler started")
 	}
 
+	// /loop time-driven scheduler (ADR-049 D6/D7, Wave 2-C2): a SECOND
+	// dedicated CronService instance, mirroring TaskTrigger's own pattern
+	// immediately above — orthogonal to the gateway's user-schedules
+	// service. No boot reconcile needed: unlike task triggers (derived from
+	// the task store), /loop jobs already persist their own cron store and
+	// their session-side UnifiedMeta state independently; a job whose
+	// session lost its loop state self-removes on next fire
+	// (LoopScheduler.RunScheduled).
+	loopSchedStorePath := filepath.Join(homePath, "loops", "jobs.json")
+	runningServices.LoopScheduler = agent.NewLoopScheduler(loopSchedStorePath, agentLoop)
+	if startErr := runningServices.LoopScheduler.Start(); startErr != nil {
+		return nil, fmt.Errorf("error starting loop scheduler: %w", startErr)
+	}
+	agentLoop.SetLoopScheduler(runningServices.LoopScheduler)
+	fmt.Println("✓ Loop scheduler started")
+
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  cfg.Tools.MediaCleanup.Enabled,
 		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
@@ -2427,7 +3303,7 @@ func setupAndStartServices(
 	if approvalTimeout > 0 {
 		approvalTimeoutDur = time.Duration(approvalTimeout) * time.Second
 	} else {
-		approvalTimeoutDur = 300 * time.Second
+		approvalTimeoutDur = defaultToolApprovalTimeout
 	}
 	approvalReg := newApprovalRegistryV2(effectiveCap, approvalTimeoutDur)
 	wsHandler.approvalRegV2 = approvalReg
@@ -2444,6 +3320,226 @@ func setupAndStartServices(
 	onboardingMgr := onboarding.NewManager(homePath)
 	tStore := agent.GetTaskStore(agentLoop)
 	tExecutor := agent.GetTaskExecutor(agentLoop)
+
+	// ADR-049 D1/D4 (Wave 2-C1): construct the Plan store + the single hybrid
+	// plan-engine instance. planStore is shared with restAPI (Plans REST
+	// surface, rest_plans.go) AND with the engine itself — both write through
+	// the SAME *plan.Store, so planStore.OnChange (wired here) is the single
+	// choke point that emits a plan_status WS frame for every plan mutation,
+	// regardless of whether the engine or a REST handler made it.
+	planStore := plan.New(filepath.Join(homePath, "plans"))
+	planStore.OnChange = func(p *plan.Plan) {
+		progress := p.Progress
+		if tStore != nil {
+			if _, _, computed, cerr := plan.ComputeProgress(p.ID, tStore); cerr == nil {
+				progress = computed
+			} else {
+				slog.Warn("gateway: plan_status: compute progress failed", "plan_id", p.ID, "error", cerr)
+			}
+		}
+		payload := agent.PlanStatusChangedPayload{
+			PlanID:    p.ID,
+			State:     string(p.State),
+			PlanPhase: string(p.EffectivePlanPhase()),
+			Progress:  progress,
+		}
+		if p.PausedReason != "" {
+			payload.PausedReason = p.PausedReason
+		}
+		agentLoop.EmitPlanStatusChanged(payload)
+	}
+
+	// ADR-052 Wave 2 (caller-int): install the real plan store into the
+	// create_plan/execute_plan agent-tool surface. SetPlanStore re-wires
+	// wirePlanToolsForAgent (pkg/agent/loop.go) for every currently
+	// registered agent — closing the DI seam Wave 1 left as
+	// NewPlanCreateTool(nil)/NewPlanExecuteTool(nil, nil) inside
+	// registerSharedTools's first pass (which runs inside NewAgentLoop,
+	// BEFORE this planStore exists). Every dependency gap inside that
+	// re-wiring is logged at Error level (loud failure, never a silently
+	// dead tool) — see wirePlanToolsForAgent's doc comment. Verified
+	// non-nil here too: planStore is a concrete value from plan.New just
+	// above, so this guards against a future refactor silently routing a
+	// nil store through, not today's happy path.
+	agentLoop.SetPlanStore(planStore)
+	if agentLoop.GetPlanStore() == nil {
+		return nil, fmt.Errorf("gateway: plan store wiring failed — SetPlanStore did not install a non-nil store")
+	}
+	fmt.Println("✓ Plan tool surface wired (create_plan/execute_plan/run_task/inspect_session)")
+
+	// S1 UAT fix (PRIYA-GATE-never-executed / PRIYA-D8-race): install the
+	// SAME planStore onto the TaskExecutor so its heartbeat auto-dispatch path
+	// (CheckQueuedTasks) can verify a plan member task's parent plan is
+	// actually in an executing state (approved/running) before dispatching it
+	// — see task_executor.go's CheckQueuedTasks doc. Mirrors the
+	// degrade-not-abort convention used for tExecutor just below (a minimal
+	// test harness's AgentLoop may have no task executor at all); a nil
+	// tExecutor here just means there is no heartbeat drain to gate.
+	if tExecutor != nil {
+		tExecutor.SetPlanStore(planStore)
+	}
+
+	// ADR-053 §5 boot sweep (FR-118/G-13) + intent-log (FR-148/M4): construct
+	// the durable session-lifecycle store and the write-ahead intent-log. Both
+	// are folded into the plan engine's single boot pass via the setters below
+	// (SetLifecycleStore / SetIntentLog), so Start runs the intent-log replay,
+	// plan reconciliation, and session boot sweep as one atomic boot step.
+	//
+	// sec-MINOR-3/#539: derive the intent-log's own HMAC-chain key from the
+	// master key, domain-separated from the audit-chain key (distinct info
+	// tag) — mirrors the audit-chain derivation earlier in bootRun (see
+	// audit.SetProcessChainKey's call site). Failure here is logged and not
+	// fatal: NewIntentLog falls back to its dev-only deterministic key with a
+	// sticky slog.Warn, exactly like audit.NewLogger's fallback.
+	intentLogChainKey, ilKeyErr := credStore.DeriveSubkey(plan.IntentLogChainKeyInfo)
+	if ilKeyErr != nil {
+		slog.Warn("intent_log: could not derive HMAC chain key from master key — intent log will use dev-only fallback",
+			"error", ilKeyErr)
+	}
+	lifecycleStore := session.NewLifecycleStore(filepath.Join(homePath, "session_lifecycle"))
+	intentLog, ilDirErr := plan.NewIntentLog(filepath.Join(homePath, "plan_intents"), intentLogChainKey)
+	if ilDirErr != nil {
+		return nil, fmt.Errorf("gateway: failed to create intent log dir: %w", ilDirErr)
+	}
+	bootSweepCfg := agentLoop.GetConfig().Planning
+
+	// ADR-053 Phase 2 on-ramp: construct the durable S3 child->parent message
+	// inbox and inject it + the S2 lifecycle store into the delegate +
+	// message_parent tool surface for every registered agent. Until this runs,
+	// every session-control path in delegate/message_parent fail-closes on nil
+	// stores (the tools registered fail-closed during NewAgentLoop's first
+	// registerSharedTools pass, before this store existed). This is the keystone
+	// injection that makes the S2/S3 plane LIVE — mirrors SetPlanStore's
+	// late-binding discipline exactly (the store is constructed here, after
+	// NewAgentLoop returned, and re-wires the tool surface for every agent).
+	// session.NewMessageInboxStore's doc specifies "<OMNIPUS_HOME>/session_messages"
+	// as the conventional dir every consumer agrees on.
+	messageInboxStore := session.NewMessageInboxStore(filepath.Join(homePath, "session_messages"))
+	// Apply the live config's caps to the store so a session_messaging edit
+	// (hot-reloaded) is reflected on the next Append (the store's own caps are
+	// plain fields, re-read per call).
+	smCfg := agentLoop.GetConfig().SessionMessaging
+	messageInboxStore.ChildSendRatePerMinute = smCfg.EffectiveChildSendRatePerMinute()
+	messageInboxStore.ChildSendBodyBytes = smCfg.EffectiveChildSendBodyBytes()
+	messageInboxStore.ChildSendMaxDepth = smCfg.EffectiveChildSendMaxDepth()
+	messageInboxStore.InboxUnackedMax = smCfg.EffectiveInboxUnackedMax()
+	messageInboxStore.InboxPerTypeCeiling = smCfg.EffectiveInboxPerTypeCeiling()
+	agentLoop.SetSessionMessagingStores(messageInboxStore, lifecycleStore)
+	if agentLoop.GetMessageInboxStore() == nil {
+		return nil, fmt.Errorf("gateway: session-messaging store wiring failed — SetSessionMessagingStores did not install a non-nil inbox")
+	}
+	fmt.Println("✓ Session-messaging plane wired (delegate + message_parent stores injected)")
+
+	// Mirrors the TaskDrain/TaskTrigger/MailboxDrain degrade-not-abort
+	// convention immediately below/above for a missing task store/executor
+	// (e.g. a minimal test harness's AgentLoop) — the plan engine needs both.
+	if tStore != nil && tExecutor != nil {
+		planEngine := agent.NewPlanEngine(agentLoop, planStore, tStore, tExecutor)
+		// Boot-sweep + intent-log wiring (must precede Start so the first boot
+		// pass runs synchronously inside Start).
+		planEngine.SetLifecycleStore(lifecycleStore)
+		// FR-118/G-13: install the SAME lifecycleStore instance onto the
+		// TaskExecutor so it can mint/transition the durable S2 record for
+		// every task/plan-member dispatch session (mintTaskLifecycleRecord,
+		// transitionTaskLifecycle, finalizeTaskLifecycle — see
+		// TaskExecutor.lifecycleStore's doc comment). Without this call the
+		// producer side of the store was permanently nil in the real gateway
+		// (every one of those methods nil-guards and silently no-ops), so the
+		// boot sweep below could reconcile plan/OWNER sessions but never saw a
+		// task/plan-member dispatch session at all — the exact gap this line
+		// closes. Regression guard:
+		// TestSetupAndStartServices_TaskExecutorLifecycleStoreWiring
+		// (lifecycle_store_wiring_test.go) dispatches a real task through this
+		// boot path and asserts the durable record was persisted; deleting
+		// this line makes that test fail.
+		tExecutor.SetLifecycleStore(lifecycleStore)
+		planEngine.SetIntentLog(intentLog)
+		// D13/G-12 Play-from-commit: install the gitevidence-backed resume
+		// resolver so Play resumes a failed/cancelled member from its last
+		// boundary commit (FR-144). The resolver degrades PER WORKSPACE
+		// (nested-repo / no-commit / unmaterialized work dir -> fresh attempt,
+		// FR-155), so it is wired unconditionally; a nil resolver here would
+		// mask a valid evidence repo on one workspace with a nested-repo
+		// degrade on another. It resolves the workspace lazily from the task
+		// record at Play time, so no workspace needs to be open at boot.
+		planEngine.SetCommitResolver(agent.NewLastMemberCommitResolver(tStore, homePath))
+		// D13/G-12 PRODUCER half (E.4): the resolver above only READS boundary
+		// commits. Without a producer it resolves "" forever and Play silently
+		// degrades to a fresh attempt — indistinguishable from a successful
+		// resume, which is why the gap was invisible to every gate. Wire the
+		// committer onto the TaskExecutor so a terminal plan member snapshots
+		// its declared write set.
+		//
+		// The secret scanner is mandatory: gitevidence.Commit refuses to commit
+		// without one (MIN-5 fail-closed), so a construction failure here means
+		// no evidence would be recorded at all — logged loudly rather than left
+		// to look like "no commits happened to be needed".
+		// tExecutor is already non-nil here — the enclosing block is gated on it.
+		scanner, scanErr := audit.NewSecretScanner(cfg.SensitiveDataReplacer(), nil)
+		switch {
+		case scanErr != nil:
+			slog.Error("evidence committer: secret scanner construction failed — "+
+				"boundary commits disabled, Play will always take the fresh-attempt path",
+				"error", scanErr)
+		default:
+			tExecutor.SetEvidenceCommitter(agent.NewWorkspaceEvidenceCommitter(homePath, scanner))
+		}
+		if bsec := bootSweepCfg.EffectiveBootSweepBudgetSeconds(); bsec > 0 {
+			planEngine.SetBootSweepBudget(time.Duration(bsec) * time.Second)
+		}
+		if smb := bootSweepCfg.EffectiveSnapshotMaxBytes(); smb > 0 {
+			planEngine.SetSnapshotMaxBytes(smb)
+		}
+		// session.failed hook: best-effort recovery signal. The plan engine's
+		// own tick loop re-arms idle settlement after Start; this hook is where
+		// a future event-bus emission of session.failed would plug in.
+		planEngine.SetSessionFailedHook(func(sessionID, reason string) {
+			slog.Info("gateway: boot sweep: session.failed", "session_id", sessionID, "reason", reason)
+		})
+		// Wave 2-C2 supplies the real /goal and /loop active-loop counters via
+		// these exact call sites; until then they contribute 0 to the R5
+		// global active-loop cap (documented boot-ordering requirement on
+		// PlanEngine.RegisterActiveCounter's doc comment). Wave 2-C2 (ADR-049
+		// D6/D7, R5): "goal" counts sessions carrying an active
+		// UnifiedMeta.GoalCondition in the shared session store (the only
+		// store /goal can ever write to — it requires a live
+		// TranscriptStore/TranscriptSessionID, which for every webchat/
+		// channel turn resolves to GetSessionStore()'s shared store, see
+		// resolveOrCreateChannelSession / the WS message handler's session
+		// minting); "loop" counts currently-enabled cron jobs owned by the
+		// dedicated LoopScheduler (constructed above, before this block).
+		planEngine.RegisterActiveCounter("goal", func() (int, error) {
+			store := agentLoop.GetSessionStore()
+			if store == nil {
+				return 0, nil
+			}
+			sessions, listErr := store.ListSessions()
+			if listErr != nil {
+				return 0, fmt.Errorf("active-goal counter: list sessions: %w", listErr)
+			}
+			count := 0
+			for _, s := range sessions {
+				if s != nil && s.GoalCondition != "" {
+					count++
+				}
+			}
+			return count, nil
+		})
+		planEngine.RegisterActiveCounter("loop", func() (int, error) {
+			if runningServices.LoopScheduler == nil {
+				return 0, nil
+			}
+			return len(runningServices.LoopScheduler.ListEnabledJobs()), nil
+		})
+		if startErr := planEngine.Start(context.Background()); startErr != nil {
+			return nil, fmt.Errorf("error starting plan engine: %w", startErr)
+		}
+		agentLoop.SetPlanEngine(planEngine)
+		runningServices.PlanEngine = planEngine
+		fmt.Println("✓ Plan engine started")
+	} else {
+		fmt.Println("⚠ Plan engine disabled: task store/executor unavailable")
+	}
 
 	// Wire god-mode opt-in into the agent loop for runtime coercion.
 	agentLoop.SetAllowGodMode(allowGodMode)
@@ -2530,6 +3626,7 @@ func setupAndStartServices(
 		homePath:        homePath,
 		taskStore:       tStore,
 		taskExecutor:    tExecutor,
+		planStore:       planStore, // ADR-049 D1: Plans REST surface (rest_plans.go) + plan_id FK check
 		credStore:       credStore,
 		mediaStore:      runningServices.MediaStore,
 		ssrfChecker:     agent.GetSSRFChecker(agentLoop), // SEC-24: nil when SSRF disabled
@@ -2718,19 +3815,7 @@ func setupAndStartServices(
 	// NOT re-create them). restartServices reuses this same HealthServer, so
 	// reloadFunc is never reset to nil after this point.
 	runningServices.manualReloadChan = make(chan struct{}, 1)
-	runningServices.reloadTrigger = func() error {
-		if !runningServices.reloading.CompareAndSwap(false, true) {
-			return fmt.Errorf("reload already in progress")
-		}
-		select {
-		case runningServices.manualReloadChan <- struct{}{}:
-			return nil
-		default:
-			// Should not happen, but reset flag if channel is full.
-			runningServices.reloading.Store(false)
-			return fmt.Errorf("reload already queued")
-		}
-	}
+	runningServices.reloadTrigger = newReloadTrigger(runningServices, agentLoop)
 	runningServices.HealthServer.SetReloadFunc(runningServices.reloadTrigger)
 
 	if err = runningServices.ChannelManager.StartAll(context.Background()); err != nil {
@@ -3058,8 +4143,14 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if runningServices.CronService != nil {
 		runningServices.CronService.Stop()
 	}
+	if runningServices.PlanEngine != nil {
+		runningServices.PlanEngine.Stop()
+	}
 	if runningServices.TaskTrigger != nil {
 		runningServices.TaskTrigger.Stop()
+	}
+	if runningServices.LoopScheduler != nil {
+		runningServices.LoopScheduler.Stop()
 	}
 	if runningServices.MediaStore != nil {
 		if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
@@ -3221,6 +4312,20 @@ func restartServices(
 	}
 	fmt.Println("  ✓ Cron service restarted")
 
+	// Restart the SAME plan-engine instance (ADR-049 D4) — unlike CronService,
+	// the engine is not reconstructed on reload: it was Stop()'d in
+	// stopAndCleanupServices(isReload=true) above, and Start() on an
+	// already-constructed *PlanEngine is safe to call again (fresh stopCh,
+	// re-subscribes to the event bus, re-runs boot reconciliation). taskStore/
+	// taskExecutor are themselves stable across a reload (owned by the SAME
+	// al, never recreated), so there is nothing to re-wire.
+	if runningServices.PlanEngine != nil {
+		if startErr := runningServices.PlanEngine.Start(context.Background()); startErr != nil {
+			return fmt.Errorf("error restarting plan engine: %w", startErr)
+		}
+		fmt.Println("  ✓ Plan engine restarted")
+	}
+
 	// Restart the task time-trigger scheduler on its dedicated CronService. The
 	// previous instance was already Stop()'d in stopAndCleanupServices(isReload).
 	if tStore := agent.GetTaskStore(al); tStore != nil {
@@ -3236,6 +4341,20 @@ func restartServices(
 			slog.Error("gateway: task trigger reconcile failed on reload", "error", recErr)
 		}
 		fmt.Println("  ✓ Task trigger scheduler restarted")
+	}
+
+	// Restart the /loop scheduler on a fresh dedicated CronService (ADR-049
+	// D6/D7). The previous instance was already Stop()'d in
+	// stopAndCleanupServices(isReload) — mirrors the task trigger restart
+	// immediately above.
+	{
+		loopSchedStorePath := filepath.Join(filepath.Dir(cfg.AgentHomeBasePath()), "loops", "jobs.json")
+		runningServices.LoopScheduler = agent.NewLoopScheduler(loopSchedStorePath, al)
+		if startErr := runningServices.LoopScheduler.Start(); startErr != nil {
+			return fmt.Errorf("error restarting loop scheduler: %w", startErr)
+		}
+		al.SetLoopScheduler(runningServices.LoopScheduler)
+		fmt.Println("  ✓ Loop scheduler restarted")
 	}
 
 	// Queued-task draining is owned by the dedicated TaskDrainService, never the
@@ -3383,11 +4502,36 @@ func restartServices(
 // and the reload is skipped, preventing spurious full-service restarts on every
 // login, settings change, or channel-config write. Only genuine external edits
 // (hashes not present in the registry) proceed to executeReload.
+//
+// homePath is $OMNIPUS_HOME, threaded through explicitly by the caller
+// (RunContextWithOptions, which already resolves it correctly) rather than
+// derived from configPath here. A prior version of this function derived the
+// entities root as filepath.Dir(configPath) under a comment claiming
+// "configPath is always $OMNIPUS_HOME/config.json by convention (see
+// agentstore.New's own doc comment)" — that citation was fabricated
+// (agentstore.New's doc says nothing of the kind) and the claim itself is
+// false whenever OMNIPUS_CONFIG (config.EnvConfig,
+// cmd/omnipus/internal/helpers.go's GetConfigPath) overrides the config path
+// to somewhere outside $OMNIPUS_HOME: filepath.Dir(configPath) then points at
+// the wrong directory, entity.Store.List maps a missing entities/agents/ dir
+// to (nil, nil, nil) — no error — and the entire in-memory agent roster
+// silently vanishes on the next external config edit. Passing the real
+// homePath in avoids the derivation entirely.
+//
+// markDegraded (may be nil, e.g. in tests) is called when
+// populateAgentsListFromEntityStoreStrict rejects a candidate config for
+// this home — see its doc for why an empty/wiped roster is a
+// privilege-escalation risk, not merely a UX gap. This lets the poller
+// surface the same operator-visible /health degraded signal executeReload's
+// own internal checks already produce, for a failure that happens BEFORE
+// executeReload is even reached.
 func setupConfigWatcherPolling(
 	configPath string,
+	homePath string,
 	debug bool,
 	credStore *credentials.Store,
 	selfWriteReg *configSelfWriteRegistry,
+	markDegraded func(error),
 ) (chan *config.Config, func()) {
 	configChan := make(chan *config.Config, 1)
 	stop := make(chan struct{})
@@ -3450,6 +4594,24 @@ func setupConfigWatcherPolling(
 					if err != nil {
 						logger.Errorf("⚠ Error loading new config: %v", err)
 						logger.Warn("  Using previous valid config")
+						continue
+					}
+					// ADR-054 D2/D3: repopulate cfg.Agents.List from the agent
+					// store — config.LoadConfig* strips agents.list on every
+					// load (legacy_agents_list.go), and this file-watcher
+					// poller is a separate config-load call site from
+					// restAPI.refreshConfigAndRewireServices's own bridge.
+					// Strict variant + the real homePath (see this function's
+					// doc comment for why filepath.Dir(configPath) was wrong):
+					// a roster-population failure must reject this reload
+					// attempt, not silently proceed with an empty/stale
+					// roster.
+					if rosterErr := populateAgentsListFromEntityStoreStrict(newCfg, homePath); rosterErr != nil {
+						logger.Errorf("⚠ Config reload: agent roster population failed: %v", rosterErr)
+						logger.Warn("  Using previous valid config")
+						if markDegraded != nil {
+							markDegraded(fmt.Errorf("config reload rejected: agent roster population failed: %w", rosterErr))
+						}
 						continue
 					}
 

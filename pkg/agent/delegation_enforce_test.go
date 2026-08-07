@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
@@ -79,6 +81,269 @@ func TestDelegationDenyChecker_DeniedWhenTargetNotTrusted(t *testing.T) {
 	}
 	if denial.Policy != tools.DenyTrustSet {
 		t.Fatalf("expected trust_set policy, got: %q (%s)", denial.Policy, denial.Reason)
+	}
+}
+
+// TestDelegationDenyChecker_DistinguishesNotFoundFromNotTrusted proves issue
+// #588 finding N7 is fixed: the batched UAT re-run found that delegating to
+// an agent that EXISTS but has no trust edge from the caller, and delegating
+// to a genuinely NONEXISTENT agent, returned byte-identical generic denial
+// text. Both cases must still DENY with the SAME Policy (DenyTrustSet) — this
+// test is a message-clarity check ONLY, never a deny/allow-logic check — but
+// the Reason text must now let a caller tell "not trusted" apart from
+// "doesn't exist".
+func TestDelegationDenyChecker_DistinguishesNotFoundFromNotTrusted(t *testing.T) {
+	// Same fixture as TestDelegationDenyChecker_DeniedWhenTargetNotTrusted
+	// (graph only authorizes Mia→Ray), but this test ALSO wires an
+	// agentExists probe so it can exercise both denial paths.
+	seedWorkspaceGraph(t, testWS, true, []graphEdge{
+		edge("mia", "ray", []string{"direct"}, nil),
+	})
+
+	// registered stands in for the live agent registry: "ava" is a real,
+	// addressable agent that simply has no trust edge from "mia";
+	// "nonexistent-agent" is not registered at all.
+	registered := map[string]bool{"mia": true, "ray": true, "ava": true}
+	agentExists := func(id string) bool { return registered[id] }
+
+	check := buildDelegationDenyCheckerForDelegate(
+		"mia", config.AgentDefaults{}, config.DelegationModeBackground, agentExists,
+	)
+
+	// Case 1: target EXISTS but has no trust edge from mia — "not trusted".
+	notTrustedDenial := check(ctxWS(testWS, 0), "ava")
+	if notTrustedDenial == nil {
+		t.Fatal("expected delegation denied for un-edged (but real) target, got allow")
+	}
+	if notTrustedDenial.Policy != tools.DenyTrustSet {
+		t.Fatalf("expected trust_set policy, got: %q (%s)", notTrustedDenial.Policy, notTrustedDenial.Reason)
+	}
+	if strings.Contains(notTrustedDenial.Reason, "does not exist") {
+		t.Errorf("target %q IS a real agent — denial must not claim it doesn't exist, got %q",
+			"ava", notTrustedDenial.Reason)
+	}
+	if !strings.Contains(notTrustedDenial.Reason, "not permitted") {
+		t.Errorf("expected a 'not permitted in this workspace' denial for a real-but-untrusted target, got %q",
+			notTrustedDenial.Reason)
+	}
+
+	// Case 2: target does NOT exist at all — must read differently from case 1.
+	notFoundDenial := check(ctxWS(testWS, 0), "nonexistent-agent")
+	if notFoundDenial == nil {
+		t.Fatal("expected delegation denied for nonexistent target, got allow")
+	}
+	if notFoundDenial.Policy != tools.DenyTrustSet {
+		t.Fatalf("expected trust_set policy, got: %q (%s)", notFoundDenial.Policy, notFoundDenial.Reason)
+	}
+	if !strings.Contains(notFoundDenial.Reason, "does not exist") {
+		t.Errorf("expected a 'does not exist' denial for a genuinely nonexistent target, got %q",
+			notFoundDenial.Reason)
+	}
+
+	// The exact regression N7 reported: the two messages must differ.
+	if notTrustedDenial.Reason == notFoundDenial.Reason {
+		t.Fatalf("N7 regression: 'exists but untrusted' and 'does not exist' produced the SAME denial text: %q",
+			notTrustedDenial.Reason)
+	}
+}
+
+// TestDelegationDistinction_RealWiringThroughCreateTask is the INTEGRATION
+// counterpart to TestDelegationDenyChecker_DistinguishesNotFoundFromNotTrusted
+// (above): it proves the "agent does not exist" vs "agent exists but is not
+// trusted" message distinction arrives through the REAL production wiring —
+// the agentExistsChecker(registry) closure baked into create_task's deny
+// checker at registerSharedTools time — not just through a synthetic
+// agentExists probe exercised in isolation.
+//
+// Coverage gap this closes: the unit test above drives the pure-function
+// logic with a hand-written `registered` map as the existence probe, but
+// NO test drove the distinction through a real AgentLoop with the real
+// agentExistsChecker(registry) closure production wires at the call site
+// (loop.go registerSharedTools). If that trailing-arg call site were ever
+// dropped, the variadic would default to nil and BOTH messages would
+// collapse to the generic "not permitted" — but the synthetic-probe unit
+// test would stay green, exactly the "tested with a seam production never
+// wires" failure class that caused the original distinction bug. Failure
+// of EITHER case below is a real regression in production wiring, not
+// just in the pure-function logic.
+func TestDelegationDistinction_RealWiringThroughCreateTask(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:      filepath.Join(home, "agents"),
+				ModelName: "test-model",
+			},
+			List: []config.AgentConfig{
+				{
+					ID:   "caller-agent",
+					Name: "Caller", Type: config.AgentTypeCustom,
+					Home: filepath.Join(home, "agents", "caller-agent"),
+				},
+				{
+					// worker-agent IS a real registered agent — it simply has
+					// NO trust edge from caller-agent in the workspace graph.
+					// The shared harness workspace (testHarnessWorkspaceMembershipID,
+					// seeded by mustNewAgentLoop -> ensureTestWorkspaceMembership)
+					// populates core_team only, never delegation edges.
+					ID:   "worker-agent",
+					Name: "Worker", Type: config.AgentTypeCustom,
+					Home: filepath.Join(home, "agents", "worker-agent"),
+				},
+			},
+		},
+	}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	t.Cleanup(func() { al.Close() })
+
+	callerInst, ok := al.GetRegistry().GetAgent("caller-agent")
+	if !ok {
+		t.Fatal("caller-agent not registered")
+	}
+	// Sanity: worker-agent is in the SAME registry the production deny
+	// checker's agentExistsChecker(registry) closure will consult — if this
+	// fails, the "extant-but-untrusted" case below cannot prove what it
+	// claims to prove.
+	if _, ok := al.GetRegistry().GetAgent("worker-agent"); !ok {
+		t.Fatal("worker-agent not registered — extant-but-untrusted case cannot be exercised")
+	}
+
+	// Bind BOTH the caller agent id and the shared harness workspace on ctx.
+	// create_task reads the caller from tools.ToolAgentID(ctx) and resolves
+	// the governing workspace from tools.ToolWorkspaceID(ctx); the workspace
+	// must be bound explicitly because testHarnessWorkspaceMembershipID is
+	// never flagged is_default (so the no-bound fallback has nothing to find).
+	ctx := tools.WithWorkspaceID(
+		tools.WithAgentID(context.Background(), "caller-agent"),
+		testHarnessWorkspaceMembershipID,
+	)
+
+	// Case 1 — target genuinely does NOT exist: the real
+	// agentExistsChecker(registry) closure (wired at registerSharedTools)
+	// must report it as nonexistent, surfacing the "does not exist"
+	// message. If the wiring were ever dropped (the trailing arg defaulted
+	// to nil), this would collapse to the generic "not permitted" message
+	// and the assertion below would fail — proving the wiring is live.
+	nonexistentResult := callerInst.Tools.Execute(ctx, "create_task", map[string]any{
+		"title":    "x",
+		"prompt":   "x",
+		"agent_id": "genuinely-nonexistent-agent",
+		"criteria": []any{map[string]any{"kind": "prose", "text": "done"}},
+	})
+	if nonexistentResult == nil || !nonexistentResult.IsError {
+		t.Fatalf("create_task against a nonexistent agent must be denied, got %+v", nonexistentResult)
+	}
+	if !strings.Contains(nonexistentResult.ForLLM, "does not exist") {
+		t.Fatalf("production wiring regression: delegating to a nonexistent agent must surface "+
+			"the 'does not exist' message, got %q", nonexistentResult.ForLLM)
+	}
+
+	// Case 2 — target EXISTS but has no trust edge from caller-agent: the
+	// SAME agentExistsChecker(registry) closure must report it as extant,
+	// surfacing the generic "not permitted in this workspace" message
+	// instead. A "does not exist" message here would mean the registry
+	// lookup itself is broken (the agent IS registered — see the sanity
+	// check above).
+	untrustedResult := callerInst.Tools.Execute(ctx, "create_task", map[string]any{
+		"title":    "x",
+		"prompt":   "x",
+		"agent_id": "worker-agent",
+		"criteria": []any{map[string]any{"kind": "prose", "text": "done"}},
+	})
+	if untrustedResult == nil || !untrustedResult.IsError {
+		t.Fatalf("create_task against an extant-but-untrusted agent must be denied, got %+v", untrustedResult)
+	}
+	if !strings.Contains(untrustedResult.ForLLM, "not permitted") {
+		t.Fatalf("production wiring regression: delegating to an extant-but-untrusted agent must "+
+			"surface the 'not permitted' message, got %q", untrustedResult.ForLLM)
+	}
+	if strings.Contains(untrustedResult.ForLLM, "does not exist") {
+		t.Fatalf("worker-agent IS a real registered agent — denial must NOT claim it doesn't exist, got %q",
+			untrustedResult.ForLLM)
+	}
+
+	// The two denial reasons MUST differ — the load-bearing assertion that
+	// proves the distinction is preserved end-to-end through the real wiring.
+	// Comparing the parsed `reason` field (not the whole JSON) avoids
+	// false-positive equality from the shared tool/policy/target fields.
+	if delegationReasonFromResult(t, nonexistentResult) == delegationReasonFromResult(t, untrustedResult) {
+		t.Fatalf("production wiring regression: 'nonexistent target' and 'extant-but-untrusted "+
+			"target' produced the SAME denial reason %q — the agentExistsChecker(registry) "+
+			"wiring is not live (the variadic defaulted to nil and both cases collapsed to "+
+			"the generic 'not permitted' message)",
+			delegationReasonFromResult(t, nonexistentResult))
+	}
+}
+
+// delegationReasonFromResult extracts the "reason" field from a JSON-encoded
+// DelegationFailure result (DelegationDeniedResult, pkg/tools/result.go) so a
+// test can compare reasons without depending on the wire-type JSON schema. On
+// a non-JSON result it falls back to the raw ForLLM so a failure still
+// produces a useful equality-comparison message.
+func delegationReasonFromResult(t *testing.T, r *tools.ToolResult) string {
+	t.Helper()
+	var p struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(r.ForLLM), &p); err != nil {
+		return r.ForLLM
+	}
+	return p.Reason
+}
+
+// TestAgentExistsChecker_NilRegistryReturnsNil pins the contract of the
+// agentExistsChecker(nil) fix: a nil registry must return nil (NOT a non-nil
+// closure that lies "does not exist" about every agent). Returning nil makes
+// findDelegationEdge's `exists != nil && !exists(target)` guard skip the
+// "does not exist" branch entirely, collapsing the nil-registry path onto the
+// SAME generic "not permitted" fallback the caller would have hit by omitting
+// the variadic arg entirely. A non-nil liar closure that falsely reported
+// every id as nonexistent would surface a misleading "does not exist"
+// message about an agent that may in fact exist — worse than no probe at all.
+//
+// This is the unit-level pin; the end-to-end behavior (real registry surfaces
+// the "does not exist" message through real production wiring) is covered by
+// TestDelegationDistinction_RealWiringThroughCreateTask above.
+func TestAgentExistsChecker_NilRegistryReturnsNil(t *testing.T) {
+	if got := agentExistsChecker(nil); got != nil {
+		t.Fatalf("agentExistsChecker(nil) must return nil so the nil-registry path " +
+			"collapses onto the omitted-variadic generic-message fallback; got a non-nil " +
+			"closure that would falsely report every agent as nonexistent")
+	}
+
+	// Control: a real registry MUST yield a non-nil probe (otherwise the
+	// "does not exist" distinction is silently lost for every production
+	// caller, not just the nil-registry defensive path).
+	seedWorkspaceGraph(t, testWS, true, nil) // OMNIPUS_HOME only; registry built below is inert
+	// Build a minimal real AgentLoop so the registry has at least one real
+	// agent to find — proves the non-nil return is a real probe that resolves
+	// a registered id, not just a non-nil func that ignores its argument.
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Home: filepath.Join(home, "agents"), ModelName: "test-model"},
+			List: []config.AgentConfig{
+				{ID: "real-agent", Name: "Real", Type: config.AgentTypeCustom,
+					Home: filepath.Join(home, "agents", "real-agent")},
+			},
+		},
+	}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	t.Cleanup(func() { al.Close() })
+
+	probe := agentExistsChecker(al.GetRegistry())
+	if probe == nil {
+		t.Fatal("agentExistsChecker(non-nil registry) must return a non-nil probe so the " +
+			"distinction is reachable through real production wiring")
+	}
+	if !probe("real-agent") {
+		t.Errorf("non-nil-registry probe must report a registered agent as existing")
+	}
+	if probe("nonexistent-agent") {
+		t.Errorf("non-nil-registry probe must report an unregistered agent as nonexistent")
 	}
 }
 

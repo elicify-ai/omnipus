@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // reload_pairing_test.go — Wave 2 gate tests for WhatsApp pairing (#283/#368)
 //
 // Covers:

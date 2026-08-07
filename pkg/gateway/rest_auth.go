@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -848,12 +846,35 @@ func revokeUserToken(userMap map[string]any, presentedToken, presentedID string)
 	userMap["tokens"] = kept
 }
 
-// reloadPollDeadline is the poll window triggerReloadAndWaitOutcome waits
-// for IsReloadPending() to clear before reporting confirmed=false. A var
-// (not an inlined 5*time.Second literal) purely so tests can shrink it
-// instead of sleeping out a real 5-second timeout to exercise that branch —
-// production always runs with the default below.
-var reloadPollDeadline = 5 * time.Second
+// reloadWaitTimeout bounds how long a config-write handler waits for the
+// in-memory rebuild to land — the poll window triggerReloadAndWaitOutcome
+// waits for IsReloadPending() to clear before reporting confirmed=false.
+//
+// This was 5 SECONDS, and that was a release blocker in its own right. A reload
+// stops and restarts every channel, cron, the plan engine, the task/loop
+// schedulers and the provider, then rebuilds the whole AgentRegistry. On an
+// idle gateway that is milliseconds; under real load (a busy plan engine, live
+// LLM turns — the llm-conformance e2e shard) it is TENS OF SECONDS. Every
+// reload that overran 5s hit the silent-nil return in triggerReloadAndWait, so
+// POST /agents answered 201 with no warning while the registry still had no
+// such agent, and the caller's next POST /tasks or POST /workspaces failed
+// with `agent "x" not found` / `core_team member "x" is not a registered agent`.
+//
+// The value is DERIVED from what a reload can actually cost rather than picked:
+// handleConfigReload drains every service with serviceShutdownTimeout and then
+// rebuilds the provider under providerReloadTimeout, and those can serialise.
+// A caller must not give up on a reload that is still legitimately progressing,
+// so the bound is that worst case plus slack. Deriving it also keeps this
+// correct if either constant is retuned.
+//
+// This is a bound on being WRONG, not a target: the normal path returns as soon
+// as the rebuild completes (milliseconds on an idle gateway), and coalescing
+// (services.beginReload) guarantees a reload that post-dates the caller's write
+// is actually queued.
+//
+// A var, not a const, only so the expiry BEHAVIOUR can be tested without a
+// 90-second test. Never reassign it outside tests.
+var reloadWaitTimeout = serviceShutdownTimeout + providerReloadTimeout + 30*time.Second
 
 // triggerReloadAndWaitOutcome is triggerReloadAndWait's richer sibling: same
 // trigger-and-poll sequence, but the return additionally distinguishes a
@@ -905,7 +926,7 @@ func (a *restAPI) triggerReloadAndWaitOutcome() (confirmed bool, err error) {
 			return false, err
 		}
 	}
-	deadline := time.Now().Add(reloadPollDeadline)
+	deadline := time.Now().Add(reloadWaitTimeout)
 	for time.Now().Before(deadline) {
 		if !a.agentLoop.IsReloadPending() {
 			return true, nil
@@ -915,24 +936,42 @@ func (a *restAPI) triggerReloadAndWaitOutcome() (confirmed bool, err error) {
 	// Reload may still be running — the exact ambiguity FIX 4 closes.
 	// confirmed=false with a nil error: callers that only check err keep
 	// their original "not blocked indefinitely" behavior; callers that
-	// check confirmed can now tell the two outcomes apart.
+	// check confirmed can now tell the two outcomes apart. triggerReloadAndWait
+	// below is NOT one of those callers — it turns confirmed=false into a real
+	// error, per reloadWaitTimeout's own "MUST NOT be swallowed" contract.
 	return false, nil
 }
 
 // triggerReloadAndWait triggers a config reload and polls until
 // IsReloadPending() clears (indicating the in-memory config has been updated),
-// up to reloadPollDeadline. Returns an error when the reload fails to start;
-// reload-completion timeout is treated as best-effort (we return nil so callers
-// are not blocked indefinitely) — this is triggerReloadAndWaitOutcome with the
-// confirmed/unconfirmed distinction discarded; see that function's doc comment
-// for why this wrapper is kept with its original signature rather than changed
-// in place.
+// up to reloadWaitTimeout.
+//
+// Returns an error when the reload fails to start AND when the wait times out.
+// The timeout MUST NOT be swallowed: it used to `return nil`, which told the
+// caller the rebuild had landed when it had not — callers turn that nil into a
+// 201 with no warning (createAgent) or a plain 200 (rotateGatewayToken,
+// HandleProviders), so a handler reported success for a change that was not yet
+// live. Persisted-but-not-live is a real, caller-visible state and it has to
+// surface as one; see reloadWaitTimeout's own doc comment for the incident
+// this caused.
 //
 // The special case "reload not configured" (reloadFunc == nil) is treated as a
 // no-op rather than an error: this condition is normal in unit tests where the
 // full gateway reload pipeline is not wired. Production always configures the
 // reload function during startup.
 func (a *restAPI) triggerReloadAndWait() error {
-	_, err := a.triggerReloadAndWaitOutcome()
-	return err
+	confirmed, err := a.triggerReloadAndWaitOutcome()
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		slog.Error("config reload did not complete within the wait deadline; "+
+			"the change is persisted on disk but is not yet live in memory",
+			"timeout", reloadWaitTimeout)
+		return fmt.Errorf(
+			"config reload did not complete within %s; the change is saved but not yet active",
+			reloadWaitTimeout,
+		)
+	}
+	return nil
 }

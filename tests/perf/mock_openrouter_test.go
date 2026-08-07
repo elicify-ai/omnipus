@@ -12,8 +12,6 @@
 // (request marshal, response decode, streaming-chunk parser) is fully
 // exercised — only the network and the model latency are removed.
 
-//go:build !cgo
-
 package perf
 
 import (

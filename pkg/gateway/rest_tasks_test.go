@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_tasks_test.go — regression tests for the fixes in rest_tasks.go (Sprint 2 hotfix).
 //
 // Fix #1: PUT /tasks/{id}/todos and PUT /tasks/{id}/dependencies now accept a

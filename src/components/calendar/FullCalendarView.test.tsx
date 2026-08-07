@@ -66,7 +66,6 @@ describe('occurrenceStatusLabel (H3 — accessible name)', () => {
     expect(occurrenceStatusLabel('blocked')).toBe('Blocked')
     expect(occurrenceStatusLabel('inbox')).toBe('Inbox')
     expect(occurrenceStatusLabel('next')).toBe('Next')
-    expect(occurrenceStatusLabel('planning')).toBe('Planning')
   })
 
   it('never silently mislabels "scheduled"/"no_record" as "Inbox" (the H3 regression)', () => {
@@ -135,13 +134,11 @@ describe('extTooltip (L3 — chip tooltip surfacing)', () => {
     expect(extTooltip(ext)).toBe('More occurrences not shown')
   })
 
-  it('returns undefined for kinds with no tooltip field at all (task-due, task-fire, milestone)', () => {
+  it('returns undefined for kinds with no tooltip field at all (task-due, task-fire)', () => {
     const due: CalendarEventExtProps = { kind: 'task-due', taskId: 't1', status: 'next', icon: 'Circle' }
     const fire: CalendarEventExtProps = { kind: 'task-fire', taskId: 't1', status: 'next', icon: 'Clock' }
-    const milestone: CalendarEventExtProps = { kind: 'milestone', milestoneId: 'm1', icon: 'Flag' }
     expect(extTooltip(due)).toBeUndefined()
     expect(extTooltip(fire)).toBeUndefined()
-    expect(extTooltip(milestone)).toBeUndefined()
   })
 })
 

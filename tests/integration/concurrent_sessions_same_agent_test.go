@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // concurrent_sessions_same_agent_test.go — regression test for Bug-3 variant:
 // multiple concurrent sessions on the SAME agent all reply.
 //
@@ -18,6 +16,7 @@
 package integration
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -38,52 +37,81 @@ import (
 func TestConcurrentSessions_FiveSessions_SameAgent(t *testing.T) {
 	const numSessions = 5
 	const replyTimeout = 8 * time.Second
+	// The collector goroutines own the real detection budget (replyTimeout).
+	// The test goroutine waits strictly longer so a collector always wins the
+	// race and delivers a CLASSIFIED verdict; the outer branch then only fires
+	// when a collector failed to report at all, which is a harness fault and
+	// is reported as such rather than as a starvation finding.
+	const collectorGrace = 3 * time.Second
 
 	gw := startIntegrationGateway(t)
 
-	type sessionSlot struct {
-		conn    *websocket.Conn
-		replied chan string
-	}
-
-	slots := make([]sessionSlot, numSessions)
-	for i := range slots {
-		slots[i] = sessionSlot{
-			conn:    wsConnect(t, gw),
-			replied: make(chan string, 1),
-		}
+	conns := make([]*websocket.Conn, numSessions)
+	for i := range conns {
+		conns[i] = wsConnect(t, gw)
 	}
 
 	// Send messages on all sessions nearly simultaneously to maximize the
-	// likelihood of concurrent in-flight turns on the same agent.
+	// likelihood of concurrent in-flight turns on the same agent. The
+	// goroutines report write failures back to the test goroutine instead of
+	// calling Fatalf off-thread (forbidden by the testing contract).
+	sendErrs := make(chan error, numSessions)
 	var wg sync.WaitGroup
 	wg.Add(numSessions)
-	for i, s := range slots {
+	for i, conn := range conns {
 		go func() {
 			defer wg.Done()
-			sendMessage(t, s.conn, "same-agent concurrent test session "+string(rune('A'+i)))
+			if err := sendMessageErr(conn, "same-agent concurrent test session "+string(rune('A'+i))); err != nil {
+				sendErrs <- fmt.Errorf("session %d (%c): %w", i, rune('A'+i), err)
+			}
 		}()
 	}
 	wg.Wait()
+	close(sendErrs)
+	for err := range sendErrs {
+		// A failed WS write never reached the agent, so it proves nothing
+		// about concurrency. Say so explicitly.
+		t.Errorf("TRANSPORT FAILURE while sending — NOT same-agent starvation: %v", err)
+	}
+	if t.Failed() {
+		t.Fatal("aborting: the transport failed before the agent was reached, so this run cannot say anything about same-agent concurrency")
+	}
 	t.Logf("all %d messages sent; waiting up to %v for replies", numSessions, replyTimeout)
 
-	// Collect replies concurrently.
-	for _, s := range slots {
-		go func() {
-			frameType := waitForFirstToken(t, s.conn, replyTimeout)
-			s.replied <- frameType
-		}()
+	// Collect replies concurrently. Buffered so a late collector never blocks
+	// on send after the test has returned.
+	replies := make(chan wsReply, numSessions)
+	for i, conn := range conns {
+		go collectFirstToken(replies, i, conn, replyTimeout)
 	}
 
-	// Assert all received replies; a timeout means a session was starved.
-	for i, s := range slots {
+	// The test goroutine decides what every outcome MEANS.
+	for range conns {
 		select {
-		case ft := <-s.replied:
-			t.Logf("session %d (%c) replied with frame type %q", i, rune('A'+i), ft)
-		case <-time.After(replyTimeout):
+		case r := <-replies:
+			switch {
+			case r.waitErr == nil:
+				t.Logf("session %d (%c) replied with frame type %q", r.idx, rune('A'+r.idx), r.frameType)
+			case r.waitErr.ReadTimeout:
+				// Healthy connection, deadline expired, no assistant frame.
+				// This is the genuine starvation signature.
+				t.Fatalf(
+					"BUG-3: session %d (%c) of %d did not receive a reply within %v — same-agent concurrent starvation. %v",
+					r.idx, rune('A'+r.idx), numSessions, replyTimeout, r.waitErr,
+				)
+			default:
+				// The socket broke. Whatever else is true, this run did not
+				// observe starvation.
+				t.Fatalf(
+					"TRANSPORT FAILURE on session %d (%c) — NOT same-agent starvation, the WebSocket died before a reply could arrive: %v",
+					r.idx, rune('A'+r.idx), r.waitErr,
+				)
+			}
+		case <-time.After(replyTimeout + collectorGrace):
 			t.Fatalf(
-				"BUG-3: session %d (%c) of %d did not receive a reply within %v — same-agent concurrent starvation",
-				i, rune('A'+i), numSessions, replyTimeout,
+				"HARNESS FAULT: a collector goroutine did not report within %v (its own budget was %v). "+
+					"No verdict was produced — this is neither a starvation finding nor a transport finding.",
+				replyTimeout+collectorGrace, replyTimeout,
 			)
 		}
 	}
@@ -118,85 +146,81 @@ func TestConcurrentSessions_FiveSessions_SameAgent_TimingProof(t *testing.T) {
 
 	gw := startSlowIntegrationGateway(t, slowDelay)
 
-	type sessionSlot struct {
-		conn    *websocket.Conn
-		replied chan string
-	}
-
-	slots := make([]sessionSlot, numSessions)
-	for i := range slots {
-		slots[i] = sessionSlot{
-			conn:    wsConnect(t, gw),
-			replied: make(chan string, 1),
-		}
+	conns := make([]*websocket.Conn, numSessions)
+	for i := range conns {
+		conns[i] = wsConnect(t, gw)
 	}
 
 	start := time.Now()
 
-	// Send messages on all sessions nearly simultaneously.
+	// Send messages on all sessions nearly simultaneously. Write failures come
+	// back to the test goroutine rather than a Fatalf off-thread.
+	sendErrs := make(chan error, numSessions)
 	var wg sync.WaitGroup
 	wg.Add(numSessions)
-	for i, s := range slots {
+	for i, conn := range conns {
 		go func() {
 			defer wg.Done()
-			sendMessage(t, s.conn, "slow same-agent concurrent timing test "+string(rune('A'+i)))
-		}()
-	}
-	wg.Wait()
-	t.Logf("all %d messages sent at t=+%v", numSessions, time.Since(start).Round(time.Millisecond))
-
-	// Collect replies concurrently.
-	for _, s := range slots {
-		go func() {
-			ft := waitForFirstToken(t, s.conn, parallelDeadline+2*time.Second)
-			s.replied <- ft
-		}()
-	}
-
-	// All must reply within the parallel deadline.
-	overallDeadline := time.NewTimer(parallelDeadline)
-	defer overallDeadline.Stop()
-
-	replies := make([]string, numSessions)
-	remaining := numSessions
-	repliedCh := make(chan struct {
-		idx int
-		ft  string
-	}, numSessions)
-
-	// Re-launch collectors to a single fan-in channel for deadline checking.
-	for i, s := range slots {
-		go func() {
-			select {
-			case ft := <-s.replied:
-				repliedCh <- struct {
-					idx int
-					ft  string
-				}{i, ft}
-			case <-time.After(parallelDeadline + 3*time.Second):
-				repliedCh <- struct {
-					idx int
-					ft  string
-				}{i, ""}
+			if err := sendMessageErr(conn, "slow same-agent concurrent timing test "+string(rune('A'+i))); err != nil {
+				sendErrs <- fmt.Errorf("session %d (%c): %w", i, rune('A'+i), err)
 			}
 		}()
 	}
+	wg.Wait()
+	close(sendErrs)
+	for err := range sendErrs {
+		t.Errorf("TRANSPORT FAILURE while sending — NOT a timing/starvation finding: %v", err)
+	}
+	if t.Failed() {
+		t.Fatal("aborting: the transport failed before the agent was reached, so this run cannot prove or disprove parallel execution")
+	}
+	t.Logf("all %d messages sent at t=+%v", numSessions, time.Since(start).Round(time.Millisecond))
 
-	for remaining > 0 {
+	// Collect replies concurrently, straight into one fan-in channel. The
+	// collector budget deliberately exceeds parallelDeadline: the LOAD-BEARING
+	// assertion is the wall-clock deadline below, which must fire on a slow
+	// (sequential) system regardless of how long a collector would wait.
+	replies := make(chan wsReply, numSessions)
+	for i, conn := range conns {
+		go collectFirstToken(replies, i, conn, parallelDeadline+2*time.Second)
+	}
+
+	// All must reply within the parallel deadline — this is the proof.
+	overallDeadline := time.NewTimer(parallelDeadline)
+	defer overallDeadline.Stop()
+
+	got := make([]string, numSessions)
+	for remaining := numSessions; remaining > 0; remaining-- {
 		select {
-		case r := <-repliedCh:
-			replies[r.idx] = r.ft
-			remaining--
-			t.Logf("session %d (%c) replied (%q) at t=+%v",
-				r.idx, rune('A'+r.idx), r.ft, time.Since(start).Round(time.Millisecond))
+		case r := <-replies:
+			switch {
+			case r.waitErr == nil:
+				got[r.idx] = r.frameType
+				t.Logf("session %d (%c) replied (%q) at t=+%v",
+					r.idx, rune('A'+r.idx), r.frameType, time.Since(start).Round(time.Millisecond))
+			case r.waitErr.ReadTimeout:
+				t.Fatalf(
+					"BUG-3 (same-agent): session %d (%c) sat on a healthy connection for %v without a single assistant frame — starvation, not slowness. %v",
+					r.idx, rune('A'+r.idx), r.waitErr.Waited, r.waitErr,
+				)
+			default:
+				// Distinguished from the timing verdict below: the socket
+				// died, so wall-clock says nothing about parallelism here.
+				t.Fatalf(
+					"TRANSPORT FAILURE on session %d (%c) at t=+%v — NOT a timing proof failure, the WebSocket died before a reply could arrive: %v",
+					r.idx, rune('A'+r.idx), time.Since(start).Round(time.Millisecond), r.waitErr,
+				)
+			}
 		case <-overallDeadline.C:
+			// Reached only with every connection still healthy and no
+			// transport error reported — the sessions really are too slow.
 			elapsed := time.Since(start).Round(time.Millisecond)
 			t.Fatalf(
-				"BUG-3 TIMING PROOF FAILED (same-agent): wall-clock elapsed=%v > parallelDeadline=%v. "+
+				"BUG-3 TIMING PROOF FAILED (same-agent): wall-clock elapsed=%v > parallelDeadline=%v with no transport error on any session. "+
 					"Expected ≤%v for %d parallel sessions at %v/session. "+
 					"Sequential dispatch lower-bound=%v. Replies so far: %v",
 				elapsed, parallelDeadline, parallelDeadline, numSessions, slowDelay,
-				time.Duration(numSessions)*slowDelay, replies,
+				time.Duration(numSessions)*slowDelay, got,
 			)
 		}
 	}
@@ -205,8 +229,8 @@ func TestConcurrentSessions_FiveSessions_SameAgent_TimingProof(t *testing.T) {
 	t.Logf("TIMING PROOF (same-agent): all %d sessions replied in %v (parallel deadline=%v, sequential lower-bound=%v)",
 		numSessions, elapsed.Round(time.Millisecond), parallelDeadline, time.Duration(numSessions)*slowDelay)
 
-	// Belt-and-suspenders: all replies must be non-empty.
-	for i, reply := range replies {
+	// Belt-and-suspenders: every session must have recorded a real frame type.
+	for i, reply := range got {
 		if reply == "" {
 			t.Errorf("BUG-3: session %d (%c) got no reply (empty frame type)", i, rune('A'+i))
 		}

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // M4 WebSocket resilience tests.
 //
 // Covers three new behaviors introduced in the M4 milestone:

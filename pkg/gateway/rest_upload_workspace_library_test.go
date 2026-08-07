@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_upload_workspace_library_test.go — FIX-1 regression test.
 //
 // POST /api/v1/upload's workspace-media-library path

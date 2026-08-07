@@ -38,6 +38,11 @@ const (
 	// EntryTypeTurnCancelled marks the JSONL entry written when a turn is canceled
 	// mid-stream. Written once per fired cancel to transcript.jsonl (FR-15).
 	EntryTypeTurnCancelled EntryType = "turn_canceled"
+	// EntryTypeJudgeVerdict marks a transcript entry carrying a task.JudgeVerdict
+	// (ADR-049, spec Part A §C/FR-025). Written alongside the worker's ADR-043
+	// completion marker so the two cannot silently disagree — the Judge System
+	// Agent's verdict is never inferred from absence (NFR-2).
+	EntryTypeJudgeVerdict EntryType = "judge_verdict"
 )
 
 // SessionStatus classifies the lifecycle state of a session.
@@ -97,6 +102,100 @@ type SessionMeta struct {
 	AgentIDs            []string          `json:"agent_ids,omitempty"`
 	ActiveAgentID       string            `json:"active_agent_id,omitempty"`
 	CompactionSummaries map[string]string `json:"compaction_summaries,omitempty"` // per-agent compaction
+
+	// ParentSessionID names the DIRECT parent of a delegated child session
+	// (ADR-057 FR-008/W2). Empty for a root (non-delegated) session. This is
+	// the write side of the FR-097 in-memory parent index (pkg/session/
+	// unified.go's u4IndexAddChild/ChildCount) — every writer that persists
+	// this field (currently the identity-group targeted writer,
+	// u5WriteIdentityLocked in unified_meta_files.go) MUST also call
+	// u4IndexAddChild(ParentSessionID, ID) so the index stays in sync with
+	// disk; skipping that call leaves ChildCount permanently 0 for real
+	// children, a silent failure of exactly this ADR's governing shape. See
+	// FR-091 for the sole reader (GET /api/v1/sessions' roots-only + nested
+	// listing) — without a reader this field could ship write-only with
+	// every test green (spec note on W2).
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+
+	// Goal loop state (ADR-049 D6/D7, spec Part B US-8, `/goal <condition>`),
+	// following the TaskID precedent above: session-scoped, not a wire type
+	// (the `goal_status` WS frame and `/goal status` reply are the wire/UX
+	// surfaces). GoalCondition == "" means no active goal — replace-on-set
+	// (FR-068) simply overwrites all five fields together.
+	// GoalID is the stable identifier for the CURRENT goal generation
+	// (ADR-053 R§8.11's `goal_id`, UAT S3 fix): minted once when a goal
+	// activates from empty (fresh `/goal <condition>` or a confirmed fresh
+	// pending goal), held constant across every round-advance/pause/judging
+	// frame for that generation (an amendment via `/goal confirm` keeps it —
+	// it is the SAME goal being refined), and cleared together with the rest
+	// of the Goal* fields on `/goal clear`. This is what lets the SPA's
+	// GoalPillTray key one pill per goal generation instead of collapsing
+	// every goal this session ever carried into a single `_default` bucket.
+	// Never regenerated mid-lifecycle — a fabricated per-frame id would be
+	// worse than no id at all.
+	GoalID           string `json:"goal_id,omitempty"`
+	GoalCondition    string `json:"goal_condition,omitempty"`
+	GoalRoundsUsed   int    `json:"goal_rounds_used,omitempty"`
+	GoalMaxRounds    int    `json:"goal_max_rounds,omitempty"`
+	GoalLatestReason string `json:"goal_latest_reason,omitempty"`
+	// GoalStartedAt is an RFC 3339 UTC timestamp, used for `/goal status`'s
+	// elapsed wall-clock (FR-069).
+	GoalStartedAt string `json:"goal_started_at,omitempty"`
+	// GoalLastActivityAt is the FR-064/D7 idle-expiry calendar-brake clock for
+	// `/goal` (review r1, mirrors plan_engine.go's Plan.LastActivityAt
+	// semantics exactly): an RFC 3339 UTC timestamp bumped on genuine goal
+	// activity (goal set, or a judge round that actually ran) but
+	// deliberately NOT on a judge-unavailability pause (R9/m4) — a
+	// permanently-unavailable judge must still end the loop via this
+	// calendar brake, never via a fabricated verdict or a clock that never
+	// expires.
+	GoalLastActivityAt string `json:"goal_last_activity_at,omitempty"`
+	// GoalCriteriaJSON is the ADR-053 Phase-2 compiled criteria ladder
+	// (FR-110/FR-113): the engine-invoked SMART compiler's output — a JSON-encoded
+	// []task.AcceptanceCriterion (the S1 unified goal/criteria record, reusing the
+	// SAME AcceptanceCriterion type tasks/plans use, DoD-11 — never a second
+	// criteria type). Empty when no goal is active OR when a legacy pre-Phase-2
+	// goal carries only GoalCondition (checkGoalLoopAfterTurn falls back to a
+	// single prose criterion from GoalCondition in that case, preserving
+	// back-compat). Cleared together with GoalCondition on /goal clear (FR-114).
+	// Immutable once the user confirms the echo (D9); a re-statement AMENDS by
+	// minting a fresh JSON via a diffed, confirmed amendment (N-6).
+	GoalCriteriaJSON string `json:"goal_criteria,omitempty"`
+	// GoalPendingJSON holds a PROPOSED-but-unconfirmed CompiledGoal JSON during
+	// a re-statement amendment flow (N-6/D11: a `/goal <new intent>` issued while
+	// a goal is ALREADY active is diffed as an amendment and confirmed via
+	// `/goal confirm`, never silently recompiled). While pending, the ACTIVE
+	// goal's Condition + GoalCriteriaJSON are untouched; on confirm the pending
+	// goal mints a new generation (GoalCondition + GoalCriteriaJSON take the
+	// proposed values, GoalPendingJSON clears). Ephemeral-ish: cleared on
+	// /goal clear and on a fresh `/goal <intent>` that supersedes it.
+	GoalPendingJSON string `json:"goal_pending,omitempty"`
+
+	// Loop state (ADR-049 D6/D7, spec Part B US-9, `/loop`). LoopMode == ""
+	// means no active loop. LoopMode is "interval" (cron `every` + `continue`)
+	// or "self_paced" (agent-chosen one-shot `at` jobs, FR-072).
+	LoopMode     string `json:"loop_mode,omitempty"`
+	LoopPrompt   string `json:"loop_prompt,omitempty"`
+	LoopRunCount int    `json:"loop_run_count,omitempty"`
+	LoopMaxRuns  int    `json:"loop_max_runs,omitempty"`
+	// LoopIntervalMS is set for interval mode (the fixed cadence); 0 for
+	// self_paced mode (which instead carries LoopNextDelayMS per run).
+	LoopIntervalMS int64 `json:"loop_interval_ms,omitempty"`
+	// LoopNextDelayMS is the self-paced mode's most recently agent-chosen
+	// next-run delay (FR-072), surfaced by `/loop status`. 0 until the first
+	// self-paced run completes.
+	LoopNextDelayMS int64 `json:"loop_next_delay_ms,omitempty"`
+	// LoopJobID is the owning cron.CronJob.ID (pkg/agent's dedicated
+	// LoopScheduler store) so /loop stop and the run-fired callback can find
+	// and remove/reschedule the job.
+	LoopJobID string `json:"loop_job_id,omitempty"`
+	// LoopStartedAt is an RFC 3339 UTC timestamp, used for `/loop status`'s
+	// elapsed wall-clock.
+	LoopStartedAt string `json:"loop_started_at,omitempty"`
+	// LoopLastActivityAt is the FR-064/D7 idle-expiry calendar-brake clock for
+	// `/loop` (review r1): an RFC 3339 UTC timestamp bumped on genuine loop
+	// activity (loop set, or a scheduled run that actually fired).
+	LoopLastActivityAt string `json:"loop_last_activity_at,omitempty"`
 }
 
 // PostLoad backfills v2 multi-agent fields from the legacy AgentID field.
@@ -202,56 +301,64 @@ type TranscriptEntry struct {
 	// (non-delegated) turn, so existing/legacy transcripts round-trip
 	// unchanged.
 	//
-	// WHY this field exists: a delegated child sub-turn shares its parent's
-	// transcriptSessionID (spawnSubTurn sets
-	// TranscriptSessionID: parentTS.transcriptSessionID, CoreTeam-scoped
-	// workspace design — there is no separate per-sub-turn transcript file),
-	// so the delegate's own intermediate narration and its own final-turn
-	// text land in the exact same transcript.jsonl as the delegator's real
-	// top-level messages, indistinguishable by any OTHER field (Role,
-	// Content, AgentID, TurnID are all populated normally for these entries
-	// too). LIVE rendering never shows this content as a chat bubble at all
-	// — pkg/gateway/websocket.go's wsStreamer.Update silently withholds the
-	// live TokenFrame for a child sub-turn's own streaming (the
-	// "shadow-stream" ownership gate: a different, still-live turn already
-	// owns TokenFrame delivery for the chatID) while still fully persisting
-	// the content via Finalize. Without this field, pkg/gateway/replay.go had
-	// no signal to replicate that suppression on reload — it flattened every
-	// entry with non-empty Content into a top-level replay_message frame,
-	// which doubled the visible bubble count and leaked the delegate's raw
-	// internal report text (plus a stray model tag/avatar it never carried
-	// live) as if each were a separate top-level turn.
+	// [ADR-057 FR-037 doc correction] The paragraph that used to sit here
+	// described the PRE-ADR-057 world and is retained below only as history,
+	// because two of its load-bearing claims are now FALSE:
 	//
-	// Backend-only: never serialized onto a wire frame. replay.go uses it to
-	// withhold the entry from replay entirely (matching live's silent
-	// suppression) rather than exposing it as a NEW nested-narration UI
-	// element that live rendering doesn't have either.
+	//   (1) "a delegated child sub-turn shares its parent's
+	//       transcriptSessionID (spawnSubTurn sets
+	//       TranscriptSessionID: parentTS.transcriptSessionID … there is no
+	//       separate per-sub-turn transcript file)" — FALSE since FR-007.
+	//       spawnSubTurn now sets TranscriptSessionID: childID
+	//       (pkg/agent/subturn.go), so a delegated child owns its OWN
+	//       store-backed session and its OWN transcript.jsonl. The parent's
+	//       transcript is deliberately EMPTY of the child's writes. (What a
+	//       child DOES inherit verbatim from its parent is the separate
+	//       routingSessionID field — the cancel/interrupt reachability key,
+	//       subturn.go:1130 — which is a different concept from this one and
+	//       must not be conflated with it.)
+	//
+	//   (2) "replay.go uses it to withhold the entry from replay entirely" —
+	//       FALSE since FR-034/FR-038. That skip is DELETED, not replaced,
+	//       at all four former read sites. Because the child's narration no
+	//       longer lands in the parent's transcript at all, there is nothing
+	//       left for a read boundary to withhold, and FR-038 explicitly
+	//       FORBIDS reintroducing a transcript visibility filter at any read
+	//       boundary. See pkg/gateway/replay.go's streamReplay contract.
+	//
+	// THIS FIELD IS NOT DEAD — do not delete it on discovering that replay.go
+	// no longer reads it. Post-ADR-057 it is written by three sites
+	// (pkg/agent/turn.go's appendIntermediateAssistantTranscript :1328 and
+	// appendAssistantTranscript :1394, plus pkg/gateway/websocket.go's
+	// wsStreamer.Finalize :4471) and READ by pkg/tools/delegate.go's
+	// recentActivityLines (:2173, ADR-057 FR-043), which reads the CHILD's
+	// own durable session and filters to ParentSpawnCallID == spawnCallID so
+	// a `delegate` status poll reports only THIS delegate call's activity.
+	// Its post-057 job is therefore per-spawn-call attribution WITHIN a
+	// child's own transcript, not parent/child separation ACROSS one shared
+	// transcript. (Distinct from the identically-named ParentSpawnCallID on
+	// the ToolExec*/SubTurnSpawn/SubTurnEnd event payloads —
+	// pkg/agent/events.go:326/372/479/512, type session.ToolCallID — which
+	// drives subagent span framing in websocket.go. Same name, different
+	// field; changing one does not change the other.)
+	//
+	// HISTORICAL root cause (pre-ADR-057, retained because pkg/agent/turn.go
+	// :896 and :1325 still cite this comment for it): when the child DID
+	// share the parent's transcript, its narration landed in the same
+	// transcript.jsonl as the delegator's real top-level messages,
+	// indistinguishable by any OTHER field (Role, Content, AgentID, TurnID
+	// were all populated normally). Live rendering never showed it as a chat
+	// bubble — wsStreamer.Update withheld the live TokenFrame for a child
+	// sub-turn's streaming (the "shadow-stream" ownership gate) while still
+	// persisting via Finalize — so without this field replay.go had no signal
+	// to replicate that suppression on reload: it flattened every entry with
+	// non-empty Content into a top-level replay_message frame, doubling the
+	// visible bubble count and leaking the delegate's raw internal report
+	// text as if each were a separate top-level turn. The own-session split
+	// (FR-007) removes that whole failure mode at the source.
+	//
+	// Backend-only: never serialized onto a wire frame.
 	ParentSpawnCallID string `json:"parent_spawn_call_id,omitempty"`
-}
-
-// IsDelegateChildEntry reports whether this entry was produced by a CHILD
-// delegation sub-turn rather than a genuine top-level turn in the session's
-// own thread — i.e. ParentSpawnCallID is non-empty. See ParentSpawnCallID's
-// doc comment above for the full root-cause writeup.
-//
-// This is the single shared predicate BOTH the live-reconnect replay path
-// (pkg/gateway/replay.go) and the REST cold-load read paths
-// (pkg/gateway/rest.go's getSession/getSessionMessages) must use to decide
-// whether to withhold an entry from the caller, so the two paths cannot
-// silently drift out of sync again (they did once: replay.go filtered these
-// entries while the REST cold-load path did not, so a fresh page load/reopen
-// dumped raw delegate narration — including "[external-cli permission]"
-// lines — into the main chat that a live reconnect never showed).
-//
-// This filtering is deliberately SERVER-SIDE, at both call sites above,
-// applied BEFORE any wire frame is built — never as a client-side/SPA
-// visibility filter. A delegate's raw internal narration (including tool-
-// permission detail) must never cross the wire in the first place; a
-// client-side filter would still leak that content to anyone inspecting
-// network traffic or a stored payload. Do not move or duplicate this check
-// into frontend code.
-func (e TranscriptEntry) IsDelegateChildEntry() bool {
-	return e.ParentSpawnCallID != ""
 }
 
 // Attachment represents a file attached to a message.

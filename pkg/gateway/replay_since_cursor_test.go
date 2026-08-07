@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // replay_since_cursor_test.go — tests for the since-cursor filtering feature
 // (Work item A) and the lazy tool-result offload feature (Work item B).
 

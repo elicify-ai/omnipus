@@ -1,24 +1,3 @@
-//go:build !cgo
-
-// This test file uses //go:build !cgo so it compiles when CGO is disabled.
-// When CGO is enabled, pkg/gateway imports pkg/channels/matrix which requires
-// the libolm system library (olm/olm.h). If that library is installed,
-// remove this build constraint and run tests normally.
-//
-// NOTE (ADR-036 §3.4): this file used to hold the wsApprovalHook /
-// wsApprovalRegistry / autoApproveSafeTool / handleApprovalResponse test suite
-// for the legacy exec_approval_request/response WS-frame gate ("gate 1"). That
-// gate was retired — it ran BEFORE the TOCTOU "ask" branch in runTurn and
-// unconditionally denied every ask-policy tool call after a 90s timeout once
-// its answering frontend UI (ExecApprovalBlock/ExecApprovalTool) was removed,
-// making the tool-approval REST path (the only path that was ever actually
-// reachable) unreachable in practice. See pkg/agent/loop.go's
-// CheckGrantOrRequestApproval doc comment for the fix, and
-// pkg/gateway/ws_approval_grants_test.go for the rewritten grant-consultation
-// regression tests. resolveApprovalToolPolicy (tested below) is a SEPARATE,
-// still-live policy-resolution helper unrelated to the retired gate; its test
-// survives unchanged.
-
 package gateway
 
 import (

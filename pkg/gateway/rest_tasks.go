@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -28,22 +26,10 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
-
-// validateMilestoneFK validates that a milestone exists and (when workspaceID is
-// non-empty) belongs to the given workspace. Returns a user-facing error on
-// failure, nil on success. Folded in from the deleted rest_board.go.
-func validateMilestoneFK(homePath, milestoneID, workspaceID string) error {
-	m, err := readMilestoneFile(homePath, milestoneID)
-	if err != nil {
-		return errors.New("milestone not found")
-	}
-	if workspaceID != "" && m.WorkspaceID != workspaceID {
-		return errors.New("milestone does not belong to this workspace")
-	}
-	return nil
-}
 
 // decodeTaskJSONBody decodes a JSON request body into dst, writing a 400 and
 // returning false on a malformed body.
@@ -57,7 +43,7 @@ func decodeTaskJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 
 // HandleTasks dispatches every request under /api/v1/tasks and /api/v1/tasks/.
 //
-//	GET    /tasks                     list (workspace_id/status/agent_id/milestone_id/surface/parent_task_id/limit/offset)
+//	GET    /tasks                     list (workspace_id/status/agent_id/surface/parent_task_id/limit/offset)
 //	POST   /tasks                     create (201, lands in inbox)
 //	GET    /tasks/{id}                get one
 //	PATCH  /tasks/{id}                partial update
@@ -65,6 +51,12 @@ func decodeTaskJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 //	GET    /tasks/{id}/subtasks       list children
 //	PUT    /tasks/{id}/todos          replace the embedded checklist
 //	PUT    /tasks/{id}/dependencies   replace the blocked_by set
+//	GET    /tasks/{id}/evidence       list judge-check evidence (ADR-049 D2)
+//	GET    /tasks/{id}/verdicts       list judge verdicts (ADR-049 D2)
+//	POST   /tasks/{id}/stop           stop the task's running goal-loop (ADR-049)
+//	POST   /tasks/{id}/restart        restart a user-stopped standalone task (ADR-052 FR-026)
+//	GET    /tasks/{id}/runs           list per-execution run history (ADR-050 RD8)
+//	POST   /tasks/{id}/runs           Run-now — task-level or per-occurrence (ADR-050 RD7)
 func (a *restAPI) HandleTasks(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	rest := strings.TrimPrefix(path, "/api/v1/tasks")
@@ -105,19 +97,36 @@ func (a *restAPI) HandleTasks(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			a.handleTaskDependencies(w, r, id)
+		case "evidence":
+			if r.Method != http.MethodGet {
+				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			a.handleTaskEvidence(w, id)
+		case "verdicts":
+			if r.Method != http.MethodGet {
+				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			a.handleTaskVerdicts(w, id)
+		case "stop":
+			if r.Method != http.MethodPost {
+				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			a.handleTaskStop(w, r, id)
+		case "restart":
+			if r.Method != http.MethodPost {
+				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			a.handleTaskRestart(w, id)
 		case "runs":
-			// GET /api/v1/tasks/{id}/runs (history list) AND POST
-			// /api/v1/tasks/{id}/runs (Run-now) BOTH land here — a single
-			// dispatch point, handleTaskRuns (rest_task_runs.go), which
-			// itself switches on r.Method (GET falls through to the
-			// history-list body; POST delegates to handleTaskRunNow; any
-			// other method is 405). ADR-050 RD8/RD7, task-run-history-spec.md
-			// §3.6/§3.4. Wrapped in the SAME dedicated taskReadLimiter
-			// /tasks/occurrences uses (rest_auth.go) — applied here rather
-			// than at top-level registration since this "/api/v1/tasks/"
-			// prefix route (registerAdditionalEndpoints, rest.go) carries no
-			// limiter of its own and a dynamic {id} segment cannot be its own
-			// registered pattern (see rest_task_runs.go's doc comment).
+			// ADR-050 RD7/RD8 (rest_task_runs.go's own doc comment): the
+			// dedicated taskReadLimiter (240/min) is applied HERE, at the
+			// dispatch point, since HandleTasks itself carries no rate
+			// limiter and handleTaskRuns takes the extra `id` argument
+			// withRateLimit's http.HandlerFunc signature does not.
 			withRateLimit(taskReadLimiter, func(w http.ResponseWriter, r *http.Request) {
 				a.handleTaskRuns(w, r, id)
 			})(w, r)
@@ -324,8 +333,31 @@ func (a *restAPI) toWireTask(t task.Task) gen.Task {
 	if t.ParentTaskID != "" {
 		out.ParentTaskId = ptr(t.ParentTaskID)
 	}
-	if t.MilestoneID != "" {
-		out.MilestoneId = ptr(t.MilestoneID)
+	if t.PlanID != "" {
+		out.PlanId = ptr(t.PlanID)
+	}
+	if len(t.WriteSet) > 0 {
+		ws := append([]string{}, t.WriteSet...)
+		out.WriteSet = &ws
+	}
+	if t.Stream != "" {
+		out.Stream = ptr(t.Stream)
+	}
+	if t.IsJoin {
+		out.IsJoin = ptr(t.IsJoin)
+	}
+	if len(t.Tags) > 0 {
+		tags := append([]string{}, t.Tags...)
+		out.Tags = &tags
+	}
+	if len(t.Criteria) > 0 {
+		out.Criteria = toWireCriteria(t.Criteria)
+	}
+	if t.AttemptCount > 0 {
+		out.AttemptCount = ptr(t.AttemptCount)
+	}
+	if t.MaxAttempts != nil {
+		out.MaxAttempts = ptr(*t.MaxAttempts)
 	}
 	if t.Trigger != nil {
 		out.Trigger = toWireTrigger(t.Trigger)
@@ -346,6 +378,10 @@ func (a *restAPI) toWireTask(t task.Task) gen.Task {
 	}
 	if t.Result != "" {
 		out.Result = ptr(t.Result)
+	}
+	if t.CancelReason != "" {
+		cr := gen.TaskCancelReason(t.CancelReason)
+		out.CancelReason = &cr
 	}
 	if len(t.Artifacts) > 0 {
 		arts := append([]string{}, t.Artifacts...)
@@ -445,6 +481,203 @@ func buildTrigger(
 		tr.Config.Tz = &v
 	}
 	return tr
+}
+
+// toWireCriteria converts internal acceptance criteria to the gen.Task.Criteria
+// inline wire shape (read path — GET/POST/PATCH responses).
+func toWireCriteria(cs []task.AcceptanceCriterion) *[]struct {
+	Author struct {
+		Id   string                     `json:"id"`
+		Kind gen.TaskCriteriaAuthorKind `json:"kind"`
+	} `json:"author"`
+	Behavior *struct {
+		MaxCount *int                           `json:"max_count,omitempty"`
+		MinCount *int                           `json:"min_count,omitempty"`
+		Scope    *gen.TaskCriteriaBehaviorScope `json:"scope,omitempty"`
+		Tool     string                         `json:"tool"`
+	} `json:"behavior,omitempty"`
+	Check *struct {
+		Command          string `json:"command"`
+		ExpectedExitCode int    `json:"expected_exit_code"`
+	} `json:"check,omitempty"`
+	Id     *string                `json:"id,omitempty"`
+	Kind   gen.TaskCriteriaKind   `json:"kind"`
+	Status gen.TaskCriteriaStatus `json:"status"`
+	Text   string                 `json:"text"`
+} {
+	out := make([]struct {
+		Author struct {
+			Id   string                     `json:"id"`
+			Kind gen.TaskCriteriaAuthorKind `json:"kind"`
+		} `json:"author"`
+		Behavior *struct {
+			MaxCount *int                           `json:"max_count,omitempty"`
+			MinCount *int                           `json:"min_count,omitempty"`
+			Scope    *gen.TaskCriteriaBehaviorScope `json:"scope,omitempty"`
+			Tool     string                         `json:"tool"`
+		} `json:"behavior,omitempty"`
+		Check *struct {
+			Command          string `json:"command"`
+			ExpectedExitCode int    `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+		Id     *string                `json:"id,omitempty"`
+		Kind   gen.TaskCriteriaKind   `json:"kind"`
+		Status gen.TaskCriteriaStatus `json:"status"`
+		Text   string                 `json:"text"`
+	}, 0, len(cs))
+	for _, c := range cs {
+		item := struct { // not-wire-format: intermediate value built to match gen.Task.Criteria's oapi-codegen anonymous element type, not a parallel wire type
+			Author struct {
+				Id   string                     `json:"id"`
+				Kind gen.TaskCriteriaAuthorKind `json:"kind"`
+			} `json:"author"`
+			Behavior *struct {
+				MaxCount *int                           `json:"max_count,omitempty"`
+				MinCount *int                           `json:"min_count,omitempty"`
+				Scope    *gen.TaskCriteriaBehaviorScope `json:"scope,omitempty"`
+				Tool     string                         `json:"tool"`
+			} `json:"behavior,omitempty"`
+			Check *struct {
+				Command          string `json:"command"`
+				ExpectedExitCode int    `json:"expected_exit_code"`
+			} `json:"check,omitempty"`
+			Id     *string                `json:"id,omitempty"`
+			Kind   gen.TaskCriteriaKind   `json:"kind"`
+			Status gen.TaskCriteriaStatus `json:"status"`
+			Text   string                 `json:"text"`
+		}{
+			Kind:   gen.TaskCriteriaKind(c.Kind),
+			Status: gen.TaskCriteriaStatus(c.Status),
+			Text:   c.Text,
+		}
+		item.Author.Id = c.Author.ID
+		item.Author.Kind = gen.TaskCriteriaAuthorKind(c.Author.Kind)
+		if c.ID != "" {
+			item.Id = ptr(c.ID)
+		}
+		if c.Check != nil {
+			item.Check = &struct {
+				Command          string `json:"command"`
+				ExpectedExitCode int    `json:"expected_exit_code"`
+			}{Command: c.Check.Command, ExpectedExitCode: c.Check.ExpectedExitCode}
+		}
+		if c.Behavior != nil {
+			beh := &struct { // not-wire-format: intermediate value built to match gen.Task.Criteria's oapi-codegen anonymous element type, not a parallel wire type
+				MaxCount *int                           `json:"max_count,omitempty"`
+				MinCount *int                           `json:"min_count,omitempty"`
+				Scope    *gen.TaskCriteriaBehaviorScope `json:"scope,omitempty"`
+				Tool     string                         `json:"tool"`
+			}{
+				// MinCount/MaxCount are passed straight through — both are
+				// already *int on task.CriterionBehavior (fix-wave finding
+				// #5), so no ptr()-wrap is needed (or type-correct: wrapping
+				// an already-*int value would produce **int). This also
+				// preserves the nil/0 distinction on read: an
+				// explicitly-zero MinCount round-trips as 0, not defaulted —
+				// the wire's own `default: 1` (schema) is authoritative only
+				// for an ABSENT create/update request field, never for what
+				// GET echoes back (fix-wave finding #6).
+				Tool:     c.Behavior.Tool,
+				MinCount: c.Behavior.MinCount,
+				MaxCount: c.Behavior.MaxCount,
+			}
+			if c.Behavior.Scope != "" {
+				s := gen.TaskCriteriaBehaviorScope(c.Behavior.Scope)
+				beh.Scope = &s
+			}
+			item.Behavior = beh
+		}
+		out = append(out, item)
+	}
+	return &out
+}
+
+// criteriaFromCreateWire converts the gen.TaskCreateRequest.Criteria inline
+// wire shape to internal acceptance criteria (create path).
+func criteriaFromCreateWire(items []struct {
+	Author struct {
+		Id   string                                  `json:"id"`
+		Kind gen.TaskCreateRequestCriteriaAuthorKind `json:"kind"`
+	} `json:"author"`
+	Behavior *struct {
+		MaxCount *int                                        `json:"max_count,omitempty"`
+		MinCount *int                                        `json:"min_count,omitempty"`
+		Scope    *gen.TaskCreateRequestCriteriaBehaviorScope `json:"scope,omitempty"`
+		Tool     string                                      `json:"tool"`
+	} `json:"behavior,omitempty"`
+	Check *struct {
+		Command          string `json:"command"`
+		ExpectedExitCode int    `json:"expected_exit_code"`
+	} `json:"check,omitempty"`
+	Id     *string                             `json:"id,omitempty"`
+	Kind   gen.TaskCreateRequestCriteriaKind   `json:"kind"`
+	Status gen.TaskCreateRequestCriteriaStatus `json:"status"`
+	Text   string                              `json:"text"`
+}) []task.AcceptanceCriterion {
+	out := make([]task.AcceptanceCriterion, 0, len(items))
+	for _, it := range items {
+		c := task.AcceptanceCriterion{
+			Kind:   task.CriterionKind(it.Kind),
+			Text:   it.Text,
+			Status: task.CriterionStatus(it.Status),
+			Author: task.CriterionAuthor{Kind: string(it.Author.Kind), ID: it.Author.Id},
+		}
+		if it.Id != nil {
+			c.ID = *it.Id
+		}
+		if it.Check != nil {
+			c.Check = &task.CriterionCheck{Command: it.Check.Command, ExpectedExitCode: it.Check.ExpectedExitCode}
+		}
+		if it.Behavior != nil {
+			c.Behavior = behaviorFromWire(it.Behavior.Tool, it.Behavior.MinCount, it.Behavior.MaxCount, it.Behavior.Scope)
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// criteriaFromUpdateWire converts the gen.TaskUpdateRequest.Criteria inline
+// wire shape to internal acceptance criteria (PATCH path).
+func criteriaFromUpdateWire(items []struct {
+	Author struct {
+		Id   string                                  `json:"id"`
+		Kind gen.TaskUpdateRequestCriteriaAuthorKind `json:"kind"`
+	} `json:"author"`
+	Behavior *struct {
+		MaxCount *int                                        `json:"max_count,omitempty"`
+		MinCount *int                                        `json:"min_count,omitempty"`
+		Scope    *gen.TaskUpdateRequestCriteriaBehaviorScope `json:"scope,omitempty"`
+		Tool     string                                      `json:"tool"`
+	} `json:"behavior,omitempty"`
+	Check *struct {
+		Command          string `json:"command"`
+		ExpectedExitCode int    `json:"expected_exit_code"`
+	} `json:"check,omitempty"`
+	Id     *string                             `json:"id,omitempty"`
+	Kind   gen.TaskUpdateRequestCriteriaKind   `json:"kind"`
+	Status gen.TaskUpdateRequestCriteriaStatus `json:"status"`
+	Text   string                              `json:"text"`
+}) []task.AcceptanceCriterion {
+	out := make([]task.AcceptanceCriterion, 0, len(items))
+	for _, it := range items {
+		c := task.AcceptanceCriterion{
+			Kind:   task.CriterionKind(it.Kind),
+			Text:   it.Text,
+			Status: task.CriterionStatus(it.Status),
+			Author: task.CriterionAuthor{Kind: string(it.Author.Kind), ID: it.Author.Id},
+		}
+		if it.Id != nil {
+			c.ID = *it.Id
+		}
+		if it.Check != nil {
+			c.Check = &task.CriterionCheck{Command: it.Check.Command, ExpectedExitCode: it.Check.ExpectedExitCode}
+		}
+		if it.Behavior != nil {
+			c.Behavior = behaviorFromWire(it.Behavior.Tool, it.Behavior.MinCount, it.Behavior.MaxCount, it.Behavior.Scope)
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // computeRollup returns the read-time roll-up of live child sub-agent runs for
@@ -556,6 +789,47 @@ func (a *restAPI) validateTaskAgentID(agentID, workspaceID string) error {
 	return nil
 }
 
+// validateTaskPlanID enforces the same-workspace FK on Task.PlanID (ADR-049
+// D1, mirrors the removed validateMilestoneFK): a task may only reference a
+// plan that lives in its own workspace. Returns nil when planID is empty
+// (nothing to validate). Fails CLOSED (400) when a.planStore is nil — an
+// uninitialized dependency is never treated as "no FK to check", mirroring
+// validateTaskAgentID's errTaskAgentLoopUnavailable convention immediately
+// above.
+//
+// Also rejects linking to a TERMINAL plan (done/failed): a terminal plan can
+// never accept new member tasks, and allowing the attach would leave a member
+// pointing at a dead plan. This is data integrity (parity with
+// pkg/tools/plan.go's validateTaskPlanLinkage), not a dispatch-approval
+// mechanism — task dispatch authority is governed solely by the run_task tool
+// policy (allow/deny/ask), enforced in the agent loop.
+func (a *restAPI) validateTaskPlanID(planID, workspaceID string) error {
+	if planID == "" {
+		return nil
+	}
+	if a.planStore == nil {
+		return errTaskPlanStoreUnavailable
+	}
+	if err := validateEntityID(planID); err != nil {
+		return fmt.Errorf("invalid plan_id: %w", err)
+	}
+	if err := a.planStore.ValidatePlanWorkspace(planID, workspaceID); err != nil {
+		return err
+	}
+	p, err := a.planStore.Get(planID)
+	if err != nil {
+		return fmt.Errorf("could not load plan %q: %w", planID, err)
+	}
+	if plan.IsTerminal(p.State) {
+		return fmt.Errorf("plan %q is %q (terminal) and cannot accept new member tasks", planID, p.State)
+	}
+	return nil
+}
+
+// errTaskPlanStoreUnavailable is returned by validateTaskPlanID when
+// a.planStore is nil — see its doc comment for the fail-closed rationale.
+var errTaskPlanStoreUnavailable = errors.New("task: plan store not initialized; cannot validate plan_id")
+
 // resolveAgentName returns the display name for an agent ID from the registry,
 // or "" when unknown.
 func (a *restAPI) resolveAgentName(agentID string) string {
@@ -574,6 +848,35 @@ func (a *restAPI) resolveAgentName(agentID string) string {
 
 // ptr returns a pointer to v.
 func ptr[T any](v T) *T { return &v }
+
+// behaviorFromWire converts a `kind: behavior` criterion's inline wire
+// fields to task.CriterionBehavior. Collapses the four byte-identical
+// FROM-wire behavior blocks (planDoDFromCreateWire/planDoDFromUpdateWire in
+// rest_plans.go, criteriaFromCreateWire/criteriaFromUpdateWire in
+// rest_tasks.go) that previously duplicated this same conversion once per
+// generated wire-request variant — S is the per-variant generated Scope enum
+// type (gen.PlanCreateRequestDodBehaviorScope, gen.TaskCriteriaBehaviorScope,
+// etc.), always ~string so a direct conversion to task.BehaviorScope works.
+//
+// minCount is passed straight through as a pointer — NO default-1
+// materialization here. task.CriterionBehavior.MinCount is itself *int
+// (fix-wave finding #5): an omitted min_count stays nil on the wire and
+// task.validateCriterionBehavior (pkg/task/criterion.go) — via
+// EffectiveMinCount() at read time — owns defaulting nil to 1. Duplicating
+// that default here would be a second source of truth for the same rule.
+//
+// The TO-wire direction (toWireCriteria/toWirePlanDoD's anonymous-struct
+// literals) is intentionally NOT collapsed here — oapi-codegen generates a
+// DISTINCT anonymous struct type per response context, so those literals
+// cannot share one helper without reintroducing the wire-shape duplication
+// Constraint #8 exists to prevent (see each call site's own comment).
+func behaviorFromWire[S ~string](tool string, minCount, maxCount *int, scope *S) *task.CriterionBehavior {
+	beh := &task.CriterionBehavior{Tool: tool, MinCount: minCount, MaxCount: maxCount}
+	if scope != nil {
+		beh.Scope = task.BehaviorScope(*scope)
+	}
+	return beh
+}
 
 // parseTimeOrNow parses an RFC 3339 timestamp, falling back to now on error.
 // Fix #5: logs a Warn when a non-empty string fails to parse (empty is normal
@@ -597,7 +900,6 @@ func (a *restAPI) handleTaskList(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: q.Get("workspace_id"),
 		Status:      task.Status(q.Get("status")),
 		AgentID:     q.Get("agent_id"),
-		MilestoneID: q.Get("milestone_id"),
 		Surface:     task.Surface(q.Get("surface")),
 	}
 	if filter.Status != "" && !task.IsValidStatus(filter.Status) {
@@ -738,6 +1040,21 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		t.Description = *req.Description
 	}
 	if req.Priority != nil {
+		// M2(a) fix: req.Priority is a wire *int, so its presence is unambiguous
+		// here — a non-nil pointer to 0 IS an explicit priority:0 and must be
+		// rejected now, BEFORE that presence information is lost by assigning
+		// into t.Priority (a plain int, where 0 means "unset" per
+		// task.Task.Priority's own contract). Previously this block skipped
+		// straight to the assignment and relied on task.Store.Create's own
+		// validation to catch an out-of-range value — but that validation
+		// (task.go normalize()) deliberately treats Priority==0 as "unset, skip
+		// the check" for exactly the same reason, so an explicit priority:0
+		// sailed through uncaught and was silently persisted as unset (read
+		// back as 3 via EffectivePriority).
+		if err := task.ValidatePriority(*req.Priority); err != nil {
+			jsonErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		t.Priority = *req.Priority
 	}
 	if req.AgentId != nil && *req.AgentId != "" {
@@ -755,12 +1072,31 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	if req.ParentTaskId != nil {
 		t.ParentTaskID = *req.ParentTaskId
 	}
-	if req.MilestoneId != nil && *req.MilestoneId != "" {
-		if err := validateMilestoneFK(a.homePath, *req.MilestoneId, req.WorkspaceId); err != nil {
+	if req.PlanId != nil && *req.PlanId != "" {
+		if err := a.validateTaskPlanID(*req.PlanId, req.WorkspaceId); err != nil {
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		t.MilestoneID = *req.MilestoneId
+		t.PlanID = *req.PlanId
+	}
+	if req.WriteSet != nil {
+		t.WriteSet = *req.WriteSet
+	}
+	if req.Stream != nil {
+		t.Stream = *req.Stream
+	}
+	if req.IsJoin != nil {
+		t.IsJoin = *req.IsJoin
+	}
+	if req.Tags != nil {
+		t.Tags = *req.Tags
+	}
+	if req.Criteria != nil {
+		t.Criteria = criteriaFromCreateWire(*req.Criteria)
+	}
+	if req.MaxAttempts != nil {
+		v := *req.MaxAttempts
+		t.MaxAttempts = &v
 	}
 	if req.Surface != nil {
 		t.Surface = task.Surface(*req.Surface)
@@ -864,6 +1200,10 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	patch := task.Patch{}
+	// Set when a plan DETACH (plan_id -> "") optimistically adds `status: inbox`
+	// to the patch; drives the ErrIllegalTransition retry at the Update below so
+	// a terminal/blocked member still detaches instead of 400ing.
+	detachResetsStatus := false
 	if req.Title != nil {
 		patch.Title = req.Title
 	}
@@ -947,8 +1287,75 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		empty := ""
 		patch.Due = &empty
 	}
-	if req.MilestoneId != nil {
-		patch.MilestoneID = req.MilestoneId
+	if req.PlanId != nil {
+		if *req.PlanId != "" {
+			// A task's workspace_id is immutable via PATCH (not a
+			// TaskUpdateRequest field) — read the existing task to learn it,
+			// mirroring the AgentId team-membership check's identical
+			// dedicated read above.
+			existingForPlanCheck, gErr := a.taskStore.Get(id)
+			if gErr != nil {
+				if errors.Is(gErr, task.ErrNotFound) {
+					jsonErr(w, http.StatusNotFound, "task not found")
+					return
+				}
+				jsonErr(w, http.StatusInternalServerError, "could not read task")
+				return
+			}
+			if err := a.validateTaskPlanID(*req.PlanId, existingForPlanCheck.WorkspaceID); err != nil {
+				jsonErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		} else if req.Status == nil {
+			// DETACH (plan_id -> ""). Sibling of the plan-delete laundering
+			// hole: detaching a member without touching its status turns a
+			// `next` member of a draft/stopped plan into a STANDALONE `next`
+			// task, which requirePlanExecuting rightly permits (PlanID == ""
+			// means "not a plan member") and CheckQueuedTasks' ~60s drain then
+			// auto-dispatches — running work the Execute gate never approved.
+			// Reachable from the UI today: TaskDetailPanel's Plan dropdown ->
+			// "No plan" sends exactly this patch.
+			//
+			// Mirror detachMemberOnPlanDelete: a detached non-terminal member
+			// returns to triage rather than inheriting a dispatchable resting
+			// state it was never approved for. Applied on the SAME patch as the
+			// plan_id clear, so there is no window where the task is standalone
+			// and still `next`.
+			//
+			// Only when the caller did NOT also set `status` in the same
+			// request (an explicit status wins). Re-parenting plan A -> plan B
+			// is untouched — that takes the non-empty branch above.
+			// detachResetsStatus drives the ErrIllegalTransition retry at the
+			// Update call site: the store refuses this combined patch for
+			// `blocked`/`done`/`failed` (blocked may only leave via the store's
+			// own recompute; done is frozen), and those must still detach
+			// rather than 400 — history is never rewritten.
+			inbox := task.StatusInbox
+			patch.Status = &inbox
+			detachResetsStatus = true
+		}
+		patch.PlanID = req.PlanId
+	}
+	if req.WriteSet != nil {
+		patch.WriteSet = req.WriteSet
+	}
+	if req.Stream != nil {
+		patch.Stream = req.Stream
+	}
+	if req.IsJoin != nil {
+		patch.IsJoin = req.IsJoin
+	}
+	if req.Tags != nil {
+		patch.Tags = req.Tags
+	}
+	if req.Criteria != nil {
+		criteria := criteriaFromUpdateWire(*req.Criteria)
+		patch.Criteria = &criteria
+	}
+	if req.MaxAttempts != nil {
+		v := *req.MaxAttempts
+		vp := &v
+		patch.MaxAttempts = &vp
 	}
 	if req.Surface != nil {
 		sf := task.Surface(*req.Surface)
@@ -1014,11 +1421,23 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		}
 	}
 
-	// M-BE1: UpdateWithPrior captures the pre-patch task snapshot under the
-	// same per-task lock as the write, so priorTriggerForAudit below is the
-	// true immediately-prior state rather than a separately-read, possibly
-	// stale one (see the doc comment above patch.Trigger's construction).
+	// FR-022/M-BE1: UpdateWithPrior (not a plain Update) so the "prior trigger"
+	// snapshot below is captured atomically under the SAME per-task lock as
+	// this write — see priorTriggerForAudit's own doc comment above for the
+	// TOCTOU window a separate pre-patch Get() would have.
 	updated, priorForUpdate, err := a.taskStore.UpdateWithPrior(id, patch)
+	if err != nil && detachResetsStatus && errors.Is(err, task.ErrIllegalTransition) {
+		// The detach above optimistically added `status: inbox`. A terminal or
+		// `blocked` member legitimately refuses that (done is frozen; blocked
+		// may only leave via the store's own recompute), but the DETACH itself
+		// must still succeed rather than 400 — those states cannot be
+		// auto-dispatched anyway, so the laundering risk this reset exists to
+		// close does not apply to them. Retry with the plan_id clear alone and
+		// let recomputeBlockedStateLocked (which runs at the end of every
+		// Update) settle `blocked`.
+		patch.Status = nil
+		updated, priorForUpdate, err = a.taskStore.UpdateWithPrior(id, patch)
+	}
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			jsonErr(w, http.StatusNotFound, "task not found")
@@ -1093,12 +1512,28 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 				slog.Error("rest: could not revert task status after StartTaskNow failure",
 					"id", id, "revert_to", preUpdateStatus, "error", rErr)
 			}
-			slog.Warn("rest: StartTaskNow failed; task reverted to prior status",
-				"id", id, "agent_id", updated.AgentID, "prior_status", preUpdateStatus, "error", startErr)
 			httpStatus := http.StatusInternalServerError
-			if errors.Is(startErr, agent.ErrDispatchCapReached) {
+			switch {
+			case errors.Is(startErr, agent.ErrDispatchCapReached):
+				httpStatus = http.StatusConflict
+			case errors.Is(startErr, agent.ErrPlanNotExecuting), errors.Is(startErr, agent.ErrPlanStateUnresolvable):
+				// S1 plan-gate follow-up: a PATCH to in_progress on a plan
+				// member whose parent plan is not (or can no longer be
+				// verified as) approved/running/unpaused — e.g. a Kanban drag
+				// on a Draft plan's member, or a member of a plan the user
+				// already Stopped. 409 (state conflict), not 500: the request
+				// itself is well-formed, it conflicts with the plan's current
+				// state.
 				httpStatus = http.StatusConflict
 			}
+			// This is a client-triggered, one-shot rejection (bounded by
+			// request rate, not a background loop) — logging it at Warn here
+			// is the appropriate severity regardless of which error it was;
+			// see agent.ErrPlanNotExecuting's own doc comment for why the
+			// SAME error is intentionally logged quieter (Debug) inside
+			// TaskExecutor's periodic/event-driven callers.
+			slog.Warn("rest: StartTaskNow failed; task reverted to prior status",
+				"id", id, "agent_id", updated.AgentID, "prior_status", preUpdateStatus, "error", startErr)
 			jsonErr(w, httpStatus, startErr.Error())
 			return
 		}
@@ -1243,6 +1678,342 @@ func (a *restAPI) applyTaskFieldUpdate(w http.ResponseWriter, id string, patch t
 		return
 	}
 	a.auditTask("task.update", id)
+	jsonOK(w, a.toWireTask(*updated))
+}
+
+// --- evidence / verdicts / stop (ADR-049 D2, Wave 2-C1 deferred REST paths) --
+
+// toWireEvidenceRecord converts an internal task.EvidenceRecord to the
+// generated wire type.
+func toWireEvidenceRecord(r task.EvidenceRecord) gen.EvidenceRecord {
+	return gen.EvidenceRecord{
+		Id:           r.ID,
+		TaskId:       r.TaskID,
+		CriterionId:  r.CriterionID,
+		Attempt:      r.Attempt,
+		Command:      r.Command,
+		ExitCode:     r.ExitCode,
+		Output:       r.Output,
+		Truncated:    r.Truncated,
+		TimedOut:     r.TimedOut,
+		PolicyDenied: r.PolicyDenied,
+		RecordedAt:   parseTimeOrNow(r.RecordedAt),
+	}
+}
+
+// toWireJudgeVerdict converts an internal task.JudgeVerdict to the generated
+// wire type.
+func toWireJudgeVerdict(v task.JudgeVerdict) gen.JudgeVerdict {
+	out := gen.JudgeVerdict{
+		Id:           v.ID,
+		Scope:        gen.JudgeVerdictScope(v.Scope),
+		Round:        v.Round,
+		Met:          v.Met,
+		Model:        v.Model,
+		JudgedAt:     parseTimeOrNow(v.JudgedAt),
+		JudgeAgentId: v.JudgeAgentID,
+	}
+	if v.TaskID != "" {
+		out.TaskId = ptr(v.TaskID)
+	}
+	if v.PlanID != "" {
+		out.PlanId = ptr(v.PlanID)
+	}
+	for _, c := range v.PerCriterion {
+		out.PerCriterion = append(out.PerCriterion, struct {
+			CriterionId string `json:"criterion_id"`
+			Met         bool   `json:"met"`
+			Reason      string `json:"reason"`
+		}{CriterionId: c.CriterionID, Met: c.Met, Reason: c.Reason})
+	}
+	return out
+}
+
+// handleTaskEvidence handles GET /api/v1/tasks/{id}/evidence. Read-only —
+// evidence is written only by the evidence-ladder judge (pkg/agent's
+// JudgeCriteria via task.EvidenceStore.Record), never via this endpoint. A
+// fresh, redaction-less EvidenceStore is constructed on demand for the read
+// path (List never touches Redact — only Record does, at write time; the
+// persisted records are already redacted), mirroring AgentLoop.evidenceStore's
+// on-demand construction in pkg/agent/judge.go.
+func (a *restAPI) handleTaskEvidence(w http.ResponseWriter, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid task ID")
+		return
+	}
+	if _, err := a.taskStore.Get(id); err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			jsonErr(w, http.StatusNotFound, "task not found")
+			return
+		}
+		slog.Error("rest: task evidence: get task failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read task")
+		return
+	}
+	es := task.NewEvidenceStore(a.homePath, nil)
+	records, err := es.List(id)
+	if err != nil {
+		slog.Error("rest: task evidence list failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not list evidence")
+		return
+	}
+	sort.SliceStable(records, func(i, j int) bool { return records[i].RecordedAt < records[j].RecordedAt })
+	out := make([]gen.EvidenceRecord, 0, len(records))
+	for _, rec := range records {
+		out = append(out, toWireEvidenceRecord(rec))
+	}
+	jsonOK(w, out)
+}
+
+// handleTaskVerdicts handles GET /api/v1/tasks/{id}/verdicts. Reads judge
+// verdicts from the task's session transcript (EntryTypeJudgeVerdict entries
+// written by TaskExecutor.writeJudgeVerdictTranscript, task_executor.go) — the
+// durable carrier; the live JudgeVerdictFrame WS push is the other, ephemeral
+// carrier of the same shape (Round-1 Grill Reconciliation R3). A task with no
+// session, no agent, or no judged attempt yet returns an empty array, not an
+// error.
+func (a *restAPI) handleTaskVerdicts(w http.ResponseWriter, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid task ID")
+		return
+	}
+	t, err := a.taskStore.Get(id)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			jsonErr(w, http.StatusNotFound, "task not found")
+			return
+		}
+		slog.Error("rest: task verdicts: get task failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read task")
+		return
+	}
+	out := make([]gen.JudgeVerdict, 0)
+	if t.SessionID == "" || t.AgentID == "" || a.agentLoop == nil {
+		jsonOK(w, out)
+		return
+	}
+	sessStore := a.agentLoop.GetAgentStore(t.AgentID)
+	if sessStore == nil {
+		jsonOK(w, out)
+		return
+	}
+	entries, rerr := sessStore.ReadTranscript(t.SessionID)
+	if rerr != nil {
+		slog.Error("rest: task verdicts: read transcript failed",
+			"id", id, "session_id", t.SessionID, "error", rerr)
+		jsonErr(w, http.StatusInternalServerError, "could not read task verdicts")
+		return
+	}
+	for _, e := range entries {
+		if e.Type != session.EntryTypeJudgeVerdict {
+			continue
+		}
+		var v task.JudgeVerdict
+		if uerr := json.Unmarshal([]byte(e.Content), &v); uerr != nil {
+			slog.Warn("rest: task verdicts: could not parse verdict transcript entry",
+				"id", id, "entry_id", e.ID, "error", uerr)
+			continue
+		}
+		out = append(out, toWireJudgeVerdict(v))
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Round < out[j].Round })
+	jsonOK(w, out)
+}
+
+// handleTaskStop handles POST /api/v1/tasks/{id}/stop (ADR-052 US-7/FR-025).
+// Delegates to PlanEngine.StopTask, which cancels the task's own worker
+// session AND its registered verifier session (if adjudication is in
+// flight — via the same RequestCancelForSession primitive Tier A /cancel
+// uses, a safe no-op when no turn is active) and marks the task
+// failed+cancel_reason=stopped_by_user. Works identically for a standalone
+// task or a SINGLE in-plan member (member-Stop, A5) — StopTask deliberately
+// does not touch the task's plan; the plan's other independent members keep
+// running (the engine's own reactive dispatch loop evaluates FR-041 "no
+// further progress possible" on its next pass, triggered by the
+// task_status_changed event StopTask's cancelMemberLocked already emits).
+// Rejected 400 when the task is not currently in_progress (nothing running
+// to stop — StopTask's own precondition; checked here first for a clearer
+// error message and to avoid engaging the engine for an obviously-invalid
+// call).
+func (a *restAPI) handleTaskStop(w http.ResponseWriter, r *http.Request, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid task ID")
+		return
+	}
+	t, err := a.taskStore.Get(id)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			jsonErr(w, http.StatusNotFound, "task not found")
+			return
+		}
+		slog.Error("rest: task stop: get failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read task")
+		return
+	}
+	if t.Status != task.StatusInProgress {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("task is %q; only an in-progress task can be stopped", t.Status))
+		return
+	}
+
+	pe := agent.GetPlanEngine(a.agentLoop)
+	if pe == nil {
+		jsonErr(w, http.StatusServiceUnavailable, "plan engine is not available")
+		return
+	}
+	c := a.callerIdentity(r)
+	updated, serr := pe.StopTask(r.Context(), id, c.Username, "system")
+	if serr != nil {
+		if errors.Is(serr, task.ErrNotFound) {
+			jsonErr(w, http.StatusNotFound, "task not found")
+			return
+		}
+		// TOCTOU between the handler's own precheck (above) and StopTask's
+		// own authoritative re-check under planDecisionMu: the task left
+		// in_progress in that window. That has two, NOT equivalent, causes:
+		//
+		//  1. A concurrent Stop request for the SAME task won the race —
+		//     the task is now failed+CancelReasonStoppedByUser. This
+		//     caller's own request achieved nothing itself, but the outcome
+		//     it asked for ("this task is stopped") is already true. A stop
+		//     that achieved its purpose must not be reported as an error —
+		//     idempotent 200, not 409 (this is the bug this branch used to
+		//     have: it mapped ANY non-in_progress re-read to 409, including
+		//     this one).
+		//  2. The task reached some OTHER terminal state on its own
+		//     (completed normally, or failed for an unrelated reason) —
+		//     that is a genuine conflict: this Stop request cannot apply,
+		//     and never did. 409, same as before.
+		//
+		// taskStopConflictOutcome makes that call from the re-read task's
+		// own Status/CancelReason (see its doc for the full state table). A
+		// re-read failure (rerr != nil — including the task having vanished
+		// between the two reads) or a re-read that STILL shows in_progress
+		// means StopTask's error had nothing to do with the task's status
+		// (e.g. an I/O failure from inside the engine's own Get or its
+		// cancelMemberLocked write) — falls through to the generic 500
+		// below, same mapping handlePlanStop uses for its own non-status
+		// engine failures.
+		if reread, rerr := a.taskStore.Get(id); rerr == nil {
+			if outcome, handled := taskStopConflictOutcome(reread); handled {
+				if outcome.alreadyStopped {
+					a.auditTask("task.stop", id)
+					jsonOK(w, a.toWireTask(*reread))
+					return
+				}
+				jsonErr(w, http.StatusConflict, outcome.message)
+				return
+			}
+		}
+		slog.Error("rest: task stop: engine stop failed", "id", id, "error", serr)
+		jsonErr(w, http.StatusInternalServerError, "could not stop task")
+		return
+	}
+	// StopTask's own cancelMemberLocked already emits task_status_changed —
+	// do not double-emit here. Audit logging remains a REST-layer concern
+	// (the engine package writes no audit entries).
+	a.auditTask("task.stop", id)
+	jsonOK(w, a.toWireTask(*updated))
+}
+
+// taskStopOutcome is what taskStopConflictOutcome decided for a task re-read
+// after PlanEngine.StopTask has already reported an error for it.
+type taskStopOutcome struct {
+	// alreadyStopped is true when the task is now failed with
+	// CancelReasonStoppedByUser — some request (not necessarily this one)
+	// already stopped it. handleTaskStop maps this to 200: the caller's
+	// stop achieved its purpose.
+	alreadyStopped bool
+	// message is the 409 body text; set only when alreadyStopped is false.
+	message string
+}
+
+// taskStopConflictOutcome maps a task re-read taken AFTER PlanEngine.StopTask
+// has already returned an error for taskID to the correct REST outcome. It
+// distinguishes "this task is now stopped, just not by this exact request"
+// (idempotent success) from a genuine conflict (409): only the task's own
+// Status/CancelReason on disk can tell those apart, since StopTask's error
+// text alone does not (both cases produce the identical "task %q is %s, not
+// in_progress" wrapping, see plan_engine.go's StopTask).
+//
+// handled is false when t is still in_progress: StopTask's error then can't
+// be explained by the task's own status having moved (an I/O failure
+// surfaced from inside the engine), and the caller should fall back to its
+// own generic 500 rather than treat this as a status-driven outcome.
+func taskStopConflictOutcome(t *task.Task) (outcome taskStopOutcome, handled bool) {
+	if t.Status == task.StatusInProgress {
+		return taskStopOutcome{}, false
+	}
+	if t.Status == task.StatusFailed && t.CancelReason == task.CancelReasonStoppedByUser {
+		return taskStopOutcome{alreadyStopped: true}, true
+	}
+	return taskStopOutcome{
+		message: fmt.Sprintf("task is %q; only an in-progress task can be stopped", t.Status),
+	}, true
+}
+
+// handleTaskRestart handles POST /api/v1/tasks/{id}/restart (ADR-052
+// FR-026, the ▶ Play route for a standalone task previously stopped by the
+// user). Per contracts/openapi.yaml's restartTask: rejected 409 when the
+// task belongs to a plan (restart the plan instead, via
+// POST /plans/{id}/restart, which re-runs its non-done members — G4) or is
+// not in a restartable state — `failed` with cancel_reason
+// stopped_by_user, specifically. Unlike a plan restart's member reset (which
+// un-freezes failed->next for ANY reason, FR-016/DS-5), this standalone-task
+// endpoint is reason-gated the same way the plan-level restart guard is: a
+// genuinely-failed standalone task (attempts exhausted) is not restartable
+// here — same "author fresh" posture as a genuinely-failed plan.
+func (a *restAPI) handleTaskRestart(w http.ResponseWriter, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid task ID")
+		return
+	}
+	t, err := a.taskStore.Get(id)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			jsonErr(w, http.StatusNotFound, "task not found")
+			return
+		}
+		slog.Error("rest: task restart: get failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read task")
+		return
+	}
+	if t.PlanID != "" {
+		jsonErr(w, http.StatusConflict,
+			"task is a plan member; restart the plan instead via POST /plans/{id}/restart")
+		return
+	}
+	// Gate delegated to task.ValidateStandaloneRestart (pkg/task/store.go) —
+	// single source of truth mirroring plan.ValidateRestartTransition,
+	// rather than an inline reason check hardcoded here. The handler keeps
+	// its own specific, actionable 409 message; the helper's error is
+	// wrapped rather than surfaced verbatim.
+	if verr := task.ValidateStandaloneRestart(t.Status, t.CancelReason); verr != nil {
+		jsonErr(w, http.StatusConflict, fmt.Sprintf(
+			"task is %q (cancel_reason=%q); only a task stopped by the user "+
+				"(status=failed, cancel_reason=stopped_by_user) can be restarted: %s",
+			t.Status, t.CancelReason, verr))
+		return
+	}
+
+	updated, rerr := a.taskStore.RestartReset(id)
+	if rerr != nil {
+		if errors.Is(rerr, task.ErrNotFound) {
+			jsonErr(w, http.StatusNotFound, "task not found")
+			return
+		}
+		if errors.Is(rerr, task.ErrNotRestartable) {
+			jsonErr(w, http.StatusConflict, rerr.Error())
+			return
+		}
+		slog.Error("rest: task restart: reset failed", "id", id, "error", rerr)
+		jsonErr(w, http.StatusInternalServerError, "could not restart task")
+		return
+	}
+	a.auditTask("task.restart", id)
+	a.emitTaskStatus(updated)
+	if a.agentLoop != nil {
+		a.agentLoop.NotifyTaskUpserted(updated)
+	}
 	jsonOK(w, a.toWireTask(*updated))
 }
 

@@ -1,7 +1,10 @@
 type: object
 description: >
   Body for PUT /agents/{id}. All fields are optional — only provided fields are updated.
-  Locked (core) agents reject mutations to name, description, and soul.
+  Locked (core) agents reject mutations to name, description, and soul. Exception
+  (ADR-052 FR-038): locked `type: system` agents (e.g. the Judge) DO accept `soul`
+  mutations — soul/rubric unification means the Judge's soul is its judging rubric,
+  editable while the agent stays otherwise locked.
   model, timeout_seconds, and max_tool_iterations may be updated on locked agents.
   heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents
   (heartbeat is workspace-scoped, ADR-027).
@@ -46,8 +49,12 @@ properties:
     type: string
     minLength: 1
     description: >
-      New SOUL.md content (agent system prompt). Rejected on locked agents.
-      Writing this triggers a config reload. Whitespace-only is rejected as minLength violation.
+      New SOUL.md content (agent system prompt). Rejected on locked core
+      agents. Exception (ADR-052 FR-038, soul/rubric unification): accepted
+      for locked `type: system` agents (e.g. the Judge) — for those, this
+      field IS the judging rubric, the only prompt-equivalent field a
+      locked System Agent accepts. Writing this triggers a config reload.
+      Whitespace-only is rejected as minLength violation.
     example: "You are a helpful assistant..."
   heartbeat:
     type: string
@@ -159,9 +166,13 @@ properties:
   default:
     type: boolean
     description: >
-      Whether this agent is the global default that handles inbound messages
-      with no more-specific routing rule. At most one agent is default.
-      Omitting this field leaves the flag unchanged. Main only — workers never default.
+      Send true to make this agent the global default that handles inbound
+      messages with no more-specific routing rule — replacing whichever agent
+      previously held it. Send false to clear the default, which only has an
+      effect if this agent currently holds it (sending false for an agent
+      that isn't the current default is a no-op). Omitting this field leaves
+      the default unchanged. Main only — workers never default (rejected with
+      400 if attempted).
     example: false
   skills:
     type: array
@@ -184,3 +195,10 @@ properties:
     example: "alloy"
   executor:
     $ref: './ExecutorConfig.yaml'
+  memory_enabled:
+    type: boolean
+    description: >
+      New value for the memory-injection gate (ADR-052 FR-039). When false,
+      ContextBuilder skips memory injection for this agent's turns. Allowed
+      on all agents.
+    example: true

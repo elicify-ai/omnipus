@@ -5,7 +5,10 @@
 
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk verifies that a fresh
 // install's default config seeds sandbox.tool_policies as a FULLY-ENUMERATED
@@ -45,31 +48,133 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		}
 	}
 
+	// ADR-052 (autonomous agent plan execution, FR-005/FR-027) — the three
+	// plan-execution tools seed an explicit "allow" CEILING (never absent,
+	// never deny).
+	//
+	// This asserted "ask" until 2026-07-28. That value matched the spec's
+	// literal seed matrix but produced the wrong RESOLVED posture: under the
+	// strictest-wins global x agent merge, an "ask" ceiling overruled Jim's own
+	// seeded "allow" and resolved "ask" for him too, making FR-005/R2-06's
+	// "Jim is the ONLY seeded agent granted unprompted plan-execution" dead on
+	// every install — and costing a 300 s approval-timeout stall per call.
+	//
+	// A ceiling grants nothing by itself; it only bounds what a per-agent
+	// policy may be granted up to. The real resolved posture — Jim allow,
+	// every other seeded agent ask, Judge deny — is asserted from the side
+	// where the import direction is legal and the REAL resolver can be called:
+	// pkg/coreagent's TestEffectiveResolution_PlanExecution_DefaultCeiling_
+	// JimAllowOthersAsk. This assertion only pins the ceiling literal so that
+	// tightening it back to "ask" has to delete a named reason first.
+	planningAllowCeiling := map[string]bool{
+		"create_plan":  true,
+		"execute_plan": true,
+		"run_task":     true,
+	}
+	for name := range planningAllowCeiling {
+		got, ok := cfg.Sandbox.ToolPolicies[name]
+		if !ok {
+			t.Errorf("expected sandbox.tool_policies to seed an entry for %q, found none", name)
+			continue
+		}
+		if got != "allow" {
+			t.Errorf("expected seeded ceiling policy 'allow' for plan-execution tool %q, got %q "+
+				"(an 'ask' ceiling silently overrules Jim's seeded 'allow' under strictest-wins)", name, got)
+		}
+	}
+	// inspect_session (fix-wave finding #2, architect F2 half 1): the ceiling
+	// seeds "allow" — the strictest-wins global x agent merge means a ceiling
+	// "deny" would OVERRULE the Judge's own seeded "allow" and resolve the
+	// Judge to deny (the landed defect this inverts). Every seeded non-Judge
+	// agent instead carries an explicit per-agent "deny" (asserted by
+	// pkg/coreagent's TestToolPolicy_InspectSession_JudgeOnly), so the
+	// resolved posture for everyone but the Judge is unchanged.
+	if got := cfg.Sandbox.ToolPolicies["inspect_session"]; got != "allow" {
+		t.Errorf("expected seeded ceiling policy 'allow' for verifier-only tool \"inspect_session\", got %q", got)
+	}
+
+	// ADR-055 (PlanSupervisor) — the supervision/containment pair. BOTH
+	// ceilings are "allow": an "ask" or "deny" ceiling on plan_correct would
+	// overrule PlanSupervisor's own seeded "allow" under strictest-wins (the
+	// inspect_session defect, repeated on the next tool), and an "ask" ceiling
+	// on stop_plan would merge Jim's seeded "allow" down to "ask", making a
+	// plan owner stopping their own plan depend on a human answering a prompt.
+	// Asserted explicitly rather than left to the allow-by-default sweep
+	// below, so someone tightening these has to delete a named assertion
+	// carrying the reason. (Until 2026-07-28 this note contrasted the pair
+	// with execute_plan's "ask" ceiling; that ceiling was the same defect and
+	// is now "allow" too — the reasoning here is unchanged, only the contrast
+	// is gone.)
+	if got := cfg.Sandbox.ToolPolicies["plan_correct"]; got != "allow" {
+		t.Errorf("expected seeded ceiling policy 'allow' for \"plan_correct\", got %q", got)
+	}
+	if got := cfg.Sandbox.ToolPolicies["stop_plan"]; got != "allow" {
+		t.Errorf("expected seeded ceiling policy 'allow' for \"stop_plan\", got %q", got)
+	}
+
+	// ADR-056 (list_jobs) — the read-only background-job roster. "allow" for
+	// the same third reason stop_plan's ceiling is: stop_plan takes a plan id,
+	// list_jobs is where an agent gets one, and an "ask" ceiling would drag
+	// every per-agent "allow" (Jim's included) down to "ask" under
+	// strictest-wins — re-introducing exactly the human-in-the-loop dependency
+	// stop_plan's ceiling exists to remove. Asserted by name for the same
+	// reason as the pair above: tightening it must require deleting a named
+	// assertion that carries the reason.
+	if got := cfg.Sandbox.ToolPolicies["list_jobs"]; got != "allow" {
+		t.Errorf("expected seeded ceiling policy 'allow' for \"list_jobs\", got %q", got)
+	}
+
 	// The global map must be a full, wildcard-free enumeration (CLAUDE.md hard
-	// constraint 6) — 80 static builtin tools (34 general + 11 browser + 35
-	// sysagent), matching pkg/coreagent's allStaticToolNames literal-for-literal.
-	// Browser gained browser_list_tabs / browser_switch_tab / browser_close_tab
-	// (ADR-041 multi-tab), taking browser from 7 to 10, then browser_open_tab
-	// (live-UAT finding, Alex — "no agent tool to open a new tab"), taking it to 11.
-	// General gained recall_conversation — the 4th memory tool (remember /
-	// recall_memory / run_retrospective / recall_conversation) that was
-	// registered but omitted from the seed + catalog, so it was denied-by-default
-	// (fail-closed) on every install — taking general from 31 to 32. General then
-	// gained library_list / library_read (D3, library-spec, 2026-07-29 UAT) —
-	// scoped read/list facades over a workspace's chat-upload dual-write
-	// directory (D-1) — taking general from 32 to 34.
-	const wantToolCount = 80
-	if got := len(cfg.Sandbox.ToolPolicies); got != wantToolCount {
-		t.Errorf(
-			"expected sandbox.tool_policies to enumerate all %d static builtin tools, got %d entries",
-			wantToolCount,
-			got,
-		)
+	// constraint 6): it must enumerate EXACTLY the names in pkg/coreagent's
+	// allStaticToolNames, one for one.
+	//
+	// That identity is NOT asserted here, and deliberately no longer has a
+	// hardcoded count standing in for it. Package config cannot import
+	// pkg/coreagent (pkg/coreagent already imports pkg/config — that direction
+	// is a cycle), so the only thing this package could ever express was a
+	// magic number, which is a strictly weaker control: it says "expected 85,
+	// got 86" while the real question is WHICH tool is missing from WHICH
+	// surface, and it has to be hand-grown (with a paragraph of changelog
+	// prose) every time a tool lands.
+	//
+	// The real, mechanical, by-name guard runs from the other side, where the
+	// import direction is legal: pkg/coreagent's
+	// TestCatalog_MatchesGlobalCeilingEntryForEntry checks BOTH directions
+	// (every catalog name has a ceiling entry; every ceiling entry is in the
+	// catalog) plus length equality, and names the offending tool when it
+	// fails. pkg/gateway's TestBuildKnownBuiltinToolNames_MatchesCoreagentStatic
+	// ToolCatalog closes the third side (the live tool registry). Do not
+	// reintroduce a count literal here — add the tool to both surfaces and let
+	// those two tests speak.
+	//
+	// What IS still asserted locally is that the map is non-empty and that
+	// every entry carries a legal, explicit policy value — the sweep below —
+	// so a corrupted or wildcard-bearing ceiling still fails in this package.
+	if len(cfg.Sandbox.ToolPolicies) == 0 {
+		t.Fatal("sandbox.tool_policies must be a fully-enumerated global ceiling, got no entries")
+	}
+	for name, policy := range cfg.Sandbox.ToolPolicies {
+		switch policy {
+		case "allow", "ask", "deny":
+		default:
+			t.Errorf("tool %q has illegal seeded policy %q — must be allow, ask or deny", name, policy)
+		}
+		if strings.ContainsAny(name, "*?") {
+			t.Errorf(
+				"tool %q is a wildcard entry — the static builtin ceiling must be literal and "+
+					"wildcard-free (CLAUDE.md hard constraint 6); wildcards are the MCP exception only",
+				name,
+			)
+		}
 	}
 
 	// Every non-destructive entry must be "allow" — this is an allow-by-default
 	// ceiling, not a narrow ask-list. disable_channel is explicitly checked as
-	// the canonical "reversible, not destructive" example.
+	// the canonical "reversible, not destructive" example. inspect_session is
+	// no longer excluded (fix-wave finding #2), and neither are the three
+	// ADR-052 plan-execution tools (2026-07-28): all four are now seeded
+	// "allow" at the ceiling, same as any other non-destructive tool, with the
+	// real gating done per-agent.
 	for name, policy := range cfg.Sandbox.ToolPolicies {
 		if destructive[name] {
 			continue

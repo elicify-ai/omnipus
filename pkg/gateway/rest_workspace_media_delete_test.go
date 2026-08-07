@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_workspace_media_delete_test.go — re-review FIX 3 / FIX 4 regression
 // tests for handleWorkspaceMediaDelete (single-item DELETE
 // /api/v1/workspaces/{id}/media/{media_id}, FR-008).

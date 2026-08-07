@@ -1,10 +1,8 @@
-//go:build !cgo
-
 // Regression tests for #406 tenancy fixes — updated for FR-1.9 (owner attribution-only).
 //
 // BDD scenarios:
 //   Scenario: ToolSessionOwner/WithSessionOwner round-trip
-//   Scenario: cross-owner milestone FK → accepted (201); owner gate removed (FR-1.9)
+//   Scenario: cross-owner shared tag → accepted (201); owner gate removed (FR-1.9)
 //   Scenario: system.task.create Rule-2 — no workspace → task.owner == session owner
 //   Scenario: multi-user: user B CAN access user A's workspace/task (FR-1.9, owner attribution-only)
 //   Scenario: single-user: shared workspace accessible
@@ -68,57 +66,53 @@ func TestToolSessionOwner_NoContext_ReturnsEmpty(t *testing.T) {
 	assert.Equal(t, "", got, "ToolSessionOwner on a bare context must return empty string")
 }
 
-// ── #406 + FR-1.9: cross-owner milestone FK — owner gate removed ──────────────
+// ── #406 + FR-1.9: cross-owner tag reference — owner gate removed ────────────
 
-// TestTask_CrossOwnerMilestoneFK_Accepted asserts that a unified task POST
-// referencing another user's milestone is accepted (201) after the owner gate
-// removal (FR-1.9). Owner is attribution-only; milestone existence is the only check.
+// TestTask_CrossOwnerTag_Accepted asserts that a unified task POST carrying a
+// tag is accepted (201) regardless of who created any other task sharing that
+// tag — FR-1.9's owner-attribution-only stance. Tags replaced the removed
+// Milestone (ADR-049 D1); unlike Milestone, tags carry no FK/ownership at all
+// (SD-A8 — no global tag registry), so there is no gate to remove here, only
+// to confirm none was reintroduced.
 //
 // BDD:
 //
-//	Given a milestone owned by "alice" and a workspace,
-//	When "bob" POSTs a unified task referencing alice's milestone_id,
-//	Then 201 is returned — the milestone FK is valid (milestone exists).
+//	Given a task owned by "alice" tagged "release-1" in a workspace,
+//	When "bob" POSTs a unified task in the same workspace tagged "release-1",
+//	Then 201 is returned for both — tags carry no ownership gate.
 //
-// Guards against: regression that re-introduces an owner check on milestone FK.
-// Sprint 2: uses POST /api/v1/tasks (replaces /board/tasks); "title"+"action"+"workspace_id" required.
-// Traces to: pkg/gateway/rest_tasks.go validateMilestoneFK — #406, FR-1.9
-func TestTask_CrossOwnerMilestoneFK_Accepted(t *testing.T) {
+// Guards against: regression that reintroduces an owner check on shared tags.
+// Traces to: pkg/task/store.go normalizeTags — #406, FR-1.9, ADR-049 D1
+func TestTask_CrossOwnerTag_Accepted(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
-
-	// Create a workspace bob's task can belong to.
-	wsID := createWorkspaceViaAPI(t, api, "BobWorkspace", "")
-
-	// Write a milestone owned by "alice" directly (workspace_id=wsID so the FK is reachable).
-	milestoneID := "01JXMILESTONE00000000ALICE"
-	milestonesDir := filepath.Join(api.homePath, "milestones")
-	require.NoError(t, os.MkdirAll(milestonesDir, 0o700))
-	milestoneJSON := fmt.Sprintf(
-		`{"id":%q,"workspace_id":%q,"name":"Alice Milestone","owner":"alice","created_at":%q,"updated_at":%q}`,
-		milestoneID,
-		wsID,
-		time.Now().UTC().Format(time.RFC3339),
-		time.Now().UTC().Format(time.RFC3339),
-	)
-	require.NoError(t, os.WriteFile(filepath.Join(milestonesDir, milestoneID+".json"), []byte(milestoneJSON), 0o600))
-
-	// "bob" creates a task referencing alice's milestone.
-	// FR-1.9: the owner gate is gone; milestone existence is the only validation.
-	body := fmt.Sprintf(`{"title":"Bob Task","action":"llm","workspace_id":%q,"milestone_id":%q}`, wsID, milestoneID)
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	r.URL.Path = "/api/v1/tasks"
-	r = r.WithContext(contextWithUser(r.Context(), "bob"))
 	api.agentLoop.GetConfig().Gateway.Users = []config.UserConfig{
 		{Username: "alice"},
 		{Username: "bob"},
 	}
 
+	wsID := createWorkspaceViaAPI(t, api, "BobWorkspace", "")
+
+	// "alice" creates a task tagged "release-1".
+	bodyAlice := fmt.Sprintf(`{"title":"Alice Task","action":"llm","workspace_id":%q,"tags":["release-1"]}`, wsID)
+	wAlice := httptest.NewRecorder()
+	rAlice := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(bodyAlice))
+	rAlice.Header.Set("Content-Type", "application/json")
+	rAlice.URL.Path = "/api/v1/tasks"
+	rAlice = rAlice.WithContext(contextWithUser(rAlice.Context(), "alice"))
+	api.HandleTasks(wAlice, rAlice)
+	require.Equal(t, http.StatusCreated, wAlice.Code, "alice's task must be created; body=%s", wAlice.Body.String())
+
+	// "bob" creates a task with the SAME tag. FR-1.9: no owner gate on tags.
+	bodyBob := fmt.Sprintf(`{"title":"Bob Task","action":"llm","workspace_id":%q,"tags":["release-1"]}`, wsID)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(bodyBob))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/tasks"
+	r = r.WithContext(contextWithUser(r.Context(), "bob"))
 	api.HandleTasks(w, r)
 
 	assert.Equal(t, http.StatusCreated, w.Code,
-		"cross-owner milestone_id reference must be accepted (201) after FR-1.9 gate removal; body=%s", w.Body.String())
+		"cross-owner shared-tag task must be accepted (201); body=%s", w.Body.String())
 }
 
 // ── #406 + FR-1.9: multi-user workspace access — owner attribution only ───────

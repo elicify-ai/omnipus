@@ -2,6 +2,8 @@ title: RateLimitsUpdateResponse
 description: >
   Response from PUT /api/v1/security/rate-limits.
   Returns save status and the applied configuration.
+  Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the
+  applied block returns only the surviving sliding-window fields.
 type: object
 required:
   - saved
@@ -21,12 +23,6 @@ properties:
     type: object
     description: The effective configuration after the update. Present only when hot-reload succeeded.
     properties:
-      daily_cost_cap_usd:
-        type: number
-        format: double
-        minimum: 0
-        description: Applied daily cost cap in USD.
-        example: 5.0
       max_agent_llm_calls_per_hour:
         type: integer
         format: int64

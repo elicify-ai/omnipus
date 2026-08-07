@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Provider-validation gateway integration tests (spec: provider-validation-centralization-spec.md).
 // Tests #10–#16, #28–#30 from the TDD plan (gateway layer only).
 //

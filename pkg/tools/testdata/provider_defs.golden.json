@@ -36,7 +36,7 @@
   },
   {
     "name": "create_task_in_workspace",
-    "description": "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, planning, in_progress, blocked, done, failed — defaults to inbox), due (optional, RFC 3339 due date/time), blocked_by (optional, array of task IDs this task is blocked by).",
+    "description": "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, in_progress, blocked, done, failed — defaults to inbox), due (optional, RFC 3339 due date/time), priority (optional, 1 highest to 5 lowest, default 3), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must not be a terminal plan), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion / Definition of Done).",
     "scope": "core",
     "category": "tasks",
     "source": "builtin"
@@ -148,7 +148,7 @@
   },
   {
     "name": "list_tasks_in_workspace",
-    "description": "List tasks with optional filters.\nParameters: workspace_id, agent_id, status (all optional).",
+    "description": "List YOUR OWN tasks across workspaces: tasks assigned to you, plus tasks you created for other agents. It never returns another agent's or a human's tasks, so an empty result means you have no matching work — not that the workspace is empty. Bounded to the 100 most recently updated matches; `truncated` and `matched` say when there were more.\nParameters: workspace_id, agent_id, status (all optional, all narrow the result further).",
     "scope": "core",
     "category": "tasks",
     "source": "builtin"
@@ -225,7 +225,7 @@
   },
   {
     "name": "update_task_in_workspace",
-    "description": "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/planning/in_progress/blocked/done/failed), due (RFC 3339), blocked_by (array of task IDs, replaces existing list). Only provided fields are updated.",
+    "description": "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/in_progress/blocked/done/failed), due (RFC 3339), priority (1 highest to 5 lowest), blocked_by (array of task IDs, replaces existing list), result (completion summary; used as the judge's claim text — required in practice for a done claim on a task with acceptance criteria, since only the criteria's own assignee running that task can force one through). Only provided fields are updated. A status:\"done\" call on a task with acceptance criteria is NOT applied immediately — it is adjudicated by the judge during that task's own run.",
     "scope": "core",
     "category": "tasks",
     "source": "builtin"

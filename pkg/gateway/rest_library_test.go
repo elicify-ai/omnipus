@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Tests for /api/v1/library* (library-spec.md). Covers every operation's
 // happy path plus the error/status-code table each operation documents in
 // contracts/openapi.yaml, with particular emphasis on path-safety

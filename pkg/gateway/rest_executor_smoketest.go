@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_executor_smoketest.go — POST /api/v1/agents/executor-smoke-test.
 //
 // Stateless, agent-agnostic: actually RUNS a trivial, real prompt through an
@@ -366,16 +364,23 @@ func (a *restAPI) runExecutorSmokeTest(
 		resolved := agent.ResolveAgentHome(agentCfg, &cfg.Agents.Defaults)
 		// CoreTeam override: an agent that belongs to a Workspace's team runs
 		// in the Workspace's dedicated project-work subdirectory
-		// (workspaces/<id>/work/, workspace.SafeWorkDir) instead of its
+		// (workspaces/<id>/work/, workspace.EnsureWorkDir) instead of its
 		// private one — same rule real dispatch applies (see the file-level
-		// doc above). Deliberately not the workspace's own root directory:
+		// doc above). workspace.EnsureWorkDir (not the bare SafeWorkDir this
+		// used before) also idempotently auto-inits the git evidence repo for
+		// that work dir, same as the real native/external-cli dispatch paths
+		// (pkg/agent/workspace_reroot.go), so a smoke-test run that lands in
+		// a real workspace's work/ dir arms the same evidence layer a genuine
+		// turn would. Deliberately not the workspace's own root directory:
 		// that also holds AGENT.md and the shared memory room, which a
 		// generic write_file/edit_file confined here must not be able to
-		// reach. Not found, or an unsafe workspace id, is not an error: it
-		// just means the agent's own directory (already resolved above) is
-		// used, same as before this override existed.
+		// reach. Not found, an unsafe workspace id, or a directory-creation
+		// failure is not a hard error here: it just means the agent's own
+		// directory (already resolved above) is used, same as before this
+		// override existed — the shared os.MkdirAll(resolved, ...) below
+		// still hard-fails the smoke test if THAT directory is unusable too.
 		if wsID, found := workspace.FindForAgent(config.OmnipusHomeDir(), agentID); found {
-			if wsDir, wsErr := workspace.SafeWorkDir(config.OmnipusHomeDir(), wsID); wsErr == nil {
+			if wsDir, wsErr := workspace.EnsureWorkDir(config.OmnipusHomeDir(), wsID); wsErr == nil {
 				resolved = wsDir
 			} else {
 				slog.Warn("executor-smoke-test: workspace-team dir resolution failed; using agent's own directory",

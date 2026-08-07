@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -110,6 +108,30 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 	persistedCfg, err := config.LoadConfig(a.configPath())
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to read persisted config")
+		return
+	}
+	// ADR-054 D2/D3: config.LoadConfig strips agents.list on every load
+	// (legacy_agents_list.go) — repopulate from the agent store so
+	// persistedCfg.Agents.List matches a.appliedConfig.Agents.List's shape
+	// (populated the same way at boot) and this diff never reports a phantom
+	// agents.list change on every single pending-restart check.
+	//
+	// SECURITY FIX (RELEASE BLOCKER, F3 follow-up): populateAgentsListFromStore
+	// now returns an error (backed by the strict, fail-closed
+	// populateAgentsListFromEntityStoreStrict — see its doc comment in
+	// gateway.go) instead of silently logging and continuing on a roster-
+	// population failure. This handler never swaps a config into the live
+	// gateway (persistedCfg is a local, read-only snapshot used purely for the
+	// restart-gated-keys diff below, none of which touch Agents.List), so
+	// there is no live privilege-escalation path through THIS call site
+	// specifically — but failing the request outright on a genuine entity-
+	// store error is still correct: proceeding would silently diff against a
+	// roster the entity store itself says it could not trust, and a future
+	// RestartGatedKeys addition touching agents.* would inherit that same
+	// blind spot for free if this were left as a fire-and-forget call.
+	if rosterErr := a.populateAgentsListFromStore(persistedCfg); rosterErr != nil {
+		slog.Error("HandlePendingRestart: agent roster population failed", "error", rosterErr)
+		jsonErr(w, http.StatusInternalServerError, "failed to read persisted agent roster")
 		return
 	}
 	persistedCfg.Tools.ApplyWarmupTimeoutDefault()

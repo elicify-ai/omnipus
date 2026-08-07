@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -59,10 +57,9 @@ import (
 // reference this constant rather than the literal string.
 const DevOriginDeniedEvent = "dev.origin_denied"
 
-// canonicalGatewayOrigin / CanonicalGatewayOrigin live in origin_canonical.go —
-// deliberately WITHOUT this file's `//go:build !cgo` tag so pkg/tools (via
-// web_serve.go) can import CanonicalGatewayOrigin under CGO, i.e. the `go test
-// -race` gate. See that file's header for the full rationale.
+// canonicalGatewayOrigin / CanonicalGatewayOrigin live in origin_canonical.go.
+// That split dates from when this package was gated behind `//go:build !cgo`;
+// the tag is gone now, so the split is historical only. See that file's header.
 
 // originMatches returns true when the request's Origin header matches the
 // expected gateway origin. Comparison is case-insensitive on the host

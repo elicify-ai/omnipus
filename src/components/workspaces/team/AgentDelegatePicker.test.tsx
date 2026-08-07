@@ -59,6 +59,7 @@ function node(id: string, over: Partial<TeamNodeModel> = {}): TeamNodeModel {
     isDefault: false,
     isWorker: false,
     isGhost: false,
+    isImplicit: false,
     position: { x: 0, y: 0 },
     ...over,
   }
@@ -155,5 +156,39 @@ describe('AgentDelegatePicker — empty state', () => {
     expect(
       screen.getByText(/No eligible agents/i),
     ).toBeInTheDocument()
+  })
+})
+
+// SD-C17 defense-in-depth (ADR-049 D3): a System agent (the Judge) is never
+// a valid delegation target, even in the hypothetical case where one somehow
+// reached the canvas as a node (the supported flow already can't produce
+// this — AddAgentPicker.tsx excludes `type: 'system'` from the team-add
+// picker in the first place — see AddAgentPicker.test.tsx for that half of
+// the defense). AgentDelegatePicker passes `n.type === 'system'` as
+// `isSystemTarget` into `validateConnection`, which rejects with
+// 'system-target' regardless of team-membership/duplicate-edge state.
+describe('AgentDelegatePicker — System agent exclusion (SD-C17)', () => {
+  it('excludes a type:system node (the Judge) from the candidate list even though it is otherwise a valid, unconnected team member', () => {
+    const judgeNode = node('judge', { name: 'Judge', type: 'system', role: 'System agent' })
+    renderPicker({
+      nodes: [SOURCE, VALID_TARGET, judgeNode],
+      editState: state({ members: ['mia', 'jim', 'judge'] }), // judge IS a team member here
+    })
+    // jim (a normal Main agent, team member, no edge yet) is a valid candidate.
+    expect(screen.getByTestId('team-node-delegate-target-mia-jim')).toBeInTheDocument()
+    // judge is a team member with no edge either — by team-membership alone
+    // it would qualify, but its type:system must still exclude it.
+    expect(screen.queryByTestId('team-node-delegate-target-mia-judge')).toBeNull()
+    expect(screen.queryByText('Judge')).not.toBeInTheDocument()
+  })
+
+  it('with the Judge as the ONLY other team member, the menu falls back to the empty-state message', () => {
+    const judgeNode = node('judge', { name: 'Judge', type: 'system', role: 'System agent' })
+    renderPicker({
+      nodes: [SOURCE, judgeNode],
+      editState: state({ members: ['mia', 'judge'] }),
+    })
+    expect(screen.queryByTestId(/team-node-delegate-target-/)).toBeNull()
+    expect(screen.getByText(/No eligible agents/i)).toBeInTheDocument()
   })
 })

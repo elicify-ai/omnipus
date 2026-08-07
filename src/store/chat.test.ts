@@ -2770,15 +2770,15 @@ describe('evictMessageFromBucket — full sweep of dependent maps', () => {
 // Trims via appendMessage (applyMessageArray path) and asserts dependent maps
 // evict the correct entries.
 
-describe('eviction-leak regression — applyMessageArray evicts spanByParentCallId and textAtToolCallStart', () => {
-  it('after trimming 100 messages, spanByParentCallId and textAtToolCallStart track the surviving set', () => {
+describe('eviction-leak regression — applyMessageArray evicts spanByParentCallId, spanBySpanId, and textAtToolCallStart', () => {
+  it('after trimming 100 messages, spanByParentCallId, spanBySpanId, and textAtToolCallStart track the surviving set', () => {
     act(() => {
       useChatStore.getState().resetSession()
     })
 
     // Seed 600 assistant messages, each with 3 tool calls (in tool_calls array).
-    // Also manually populate spanByParentCallId and textAtToolCallStart to simulate
-    // in-flight spans and tool call snapshots.
+    // Also manually populate spanByParentCallId, spanBySpanId, and textAtToolCallStart
+    // to simulate in-flight spans and tool call snapshots.
     const TOTAL = 600
 
     // Build the bucket directly to avoid the test going through 600 handleFrame cycles.
@@ -2787,11 +2787,13 @@ describe('eviction-leak regression — applyMessageArray evicts spanByParentCall
     const toolCallOrder: string[] = []
     const textAtToolCallStart: SessionChatState['textAtToolCallStart'] = {}
     const spanByParentCallId: SessionChatState['spanByParentCallId'] = {}
+    const spanBySpanId: NonNullable<SessionChatState['spanBySpanId']> = {}
 
     for (let i = 0; i < TOTAL; i++) {
       const msgId = `msg_${i}`
       const tcIds = [`tc_${i}_0`, `tc_${i}_1`, `tc_${i}_2`]
       const parentCallId = `pc_${i}`
+      const spanId = `span_${i}`
 
       msgs.push({
         id: msgId,
@@ -2808,8 +2810,9 @@ describe('eviction-leak regression — applyMessageArray evicts spanByParentCall
         textAtToolCallStart[tcId] = `snapshot for ${tcId}`
       }
 
-      // Each message also has a span entry in the index.
+      // Each message also has a span entry in BOTH span indexes (lockstep).
       spanByParentCallId[parentCallId] = { messageId: msgId, spanIdx: 0 }
+      spanBySpanId[spanId] = { messageId: msgId, spanIdx: 0 }
     }
 
     act(() => {
@@ -2822,6 +2825,7 @@ describe('eviction-leak regression — applyMessageArray evicts spanByParentCall
             toolCallOrder,
             textAtToolCallStart,
             spanByParentCallId,
+            spanBySpanId,
             isStreaming: false,
             isReplaying: false,
             replayCompletedForSession: null,
@@ -2861,11 +2865,21 @@ describe('eviction-leak regression — applyMessageArray evicts spanByParentCall
       ).toBe(true)
     }
 
+    // All spanBySpanId entries must point to surviving messages (mirrors above —
+    // lockstep invariant: the helper-based eviction must filter both maps together).
+    for (const [spanId, entry] of Object.entries(bucket.spanBySpanId ?? {})) {
+      expect(
+        survivingMsgIds.has(entry.messageId),
+        `spanBySpanId["${spanId}"] points to evicted message "${entry.messageId}"`,
+      ).toBe(true)
+    }
+
     // Count how many span entries we expect: one per surviving assistant message.
     const survivingAssistantMsgIds = new Set(
       bucket.messageOrder.filter((id) => bucket.messagesById[id]?.role === 'assistant')
     )
     expect(Object.keys(bucket.spanByParentCallId).length).toBe(survivingAssistantMsgIds.size)
+    expect(Object.keys(bucket.spanBySpanId ?? {}).length).toBe(survivingAssistantMsgIds.size)
 
     // All textAtToolCallStart entries must have call_ids present in toolCallOrder.
     const liveCallIdSet = new Set(bucket.toolCallOrder)

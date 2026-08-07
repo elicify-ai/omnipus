@@ -6,8 +6,8 @@
 //
 // This file is the integration seam for the parallel build: the pure mapping
 // (eventMapping.ts), the FullCalendar wrapper (FullCalendarView.tsx), the toolbar
-// (CalendarToolbar.tsx), the milestone popover (MilestoneDatePopover.tsx) and the
-// host screen (CalendarScreen.tsx) all depend on the interfaces declared here.
+// (CalendarToolbar.tsx), and the host screen (CalendarScreen.tsx) all depend on
+// the interfaces declared here.
 
 import type { MutableRefObject } from 'react'
 import type FullCalendar from '@fullcalendar/react'
@@ -102,18 +102,17 @@ export type StatusIconKey =
   | 'CircleNotch' // in_progress
   | 'Prohibit' //    blocked
   | 'XCircle' //     failed
-  | 'Circle' //      inbox / next / planning (muted)
+  | 'Circle' //      inbox / next (muted)
   | 'Clock' //       once-trigger "fires" chip (overrides status icon)
-  | 'Flag' //        milestone
   | 'SkipForward' //  TaskRun.status === 'skipped' (overlap-guard, run-only)
 
 /**
  * extendedProps carried on every FullCalendar EventInput we produce.
  *
- * Discriminated on `kind` so illegal states (e.g. a milestone carrying a
- * `taskId`, or a task without one) are unrepresentable — the consumer's
- * switch on `kind` then narrows `taskId`/`milestoneId`/`status` with no
- * defensive runtime checks, and `persistReschedule`'s switch can be exhaustive.
+ * Discriminated on `kind` so illegal states (e.g. a task without a `taskId`)
+ * are unrepresentable — the consumer's switch on `kind` then narrows
+ * `taskId`/`status` with no defensive runtime checks, and `persistReschedule`'s
+ * switch can be exhaustive.
  *
  * Calendar Recurrence Redesign (docs/internal/specs/calendar-recurrence-redesign-spec.md,
  * Integration Boundaries → FullCalendar v6, FR-009/FR-012) adds three occurrence
@@ -152,7 +151,6 @@ export type StatusIconKey =
 export type CalendarEventExtProps =
   | { kind: 'task-due'; taskId: string; status: TaskStatus; icon: StatusIconKey }
   | { kind: 'task-fire'; taskId: string; status: TaskStatus; icon: 'Clock' }
-  | { kind: 'milestone'; milestoneId: string; icon: 'Flag' }
   | {
       kind: 'task-occurrence'
       taskId: string
@@ -212,7 +210,7 @@ export const CHIP_TEXT_COLOR = '#0A0A0B'
 /**
  * Canonical status → chip style map (single source of truth, FR-005).
  * `bg` is the chip background; the icon is the StatusIconKey. All clear >=7:1
- * contrast with CHIP_TEXT_COLOR. `next`/`inbox`/`planning` are muted/slate.
+ * contrast with CHIP_TEXT_COLOR. `next`/`inbox` are muted/slate.
  */
 export interface ChipStyle {
   bg: string
@@ -226,14 +224,10 @@ export const STATUS_STYLE: Record<TaskStatus, ChipStyle> = {
   failed: { bg: '#F87171', icon: 'XCircle' },
   inbox: { bg: '#94A3B8', icon: 'Circle' },
   next: { bg: '#94A3B8', icon: 'Circle' },
-  planning: { bg: '#94A3B8', icon: 'Circle' },
 }
 
 /** Fallback style for an unknown/missing status. */
 export const STATUS_STYLE_FALLBACK: ChipStyle = { bg: '#94A3B8', icon: 'Circle' }
-
-/** Milestone chip style (Forge Gold + Flag). */
-export const MILESTONE_STYLE: ChipStyle = { bg: '#D4AF37', icon: 'Flag' }
 
 /**
  * "Scheduled" occurrence chip style (ADR-050 RD6) — no run yet, instant still
@@ -327,19 +321,3 @@ export interface CalendarToolbarProps {
   agentRosterError?: boolean
 }
 
-/** The milestone a MilestoneDatePopover edits (null = closed). */
-export interface MilestoneTarget {
-  id: string
-  name: string
-  due_date: string | null
-}
-
-/** Props for the milestone reschedule popover/dialog (MilestoneDatePopover.tsx). */
-export interface MilestoneDatePopoverProps {
-  workspaceId: string
-  /** null closes the dialog. */
-  milestone: MilestoneTarget | null
-  onClose: () => void
-  /** Called after a successful reschedule so the host can invalidate queries. */
-  onRescheduled?: () => void
-}

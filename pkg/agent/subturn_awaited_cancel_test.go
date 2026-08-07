@@ -124,13 +124,21 @@ func TestSpawnSubTurn_AwaitedSyncCancel_CascadesAndRecordsDescendants(t *testing
 	parentTS := &turnState{
 		turnID:              "parent-awaited-sync-cancel",
 		transcriptSessionID: sessionID,
-		depth:               0,
-		session:             newEphemeralSession(nil),
-		pendingResults:      make(chan *tools.ToolResult, 16),
-		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
-		al:                  al,
-		finishedChan:        make(chan struct{}),
-		transcriptStore:     store,
+		// ADR-057 FR-011: newTurnState (turn.go) always defaults
+		// routingSessionID to the turn's own transcriptSessionID for a root
+		// turn — GetActiveTurnHookForSession (and every other role-B cancel
+		// predicate) matches on routingSessionID, not transcriptSessionID.
+		// This test builds the turnState literal directly (bypassing
+		// newTurnState), so it must replicate that default itself or
+		// RequestCancel below can never find this turn at all.
+		routingSessionID: session.RoutingSessionID(sessionID),
+		depth:            0,
+		session:          newEphemeralSession(nil),
+		pendingResults:   make(chan *tools.ToolResult, 16),
+		concurrencySem:   make(chan struct{}, testMaxConcurrentSubTurns),
+		al:               al,
+		finishedChan:     make(chan struct{}),
+		transcriptStore:  store,
 	}
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
 	al.activeTurnStates.Store(sessionID, parentTS)
@@ -164,6 +172,36 @@ func TestSpawnSubTurn_AwaitedSyncCancel_CascadesAndRecordsDescendants(t *testing
 	childSpawnKey := parentTS.childTurnIDs[0] // the child's activeTurnStates map key (childID) — NOT its turnID; see below
 	parentTS.mu.RUnlock()
 	require.NotEmpty(t, childSpawnKey)
+
+	// Wait for the child to actually be blocked inside its LLM call — i.e.
+	// its OWN providerCancel is set (loop.go's per-call `providerCtx,
+	// providerCancel := context.WithCancel(turnCtx); ts.setProviderCancel(...)`).
+	// "Registered on the parent" (above) only proves spawnSubTurn's
+	// bookkeeping ran; it fires well BEFORE the child's own runTurn reaches
+	// its provider call. Interrupt's graceful cascade (steering.go) fires
+	// ts.providerCancel (nil-safe no-op) and ONLY THEN sets the graceful
+	// flag — by design, a graceful interrupt that arrives before the flag's
+	// first LLM call does not abort that call, it lets it run once (FR-15's
+	// "one more, then wrap up" semantics) and only the 3s hard-abort
+	// escalation would stop it. Firing RequestCancel any earlier than this
+	// point races that design and would need the full hard-abort window
+	// instead of the graceful path this test exists to verify — matching
+	// this test's own docstring ("fires a REAL RequestCancel ... while the
+	// child is still blocked inside a slow ... LLM call").
+	require.Eventually(t, func() bool {
+		val, ok := al.activeTurnStates.Load(childSpawnKey)
+		if !ok {
+			return false
+		}
+		childTS, ok := val.(*turnState)
+		if !ok || childTS == nil {
+			return false
+		}
+		childTS.mu.RLock()
+		defer childTS.mu.RUnlock()
+		return childTS.providerCancel != nil
+	}, 2*time.Second, 5*time.Millisecond,
+		"child sub-turn must be blocked inside its LLM call (providerCancel set) before the cancel fires")
 
 	// The REAL production cancel path: RequestCancel -> ClaimCancel -> graceful
 	// InterruptSession cascade -> providerCancel() on every matching turnState

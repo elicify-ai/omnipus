@@ -24,7 +24,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { RegistryTool } from '@/lib/api'
 import type { ToolPolicy } from '@/components/shared/PolicyBadge'
@@ -1022,5 +1022,184 @@ describe('ToolPolicyEditor — G10: per-server bulk policy control', () => {
     expect(onChange).toHaveBeenCalledWith({
       policies: { ...SAFE_VALUE.policies, 'mcp_github_mcp_*': 'deny' },
     })
+  })
+})
+
+// ── execute_plan grant security affordance (ADR-052 FR-021/F6) ────────────────
+//
+// "Holding execute_plan IS the approval" for autonomous multi-task plan
+// execution — any edit that would make execute_plan RESOLVE to "allow" (a
+// per-agent grant, or raising the global ceiling entry itself) must be
+// gated behind an explicit confirmation modal, not a plain checkbox click.
+// FR-021 requires this to be testable via modal presence.
+
+const EXECUTE_PLAN_TOOL: RegistryTool = makeTool({
+  name: 'execute_plan',
+  category: 'planning',
+  scope: 'core',
+})
+
+const PLAN_TOOLS: RegistryTool[] = [EXECUTE_PLAN_TOOL, ...FILE_TOOLS]
+
+const PLAN_TOOLS_ASK_VALUE: ToolPolicyValue = {
+  policies: Object.fromEntries(PLAN_TOOLS.map((t) => [t.name, 'ask' as ToolPolicy])),
+}
+
+async function expandExecutePlanRow() {
+  const user = userEvent.setup()
+  const categoryGrid = screen.getByTestId('category-grid')
+  await user.click(within(categoryGrid).getByRole('button', { name: /planning/i }))
+  return { user, row: screen.getByTestId('tool-row-execute_plan') }
+}
+
+describe('ToolPolicyEditor — execute_plan grant security affordance (ADR-052 FR-021/F6)', () => {
+  it('no modal renders until an execute_plan-allow-resolving edit is made', () => {
+    render(<ToolPolicyEditor tools={PLAN_TOOLS} value={PLAN_TOOLS_ASK_VALUE} onChange={vi.fn()} />)
+    expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull()
+  })
+
+  it('clicking Allow on execute_plan (global ceiling editor — no globalPolicies prop) opens a confirm modal instead of writing immediately', async () => {
+    const onChange = vi.fn()
+    render(<ToolPolicyEditor tools={PLAN_TOOLS} value={PLAN_TOOLS_ASK_VALUE} onChange={onChange} />)
+    const { user, row } = await expandExecutePlanRow()
+
+    await user.click(within(row).getByRole('button', { name: /allow/i }))
+
+    const dialog = await screen.findByTestId('execute-plan-grant-dialog')
+    expect(dialog).toHaveTextContent(/autonomous multi-task execution without an approval prompt/i)
+    // The edit must not land until the operator explicitly confirms.
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('Cancel dismisses the modal and discards the pending edit', async () => {
+    const onChange = vi.fn()
+    render(<ToolPolicyEditor tools={PLAN_TOOLS} value={PLAN_TOOLS_ASK_VALUE} onChange={onChange} />)
+    const { user, row } = await expandExecutePlanRow()
+
+    await user.click(within(row).getByRole('button', { name: /allow/i }))
+    await screen.findByTestId('execute-plan-grant-dialog')
+    await user.click(screen.getByTestId('execute-plan-grant-cancel'))
+
+    await waitFor(() => expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull())
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('Confirm applies the pending execute_plan allow write', async () => {
+    const onChange = vi.fn()
+    render(<ToolPolicyEditor tools={PLAN_TOOLS} value={PLAN_TOOLS_ASK_VALUE} onChange={onChange} />)
+    const { user, row } = await expandExecutePlanRow()
+
+    await user.click(within(row).getByRole('button', { name: /allow/i }))
+    await screen.findByTestId('execute-plan-grant-dialog')
+    await user.click(screen.getByTestId('execute-plan-grant-confirm'))
+
+    expect(onChange).toHaveBeenCalledWith({
+      policies: { ...PLAN_TOOLS_ASK_VALUE.policies, execute_plan: 'allow' },
+    })
+    await waitFor(() => expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull())
+  })
+
+  it('a non-sensitive tool (read_file) allow write applies immediately with no modal', async () => {
+    const onChange = vi.fn()
+    render(<ToolPolicyEditor tools={PLAN_TOOLS} value={PLAN_TOOLS_ASK_VALUE} onChange={onChange} />)
+    const categoryGrid = screen.getByTestId('category-grid')
+    const user = userEvent.setup()
+    await user.click(within(categoryGrid).getByRole('button', { name: /file/i }))
+    const row = screen.getByTestId('tool-row-read_file')
+
+    await user.click(within(row).getByRole('button', { name: /allow/i }))
+
+    expect(onChange).toHaveBeenCalledWith({
+      policies: { ...PLAN_TOOLS_ASK_VALUE.policies, read_file: 'allow' },
+    })
+    expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull()
+  })
+
+  it('setting execute_plan to Ask or Deny never opens the modal', async () => {
+    const onChange = vi.fn()
+    const allowValue: ToolPolicyValue = { policies: { ...PLAN_TOOLS_ASK_VALUE.policies, execute_plan: 'allow' } }
+    render(<ToolPolicyEditor tools={PLAN_TOOLS} value={allowValue} onChange={onChange} />)
+    const { user, row } = await expandExecutePlanRow()
+
+    await user.click(within(row).getByRole('button', { name: /deny/i }))
+
+    expect(onChange).toHaveBeenCalledWith({ policies: { ...allowValue.policies, execute_plan: 'deny' } })
+    expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull()
+  })
+
+  it('per-agent editor: execute_plan Allow is disabled (locked) under a stricter global "ask" ceiling — no modal reachable', async () => {
+    render(
+      <ToolPolicyEditor
+        tools={PLAN_TOOLS}
+        value={PLAN_TOOLS_ASK_VALUE}
+        onChange={vi.fn()}
+        globalPolicies={{ policies: { execute_plan: 'ask' } }}
+      />,
+    )
+    const { row } = await expandExecutePlanRow()
+    expect(within(row).getByRole('button', { name: /allow/i })).toBeDisabled()
+    expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull()
+  })
+
+  it('per-agent editor: execute_plan Allow still requires confirmation when the global ceiling already resolves allow (not locked)', async () => {
+    const onChange = vi.fn()
+    render(
+      <ToolPolicyEditor
+        tools={PLAN_TOOLS}
+        value={PLAN_TOOLS_ASK_VALUE}
+        onChange={onChange}
+        globalPolicies={{ policies: { execute_plan: 'allow' } }}
+      />,
+    )
+    const { user, row } = await expandExecutePlanRow()
+    expect(within(row).getByRole('button', { name: /allow/i })).not.toBeDisabled()
+
+    await user.click(within(row).getByRole('button', { name: /allow/i }))
+
+    await screen.findByTestId('execute-plan-grant-dialog')
+    expect(onChange).not.toHaveBeenCalled()
+
+    await user.click(screen.getByTestId('execute-plan-grant-confirm'))
+    expect(onChange).toHaveBeenCalledWith({
+      policies: { ...PLAN_TOOLS_ASK_VALUE.policies, execute_plan: 'allow' },
+    })
+  })
+
+  it('a role-preset click that would set execute_plan to Allow (Full access) opens the modal naming the preset', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(<ToolPolicyEditor tools={PLAN_TOOLS} value={PLAN_TOOLS_ASK_VALUE} onChange={onChange} />)
+
+    await user.click(screen.getByTestId('preset-full_access'))
+
+    const dialog = await screen.findByTestId('execute-plan-grant-dialog')
+    expect(dialog).toHaveTextContent(/full access/i)
+    expect(dialog).toHaveTextContent(/autonomous multi-task execution without an approval prompt/i)
+    expect(onChange).not.toHaveBeenCalled()
+
+    await user.click(screen.getByTestId('execute-plan-grant-confirm'))
+    expect(onChange).toHaveBeenCalledWith({ policies: expectedPresetMap('full_access', PLAN_TOOLS) })
+  })
+
+  it('a role-preset click that leaves execute_plan at Ask (Cautious) never opens the modal', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(<ToolPolicyEditor tools={PLAN_TOOLS} value={PLAN_TOOLS_ASK_VALUE} onChange={onChange} />)
+
+    await user.click(screen.getByTestId('preset-cautious'))
+
+    expect(onChange).toHaveBeenCalledWith({ policies: expectedPresetMap('cautious', PLAN_TOOLS) })
+    expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull()
+  })
+
+  it('a role-preset click is applied immediately (no modal) when execute_plan is not in the tool registry', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(<ToolPolicyEditor tools={FILE_TOOLS} value={SAFE_VALUE} onChange={onChange} />)
+
+    await user.click(screen.getByTestId('preset-full_access'))
+
+    expect(onChange).toHaveBeenCalledWith({ policies: expectedPresetMap('full_access', FILE_TOOLS) })
+    expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull()
   })
 })

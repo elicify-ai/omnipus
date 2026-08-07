@@ -56,6 +56,9 @@ var fullManifestToolNames = map[string]struct{}{
 	"create_task":       {},
 	"list_tasks":        {},
 	"update_task":       {},
+	"delegate":          {}, // ADR-053: must be as visible as create_task/list_tasks/update_task,
+	// otherwise the model reaches for the task route because it is the only
+	// one it can see as a callable def (measured 304s vs 20-80s for delegate).
 }
 
 // infraManifestToolNames is the set of infrastructure tools that are always

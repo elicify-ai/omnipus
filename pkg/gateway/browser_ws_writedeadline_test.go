@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // browser_ws_writedeadline_test.go — the browser-WS half of the write-deadline
 // regression already covered for the chat WS in websocket_writedeadline_test.go.
 //
@@ -9,8 +7,7 @@
 // requires a single writer goroutine, so once a client's TCP receive window
 // fills, an unbounded WriteMessage blocks that goroutine forever: no further
 // frames AND no further keepalive pings. The peer then hits its own read timeout
-// and tears the connection down, surfacing as `close 1006 (abnormal closure)` —
-// 33 of them in one operator session's log.
+// and tears the connection down, surfacing as `close 1006 (abnormal closure)`.
 //
 // This socket is the more exposed of the two: it carries the high-volume JPEG
 // screencast stream, so it is the one most likely to fill a window at all.

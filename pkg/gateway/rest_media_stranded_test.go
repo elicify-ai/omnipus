@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_media_stranded_test.go — regression test for serveMedia's
 // ErrEntryStranded HTTP mapping (see rest_workspace_media_stranded_test.go's
 // doc comment for the underlying "compound rollback-of-rollback" mechanism

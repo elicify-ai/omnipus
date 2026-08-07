@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Critical Assessment — Omnipus Goal/Plan/Subagent Design v2.1</title>
+<style>
+:root{
+  --bg:#0A0A0B; --panel:#141417; --panel2:#1B1B20; --ink:#E2E8F0; --muted:#8B8D98;
+  --gold:#D4AF37; --blue:#3B82F6; --green:#34D399; --red:#EF4444; --orange:#EAB308;
+  --line:#26262C;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+}
+@media (prefers-color-scheme: light){:root{--bg:#F7F7F8;--panel:#FFFFFF;--panel2:#F0F0F2;--ink:#1A1B1E;--muted:#5B5D66;--line:#DDDDE2;}}
+:root[data-theme="dark"]{--bg:#0A0A0B;--panel:#141417;--panel2:#1B1B20;--ink:#E2E8F0;--muted:#8B8D98;--line:#26262C;}
+:root[data-theme="light"]{--bg:#F7F7F8;--panel:#FFFFFF;--panel2:#F0F0F2;--ink:#1A1B1E;--muted:#5B5D66;--line:#DDDDE2;}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;margin:0;padding:2.5rem 1.25rem 5rem;}
+main{max-width:1060px;margin:0 auto;display:flex;flex-direction:column;gap:2rem;}
+h1{font-size:2rem;margin:0;letter-spacing:-.02em;text-wrap:balance;}
+h1 .accent{color:var(--gold)}
+.meta{font-family:var(--mono);font-size:.72rem;color:var(--muted);letter-spacing:.02em}
+h2{font-size:1.25rem;margin:0;display:flex;align-items:center;gap:.6rem;text-wrap:balance}
+h2 .dot{width:.7rem;height:.7rem;border-radius:50%;display:inline-block;flex:none}
+section{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.5rem 1.6rem;}
+.lede{color:var(--muted);margin:.3rem 0 0;max-width:78ch}
+.verdict{display:grid;grid-template-columns:auto 1fr;gap:1.2rem 1.6rem;align-items:start}
+.score{font-family:var(--mono);font-size:3rem;font-weight:700;line-height:1;letter-spacing:-.04em}
+.score small{display:block;font-size:.7rem;font-weight:500;color:var(--muted);letter-spacing:.1em;margin-top:.3rem;text-transform:uppercase}
+.bar{height:8px;border-radius:4px;background:var(--panel2);overflow:hidden;display:flex}
+.bar span{height:100%}
+.finding{border:1px solid var(--line);border-left-width:4px;border-radius:0 8px 8px 0;padding:.85rem 1.05rem;margin:.7rem 0;background:var(--panel2)}
+.f-block{border-left-color:var(--red)} .f-major{border-left-color:var(--orange)} .f-minor{border-left-color:var(--muted)}
+.sev{font-family:var(--mono);font-size:.65rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;padding:.12rem .4rem;border-radius:3px;border:1px solid currentColor;display:inline-block;vertical-align:middle}
+.s-block{color:var(--red)} .s-major{color:var(--orange)} .s-minor{color:var(--muted)} .s-ok{color:var(--green)}
+.finding h4{margin:0 0 .3rem;font-size:.98rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.finding p{margin:.35rem 0}
+.finding .loc{font-family:var(--mono);font-size:.78rem;color:var(--blue)}
+.finding code,table code,pre code,.ic{font-family:var(--mono);font-size:.82em;background:var(--panel);border:1px solid var(--line);padding:.06em .32em;border-radius:4px}
+.finding .fix{margin-top:.5rem;padding-top:.5rem;border-top:1px dashed var(--line)}
+.finding .fix::before{content:"→ Fix: ";font-weight:700;color:var(--green)}
+table{border-collapse:collapse;width:100%;font-size:.86rem;margin:.5rem 0}
+th{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);text-align:left;padding:.5rem .7rem;border-bottom:1px solid var(--line);}
+td{padding:.5rem .7rem;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:none}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+@media(max-width:720px){.grid2{grid-template-columns:1fr}.verdict{grid-template-columns:1fr}}
+ul{margin:.3rem 0;padding-left:1.2rem} li{margin:.2rem 0}
+.heat{display:grid;grid-template-columns:120px repeat(4,1fr);gap:3px;font-size:.75rem;font-family:var(--mono)}
+.heat .h{padding:.4rem .5rem;background:var(--panel2);border-radius:3px;display:flex;align-items:center}
+.heat .c{padding:.4rem .5rem;border-radius:3px;text-align:center;font-weight:700;color:#0A0A0B}
+.tag{font-family:var(--mono);font-size:.7rem;padding:.1rem .4rem;border-radius:3px;border:1px solid var(--line)}
+.t-ahead{color:var(--green);border-color:var(--green)} .t-par{color:var(--blue);border-color:var(--blue)} .t-behind{color:var(--red);border-color:var(--red)} .t-novel{color:var(--gold);border-color:var(--gold)}
+footer{color:var(--muted);font-size:.8rem;border-top:1px solid var(--line);padding-top:1rem}
+summary{cursor:pointer;font-weight:600;color:var(--blue)}
+details{margin:.4rem 0}
+.legend{display:flex;gap:1.2rem;flex-wrap:wrap;font-size:.8rem;color:var(--muted);margin:.3rem 0}
+.evi-ladder{display:flex;gap:.5rem;align-items:flex-end;margin:.8rem 0}
+.evi-ladder .rung{flex:1;text-align:center;padding:.7rem .4rem;border-radius:6px 6px 0 0;font-size:.75rem;border:1px solid var(--line);border-bottom:none}
+.evi-ladder .lbl{font-size:.7rem;color:var(--muted);padding:.3rem}
+</style>
+</head>
+<body>
+<main>
+
+<header>
+<h1>Critical Assessment — <span class="accent">Unified Goal/Plan/Subagent Design v2.1</span></h1>
+<p class="meta">Adversarial architecture review · 2026-07-22 · 5 viewpoints + SOTA/code grounding · target: <code>docs/internal/design/unified-goal-plan-subagent-target-design-v2.1.html</code></p>
+<p class="lede">An evidence-driven assessment from five perspectives — the <b>end user</b>, the <b>Judge</b>, the <b>plan owner</b>, the <b>orchestrator</b>, and the <b>subagents</b> — each grounded against the shipped codebase (<code>pkg/agent/*</code>) and current 2025–2026 multi-agent state of the art. Verdict first, then findings, then the comparison and risk register.</p>
+</header>
+
+<!-- VERDICT -->
+<section>
+<div class="verdict">
+<div>
+<div class="score" style="color:var(--green)">A−<small>Design</small></div>
+<div class="score" style="color:var(--orange);font-size:1.6rem;margin-top:.4rem">B+<small>Ship-readiness</small></div>
+</div>
+<div>
+<p><b>Verdict: a genuinely best-in-class <i>target design</i> whose ambition outruns its currently-shipped substrate in the exact places it honestly labels “NEW.”</b> The integration-level novelty is real and unmatched (verification-first goals compiled from intent, an immutable-DoD judge with a three-rung evidence ladder, typed bidirectional agent↔human session control, parallelism-as-an-artifact-problem) — nothing in LangGraph, CrewAI, AutoGen, OpenAI Agents SDK, Devin, or Claude Code combines these. The reuse claims are <b>mostly accurate against the code</b> (plan_engine, goal_loop, steering, async_notifier, cancel, the Judge seed, IsPrivilegedAgent all verified). The defects cluster into three honest themes: <b>(1)</b> the Judge is under-fed with evidence, <b>especially at plan scope</b>; <b>(2)</b> the human-answer UX has no real surface (and no channel story at all); <b>(3)</b> append-only immutability and one-hop messaging lack correction vocabulary. All fixable as normative text + a few targeted additions — none requires abandoning the thesis.</p>
+<div class="bar" title="severity distribution">
+<span style="width:12.5%;background:var(--red)"></span>
+<span style="width:55%;background:var(--orange)"></span>
+<span style="width:22.5%;background:var(--muted)"></span>
+<span style="width:10%;background:var(--green)"></span>
+</div>
+<div class="legend">
+<span><span class="sev s-block">BLOCKER</span> 5</span>
+<span><span class="sev s-major">MAJOR</span> 22</span>
+<span><span class="sev s-minor">MINOR</span> 9</span>
+<span><span class="sev s-ok">SOUND</span> 4</span>
+</div>
+</div>
+</div>
+</section>
+
+<!-- METHODOLOGY -->
+<section>
+<h2><span class="dot" style="background:var(--blue)"></span>How this was assessed</h2>
+<p class="lede">Three parallel evidence passes, then synthesis: (1) <b>SOTA + code grounding</b> — verified every reuse claim against <code>pkg/agent/*</code> and compared against 2025–2026 platforms; (2) <b>user + Judge</b> perspectives; (3) <b>owner + orchestrator + subagents</b> perspectives. Findings cite <code>file:line</code> for code and source for SOTA. What could <i>not</i> be verified is named at the end.</p>
+<div class="heat">
+<div class="h" style="grid-column:1/-1;background:transparent;color:var(--muted)">Perspective × Theme heat (■ = a finding landed here)</div>
+<div class="h"></div><div class="c" style="background:var(--panel2);color:var(--muted)">User</div><div class="c" style="background:var(--panel2);color:var(--muted)">Judge</div><div class="c" style="background:var(--panel2);color:var(--muted)">Owner</div><div class="c" style="background:var(--panel2);color:var(--muted)">Orch/Sub</div>
+<div class="h">Answer UX / channels</div><div class="c" style="background:var(--red)">■■</div><div class="c" style="background:var(--panel2);color:var(--muted)">·</div><div class="c" style="background:var(--panel2);color:var(--muted)">·</div><div class="c" style="background:var(--orange)">■</div>
+<div class="h">Evidence richness</div><div class="c" style="background:var(--panel2);color:var(--muted)">·</div><div class="c" style="background:var(--red)">■■■</div><div class="c" style="background:var(--panel2);color:var(--muted)">·</div><div class="c" style="background:var(--panel2);color:var(--muted)">·</div>
+<div class="h">Correction vocabulary</div><div class="c" style="background:var(--orange)">■</div><div class="c" style="background:var(--orange)">■</div><div class="c" style="background:var(--red)">■■</div><div class="c" style="background:var(--orange)">■</div>
+<div class="h">Messaging scope/depth</div><div class="c" style="background:var(--panel2);color:var(--muted)">·</div><div class="c" style="background:var(--panel2);color:var(--muted)">·</div><div class="c" style="background:var(--panel2);color:var(--muted)">·</div><div class="c" style="background:var(--red)">■■■</div>
+<div class="h">3P honesty</div><div class="c" style="background:var(--panel2);color:var(--muted)">·</div><div class="c" style="background:var(--panel2);color:var(--mutable)">·</div><div class="c" style="background:var(--panel2);color:var(--muted)">·</div><div class="c" style="background:var(--red)">■■</div>
+<div class="h">Budget operability</div><div class="c" style="background:var(--panel2);color:var(--muted)">·</div><div class="c" style="background:var(--orange)">■</div><div class="c" style="background:var(--orange)">■■</div><div class="c" style="background:var(--panel2);color:var(--muted)">·</div>
+</div>
+</section>
+
+<!-- BLOCKERS -->
+<section>
+<h2><span class="dot" style="background:var(--red)"></span>The 5 blockers (must resolve before implementation)</h2>
+
+<div class="finding f-block">
+<h4><span class="sev s-block">Blocker 1</span> FR-6a "child shares parent transcript" is <b>refuted by the code</b></h4>
+<p class="loc">Research · <code>pkg/agent/subturn.go:504-506, 611-614</code> vs design §4</p>
+<p>The design's session-control plane leans on delegated children <i>sharing the parent's transcript session (FR-6a)</i>. The code says the opposite: the child runs in an <b>ephemeral, in-memory store</b> so its turns "never pollute or persist to the parent's session history." If attach/peek/audit assume a shared transcript, that is a <b>reversal of today's isolation</b>, not a reuse — and every "session-scoped message," "attach to child transcript," and "task_id = session_id alias" inherits a child-session identity that doesn't cleanly exist today.</p>
+<div class="fix">Decide explicitly: either drop the FR-6a "shares transcript" claim (children are isolated, messages are the only bridge) and re-derive attach/peek on the durable <code>DelegateTaskState.SessionID</code> alone, or declare shared-transcript a deliberate reversal with its own migration. State which.</p>
+</div>
+
+<div class="finding f-block">
+<h4><span class="sev s-block">Blocker 2</span> The "answer a specific question" UX has no affordance — and no channel story</h4>
+<p class="loc">User A-1 / A-5 · design §4 (MAJ-8, N-9)</p>
+<p>The design promises "a reply is never mis-consumed as an answer" via <code>correlation_id</code>, but specifies <b>no UI mechanism</b>. The chat surface is a single free-text composer today (<code>GoalIndicator.tsx</code>); nothing binds a message to a question. And Omnipus ships ~14 channels — on Telegram/Discord a per-question reply button is <b>literally impossible</b> (free text only). This is the most-used interaction (worker asks → you answer) and it's unfulfillable as specified.</p>
+<div class="fix">Define the SPA primitive (a question card with its own reply box emitting <code>respond(correlation_id)</code>, visually distinct from the new-message composer) AND a channel fallback (reply-quoted messages; explicit FIFO binding to the oldest open question when the channel can't carry correlation).</div>
+</div>
+
+<div class="finding f-block">
+<h4><span class="sev s-block">Blocker 3</span> Idle-settlement "persisted evidence" is overstated — two of three sources don't exist in this amendment</h4>
+<p class="loc">Judge B-1 · acceptance criterion G-3 · <code>verifier_adjudication.go:266-272, 397-405</code></p>
+<p>G-3 claims idle judges "artifacts, write-set-scoped diffs, latest checkpoint." Verified: (a) <b>write-set diffs are deferred</b> — the git layer (§3d) is explicitly a separate spike-gated ADR, <code>go-git</code> is absent from <code>go.mod</code> today; (b) <b>checkpoints have no carrier for a chat goal</b> — they're child→parent messages, and a top-level chat goal has no parent. What the idle Judge actually receives is the same last-20k-token transcript tail as the claim path. G-3 is untestable for the gap it claims to close.</p>
+<div class="fix">Rewrite G-3 to the honest basis ("transcript window + workspace artifacts; diffs/checkpoints are co-requisites pending §3d/§4") — or make the git layer / chat-goal checkpoint a <b>co-requisite</b> of the idle trigger, not a deferred dependency.</div>
+</div>
+
+<div class="finding f-block">
+<h4><span class="sev s-block">Blocker 4</span> The plan-level Judge is evidence-starved, and the anti-gaming guard can't reach it</h4>
+<p class="loc">Judge B-2 / B-6 · <code>plan_engine.go:1394-1426</code> (<code>buildPlanClaimText</code>, <code>planClaimTruncateLimit=500</code>), <code>verifier_adjudication.go:266</code> (plan-scope window = <code>""</code>)</p>
+<p>The plan Judge's <b>entire</b> view of member work is each member rendered as a 500-char self-reported summary + plan title/goal/description, with an <b>empty</b> plan-scope transcript window. The design's N-2 defense ("flag artifacts authored after an unmet verdict to the Judge") has <b>no channel to reach it</b> — the plan Judge receives no artifacts at all. So the "low likelihood" judgment is unjustified <i>precisely where evidence is poorest</i>: a prose-only DoD has no deterministic rung, and a forgeable tail member is judged on a 500-char claim. The member-Judge (rich evidence) and plan-Judge (poor evidence) judging the <i>same work</i> makes the plan-Judge strictly more error-prone.</p>
+<div class="fix">Give the plan Judge a structured evidence composition per member (artifact paths, the member's <code>[goal:evidence]</code> line verbatim, and write-set diffs when §3d lands) — not a 500-char <code>Result</code>. Route the post-hoc-artifact flag through this composition. And surface the evidence asymmetry in the plan-tile UX so a failure over all-green members is interpretable.</div>
+</div>
+
+<div class="finding f-block">
+<h4><span class="sev s-block">Blocker 5</span> Append-only immutability has no vocabulary for "a done member's criteria were wrong" or "a frozen member was transiently failed"</h4>
+<p class="loc">Owner C-1 · design §3</p>
+<p>Immutability preserves evidence beautifully for <i>execution</i> failures but is mute on two real correction shapes: (1) a member is <code>done</code> but its criteria were mis-compiled and don't support the DoD — you can't un-score it, and the plan-lint (write-set overlap only) can't catch semantic non-contribution; (2) a member is <i>frozen</i> on a flaky/transient failure but the only revival is Stop/Play, which zeroes JudgeRounds and re-queues <i>every</i> failed member — a sledgehammer for one flaky member. The fixed-point ("owner extends toward the DoD, never edits the goal") assumes the only correction is "add more work," but real correction is often "this completed work shouldn't count" or "this failed work should be retriable."</p>
+<div class="fix">Add a <b>supersede</b> relation (a tail member marks a done member's outcome as ignored-by-the-Judge, reason in the revision entry — record stays immutable, only weighting changes) and a <b>targeted retry</b> that distinguishes transient vs structural freeze (an attempts-exhausted member individually retriable without a full Stop/Play while the plan still has rounds).</div>
+</div>
+</section>
+
+<!-- PERSPECTIVE: USER -->
+<section>
+<h2><span class="dot" style="background:var(--blue)"></span>Perspective · the end user (UI)</h2>
+<p class="lede">Walking the real journeys: set a chat goal → worker pauses → you answer → completion; create a plan → Execute → a member needs input → plan re-plans → you Stop/Play. Where is it confusing, dangerous, or underspecified?</p>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">A-3</span> The pill taxonomy silently drops a shipped wire state</h4>
+<p class="loc"><code>src/components/chat/GoalIndicator.tsx:56,72,91,96</code> vs design §1</p>
+<p>Today's enum is 4 values: <code>active / paused_judge_unavailable / brake_fired / cleared</code>. The design's new 6-state taxonomy (<code>active / waiting-on-user / re-planning / judging / done / failed</code>) drops <code>paused_judge_unavailable</code> — a state production rate-limited plans hit routinely, which is neither "active" nor "judging." Conflating it misleads. Terminal pills (green/red) also have no lifecycle (today they collapse to nothing via <code>cleared</code>).</p>
+<div class="fix">Add <code>judge_unavailable</code> and a <code>queued</code> (cap-admitted-not-started) state; specify terminal-pill retention.</div>
+</div>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">A-4</span> Stop-then-Play on a member cancelled mid-run is a data-loss ambiguity</h4>
+<p class="loc">design §3 (Play semantics) · <code>plan_engine.go</code> distinguishes <code>failed</code> vs <code>cancelled</code></p>
+<p>Play resets <code>failed</code> members to attempts 0 and preserves <code>done</code>. But a member that was <b>running</b> when Stop hit is cancelled (not failed, not done). Does a member 90% through its work warm-resume, or restart from zero? A user pressing Play expecting "continue" and getting "restart from scratch" is a wrong-button-equals-data-loss scenario.</p>
+<div class="fix">State explicitly which path applies (reset to attempts 0, or warm-resume via <code>resumed_from</code>) and document it on the button.</div>
+</div>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">A-2 / A-6</span> Multi-goal rendering &amp; the re-planning window are undescribed</h4>
+<p class="loc">design §1 (per-goal-id pills) · §3b (re-planning)</p>
+<p><code>GoalIndicator.tsx</code> takes a single <code>goalStatus</code> today; N stacked bottom-right pills (overflow? ordering? which is "waiting"?) and the cap-queued sub-state are undefined. While the owner reasons through correction, plan/member tiles are undescribed — a user seeing "re-planning" for 90s doesn't know whether to wait, Stop, or intervene.</p>
+<div class="fix">Pill-list layout rule + <code>queued</code> sub-state; specify the plan-tile state during <code>awaiting-owner-correction</code>.</div>
+</div>
+</section>
+
+<!-- PERSPECTIVE: JUDGE -->
+<section>
+<h2><span class="dot" style="background:var(--gold)"></span>Perspective · the Judge</h2>
+<p class="lede">Adjudicating claim-triggered and idle-triggered verdicts against LLM-authored criteria. Read-only, fail-closed, 20k-token window.</p>
+
+<div class="evi-ladder" aria-label="evidence ladder gap">
+<div class="rung" style="background:rgba(52,211,153,.18);border-color:var(--green)">machine checks<div class="lbl">bash exit codes · both scopes</div></div>
+<div class="rung" style="background:rgba(59,130,246,.18);border-color:var(--blue)">behavior counts<div class="lbl">tool-log scan · both</div></div>
+<div class="rung" style="background:rgba(212,175,55,.22);border-color:var(--gold);height:70%">prose @ member<div class="lbl">20k window + artifacts</div></div>
+<div class="rung" style="background:rgba(234,179,8,.1);border-color:var(--orange);height:38%">prose @ plan<div class="lbl">500-char summary, EMPTY window</div></div>
+</div>
+<p style="font-size:.8rem;color:var(--muted);margin-top:-.2rem">The evidence ladder collapses at plan scope — the weakest evidence feeds the most consequential (whole-DoD) verdict.</p>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">B-3</span> Internal contradiction: does the first idle consume a round?</h4>
+<p class="loc">§6 (N-13) vs §8 acceptance (G-2, G-3, G-4)</p>
+<p>N-13 says the first idle settlement is "free" (no round), mirroring the bare-claim first bounce (G-4). But G-2/G-3 say idle "consumes a round" <i>unconditionally</i>. Both can't hold — the acceptance table contradicts the design prose; an implementer cannot satisfy both.</p>
+<div class="fix">Pick one. Recommended: idle mirrors the bare-claim ladder (first idle with no evidence = free steer, no round; subsequent idles consume a round) — amend G-2/G-3.</div>
+</div>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">B-4</span> No "criterion unverifiable" verdict — impossible criteria fail-closed-by-exhaustion</h4>
+<p class="loc">§6 fail-closed · §1 feasibility gate (N-5) only vets reachability</p>
+<p>A compiled (or owner-authored) criterion like "the refactor feels maintainable" is syntactically valid, policy-reachable, and genuinely unverifiable. The Judge has no verdict type for "cannot be verified as written" — it can only return <code>unmet</code> every round until exhaustion → <code>failed</code>, burning the token budget (B-7). For chat goals there's no owner loop to route back to the author.</p>
+<div class="fix">Add a <code>criterion_unverifiable</code> verdict that routes to the author (chat: re-prompt rephrase; plan: surface to owner) instead of burning rounds.</div>
+</div>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">B-5</span> The 20k window is "last N tokens" — load-bearing early evidence gets truncated</h4>
+<p class="loc"><code>verifier_adjudication.go:397-405</code> (<code>renderVerifierWindowText</code>)</p>
+<p>For a long task, the foundational decision / the original failing test / the first artifact — the load-bearing early evidence — walks off the back of the window. <code>[goal:evidence]</code> is the <i>claim</i>, not a pinning mechanism; there's no "keep this artifact/diff in the always-included evidence block" concept.</p>
+<div class="fix">A worker-pinnable structured evidence block that rides outside the 20k budget, distinct from the transcript tail.</div>
+</div>
+
+<div class="finding f-minor">
+<h4><span class="sev s-minor">B-7</span> Token budget silently debited by Judge <i>retry</i> calls</h4>
+<p class="loc"><code>judge.go:243-251</code> (retries on <code>judgeRetryBackoff</code>, returns <code>Unavailable</code> only on ctx cancel)</p>
+<p>A sustained SEC-26 rate-limit makes the verifier retry internally — each retry debits tokens but consumes no round. The scope can brake to <code>failed(budget_exhausted)</code> for reasons the user reads as "the Judge kept failing," with no round ever spent.</p>
+<div class="fix">Don't debit failed/retry verifier calls against the token budget, or surface "verifier retrying" as a distinct pill state (ties to A-3's missing <code>judge_unavailable</code>).</div>
+</div>
+</section>
+
+<!-- PERSPECTIVE: OWNER -->
+<section>
+<h2><span class="dot" style="background:var(--green)"></span>Perspective · the plan owner</h2>
+<p class="lede">Persistent session; plans, then re-plans by appending tail members; receives critic feedback; bounded by JudgeRounds and a token budget.</p>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">C-2</span> The awaiting-owner-correction gate can be pre-empted; owner re-dispatch after a crash sweep is undefined</h4>
+<p class="loc">§3/§3b/§4/§5 · <code>plan_engine.go:605</code> (<code>dispatchReadyMembers</code> dispatches members, not the owner)</p>
+<p>A <code>steer</code> into an owner session parked on a child's <code>needs_input</code> can silently pre-empt the park (the state machine permits <code>needs_input → running : steer</code>), abandoning the open child question. Worse: the §5 boot sweep fails non-terminal sessions to <code>failed(interrupted)</code> — including the mid-deliberation owner — but the owner is <b>not a dispatched member</b>, so there is no defined re-dispatch path for the owner session itself after a sweep.</p>
+<div class="fix">Normative rule that a steer into <code>needs_input</code> must carry/dismiss the open question or queue behind it (no silent pre-emption); and define owner-session re-dispatch explicitly (symmetric to Play's <code>cancelled→approved</code> edge).</div>
+</div>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">C-3</span> The token budget is a cliff with no burn visibility and a broken Play-after-exhaustion path</h4>
+<p class="loc">§6 / §3 / §7</p>
+<p>No "approaching budget" signal (the owner learns it's out only at the brake); remaining-budget isn't surfaced in the re-planning prompt, so the owner can't self-ration; and after <code>failed(budget_exhausted)</code>, Play re-runs failed members but the per-plan budget isn't refunded — so Play <b>immediately re-brakes</b> unless the operator raises the restart-gated <code>token_budget</code>, an operability step the design never states.</p>
+<div class="fix">80%-consumed non-terminal signal; expose remaining-budget in the re-planning prompt; explicit operability note for Play-after-exhaustion.</div>
+</div>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">C-4</span> The write-set lint can't handle exploratory work — the design's own headline use case</h4>
+<p class="loc">§3c (write-set partition, lint) · §3b step 1 (delegatable research/decomposition)</p>
+<p>Disjoint write-sets work for <i>construction</i> with knowable outputs. They break for <i>exploratory</i> work the design explicitly wants: a research/decomposition member, a "find the flaky-test root cause" member, or data analysis have unknowable write-sets until they run. Declaring <code>work/**</code> is rejected; a guess means runtime writes outside it surface only post-hoc as contention evidence. The "parallelize every plan kind" claim is undermined for exactly the cases it markets.</p>
+<div class="fix">An explicit exploratory mode that opts out of write-set declaration but is hard-forced sequential; a runtime guard that an undeclared write triggers an immediate plan-correction event; qualify the "every plan kind" claim honestly.</div>
+</div>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">C-5</span> The integrity guard covers tail members but misses the owner authoring the DoD itself</h4>
+<p class="loc">§1 (chat mint-gate) vs §3b (owner authors plan DoD) · §9 BOM</p>
+<p>§1 applies a mint-gate (feasibility + echo-confirm + amendment diff) to <i>chat</i> goals compiled from intent. But a <i>plan</i>'s owner-authored DoD enters via <code>create_plan</code> with <b>no echo-confirm-to-user and no user-side feasibility gate</b> documented. That's a bigger integrity hole than the self-attesting-tail case: an owner can pass its own goal by compiling an easy DoD at the start — no tail required, no red-team catches it. The owner also authors the revision <i>diagnosis</i>, and the Judge can adopt that framing.</p>
+<div class="fix">Extend the §1 mint-gate to plan DoDs; prompt the Judge to form its own diagnosis from raw member outcomes rather than adopting the owner's framing.</div>
+</div>
+</section>
+
+<!-- PERSPECTIVE: ORCHESTRATOR + SUBAGENTS -->
+<section>
+<h2><span class="dot" style="background:var(--orange)"></span>Perspective · orchestrator &amp; subagents</h2>
+<p class="lede">The parent steering children; and the children (native + 3P external-CLI) running, asking, being steered, handing back.</p>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">D-1</span> Typed messaging is strictly one-hop — it does not compose across chain-depth-3</h4>
+<p class="loc">§7.7 O-5, §4 P2M-10 · <code>pkg/agent/cancel.go</code> (cancel cascades; <code>delegate.steer</code> does not)</p>
+<p>At depth 3 (you → Ava → Worker), the grandchild's <code>message_parent</code> reaches <i>Ava</i>, never you — you see it only if Ava re-emits it (re-framed, new correlation). Visibility is one-hop (<code>inbox_unread_count</code> = direct children only). Cancel cascades down the spawn chain; <b>steer does not</b> — course-correcting a misbehaving grandchild is a game of telephone. The depth-3 cap survives, but the typed-messaging/warm-resume story is effectively depth-1.</p>
+<div class="fix">Opt-in transitive visibility (descendant messages relay with original-sender identity); a <code>steer_descendant</code> the runtime walks down the spawn chain.</div>
+</div>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">D-2</span> The per-type ceiling is per-parent-inbox — one noisy child DoSes its siblings</h4>
+<p class="loc">§7.5 P2M-9, §4 caps table</p>
+<p>The 20-open-question ceiling is on <i>your</i> inbox aggregated across <i>all</i> children. Child A spams 20 <code>question</code>s; child B's genuine <code>blocker</code> bounces back to B as a tool error. "Never silent drop" holds (B gets an error), but operationally B can't reach you — a functional drop caused by a <i>sibling</i>.</p>
+<div class="fix">Make the per-type ceiling <b>per-child</b> (each child has its own 20-question budget against you). One-line semantic fix, operationally critical.</div>
+</div>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">D-3</span> <code>delegate.cancel</code> on a plan member with dependents <b>fails the entire plan</b></h4>
+<p class="loc"><code>plan_engine.go:560-562, 1158-1171</code> (<code>planStuckAfterMemberCancel</code> → <code>failPlanLocked(StoppedByUser)</code>)</p>
+<p>You soft-cancel one wasted child that happens to be a plan member with downstream <code>blocked_by</code> dependents. Verified: the engine's <code>planStuckAfterMemberCancel</code> then fails the <b>whole plan</b> with <code>StoppedByUser</code>. You wanted to stop one run and re-dispatch; you bricked the plan. A routine per-child session op cascades into plan failure silently — no documented link between <code>delegate.cancel</code> and the plan-engine consequence.</p>
+<div class="fix">Refuse <code>delegate.cancel</code> on a member with dependents with a clear error, or trigger a plan-correction event that appends a replacement tail — not a whole-plan failure.</div>
+</div>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">D-4 / E-5</span> For 3P/external-CLI children, <code>needs_input</code> is fiction and warm resume is native-only</h4>
+<p class="loc">§4 MAJ-10 · <code>task_executor.go:560-575</code> (terminal marker proven) vs unvalidated mid-run extraction</p>
+<p>For a 3P child (claude-code/codex/opencode), your <code>respond</code> to a <code>question</code> does <b>not</b> resume warm — the process ends and you cold-resume. So for 3P, <code>needs_input</code> is today's cold re-delegate relabeled. And the claim that mid-run marker extraction "already proves this works" is <b>overstated</b>: the terminal <code>[goal:evidence]</code>/<code>TASK_STATUS</code> line is proven, but robust extraction of <i>mid-run</i> <code>progress</code>/<code>blocker</code>/<code>checkpoint</code> from arbitrary 3P CLI output is unvalidated.</p>
+<div class="fix">Be blunt: 3P children get fire-and-collect semantics in typed-marker clothing — warm resume is native-only. For 3P, advertise only <code>progress</code>/<code>artifact</code>/<code>handback</code>; drop <code>question</code>/<code>needs_input</code> (honest fire-and-collect beats a cold-resume pretense). Downgrade the "proven" claim to "terminal proven; mid-run is a spike."</div>
+</div>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">E-2</span> Idle settlement conflates "forgot the claim line" with "was still working, the timer fired"</h4>
+<p class="loc">§8 (idle detection) · §6 N-13</p>
+<p>Two identical-looking "no claim, idle" causes: (1) you forgot the evidence line on completed work (a teaching steer is fair); (2) you were genuinely mid-work and the ~60s quiet window fired while you were slow (adjudicating incomplete work as if claimed is unfair). Both look identical to the gate. The unmet verdict from (2) feeds the correction loop as if you'd failed — an honest slow worker burns rounds for velocity, not correctness.</p>
+<div class="fix">Idle should require "no declared in-progress intent in the last checkpoint" (open sub-tasks/unreached <code>next</code> = mid-work, re-arm, don't adjudicate). Distinguish claimed-but-bare (teach) from genuinely-mid-work (re-arm).</div>
+</div>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">E-3</span> Write-set confinement can't be renegotiated, and the <code>.git</code> deny is over-broad</h4>
+<p class="loc">§3c/§3d</p>
+<p>If mid-run you discover the fix is in <code>bar.go</code> but you declared <code>foo.go</code>, you're trapped — your correct edit surfaces as "contention" rather than committing; you must hand back and let the owner re-plan (high friction for a routine debugging discovery). And denying <code>work/**/.git</code> blocks legitimate read-only <code>git log</code>/<code>blame</code>/<code>show</code> a worker commonly needs — the threat model is <i>mutating</i> ops, the blanket path-deny is broader.</p>
+<div class="fix">A <code>request_write_set_expansion</code> child→parent message (cheap on the existing primitive); model the <code>.git</code> deny on <i>operation</i> (permit log/blame/show/diff, deny commit/amend/rebase/rm), not path.</div>
+</div>
+
+<div class="finding f-major">
+<h4><span class="sev s-major">E-1 / E-4</span> Ad-hoc delegate inboxes strand across parent lifecycle; a non-answer <code>respond</code> resumes you into confusion</h4>
+<p class="loc">§4 MAJ-9 · §7.3 M-3 · §7.5 P2M-2</p>
+<p>Plan-member inboxes are keyed to the durable plan id (good); <b>ad-hoc delegate inboxes are keyed to the spawning session id</b> — a parent compact/restart/Play strands your <code>question(wait=true)</code> on a dead key; the new generation never sees it (7-day retention surfaces it to the human, not the new parent). Separately, <code>respond(correlation_id, answer)</code> validates <i>nothing</i> about whether <code>answer</code> addresses the question — a parent draining its inbox can hand you an unrelated directive that closes your question and resumes you warm into confusion (TTL resets, no auto-handback). <code>decision_request</code> has <code>choices[]</code> validation; <code>question</code> does not.</p>
+<div class="fix">Key ad-hoc inboxes to a durable parent handle (chat id), or document <code>handback</code> across lifecycle boundaries; on <code>respond</code>, re-prompt the child with BOTH the answer AND a re-statement of Q1 (re-emit <code>question</code> if unanswered), and add a cheap answer-type sanity check mirroring <code>choices[]</code>.</div>
+</div>
+</section>
+
+<!-- SOTA COMPARISON -->
+<section>
+<h2><span class="dot" style="background:var(--blue)"></span>Against the state of the art (2025–2026)</h2>
+<p class="lede">Grounded against verified docs/specs/issues, not vendor marketing. Where the design genuinely leads, where it's on par, and the one contrarian bet.</p>
+<table>
+<tr><th>Capability</th><th>Omnipus v2.1</th><th>Nearest alternative (and where it stops)</th></tr>
+<tr><td>Verification of agent work</td><td><span class="tag t-ahead">AHEAD</span> real verifier agent, immutable-DoD, 3-rung ladder, fail-closed, per-criterion verdicts steer next round</td><td>LLM-as-judge/rubrics (DeepEval, OpenAI Evals) are <i>offline eval frameworks you wire</i> — none ship a runtime acceptance judge tied to a DoD contract</td></tr>
+<tr><td>Mid-flight parent↔child control</td><td><span class="tag t-ahead">AHEAD</span> one typed primitive: steer/respond/cancel-in, progress/question/handback-out, agent↔human parity</td><td>LangGraph <code>interrupt()</code> is human-only &amp; developer-resumed; OpenAI/CrewAI/Claude Code are fire-and-collect</td></tr>
+<tr><td>Goal compilation</td><td><span class="tag t-ahead">AHEAD</span> intent → measurable criteria ladder, feasibility-gated, echoed + amendable</td><td>No major platform compiles intent into a verifiable criteria object</td></tr>
+<tr><td>Parallel shared-artifact work</td><td><span class="tag t-novel">NOVEL (unproven)</span> write-set partition + isolation ladder + shard/assemble + authored join</td><td>git-worktree-per-agent is de-facto for code; merge is the universal pain; <b>no precedent</b> for shard/assemble or authored-join</td></tr>
+<tr><td>Durability / crash recovery</td><td><span class="tag t-behind">BEHIND (honest)</span> recover-to-checkpoint (LLM turns non-replayable)</td><td>Temporal event-sourced replay reconstructs exact in-flight state — design concedes this</td></tr>
+<tr><td>Generality / interrupt</td><td><span class="tag t-par">PAR</span></td><td>LangGraph's graph model + checkpointer is more general; the design's loop is goal-shaped</td></tr>
+<tr><td>Spend bounding</td><td><span class="tag t-novel">CONTRARIAN</span> tokens + attempts + rounds; <b>no money caps</b></td><td>Industry is moving toward usage-based/money metering (arXiv "Agent Contracts"; silenceper)</td></tr>
+</table>
+<p style="font-size:.82rem;color:var(--muted);margin-top:.6rem">Sources: LangChain LangGraph docs + <a href="https://github.com/langchain-ai/langgraph/issues/6533">issue #6533</a>; DeepEval/OpenAI Evals docs; incident.io, termdock, augmentcode worktree guides; <a href="https://trigger.dev/blog/parallel-agents-gitbutler">trigger.dev's move away from worktrees</a> (counter-trend not acknowledged in the design); arXiv 2601.08815 "Agent Contracts"; Georgia Tech 2026 reward-hacking; Galileo failure-mode guide.</p>
+</section>
+
+<!-- RISK REGISTER -->
+<section>
+<h2><span class="dot" style="background:var(--orange)"></span>Risk register (top 6 to bake into the ADR)</h2>
+<table>
+<tr><th>#</th><th>Risk</th><th>L × I</th><th>Mitigation</th></tr>
+<tr><td>R1</td><td><b>Plan-Judge evidence poverty</b> → wrong whole-DoD verdicts; anti-gaming guard unreachable (B-2/B-5/B-6)</td><td>H × H</td><td>Structured per-member evidence composition (artifacts + evidence line + diffs); pin evidence outside the 20k window</td></tr>
+<tr><td>R2</td><td><b>Human-answer UX / channel impossibility</b> → mis-answered questions, no mobile story (Blk-2)</td><td>H × H</td><td>Concrete SPA affordance + channel FIFO fallback; answer-type validation</td></tr>
+<tr><td>R3</td><td><b>Append-only has no correction vocabulary</b> → wrong-criteria done members &amp; un-retriable transient freezes (Blk-5/C-1)</td><td>M × H</td><td><code>supersede</code> relation + targeted transient retry without full Stop/Play</td></tr>
+<tr><td>R4</td><td><b>3P children second-class</b> → advertised capabilities don't hold; parsing unvalidated (D-4/E-5)</td><td>H × M</td><td>Honest fire-and-collect label for 3P; restrict advertised message types; spike mid-run marker extraction</td></tr>
+<tr><td>R5</td><td><b>One-hop messaging + per-parent inbox</b> → depth-1 effective steering; sibling DoS; cancel blast radius (D-1/D-2/D-3)</td><td>M × H</td><td>Transitive visibility + <code>steer_descendant</code>; per-child ceilings; refuse/redirect member cancel with dependents</td></tr>
+<tr><td>R6</td><td><b>go-git dependency unproven</b> — absent today; worktree/merge limits + footprint vs Constraint #3 (research)</td><td>M × M</td><td>Keep spike-gated as own ADR; measure binary-size &amp; auto-commit cost before adopting</td></tr>
+</table>
+</section>
+
+<!-- SOUND -->
+<section>
+<h2><span class="dot" style="background:var(--green)"></span>What is genuinely sound (verified)</h2>
+<div class="grid2">
+<div class="finding" style="border-left-color:var(--green)"><b>§5 Boot sweep</b> — correctly identifies the #1 production hole (persisted lifecycle survives restart, goroutines/queues don't) with a concrete sweep + a verified precedent (<code>orphan_watch.go</code>). The Temporal-replay trade-off justification (LLM turns aren't replayable) is the right honest scoping.</div>
+<div class="finding" style="border-left-color:var(--green)"><b>§9 BOM / carrier table</b> — every mechanism has a home; the four anti-parallel-systems rules (name-existing-or-justify-new, one-concept-one-impl, skills+grants over new agents, BOM-as-review-gate) are exemplary discipline. <code>pkg/skills/embedded/plan/SKILL.md</code> confirmed to ship — the planner is an extension, not a fork.</div>
+<div class="finding" style="border-left-color:var(--green)"><b>The awaiting-owner-correction gate</b> — fixes a verified live bug: post-unmet the phase reverts to <code>dispatching</code> (<code>plan_engine.go:67-70</code>), so with all members terminal the next tick re-judges <i>unchanged</i> state, burning JudgeRounds until exhaustion.</div>
+<div class="finding" style="border-left-color:var(--green)"><b>Verifier is genuinely read-only &amp; unprivileged</b> — <code>core.go:53-54</code> (<code>read_file/list_directory/inspect_session</code>); the Judge is <code>type=system</code> = non-privileged/capped (so the token-budget-bypasses-exemption point is accurate). AND-combine with deterministic rungs first is verified sound.</div>
+</div>
+</section>
+
+<!-- UNVERIFIED -->
+<section>
+<h2><span class="dot" style="background:var(--muted)"></span>What could not be verified</h2>
+<ul>
+<li><b>Warm-resume across a process boundary (M-4)</b> — §5 names it as a requirement, says "answered here, not left implicit," then <i>implicitly</i> answers it ("swept to <code>failed(interrupted)</code> unless warm-resume can reconstruct it"). The reconstruction criterion is never actually specified — the single biggest unproven engineering risk.</li>
+<li><b>go-git envelope</b> — merge/worktree limits + auto-commit cost on large/media-heavy trees are unmeasured; the whole §3c/§3d model rides on it (design's own OBS-3).</li>
+<li><b>3P mid-run marker parser robustness</b> — terminal-claim extraction proven; mid-run typed-marker extraction from arbitrary CLI streams is not.</li>
+<li><b>Pill pixel feasibility</b> — the bottom-right pill's fit with <code>/loop</code> status (which shares <code>GoalIndicator.tsx</code> today) and composer occupants wasn't visually confirmed; the wire-enum gap (A-3) is verified from source, the layout fitment is not.</li>
+<li><b>Numeric defaults</b> (15s debounce, 4 wakes/h, 20 ceiling, ~60s quiet window) are plausible but unvalidated — operator tuning items.</li>
+</ul>
+</section>
+
+<footer>
+Assessment synthesized from three parallel evidence passes (SOTA+code grounding; user+Judge; owner+orchestrator+subagents). Every code citation read directly from <code>feature/plan-swimlane-board</code> at 2026-07-22. Severity: BLOCKER forks implementation or breaks a core guarantee · MAJOR must resolve before ADR sign-off · MINOR cheap to fix. The design's self-awareness is itself a strength — it pre-identified many of these via its own grill/architect passes.
+</footer>
+
+</main>
+</body>
+</html>

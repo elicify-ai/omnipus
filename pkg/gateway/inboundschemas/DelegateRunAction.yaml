@@ -1,0 +1,102 @@
+type: object
+title: DelegateRunAction
+description: >
+  `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface).
+  Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY
+  portion of the curated context snapshot (R§8.5) — parent-named artifact
+  references + optional notes. The MANDATORY core (task prompt + compiled
+  criteria + engine-injected child identity from the target agent, ADR-032)
+  is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4);
+  only `snapshot` here is subject to `snapshot_max_bytes`/
+  `snapshot_max_refs`. Illegal `launch_profile`/`child_messaging`/
+  `steering` combinations are rejected at the handler (not schema-
+  expressible beyond the enum itself) — see `launch_profile`'s
+  description for the two published legal profiles.
+required:
+  - action
+  - target_agent_id
+  - task
+  - launch_profile
+additionalProperties: false
+properties:
+  action:
+    type: string
+    enum:
+      - run
+    example: "run"
+  target_agent_id:
+    type: string
+    minLength: 1
+    description: The agent to delegate to. Its own soul/tools/model/policy apply (ADR-032).
+    example: "ray"
+  task:
+    type: string
+    minLength: 1
+    maxLength: 10000
+    description: The task prompt handed to the child as its first user message.
+    example: "Summarize the last 7 days of gateway logs and flag anomalies."
+  label:
+    type: string
+    maxLength: 100
+    description: Human-readable label for the spawned span (subagent_start.task_label).
+    example: "Log anomaly scan"
+  launch_profile:
+    type: string
+    enum:
+      - utility
+      - specialist
+    description: >
+      `utility` — visibility=outcome, steering=none, child_messaging=
+      progress_only (fire-and-collect; maps today's one-shot spawn).
+      `specialist` — visibility=checkpoints, steering=parent_and_human,
+      child_messaging=full (collaborating native worker; a 3P child on
+      this profile degrades to fire-and-collect, D5). The full
+      illegal-combo legality table (e.g. visibility=outcome with
+      child_messaging=full) is enforced at the handler, not by this
+      enum alone.
+    example: "specialist"
+  wait:
+    type: boolean
+    description: >
+      True for a synchronous (blocking) delegation. A synchronous
+      delegation whose child raises a `question` is rejected by default
+      with a clear tool error (never a silent deadlock, MIN-3) unless the
+      caller also sets `allow_blocking_question`.
+    example: false
+  allow_blocking_question:
+    type: boolean
+    description: >
+      Explicit opt-in (only meaningful with `wait: true`) permitting a
+      bounded human-routed wait on a child `question` instead of the
+      default rejection (P2M-14/MIN-3).
+    example: false
+  critical:
+    type: boolean
+    description: Continue running after the parent finishes gracefully.
+    example: false
+  timeout_seconds:
+    type: integer
+    minimum: 0
+    description: Maximum seconds before this delegation is force-cancelled. 0 = default (5 min).
+    example: 300
+  snapshot:
+    type: object
+    additionalProperties: false
+    description: >
+      The DISCRETIONARY portion of the curated context snapshot (R§8.5).
+      Deny-by-default — nothing beyond this + the mandatory core reaches
+      the child. Over-cap is rejected with a narrow-the-snapshot tool
+      error, never silently truncated.
+    properties:
+      references:
+        type: array
+        items:
+          type: string
+        description: Parent-named artifact path/ref strings (not contents) visible to the child.
+        example:
+          - "work/report-schema.json"
+      notes:
+        type: string
+        maxLength: 8192
+        description: Optional parent-authored notes, counted against `snapshot_max_bytes`.
+        example: "Focus on anomalies after 2026-07-15."

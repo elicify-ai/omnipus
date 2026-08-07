@@ -37,8 +37,24 @@ properties:
     description: >
       Agent lifecycle classification.
       "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray).
-      "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives
-      in the API contract for backwards compatibility but SeedConfig does NOT create these).
+      "system" = the System Agents category (ADR-049 D3) — seeded, locked,
+      non-privileged internal-LLM agents that run as real agents in a
+      verifier role: same agent loop and ContextBuilder as any agent, own
+      session, but with memory injection off and a narrow read-only tool
+      set (read_file, list_directory, and a scoped inspect_session — no
+      writes, mutations, commits, task-state changes, or delegation)
+      (ADR-052 Judge/Verifier architecture, e.g. the Judge). Seeding is
+      the only creation path: not
+      creatable via POST /agents or the create_agent tool (400), not
+      deletable, and excluded from chat-target/default-fallback/routing-
+      binding/delegation-target/team-roster enumeration — visible only in
+      the Agents screen "System" section. Only `model`/`provider` and
+      `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the
+      Judge's soul IS its judging rubric, editable while the agent stays
+      otherwise locked; the Judge additionally cannot be disabled).
+      Despite historically being described as privileged, `system` agents
+      are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and
+      remain subject to per-agent LLM rate limits and cost caps (SEC-26).
       "Main" = user-defined chat colleague (the typical Main agent).
       "Subagent" = user-defined delegation-only worker on the Omnipus engine.
       "subagent_3p" = user-defined delegation-only worker on an external CLI
@@ -104,7 +120,10 @@ properties:
     description: >
       Contents of SOUL.md — the agent's system prompt. Empty string for locked
       core agents (prompt is compiled in, not exposed via API). Empty string for
-      draft agents (no SOUL.md written yet). Always present (never null).
+      draft agents (no SOUL.md written yet). Always present (never null). For
+      `type: system` agents (e.g. the Judge), this is ALSO the judging rubric —
+      one unified soul concept (ADR-052 FR-038, no separate `rubric` field);
+      the Judge's soul is editable while the agent stays otherwise locked.
     example: "You are Jim, a senior software engineer..."
   warning:
     type: string
@@ -154,9 +173,12 @@ properties:
   default:
     type: boolean
     description: >
-      Whether this agent is the global default that handles inbound messages
-      with no more-specific routing rule. At most one agent is default.
-      Main only — workers never default.
+      Whether this agent is the current global default that handles inbound
+      messages with no more-specific routing rule. This is a COMPUTED value —
+      the backend derives it by comparing the agent's id against the single
+      default-agent setting each time it builds a response; it is never
+      stored per-agent. At most one agent is default at a time. Main only —
+      workers never default.
     example: false
   skills:
     type: array
@@ -187,3 +209,14 @@ properties:
     example: "alloy"
   executor:
     $ref: './ExecutorConfig.yaml'
+  memory_enabled:
+    type: boolean
+    default: true
+    description: >
+      Gates ContextBuilder memory injection for this agent (ADR-052 FR-039).
+      Defaults to true for ordinary agents. The seeded Judge (and, by
+      extension, any verifier-role agent) is seeded false — memory OFF
+      produces reproducible, impartial verdicts (same evidence -> same
+      verdict) since injected memory would otherwise vary the outcome
+      between runs.
+    example: true

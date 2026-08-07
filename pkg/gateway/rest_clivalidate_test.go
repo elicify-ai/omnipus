@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Tests for POST /api/v1/system/cli-validate (ADR-030 §11 / spec §TDD 8-12,
 // 21-27). Covers the pure classification (unknown-cli / empty / non-regular /
 // handshake / unauthenticated), the reason/detail/ok mappings (no raw stderr),

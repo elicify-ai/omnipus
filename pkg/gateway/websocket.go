@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -164,6 +162,15 @@ type replayFrameDecoder struct { // not-wire-format: decode-only test assertion 
 	ErrorKind    string         `json:"kind,omitempty"`
 	ErrorEntryID string         `json:"entry_id,omitempty"`
 	ErrorPayload map[string]any `json:"payload,omitempty"`
+	// review r2 RV1: JudgeVerdictFrame decoder fields (Model/Scope/ID above are
+	// shared with other frame types via the same JSON key).
+	Met          bool             `json:"met,omitempty"`
+	Round        int              `json:"round,omitempty"`
+	JudgeAgentID string           `json:"judge_agent_id,omitempty"`
+	JudgedAt     string           `json:"judged_at,omitempty"`
+	TaskID       string           `json:"task_id,omitempty"`
+	PlanID       string           `json:"plan_id,omitempty"`
+	PerCriterion []map[string]any `json:"per_criterion,omitempty"`
 }
 
 // WSHandler handles the /api/v1/chat/ws WebSocket endpoint for bi-directional
@@ -623,8 +630,13 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// pkg/agent/loop.go's CheckGrantOrRequestApproval doc comment.
 
 	// Subscribe to agent-loop events so we can forward tool_call_start/result
-	// frames to the browser in real time.
-	eventSub := h.agentLoop.SubscribeEvents(32)
+	// frames to the browser in real time. 256 (not 32) to match wc.sendCh's own
+	// buffer above: a burst of concurrent subagent dispatches (confirmed live at
+	// 24 in ~0.3s, each firing spawn/end plus its own tool-call events) can
+	// enqueue far more events than the old 32-slot buffer while eventForwarder
+	// is still marshaling+writing the previous one; sizing to sendCh keeps this
+	// stage no more likely to overflow than the outbound path it feeds.
+	eventSub := h.agentLoop.SubscribeEvents(256)
 	eventDone := make(chan struct{})
 	go h.eventForwarder(wc, chatID, eventSub, eventDone)
 
@@ -1758,6 +1770,10 @@ func (h *WSHandler) handleChatMessage(
 		Content:       turnContent,
 		SessionID:     sessionID,
 		Media:         acceptedMedia,
+		// UserInitiated (ADR-049 Gap #8/r2, R6): the webchat WS `message`
+		// handler is the "Web WS message handler (authenticated gateway
+		// user)" origination point — always a genuine live user action.
+		UserInitiated: true,
 	}
 	if agentID != "" {
 		// Format already validated up front, before the kickoff consume step
@@ -2054,6 +2070,62 @@ func sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
 	// existed in the old inline implementation.
 }
 
+// u11CollectDescendantSessionIDs walks the durable lifecycle store's
+// ParentDurableKey edges (pkg/session/lifecycle.go, FR-019/FR-020;
+// LifecycleStore.List(LifecycleFilter{ParentDurableKey: id}) returns X's
+// DIRECT children only, index-backed per BDD-19) to collect EVERY descendant
+// of rootID, however many delegation levels deep. Returns only descendants —
+// rootID itself is never included; the caller prepends it.
+//
+// ADR-057 FR-032/W10c: cancelAllPendingForSessions matches a pending
+// approval by EXACT equality on the registry entry's own acting session id
+// (FR-080 — a delegated child's entry carries the CHILD's own id, never the
+// chat's), so a chat-level Stop that passed only the chat/root id would
+// cancel nothing inside any live child (BDD-33). The DURABLE lifecycle store
+// is reachable read-only through h.agentLoop's already-exported
+// GetSessionLifecycleStore() (pkg/agent/session_messaging_wire.go), and
+// every delegation — live or not — has a LifecycleRecord (User Story 4), so
+// this walk is authoritative independent of what is still running.
+//
+// [FIX-5, Defect 4, 2026-08-03] HOISTED: this used to be a byte-identical
+// duplicate of pkg/agent/cancel.go's collectDescendantSessionIDs, kept
+// separate only because a parallel-implementation ownership rule (then:
+// "neither of which this unit may edit") forbade this unit from touching
+// pkg/agent. That rule has expired — this is now a thin signature-compat
+// shim over the ONE hoisted implementation, agent.CollectDescendantSessionIDs
+// (pkg/agent/cancel.go), which also gained a real error return (Defect 2:
+// a lifecycleStore.List failure partway through the walk used to be
+// swallowed as "this node has no children" — silently truncating the
+// returned set with no signal). This shim is kept, rather than deleted and
+// inlined at every call site, because pkg/gateway/rest.go's deleteSession
+// handler and pkg/gateway/websocket_adr057_test.go's U11 unit tests call it
+// directly by this exact name/signature and are outside this fix's file
+// ownership — changing its signature would require edits there too. A
+// caller that CAN use the richer (typed-error) signature directly — see
+// buildCancelHooks's CancelPendingApprovals closure below — calls
+// agent.CollectDescendantSessionIDs itself instead of this shim, so it can
+// react to a partial-walk failure with a more specific diagnostic than the
+// generic one logged here.
+//
+// Guards against a corrupted or cyclic ParentDurableKey chain with a visited
+// set rather than trusting the system's own delegation-depth cap
+// (config.SubTurn.MaxDepth) to bound recursion — this walk must terminate
+// even over on-disk state that predates or violates that cap. A nil store
+// (no delegation lifecycle store wired — most webchat-only installs never
+// mint one) yields an empty slice, so the caller degrades to exactly
+// cancelAllPendingForSession's documented single-id behavior. A walk error
+// is logged at WARN (never returned — see the shim rationale above) so this
+// call's INCOMPLETE-cascade case is never silent, even though it cannot be
+// propagated through this signature.
+func u11CollectDescendantSessionIDs(ls *session.LifecycleStore, rootID string) []string {
+	descendants, err := agent.CollectDescendantSessionIDs(ls, rootID)
+	if err != nil {
+		slog.Warn("ws: descendant walk: could not list children — the walk is INCOMPLETE; any descendant beyond the failure point is unreachable to this caller",
+			"session_id", rootID, "error", err)
+	}
+	return descendants
+}
+
 // buildCancelHooks constructs the transport-specific agent.CancelHooks for a
 // web-SPA-originated cancel. wc is the live connection to notify via
 // cancel_stage frames — nil when there is no live connection to notify.
@@ -2071,9 +2143,37 @@ func (h *WSHandler) buildCancelHooks(wc *wsConn) agent.CancelHooks {
 			sendCancelStageFrame(wc, sid, stage)
 		},
 		CancelPendingApprovals: func(sid, reason string) {
-			if h.approvalRegV2 != nil {
-				h.approvalRegV2.cancelAllPendingForSession(sid, reason)
+			if h.approvalRegV2 == nil {
+				return
 			}
+			// ADR-057 FR-032/W10c: cancel over the DESCENDANT SET, not the
+			// single chat/root id — see u11CollectDescendantSessionIDs' doc
+			// comment for why a single id would silently cancel nothing
+			// inside a live delegated child (BDD-33). The old single-id
+			// cancelAllPendingForSession still compiles and remains correct
+			// for a session with no descendants (its own doc comment says
+			// so); this call site is the one FR-032 requires use the plural
+			// form.
+			var lifecycleStore *session.LifecycleStore
+			if h.agentLoop != nil {
+				lifecycleStore = h.agentLoop.GetSessionLifecycleStore()
+			}
+			// [FIX-5, Defect 2, 2026-08-03] Calls agent.CollectDescendantSessionIDs
+			// directly (not the u11CollectDescendantSessionIDs shim above) so this
+			// call site can react to a partial-walk failure with the specific,
+			// user-visible consequence it has here: a lifecycleStore.List error
+			// partway through the walk used to be swallowed as "no more
+			// children" and the dropped descendant's pending RequestApproval was
+			// left standing — its blocked select only unblocks on ITS OWN
+			// multi-minute approval timeout, all while this Stop click's UI
+			// already reported the cancel as complete.
+			descendants, walkErr := agent.CollectDescendantSessionIDs(lifecycleStore, sid)
+			if walkErr != nil {
+				slog.Warn("ws: buildCancelHooks: descendant walk failed partway through — the approval-cancel cascade below is INCOMPLETE; a dropped descendant's pending approval will hang until its own timeout instead of being auto-denied by this Stop",
+					"session_id", sid, "error", walkErr)
+			}
+			sessionIDs := append([]string{sid}, descendants...)
+			h.approvalRegV2.cancelAllPendingForSessions(sessionIDs, reason)
 		},
 		KillBackgroundSessions: func(sid string) (killed, failed int) {
 			// Cascade the cancel to any detached background bash/exec
@@ -2094,6 +2194,61 @@ func (h *WSHandler) buildCancelHooks(wc *wsConn) agent.CancelHooks {
 						"session_id", sid, "error", err)
 				}
 			}
+		},
+		// OnLatchExpired closes the last gap in the chain: handleCancel below
+		// already tells the user "acknowledged" (cancel_stage "graceful") the
+		// instant CancelOutcome.Armed is true, but a latch that ages out
+		// (cancelPreArmTTL, pkg/agent/cancel_prearm.go) with no turn ever
+		// registering to consume it means that acknowledgement was never made
+		// good on — the turn runs to completion (or the background-only
+		// cancel this reap represents never lands at all) uncanceled. Without
+		// this, the user is told "stop requested" and then never told it
+		// didn't happen — the exact silent-success defect this whole chain
+		// exists to close, just moved one step later.
+		//
+		// Deliberately NOT a second cancel_stage frame: {graceful, hard,
+		// detached} (contracts/components/schemas/CancelStageFrame.yaml) is a
+		// closed, SPA-validated enum and none of its three members mean
+		// "requested but did not land" — graceful/hard/detached all describe
+		// a cancel that IS proceeding. Reusing "graceful" here (as the
+		// no-active-turn case just above does, deliberately, for the
+		// still-pending case) would claim progress that never happened —
+		// over-signaling in exactly the place this fix must not. ErrorFrame
+		// is the right existing wire type instead: it is documented as
+		// "session-scoped... SPA displays the message as a toast or inline
+		// error... does NOT terminate the WebSocket connection" — precisely
+		// "something the user asked for did not happen", with no enum to
+		// extend and no contract change required.
+		OnLatchExpired: func(scope agent.CancelScope, canceller agent.CancelCanceller) {
+			if wc == nil {
+				// No live connection to notify — the orphan-foreground-turn
+				// reap path (reapOrphanForegroundTurn below, via
+				// buildCancelHooks(nil)) fires precisely because nobody is
+				// watching this session anymore. notifyLatchExpired
+				// (cancel_prearm.go) already logged the base "latch expired"
+				// Warn unconditionally; add site-specific context here so an
+				// operator sees not just THAT it expired but that this was a
+				// no-connection (reap/background) case with no user to have
+				// told anyway.
+				slog.Warn("ws: cancel latch expired with no live connection to notify — the cancel it stood in for never took effect",
+					"session_id", scope.SessionID,
+					"channel", scope.Channel,
+					"chat_id", scope.ChatID,
+					"canceller_user", canceller.UserID,
+					"canceller_channel", canceller.Channel,
+				)
+				return
+			}
+			var sidPtr *string
+			if scope.SessionID != "" {
+				sidCopy := scope.SessionID
+				sidPtr = &sidCopy
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:      string(generated.WsFrameTypeError),
+				SessionId: sidPtr,
+				Message:   "Cancel request did not take effect: no matching operation was found before the request timed out. If something is still running, try Stop again.",
+			})
 		},
 	}
 }
@@ -2133,7 +2288,8 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 		return
 	}
 	if !outcome.Fired {
-		slog.Debug("ws: cancel — no active turn or already canceled", "session_id", sessionID)
+		slog.Debug("ws: cancel — no active turn or already canceled",
+			"session_id", sessionID, "armed", outcome.Armed)
 		// Observability fix: a cancel with no active turn is the COMMON case
 		// for a `bash run_in_background=true` job whose own turn already
 		// ended (see cancel.go's RequestCancel doc comment) — the background
@@ -2145,15 +2301,48 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 		// ({graceful, hard, detached} — contracts/components/schemas/
 		// CancelStageFrame.yaml) and adding a value would require a
 		// contract + frontend change beyond this fix's scope; "graceful"'s
-		// documented meaning ("cancel request acknowledged") fits a
-		// background-only kill well enough to give the Stop button SOME
-		// visible response instead of silence.
+		// documented meaning ("cancel request acknowledged; agent is
+		// completing the current tool call and will stop at the next safe
+		// checkpoint") fits a background-only kill well enough to give the
+		// Stop button SOME visible response instead of silence.
+		//
+		// outcome.Armed closes a second, HIGH-severity gap in the same
+		// family (review finding on commit 99d4e729, CancelOutcome.Armed):
+		// its doc comment mandates "Callers surfacing Fired to a user MUST
+		// also check Armed before reporting a cancel as a no-op" — a contract
+		// every RequestCancel caller that surfaces Fired to a user or operator
+		// must honour, not one this edit closes everywhere in one pass. This
+		// fixes THIS caller (the web-SPA Stop button, handleCancel): a Stop
+		// click arriving before its turn has registered
+		// (pkg/agent/cancel_prearm.go) now correctly latches and WILL cancel
+		// that turn the instant it registers (within cancelPreArmTTL), and
+		// the click itself produces a frame here instead of the pre-fix zero
+		// frames. Other RequestCancel callers still need their own fix for
+		// the same contract — notably pkg/commands' RequestCancelForSession
+		// (flattens to a bare bool, dropping Armed, so cmd_cancel.go reports
+		// "Nothing to cancel" for an armed latch; owned by a separate agent
+		// via a widened adapter signature) and plan_engine.go's cancelSessions
+		// fan-out (buckets Armed as notFired; owned separately) — do not
+		// treat either as covered by this file. Reuse "graceful" for this
+		// case too, for the same reason as the background-kill case above:
+		// on the wire it means "acknowledged, pending", never "canceled" —
+		// nothing has actually stopped yet, so claiming more than that would
+		// just be the same under-signaling bug inverted into over-signaling
+		// (the trap this fix must not fall into).
 		if outcome.BackgroundSessionsKilled > 0 {
 			slog.Info("ws: cancel killed background session(s) with no active turn",
 				"session_id", sessionID,
 				"background_sessions_killed", outcome.BackgroundSessionsKilled,
 				"background_sessions_failed", outcome.BackgroundSessionsFailed,
+				"armed", outcome.Armed,
 			)
+		}
+		if outcome.Armed {
+			slog.Info("ws: cancel armed a pre-registration latch — no turn registered yet for this session; the next turn to register will be canceled the instant it does, unless the latch's TTL expires first",
+				"session_id", sessionID,
+			)
+		}
+		if outcome.BackgroundSessionsKilled > 0 || outcome.Armed {
 			sendCancelStageFrame(wc, sessionID, "graceful")
 		}
 	}
@@ -2188,8 +2377,16 @@ func (h *WSHandler) reapOrphanForegroundTurn(sessionID, reason string) {
 		return
 	}
 	if !outcome.Fired {
+		// armed distinguishes "genuinely nothing to do" from "a pre-
+		// registration cancel latch now stands in for this reap and will
+		// fire on the next turn to register under this session, within
+		// cancelPreArmTTL" (CancelOutcome.Armed doc comment, pkg/agent/
+		// cancel.go). No frame is sent either way — wc is nil here (see
+		// buildCancelHooks above), because a reap fires precisely when
+		// nobody is watching this session anymore, so there is no live
+		// connection to acknowledge to regardless of which case this is.
 		slog.Debug("ws: orphan watchdog: RequestCancel no-op (turn already finished or already canceled)",
-			"session_id", sessionID, "reason", reason)
+			"session_id", sessionID, "reason", reason, "armed", outcome.Armed)
 	}
 }
 
@@ -2603,14 +2800,18 @@ var errSendTimeout = fmt.Errorf("ws: send channel full — replay send timeout")
 // gorilla/websocket requires all writes to happen from the same goroutine.
 // A nil message on sendCh is the sentinel for a ping frame.
 func (h *WSHandler) writePump(wc *wsConn) {
-	// defer close (2026-07-31, found by the sibling instance's reviewers and
-	// verified here): every exit path below is a bare `return`. Without this,
-	// a write failure left the connection WRITE-dead but READ-alive — doneCh
-	// was never closed, so sendFrame/sendCritical kept selecting on a channel
-	// nobody would ever close, and readLoop kept refreshing its deadline from
-	// whatever the client was still sending. The socket was then only reaped
-	// by the CLIENT's own missed-ping self-heal ~60s later. close() is
-	// sync.Once-guarded, so this is safe alongside every other caller.
+	// 2026-07-31 review finding (mirrors the same fix in browser_ws.go's
+	// writePump): returning here on a write-side stall used to leave the
+	// connection write-dead but read-alive — nothing else in this function
+	// called wc.close(), so pingPump/sendRawFrameBytes kept selecting on a
+	// doneCh that was never closed, and readLoop's own read deadline kept
+	// getting refreshed by whatever the client was still sending (including
+	// the client's own app-level ping). The SetWriteDeadline calls below only
+	// bound how long ONE write blocks; without this, the connection was still
+	// only actually reaped by the client's independent missed-ping self-heal
+	// (ws.ts), not by anything server-side. wc.close() is sync.Once-guarded,
+	// so signalling here the moment the writer dies is safe to call alongside
+	// whatever else already calls it.
 	defer wc.close()
 
 	for {
@@ -2949,6 +3150,86 @@ type openSpanEntry struct {
 	closeCh         chan struct{} // closed when EventKindSubTurnEnd arrives (cancels watchdog)
 }
 
+// ADR-057 FR-089 — W5 audit classification artefact (U11's half).
+//
+// generated.SESSION_SCOPED_FRAME_TYPES has 19 members. 13 were classified by
+// the spec itself (adr-057-session-unification-spec.md, BDD-16/BDD-98/BDD-99):
+// class (a) both-ids — token, done, tool_call_start, tool_call_result,
+// tool_approval_required, media; class (b) producing_session_id-absent —
+// replay_message, session_started, session_close_ack, subagent_start,
+// subagent_end; class (c) documented pre-existing gap — rate_limit,
+// replay_done. The remaining 6 were left "class not yet assigned by the W5
+// audit" on their generated types pending this classification, verified
+// 2026-08 against this tree:
+//
+//   - agent_switched → class (a). Built at this file's ToolExecEnd case
+//     (below, evtSID := p.SessionID from agent.ToolExecEndPayload) immediately
+//     after a successful hand_off/return_to_default tool_call_result — the
+//     IDENTICAL payload and session-id source as tool_call_result, which is
+//     already verified class (a). A delegated child can invoke hand_off on
+//     its own session exactly as a root turn can, so evtSID is the child's own
+//     producing session whenever that happens, distinct from the routing key.
+//     Stamped alongside tool_call_result above.
+//
+//   - task_status_changed → class (b). Its only non-test construction site is
+//     `TaskStatusChangedFrame{..., SessionId: p.SessionID, ...}` (this file's
+//     EventKindTaskStatusChanged case), fed solely by
+//     agent.TaskStatusChangedPayload, whose ONLY constructor is
+//     pkg/agent/task_executor.go:1821-1830 (`sessionID := t.SessionID; ...
+//     EmitTaskStatusChanged(TaskStatusChangedPayload{SessionID: sessionID,
+//     ...})`) — the TaskExecutor (a system-level component) reporting a
+//     scheduled task's OWN session lifecycle, not narration produced by a
+//     delegated child turn. No stamping added; producing_session_id stays
+//     absent.
+//
+//   - cancel_stage → class (b). Sole constructor is sendCancelStageFrame
+//     (this file), called only with the id RequestCancel's CancelScope.SessionID
+//     resolved to (pkg/agent/cancel.go:404-409,
+//     `hooks.SendStageFrame(sessionID, "graceful")`) — the cancel machinery's
+//     own target id, narrating the Stop's progress across the whole subtree it
+//     cascades to (FR-032/W10c below), never a specific descendant's own
+//     output. No stamping added.
+//
+//   - goal_status → class (b). Its only non-test construction site is this
+//     file's EventKindGoalStatusChanged case (`SessionId: p.SessionID` from
+//     agent.GoalStatusChangedPayload), whose constructors —
+//     pkg/agent/goal_loop.go:502-514, several sites in
+//     pkg/agent/goal_triggers.go, and pkg/agent/session_messaging_wire.go:602-606
+//     /:626-630 — all pass the session that OWNS the /goal loop config being
+//     reported, i.e. the session reporting on itself. No call site was found
+//     where this payload's SessionID is a delegated child distinct from a
+//     parent's routing id. No stamping added.
+//
+//   - loop_status → class (b). Its only non-test construction site is this
+//     file's EventKindLoopStatusChanged case (`SessionId: p.SessionID` from
+//     agent.LoopStatusChangedPayload), whose sole constructor
+//     (pkg/agent/loop_command.go:301-309, `emitLoopStatusFrame(sessionID,
+//     ...)`) reports on the session whose OWN /loop state changed — the
+//     identical "reporting on itself" shape as goal_status. No stamping added.
+//
+//   - system_overload → COULD NOT DETERMINE; not guessed (spec line ~1309
+//     forbids it). Verified: `rg -rl 'SystemOverloadFrame|system_overload'
+//     pkg/` matches only the generated type
+//     (pkg/api/generated/asyncapi_types.gen.go), its fixtures
+//     (pkg/api/generated/fixtures.go), and the inbound-schema copy
+//     (pkg/gateway/inboundschemas/SystemOverloadFrame.yaml) — ZERO
+//     non-generated, non-fixture Go call site constructs or sends this frame
+//     anywhere in pkg/gateway or pkg/agent. The type is fully specified on the
+//     wire and consumed by the SPA (src/store/chat.ts, src/lib/ws.ts) but is
+//     never produced by the backend, so there is no real emission site to
+//     classify BY EVIDENCE. Do not assume a class for this type until a
+//     producer exists and is audited.
+//
+// TokenFrame/DoneFrame (wsStreamer.Update/Finalize, below) need no stamping
+// change: their shared "shadow stream" gate (isShadowStream forced true
+// whenever parentSpawnCallID != "", in both Update and Finalize) means these
+// two frames are constructed ONLY when parentSpawnCallID == "" — i.e. only
+// for a turn that IS the routing session by definition (turn.go:406,
+// session.RoutingSessionID's own contract: "for a root turn, RoutingSessionID
+// MUST equal that turn's own SessionID"). SessionId already equals the
+// routing key in every case either frame is actually emitted, so
+// ProducingSessionId is correctly always absent.
+//
 // eventForwarder listens on the agent EventBus and forwards tool_call_start/result
 // frames to the browser so tool call UIs render in real time.
 // It also matches events from an attached task session (via taskChatIDs).
@@ -3049,6 +3330,26 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 	// if the span is not closed first. On timeout it synthesizes subagent_end and logs.
 	// W1-9: the goroutine also exits cleanly when wc.doneCh is closed (connection torn down).
 	startOrphanWatchdog := func(entry *openSpanEntry, reason string) {
+		// Snapshot BOTH test-shrinkable knobs ONCE, synchronously, before
+		// spawning the goroutine below — never re-read the package-level vars
+		// from inside it. This goroutine loops (reschedule on "still active")
+		// for however long a genuine delegate keeps running, re-arming
+		// time.After(orphanWatchdogTimeout) and re-checking the reschedule
+		// count against orphanWatchdogMaxRechecks on every iteration —
+		// potentially for the lifetime of a long test. A test that shrinks
+		// these vars via
+		// SetOrphanWatchdogTimeoutForTest/SetOrphanWatchdogMaxRechecksForTest
+		// and restores them (defer/t.Cleanup) the moment its OWN foreground
+		// assertions pass has no happens-before edge to this still-running
+		// goroutine's later reads — a genuine data race (WARNING: DATA RACE,
+		// websocket.go:3229 vs export_test.go:29, caught under
+		// `go test -race`, TestOrphanWatchdog_GenuinelyActiveDelegate_
+		// NeverSynthesizesInterrupted), not a flake. Capturing both up front
+		// removes every later read of the package vars from this goroutine;
+		// production behavior is unchanged since neither var is ever mutated
+		// outside tests.
+		watchdogTimeout := orphanWatchdogTimeout
+		maxRechecks := orphanWatchdogMaxRechecks
 		go func() {
 			rechecks := 0
 			for {
@@ -3059,7 +3360,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				case <-wc.doneCh:
 					// Connection closed while waiting — exit cleanly without emitting.
 					return
-				case <-time.After(orphanWatchdogTimeout):
+				case <-time.After(watchdogTimeout):
 					// Span is still open after timeout. Before declaring it
 					// orphaned, confirm the real sub-turn genuinely isn't
 					// still running.
@@ -3093,7 +3394,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 					forceCeiling := false
 					if stillActive {
 						rechecks++
-						if rechecks > orphanWatchdogMaxRechecks {
+						if rechecks > maxRechecks {
 							// Ceiling exceeded: a genuinely wedged/deadlocked
 							// turn — a goroutine that neither returns nor
 							// panics, e.g. blocked on a tool call not
@@ -3115,7 +3416,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 								"parent_call_id", entry.parentCallID,
 								"reason", reason,
 								"rechecks", rechecks,
-								"max_rechecks", orphanWatchdogMaxRechecks,
+								"max_rechecks", maxRechecks,
 							)
 						} else {
 							// Escalate Debug -> Warn once the loop has
@@ -3135,7 +3436,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 								"parent_call_id", entry.parentCallID,
 								"reason", reason,
 								"rechecks", rechecks,
-								"max_rechecks", orphanWatchdogMaxRechecks,
+								"max_rechecks", maxRechecks,
 							)
 							continue
 						}
@@ -3336,6 +3637,21 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				pc := string(p.ParentSpawnCallID)
 				startF.ParentCallId = &pc
 			}
+			// ADR-057 FR-012/FR-013 (W5b): tool_call_start is class (a) — a
+			// genuinely child-turn-produced frame (BDD-16; generated.
+			// ToolCallStartFrame's own doc comment). startSID above already
+			// carries the routing key per ToolExecStartPayload.SessionID's
+			// contract (events.go, U3/U9); ProducingSessionID is the emitting
+			// turn's own real session, left zero-valued by the emitter when it
+			// equals the routing key. Stamp the wire's optional
+			// producing_session_id only when it is non-empty AND differs from
+			// what was actually placed in SessionId — never "≥ 1" but the
+			// FR-013 "present iff it differs" rule, checked against startSID
+			// rather than raw p.SessionID so the sessionIDForChat fallback
+			// above can never manufacture a false "differs".
+			if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != startSID {
+				startF.ProducingSessionId = &producingSID
+			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeToolCallStart), startF)
 		case agent.EventKindToolExecEnd:
 			p, ok := evt.Payload.(agent.ToolExecEndPayload)
@@ -3405,9 +3721,32 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				de := delegationErr
 				resultF.Error = &de
 			}
+			// ADR-057 FR-012/FR-013 (W5b): tool_call_result is class (a) —
+			// genuinely child-turn-produced (BDD-16; generated.
+			// ToolCallResultFrame's own doc comment). See the tool_call_start
+			// stamping above for the identical "present iff it differs from
+			// what's actually on the wire" contract.
+			var producingSIDForResult string
+			if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != evtSID {
+				resultF.ProducingSessionId = &producingSID
+				producingSIDForResult = producingSID
+			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeToolCallResult), resultF)
 			// When the handoff tool succeeds, notify the frontend to switch agents.
 			// Use evtSID (the session ID from the payload) to key the lookup, not chatID.
+			//
+			// ADR-057 FR-089 (W5 audit): agent_switched is class (a), not
+			// "class not yet assigned" (generated.AgentSwitchedFrame's doc
+			// comment pre-audit) — it is derived from THIS SAME
+			// ToolExecEndPayload, at the exact call site whose tool_call_result
+			// sibling is already verified class (a): a delegated child can
+			// invoke hand_off/return_to_default on its OWN session exactly as a
+			// root turn can, so evtSID here is the CHILD's own producing
+			// session whenever the hand_off ran inside a sub-turn, distinct
+			// from the routing key placed in SessionId below. Reuses
+			// producingSIDForResult computed above rather than re-deriving it,
+			// since both frames answer the identical "does this ToolExecEnd's
+			// producer differ from its routing key" question.
 			if p.Tool == "hand_off" && status == "success" {
 				if activeAgent, ok := h.agentLoop.GetSessionActiveAgent(evtSID); ok {
 					agentName, _ := h.agentLoop.GetRegistry().GetAgentName(activeAgent)
@@ -3421,6 +3760,10 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 					}
 					if agentName != "" {
 						switchF.Message = &agentName
+					}
+					if producingSIDForResult != "" {
+						pid := producingSIDForResult
+						switchF.ProducingSessionId = &pid
 					}
 					sendConnGenFrame(wc, string(generated.WsFrameTypeAgentSwitched), switchF)
 				}
@@ -3439,6 +3782,10 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				}
 				if defaultName != "" {
 					switchF.Message = &defaultName
+				}
+				if producingSIDForResult != "" {
+					pid := producingSIDForResult
+					switchF.ProducingSessionId = &pid
 				}
 				sendConnGenFrame(wc, string(generated.WsFrameTypeAgentSwitched), switchF)
 			}
@@ -3656,6 +4003,79 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				taskF.AgentId = &aid
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeTaskStatusChanged), taskF)
+		case agent.EventKindPlanStatusChanged:
+			// ADR-049 D4/D7: a Plan's state/phase/progress/paused_reason changed.
+			// Not tied to a specific chatID (a Plan is workspace-scoped, not
+			// session-scoped) — broadcast to every connection, mirroring
+			// EventKindTaskStatusChanged above. The SPA invalidates its plans
+			// query cache / updates the plan card on receipt.
+			p, ok := evt.Payload.(agent.PlanStatusChangedPayload)
+			if !ok {
+				continue
+			}
+			planF := generated.PlanStatusFrame{
+				Type:      string(generated.WsFrameTypePlanStatus),
+				PlanId:    p.PlanID,
+				State:     p.State,
+				PlanPhase: p.PlanPhase,
+				Progress:  p.Progress,
+			}
+			if p.PausedReason != "" {
+				pr := p.PausedReason
+				planF.PausedReason = &pr
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypePlanStatus), planF)
+		case agent.EventKindGoalStatusChanged:
+			// ADR-049 D6/D7: a session's `/goal` loop status changed (set,
+			// round advance, met, bound reached, cleared). Broadcast to every
+			// connection, mirroring EventKindPlanStatusChanged — the SPA
+			// matches session_id client-side to the currently open session.
+			p, ok := evt.Payload.(agent.GoalStatusChangedPayload)
+			if !ok {
+				continue
+			}
+			goalF := generated.GoalStatusFrame{
+				Type:         string(generated.WsFrameTypeGoalStatus),
+				SessionId:    p.SessionID,
+				Condition:    p.Condition,
+				Round:        p.Round,
+				MaxRounds:    p.MaxRounds,
+				LatestReason: p.LatestReason,
+				ActiveLoops:  p.ActiveLoops,
+				Cap:          p.Cap,
+				State:        p.State,
+			}
+			// ADR-053 R§8.11 / UAT S3 fix: goal_id disambiguates which goal
+			// generation this frame updates so the SPA's GoalPillTray can key
+			// one pill per goal-id instead of collapsing every goal a session
+			// ever carried into the `_default` bucket. Optional on the wire —
+			// omitted for a legacy pre-upgrade goal that never had one minted.
+			if p.GoalID != "" {
+				gid := p.GoalID
+				goalF.GoalId = &gid
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeGoalStatus), goalF)
+		case agent.EventKindLoopStatusChanged:
+			// ADR-049 D6/D7: a session's `/loop` status changed (set, run
+			// fired, run-cap reached, stop). Broadcast to every connection,
+			// mirroring EventKindGoalStatusChanged above.
+			p, ok := evt.Payload.(agent.LoopStatusChangedPayload)
+			if !ok {
+				continue
+			}
+			loopF := generated.LoopStatusFrame{
+				Type:      string(generated.WsFrameTypeLoopStatus),
+				SessionId: p.SessionID,
+				Mode:      p.Mode,
+				Run:       p.Run,
+				MaxRuns:   p.MaxRuns,
+				State:     p.State,
+			}
+			if p.NextDelay != nil {
+				nd := int64(*p.NextDelay)
+				loopF.NextDelay = &nd
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeLoopStatus), loopF)
 		case agent.EventKindTaskRunStatus:
 			// A per-execution run opened or closed (ADR-050). Broadcast so the
 			// calendar's per-occurrence chip updates live without a full refetch.
@@ -3677,6 +4097,26 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			sendConnGenFrame(wc, string(generated.WsFrameTypeTaskRunStatus), runF)
 		}
 	}
+}
+
+// wsTranscriptWriteFailures counts how many times wsStreamer.Finalize's
+// streamed-assistant-message audit write via AppendTranscriptStrict failed
+// against a session id that does not resolve to a real, store-backed session
+// (ADR-057 FR-001/FR-002/W3, spec BDD-03 row `pkg/gateway/websocket.go:4256`
+// "streamed assistant"). Mirrors pkg/agent/turn.go's transcriptWriteFailures
+// and pkg/tools/handoff.go's handoffTranscriptWriteFailures — each unit that
+// owns a converted call site gets its own package-local counter rather than
+// sharing one across package boundaries. The write itself stays best-effort
+// by design (a failed streamed-transcript record must never fail the turn
+// that already streamed successfully to the client); this counter is the
+// only durable, operator-visible signal that it happened. Exposed via
+// WSTranscriptWriteFailures() for tests and operator tooling.
+var wsTranscriptWriteFailures atomic.Uint64
+
+// WSTranscriptWriteFailures returns the current value of the
+// omnipus_ws_transcript_write_failures_total counter (ADR-057 FR-002).
+func WSTranscriptWriteFailures() uint64 {
+	return wsTranscriptWriteFailures.Load()
 }
 
 // wsStreamer implements bus.Streamer, pushing token/done frames into a wsConn's send channel.
@@ -3714,10 +4154,20 @@ type wsStreamer struct {
 	// in the PARENT turn when this streamer belongs to a CHILD delegation
 	// sub-turn (empty for a root/non-delegated turn). Stamped by the agent
 	// loop via SetParentSpawnCallID, mirroring SetTurnID's pattern exactly.
-	// Carried onto the transcript entry Finalize writes so
-	// pkg/gateway/replay.go can withhold a delegate's own streamed narration
-	// from top-level replay — see session.TranscriptEntry.ParentSpawnCallID's
-	// doc comment. Guarded by statsMu like turnID/agentID.
+	//
+	// [FIX-5, Defect 5, 2026-08-03] Carried onto the transcript entry
+	// Finalize writes for per-spawn-call attribution WITHIN the child's OWN
+	// durable transcript (read by pkg/tools/delegate.go's recentActivityLines,
+	// ADR-057 FR-043, to filter a `delegate` status poll to only THAT
+	// delegate call's activity) — NOT, as an earlier revision of this
+	// comment claimed, so pkg/gateway/replay.go could withhold the entry
+	// from top-level replay. That replay-side skip was DELETED by ADR-057
+	// FR-034/FR-038 (a delegated child now owns its own store-backed session
+	// and never lands in the parent's transcript at all, so there is
+	// nothing left for replay.go to withhold) — see
+	// session.TranscriptEntry.ParentSpawnCallID's doc comment
+	// (pkg/session/daypartition.go) for the authoritative, corrected
+	// post-ADR-057 role of this field. Guarded by statsMu like turnID/agentID.
 	parentSpawnCallID string
 	channel           *webchatChannel // to mark streaming complete and suppress duplicate Send()
 	accumulated       strings.Builder // accumulates full response text
@@ -4000,12 +4450,28 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	// lazy shadowResolved=false) then finds the slot empty and legitimately
 	// "wins" it under the old rule — even though a child's own token stream
 	// is supposed to stay hidden unconditionally, exactly like the
-	// already-correct sync/await case and replay.go's ParentSpawnCallID skip
-	// (see that doc comment). Live-verified: reproduced the leak (a second,
-	// delegate-authored top-level bubble with raw narration) via a
-	// background delegation canceled mid-flight, confirmed the fix removes
-	// it. A root/non-delegated turn is unaffected — this branch only ever
-	// narrows behavior for parentSpawnCallID != "".
+	// already-correct sync/await case.
+	//
+	// [FIX-5, Defect 5, 2026-08-03] This gate's justification is
+	// SELF-CONTAINED and does not rest on replay.go: a delegated child's
+	// narration must never reach the user as its own top-level chat bubble,
+	// live-streamed or replayed. This function enforces the LIVE half of
+	// that invariant (withholding the live TokenFrame for a shadow stream);
+	// the DURABLE half no longer needs an analogous read-side filter at all
+	// (ADR-057 FR-034/FR-038 gave every delegated child its own store-backed
+	// session, so its narration never lands in the parent's transcript for
+	// replay.go to have to withhold in the first place — see
+	// session.TranscriptEntry.ParentSpawnCallID's doc comment,
+	// pkg/session/daypartition.go, for that mechanism's retirement). Do NOT
+	// read the historical replay.go comparison as this gate's justification
+	// and remove this gate on discovering replay.go no longer filters
+	// anything — this Update() gate is a DIFFERENT, still-live mechanism
+	// (the live-stream ownership claim, not a transcript read filter) with
+	// its own reason to exist, stated above. Live-verified: reproduced the
+	// leak (a second, delegate-authored top-level bubble with raw narration)
+	// via a background delegation canceled mid-flight, confirmed the fix
+	// removes it. A root/non-delegated turn is unaffected — this branch only
+	// ever narrows behavior for parentSpawnCallID != "".
 	if !s.shadowResolved {
 		if s.parentSpawnCallID != "" {
 			s.isShadowStream = true
@@ -4159,10 +4625,22 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	// subagent_start (duration_ms matching that child's own subagent_end),
 	// well before the parent's real, final `done` — producing N+1 bubbles for
 	// N sequential delegate calls instead of one continuous bubble matching
-	// the child's own hidden-narration invariant (replay.go's
-	// ParentSpawnCallID skip / this same Update() shadow gate already treat a
-	// child's own text as never visible — Finalize simply never enforced
-	// that for the "done" signal it also sends).
+	// the child's own hidden-narration invariant (this same Update() shadow
+	// gate already treats a child's own text as never visible — Finalize
+	// simply never enforced that for the "done" signal it also sends).
+	//
+	// [FIX-5, Defect 5, 2026-08-03] The invariant this paragraph enforces —
+	// "a delegated child's own narration/signals are never visible as their
+	// own top-level chat event" — no longer needs replay.go as a supporting
+	// citation: that read-side skip was DELETED (ADR-057 FR-034/FR-038; see
+	// session.TranscriptEntry.ParentSpawnCallID's doc comment,
+	// pkg/session/daypartition.go, for why — a delegated child now owns its
+	// own store-backed session, so there is nothing left in the PARENT's
+	// transcript for a read boundary to withhold). This Finalize() gate and
+	// Update()'s shadow-stream gate are BOTH still live, LIVE-side
+	// mechanisms (withholding the "done" frame / the live TokenFrame,
+	// respectively) — each independently justified by the invariant stated
+	// above, not by the retired replay.go mechanism.
 	//
 	// Mirrors Update()'s lazy resolution exactly, including the same "a
 	// delegated child NEVER owns the live slot" rule Update() gained for
@@ -4272,7 +4750,16 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 				// Empty (the common case) for a root turn.
 				ParentSpawnCallID: parentSpawnCallID,
 			}
-			if err := s.agentStore.AppendTranscript(s.sessionID, entry); err != nil {
+			// ADR-057 FR-001/FR-002 (W3): AppendTranscriptStrict refuses loudly
+			// (and creates nothing on disk) when s.sessionID does not resolve to
+			// a real, store-backed session, instead of AppendTranscript's old
+			// lenient silent-create branch. The error was already checked here
+			// before this conversion — only the runtime behavior of a failure
+			// changes (loud vs. silently minting an orphan session directory) —
+			// so surface it as a counter increment (BDD-03) alongside the
+			// pre-existing WARN.
+			if err := s.agentStore.AppendTranscriptStrict(s.sessionID, entry); err != nil {
+				wsTranscriptWriteFailures.Add(1)
 				slog.Warn("ws: could not record streamed assistant message", "session_id", s.sessionID, "error", err)
 			}
 		}

@@ -1,0 +1,423 @@
+title: Plan
+description: >
+  A first-class Plan entity (ADR-049 D1/FR-1) that groups an executable task
+  DAG under a goal, Definition of Done, owner agent, and state machine. Tasks
+  join a plan via `Task.plan_id` (same-workspace FK, validated); membership
+  and `progress` are computed read-time by scanning member tasks — never
+  stored on the Plan record (mirrors the removed Milestone's
+  `computeMilestoneCounts`). Persisted at `~/.omnipus/plans/<id>.json`
+  (`pkg/plan`, atomic write + per-plan striped lock). Replaces Milestones
+  (see the Milestone removal diffs) as the container for grouped, judged,
+  goal-driven work.
+
+  Returned by GET /workspaces/{id}/plans, POST /workspaces/{id}/plans,
+  GET /plans/{id}, PUT /plans/{id}, POST /plans/{id}/approve, and
+  POST /plans/{id}/stop (Wave 2-C1 — the deferred REST paths from
+  Constraint #8's contract-surface table).
+type: object
+required:
+  - id
+  - workspace_id
+  - title
+  - state
+  - owner_agent_id
+  - owner
+  - created_by
+  - created_at
+  - updated_at
+additionalProperties: false
+properties:
+  id:
+    type: string
+    description: Unique plan identifier (ULID).
+    example: "01J3ZQK8N2H8VXNRP5T7C9M4WE"
+  workspace_id:
+    type: string
+    description: >
+      Workspace this plan belongs to. Required-scoped — a plan may only
+      reference same-workspace tasks (validated FK on `Task.plan_id`).
+    example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  title:
+    type: string
+    minLength: 1
+    maxLength: 200
+    description: Human-readable plan title.
+    example: "v1.0 Launch"
+  goal:
+    type: string
+    maxLength: 2000
+    description: >
+      Plain-prose objective the plan-level judge evaluates against when
+      `dod` is empty (soft tier, ADR D5).
+    example: "Ship the v1.0 release with all P0 issues closed and CI green."
+  description:
+    type: string
+    maxLength: 2000
+    description: Optional free-form description.
+    example: "Coordinates the v1.0 release train across backend and SPA."
+  state:
+    type: string
+    enum:
+      - draft
+      - approved
+      - running
+      - done
+      - failed
+    description: >
+      Canonical 5-value plan state machine (ADR D1; Round-1 Grill
+      Reconciliation R1 is the single source of truth for this wire enum).
+      `draft` being authored, not yet runnable. `approved` DoD/owner locked
+      in; the single plan-engine instance auto-advances to `running` on its
+      next tick — or stays `approved` in a legitimate cap-waiting state when
+      the global active-loop cap is full (see `paused_reason`). `running`
+      the engine is dispatching member tasks under the plan judge; see
+      `plan_phase` for the current sub-phase and `paused_reason` for a
+      transient pause. `done` terminal success (plan judge PASS), frozen.
+      `failed` terminal failure — see `failed_reason` for why; frozen, never
+      retried (author a new plan). An unrecognized future value should
+      render as `draft` (forward-compat fallback).
+    example: "draft"
+  plan_phase:
+    type: string
+    enum:
+      - dispatching
+      - judging
+      - synthesizing
+      - idle
+      - awaiting_supervision
+      - stalled
+    default: idle
+    description: >
+      Runtime-only sub-phase while `state == running` (R1) — NOT itself a
+      `state` value. `dispatching` the engine is dispatching ready tasks off
+      the `blocked_by` DAG. `judging` the plan-level judge is evaluating the
+      DoD. `synthesizing` writing the completion/handover summary. `idle`
+      no active phase (default; also the value while `state != running`).
+      `awaiting_supervision` (ADR-053 C1/R§8.8/INV-2/INV-7; ADR-055/FR-062
+      — the adjudicator is the `plansupervisor` System Agent, not the
+      plan's owner) — the plan
+      reached all-terminal-but-unmet; it durably holds here (persisting
+      `last_unmet_terminal_signature`) until a correction is applied or a
+      budget is spent. The engine does NOT re-judge unchanged state
+      while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's
+      owner session — sitting at durable lifecycle `paused` — from the
+      `failed(interrupted)` sweep while this phase holds (INV-9). This does
+      NOT add a 9th session-lifecycle state — it is a plan condition only.
+      `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) —
+      the plan is `running` with a NON-terminal member DAG (real work
+      remains) but no member is currently dispatchable (`next`) or in
+      flight (`in_progress`) — e.g. a member blocked on a dependency this
+      plan's own dispatch loop can never itself resolve. The engine wakes
+      the supervisor exactly once per distinct condition and reverts to
+      `dispatching` once something becomes dispatchable/in-flight again.
+      `awaiting_supervision` and `stalled` together form the
+      supervision-eligible phase set (ADR-055/FR-029) — the only two phases
+      from which a correction may be applied.
+      PRECEDENCE: `awaiting_supervision` is a strictly more specific
+      condition (a plan-judge dead end on an all-terminal DAG) and is NEVER
+      masked by `stalled` — the two are mutually exclusive by construction
+      (the former requires an all-terminal DAG, the latter a non-terminal
+      one), and the engine additionally refuses to touch `plan_phase` while
+      `awaiting_supervision` holds, belt-and-suspenders.
+    example: "idle"
+  last_unmet_terminal_signature:
+    type: string
+    readOnly: true
+    description: >
+      ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member
+      outcomes at the moment the plan last entered
+      `plan_phase: awaiting_supervision`. Persisted (not in-memory
+      only, closing the standalone-F2 restart gap) so the engine can tell
+      an unchanged all-terminal-but-unmet state from a genuinely new one
+      after a restart, and skip re-judging it (no JudgeRound burned).
+      Empty/absent when the plan has never entered
+      `awaiting_supervision`.
+    example: "sha256:3b1c2e9b7d4f6a1c0e2b3d4f5a6b7c8d9e0f1a2b"
+  owner_session_id:
+    type: string
+    description: >
+      ADR-053 m-3/FR-147 — the durable session that owns this plan (the
+      reciprocal of `SessionLifecycleRecord.owns_plan_id`). While the plan
+      is `awaiting_supervision`, this session sits at lifecycle
+      `paused`, legitimately idle awaiting adjudication, and is exempt from
+      the boot-sweep `failed(interrupted)` transition (INV-9). Distinct
+      from `supervision.session_id`, which is PlanSupervisor's own
+      adjudication session (ADR-055/FR-016b).
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  failed_reason:
+    type: string
+    enum:
+      - judge_rounds_exhausted
+      - stopped_by_user
+      - idle_expired
+      - budget_exhausted
+      - dod_unreachable
+      - supervision_unavailable
+    description: >
+      Set only when `state == failed` (R1) — distinguishes
+      judge-rounds-exhausted vs user-stopped vs idle-expired vs the
+      ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted`
+      — added §Contract Surface "Budget / bounds") so they don't
+      collapse to one generic "Failed" badge. ADR-055/FR-035 adds two
+      more so every terminal cause supervision can produce is
+      machine-distinguishable rather than string-distinguishable:
+      `dod_unreachable` — the Definition of Done cannot be reached from
+      the plan's current state (a correction left the plan unable to
+      progress, or PlanSupervisor issued the `abandon` verb); rounds may
+      still remain, which is exactly why it is NOT
+      `judge_rounds_exhausted`. `supervision_unavailable` — the
+      supervision attempt ceiling was exhausted (ADR-055/FR-022): the
+      plan parked, was woken, and no valid correction ever arrived. Note
+      that `judge_rounds_exhausted` still covers two distinct causes,
+      told apart by `supervision.correction_rounds` (`== 0` the round
+      ceiling was reached with no correction ever applied; `> 0`
+      corrections consumed the shared round budget).
+    example: "judge_rounds_exhausted"
+  supervision:
+    type: object
+    additionalProperties: false
+    description: >
+      ADR-055/FR-050 — the durable PlanSupervisor adjudication state for
+      this plan. Server-set only; never accepted from a create or update
+      body. Absent until the plan first enters the supervision-eligible
+      phase set (`awaiting_supervision`, `stalled`). Every field is
+      optional and independently written — the engine's write path is five
+      discrete `plan.Patch` pointers, not one whole-object pointer, so a
+      concurrent REST update of an unrelated field can never clobber a
+      counter (FR-050, r3 M3-16).
+    properties:
+      wake_at:
+        type: string
+        format: date-time
+        description: >
+          RFC 3339 UTC timestamp of the supervision wake receipt. Arms the
+          supervision deadline (FR-021) AND is the once-per-park dedup key
+          that stops every engine tick re-waking the same parked plan
+          (FR-023). Cleared when the plan leaves the supervision-eligible
+          phase set and on every applied correction, so a later re-park
+          re-wakes.
+        example: "2026-07-28T10:00:00Z"
+      wake_error:
+        type: string
+        description: >
+          The last supervision wake-publish failure, recorded rather than
+          WARNed away (FR-024) so an undelivered wake is observable. Cleared
+          by the next successful wake, on an applied correction, and when
+          the plan leaves the supervision-eligible phase set. A plan with no
+          chat origin is NOT a wake error — that case is logged INFO with
+          `reason: no_chat_origin` and never lands here (FR-012d(5)).
+        example: "notifier unavailable: bus closed"
+      attempts:
+        type: integer
+        minimum: 0
+        description: >
+          Supervision turns that produced no valid correction, bounded by
+          the `supervision_max_attempts` ceiling (FR-022). Exhausting the
+          ceiling terminates the plan `failed(supervision_unavailable)`.
+          Reset to 0 on an applied correction and when the plan leaves the
+          supervision-eligible phase set. Resetting it never touches
+          `correction_rounds`.
+        example: 1
+      correction_rounds:
+        type: integer
+        minimum: 0
+        description: >
+          Corrections applied to this plan over its whole life. An
+          ATTRIBUTION counter, not a budget (FR-034) — nothing gates on it;
+          FR-035 reads it to tell the two `judge_rounds_exhausted` causes
+          apart. CUMULATIVE AND NEVER RESET: a plan leaves the
+          supervision-eligible phase set on every applied correction, so any
+          reset rule would zero this counter immediately after each
+          increment and every terminal record would read 0 (r3 C3-03).
+        example: 2
+      session_id:
+        type: string
+        description: >
+          The real, store-backed session PlanSupervisor's adjudication turn
+          runs in (FR-016b) — keeps the adjudication transcript out of the
+          plan owner's session, and is the handle `stop_plan` cancels
+          (FR-044). NEVER cleared, only overwritten when the next
+          supervision session is minted: an applied correction returns the
+          plan to `dispatching` while the adjudication turn may still be
+          running, and blanking the handle in that window would make the
+          stop uncancellable (r3 m3-07). Cancelling an already-finished
+          session is a benign no-op.
+        example: "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+  source_channel:
+    type: string
+    description: >
+      ADR-055/FR-012d — the channel this plan was created from, and the
+      channel a plan wake delivers its outcome back to. Mirrors
+      `Task.source_channel` exactly, including its optionality. Server-set
+      at creation only and immutable thereafter; never accepted from
+      `PlanCreateRequest` or any update body. ABSENT IS A LEGITIMATE,
+      EXPECTED STATE, not a degraded one — a plan created over REST from the
+      Plans UI has no chat origin at all. Unlike the task precedent, a
+      `webchat` origin IS recorded here rather than excluded. The wake path
+      requires `source_channel` and `source_chat_id` to BOTH be non-empty
+      before it constructs a chat-origin wake; when either is empty the
+      owner turn still runs and its synthesis is still persisted, no
+      outbound message is published anywhere, and the human-facing surface
+      is the `plan_completed` / `plan_failed` notification.
+    example: "telegram"
+  source_chat_id:
+    type: string
+    description: >
+      ADR-055/FR-012d — the chat within `source_channel` this plan was
+      created from. Mirrors `Task.source_chat_id`. Server-set at creation
+      only; absent whenever the plan has no chat origin. See
+      `source_channel` for the both-non-empty wake predicate.
+    example: "-1001234567890"
+  owner_agent_id:
+    type: string
+    description: >
+      Agent responsible for this plan — woken at decision points (attempts
+      exhausted, plan judge failed, plan complete) via the async-notifier
+      seam (ADR D4).
+    example: "jim"
+  dod:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterion.yaml
+    description: >
+      Plan-level Definition of Done, evaluated by the plan judge each round.
+      Required (non-empty) before `draft -> approved` for agent-authored
+      plans (strict tier); may be empty for human/UI-authored plans (soft
+      tier — the judge then evaluates against `title` + `goal`, ADR D5).
+  rationale:
+    type: string
+    maxLength: 4000
+    description: >
+      ADR-053 §Contract Surface — persisted planning rationale (see
+      `PlanCreateRequest.rationale`). Plan-lint and the owner-loop
+      correction flow read this alongside member `write_set`/`stream`/
+      `is_join`.
+    example: >
+      Split into two lint-disjoint worktree streams (schema + client) that
+      converge at a single merge member, per the shard+assemble topology.
+  bounds:
+    type: object
+    additionalProperties: false
+    description: >
+      Per-plan overrides of the global `PlanningConfig` bounds (FR-9).
+      Absent fields inherit the global default.
+    properties:
+      plan_judge_max_rounds:
+        type: integer
+        minimum: 1
+        description: >
+          Override of the global plan-judge round ceiling (global default
+          20, symmetric with `/goal`).
+        example: 20
+      idle_expiry_days:
+        type: integer
+        minimum: 1
+        description: >
+          Override of the global idle-expiry calendar brake (global default
+          7 days).
+        example: 7
+      supervision_turn_timeout_seconds:
+        type: integer
+        minimum: 1
+        description: >
+          Override of FR-021's supervision observation deadline — how long
+          the PlanSupervisor waits on an armed supervision wake before that
+          attempt counts as spent (global default
+          `planning.supervision_turn_timeout_seconds`, 600 s).
+        example: 600
+      supervision_max_attempts:
+        type: integer
+        minimum: 1
+        description: >
+          Override of FR-022's ceiling on supervision wakes that produce no
+          valid correction; exhausting it terminates the plan
+          `failed(supervision_unavailable)` (global default
+          `planning.supervision_max_attempts`, 3).
+        example: 3
+  judge_rounds:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      Plan-judge rounds consumed so far (ADR D4 MAJ-004, durable
+      boot-reconciled counter).
+    example: 2
+  active_loop:
+    type: boolean
+    readOnly: true
+    description: >
+      True while this plan counts toward the global active-loop cap — iff
+      `state == running` (Round-1 Grill Reconciliation R5).
+    example: true
+  paused_reason:
+    type: string
+    readOnly: true
+    description: >
+      Non-empty when a `running` plan is paused (owner agent disabled
+      mid-loop, judge temporarily unavailable) or when `state == approved`
+      is waiting for a free slot under the global active-loop cap.
+      Empty/absent when not paused.
+    example: "owner agent disabled"
+  last_activity_at:
+    type: string
+    format: date-time
+    readOnly: true
+    description: >
+      Idle-expiry clock (ADR D7, default 7 days) — timestamp of the last
+      attempt, state transition, or user interaction on this plan.
+    example: "2026-07-19T12:00:00Z"
+  progress:
+    type: number
+    minimum: 0
+    maximum: 1
+    readOnly: true
+    description: >
+      Completion fraction (0-1), server-computed read-time as done/total
+      over member tasks (`Task.plan_id == this.id`). 0 when there are no
+      member tasks. Never accepted on create/update.
+    example: 0.5
+  owner:
+    type: string
+    readOnly: true
+    description: >
+      Username of the user who created this plan. Set server-side at
+      creation; read-only.
+    example: "alice"
+  created_by:
+    type: string
+    readOnly: true
+    description: >
+      Username (or agent ID) that created the plan. Set server-side at
+      creation; read-only.
+    example: "alice"
+  created_at:
+    type: string
+    format: date-time
+    description: RFC 3339 UTC timestamp when the plan was created.
+    example: "2026-07-19T10:00:00Z"
+  updated_at:
+    type: string
+    format: date-time
+    description: RFC 3339 UTC timestamp of the last update.
+    example: "2026-07-19T10:05:00Z"
+  approved_at:
+    type: string
+    format: date-time
+    description: >
+      RFC 3339 timestamp when the plan transitioned `draft -> approved`.
+      Absent until then.
+    example: "2026-07-19T10:10:00Z"
+  started_at:
+    type: string
+    format: date-time
+    description: >
+      RFC 3339 timestamp when the plan transitioned into `running`. Absent
+      until then.
+    example: "2026-07-19T10:15:00Z"
+  completed_at:
+    type: string
+    format: date-time
+    description: >
+      RFC 3339 timestamp when the plan reached `done` or `failed`. Absent
+      until then.
+    example: "2026-07-19T12:30:00Z"

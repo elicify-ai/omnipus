@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // concurrent_sessions_test.go — regression tests for Bug-3: Concurrent sessions
 // both respond.
 //
@@ -18,6 +16,7 @@
 package integration
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -42,89 +41,106 @@ func TestConcurrentSessions_TwoSessions_BothReply(t *testing.T) {
 	connA := wsConnect(t, gw)
 	connB := wsConnect(t, gw)
 
-	// Track results per session.
-	type result struct {
-		frameType string
-		err       string
-	}
-	resA := make(chan result, 1)
-	resB := make(chan result, 1)
+	const replyTimeout = 5 * time.Second
+	// The collectors own the detection budget; the test goroutine waits longer
+	// so a collector always reports a classified outcome first.
+	const collectorGrace = 3 * time.Second
 
-	// Send messages on both connections within 1 second to trigger concurrent turns.
+	// Send messages on both connections within 1 second to trigger concurrent
+	// turns. Write failures are reported back to the test goroutine — calling
+	// Fatalf from these goroutines would violate the testing contract.
+	sendErrs := make(chan error, 2)
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
-		sendMessage(t, connA, "session A: ping concurrent test")
+		if err := sendMessageErr(connA, "session A: ping concurrent test"); err != nil {
+			sendErrs <- fmt.Errorf("session A: %w", err)
+		}
 	}()
 	go func() {
 		defer wg.Done()
-		sendMessage(t, connB, "session B: ping concurrent test")
+		if err := sendMessageErr(connB, "session B: ping concurrent test"); err != nil {
+			sendErrs <- fmt.Errorf("session B: %w", err)
+		}
 	}()
 	wg.Wait()
-
-	// Both sends happened within a few ms of each other. Now race to receive replies.
-	go func() {
-		frameType := waitForFirstToken(t, connA, 5*time.Second)
-		resA <- result{frameType: frameType}
-	}()
-	go func() {
-		frameType := waitForFirstToken(t, connB, 5*time.Second)
-		resB <- result{frameType: frameType}
-	}()
-
-	// Assert both got a response — a timeout here means one session was starved.
-	const replyTimeout = 5 * time.Second
-	select {
-	case ra := <-resA:
-		if ra.err != "" {
-			t.Errorf("BUG-3: session A did not reply: %s", ra.err)
-		} else {
-			t.Logf("session A first frame: %q", ra.frameType)
-		}
-	case <-time.After(replyTimeout):
-		t.Fatal("BUG-3: session A did not receive any response within 5s — concurrent session starvation")
+	close(sendErrs)
+	for err := range sendErrs {
+		t.Errorf("TRANSPORT FAILURE while sending — NOT concurrent session starvation: %v", err)
+	}
+	if t.Failed() {
+		t.Fatal("aborting: the transport failed before the agent was reached, so this run cannot say anything about concurrency")
 	}
 
-	select {
-	case rb := <-resB:
-		if rb.err != "" {
-			t.Errorf("BUG-3: session B did not reply: %s", rb.err)
-		} else {
-			t.Logf("session B first frame: %q", rb.frameType)
+	// Both sends happened within a few ms of each other. Now race to receive replies.
+	replies := make(chan wsReply, 2)
+	go collectFirstToken(replies, 0, connA, replyTimeout)
+	go collectFirstToken(replies, 1, connB, replyTimeout)
+
+	// Assert both got a response. The test goroutine classifies every outcome:
+	// a broken socket is reported as a transport failure, and only a healthy
+	// connection that stayed silent counts as starvation.
+	name := func(idx int) string {
+		if idx == 0 {
+			return "A"
 		}
-	case <-time.After(replyTimeout):
-		t.Fatal("BUG-3: session B did not receive any response within 5s — concurrent session starvation")
+		return "B"
+	}
+	for range 2 {
+		select {
+		case r := <-replies:
+			switch {
+			case r.waitErr == nil:
+				t.Logf("session %s first frame: %q", name(r.idx), r.frameType)
+			case r.waitErr.ReadTimeout:
+				t.Fatalf("BUG-3: session %s received no response within %v on a healthy connection — concurrent session starvation. %v",
+					name(r.idx), replyTimeout, r.waitErr)
+			default:
+				t.Fatalf("TRANSPORT FAILURE on session %s — NOT concurrent session starvation, the WebSocket died before a reply could arrive: %v",
+					name(r.idx), r.waitErr)
+			}
+		case <-time.After(replyTimeout + collectorGrace):
+			t.Fatalf("HARNESS FAULT: a collector goroutine did not report within %v (its own budget was %v). "+
+				"No verdict was produced — neither a starvation nor a transport finding.",
+				replyTimeout+collectorGrace, replyTimeout)
+		}
 	}
 }
 
 // TestConcurrentSessions_TwoSessions_TimingProof is the LOAD-BEARING concurrency
-// regression test for Bug-3. It uses a slow mock LLM (2 s per call) to prove
+// regression test for Bug-3. It uses a slow mock LLM (4 s per call) to prove
 // that the two sessions run in PARALLEL, not sequentially.
 //
 // Proof logic:
-//   - Each LLM call takes ~2 s.
-//   - Two sessions sent concurrently must BOTH reply in <3 s wall-clock time.
-//   - If the dispatcher were sequential, the total would be ≥4 s and the test fails.
+//   - Each LLM call takes ~4 s.
+//   - Two sessions sent concurrently must BOTH reply in <6 s wall-clock time.
+//   - If the dispatcher were sequential, the total would be ≥8 s and the test fails.
 //
 // Reverting the per-session-worker fix (restoring the old single-goroutine Run())
 // causes the sequential path and the wall-clock assertion fails.
 //
-// BDD: Given 2 WS sessions open simultaneously with a 2 s slow mock LLM
+// BDD: Given 2 WS sessions open simultaneously with a 4 s slow mock LLM
 //
 //	When both messages are sent within 1 s of each other
-//	Then BOTH sessions reply within 3 s wall-clock (proves parallel execution)
-//	And a sequential dispatcher would take ≥4 s (proves the test is load-bearing)
+//	Then BOTH sessions reply within 6 s wall-clock (proves parallel execution)
+//	And a sequential dispatcher would take ≥8 s (proves the test is load-bearing)
 //
 // Traces to: Bug-3 (concurrent sessions both respond) — timing proof
 // Traces to: review-pr-test-analyzer.md — "Concurrency is not actually proven"
 func TestConcurrentSessions_TwoSessions_TimingProof(t *testing.T) {
-	const slowDelay = 2 * time.Second
-	// With two sessions running in parallel, both should reply by ~slowDelay + overhead.
-	// We allow 3 s total: 1 s for test overhead + 2 s for the slow LLM.
-	// A sequential dispatcher would need ≥4 s (2 s × 2 sessions) and fail this assertion.
-	const parallelDeadline = 3 * time.Second
+	const slowDelay = 4 * time.Second
+	// Parallel deadline: 4 s LLM + generous overhead headroom for CI load. The
+	// proof is that concurrent execution is far below the ≥8 s sequential time
+	// (2 × 4 s); a 6 s bound stays well under that while tolerating scheduler
+	// contention on a loaded CI box — the prior 3 s budget (only ~1 s headroom
+	// over the 2 s LLM) flaked on the ci-omnipus worker under load, the same
+	// failure the same-author 5-session sibling's 3.5 s budget hit before being
+	// bumped to 6 s (concurrent_sessions_same_agent_test.go). 6 s gives ~2 s
+	// headroom above the parallel real (4 s + overhead) AND ~2 s margin below
+	// the 8 s sequential lower bound, so it discriminates BOTH directions.
+	const parallelDeadline = 6 * time.Second
 
 	gw := startSlowIntegrationGateway(t, slowDelay)
 
@@ -134,48 +150,80 @@ func TestConcurrentSessions_TwoSessions_TimingProof(t *testing.T) {
 	// Record the wall-clock start time before sending.
 	start := time.Now()
 
-	// Send messages on both connections nearly simultaneously.
+	// Send messages on both connections nearly simultaneously. Write failures
+	// come back to the test goroutine rather than a Fatalf off-thread.
+	sendErrs := make(chan error, 2)
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		sendMessage(t, connA, "slow concurrent test A")
+		if err := sendMessageErr(connA, "slow concurrent test A"); err != nil {
+			sendErrs <- fmt.Errorf("session A: %w", err)
+		}
 	}()
 	go func() {
 		defer wg.Done()
-		sendMessage(t, connB, "slow concurrent test B")
+		if err := sendMessageErr(connB, "slow concurrent test B"); err != nil {
+			sendErrs <- fmt.Errorf("session B: %w", err)
+		}
 	}()
 	wg.Wait()
+	close(sendErrs)
+	for err := range sendErrs {
+		t.Errorf("TRANSPORT FAILURE while sending — NOT a timing/starvation finding: %v", err)
+	}
+	if t.Failed() {
+		t.Fatal("aborting: the transport failed before the agent was reached, so this run cannot prove or disprove parallel execution")
+	}
 	t.Logf("both messages sent at t=+%v", time.Since(start).Round(time.Millisecond))
 
-	// Collect replies concurrently.
-	resA := make(chan string, 1)
-	resB := make(chan string, 1)
-	go func() { resA <- waitForFirstToken(t, connA, parallelDeadline+time.Second) }()
-	go func() { resB <- waitForFirstToken(t, connB, parallelDeadline+time.Second) }()
+	// Collect replies concurrently. The collector budget deliberately exceeds
+	// parallelDeadline: the LOAD-BEARING assertion is the wall-clock deadline
+	// below, which must fire on a sequential dispatcher regardless.
+	replies := make(chan wsReply, 2)
+	go collectFirstToken(replies, 0, connA, parallelDeadline+time.Second)
+	go collectFirstToken(replies, 1, connB, parallelDeadline+time.Second)
 
 	// Both must reply within the parallel deadline.
 	deadline := time.NewTimer(parallelDeadline)
 	defer deadline.Stop()
 
+	name := func(idx int) string {
+		if idx == 0 {
+			return "A"
+		}
+		return "B"
+	}
 	var replyA, replyB string
 	for replyA == "" || replyB == "" {
 		select {
-		case ft := <-resA:
-			replyA = ft
-			t.Logf("session A replied (%q) at t=+%v", ft, time.Since(start).Round(time.Millisecond))
-		case ft := <-resB:
-			replyB = ft
-			t.Logf("session B replied (%q) at t=+%v", ft, time.Since(start).Round(time.Millisecond))
+		case r := <-replies:
+			switch {
+			case r.waitErr == nil:
+				if r.idx == 0 {
+					replyA = r.frameType
+				} else {
+					replyB = r.frameType
+				}
+				t.Logf("session %s replied (%q) at t=+%v", name(r.idx), r.frameType, time.Since(start).Round(time.Millisecond))
+			case r.waitErr.ReadTimeout:
+				t.Fatalf("BUG-3: session %s sat on a healthy connection for %v without a single assistant frame — starvation, not slowness. %v",
+					name(r.idx), r.waitErr.Waited, r.waitErr)
+			default:
+				t.Fatalf("TRANSPORT FAILURE on session %s at t=+%v — NOT a timing proof failure, the WebSocket died before a reply could arrive: %v",
+					name(r.idx), time.Since(start).Round(time.Millisecond), r.waitErr)
+			}
 		case <-deadline.C:
+			// Reached only with both connections healthy and no transport
+			// error reported — the sessions really are too slow.
 			elapsed := time.Since(start).Round(time.Millisecond)
 			t.Fatalf(
-				"BUG-3 TIMING PROOF FAILED: wall-clock elapsed=%v > parallelDeadline=%v. "+
-					"Expected ≤%v for parallel execution (2 s slow LLM × 2 sessions in parallel). "+
+				"BUG-3 TIMING PROOF FAILED: wall-clock elapsed=%v > parallelDeadline=%v with no transport error on either session. "+
+					"Expected ≤%v for parallel execution (%v slow LLM × 2 sessions in parallel). "+
 					"Sequential dispatch would take ≥%v. "+
 					"Got replyA=%q replyB=%q",
 				elapsed, parallelDeadline, parallelDeadline,
-				2*slowDelay,
+				slowDelay, 2*slowDelay,
 				replyA, replyB,
 			)
 		}
@@ -191,42 +239,85 @@ func TestConcurrentSessions_TwoSessions_TimingProof(t *testing.T) {
 	}
 }
 
-// TestConcurrentSessions_TranscriptPersisted verifies that after a concurrent
-// turn completes, the session transcripts actually contain an assistant entry —
-// proving neither session's turn was silently swallowed.
+// TestConcurrentSessions_TranscriptPersisted asserts that two concurrently
+// dispatched sessions each receive an assistant frame.
 //
-// BDD: Given 2 WS sessions that both received replies
+// SCOPE WARNING — the name overpromises. Despite "TranscriptPersisted", this
+// test makes NO REST call and asserts NOTHING about the persisted transcript;
+// it only observes the live WS reply. As written it duplicates
+// TestConcurrentSessions_TwoSessions_BothReply. Read a pass here as "both
+// sessions replied", never as "both transcripts were persisted" — the
+// persistence assertion the original doc comment described was never
+// implemented.
 //
-//	Then the REST transcript for each session has at least one assistant entry
+// BDD: Given 2 WS sessions dispatched concurrently
+//
+//	Then each session receives an assistant frame within 5s
 //
 // Traces to: Bug-3 persistence assertion variant
 func TestConcurrentSessions_TranscriptPersisted(t *testing.T) {
+	const replyTimeout = 5 * time.Second
+	const collectorGrace = 3 * time.Second
+
 	gw := startIntegrationGateway(t)
 
 	connA := wsConnect(t, gw)
 	connB := wsConnect(t, gw)
 
-	// Send on both within 1 second to trigger concurrent processing.
+	// Send on both within 1 second to trigger concurrent processing. Write
+	// failures come back to the test goroutine rather than a Fatalf off-thread.
+	sendErrs := make(chan error, 2)
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); sendMessage(t, connA, "concurrent persistence check A") }()
-	go func() { defer wg.Done(); sendMessage(t, connB, "concurrent persistence check B") }()
+	go func() {
+		defer wg.Done()
+		if err := sendMessageErr(connA, "concurrent persistence check A"); err != nil {
+			sendErrs <- fmt.Errorf("session A: %w", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if err := sendMessageErr(connB, "concurrent persistence check B"); err != nil {
+			sendErrs <- fmt.Errorf("session B: %w", err)
+		}
+	}()
 	wg.Wait()
-
-	// Wait for both to reply (same timeout as above).
-	doneA := make(chan struct{}, 1)
-	doneB := make(chan struct{}, 1)
-	go func() { waitForFirstToken(t, connA, 5*time.Second); close(doneA) }()
-	go func() { waitForFirstToken(t, connB, 5*time.Second); close(doneB) }()
-
-	select {
-	case <-doneA:
-	case <-time.After(5 * time.Second):
-		t.Fatal("BUG-3: session A never replied in concurrent persistence test")
+	close(sendErrs)
+	for err := range sendErrs {
+		t.Errorf("TRANSPORT FAILURE while sending — NOT concurrent session starvation: %v", err)
 	}
-	select {
-	case <-doneB:
-	case <-time.After(5 * time.Second):
-		t.Fatal("BUG-3: session B never replied in concurrent persistence test")
+	if t.Failed() {
+		t.Fatal("aborting: the transport failed before the agent was reached, so this run cannot say anything about concurrency")
+	}
+
+	// Wait for both to reply, classifying each outcome on the test goroutine.
+	replies := make(chan wsReply, 2)
+	go collectFirstToken(replies, 0, connA, replyTimeout)
+	go collectFirstToken(replies, 1, connB, replyTimeout)
+
+	name := func(idx int) string {
+		if idx == 0 {
+			return "A"
+		}
+		return "B"
+	}
+	for range 2 {
+		select {
+		case r := <-replies:
+			switch {
+			case r.waitErr == nil:
+				t.Logf("session %s replied with frame type %q", name(r.idx), r.frameType)
+			case r.waitErr.ReadTimeout:
+				t.Fatalf("BUG-3: session %s never replied on a healthy connection within %v — concurrent session starvation. %v",
+					name(r.idx), replyTimeout, r.waitErr)
+			default:
+				t.Fatalf("TRANSPORT FAILURE on session %s — NOT concurrent session starvation, the WebSocket died before a reply could arrive: %v",
+					name(r.idx), r.waitErr)
+			}
+		case <-time.After(replyTimeout + collectorGrace):
+			t.Fatalf("HARNESS FAULT: a collector goroutine did not report within %v (its own budget was %v). "+
+				"No verdict was produced — neither a starvation nor a transport finding.",
+				replyTimeout+collectorGrace, replyTimeout)
+		}
 	}
 }

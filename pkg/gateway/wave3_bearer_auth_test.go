@@ -1,10 +1,3 @@
-//go:build !cgo
-
-// This test file uses //go:build !cgo so it compiles when CGO is disabled.
-// When CGO is enabled, pkg/gateway imports pkg/channels/matrix which requires
-// the libolm system library (olm/olm.h). If that library is installed,
-// remove this build constraint and run tests normally.
-
 package gateway
 
 import (
@@ -376,16 +369,6 @@ func TestAuthenticateWS_SecondAccountAuthenticates(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, authData))
 
-	// Listen on the bus before sending the message.
-	received := make(chan bus.InboundMessage, 1)
-	go func() {
-		select {
-		case msg := <-msgBus.InboundChan():
-			received <- msg
-		case <-time.After(3 * time.Second):
-		}
-	}()
-
 	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello from second account"}
 	msgData, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
@@ -393,13 +376,10 @@ func TestAuthenticateWS_SecondAccountAuthenticates(t *testing.T) {
 		"message send must succeed after valid second-account auth — a Users[0]-only "+
 			"regression would reject this token and close the connection")
 
-	select {
-	case msg := <-received:
-		assert.Equal(t, "ws-account-two", msg.GatewayUserID,
-			"authenticateWS must resolve the SECOND account, not the first")
-	case <-time.After(3 * time.Second):
-		t.Fatal("message was not published to bus within 3 seconds — authentication as Users[1] did not succeed")
-	}
+	msg := awaitInboundMessage(t, msgBus,
+		"authentication as Users[1] must succeed and publish the message")
+	assert.Equal(t, "ws-account-two", msg.GatewayUserID,
+		"authenticateWS must resolve the SECOND account, not the first")
 }
 
 // TestWithOptionalAuth_SecondAccountAuthenticates proves that Gateway.Users[1]
@@ -840,16 +820,6 @@ func TestWSAuthAcceptsSessionCookie(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
 
-	// Listen on the bus before sending the message.
-	received := make(chan bus.InboundMessage, 1)
-	go func() {
-		select {
-		case msg := <-msgBus.InboundChan():
-			received <- msg
-		case <-time.After(3 * time.Second):
-		}
-	}()
-
 	// Deliberately send a "message" frame FIRST with no preceding auth frame
 	// — proving the connection is already authenticated via the cookie at
 	// handshake time (a pre-Wave-2 server would have rejected this as "first
@@ -861,11 +831,7 @@ func TestWSAuthAcceptsSessionCookie(t *testing.T) {
 		"message send must succeed immediately — no auth frame required when the "+
 			"omnipus-session cookie authenticates the handshake")
 
-	select {
-	case msg := <-received:
-		assert.Equal(t, "ws-cookie-user", msg.GatewayUserID,
-			"authenticateWS must resolve identity from the cookie, not silently drop it")
-	case <-time.After(3 * time.Second):
-		t.Fatal("message was not published to bus within 3 seconds — cookie-based WS auth did not succeed")
-	}
+	msg := awaitInboundMessage(t, msgBus, "cookie-based WS auth must succeed and publish the message")
+	assert.Equal(t, "ws-cookie-user", msg.GatewayUserID,
+		"authenticateWS must resolve identity from the cookie, not silently drop it")
 }

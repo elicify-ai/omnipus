@@ -22,13 +22,132 @@ import {
 import { fetchAgents, fetchSessions, fetchWorkspaces, renameSession, deleteSession, workspacesQueryKeys, getErrorMessage } from '@/lib/api'
 import { formatTokens } from '@/lib/formatTokens'
 import { formatRelative } from '@/lib/formatRelative'
-import type { Session, Workspace, Agent } from '@/lib/api'
+import type { Session, Workspace, Agent, SessionTreeNode } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useSelectSession } from '@/components/chat/useSelectSession'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { cn, initialOf } from '@/lib/utils'
+import { SessionTree, SessionExpandToggle, flattenSessionTree, type SessionTreeFlatRow } from '@/components/sessions/SessionTree'
+
+// ── ADR-057 US-19/FR-094 (W16g — operator decision 1, nested under parent) ──
+//
+// SearchModal fetches every session (roots AND delegated children,
+// `flat: true` — FR-104) rather than the default roots-only page, because a
+// text search must be able to find a match at ANY depth. The already-
+// resident flat list is nested client-side (buildSearchNode below) rather
+// than incrementally, unlike Sidebar's lazy per-node fetch
+// (SessionTree.tsx's useSessionForest) — the whole point of search is that
+// the match set isn't known ahead of expand-clicks.
+function buildSearchNode(session: Session, childrenByParent: Map<string, Session[]>): SessionTreeNode {
+  const kids = childrenByParent.get(session.id) ?? []
+  return {
+    session: { ...session, child_count: session.child_count ?? kids.length },
+    children: kids.map((k) => buildSearchNode(k, childrenByParent)),
+    childrenLoaded: true,
+  }
+}
+
+// A session list this long stops being "the full list plus a scrollbar" and
+// becomes the exact R-9/BDD-105 shape this story exists to fix (24-way
+// delegation fan-out, "an order of magnitude longer" per the spec) — past
+// this bound the group gets its own capped-height, virtualized viewport
+// (FR-094) instead of mounting every row. Below it (every existing fixture
+// in this file, and the overwhelming common case), rendering stays exactly
+// as before — plain, fully mounted, zero behavior change.
+const VIRTUALIZE_ROW_THRESHOLD = 20
+
+/**
+ * Renders one agent group's ROOT sessions as a tree — a root with delegated
+ * children gets an expand toggle; children nest indented beneath it,
+ * collapsed by default (or auto-revealed while a search finds a match
+ * beneath them — see `effectiveExpandedIds` in SearchModal). Extracted as
+ * its own component (rather than inlined in SearchModal's render loop) so
+ * its `useRef`/`useMemo` calls have a stable, unconditional call site — one
+ * instance is mounted per agent group in the `.map()` below, not a variable
+ * number of hook calls inside a single component's render body.
+ */
+function AgentSessionList({
+  sessions,
+  childrenByParent,
+  expandedIds,
+  toggleExpand,
+  activeSessionId,
+  highlightedId,
+  mode,
+  selectSession,
+  onRename,
+  onDelete,
+  isDeleting,
+  onEditingChange,
+}: {
+  sessions: Session[]
+  childrenByParent: Map<string, Session[]>
+  expandedIds: ReadonlySet<string>
+  toggleExpand: (sessionId: string) => void
+  activeSessionId: string | null
+  highlightedId: string | undefined
+  mode: 'sessions' | 'workspaces'
+  selectSession: (session: Session) => void
+  onRename: (id: string, title: string) => void
+  onDelete: (id: string) => void
+  isDeleting: (id: string) => boolean
+  onEditingChange: (sessionId: string, editing: boolean) => void
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const nodes = useMemo(() => sessions.map((s) => buildSearchNode(s, childrenByParent)), [sessions, childrenByParent])
+  const rows = useMemo(() => flattenSessionTree(nodes, expandedIds), [nodes, expandedIds])
+  const shouldVirtualize = rows.length > VIRTUALIZE_ROW_THRESHOLD
+
+  const renderRow = (row: SessionTreeFlatRow) => {
+    const s = row.node.session
+    return (
+      <div className="flex items-center" style={row.depth > 0 ? { paddingLeft: row.depth * 14 } : undefined}>
+        {row.hasChildren ? (
+          <SessionExpandToggle
+            expanded={row.isExpanded}
+            onToggle={() => toggleExpand(s.id)}
+            expandLabel={`Expand ${s.title || 'Untitled session'} delegated sessions`}
+            collapseLabel={`Collapse ${s.title || 'Untitled session'} delegated sessions`}
+          />
+        ) : (
+          <span className="w-[18px] shrink-0" aria-hidden="true" />
+        )}
+        <div className="min-w-0 flex-1">
+          <SessionRow
+            session={s}
+            isActive={s.id === activeSessionId}
+            isHighlighted={mode === 'sessions' && s.id === highlightedId}
+            onSelect={() => selectSession(s)}
+            onRename={(t) => onRename(s.id, t)}
+            onDelete={() => onDelete(s.id)}
+            deleting={isDeleting(s.id)}
+            onEditingChange={onEditingChange}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  const content = (
+    <SessionTree
+      nodes={nodes}
+      expandedIds={expandedIds}
+      renderRow={renderRow}
+      virtualize={shouldVirtualize ? { scrollElementRef: scrollRef, estimateRowHeight: 56 } : undefined}
+    />
+  )
+
+  if (shouldVirtualize) {
+    return (
+      <div ref={scrollRef} className="max-h-[360px] overflow-y-auto" data-testid="search-session-list-virtual-scroll">
+        {content}
+      </div>
+    )
+  }
+  return content
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -355,11 +474,120 @@ export function SearchModal() {
     }
   }, [open, mode])
 
-  const { data: sessions = [], isLoading: sLoading, isError: sessionsError } = useQuery({ queryKey: ['sessions'], queryFn: () => fetchSessions(), enabled: open })
+  // ADR-052 FR-036: verifier-role sessions stay excluded by default —
+  // `includeVerifier` is intentionally omitted (see Sidebar.tsx for the
+  // matching note and UsageScreen.tsx for the surface that DOES want them).
+  //
+  // ADR-057 US-19/FR-094/FR-104 (W16g, operator decision 1 — nested under
+  // parent, not the `verifier` hidden-with-a-flag precedent): fetches
+  // `flat: true` rather than the default roots-only page, because a text
+  // search must be able to find a match in a delegated CHILD session, not
+  // just a root — the default listing would silently exclude every
+  // subordinate from the search space. The flat list is nested client-side
+  // (buildSearchNode) and rendered through AgentSessionList below, which
+  // keeps the DOM bounded via virtualization once a group's row count
+  // crosses VIRTUALIZE_ROW_THRESHOLD (FR-094's "rendered node count bounded
+  // by the viewport, not the result count"). Distinct queryKey from
+  // Sidebar's `['sessions']` (roots-only) — the two surfaces intentionally
+  // request different shapes and must not share a cache entry.
+  const { data: sessions = [], isLoading: sLoading, isError: sessionsError } = useQuery({
+    queryKey: ['sessions', 'flat'],
+    queryFn: () => fetchSessions(undefined, undefined, { flat: true }),
+    enabled: open,
+  })
   const { data: workspaces = [], isLoading: wLoading, isError: workspacesError } = useQuery({ queryKey: workspacesQueryKeys.list({ status: 'active' }), queryFn: () => fetchWorkspaces({ status: 'active' }), enabled: open })
   const { data: agents = [], isError: agentsError } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents, enabled: open })
 
   const selectSession = useSelectSession({ agents, workspaces, onClose: close })
+
+  // ── ADR-057 US-19/FR-091/FR-094 tree assembly ───────────────────────────
+  const wsMap = useMemo(() => new Map(workspaces.map((w) => [w.id, w])), [workspaces])
+  const sessionById = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions])
+  // A session is a DISPLAY ROOT if it has no parent, or its declared parent
+  // doesn't resolve in the fetched set — BDD-106: an orphan is shown as a
+  // root, never silently dropped.
+  const isDisplayRoot = useCallback((s: Session) => !s.parent_session_id || !sessionById.has(s.parent_session_id), [sessionById])
+  const childrenByParent = useMemo(() => {
+    const map = new Map<string, Session[]>()
+    for (const s of sessions) {
+      if (!s.parent_session_id || !sessionById.has(s.parent_session_id)) continue
+      const arr = map.get(s.parent_session_id)
+      arr ? arr.push(s) : map.set(s.parent_session_id, [s])
+    }
+    return map
+  }, [sessions, sessionById])
+
+  // Session-content search only applies in 'sessions' mode — 'workspaces'
+  // mode's search box filters WORKSPACE NAMES (existing behavior below),
+  // and must not incidentally auto-expand session trees in the peek view
+  // just because a workspace-name substring happens to match a session
+  // title too.
+  const searchActive = mode === 'sessions' && debouncedSearch.trim().length > 0
+  const matchesSessionQuery = useCallback(
+    (s: Session): boolean => {
+      const qq = debouncedSearch.trim().toLowerCase()
+      if (!qq) return true
+      const wsName = s.workspace_id ? (wsMap.get(s.workspace_id)?.name ?? '').toLowerCase() : ''
+      return (s.title ?? '').toLowerCase().includes(qq) || wsName.includes(qq)
+    },
+    [wsMap, debouncedSearch],
+  )
+
+  // Single post-order walk from every display root: `selfMatchIds` are
+  // sessions whose OWN title/workspace matched; `subtreeMatchIds` are
+  // sessions where the match is anywhere in the subtree (self or any
+  // descendant, any depth) — BDD-105's "the matching child appears nested
+  // under its parent, with the parent shown for context even though it did
+  // not match".
+  const { selfMatchIds, subtreeMatchIds } = useMemo(() => {
+    const self = new Set<string>()
+    const subtree = new Set<string>()
+    if (!searchActive) return { selfMatchIds: self, subtreeMatchIds: subtree }
+    function visit(s: Session): boolean {
+      const isSelf = matchesSessionQuery(s)
+      if (isSelf) self.add(s.id)
+      let any = isSelf
+      for (const child of childrenByParent.get(s.id) ?? []) {
+        if (visit(child)) any = true
+      }
+      if (any) subtree.add(s.id)
+      return any
+    }
+    for (const s of sessions) {
+      if (isDisplayRoot(s)) visit(s)
+    }
+    return { selfMatchIds: self, subtreeMatchIds: subtree }
+  }, [searchActive, sessions, childrenByParent, isDisplayRoot, matchesSessionQuery])
+
+  // Auto-reveal exactly the ancestors that need it to surface a match — a
+  // node whose subtree matches but who did NOT itself match, and that
+  // actually has children to show. A root that matched on its own title
+  // does not get its whole fan-out dumped open just because it matched.
+  const autoExpandIds = useMemo(() => {
+    if (!searchActive) return new Set<string>()
+    const out = new Set<string>()
+    for (const id of subtreeMatchIds) {
+      if (!selfMatchIds.has(id) && (childrenByParent.get(id)?.length ?? 0) > 0) out.add(id)
+    }
+    return out
+  }, [searchActive, subtreeMatchIds, selfMatchIds, childrenByParent])
+
+  // Manual expand/collapse (chevron clicks) — independent of search so a
+  // user can browse a tree with no query typed at all, mirroring Sidebar's
+  // affordance for the same underlying data shape.
+  const [manualExpandedIds, setManualExpandedIds] = useState<Set<string>>(new Set())
+  const toggleManualExpand = useCallback((sessionId: string) => {
+    setManualExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(sessionId)) next.delete(sessionId)
+      else next.add(sessionId)
+      return next
+    })
+  }, [])
+  const effectiveExpandedIds = useMemo(
+    () => new Set([...manualExpandedIds, ...autoExpandIds]),
+    [manualExpandedIds, autoExpandIds],
+  )
 
   // Workspace-switch arrow (WorkspaceHeader) — mirrors Sidebar.tsx's
   // "New chat" workspace-row action EXACTLY (setActiveWorkspaceId ->
@@ -432,8 +660,12 @@ export function SearchModal() {
   }, [agents])
 
   const groups = useMemo<WsGroup[]>(() => {
-    const wsMap = new Map(workspaces.map((w) => [w.id, w]))
     const q = debouncedSearch.trim().toLowerCase()
+    // ADR-057 US-19/FR-091: every surface below buckets ROOT sessions only —
+    // delegated children never compete for a top-level slot in either mode.
+    // They render nested under their real parent via AgentSessionList
+    // (childrenByParent/effectiveExpandedIds), not as independent rows here.
+    const rootSessions = sessions.filter(isDisplayRoot)
 
     if (mode === 'workspaces') {
       // Workspace-switch mode: source the FULL fetchWorkspaces list — every
@@ -445,7 +677,7 @@ export function SearchModal() {
       // Unfiled pseudo-group here — it isn't a real workspace and can't be
       // switched to (handleSwitchWorkspace requires a Workspace).
       const byWorkspace = new Map<string, Session[]>()
-      for (const s of sessions) {
+      for (const s of rootSessions) {
         if (s.workspace_id && wsMap.has(s.workspace_id)) {
           const arr = byWorkspace.get(s.workspace_id); arr ? arr.push(s) : byWorkspace.set(s.workspace_id, [s])
         }
@@ -458,18 +690,18 @@ export function SearchModal() {
       })
     }
 
-    // Sessions mode (default, unchanged): group the FILTERED sessions by
-    // workspace, then by agent within each workspace.
+    // Sessions mode (default): group the FILTERED root sessions by
+    // workspace, then by agent within each workspace. A root passes the text
+    // filter if it OR any descendant matches (subtreeMatchIds, BDD-105) —
+    // the matching descendant itself is revealed via effectiveExpandedIds at
+    // render time, not by being present in this bucket.
     const fromT = fromDate ? new Date(`${fromDate}T00:00:00`).getTime() : null
     const toT = toDate ? new Date(`${toDate}T23:59:59`).getTime() : null
 
-    const filtered = sessions.filter((s) => {
+    const filtered = rootSessions.filter((s) => {
       // Workspace pre-filter (from the sidebar "More…" button)
       if (wsFilter && s.workspace_id !== wsFilter) return false
-      if (q) {
-        const wsName = s.workspace_id ? (wsMap.get(s.workspace_id)?.name ?? '').toLowerCase() : ''
-        if (!(s.title ?? '').toLowerCase().includes(q) && !wsName.includes(q)) return false
-      }
+      if (searchActive && !subtreeMatchIds.has(s.id)) return false
       const u = new Date(s.updated_at).getTime()
       if ((fromT !== null || toT !== null) && (isNaN(u) || (fromT !== null && u < fromT) || (toT !== null && u > toT))) return false
       return true
@@ -491,7 +723,7 @@ export function SearchModal() {
       return new Date(b.agentGroups[0]?.sessions[0]?.updated_at ?? '').getTime() - new Date(a.agentGroups[0]?.sessions[0]?.updated_at ?? '').getTime()
     })
     return result
-  }, [sessions, workspaces, debouncedSearch, fromDate, toDate, wsFilter, mode, bucketByAgent])
+  }, [sessions, workspaces, debouncedSearch, fromDate, toDate, wsFilter, mode, bucketByAgent, isDisplayRoot, wsMap, searchActive, subtreeMatchIds])
 
   // Sessions mode: total is a SESSION count (drives "No sessions found").
   // Workspaces mode: total is a WORKSPACE count — `groups` already IS one
@@ -514,11 +746,17 @@ export function SearchModal() {
       if (isWsCollapsed(wsKey)) continue
       for (const ag of g.agentGroups) {
         if (collapsedAgent.has(`${wsKey}::${ag.agentId}`)) continue
-        out.push(...ag.sessions)
+        // ADR-057 US-19: walks roots AND their currently-visible (expanded)
+        // nested children, in the exact depth-first order AgentSessionList
+        // renders them, so ArrowUp/Down/Enter can reach a nested delegate
+        // session too — not just its root.
+        const nodes = ag.sessions.map((s) => buildSearchNode(s, childrenByParent))
+        const rows = flattenSessionTree(nodes, effectiveExpandedIds)
+        out.push(...rows.map((r) => r.node.session))
       }
     }
     return out
-  }, [groups, isWsCollapsed, collapsedAgent])
+  }, [groups, isWsCollapsed, collapsedAgent, childrenByParent, effectiveExpandedIds])
 
   // Keyboard highlight — TWO SEPARATE nav lists, one active per mode (kept
   // explicit rather than interleaved): sessions mode walks `flatSessions`
@@ -716,13 +954,28 @@ export function SearchModal() {
                             <AgentHeader agent={ag.agent} name={agentName} isCollapsed={agentCollapsed} onToggle={() => toggleAgent(agentKey)} panelId={`agent-panel-${agentKey}`} />
                             {!agentCollapsed && (
                               <div id={`agent-panel-${agentKey}`} role="region" className="space-y-0.5 pl-3">
-                                {ag.sessions.map((s) => (
-                                  <SessionRow key={s.id} session={s} isActive={s.id === activeSessionId} isHighlighted={mode === 'sessions' && s.id === highlighted?.id} onSelect={() => selectSession(s)}
-                                    onRename={(t) => renameMut.mutate({ id: s.id, title: t })}
-                                    onDelete={() => deleteMut.mutate(s.id)}
-                                    deleting={deleteMut.isPending && deleteMut.variables === s.id}
-                                    onEditingChange={handleEditingChange} />
-                                ))}
+                                {/* ADR-057 US-19/FR-093/FR-094: a root session
+                                    with delegated children (child_count > 0)
+                                    renders with an expand toggle; children
+                                    nest indented beneath it, collapsed by
+                                    default (or auto-revealed by an active
+                                    search match beneath them). Virtualized
+                                    once the group's row count crosses
+                                    VIRTUALIZE_ROW_THRESHOLD. */}
+                                <AgentSessionList
+                                  sessions={ag.sessions}
+                                  childrenByParent={childrenByParent}
+                                  expandedIds={effectiveExpandedIds}
+                                  toggleExpand={toggleManualExpand}
+                                  activeSessionId={activeSessionId}
+                                  highlightedId={highlighted?.id}
+                                  mode={mode}
+                                  selectSession={selectSession}
+                                  onRename={(id, title) => renameMut.mutate({ id, title })}
+                                  onDelete={(id) => deleteMut.mutate(id)}
+                                  isDeleting={(id) => deleteMut.isPending && deleteMut.variables === id}
+                                  onEditingChange={handleEditingChange}
+                                />
                               </div>
                             )}
                           </div>

@@ -3,8 +3,9 @@ description: >
   Server → client (FR-H-004). Closing bracket of a subagent span. Emitted when
   the sub-turn finishes. The SPA transitions the span from "running" to a
   terminal status and records duration and optional result.
-  NOTE: status MUST be validated — the SPA's isValidFrame() rejects any
-  status string not in the SUBAGENT_END_STATUSES set; such frames are dropped.
+  NOTE: status MUST be validated — the SPA's generated Zod schema
+  (src/lib/api/generated/schemas.ts, built from this enum) rejects any status
+  string not in this set; such frames are dropped.
 type: object
 required:
   - type
@@ -32,9 +33,17 @@ properties:
       - cancelled
       - interrupted
       - timeout
+      - parked
     description: >
       Terminal status of the sub-turn.  The SPA validates this field and drops
       frames with any other value to prevent unknown-status render crashes (W4-6).
+      "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a
+      successful message_parent(kind="question", wait=true) call parked it
+      awaiting the parent's answer — not a success, error, cancellation, or
+      timeout. The span itself is over (a `delegate respond` that later answers
+      the question runs a FRESH sub-turn with its own new span, not a
+      continuation of this one); the child's own durable session lifecycle
+      stays "needs_input" independently of this per-span wire status.
   duration_ms:
     type: integer
     minimum: 0

@@ -126,6 +126,15 @@ func (t *DoctorRunTool) Execute(_ context.Context, _ map[string]any) *tools.Tool
 // UsageQueryTool implements the get_usage system tool.  It reads all sessions
 // via deps.ListSessions, aggregates token usage using session.AggregateUsage,
 // and returns a JSON report.  No dollar amounts are included.
+//
+// ADR-057 U25 verification note (W16i, [grill2 C2-1]): deps.ListSessions kept
+// its pre-existing zero-arg func() ([]*session.UnifiedMeta, []error) shape
+// across U9's AgentLoop.ListAllSessions pagination rewrite — see
+// Deps.ListSessions' doc comment (deps.go) for why — so this call site
+// requires NO change. It transitively benefits from the production wiring's
+// flat=true choice (pkg/gateway/gateway.go's u25AllSessionsForUsage): every
+// session, including delegated children, is included in this tool's
+// aggregates (FR-104).
 type UsageQueryTool struct{ deps *Deps }
 
 func NewUsageQueryTool(d *Deps) *UsageQueryTool  { return &UsageQueryTool{deps: d} }

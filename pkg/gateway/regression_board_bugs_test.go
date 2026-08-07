@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Regression tests for board-task / unified-task bugs.
 //
 // Sprint 2 changes:
@@ -133,7 +131,7 @@ func TestRegression_CompletionCallback_SetsResult(t *testing.T) {
 // clobbering un-touched fields. The old bug path: a minimal write would zero
 // fields not included in the PATCH body (old PUT semantic from boardtask era).
 //
-// BDD: Given a task with prompt, priority, milestone_id, session_id, agent_id
+// BDD: Given a task with prompt, priority, tags, session_id, agent_id
 //
 //	set on disk,
 //
@@ -146,26 +144,12 @@ func TestRegression_RESTPatch_PreservesAllFields(t *testing.T) {
 
 	projID := createWorkspaceViaAPI(t, api, "PATCHFieldPreservationProject", "")
 
-	// Create a milestone.
-	wMil := httptest.NewRecorder()
-	rMil := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+projID+"/milestones",
-		strings.NewReader(`{"name":"Patch Field Milestone"}`))
-	rMil.Header.Set("Content-Type", "application/json")
-	rMil.URL.Path = "/api/v1/workspaces/" + projID + "/milestones"
-	api.HandleMilestones(wMil, rMil)
-	require.Equal(t, http.StatusCreated, wMil.Code)
-	var milResp struct {
-		ID string `json:"id"`
-	}
-	require.NoError(t, json.Unmarshal(wMil.Body.Bytes(), &milResp))
-	milID := milResp.ID
-
-	// Create task with prompt, priority, milestone_id.
+	// Create task with prompt, priority, tags.
 	const wantPrompt = "Run the full integration suite"
 	wantPriority := 2
 	createBody := fmt.Sprintf(
-		`{"title":"OriginalTitle","action":"llm","workspace_id":%q,"milestone_id":%q,"prompt":%q,"priority":%d}`,
-		projID, milID, wantPrompt, wantPriority,
+		`{"title":"OriginalTitle","action":"llm","workspace_id":%q,"tags":["release-1"],"prompt":%q,"priority":%d}`,
+		projID, wantPrompt, wantPriority,
 	)
 	wPost := httptest.NewRecorder()
 	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(createBody))
@@ -218,9 +202,9 @@ func TestRegression_RESTPatch_PreservesAllFields(t *testing.T) {
 	assert.Equal(t, wantPriority, *got.Priority,
 		"priority must survive a partial PATCH")
 
-	require.NotNil(t, got.MilestoneId, "milestone_id must not be nil after partial PATCH")
-	assert.Equal(t, milID, *got.MilestoneId,
-		"milestone_id must survive a partial PATCH")
+	require.NotNil(t, got.Tags, "tags must not be nil after partial PATCH")
+	assert.Contains(t, *got.Tags, "release-1",
+		"tags must survive a partial PATCH")
 
 	assert.Equal(t, projID, got.WorkspaceId,
 		"workspace_id must survive a partial PATCH")

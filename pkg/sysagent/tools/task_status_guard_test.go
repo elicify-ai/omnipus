@@ -4,21 +4,22 @@
 
 package systools_test
 
-// H3: sysagent status-guard tests for the unified 7-state task vocabulary.
+// H3: sysagent status-guard tests for the unified 6-state task vocabulary
+// (ADR-051 D5 removed `planning`, formerly 7-state).
 //
 // The old A4 guard ("status=active only via /start") has been REMOVED in Sprint
-// 2: the new store accepts any of the 7 valid statuses without a transition
-// machine. Invalid status values (not in the 7-state vocab) are silently ignored
+// 2: the new store accepts any of the 6 valid statuses without a transition
+// machine. Invalid status values (not in the 6-state vocab) are silently ignored
 // by the update tool — the tool still returns success, but the status is left
 // unchanged. This file verifies that behavior.
 //
 // Deleted: TestSysagentTaskUpdate_A4_StatusActiveRejected — the A4 guard that
-// rejected status="active" was removed when the 7-state vocabulary replaced the
-// old board vocab; "active" is simply not in the enum, so it is ignored.
+// rejected status="active" was removed when the 7-state vocabulary (since
+// reduced to 6-state, ADR-051 D5) replaced the old board vocab; "active" is
+// simply not in the enum, so it is ignored.
 // Deleted: TestSysagentTaskUpdate_A4_Differentiation — same reason.
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -55,8 +56,8 @@ func seedWorkspace(t *testing.T, home, id string) {
 }
 
 // TestSysagentTaskUpdate_InvalidStatusIgnored verifies that an invalid status
-// value (one not in the 7-state vocabulary) is silently ignored: the tool
-// returns IsError=false and the task's on-disk status is unchanged.
+// value (one not in the 6-state vocabulary, ADR-051 D5) is silently ignored:
+// the tool returns IsError=false and the task's on-disk status is unchanged.
 //
 // BDD:
 //
@@ -71,11 +72,11 @@ func TestSysagentTaskUpdate_InvalidStatusIgnored(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 
 	const taskID = "01JXSTATUSGUARD_INVAL0001"
-	// "active" is NOT in the 7-state vocab: it is silently ignored by the new tool.
+	// "active" is NOT in the 6-state vocab: it is silently ignored by the new tool.
 	seedTask(t, home, taskID, "WriteTests", task.StatusInbox, nil)
 
 	tool := systools.NewTaskUpdateTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     taskID,
 		"status": "active",
 	})
@@ -89,7 +90,32 @@ func TestSysagentTaskUpdate_InvalidStatusIgnored(t *testing.T) {
 		"on-disk status must still be 'inbox' — the invalid status was silently ignored")
 }
 
-// TestSysagentTaskUpdate_ValidStatusApplied verifies that a valid 7-state status
+// TestSysagentTaskUpdate_RemovedPlanningStatusIgnored verifies that the
+// removed "planning" status (ADR-051 D5) is treated exactly like any other
+// unknown status value by the sysagent update tool: silently ignored, not
+// applied, no error. Canary catching a regression that re-introduces
+// "planning" as a live status.
+//
+// Traces to: pkg/task/task.go validStatuses (ADR-051 D5 removed StatusPlanning).
+func TestSysagentTaskUpdate_RemovedPlanningStatusIgnored(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+
+	const taskID = "01JXSTATUSGUARD_PLAN0001"
+	seedTask(t, home, taskID, "WriteTests", task.StatusInbox, nil)
+
+	tool := systools.NewTaskUpdateTool(deps)
+	result := tool.Execute(callerCtx("caller-agent"), map[string]any{
+		"id":     taskID,
+		"status": "planning",
+	})
+
+	assert.False(t, result.IsError,
+		"system.task.update with status=planning must NOT return IsError (invalid status is silently ignored)")
+	assert.Equal(t, task.StatusInbox, diskTaskStatus(t, home, taskID),
+		"on-disk status must still be 'inbox' — the removed 'planning' status was silently ignored, not applied")
+}
+
+// TestSysagentTaskUpdate_ValidStatusApplied verifies that a valid 6-state status
 // (status="next") is applied successfully and the on-disk status is updated.
 //
 // BDD:
@@ -107,7 +133,7 @@ func TestSysagentTaskUpdate_ValidStatusApplied(t *testing.T) {
 	seedTask(t, home, taskID, "DeployService", task.StatusInbox, nil)
 
 	tool := systools.NewTaskUpdateTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     taskID,
 		"status": "next",
 	})
@@ -120,25 +146,24 @@ func TestSysagentTaskUpdate_ValidStatusApplied(t *testing.T) {
 }
 
 // TestSysagentTaskUpdate_AllSettableStatusesApplied verifies that every directly
-// settable status in the 7-state vocabulary can be set via system.task.update
-// (differentiation test: each produces a different on-disk status, proving no
-// hardcoding).
+// settable status in the 6-state vocabulary (ADR-051 D5) can be set via
+// system.task.update (differentiation test: each produces a different on-disk
+// status, proving no hardcoding).
 //
 // `blocked` is deliberately EXCLUDED here: it is a derived side-state that the
 // store enters/leaves only through the dependency-recompute hatch, and a direct
 // wire write to `blocked` is rejected with ErrBlockedNotSettable. That guard is
 // covered separately by TestSysagentTaskUpdate_BlockedNotSettable below.
 //
-// Traces to: Sprint-2 unified task store — the six directly-settable statuses are
-// writable; `blocked` is derived (pkg/task/store.go ErrBlockedNotSettable).
+// Traces to: Sprint-2 unified task store — the five directly-settable statuses
+// are writable; `blocked` is derived (pkg/task/store.go ErrBlockedNotSettable).
 func TestSysagentTaskUpdate_AllSettableStatusesApplied(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 
-	// All seven canonical statuses EXCEPT the derived `blocked` side-state.
+	// All six canonical statuses EXCEPT the derived `blocked` side-state.
 	statuses := []task.Status{
 		task.StatusInbox,
 		task.StatusNext,
-		task.StatusPlanning,
 		task.StatusInProgress,
 		task.StatusDone,
 		task.StatusFailed,
@@ -160,7 +185,7 @@ func TestSysagentTaskUpdate_AllSettableStatusesApplied(t *testing.T) {
 		seedTask(t, home, id, "Task for "+string(st), seedStatus, nil)
 
 		tool := systools.NewTaskUpdateTool(deps)
-		result := tool.Execute(context.Background(), map[string]any{
+		result := tool.Execute(callerCtx("caller-agent"), map[string]any{
 			"id":     id,
 			"status": string(st),
 		})
@@ -194,7 +219,7 @@ func TestSysagentTaskUpdate_BlockedNotSettable(t *testing.T) {
 	seedTask(t, home, taskID, "Task for blocked", task.StatusInbox, nil)
 
 	tool := systools.NewTaskUpdateTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     taskID,
 		"status": string(task.StatusBlocked),
 	})
@@ -219,11 +244,11 @@ func TestSysagentTaskUpdate_Differentiation(t *testing.T) {
 
 	tool := systools.NewTaskUpdateTool(deps)
 
-	resultInbox := tool.Execute(context.Background(), map[string]any{
+	resultInbox := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     inboxTaskID,
 		"status": "inbox",
 	})
-	resultNext := tool.Execute(context.Background(), map[string]any{
+	resultNext := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     nextTaskID,
 		"status": "next",
 	})

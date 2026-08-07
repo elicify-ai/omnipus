@@ -1,4 +1,4 @@
-//go:build !cgo && test_harness
+//go:build test_harness
 
 // Sanity tests for the pkg/agent/testutil gateway harness.
 // Requires -tags=test_harness because SetTestProviderOverride is a no-op stub

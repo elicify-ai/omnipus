@@ -137,6 +137,48 @@ func CopyFile(src, dst string, perm os.FileMode) error {
 	return WriteFileAtomic(dst, data, perm)
 }
 
+// AppendJSONLSync appends a single JSON-encoded record followed by a newline
+// to a JSONL file, syncs the file, and returns — the exact durability
+// posture AppendJSONL callers need when the append is a linearization point
+// (e.g. pkg/plan/intent_log.go's commit/done markers — fsync must reach
+// disk before the call returns). The directory is created if it does not
+// exist; the file is opened O_WRONLY|O_CREATE|O_APPEND at 0600.
+//
+// This is the minimal-friction cousin of AppendJSONL: it does NOT perform
+// the defensive-newline hardening AppendJSONL does (the plan intent log
+// writes line-by-line atomically and never has to recover from a missing
+// trailing newline — every prior append terminates with '\n' by
+// construction). Use AppendJSONL when rewriting an existing JSONL in place;
+// use AppendJSONLSync when the append IS the durability event.
+func AppendJSONLSync(path string, record any) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("fileutil: create dir for jsonl sync: %w", err)
+	}
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("fileutil: marshal jsonl record: %w", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return fmt.Errorf("fileutil: open jsonl file for sync append: %w", err)
+	}
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("fileutil: append jsonl record: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("fileutil: sync jsonl file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("fileutil: close jsonl file: %w", err)
+	}
+	return nil
+}
+
 // AppendJSONL appends a single JSON-encoded record followed by a newline to a
 // JSONL file. The file is opened with O_APPEND|O_CREATE.
 //

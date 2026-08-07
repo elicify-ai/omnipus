@@ -8,7 +8,13 @@
  *   - "Operator creates a biweekly task…" (User Story 1, spec line 392)
  *   - "Weekly task renders…" (User Story 2, spec line 504)
  *   - "Agent filter…" (User Story 4, spec line 644)
- *   - "Recurring tasks absent from Board" (User Story 3, spec line 615)
+ *   - "Recurring tasks absent from Board" (User Story 3, spec line 615) —
+ *     scenario BROADENED per operator ruling 2026-08-07 ("recurring and ALL
+ *     scheduled tasks are calendar-only", implemented in commit 364d00b2):
+ *     `once`/`every`/`recurring` triggers are ALL Board/List-excluded now,
+ *     not just `every`/`recurring`. See the (d) test below and
+ *     src/components/workspaces/boardListExclusion.test.ts for the unit-level
+ *     boundary this E2E scenario exercises end-to-end.
  *
  * LLM-independent: no agent turns, no model calls required — every
  * assertion is deterministic UI/REST behaviour (matches the calendar.spec.ts
@@ -587,7 +593,7 @@ test(
   },
 );
 
-// ── (d) US-3: recurring tasks are absent from Board ────────────────────────────
+// ── (d) US-3: scheduled tasks (once/every/recurring) are calendar-only ─────────
 
 test(
   'Recurring tasks are absent from Board and List (US-3)',
@@ -595,9 +601,22 @@ test(
     // Traces to: calendar-recurrence-redesign-spec.md line 615 (Scenario:
     // Recurring tasks are absent from Board and List) / User Story 3,
     // Acceptance Scenarios 1–2 / FR-011 / TDD plan Test 24.
+    //
+    // BROADENED per operator ruling 2026-08-07 ("recurring and ALL scheduled
+    // tasks are calendar-only"), implemented in commit 364d00b2
+    // (`isScheduledTrigger` in src/components/workspaces/taskFormFields.ts,
+    // now matching `once`/`every`/`recurring` — not just `every`/`recurring`
+    // — in both BoardView.tsx and ListView.tsx). The original US-3 boundary
+    // only excluded the recurring task and kept the once task visible; that
+    // is no longer the rule. See boardListExclusion.test.ts for the unit
+    // coverage of the predicate itself — this test proves the same boundary
+    // holds end-to-end AND that excluded tasks actually surface on the
+    // Calendar tab rather than merely vanishing.
+    //
     // BDD: Given Ops contains a manual task, a once task, and a recurring
     // task, When the operator opens the Board, Then it shows exactly the
-    // manual and once tasks — the recurring task appears in neither.
+    // manual task — the once and recurring tasks appear in neither Board nor
+    // List, and instead render as events on the workspace Calendar.
     test.setTimeout(90_000);
 
     const manualTitle = `E2E Board Manual ${Date.now()}`;
@@ -640,13 +659,36 @@ test(
       // Give the board's own task fetch a moment past the Inbox-column mount
       // before asserting absence (a false negative from "not rendered yet"
       // would be indistinguishable from a real exclusion otherwise).
+      // The manual task is the Binding-Rule-4 positive control: a filter
+      // that hides everything must fail this assertion.
       await expect(page.getByText(manualTitle)).toBeVisible({ timeout: 15_000 });
-      await expect(page.getByText(onceTitle)).toBeVisible({ timeout: 10_000 });
 
-      // The recurring task must never appear anywhere on the board.
+      // Neither scheduled task — once OR recurring — may appear anywhere on
+      // the Board. `once` staying visible was the OLD (now-superseded)
+      // boundary; asserting its absence here is the whole point of this fix.
+      await expect(page.getByText(onceTitle)).not.toBeVisible({ timeout: 10_000 });
       await expect(page.getByText(recurringTitle)).not.toBeVisible({ timeout: 5_000 });
+      const onceCount = await page.getByText(onceTitle).count();
       const recurringCount = await page.getByText(recurringTitle).count();
+      expect(onceCount, 'once task title must not be present anywhere on the Board DOM').toBe(0);
       expect(recurringCount, 'recurring task title must not be present anywhere on the Board DOM').toBe(0);
+
+      // Prove "moved to Calendar", not merely "hidden": both scheduled tasks
+      // must render as event chips on the workspace Calendar tab. Month view
+      // (the calendar's default on a fresh mount — CalendarScreen.tsx's
+      // `currentView` initial state is 'dayGridMonth', not persisted across
+      // navigations) covers both — the once task fires today at 11:00 (in
+      // the currently-displayed month) and the recurring rule's Tuesday
+      // dtstart is far enough in the past (priorMonday(…, 60)) that the
+      // current month grid contains a real occurrence, mirroring the (b)
+      // "Weekly task renders" assertion above.
+      await navigateToCalendar(page);
+      await expect(page.locator('.fc-event', { hasText: onceTitle }).first()).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect(page.locator('.fc-event', { hasText: recurringTitle }).first()).toBeVisible({
+        timeout: 10_000,
+      });
     } finally {
       await deleteTaskApi(adminToken, manualTask.id);
       await deleteTaskApi(adminToken, onceTask.id);

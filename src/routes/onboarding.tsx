@@ -26,6 +26,7 @@ import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 import { PROVIDER_HINTS } from '@/lib/constants'
 import { useUiStore } from '@/store/ui'
 import { useAuthStore } from '@/store/auth'
+import { queryClient } from '@/lib/queryClient'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
 import type { ProviderValidation, ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
 import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
@@ -555,6 +556,16 @@ function OnboardingWizard() {
         },
       })
       useAuthStore.getState().setUsername(resp.username)
+      // Bugfix (slash-palette silent-empty): completeOnboardingTransaction is
+      // the FIRST point the omnipus-session cookie exists on a fresh
+      // install. The commands query (['commands','web'],
+      // src/hooks/useSlashMenu.ts + ChatScreen.tsx) is behind withAuth and
+      // may have already 401'd — and gone permanently errored — from a
+      // composer that mounted before this cookie was set. Invalidate now so
+      // every mounted observer of the shared ['commands', ...] cache entry
+      // refetches once the user reaches chat, instead of staying empty for
+      // the rest of the page session (only a manual reload used to recover).
+      queryClient.invalidateQueries({ queryKey: ['commands'] })
       setCompleted(true)
     } catch (err) {
       // Surface the failure both inline (so the user stays on step 3 and can

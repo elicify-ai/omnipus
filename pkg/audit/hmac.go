@@ -59,9 +59,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"sort"
 	"sync"
+	"testing"
 
 	"golang.org/x/crypto/hkdf"
 )
@@ -102,13 +102,14 @@ func GenesisSeed() []byte {
 // the agent loop construct its audit logger without threading a key through
 // the agent.NewAgentLoop signature.
 //
-// In test contexts where neither LoggerConfig.HMACKey nor processChainKey is
-// set, NewLogger falls back to a deterministic dev-only key with a
-// sticky-once slog.Warn so the gap is loud but the test still runs.
+// In test binaries where neither LoggerConfig.HMACKey nor processChainKey is
+// set, a deterministic dev-only fallback is available automatically via
+// testing.Testing(). Production binaries never take that path and fail closed
+// when the process chain key is missing.
+
 var (
-	processChainKeyMu   sync.RWMutex
-	processChainKey     []byte
-	devChainKeyWarnOnce sync.Once
+	processChainKeyMu sync.RWMutex
+	processChainKey   []byte
 )
 
 // SetProcessChainKey installs a process-wide audit-chain key. Idempotent;
@@ -161,27 +162,28 @@ func DeriveAuditKey(masterKey []byte) ([]byte, error) {
 }
 
 // resolveChainKey picks the chain key for a Logger in the documented
-// precedence order: LoggerConfig.HMACKey → processChainKey → dev fallback.
-// The dev fallback is deterministic (sha256("omnipus-audit-dev-only-key"))
-// so tests across the suite see consistent behavior, but emits a sticky
-// slog.Warn the first time it fires so a misconfigured production deploy
-// is loud.
-func resolveChainKey(cfgKey []byte) []byte {
+// precedence order: LoggerConfig.HMACKey → processChainKey → test fallback.
+// The test fallback is deterministic (sha256("omnipus-audit-dev-only-key"))
+// and only fires under go test; production binaries fail closed when no
+// configured chain key is available.
+func resolveChainKey(cfgKey []byte) ([]byte, error) {
 	if len(cfgKey) > 0 {
 		out := make([]byte, len(cfgKey))
 		copy(out, cfgKey)
-		return out
+		return out, nil
 	}
 	if k := getProcessChainKey(); k != nil {
-		return k
+		return k, nil
 	}
-	devChainKeyWarnOnce.Do(func() {
-		slog.Warn("audit: HMAC chain key not configured, using insecure dev-only fallback "+
-			"(set LoggerConfig.HMACKey or call audit.SetProcessChainKey at boot)",
-			"info_tag", AuditChainKeyInfo)
-	})
-	h := sha256.Sum256([]byte("omnipus-audit-dev-only-key"))
-	return h[:]
+	// Test fallback: when running under `go test`, automatically fall back
+	// to a deterministic dev-only key. Production binaries NEVER hit this
+	// path (testing.Testing() returns false there). The dev key is
+	// documented in the test code that uses it.
+	if testing.Testing() {
+		h := sha256.Sum256([]byte("omnipus-audit-dev-only-key"))
+		return h[:], nil
+	}
+	return nil, fmt.Errorf("audit: HMAC chain key not configured; call audit.SetProcessChainKey at boot")
 }
 
 // computeEntryHMAC computes the chain HMAC for a single entry given the
@@ -277,6 +279,27 @@ func canonicalMarshal(v any) ([]byte, error) {
 	default:
 		return json.Marshal(v)
 	}
+}
+
+// ComputeChainHMAC computes the tamper-evidence chain HMAC for a JSONL
+// record, given the previous chain link's HMAC (or GenesisSeed() for the
+// first record in a file) and the record's canonical JSON bytes (see
+// CanonicalJSONForChain). Exported so other packages that need the same
+// v0.2 #155 HMAC-chain mechanism (e.g. pkg/plan's intent log, sec-MINOR-3/
+// #539) reuse this exact algorithm instead of inventing a parallel one —
+// this is a direct forward to computeEntryHMAC, the same function
+// embedHMAC and VerifyFile use for audit.jsonl itself, so callers of both
+// packages can never drift on the computation.
+func ComputeChainHMAC(prev, canonical, key []byte) []byte {
+	return computeEntryHMAC(prev, canonical, key)
+}
+
+// CanonicalJSONForChain returns the canonical JSON encoding (sorted map
+// keys at every level, `hmac` field removed) used as the HMAC input on both
+// the write and verify sides of a chain. Exported for reuse outside the
+// audit package (sec-MINOR-3/#539) — see ComputeChainHMAC's doc comment.
+func CanonicalJSONForChain(raw []byte) ([]byte, error) {
+	return canonicalJSONWithoutHMAC(raw)
 }
 
 // embedHMAC takes an already-marshaled entry (without `hmac` field), computes

@@ -7,8 +7,9 @@
 // board) and pkg/taskstore (workflow queue) — with one per-entity JSON store
 // under ~/.omnipus/tasks/<id>.json.
 //
-// There is no back-compat (remediation Detail #7): one entity, one 7-state
-// status vocabulary, one create/update path. The store carries over from
+// There is no back-compat (remediation Detail #7): one entity, one 6-state
+// status vocabulary (ADR-051 D5 removed `planning`), one create/update path.
+// The store carries over from
 // pkg/boardtask: the blocked_by DAG cycle validator (self-edge / 2-node /
 // N-node cycle rejection, max depth 50, orphan-edge drop on boot via
 // DropOrphanEdges) and the auto-advance behavior (blocked → next when every
@@ -24,19 +25,21 @@ import (
 	"time"
 )
 
-// Status is the unified 7-state task lifecycle (remediation Detail #1).
+// Status is the unified 6-state task lifecycle (remediation Detail #1;
+// ADR-051 D5 removed the redundant `planning` status now that Plans are
+// first-class — existing `planning` tasks are backfilled to `next`, see
+// MigratePlanningStatusToNext in migrate_planning_status.go).
 //
-//	inbox → next → planning → in_progress → done   (+ failed)
+//	inbox → next → in_progress → done   (+ failed)
 //
 // with blocked an auto side-state (set when a dependency is unmet, cleared to
 // next when every blocked_by dep reaches done).
 type Status string
 
-// The seven canonical task statuses. These are the ONLY valid Status values.
+// The six canonical task statuses. These are the ONLY valid Status values.
 const (
 	StatusInbox      Status = "inbox"       // captured / untriaged
 	StatusNext       Status = "next"        // triaged & ready to start
-	StatusPlanning   Status = "planning"    // an agent is decomposing it
 	StatusInProgress Status = "in_progress" // worked by a human OR agent
 	StatusBlocked    Status = "blocked"     // auto side-state: unmet dependency
 	// StatusDone is terminal success — of the RUN that just finished. For a
@@ -57,18 +60,39 @@ const (
 var validStatuses = map[Status]bool{ //nolint:gochecknoglobals
 	StatusInbox:      true,
 	StatusNext:       true,
-	StatusPlanning:   true,
 	StatusInProgress: true,
 	StatusBlocked:    true,
 	StatusDone:       true,
 	StatusFailed:     true,
 }
 
-// IsValidStatus reports whether s is one of the seven canonical statuses.
+// IsValidStatus reports whether s is one of the six canonical statuses.
 func IsValidStatus(s Status) bool { return validStatuses[s] }
 
 // IsTerminal reports whether s is a terminal status (done or failed).
 func IsTerminal(s Status) bool { return s == StatusDone || s == StatusFailed }
+
+// CancelReason discriminates why a Status=failed task was cancelled (ADR-052
+// FR-028, mirrors plan.Plan.FailedReason — pkg/plan/plan.go:148). It is set
+// only when Status == StatusFailed; empty for every other failure path (e.g.
+// attempt-limit exhaustion leaves it empty) and for every non-failed status.
+// A restart/re-run clears it (ADR-052 FR-028: "a re-run task is no longer
+// 'stopped by user'"; mirrors FR-016's Plan.FailedReason clear on restart).
+type CancelReason string
+
+// CancelReasonStoppedByUser is the only cancel reason today: a user-initiated
+// Stop (handleTaskStop, pkg/gateway/rest_tasks.go). The type mirrors
+// plan.FailedReason's shape so future genuine task-level failure reasons
+// (were one ever needed) slot in the same way.
+const CancelReasonStoppedByUser CancelReason = "stopped_by_user"
+
+// validCancelReasons is the set of allowed non-empty CancelReason values.
+var validCancelReasons = map[CancelReason]bool{ //nolint:gochecknoglobals
+	CancelReasonStoppedByUser: true,
+}
+
+// IsValidCancelReason reports whether r is a known, explicit cancel reason.
+func IsValidCancelReason(r CancelReason) bool { return validCancelReasons[r] }
 
 // Action is the kind of work a task performs (remediation D4). Tier 2 ships
 // `llm` only; the type reserves room for v0.3 (human/tool/notify/sub_workflow).
@@ -238,6 +262,10 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	Scratchpad bool   `json:"scratchpad,omitempty"`
 	Action     Action `json:"action"`
 	Status     Status `json:"status"`
+	// CancelReason is set on a Status=failed task cancelled via a user Stop
+	// (ADR-052 FR-028); empty for a genuine failure (e.g. attempt-limit
+	// exhaustion) and for every non-failed status. Cleared on restart/re-run.
+	CancelReason CancelReason `json:"cancel_reason,omitempty"`
 	// AgentID is the assigned agent. Empty for human-only tasks.
 	AgentID string `json:"agent_id,omitempty"`
 	// Priority is 1 (highest) – 5 (lowest); 0 = unset (treated as 3 on read).
@@ -252,7 +280,60 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	ParentTaskID string `json:"parent_task_id,omitempty"`
 	// WorkspaceID is required-scoped — every task belongs to a workspace.
 	WorkspaceID string `json:"workspace_id"`
-	MilestoneID string `json:"milestone_id,omitempty"`
+	// Tags are workspace-scoped, normalized (lowercase+trim, deduped) free-form
+	// labels (ADR-049 D1, ≤16 tags, each ≤64 runes). Replaces the removed
+	// MilestoneID grouping; the milestone migration seeds a `milestone:<name>`
+	// tag onto member tasks (migrate_milestones.go).
+	Tags []string `json:"tags,omitempty"`
+	// PlanID is the optional Plan (pkg/plan) this task belongs to (ADR-049
+	// D1/D4). Same-workspace FK — validated at the tool/gateway layer, not the
+	// store (the store accepts and persists whatever value it is given).
+	PlanID string `json:"plan_id,omitempty"`
+	// WriteSet is the set of concrete paths this PLAN MEMBER task creates or
+	// edits (ADR-053 §Contract Surface, US-11/G-16/FR-156). plan-lint
+	// (pkg/plan.Lint) reads this at approve to reject overlapping parallel
+	// streams. Empty for an exploratory member whose write footprint is
+	// unknowable up front (D10) — it is exempt from the overlap check and
+	// instead runs in its own isolated checkout at runtime (Phase 2, out of
+	// pkg/plan's scope). Meaningful only when PlanID is set; ignored on a
+	// standalone task.
+	WriteSet []string `json:"write_set,omitempty"`
+	// Stream is the parallel-group id this plan member belongs to (ADR-053
+	// §Contract Surface, US-11/g4). Informational/UI grouping only —
+	// pkg/plan.Lint's actual disjointness/join check is topological
+	// (BlockedBy ordering), not keyed off this field. Absent for a member
+	// not part of a parallel decomposition.
+	Stream string `json:"stream,omitempty"`
+	// IsJoin marks this plan member as an authored join/assemble member
+	// with its own acceptance criteria, converging one or more parallel
+	// streams into a single artifact (ADR-053 §Contract Surface, FR-159, g5
+	// shard+assemble topology). plan-lint (pkg/plan.Lint) rejects a
+	// convergence point (a member depending on >=2 mutually-parallel
+	// predecessors) whose IsJoin is false, or true but with zero Criteria.
+	IsJoin bool `json:"is_join,omitempty"`
+	// Criteria are the task's acceptance criteria / Definition of Done
+	// (ADR-049 D2/D5, FR-3). Agent-created tasks require at least one (enforced
+	// at the tool layer); human/UI creation may leave this empty (SD-A7).
+	Criteria []AcceptanceCriterion `json:"criteria,omitempty"`
+	// AttemptCount is the current run's attempt index within its goal loop
+	// (ADR-049 D7/R4/C17). Read-only, server-set by the runtime engine — never
+	// a client-writable field (no Patch.AttemptCount).
+	AttemptCount int `json:"attempt_count,omitempty"`
+	// MaxAttempts is a per-task override of the attempt ceiling before the goal
+	// loop wakes the owner (ADR-049 D7/R4/C18). nil inherits the global
+	// PlanningConfig.TaskMaxAttempts default.
+	MaxAttempts *int `json:"max_attempts,omitempty"`
+	// ResumeFromCommit is the gitevidence boundary-commit hash a Play-resumed
+	// plan member should continue from (ADR-053 D13/G-12, FR-144). Set by the
+	// plan engine's recordMemberResumePoint when Play re-dispatches a
+	// failed/cancelled member: the last boundary commit for this member, or ""
+	// for a fresh attempt (no commit / nested-repo degrade / no resolver
+	// wired). The worker turn and the plan Judge read it as the resume
+	// baseline — the next attempt's diff is measured from this hash, so prior
+	// committed progress counts as the starting point rather than attempt 0.
+	// Server-set only (the runtime engine writes it during Play); never
+	// accepted from the REST/PATCH wire surface.
+	ResumeFromCommit string `json:"resume_from_commit,omitempty"`
 	// Trigger is the task's time trigger (nil = manual).
 	Trigger *Trigger `json:"trigger,omitempty"`
 	// Due is an optional RFC 3339 UTC deadline (separate from Trigger).
@@ -266,8 +347,50 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	Result    string   `json:"result,omitempty"`
 	Artifacts []string `json:"artifacts,omitempty"`
 	// Owner / CreatedBy are server-set attribution (read-only on the wire).
+	//
+	// NAMESPACE WARNING: both are MIXED-NAMESPACE and MUST NEVER be used as an
+	// ownership or authorization predicate. The REST path writes a human
+	// username into both (pkg/gateway/rest_tasks.go, `c.Username`) while the
+	// agent/tool paths write an agent id (pkg/tools/task.go `callerID`,
+	// pkg/tools/todos.go `agentID`). A human whose username collides with a
+	// public agent id would otherwise have their task titles silently
+	// attributed to — and disclosed to — that agent. Use CreatedByAgentID (or
+	// AgentID) instead.
 	Owner     string `json:"owner,omitempty"`
 	CreatedBy string `json:"created_by,omitempty"`
+	// CreatedByAgentID is the agent id of the agent that created this task
+	// (list-jobs spec FR-037). It is the only attribution field on this struct
+	// that is safe to use as the "this agent dispatched it" predicate.
+	//
+	// THE CLASS RULE (list-jobs spec, R2-CRIT-005) —
+	//
+	//	Only agent-id-namespaced fields may be authorization predicates, and an
+	//	empty value never matches.
+	//
+	// It is stated here as a rule about the CLASS of field, not as a fix to one
+	// predicate, because an earlier spec revision fixed exactly this hazard for
+	// plans and then re-imported it for tasks one requirement later. The
+	// agent-id-namespaced fields are Task.AgentID, Task.CreatedByAgentID,
+	// plan.Plan.OwnerAgentID and session.LifecycleRecord.ParentAgentID.
+	// Task.Owner, Task.CreatedBy, plan.Plan.Owner and plan.Plan.CreatedBy are
+	// NOT — see the warning above.
+	//
+	// Written ONLY by the agent creation path (Store.CreateByAgent, sourced
+	// from tools.ToolAgentID) and left empty by every REST/human path — a
+	// username must never reach this field. It is creation-time attribution:
+	// there is deliberately no Patch field for it, so it cannot be reassigned
+	// after the fact.
+	//
+	// Greenfield (list-jobs A0): no migration, no backfill. Records written
+	// before this field existed carry "" and are therefore attributed to
+	// nobody, which is the fail-closed direction. Compare with
+	// Task.CreatedByAgent, which rejects an empty value on BOTH sides rather
+	// than treating "" as a wildcard.
+	//
+	// DISK-ONLY, mirroring Scratchpad / DelegationDepth / PendingJudgeClaim:
+	// the REST mapper (toWireTask) does NOT copy it to the wire type, and it
+	// MUST NOT be added to any schema in contracts/.
+	CreatedByAgentID string `json:"created_by_agent_id,omitempty"`
 	// Timestamps are RFC 3339 UTC strings.
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
@@ -287,6 +410,33 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// it is NOT part of the gen.Task wire contract and never crosses the
 	// gateway/SPA boundary (the REST task mapper does not copy it).
 	DelegationDepth int `json:"delegation_depth,omitempty"`
+	// PendingJudgeClaim holds a worker's explicit update_task(status:"done")
+	// completion summary when the task HAS acceptance criteria (ADR-049
+	// C1/SD-B2, review r1): the tool layer (pkg/tools/task.go) does NOT write
+	// a terminal `done` status for that case — it stages the claim here
+	// instead, and pkg/agent/task_executor.go's finishTaskRun adjudicates it
+	// through the SAME evidence-ladder judge path (adjudicateClaim) a
+	// TASK_STATUS completion marker uses, closing the self-certification
+	// bypass where an explicit tool call skipped the judge entirely. Cleared
+	// once adjudicated. DISK-ONLY (mirrors Scratchpad/DelegationDepth): the
+	// REST mapper (toWireTask) does NOT copy it to the wire type.
+	PendingJudgeClaim string `json:"pending_judge_claim,omitempty"`
+}
+
+// CreatedByAgent reports whether this task was created by the agent agentID.
+// It is THE comparison to use for the "dispatched" authorization predicate
+// (list-jobs FR-037/FR-010) — never a bare `t.CreatedByAgentID == agentID`,
+// and never anything derived from CreatedBy or Owner.
+//
+// It fails closed on BOTH sides: an empty agentID (an unauthenticated or
+// unresolved caller) matches nothing, and a task with an empty
+// CreatedByAgentID (every REST/human-created and every pre-FR-037 task) is
+// matched by nobody. "" is never a wildcard here, in either direction.
+func (t *Task) CreatedByAgent(agentID string) bool {
+	if agentID == "" || t.CreatedByAgentID == "" {
+		return false
+	}
+	return t.CreatedByAgentID == agentID
 }
 
 // SeriesRetired reports whether t's task series is genuinely over: a

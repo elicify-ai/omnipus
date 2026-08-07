@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Tests for GET /api/v1/skills/search (ClawHub marketplace search) and the
 // install-by-slug validation on POST /api/v1/skills/install. The registry is
 // stubbed via a fake SkillRegistry — these tests never reach the real

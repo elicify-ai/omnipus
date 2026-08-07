@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -196,22 +194,25 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 	// wired) as a no-op, so a non-nil error here is always a genuine reload
 	// failure.
 	//
-	// Reload-failure semantics mirror updateAgent's delegation_policy path: the
-	// config IS persisted, so we never 500 (that would wrongly signal the write
-	// failed). A genuine reload error is logged at Error — it means running
-	// agents may keep the previous global policy until the next restart, which
-	// an operator must see in the logs.
-	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
+	// Reload-failure semantics mirror updateAgent's soul path: the config IS
+	// persisted, so we never 500 (that would wrongly signal the write failed).
+	// A genuine reload error is logged at Error — it means running agents may
+	// keep the previous global policy until the next restart, which an operator
+	// must see in the logs.
+	//
+	// triggerReloadAndWait (not the bare TriggerReload): this is the fail-open
+	// authorization-bypass path described above, so the response must not claim
+	// the tightening is enforced while the rebuild is still queued. It also
+	// absorbs ErrReloadNotConfigured (the no-reload-loop case in tests / minimal
+	// embeddings) as a benign no-op, and — via services.beginReload's coalescing
+	// — a request that arrives mid-reload is served by a follow-up reload
+	// instead of being dropped, which used to leave the old policy live
+	// indefinitely.
+	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Error(
 			"rest: reload after tool policies update failed; running agents may keep the previous global policy until restart",
 			"error",
 			err,
-		)
-	} else if !confirmed {
-		slog.Warn(
-			"rest: reload after tool policies update did not confirm within the poll window; "+
-				"running agents may still be evaluating the previous global policy",
-			"policy_count", len(body.Policies),
 		)
 	}
 

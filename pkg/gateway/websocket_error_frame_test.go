@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // websocket_error_frame_test.go — FIX 2 regression: the EventKindError
 // forwarder in eventForwarder (websocket.go) always recomputed
 // agent.TranslateLLMError(p.ProviderError, p.Message) from scratch, discarding

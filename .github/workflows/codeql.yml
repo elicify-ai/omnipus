@@ -2,9 +2,18 @@ name: CodeQL
 
 on:
   push:
-    branches: [main]
+    # release/** included so release branches get a CodeQL BASELINE analysis:
+    # without one, a PR targeting a release branch has nothing to diff
+    # against and GHAS surfaces every pre-existing alert as "new" (seen on
+    # PR #597: "933 new alerts ... code changes were too large"). The
+    # baseline lands on the first push to the release branch after this
+    # change; the first PR scanned before that may still report unbaselined
+    # alerts once, then self-correct.
+    branches: [main, 'release/**']
   pull_request:
-    branches: [main]
+    # Operator direction (2026-08-06): feature PRs target release/*, not
+    # main — without this filter no release PR ever gets a CodeQL scan.
+    branches: [main, 'release/**']
   schedule:
     # Weekly scan on Sunday 02:17 UTC — odd minute to avoid the top-of-hour scheduler rush
     - cron: '17 2 * * 0'
@@ -27,7 +36,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4

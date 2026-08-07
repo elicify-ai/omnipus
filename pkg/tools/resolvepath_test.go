@@ -186,6 +186,147 @@ func TestResolvePath_SymlinkAnchorsOnRealpath(t *testing.T) {
 	}
 }
 
+// TestResolvePath_SymlinkedWorkspaceRoot_Confined — regression test for a
+// HIGH-severity finding surfaced by the macOS CI matrix job (PR #597,
+// `matrix (macos-latest, arm64)`): ResolvePath compared a symlink-resolved
+// candidate path (realAbs) against an UNRESOLVED policy.WorkDir, so on
+// macOS — where t.TempDir() lives under /var, itself a symlink to
+// /private/var — every legitimate in-workspace path was falsely rejected as
+// "escaping" the working directory (20+ failures: TestFilesystemTool_*,
+// TestEditTool_*, TestReadFile_*, TestSendFileTool_*).
+//
+// This pod is Linux, so it cannot exercise /var's real symlink. Instead it
+// manufactures the identical SHAPE locally: a real directory behind an
+// explicit symlink, with policy.WorkDir set to the symlink path and
+// deliberately NOT pre-resolved via filepath.EvalSymlinks — unlike this
+// file's own confinedPolicy/unrestrictedPolicy helpers (which is exactly why
+// this is a fresh fspolicy.FSPolicy{} literal here, not those helpers: using
+// them would silently resolve the bug away before ResolvePath ever saw it).
+// This reproduces the defect precisely: fspolicy.EffectiveFSPolicy always
+// resolves WorkDir in production, but fspolicy.FSPolicy.Validate's own doc
+// comment (policy.go ~line 96-99) acknowledges "the direct-construction
+// shape several resolver-level unit tests use" as a sanctioned pattern
+// ResolvePath must not silently assume away.
+func TestResolvePath_SymlinkedWorkspaceRoot_Confined(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks are POSIX-specific here")
+	}
+
+	realTarget := t.TempDir()
+	if err := os.WriteFile(filepath.Join(realTarget, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+
+	parent := t.TempDir()
+	symlinkedWorkDir := filepath.Join(parent, "workdir-link")
+	if err := os.Symlink(realTarget, symlinkedWorkDir); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+
+	// Deliberately UNRESOLVED WorkDir (contrast with confinedPolicy above).
+	policy := fspolicy.FSPolicy{WorkDir: symlinkedWorkDir, Scope: fspolicy.FSScopeConfined}
+
+	// A relative path must resolve and read successfully through the
+	// symlinked root.
+	handle, err := ResolvePath(context.Background(), policy, "read_file", "call-1", FSOpRead, "a.txt")
+	if err != nil {
+		t.Fatalf("ResolvePath (relative, symlinked WorkDir) should succeed, got: %v", err)
+	}
+	data, err := handle.ReadFile()
+	handle.Close()
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Errorf("content = %q, want %q", data, "hello")
+	}
+
+	// An ABSOLUTE path spelled through the UNRESOLVED symlink prefix must
+	// also succeed — this is exactly how the failing macOS tests built their
+	// "path" argument: filepath.Join(tmpDir, "a.txt") using tmpDir's raw,
+	// unresolved spelling (the /var, not /private/var, form).
+	absViaSymlink := filepath.Join(symlinkedWorkDir, "a.txt")
+	handle2, err := ResolvePath(context.Background(), policy, "read_file", "call-2", FSOpRead, absViaSymlink)
+	if err != nil {
+		t.Fatalf("ResolvePath (absolute, unresolved-symlink spelling) should succeed, got: %v", err)
+	}
+	defer handle2.Close()
+	data2, err := handle2.ReadFile()
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data2) != "hello" {
+		t.Errorf("content = %q, want %q", data2, "hello")
+	}
+
+	// Operating on the WORKSPACE ROOT ITSELF (spelled through the symlink,
+	// matching TestFilesystemTool_ListDir_Success's "path": tmpDir shape)
+	// must also succeed. This is the edge case a naive "just resolve the
+	// ancestor and keep the last component literal" fix gets wrong: with no
+	// child component to preserve, that approach walks one directory too far
+	// up and rejects the root itself as "../workdir-link escapes".
+	handle3, err := ResolvePath(context.Background(), policy, "list_directory", "call-3", FSOpList, symlinkedWorkDir)
+	if err != nil {
+		t.Fatalf("ResolvePath (workspace root itself, unresolved-symlink spelling) should succeed, got: %v", err)
+	}
+	defer handle3.Close()
+	entries, err := handle3.ReadDir()
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "a.txt" {
+		t.Errorf("unexpected directory listing: %+v", entries)
+	}
+}
+
+// TestResolvePath_SymlinkedWorkspaceRoot_GenuineEscapeStillRefused is the
+// negative control for the fix proven above (Binding Rule 4: a fix needs a
+// positive assertion AND a control proving it didn't just start accepting
+// everything). Normalizing policy.WorkDir's own symlink must not, in the
+// process, start ACCEPTING a path that genuinely escapes the workspace —
+// neither via an absolute path to an unrelated real location, nor via a
+// lexical ".." escape expressed relative to the symlinked root.
+func TestResolvePath_SymlinkedWorkspaceRoot_GenuineEscapeStillRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks are POSIX-specific here")
+	}
+
+	realTarget := t.TempDir()
+	parent := t.TempDir()
+	symlinkedWorkDir := filepath.Join(parent, "workdir-link")
+	if err := os.Symlink(realTarget, symlinkedWorkDir); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+
+	outside := t.TempDir()
+	secretFile := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secretFile, []byte("top secret"), 0o600); err != nil {
+		t.Fatalf("seed secret: %v", err)
+	}
+
+	policy := fspolicy.FSPolicy{WorkDir: symlinkedWorkDir, Scope: fspolicy.FSScopeConfined}
+
+	// An absolute path to a real file entirely outside the (symlinked)
+	// workspace must still be refused.
+	_, err := ResolvePath(context.Background(), policy, "read_file", "call-1", FSOpRead, secretFile)
+	if err == nil {
+		t.Fatal("expected ResolvePath to refuse a path outside the symlinked workspace, got success")
+	}
+	if !errors.Is(err, ErrOutsideScope) {
+		t.Errorf("expected ErrOutsideScope, got: %v", err)
+	}
+
+	// A leading ".." escape expressed relative to the symlinked WorkDir must
+	// still be refused too.
+	_, err = ResolvePath(context.Background(), policy, "read_file", "call-2", FSOpRead, "../secret.txt")
+	if err == nil {
+		t.Fatal("expected a leading .. escape to be refused even with a symlinked WorkDir")
+	}
+	if !errors.Is(err, ErrOutsideScope) {
+		t.Errorf("expected ErrOutsideScope, got: %v", err)
+	}
+}
+
 // TestResolvePath_NullByteRejected — spec test 6 (dataset row 11): an
 // embedded NUL byte is rejected with ErrPathInvalid before any I/O.
 func TestResolvePath_NullByteRejected(t *testing.T) {

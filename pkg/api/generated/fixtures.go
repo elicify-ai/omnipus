@@ -425,6 +425,26 @@ func FixtureSubagentEndFrame_ZeroValue() SubagentEndFrame {
 	return SubagentEndFrame{}
 }
 
+// FixtureSubagentEndFrame_Parked — ADR-057 UAT defect C2 fix: the child
+// sub-turn stopped because a message_parent(kind="question", wait=true)
+// call parked it awaiting the parent's answer, not because it succeeded,
+// errored, was cancelled, or timed out. No `reason` (that field is
+// documented as populated only when status is "interrupted").
+func FixtureSubagentEndFrame_Parked() SubagentEndFrame {
+	agentId := "ava"
+	durationMs := 1200
+	parentCallId := "parent-call-2"
+	return SubagentEndFrame{
+		Type:         "subagent_end",
+		SessionId:    "sess-1",
+		SpanId:       "span-def-456",
+		Status:       "parked",
+		AgentId:      &agentId,
+		DurationMs:   &durationMs,
+		ParentCallId: &parentCallId,
+	}
+}
+
 // ReplayMessageFrame
 
 func FixtureReplayMessageFrame_Populated() ReplayMessageFrame {
@@ -936,7 +956,9 @@ func FixtureTask_Populated() Task {
 	parentTaskId := "parent-task-00000000-0000-0000-0000-000000000001"
 	prompt := "Summarize the last 7 days of gateway logs."
 	description := "Look for anomalies in the last 7 days of gateway logs."
-	milestoneId := "m-1234"
+	planId := "01J3ZQK8N2H8VXNRP5T7C9M4WE"
+	attemptCount := 1
+	maxAttempts := 5
 	result := "Found 3 anomalies in the log."
 	sessionId := "sess-00000000-0000-0000-0000-000000000002"
 	sourceChannel := "telegram"
@@ -962,7 +984,10 @@ func FixtureTask_Populated() Task {
 		BlockedBy:     &blockedBy,
 		ParentTaskId:  &parentTaskId,
 		WorkspaceId:   "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-		MilestoneId:   &milestoneId,
+		Tags:          &[]string{"milestone:v1.0-launch"},
+		PlanId:        &planId,
+		AttemptCount:  &attemptCount,
+		MaxAttempts:   &maxAttempts,
 		Due:           &due,
 		Surface:       &surface,
 		SourceChannel: &sourceChannel,
@@ -985,6 +1010,40 @@ func FixtureTask_Populated() Task {
 		Config Task_Trigger_Config `json:"config"`
 		Type   TaskTriggerType     `json:"type"`
 	}{Type: TaskTriggerType("manual")}
+	t.Criteria = &[]struct {
+		Author struct {
+			Id   string                 `json:"id"`
+			Kind TaskCriteriaAuthorKind `json:"kind"`
+		} `json:"author"`
+		Behavior *struct {
+			MaxCount *int                       `json:"max_count,omitempty"`
+			MinCount *int                       `json:"min_count,omitempty"`
+			Scope    *TaskCriteriaBehaviorScope `json:"scope,omitempty"`
+			Tool     string                     `json:"tool"`
+		} `json:"behavior,omitempty"`
+		Check *struct {
+			Command          string `json:"command"`
+			ExpectedExitCode int    `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+		Id     *string            `json:"id,omitempty"`
+		Kind   TaskCriteriaKind   `json:"kind"`
+		Status TaskCriteriaStatus `json:"status"`
+		Text   string             `json:"text"`
+	}{
+		{
+			Kind:   TaskCriteriaKind("check"),
+			Text:   "go test ./pkg/plan/... passes",
+			Status: TaskCriteriaStatus("pending"),
+			Check: &struct {
+				Command          string `json:"command"`
+				ExpectedExitCode int    `json:"expected_exit_code"`
+			}{Command: "go test ./pkg/plan/...", ExpectedExitCode: 0},
+			Author: struct {
+				Id   string                 `json:"id"`
+				Kind TaskCriteriaAuthorKind `json:"kind"`
+			}{Id: "jim", Kind: TaskCriteriaAuthorKind("agent")},
+		},
+	}
 	return t
 }
 
@@ -1555,8 +1614,6 @@ func intPtr(i int) *int { return &i }
 
 func boolPtr(b bool) *bool { return &b }
 
-func float32Ptr(f float32) *float32 { return &f }
-
 func repeatStr(s string, n int) string {
 	result := make([]byte, 0, len(s)*n)
 	for i := 0; i < n; i++ {
@@ -1686,11 +1743,11 @@ func FixturePromptGuardUpdateResponse_Edge() PromptGuardUpdateResponse {
 // ── RateLimitsResponse ────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/RateLimitsResponse.yaml
 
+// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
+
 func FixtureRateLimitsResponse_Populated() RateLimitsResponse {
 	return RateLimitsResponse{
 		Enabled:                    true,
-		DailyCostCap:               5.0,
-		DailyCostUsd:               1.23,
 		MaxAgentLlmCallsPerHour:    100,
 		MaxAgentToolCallsPerMinute: 60,
 	}
@@ -1703,8 +1760,6 @@ func FixtureRateLimitsResponse_ZeroValue() RateLimitsResponse {
 func FixtureRateLimitsResponse_Edge() RateLimitsResponse {
 	return RateLimitsResponse{
 		Enabled:                    false,
-		DailyCostCap:               0, // unlimited
-		DailyCostUsd:               0,
 		MaxAgentLlmCallsPerHour:    0, // unlimited
 		MaxAgentToolCallsPerMinute: 0, // unlimited
 	}
@@ -1713,12 +1768,12 @@ func FixtureRateLimitsResponse_Edge() RateLimitsResponse {
 // ── RateLimitsUpdateRequest ───────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/RateLimitsUpdateRequest.yaml
 
+// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
+
 func FixtureRateLimitsUpdateRequest_Populated() RateLimitsUpdateRequest {
-	costCap := float64(10.0)
 	llm := int64(200)
 	tool := int64(120)
 	return RateLimitsUpdateRequest{
-		DailyCostCapUsd:            &costCap,
 		MaxAgentLlmCallsPerHour:    &llm,
 		MaxAgentToolCallsPerMinute: &tool,
 	}
@@ -1729,26 +1784,25 @@ func FixtureRateLimitsUpdateRequest_ZeroValue() RateLimitsUpdateRequest {
 }
 
 func FixtureRateLimitsUpdateRequest_Edge() RateLimitsUpdateRequest {
-	costCap := float64(0)
-	return RateLimitsUpdateRequest{DailyCostCapUsd: &costCap}
+	llm := int64(0)
+	return RateLimitsUpdateRequest{MaxAgentLlmCallsPerHour: &llm}
 }
 
 // ── RateLimitsUpdateResponse ──────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/RateLimitsUpdateResponse.yaml
 
+// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
+
 func FixtureRateLimitsUpdateResponse_Populated() RateLimitsUpdateResponse {
-	costCap := float64(10.0)
 	llm := int64(200)
 	tool := int64(120)
 	return RateLimitsUpdateResponse{
 		Saved:           true,
 		RequiresRestart: false,
 		Applied: &struct {
-			DailyCostCapUsd            *float64 `json:"daily_cost_cap_usd,omitempty"`
-			MaxAgentLlmCallsPerHour    *int64   `json:"max_agent_llm_calls_per_hour,omitempty"`
-			MaxAgentToolCallsPerMinute *int64   `json:"max_agent_tool_calls_per_minute,omitempty"`
+			MaxAgentLlmCallsPerHour    *int64 `json:"max_agent_llm_calls_per_hour,omitempty"`
+			MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
 		}{
-			DailyCostCapUsd:            &costCap,
 			MaxAgentLlmCallsPerHour:    &llm,
 			MaxAgentToolCallsPerMinute: &tool,
 		},
@@ -2033,28 +2087,267 @@ func FixtureUploadFilesResponse_Edge() UploadFilesResponse {
 // Marshal-validate roundtrip coverage for the REST response types served by the
 // gateway, so a Go struct producing schema-invalid JSON is caught by CI.
 
-// ── Milestone ────────────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/Milestone.yaml
+// ── AcceptanceCriterion ──────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AcceptanceCriterion.yaml
 
-func FixtureMilestone_Populated() Milestone {
-	return Milestone{
-		Id:          "c3d4e5f6-a7b8-9012-cdef-123456789012",
-		WorkspaceId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-		Name:        "v1.0 Launch",
-		Description: strPtr("Ship the first public release."),
-		DueDate:     strPtr("2026-12-31"),
-		Owner:       strPtr("alice"),
-		Progress:    float32Ptr(0.5),
-		CreatedAt:   time.Date(2026, 6, 8, 14, 22, 0, 0, time.UTC),
-		UpdatedAt:   time.Date(2026, 6, 8, 15, 0, 0, 0, time.UTC),
+func FixtureAcceptanceCriterion_Populated() AcceptanceCriterion {
+	return AcceptanceCriterion{
+		Id:   strPtr("550e8400-e29b-41d4-a716-446655440010"),
+		Kind: AcceptanceCriterionKind("check"),
+		Text: "All new pkg/plan tests pass",
+		Check: &struct {
+			Command          string `json:"command"`
+			ExpectedExitCode int    `json:"expected_exit_code"`
+		}{Command: "go test ./pkg/plan/...", ExpectedExitCode: 0},
+		Author: struct {
+			Id   string                        `json:"id"`
+			Kind AcceptanceCriterionAuthorKind `json:"kind"`
+		}{Id: "jim", Kind: AcceptanceCriterionAuthorKind("agent")},
+		Status: AcceptanceCriterionStatus("pending"),
 	}
 }
 
-// FixtureMilestone_ZeroValue — Go zero values. Expected to FAIL validation:
-// name is "" (minLength: 1) and workspace_id/id are required-but-empty
-// (id has no minLength, but name does, so the object is invalid).
-func FixtureMilestone_ZeroValue() Milestone {
-	return Milestone{}
+// FixtureAcceptanceCriterion_ZeroValue — Go zero values. Expected to FAIL
+// validation: kind="" (not in enum), author.kind="" (not in enum),
+// author.id="" (minLength: 1), status="" (not in enum).
+func FixtureAcceptanceCriterion_ZeroValue() AcceptanceCriterion {
+	return AcceptanceCriterion{}
+}
+
+// FixtureAcceptanceCriterion_Prose — a prose (LLM-judged) criterion with no check.
+func FixtureAcceptanceCriterion_Prose() AcceptanceCriterion {
+	return AcceptanceCriterion{
+		Kind: AcceptanceCriterionKind("prose"),
+		Text: "The release notes clearly explain the migration path",
+		Author: struct {
+			Id   string                        `json:"id"`
+			Kind AcceptanceCriterionAuthorKind `json:"kind"`
+		}{Id: "alice", Kind: AcceptanceCriterionAuthorKind("user")},
+		Status: AcceptanceCriterionStatus("pending"),
+	}
+}
+
+// ── EvidenceRecord ───────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/EvidenceRecord.yaml
+
+func FixtureEvidenceRecord_Populated() EvidenceRecord {
+	return EvidenceRecord{
+		Id:           "550e8400-e29b-41d4-a716-446655440030",
+		TaskId:       "550e8400-e29b-41d4-a716-446655440000",
+		CriterionId:  "550e8400-e29b-41d4-a716-446655440010",
+		Attempt:      1,
+		Command:      "go test ./pkg/plan/... [REDACTED]",
+		ExitCode:     0,
+		Output:       "ok  \tpkg/plan\t0.412s",
+		Truncated:    false,
+		TimedOut:     false,
+		PolicyDenied: false,
+		RecordedAt:   time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+// FixtureEvidenceRecord_ZeroValue — Go zero values. Expected to FAIL
+// validation: id/task_id/criterion_id/command/output/recorded_at are all "".
+func FixtureEvidenceRecord_ZeroValue() EvidenceRecord {
+	return EvidenceRecord{}
+}
+
+// ── CriterionVerdict ─────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/CriterionVerdict.yaml
+
+func FixtureCriterionVerdict_Populated() CriterionVerdict {
+	return CriterionVerdict{
+		CriterionId: "550e8400-e29b-41d4-a716-446655440010",
+		Met:         true,
+		Reason:      "go test output shows all tests passing.",
+	}
+}
+
+func FixtureCriterionVerdict_ZeroValue() CriterionVerdict {
+	return CriterionVerdict{}
+}
+
+// ── JudgeVerdict ─────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/JudgeVerdict.yaml
+
+func FixtureJudgeVerdict_Populated() JudgeVerdict {
+	taskId := "550e8400-e29b-41d4-a716-446655440000"
+	return JudgeVerdict{
+		Id:     "550e8400-e29b-41d4-a716-446655440020",
+		Scope:  JudgeVerdictScope("task"),
+		TaskId: &taskId,
+		Round:  1,
+		Met:    false,
+		PerCriterion: []struct {
+			CriterionId string `json:"criterion_id"`
+			Met         bool   `json:"met"`
+			Reason      string `json:"reason"`
+		}{
+			{CriterionId: "550e8400-e29b-41d4-a716-446655440010", Met: false, Reason: "3 tests still failing"},
+		},
+		Model:        "z-ai/glm-5-turbo",
+		JudgedAt:     time.Date(2026, 7, 19, 12, 5, 0, 0, time.UTC),
+		JudgeAgentId: "judge",
+	}
+}
+
+// FixtureJudgeVerdict_ZeroValue — Go zero values. Expected to FAIL validation:
+// id="", scope="" (not in enum), round=0 (minimum:1), model/judged_at/
+// judge_agent_id are all "".
+func FixtureJudgeVerdict_ZeroValue() JudgeVerdict {
+	return JudgeVerdict{}
+}
+
+// ── Plan ─────────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/Plan.yaml
+
+func FixturePlan_Populated() Plan {
+	progress := float32(0.5)
+	return Plan{
+		Id:           "01J3ZQK8N2H8VXNRP5T7C9M4WE",
+		WorkspaceId:  "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		Title:        "v1.0 Launch",
+		Goal:         strPtr("Ship the v1.0 release with all P0 issues closed and CI green."),
+		Description:  strPtr("Coordinates the v1.0 release train across backend and SPA."),
+		State:        PlanState("running"),
+		PlanPhase:    (*PlanPlanPhase)(strPtr("dispatching")),
+		OwnerAgentId: "jim",
+		JudgeRounds:  intPtr(2),
+		ActiveLoop:   boolPtr(true),
+		Progress:     &progress,
+		Owner:        strPtr("alice"),
+		CreatedBy:    strPtr("alice"),
+		CreatedAt:    time.Date(2026, 7, 19, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 7, 19, 10, 5, 0, 0, time.UTC),
+	}
+}
+
+// FixturePlan_ZeroValue — Go zero values. Expected to FAIL validation:
+// id/workspace_id/title/owner_agent_id/owner/created_by are all "", and
+// state="" (not in the 5-value enum).
+func FixturePlan_ZeroValue() Plan {
+	return Plan{}
+}
+
+// ── PlanCreateRequest ────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/PlanCreateRequest.yaml
+
+func FixturePlanCreateRequest_Populated() PlanCreateRequest {
+	return PlanCreateRequest{
+		WorkspaceId:  "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		Title:        "v1.0 Launch",
+		Goal:         strPtr("Ship the v1.0 release with all P0 issues closed and CI green."),
+		OwnerAgentId: "jim",
+	}
+}
+
+func FixturePlanCreateRequest_ZeroValue() PlanCreateRequest {
+	return PlanCreateRequest{}
+}
+
+// ── PlanUpdateRequest ────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/PlanUpdateRequest.yaml
+
+func FixturePlanUpdateRequest_Populated() PlanUpdateRequest {
+	state := PlanUpdateRequestState("approved")
+	return PlanUpdateRequest{
+		Title: strPtr("v1.0 Launch (delayed)"),
+		State: &state,
+	}
+}
+
+// FixturePlanUpdateRequest_Empty — no fields set. Expected to FAIL validation:
+// minProperties:1.
+func FixturePlanUpdateRequest_Empty() PlanUpdateRequest {
+	return PlanUpdateRequest{}
+}
+
+// ── PlanListResponse ─────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/PlanListResponse.yaml
+
+func FixturePlanListResponse_Populated() PlanListResponse {
+	progress := float32(0.5)
+	return PlanListResponse{
+		Plans: []struct {
+			ActiveLoop *bool      `json:"active_loop,omitempty"`
+			ApprovedAt *time.Time `json:"approved_at,omitempty"`
+			Bounds     *struct {
+				IdleExpiryDays                *int `json:"idle_expiry_days,omitempty"`
+				PlanJudgeMaxRounds            *int `json:"plan_judge_max_rounds,omitempty"`
+				SupervisionMaxAttempts        *int `json:"supervision_max_attempts,omitempty"`
+				SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
+			} `json:"bounds,omitempty"`
+			CompletedAt *time.Time `json:"completed_at,omitempty"`
+			CreatedAt   time.Time  `json:"created_at"`
+			CreatedBy   *string    `json:"created_by,omitempty"`
+			Description *string    `json:"description,omitempty"`
+			Dod         *[]struct {
+				Author struct {
+					Id   string                             `json:"id"`
+					Kind PlanListResponsePlansDodAuthorKind `json:"kind"`
+				} `json:"author"`
+				Behavior *struct {
+					MaxCount *int                                   `json:"max_count,omitempty"`
+					MinCount *int                                   `json:"min_count,omitempty"`
+					Scope    *PlanListResponsePlansDodBehaviorScope `json:"scope,omitempty"`
+					Tool     string                                 `json:"tool"`
+				} `json:"behavior,omitempty"`
+				Check *struct {
+					Command          string `json:"command"`
+					ExpectedExitCode int    `json:"expected_exit_code"`
+				} `json:"check,omitempty"`
+				Id     *string                        `json:"id,omitempty"`
+				Kind   PlanListResponsePlansDodKind   `json:"kind"`
+				Status PlanListResponsePlansDodStatus `json:"status"`
+				Text   string                         `json:"text"`
+			} `json:"dod,omitempty"`
+			FailedReason               *PlanListResponsePlansFailedReason `json:"failed_reason,omitempty"`
+			Goal                       *string                            `json:"goal,omitempty"`
+			Id                         string                             `json:"id"`
+			JudgeRounds                *int                               `json:"judge_rounds,omitempty"`
+			LastActivityAt             *time.Time                         `json:"last_activity_at,omitempty"`
+			LastUnmetTerminalSignature *string                            `json:"last_unmet_terminal_signature,omitempty"`
+			Owner                      *string                            `json:"owner,omitempty"`
+			OwnerAgentId               string                             `json:"owner_agent_id"`
+			OwnerSessionId             *string                            `json:"owner_session_id,omitempty"`
+			PausedReason               *string                            `json:"paused_reason,omitempty"`
+			PlanPhase                  *PlanListResponsePlansPlanPhase    `json:"plan_phase,omitempty"`
+			Progress                   *float32                           `json:"progress,omitempty"`
+			Rationale                  *string                            `json:"rationale,omitempty"`
+			SourceChannel              *string                            `json:"source_channel,omitempty"`
+			SourceChatId               *string                            `json:"source_chat_id,omitempty"`
+			StartedAt                  *time.Time                         `json:"started_at,omitempty"`
+			State                      PlanListResponsePlansState         `json:"state"`
+			Supervision                *struct {
+				Attempts         *int       `json:"attempts,omitempty"`
+				CorrectionRounds *int       `json:"correction_rounds,omitempty"`
+				SessionId        *string    `json:"session_id,omitempty"`
+				WakeAt           *time.Time `json:"wake_at,omitempty"`
+				WakeError        *string    `json:"wake_error,omitempty"`
+			} `json:"supervision,omitempty"`
+			Title       string    `json:"title"`
+			UpdatedAt   time.Time `json:"updated_at"`
+			WorkspaceId string    `json:"workspace_id"`
+		}{
+			{
+				Id:           "01J3ZQK8N2H8VXNRP5T7C9M4WE",
+				WorkspaceId:  "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+				Title:        "v1.0 Launch",
+				State:        PlanListResponsePlansState("running"),
+				OwnerAgentId: "jim",
+				Owner:        strPtr("alice"),
+				CreatedBy:    strPtr("alice"),
+				Progress:     &progress,
+				CreatedAt:    time.Date(2026, 7, 19, 10, 0, 0, 0, time.UTC),
+				UpdatedAt:    time.Date(2026, 7, 19, 10, 5, 0, 0, time.UTC),
+			},
+		},
+		Total: 1,
+	}
+}
+
+func FixturePlanListResponse_ZeroValue() PlanListResponse {
+	return PlanListResponse{}
 }
 
 // ── Workspace ────────────────────────────────────────────────────────────────

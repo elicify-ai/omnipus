@@ -1,5 +1,3 @@
-//go:build !cgo
-
 package security_test
 
 // File purpose: Sprint J issue #76 — sandbox Apply() boot-time wiring integration tests.

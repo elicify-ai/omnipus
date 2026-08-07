@@ -30,6 +30,17 @@ func seedTask(t *testing.T, store *task.Store, agentID, createdBy, wsID string) 
 	return tk
 }
 
+// validCriteriaArg returns a minimal well-formed "criteria" tool-call
+// argument (one prose criterion) — the shape create_task's Execute now
+// requires at least one of (FR-6/D5 strict criteria enforcement, review r1
+// major M5). Tests whose concern is something other than criteria
+// enforcement itself use this to stay unaffected by that requirement.
+func validCriteriaArg() []any {
+	return []any{
+		map[string]any{"kind": "prose", "text": "the work is done"},
+	}
+}
+
 // seedWorkspaceDefault writes a minimal workspace JSON with is_default:true under
 // <home>/workspaces/<id>.json so workspace.ResolveDefaultID finds it.
 func seedWorkspaceDefault(t *testing.T, home, id string) {
@@ -83,8 +94,19 @@ func TestTaskDelete_OwnerAllowed(t *testing.T) {
 	}
 }
 
-// TestTaskDelete_CreatorAllowed proves CreatedBy can also delete.
-func TestTaskDelete_CreatorAllowed(t *testing.T) {
+// TestTaskDelete_MixedNamespaceCreatorRejected proves the creator clause reads
+// the AGENT-namespaced attribution and nothing else.
+//
+// This test previously asserted the opposite ("CreatedBy can also delete") and
+// passed, because seedTask writes its createdBy straight into the
+// mixed-namespace Task.CreatedBy — the field whose own doc comment says it
+// "MUST NEVER be used as an ownership or authorization predicate", because the
+// REST path writes a human USERNAME into it. A task carrying only that (no
+// CreatedByAgentID) is either a human's or a pre-attribution record, and is
+// nobody's to delete via an agent tool. The legitimate creator case — an agent
+// deleting what it created through Store.CreateByAgent — is covered by
+// TestTaskDelete_AgentCreatorAllowed in task_scope_test.go.
+func TestTaskDelete_MixedNamespaceCreatorRejected(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
 	tk := seedTask(t, store, "agent-owner", "creator-a", "ws-1")
@@ -92,8 +114,11 @@ func TestTaskDelete_CreatorAllowed(t *testing.T) {
 	tool := NewTaskDeleteTool(store)
 	ctx := WithAgentID(context.Background(), "creator-a")
 	result := tool.Execute(ctx, map[string]any{"task_id": tk.ID})
-	if result.IsError {
-		t.Fatalf("creator delete failed: %s", result.ForLLM)
+	if !result.IsError {
+		t.Fatal("a caller matching only the mixed-namespace created_by must not be able to delete")
+	}
+	if _, err := store.Get(tk.ID); err != nil {
+		t.Errorf("task must survive a denied delete, got: %v", err)
 	}
 }
 
@@ -220,6 +245,7 @@ func TestTaskCreateTool_WorkspaceFromCtx(t *testing.T) {
 		"title":    "test",
 		"prompt":   "do it",
 		"agent_id": "agent-b",
+		"criteria": validCriteriaArg(),
 	})
 	if result.IsError {
 		t.Fatalf("task_create failed: %s", result.ForLLM)
@@ -277,6 +303,7 @@ func TestTaskCreateTool_StaleCtxWorkspace_LandsOnDefault(t *testing.T) {
 		"title":    "test",
 		"prompt":   "do it",
 		"agent_id": "agent-b",
+		"criteria": validCriteriaArg(),
 	})
 	if result.IsError {
 		t.Fatalf("task_create failed: %s", result.ForLLM)
@@ -317,6 +344,7 @@ func TestTaskCreateTool_WorkspaceFromHome(t *testing.T) {
 		"title":    "test",
 		"prompt":   "do it",
 		"agent_id": "agent-b",
+		"criteria": validCriteriaArg(),
 	})
 	if result.IsError {
 		t.Fatalf("task_create failed: %s", result.ForLLM)
@@ -345,6 +373,7 @@ func TestTaskCreateTool_NoWorkspaceError(t *testing.T) {
 		"title":    "test",
 		"prompt":   "do it",
 		"agent_id": "agent-b",
+		"criteria": validCriteriaArg(),
 	})
 	if !result.IsError {
 		t.Fatal("expected error when no workspace can be resolved")
@@ -369,7 +398,7 @@ func TestTaskCreateTool_DelegationDepthStamped(t *testing.T) {
 	// Root context (no delegation depth) → child stamped generation 1.
 	ctx := WithAgentID(context.Background(), "caller")
 	ctx = WithWorkspaceID(ctx, "ws")
-	res := tool.Execute(ctx, map[string]any{"title": "t1", "prompt": "p", "agent_id": "b"})
+	res := tool.Execute(ctx, map[string]any{"title": "t1", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg()})
 	if res.IsError {
 		t.Fatalf("root create failed: %s", res.ForLLM)
 	}
@@ -380,7 +409,7 @@ func TestTaskCreateTool_DelegationDepthStamped(t *testing.T) {
 
 	// Context at generation 4 → child stamped generation 5.
 	ctx5 := WithDelegationDepth(ctx, 4)
-	res = tool.Execute(ctx5, map[string]any{"title": "t2", "prompt": "p", "agent_id": "b"})
+	res = tool.Execute(ctx5, map[string]any{"title": "t2", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg()})
 	if res.IsError {
 		t.Fatalf("nested create failed: %s", res.ForLLM)
 	}
@@ -414,13 +443,13 @@ func TestTaskCreateTool_DelegationDepthBound(t *testing.T) {
 
 	// At generation 9, a create yields generation 10 == ceiling → allowed.
 	ctxAt9 := WithDelegationDepth(ctx, 9)
-	if res := tool.Execute(ctxAt9, map[string]any{"title": "ok", "prompt": "p", "agent_id": "b"}); res.IsError {
+	if res := tool.Execute(ctxAt9, map[string]any{"title": "ok", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg()}); res.IsError {
 		t.Fatalf("create at the ceiling boundary must be allowed, got: %s", res.ForLLM)
 	}
 
 	// At generation 10, a create would yield generation 11 > ceiling → rejected.
 	ctxAt10 := WithDelegationDepth(ctx, 10)
-	res := tool.Execute(ctxAt10, map[string]any{"title": "blocked", "prompt": "p", "agent_id": "b"})
+	res := tool.Execute(ctxAt10, map[string]any{"title": "blocked", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg()})
 	if !res.IsError {
 		t.Fatal("expected task_create past the depth ceiling to be rejected")
 	}
@@ -434,6 +463,136 @@ func TestTaskCreateTool_DelegationDepthBound(t *testing.T) {
 		if tk.Title == "blocked" {
 			t.Fatal("a rejected over-depth task must not be persisted")
 		}
+	}
+}
+
+// TestTaskTool_CreateWithoutCriteria_Rejected is review r1 major M5 (FR-6/D5
+// strict criteria enforcement, ADR-049 SD-A7): an agent-created task with
+// zero acceptance criteria must be rejected outright — neither an absent
+// "criteria" arg nor an explicitly empty array may slip through.
+func TestTaskTool_CreateWithoutCriteria_Rejected(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewTaskCreateTool(store)
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
+	ctx := WithAgentID(context.Background(), "caller")
+	ctx = WithWorkspaceID(ctx, "ws")
+
+	cases := []struct {
+		name string
+		args map[string]any
+	}{
+		{"absent", map[string]any{"title": "no criteria field", "prompt": "p", "agent_id": "b"}},
+		{"empty_array", map[string]any{"title": "empty criteria", "prompt": "p", "agent_id": "b", "criteria": []any{}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			res := tool.Execute(ctx, tc.args)
+			if !res.IsError {
+				t.Fatal("expected an agent-created task with zero criteria to be rejected")
+			}
+			if !strings.Contains(res.ForLLM, "criteria is required") {
+				t.Errorf("unexpected error message: %s", res.ForLLM)
+			}
+		})
+	}
+
+	// Nothing must have been persisted for either rejected case.
+	all, _ := store.List(task.Filter{WorkspaceID: "ws"})
+	if len(all) != 0 {
+		t.Fatalf("expected zero tasks persisted, got %d: %+v", len(all), all)
+	}
+}
+
+// TestJudge_AllMachineCriteria_UnsatisfiableBashPolicy_RejectedAtWrite is
+// review r1 major M5 / ADR-049 D2 rule 5 (FR-017/052): create_task must
+// reject a criteria set that is ALL kind=check when the assignee's effective
+// bash policy is deny or ask — a machine check that can never even run can
+// never be adjudicated MET, so the write is rejected at create time instead
+// of letting the goal loop retry forever against an unsatisfiable DoD.
+func TestJudge_AllMachineCriteria_UnsatisfiableBashPolicy_RejectedAtWrite(t *testing.T) {
+	t.Parallel()
+	checkCriterion := []any{
+		map[string]any{
+			"kind": "check",
+			"text": "tests pass",
+			"check": map[string]any{
+				"command":            "go test ./...",
+				"expected_exit_code": float64(0),
+			},
+		},
+	}
+
+	cases := []struct {
+		name       string
+		policy     string
+		policyOK   bool
+		wantReject bool
+	}{
+		{"deny_rejected", "deny", true, true},
+		{"ask_rejected", "ask", true, true},
+		{"allow_accepted", "allow", true, false},
+		{"unresolvable_assignee_rejected", "", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := task.New(t.TempDir())
+			tool := NewTaskCreateTool(store)
+			tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
+			tool.SetBashPolicyChecker(func(assigneeAgentID string) (string, bool) {
+				return tc.policy, tc.policyOK
+			})
+			ctx := WithAgentID(context.Background(), "caller")
+			ctx = WithWorkspaceID(ctx, "ws")
+
+			res := tool.Execute(ctx, map[string]any{
+				"title":    "all-machine criteria",
+				"prompt":   "p",
+				"agent_id": "assignee",
+				"criteria": checkCriterion,
+			})
+			if tc.wantReject {
+				if !res.IsError {
+					t.Fatalf("expected rejection for bash policy %q (ok=%v), got success", tc.policy, tc.policyOK)
+				}
+				if !strings.Contains(res.ForLLM, "D2 rule 5") {
+					t.Errorf("expected the D2 rule 5 message, got: %s", res.ForLLM)
+				}
+			} else if res.IsError {
+				t.Fatalf("expected success for bash policy %q, got error: %s", tc.policy, res.ForLLM)
+			}
+		})
+	}
+}
+
+// TestTaskTool_CreateWithoutBashPolicyChecker_AllCheckCriteria_FailsClosed
+// proves the D2 rule 5 checker itself fails CLOSED (denies) when unwired —
+// mirroring the delegation-deny gate's own unwired-fails-closed discipline
+// (CLAUDE.md hard constraint 6: no default policy fallback).
+func TestTaskTool_CreateWithoutBashPolicyChecker_AllCheckCriteria_FailsClosed(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewTaskCreateTool(store)
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
+	// tool.SetBashPolicyChecker deliberately left unset.
+	ctx := WithAgentID(context.Background(), "caller")
+	ctx = WithWorkspaceID(ctx, "ws")
+
+	res := tool.Execute(ctx, map[string]any{
+		"title":    "all-machine, no checker wired",
+		"prompt":   "p",
+		"agent_id": "assignee",
+		"criteria": []any{
+			map[string]any{
+				"kind": "check", "text": "tests pass",
+				"check": map[string]any{"command": "go test ./...", "expected_exit_code": float64(0)},
+			},
+		},
+	})
+	if !res.IsError {
+		t.Fatal("expected an unwired D2 rule 5 checker to fail CLOSED (deny) for an all-check criteria set")
 	}
 }
 
@@ -870,6 +1029,7 @@ func TestTaskCreate_WithBlockedBy(t *testing.T) {
 		"prompt":     "do it",
 		"agent_id":   "agent-b",
 		"blocked_by": []any{blocker.ID},
+		"criteria":   validCriteriaArg(),
 	})
 	if res.IsError {
 		t.Fatalf("task_create with blocked_by: %s", res.ForLLM)
@@ -921,6 +1081,7 @@ func TestTaskCreate_BlockedByRejectsNonExistentBlocker(t *testing.T) {
 		"prompt":     "p",
 		"agent_id":   "agent-b",
 		"blocked_by": []any{"nonexistent-blocker-id"},
+		"criteria":   validCriteriaArg(),
 	})
 	if !res.IsError {
 		t.Fatal("expected error creating task blocked_by a non-existent blocker")
@@ -957,6 +1118,7 @@ func TestTaskCreate_BlockedByRejectsCrossWorkspace(t *testing.T) {
 		"prompt":     "p",
 		"agent_id":   "agent-b",
 		"blocked_by": []any{blocker.ID},
+		"criteria":   validCriteriaArg(),
 	})
 	if !res.IsError {
 		t.Fatal("expected cross-workspace rejection at task_create")
@@ -1087,6 +1249,115 @@ func TestTaskUpdate_DueInvalidRFC3339(t *testing.T) {
 	}
 }
 
+// TestTaskCreate_DueRoundTrip proves create_task accepts and persists an RFC 3339
+// due date: the schema-consistency gap that previously gated `due` behind
+// update_task only is closed on the create path too. The two cases use two
+// different valid RFC 3339 inputs (differentiation — catches a hardcoded
+// response that ignores the field).
+func TestTaskCreate_DueRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		due  string
+	}{
+		{"utc", "2026-08-15T09:30:00Z"},
+		{"with_offset", "2026-08-16T14:00:00-05:00"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := task.New(t.TempDir())
+			tool := NewTaskCreateTool(store)
+			// create_task's concern here is the `due` arg, not the
+			// delegation-policy gate — wire a permissive deny-checker so the
+			// (fail-closed per the 7-reviewer-gate fix) gate does not mask the
+			// assertion under test.
+			tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
+
+			ctx := WithAgentID(context.Background(), "caller")
+			ctx = WithWorkspaceID(ctx, "ws-1")
+
+			res := tool.Execute(ctx, map[string]any{
+				"title":    "with due",
+				"prompt":   "do it",
+				"agent_id": "agent-b",
+				"due":      tc.due,
+				"criteria": validCriteriaArg(),
+			})
+			if res.IsError {
+				t.Fatalf("create_task with valid due %q failed: %s", tc.due, res.ForLLM)
+			}
+
+			var created struct {
+				TaskID string `json:"task_id"`
+			}
+			if err := json.Unmarshal([]byte(res.ForLLM), &created); err != nil {
+				t.Fatalf("parse result %q: %v", res.ForLLM, err)
+			}
+			got, err := store.Get(created.TaskID)
+			if err != nil {
+				t.Fatalf("get created task: %v", err)
+			}
+			if got.Due != tc.due {
+				t.Errorf("expected due %q persisted, got %q", tc.due, got.Due)
+			}
+		})
+	}
+}
+
+// TestTaskCreate_DueInvalidRFC3339 mirrors TestTaskUpdate_DueInvalidRFC3339 for
+// the create path: an invalid due date is rejected at create time too, and the
+// task must NOT be persisted. Differentiation: two different invalid inputs both
+// reject (not silently accepted).
+func TestTaskCreate_DueInvalidRFC3339(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		due  string
+	}{
+		{"not-a-date", "not-a-date"},
+		{"invalid-month-day", "2026-13-99T00:00:00Z"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := task.New(t.TempDir())
+			tool := NewTaskCreateTool(store)
+			// create_task's concern here is `due` validation, not the
+			// delegation-policy gate — wire a permissive checker so the
+			// rejection this test asserts on genuinely comes from the due-date
+			// validator, not an (fail-closed) unwired delegation gate
+			// short-circuiting first for the wrong reason.
+			tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
+
+			ctx := WithAgentID(context.Background(), "caller")
+			ctx = WithWorkspaceID(ctx, "ws-1")
+
+			res := tool.Execute(ctx, map[string]any{
+				"title":    "bad due",
+				"prompt":   "do it",
+				"agent_id": "agent-b",
+				"due":      tc.due,
+				"criteria": validCriteriaArg(),
+			})
+			if !res.IsError {
+				t.Fatalf("expected error for invalid due %q", tc.due)
+			}
+			if !strings.Contains(res.ForLLM, "invalid due date") {
+				t.Errorf("expected 'invalid due date' in error, got: %s", res.ForLLM)
+			}
+
+			// Nothing must have been persisted for the rejected create.
+			all, _ := store.List(task.Filter{WorkspaceID: "ws-1"})
+			if len(all) != 0 {
+				t.Fatalf("expected zero tasks persisted after rejected create, got %d: %+v", len(all), all)
+			}
+		})
+	}
+}
+
 // TestTaskUpdate_InvalidStatus proves a bogus status string is rejected.
 func TestTaskUpdate_InvalidStatus(t *testing.T) {
 	t.Parallel()
@@ -1134,14 +1405,24 @@ func TestTaskUpdate_NotFound(t *testing.T) {
 	}
 }
 
-// TestTaskUpdate_OwnershipRejection proves a caller who is NOT the assignee is
-// rejected — mirrors TestTaskDelete_OwnershipRejection /
-// TestTaskAddDependency_OwnershipRejection. task_update's gate is assignee-only
-// (it does NOT allow the creator, unlike delete/add_dependency).
+// TestTaskUpdate_OwnershipRejection proves a caller who is NEITHER the
+// assignee NOR the (agent-namespaced) creator is rejected — mirrors
+// TestTaskDelete_OwnershipRejection / TestTaskAddDependency_OwnershipRejection.
+//
+// task_update's gate is now the SAME union check delete_task uses: assignee
+// OR agent-namespaced creator (CreatedByAgentID, via
+// task.Task.CreatedByAgent). The "creator-a" sub-case below is still rejected
+// here, but NOT because creators are disallowed in general — seedTask stamps
+// its createdBy into the MIXED-NAMESPACE Task.CreatedBy field only (never
+// CreatedByAgentID), so "creator-a" carries no agent-namespaced attribution on
+// this task and is exercising the same namespace-safety property
+// TestTaskDelete_MixedNamespaceCreatorRejected proves for delete_task. The
+// legitimate agent-creator-can-update case (CreatedByAgentID set via
+// Store.CreateByAgent) is covered by TestTaskUpdate_AgentCreatorAllowed below.
 func TestTaskUpdate_OwnershipRejection(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
-	// Task assigned to agent-owner, created by creator-a.
+	// Task assigned to agent-owner, created by creator-a (mixed-namespace only).
 	tk := seedTask(t, store, "agent-owner", "creator-a", "ws-1")
 
 	tool := NewTaskUpdateTool(store)
@@ -1154,20 +1435,21 @@ func TestTaskUpdate_OwnershipRejection(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected ownership rejection for an unrelated caller")
 	}
-	if !strings.Contains(res.ForLLM, "you can only update tasks assigned to you") {
+	if !strings.Contains(res.ForLLM, "you can only update tasks you own or are assigned") {
 		t.Errorf("unexpected rejection message: %s", res.ForLLM)
 	}
 
-	// The creator (who is NOT the assignee) must ALSO be rejected — task_update
-	// is assignee-only, unlike delete/add_dependency which allow the creator.
+	// A caller matching only the MIXED-NAMESPACE created_by (not
+	// CreatedByAgentID) must ALSO be rejected — see the namespace-safety note
+	// in the doc comment above.
 	resCreator := tool.Execute(WithAgentID(context.Background(), "creator-a"), map[string]any{
 		"task_id": tk.ID,
 		"status":  updStatusInProg,
 	})
 	if !resCreator.IsError {
-		t.Fatal("expected rejection when the creator (non-assignee) calls task_update")
+		t.Fatal("expected rejection for a caller matching only the mixed-namespace created_by")
 	}
-	if !strings.Contains(resCreator.ForLLM, "you can only update tasks assigned to you") {
+	if !strings.Contains(resCreator.ForLLM, "you can only update tasks you own or are assigned") {
 		t.Errorf("unexpected creator rejection message: %s", resCreator.ForLLM)
 	}
 
@@ -1175,6 +1457,46 @@ func TestTaskUpdate_OwnershipRejection(t *testing.T) {
 	got, _ := store.Get(tk.ID)
 	if got.Status != task.StatusNext {
 		t.Errorf("status must be unchanged after rejected updates, got %q", got.Status)
+	}
+}
+
+// TestTaskUpdate_AgentCreatorAllowed proves the legitimate creator case: an
+// agent that created a task through the AGENT path (Store.CreateByAgent, which
+// stamps the agent-id-namespaced CreatedByAgentID) can update it even though
+// it is assigned to a different agent — mirroring
+// TestTaskDelete_AgentCreatorAllowed (task_scope_test.go) for update_task's
+// now-matching union check.
+func TestTaskUpdate_AgentCreatorAllowed(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+
+	tk := &task.Task{
+		Title: "DELEGATED", Action: task.ActionLLM, Status: task.StatusNext,
+		WorkspaceID: "ws-1", AgentID: "agent-owner",
+	}
+	if err := store.CreateByAgent(tk, "creator-a"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	tool := NewTaskUpdateTool(store)
+	res := tool.Execute(WithAgentID(context.Background(), "creator-a"), map[string]any{
+		"task_id":  tk.ID,
+		"priority": float64(1),
+	})
+	if res.IsError {
+		t.Fatalf("the agent that created the task must still be able to update it: %s", res.ForLLM)
+	}
+
+	got, err := store.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("get after update: %v", err)
+	}
+	if got.Priority != 1 {
+		t.Errorf("expected priority update to persist, got %d", got.Priority)
+	}
+	// The assignee (agent-owner) must be untouched by this creator-initiated update.
+	if got.AgentID != "agent-owner" {
+		t.Errorf("creator update must not reassign the task, got agent_id %q", got.AgentID)
 	}
 }
 
@@ -1479,6 +1801,7 @@ func TestTaskCreate_AllowsSubagent3pWorker_WhenDelegationAllows(t *testing.T) {
 		"title":    "dispatched to external CLI",
 		"prompt":   "do it",
 		"agent_id": "external-worker",
+		"criteria": validCriteriaArg(),
 	})
 
 	if res == nil || res.IsError {

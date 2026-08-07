@@ -140,28 +140,70 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 	agent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, agent)
 
-	// Calibrated window: large enough that tool defs leave room for some history
-	// turns (toolDefsTokens ≈ 5876 in the test environment), yet small enough
-	// that the seeded conversation overflows and a trim fires.
+	// --- Fixture calibration (derived, NOT hardcoded) -----------------------
 	//
-	// cw=20000, mt=4096 → budget = 20000 - 4096 - 1000 (5% headroom) = 14904.
-	// toolDefsTokens ≈ 5876 → history budget ≈ 9028 tokens.
-	// We seed 12 turns × ~1000 tok/turn = ~12000 tokens of history → overflow.
-	// After trim the last 9 turns (~9000 tokens) fit within the history budget.
-	agent.ContextWindow = 20000
-	agent.MaxTokens = 4096
+	// The builtin tool catalog is sent on EVERY request, and it grows as tools
+	// are added: it cost 13347 estimated tokens before the ADR-055/056 epic and
+	// 16059 after plan_correct + stop_plan + list_jobs landed. A hardcoded
+	// context window therefore ROTS. This fixture used to pin cw=20000 on the
+	// (by then already stale) assumption "toolDefsTokens ≈ 5876"; once
+	// toolDefs + maxTokens alone exceeded 20000 the scenario became
+	// unsatisfiable — NO amount of eviction can make the request fit, so
+	// windowTrim correctly bottomed out on its FR-003 last-user-Turn floor and
+	// the post-trim assertion below could never hold.
+	//
+	// Derive the window from the MEASURED catalog cost instead, so this test
+	// keeps asserting windowTrim's BEHAVIOUR (it evicts until the request fits)
+	// rather than a constant that silently expires the next time a tool lands.
+	//
+	// windowTrim keeps the largest suffix window[b:] satisfying
+	//   suffix + toolDefs <= cw - maxTokens - ceil(0.05*cw) - pinnedCore
+	// so the smallest cw leaving room for keepTurns turns of history solves
+	//   0.95*cw >= maxTokens + pinnedCore + toolDefs + keepTurns*turnTokens.
+	const maxTokens = 4096
+	const keepTurns = 3
+
+	toolDefsTokens := estimateToolDefsTokens(agent.Tools.ToProviderDefs())
+	pinnedCore := breadcrumbTokenCap
+	if agent.ContextBuilder != nil {
+		// Same chars*2/5 heuristic windowTrim uses for the system prompt.
+		pinnedCore += len(agent.ContextBuilder.BuildSystemPromptWithCache()) * 2 / 5
+	}
+
+	// ~2500 chars per message ≈ 1000 tokens per message → ~2000 tokens per turn.
+	turnText := strings.Repeat("a", 2500)
+	turnTokens := 2 * estimateMessageTokens(providers.Message{Role: "user", Content: turnText})
+	require.Positive(t, turnTokens, "test setup: seeded turn must cost tokens")
+
+	// +256 slack absorbs the integer rounding in the *20/19 solve and the
+	// ceil() in the headroom term; it stays well below one turn (turnTokens),
+	// so the trim still lands on exactly keepTurns turns.
+	contextWindow := (maxTokens+pinnedCore+toolDefsTokens+keepTurns*turnTokens)*20/19 + 256
+
+	// Guard the scenario is actually exercisable. If this ever fails, the
+	// builtin catalog has grown enough that the derivation above no longer
+	// leaves room for keepTurns turns — fix the catalog or the derivation,
+	// do not paper over it.
+	require.Greater(t, contextWindow, toolDefsTokens+maxTokens+keepTurns*turnTokens,
+		"derived context window must leave real room for history after tool defs "+
+			"(tool_defs=%d, max_tokens=%d) — the builtin catalog has outgrown this fixture",
+		toolDefsTokens, maxTokens)
+
+	agent.ContextWindow = contextWindow
+	agent.MaxTokens = maxTokens
 	al.mu.Lock()
-	al.cfg.Agents.Defaults.ContextWindow = 20000
+	al.cfg.Agents.Defaults.ContextWindow = contextWindow
 	al.mu.Unlock()
 
 	oldModel := agent.Model
 	require.NotEmpty(t, oldModel, "test setup: default agent must have a model")
 
 	const sessionKey = "switch-test-session"
-	// ~2500 chars per message ≈ 1000 tokens per message → 2000 tokens per turn.
-	turnText := strings.Repeat("a", 2500)
+	// Seed enough turns that the conversation overflows the new window, so
+	// decideSwitchCompressAction returns Compress and a trim actually fires.
+	seedTurns := contextWindow/turnTokens + 4
 	var seedMsgs []providers.Message
-	for i := 0; i < 12; i++ {
+	for i := 0; i < seedTurns; i++ {
 		seedMsgs = append(seedMsgs, providers.Message{Role: "user", Content: turnText})
 		seedMsgs = append(seedMsgs, providers.Message{Role: "assistant", Content: turnText})
 	}
@@ -170,6 +212,9 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 
 	historyBefore := agent.Sessions.GetHistory(sessionKey)
 	tokensBefore := estimateHistoryTokens(historyBefore)
+	require.Greater(t, tokensBefore, contextWindow,
+		"test setup: seeded conversation must overflow the new window so "+
+			"decideSwitchCompressAction returns Compress")
 
 	require.NotEqual(t, oldModel, newModel,
 		"test invariant: new model must differ from current model")
@@ -203,13 +248,23 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 	assert.Less(t, tokensAfter, tokensBefore,
 		"history token estimate must have shrunk after switch-time trim")
 
+	// windowTrim must have taken the NORMAL Turn-boundary path, not the FR-003
+	// emergency floor (which keeps only the most-recent user Turn and
+	// terminates even when the result is still over budget). Bottoming out on
+	// the floor is how this test used to "trim" while still failing the budget
+	// assertion below, so assert the distinction explicitly.
+	assert.Greater(t, len(history), 2,
+		"windowTrim must cut at a real Turn boundary, not bottom out on the "+
+			"FR-003 last-user-Turn floor (floor keeps 2 msgs)")
+
 	// The full request (history + tool defs + maxTokens) must fit within cw.
 	// windowTrim enforces: suffixTokens + toolDefsTokens + recallSpanTokens <=
-	// budget, where budget = cw - maxTokens - ceil(0.05*cw).  We verify the
-	// same constraint post-trim to confirm windowTrim did its job.
-	toolDefsTokens := estimateToolDefsTokens(updatedAgent.Tools.ToProviderDefs())
-	totalAfter := tokensAfter + toolDefsTokens + 4096 // 4096 = MaxTokens
-	assert.LessOrEqual(t, totalAfter, 20000,
+	// budget, where budget = cw - maxTokens - ceil(0.05*cw) - pinnedCore.  We
+	// verify the looser, user-visible constraint post-trim — deliberately NOT
+	// windowTrim's internal formula — to confirm windowTrim did its job.
+	postToolDefsTokens := estimateToolDefsTokens(updatedAgent.Tools.ToProviderDefs())
+	totalAfter := tokensAfter + postToolDefsTokens + maxTokens
+	assert.LessOrEqual(t, totalAfter, contextWindow,
 		"post-trim total (history+tool_defs+max_tokens) must fit within the new cw")
 
 	// ApplyAgentModel swap: provider pool must be queryable for the new model.

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // BDD: unified task blocked_by DAG advance on completion (FR-6.5).
 //
 // Sprint 2 changes:

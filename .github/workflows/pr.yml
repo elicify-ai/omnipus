@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Verify every e2e spec is assigned to exactly one shard
         run: scripts/e2e-shards.sh check
 
@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Check for removed CLI verbs in infra
         run: |
@@ -65,10 +65,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
 
@@ -99,10 +99,10 @@ jobs:
             patterns: "src/components/layout/ src/components/command-center/ src/components/projects/"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: "npm"
@@ -136,7 +136,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Run wire-types lint
         # No language runtimes needed beyond bash + python3 (both present on
@@ -155,15 +155,15 @@ jobs:
       CGO_ENABLED: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
 
@@ -194,23 +194,23 @@ jobs:
     name: Linter
     runs-on: ubuntu-latest
     env:
-      # pkg/gateway/*.go is tagged //go:build !cgo (pure-Go per CLAUDE.md hard
-      # constraint #2). Without CGO_ENABLED=0 the whole gateway package is
-      # excluded from the build and every caller of gateway.Run fails with
-      # "undefined: gateway.Run". CI must run with CGO disabled to match the
-      # release build and the project's pure-Go policy.
+      # Omnipus ships a pure-Go binary (CLAUDE.md hard constraint #2), so tests
+      # run with cgo disabled to match the release build. This is the
+      # enforcement mechanism for that constraint — the packages themselves
+      # carry no !cgo build tags (see the cgo-gate job, which builds the module
+      # under both CGO_ENABLED=0 and =1).
       CGO_ENABLED: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
 
@@ -243,17 +243,17 @@ jobs:
       CGO_ENABLED: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
 
@@ -290,15 +290,15 @@ jobs:
       CGO_ENABLED: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
 
@@ -320,9 +320,25 @@ jobs:
         run: go build -tags goolm,stdjson ./...
 
       - name: CGO_ENABLED=0 vet (smoke)
-        # go vet under CGO=0 catches pure-Go build-constraint regressions on the
-        # gateway files (//go:build !cgo) that a CGO=1 vet would silently skip.
+        # go vet under CGO=0 is the canonical vet for this module: production
+        # and release builds are always CGO_ENABLED=0.
         run: go vet -tags goolm,stdjson ./...
+
+      - name: CGO_ENABLED=1 build (all packages)
+        # The counterpart to the CGO=0 build above, and the gate CLAUDE.md has
+        # always documented but CI never actually ran (every job pinned
+        # CGO_ENABLED=0). It does NOT permit CGo — CGO=0 above still proves the
+        # module is CGo-free. It proves every package still COMPILES when cgo is
+        # enabled, which is what `go test -race` requires (race forces cgo).
+        #
+        # This exists because ~70 production files (all of pkg/gateway, plus
+        # tests/integration|perf|security) once carried //go:build !cgo, so
+        # under CGO_ENABLED=1 those packages compiled to nothing and could never
+        # be race-tested. This step fails loudly if such a tag comes back.
+        env:
+          CGO_ENABLED: "1"
+        run: go build -tags goolm,stdjson ./...
+
 
   test:
     name: Tests
@@ -336,15 +352,15 @@ jobs:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY_CI }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
 
@@ -367,11 +383,47 @@ jobs:
         # offenders. A package that fails BOTH times is a real failure; a
         # non-zero exit with no package-level `FAIL <pkg>` line (a build/setup
         # error) is a real failure too and is never swallowed.
+        #
+        # DATA RACE carve-out: this step doesn't pass -race itself (that's the
+        # dedicated step below), but a "DATA RACE" marker in the output — e.g.
+        # a future GOFLAGS change, or a test binary that shells out with -race
+        # — is never routed through the flake filter. A race that only
+        # manifests under parallel package execution and vanishes under -p 1
+        # is the textbook signature of a genuine concurrency bug, not CI
+        # flakiness; defense in depth here is cheap.
         run: |
           set +e
           out=$(go test -tags goolm,stdjson -count=1 ./... 2>&1)
           code=$?
           echo "$out"
+          # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
+          # race can be reported without flipping the overall `go test` exit code
+          # (e.g. a test that shells out with -race and only inspects the child's
+          # stdout, or ignores cmd.Run()'s error). Checking after `[ $code -eq 0 ]`
+          # would skip exactly the case this carve-out's own rationale describes.
+          #
+          # Native bash substring match — NOT `printf ... | grep -q`. Under
+          # GitHub's `bash -eo pipefail`, `grep -q` exits on the FIRST match and
+          # closes the pipe, `printf` then dies of SIGPIPE (141), and pipefail
+          # makes the whole pipeline 141 — so the test evaluated FALSE and this
+          # carve-out was silently skipped whenever the race report appeared more
+          # than one pipe buffer (64 KB) from the end of $out. Real `go test`
+          # output is megabytes, so that was the COMMON case; it only "worked"
+          # against small synthetic fixtures. No pipe, no subprocess, no SIGPIPE.
+          if [[ $out == *"DATA RACE"* ]]; then
+            echo ""
+            echo "=== DATA RACE detected in parallel run — this is never excused by an isolated re-run ==="
+            failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+            if [ -n "$failed" ]; then
+              for p in $failed; do
+                echo "REAL FAILURE (data race detected — never excused): $p"
+              done
+            else
+              echo "REAL FAILURE (data race detected — never excused): race detected but no package-level FAIL line matched; see full output above"
+            fi
+            exit 1
+          fi
+          # No race detected — now the ordinary short-circuit applies.
           [ $code -eq 0 ] && exit 0
           failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
           [ -z "$failed" ] && exit $code
@@ -388,23 +440,96 @@ jobs:
           exit $rc
 
       - name: Run go test -race (concurrency-sensitive packages)
-        # pkg/agent is excluded: it has 2 pre-existing races in unrelated tests
-        # that predate this PR. The packages below cover the full concurrency
+        # pkg/agent is now INCLUDED. It was excluded for "2 pre-existing races in
+        # unrelated tests"; a full `go test -race -count=1 -p 1 ./pkg/agent/` run
+        # on 2026-07-26 reported ZERO data races (ok, 124.6s), so the exclusion
+        # was stale and Constraint #7 ("pre-existing is never a closure path")
+        # applies. If a race reappears here it is a real finding, not a flake —
+        # the DATA RACE carve-out above makes it unexcusable.
+        # The packages below cover the full concurrency
         # contract introduced by MutateConfig, WithConfig, SaveConfigLocked,
-        # and the single-user bypass.
-        # pkg/gateway is excluded: every gateway file is //go:build !cgo, so
-        # under CGO_ENABLED=1 the package compiles to nothing and the test
-        # invocation fails. Race coverage for the gateway is provided by the
-        # CGO=0 test job above.
-        # Same flake filter as the CGO=0 step above; the isolated re-run keeps
-        # -race so a genuine DATA RACE still fails twice and is reported.
+        # and the single-user bypass, plus ADR-054's pkg/entity (64-shard
+        # striped mutex + sidecar flock) and pkg/agentstore.
+        # pkg/gateway used to be excluded because every gateway file carried
+        # //go:build !cgo, so under CGO_ENABLED=1 the package compiled to
+        # nothing and the test invocation failed. That tag has been removed
+        # (the pure-Go guarantee is enforced by the CGO_ENABLED=0 gate, not by
+        # a build tag), so pkg/gateway is now race-buildable. The old claim
+        # that "race coverage for the gateway is provided by the CGO=0 test job"
+        # was false — -race requires cgo, so a CGO_ENABLED=0 job runs no race
+        # detector at all. pkg/gateway is now INCLUDED below.
+        #
+        # It earned its place immediately: the first race run of that
+        # newly-unlocked surface found TWO real production races, both fixed —
+        # retentionToolResultSweepFn read by the boot sweep goroutine five lines
+        # before it was assigned (60bc0446), and Manager.StopAll closing worker
+        # queues while dispatchOutbound was still sending on them, which panics
+        # (f5cfa241). Neither was reachable by any gate that existed before.
+        #
+        # tests/integration is included for the same reason — it is where the
+        # second race actually surfaced, and it is the only suite that exercises
+        # a real gateway boot+shutdown cycle. Both were verified locally under
+        # -race (single run and -count=3, zero reports) before being added here;
+        # the timeout below is raised to accommodate them.
+        #
+        # pkg/logger is included (99d4e729's logMessage fix, guarded by
+        # logger_race_test.go): logMessage read the package-level
+        # `logger`/`fileLogger` globals with no RLock while four mutators wrote
+        # under Lock, on the path of every log call in the binary — reverting
+        # the fix would have kept CI green forever without this line, since the
+        # package's only other coverage is the plain (non-race) `go test` job
+        # above, which cannot detect a race by construction. Timeout left at
+        # 600s: verified locally, the package's whole race suite (a single
+        # 300ms-deadline goroutine-hammer test plus the ordinary unit tests)
+        # completes in ~1.3s under -race — negligible next to the headroom the
+        # 240s→600s raise already bought pkg/agent/pkg/gateway/tests/integration.
+        #
+        # DATA RACE carve-out (never routed through the flake filter): a race
+        # that manifests under the default parallel `-p` (NumCPU) run but
+        # disappears when the same package is re-run isolated at -p 1 is the
+        # textbook signature of a genuine concurrency bug — shared state
+        # racing under real parallelism — not a timing flake. The flake filter
+        # below exists only for ordinary (non-race) test failures that are
+        # sensitive to GitHub-runner CPU oversubscription; it must never be
+        # allowed to excuse an actual detected race. So: if "DATA RACE" shows
+        # up anywhere in the first run's output, fail immediately and skip the
+        # isolated re-run/flake-filter path entirely — a race is never given a
+        # second chance to "pass isolated".
         env:
           CGO_ENABLED: "1"
         run: |
           set +e
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 240s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... 2>&1)
+          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 600s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... ./pkg/logger/... ./tests/integration/... 2>&1)
           code=$?
           echo "$out"
+          # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
+          # race can be reported without flipping the overall `go test` exit code
+          # (e.g. a test that shells out with -race and only inspects the child's
+          # stdout, or ignores cmd.Run()'s error). Checking after `[ $code -eq 0 ]`
+          # would skip exactly the case this carve-out's own rationale describes.
+          #
+          # Native bash substring match — NOT `printf ... | grep -q`. Under
+          # GitHub's `bash -eo pipefail`, `grep -q` exits on the FIRST match and
+          # closes the pipe, `printf` then dies of SIGPIPE (141), and pipefail
+          # makes the whole pipeline 141 — so the test evaluated FALSE and this
+          # carve-out was silently skipped whenever the race report appeared more
+          # than one pipe buffer (64 KB) from the end of $out. Real `go test`
+          # output is megabytes, so that was the COMMON case; it only "worked"
+          # against small synthetic fixtures. No pipe, no subprocess, no SIGPIPE.
+          if [[ $out == *"DATA RACE"* ]]; then
+            echo ""
+            echo "=== DATA RACE detected in parallel run — skipping flake filter entirely ==="
+            failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+            if [ -n "$failed" ]; then
+              for p in $failed; do
+                echo "REAL FAILURE (data race detected — never excused): $p"
+              done
+            else
+              echo "REAL FAILURE (data race detected — never excused): race detected but no package-level FAIL line matched; see full output above"
+            fi
+            exit 1
+          fi
+          # No race detected — now the ordinary short-circuit applies.
           [ $code -eq 0 ] && exit 0
           failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
           [ -z "$failed" ] && exit $code
@@ -412,7 +537,7 @@ jobs:
           echo "=== FLAKE FILTER (-race): re-running failed packages isolated (-p 1): $failed ==="
           rc=0
           for p in $failed; do
-            if go test -race -tags goolm,stdjson -count=1 -timeout 240s -p 1 "$p" >/tmp/rr_race.log 2>&1; then
+            if go test -race -tags goolm,stdjson -count=1 -timeout 600s -p 1 "$p" >/tmp/rr_race.log 2>&1; then
               echo "FLAKE (passed isolated): $p"
             else
               echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL|DATA RACE' /tmp/rr_race.log | head; rc=1
@@ -428,11 +553,11 @@ jobs:
     env:
       CGO_ENABLED: "0"
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
       - name: Build SPA
@@ -483,15 +608,15 @@ jobs:
       CGO_ENABLED: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
 
@@ -525,7 +650,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Compute shard matrix from tests/e2e/shards.json
         id: plan
         run: |
@@ -554,16 +679,16 @@ jobs:
       OPENROUTER_KEY_C: ${{ secrets.OPENROUTER_API_KEY_CI_C }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: "npm"
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 

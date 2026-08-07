@@ -1,0 +1,110 @@
+type: object
+title: SubagentMessageFrame
+description: >
+  Server -> client (ADR-053 §Contract Surface — "Mid-span subagent
+  frames"). A mid-span event riding between the existing
+  `subagent_start`/`subagent_end` brackets, feeding pill/panel/board live
+  as a child pushes typed messages / the parent steers it. Rides the
+  existing since-cursor WS replay (same pattern as `ReplayMessageFrame`).
+
+  SHAPE DECISION (flagged for review): this is a FLAT, UI-facing
+  PROJECTION of the underlying `SessionMessage` — it does not embed the
+  full 12-variant `SessionMessage` discriminated union. Reasons: (1) the
+  full union is hosted INLINE in `openapi.yaml` per ADR-034 specifically
+  because oapi-codegen needs internal component refs inside a `oneOf` —
+  embedding it inside an asyncapi frame would require a second,
+  hand-duplicated copy of all 12 variants inside `asyncapi.yaml` (which
+  does not resolve cross-file `$ref` for its own codegen, per the
+  existing `GoalStatusFrame.yaml` note), multiplying maintenance burden
+  for a live UI ping that only ever needs a handful of display fields;
+  (2) this mirrors the established precedent of `GoalStatusFrame` itself
+  being a flat projection of goal state rather than embedding a full Goal
+  record. Full-fidelity SessionMessage data (every typed field, for every
+  kind) is available via `delegate.inbox`/`delegate.peek`
+  (`DelegateInboxResponse`/`DelegatePeekResponse`) — this frame is a
+  live nudge, not the source of truth.
+required:
+  - type
+  - session_id
+  - span_id
+  - message_id
+  - kind
+  - sender_identity
+  - untrusted_origin
+  - created_at
+additionalProperties: false
+properties:
+  type:
+    type: string
+    enum:
+      - subagent_message
+  session_id:
+    type: string
+    minLength: 1
+    description: Session in which the parent's span is running.
+  span_id:
+    type: string
+    minLength: 1
+    description: Matches the `span_id` from the bracketing `subagent_start` frame.
+  message_id:
+    type: string
+    minLength: 1
+    description: >
+      The underlying SessionMessage's `message_id` — correlates this live
+      ping with the full record fetchable via `delegate.inbox`/`peek`.
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WF"
+  kind:
+    type: string
+    enum:
+      - progress
+      - checkpoint
+      - artifact
+      - blocker
+      - question
+      - decision_request
+      - error
+      - handback
+      - steer
+      - respond
+    description: >
+      The underlying SessionMessage kind. `revision_entry` and
+      `goal_status` are excluded — they ride their own existing
+      plan/goal-scoped frame families, not the span-scoped mid-span
+      channel.
+    example: "progress"
+  text:
+    type: string
+    description: >
+      Flattened display text (progress.text / checkpoint.summary /
+      blocker.text / question.text / error.text / steer.text /
+      respond.text), when the kind carries one.
+    example: "Scanning pkg/plan for the write-set boundary..."
+  pct:
+    type: integer
+    minimum: 0
+    maximum: 100
+    description: "Present for `kind: progress` when a percentage estimate was given."
+    example: 40
+  correlation_id:
+    type: string
+    description: >
+      Present for `question`/`decision_request`/`steer`/`respond` — lets
+      the SPA thread a live reply.
+    example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"
+  sender_identity:
+    type: string
+    minLength: 1
+    description: Agent ID (or "human") that authored the underlying message.
+    example: "ray"
+  untrusted_origin:
+    type: boolean
+    description: >
+      True when the underlying message's free-text content originated
+      from a child agent and must render in untrusted-content framing
+      (FE-7/MAJ-12).
+    example: true
+  created_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp the underlying message was created.
+    example: "2026-07-22T10:00:00Z"

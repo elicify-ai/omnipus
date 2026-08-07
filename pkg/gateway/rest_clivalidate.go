@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // POST /api/v1/system/cli-validate — stateless, create-time validation that an
 // external-executor CLI actually runs at a caller-supplied path (ADR-030 §11,
 // spec FR-006/FR-012/FR-013/FR-014/FR-015/FR-017/FR-018).

@@ -1,7 +1,7 @@
 // Task DAG graph model + auto-layout.
 //
 // Pure, side-effect-free helpers shared by the Graph view and its tests:
-//   - the 7-state status → colour/label map (Sovereign Deep palette),
+//   - the 6-state status → colour/label map (Sovereign Deep palette),
 //   - the priority map,
 //   - `buildTaskGraph`, which turns a list of tasks into dagre-laid-out
 //     React Flow nodes + edges (blocker → blocked, left→right).
@@ -17,6 +17,7 @@ import {
   STATUS_COLORS,
   STATUS_LABELS,
   STATUS_MUTED,
+  TASK_CANCELLED_COLOR,
   type TaskStatus as SharedTaskStatus,
 } from '@/lib/statusColors'
 
@@ -33,7 +34,7 @@ export interface StatusVisual {
   muted: boolean
 }
 
-// 7-state lifecycle, projected from the single source of truth in
+// 6-state lifecycle, projected from the single source of truth in
 // `@/lib/statusColors` so the Graph, Board, roll-ups, and List can never drift.
 // in_progress is Forge Gold (#D4AF37) — the marquee "live work" accent.
 export const STATUS_VISUALS: Record<TaskStatus, StatusVisual> = Object.fromEntries(
@@ -51,6 +52,30 @@ export const STATUS_VISUALS: Record<TaskStatus, StatusVisual> = Object.fromEntri
 /** Resolve a status to its visual, tolerating unknown values from the wire. */
 export function statusVisual(status: TaskStatus | string | undefined): StatusVisual {
   return STATUS_VISUALS[(status as TaskStatus) ?? 'inbox'] ?? STATUS_VISUALS.inbox
+}
+
+/**
+ * The visual a graph NODE renders (ADR-052 FR-015/US-8) — like `statusVisual`,
+ * but a user-cancelled task (`status: 'failed'`, `cancel_reason:
+ * 'stopped_by_user'`) overrides the label/colour to the orange "Cancelled"
+ * marker instead of the genuine red "Failed", so it reads as distinct on the
+ * node chip + left rail. Deliberately node-scoped (not folded into
+ * `statusVisual`, which also colours dependency EDGES by their target task's
+ * status) — extending the cancelled override to edges is out of this wave's
+ * scope.
+ */
+export function taskNodeVisual(task: Pick<Task, 'status' | 'cancel_reason'>): StatusVisual {
+  const base = statusVisual(task.status)
+  if (task.status === 'failed' && task.cancel_reason === 'stopped_by_user') {
+    // Literal hex, not a `var(--color-warning)` reference — TaskNode.tsx:126
+    // string-concatenates an alpha suffix onto this value (`${visual.color}1f`);
+    // `var(--color-warning)1f` is invalid CSS and silently drops the
+    // backgroundColor declaration (Gate-2 finding #1, same bug class as
+    // TaskCard/PlansFilterBand/WorkspaceGraphTab — see statusColors.ts's
+    // TASK_CANCELLED_COLOR doc comment).
+    return { ...base, label: 'Cancelled', color: TASK_CANCELLED_COLOR }
+  }
+  return base
 }
 
 export const PRIORITY_LABELS: Record<number, string> = {
@@ -101,22 +126,110 @@ export interface AgentLike {
 }
 
 /**
+ * DAG-relevance test for orphan-collapsing (whole-workspace "All" mode of the
+ * Graph tab — ADR-051 (plans-as-filter), psychology-grounded: Attention —
+ * a disconnected single node is noise; Gestalt — a connected component is
+ * meaning). A task is "DAG-relevant" — worth its own node on the canvas —
+ * when it participates in some structure: it depends on something
+ * (`blocked_by`), something depends on IT, or it is a member of a Plan (plan
+ * membership is itself a grouping structure, even before any `blocked_by`
+ * edge exists among the plan's members). Everything else is a one-time,
+ * unlinked task, excluded from the canvas entirely (never rendered as a lone
+ * dot) and returned via `unlinked` instead. There is no per-task "tray" UI —
+ * GraphView only surfaces the *count* (`layout.unlinked.length`) as a small
+ * banner pointing back to the Board/List (S3 UAT fix #9); an earlier version
+ * of this comment promised an "N unlinked tasks" tray, which was deliberately
+ * dropped before ship — don't resurrect it from this doc comment.
+ *
+ * `candidates` should be the same population `buildTaskGraph` would render as
+ * nodes (already surface/parent-filtered) — a dependent hiding outside that
+ * population (a subtask, a heartbeat task) does not count as a visible
+ * dependency relationship.
+ */
+export function isDagRelevant(task: Task, candidates: Task[]): boolean {
+  if (task.plan_id) return true
+  if ((task.blocked_by?.length ?? 0) > 0) return true
+  return candidates.some(
+    (other) => other.id !== task.id && (other.blocked_by ?? []).includes(task.id),
+  )
+}
+
+/**
+ * `planId` and `collapseOrphans` are mutually exclusive: plan scope is never
+ * orphan-collapsed (the plan boundary IS the scope, so every member renders
+ * even with zero edges), and `collapseOrphans` only means anything in the
+ * whole-workspace "All" view. A discriminated union makes "both set" a type
+ * error instead of a silently-ignored runtime combination.
+ */
+export type BuildTaskGraphOptions =
+  | {
+      /**
+       * Scope the graph to a single Plan's member tasks (`task.plan_id ===
+       * planId`) + the `blocked_by` edges between them (ADR-051 plans-as-filter
+       * — plan-scoped graph).
+       */
+      planId: string
+    }
+  | {
+      planId?: null
+      /**
+       * Whole-workspace "All" mode: when true, tasks that fail
+       * `isDagRelevant` are excluded from `nodes` and returned via
+       * `unlinked` instead, so the canvas never shows a field of
+       * disconnected one-time-task dots. Defaults to false, preserving the
+       * historical "every visible task is a node" behaviour for existing
+       * callers/tests.
+       */
+      collapseOrphans?: boolean
+    }
+
+/**
  * Build a left→right dependency DAG from the workspace's tasks.
  *
  * Nodes are top-level user-surface tasks; edges go blocker → blocked (an edge
  * for every `blocked_by` entry whose blocker is also visible). Dagre lays the
  * graph out with rank direction LR. Returns positioned React Flow nodes +
- * styled edges. Pure: same input → same output, no DOM access.
+ * styled edges, plus `unlinked` — the tasks collapsed out of the canvas by
+ * `collapseOrphans` (always empty otherwise, and always empty in plan scope).
+ * Pure: same input → same output, no DOM access.
  */
 export function buildTaskGraph(
   tasks: Task[],
   agents: AgentLike[] = [],
-): { nodes: TaskGraphNode[]; edges: Edge[] } {
-  // Match the Board: only top-level, user-surface tasks are graphed.
-  const visible = tasks.filter(
+  options: BuildTaskGraphOptions = {},
+): { nodes: TaskGraphNode[]; edges: Edge[]; unlinked: Task[] } {
+  // Can't destructure `collapseOrphans` directly alongside `planId` — it
+  // only exists on the union's "no planId" branch, so TS needs the
+  // discriminant check inline to narrow `options` before reading it.
+  const planId = options.planId ?? null
+  const collapseOrphans = options.planId == null ? (options.collapseOrphans ?? false) : false
+
+  // Match the Board: only top-level, user-surface tasks are graphable at all.
+  const graphable = tasks.filter(
     (t) =>
       (t.surface === 'user' || t.surface === undefined) && t.parent_task_id == null,
   )
+
+  let visible: Task[]
+  let unlinked: Task[]
+  if (planId != null) {
+    visible = graphable.filter((t) => t.plan_id === planId)
+    unlinked = []
+  } else if (collapseOrphans) {
+    // Single pass — `isDagRelevant` is only evaluated once per task, not
+    // once per filter (it itself scans `graphable`, so evaluating it twice
+    // per task doubled that cost for no benefit).
+    visible = []
+    unlinked = []
+    for (const t of graphable) {
+      if (isDagRelevant(t, graphable)) visible.push(t)
+      else unlinked.push(t)
+    }
+  } else {
+    visible = graphable
+    unlinked = []
+  }
+
   const visibleIds = new Set(visible.map((t) => t.id))
   const agentById = new Map(agents.map((a) => [a.id, a]))
 
@@ -207,5 +320,5 @@ export function buildTaskGraph(
     }
   })
 
-  return { nodes, edges }
+  return { nodes, edges, unlinked }
 }

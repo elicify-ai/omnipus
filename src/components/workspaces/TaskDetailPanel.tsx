@@ -5,19 +5,28 @@ import {
   fetchAgents,
   buildTaskAssigneeItems,
   fetchSubtasks,
-  fetchMilestones,
   fetchWorkspaces,
   fetchTasks,
+  fetchPlans,
+  fetchTaskEvidence,
+  fetchTaskVerdicts,
   updateTask,
   deleteTask,
   setTaskDependencies,
+  stopTaskGoalLoop,
   runTaskNow,
   isApiError,
-  milestonesQueryKeys,
   workspacesQueryKeys,
   tasksQueryKeys,
+  plansQueryKeys,
+  taskEvidenceQueryKeys,
+  taskVerdictsQueryKeys,
 } from '@/lib/api'
 import type { Task, TaskUpdateRequest } from '@/lib/api'
+import { TagInput } from '@/components/workspaces/TagInput'
+import { AcceptanceCriteriaEditor } from '@/components/workspaces/AcceptanceCriteriaEditor'
+import { CriteriaVerdictList } from '@/components/workspaces/CriteriaVerdictList'
+import { useAuthStore } from '@/store/auth'
 import {
   Sheet,
   SheetContent,
@@ -54,6 +63,7 @@ import { STATUS_OPTIONS, STATUS_BADGE } from '@/components/workspaces/taskStatus
 import { formatDateTime } from '@/lib/dateFormat'
 import {
   Play,
+  Stop,
   Copy,
   PencilSimple,
   Check,
@@ -68,12 +78,11 @@ import { cn } from '@/lib/utils'
 import {
   type TriggerKind,
   buildTrigger,
-  datetimeLocalToMs,
   datetimeLocalToIso,
   datetimeLocalToDate,
   dateToDatetimeLocal,
-  isRecurringTrigger,
-  recurringTriggerSummary,
+  isScheduledTrigger,
+  scheduledTriggerSummary,
 } from '@/components/workspaces/taskFormFields'
 
 // ── Status config ──────────────────────────────────────────────────────────────
@@ -103,42 +112,40 @@ interface TaskDetailPanelProps {
 
 export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanelProps) {
   const { addToast } = useUiStore()
+  const username = useAuthStore((s) => s.username)
   const queryClient = useQueryClient()
 
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(task?.workspace_id ?? '')
   // Inline field errors — surfaced instead of silently discarding invalid input.
-  const [triggerError, setTriggerError] = useState('')
+  // (No inline trigger-time error here: operator ruling 2026-08-07 made
+  // `once` schedule editing calendar-only, same as every/recurring — the
+  // panel no longer owns a trigger-time input that could fail to parse. The
+  // calendar editor (CalendarEventSlideOver) owns that validation now.)
   const [dueError, setDueError] = useState('')
   const [statusError, setStatusError] = useState('')
   // DateTimePicker is fully controlled (value/onChange) — day, hour, and minute
   // picks each fire a separate onChange that must compose on top of the prior
-  // pick, so these hold the in-progress edit and are re-synced from the task
+  // pick, so this holds the in-progress edit and is re-synced from the task
   // whenever the server value changes (e.g. after a successful autosave PATCH).
-  const [triggerAtDraft, setTriggerAtDraft] = useState<Date | null>(
-    typeof task?.trigger?.config?.at_ms === 'number' ? new Date(task.trigger.config.at_ms) : null,
-  )
   const [dueDraft, setDueDraft] = useState<Date | null>(datetimeLocalToDate(task?.due))
   // Autosave indicator — every field change fires an immediate mutation; this
   // mirrors the AgentProfile / Gateway pattern so the user sees Saving…/Saved.
   const [saveStatus, setSaveStatus] = useState<AutoSaveStatus>('idle')
   const [saveError, setSaveError] = useState<string | undefined>(undefined)
 
-  // Resync everything EXCEPT the due/trigger-at drafts when the task's identity
+  // Resync everything EXCEPT the due draft when the task's identity
   // (id/prompt/workspace_id) actually changes — i.e. a different task was
   // selected, or the prompt was saved elsewhere. Deliberately NOT keyed on
-  // task?.due / task?.trigger?.config?.at_ms: a due/trigger autosave PATCH
-  // invalidates the tasks query, which hands this component a new `task`
-  // object with the SAME id/prompt/workspace_id — if this effect also fired
-  // on that resync, it would wipe an in-progress, unsaved prompt edit out from
-  // under the user (data loss). See the sibling effect below for due/trigger.
+  // task?.due: a due autosave PATCH invalidates the tasks query, which hands
+  // this component a new `task` object with the SAME id/prompt/workspace_id —
+  // if this effect also fired on that resync, it would wipe an in-progress,
+  // unsaved prompt edit out from under the user (data loss). See the sibling
+  // effect below for due.
   useEffect(() => {
     setPromptDraft(task?.prompt ?? '')
     setEditingPrompt(false)
-    setSelectedWorkspaceId(task?.workspace_id ?? '')
-    setTriggerError('')
     setDueError('')
     setStatusError('')
     setSaveStatus('idle')
@@ -146,16 +153,15 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     setConfirmDelete(false)
   }, [task?.id, task?.prompt, task?.workspace_id])
 
-  // Resync ONLY the due/trigger-at drafts when the task's due date or
-  // one-time trigger changes — including the same-identity resync described
-  // above (a due/trigger PATCH's own success should still reflect the saved
-  // value once the query refetches). Split out from the effect above so this
-  // resync can never touch promptDraft/editingPrompt/errors (todos are now
-  // TaskChecklistField's own state, keyed on task.id).
+  // Resync ONLY the due draft when the task's due date changes — including
+  // the same-identity resync described above (a due PATCH's own success
+  // should still reflect the saved value once the query refetches). Split
+  // out from the effect above so this resync can never touch
+  // promptDraft/editingPrompt/errors (todos are now TaskChecklistField's own
+  // state, keyed on task.id).
   useEffect(() => {
-    setTriggerAtDraft(typeof task?.trigger?.config?.at_ms === 'number' ? new Date(task.trigger.config.at_ms) : null)
     setDueDraft(datetimeLocalToDate(task?.due))
-  }, [task?.id, task?.due, task?.trigger?.config?.at_ms])
+  }, [task?.id, task?.due])
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
 
@@ -175,11 +181,30 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     staleTime: 30_000,
   })
 
-  const { data: milestones = [] } = useQuery({
-    queryKey: milestonesQueryKeys.list(selectedWorkspaceId),
-    queryFn: () => fetchMilestones(selectedWorkspaceId),
-    enabled: !!selectedWorkspaceId,
-    staleTime: 30_000,
+  // Plans in this task's workspace (ADR-051 plans-as-filter) — the "Move to
+  // plan…" picker below is the explicit cross-plan reassignment path: the
+  // Board doesn't change a task's plan via drag; use this dropdown to move it.
+  const { data: plans = [] } = useQuery({
+    queryKey: plansQueryKeys.list(task?.workspace_id ?? ''),
+    queryFn: () => fetchPlans(task!.workspace_id),
+    enabled: task != null && !!task.workspace_id,
+    staleTime: 10_000,
+  })
+
+  // Acceptance-criteria evidence + judge verdicts (ADR-049 FR-088/089) — only
+  // meaningful once the task has criteria; the query is cheap to skip otherwise.
+  const hasCriteria = (task?.criteria?.length ?? 0) > 0
+  const { data: taskEvidence = [] } = useQuery({
+    queryKey: taskEvidenceQueryKeys.list(task?.id ?? ''),
+    queryFn: () => fetchTaskEvidence(task!.id),
+    enabled: task != null && hasCriteria,
+    staleTime: 10_000,
+  })
+  const { data: taskVerdicts = [] } = useQuery({
+    queryKey: taskVerdictsQueryKeys.list(task?.id ?? ''),
+    queryFn: () => fetchTaskVerdicts(task!.id),
+    enabled: task != null && hasCriteria,
+    staleTime: 10_000,
   })
 
   const { data: subtasks = [] } = useQuery({
@@ -195,8 +220,16 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     enabled: task != null && !!task.workspace_id,
     staleTime: 10_000,
   })
+  // Candidate dependencies are same-plan, top-level siblings (exclude self).
+  // A `blocked_by` edge must stay inside one plan's DAG — cross-plan deps
+  // aren't meaningful. Existing cross-plan deps (pre-enforcement / agent-set)
+  // still render and stay removable because the chip list below resolves
+  // titles from the full `wsTasks`, not this filtered candidate set.
   const depCandidates: Task[] = wsTasks.filter(
-    (t) => t.id !== task?.id && !t.parent_task_id,
+    (t) =>
+      t.id !== task?.id &&
+      !t.parent_task_id &&
+      (t.plan_id || null) === (task?.plan_id || null),
   )
 
   // Reset the "Saved" indicator back to idle after a short fade so it does not
@@ -204,20 +237,23 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const savedFadeRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (savedFadeRef.current) clearTimeout(savedFadeRef.current) }, [])
 
-  // Debounce the due/trigger-at DateTimePicker autosave: day, hour, and minute
-  // are three separate onChange firings for a single logical edit, so PATCHing
-  // on every one of them sends 3 sequential requests with intermediate
+  // Debounce the due-date DateTimePicker autosave: day, hour, and minute are
+  // three separate onChange firings for a single logical edit, so PATCHing on
+  // every one of them sends 3 sequential requests with intermediate
   // (partially-composed) values — chatty, and a race if they resolve out of
-  // order. Coalesce into ONE PATCH per field ~500ms after the user stops
-  // picking (cancel-in-flight: each new pick within the window replaces the
-  // pending commit). Keyed per field (not a single shared timer) so editing
-  // due and trigger-at close together doesn't drop one of them.
-  const dateCommitTimers = useRef<Partial<Record<'due' | 'triggerAt', ReturnType<typeof setTimeout>>>>({})
+  // order. Coalesce into ONE PATCH ~500ms after the user stops picking
+  // (cancel-in-flight: each new pick within the window replaces the pending
+  // commit). Kept keyed-by-field (rather than a single bare timer) since this
+  // used to also debounce the inline trigger-time picker before operator
+  // ruling 2026-08-07 moved `once` schedule editing to the calendar-only
+  // gate below — 'due' is the only field left, but the shape stays generic
+  // in case a future inline date field needs it.
+  const dateCommitTimers = useRef<Partial<Record<'due', ReturnType<typeof setTimeout>>>>({})
   useEffect(() => () => {
     Object.values(dateCommitTimers.current).forEach((t) => { if (t) clearTimeout(t) })
   }, [])
 
-  function scheduleDateCommit(field: 'due' | 'triggerAt', commit: () => void) {
+  function scheduleDateCommit(field: 'due', commit: () => void) {
     const timers = dateCommitTimers.current
     const pending = timers[field]
     if (pending) clearTimeout(pending)
@@ -306,6 +342,22 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to re-run task', variant: 'error' }),
   })
 
+  // Stop/Clear (D8) — halts this task's own goal loop (ADR-049).
+  const [confirmStopLoop, setConfirmStopLoop] = useState(false)
+  const { mutate: doStopLoop, isPending: isStoppingLoop } = useMutation({
+    mutationFn: () => {
+      if (!task) return Promise.reject(new Error('No task selected'))
+      return stopTaskGoalLoop(task.id)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+      addToast({ message: 'Goal loop stopped.', variant: 'success' })
+      setConfirmStopLoop(false)
+    },
+    onError: (err: unknown) =>
+      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to stop the goal loop', variant: 'error' }),
+  })
+
   // Delete task
   const { mutate: doDelete, isPending: isDeleting } = useMutation({
     mutationFn: () => {
@@ -340,10 +392,16 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     doSetDeps(next)
   }
 
-  // FR-011/D3/FR-005: the generic detail panel edits manual/once triggers
-  // only — recurring-trigger editing exists exclusively in the calendar
-  // editor. (This handler is unreachable for every/recurring tasks: the
-  // Trigger field renders the FR-023 defensive read-only guard for those,
+  // FR-011/D3/FR-005, updated by operator ruling 2026-08-07: the generic
+  // detail panel only ever offers switching the trigger *kind* between
+  // "None (manual)" and "Once (at a time)" — it no longer owns setting the
+  // actual once-trigger time. Picking "Once" here hands the task a default
+  // at_ms (now + 1h) via buildTrigger and immediately PATCHes; the task then
+  // round-trips as a schedule-bearing task and the Trigger field below
+  // switches to its read-only calendar-redirect rendering — the same
+  // treatment every/recurring already got, and where the actual time is set.
+  // (This handler is unreachable for every/recurring/once tasks already at
+  // rest: the Trigger field renders the calendar-redirect guard for those,
   // never this SmartSelect.)
   function handleTriggerKindChange(kind: TriggerKind) {
     if (!task) return
@@ -353,16 +411,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     } else {
       doUpdate({ trigger: buildTrigger('manual', {}) })
     }
-  }
-
-  function handleTriggerAtChange(value: string) {
-    const at = datetimeLocalToMs(value)
-    if (at == null) {
-      setTriggerError('Pick a valid date and time for the one-time trigger.')
-      return
-    }
-    setTriggerError('')
-    doUpdate({ trigger: buildTrigger('once', { at_ms: at }) })
   }
 
   function handleDueChange(value: string) {
@@ -424,7 +472,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   // against"). Disable the picker instead of offering guaranteed-400 choices.
   const noWorkspaceForAssignment = !task.workspace_id
 
-  const isStartable = task.status === 'inbox' || task.status === 'next' || task.status === 'planning'
+  const isStartable = task.status === 'inbox' || task.status === 'next'
   const isFailed = task.status === 'failed'
   const isRunning = task.status === 'in_progress'
   const blockedBy = task.blocked_by ?? []
@@ -552,22 +600,91 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         </p>
       </Field>
 
-      {/* Milestone */}
-      <Field label="Milestone">
+      {/* Plan (ADR-051 plans-as-filter) — "Move to plan…", the explicit
+          cross-plan reassignment path: the Board doesn't change a task's plan
+          via drag; use this dropdown to move it. */}
+      <Field label="Plan">
         <SmartSelect
-          value={task.milestone_id ?? '__none__'}
-          onValueChange={(val) => {
-            doUpdate({ milestone_id: val === '__none__' ? '' : val })
-          }}
-          placeholder="No milestone"
+          value={task.plan_id ?? '__none__'}
+          onValueChange={(val) => doUpdate({ plan_id: val === '__none__' ? '' : val })}
+          placeholder={noWorkspaceForAssignment ? 'Unavailable' : 'No plan'}
+          disabled={noWorkspaceForAssignment}
           triggerClassName="h-8 text-xs"
-          ariaLabel="Milestone"
+          ariaLabel="Plan"
           items={[
-            { value: '__none__', label: 'No milestone', className: 'text-xs' },
-            ...milestones.map((m) => ({ value: m.id, label: m.name, className: 'text-xs' })),
+            { value: '__none__', label: 'No plan', className: 'text-xs' },
+            ...plans.map((p) => ({ value: p.id, label: p.title, className: 'text-xs' })),
           ]}
         />
+        {noWorkspaceForAssignment && (
+          <p className="text-xs text-[var(--color-muted)] mt-1.5">
+            Task has no workspace — plan assignment unavailable
+          </p>
+        )}
       </Field>
+
+      {/* Tags (ADR-049 — replaces the milestone dropdown). Migrated
+          `milestone:<name>` tags render as ordinary chips here. */}
+      <Field label="Tags">
+        <TagInput
+          ariaLabel="Add tag"
+          tags={task.tags ?? []}
+          onChange={(tags) => doUpdate({ tags })}
+        />
+      </Field>
+
+      {/* Acceptance criteria + per-attempt verdicts (ADR-049 FR-087/088) */}
+      <Field label="Acceptance criteria">
+        <AcceptanceCriteriaEditor
+          criteria={task.criteria ?? []}
+          onChange={(criteria) => doUpdate({ criteria })}
+          currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
+          emptyHint="No criteria — this task will be judged against its title and description (D5)."
+        />
+        <div className="mt-2">
+          <CriteriaVerdictList
+            criteria={task.criteria ?? []}
+            verdicts={taskVerdicts}
+            evidence={taskEvidence}
+            attemptCount={task.attempt_count}
+            maxAttempts={task.max_attempts}
+          />
+        </div>
+      </Field>
+
+      {/* Clear/Stop — a task actively running its own goal loop (US-11 AS-5) */}
+      {isRunning && typeof task.attempt_count === 'number' && task.attempt_count > 0 && (
+        <Button
+          variant="outline"
+          className="w-full gap-2 text-xs h-8 border-[var(--color-error)]/30 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10"
+          onClick={() => setConfirmStopLoop(true)}
+          disabled={isStoppingLoop}
+        >
+          <Stop size={13} weight="fill" />
+          {isStoppingLoop ? 'Stopping…' : 'Stop/Clear goal loop'}
+        </Button>
+      )}
+
+      <AlertDialog open={confirmStopLoop} onOpenChange={setConfirmStopLoop}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Stop this task's goal loop?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This winds down the attempt loop for “{task.title}”. In-flight work finishes gracefully; it will not restart automatically.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => doStopLoop()}
+              disabled={isStoppingLoop}
+              className="bg-[var(--color-error)] text-white hover:bg-[var(--color-error)]/90"
+            >
+              {isStoppingLoop ? 'Stopping…' : 'Stop/Clear'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Agent */}
       <Field label="Agent">
@@ -602,21 +719,31 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         ) : null}
       </Field>
 
-      {/* Trigger — FR-023 defensive guard: Board/List already exclude
-          every/recurring tasks (BoardView/ListView's isRecurringTrigger
-          filter), so this panel should never receive one in practice. If it
-          somehow does (stale cache / race), render a READ-ONLY plain-English
-          summary + a link to the workspace calendar instead of the editable
-          picker — never a raw cron/rule string, never trigger editing here.
-          Recurring-trigger editing exists only in the calendar editor
-          (FR-005). Otherwise (manual/once, the normal case), the picker
-          below offers only those two kinds — the same trim as the generic
-          create form (FR-011/D3). */}
+      {/* Trigger — operator ruling 2026-08-07 (supersedes the 364d00b2-era
+          judgment that kept `once` inline-editable here): editing a
+          schedule-bearing task's TIME is calendar-only for every kind —
+          once/every/recurring alike — not just repeating ones. Gate on the
+          broader isScheduledTrigger, not the narrower isRecurringTrigger.
+          Board/List already exclude every schedule-bearing task
+          (BoardView/ListView's isScheduledTrigger filter), so this panel
+          should rarely receive one in practice — reachable via a dependency
+          chip, subtask row, search result, stale cache, or a race. When it
+          does, render a READ-ONLY plain-English summary + a link to the
+          workspace calendar instead of an editable picker — never a raw
+          cron/rule string, never trigger-time editing here. Schedule editing
+          exists only in the calendar editor (FR-005, CalendarEventSlideOver).
+          Otherwise (manual, the normal case), the picker below offers
+          "None (manual)" and "Once (at a time)" as trigger KINDS — the same
+          trim as the generic create form (FR-011/D3). Picking "Once" hands
+          the task a default at_ms and PATCHes immediately; once the task
+          round-trips as schedule-bearing, this field switches to the
+          read-only redirect above — the actual date/time is then set in the
+          calendar, same as every/recurring. */}
       <Field label="Trigger">
-        {isRecurringTrigger(task.trigger) ? (
+        {isScheduledTrigger(task.trigger) ? (
           <div className="space-y-1.5">
             <p className="text-xs text-[var(--color-secondary)]">
-              {recurringTriggerSummary(task.trigger)}
+              {scheduledTriggerSummary(task.trigger)}
             </p>
             {task.workspace_id && (
               <Link
@@ -631,32 +758,16 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             )}
           </div>
         ) : (
-          <>
-            <SmartSelect
-              value={triggerKind}
-              onValueChange={(val) => handleTriggerKindChange(val as TriggerKind)}
-              triggerClassName="h-8 text-xs"
-              ariaLabel="Trigger"
-              items={[
-                { value: 'manual', label: 'None (manual)', className: 'text-xs' },
-                { value: 'once', label: 'Once (at a time)', className: 'text-xs' },
-              ]}
-            />
-            {triggerKind === 'once' && (
-              <DateTimePicker
-                aria-label="Trigger date and time"
-                value={triggerAtDraft}
-                onChange={(d) => {
-                  setTriggerAtDraft(d)
-                  scheduleDateCommit('triggerAt', () => handleTriggerAtChange(dateToDatetimeLocal(d)))
-                }}
-                className="mt-1.5"
-              />
-            )}
-            {triggerError && (
-              <p className="text-xs text-[var(--color-error)] mt-1.5">{triggerError}</p>
-            )}
-          </>
+          <SmartSelect
+            value={triggerKind}
+            onValueChange={(val) => handleTriggerKindChange(val as TriggerKind)}
+            triggerClassName="h-8 text-xs"
+            ariaLabel="Trigger"
+            items={[
+              { value: 'manual', label: 'None (manual)', className: 'text-xs' },
+              { value: 'once', label: 'Once (at a time)', className: 'text-xs' },
+            ]}
+          />
         )}
       </Field>
 
@@ -751,7 +862,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           calendar's recurring-task edit slide-over (TaskChecklistField). */}
       <TaskChecklistField task={task} />
 
-      {/* Start button — inbox / next / planning tasks */}
+      {/* Start button — inbox / next tasks */}
       {isStartable && (
         <Button
           className="w-full gap-2 text-xs h-8"

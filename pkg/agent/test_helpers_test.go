@@ -15,6 +15,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -84,12 +85,71 @@ func mustNewAgentLoop(
 	provider providers.LLMProvider,
 ) *AgentLoop {
 	t.Helper()
+	ensureTestIsolatedAgentHome(t, cfg)
 	ensureTestWorkspaceMembership(t, cfg)
 	al, err := NewAgentLoop(cfg, msgBus, provider)
 	if err != nil {
 		t.Fatalf("NewAgentLoop: %v", err)
 	}
 	return al
+}
+
+// ensureTestIsolatedAgentHome gives cfg its own private, per-test home
+// directory (via t.TempDir()) whenever the caller left Agents.Defaults.Home
+// unset — closing a real (test-only) defect class this package's tests were
+// silently hitting.
+//
+// The mechanism: config.Config.AgentHomeBasePath() (pkg/config/config.go) is
+// expandHome(cfg.Agents.Defaults.Home), and THAT expandHome (unlike the
+// same-named helper in pkg/agent/instance.go) does NOT fall back to
+// $OMNIPUS_HOME/$HOME for an empty input — it returns "" verbatim. NewAgentLoop
+// (pkg/agent/loop.go) then computes homePath := filepath.Dir(cfg.
+// AgentHomeBasePath()); filepath.Dir("") returns ".", the test PROCESS's
+// current working directory — this package's own source directory when
+// running `go test ./pkg/agent/` — and roots the shared session store AND
+// task store there (sharedDir := filepath.Join(homePath, "sessions"), etc.).
+//
+// Real gateway boots never hit this: config.DefaultConfig() (pkg/config/
+// defaults.go) always seeds Agents.Defaults.Home from OmnipusHomeDir(), so
+// homePath is never "." in production. But a large fraction of this
+// package's tests construct a bare config.Config{} literal (bypassing
+// DefaultConfig() entirely) and leave Agents.Defaults.Home empty — every one
+// of those was, before this fix, silently writing real session directories
+// straight into pkg/agent/sessions/ on the actual checkout: not under any
+// temp root, never cleaned up between runs, accumulating indefinitely.
+//
+// Most such tests never noticed because they mint a fresh random session id
+// every run (al.generateSubTurnID()/store.NewSession's ULID), so the leak was
+// silent — a new, never-colliding directory each time. The exception that
+// surfaced this: TestDelegateCancelHard/Soft_RealSubTurn_
+// ActuallyCancelsTargetContext (interrupt_by_session_key_test.go, #577) use a
+// FIXED, hardcoded DelegateSessionID ("test-577-delegate-child"[-soft]) so
+// their SECOND (and every subsequent) run collided with their OWN first run's
+// leftover directory and tripped CreateSessionWithID's FR-096 collision guard
+// (pkg/session/unified_api.go) — surfacing as "target sub-turn's LLM call
+// never started" (spawnSubTurn returns the collision error before ever
+// reaching runTurn/the provider Chat call), which is a test-infrastructure
+// artifact, NOT a defect in the delegate-cancel logic those tests exist to
+// prove. Root-caused and verified via targeted instrumentation: the isolated
+// failure is a ~10ms error return (session already exists), not a hang —
+// indistinguishable from a genuine 5s timeout only because both tests discard
+// spawnSubTurn's return value.
+//
+// t.TempDir() (not t.Setenv) is deliberate: safe to call even after
+// t.Parallel(), auto-removed after the test, and unique per call — so this
+// closes the leak for every mustNewAgentLoop caller in this package in one
+// place, rather than requiring each test to remember to set Home itself (many
+// already do, e.g. loop_test.go/loop_sysagent_test.go's own explicit
+// `cfg.Agents.Defaults.Home = tmpDir`; this is a no-op for those — only a cfg
+// that left Home empty is touched).
+func ensureTestIsolatedAgentHome(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	if cfg == nil {
+		return
+	}
+	if cfg.Agents.Defaults.Home == "" {
+		cfg.Agents.Defaults.Home = t.TempDir()
+	}
 }
 
 // testHarnessWorkspaceMembershipID is the fixed workspace id the shared
@@ -159,6 +219,17 @@ func ensureTestWorkspaceMembership(t *testing.T, cfg *config.Config) {
 // atomically under a package-level mutex so concurrent (t.Parallel) callers
 // never race a read-merge-write against each other or produce a torn read
 // for a concurrently-running turn's own FindForAgentPreferring lookup.
+//
+// Every id passed in MUST already be normalized exactly the way the agent
+// registry itself will key it (routing.NormalizeAgentID) — callers seed
+// CoreTeam membership FOR that exact string, and resolveTurnWorkDirOrRefuse's
+// FindForAgentPreferring/FindForAgent lookup at real-turn time is an EXACT
+// string match against it (pkg/workspace/find_for_agent.go), never
+// case-folded or re-normalized on the read side. testHarnessAgentIDs is the
+// primary caller and already normalizes; a caller that passes a raw,
+// un-normalized id (e.g. a mixed-case agent name straight from
+// cfg.Agents.List) will fail the post-seed guard below LOUDLY instead of
+// silently seeding a key nothing will ever look up.
 func seedTestWorkspaceMembershipForIDs(t *testing.T, ids []string) {
 	t.Helper()
 	home := omnipusHome()
@@ -172,38 +243,72 @@ func seedTestWorkspaceMembershipForIDs(t *testing.T, ids []string) {
 			toSeed = append(toSeed, id)
 		}
 	}
-	if len(toSeed) == 0 {
-		return
-	}
+	if len(toSeed) > 0 {
+		dir := filepath.Join(home, "workspaces")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("seedTestWorkspaceMembershipForIDs: mkdir workspaces: %v", err)
+		}
+		path := filepath.Join(dir, testHarnessWorkspaceMembershipID+".json")
 
-	dir := filepath.Join(home, "workspaces")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("seedTestWorkspaceMembershipForIDs: mkdir workspaces: %v", err)
-	}
-	path := filepath.Join(dir, testHarnessWorkspaceMembershipID+".json")
-
-	rec := testHarnessWorkspaceRecord{ID: testHarnessWorkspaceMembershipID}
-	if existing, rerr := os.ReadFile(path); rerr == nil {
-		_ = json.Unmarshal(existing, &rec) // best-effort merge; a corrupt file is overwritten below
-	}
-	seen := make(map[string]bool, len(rec.CoreTeam))
-	for _, id := range rec.CoreTeam {
-		seen[id] = true
-	}
-	for _, id := range toSeed {
-		if !seen[id] {
-			rec.CoreTeam = append(rec.CoreTeam, id)
+		rec := testHarnessWorkspaceRecord{ID: testHarnessWorkspaceMembershipID}
+		if existing, rerr := os.ReadFile(path); rerr == nil {
+			_ = json.Unmarshal(existing, &rec) // best-effort merge; a corrupt file is overwritten below
+		}
+		seen := make(map[string]bool, len(rec.CoreTeam))
+		for _, id := range rec.CoreTeam {
 			seen[id] = true
 		}
-	}
-	rec.ID = testHarnessWorkspaceMembershipID
+		for _, id := range toSeed {
+			if !seen[id] {
+				rec.CoreTeam = append(rec.CoreTeam, id)
+				seen[id] = true
+			}
+		}
+		rec.ID = testHarnessWorkspaceMembershipID
 
-	data, err := json.Marshal(rec)
-	if err != nil {
-		t.Fatalf("seedTestWorkspaceMembershipForIDs: marshal: %v", err)
+		data, err := json.Marshal(rec)
+		if err != nil {
+			t.Fatalf("seedTestWorkspaceMembershipForIDs: marshal: %v", err)
+		}
+		if err := fileutil.WriteFileAtomic(path, data, 0o644); err != nil {
+			t.Fatalf("seedTestWorkspaceMembershipForIDs: write %s: %v", path, err)
+		}
 	}
-	if err := fileutil.WriteFileAtomic(path, data, 0o644); err != nil {
-		t.Fatalf("seedTestWorkspaceMembershipForIDs: write %s: %v", path, err)
+
+	// GUARD: this is the loud failure this class of bug needs. Re-resolve
+	// every id via the EXACT same primitive (workspace.FindForAgent) the
+	// ADR-046 P1 gate calls at real-turn time (resolveTurnWorkDirOrRefuse,
+	// pkg/agent/workspace_reroot.go) — deliberately checking
+	// routing.NormalizeAgentID(id), the REAL key the agent registry and every
+	// AgentInstance.ID actually resolve to (registry.go:109, instance.go:160),
+	// NOT the raw id the caller passed in. Checking the raw id would only
+	// prove seeding-round-tripped-itself (it always does — we just wrote that
+	// exact string into CoreTeam above) and would NOT catch this bug's actual
+	// shape: a caller (e.g. a regressed testHarnessAgentIDs) seeding CoreTeam
+	// with an un-normalized id that the registry will never look up under.
+	// Re-deriving the expected key independently, from the same production
+	// routing.NormalizeAgentID the registry itself calls, is what makes this a
+	// real postcondition check instead of a tautology.
+	//
+	// If any id's normalized form still doesn't resolve to a workspace after
+	// seeding, fail the test HERE, at setup — not later, as a real turn
+	// silently refusing with nothing but a "turn refused: agent is not a
+	// member of any workspace" WARN log that a green test suite never
+	// surfaces. This is exactly the shape of bug this file shipped with:
+	// testHarnessAgentIDs seeding an agent's raw (non-normalized) config ID
+	// while the registry keys real turns off routing.NormalizeAgentID(ac.ID)
+	// — an exact-string-match miss. Mirrors the identical guard added to
+	// pkg/gateway/test_agent_loop_helper_test.go's copy of this helper.
+	for _, id := range ids {
+		normalized := routing.NormalizeAgentID(id)
+		if _, found := workspace.FindForAgent(home, normalized); !found {
+			t.Fatalf("seedTestWorkspaceMembershipForIDs: BLOCKED: agent_id=%q (registry key %q) "+
+				"does not resolve to any workspace after seeding — any real turn for this agent "+
+				"will silently refuse at the ADR-046 P1 gate (resolveTurnWorkDirOrRefuse) with "+
+				"only a WARN log, not a test failure. The seeded id must equal "+
+				"routing.NormalizeAgentID's output — the exact key the agent registry keys real "+
+				"turns under.", id, normalized)
+		}
 	}
 }
 
@@ -258,7 +363,24 @@ func seedDistinctTestWorkspacesForIDs(t *testing.T, ids []string) {
 // registered as the synthetic default/fallback agent regardless of cfg — see
 // NewAgentRegistry in registry.go) plus every explicit, non-reserved ID in
 // cfg.Agents.List — INCLUDING an agent configured with an external-CLI
-// executor (Subagents.Executor.Kind == config.ExecutorKindExternalCLI).
+// executor (Subagents.Executor.Kind == config.ExecutorKindExternalCLI) —
+// NORMALIZED exactly the way NewAgentRegistry itself keys the registry.
+//
+// registry.go's NewAgentRegistry never registers an agent under its raw
+// cfg.Agents.List[i].ID: every entry is keyed under
+// routing.NormalizeAgentID(ac.ID) (registry.go:109 — lower-cased, sanitized
+// to [a-z0-9][a-z0-9_-]*), and instance.go's NewAgentInstance independently
+// normalizes the SAME way when it sets AgentInstance.ID. A real turn's
+// ADR-046 P1 gate (resolveTurnWorkDirOrRefuse) is then called with that
+// normalized ts.agent.ID, and workspace.FindForAgent's CoreTeam lookup is an
+// EXACT string match — so seeding CoreTeam with the raw, un-normalized
+// config ID (e.g. a mixed-case agent name) writes a key nothing ever looks
+// up. The turn still runs — it just silently refuses at the gate with a WARN
+// log ("turn refused: agent is not a member of any workspace"), never a test
+// failure, so any test that believed it exercised a real turn for such an
+// agent did not. This mirrors the identical bug fixed in
+// pkg/gateway/test_agent_loop_helper_test.go's copy of this helper — same
+// shape, same fix (normalize before seeding).
 //
 // External-CLI agents are NOT excluded (a prior version of this function
 // excluded them): external_dispatch.go's runExternalCLISubTurn now calls the
@@ -295,11 +417,15 @@ func testHarnessAgentIDs(cfg *config.Config) []string {
 	}
 	seen := map[string]bool{DefaultAgentID: true}
 	for _, a := range cfg.Agents.List {
-		if a.ID == "" || seen[a.ID] {
+		if a.ID == "" {
 			continue
 		}
-		seen[a.ID] = true
-		ids = append(ids, a.ID)
+		id := routing.NormalizeAgentID(a.ID)
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
 	}
 	return ids
 }

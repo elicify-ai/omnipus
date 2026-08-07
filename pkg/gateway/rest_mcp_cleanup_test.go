@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Tests for Epic #314 cleanup-be fixes:
 //   - Fix #3: MCP server URL scheme backend validation (addMCPServer).
 //   - Fix #5: validateSkillIDs fail-open when no skills are installed.

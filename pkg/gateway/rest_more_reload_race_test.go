@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // This test file uses //go:build !cgo so it compiles when CGO is disabled (see
 // rest_agent_reload_race_test.go's header comment for the full explanation of
 // why: pkg/gateway imports pkg/channels/matrix, which requires libolm when CGO

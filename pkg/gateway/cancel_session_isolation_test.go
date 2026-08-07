@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // cancel_session_isolation_test.go — T18 gateway placeholder.
 //
 // The authoritative T18 isolation test lives in:

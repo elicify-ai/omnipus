@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // D18: GET /api/v1/providers/model-capabilities — the SPA warn-and-proceed
 // pre-send check needs a flat {id, modalities}[] list from the backend's
 // in-repo capability catalog (pkg/providers/capabilities), because model

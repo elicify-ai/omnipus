@@ -134,6 +134,10 @@ func waitForCompletionContractTerminal(t *testing.T, al *AgentLoop, taskID strin
 func TestTaskCompletionContract_Native_SuccessMarker_DoneWithSummary(t *testing.T) {
 	provider := &scriptedProvider{
 		responseBody: "Implemented the feature and ran the tests.\n" +
+			// ADR-052 FR-035: the evidence-marker gate (finishTaskRun, ahead of
+			// parseTaskCompletionSignal) requires this line immediately before
+			// TASK_STATUS or the claim is re-prompted instead of completing.
+			"[goal:evidence] ran the test suite, all green\n" +
 			"TASK_STATUS: success\n" +
 			"TASK_SUMMARY: Added the new export endpoint and its tests.",
 	}
@@ -161,6 +165,10 @@ func TestTaskCompletionContract_Native_SuccessMarker_DoneWithSummary(t *testing.
 func TestTaskCompletionContract_Native_FailureMarker_FailedWithAgentWords(t *testing.T) {
 	provider := &scriptedProvider{
 		responseBody: "Tried to reach the upstream service repeatedly.\n" +
+			// ADR-052 FR-035: the evidence-marker gate applies uniformly to a
+			// failure marker too (checkEvidenceMarkerGate: "success OR failure
+			// — the gate does not care which").
+			"[goal:evidence] retried the connection 5 times, all timed out\n" +
 			"TASK_STATUS: failure\n" +
 			"TASK_SUMMARY: Could not reach the upstream API (connection timeout).",
 	}
@@ -227,29 +235,48 @@ func TestTaskCompletionContract_Native_NoMarker_FailsClosed_NotAutoDone(t *testi
 // no textual output" fallback, external_dispatch.go) — so this is the only
 // way to exercise the executor's own fail-closed handling of a truly empty
 // string, which the parser and finishTaskRun both explicitly guard for.
+// TestTaskCompletionContract_FinishTaskRun_EmptyOutput_FailsClosed proves the
+// empty-output edge case (item (c) of the feature spec) directly against
+// TaskExecutor.finishTaskRun: a genuinely empty resp is now an UNMET claim
+// (ADR-049 FR-045) — the run re-dispatches internally (via
+// ExecuteTask/mockProvider, which itself always returns non-marker content)
+// until the default attempt ceiling (3) is exhausted, landing terminal
+// Failed with a graceful wind-down handover — never the retired "Task
+// completed" auto-complete default, and never a false Done.
 func TestTaskCompletionContract_FinishTaskRun_EmptyOutput_FailsClosed(t *testing.T) {
 	al := newNativeTaskCompletionTestLoop(t, &mockProvider{})
 	tk := newCompletionContractTask(t, al, "native-agent", "empty output task")
-
-	// ADR-050 RD5 coverage (task-run-history-spec.md §3.3, operator decision
-	// 2026-07-20 — there is no stuck-run reaper): finishTaskRun must close a
-	// REAL open run on this fail-closed path too, not just the success path.
-	// Seed one directly via the store (mirroring how runTask/
-	// runTaskFromInProgress would have opened it before reaching this call)
-	// rather than passing nil, so this test proves actual closure instead of
-	// exercising closeRun's nil-run no-op.
-	seeded, created, err := al.taskStore.OpenRun(tk.ID, nil, task.RunKindScheduled, "")
-	if err != nil || !created {
-		t.Fatalf("seed OpenRun: created=%v err=%v", created, err)
+	// ADR-052 FR-014/§6.4(b) TOCTOU fix: finishTaskRun's outcome writers
+	// (consumeAttemptOrExhaust) now CAS against the task being genuinely
+	// in_progress — the SAME invariant a real dispatch always establishes via
+	// ExecuteTask's own ClaimForRun claim before it ever calls finishTaskRun.
+	// This test intentionally bypasses real dispatch (see the doc comment
+	// above) to inject a truly empty resp, so it must claim the task itself
+	// to keep that invariant true, rather than calling finishTaskRun against
+	// the fixture's on-disk `next` status.
+	if _, err := al.taskStore.ClaimForRun(tk.ID, time.Now()); err != nil {
+		t.Fatalf("claim task before direct finishTaskRun call: %v", err)
 	}
-	run := &activeRun{runID: seeded.RunID, occurrenceMs: seeded.OccurrenceMs}
+	tk.Status = task.StatusInProgress
 
-	al.taskExecutor.finishTaskRun(tk, "", "", nil, "", run)
-
-	final, gerr := al.taskStore.Get(tk.ID)
-	if gerr != nil {
-		t.Fatalf("get task: %v", gerr)
+	// This test bypasses real dispatch (see the doc comment above), so it
+	// must also seed the ADR-050 TaskRun openRun would otherwise have opened
+	// — finishTaskRun's fail-closed path closes it, and the assertions below
+	// verify that close actually landed.
+	seeded, _, oerr := al.taskStore.OpenRun(tk.ID, nil, task.RunKindManual, "")
+	if oerr != nil {
+		t.Fatalf("seed OpenRun: %v", oerr)
 	}
+	run := &activeRun{runID: seeded.RunID}
+
+	redispatchID := al.taskExecutor.finishTaskRun(context.Background(), tk, "", "", nil, "", run)
+	if redispatchID != "" {
+		if err := al.taskExecutor.ExecuteTask(context.Background(), redispatchID, nil); err != nil {
+			t.Fatalf("ExecuteTask (goal-loop re-dispatch): %v", err)
+		}
+	}
+
+	final := waitForCompletionContractTerminal(t, al, tk.ID)
 	if final.Status != task.StatusFailed {
 		t.Fatalf("status = %q, want %q — empty output must fail closed, not auto-complete to done "+
 			"(result: %s)", final.Status, task.StatusFailed, final.Result)
@@ -257,8 +284,8 @@ func TestTaskCompletionContract_FinishTaskRun_EmptyOutput_FailsClosed(t *testing
 	if final.Result == "Task completed" || strings.Contains(final.Result, "Task completed") {
 		t.Errorf("result = %q, the retired 'Task completed' auto-complete default must be gone", final.Result)
 	}
-	if !strings.Contains(final.Result, "completion signal") {
-		t.Errorf("result = %q, want it to explain the missing completion signal", final.Result)
+	if final.AttemptCount == 0 {
+		t.Errorf("attempt_count = %d, want it to have been consumed by the goal loop", final.AttemptCount)
 	}
 
 	runs, lerr := al.taskStore.ListRuns(tk.ID)
@@ -300,6 +327,9 @@ func TestTaskCompletionContract_External_FailureMarker_FailedWithAgentWords(t *t
 			Kind: runner.EventKindOutput,
 			Output: &runner.OutputEvent{
 				Text: "Ran into a permissions error partway through.\n" +
+					// ADR-052 FR-035: evidence-marker gate applies to failure
+					// markers too — see the native-dispatch counterpart above.
+					"[goal:evidence] attempted the write, got a permissions error\n" +
 					"TASK_STATUS: failure\n" +
 					"TASK_SUMMARY: Blocked by missing write access to the target repo.",
 			},
@@ -330,6 +360,12 @@ func TestTaskCompletionContract_External_FailureMarker_FailedWithAgentWords(t *t
 // external-CLI counterpart of the native no-marker test: a clean external-CLI
 // exit with prose output but no TASK_STATUS marker must fail closed — this is
 // precisely the false-success cascade ADR-042 §3 flagged and ADR-043 closes.
+// The fake driver's goroutine below injects its single scripted event
+// sequence exactly ONCE (it calls fr.Cancel() right after), so this test
+// pins max_attempts=1 on the task — under the ADR-049 goal loop, a no-signal
+// outcome now consumes an attempt and re-dispatches (FR-045) rather than
+// failing on the spot; with the ceiling at 1 it still exhausts (and thus
+// fails closed) after exactly the one dispatch this fake driver can serve.
 func TestTaskCompletionContract_External_NoMarker_FailsClosed_NotAutoDone(t *testing.T) {
 	provider := &countingProvider{}
 	al, _ := newExternalCLITaskTestLoop(t, provider)
@@ -347,6 +383,11 @@ func TestTaskCompletionContract_External_NoMarker_FailsClosed_NotAutoDone(t *tes
 	}()
 
 	tk := newCompletionContractTask(t, al, "ext-agent", "external no marker")
+	one := 1
+	onePtr := &one
+	if _, err := al.taskStore.Update(tk.ID, task.Patch{MaxAttempts: &onePtr}); err != nil {
+		t.Fatalf("pin max_attempts=1: %v", err)
+	}
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
@@ -421,6 +462,47 @@ func TestBuildPrompt_InstructionEchoNeverResolvesToSuccess(t *testing.T) {
 		if sig.Verdict == verdictSuccess {
 			t.Fatalf("parsing a bulleted paraphrase of buildPrompt's instruction text resolved to "+
 				"verdictSuccess (echo-unsafe) — prompt:\n%s", bulleted)
+		}
+	})
+}
+
+// TestBuildPrompt_TeachesEvidenceMarkerBothDispatchKinds is ADR-052 FR-035
+// Fix-Wave-2's fix 1 regression proof: buildPrompt's instruction text must
+// teach the [goal:evidence] marker requirement in BOTH the native and the
+// external-CLI branch. Before this fix, [goal:evidence] appeared NOWHERE in
+// either prompt — only in checkEvidenceMarkerGate's parser regex, the
+// goalEvidenceLabel const, and evidenceGateSteeringText — so every
+// marker-path completion tripped the gate on turn 1 by construction. This
+// was especially acute for external-CLI (subagent_3p) dispatch:
+// dispatchesExternalCLI's early return in buildPrompt means that worker gets
+// ONLY the marker instruction (no task_update tool escape hatch exists for
+// it at all — see dispatchesExternalCLI's own doc comment), so teaching the
+// evidence marker there is its ONLY possible path to ever satisfy the gate.
+//
+// Verified this fails against pre-fix code: the pre-fix buildPrompt (read
+// directly before this wave's edits) wrote exactly two example lines —
+// "  TASK_STATUS: success\n" and "  TASK_STATUS: failure\n" — with no
+// occurrence of goalEvidenceLabel ("[goal:evidence]") anywhere in either the
+// native or the external-CLI instruction block; this assertion would have
+// failed on that text for both subtests.
+func TestBuildPrompt_TeachesEvidenceMarkerBothDispatchKinds(t *testing.T) {
+	t.Run("native", func(t *testing.T) {
+		al := newNativeTaskCompletionTestLoop(t, &mockProvider{})
+		tk := newCompletionContractTask(t, al, "native-agent", "evidence-marker teaching native")
+		prompt := al.taskExecutor.buildPrompt(tk)
+		if !strings.Contains(prompt, goalEvidenceLabel) {
+			t.Fatalf("native buildPrompt output does not mention %q — the worker is never taught the "+
+				"evidence-marker gate's requirement:\n%s", goalEvidenceLabel, prompt)
+		}
+	})
+	t.Run("external_cli", func(t *testing.T) {
+		al, _ := newExternalCLITaskTestLoop(t, &countingProvider{})
+		tk := newCompletionContractTask(t, al, "ext-agent", "evidence-marker teaching external")
+		prompt := al.taskExecutor.buildPrompt(tk)
+		if !strings.Contains(prompt, goalEvidenceLabel) {
+			t.Fatalf("external-CLI buildPrompt output does not mention %q — a subagent_3p worker has no "+
+				"task_update escape hatch, so this instruction is its ONLY path to ever satisfy the "+
+				"gate:\n%s", goalEvidenceLabel, prompt)
 		}
 	})
 }
@@ -555,6 +637,8 @@ func TestTaskCompletionContract_TaskUpdatePrecedence_WinsOverMarkerlessResponse(
 func TestTaskCompletionContract_SessionArchivedOnCompletion(t *testing.T) {
 	provider := &scriptedProvider{
 		responseBody: "Implemented the feature and ran the tests.\n" +
+			// ADR-052 FR-035: see the SuccessMarker test above.
+			"[goal:evidence] ran the test suite, all green\n" +
 			"TASK_STATUS: success\n" +
 			"TASK_SUMMARY: Added the new export endpoint and its tests.",
 	}

@@ -9,7 +9,7 @@
  * graph/GraphView and WorkspaceTeamGraph tests.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Agent, Workspace, WorkspaceDelegation } from '@/lib/api'
@@ -71,6 +71,12 @@ const AGENTS: Agent[] = [
   agent('jim', { name: 'Jim' }),
   agent('planner', { name: 'Planner', type: 'Subagent' }),
   agent('ray', { name: 'Ray' }), // not on the team — should appear in the picker
+  // System agent (the Judge, ADR-049 D3) — implicit member of EVERY
+  // workspace (pkg/workspace/find_for_agent.go's isImplicitMember). Present
+  // in every test in this file via the shared `fetchAgents` mock so the
+  // "Judge invisible in workspace Teams" fix is exercised across the whole
+  // suite, not just its own describe block below.
+  agent('judge', { name: 'Judge', type: 'system' }),
 ]
 
 const DELEGATION: WorkspaceDelegation = {
@@ -647,132 +653,93 @@ describe('WorkspaceTeamTab', () => {
   })
 })
 
-// ── D3 residual (2nd site) regression ───────────────────────────────────────
+// ── Implicit Judge row (operator-reported: "Judge invisible in workspace
+// Teams") ─────────────────────────────────────────────────────────────────
 //
-// Root cause: `hydratedRef` (a plain `useRef`) was set to `true` on the FIRST
-// hydration and never reset. WorkspaceTeamTab persists across a workspace
-// switch (no `key` prop at the route — the component even ignores its own
-// `workspaceId` PROP, see `_props` in WorkspaceTeamTab.tsx, and reads
-// `useActiveWorkspace()` instead), so switching to a second workspace left
-// `disabled` permanently `false`: the newly-adopted workspace's own fresh
-// core_team/edges were read as a "genuine edit" relative to the stale
-// previous-workspace baseline, and useAutoSave fired a spurious
-// `updateWorkspace` + `updateWorkspaceDelegation` PUT echoing the new
-// workspace's own data straight back. Fixed by a reactive `hydrated` state,
-// reset via the mid-render "adjusting state during render" pattern (the same
-// fix WorkspaceSettingsTab's `instructionsHydrated` already uses).
-describe('WorkspaceTeamTab — D3 residual: workspace switch must not fire a spurious PUT', () => {
-  afterEach(() => {
-    // Restore the default so a LATER test's `renderTab()` (fixed at 'ws-1')
-    // doesn't inherit whichever workspace this describe block last switched to.
-    vi.mocked(useActiveWorkspace).mockImplementation(() => WORKSPACE)
+// Backend model (operator-directed, pkg/workspace/find_for_agent.go's
+// isImplicitMember): System agents (the Judge) are IMPLICIT members of
+// EVERY workspace — they cannot be added to core_team rosters (the gateway
+// 400s that), and membership is resolved implicitly everywhere. Before this
+// fix the Team tab only ever rendered the literal core_team ∪ edge-endpoint
+// node set, so the Judge looked absent even though it always verifies work
+// on every workspace.
+describe('WorkspaceTeamTab — implicit Judge row (ADR-049 D3)', () => {
+  it('shows the Judge row with the "Verifier — implicit member" badge for a normal workspace', async () => {
+    renderTab()
+    await waitFor(() => {
+      expect(screen.getByTestId('team-node-judge')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Judge')).toBeInTheDocument()
+    expect(screen.getByTestId('team-node-implicit-badge-judge')).toHaveTextContent(
+      'Verifier — implicit member of every workspace',
+    )
   })
 
-  it("REVERT-PROOF: switching to a second workspace within the same mounted WorkspaceTeamTab does not echo that workspace's own team/edges back via updateWorkspace/updateWorkspaceDelegation", async () => {
-    const WORKSPACE_2: Workspace = {
+  it('a workspace with ZERO real members still shows the Judge row', async () => {
+    vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
+      workspace_id: 'ws-1',
+      team: [],
+      edges: [],
+      default_depth: 3,
+    } as WorkspaceDelegation)
+    renderTab()
+    await waitFor(() => {
+      expect(screen.getByTestId('team-node-judge')).toBeInTheDocument()
+    })
+  })
+
+  it('the [+ Add agent] picker never offers the Judge — System agents are not team-addable', async () => {
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('team-add-agent'))
+    await waitFor(() =>
+      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
+    )
+    expect(screen.queryByTestId('team-add-agent-option-judge')).toBeNull()
+  })
+
+  it('saving the team (adding a real member + drawing an edge) never includes the Judge in either PUT payload', async () => {
+    vi.mocked(updateWorkspace).mockResolvedValue({
       ...WORKSPACE,
-      id: 'ws-2',
-      core_team: ['ray'],
-    }
-    const DELEGATION_2: WorkspaceDelegation = {
-      workspace_id: 'ws-2',
-      team: ['ray'],
-      edges: [],
-      default_depth: 3,
-    }
-
-    let activeWorkspace: Workspace = WORKSPACE
-    vi.mocked(useActiveWorkspace).mockImplementation(() => activeWorkspace)
-    vi.mocked(fetchWorkspaceDelegation).mockImplementation((id: string) =>
-      Promise.resolve(id === 'ws-2' ? DELEGATION_2 : DELEGATION),
-    )
-
-    const { rerender, client } = renderTab()
-    await waitFor(() => expect(screen.getByTestId('team-node-mia')).toBeInTheDocument())
-
-    // Let the first workspace's own hydration/effects fully settle, then
-    // clear the call log — from here on, ANY updateWorkspace /
-    // updateWorkspaceDelegation call is necessarily caused by the SWITCH
-    // itself, not startup noise.
-    await act(async () => {
-      await Promise.resolve()
-      await Promise.resolve()
+      core_team: ['mia', 'jim', 'planner', 'ray'],
     })
-    vi.mocked(updateWorkspace).mockClear()
-    vi.mocked(updateWorkspaceDelegation).mockClear()
-
-    // Switch workspaces on the SAME mounted component instance (rerender,
-    // not remount) — mirrors the router keeping WorkspaceTeamTab mounted
-    // across a `$workspaceId` param change.
-    activeWorkspace = WORKSPACE_2
-    rerender(
-      <QueryClientProvider client={client}>
-        <WorkspaceTeamTab workspaceId="ws-2" />
-      </QueryClientProvider>,
-    )
-
-    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
-
-    // PASSIVE idle wait — no interaction at all — comfortably past the
-    // 500ms debounce default, so a spurious hydration-triggered echo save of
-    // the SECOND workspace's own (already-correct) team/edges gets every
-    // chance to fire.
-    await new Promise((resolve) => setTimeout(resolve, 800))
-
-    expect(updateWorkspace).not.toHaveBeenCalled()
-    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
-  })
-
-  it('cache-hit hardening: switching to a workspace whose delegation is ALREADY cached (no network gap) still does not fire a spurious echo PUT', async () => {
-    // Exercises the trickier race the mid-render reset (vs. a plain
-    // useEffect reset) exists to close: when the destination workspace's
-    // delegation query is already cache-resolved on the SAME render as the
-    // switch (no loading gap), a plain-effect-based reset and the hydration
-    // effect would run in the SAME batched flush, and React would coalesce
-    // `setHydrated(false)` then `setHydrated(true)` away with no OBSERVABLE
-    // transition in between — see `hydrated`'s doc comment in
-    // WorkspaceTeamTab.tsx for the full reasoning.
-    const WORKSPACE_2: Workspace = { ...WORKSPACE, id: 'ws-2', core_team: ['ray'] }
-    const DELEGATION_2: WorkspaceDelegation = {
-      workspace_id: 'ws-2',
-      team: ['ray'],
-      edges: [],
+    vi.mocked(updateWorkspaceDelegation).mockResolvedValue({
+      workspace_id: 'ws-1',
+      team: ['mia', 'jim', 'planner', 'ray'],
+      edges: [
+        ...(DELEGATION.edges ?? []),
+        { from_agent: 'jim', to_agent: 'ray', modes: ['direct', 'task'] },
+      ],
       default_depth: 3,
-    }
-
-    let activeWorkspace: Workspace = WORKSPACE
-    vi.mocked(useActiveWorkspace).mockImplementation(() => activeWorkspace)
-    vi.mocked(fetchWorkspaceDelegation).mockImplementation((id: string) =>
-      Promise.resolve(id === 'ws-2' ? DELEGATION_2 : DELEGATION),
-    )
-
-    const { rerender, client } = renderTab()
-    await waitFor(() => expect(screen.getByTestId('team-node-mia')).toBeInTheDocument())
-    await act(async () => {
-      await Promise.resolve()
-      await Promise.resolve()
     })
 
-    // Pre-seed ws-2's delegation query cache — simulates having visited
-    // ws-2's Team tab recently (still within staleTime), so the switch below
-    // resolves `delegation` for ws-2 SYNCHRONOUSLY, on the very first render
-    // of the switch (no loading gap).
-    client.setQueryData(workspacesQueryKeys.delegation('ws-2'), DELEGATION_2)
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
+    // The Judge row is present throughout — proving it renders alongside a
+    // normal, in-flight edit session, not just a pristine/empty one.
+    await waitFor(() => expect(screen.getByTestId('team-node-judge')).toBeInTheDocument())
 
-    vi.mocked(updateWorkspace).mockClear()
-    vi.mocked(updateWorkspaceDelegation).mockClear()
-
-    activeWorkspace = WORKSPACE_2
-    rerender(
-      <QueryClientProvider client={client}>
-        <WorkspaceTeamTab workspaceId="ws-2" />
-      </QueryClientProvider>,
+    fireEvent.click(screen.getByTestId('team-add-agent'))
+    await waitFor(() =>
+      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
     )
-
+    fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
     await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
-    await new Promise((resolve) => setTimeout(resolve, 800))
 
-    expect(updateWorkspace).not.toHaveBeenCalled()
-    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
+    expect(capturedGraphProps).not.toBeNull()
+    act(() => {
+      capturedGraphProps!.onConnect('jim', 'ray')
+    })
+
+    await waitFor(() => expect(updateWorkspace).toHaveBeenCalled(), { timeout: 3000 })
+    const coreTeamArg = vi.mocked(updateWorkspace).mock.calls[0]?.[1] as { core_team?: string[] }
+    expect(coreTeamArg?.core_team).not.toContain('judge')
+
+    await waitFor(() => expect(updateWorkspaceDelegation).toHaveBeenCalled(), { timeout: 3000 })
+    const edgesArg = vi.mocked(updateWorkspaceDelegation).mock.calls[0]?.[1] as Array<{
+      from_agent: string
+      to_agent: string
+    }>
+    expect(edgesArg.every((e) => e.from_agent !== 'judge' && e.to_agent !== 'judge')).toBe(true)
   })
 })

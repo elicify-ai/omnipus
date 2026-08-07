@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
 
 export const AuthFrame = z
   .object({
@@ -76,6 +76,7 @@ export const SessionStartedFrame = z
     type: z.literal("session_started"),
     session_id: z.string().min(1),
     agent_id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -85,6 +86,7 @@ export const TokenFrame = z
     session_id: z.string().min(1).max(128),
     content: z.string().max(65536),
     agent_id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -108,6 +110,7 @@ export const DoneFrame = z
     type: z.literal("done"),
     session_id: z.string().min(1),
     stats: DoneStats.optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -150,6 +153,7 @@ export const ToolCallStartFrame = z
     params: z.record(z.unknown()),
     parent_call_id: z.string().optional(),
     agent_id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -198,6 +202,7 @@ export const ToolCallResultFrame = z
     error: z.string().optional(),
     parent_call_id: z.string().optional(),
     agent_id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -209,6 +214,7 @@ export const SubagentStartFrame = z
     parent_call_id: z.string().min(1),
     task_label: z.string().max(100),
     agent_id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -217,13 +223,46 @@ export const SubagentEndFrame = z
     type: z.literal("subagent_end"),
     session_id: z.string().min(1),
     span_id: z.string().min(1),
-    status: z.enum(["success", "error", "cancelled", "interrupted", "timeout"]),
+    status: z.enum(["success", "error", "cancelled", "interrupted", "timeout", "parked"]),
     duration_ms: z.number().int().optional(),
     final_result: z.string().optional(),
     reason: z.enum(["parent_timeout", "parent_cancelled", "parent_done_early", "unknown"]).optional(),
     agent_id: z.string().optional(),
     parent_call_id: z.string().optional(),
     message: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const SubagentMessageFrame = z
+  .object({
+    type: z.literal("subagent_message"),
+    session_id: z.string().min(1),
+    span_id: z.string().min(1),
+    message_id: z.string().min(1),
+    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond"]),
+    text: z.string().optional(),
+    pct: z.number().int().min(0).max(100).optional(),
+    correlation_id: z.string().optional(),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    created_at: z.string(),
+  })
+  .strict();
+
+export const SubagentStateFrame = z
+  .object({
+    type: z.literal("subagent_state"),
+    session_id: z.string().min(1),
+    span_id: z.string().min(1),
+    state: z.enum(["queued", "running", "needs_input", "paused", "completed", "failed", "cancelled", "timed_out"]),
+    steering_receipt: z
+    .object({
+      correlation_id: z.string(),
+      applied_at: z.string(),
+    })
+    .strict().optional(),
+    created_at: z.string(),
   })
   .strict();
 
@@ -232,8 +271,9 @@ export const TaskStatusChangedFrame = z
     type: z.literal("task_status_changed"),
     session_id: z.string().min(1),
     task_id: z.string().min(1),
-    status: z.enum(["inbox", "next", "planning", "in_progress", "blocked", "done", "failed"]),
+    status: z.enum(["inbox", "next", "in_progress", "blocked", "done", "failed"]),
     agent_id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -306,6 +346,7 @@ export const MediaFrame = z
     type: z.literal("media"),
     session_id: z.string().min(1),
     parts: z.array(MediaPart).min(1).max(32),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -315,6 +356,7 @@ export const AgentSwitchedFrame = z
     session_id: z.string().min(1),
     agent_id: z.string().optional(),
     message: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -329,6 +371,7 @@ export const ToolApprovalRequiredFrame = z
     session_id: z.string().min(1),
     turn_id: z.string().min(1),
     expires_in_ms: z.number().int().min(0).max(86400000),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -356,6 +399,7 @@ export const SystemOverloadFrame = z
     type: z.literal("system_overload"),
     session_id: z.string().min(1),
     message: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -379,6 +423,7 @@ export const CancelStageFrame = z
     type: z.literal("cancel_stage"),
     session_id: z.string().min(1),
     stage: z.enum(["graceful", "hard", "detached"]),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -387,6 +432,7 @@ export const SessionCloseAckFrame = z
     type: z.literal("session_close_ack"),
     session_id: z.string().min(1),
     id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -608,6 +654,68 @@ export const BrowserCaptureControlFrame = z
   })
   .strict();
 
+export const GoalStatusFrame = z
+  .object({
+    type: z.literal("goal_status"),
+    session_id: z.string().min(1),
+    goal_id: z.string().min(1).optional(),
+    condition: z.string(),
+    round: z.number().int().min(0),
+    max_rounds: z.number().int().min(1),
+    latest_reason: z.string(),
+    active_loops: z.number().int().min(0),
+    cap: z.number().int().min(1),
+    state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared"]),
+    producing_session_id: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const LoopStatusFrame = z
+  .object({
+    type: z.literal("loop_status"),
+    session_id: z.string().min(1),
+    mode: z.enum(["interval", "self_paced"]),
+    run: z.number().int().min(0),
+    max_runs: z.number().int().min(1),
+    next_delay: z.number().int().optional(),
+    state: z.string(),
+    producing_session_id: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const PlanStatusFrame = z
+  .object({
+    type: z.literal("plan_status"),
+    plan_id: z.string(),
+    state: z.enum(["draft", "approved", "running", "done", "failed"]),
+    plan_phase: z.enum(["dispatching", "judging", "synthesizing", "idle", "awaiting_supervision", "stalled"]),
+    progress: z.number().min(0).max(1),
+    paused_reason: z.string().optional(),
+  })
+  .strict();
+
+export const JudgeVerdictFrame = z
+  .object({
+    type: z.literal("judge_verdict"),
+    id: z.string(),
+    scope: z.enum(["task", "plan", "goal"]),
+    task_id: z.string().optional(),
+    plan_id: z.string().optional(),
+    round: z.number().int().min(1),
+    met: z.boolean(),
+    per_criterion: z.array(z
+    .object({
+      criterion_id: z.string().min(1),
+      met: z.boolean(),
+      reason: z.string(),
+    })
+    .strict()),
+    model: z.string(),
+    judged_at: z.string(),
+    judge_agent_id: z.string(),
+  })
+  .strict();
+
 export const ErrorPayload = z
   .object({
     llm_error: LLMError,
@@ -638,6 +746,8 @@ export const WsFrame = z.discriminatedUnion("type", [
   ToolCallResultFrame,
   SubagentStartFrame,
   SubagentEndFrame,
+  SubagentMessageFrame,
+  SubagentStateFrame,
   TaskStatusChangedFrame,
   TaskRunStatusFrame,
   ReplayMessageFrame,
@@ -672,6 +782,10 @@ export const WsFrame = z.discriminatedUnion("type", [
   BrowserCaptureOfferFrame,
   BrowserCaptureAnswerFrame,
   BrowserCaptureControlFrame,
+  GoalStatusFrame,
+  LoopStatusFrame,
+  PlanStatusFrame,
+  JudgeVerdictFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

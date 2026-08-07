@@ -128,7 +128,11 @@ func (s *inMemoryMemoryStore) SearchEntries(query string, limit int) ([]tools.Me
 // Traces to: Plan §10 — Chain 1 (create_task → list_tasks → update_task → delete_task)
 func TestToolChain_TaskCRUD(t *testing.T) {
 	deps, _ := chainDeps(t)
-	ctx := context.Background()
+	// A calling agent principal, as production always supplies (pkg/agent/loop.go
+	// seeds every turn ctx via tools.WithAgentID). The task tools scope reads to
+	// the caller and gate mutations on it, so a bare context is not a realistic
+	// invocation of this chain.
+	ctx := callerCtx("chain-agent")
 
 	// Precondition: create a workspace to hold the task.
 	wsResult := systools.NewWorkspaceCreateTool(deps).Execute(ctx, map[string]any{
@@ -496,7 +500,7 @@ func TestToolChain_SendMessage_Differentiation(t *testing.T) {
 // Traces to: Plan §10 — Chain 4 (create_workspace → create_task → delete_workspace)
 func TestToolChain_WorkspaceCascadeDelete(t *testing.T) {
 	deps, _ := chainDeps(t)
-	ctx := context.Background()
+	ctx := callerCtx("chain-agent")
 
 	// ── step 1: create workspace ──────────────────────────────────────────
 	wsResult := systools.NewWorkspaceCreateTool(deps).Execute(ctx, map[string]any{
@@ -627,7 +631,7 @@ func TestToolChain_CreateTask_InvalidWorkspaceID(t *testing.T) {
 // Traces to: Plan §10 — rejection test for Chain 1
 func TestToolChain_DeleteTask_RequiresConfirm(t *testing.T) {
 	deps, _ := chainDeps(t)
-	ctx := context.Background()
+	ctx := callerCtx("chain-agent")
 
 	// Create a workspace and a task.
 	wsRes := systools.NewWorkspaceCreateTool(deps).Execute(ctx, map[string]any{"name": "Del Guard"})

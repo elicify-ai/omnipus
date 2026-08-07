@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // /api/v1/schedules + /api/v1/notifications REST tests (#264, FR-015). Exercises
 // create 201, worker-owner 400, unknown 404, invalid trigger 400, run-now, pause
 // toggle, list projection, and notification list/read.

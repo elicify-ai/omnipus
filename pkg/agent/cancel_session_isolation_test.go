@@ -85,10 +85,15 @@ func TestCancel_SessionIsolation(t *testing.T) {
 	require.NotEmpty(t, sidB)
 	require.NotEqual(t, sidA, sidB, "session A and session B must have distinct IDs")
 
+	// ADR-057 FR-011/FR-015 fixture repair `[grill C-1]`: GetActiveTurnHookForSession
+	// (RequestCancel's claim gate, a role-B predicate) now matches on
+	// routingSessionID, not transcriptSessionID.
+
 	// Inject a turnState for session A (depth=0, representing an active turn).
 	tsA := &turnState{
 		turnID:              "turn-A-T18",
 		transcriptSessionID: sidA,
+		routingSessionID:    session.RoutingSessionID(sidA),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 		transcriptStore:     store,
@@ -100,6 +105,7 @@ func TestCancel_SessionIsolation(t *testing.T) {
 	tsB := &turnState{
 		turnID:              "turn-B-T18",
 		transcriptSessionID: sidB,
+		routingSessionID:    session.RoutingSessionID(sidB),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 		transcriptStore:     store,
@@ -196,9 +202,12 @@ func TestCancel_SessionIsolation_TranscriptWrittenOnlyForA(t *testing.T) {
 	sidB := metaB.ID
 	require.NotEqual(t, sidA, sidB)
 
+	// ADR-057 FR-011/FR-015 fixture repair: see the identical note in
+	// TestCancel_SessionIsolation above.
 	tsA := &turnState{
 		turnID:              "turn-A-transcript-T18",
 		transcriptSessionID: sidA,
+		routingSessionID:    session.RoutingSessionID(sidA),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 		transcriptStore:     store,
@@ -209,6 +218,7 @@ func TestCancel_SessionIsolation_TranscriptWrittenOnlyForA(t *testing.T) {
 	tsB := &turnState{
 		turnID:              "turn-B-transcript-T18",
 		transcriptSessionID: sidB,
+		routingSessionID:    session.RoutingSessionID(sidB),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 		transcriptStore:     store,

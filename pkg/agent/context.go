@@ -106,6 +106,23 @@ type ContextBuilder struct {
 	// into a nested struct so context_env.go owns the mutation surface without
 	// touching the core ContextBuilder definition.
 	env contextBuilderEnv
+
+	// memoryEnabled gates whether BuildSystemPrompt injects the "# Memory"
+	// section (ADR-052 FR-039, Judge/Verifier architecture). Defaults to true
+	// (NewContextBuilder) so every agent that never calls WithMemoryEnabled
+	// sees the pre-existing, unconditional behavior. A verifier-role agent
+	// (e.g. the seeded Judge, config.AgentConfig.MemoryEnabled=false) is
+	// wired to false so its verdicts stay reproducible and impartial — same
+	// evidence, same verdict — rather than drifting with accumulated
+	// episodic memory across adjudications.
+	//
+	// Set ONCE at construction (mirrors WithSkillAllowlist/WithAgentInfo) —
+	// never toggle this per-turn/per-call. A ContextBuilder is one instance
+	// shared by every concurrent turn/session for its agent, so flipping
+	// this field around a single call would race against any other
+	// concurrently-running turn for the same agent and could leave the flag
+	// in the wrong state for it.
+	memoryEnabled bool
 }
 
 // WithResourcesInjector sets a callback that provides additional context sections
@@ -144,6 +161,17 @@ func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuil
 
 func (cb *ContextBuilder) WithSplitOnMarker(enabled bool) *ContextBuilder {
 	cb.splitOnMarker = enabled
+	return cb
+}
+
+// WithMemoryEnabled gates whether BuildSystemPrompt injects this agent's
+// episodic "# Memory" section (ADR-052 FR-039). Call with false ONCE at
+// construction for a verifier-role agent (see the memoryEnabled field's doc
+// comment for why this must never be toggled per-turn). Every agent that
+// never calls this keeps the pre-existing, unconditional behavior via
+// NewContextBuilder's default of true.
+func (cb *ContextBuilder) WithMemoryEnabled(enabled bool) *ContextBuilder {
+	cb.memoryEnabled = enabled
 	return cb
 }
 
@@ -245,9 +273,10 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 		builtinSkillsDir = filepath.Join(wd, "skills")
 	}
 	return &ContextBuilder{
-		workspace:    workspace,
-		skillsLoader: skills.NewSkillsLoader(workspace, globalSkillsDir(), builtinSkillsDir),
-		memory:       NewMemoryStore(workspace, omnipusHome()),
+		workspace:     workspace,
+		skillsLoader:  skills.NewSkillsLoader(workspace, globalSkillsDir(), builtinSkillsDir),
+		memory:        NewMemoryStore(workspace, omnipusHome()),
+		memoryEnabled: true,
 	}
 }
 
@@ -396,10 +425,14 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 %s`, skillsSummary))
 	}
 
-	// Memory context
-	memoryContext := cb.memory.GetMemoryContext()
-	if memoryContext != "" {
-		parts = append(parts, "# Memory\n\n"+memoryContext)
+	// Memory context (ADR-052 FR-039: suppressed when memoryEnabled=false —
+	// e.g. the verifier role — so verdicts stay reproducible/impartial
+	// rather than drifting with episodic memory across adjudications).
+	if cb.memoryEnabled {
+		memoryContext := cb.memory.GetMemoryContext()
+		if memoryContext != "" {
+			parts = append(parts, "# Memory\n\n"+memoryContext)
+		}
 	}
 
 	// Multi-Message Sending (if enabled)

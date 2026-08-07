@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -37,8 +39,17 @@ func TestSpawn_PersistsParentToolCallIDOnChildren(t *testing.T) {
 	store, err := session.NewUnifiedStore(tmpDir)
 	require.NoError(t, err)
 
-	sessionID, err := session.NewSessionID()
+	// ADR-057 FR-002 fixture repair: appendToolCallTranscript now calls
+	// AppendTranscriptStrict, which refuses to write against a session id
+	// that does not resolve to a real, store-backed session (readMetaLocked
+	// must succeed first, before any filesystem write). A bare
+	// session.NewSessionID() value with no meta.json on disk used to fail
+	// that check silently (WARN-logged + a counter increment, not a panic),
+	// leaving ReadTranscript empty. Mint a real session via store.NewSession
+	// so the id actually exists on disk.
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "max")
 	require.NoError(t, err)
+	sessionID := meta.ID
 
 	// Build a turnState with parentSpawnCallID set (simulating a child sub-turn).
 	ts := &turnState{
@@ -90,8 +101,13 @@ func TestSpawn_TopLevel_NoParentToolCallID(t *testing.T) {
 	store, err := session.NewUnifiedStore(tmpDir)
 	require.NoError(t, err)
 
-	sessionID, err := session.NewSessionID()
+	// ADR-057 FR-002 fixture repair: see the identical note in
+	// TestSpawn_PersistsParentToolCallIDOnChildren above — the session id
+	// must resolve to a real, store-backed session for AppendTranscriptStrict
+	// to accept the write.
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "max")
 	require.NoError(t, err)
+	sessionID := meta.ID
 
 	ts := &turnState{
 		agentID:             "max",
@@ -176,9 +192,37 @@ func (p *w212ToolProvider) GetDefaultModel() string { return "scripted-model" }
 // Traces to: temporal-puzzling-melody.md W2-12
 // Traces to: sprint-h-subagent-block-spec.md TDD row 9, FR-H-001, FR-H-003
 func TestSpawn_PersistsParentToolCallID_ViaProductionPath(t *testing.T) {
-	al, _, _, _provider, cleanup := newTestAgentLoop(t)
-	_ = _provider
-	defer cleanup()
+	// ADR-057 FR-005/FR-096 fixture repair: spawnSubTurn now mints the child
+	// via al.GetSessionStore().CreateSessionWithID(childID,
+	// parentTS.transcriptSessionID, ...) against the REAL shared store — a
+	// parent turnState whose only session reference is an ephemeralSessionStore
+	// (transcriptSessionID left at its zero value "") fails "invalid parent
+	// id: unified_store: invalid session ID ''" before the scripted provider
+	// is ever invoked, which is exactly why the callCount>=1 assertion below
+	// used to observe 0. Separately, newTestAgentLoop's flat
+	// os.MkdirTemp("", "agent-test-*") Home resolves the shared session-store
+	// root (filepath.Dir(cfg.AgentHomeBasePath())) to the OS temp root shared
+	// by every test process in this package, so the deterministic child id
+	// "subturn-1" (al.generateSubTurnID's per-AgentLoop counter restarts at 1
+	// for every fresh *AgentLoop) can collide with a leftover session
+	// directory from a different test/run once CreateSessionWithID is
+	// actually reached (FR-096 refuses the collision loudly). Build a
+	// dedicated AgentLoop with Home: t.TempDir() instead — t.TempDir()
+	// already nests one level below the OS temp root via its own
+	// per-test-random directory, which is what keeps
+	// subturn_cancel_status_test.go's spawnSubTurn calls collision-free.
+	agentCfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:              t.TempDir(),
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+	al := mustNewAgentLoop(t, agentCfg, bus.NewMessageBus(), &mockProvider{})
+	t.Cleanup(al.Close)
 
 	// Register a simple echo tool that always succeeds.
 	// We use ReadFileTool as a stand-in (it's already registered in the default registry).
@@ -208,14 +252,25 @@ func TestSpawn_PersistsParentToolCallID_ViaProductionPath(t *testing.T) {
 		Tools:          baseAgent.Tools,
 	}
 
+	// ADR-057 FR-005 fixture repair: spawnSubTurn's sharedStore.CreateSessionWithID
+	// requires parentTS.transcriptSessionID to resolve to a real session in
+	// al.GetSessionStore() — mint one via the AgentLoop's own shared store.
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "test harness did not wire a shared session store")
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	require.NoError(t, err)
+
 	parent := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-w2-12",
-		depth:          0,
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 10),
-		session:        &ephemeralSessionStore{},
-		agent:          scriptedAgent,
+		ctx:                 context.Background(),
+		turnID:              "parent-w2-12",
+		depth:               0,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 10),
+		session:             &ephemeralSessionStore{},
+		agent:               scriptedAgent,
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 	}
 
 	// The parentSpawnCallID on the child sub-turn is set from context via
@@ -230,10 +285,10 @@ func TestSpawn_PersistsParentToolCallID_ViaProductionPath(t *testing.T) {
 	}
 
 	// Run spawnSubTurn. The scripted provider will emit one tool call on first iteration.
-	_, err := spawnSubTurn(parentCtx, al, parent, cfg)
+	_, spawnErr := spawnSubTurn(parentCtx, al, parent, cfg)
 	// The test is about verifying the transcript, not spawnSubTurn success/failure.
 	// The tool call may fail (file not found), but it must be persisted.
-	_ = err
+	_ = spawnErr
 
 	// Give the transcript writer time to flush.
 	time.Sleep(50 * time.Millisecond)

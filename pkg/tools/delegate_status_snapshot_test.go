@@ -33,6 +33,27 @@ func (r *stubDelegateAgentRegistry) IsExternalCLI(agentID string) bool {
 	return r.externalCLI[agentID]
 }
 
+// extractDelegateSessionIDFromAck pulls the "session_id: X" token out of an
+// async delegate ack message (ADR-057 FR-043: recentActivityLines now reads
+// via the child's own DelegateSessionID, not the shared transcript session
+// id captured at task-creation time — so a test seeding synthetic
+// transcript activity must key it by THIS value, which is only known after
+// the run ack, not chosen up front).
+func extractDelegateSessionIDFromAck(t *testing.T, forLLM string) string {
+	t.Helper()
+	const marker = "session_id: "
+	idx := strings.Index(forLLM, marker)
+	if idx == -1 {
+		t.Fatalf("expected %q in run ack, got: %s", marker, forLLM)
+	}
+	rest := forLLM[idx+len(marker):]
+	end := strings.IndexAny(rest, ")\n")
+	if end == -1 {
+		t.Fatalf("could not find end of session_id in ack: %s", forLLM)
+	}
+	return rest[:end]
+}
+
 // TestDelegateStatus_RunningNative_IncludesRecentActivity is the regression
 // proof for W2: action:"status" on a RUNNING NATIVE task must surface the
 // child sub-turn's recent transcript activity. The data already exists —
@@ -45,6 +66,12 @@ func (r *stubDelegateAgentRegistry) IsExternalCLI(agentID string) bool {
 func TestDelegateStatus_RunningNative_IncludesRecentActivity(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
+	// ADR-057 FR-021/BDD-20 (W7a): a real delegation now requires a lifecycle
+	// store and a resolvable calling-agent identity — neither is this test's
+	// concern (it exercises the action:"status" activity snapshot), so both
+	// are wired past.
+	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
+	t.Cleanup(tool.WaitForAsyncTasks)
 
 	store := &stubDelegateSessionStore{entries: map[string][]session.TranscriptEntry{}}
 	tool.SetSessionStore(store)
@@ -62,9 +89,12 @@ func TestDelegateStatus_RunningNative_IncludesRecentActivity(t *testing.T) {
 	// captures at creation time (W2): the transcript session ID and this
 	// call's own tool-call ID — mirroring what pkg/agent/loop.go injects via
 	// tools.WithTranscriptSessionID / tools.WithToolCallID before every real
-	// tool dispatch.
+	// tool dispatch. WithAgentID carries the CALLING agent's own identity
+	// (FR-015) — distinct from "agent_id" in the args below, which names the
+	// delegation TARGET.
 	createCtx := WithTranscriptSessionID(context.Background(), "sess-native-1")
 	createCtx = WithToolCallID(createCtx, "call-native-1")
+	createCtx = WithAgentID(createCtx, "test-caller")
 
 	runResult := tool.Execute(createCtx, map[string]any{
 		"task": "research native", "label": "research", "agent_id": "ray",
@@ -73,6 +103,11 @@ func TestDelegateStatus_RunningNative_IncludesRecentActivity(t *testing.T) {
 		t.Fatalf("expected successful delegation, got: %+v", runResult)
 	}
 	taskID := extractTaskID(t, runResult.ForLLM)
+	// ADR-057 FR-043: recentActivityLines now reads via the child's OWN
+	// DelegateSessionID (a fresh UUID minted at run time), not the shared
+	// transcript session id ("sess-native-1") captured above — seed the
+	// synthetic transcript activity under THAT id instead.
+	delegateSessionID := extractDelegateSessionIDFromAck(t, runResult.ForLLM)
 
 	// Seed the child sub-turn's own transcript activity — exactly what
 	// pkg/agent/turn.go's appendIntermediateAssistantTranscript writes for a
@@ -81,7 +116,7 @@ func TestDelegateStatus_RunningNative_IncludesRecentActivity(t *testing.T) {
 	// spawn call sharing the same session) proves the filter, not just
 	// presence.
 	store.mu.Lock()
-	store.entries["sess-native-1"] = []session.TranscriptEntry{
+	store.entries[delegateSessionID] = []session.TranscriptEntry{
 		{Role: "assistant", Content: "Let me search for X first...", ParentSpawnCallID: "call-native-1"},
 		{
 			Role: "assistant", Content: "unrelated sibling sub-turn narration",
@@ -132,12 +167,16 @@ func TestDelegateStatus_RunningNative_IncludesRecentActivity(t *testing.T) {
 func TestDelegateStatus_RunningNative_NoMatchingActivity_OmitsHeader(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
+	// ADR-057 FR-021/BDD-20 (W7a): see the sibling test's comment.
+	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
+	t.Cleanup(tool.WaitForAsyncTasks)
 
-	// Store is wired (unlike a nil sessionStore) and has real data for the
-	// session — just none tagged with THIS task's SpawnCallID, mirroring a
-	// child sub-turn that hasn't produced any intermediate narration yet.
+	// Store is wired (unlike a nil sessionStore) and has real data — for an
+	// UNRELATED session id, just to prove a wired-but-non-matching store
+	// behaves identically to a wired-and-empty one; the actual child session
+	// id is not known until after the run ack (FR-043 — see below).
 	store := &stubDelegateSessionStore{entries: map[string][]session.TranscriptEntry{
-		"sess-native-2": {
+		"unrelated-session": {
 			{
 				Role: "assistant", Content: "unrelated entry from a different spawn call",
 				ParentSpawnCallID: "some-other-call",
@@ -157,6 +196,7 @@ func TestDelegateStatus_RunningNative_NoMatchingActivity_OmitsHeader(t *testing.
 
 	createCtx := WithTranscriptSessionID(context.Background(), "sess-native-2")
 	createCtx = WithToolCallID(createCtx, "call-native-2")
+	createCtx = WithAgentID(createCtx, "test-caller")
 
 	runResult := tool.Execute(createCtx, map[string]any{
 		"task": "research native", "label": "research", "agent_id": "ray",
@@ -166,8 +206,9 @@ func TestDelegateStatus_RunningNative_NoMatchingActivity_OmitsHeader(t *testing.
 	}
 	taskID := extractTaskID(t, runResult.ForLLM)
 
-	// No entries are seeded for "call-native-2" — the store stays exactly as
-	// constructed above (only the unrelated sibling entry).
+	// No entries are seeded for the child's own DelegateSessionID — the
+	// store stays exactly as constructed above (only the unrelated entry
+	// under an unrelated key).
 
 	statusResult := tool.Execute(context.Background(), map[string]any{
 		"action": "status", "task_id": taskID,
@@ -199,6 +240,9 @@ func TestDelegateStatus_RunningNative_NoMatchingActivity_OmitsHeader(t *testing.
 func TestDelegateStatus_RunningExternalCLI_NoLiveSnapshot(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
+	// ADR-057 FR-021/BDD-20 (W7a): see the sibling tests' comment.
+	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
+	t.Cleanup(tool.WaitForAsyncTasks)
 
 	store := &stubDelegateSessionStore{entries: map[string][]session.TranscriptEntry{
 		"sess-3p-1": {
@@ -221,6 +265,7 @@ func TestDelegateStatus_RunningExternalCLI_NoLiveSnapshot(t *testing.T) {
 
 	createCtx := WithTranscriptSessionID(context.Background(), "sess-3p-1")
 	createCtx = WithToolCallID(createCtx, "call-3p-1")
+	createCtx = WithAgentID(createCtx, "test-caller")
 
 	runResult := tool.Execute(createCtx, map[string]any{
 		"task": "research via external cli", "agent_id": "codex-worker",

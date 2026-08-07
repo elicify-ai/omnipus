@@ -149,7 +149,7 @@ func TestRunTurn_HardAbortViaInterruptSessionHard_RecordsCancelMethodHard(t *tes
 	// Phase A above does NOT reach a tool already executing (only
 	// requestHardAbort's turnCancel() cascades into the tool's execCtx), so
 	// the tool is still blocked until this call.
-	_, hardErr := al.InterruptSessionHard(sessionID, "test hard escalation")
+	_, hardErr := al.InterruptSessionHard(sessionID, ScopeSubtree, "test hard escalation")
 	require.NoError(t, hardErr)
 
 	select {

@@ -40,7 +40,12 @@ func (s *stubSessionStore) ReadTranscript(sessionID string) ([]session.Transcrip
 	return s.transcript, nil
 }
 
-func (s *stubSessionStore) AppendTranscript(sessionID string, entry session.TranscriptEntry) error {
+// AppendTranscriptStrict implements HandoffSessionStore's strict entry point
+// (ADR-057 U22, W3c: HandoffSessionStore.AppendTranscript was renamed to
+// AppendTranscriptStrict in handoff.go; this is the same test double,
+// mechanically renamed to keep satisfying the interface — no assertions in
+// this file depend on the old lenient name).
+func (s *stubSessionStore) AppendTranscriptStrict(sessionID string, entry session.TranscriptEntry) error {
 	s.appendedEvents = append(s.appendedEvents, entry)
 	return nil
 }

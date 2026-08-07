@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Regression coverage for a live-UAT-reported bug (re-verification 2026-07):
 // the WS event forwarder's orphan watchdog (pkg/gateway/websocket.go,
 // startOrphanWatchdog) synthesizes subagent_end{status:"interrupted"} for
@@ -36,6 +34,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -48,6 +47,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -205,10 +205,43 @@ func TestOrphanWatchdog_GenuinelyActiveDelegate_NeverSynthesizesInterrupted(t *t
 
 	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
 	delegateTool.SetSpawner(agent.NewSubTurnSpawner(al))
+	// ADR-057 U14 fixture repair (38ba80eb): DelegateTool now refuses to
+	// start a delegated session without a durable lifecycle store wired
+	// (fail-closed rather than an untracked, unrecoverable session,
+	// BDD-20/FR-021) — mirrors
+	// pkg/agent/delegate_async_toolcall_completion_test.go's identical
+	// wiring for the same contentRouted*Provider/gateTool pattern. Without
+	// this, executeRun's fail-closed guard returns ErrorResult before ever
+	// dispatching the async delegate, so the delegate never reaches
+	// orphan_gate_tool and every wait on gate.entered below times out at
+	// 15s — a fixture gap, not a watchdog defect.
+	delegateTool.SetLifecycleStore(session.NewLifecycleStore(filepath.Join(tmpDir, "session_lifecycle")))
 	delegateTool.SetDelegationDenyCheckerBackground(
 		func(context.Context, string) *tools.DelegationDenial { return nil },
 	)
 	al.RegisterTool(delegateTool)
+	// Drain the async delegate's own detached goroutine before t.TempDir()'s
+	// cleanup runs (mirrors pkg/tools/delegate_adr053_test.go's
+	// newADR053TestTool and every other DelegateTool test fixture in this
+	// codebase). executeAsync's goroutine (pkg/tools/delegate.go) keeps
+	// writing to the lifecycle store — t.transitionLifecycle's
+	// LifecycleStore.Persist, an atomic write under tmpDir/session_lifecycle
+	// — AFTER SpawnSubTurn returns, which is itself AFTER the real
+	// EventKindSubTurnEnd event this test observes on `ch` was already
+	// published. So "saw the real subagent_end frame" does NOT imply this
+	// goroutine has finished writing: the goroutine can still be mid-Persist
+	// when this test function returns. al.Close() (registered by
+	// mustAgentLoop) cannot help — it has no reference to this DelegateTool
+	// or its asyncWG, since delegateTool is a local test fixture, not part of
+	// *agent.AgentLoop. Without this, the trailing Persist call's
+	// create-temp-file-then-rename can race t.TempDir()'s RemoveAll walk,
+	// intermittently failing with "TempDir RemoveAll cleanup: ...: directory
+	// not empty" — exactly the class of flake documented on
+	// DelegateTool.WaitForAsyncTasks's own doc comment. Registered here
+	// (after delegateTool is fully wired, before TempDir()-dependent test
+	// logic runs) so LIFO cleanup ordering runs this BEFORE al.Close() and
+	// well before the TempDir() cleanup registered at this test's very start.
+	t.Cleanup(delegateTool.WaitForAsyncTasks)
 
 	for _, agentID := range al.GetRegistry().ListAgentIDs() {
 		ag, ok := al.GetRegistry().GetAgent(agentID)
@@ -356,6 +389,17 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 
 	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
 	delegateTool.SetSpawner(agent.NewSubTurnSpawner(al))
+	// ADR-057 U14 fixture repair (38ba80eb): DelegateTool now refuses to
+	// start a delegated session without a durable lifecycle store wired
+	// (fail-closed rather than an untracked, unrecoverable session,
+	// BDD-20/FR-021) — mirrors
+	// pkg/agent/delegate_async_toolcall_completion_test.go's identical
+	// wiring for the same contentRouted*Provider/gateTool pattern. Without
+	// this, executeRun's fail-closed guard returns ErrorResult before ever
+	// dispatching the async delegate, so the delegate never reaches
+	// orphan_gate_tool and every wait on gate.entered below times out at
+	// 15s — a fixture gap, not a watchdog defect.
+	delegateTool.SetLifecycleStore(session.NewLifecycleStore(filepath.Join(tmpDir, "session_lifecycle")))
 	delegateTool.SetDelegationDenyCheckerBackground(
 		func(context.Context, string) *tools.DelegationDenial { return nil },
 	)

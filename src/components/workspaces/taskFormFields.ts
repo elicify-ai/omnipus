@@ -83,27 +83,61 @@ export function dateToDatetimeLocal(date: Date | null): string {
 }
 
 /**
- * Whether a trigger is a calendar-only recurring trigger (`every`/`recurring`,
- * FR-011/D3). Board and List exclude tasks whose trigger matches this
- * predicate — recurring tasks live exclusively on the workspace calendar.
- * Accepts `trigger` directly (not the whole `Task`) so BoardView/ListView can
- * call it inline as `isRecurringTrigger(t.trigger)`.
+ * Whether a trigger is a repeat-rule trigger (`every`/`recurring`). NARROWER
+ * than the calendar-only boundary (see `isScheduledTrigger` below, which is
+ * the one Board/List — and, as of the 2026-08-07 operator ruling,
+ * TaskDetailPanel's editing gate too — actually use) — this predicate is now
+ * reserved for call sites that specifically care about REPEATING behaviour,
+ * not mere schedule-bearing: `canDropTransition`'s repeating-task drag guard
+ * (BoardView.tsx — a failed repeating task can't be restarted by dragging).
+ * TaskDetailPanel used to gate its raw-cron/rrule-hiding guard on this
+ * narrower predicate (leaving `once` fully inline-editable, since a `once`
+ * trigger has no rule string to hide) — the 2026-08-07 ruling superseded
+ * that: `once` is calendar-only too now, so TaskDetailPanel gates on
+ * `isScheduledTrigger` instead. Accepts `trigger` directly (not the whole
+ * `Task`) so callers can use it inline as `isRecurringTrigger(t.trigger)`.
  */
 export function isRecurringTrigger(trigger?: TaskTrigger | null): trigger is TaskTrigger {
   return trigger?.type === 'every' || trigger?.type === 'recurring'
 }
 
 /**
- * Defensive, read-only plain-English summary for a recurring trigger (FR-023).
- * Used ONLY by the generic TaskDetailPanel's defensive guard — normally
- * unreachable since Board/List exclude recurring tasks (isRecurringTrigger
- * above), reachable only via stale cache or a race. Deliberately never
- * includes `cron_expr` or `rrule` — no raw cron/rule string is ever displayed
- * outside the calendar editor (D8/D9). NOT the same as `triggerSummary` below,
- * which is a general-purpose label that DOES surface the raw cron string and
- * must not be reused for this guard.
+ * Whether a trigger carries ANY schedule — a concrete one-shot instant
+ * (`once`), a fixed interval (`every`), or a repeat rule (`recurring`).
+ * Superset of `isRecurringTrigger` (adds `once`). Board and List exclude
+ * every task whose trigger matches this predicate — schedule-bearing tasks
+ * live exclusively on the workspace calendar (operator ruling 2026-08-07:
+ * "recurring and ALL scheduled tasks are calendar-only"). Only a `manual`
+ * trigger (or no trigger at all — the default) leaves a task on Board/List.
+ * Accepts `trigger` directly (not the whole `Task`) so BoardView/ListView —
+ * and, as of the 2026-08-07 ruling, TaskDetailPanel's own trigger-editing
+ * gate — can call it inline as `isScheduledTrigger(t.trigger)`.
  */
-export function recurringTriggerSummary(trigger: TaskTrigger): string {
+export function isScheduledTrigger(trigger?: TaskTrigger | null): trigger is TaskTrigger {
+  return trigger?.type === 'once' || trigger?.type === 'every' || trigger?.type === 'recurring'
+}
+
+/**
+ * Defensive, read-only plain-English summary for a schedule-bearing trigger
+ * (`once`/`every`/`recurring` — FR-023, broadened by the 2026-08-07 operator
+ * ruling to cover `once` too, superseding the `364d00b2`-era judgment that
+ * kept `once` inline-editable). Used ONLY by the generic TaskDetailPanel's
+ * calendar-redirect guard — normally unreachable since Board/List exclude
+ * every schedule-bearing task (`isScheduledTrigger` above), reachable only
+ * via stale cache, a race, or navigation into the panel from a dependency
+ * chip / subtask row / search result. Deliberately never includes
+ * `cron_expr` or `rrule` — no raw cron/rule string is ever displayed outside
+ * the calendar editor (D8/D9). NOT the same as `triggerSummary` below, which
+ * is a general-purpose label that DOES surface the raw cron string and must
+ * not be reused for this guard.
+ */
+export function scheduledTriggerSummary(trigger: TaskTrigger): string {
+  if (trigger.type === 'once') {
+    const at = trigger.config?.at_ms
+    return typeof at === 'number'
+      ? `Runs once — ${new Date(at).toLocaleString()}`
+      : 'Runs once (time not yet set)'
+  }
   if (trigger.type === 'every') {
     const ms = trigger.config?.every_ms
     if (typeof ms === 'number' && ms > 0) {

@@ -31,6 +31,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
@@ -66,6 +67,21 @@ type AgentLoop struct {
 	cfg      *config.Config
 	registry *AgentRegistry
 	state    *state.Manager
+
+	// configGen is a monotonic counter bumped every time al.cfg is replaced
+	// with a new pointer, under al.mu.Lock() — currently by SwapConfig and by
+	// ReloadProviderAndConfig's own al.cfg/al.registry swap (see both call
+	// sites for the Add(1) call). It exists because "al.registry changed" is
+	// NOT a reliable proxy for "al.cfg changed": SwapConfig (the path every
+	// REST-initiated config write goes through — see
+	// pkg/gateway/rest.go's refreshConfigAndRewireServices) replaces al.cfg
+	// ALONE and never touches al.registry at all. UpsertAgentFast's
+	// optimistic-concurrency publish loop (pkg/agent/registry.go) reads this
+	// alongside al.registry to detect ANY concurrent config writer, not just
+	// a full registry-swapping reload — otherwise a bare SwapConfig landing
+	// mid-upsert is invisible to a registry-pointer-only CAS check and gets
+	// silently reverted by the upsert's own later `al.cfg = cfg` publish.
+	configGen atomic.Uint64
 
 	// Event system
 	eventBus *EventBus
@@ -135,6 +151,49 @@ type AgentLoop struct {
 	// trigger CronService. Set at boot by the gateway (SetTaskTriggerScheduler);
 	// nil in tests / before wiring. All notify paths are nil-safe.
 	taskTrigger *TaskTriggerScheduler
+	// planEngine is the single hybrid plan-coordinator instance (ADR-049 D4,
+	// Wave 2-B's PlanEngine). Set once at boot by the gateway
+	// (SetPlanEngine); nil in tests / before wiring. Wave 2-C2's /goal and
+	// /loop command admission reaches it via GetPlanEngine(al).Admit(kind).
+	planEngine *PlanEngine
+	// planStore is the shared *plan.Store (ADR-052) the create_plan/
+	// execute_plan agent tools read/write. It is constructed by the gateway
+	// AFTER NewAgentLoop returns (setupAndStartServices, alongside
+	// agent.NewPlanEngine — see gateway.go's boot wiring region), so it is
+	// nil on the FIRST registerSharedTools pass (inside NewAgentLoop) and
+	// installed later via SetPlanStore, which re-wires the plan-tool surface
+	// for every currently-registered agent with the real store. Mirrors
+	// planEngine's own late-binding discipline exactly. nil in tests /
+	// before boot wiring completes — create_plan/execute_plan then register
+	// but fail closed at Execute() (Wave-1 discipline, pkg/tools/plan.go).
+	planStore *plan.Store
+	// loopSched is the dedicated /loop time-driven scheduler (ADR-049 D6/D7,
+	// loop_scheduler.go). Set once at boot by the gateway
+	// (SetLoopScheduler); nil in tests / before wiring — applyLoopCommandPrompt
+	// nil-checks via the loopScheduler() accessor and reports "/loop
+	// unavailable" rather than panicking.
+	loopSched *LoopScheduler
+
+	// messageInboxStore is the durable S3 child->parent SessionMessage inbox
+	// (ADR-053 §Contract Surface, pkg/session/message_inbox.go). Constructed by
+	// the gateway AFTER NewAgentLoop returns (alongside lifecycleStore), then
+	// installed via SetSessionMessagingStores — which re-wires the delegate +
+	// message_parent tool surface for every registered agent with the real
+	// store, mirroring SetPlanStore's late-binding discipline exactly. nil on
+	// the FIRST registerSharedTools pass (inside NewAgentLoop, before the store
+	// exists) and in tests — the tools then fail-closed at Execute()
+	// (message_parent returns "tool not fully configured"; delegate's
+	// inbox/steer/cancel actions return "not configured"). See
+	// session_messaging_wire.go.
+	messageInboxStore *session.MessageInboxStore
+	// sessionLifecycleStoreForTools is the durable S2 session-lifecycle store
+	// (pkg/session/lifecycle.go), threaded to the delegate + message_parent
+	// tools so a child can read/park its own record and a parent can read a
+	// child's record. Distinct name from planEngine's own lifecycleStore
+	// reference to keep the two consumers (boot-sweep vs tool-surface) legible;
+	// both point at the SAME single *session.LifecycleStore instance the
+	// gateway constructs once.
+	sessionLifecycleStoreForTools *session.LifecycleStore
 
 	// Security (SEC-15, SEC-17): audit logging and policy evaluation.
 	// Initialized in NewAgentLoop when sandbox.audit_log is enabled.
@@ -288,14 +347,22 @@ type AgentLoop struct {
 	// env preamble with the new values.
 	contextBuilderRegistry *ContextBuilderRegistry
 
-	// Per-agent rate limiting and global daily cost cap (SEC-26).
-	// rateLimiter manages sliding-window counters; costTracker persists the
-	// daily cost accumulator across restarts. Both are always non-nil after
-	// NewAgentLoop — the registry exists even when no limits are configured
-	// so it can record costs for observability. The per-call sites check
+	// Per-agent sliding-window rate limiting (SEC-26). rateLimiter manages
+	// the LLM/hr and tool/min counters per agent; always non-nil after
+	// NewAgentLoop so per-call sites add a defensive nil-check that is
+	// structurally unreachable. The per-call sites check
 	// cfg.Sandbox.RateLimits.* > 0 to decide whether to enforce.
+	// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 	rateLimiter *security.RateLimiterRegistry
-	costTracker *security.CostTracker
+
+	// tokenBudget is the ADR-053 Phase-2 / D12 app-level OVERALL token budget
+	// (R§8.3): ONE atomic pool debited by ALL workloads (owner/member/verifier/
+	// Judge) from provider-reported usage, deliberately NOT honoring
+	// IsPrivilegedAgent (FR-172). Default cap 0 = unbounded (FR-175). The
+	// ceiling is restart-gated (FR-177). Always non-nil after NewAgentLoop so
+	// the debit path is a unconditional no-op when unbounded. The persisted
+	// consumed counter is reconciled at boot from system/token_budget.json.
+	tokenBudget *TokenBudget
 
 	// approvalGrants tracks per-session "Always Allow" tool-approval grants,
 	// scoped by (session_id, agent_id, tool_name). Always non-nil after
@@ -373,6 +440,13 @@ type AgentLoop struct {
 	// Initialized in NewAgentLoop; always non-nil after construction.
 	cancelAbuse *cancelAbuseDetector
 
+	// cancelPreArm holds pre-registration cancel latches (cancel_prearm.go) —
+	// cancels that arrive before their target turn has registered in
+	// activeTurnStates. Initialized in NewAgentLoop; always non-nil after
+	// construction. See RequestCancel (cancel.go) for the arm side and
+	// registerActiveTurn (turn.go) for the consume side.
+	cancelPreArm *cancelPreArm
+
 	// sessionWorkers holds the active per-scope session workers (sync.Map).
 	// Key: scope string (e.g. "agent:jim:session:abc123").
 	// Value: *sessionWorker.
@@ -384,6 +458,18 @@ type AgentLoop struct {
 	// Resource-aware admission (CPU load, RSS, goroutine count) is out of
 	// scope for v0.1 and filed as a follow-up.
 	admission *AdmissionController
+
+	// rootDelegationAdmission is the ADR-057 W17 (FR-069/FR-070/FR-095)
+	// process-wide gate for ROOT-level `delegate` fan-out — see admission.go's
+	// "ADR-057 W17" block for the full rationale. Constructed exactly once in
+	// NewAgentLoop from agents.defaults.subturn.max_concurrent (unclamped) and
+	// shared by every per-agent DelegateTool's wrapped spawner
+	// (rootDelegationAdmittingSpawner, registerSharedTools' delegate-tool
+	// block) so the cap is enforced once for the whole running process, not
+	// per agent. Always non-nil after successful construction — NewAgentLoop
+	// fails closed (returns an error) rather than proceeding with a nil gate,
+	// per ErrRootDelegationCapMisconfigured's doc comment.
+	rootDelegationAdmission *RootDelegationAdmission
 
 	// channelSessionIdx maps "channel/chatID" → shared session ID for fast per-peer
 	// session resumption. Built on startup and updated on every new channel session.
@@ -476,6 +562,19 @@ type processOptions struct {
 	// eviction-survives-everything delivery mechanism rather than adding a
 	// second, parallel injection path.
 	IsTaskRun bool
+
+	// UserInitiated threads bus.InboundMessage.UserInitiated into the turn
+	// (ADR-049 Gap #8/r2, spec Part B FR-075/SD-B6/R6) — see that field's doc
+	// comment for the fail-closed origin contract. handleCommand reads this
+	// (never msg.UserInitiated directly, for the same "read the dedicated
+	// processOptions carrier, not the raw inbound field" discipline
+	// UserID/gatewayPrincipal already establishes) to decide whether /goal
+	// and /loop action or pass through inert as ordinary text. Every
+	// processOptions literal NOT built from userInitiated(msg) — ProcessScheduled,
+	// processTaskDirect, processTaskDirectExternalCLI, processSystemMessage,
+	// spawnSubTurn — leaves this at its zero value (false), which is the
+	// correct fail-closed answer for every one of those non-user origins.
+	UserInitiated bool
 }
 
 // gatewayPrincipal returns the WS-authenticated gateway principal that an
@@ -491,6 +590,19 @@ type processOptions struct {
 // empty structurally rather than by a runtime channel-name guard.
 func gatewayPrincipal(msg bus.InboundMessage) string {
 	return msg.GatewayUserID
+}
+
+// userInitiated returns msg's fail-closed origin signal (ADR-049 Gap #8/r2,
+// R6) for threading onto processOptions.UserInitiated. It reads ONLY
+// bus.InboundMessage.UserInitiated — set true exclusively by the gateway
+// webchat WS `message` handler and by channel adapters' HandleMessage (a
+// real platform sender). Every other producer of an InboundMessage
+// (async-notifier, followUps re-publish, ProcessDirect/ProcessDirectWithChannel)
+// leaves the field at its zero value, so this returns false for them by
+// construction — mirroring gatewayPrincipal's "read the one dedicated
+// carrier, never infer" discipline above.
+func userInitiated(msg bus.InboundMessage) bool {
+	return msg.UserInitiated
 }
 
 // ScheduledJobInfo carries the schedule/job identity that ProcessScheduled
@@ -552,10 +664,23 @@ const (
 // unexpected and log accordingly.
 var ErrReloadNotConfigured = errors.New("reload not configured")
 
-// ErrReloadAlreadyInProgress is returned by TriggerReload when a reload is
-// already running. The caller should treat this as "poll anyway" — the in-flight
-// reload will call ClearReloadPending when it completes, unblocking any poller.
+// ErrReloadAlreadyInProgress is returned by TriggerReload when a reload
+// function reports that a reload is already running. The caller should treat
+// this as "poll anyway" — that reload will call ClearReloadPending when it
+// completes, unblocking any poller.
+//
+// NOT REACHABLE FROM PRODUCTION. The only reloadFunc production installs is the
+// gateway's coalescing trigger (pkg/gateway.newReloadTrigger), which never
+// reports contention as an error: a request arriving mid-reload is recorded and
+// served by a follow-up reload, so it returns nil. This sentinel and the branch
+// that produces it survive as a defensive net for any other reloadFunc (and are
+// exercised by pkg/gateway's rest_auth_test.go, which installs one deliberately)
+// — do not read them as describing live gateway behaviour.
 var ErrReloadAlreadyInProgress = errors.New("reload already in progress")
+
+// (The TriggerReload window hook that used to live here is gone: the race it
+// let tests reproduce is now structurally impossible, because TriggerReload no
+// longer sets the reload-pending flag at all. See TriggerReload.)
 
 // ErrAgentNotWorkspaceMember is returned by runTurn when the acting agent is
 // not a member of any workspace's CoreTeam (ADR-046 P1, FR-007/008). Execution
@@ -611,6 +736,25 @@ func NewAgentLoop(
 		stateManager = state.NewManager(defaultAgent.Home)
 	}
 
+	// ADR-057 W17: a boot-time diagnostic only — genuine construction of the
+	// root-delegation admission gate happens AFTER al exists, below, via a
+	// LIVE resolver (concurrency-gate consolidation, 2026-08-04). A NEGATIVE
+	// agents.defaults.subturn.max_concurrent is the only case
+	// ResolveRootDelegationCap treats as an error (an unset/zero value now
+	// resolves straight to the central Performance.EffectiveMaxParallelAgents()
+	// authority, not an error — see ResolveRootDelegationCap's doc comment).
+	// Logged loudly here so a genuine operator misconfiguration is
+	// diagnosable at boot; does not abort construction, since the live
+	// resolver's own error branch (below) keeps the gate GATED at the
+	// central value either way, never nil (nil would mean UNLIMITED root
+	// fan-out — the "silently reinterpreted as no gate" outcome ADR-037
+	// bans).
+	if _, err := ResolveRootDelegationCap(cfg); err != nil {
+		logger.ErrorCF("agent",
+			"agents.defaults.subturn.max_concurrent is configured to a negative value — the root-delegation admission gate falls back to the central Performance.EffectiveMaxParallelAgents() authority; set it to 0 (inherit the central value) or a positive explicit override",
+			map[string]any{"error": err.Error()})
+	}
+
 	eventBus := NewEventBus()
 	al := &AgentLoop{
 		bus:                    msgBus,
@@ -623,10 +767,34 @@ func NewAgentLoop(
 		cmdRegistry:            commands.NewRegistry(commands.BuiltinDefinitions()),
 		steering:               newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
 		contextBuilderRegistry: NewContextBuilderRegistry(),
-		admission:              newAdmissionController(0),
 		loadedTools:            make(map[string]map[string]bool),
 		browserMgrs:            make(map[string]*browser.BrowserManager),
 	}
+	// Concurrency-gate consolidation (2026-08-04): session admission's cap is
+	// resolved LIVE from the SAME central authority TaskExecutor's dispatch
+	// semaphore uses (Performance.EffectiveMaxParallelAgents), instead of the
+	// former independent, hardcoded runtime.NumCPU()*4 soft cap — see
+	// AdmissionController.resolveCap's doc comment (admission.go) for why
+	// this must be resolved fresh on every check rather than cached once
+	// here at construction time.
+	al.admission = newAdmissionControllerWithResolver(func() int {
+		return al.GetConfig().Performance.EffectiveMaxParallelAgents()
+	})
+	// ADR-057 W17, same live-resolution treatment: root-level delegate()
+	// fan-out must never drift from the central authority either. On
+	// ResolveRootDelegationCap's error branch (a NEGATIVE configured value)
+	// this falls back directly to EffectiveMaxParallelAgents() so the gate
+	// stays GATED at the central value rather than degrading to unlimited.
+	al.rootDelegationAdmission = newRootDelegationAdmissionWithResolver(func() int {
+		liveCfg := al.GetConfig()
+		if resolvedCap, capErr := ResolveRootDelegationCap(liveCfg); capErr == nil {
+			return resolvedCap
+		}
+		if liveCfg != nil {
+			return liveCfg.Performance.EffectiveMaxParallelAgents()
+		}
+		return 1
+	})
 	al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(al.hooks, cfg)
 
@@ -667,6 +835,18 @@ func NewAgentLoop(
 				map[string]any{"dir": sharedDir, "error": ssErr.Error()})
 		} else {
 			al.sharedSessionStore = sharedStore
+			// FR-067/SC-048 (ADR-057): apply the operator's resolved
+			// stats-flush override onto the store's live periodic flusher.
+			// Without this call, startStatsFlusher (unified_stats_flush.go,
+			// invoked unconditionally from NewUnifiedStoreWithHome) always
+			// runs on the hardcoded config.DefaultSessionStatsFlushInterval
+			// (5s) constant — a seeded, documented
+			// sessions.stats_flush_interval key in config.json would persist
+			// but have zero runtime effect. cfg.Session.
+			// EffectiveStatsFlushInterval() resolves the operator's value (or
+			// the same 5s default when unset), exactly matching
+			// startStatsFlusher's own doc comment naming this call site.
+			sharedStore.SetStatsFlushInterval(cfg.Session.EffectiveStatsFlushInterval())
 			al.rebuildChannelSessionIndex()
 		}
 	}
@@ -832,17 +1012,23 @@ func NewAgentLoop(
 	// Initialize cancel abuse detector (shared across all four cancel entry points).
 	al.cancelAbuse = newCancelAbuseDetector()
 
-	// SEC-26: Initialize rate limiter registry and persistent cost tracker.
-	// The registry always exists so per-agent windows can be created even when
-	// no cap is configured; SetDailyCostCap(0) disables cost-cap enforcement.
+	// Initialize the pre-registration cancel latch table (cancel_prearm.go).
+	al.cancelPreArm = newCancelPreArm()
+
+	// SEC-26: Initialize rate limiter registry. The registry always exists
+	// so per-agent windows can be created even when no limit is configured.
+	// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 	al.rateLimiter = security.NewRateLimiterRegistry()
-	al.rateLimiter.SetDailyCostCap(cfg.Sandbox.RateLimits.DailyCostCapUSD)
-	costPath := filepath.Join(homePath, "system", "cost.json")
-	al.costTracker = security.NewCostTracker(costPath)
-	al.costTracker.LoadIntoRegistry(al.rateLimiter)
+
+	// ADR-053 Phase-2 / D12 (R§8.3): app-level OVERALL token budget — the
+	// sole app-level spend brake. The ceiling is restart-gated (FR-177) —
+	// read ONCE at boot from PlanningConfig and never live-reloaded; the
+	// live spend lever is Stop/cancel. The persister reconciles the
+	// consumed counter across restarts. cap 0 = unbounded (FR-175).
+	tbPath := filepath.Join(homePath, "system", "token_budget.json")
+	al.tokenBudget = NewTokenBudget(cfg.Planning.EffectiveTokenBudget(), NewTokenBudgetPersister(tbPath))
 	logger.InfoCF("agent", "Rate limiter initialized",
 		map[string]any{
-			"daily_cost_cap_usd":              cfg.Sandbox.RateLimits.DailyCostCapUSD,
 			"max_agent_llm_calls_per_hour":    cfg.Sandbox.RateLimits.MaxAgentLLMCallsPerHour,
 			"max_agent_tool_calls_per_minute": cfg.Sandbox.RateLimits.MaxAgentToolCallsPerMinute,
 		})
@@ -1025,6 +1211,17 @@ func (al *AgentLoop) RateLimiter() *security.RateLimiterRegistry {
 	return al.rateLimiter
 }
 
+// TokenBudget returns the ADR-053 Phase-2 app-level OVERALL token budget
+// (D12/R§8.3). Always non-nil after NewAgentLoop (a nil AgentLoop returns
+// nil). Used by the goal loop's graceful-wind-down brake (checkGoalLoopAfterTurn)
+// and by gateway Usage handlers that report spend / set the restart-gated ceiling.
+func (al *AgentLoop) TokenBudget() *TokenBudget {
+	if al == nil {
+		return nil
+	}
+	return al.tokenBudget
+}
+
 // ApprovalGrants returns the session-scoped "Always Allow" tool-approval
 // grant store. Always non-nil after NewAgentLoop (a nil AgentLoop returns
 // nil). Every ApprovalGrantStore method is itself nil-receiver-safe and
@@ -1153,7 +1350,13 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 	if registry == nil {
 		return
 	}
-	cfg := al.cfg
+	// Read al.cfg under al.mu.RLock (GetConfig), NOT bare. This helper runs
+	// inside UpsertAgentFast's and ReloadProviderAndConfig's wiring pass with
+	// NO al.mu held, so a bare `al.cfg` read races every pointer-swap publisher
+	// (SwapConfig, ReloadProviderAndConfig, and MutateConfig's copy-then-swap)
+	// writing the al.cfg slot under al.mu.Lock. The locked read establishes the
+	// happens-before edge the bare read lacked.
+	cfg := al.GetConfig()
 	if cfg == nil {
 		return
 	}
@@ -1262,7 +1465,11 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 	if registry == nil {
 		return
 	}
-	cfg := al.cfg
+	// Read al.cfg under al.mu.RLock (GetConfig), NOT bare — see the matching
+	// comment in wireExecToolDepsOn: this helper likewise runs in the unlocked
+	// wiring pass of UpsertAgentFast/ReloadProviderAndConfig, and a bare al.cfg
+	// read races every pointer-swap publisher of al.cfg.
+	cfg := al.GetConfig()
 	if cfg == nil {
 		return
 	}
@@ -1591,7 +1798,40 @@ func registerSharedTools(
 		// action:"status" — a single, connected piece of state (FR-D2).
 		{
 			delegateTool := tools.NewDelegateTool(agent.Model, agent.MaxTokens, agent.Temperature)
-			delegateTool.SetSpawner(NewSubTurnSpawner(al))
+			// ADR-057 W17 (FR-069/FR-070/FR-095): wrap the real spawner with
+			// the root-delegation admission gate (admission.go) so a
+			// ROOT-level `delegate` fan-out from this agent is actually
+			// capped by al.rootDelegationAdmission — the SAME shared,
+			// process-wide instance every other agent's DelegateTool is
+			// wrapped with, so the cap applies once across the whole running
+			// gateway, not per agent. See rootDelegationAdmittingSpawner's
+			// doc comment (admission.go) for why wrapping SpawnSubTurn here
+			// is the correct choke point for both sync and async delegation.
+			delegateTool.SetSpawner(newRootDelegationAdmittingSpawner(NewSubTurnSpawner(al), al.rootDelegationAdmission, agentID))
+			// FR-196 kill switch — wire it HERE, at construction, not only in
+			// SetSessionMessagingStores' later re-wire. This is a PER-AGENT
+			// DelegateTool: the session_messaging_wire.go re-wire walks the
+			// shared registry, so an agent-scoped instance built here would
+			// otherwise never be wired at all. An unwired tool fails CLOSED
+			// (delegate.go sessionMessagingPlaneEnabled), which would deny the
+			// whole gated action set — cancel/steer/respond/inbox/inbox_ack/
+			// follow_up/peek — for every agent. The closure re-reads config per
+			// call, so a live kill-switch flip is still honored.
+			delegateTool.SetSessionMessagingEnabled(al.sessionMessagingEnabledLive())
+			// R2-MAJ-015 — the operator kill switch for delegate's FR-015
+			// fail-closed parent-agent-id guard
+			// (tools.delegate.require_parent_agent_id). Same live-closure
+			// discipline as the FR-196 switch immediately above, and for a
+			// sharper reason: this guard's failure mode is "delegation stops
+			// entirely across the install", so the escape hatch is worthless
+			// if escaping it needs a restart. al.GetConfig() is re-read per
+			// call rather than captured here — an eagerly-read value would
+			// freeze at whatever this wiring pass saw, which for a dependency
+			// the gateway assigns AFTER tool wiring means frozen at nil while
+			// registration still looks correct.
+			delegateTool.SetRequireParentAgentID(func() bool {
+				return al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID()
+			})
 			// W2: action:"status" live-progress snapshot for a running native
 			// task. sharedStore mirrors the exact store wiring
 			// NewHandoffTool already uses just above (line ~1469) — the same
@@ -1615,6 +1855,19 @@ func registerSharedTools(
 				delegateTool.SetSessionStore(sharedStore)
 			}
 			delegateTool.SetAgentRegistry(func() tools.DelegateAgentRegistry { return al.GetRegistry() })
+			// FR-028/BDD-29 (ADR-057 U14): wire the shared, process-wide
+			// SessionManager so `delegate action="cancel"` actually kills the
+			// TARGET child's own background bash/exec shells, not just its
+			// turn. Without this, killChildBackgroundShells (delegate.go)
+			// starts with `if t.sessionManager == nil { return }` — always
+			// taken — and a cancelled delegate's background dev server (or
+			// any other backgrounded shell) is silently orphaned holding its
+			// port. tools.GetSharedSessionManager() is the SAME process-wide
+			// singleton ExecTool/bash register their background sessions
+			// with (session.go/session_manager_export.go), so this ties the
+			// cancel path to the actual live session registry rather than a
+			// fresh, empty one.
+			delegateTool.SetSessionManager(tools.GetSharedSessionManager())
 			currentAgentID := agentID
 			// ADR-037: the legacy DelegationPolicy.To / SubagentsConfig.AllowAgents
 			// allowlist checkers (SetAllowlistChecker / SetDelegateChecker) are
@@ -1633,6 +1886,7 @@ func registerSharedTools(
 					currentAgentID,
 					cfg.Agents.Defaults,
 					config.DelegationModeBackground,
+					agentExistsChecker(registry),
 				),
 			)
 			// FR-6.2: full-policy gate for the await (async=false) mode. Uses
@@ -1644,7 +1898,9 @@ func registerSharedTools(
 			delegateTool.SetDelegationDenyCheckerAwait(
 				// ForDelegate bakes in exempt=false: same reasoning as the background
 				// gate — a self-targeted await delegate() is real delegation, graph-gated.
-				buildDelegationDenyCheckerForDelegate(currentAgentID, cfg.Agents.Defaults, config.DelegationModeAwait),
+				buildDelegationDenyCheckerForDelegate(
+					currentAgentID, cfg.Agents.Defaults, config.DelegationModeAwait, agentExistsChecker(registry),
+				),
 			)
 			// #477 / FR-D9-FR-D10: thread the SAME effective depth cap the
 			// gates above just authorized against into spawnSubTurn's own
@@ -1657,8 +1913,27 @@ func registerSharedTools(
 				currentAgentID, cfg.Agents.Defaults,
 			))
 
+			// ADR-057: derive the ownership-walk bound from the SAME operator
+			// setting that bounds delegation depth. Left unwired, the walk used
+			// a hardcoded 3 while delegation depth stayed configurable — so
+			// raising max_depth made cancel/steer/peek on a legitimate depth-4+
+			// child fail with an ownership error indistinguishable from a real
+			// cross-tenant attempt. Zero/unset is ignored by the setter, which
+			// keeps its own default.
+			delegateTool.SetOwnershipWalkMaxDepth(cfg.Agents.Defaults.SubTurn.MaxDepth)
+
 			agent.Tools.Register(delegateTool)
 		}
+
+		// ADR-053 Phase 2 on-ramp (session_messaging_wire.go): wire the S2/S3
+		// session-control hooks onto THIS agent's delegate + message_parent
+		// tools. On the FIRST registerSharedTools pass (inside NewAgentLoop,
+		// before the gateway constructs the stores) the stores are nil → both
+		// tools register fail-closed (Execute returns "not configured"). The
+		// gateway's later SetSessionMessagingStores call re-runs this wiring
+		// with the real stores, mirroring SetPlanStore's late-binding
+		// discipline exactly. Safe on hot-reload (idempotent re-wire).
+		al.wireSessionMessagingForAgent(agent)
 
 		// Task tools — require a task store (available after first NewAgentLoop call).
 		if al.taskStore != nil {
@@ -1671,6 +1946,17 @@ func registerSharedTools(
 			// chat-delegated task has no workspace bound to the turn — never the
 			// literal "default" (which would land it in an invisible workspace).
 			taskCreate.SetHome(filepath.Dir(cfg.AgentHomeBasePath()))
+			// ADR-052 FR-002: wire the plan store so the optional plan_id
+			// linkage arg can be validated (validateTaskPlanLinkage,
+			// pkg/tools/plan.go) instead of failing closed with "plan store is
+			// not configured" on every call. al.GetPlanStore() may still be nil
+			// on this very first registerSharedTools pass (it runs inside
+			// NewAgentLoop, before the gateway's setupAndStartServices
+			// constructs the real plan.Store) — that is fine, SetPlanStore's
+			// per-agent loop below re-wires this tool with the real store once
+			// it exists, exactly like wirePlanToolsForAgent's own create_plan/
+			// execute_plan late-binding discipline.
+			taskCreate.SetPlanStore(al.GetPlanStore())
 			// ADR-037: the legacy boolean delegateCheck (SetDelegateChecker,
 			// backed by config.ResolveDelegationTo) is retired — the field it
 			// read no longer exists. The graph-based deny checker below is the
@@ -1683,6 +1969,7 @@ func registerSharedTools(
 					currentAgentID,
 					cfg.Agents.Defaults,
 					config.DelegationModeTask,
+					agentExistsChecker(registry),
 				),
 			)
 			// Task-mode recursion bound: reject a task_create issued from within a
@@ -1691,6 +1978,18 @@ func registerSharedTools(
 			// task run starts a fresh turn at depth 0 (see processTaskDirect depth
 			// seeding); this hard ceiling closes that gap.
 			taskCreate.SetMaxDelegationDepth(maxTaskDepth)
+			// D2 rule 5 (FR-017/052, review r1 major M5): reject an all-check
+			// criteria create outright when the assignee's effective bash
+			// policy is deny or ask — structurally unsatisfiable, mirrors
+			// judge.go's runMachineCheck policy resolution exactly (same
+			// registry, same EffectiveToolPolicy call, ScopeCore).
+			taskCreate.SetBashPolicyChecker(func(assigneeAgentID string) (policy string, ok bool) {
+				agentInst, found := al.GetRegistry().GetAgent(assigneeAgentID)
+				if !found || agentInst == nil {
+					return "", false
+				}
+				return tools.EffectiveToolPolicy(agentInst.LoadToolPolicy(), tools.ScopeCore, agentInst.AgentType, "bash"), true
+			})
 			// subagent_3p (external-CLI) worker task assignment is no longer
 			// guarded here: processTaskDirect (this file) now branches on
 			// runner.ResolveDispatch and routes an external-CLI worker's task
@@ -1734,6 +2033,7 @@ func registerSharedTools(
 					currentAgentID,
 					cfg.Agents.Defaults,
 					config.DelegationModeTask,
+					agentExistsChecker(registry),
 				),
 			)
 			// Same rationale as taskCreate above: the subagent_3p reassignment
@@ -1749,12 +2049,46 @@ func registerSharedTools(
 				var infos []tools.AgentInfo
 				for _, id := range registry.ListAgentIDs() {
 					if a, ok := registry.GetAgent(id); ok {
+						// ADR-049 D3: System Agents (the Judge) are excluded from
+						// list_agents — it is the delegation picker ("resolve agent
+						// names to IDs before delegating"), and a System Agent is
+						// never a delegation target (nor a chat target). Excluding it
+						// here keeps the picker consistent with the workspace
+						// delegation graph, which never contains a System Agent.
+						if a.AgentType == string(config.AgentTypeSystem) {
+							continue
+						}
 						infos = append(infos, tools.AgentInfo{ID: a.ID, Name: a.Name, Type: "custom"})
 					}
 				}
 				return infos
 			}))
 		}
+
+		// ADR-052 plan/task tool surface (create_plan, execute_plan,
+		// run_task, inspect_session) — the single wiring site Wave 1 left
+		// unwired for Wave 2 (see pkg/tools/plan.go / run_task.go /
+		// inspect_session.go's "another wave's job" doc comments). Not
+		// nested inside the `al.taskStore != nil` guard above —
+		// wirePlanToolsForAgent does its own nil-checks per dependency
+		// (taskStore, taskExecutor, planStore, session store) and logs
+		// loudly (Error) on any gap rather than silently skipping the whole
+		// surface. al.GetPlanStore() may still return nil here on the very
+		// FIRST pass — this call runs inside NewAgentLoop, before the
+		// gateway constructs the real plan.Store in setupAndStartServices —
+		// so create_plan/execute_plan register with a nil store and fail
+		// closed at Execute() (Wave-1 discipline) until SetPlanStore
+		// re-wires every agent with the real store once it exists. Read via
+		// the accessor (not the bare al.planStore field) since SetPlanStore
+		// writes it under al.mu — a bare field read here would race that
+		// writer (7-reviewer gate NIT).
+		al.wirePlanToolsForAgent(agent, al.GetPlanStore())
+
+		// list_jobs (the unified background-job roster). Separate from the
+		// plan surface above because it spans plans, standalone tasks AND
+		// delegated sessions, and because it needs no late re-bind — every
+		// store is read through a live adapter (see wireJobRosterForAgent).
+		al.wireJobRosterForAgent(agent)
 
 		// Browser automation tools (US-4/US-6/US-7).
 		// Tools are always registered; whether an agent can actually invoke them
@@ -2299,6 +2633,29 @@ func currentDelegationDepth(ctx context.Context) int {
 	return 0
 }
 
+// agentExistsChecker builds the read-only registry existence probe threaded
+// through the delegation-deny checkers so a denial can say "agent not found"
+// instead of the generic trust-set message when the named target was never a
+// real agent at all. Consulted for message text ONLY — never for the
+// allow/deny decision.
+//
+// A nil registry (should not happen in production; defensive only) returns
+// nil rather than a closure that would falsely report every id as
+// nonexistent — a probe that lies "does not exist" about an agent that may
+// in fact exist is worse than no probe at all. The nil return collapses the
+// nil-registry path onto the SAME generic "not permitted" fallback the
+// caller would have hit by omitting the variadic arg entirely, instead of
+// fabricating a misleading "does not exist" message.
+func agentExistsChecker(registry *AgentRegistry) func(id string) bool {
+	if registry == nil {
+		return nil
+	}
+	return func(id string) bool {
+		_, ok := registry.GetAgent(id)
+		return ok
+	}
+}
+
 // resolveEffectiveWorkspaceID resolves the workspace whose delegation graph
 // governs the current turn. Every delegation check resolves to exactly one
 // workspace:
@@ -2339,12 +2696,30 @@ func resolveEffectiveWorkspaceID(ctx context.Context, targetAgentID string) (str
 // of a caller→target edge all DENY (trust_set). The graph is read per-call, so an
 // edit to the workspace graph takes effect on the next turn with no agent rebuild.
 //
+// agentExists is an OPTIONAL trailing arg (variadic so the many pre-existing
+// call sites — production and test — that predate this distinction keep
+// compiling unchanged), consulted ONLY to distinguish the no-edge denial's
+// MESSAGE. Without it, delegating to an agent that EXISTS but has no trust
+// edge from the caller, and delegating to a genuinely NONEXISTENT agent,
+// both returned byte-identical generic denial text — making a typo'd
+// agent_id indistinguishable from a real permissions gap. It never changes
+// the allow/deny OUTCOME — both cases still deny with Policy: DenyTrustSet —
+// it only selects which of the two messages below is returned. Omitting it
+// (or passing nil) falls back to the pre-existing generic "not permitted"
+// message — every production wiring site (registerSharedTools,
+// NewSysagentDelegationDeny, both in loop.go) passes a real checker.
+//
 // Returns (edge, nil) when an authorizing edge exists; (nil, denial) otherwise.
 func findDelegationEdge(
 	ctx context.Context,
 	callerAgentID, targetAgentID string,
 	mode config.DelegationMode,
+	agentExists ...func(id string) bool,
 ) (*workspace.DelegationEdge, *tools.DelegationDenial) {
+	var exists func(string) bool
+	if len(agentExists) > 0 {
+		exists = agentExists[0]
+	}
 	wsID, denial := resolveEffectiveWorkspaceID(ctx, targetAgentID)
 	if denial != nil {
 		return nil, denial
@@ -2375,12 +2750,23 @@ func findDelegationEdge(
 		}
 	}
 
+	if exists != nil && !exists(targetAgentID) {
+		logger.WarnCF("agent", "delegation denied: target agent does not exist", map[string]any{
+			"agent_id": callerAgentID, "target": targetAgentID, "workspace_id": wsID, "mode": string(mode),
+		})
+		return nil, &tools.DelegationDenial{
+			Reason:        fmt.Sprintf("agent %q does not exist", targetAgentID),
+			Policy:        tools.DenyTrustSet,
+			TargetAgentID: targetAgentID,
+		}
+	}
+
 	logger.WarnCF("agent", "delegation denied: no edge in workspace graph", map[string]any{
 		"agent_id": callerAgentID, "target": targetAgentID, "workspace_id": wsID, "mode": string(mode),
 	})
 	return nil, &tools.DelegationDenial{
 		Reason: fmt.Sprintf(
-			"agent %q is not allowed as a delegation target in this workspace",
+			"delegation to agent %q is not permitted in this workspace",
 			targetAgentID,
 		),
 		Policy:        tools.DenyTrustSet,
@@ -2601,11 +2987,17 @@ func errString(err error) string {
 // defaults is only consulted for its SubTurn.MaxDepth global depth cap — there
 // is no per-agent config.DelegationPolicy to read anymore (ADR-037); the
 // per-workspace graph is the sole authority.
+//
+// agentExists is an optional trailing arg (variadic, same rationale as
+// findDelegationEdge's own doc comment) forwarded to findDelegationEdge
+// purely to distinguish the no-edge denial's message — message-only, never
+// affects the allow/deny decision itself.
 func buildDelegationDenyChecker(
 	currentAgentID string,
 	defaults config.AgentDefaults,
 	mode config.DelegationMode,
 	selfAssignmentExempt bool,
+	agentExists ...func(id string) bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
 	globalDepthCap := defaults.SubTurn.MaxDepth
 
@@ -2638,7 +3030,7 @@ func buildDelegationDenyChecker(
 		if targetAgentID != "" {
 			// Targeted delegation: require an authorizing edge, then enforce its
 			// modes + depth.
-			edge, denial := findDelegationEdge(ctx, currentAgentID, targetAgentID, mode)
+			edge, denial := findDelegationEdge(ctx, currentAgentID, targetAgentID, mode, agentExists...)
 			if denial != nil {
 				return denial
 			}
@@ -2657,12 +3049,20 @@ func buildDelegationDenyChecker(
 // delegate(agent_id=self) spawns a real sub-turn instance, so it IS delegation and a
 // self-target is ALWAYS denied. Use this — never the raw core with a literal false —
 // so the security-critical exempt value can never be flipped wrong at a call site.
+// agentExists is an optional trailing arg (variadic — see findDelegationEdge's
+// own doc comment for why): a read-only existence probe against the live
+// agent registry, consulted only to distinguish "target agent doesn't exist"
+// from "target agent exists but has no trust edge" in the denial MESSAGE —
+// it never affects the allow/deny outcome. Omit it only in tests that don't
+// care about the distinction; every production wiring site passes a real
+// checker (see registerSharedTools / NewSysagentDelegationDeny).
 func buildDelegationDenyCheckerForDelegate(
 	currentAgentID string,
 	defaults config.AgentDefaults,
 	mode config.DelegationMode,
+	agentExists ...func(id string) bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	return buildDelegationDenyChecker(currentAgentID, defaults, mode, false)
+	return buildDelegationDenyChecker(currentAgentID, defaults, mode, false, agentExists...)
 }
 
 // buildDelegationDenyCheckerForTaskReassignment is the wiring-site constructor for the
@@ -2671,12 +3071,17 @@ func buildDelegationDenyCheckerForDelegate(
 // It bakes in selfAssignmentExempt=true: reassigning a task to the agent that already
 // owns it is NOT delegation (no new instance is spawned), so a self-target is allowed
 // without consulting the graph. Non-self targets are still fully graph-gated.
+//
+// agentExists: see buildDelegationDenyCheckerForDelegate's doc comment — same
+// optional-trailing-arg, message-only distinction, same "pass a real checker
+// in production" expectation.
 func buildDelegationDenyCheckerForTaskReassignment(
 	currentAgentID string,
 	defaults config.AgentDefaults,
 	mode config.DelegationMode,
+	agentExists ...func(id string) bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	return buildDelegationDenyChecker(currentAgentID, defaults, mode, true)
+	return buildDelegationDenyChecker(currentAgentID, defaults, mode, true, agentExists...)
 }
 
 // evalUntargetedDelegation gates an untargeted delegation (no explicit target)
@@ -2781,8 +3186,27 @@ func (al *AgentLoop) NewSysagentDelegationDeny() func(ctx context.Context, calle
 		// ForTaskReassignment (exempt=true): these are the cross-workspace TASK tools
 		// (create_task_in_workspace / update_task_in_workspace) — a self-target is a
 		// no-op task reassignment, not delegation (also short-circuited above).
-		gate := buildDelegationDenyCheckerForTaskReassignment(callerAgentID, defaults, config.DelegationModeTask)
+		gate := buildDelegationDenyCheckerForTaskReassignment(
+			callerAgentID, defaults, config.DelegationModeTask, agentExistsChecker(al.GetRegistry()),
+		)
 		return gate(ctx, targetAgentID)
+	}
+}
+
+// NewSysagentBashPolicyResolver builds the systools.Deps.ResolveBashPolicy
+// closure (ADR-049 D2 rule 5, FR-017/052, review r1 major M5): resolves an
+// assignee agent's effective "bash" tool policy from the SAME live registry
+// judge.go's runMachineCheck and the plain create_task tool's own
+// bashPolicyChecker use (tools.EffectiveToolPolicy, ScopeCore) — parity
+// between the same-workspace and cross-workspace (create_task_in_workspace)
+// task-creation surfaces.
+func (al *AgentLoop) NewSysagentBashPolicyResolver() func(assigneeAgentID string) (policy string, ok bool) {
+	return func(assigneeAgentID string) (policy string, ok bool) {
+		agentInst, found := al.GetRegistry().GetAgent(assigneeAgentID)
+		if !found || agentInst == nil {
+			return "", false
+		}
+		return tools.EffectiveToolPolicy(agentInst.LoadToolPolicy(), tools.ScopeCore, agentInst.AgentType, "bash"), true
 	}
 }
 
@@ -3223,6 +3647,21 @@ func (al *AgentLoop) Close() {
 	// that didn't finish writing, which is strictly better than a frozen process.
 	al.waitRecapDrain(30 * time.Second)
 
+	// Drain in-flight task-dispatch goroutines (runTask/runTaskFromInProgress,
+	// including any goal-loop redispatch chain they trigger — see
+	// TaskExecutor.wg's doc comment) BEFORE tearing down session workers,
+	// browser managers, and the stores those goroutines write through —
+	// mirrors waitRecapDrain's identical bounded-drain rationale immediately
+	// above. Previously Close() never drained TaskExecutor at all, so a
+	// still-running task goroutine (or its goal-loop's chain of re-dispatch
+	// attempts) could keep writing session/transcript/run-history files after
+	// Close() returned, racing a caller's own teardown (e.g. a test's
+	// t.TempDir() cleanup removing the directory tree those files live
+	// under).
+	if al.taskExecutor != nil {
+		al.taskExecutor.Drain(30 * time.Second)
+	}
+
 	// Cancel all active session workers and wait for them to drain (5 s budget).
 	// stopSessionWorkers is idempotent — safe to call here even if Run() has
 	// already called it on context-cancellation, because workers cancel their
@@ -3326,6 +3765,24 @@ func (al *AgentLoop) Close() {
 	// is safe to call more than once.
 	al.closeAgentMemoryStores()
 
+	// al.sharedSessionStore (the single UnifiedStore at
+	// $OMNIPUS_HOME/sessions/, constructed in NewAgentLoop) is a distinct
+	// resource from each AgentInstance's own per-agent session store — the
+	// latter is already torn down by AgentInstance.Close() (instance.go), but
+	// nothing previously closed this one. Leaving it open leaks its periodic
+	// stats-flusher goroutine + live timer (unified_stats_flush.go) for the
+	// life of the process, and means a session's very last write (before an
+	// unclean-but-Close()'d shutdown) waits out the flush interval instead of
+	// being forced to disk — losing token/cost stats for a session that just
+	// received its first message. Safe to call even when nil (degraded boot,
+	// loop.go's own error-logged "shared session store unavailable" branch).
+	if al.sharedSessionStore != nil {
+		if err := al.sharedSessionStore.Close(); err != nil {
+			logger.ErrorCF("agent", "Failed to close shared session store",
+				map[string]any{"error": err.Error()})
+		}
+	}
+
 	al.GetRegistry().Close()
 	if al.hooks != nil {
 		al.hooks.Close()
@@ -3358,24 +3815,6 @@ func (al *AgentLoop) Close() {
 		al.orphanWatches.Delete(k)
 		return true
 	})
-
-	// SEC-26: Persist the accumulated daily cost so the next startup can
-	// restore it via LoadIntoRegistry, preventing double-counting on restarts.
-	// A save failure here means the cap will under-count after the next
-	// restart — worth an Error-level log plus the daily total so operators
-	// can reconcile manually.
-	if al.costTracker != nil && al.rateLimiter != nil {
-		if err := al.costTracker.SaveFromRegistry(al.rateLimiter); err != nil {
-			logger.ErrorCF(
-				"agent",
-				"SEC-26: failed to persist daily cost on shutdown — cap may under-count after restart",
-				map[string]any{
-					"error":          err.Error(),
-					"daily_cost_usd": al.rateLimiter.GetDailyCost(),
-				},
-			)
-		}
-	}
 
 	// FR-048: On graceful shutdown, write turn_canceled_restart synthetic entries
 	// to any sessions that have active turns paused awaiting approval. This makes
@@ -3627,6 +4066,32 @@ func (al *AgentLoop) EmitTaskStatusChanged(p TaskStatusChangedPayload) {
 	al.emitEvent(EventKindTaskStatusChanged, EventMeta{AgentID: p.AgentID, Source: "task_executor"}, p)
 }
 
+// EmitPlanStatusChanged publishes a Plan state/phase/progress transition onto
+// the event bus so every connected SPA WebSocket client receives a
+// plan_status frame (ADR-049 D4/D7, spec Part B R3). Safe to call from any
+// goroutine — the bus drops to a full subscriber rather than blocking. The
+// production emission path is pkg/plan.Store.OnChange, wired at gateway boot
+// (setupAndStartServices) to call this after every successful plan
+// Create/Update — see that wiring for why this is the single choke point for
+// both the plan engine's and the gateway REST layer's mutations.
+func (al *AgentLoop) EmitPlanStatusChanged(p PlanStatusChangedPayload) {
+	al.emitEvent(EventKindPlanStatusChanged, EventMeta{Source: "plan_engine"}, p)
+}
+
+// EmitGoalStatusChanged publishes a `/goal` loop status transition onto the
+// event bus so every connected SPA WebSocket client receives a goal_status
+// frame (ADR-049 D6/D7, spec Part B US-8). Safe to call from any goroutine.
+func (al *AgentLoop) EmitGoalStatusChanged(p GoalStatusChangedPayload) {
+	al.emitEvent(EventKindGoalStatusChanged, EventMeta{Source: "goal_loop"}, p)
+}
+
+// EmitLoopStatusChanged publishes a `/loop` status transition onto the event
+// bus so every connected SPA WebSocket client receives a loop_status frame
+// (ADR-049 D6/D7, spec Part B US-9). Safe to call from any goroutine.
+func (al *AgentLoop) EmitLoopStatusChanged(p LoopStatusChangedPayload) {
+	al.emitEvent(EventKindLoopStatusChanged, EventMeta{Source: "goal_loop"}, p)
+}
+
 // EmitTaskRunStatus publishes a per-execution TaskRun open/close transition
 // (ADR-050 §3.8) onto the event bus so every connected SPA WebSocket client
 // receives a task_run_status frame — additive alongside EmitTaskStatusChanged
@@ -3648,6 +4113,38 @@ func cloneEventArguments(args map[string]any) map[string]any {
 		cloned[k] = v
 	}
 	return cloned
+}
+
+// u9ToolExecSessionIDs computes the two identity fields ADR-057's W4 stamping
+// contract requires on the wire for a session-scoped frame, for the two Go
+// event payloads events.go (U23) gave a ProducingSessionID field —
+// ToolExecStartPayload and ToolExecEndPayload, the only two of the 19
+// SESSION_SCOPED_FRAME_TYPES classified as needing it at the Go-payload
+// level today (class (a) per the W5 audit, FR-089/BDD-16: a child turn
+// genuinely emits tool_call_start/tool_call_result, so the wire frame
+// carries both ids). Factored into one function, called from both
+// construction sites below, so this file has exactly one place that answers
+// "what goes on the wire" rather than two independently-maintained copies of
+// the same two-field contract.
+//
+//   - sessionID (FR-011/FR-012): the ROUTING identity — the id inherited
+//     verbatim from the root of the delegation subtree — never this turn's
+//     own transcriptSessionID, which for a delegated child differs from the
+//     root's.
+//   - producingSessionID (FR-013): the zero value when ts IS the routing
+//     session (producing == routing — the common non-delegated case, and
+//     every root turn), so the WS forwarder (pkg/gateway/websocket.go, U11)
+//     can implement the "present iff it differs from session_id" rule with a
+//     plain non-empty-and-unequal check before stamping the wire's optional
+//     producing_session_id. Otherwise this turn's own real, store-backed
+//     session id — see ToolExecStartPayload.ProducingSessionID's doc comment
+//     (events.go) for the full rationale.
+func u9ToolExecSessionIDs(ts *turnState) (sessionID string, producingSessionID session.SessionID) {
+	sessionID = string(ts.routingSessionID)
+	if ts.transcriptSessionID == sessionID {
+		return sessionID, ""
+	}
+	return sessionID, session.SessionID(ts.transcriptSessionID)
 }
 
 func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDecision) error {
@@ -3940,6 +4437,10 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// Store new values
 	al.cfg = cfg
 	al.registry = registry
+	// DEFECT 2 fix (concurrency review): keep configGen in lockstep with
+	// every al.cfg replacement, not only a bare SwapConfig — see configGen's
+	// doc comment on the AgentLoop struct.
+	al.configGen.Add(1)
 
 	// Also update fallback chain with new config
 	al.fallback = providers.NewFallbackChainWithTimeout(
@@ -4147,23 +4648,60 @@ func (al *AgentLoop) GetSessionActiveAgent(sessionID string) (string, bool) {
 func (al *AgentLoop) SwapConfig(newCfg *config.Config) {
 	al.mu.Lock()
 	al.cfg = newCfg
+	// DEFECT 2 fix (concurrency review): bump configGen so a concurrent
+	// UpsertAgentFast in-flight against the PRE-swap cfg detects this write
+	// even though al.registry is untouched — see configGen's doc comment on
+	// the AgentLoop struct.
+	al.configGen.Add(1)
 	al.mu.Unlock()
 }
 
-// MutateConfig acquires the agent loop write lock and calls fn with the
-// live *config.Config pointer. This serializes sysagent mutations with all
-// REST readers that go through GetConfig (which holds RLock). fn must not
-// call GetConfig or SwapConfig — deadlock would result.
+// MutateConfig acquires the agent loop write lock and calls fn with a PRIVATE
+// deep copy of the live *config.Config (via config.Clone, which also carries
+// the runtime-registered sensitive plaintexts). fn may freely mutate that copy
+// — fields, slices, maps — without racing the many UNLOCKED readers of the live
+// al.cfg, most importantly fastAgentUpsert/UpsertAgentFast, whose wiring pass
+// reads the exact *config.Config pointer GetConfig hands out here WITHOUT al.mu
+// (see UpsertAgentFast's doc comment and its "residual, narrower hazard" note
+// in registry.go — that residual is what this copy-then-swap closes).
 //
-// The caller (typically Deps.WithConfig) is responsible for snapshotting and
-// rolling back cfg fields if fn or the subsequent SaveConfig fails.
+// On a nil error from fn, the copy is PUBLISHED as the new al.cfg via the SAME
+// pointer-swap + configGen-bump idiom SwapConfig and ReloadProviderAndConfig
+// already use (under al.mu.Lock), so a concurrent UpsertAgentFast detects it
+// through its configGen CAS and rebases, instead of silently reverting it. On a
+// non-nil error the copy is discarded and the live al.cfg is left untouched —
+// equivalent to the rollback the two existing publishers' callers perform, but
+// built in: the live object was never mutated, so there is nothing to restore.
+//
+// fn must not call GetConfig or SwapConfig — deadlock would result (both take
+// al.mu, which this method holds for the entire call). fn receives a copy, not
+// the live pointer; callers that persist (e.g. systools.Deps.WithConfig)
+// continue to receive that same copy and SaveConfigLocked it directly, then
+// this method publishes it — persisted-disk and live-pointer stay consistent.
 func (al *AgentLoop) MutateConfig(fn func(*config.Config) error) error {
 	al.mu.Lock()
 	defer al.mu.Unlock()
 	if al.cfg == nil {
 		return fmt.Errorf("agent loop config is nil")
 	}
-	return fn(al.cfg)
+	// Deep copy so fn's mutations never touch the live object GetConfig handed
+	// out (and still hands out) to concurrent unlocked readers. config.Clone
+	// carries registeredSensitive so the credential-scrubbing invariant survives
+	// the swap below.
+	clone, err := al.cfg.Clone()
+	if err != nil {
+		return fmt.Errorf("agent loop: clone config for mutation: %w", err)
+	}
+	if err := fn(clone); err != nil {
+		return err
+	}
+	// Publish via pointer-swap + configGen bump — the SAME shape SwapConfig
+	// (al.cfg replace alone) and ReloadProviderAndConfig (al.cfg + al.registry)
+	// use — so a concurrent UpsertAgentFast sees this change via its configGen
+	// CAS and rebases rather than silently reverting it (DEFECT 2 family).
+	al.cfg = clone
+	al.configGen.Add(1)
+	return nil
 }
 
 // GetTaskStore returns the shared unified task Store (may be nil in tests).
@@ -4253,6 +4791,498 @@ func (al *AgentLoop) SetTaskTriggerScheduler(s *TaskTriggerScheduler) {
 	al.mu.Lock()
 	al.taskTrigger = s
 	al.mu.Unlock()
+}
+
+// SetPlanEngine installs the single hybrid plan-coordinator instance
+// (ADR-049 D4) so command handlers and REST handlers can reach its Admit/
+// Release admission authority and PausePlansOwnedBy/ResumePlansOwnedBy/
+// HasActivePlansOwnedBy owner-lifecycle hooks. Called once at boot by the
+// gateway (setupAndStartServices), before any /goal or /loop admission can
+// occur. Idempotent.
+func (al *AgentLoop) SetPlanEngine(pe *PlanEngine) {
+	al.mu.Lock()
+	al.planEngine = pe
+	al.mu.Unlock()
+}
+
+// GetPlanEngine returns the installed PlanEngine (may be nil in tests or
+// before boot wiring completes — Wave 2-C2's /goal and /loop admission paths
+// MUST nil-check before calling Admit). Mirrors GetTaskStore/GetTaskExecutor's
+// free-function-with-al-parameter convention.
+func GetPlanEngine(al *AgentLoop) *PlanEngine {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	return al.planEngine
+}
+
+// SetPlanStore installs the shared *plan.Store (ADR-052) so the
+// create_plan/execute_plan agent tools can read/write it, and re-wires the
+// full plan/task tool surface (create_plan, execute_plan, run_task,
+// inspect_session) for every CURRENTLY-registered agent with the real
+// store — mirrors SetPlanEngine's late-binding discipline exactly. Called
+// once at boot by the gateway (setupAndStartServices), right where
+// plan.New(...) constructs the store — see gateway.go's boot wiring
+// region. Idempotent; safe to call again on hot-reload (registerSharedTools
+// already re-runs wirePlanToolsForAgent on every reload, so this mainly
+// matters for the initial boot gap between NewAgentLoop and
+// setupAndStartServices).
+func (al *AgentLoop) SetPlanStore(store *plan.Store) {
+	al.mu.Lock()
+	al.planStore = store
+	al.mu.Unlock()
+
+	if store == nil {
+		logger.ErrorCF("agent", "SetPlanStore: installed a nil plan store — "+
+			"create_plan/execute_plan will remain fail-closed", nil)
+		return
+	}
+
+	reg := al.GetRegistry()
+	if reg == nil {
+		logger.ErrorCF("agent", "SetPlanStore: no agent registry available — "+
+			"plan tool surface not re-wired", nil)
+		return
+	}
+	for _, agentID := range reg.ListAgentIDs() {
+		inst, ok := reg.GetAgent(agentID)
+		if !ok || inst == nil {
+			continue
+		}
+		al.wirePlanToolsForAgent(inst, store)
+
+		// create_task is NOT part of the wirePlanToolsForAgent surface (that
+		// function's own doc comment enumerates create_plan/execute_plan/
+		// run_task/inspect_session/plan_correct/stop_plan only) — it is
+		// constructed separately in registerSharedTools's "Task tools" block.
+		// Re-wire its plan store here too, on the same late-binding pass, so
+		// create_task(plan_id=...) stops failing closed with "plan store is
+		// not configured" once the real store exists. A missing or wrong-typed
+		// tool is not an error here — task tools are gated behind
+		// al.taskStore != nil in registerSharedTools, so an agent with no task
+		// store never registered create_task at all.
+		if inst.Tools == nil {
+			continue
+		}
+		if raw, ok := inst.Tools.Get("create_task"); ok {
+			if taskCreate, ok := raw.(*tools.TaskCreateTool); ok {
+				taskCreate.SetPlanStore(store)
+			}
+		}
+	}
+}
+
+// GetPlanStore returns the installed plan.Store (may be nil in tests or
+// before boot wiring completes). Mirrors GetTaskStore/GetPlanEngine's
+// free-function-with-al-parameter convention is intentionally NOT followed
+// here since every other Set/Get pair on AgentLoop that is read from
+// pkg/tools construction sites (SetMediaStore/GetMediaStore) uses the
+// method form; kept consistent with that sibling pair.
+func (al *AgentLoop) GetPlanStore() *plan.Store {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	return al.planStore
+}
+
+// validatePlanOwnerAgentForTool mirrors pkg/gateway/rest_plans.go's
+// validatePlanOwnerAgent EXACTLY (same rule, same error text shape) for
+// create_plan's SetOwnerValidator seam. pkg/agent cannot import pkg/gateway
+// (gateway already imports agent — that would be a cycle), so this is a
+// same-behavior local copy consumed only here. Rejects an owner_agent_id
+// that is not a registered agent, or that IS registered but is a System
+// Agent or worker — OwnerAgentID's contract ("the agent woken at plan
+// decision points", ADR-049 D4) requires a real, addressable agent.
+func validatePlanOwnerAgentForTool(cfg *config.Config, ownerAgentID string) error {
+	if cfg == nil {
+		return fmt.Errorf("owner_agent_id %q is not a registered agent", ownerAgentID)
+	}
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID != ownerAgentID {
+			continue
+		}
+		if !cfg.Agents.List[i].IsChatTarget() {
+			return fmt.Errorf(
+				"owner_agent_id %q is a System Agent or worker and cannot own a plan", ownerAgentID)
+		}
+		return nil
+	}
+	return fmt.Errorf("owner_agent_id %q is not a registered agent", ownerAgentID)
+}
+
+// isRegisteredAgentID reports whether id resolves to a known agent in the
+// live registry — mirrors pkg/gateway/rest_plans.go's restAPI.isAgentID
+// exactly, and drives execute_plan's SD-A7 tiered-DoD gate via
+// SetIsAgentIDChecker (a plan whose CreatedBy resolves to an agent — strict
+// tier — must carry >=1 DoD criterion).
+func (al *AgentLoop) isRegisteredAgentID(id string) bool {
+	if id == "" {
+		return false
+	}
+	reg := al.GetRegistry()
+	if reg == nil {
+		return false
+	}
+	_, ok := reg.GetAgent(id)
+	return ok
+}
+
+// wirePlanToolsForAgent constructs and registers the ADR-052 create_plan /
+// execute_plan / run_task / inspect_session tool surface, plus the ADR-055
+// plan_correct / stop_plan supervision surface, for a single
+// agent instance — the single clear wiring site Wave 1 left unwired for
+// Wave 2 (pkg/tools/plan.go / run_task.go / inspect_session.go's "another
+// wave's job" doc comments name pkg/agent/loop.go explicitly). Called from
+// registerSharedTools's per-agent loop (planStore may be nil there on the
+// very first pass) and again from SetPlanStore for every already-registered
+// agent once the gateway installs the real store.
+//
+// Every dependency gap is logged LOUDLY (Error, never silently) at wiring
+// time so an unwired seam is visible in the boot log — on top of, not
+// instead of, each tool's own Wave-1 fail-closed Execute() behavior (nil
+// store / nil checker / nil dispatcher => explicit error result, never an
+// implicit allow or a silently-dead no-op tool).
+// The six tools below (the ADR-052 four, plus ADR-055's plan_correct and
+// stop_plan) are registered via RegisterReplacing, not Register:
+// this function is called once per agent at registerSharedTools time AND
+// again for every already-registered agent from SetPlanStore once the real
+// plan.Store is installed (this function's own doc comment) — the second
+// pass is an EXPECTED same-name re-registration, not an accidental
+// collision, so it must not spam a WARN per tool per agent (7-reviewer gate
+// item 5; see ToolRegistry.RegisterReplacing's own doc comment).
+func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan.Store) {
+	if agent == nil || agent.Tools == nil {
+		return
+	}
+
+	if planStore == nil {
+		logger.WarnCF("agent", "wirePlanToolsForAgent: plan store not yet installed — "+
+			"create_plan/execute_plan register but will fail closed until SetPlanStore runs",
+			map[string]any{"agent_id": agent.ID})
+	}
+
+	// create_plan (FR-001, US-1): owner_agent_id validated against the live
+	// config/registry (SetOwnerValidator — see the field doc on
+	// tools.PlanCreateTool for the fail-closed-when-unwired discipline this
+	// honors).
+	planCreate := tools.NewPlanCreateTool(planStore)
+	planCreate.SetHome(al.homePath)
+	planCreate.SetOwnerValidator(func(ownerAgentID string) error {
+		return validatePlanOwnerAgentForTool(al.GetConfig(), ownerAgentID)
+	})
+	agent.Tools.RegisterReplacing(planCreate)
+
+	// execute_plan (FR-003/004/030, US-3): SD-A7 tiered-DoD gate's isAgentID
+	// checker (SetIsAgentIDChecker) mirrors gateway's restAPI.isAgentID.
+	if al.taskStore == nil {
+		logger.ErrorCF("agent", "wirePlanToolsForAgent: task store unavailable — "+
+			"execute_plan registered but will fail closed (no task store to list members)",
+			map[string]any{"agent_id": agent.ID})
+	}
+	planExecute := tools.NewPlanExecuteTool(planStore, al.taskStore)
+	planExecute.SetIsAgentIDChecker(al.isRegisteredAgentID)
+	agent.Tools.RegisterReplacing(planExecute)
+
+	// run_task (FR-019, US-10): dispatches via the real
+	// TaskExecutor.StartTaskNow — the standalone-task full attempt loop.
+	taskRun := tools.NewTaskRunTool(al.taskStore)
+	if al.taskExecutor != nil {
+		taskRun.SetStartTaskNow(al.taskExecutor.StartTaskNow)
+	} else {
+		logger.ErrorCF("agent", "wirePlanToolsForAgent: task executor unavailable — "+
+			"run_task registered but will fail closed (no dispatcher installed)",
+			map[string]any{"agent_id": agent.ID})
+	}
+	agent.Tools.RegisterReplacing(taskRun)
+
+	// inspect_session (FR-033, US-13 Acceptance 3): verifier-role-only by
+	// seeded tool policy (enforced outside this function); target-session
+	// locked via the engine-set WithVerifierSessionScope ctx value
+	// (verifier_adjudication.go), not by anything wired here.
+	//
+	// Deliberately NOT wired to al.GetSessionStore() alone: that is only
+	// the SHARED store at $OMNIPUS_HOME/sessions/ (new webchat/channel
+	// sessions), but a task's own session — the exact thing task-scope
+	// verification targets — is created via createTaskSessionSync
+	// (task_executor.go), which writes through al.GetAgentStore(t.AgentID):
+	// the ASSIGNEE agent's own per-agent legacy store, a DIFFERENT
+	// directory. A single fixed store can never cover both. agentLoopInspectSessionStore
+	// (below) instead adapts al.ResolveSessionStore — the SAME
+	// shared-store-first-then-per-agent-scan resolver cancel.go's
+	// RequestCancel already uses to find an arbitrary session id's owning
+	// store — so inspect_session finds a target session regardless of
+	// which store actually holds it. Always non-nil (a value type over a
+	// non-nil al): Execute()'s own not-found error (via GetMeta/
+	// ReadTranscript, once VerifierSessionScopeAllows has already passed)
+	// is the fail-closed signal, not a nil-store check.
+	agent.Tools.RegisterReplacing(tools.NewInspectSessionTool(agentLoopInspectSessionStore{al: al}))
+
+	// --- ADR-055 plan supervision surface: plan_correct + stop_plan --------
+	//
+	// Both engine hooks are installed as LATE-RESOLVING CLOSURES over
+	// GetPlanEngine(al), never as a value captured here. This is load-bearing,
+	// not a style choice: the gateway installs the plan engine LAST
+	// (gateway.go's SetPlanEngine, after SetPlanStore), and SetPlanEngine only
+	// assigns the field — it does not re-run this function. A hook capturing
+	// al.planEngine at wiring time would therefore be nil on EVERY pass and
+	// both tools would sit permanently in their fail-closed "engine is not
+	// wired" branch, in a build where everything looks correctly registered.
+	//
+	// The closures preserve the fail-closed contract they replace: an absent
+	// engine returns an explicit error, so the tool reports a failure and
+	// never a silent success. Neither tool's authority is wired here — both
+	// gate internally, and deliberately in opposite directions: plan_correct
+	// admits only the PlanSupervisor identity (tools.PlanSupervisorAgentID),
+	// stop_plan admits only the plan's own owner agent. The adjudicator
+	// corrects; the owner contains.
+	planCorrect := tools.NewPlanCorrectTool(planStore, al.taskStore)
+	planCorrect.SetAppendCorrection(func(
+		ctx context.Context, planID string, caller tools.CorrectionCaller, req tools.CorrectionRequest,
+	) (string, bool, error) {
+		pe := GetPlanEngine(al)
+		if pe == nil {
+			return "", false, errors.New(
+				"plan engine is not installed — corrections cannot be applied")
+		}
+		// Passed through whole, NOT rebuilt field-by-field. FR-004 moved the
+		// correction types into pkg/plan and left tools.CorrectionCaller /
+		// agent.CorrectionCaller as type ALIASES of plan.CorrectionCaller
+		// (likewise CorrectionRequest), so these are one type, not two that
+		// happen to match — the compiler accepts the value directly and the
+		// old CorrectionVerb() conversion became a no-op the linter flags.
+		//
+		// The rebuild also had to go on its own merits: enumerating the
+		// fields here means the next field added to plan.CorrectionRequest is
+		// silently dropped at this seam, with nothing failing to compile.
+		// This branch has shipped that exact shape more than once.
+		res, err := pe.AppendCorrection(ctx, planID, caller, req)
+		if err != nil {
+			return "", false, err
+		}
+		if res == nil {
+			// Defensive: a nil result with a nil error would otherwise be
+			// reported to the adjudicator as a successful correction carrying
+			// an empty revision id.
+			return "", false, errors.New(
+				"plan engine returned no correction result")
+		}
+		return res.RevisionID, res.HonestExit, nil
+	})
+	agent.Tools.RegisterReplacing(planCorrect)
+
+	// stop_plan (FR-042/FR-043, US-8): the containment control. StopPlan's
+	// signature matches StopPlanFunc exactly, so the closure adds only the
+	// late engine resolution described above.
+	planStop := tools.NewPlanStopTool(planStore)
+	planStop.SetStopPlan(func(ctx context.Context, planID, userID, channel string) (*plan.Plan, error) {
+		pe := GetPlanEngine(al)
+		if pe == nil {
+			return nil, errors.New(
+				"plan engine is not installed — the plan cannot be stopped")
+		}
+		return pe.StopPlan(ctx, planID, userID, channel)
+	})
+	agent.Tools.RegisterReplacing(planStop)
+}
+
+// agentLoopInspectSessionStore adapts AgentLoop.ResolveSessionStore to the
+// tools.InspectSessionStore interface (GetMeta/ReadTranscript keyed purely
+// on session ID — see that interface's own doc comment: "the store resolves
+// the owning agent internally"). ResolveSessionStore already implements
+// exactly that resolution (shared store fast path, DefaultAgentID legacy
+// fast path, then a scan across every per-agent store, cancel.go) — reused
+// here rather than re-implemented, so inspect_session and RequestCancel
+// agree on where any given session id actually lives.
+type agentLoopInspectSessionStore struct {
+	al *AgentLoop
+}
+
+func (s agentLoopInspectSessionStore) GetMeta(sessionID string) (*session.UnifiedMeta, error) {
+	store := s.al.ResolveSessionStore(sessionID)
+	if store == nil {
+		return nil, fmt.Errorf("session %q not found in any known session store", sessionID)
+	}
+	return store.GetMeta(sessionID)
+}
+
+func (s agentLoopInspectSessionStore) ReadTranscript(sessionID string) ([]session.TranscriptEntry, error) {
+	store := s.al.ResolveSessionStore(sessionID)
+	if store == nil {
+		return nil, fmt.Errorf("session %q not found in any known session store", sessionID)
+	}
+	return store.ReadTranscript(sessionID)
+}
+
+// --- list_jobs wiring (the unified background-job roster) -----------------
+//
+// Every store below is reached through a LATE-RESOLVING adapter rather than a
+// value captured at wiring time, because the three stores list_jobs reads are
+// installed at three DIFFERENT points in gateway boot, all of which can follow
+// this wiring: the task store exists from NewAgentLoop, the plan store arrives
+// with SetPlanStore, and the lifecycle store arrives later still with
+// SetSessionMessagingStores (which re-wires only the session-messaging tool
+// surface, never this one). A captured lifecycle store would be nil forever
+// and the `subagent` kind would silently report an empty roster on every call.
+//
+// Each adapter returns an explicit ERROR when its store is absent — never an
+// empty slice. list_jobs turns that into a per-kind error entry, which is the
+// whole point: "a short list that looks complete is the worst possible output"
+// (NewListJobsTool's own doc). A nil-return adapter would produce exactly the
+// silent-undercount failure the tool is built to prevent.
+//
+// DELIBERATELY NOT IMPLEMENTED HERE: the optional ListLenient siblings
+// (tools.jobPlanLenientLister and friends). list_jobs picks those up by
+// OPTIONAL type assertion against the value passed to NewListJobsTool — i.e.
+// against these adapters. None of pkg/plan, pkg/task or pkg/session implements
+// ListLenient yet, so defining a forwarding method here would make the
+// assertion succeed while the count it feeds (`unreadable`) is structurally
+// always 0 — an honest-looking zero that means "not measured", not "nothing
+// was corrupt". The seam is left unsatisfied on purpose so it stays visibly
+// unwired. WHEN ListLenient LANDS on the concrete stores, add the matching
+// forwarding method to the adapter below; that is the only change needed.
+type agentLoopJobPlanLister struct{ al *AgentLoop }
+
+func (l agentLoopJobPlanLister) List(filter plan.Filter) ([]plan.Plan, error) {
+	store := l.al.GetPlanStore()
+	if store == nil {
+		return nil, errors.New("plan store is not installed")
+	}
+	return store.List(filter)
+}
+
+type agentLoopJobTaskLister struct{ al *AgentLoop }
+
+func (l agentLoopJobTaskLister) List(filter task.Filter) ([]task.Task, error) {
+	store := GetTaskStore(l.al)
+	if store == nil {
+		return nil, errors.New("task store is not installed")
+	}
+	return store.List(filter)
+}
+
+type agentLoopJobLifecycleLister struct{ al *AgentLoop }
+
+func (l agentLoopJobLifecycleLister) List(
+	filter session.LifecycleFilter,
+) ([]session.LifecycleRecord, error) {
+	store := l.al.GetSessionLifecycleStore()
+	if store == nil {
+		return nil, errors.New("session lifecycle store is not installed")
+	}
+	return store.List(filter)
+}
+
+// agentLoopJobAgentNamer resolves a delegated agent's display name for a
+// subagent row's label. AgentRegistry.GetAgentName already has exactly this
+// contract (name+true when the agent exists, the raw id when its name is
+// empty, ("",false) when it does not), so this forwards rather than
+// re-deriving. A false return is a NORMAL case: durable lifecycle records
+// outlive the agents they name, and the tool falls back to the raw agent id.
+type agentLoopJobAgentNamer struct{ al *AgentLoop }
+
+func (n agentLoopJobAgentNamer) AgentDisplayName(agentID string) (string, bool) {
+	reg := n.al.GetRegistry()
+	if reg == nil {
+		return "", false
+	}
+	return reg.GetAgentName(agentID)
+}
+
+// wireJobRosterForAgent registers `list_jobs` for one agent.
+//
+// Called from registerSharedTools' per-agent loop (so it re-runs on every hot
+// reload, picking up the fresh config). It is deliberately NOT called from
+// SetPlanStore's re-wire loop the way the plan surface is: the adapters above
+// read every store live, so there is nothing for a later pass to re-bind.
+//
+// Two of this tool's seven setters are left UNWIRED because the
+// implementations they need do not exist yet. Each omission degrades honestly
+// and is listed here so the gap is visible at the wiring site rather than
+// inferred from behaviour:
+//
+//   - SetCapSnapshotSource — needs PlanEngine.CapSnapshot, a LOCK-FREE reader
+//     over values the engine already published from inside its own admission
+//     path. It must never be faked from Admit (which takes the engine mutex
+//     exclusively and re-scans the plan store) nor re-derived independently.
+//     Unwired, the cap fields are omitted as a pair, which is the designed
+//     degradation; a fabricated source reporting 0 would be strictly worse
+//     than absent.
+//   - SetScanCeiling — the config key list_jobs' own doc names
+//     (tools.list_jobs.max_records_scanned_per_kind) does not exist in
+//     pkg/config. Unwired, the package default (5000/kind) applies and a
+//     crossing is still REPORTED via notes.scan_truncated.
+//
+// SetAuditLogger is intentionally not called either, but for the opposite
+// reason: it is already satisfied. ListJobsTool implements the registry's
+// auditLoggerAware contract, and ToolRegistry propagates the logger on
+// registration and on its own SetAuditLogger — wiring it by hand here would
+// duplicate that with a value that goes stale.
+func (al *AgentLoop) wireJobRosterForAgent(agent *AgentInstance) {
+	if agent == nil || agent.Tools == nil {
+		return
+	}
+	listJobs := tools.NewListJobsTool(
+		agentLoopJobPlanLister{al: al},
+		agentLoopJobTaskLister{al: al},
+		agentLoopJobLifecycleLister{al: al},
+	)
+	// A LIVE closure, never al.GetConfig()'s value: this function is reached
+	// from registerSharedTools, which the hot-reload path runs BEFORE it swaps
+	// al.cfg. A value read here is therefore the PRE-reload config on every
+	// reload, so the reload that enables tools.filter_sensitive_data would be
+	// exactly the one list_jobs missed — it would keep emitting plan and task
+	// titles unredacted until some unrelated later reload happened to run.
+	// (Boot is unaffected, which is what made this invisible.) The setter takes
+	// only a closure so the mistake cannot be re-made here.
+	listJobs.SetConfig(func() *config.Config { return al.GetConfig() })
+	listJobs.SetAgentNamer(func() tools.JobAgentNamer {
+		return agentLoopJobAgentNamer{al: al}
+	})
+	// SetSessionResolver over THIS agent's own *tools.DelegateTool (now that
+	// it implements tools.JobSessionResolver via ResolvableSessionIDs). A
+	// LIVE closure, same discipline as SetConfig/SetAgentNamer above — it
+	// re-resolves agent.Tools.Get("delegate") on every list_jobs call rather
+	// than capturing a value at wiring time, so wiring order relative to the
+	// delegate tool's own registration in this same per-agent pass does not
+	// matter, and a hot-reload that replaces the delegate tool instance is
+	// picked up automatically. A missing or
+	// wrong-typed "delegate" registration (an agent with no delegate tool at
+	// all) resolves to a nil JobSessionResolver, which collectSubagentRows
+	// already treats as "nothing resolves" — the same honest degradation
+	// this setter's absence used to produce, not a new failure mode.
+	listJobs.SetSessionResolver(func() tools.JobSessionResolver {
+		raw, ok := agent.Tools.Get("delegate")
+		if !ok {
+			return nil
+		}
+		delegateTool, ok := raw.(*tools.DelegateTool)
+		if !ok {
+			return nil
+		}
+		return delegateTool
+	})
+	// SetLabelResolver over the SAME *tools.DelegateTool (UAT M3, 2026-08-03
+	// / #584): DelegateTool now also implements tools.JobLabelResolver via
+	// ResolvableLabels, so list_jobs' label_contains filter can match a
+	// subagent's custom delegate label instead of only its raw agent/session
+	// identifiers. Same live-closure discipline as SetSessionResolver
+	// immediately above — re-resolves on every call rather than capturing a
+	// value at wiring time — for the identical reasons (wiring-order
+	// independence, hot-reload safety, honest nil degradation when no
+	// delegate tool is registered).
+	listJobs.SetLabelResolver(func() tools.JobLabelResolver {
+		raw, ok := agent.Tools.Get("delegate")
+		if !ok {
+			return nil
+		}
+		delegateTool, ok := raw.(*tools.DelegateTool)
+		if !ok {
+			return nil
+		}
+		return delegateTool
+	})
+	// RegisterReplacing, not Register: registerSharedTools re-runs on every hot
+	// reload, so a same-name re-registration is EXPECTED and must not log a
+	// WARN per agent per reload.
+	agent.Tools.RegisterReplacing(listJobs)
 }
 
 // taskTriggerScheduler returns the installed scheduler under the loop lock.
@@ -4465,17 +5495,67 @@ func (al *AgentLoop) ResolveSessionStore(sessionID string) *session.UnifiedStore
 	return nil
 }
 
-// ListAllSessions returns sessions from the shared store merged with legacy
-// per-agent stores, deduplicated and sorted by UpdatedAt descending.
-// The second return value collects per-store errors so callers can distinguish
-// "no sessions" from "all stores failed". Callers should surface partial errors
-// as warnings rather than treating the entire response as a failure.
-func (al *AgentLoop) ListAllSessions() ([]*session.UnifiedMeta, []error) {
+// ListAllSessions returns a stably-ordered, paginated window of sessions from
+// the shared store merged with legacy per-agent stores, deduplicated
+// (ADR-057 FR-092/FR-098, W16b, owner U9 — the loop layer of the four-layer
+// pagination stack FR-068/FR-092 requires: UnifiedStore.ListSessions (U6) ->
+// AgentLoop.ListAllSessions (here) -> restAPI.listSessions (U18) ->
+// fetchSessions (U12)).
+//
+// Ordering and pagination contract (FR-098, stated once here as this
+// method's owner):
+//
+//   - (a) The merged sequence is ordered by UpdatedAt descending with the
+//     session id as a stable tiebreak, so two sessions sharing a timestamp
+//     cannot silently swap places between two calls with no intervening
+//     write — mirroring UnifiedStore.ListSessions' own post-FR-097a
+//     ordering exactly (pkg/session/unified.go).
+//   - (b) Paging is offset-based over that merged sequence. limit <= 0 means
+//     "no limit" — the remainder of the sequence from offset is returned in
+//     one page, matching UnifiedStore.ListSessionsPage's contract. offset <
+//     0 is treated as 0. An offset at or beyond the end of the sequence
+//     returns an empty, non-nil page with NextOffset == -1, not an error. A
+//     cursor built from NextOffset stays valid for the duration of a
+//     client's expansion even if a store's contents change in between — a
+//     shifted window is acceptable, a duplicated or skipped row within one
+//     already-served page is not, because this method never re-derives an
+//     already-returned row's position from anything but that same total
+//     order.
+//   - (c) A legacy per-agent store that errors mid-merge contributes zero
+//     rows, is appended to the returned errs, and does NOT halt the page or
+//     invalidate the cursor — the merge simply continues over the remaining
+//     stores (unchanged from this method's pre-pagination behavior; see the
+//     loop below). Callers should surface these as partial_errors rather
+//     than treating the whole response as a failure.
+//
+// Hierarchy (FR-091/FR-104) is applied BEFORE pagination, over the full
+// merged set, so a page boundary can never split a parent from its
+// child-count context or silently promote/demote a row depending on which
+// page it lands on:
+//
+//   - flat == true: no hierarchy filter — every merged, deduplicated session
+//     is a candidate row (FR-104's per-session usage-accounting listing).
+//     parentSessionID is ignored in this combination; the 400 for supplying
+//     both is a REST-layer concern (U18), not this method's.
+//   - flat == false, parentSessionID != "": only that session's DIRECT
+//     children (meta.ParentSessionID == parentSessionID) are returned.
+//   - flat == false, parentSessionID == "": only ROOT sessions are returned
+//     — meta.ParentSessionID == "", OR meta.ParentSessionID names a session
+//     absent from this merge (an orphan; FR-091: "a session whose
+//     ParentSessionID names a session that no longer resolves MUST be
+//     returned as a root"). Orphan detection is computed across the WHOLE
+//     merged id set rather than by delegating to UnifiedStore.IsOrphan
+//     (which is scoped to one store's own metaCache) because this method
+//     spans multiple stores — in practice every delegated child lives in
+//     the one shared store per FR-010, but resolving membership against the
+//     full merge is correct regardless of that placement detail.
+func (al *AgentLoop) ListAllSessions(limit, offset int, parentSessionID string, flat bool) (session.SessionListPage, []error) {
 	var all []*session.UnifiedMeta
 	var errs []error
 
 	// 1. Shared store (new sessions).
 	sharedIDs := make(map[string]bool)
+	allIDs := make(map[string]bool)
 	if al.sharedSessionStore != nil {
 		shared, err := al.sharedSessionStore.ListSessions()
 		if err != nil {
@@ -4485,12 +5565,14 @@ func (al *AgentLoop) ListAllSessions() ([]*session.UnifiedMeta, []error) {
 		} else {
 			for _, s := range shared {
 				sharedIDs[s.ID] = true
+				allIDs[s.ID] = true
 				all = append(all, s)
 			}
 		}
 	}
 
-	// 2. Legacy per-agent stores — deduplicate against shared.
+	// 2. Legacy per-agent stores — deduplicate against shared. FR-098(c): a
+	// store that errors here contributes zero rows and the merge continues.
 	for _, id := range al.GetRegistry().ListAgentIDs() {
 		store := al.getLegacyAgentStore(id)
 		if store == nil {
@@ -4505,15 +5587,79 @@ func (al *AgentLoop) ListAllSessions() ([]*session.UnifiedMeta, []error) {
 		}
 		for _, s := range sessions {
 			if !sharedIDs[s.ID] {
+				allIDs[s.ID] = true
 				all = append(all, s)
 			}
 		}
 	}
 
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].UpdatedAt.After(all[j].UpdatedAt)
-	})
-	return all, errs
+	all = u9FilterSessionHierarchy(all, allIDs, parentSessionID, flat)
+
+	// FR-098(a): stable total order.
+	sort.Slice(all, func(i, j int) bool { return u9SessionRecencyLess(all[i], all[j]) })
+
+	// FR-098(b): offset-based paging over the merged, filtered, sorted
+	// sequence — mirrors UnifiedStore.ListSessionsPage's contract exactly.
+	if offset < 0 {
+		offset = 0
+	}
+	total := len(all)
+	if offset >= total {
+		return session.SessionListPage{Sessions: []*session.UnifiedMeta{}, NextOffset: -1, Total: total}, errs
+	}
+	end := total
+	if limit > 0 && offset+limit < total {
+		end = offset + limit
+	}
+	nextOffset := -1
+	if end < total {
+		nextOffset = end
+	}
+	page := make([]*session.UnifiedMeta, end-offset)
+	copy(page, all[offset:end])
+	return session.SessionListPage{Sessions: page, NextOffset: nextOffset, Total: total}, errs
+}
+
+// u9FilterSessionHierarchy applies FR-091/FR-104's hierarchy rule to a
+// merged, deduplicated session list, given the full set of ids present in
+// that same merge (allIDs) so the orphan clause of FR-091 ("a session whose
+// ParentSessionID names a session that no longer resolves MUST be returned
+// as a root") is evaluated across every store ListAllSessions merged, not
+// just one. See ListAllSessions' doc comment for the three cases.
+func u9FilterSessionHierarchy(all []*session.UnifiedMeta, allIDs map[string]bool, parentSessionID string, flat bool) []*session.UnifiedMeta {
+	if flat {
+		return all
+	}
+	filtered := make([]*session.UnifiedMeta, 0, len(all))
+	if parentSessionID != "" {
+		for _, s := range all {
+			if s.ParentSessionID == parentSessionID {
+				filtered = append(filtered, s)
+			}
+		}
+		return filtered
+	}
+	for _, s := range all {
+		if s.ParentSessionID == "" || !allIDs[s.ParentSessionID] {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered
+}
+
+// u9SessionRecencyLess is ListAllSessions' FR-098(a) total order, factored
+// into a named, directly-testable function rather than left as an inline
+// sort.Slice closure: UpdatedAt descending, with session id as a stable
+// tiebreak so two sessions sharing a timestamp (down to whatever resolution
+// the clock gives) cannot silently swap places between two calls with no
+// intervening write. Mirrors UnifiedStore.ListSessions' own post-FR-097a
+// comparator (pkg/session/unified.go) exactly, at the layer that merges
+// ACROSS stores rather than within one.
+func u9SessionRecencyLess(a, b *session.UnifiedMeta) bool {
+	if !a.UpdatedAt.Equal(b.UpdatedAt) {
+		return a.UpdatedAt.After(b.UpdatedAt)
+	}
+	return a.ID < b.ID
 }
 
 // processTaskDirect runs the agent loop for a task, dispatching to the given agent.
@@ -4591,19 +5737,20 @@ func (al *AgentLoop) processTaskDirect(
 		TranscriptStore:        al.GetAgentStore(agentID),
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
-		// FIX 1 (re-review): the same genuine source processTaskDirectExternalCLI
-		// already reads a few lines below (see that function's own comment) — the
-		// task executor (task_executor.go) seeds tools.WithWorkspaceID(ctx,
-		// task.WorkspaceID) on `ctx` BEFORE calling processTaskDirect, and taskCtx
-		// is derived from that same ctx, so tools.ToolWorkspaceID(taskCtx) reads it
-		// straight back. Currently inert end-to-end for THIS dispatch branch only
-		// because webchatChannel.SendMedia (pkg/gateway/webchat_channel.go)
-		// ignores OutboundMediaMessage.WorkspaceID — Channel is hardcoded to
-		// "webchat" a few lines up — but it is not moot for every consumer of
-		// ts.opts.WorkspaceID (e.g. the memory-routing injection in runTurn), and
-		// stays correct with zero further changes here if webchatChannel is ever
-		// updated to honor it. Set for consistency with the external-CLI sibling
-		// dispatch branch, not invented.
+		// WorkspaceID is already on taskCtx via tools.WithWorkspaceID (the task
+		// executor sets it on ctx before calling processTaskDirect — see
+		// runTask/runTaskFromInProgress's tools.WithWorkspaceID(ctx, t.WorkspaceID)
+		// calls in task_executor.go); thread it through processOptions
+		// explicitly too, mirroring processTaskDirectExternalCLI's identical
+		// field below, so runTurn's re-root block (loop.go ~6428) resolves the
+		// work dir from ts.opts.WorkspaceID via FindForAgentPreferring rather
+		// than falling through to workspace.FindForAgent's arbitrary
+		// sort.Strings(matches)[0] pick when the agent belongs to 2+
+		// workspaces. Without this, a native task run silently rooted in the
+		// WRONG workspace whenever the assigned agent had more than one
+		// CoreTeam membership — this field reads ts.opts, not the context, so
+		// leaving it unset here (while the external-CLI sibling below sets it)
+		// was the gap.
 		WorkspaceID: tools.ToolWorkspaceID(taskCtx),
 	})
 }
@@ -5046,11 +6193,27 @@ func (al *AgentLoop) TriggerReload() error {
 	if al.reloadFunc == nil {
 		return ErrReloadNotConfigured
 	}
-	al.reloadPending.Store(true)
+	// This deliberately does NOT mark the reload pending. Only the reload
+	// function itself can, because only it knows whether a reload was actually
+	// queued — and it sets the flag while holding the same mutex that clears it
+	// (pkg/gateway's services.beginReload / finishReload), which is what makes
+	// "request registered" and "flag set" atomic against a concurrently
+	// finishing reload.
+	//
+	// Setting it here instead was a real defect. TriggerReload cannot register
+	// the request until it calls reloadFunc, so a flag set beforehand sits in a
+	// window where a finishing cycle sees no registered request, clears the
+	// flag, and releases the slot; the caller's poller then returns immediately
+	// against a config snapshot predating its own write. It also made the flag
+	// LIE whenever reloadFunc completed nothing — every test fake that returns
+	// nil without running a reload left the flag stuck on, so callers polling
+	// it blocked for the full deadline against a reload that was never coming.
 	if err := al.reloadFunc(); err != nil {
 		// Only clear the pending flag if this was a genuine failure.
 		// If another reload is already in progress, that reload owns the flag —
 		// clearing it here would prematurely unblock any concurrent poller.
+		// Defensive/test-only in practice: the production reloadFunc coalesces
+		// instead of reporting contention. See ErrReloadAlreadyInProgress.
 		if strings.Contains(err.Error(), "already in progress") {
 			return ErrReloadAlreadyInProgress
 		}
@@ -5058,6 +6221,24 @@ func (al *AgentLoop) TriggerReload() error {
 		return err
 	}
 	return nil
+}
+
+// MarkReloadPending marks a config reload as pending — the flag
+// restAPI.triggerReloadAndWait polls, and the one ClearReloadPending clears.
+//
+// This is the ONLY way the flag gets set, and it is called from exactly one
+// place in production: pkg/gateway's services.beginReload, while it holds the
+// mutex that finishReload/abandonReload clear under. That placement is the
+// whole design — it makes "a reload is queued" and "the flag is set" the same
+// atomic fact, so the flag can never be set for a reload that will not run, nor
+// cleared out from under a request that has just been registered.
+//
+// Callers other than the reload bookkeeping should not use it; a flag set
+// without a queued reload blocks every poller until the wait deadline expires.
+//
+// Idempotent, safe to call repeatedly and concurrently.
+func (al *AgentLoop) MarkReloadPending() {
+	al.reloadPending.Store(true)
 }
 
 // IsReloadPending reports whether a config reload is currently in flight.
@@ -5599,6 +6780,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		// it with the platform handle (e.g. "@alice"), which is not a gateway
 		// principal and must never be stamped as audit User.
 		UserID:              gatewayPrincipal(msg),
+		UserInitiated:       userInitiated(msg),
 		UserMessage:         msg.Content,
 		Media:               msg.Media,
 		DefaultResponse:     defaultResponse,
@@ -6168,6 +7350,12 @@ func (al *AgentLoop) runAgentLoop(
 		return "", nil
 	}
 
+	// ADR-049 D6/D7 (US-8): judge-gated /goal round advance. Fast no-op
+	// unless opts.TranscriptSessionID's session carries an active goal; may
+	// append a steering follow-up to result.followUps, published by the loop
+	// immediately below exactly like any other follow-up.
+	al.checkGoalLoopAfterTurn(ctx, agent, opts, &result)
+
 	for _, followUp := range result.followUps {
 		if pubErr := al.bus.PublishInbound(ctx, followUp); pubErr != nil {
 			logger.WarnCF("agent", "Failed to publish follow-up after turn",
@@ -6349,8 +7537,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// Filesystem re-rooting: every agent that belongs to a Workspace's CoreTeam
 	// — native (Main/Subagent) or subagent_3p (external-CLI), no exceptions by
 	// kind — works in that Workspace's dedicated project-work subdirectory
-	// (workspaces/<id>/work/, workspace.SafeWorkDir) instead of its private
-	// per-agent one. Unconditional (no feature flag) and PRIMARILY driven by
+	// (workspaces/<id>/work/, materialized via workspace.EnsureWorkDir — the
+	// sanctioned SafeWorkDir+MkdirAll+git-evidence replacement) instead of its
+	// private per-agent one. Unconditional (no feature flag) and PRIMARILY driven by
 	// AGENT IDENTITY (workspace.FindForAgent's CoreTeam-membership lookup),
 	// NOT by ts.opts.WorkspaceID above: those are genuinely different signals
 	// that can diverge in both directions — a CoreTeam member responding via
@@ -6417,7 +7606,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// and external-cli dispatch paths again (a prior review found
 	// runExternalCLISubTurn had its own, weaker copy that fell through to the
 	// agent's private home directory instead of refusing).
-	wsDir, wsErr := resolveTurnWorkDirOrRefuse(ts.agent.ID, ts.opts.WorkspaceID)
+	wsDir, wsErr := resolveTurnWorkDirOrRefuse(turnCtx, ts.agent.ID, ts.agent.Home, ts.opts.WorkspaceID)
 	if wsErr != nil {
 		return turnResult{}, wsErr
 	}
@@ -6510,8 +7699,21 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				Duration:        time.Since(ts.startedAt),
 				FinalContentLen: ts.finalContentLen(),
 				ChatID:          ts.chatID,
-				SessionID:       ts.transcriptSessionID,
-				IsRoot:          ts.parentTurnID == "",
+				// ADR-057 FR-012 (W4/U9): the "done" frame is one of the 19
+				// SESSION_SCOPED_FRAME_TYPES (src/store/chat.ts), so its wire
+				// session_id MUST come from the ROUTING identity — the id
+				// inherited verbatim from the root of the delegation subtree
+				// — not this turn's own store-backed transcriptSessionID,
+				// which for a delegated child differs from the root's. No
+				// ProducingSessionID sibling exists on this payload today
+				// (events.go/U23 added that field only to
+				// ToolExecStart/EndPayload) even though the W5 audit already
+				// classifies "done" as carrying both ids on the wire schema
+				// (contracts/asyncapi.yaml) — closing that gap is events.go's
+				// (U23) and the WS forwarder's (U11) cross-unit follow-up,
+				// not something addable from this file.
+				SessionID: string(ts.routingSessionID),
+				IsRoot:    ts.parentTurnID == "",
 			},
 		)
 	}()
@@ -6765,32 +7967,6 @@ turnLoop:
 			}
 		}
 
-		// SEC-26: Global daily cost cap pre-check. Deny if the accumulated cost
-		// for today already meets or exceeds the cap. The system agent is exempt.
-		if al.rateLimiter != nil && cfg.Sandbox.RateLimits.DailyCostCapUSD > 0 &&
-			!security.IsPrivilegedAgent(ts.agent.AgentType) {
-			if currentCost := al.rateLimiter.GetDailyCost(); currentCost >= cfg.Sandbox.RateLimits.DailyCostCapUSD {
-				capRule := fmt.Sprintf("global daily cost cap exceeded ($%.2f)", cfg.Sandbox.RateLimits.DailyCostCapUSD)
-				al.recordRateLimitDenial(
-					ts,
-					"daily_cost_cap_usd",
-					RateLimitPayload{
-						Scope:      string(security.ScopeGlobal),
-						Resource:   "daily_cost_usd",
-						PolicyRule: capRule,
-						AgentID:    ts.agent.ID,
-						ChatID:     ts.chatID,
-					},
-					map[string]any{
-						"daily_cost_usd": currentCost,
-						"daily_cost_cap": cfg.Sandbox.RateLimits.DailyCostCapUSD,
-					},
-				)
-				turnStatus = TurnEndStatusError
-				return turnResult{}, fmt.Errorf("rate limit: %s", capRule)
-			}
-		}
-
 		if iteration > 1 {
 			if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
 				pendingMessages = append(pendingMessages, steerMsgs...)
@@ -6881,7 +8057,8 @@ turnLoop:
 		// FilterToolsByPolicy enforces global × agent deny>ask>allow resolution and
 		// the ScopeCore-on-custom-agent gate before the tool list reaches the LLM.
 		// Tools with effective policy "ask" are included — the mid-turn policy snapshot
-		// (FR-041) handles human-in-the-loop confirmation; see recordSyntheticDeny.
+		// (FR-041) handles human-in-the-loop confirmation; see the ADR-058
+		// quarantine gate and recordToolDenial (tool_denial.go).
 		allAgentTools := ts.agent.Tools.GetAll()
 		policyFilteredTools, filterTimePolicyMap := tools.FilterToolsByPolicy(allAgentTools, ts.agent.AgentType, ts.agent.LoadToolPolicy())
 
@@ -6908,10 +8085,16 @@ turnLoop:
 				ts.agent.Sessions.AddFullMessage(ts.sessionKey, syntheticDenyMsg)
 				ts.recordPersistedMessage(syntheticDenyMsg)
 			}
-			if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
-				turnStatus = TurnEndStatusAborted
-				return al.abortTurn(ts, "synthetic_error_floor", abortMsg)
-			}
+			// ADR-058 §3.2/§10.A3: this branch used to also invoke FR-084's
+			// per-turn synthetic-deny counter-and-abort helper before
+			// returning below. FR-084 is deleted in full — this was the one
+			// call site whose abort branch could NEVER fire
+			// (every other call site's shouldAbort path was reachable; this
+			// one always returns unconditionally on the very next line, so
+			// its counter could reach at most 1 and a floor of 8 was
+			// structurally unreachable, issue #595). Nothing behavioural is
+			// lost: the turn already terminates unconditionally below.
+			//
 			// Fail the LLM call for this iteration by returning an error turn result.
 			turnStatus = TurnEndStatusError
 			return turnResult{status: TurnEndStatusError, finalContent: denyMsg}, dedupErr
@@ -7865,33 +9048,25 @@ turnLoop:
 		}
 		logger.DebugCF("agent", "LLM response", llmResponseFields)
 
-		// SEC-26: Record the cost of this completed LLM call in the daily
-		// accumulator. We MUST use RecordSpend (not CheckGlobalCostCap) here:
-		// the call already happened, so the spend must be recorded even if it
-		// pushes the total past the cap — the next turn's pre-check will deny
-		// further calls. CheckGlobalCostCap silently skipped the increment on
-		// denials, which caused the accumulator to stick below the cap and let
-		// every subsequent call sneak through.
-		if al.rateLimiter != nil && response != nil && response.Usage != nil {
+		// ADR-053 Phase-2 / D12 (R§8.3d/FR-171/FR-172/FR-173): debit the ONE
+		// app-level OVERALL token pool from provider-reported usage. Agent-agnostic
+		// by design (no agentType arg) — the IsPrivilegedAgent exemption is removed
+		// so core-agent turns debit the same pool. Atomic RMW under one lock; the
+		// graceful-wind-down gate (Exhausted) is consulted at the next turn/
+		// adjudication boundary, NEVER mid-turn (FR-174). The debit is unconditional
+		// even when unbounded (cap 0) so Usage accounting stays correct.
+		//
+		// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
+		if response != nil && response.Usage != nil {
 			callCost := estimateLLMCallCost(llmModel, response.Usage)
-			al.rateLimiter.RecordSpend(callCost, ts.agent.AgentType)
+			if al.tokenBudget != nil && response.Usage.TotalTokens > 0 {
+				al.tokenBudget.Debit(int64(response.Usage.TotalTokens))
+			}
 			// Accumulate turn-level stats so the "done" WS frame can surface
 			// real token counts and cost to the chat UI (issue #12).
 			ts.AddTurnStats(int64(response.Usage.TotalTokens), callCost)
 			// Accumulate cache token split for transcript entry (Wave 1 token tracking).
 			ts.AddTurnCacheStats(response.Usage.CacheReadTokens, response.Usage.CacheWriteTokens)
-			if al.costTracker != nil {
-				if saveErr := al.costTracker.SaveFromRegistry(al.rateLimiter); saveErr != nil {
-					logger.ErrorCF("agent", "SEC-26: failed to persist daily cost after LLM call — cap may under-count on restart",
-						map[string]any{
-							"error":          saveErr.Error(),
-							"agent_id":       ts.agent.ID,
-							"call_cost_usd":  callCost,
-							"daily_cost_usd": al.rateLimiter.GetDailyCost(),
-							"model":          llmModel,
-						})
-				}
-			}
 		}
 
 		if len(response.ToolCalls) == 0 || gracefulTerminal {
@@ -8104,6 +9279,71 @@ turnLoop:
 			toolName := ts.agent.Tools.UnsanitizeToolName(tc.Name)
 			toolArgs := cloneStringAnyMap(tc.Arguments)
 
+			// ADR-058 fix: ledgerToolName is the PRE-HOOK tool name, captured
+			// before hooks.BeforeTool below gets a chance to run. Every
+			// recordToolDenial/recordQuarantineReplay call for THIS call must
+			// key the ledger by this value, not by whatever toolName holds
+			// after hooks.BeforeTool's HookActionContinue/HookActionModify
+			// case (a few lines down) may have reassigned it to
+			// toolReq.Tool — because the quarantine gate immediately below
+			// looks a tool up BEFORE any hook runs, using exactly this
+			// pre-hook value, on EVERY call including the next one. A hook
+			// that renames a tool would otherwise store its quarantine entry
+			// under the RENAMED (post-hook) name while every future lookup
+			// for the same incoming call keys on the ORIGINAL (pre-hook)
+			// name — a latent key-shape mismatch that means the short-circuit
+			// silently never fires for a renaming hook, and every repeat call
+			// resumes a full approval round-trip. No in-tree hook renames a
+			// tool today, but nothing prevented one from doing so.
+			ledgerToolName := toolName
+
+			// ADR-058 FR-058-11: the quarantine gate. A tool that has already
+			// produced one PERMANENT denial earlier in this turn is answered
+			// from the cached payload here — before hooks.BeforeTool, the
+			// TOCTOU re-check, and the approval path, so none of them run for
+			// this call: no hook call, no policy re-resolution, no
+			// CheckGrantOrRequestApproval, no RequestApproval, no
+			// tool_approval_required frame. The turn CONTINUES (D5 rejected
+			// removing the tool from tools[]; the advertised tool set stays
+			// stable and this gate is what makes offering it again safe).
+			if payload, qReason, quarantined := ts.quarantinedDenialFor(ledgerToolName); quarantined {
+				al.emitPolicyDenyAudit(ts, toolName, "quarantined", qReason)
+				// ADR-058 fix: persist a transcript record for this replay too.
+				// Before this, only the FIRST denial that created the
+				// quarantine entry ever produced a tool_call transcript
+				// entry — replays 2..N left no record at all and vanished on
+				// reload. This never blocks (quarantine is a synchronous
+				// short-circuit), so there is no preceding `pending`
+				// placeholder to settle; settleAskToolCallTranscript already
+				// handles that "no placeholder" case by appending directly
+				// (the same shape the headless auto-deny site below relies
+				// on for the identical reason).
+				settleAskToolCallTranscript(ts, session.ToolCallID(tc.ID), toolName, toolArgs, qReason)
+				deniedMsg := providers.Message{
+					Role:       "tool",
+					Content:    payload,
+					ToolCallID: tc.ID,
+				}
+				messages = append(messages, deniedMsg)
+				if !ts.opts.NoHistory {
+					ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
+					ts.recordPersistedMessage(deniedMsg)
+				}
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: fmt.Sprintf("permission_denied (quarantined: %s)", qReason),
+					},
+				)
+				if used, exhausted := ts.recordQuarantineReplay(ledgerToolName); exhausted {
+					turnStatus = TurnEndStatusAborted
+					return al.abortTurnForToolDenialBudget(ts, ledgerToolName, qReason, used)
+				}
+				continue
+			}
+
 			if al.hooks != nil {
 				toolReq, decision := al.hooks.BeforeTool(turnCtx, &ToolCallHookRequest{
 					Meta:      ts.eventMeta("runTurn", "turn.tool.before"),
@@ -8137,6 +9377,30 @@ turnLoop:
 					if !ts.opts.NoHistory {
 						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
 						ts.recordPersistedMessage(deniedMsg)
+					}
+					// ADR-058 fix: this branch used to `continue` with no
+					// ClassifyDenial, no recordToolDenial and no budget check
+					// at all — a third-party ProcessHook that denies a tool
+					// reproduced the pre-ADR-058 infinite retry exactly,
+					// despite tool_denial.go's package doc, turnDenialLedger's
+					// doc, and audit.EventTurnAbortedToolDenialBudget's doc all
+					// asserting the budget covers "every denial response
+					// handed to the model". This does NOT route through
+					// ClassifyDenial/denialPayloadJSON — decision.Reason is
+					// arbitrary third-party-hook free text with no fixed
+					// literal to classify against, and denyContent (plain
+					// text, not a JSON envelope) is already an honest
+					// attribution ("denied by hook", never a false claim of a
+					// human decision) so D1/D2 do not apply here. quarantine
+					// is unconditionally true: a hook that explicitly denies a
+					// tool is a deliberate decision, like a human "no" or a
+					// resolved policy deny, and there is no FR-079-style
+					// re-check mechanism for hook decisions that a cached
+					// short-circuit would disable.
+					const hookDeniedLedgerReason = "hook_denied"
+					if used, exhausted := ts.recordToolDenial(ledgerToolName, hookDeniedLedgerReason, true, denyContent); exhausted {
+						turnStatus = TurnEndStatusAborted
+						return al.abortTurnForToolDenialBudget(ts, ledgerToolName, hookDeniedLedgerReason, used)
 					}
 					continue
 				case HookActionAbortTurn:
@@ -8195,6 +9459,25 @@ turnLoop:
 						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
 						ts.recordPersistedMessage(deniedMsg)
 					}
+					// ADR-058 fix: same rationale as the HookActionDenyTool
+					// branch above — this hook-deny path used to bypass the
+					// ledger entirely (no ClassifyDenial, no
+					// recordToolDenial, no budget), so a ToolApprover hook
+					// (e.g. the gateway's wsApprovalHook) denying the same
+					// tool repeatedly reproduced the pre-ADR-058 infinite
+					// retry exactly, despite this file's own doc comments
+					// claiming total budget coverage. Kept as plain text
+					// (denyContent), not the JSON permission_denied envelope:
+					// approval.Reason is arbitrary hook-supplied free text
+					// with no fixed literal to classify against, and the
+					// message already names the actual cause ("denied by
+					// approval hook") rather than claiming a human decision
+					// that did not occur.
+					const approvalHookDeniedLedgerReason = "approval_hook_denied"
+					if used, exhausted := ts.recordToolDenial(ledgerToolName, approvalHookDeniedLedgerReason, true, denyContent); exhausted {
+						turnStatus = TurnEndStatusAborted
+						return al.abortTurnForToolDenialBudget(ts, ledgerToolName, approvalHookDeniedLedgerReason, used)
+					}
 					continue
 				}
 			}
@@ -8205,7 +9488,18 @@ turnLoop:
 			toctouPolicy := al.resolveToolPolicyAtExec(ts, toolName, filterTimePolicyMap)
 			if toctouPolicy == "deny" {
 				// Policy flipped to deny between filter-time and exec-time.
-				denyMsg := fmt.Sprintf(`{"error":"permission_denied","message":"Tool execution denied by policy.","tool":%q}`, toolName)
+				// ADR-058 site 1: this branch has no approver-supplied
+				// reason at all, so it uses the fixed loop pseudo-reason
+				// "policy_denied" (spec §4.1 row 9) — the one table row that
+				// exists purely so this site can be uniformly rewired
+				// through denialPayloadJSON/ClassifyDenial without changing
+				// the pre-existing message text ("already true" per ADR D2;
+				// the payload as a whole does still gain "reason" and
+				// "permanent" fields it previously lacked, see the
+				// denialTable row's own comment).
+				const policyDeniedReason = "policy_denied"
+				cls, _ := ClassifyDenial(policyDeniedReason)
+				denyMsg := denialPayloadJSON(toolName, policyDeniedReason, cls)
 				al.emitPolicyDenyAudit(ts, toolName, "deny", "mid_turn_policy_change")
 				deniedMsg := providers.Message{
 					Role:       "tool",
@@ -8225,9 +9519,24 @@ turnLoop:
 						Reason: "permission_denied (mid-turn policy change)",
 					},
 				)
-				if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
+				// ADR-058 fix: policy_denied must NOT quarantine, even
+				// though cls.Permanent is true for message-classification
+				// purposes. FR-079's TOCTOU re-check exists BECAUSE policy
+				// can change again mid-turn — quarantining here would
+				// silently disable that re-check for the rest of the turn,
+				// serving every later call to this tool a stale cached
+				// denial with no policy re-resolution at all. If an
+				// operator fixes the policy back to allow/ask a moment
+				// later, a quarantined tool would never notice; passing
+				// `false` here (not cls.Permanent) keeps recordToolDenial's
+				// aggregate-budget counting intact while excluding this one
+				// reason from the quarantine cache, so resolveToolPolicyAtExec
+				// keeps running on every subsequent call to this tool. See
+				// recordToolDenial's own doc for the quarantine-vs-Permanent
+				// distinction this relies on.
+				if used, exhausted := ts.recordToolDenial(ledgerToolName, policyDeniedReason, false, denyMsg); exhausted {
 					turnStatus = TurnEndStatusAborted
-					return al.abortTurn(ts, "synthetic_error_floor", abortMsg)
+					return al.abortTurnForToolDenialBudget(ts, ledgerToolName, policyDeniedReason, used)
 				}
 				continue
 			}
@@ -8236,8 +9545,20 @@ turnLoop:
 				// operator to approve, so any `ask`-policy tool is denied without
 				// ever issuing an approval request — the run must never stall.
 				if ts.opts.AutoDenyAsk {
-					const denialReason = "auto-denied: ask-policy tool not allowed in a headless scheduled run"
-					denyMsg := fmt.Sprintf(`{"error":"permission_denied","message":"User denied tool execution.","tool":%q,"reason":%q}`, toolName, denialReason)
+					// ADR-058: this literal is a DEDICATED denialTable row
+					// (agent.autoDenyHeadlessReason, tool_denial.go) with
+					// headless-specific wording, not the generic
+					// unknown-reason fallback — an earlier revision of this
+					// comment described the fallback path, which produced a
+					// stuttering message ("the tool call was refused (reason:
+					// auto-denied: ...)") with no headless-specific guidance
+					// and failed AC-01's "every driven reason must be known"
+					// guard. A headless scheduled run has no operator by
+					// construction, for the whole run, so Permanent: true is
+					// the correct classification (ADR D1 row 9).
+					const denialReason = autoDenyHeadlessReason
+					cls, _ := ClassifyDenial(denialReason)
+					denyMsg := denialPayloadJSON(toolName, denialReason, cls)
 					// Build optional extra Details for the deny.attempted entry so
 					// both correlated records carry the schedule identity (O-3 / F-13
 					// / issue #342). scheduledJobContextFrom is a no-op read — safe to
@@ -8254,6 +9575,15 @@ turnLoop:
 					// entry via EmitToolPolicyAskDenied (CRIT-6 compliant, INFO severity,
 					// reason=AskDenyReasonScheduled). See emitScheduledAutoDenyAudit.
 					al.emitScheduledAutoDenyAudit(turnCtx, ts, toolName, tc.ID)
+					// Persist the refusal as a real tool_call entry. This path
+					// never blocks (there is no approver on a headless run), so
+					// there is no pending placeholder to settle — but without
+					// this the scheduled run's transcript showed the tool had
+					// simply never been called, with the reason living only in
+					// the audit log. settleAskToolCallTranscript appends when it
+					// finds no placeholder, which is exactly this case.
+					settleAskToolCallTranscript(
+						ts, session.ToolCallID(tc.ID), toolName, toolArgs, denialReason)
 					deniedMsg := providers.Message{
 						Role:       "tool",
 						Content:    denyMsg,
@@ -8272,9 +9602,9 @@ turnLoop:
 							Reason: fmt.Sprintf("permission_denied (ask auto-denied: %s)", denialReason),
 						},
 					)
-					if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
+					if used, exhausted := ts.recordToolDenial(ledgerToolName, denialReason, cls.Permanent, denyMsg); exhausted {
 						turnStatus = TurnEndStatusAborted
-						return al.abortTurn(ts, "synthetic_error_floor", abortMsg)
+						return al.abortTurnForToolDenialBudget(ts, ledgerToolName, denialReason, used)
 					}
 					continue
 				}
@@ -8283,11 +9613,63 @@ turnLoop:
 				// now that the legacy WS-frame gate, wsApprovalHook, has been
 				// retired), then fall through to interactive human approval
 				// (FR-011) only when no grant is on file.
-				approved, denialReason := al.CheckGrantOrRequestApproval(
-					turnCtx, ts.transcriptSessionID, ts.agentID, toolName, tc.ID, ts.turnID, toolArgs,
-				)
+				//
+				// A standing grant resolves without ever contacting a human, so
+				// it must NOT write a pending placeholder — that would render an
+				// "awaiting approval" card for a call nobody was asked about.
+				// Consult the grant store separately here (CheckGrantOrRequestApproval
+				// consults the SAME store first, so a granted call still
+				// short-circuits identically), and write the placeholder only on
+				// the path that genuinely blocks on a human.
+				approved := al.ApprovalGrants().IsAllowed(ts.transcriptSessionID, ts.agentID, toolName)
+				denialReason := ""
 				if !approved {
-					denyMsg := fmt.Sprintf(`{"error":"permission_denied","message":"User denied tool execution.","tool":%q,"reason":%q}`, toolName, denialReason)
+					// About to block on a human, for up to the approval
+					// registry's timeout (300 s by default — see
+					// pkg/gateway/approvals.go). Record the call as `pending`
+					// FIRST so the thread shows what the turn is waiting on for
+					// the whole wait, and so a reload mid-wait still shows it:
+					// the tool_approval_required WS frame is live-only and does
+					// not survive a refresh. Before this, an unanswered approval
+					// rendered nothing at all and the turn looked hung for no
+					// visible reason.
+					recordAskPendingToolCall(ts, session.ToolCallID(tc.ID), toolName, toolArgs)
+					approved, denialReason = al.CheckGrantOrRequestApproval(
+						turnCtx, ts.transcriptSessionID, ts.agentID, toolName, tc.ID, ts.turnID, toolArgs,
+					)
+				}
+				if !approved {
+					// Settle the placeholder to `denied` with the outcome
+					// reason, so "denied by the user" and "expired after five
+					// minutes with nobody watching" are distinguishable in the
+					// thread and on replay.
+					settleAskToolCallTranscript(
+						ts, session.ToolCallID(tc.ID), toolName, toolArgs, denialReason)
+					// ADR-058 site 3 — the original defect: denialReason here
+					// is verbatim from CheckGrantOrRequestApproval, so it is
+					// classified for real rather than assumed to be a user
+					// "no". ClassifyDenial handles every reason this call is
+					// KNOWN to be able to produce — not just the
+					// approvals.go-authored six (user, timeout, saturated,
+					// cancel, restart, batch_short_circuit), but also
+					// internal_error (policy_approver.go's nil-entry branch),
+					// no_approver_configured (tool_approver.go's nop
+					// fallback), the empty reason, and "session canceled"
+					// (verified end-to-end in this session:
+					// pkg/agent/cancel.go::AgentLoop.RequestCancel ->
+					// hooks.CancelPendingApprovals ->
+					// pkg/gateway/approvals.go::cancelAllPendingForSessions's
+					// ApprovalOutcome{Reason: "session canceled"} -> here,
+					// distinct from the single-word "cancel" reason above).
+					// An earlier revision of this comment claimed the table
+					// "covers every reason this call can produce" and
+					// enumerated only nine of these — that was never a
+					// closed set, and any reason NOT in denialTable still
+					// fails safe (Permanent: true) through ClassifyDenial's
+					// unknown-reason fallback rather than being silently
+					// treated as retryable.
+					cls, _ := ClassifyDenial(denialReason)
+					denyMsg := denialPayloadJSON(toolName, denialReason, cls)
 					al.emitPolicyDenyAudit(ts, toolName, "ask", denialReason)
 					deniedMsg := providers.Message{
 						Role:       "tool",
@@ -8307,9 +9689,14 @@ turnLoop:
 							Reason: fmt.Sprintf("permission_denied (ask denied: %s)", denialReason),
 						},
 					)
-					if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
+					// ADR-058 §3.5 (R5, Binding Rule 4 — the positive lower
+					// bound): cls.Permanent is false ONLY for "saturated" at
+					// THIS site, so recordToolDenial never quarantines it
+					// here — a later call to the same tool in the same turn
+					// is free to reach the approver and execute (AC-06).
+					if used, exhausted := ts.recordToolDenial(ledgerToolName, denialReason, cls.Permanent, denyMsg); exhausted {
 						turnStatus = TurnEndStatusAborted
-						return al.abortTurn(ts, "synthetic_error_floor", abortMsg)
+						return al.abortTurnForToolDenialBudget(ts, ledgerToolName, denialReason, used)
 					}
 					continue
 				}
@@ -8328,17 +9715,23 @@ turnLoop:
 					"tool":      toolName,
 					"iteration": iteration,
 				})
+			toolExecSID, toolExecProducingSID := u9ToolExecSessionIDs(ts)
 			al.emitEvent(
 				EventKindToolExecStart,
 				ts.eventMeta("runTurn", "turn.tool.start"),
 				ToolExecStartPayload{
-					ToolCallID:        session.ToolCallID(tc.ID),
-					ChatID:            ts.chatID,
-					SessionID:         ts.transcriptSessionID,
-					Tool:              toolName,
-					Arguments:         cloneEventArguments(toolArgs),
-					ParentSpawnCallID: session.ToolCallID(ts.parentSpawnCallID),
-					AgentID:           ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
+					ToolCallID: session.ToolCallID(tc.ID),
+					ChatID:     ts.chatID,
+					// ADR-057 FR-011/FR-012/FR-013 (W4/W5d, U9): see
+					// u9ToolExecSessionIDs and
+					// ToolExecStartPayload.SessionID/.ProducingSessionID's doc
+					// comments (events.go, U23) for the full rationale.
+					SessionID:          toolExecSID,
+					Tool:               toolName,
+					Arguments:          cloneEventArguments(toolArgs),
+					ParentSpawnCallID:  session.ToolCallID(ts.parentSpawnCallID),
+					AgentID:            ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
+					ProducingSessionID: toolExecProducingSID,
 				},
 			)
 
@@ -8731,26 +10124,60 @@ turnLoop:
 			if len(toolResult.Media) > 0 && turnMediaStore != nil {
 				attachToolResultMedia(&toolResultMsg, toolResult.Media, turnMediaStore, maxMediaSize)
 			}
+			endSID, endProducingSID := u9ToolExecSessionIDs(ts)
 			al.emitEvent(
 				EventKindToolExecEnd,
 				ts.eventMeta("runTurn", "turn.tool.end"),
 				ToolExecEndPayload{
-					ToolCallID:        session.ToolCallID(toolCallID),
-					ChatID:            ts.chatID,
-					SessionID:         ts.transcriptSessionID,
-					Tool:              toolName,
-					Duration:          toolDuration,
-					ForLLMLen:         len(contentForLLM),
-					ForUserLen:        len(toolResult.ForUser),
-					IsError:           toolResult.IsError,
-					Async:             toolResult.Async,
-					Result:            contentForLLM,
-					ParentSpawnCallID: session.ToolCallID(ts.parentSpawnCallID),
-					AgentID:           ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
+					ToolCallID: session.ToolCallID(toolCallID),
+					ChatID:     ts.chatID,
+					// ADR-057 FR-011/FR-012/FR-013 (W4/W5d, U9): see the
+					// matching ToolExecStartPayload construction above —
+					// identical contract on the result frame.
+					SessionID:          endSID,
+					Tool:               toolName,
+					Duration:           toolDuration,
+					ForLLMLen:          len(contentForLLM),
+					ForUserLen:         len(toolResult.ForUser),
+					IsError:            toolResult.IsError,
+					Async:              toolResult.Async,
+					Result:             contentForLLM,
+					ParentSpawnCallID:  session.ToolCallID(ts.parentSpawnCallID),
+					AgentID:            ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
+					ProducingSessionID: endProducingSID,
 				},
 			)
 			tcStatus := "success"
 			switch {
+			case toolResult.ParksTurn:
+				// ADR-057 UAT defect C2 fix (2026-08-04): a SYNCHRONOUS
+				// delegate/spawn call whose child sub-turn parked awaiting
+				// the parent's answer (message_parent(kind="question",
+				// wait=true) — see pkg/agent/subturn.go's spawnSubTurn,
+				// the `if turnRes.status == TurnEndStatusParked` branch
+				// that sets ToolResult.ParksTurn, the single source of
+				// truth for this signal). Without this case, a parked
+				// child's toolResult here has Interrupted==false and
+				// IsError==false (it is neither a failure nor a
+				// cancellation), so tcStatus fell through to the
+				// "success" initializer — persisting the OUTER delegate
+				// tool call's own tc.Status as "success" even though the
+				// live subagent_end WS frame (spawnSubTurn's endStatus
+				// switch, now SubTurnStatusParked) already correctly said
+				// "parked". That divergence meant a SESSION RELOAD
+				// (pkg/gateway/replay.go's resolveStatus(tc.Status), used
+				// to reconstruct the subagent_end frame from this exact
+				// persisted record) would show "success" for a
+				// synchronously-dispatched parked child even after the
+				// live-render half of this fix, exactly the class of
+				// live/reload-parity bug the surrounding tcStatus switch
+				// already exists to close for "interrupted" below.
+				// Checked FIRST (highest priority), mirroring this same
+				// loop's `parked := toolResult.ParksTurn` priority check
+				// (below, in the tool-execution loop) — a park must win
+				// over the (mutually exclusive, by construction) Interrupted/
+				// IsError cases.
+				tcStatus = "parked"
 			case toolResult.Interrupted:
 				// Finding F (A-I4 round 5): a synchronous delegate/spawn call
 				// whose child sub-turn was interrupted by a parent-turn
@@ -8841,9 +10268,26 @@ turnLoop:
 				pendingMessages = append(pendingMessages, steerMsgs...)
 			}
 
+			// C2 (ADR-057 UAT 2026-08-03): a successful message_parent(kind=
+			// question, wait=true) call parks the CALLING child's own durable
+			// LifecycleRecord in needs_input (pkg/tools/message_parent.go's
+			// parkNeedsInput) — but until this check existed, this in-memory
+			// loop was completely blind to that transition and kept iterating,
+			// eventually overwriting the durable park with a later terminal
+			// state before any `delegate respond` could ever reach it (the
+			// child "kept running" past its own park, permanently stranding
+			// the correlation_id). toolResult.ParksTurn is the signal
+			// message_parent.go sets on exactly that success path; checked
+			// FIRST (highest priority) because a park must win over an
+			// in-flight steering message or graceful interrupt too.
+			parked := toolResult.ParksTurn
+
 			skipReason := ""
 			skipMessage := ""
-			if len(pendingMessages) > 0 {
+			if parked {
+				skipReason = "session parked (message_parent question wait=true)"
+				skipMessage = "Skipped: this session parked awaiting the parent's answer."
+			} else if len(pendingMessages) > 0 {
 				skipReason = "queued user steering message"
 				skipMessage = "Skipped due to queued user message."
 			} else if gracefulPending, _ := ts.gracefulInterruptRequested(); gracefulPending {
@@ -8882,6 +10326,28 @@ turnLoop:
 							ts.recordPersistedMessage(skippedMsg)
 						}
 					}
+				}
+				if parked {
+					// Stop the turn NOW — modeled on the hardAbortRequested
+					// early-return above (this same loop), not on the
+					// graceful-interrupt `break` below: `break` only exits
+					// THIS tool-execution loop and falls through to another
+					// LLM call at the top of the iteration loop (turnLoop),
+					// which is exactly the bug (the loop resuming past the
+					// park). A genuine `return` here is what actually stops
+					// runTurn. Unlike abortTurn, this deliberately does NOT
+					// call ts.restoreSession — a park is not a rollback: the
+					// history through this tool call's own recorded result
+					// must survive on disk exactly as-is so a later `delegate
+					// respond` resumes from this point, not from a rewound
+					// pre-turn snapshot.
+					ts.setPhase(TurnPhaseParked)
+					turnStatus = TurnEndStatusParked
+					return turnResult{
+						status:     TurnEndStatusParked,
+						followUps:  append([]bus.InboundMessage(nil), ts.followUps...),
+						turnFailed: ts.turnFailed,
+					}, nil
 				}
 				break
 			}
@@ -9015,8 +10481,9 @@ turnLoop:
 // hardInterruptAbortReason is the abort reason used when a turn is
 // hard-aborted via ts.requestHardAbort() (InterruptHard/InterruptSessionHard,
 // reached from the turn loop's ts.hardAbortRequested() checks) rather than by
-// a hook decision or the synthetic-error floor, neither of which have a more
-// specific reason string available at the call site.
+// a hook decision or the aggregate tool-denial budget (ADR-058,
+// toolDenialAbortReason), neither of which have a more specific reason
+// string available at the call site.
 //
 // abortTurn treats this exact reason string as the signal for a clean,
 // intentional stop rather than a failure needing a surfaced error (see
@@ -9047,9 +10514,10 @@ const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 //     TestAgentLoop_InterruptHard_RestoresSession asserts this: a
 //     hard-interrupted turn restores the session cleanly with a nil error.
 //
-//   - any other reason (the synthetic-error floor's abortMsg, or a hook's
-//     decision.Reason): a system-initiated abort — e.g. the repeated-policy-
-//     denial floor or a hook's HookActionHardAbort decision. Synthesizes a
+//   - any other reason (the aggregate tool-denial budget's
+//     toolDenialAbortReason, ADR-058, or a hook's decision.Reason): a
+//     system-initiated abort — e.g. the turn exhausting its per-turn tool-
+//     denial budget or a hook's HookActionHardAbort decision. Synthesizes a
 //     real, non-nil error carrying stage + reason, mirroring
 //     hookAbortError's shape; emits an error event; and appends it to the
 //     transcript so the user (and replay) learn why the turn ended.
@@ -9088,7 +10556,8 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 	}
 
 	// Case 2: system-initiated abort (policy/hook decision or the
-	// synthetic-error floor) — synthesize a real, surfaced error.
+	// aggregate tool-denial budget, ADR-058) — synthesize a real, surfaced
+	// error.
 	if reason == "" {
 		reason = "no reason provided"
 	}
@@ -9122,69 +10591,45 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 	return turnResult{status: TurnEndStatusAborted}, err
 }
 
-// defaultSyntheticErrorFloor is the default value of
-// gateway.turn_synthetic_error_floor (FR-084). After this many consecutive
-// synthetic-deny tool results in a single turn, the turn is aborted.
-const defaultSyntheticErrorFloor = 8
-
-// syntheticErrorFloor returns the configured synthetic-error floor for the
-// current loop config. Negative values return the default. 0 means disabled.
-func (al *AgentLoop) syntheticErrorFloor() int {
-	cfg := al.GetConfig()
-	n := cfg.Gateway.TurnSyntheticErrorFloor
-	if n < 0 {
-		return defaultSyntheticErrorFloor
-	}
-	return n
-}
-
-// recordSyntheticDeny increments the turn's consecutive-synthetic-deny counter
-// and returns true when the turn should be aborted (FR-084). It also appends a
-// system message to the session documenting the abort reason so the LLM can
-// observe it on the next prompt.
+// abortTurnForToolDenialBudget is the ONE place a turn is aborted for
+// exhausting its aggregate per-turn tool-denial budget (ADR-058 FR-058-13,
+// turnDenialBudget = 10). All four call sites that can exhaust the budget —
+// the quarantine-gate replay and the three permission_denied emit sites —
+// route through this single function rather than each constructing its own
+// abort, so the audit entry and the abort reason can never diverge between
+// them (the same "one renderer" discipline this ADR uses for the denial
+// payload itself).
 //
-// Returns (shouldAbort bool, abortMsg string). The caller is responsible for
-// appending abortMsg to messages and calling abortTurn if shouldAbort is true.
-func (al *AgentLoop) recordSyntheticDeny(ts *turnState) (shouldAbort bool, abortMsg string) {
-	ts.syntheticErrorCount++
-	floor := al.syntheticErrorFloor()
-	if floor <= 0 || ts.syntheticErrorCount < floor {
-		return false, ""
-	}
-	msg := fmt.Sprintf(
-		`{"role":"system","type":"turn_aborted","reason":"synthetic_error_loop","count":%d}`,
-		ts.syntheticErrorCount,
-	)
-	if !ts.opts.NoHistory {
-		ts.agent.Sessions.AddMessage(ts.sessionKey, "system", msg)
-		if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
-			logger.WarnCF("agent", "FR-084: failed to persist turn_aborted message",
-				map[string]any{"session_key": ts.sessionKey, "error": err.Error()})
-		}
-	}
-	// CRIT-6 + typed-Decision/Event migration: route through audit.EmitEntry
-	// so Log failure bumps the audit-skipped counter; use the typed
-	// EventTurnAbortedSyntheticLoop and DecisionDeny constants.
+// Replaces FR-084's now-deleted per-turn synthetic-deny helper, which
+// emitted its own audit entry immediately before calling abortTurn (§10.A3,
+// spec §3.3): this does the same, with the new
+// audit.EventTurnAbortedToolDenialBudget event in place of FR-084's retired
+// audit event constant.
+func (al *AgentLoop) abortTurnForToolDenialBudget(ts *turnState, tool, reason string, denialsUsed int) (turnResult, error) {
 	audit.EmitEntry(al.auditLogger, &audit.Entry{
-		Event:     audit.EventTurnAbortedSyntheticLoop,
+		Event:     audit.EventTurnAbortedToolDenialBudget,
 		Decision:  audit.DecisionDeny,
 		AgentID:   ts.agentID,
+		Tool:      tool,
 		SessionID: ts.sessionKey,
 		User:      ts.auditUser(), // FR-017
 		Details: map[string]any{
-			"turn_id":               ts.turnID,
-			"synthetic_error_count": ts.syntheticErrorCount,
-			"floor":                 floor,
+			"turn_id":       ts.turnID,
+			"denial_reason": reason,
+			"denials_used":  denialsUsed,
+			"budget":        turnDenialBudget,
 		},
 	})
-	logger.WarnCF("agent", "FR-084: synthetic-error floor reached — aborting turn",
+	logger.WarnCF("agent", "ADR-058: aggregate tool-denial budget exhausted — aborting turn",
 		map[string]any{
-			"agent_id":    ts.agentID,
-			"session_key": ts.sessionKey,
-			"count":       ts.syntheticErrorCount,
-			"floor":       floor,
+			"agent_id":     ts.agentID,
+			"session_key":  ts.sessionKey,
+			"tool":         tool,
+			"reason":       reason,
+			"denials_used": denialsUsed,
+			"budget":       turnDenialBudget,
 		})
-	return true, msg
+	return al.abortTurn(ts, "tool_denial_budget", toolDenialAbortReason(tool, reason, ts.agentID, turnDenialBudget))
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {
@@ -9405,6 +10850,81 @@ func (al *AgentLoop) assembleMessages(
 	)
 }
 
+// sentToolSurfaceTokens estimates the tokens the tool surface ACTUALLY costs on
+// the wire for this agent+session — the non-evictable overhead history has to
+// fit around.
+//
+// This is deliberately NOT agent.Tools.ToProviderDefs(): that returns a full
+// JSON schema for EVERY registered tool, but under a compressed manifest only
+// three groups are sent (buildCompressedToolDefs, tool_manifest.go):
+//
+//   - ManifestFull  — full schema, every turn
+//   - ManifestInfra — full schema (load_tool is always callable)
+//   - ManifestLazy  — full schema ONLY while loaded this session; otherwise it
+//     is one line in the compact manifest block, ~25x cheaper
+//
+// Charging every lazy tool a full schema made the budget shrink with the size
+// of the CATALOG rather than the size of the REQUEST. With ~15 MCP servers
+// connected (150-450 lazy tools, none of them sent) the over-count exceeds the
+// whole context window, driving the history budget negative: the trimmer would
+// evict every turn, still not fit, and stop at its FR-003 floor keeping only
+// the last user message — silently, on every turn. TestSwitchTime_EndToEnd
+// caught the small-scale version of this at a 20k window.
+//
+// The manifest block is MEASURED via the same builder the turn uses, not
+// approximated by a per-entry constant, so the two cannot drift.
+//
+// When the compressed manifest is off every tool really is sent, so the whole
+// registry is the correct answer and we fall back to it.
+func (al *AgentLoop) sentToolSurfaceTokens(agent *AgentInstance, sessionKey string) int {
+	if agent == nil || agent.Tools == nil {
+		return 0
+	}
+	all := agent.Tools.GetAll()
+
+	cfg := al.GetConfig()
+	if cfg == nil || !cfg.Tools.Manifest.Compressed {
+		// Uncompressed: every tool is sent as a full def.
+		return estimateToolDefsTokens(agent.Tools.ToProviderDefs())
+	}
+
+	loaded := al.sessionLoadedTools(sessionKey)
+
+	sent := make([]tools.Tool, 0, len(all))
+	for _, t := range all {
+		switch tools.ToolManifestTier(t.Name()) {
+		case tools.ManifestFull, tools.ManifestInfra:
+			sent = append(sent, t)
+		case tools.ManifestLazy:
+			if loaded[t.Name()] {
+				sent = append(sent, t)
+			}
+		}
+	}
+
+	total := estimateToolDefsTokens(tools.ToolsToProviderDefs(sent))
+	// The compact block for the lazy tools that are NOT loaded. Measured with
+	// the real builder: same input shape the turn passes, same filtering.
+	if note := tools.BuildCompressedManifest(all, loaded); note != "" {
+		total += estimateMessageTokens(providers.Message{Role: "system", Content: note})
+	}
+
+	// Loud, non-fatal: if the surface alone rivals the window, the trimmer will
+	// bottom out on its floor and the agent will look like it lost its memory
+	// for no visible reason. Name the numbers so that is diagnosable from logs.
+	if window := agent.ContextWindow; window > 0 && total > window/2 {
+		logger.WarnCF("agent", "tool definitions occupy over half the context window; "+
+			"history retention will be severely reduced", map[string]any{
+			"agent_id":          agent.ID,
+			"tool_surface_toks": total,
+			"context_window":    window,
+			"tools_registered":  len(all),
+			"tools_sent":        len(sent),
+		})
+	}
+	return total
+}
+
 // evictionTotal counts successful windowTrim evictions (FR-018,
 // context_eviction_total). Exported for test assertions.
 var evictionTotal atomic.Int64
@@ -9430,6 +10950,9 @@ var skipAdvanceTotal atomic.Int64
 //
 // Returns a compressionResult with DroppedMessages/RemainingMessages for
 // event emission, and ok=true when eviction actually occurred.
+//
+// The tool-surface term is what the turn ACTUALLY SENDS, not the whole
+// registry — see sentToolSurfaceTokens.
 func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compressionResult, bool) {
 	window := agent.Sessions.GetHistory(sessionKey)
 	if len(window) <= 1 {
@@ -9437,8 +10960,7 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 		return compressionResult{NothingToTrim: true}, false
 	}
 
-	toolDefs := agent.Tools.ToProviderDefs()
-	toolDefsTokens := estimateToolDefsTokens(toolDefs)
+	toolDefsTokens := al.sentToolSurfaceTokens(agent, sessionKey)
 
 	// Recall span tokens — updated after a potential drop below.
 	recallSpan := al.activeRecallSpan(sessionKey)
@@ -10241,6 +11763,18 @@ func (al *AgentLoop) handleCommand(
 		return reply, handled
 	}
 
+	// /goal and /loop (ADR-049 D6, Gap #8/r2 origin gating) — checked before
+	// registered-command dispatch so a matched verb can answer synchronously
+	// (status/clear/stop) or rewrite the turn (goal set) exactly like the
+	// hooks above. A non-user-initiated turn's "/goal"/"/loop" text is NOT
+	// matched by either hook and falls through to normal dispatch/passthrough.
+	if matched, handled, reply := al.applyGoalCommandPrompt(ctx, msg, agent, opts); matched {
+		return reply, handled
+	}
+	if matched, handled, reply := al.applyLoopCommandPrompt(ctx, msg, agent, opts); matched {
+		return reply, handled
+	}
+
 	if al.cmdRegistry == nil {
 		return "", false
 	}
@@ -10504,7 +12038,13 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 		rt.SessionID = func() string { return sessionKey }
 	}
 
-	// Inject the agent loop so CancelActiveTurn can call InterruptSession.
+	// Inject the agent loop so CancelActiveTurn can call
+	// RequestCancelForSession (ADR-057 FR-100/FR-041: InterruptSession, the
+	// symbol this comment used to name, was retired by U8's collapse of the
+	// four legacy interrupt entry points behind Interrupt/InterruptSessionHard
+	// plus a mandatory InterruptScope; CancelActiveTurn's own call has always
+	// gone through RequestCancelForSession, pkg/commands/runtime.go, never
+	// direct to an Interrupt* function).
 	rt = rt.WithAgentLoop(al)
 
 	return rt
@@ -10881,14 +12421,30 @@ func (al *AgentLoop) loadToolApprover() PolicyApprover {
 // pkg/agent but cannot construct a *turnState — without spinning up a
 // WebSocket connection. See pkg/gateway/ws_approval_grants_test.go.
 //
-// Identity: sessionID MUST be the transcript-store session ID
-// (turnState.transcriptSessionID), NOT the session-store scope key
-// (turnState.sessionKey). transcriptSessionID is the identity
-// ApprovalGrantStore.Inherit and ClearSession already use, and the ONE
-// identity shared across a delegation chain: subturn.go's spawnSubTurn gives
-// every child turn its own distinct, per-child SessionKey but always threads
-// the PARENT's TranscriptSessionID through unchanged, so a grant recorded
-// under sessionKey would never be visible to a delegated child turn.
+// Identity (ADR-057 FR-031/FR-080, W10b — corrected from the pre-ADR-057
+// description this comment used to carry): sessionID MUST be the caller's
+// own ACTING session id — turnState.transcriptSessionID — NOT the
+// session-store scope key (turnState.sessionKey) and NOT the ROUTING
+// identity (turnState.routingSessionID, W4). This is a narrower requirement
+// than the pre-ADR-057 invariant it replaces: before D1, a delegated child's
+// transcriptSessionID was always threaded through unchanged from its parent
+// (subturn.go's spawnSubTurn), so "the one identity shared across a
+// delegation chain" and "the child's own identity" were the same value and
+// this distinction did not exist. Under ADR-057 the child gets its OWN
+// distinct, store-backed transcriptSessionID (FR-005/FR-007/FR-009), and
+// ApprovalGrantStore.InheritFrom (pkg/security/approvalgrants.go, U17a)
+// copies grants at spawn time INTO exactly that child key — {dstSessionID:
+// childID, dstAgentID} — never into the routing/root id. A grant read here
+// keyed on anything other than the calling turn's own transcriptSessionID
+// (in particular, keying on routingSessionID, which for a grandchild equals
+// the ROOT's session id) would silently miss every grant InheritFrom wrote
+// for THIS turn and force a real human through the 300s interactive
+// approval wait on every delegated call — the exact failure class FR-031's
+// two-key InheritFrom redesign exists to prevent on the write side; this is
+// its read-side half (see pkg/security/approvalgrants_adr057_test.go for the
+// write side, TestCheckGrantOrRequestApproval_UsesActingSessionKey below for
+// this one). ClearSession (session teardown, U17b) uses the same key for the
+// same reason: it is the acting session's own bucket, not a shared one.
 func (al *AgentLoop) CheckGrantOrRequestApproval(
 	ctx context.Context,
 	sessionID, agentID, toolName, toolCallID, turnID string,

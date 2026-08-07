@@ -119,7 +119,7 @@ func TestProcessTaskDirect_ExternalCLIWorker_DispatchesViaExternalCLI(t *testing
 	// workspace's id here. SOUL.md above is still read from agent.Home
 	// (workspace) — persona resolution is a separate, unaffected mechanism
 	// from working-directory resolution.
-	wantWorkDir, wsErr := resolveTurnWorkDirOrRefuse("ext-agent", "")
+	wantWorkDir, wsErr := resolveTurnWorkDirOrRefuse(context.Background(), "ext-agent", workspace, "")
 	if wsErr != nil {
 		t.Fatalf("resolveTurnWorkDirOrRefuse: %v", wsErr)
 	}
@@ -181,8 +181,15 @@ func TestTaskExecutor_ExternalCLIWorker_CompletesViaStatusMarker(t *testing.T) {
 
 	go func() {
 		fr.InjectEvent(runner.RunEvent{
-			Kind:   runner.EventKindOutput,
-			Output: &runner.OutputEvent{Text: "task finished by external CLI\nTASK_STATUS: success"},
+			Kind: runner.EventKindOutput,
+			// ADR-052 FR-035: the evidence-marker gate (task_executor.go's
+			// finishTaskRun, ahead of parseTaskCompletionSignal) requires a
+			// "[goal:evidence] ..." line immediately before TASK_STATUS —
+			// without it this bare claim would be re-prompted instead of
+			// completing the task from the marker.
+			Output: &runner.OutputEvent{
+				Text: "task finished by external CLI\n[goal:evidence] confirmed the external run completed\nTASK_STATUS: success",
+			},
 		})
 		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
 		fr.Cancel()

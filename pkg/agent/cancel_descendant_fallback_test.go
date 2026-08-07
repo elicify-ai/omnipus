@@ -97,6 +97,7 @@ func TestRequestCancel_RootAlreadyClaimed_FallsBackToLiveDescendant(t *testing.T
 	parentTS := &turnState{
 		turnID:              "turn-parent-already-claimed",
 		transcriptSessionID: sessionID,
+		routingSessionID:    session.RoutingSessionID(sessionID),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 		transcriptStore:     store,
@@ -111,6 +112,7 @@ func TestRequestCancel_RootAlreadyClaimed_FallsBackToLiveDescendant(t *testing.T
 	childTS := &turnState{
 		turnID:              "turn-child-live-unclaimed",
 		transcriptSessionID: sessionID,
+		routingSessionID:    session.RoutingSessionID(sessionID),
 		depth:               1,
 		parentTurnID:        "turn-parent-already-claimed",
 		finishedChan:        make(chan struct{}),
@@ -198,6 +200,7 @@ func TestClaimAnyTurnForSession_NoMatch_ReturnsNil(t *testing.T) {
 	ts := &turnState{
 		turnID:              "unrelated",
 		transcriptSessionID: "session-other",
+		routingSessionID:    session.RoutingSessionID("session-other"),
 		finishedChan:        make(chan struct{}),
 	}
 	al.activeTurnStates.Store(ts.turnID, ts)
@@ -215,6 +218,7 @@ func TestClaimAnyTurnForSession_OnlyAlreadyClaimed_ReturnsNil(t *testing.T) {
 	ts := &turnState{
 		turnID:              "already-claimed",
 		transcriptSessionID: "session-x",
+		routingSessionID:    session.RoutingSessionID("session-x"),
 		finishedChan:        make(chan struct{}),
 	}
 	require.True(t, ts.ClaimCancel())
@@ -233,6 +237,7 @@ func TestClaimAnyTurnForSession_OnlyFinished_ReturnsNil(t *testing.T) {
 	ts := &turnState{
 		turnID:              "finished-unclaimed",
 		transcriptSessionID: "session-y",
+		routingSessionID:    session.RoutingSessionID("session-y"),
 		finishedChan:        make(chan struct{}),
 	}
 	ts.isFinished.Store(true)
@@ -250,6 +255,7 @@ func TestClaimAnyTurnForSession_LiveUnclaimedMatch_Claims(t *testing.T) {
 	ts := &turnState{
 		turnID:              "live-unclaimed",
 		transcriptSessionID: "session-z",
+		routingSessionID:    session.RoutingSessionID("session-z"),
 		finishedChan:        make(chan struct{}),
 	}
 	al.activeTurnStates.Store(ts.turnID, ts)

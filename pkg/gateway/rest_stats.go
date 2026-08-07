@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -91,7 +89,18 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 
 	// ListAllSessions merges the shared store (new sessions) with all per-agent
 	// legacy stores, deduplicates, and returns a slice of *UnifiedMeta.
-	allSessions, errs := a.agentLoop.ListAllSessions()
+	//
+	// ADR-057 U9 (FR-092/FR-098) made this call paginated and hierarchy-aware.
+	// This endpoint MUST pass flat=true: per FR-104, a roots-only listing
+	// would silently drop delegated children's token spend from both the
+	// by-agent totals below (line ~111) and the by-model breakdown (line
+	// ~125), under-reporting real spend with a green build. limit=0/offset=0
+	// mean "no limit, from the start" (FR-098(b)), matching this handler's
+	// pre-pagination "aggregate over every session, every store" behavior
+	// exactly — see HandleActivity/HandleStorageStats (pkg/gateway/rest.go,
+	// U18) for the same flat=true idiom this mirrors.
+	page, errs := a.agentLoop.ListAllSessions(0, 0, "", true)
+	allSessions := page.Sessions
 	for _, e := range errs {
 		slog.Warn("rest: token stats: partial session list error", "error", e)
 	}

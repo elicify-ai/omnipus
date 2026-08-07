@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Regression tests for concurrent PATCH + task.update on same task.
 //
 // Sprint 2 changes:
@@ -132,7 +130,6 @@ func TestTaskStatus_TypedConstants(t *testing.T) {
 	}{
 		{"inbox", task.StatusInbox, "inbox"},
 		{"next", task.StatusNext, "next"},
-		{"planning", task.StatusPlanning, "planning"},
 		{"in_progress", task.StatusInProgress, "in_progress"},
 		{"blocked", task.StatusBlocked, "blocked"},
 		{"done", task.StatusDone, "done"},
@@ -163,13 +160,13 @@ func TestTaskStatus_TypedConstants(t *testing.T) {
 
 // ── PATCH status vocabulary ───────────────────────────────────────────────────
 
-// TestTask_PATCH_AllStatuses_Allowed asserts that each of the 7 unified statuses
+// TestTask_PATCH_AllStatuses_Allowed asserts that each of the 6 unified statuses
 // is reachable via legal lifecycle transitions, and that `blocked` is NOT directly
 // settable via PATCH (it is a derived side-state — Fix #6 gateway seam guard).
 //
-// Sprint 2 lifecycle: inbox → next → planning | in_progress → done | failed.
-// inbox → failed is also allowed directly. `blocked` is derived from blocked_by
-// deps and is rejected at the gateway seam with 400.
+// ADR-051 D5 lifecycle: inbox → next → in_progress → done | failed. inbox →
+// failed is also allowed directly. `blocked` is derived from blocked_by deps
+// and is rejected at the gateway seam with 400.
 //
 // Differentiation: testing two different paths proves neither is hardcoded.
 //
@@ -183,14 +180,6 @@ func TestTask_PATCH_AllStatuses_Allowed(t *testing.T) {
 	wNext := patchTask(t, api, tskNext.Id, `{"status":"next","description":"ready to go"}`)
 	assert.Equal(t, http.StatusOK, wNext.Code,
 		"PATCH inbox→next must return 200; body=%s", wNext.Body.String())
-
-	// inbox → next → planning.
-	tskPlanning := createTaskViaAPI(t, api, "Task_planning", wsID)
-	wPN := patchTask(t, api, tskPlanning.Id, `{"status":"next","description":"ready"}`)
-	require.Equal(t, http.StatusOK, wPN.Code, "inbox→next; body=%s", wPN.Body.String())
-	wPlanning := patchTask(t, api, tskPlanning.Id, `{"status":"planning"}`)
-	assert.Equal(t, http.StatusOK, wPlanning.Code,
-		"PATCH next→planning must return 200; body=%s", wPlanning.Body.String())
 
 	// inbox → next → in_progress (directly settable, no /start required in Sprint 2).
 	tskInProg := createTaskViaAPI(t, api, "Task_in_progress", wsID)
@@ -235,6 +224,17 @@ func TestTask_PATCH_AllStatuses_Allowed(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, wWaiting.Code,
 		"PATCH status=waiting must return 400 (removed in Sprint 2, use 'blocked' instead); body=%s",
 		wWaiting.Body.String())
+
+	// PATCH with removed "planning" → 400 (ADR-051 D5: 7-state → 6-state,
+	// `planning` removed and existing tasks remapped to `next`; canary
+	// catching a regression that re-introduces it).
+	tskPlanning := createTaskViaAPI(t, api, "OldPlanningTask", wsID)
+	wPlanningNext := patchTask(t, api, tskPlanning.Id, `{"status":"next","description":"ready"}`)
+	require.Equal(t, http.StatusOK, wPlanningNext.Code, "inbox→next; body=%s", wPlanningNext.Body.String())
+	wPlanning := patchTask(t, api, tskPlanning.Id, `{"status":"planning"}`)
+	assert.Equal(t, http.StatusBadRequest, wPlanning.Code,
+		"PATCH status=planning must return 400 (removed in ADR-051 D5, not a valid status); body=%s",
+		wPlanning.Body.String())
 
 	// Differentiation: in_progress (valid) and active (invalid) get different codes.
 	assert.NotEqual(t, wInProg.Code, wActive.Code,

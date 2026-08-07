@@ -6,10 +6,29 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
+
+// handoffTranscriptWriteFailures counts how many times HandoffTool's or
+// ReturnToDefaultTool's audit-trail AppendTranscriptStrict write failed
+// (ADR-057 FR-002: every AppendTranscript invocation site must surface the
+// now-possible strict-write error as a counter increment plus a WARN naming
+// the session id — see the spec's "conversion boundary" table, handoff.go
+// row). The write itself stays best-effort by design (Execute step 7's doc
+// comment): a failed audit entry must never fail the handoff/return-to-default
+// operation, so this counter is the only durable, operator-visible signal
+// that it happened. Exposed via HandoffTranscriptWriteFailures() for tests
+// and operator tooling.
+var handoffTranscriptWriteFailures atomic.Uint64
+
+// HandoffTranscriptWriteFailures returns the current value of the
+// omnipus_handoff_transcript_write_failures_total counter (FR-002).
+func HandoffTranscriptWriteFailures() uint64 {
+	return handoffTranscriptWriteFailures.Load()
+}
 
 // ErrAlreadyActive is returned by SessionStore.SwitchAgent when the session is
 // already assigned to the requested agent. Treat as a no-op success.
@@ -66,8 +85,14 @@ type HandoffSessionStore interface {
 	// ReadTranscript returns all transcript entries for the session.
 	ReadTranscript(sessionID string) ([]session.TranscriptEntry, error)
 
-	// AppendTranscript appends a single entry to the session transcript.
-	AppendTranscript(sessionID string, entry session.TranscriptEntry) error
+	// AppendTranscriptStrict appends a single entry to the session
+	// transcript, returning a non-nil error (and creating nothing on disk)
+	// when sessionID does not name a real, store-backed session (ADR-057
+	// FR-001/FR-002 — pkg/session/unified_api.go:69). Converted from the
+	// lenient AppendTranscript (ADR-057 U22, W3c): both call sites below
+	// already had an error branch, so this is a runtime-behavior change at
+	// an existing check, not a new one.
+	AppendTranscriptStrict(sessionID string, entry session.TranscriptEntry) error
 }
 
 // HandoffTool transfers the active session to a specialist agent.
@@ -202,7 +227,7 @@ func (t *HandoffTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	// Step 7: Log handoff event in transcript as an audit trail (FR-016).
 	currentAgentID := ToolAgentID(ctx)
 	handoffContent := fmt.Sprintf("Handoff: %s → %s. Context: %s", currentAgentID, agentName, contextMsg)
-	appendErr := t.sessionStore.AppendTranscript(sessionID, session.TranscriptEntry{
+	appendErr := t.sessionStore.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
 		ID:   fmt.Sprintf("handoff-%d", time.Now().UnixNano()),
 		Type: session.EntryTypeSystem,
 		Role: "system",
@@ -214,6 +239,11 @@ func (t *HandoffTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		Timestamp: time.Now().UTC(),
 	})
 	if appendErr != nil {
+		// FR-002: surface the now-possible strict-write error as a counter
+		// increment plus a WARN naming the session id — this remains
+		// best-effort (the handoff itself already succeeded above), but the
+		// failure must no longer be invisible.
+		handoffTranscriptWriteFailures.Add(1)
 		slog.Warn("handoff: could not write audit entry to transcript", "session", sessionID, "error", appendErr)
 	}
 
@@ -383,7 +413,7 @@ func (t *ReturnToDefaultTool) Execute(ctx context.Context, args map[string]any) 
 
 	// Log the return event as an audit trail (FR-016).
 	currentAgentID := ToolAgentID(ctx)
-	appendErr := t.sessionStore.AppendTranscript(sessionID, session.TranscriptEntry{
+	appendErr := t.sessionStore.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
 		ID:        fmt.Sprintf("return-%d", time.Now().UnixNano()),
 		Type:      session.EntryTypeSystem,
 		Role:      "system",
@@ -392,6 +422,10 @@ func (t *ReturnToDefaultTool) Execute(ctx context.Context, args map[string]any) 
 		Timestamp: time.Now().UTC(),
 	})
 	if appendErr != nil {
+		// FR-002: surface the now-possible strict-write error as a counter
+		// increment plus a WARN naming the session id — best-effort, same
+		// as HandoffTool.Execute's audit write above.
+		handoffTranscriptWriteFailures.Add(1)
 		slog.Warn("handoff: could not write audit entry to transcript", "session", sessionID, "error", appendErr)
 	}
 

@@ -67,6 +67,8 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       soul: '',
       timeout_seconds: 60,
       max_tool_iterations: 20,
+      // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
+      memory_enabled: true,
     } satisfies Agent
 
     expect(mock.id).toBe('mia')
@@ -87,6 +89,8 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       soul: '',
       timeout_seconds: 60,
       max_tool_iterations: 20,
+      // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
+      memory_enabled: true,
     } satisfies Agent
 
     expect(mock.type).toBe('Main')
@@ -113,10 +117,10 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
     expect(mock.status).toBe('inbox')
   })
 
-  it('Task with 7-state status satisfies interface', () => {
-    // Verify each of the 7 unified statuses is valid
-    const statuses: Task['status'][] = ['inbox', 'next', 'planning', 'in_progress', 'blocked', 'done', 'failed']
-    expect(statuses).toHaveLength(7)
+  it('Task with 6-state status satisfies interface', () => {
+    // Verify each of the 6 unified statuses is valid (ADR-051 D5 removed `planning`)
+    const statuses: Task['status'][] = ['inbox', 'next', 'in_progress', 'blocked', 'done', 'failed']
+    expect(statuses).toHaveLength(6)
 
     const mock = {
       id: '550e8400-e29b-41d4-a716-446655440001',

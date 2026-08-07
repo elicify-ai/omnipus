@@ -49,6 +49,8 @@ func FuzzIsCarveOut(f *testing.F) {
 		filepath.Join(home, "agents", "x"),
 		filepath.Join(home, "workspaces"),
 		filepath.Join(home, "workspaces", "x"),
+		filepath.Join(home, "entities"),
+		filepath.Join(home, "entities", "agents", "x.json"),
 	}
 
 	seeds := []string{

@@ -37,6 +37,10 @@ import { GenericToolCall } from './tools/GenericToolCall'
 import { WebServeBlock } from './tools/WebServeUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
 import { RateLimitIndicator } from './RateLimitIndicator'
+import { GoalIndicator } from './GoalIndicator'
+import { GoalPillTray } from './GoalPillTray'
+import { GoalThreadTailCards } from './GoalThreadTailCards'
+import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
 import { AgentPicker } from './composer/AgentPicker'
 import { ModelPicker } from './composer/ModelPicker'
@@ -62,7 +66,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { shouldRenderSubagentSpan, shouldRenderToolCall } from '@/lib/toolVisibility'
+import { shouldRenderSubagentSpan, shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
@@ -485,7 +489,27 @@ function resolveSpanAgentType(span: SubagentSpan, agents: Agent[]): '3p' | 'nati
 // useMessage().id corresponds to the store message's id (set in omnipus-runtime convertMessage).
 export function SubagentSpansRenderer() {
   const message = useMessage()
-  const messages = useChatStore((s) => s.messages)
+  // Perf (chat UI freeze under heavy subagent/delegation
+  // activity): select the ONE message by id from `messagesById` instead of
+  // subscribing to the whole `messages` array + `.find()`ing it every
+  // render. `messages` gets a brand-new array identity on every WS frame
+  // (bucketToForeground rebuilds it every bucket mutation), so the old
+  // `useChatStore((s) => s.messages)` re-rendered this component on every
+  // frame of the ENTIRE turn, not just frames touching this message; the
+  // `.find()` then re-scanned the whole array on top of that. `messagesById`
+  // returns the SAME object reference across renders unless THIS message
+  // was the one touched by the last mutation (Immer structural sharing —
+  // see ChatStore.messagesById's doc comment), so Zustand's default
+  // Object.is equality correctly skips re-rendering otherwise. The `??`
+  // fallback is a defensive O(N) scan — mirrors attachStepToSpan's
+  // established "O(1) lookup first, O(N) fallback" idiom (src/store/chat.ts)
+  // — for the narrow case of a hand-rolled test fixture that sets `messages`
+  // on the store directly without also setting `messagesById`; real app
+  // flows always keep the two in sync (bucketToForeground derives both from
+  // the same bucket, and getMessages() filters `messages` down to exactly
+  // the ids present in `messagesById`), so this fallback is never reached
+  // outside such fixtures.
+  const storeMsg = useChatStore((s) => s.messagesById[message.id] ?? s.messages.find((m) => m.id === message.id))
   // Fix 2 (user-approved 2026-07-16): delegation cards are hidden from the
   // thread by default — verbose chat is the only way to bring them back
   // here (shouldRenderSubagentSpan, src/lib/toolVisibility.ts). Selector
@@ -497,7 +521,6 @@ export function SubagentSpansRenderer() {
   // elsewhere) — resolves each span's agentId to native/3p so a running
   // external-CLI delegate's card can show the "no live progress" notice.
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
-  const storeMsg = messages.find((m) => m.id === message.id)
   const spans = (storeMsg?.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
   if (spans.length === 0) return null
   return (
@@ -1042,6 +1065,9 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
 function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; liteMode: boolean }) {
   const { skills, commandLabels } = useSkillChipData()
+  // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default,
+  // verbose-only inline) — same store read as every other verbose-gated row.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   return (
     <div
       data-testid="virtualized-message-list"
@@ -1049,6 +1075,15 @@ function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; lit
     >
       <div className="max-w-4xl mx-auto w-full">
         {messages.map((msg) => {
+          // ADR-049 D2/SD-C10: a persisted `Message.type: judge_verdict`
+          // entry never renders via the normal role-based rows — it is
+          // panel-only by default (ActivityPanel's judge row, fed live by
+          // the judge_verdict WS frame — see chat.ts), inline in the thread
+          // ONLY under verbose chat.
+          if (msg.type === 'judge_verdict') {
+            if (!shouldRenderJudgeVerdictInThread(verboseChatEnabled) || !msg.verdict) return null
+            return <JudgeVerdictThreadCard key={msg.id} verdict={msg.verdict} />
+          }
           if (msg.role === 'user')
             return (
               <VirtualUserMessageRow
@@ -1152,6 +1187,8 @@ function VirtualizedMessageListInner({
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const { skills, commandLabels } = useSkillChipData()
+  // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default, verbose-only inline).
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
 
   // Separate the live streaming message from completed history.
   const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
@@ -1168,6 +1205,11 @@ function VirtualizedMessageListInner({
   const virtualItems = virtualizer.getVirtualItems()
 
   const rowForMessage = (msg: ChatMessage) => {
+    // ADR-049 D2/SD-C10: see PlainMessageList's identical branch above.
+    if (msg.type === 'judge_verdict') {
+      if (!shouldRenderJudgeVerdictInThread(verboseChatEnabled) || !msg.verdict) return null
+      return <JudgeVerdictThreadCard verdict={msg.verdict} />
+    }
     if (msg.role === 'user')
       return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
@@ -1262,7 +1304,19 @@ function AssistantMessage() {
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const message = useMessage()
-  const messages = useChatStore((s) => s.messages)
+  // Perf (chat UI freeze under heavy subagent/delegation
+  // activity): select the ONE message by id from `messagesById` instead of
+  // subscribing to the whole `messages` array + `.find()`ing it every
+  // render — see SubagentSpansRenderer's identical fix above (and
+  // ChatStore.messagesById's doc comment) for the full rationale. This is
+  // the component that renders the live streaming bubble, so it used to
+  // re-render (and re-scan `messages`) on literally every WS frame of the
+  // whole turn regardless of which message the frame actually touched. The
+  // `??` fallback is a defensive O(N) scan for a hand-rolled test fixture
+  // that sets `messages` directly without `messagesById` — see
+  // SubagentSpansRenderer's identical fallback comment for why it's never
+  // reached in real app flows.
+  const storeMsg = useChatStore((s) => s.messagesById[message.id] ?? s.messages.find((m) => m.id === message.id))
   // Fix 3 (2026-07-16): needed to judge tool-call/span emptiness on VISIBLE
   // content only — see the showEmptyPlaceholder computation below.
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
@@ -1270,7 +1324,6 @@ function AssistantMessage() {
   // Prefer the per-message agentId (set during transcript replay) over the
   // session-level activeAgentId. This makes multi-agent transcripts show the
   // correct per-turn agent label instead of the current session agent.
-  const storeMsg = messages.find((m) => m.id === message.id)
   const messageAgentId = storeMsg?.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)
   // Fallback to the raw agentId string if the agent isn't in the list yet
@@ -2153,8 +2206,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                       longest current label; truncate guards outliers. */}
                   <span className="w-[9.5rem] shrink-0 truncate font-mono text-xs text-[var(--color-accent)]">{item.label}</span>
                   <span className="text-[11px] flex-1 min-w-0 truncate">{item.description}</span>
-                  {/* FR-014/R3: show argument_hint as muted help text for skills */}
-                  {item.section === 'skills' && item.argumentHint && (
+                  {/* FR-014/R3: show argument_hint as muted help text for skills;
+                      SD-C7 extends this to `delivery: agent` commands (e.g. /goal, /loop). */}
+                  {(item.section === 'skills' || item.section === 'commands') && item.argumentHint && (
                     <span className="ml-auto text-[10px] text-[var(--color-muted)] opacity-70 font-mono shrink-0">
                       {item.argumentHint}
                     </span>
@@ -2684,12 +2738,27 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const rateLimitEvent = useChatStore((s) => s.rateLimitEvent)
   const clearRateLimitEvent = useChatStore((s) => s.clearRateLimitEvent)
+  // ADR-049 D6/US-12/SD-C9: loop indicator state, same session-scoped
+  // foreground field as rateLimitEvent above. (Goal pill state is read
+  // directly by GoalPillTray via its own useChatStore subscription — FE-1.)
+  const loopStatus = useChatStore((s) => s.loopStatus ?? null)
   const setMessages = useChatStore((s) => s.setMessages)
   const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
   const attachedTaskTitle = useSessionStore((s) => s.attachedTaskTitle)
-  // For the ARIA live region: track the last assistant message id for screen reader announcements
+  // For the ARIA live region: track the last assistant message id for screen reader announcements.
+  // Select the pre-derived single id from the store (companion to `messagesById`)
+  // rather than subscribing to the whole `messages` array + reversing/scanning it per
+  // frame — the id only changes when the LAST assistant message itself changes (e.g. a
+  // new turn starts), not on every WS frame of the turn. The full message object (for
+  // the status read below) is then looked up via `messagesById[id]` — the same
+  // O(1)-lookup idiom AssistantMessage/SubagentSpansRenderer use.
   const messages = useChatStore((s) => s.messages)
-  const lastAssistantMessage = [...messages].reverse().find((m) => m.role === 'assistant')
+  const lastAssistantMessageId = useChatStore((s) => s.lastAssistantMessageId)
+  const lastAssistantMessage = useChatStore((s) =>
+    lastAssistantMessageId === null
+      ? undefined
+      : s.messagesById[lastAssistantMessageId] ?? s.messages.find((m) => m.id === lastAssistantMessageId),
+  )
   const lastAnnouncedIdRef = useRef<string | null>(null)
   const shouldAnnounce = lastAssistantMessage?.id != null && lastAssistantMessage.id !== lastAnnouncedIdRef.current
 
@@ -2841,10 +2910,34 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
             </div>
           )}
 
+          {/* Goal/loop indicator — ADR-049 D6/US-12/SD-C9: the goal pill was
+              RELOCATED to the bottom-right GoalPillTray (FE-1, ADR-053 US-14);
+              this above-composer slot now carries LOOP status only. Pass
+              goalStatus=null so GoalIndicator's goal branch is dormant.
+              GoalIndicator renders nothing when loopStatus is also absent. */}
+          {loopStatus && (
+            <div className="px-4 space-y-2 pb-2">
+              <GoalIndicator goalStatus={null} loopStatus={loopStatus} />
+            </div>
+          )}
+
+          {/* Goal echo / amendment cards — ADR-053 FE-8: the compiled goal is
+              echoed IN CHAT (no form/modal) when a pill is in `queued` state
+              (newly compiled, awaiting the user's chat confirmation). Renders
+              nothing when no queued pills exist. */}
+          <GoalThreadTailCards />
+
           {/* Composer — centered, ChatGPT-style floating layout. The context
               row and ActivityBar pills render bare on the shell (above /
               below the card); only the input surface reads as a card. */}
           <div className="relative w-full">
+            {/* Goal pill tray — ADR-053 FE-1: bottom-right pills, one per
+                goal-id, click-to-expand. Renders nothing when no goals are
+                active (the tray component early-returns null on an empty
+                map). Positioned just above the composer, right-aligned,
+                pointer-events-none on the tray wrapper so it never blocks
+                composer interaction (each pill re-enables pointer events). */}
+            <GoalPillTray />
             {/* Gradient fade above composer */}
             <div className="absolute -top-8 left-0 right-0 h-8 bg-gradient-to-t from-[var(--color-primary)] to-transparent pointer-events-none" />
             <div className="w-full max-w-3xl mx-auto px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">

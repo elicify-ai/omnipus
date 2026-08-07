@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package gateway — test-only exports.
 //
 // This file exposes unexported helpers to package-level tests so that tests

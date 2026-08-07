@@ -1,0 +1,106 @@
+title: PlanUpdateRequest
+description: >
+  Request body for PUT /plans/{id} (ADR-049 D1). All fields are optional;
+  only provided fields are updated. `state` drives the canonical 5-value
+  plan state machine (draft/approved/running/done/failed) — illegal
+  transitions are rejected 400 (`ErrIllegalPlanTransition`); approving with
+  no `dod` and no member-task criteria is rejected per the tiered DoD rule
+  (ADR D5, Round-1 Grill Reconciliation R1).
+type: object
+minProperties: 1
+additionalProperties: false
+properties:
+  title:
+    type: string
+    minLength: 1
+    maxLength: 200
+    description: New plan title.
+    example: "v1.0 Launch (delayed)"
+  goal:
+    type: string
+    maxLength: 2000
+    description: New plain-prose objective.
+    example: "Ship the v1.0 release with all P0 issues closed and CI green."
+  description:
+    type: string
+    maxLength: 2000
+    description: New free-form description.
+    example: "Coordinates the v1.0 release train across backend and SPA."
+  state:
+    type: string
+    enum:
+      - draft
+      - approved
+      - running
+      - done
+      - failed
+    description: >
+      Requested state transition. Validated against the canonical plan
+      state machine (Plan.yaml `state` description); illegal transitions
+      are rejected 400.
+    example: "approved"
+  owner_agent_id:
+    type: string
+    minLength: 1
+    description: Reassign plan ownership to this agent.
+    example: "jim"
+  dod:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterion.yaml
+    description: >
+      Replacement Definition of Done set (replaces the current `dod`
+      atomically).
+  bounds:
+    type: object
+    additionalProperties: false
+    description: >
+      Per-plan bounds overrides, MERGED field-by-field into the plan's
+      stored bounds. A field present here is written; a field ABSENT here
+      keeps its stored value, and omitting `bounds` entirely leaves all of
+      them untouched.
+
+
+      This is deliberately a merge and not a replacement. Under the previous
+      replace semantics any client that sent a PARTIAL bounds object
+      silently zeroed every field it did not know about — which the shipped
+      SPA plan-edit form does on every save, because it renders inputs for
+      only `plan_judge_max_rounds` and `idle_expiry_days`. Editing a plan's
+      title therefore destroyed its supervision overrides. Replacement is
+      defensible REST in the abstract; it is not defensible when a shipped
+      client provably sends a partial object.
+
+
+      Consequence to know: an individual override cannot be CLEARED AT ALL —
+      not through this endpoint and not through any other, because there is no
+      other. This is the ONLY route that writes plan bounds: there is no
+      PATCH, and no agent tool sets them. Once set, an override can only be
+      overwritten with a new value >= 1, never removed. Clearing was never
+      reliably reachable under the old semantics either (the SPA sends no
+      `bounds` key at all once every input is empty, which was — and remains —
+      a no-op), so no working client behaviour depends on it. Restoring
+      clearability requires a deliberate wire change — an explicit
+      null-per-field or a `bounds: null` reset sentinel — not a second route.
+    properties:
+      plan_judge_max_rounds:
+        type: integer
+        minimum: 1
+        example: 20
+      idle_expiry_days:
+        type: integer
+        minimum: 1
+        example: 7
+      supervision_turn_timeout_seconds:
+        type: integer
+        minimum: 1
+        description: >
+          Override of FR-021's supervision observation deadline (global
+          default `planning.supervision_turn_timeout_seconds`, 600 s).
+        example: 600
+      supervision_max_attempts:
+        type: integer
+        minimum: 1
+        description: >
+          Override of FR-022's no-correction supervision attempt ceiling
+          (global default `planning.supervision_max_attempts`, 3).
+        example: 3

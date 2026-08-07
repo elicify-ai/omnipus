@@ -449,6 +449,18 @@ func TestBootConfigRoundTrip_NewFields(t *testing.T) {
 	if len(loaded.Gateway.Users) < 1 || loaded.Gateway.Users[0].SessionTokenHash != "bcrypthash" {
 		t.Errorf("SessionTokenHash did not survive round-trip: %v", loaded.Gateway.Users)
 	}
+	// ADR-054: unlike every field checked above, cfg.Agents.List set at the top
+	// of this test does NOT survive the round-trip — AgentsConfig.List is
+	// json:"-", so SaveConfig never serializes it and LoadConfig can only ever
+	// come back empty. This was previously unasserted dead setup (the field
+	// used to round-trip before ADR-054 and nothing here checks it either
+	// way), which would have silently masked a regression that accidentally
+	// re-added `json:"list"` to AgentsConfig and reopened the config.json
+	// agents-roster round-trip this ADR structurally closes.
+	if len(loaded.Agents.List) != 0 {
+		t.Errorf("Agents.List must NOT survive SaveConfig/LoadConfig round-trip (ADR-054, json:\"-\"), got %+v",
+			loaded.Agents.List)
+	}
 }
 
 func TestBootConfigRoundTrip_RemovedKeys_Rejected(t *testing.T) {

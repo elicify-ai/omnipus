@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // REST gate test for PUT /api/v1/agents/{id}: sandbox_profile is retired
 // (ADR-035-remove-per-agent-sandbox-profile) and must be rejected loudly
 // rather than silently dropped.

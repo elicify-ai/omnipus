@@ -209,6 +209,18 @@ export function useAutoSave<T>(
   const rerunPendingRef = useRef(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Mounted-flag for late-firing fade timers: the useEffect cleanup that
+  // clears fadeTimerRef runs synchronously on unmount, but a real (not fake)
+  // timer that already started dispatching its callback at unmount time is
+  // not cancellable — clearTimeout only stops a still-pending timer. In
+  // production the setStatus call is harmless; in jsdom it dereferences a
+  // torn-down `window` and throws an unhandled ReferenceError that fails
+  // the whole vitest run. The guard makes the late callback a no-op.
+  // Initial value intentionally false — the effect below sets it true on
+  // mount. Initializing during render (`useRef(true)`) broke under React
+  // StrictMode, where effects run setup→cleanup→setup on initial mount in
+  // dev, leaving `mountedRef.current` permanently false in development.
+  const mountedRef = useRef(false)
   const latestDataRef = useRef<T>(data)
   const saveFnRef = useRef(saveFn)
   saveFnRef.current = saveFn
@@ -264,6 +276,8 @@ export function useAutoSave<T>(
       // avoid leaking setTimeouts when saves happen in quick succession.
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
       fadeTimerRef.current = setTimeout(() => {
+        if (!mountedRef.current) return
+        setStatus((s) => (s === 'saved' ? 'idle' : s))
         fadeTimerRef.current = null
         // The host environment can disappear while this 2s timer is still
         // armed. The unmount cleanup below only fires if an unmount actually
@@ -413,7 +427,13 @@ export function useAutoSave<T>(
   // defined" that fails the whole vitest run (a flaky false-positive that CI
   // caught). Mount-once so it runs only on final unmount.
   useEffect(() => {
+    // Own both sides of the lifecycle so StrictMode's setup→cleanup→setup
+    // dance doesn't leave `mountedRef.current` permanently false after the
+    // initial-mount cleanup. Setting true here (not at render) means the
+    // post-cleanup re-setup restores it correctly in development.
+    mountedRef.current = true
     return () => {
+      mountedRef.current = false
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
       if (timerRef.current) clearTimeout(timerRef.current)
     }

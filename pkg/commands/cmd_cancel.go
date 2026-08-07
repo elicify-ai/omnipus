@@ -35,6 +35,12 @@ func cancelCommand() Definition {
 			case err == nil:
 				// Interrupt successfully fired.
 				return req.Reply("⏸ Canceling...")
+			case errors.Is(err, ErrCancelArmed):
+				// Nothing was running YET, but the cancel was acknowledged and
+				// will fire the instant a turn registers for this session —
+				// honest middle ground between "canceling now" and "nothing
+				// to cancel" (neither of which is true here).
+				return req.Reply("⏸ Cancel acknowledged — nothing is running yet, but it will stop the instant it starts.")
 			case errors.Is(err, ErrNoActiveTurn):
 				// Informational — nothing was running; not a failure.
 				return req.Reply("Nothing to cancel")

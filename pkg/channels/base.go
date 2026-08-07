@@ -313,6 +313,11 @@ func (c *BaseChannel) HandleMessage(
 		MessageID:  messageID,
 		MediaScope: scope,
 		Metadata:   metadata,
+		// UserInitiated (ADR-049 Gap #8/r2, R6): HandleMessage is the single
+		// choke point every channel adapter (Telegram, Discord, Slack, ...)
+		// calls to publish a real platform sender's inbound message — the
+		// "channel adapter inbound (real human Sender)" origination point.
+		UserInitiated: true,
 	}
 
 	// Auto-trigger typing indicator, message reaction, and placeholder before publishing.

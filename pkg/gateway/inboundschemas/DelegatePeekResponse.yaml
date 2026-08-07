@@ -1,0 +1,41 @@
+type: object
+title: DelegatePeekResponse
+description: >
+  Response to `delegate` `action: peek` (ADR-053 §5.1). Read-only
+  Agent-View parity snapshot — does not ack, steer, or consume the
+  child's unacked ceiling (m8).
+required:
+  - session_id
+  - state
+additionalProperties: false
+properties:
+  session_id:
+    type: string
+    minLength: 1
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  state:
+    type: string
+    enum:
+      - queued
+      - running
+      - needs_input
+      - paused
+      - completed
+      - failed
+      - cancelled
+      - timed_out
+    example: "running"
+  latest_checkpoint_summary:
+    type: string
+    description: The most recent checkpoint summary, if any.
+    example: "Wrote the write-set-scoped diff extractor; tests pending."
+  latest_progress_text:
+    type: string
+    description: The most recent progress narration text, if any.
+    example: "Scanning pkg/plan for the write-set boundary..."
+  latest_progress_pct:
+    type: integer
+    minimum: 0
+    maximum: 100
+    description: The most recent progress percentage estimate, if any.
+    example: 40

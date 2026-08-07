@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // tool_result_lazy_fetch_test.go — T2: Tool-result lazy-fetch round-trip tests.
 //
 // Tests the full write → REST-read cycle for the lazy-fetch feature:

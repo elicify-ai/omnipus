@@ -83,6 +83,8 @@ const mockCoreAgent: Agent = {
   max_tool_iterations: 20,
   rate_limits: { use_global_defaults: true },
   stats: { total_sessions: 5, total_tokens: 12000, total_cost: 0.05 },
+  // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
+  memory_enabled: true,
 }
 
 const mockLockedCoreAgent: Agent = {
@@ -96,6 +98,8 @@ const mockLockedCoreAgent: Agent = {
   soul: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
+  // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
+  memory_enabled: true,
 }
 
 // Tier-branched form fixtures (Spec-4 FR-4.1 + locked concept in
@@ -135,6 +139,24 @@ const mockSubagent3pAgent: Agent = {
   type: 'subagent_3p',
   description: 'Delegation-only worker on an external CLI runner',
   executor: { kind: 'external-cli', cli: 'claude-code' },
+}
+
+// ADR-052 FR-038/FR-039 — the seeded Judge System Agent. Locked + type
+// 'system'; its soul carries the judging rubric (soul/rubric unification —
+// `AgentConfig.Rubric` was deleted) and memory_enabled is seeded false
+// (impartial, reproducible verdicts).
+const mockJudgeAgent: Agent = {
+  id: 'judge',
+  name: 'Judge',
+  type: 'system',
+  locked: true,
+  status: 'active',
+  model: 'claude-opus-4-6',
+  description: 'Impartial acceptance-criteria verifier',
+  soul: 'You are the Judge — an impartial acceptance-criteria evaluator.',
+  timeout_seconds: 60,
+  max_tool_iterations: 20,
+  memory_enabled: false,
 }
 
 function makeClient() {
@@ -1497,6 +1519,135 @@ describe('AgentProfile — locked banner (spec §6 BDD #13)', () => {
   })
 })
 
+// ADR-052 FR-038 (soul/rubric unification) + FR-039 (memory_enabled).
+describe('AgentProfile — ADR-052 soul unification + memory toggle (FR-038/FR-039)', () => {
+  it('renders the soul textarea read-only for a locked core agent (no dead edits)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    switchTab('tab-personality')
+    const soulTextarea = await screen.findByTestId('agent-soul')
+    expect((soulTextarea as HTMLTextAreaElement).disabled).toBe(true)
+    expect((soulTextarea as HTMLTextAreaElement).readOnly).toBe(true)
+    // The "no dead code" guarantee: a locked agent's soul edit must never be
+    // silently discarded — making the field read-only (rather than editable
+    // but stripped from the PUT payload) is how that's enforced.
+  })
+
+  it('renders the System-agent banner naming identity as locked and soul (with model/provider) as editable (ADR-052 Fix-Wave-2 carve-out)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockJudgeAgent)
+    renderProfile('judge')
+    await screen.findByText('Judge')
+    const banner = screen.getByTestId('locked-banner')
+    expect(banner).toHaveTextContent(/system agent/i)
+    expect(banner).toHaveTextContent(/identity/i)
+    expect(banner).toHaveTextContent(/is locked/i)
+    expect(banner).toHaveTextContent(/soul/i)
+    expect(banner).toHaveTextContent(/editable/i)
+    expect(banner).not.toHaveTextContent(/rubric/i)
+    // The old "soul editing isn't available yet" copy must be gone — the
+    // backend now genuinely accepts it (updateAgent's IsSystem() carve-out).
+    expect(banner).not.toHaveTextContent(/isn.t available yet/i)
+  })
+
+  it('renders the Judge soul textarea EDITABLE (ADR-052 Fix-Wave-2 carve-out) — identity stays locked, soul does not', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockJudgeAgent)
+    renderProfile('judge')
+    await screen.findByText('Judge')
+    switchTab('tab-personality')
+    const soulTextarea = await screen.findByTestId('agent-soul')
+    expect((soulTextarea as HTMLTextAreaElement).disabled).toBe(false)
+    expect((soulTextarea as HTMLTextAreaElement).readOnly).toBe(false)
+    expect((soulTextarea as HTMLTextAreaElement).value).toBe(mockJudgeAgent.soul)
+    expect(screen.queryByText(/rubric/i)).toBeNull()
+  })
+
+  it('persists a Judge soul edit through updateAgent (System Agent soul carve-out, backend PUT allows it)', async () => {
+    vi.mocked(fetchAgent).mockReset().mockResolvedValue(mockJudgeAgent)
+    const editedSoul = 'You are the Judge. Operator-edited: require a green CI run before PASS.'
+    vi.mocked(updateAgent).mockReset().mockResolvedValue({ ...mockJudgeAgent, soul: editedSoul })
+    renderProfile('judge')
+    await screen.findByText('Judge')
+    switchTab('tab-personality')
+    const soulTextarea = await screen.findByTestId('agent-soul')
+
+    vi.useFakeTimers()
+    fireEvent.change(soulTextarea, { target: { value: editedSoul } })
+    await act(async () => { vi.advanceTimersByTime(1600) })
+    vi.useRealTimers()
+
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalledWith(
+        'judge',
+        expect.objectContaining({ soul: editedSoul }),
+      )
+    }, { timeout: 6000 })
+    // The still-locked identity fields must never ride along on this save —
+    // only soul (plus whatever else the autosave payload already includes
+    // for every agent, e.g. model) is exempted for a System Agent.
+    const [, payload] = vi.mocked(updateAgent).mock.calls[0]
+    expect(payload).not.toHaveProperty('name')
+    expect(payload).not.toHaveProperty('description')
+    expect(payload).not.toHaveProperty('color')
+    expect(payload).not.toHaveProperty('icon')
+    expect(payload).not.toHaveProperty('skills')
+  })
+
+  it('shows the Memory toggle OFF and disabled for the Judge (System agent)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockJudgeAgent)
+    renderProfile('judge')
+    await screen.findByText('Judge')
+    switchTab('tab-personality')
+    const memorySwitch = await screen.findByTestId('memory-toggle')
+    expect(memorySwitch).toHaveAttribute('data-state', 'unchecked')
+    expect(memorySwitch).toBeDisabled()
+    expect(screen.getByTestId('memory-toggle-row')).toHaveTextContent(/verifier agents always run with memory off/i)
+  })
+
+  it('shows a live, editable Memory toggle (default ON) for an ordinary agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    switchTab('tab-personality')
+    const memorySwitch = await screen.findByTestId('memory-toggle')
+    expect(memorySwitch).toHaveAttribute('data-state', 'checked')
+    expect(memorySwitch).not.toBeDisabled()
+  })
+
+  it('persists a Memory toggle-off through updateAgent for an ordinary (non-locked) agent', async () => {
+    vi.mocked(fetchAgent).mockReset().mockResolvedValue(mockCoreAgent)
+    vi.mocked(updateAgent).mockReset().mockResolvedValue({ ...mockCoreAgent, memory_enabled: false })
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    switchTab('tab-personality')
+    const memorySwitch = await screen.findByTestId('memory-toggle')
+    fireEvent.click(memorySwitch)
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalledWith(
+        'general-assistant',
+        expect.objectContaining({ memory_enabled: false }),
+      )
+    }, { timeout: 6000 })
+  })
+
+  it('persists a Memory toggle-on for a LOCKED core agent (memory_enabled is allowed on all agents, unlike soul/name)', async () => {
+    vi.mocked(fetchAgent).mockReset().mockResolvedValue({ ...mockLockedCoreAgent, memory_enabled: false })
+    vi.mocked(updateAgent).mockReset().mockResolvedValue({ ...mockLockedCoreAgent, memory_enabled: true })
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    switchTab('tab-personality')
+    const memorySwitch = await screen.findByTestId('memory-toggle')
+    expect(memorySwitch).not.toBeDisabled()
+    fireEvent.click(memorySwitch)
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalledWith(
+        'mia',
+        expect.objectContaining({ memory_enabled: true }),
+      )
+    }, { timeout: 6000 })
+  })
+})
+
 // Wave 5 / spec §6.1 — Footer: last-saved-indicator (left) + delete-agent-button
 // (right) + AlertDialog confirm. Locked agents hide the delete button.
 describe('AgentProfile — Wave 5 footer (spec §6.1)', () => {
@@ -1805,15 +1956,16 @@ describe('AgentProfile — updated_at staleness guard', () => {
     vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
   })
 
-  it('silently no-ops (NO console.warn) when it rejects a background refetch snapshot that is IDENTICAL (same updated_at) to what is already incorporated', async () => {
-    // Guard-noise fix (D3 / UAT v0.1.1 defects): this used to assert a
-    // console.warn fired for this exact scenario, because the guard's old
-    // `incomingTime <= incorporatedTime` conflated "genuinely stale" (`<`)
-    // with "identical, nothing to apply" (`===`) under one branch. An
-    // IDENTICAL snapshot is a normal no-op (e.g. this same-content
-    // invalidateQueries refetch echo) — not a staleness rejection — so it
-    // must NOT warn. Only a genuinely OLDER (`<`) snapshot is still
-    // load-bearing noise; see the sibling test below for that case.
+  it('Wave-3 hotfix: an EQUAL incoming updated_at (already-incorporated echo) is a silent no-op — no rejected-hydration telemetry', async () => {
+    // Regression for the bogus telemetry finding: the guard used to treat
+    // `incoming <= incorporated` as one "reject + warn" branch, so a
+    // same-timestamp echo (the normal, expected shape of an
+    // `invalidateQueries` background refetch landing right after a save
+    // already applied that exact snapshot via `setQueryData`) fired
+    // `agentProfileUpdatedAtGuardRejectedHydration` on every profile open
+    // AND after every successful autosave — a false positive with no real
+    // conflict. Equal must still SKIP re-hydrating (nothing changed) but
+    // must NOT log anything.
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t0 = '2026-02-01T00:00:00.000Z'
 
@@ -1834,18 +1986,52 @@ describe('AgentProfile — updated_at staleness guard', () => {
       expect(vi.mocked(updateAgent)).toHaveBeenCalled()
     }, { timeout: 5000 })
 
-    // Let the invalidateQueries background refetch (same static t0
-    // snapshot) settle. Give it a real window past the save.
-    await new Promise((resolve) => setTimeout(resolve, 500))
-
-    // The identical-snapshot echo must NOT warn — it's a silent no-op now.
+    // Give the save-success `setQueryData` patch and the `invalidateQueries`
+    // background refetch (both landing at the same t0) a moment to run
+    // through the hydration effect, then assert the rejected-hydration
+    // telemetry event never fired.
+    await waitFor(() => {
+      expect(screen.getAllByTestId('agent-name-input')[0]).toHaveValue('Edited Name')
+    }, { timeout: 6000 })
     expect(warnSpy).not.toHaveBeenCalledWith(
       'agentProfile.updatedAtGuardRejectedHydration',
       expect.anything(),
     )
-    // The edit itself still visibly succeeded — the guard's silence does
-    // not mean the save failed or the field reverted.
-    expect(screen.getAllByTestId('agent-name-input')[0]).toHaveValue('Edited Name')
+  })
+
+  it('a genuinely STALE incoming updated_at (strictly older than incorporated) still warns via console.warn + logDiagnostic', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const tOld = '2026-02-01T00:00:00.000Z'
+    const tNew = '2026-02-01T00:05:00.000Z' // strictly newer
+
+    // Every fetchAgent call — the initial load AND the invalidateQueries
+    // background refetch fired after the save below — resolves with the
+    // OLDER timestamp, simulating a stale/lagging refetch race (network
+    // reordering, read-replica lag). The save's own PUT response carries
+    // the NEWER timestamp, so `lastIncorporatedUpdatedAtRef.current` is
+    // advanced to tNew directly by the save-success handler before the
+    // stale background refetch's snapshot (tOld) lands.
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, updated_at: tOld })
+    vi.mocked(updateAgent).mockResolvedValue({ ...mockCoreAgent, name: 'Edited Name', updated_at: tNew })
+
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+
+    fireEvent.change(screen.getAllByTestId('agent-name-input')[0], { target: { value: 'Edited Name' } })
+
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalled()
+    }, { timeout: 5000 })
+
+    // The invalidateQueries background refetch resolves with the STALE
+    // (tOld < tNew) snapshot — a genuine conflict, still rejected with a
+    // telemetry breadcrumb.
+    await waitFor(() => {
+      expect(warnSpy).toHaveBeenCalledWith(
+        'agentProfile.updatedAtGuardRejectedHydration',
+        expect.objectContaining({ agentId: 'general-assistant', incoming: tOld, incorporated: tNew }),
+      )
+    }, { timeout: 6000 })
   })
 
   // The `<` (genuinely stale) case remains load-bearing and must stay

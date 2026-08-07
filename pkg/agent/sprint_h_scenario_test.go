@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // W2-5: Integration test — sub-turn calling forbidden tools returns unknown-tool errors.
 //
 // Scripts a sub-turn where the LLM attempts to call delegate, then hand_off.
@@ -54,6 +52,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -170,20 +171,53 @@ func TestSubTurn_ForbiddenToolCalls_EmitZeroGrandchildSpawnEvents(t *testing.T) 
 //
 // Traces to: temporal-puzzling-melody.md W2-5
 func TestSubTurn_OriginalDelegation_EmitsExactlyOneSpawnEvent(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
-	defer cleanup()
+	// ADR-057 FR-005/FR-096 fixture repair: spawnSubTurn mints the child via
+	// al.GetSessionStore().CreateSessionWithID(childID,
+	// parentTS.transcriptSessionID, ...) against the REAL shared store — a
+	// parent whose only session reference is an ephemeralSessionStore (no
+	// transcriptSessionID) fails "invalid parent id: unified_store: invalid
+	// session ID ''" before ever spawning. Separately, newTestAgentLoop's flat
+	// os.MkdirTemp("", "agent-test-*") Home resolves the shared session-store
+	// root (filepath.Dir(cfg.AgentHomeBasePath())) to the OS temp root shared
+	// by every test process in this package, so the deterministic child id
+	// "subturn-1" can collide with a leftover session directory from a
+	// different test/run once CreateSessionWithID is actually reached
+	// (FR-096 refuses the collision loudly). Build a dedicated AgentLoop with
+	// Home: t.TempDir() instead — t.TempDir() already nests one level below
+	// the OS temp root via its own per-test-random directory, which is what
+	// keeps subturn_cancel_status_test.go's spawnSubTurn calls collision-free.
+	agentCfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:              t.TempDir(),
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+	al := mustNewAgentLoop(t, agentCfg, bus.NewMessageBus(), &mockProvider{})
+	t.Cleanup(al.Close)
 
 	collector, collectCleanup := newEventCollector(t, al)
 	defer collectCleanup()
 
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "test harness did not wire a shared session store")
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	require.NoError(t, err)
+
 	parent := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-scenario-1",
-		depth:          0,
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 10),
-		session:        &ephemeralSessionStore{},
-		agent:          al.GetRegistry().GetDefaultAgent(),
+		ctx:                 context.Background(),
+		turnID:              "parent-scenario-1",
+		depth:               0,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 10),
+		session:             &ephemeralSessionStore{},
+		agent:               al.GetRegistry().GetDefaultAgent(),
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 	}
 
 	cfg := SubTurnConfig{
@@ -195,8 +229,8 @@ func TestSubTurn_OriginalDelegation_EmitsExactlyOneSpawnEvent(t *testing.T) {
 	// the context carries a parentSpawnCallID — i.e., when invoked via the
 	// delegate tool. In tests we simulate that by injecting the call ID directly.
 	ctx := withSpawnToolCallID(context.Background(), "parent-scenario-spawn-call")
-	_, err := spawnSubTurn(ctx, al, parent, cfg)
-	require.NoError(t, err, "spawnSubTurn must not error for valid config")
+	_, spawnErr := spawnSubTurn(ctx, al, parent, cfg)
+	require.NoError(t, spawnErr, "spawnSubTurn must not error for valid config")
 
 	// Wait for events to flush.
 	require.Eventually(t, func() bool {

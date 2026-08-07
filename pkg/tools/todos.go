@@ -151,7 +151,13 @@ func (t *SetTodosTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			Scratchpad:  true,
 			Todos:       todos,
 		}
-		if err := t.store.Create(card); err != nil {
+		// CreateByAgent, not Create: a scratchpad card is created BY this agent
+		// FOR this agent, so it carries FR-037 provenance
+		// (Task.CreatedByAgentID) in the agent-id namespace — CreatedBy above
+		// is the mixed-namespace display field and cannot serve as an
+		// ownership predicate. agentID is guaranteed non-empty by the
+		// "could not resolve acting agent" guard at the top of Execute.
+		if err := t.store.CreateByAgent(card, agentID); err != nil {
 			return ErrorResult(fmt.Sprintf("set_todos: create goal task: %v", err))
 		}
 		updated = card

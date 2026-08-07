@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // websocket_model_name_test.go — unit tests for FR-010 (per-turn model override).
 //
 // The WS handler must forward `MessageFrame.Metadata.ModelName` to the bus as

@@ -76,7 +76,7 @@ describe('mapToCalendarEvents — occurrence instants (test 17)', () => {
     const task = makeTask({ title: 'Weekly report' })
     const set = makeOccurrenceSet({ occurrences_ms: mondays })
 
-    const events = mapToCalendarEvents([task], [], [set], nowMs, nowMs)
+    const events = mapToCalendarEvents([task], [set], nowMs, nowMs)
 
     expect(events).toHaveLength(4)
     for (const [i, ev] of events.entries()) {
@@ -98,8 +98,8 @@ describe('mapToCalendarEvents — occurrence instants (test 17)', () => {
   it('drops an unparseable/zero instant without throwing', () => {
     const task = makeTask()
     const set = makeOccurrenceSet({ occurrences_ms: [0, NaN] })
-    expect(() => mapToCalendarEvents([task], [], [set])).not.toThrow()
-    expect(mapToCalendarEvents([task], [], [set])).toHaveLength(0)
+    expect(() => mapToCalendarEvents([task], [set])).not.toThrow()
+    expect(mapToCalendarEvents([task], [set])).toHaveLength(0)
   })
 
   it('defense-in-depth: a set whose task_id has no matching task is dropped entirely', () => {
@@ -108,12 +108,12 @@ describe('mapToCalendarEvents — occurrence instants (test 17)', () => {
       occurrences_ms: [new Date(2026, 5, 1, 9, 0, 0).getTime()],
     })
     // No task list entry for 'ghost-task' at all.
-    expect(mapToCalendarEvents([], [], [set])).toHaveLength(0)
+    expect(mapToCalendarEvents([], [set])).toHaveLength(0)
   })
 
   it('occurrenceSets defaults to [] — existing 2-arg call sites are unaffected', () => {
     const task = makeTask({ due: undefined })
-    expect(mapToCalendarEvents([task], [])).toHaveLength(0)
+    expect(mapToCalendarEvents([task])).toHaveLength(0)
   })
 })
 
@@ -138,7 +138,7 @@ describe('mapToCalendarEvents — aggregated day buckets (test 17)', () => {
       ],
     })
 
-    const events = mapToCalendarEvents([task], [], [set], nowMs, nowMs)
+    const events = mapToCalendarEvents([task], [set], nowMs, nowMs)
 
     expect(events).toHaveLength(1)
     const ev = events[0]
@@ -168,7 +168,7 @@ describe('mapToCalendarEvents — aggregated day buckets (test 17)', () => {
       ],
     })
 
-    const events = mapToCalendarEvents([task], [], [set], nowMs, nowMs)
+    const events = mapToCalendarEvents([task], [set], nowMs, nowMs)
 
     expect(events).toHaveLength(1)
     expect(events[0].title).toBe('Check dashboards · 4×/day')
@@ -217,7 +217,7 @@ describe('mapToCalendarEvents — truncated expansion (test 17)', () => {
       truncated: true,
     })
 
-    const events = mapToCalendarEvents([task], [], [set])
+    const events = mapToCalendarEvents([task], [set])
 
     const markers = events.filter((e) => e.extendedProps?.kind === 'task-occurrence-more')
     expect(markers).toHaveLength(1)
@@ -253,7 +253,7 @@ describe('mapToCalendarEvents — truncated expansion (test 17)', () => {
       truncated: true,
     })
 
-    const events = mapToCalendarEvents([task], [], [set])
+    const events = mapToCalendarEvents([task], [set])
     const marker = events.find((e) => e.extendedProps?.kind === 'task-occurrence-more')
     expect(marker).toBeDefined()
     expect(marker!.start).toEqual(new Date(laterBucketDay))
@@ -273,7 +273,7 @@ describe('mapToCalendarEvents — truncated expansion (test 17)', () => {
     })
     const fallbackMs = new Date(2026, 5, 1, 0, 0, 0).getTime()
 
-    const events = mapToCalendarEvents([task], [], [set], fallbackMs)
+    const events = mapToCalendarEvents([task], [set], fallbackMs)
 
     const markers = events.filter((e) => e.extendedProps?.kind === 'task-occurrence-more')
     expect(markers).toHaveLength(1)
@@ -284,7 +284,7 @@ describe('mapToCalendarEvents — truncated expansion (test 17)', () => {
     const task = makeTask({ id: 'task-8' })
     const set = makeOccurrenceSet({ task_id: 'task-8', occurrences_ms: [], day_buckets: [], truncated: true })
 
-    const events = mapToCalendarEvents([task], [], [set])
+    const events = mapToCalendarEvents([task], [set])
 
     const markers = events.filter((e) => e.extendedProps?.kind === 'task-occurrence-more')
     expect(markers).toHaveLength(1)
@@ -298,7 +298,7 @@ describe('mapToCalendarEvents — truncated expansion (test 17)', () => {
       occurrences_ms: [new Date(2026, 5, 1, 9, 0, 0).getTime()],
       truncated: false,
     })
-    const events = mapToCalendarEvents([task], [], [set])
+    const events = mapToCalendarEvents([task], [set])
     expect(events.some((e) => e.extendedProps?.kind === 'task-occurrence-more')).toBe(false)
   })
 
@@ -325,7 +325,7 @@ describe('mapToCalendarEvents — due/fire chip regression (test 17)', () => {
     const task = makeTask({ due: '2026-06-20', status: 'blocked' })
     const unrelatedSet = makeOccurrenceSet({ task_id: 'some-other-task', occurrences_ms: [12345] })
 
-    const events = mapToCalendarEvents([task], [], [unrelatedSet])
+    const events = mapToCalendarEvents([task], [unrelatedSet])
 
     const dueChip = events.find((e) => e.extendedProps?.kind === 'task-due')
     expect(dueChip).toBeDefined()
@@ -337,7 +337,7 @@ describe('mapToCalendarEvents — due/fire chip regression (test 17)', () => {
     const at_ms = new Date(2026, 5, 21, 9, 0, 0).getTime()
     const task = makeTask({ trigger: makeOnceTrigger(at_ms) })
 
-    const events = mapToCalendarEvents([task], [], [])
+    const events = mapToCalendarEvents([task])
 
     const fireChip = events.find((e) => e.extendedProps?.kind === 'task-fire')
     expect(fireChip).toBeDefined()
@@ -351,7 +351,7 @@ describe('mapToCalendarEvents — due/fire chip regression (test 17)', () => {
     const task = makeTask({ due: '2026-06-20', trigger: makeOnceTrigger(at_ms) })
     const set = makeOccurrenceSet({ occurrences_ms: [occurrenceMs] })
 
-    const events = mapToCalendarEvents([task], [], [set])
+    const events = mapToCalendarEvents([task], [set])
 
     expect(events).toHaveLength(3)
     const byKind = Object.fromEntries(events.map((e) => [e.extendedProps?.kind, e]))

@@ -1,0 +1,132 @@
+title: GoalStatusFrame
+description: >
+  Server → client. Status push for a session's active `/goal` loop
+  (ADR-049 D6/D7/US-8; `state` enum + `goal_id` extended by ADR-053
+  §Contract Surface — "Pill-state enum"/R§8.10). Emitted on round
+  completion, state change, and clear/stop. Session-scoped (registered in
+  SESSION_SCOPED_FRAME_TYPES). Canonical copy lives inline in
+  contracts/asyncapi.yaml components.schemas (AsyncAPI does not resolve
+  cross-file $ref for its own codegen) — this file exists for the
+  Constraint #8 5-step process and the inboundschemas sync; keep both in
+  sync by hand. Class not yet assigned by the ADR-057 W5 audit (FR-089) —
+  do not assume presence or absence of producing_session_id until the
+  audit classifies it.
+type: object
+required:
+  - type
+  - session_id
+  - condition
+  - round
+  - max_rounds
+  - latest_reason
+  - active_loops
+  - cap
+  - state
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: goal_status
+  session_id:
+    type: string
+    minLength: 1
+    description: Session this goal loop belongs to.
+  goal_id:
+    type: string
+    minLength: 1
+    description: >
+      ADR-053 R§8.11 — the specific goal-id this pill/timer/round-budget
+      belongs to. A session may carry multiple independent goals, each
+      rendering its own pill; `goal_id` disambiguates which one this
+      frame updates. OPTIONAL (SHAPE DECISION, flagged for review) —
+      absent means the session's single (legacy, pre-multi-goal) goal;
+      kept optional rather than required so this purely-additive field
+      does not force every existing GoalStatusFrame construction site to
+      change in the same pass as the state-enum replacement below.
+    example: "goal_01J3ZQK8N2H8VXNRP5T7C9M4WU"
+  condition:
+    type: string
+    description: The proof-driven condition text set by `/goal <condition>`.
+    example: "make the tests pass"
+  round:
+    type: integer
+    minimum: 0
+    description: >
+      Adjudications consumed so far (ADR-053 R§8.9 — one round = one
+      adjudication, claim-triggered OR idle-settled; supersedes the
+      original ADR D7 "one worker turn plus its judge evaluation"
+      definition — the stored integer is preserved unchanged across the
+      upgrade, only the increment site moved).
+    example: 3
+  max_rounds:
+    type: integer
+    minimum: 1
+    description: Round ceiling (default 20) before the goal loop wakes the owner.
+    example: 20
+  latest_reason:
+    type: string
+    description: >
+      Most recent judge reason fed forward as steering (evaluator-optimizer
+      pattern). Empty string before the first round completes.
+    example: "3 tests still failing in pkg/plan"
+  active_loops:
+    type: integer
+    minimum: 0
+    description: >
+      Current count of globally active loops (running plans + active
+      `/goal` sessions + enabled `/loop` jobs — Round-1 Grill Reconciliation
+      R5) toward the global cap.
+    example: 4
+  cap:
+    type: integer
+    minimum: 1
+    description: Global active-loop cap (default 16).
+    example: 16
+  state:
+    type: string
+    enum:
+      - queued
+      - active
+      - waiting_on_user
+      - judge_unavailable
+      - re-planning
+      - judging
+      - done
+      - failed
+      - cleared
+    description: >
+      ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk
+      (originally 8 states, superseding the earlier 4-value
+      active/paused_judge_unavailable/brake_fired/cleared set — no
+      back-compat at the time). `queued` admitted to the global cap, not
+      yet dispatched (lifecycle). `active` iterating normally (lifecycle
+      default overlay). `waiting_on_user` a typed `GOAL_STATUS:
+      waiting_on_user` pause, OR `needs_input`/`paused` for any other
+      reason — cancel-soft grace, etc. (lifecycle). `judge_unavailable`
+      the Judge is rate-limited/down; no round increment while this holds
+      (ephemeral engine-phase signal, pill-only — no lifecycle
+      counterpart). `re-planning` the DURABLE `plan_phase =
+      awaiting_supervision` condition over a `paused` owner session
+      (C1 — survives restart, so the pill reconstructs correctly as
+      `re-planning`, not `waiting_on_user`, after a boot sweep).
+      `judging` a verifier turn is in flight (ephemeral engine-phase
+      signal, pill-only). `done` terminal success (lifecycle `completed`).
+      `failed` terminal failure — a genuine budget/rounds-exhausted/
+      idle-expired brake, NOT a user-initiated stop (see `cleared` below).
+      `cleared` — 9th value, ADDED post-ADR-053 (UAT S3 fix): a
+      user-initiated `/goal clear|stop|off|reset|cancel|none` is a
+      deliberate, successful action, not a failure — it MUST NOT collapse
+      into `failed` the way `cancelled`/`timed_out` do. This intentionally
+      departs from the original crosswalk's blanket
+      "failed/cancelled/timed_out → failed" rule for the specific case of
+      a human choosing to stop; the frontend does not disambiguate via
+      `latest_reason`, so the wire state itself must carry the distinction.
+    example: "active"
+  producing_session_id:
+    type: string
+    minLength: 1
+    description: >
+      ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
+      (FR-089) — do not assume presence or absence until the audit
+      classifies this frame type. Keep in sync by hand with
+      contracts/asyncapi.yaml's inline GoalStatusFrame.

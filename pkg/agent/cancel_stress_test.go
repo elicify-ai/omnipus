@@ -41,6 +41,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -170,6 +171,12 @@ func TestStress_ExternalCLI_ConcurrentSpawnAndCancel(t *testing.T) {
 				agentID:             agent.ID,
 				turnID:              turnKey,
 				transcriptSessionID: sessID,
+				// ADR-057 FR-011/FR-015 fixture repair: activeTurnStates is
+				// keyed by turnKey (not sessID), so al.Interrupt(sessID, ...)
+				// (steering.go's resolveInterruptAnchors) falls through its
+				// direct-key Load to the Range fallback, which now matches on
+				// routingSessionID rather than transcriptSessionID.
+				routingSessionID: session.RoutingSessionID(sessID),
 			}
 			al.activeTurnStates.Store(turnKey, ts)
 			defer al.activeTurnStates.Delete(turnKey)
@@ -201,8 +208,8 @@ func TestStress_ExternalCLI_ConcurrentSpawnAndCancel(t *testing.T) {
 				default:
 				}
 				for _, sid := range sessionIDs {
-					_, _ = al.InterruptSession(sid, "stress cancel")
-					_, _ = al.InterruptSessionHard(sid, "stress cancel")
+					_, _ = al.Interrupt(sid, ScopeSubtree, "stress cancel")
+					_, _ = al.InterruptSessionHard(sid, ScopeSubtree, "stress cancel")
 				}
 				time.Sleep(time.Millisecond)
 			}

@@ -40,6 +40,31 @@ const (
 	// the top of the Session panel and disables their delete control while the
 	// heartbeat is active (FR-021, FR-028).
 	SessionTypeHeartbeat UnifiedSessionType = "heartbeat"
+	// SessionTypeVerifier classifies a session created for a verifier-role
+	// adjudication (ADR-052 FR-036/US-13 Acceptance 6): the Judge System
+	// Agent, or a future custom verifier, runs its own real agent-loop turn
+	// in a session of this type rather than the old blind Provider.Chat
+	// shortcut. Persisted with normal 90-day retention but hidden by default
+	// from GET /api/v1/sessions (see the include_verifier query param);
+	// Sidebar and SearchModal always exclude it, UsageScreen INCLUDES it
+	// (verifier LLM spend must stay visible, SC-014), and the ActivityPanel /
+	// verdict drill-down surface it on demand. Client-created via POST
+	// /api/v1/sessions is intentionally NOT supported for this type
+	// (SessionCreateRequest.yaml's type enum is narrower than this one, by
+	// design — mirrors the existing "scheduled" precedent) — only the engine
+	// mints verifier sessions, via NewVerifierSession below.
+	SessionTypeVerifier UnifiedSessionType = "verifier"
+	// SessionTypeDelegate classifies a subordinate session minted for a
+	// delegated child sub-turn (ADR-057 FR-005/FR-008/FR-009): every
+	// delegated child now owns its OWN real, store-backed session (D1) with
+	// ParentSessionID naming its direct parent, rather than sharing the
+	// parent's transcript.jsonl. The literal MUST be exactly "delegate" —
+	// U10 already generated the matching OpenAPI enum member
+	// (SessionTypeDelegate SessionType = "delegate",
+	// pkg/api/generated/openapi_types.gen.go) from contracts/, and any other
+	// spelling here would silently drift the Go implementation from the
+	// wire contract with no compiler error to catch it.
+	SessionTypeDelegate UnifiedSessionType = "delegate"
 )
 
 // IsValidSessionType reports whether t is one of the known session types.
@@ -47,7 +72,7 @@ const (
 // validation/listing site accepts them.
 func IsValidSessionType(t UnifiedSessionType) bool {
 	switch t {
-	case SessionTypeChat, SessionTypeTask, SessionTypeChannel, SessionTypeScheduled, SessionTypeHeartbeat:
+	case SessionTypeChat, SessionTypeTask, SessionTypeChannel, SessionTypeScheduled, SessionTypeHeartbeat, SessionTypeVerifier, SessionTypeDelegate:
 		return true
 	default:
 		return false
@@ -66,6 +91,45 @@ type MetaPatch struct {
 	// WorkspaceID tags the session with the active workspace (M4 workspace→turn
 	// binding). Only written when non-nil; empty string clears the tag.
 	WorkspaceID *string
+	// ParentSessionID stamps this session's direct parent (ADR-057 FR-008).
+	// Only written when non-nil; empty string clears it (making the session
+	// a root again). The write path also wires the FR-097 in-memory parent
+	// index (see u5WriteIdentityLocked in unified_meta_files.go) — setting
+	// this via SetMeta is a fully-indexed operation, not just a field write.
+	ParentSessionID *string
+
+	// Goal loop fields (ADR-049 D6/D7, /goal). Only non-nil fields are
+	// written; callers that want to CLEAR a goal must pass an empty-string
+	// GoalCondition explicitly (matching the TaskID clear convention).
+	// GoalID is the stable per-generation goal identifier (see SessionMeta.GoalID's
+	// doc comment); pass an empty string to CLEAR it on /goal clear.
+	GoalID             *string
+	GoalCondition      *string
+	GoalRoundsUsed     *int
+	GoalMaxRounds      *int
+	GoalLatestReason   *string
+	GoalStartedAt      *string
+	GoalLastActivityAt *string
+	// GoalCriteriaJSON is the ADR-053 Phase-2 compiled criteria ladder
+	// (FR-110/FR-113). Pass an empty string to CLEAR it (paired with clearing
+	// GoalCondition on /goal clear, FR-114).
+	GoalCriteriaJSON *string
+	// GoalPendingJSON is the proposed CompiledGoal during a re-statement
+	// amendment (N-6/D11). Pass an empty string to CLEAR it (on confirm/clear).
+	GoalPendingJSON *string
+
+	// Loop fields (ADR-049 D6/D7, /loop). Only non-nil fields are written;
+	// callers that want to CLEAR a loop must pass an empty-string LoopMode
+	// explicitly.
+	LoopMode           *string
+	LoopPrompt         *string
+	LoopRunCount       *int
+	LoopMaxRuns        *int
+	LoopIntervalMS     *int64
+	LoopNextDelayMS    *int64
+	LoopJobID          *string
+	LoopStartedAt      *string
+	LoopLastActivityAt *string
 }
 
 // UnifiedMeta extends SessionMeta with the session type field.
@@ -84,7 +148,7 @@ type UnifiedMeta struct {
 //
 // This is load-bearing, not polish: NewChannelSession mutates
 // meta.PeerID/meta.Title on the pointer returned by NewSession without
-// holding us.mu (see its doc comment). If the cache aliased that pointer,
+// holding any lock (see its doc comment). If the cache aliased that pointer,
 // a concurrent ListSessions/GetMeta clone-read racing that mutation would be
 // a real -race failure. Cloning on every cache insert and cache read keeps
 // the cache and every caller's copy fully independent in both directions.
@@ -110,28 +174,66 @@ var ErrAlreadyActive = errors.New("agent already active on this session")
 //
 // It implements SessionStore so the agent loop works unchanged, and adds
 // UI-oriented methods (NewSession, AppendTranscript, ReadTranscript, etc.).
+//
+// Locking (ADR-057 FR-048, replacing the single pre-ADR-057 us.mu
+// sync.RWMutex): two independent primitives, never a store-global lock.
+//
+//   - sessionLocks (unified_lock.go) is a 64-shard per-session mutex pool.
+//     Every method that mutates or reads a SINGLE session's on-disk state
+//     acquires that session's shard via lockSession(id) for the duration of
+//     its filesystem work — concurrent operations on DIFFERENT sessions no
+//     longer contend with each other (this is the R-8 fix: a wide delegation
+//     fan-out no longer stalls token streaming in every other session).
+//   - cacheMu is a narrow sync.RWMutex guarding ONLY metaCache,
+//     cacheLoadFailures, and the FR-097 parent index (parentIndex/
+//     childToParent) below. It is NEVER held across an os.* or fileutil.*
+//     call (FR-049) — every cacheMu critical section is a tight map
+//     read/write with no I/O inside it.
+//
+// Lock order (FR-050): sessionLock(id) -> cacheMu, one-directional. Two
+// session shards are never held simultaneously except by ClearAll/
+// RetentionSweep (which take all 64 in ascending index order via
+// lockAllSessionShards) and by U2's CreateSessionWithID parent-Owner copy
+// (FR-082: read under lockSession(parent), Unlock, THEN lockSession(child)).
+// See unified_lock.go's doc comment for the full design and the FR-101
+// lock-order observation seam.
 type UnifiedStore struct {
-	mu       sync.RWMutex
-	baseDir  string // {workspace}/sessions/
-	homePath string // ~/.omnipus/ — uploads cascade-delete root (home-rooted per rest.go:4352)
-	backend  *memory.JSONLStore
+	// sessionLocks is the FR-048(a) 64-shard per-session mutex pool. See
+	// unified_lock.go's lockSession/lockAllSessionShards.
+	sessionLocks u4SessionStripedLock
+	baseDir      string // {workspace}/sessions/
+	homePath     string // ~/.omnipus/ — uploads cascade-delete root (home-rooted per rest.go:4352)
+	backend      *memory.JSONLStore
+
+	// cacheMu is the FR-048(b) narrow lock guarding metaCache,
+	// cacheLoadFailures and the FR-097 parent index ONLY — see this struct's
+	// doc comment above for the full lock-order contract.
+	cacheMu sync.RWMutex
 
 	// metaCache holds one independent clone per session, keyed by session ID.
 	// It is the primary data source for ListSessions/GetOrCreateScheduledSession's
 	// existence check and GetMeta's fast path — avoiding the O(N) os.ReadDir +
-	// per-session os.ReadFile+json.Unmarshal that ListSessions previously did
-	// under the single store-wide lock on every call. Populated via four
-	// paths: once at construction (loadMetaCacheLocked); on every successful
-	// mutation via writeMetaLocked (every mutation path funnels through it);
-	// via readMetaLocked self-healing the cache on a cache-miss disk read
-	// (SetMeta, SwitchAgent, AppendTranscript, GetOrCreateScheduledSession, and
-	// GetMeta's cache-miss path all reach the cache this way); and via
-	// ListSessions' own reconciliation pass, which uses a directory-NAMES-only
-	// os.ReadDir to find sessions written directly to disk out-of-band
-	// (bypassing this store) and self-heals them into the cache the same way
-	// readMetaLocked does — without any per-file disk read for entries already
-	// cached. Explicit eviction on DeleteSession, ClearAll, and
-	// RetentionSweep's empty-dir removal.
+	// per-session disk read that ListSessions previously did under the single
+	// store-wide lock on every call. Populated via four paths: once at
+	// construction (loadMetaCacheLocked); on every successful mutation via one
+	// of the four ADR-057 W23 targeted field-group writers
+	// (u5WriteIdentityLocked/u5WriteStatsLocked/u5WriteGoalLocked/
+	// u5WriteLoopLocked, unified_meta_files.go) — NOT a single funnel anymore
+	// (FR-059/FR-084): each writer updates ONLY its own field group on the
+	// cached entry and never replaces it wholesale, so a loop tick no longer
+	// touches this entry's Stats/Goal fields and a transcript append no
+	// longer touches its Goal/Loop fields; via readMetaLocked self-healing
+	// the cache on a cache-miss disk read (SetMeta, SwitchAgent,
+	// AppendTranscript, GetOrCreateScheduledSession, and GetMeta's cache-miss
+	// path all reach the cache this way, composing across all four on-disk
+	// group files — see readUnifiedMeta); and via ListSessions' own
+	// reconciliation pass, which uses a directory-NAMES-only os.ReadDir to
+	// find sessions written directly to disk out-of-band (bypassing this
+	// store) and self-heals them into the cache the same way readMetaLocked
+	// does — without any per-file disk read for entries already cached
+	// (FR-058/FR-103, verified zero on a cache hit). Explicit eviction on
+	// DeleteSession, ClearAll, and RetentionSweep's empty-dir removal.
+	// Guarded by cacheMu (was: us.mu).
 	metaCache map[string]*UnifiedMeta
 
 	// cacheLoadFailures counts sessions whose meta.json failed to read/parse
@@ -141,8 +243,69 @@ type UnifiedStore struct {
 	// transient blip that would have cleared up moments later does NOT
 	// self-correct without a restart. This counter makes that accepted
 	// limitation assertable/observable instead of a silent gap. See
-	// CacheLoadFailureCount.
+	// CacheLoadFailureCount. Guarded by cacheMu (was: us.mu).
 	cacheLoadFailures int
+
+	// parentIndex/childToParent are the ADR-057 FR-097 in-memory parent
+	// index: parentIndex maps a parent session id to the set of its DIRECT
+	// children, and childToParent is its reverse (child id -> parent id),
+	// letting both ChildCount and "is this a tracked child" resolve in O(1)
+	// without a reverse scan. Guarded by the SAME cacheMu that guards
+	// metaCache — deliberately NOT its own lock (contrast
+	// lifecycle_index.go's lifecycleParentIndex, which has its own mutex),
+	// because a session's cache entry and its parent-index membership must
+	// never be observable out of sync with each other, and sharing one lock
+	// is the simplest way to guarantee that.
+	//
+	// FULLY WIRED as of ADR-057 U5 (Wave C): U4 (Wave B) built this surface
+	// with only the DELETE/EVICT side wired (u4IndexEvict, into
+	// DeleteSession/ClearAll/RetentionSweep below) because
+	// SessionMeta.ParentSessionID did not exist yet. It now does (FR-008/W2,
+	// daypartition.go), and the ADD side (u4IndexAddChild) is called from
+	// u5WriteIdentityLocked (unified_meta_files.go) — the ADR-057 W23
+	// targeted identity-group writer, itself called from every path that can
+	// mint or re-key a session's identity group: createSessionLocked,
+	// SetMeta (including a bare Owner/Title patch — u4IndexAddChild is a
+	// no-op when ParentSessionID is unchanged/empty, so this is safe to call
+	// unconditionally rather than only when the patch touches
+	// ParentSessionID specifically), SwitchAgent, NewChannelSession, and
+	// unified_api.go's CreateSessionWithID/AppendTranscriptStrict call sites
+	// via the writeMetaLocked dispatcher. U6 consumes ChildCount for
+	// roots-only listing (FR-097's stated ownership split: "U4 creates the
+	// index surface ... U6 consumes it for listing").
+	parentIndex   map[string]map[string]struct{}
+	childToParent map[string]string
+
+	// --- ADR-057 U6 (Wave D), W24 — the FR-061...FR-067 stats-flush
+	// throttle. See unified_stats_flush.go for the mechanics; the fields
+	// live here because UnifiedStore itself does. ---
+
+	// dirtyStats tracks sessions with an unflushed in-memory-only Stats
+	// delta (FR-061): AppendTranscript's per-token counter bump no longer
+	// writes stats.json synchronously — it mutates the cached entry via
+	// u6MarkStatsDirtyLocked and records the session id here instead. The
+	// periodic flusher (runStatsFlusher) and every forced-flush point
+	// (SetMeta w/ Status, DeleteSession, Close, FlushSessionStats) drain
+	// this set. Guarded by the SAME cacheMu that guards metaCache — a
+	// session's dirty membership must never be observable out of sync with
+	// its cached Stats.
+	dirtyStats map[string]struct{}
+
+	// flushMu guards statsFlushInterval/flusherStarted/flushStopCh/
+	// flushDoneCh below. Deliberately a SEPARATE lock from cacheMu/
+	// sessionLocks — it protects the flusher's own control-plane state, not
+	// session data, so it is never part of the sessionLock -> cacheMu order
+	// and is never held across an os.*/fileutil.* call either.
+	flushMu            sync.Mutex
+	statsFlushInterval time.Duration
+	flusherStarted     bool
+	flushStopCh        chan struct{}
+	flushDoneCh        chan struct{}
+	// flushTimer is the flusher goroutine's LIVE timer. SetStatsFlushInterval
+	// resets it directly so an override takes effect immediately rather than
+	// only after the in-flight wait (started with whatever interval was
+	// current when the timer was last armed) happens to elapse on its own.
+	flushTimer *time.Timer
 }
 
 // CacheLoadFailureCount returns the number of sessions that failed to load
@@ -150,8 +313,8 @@ type UnifiedStore struct {
 // loadMetaCacheLocked's doc comment for the accepted limitation this
 // signals. Safe to call concurrently with any other UnifiedStore method.
 func (us *UnifiedStore) CacheLoadFailureCount() int {
-	us.mu.RLock()
-	defer us.mu.RUnlock()
+	us.cacheMu.RLock()
+	defer us.cacheMu.RUnlock()
 	return us.cacheLoadFailures
 }
 
@@ -170,14 +333,27 @@ func (us *UnifiedStore) BaseDir() string {
 // os.RemoveAll/os.ReadDir calls.
 var removeAllFn = os.RemoveAll
 
-// writeFileAtomicFn is a package-level test seam for writeMetaLocked's disk
-// write step. It defaults to fileutil.WriteFileAtomic; tests override it to
-// force a deterministic write failure (the MB-1 cache/disk-divergence
-// regression guard) without depending on OS permission enforcement — same
-// rationale as removeAllFn above (root bypasses chmod-based failure
-// injection via CAP_DAC_OVERRIDE in CI). Scoped narrowly to writeMetaLocked's
-// one call site.
+// writeFileAtomicFn is a package-level test seam for the four ADR-057 W23
+// targeted meta-group writers' (u5WriteIdentityLocked/u5WriteStatsLocked/
+// u5WriteGoalLocked/u5WriteLoopLocked, unified_meta_files.go) disk write
+// step. It defaults to fileutil.WriteFileAtomic; tests override it to force
+// a deterministic write failure (the MB-1 cache/disk-divergence regression
+// guard) without depending on OS permission enforcement — same rationale as
+// removeAllFn above (root bypasses chmod-based failure injection via
+// CAP_DAC_OVERRIDE in CI).
 var writeFileAtomicFn = fileutil.WriteFileAtomic
+
+// readFileFn is the ADR-057 FR-103 read-side mirror of writeFileAtomicFn: a
+// package-level seam every meta-group file read (u5ReadIdentityFile/
+// u5ReadStatsFile/u5ReadGoalFile/u5ReadLoopFile, unified_meta_files.go) goes
+// through, defaulting to os.ReadFile. `[grill2 M2-6]` Before this file split,
+// the store had an injectable WRITE seam but no injectable READ seam, so
+// neither test #103's "a cache hit performs zero disk reads" assertion nor
+// FR-092's bounded-cost clause (c) — which reuses the same counter — was
+// constructible: there was nothing to instrument. A test installs a counting
+// wrapper here to prove GetMeta/ListSessions never touch this function on a
+// warm cacheMu hit.
+var readFileFn = os.ReadFile
 
 // validateSessionID rejects IDs that could escape the base directory.
 func validateSessionID(id string) error {
@@ -223,14 +399,24 @@ func NewUnifiedStoreWithHome(baseDir, homePath string) (*UnifiedStore, error) {
 	}
 
 	us := &UnifiedStore{
-		baseDir:   baseDir,
-		homePath:  homePath,
-		backend:   store,
-		metaCache: make(map[string]*UnifiedMeta),
+		baseDir:       baseDir,
+		homePath:      homePath,
+		backend:       store,
+		metaCache:     make(map[string]*UnifiedMeta),
+		parentIndex:   make(map[string]map[string]struct{}),
+		childToParent: make(map[string]string),
+		dirtyStats:    make(map[string]struct{}),
 	}
 
 	us.migrateLegacy()
 	us.loadMetaCacheLocked()
+	// ADR-057 U6 W24 (FR-063): every store gets a running periodic flusher
+	// from construction — a fresh install with no operator override still
+	// converges stats.json every DefaultSessionStatsFlushInterval (5s, see
+	// unified_stats_flush.go) with zero wiring required by the caller.
+	// SetStatsFlushInterval overrides the period later, e.g. once a caller
+	// has resolved config.SessionConfig.EffectiveStatsFlushInterval().
+	us.startStatsFlusher()
 	return us, nil
 }
 
@@ -285,6 +471,26 @@ func (us *UnifiedStore) loadMetaCacheLocked() {
 			continue
 		}
 		us.metaCache[entry.Name()] = meta
+		// FR-097 (Defect-1 fix): wire the parent index for every session
+		// composed here. This is the boot/restart-time cache-population
+		// path — until this fix it was one of TWO paths (alongside
+		// readMetaLocked's cache-miss branch) that populated metaCache
+		// without ever touching parentIndex/childToParent. A prior process's
+		// Persist-time maintenance (u5WriteIdentityLocked -> u4IndexAddChild)
+		// only ever updated THAT process's in-memory index, which dies with
+		// it; a NEW UnifiedStore over the same baseDir must rebuild the
+		// index from the meta.json this scan just composed, or every
+		// parent->child edge stays correct on disk (ParentSessionID
+		// round-trips fine) while ChildCount silently reports 0 for every
+		// parent until the child is re-written — the "success-shaped"
+		// silent failure this whole spec exists to close out (see
+		// lifecycle_index.go's ensureWarm doc comment for the sibling index
+		// that already got this right). Safe to call unconditionally here:
+		// u4IndexAddChild no-ops for an empty ParentSessionID and is
+		// idempotent, and taking cacheMu per-entry is harmless since no
+		// other goroutine can reach us yet (see this method's own doc
+		// comment above).
+		us.u4IndexAddChild(meta.ParentSessionID, entry.Name())
 	}
 }
 
@@ -365,8 +571,8 @@ func (us *UnifiedStore) NewSession(
 		return nil, err
 	}
 
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 	return us.createSessionLocked(sessionID, sessionType, channel, creatingAgentID)
 }
 
@@ -380,9 +586,11 @@ func (us *UnifiedStore) NewChannelSession(channel, peerID, agentID, title string
 	}
 	meta.PeerID = peerID
 	meta.Title = title
-	us.mu.Lock()
-	err = us.writeMetaLocked(meta.ID, meta)
-	us.mu.Unlock()
+	h := us.lockSession(meta.ID)
+	// PeerID/Title are both identity-group fields (FR-053) — the targeted
+	// identity writer, not the retired whole-document funnel.
+	err = us.u5WriteIdentityLocked(meta.ID, meta)
+	h.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -390,7 +598,8 @@ func (us *UnifiedStore) NewChannelSession(channel, peerID, agentID, title string
 }
 
 // createSessionLocked creates a session directory with the EXACT supplied id,
-// meta.json, and an empty transcript. Caller must hold us.mu.
+// meta.json, and an empty transcript. Caller must hold sessionID's shard
+// (see lockSession) — was: caller must hold us.mu.
 func (us *UnifiedStore) createSessionLocked(
 	sessionID string,
 	sessionType UnifiedSessionType,
@@ -416,7 +625,12 @@ func (us *UnifiedStore) createSessionLocked(
 	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
 		return nil, fmt.Errorf("unified_store: create session dir: %w", err)
 	}
-	if err := us.writeMetaLocked(sessionID, meta); err != nil {
+	// ADR-057 W23 (FR-053/FR-054): a brand-new session has no goal/loop/stats
+	// activity yet, so only the identity group (meta.json) is written here —
+	// stats.json/goal.json/loop.json are created lazily by their own
+	// targeted writers the first time something actually touches that group
+	// (dataset row 2, "a session that never ran a goal": meta.json only).
+	if err := us.u5WriteIdentityLocked(sessionID, meta); err != nil {
 		return nil, err
 	}
 	// Create empty transcript so readers don't error on first access.
@@ -473,6 +687,35 @@ func (us *UnifiedStore) NewHeartbeatSession(workspaceID, agentID string) (*Unifi
 	return meta, nil
 }
 
+// NewVerifierSession mints a fresh, isolated session of SessionTypeVerifier
+// for a verifier-role adjudication (ADR-052 FR-036/US-13 Acceptance 1+6):
+// runVerifierAdjudication (pkg/agent) creates one FRESH session per
+// adjudication call — never reused across calls — so this is a thin
+// "New", not "GetOrCreate", wrapper (mirroring NewScheduledSession's
+// shape, not NewHeartbeatSession's reuse-by-id shape).
+//
+// ownerAgentID is the verifier agent actually running the turn (e.g. the
+// Judge System Agent's id, coreagent.IDJudge) — NOT the agent under
+// review. The returned session's Type is stamped SessionTypeVerifier so
+// it round-trips through the wire as "verifier" and is excluded by
+// listSessions' default filtering (pkg/gateway/rest.go) unless
+// include_verifier=true is passed, while remaining fully visible to the
+// usage/cost aggregation path (session.AggregateUsage applies no
+// type-based filter at all — SC-014).
+//
+// This is the ONLY sanctioned way to create a verifier-typed session on
+// disk; POST /api/v1/sessions (createSessionHTTP) intentionally does not
+// accept type="verifier" in its request body (SessionCreateRequest.yaml's
+// type enum is narrower by design), so a REST client can never spoof a
+// hidden verifier session.
+func (us *UnifiedStore) NewVerifierSession(ownerAgentID string) (*UnifiedMeta, error) {
+	meta, err := us.NewSession(SessionTypeVerifier, "verifier", ownerAgentID)
+	if err != nil {
+		return nil, fmt.Errorf("session: new verifier session (owner=%s): %w", ownerAgentID, err)
+	}
+	return meta, nil
+}
+
 // GetOrCreateScheduledSession returns the scheduled session with the EXACT id,
 // creating it if it does not exist (issue #264, W-2). It is the get-or-create
 // primitive backing the `continue` (stable per-schedule id) and `main`
@@ -491,8 +734,8 @@ func (us *UnifiedStore) GetOrCreateScheduledSession(id, ownerAgentID string) (*U
 	if err := validateSessionID(id); err != nil {
 		return nil, err
 	}
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(id)
+	defer h.Unlock()
 
 	if meta, err := us.readMetaLocked(id); err == nil {
 		// Cache-first existence check. readMetaLocked already returns an
@@ -512,21 +755,23 @@ func (us *UnifiedStore) GetMeta(sessionID string) (*UnifiedMeta, error) {
 		return nil, err
 	}
 
-	// Fast path: RLock-only cache hit, cloned before returning so the caller
-	// never receives a pointer aliasing the cache's live entry.
-	us.mu.RLock()
+	// Fast path: cacheMu.RLock-only cache hit, cloned before returning so the
+	// caller never receives a pointer aliasing the cache's live entry. No
+	// session shard needed — this touches only the cache, never disk.
+	us.cacheMu.RLock()
 	if meta, ok := us.metaCache[sessionID]; ok {
 		clone := meta.Clone()
-		us.mu.RUnlock()
+		us.cacheMu.RUnlock()
 		return clone, nil
 	}
-	us.mu.RUnlock()
+	us.cacheMu.RUnlock()
 
-	// Cache miss: upgrade to the full write lock and self-heal from disk
+	// Cache miss: acquire ONLY this session's shard and self-heal from disk
 	// (readMetaLocked populates the cache on a successful read). Preserves
-	// the existing not-found error contract.
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	// the existing not-found error contract, without contending with any
+	// OTHER session's concurrent operation (was: store-global us.mu.Lock()).
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 	meta, err := us.readMetaLocked(sessionID)
 	if err != nil {
 		return nil, err
@@ -535,46 +780,175 @@ func (us *UnifiedStore) GetMeta(sessionID string) (*UnifiedMeta, error) {
 }
 
 // SetMeta applies a partial update to a session's meta.json.
+//
+// ADR-057 W23/FR-084: unlike the pre-split version, this no longer funnels
+// every patch through one whole-document rewrite. Each non-nil patch field
+// is routed to its OWN field group (identity/stats/goal/loop, FR-053), and
+// ONLY the group(s) actually touched by this call are written — a `/goal`
+// or `/loop` patch no longer rewrites meta.json's UpdatedAt or touches
+// stats.json at all (BDD-59: a goal round leaves loop.json AND meta.json
+// byte-identical). meta.json's own UpdatedAt is bumped only when an
+// identity-group field (including the new ParentSessionID) is touched;
+// Goal*/Loop* groups carry no UpdatedAt of their own (only stats.json does,
+// per FR-053/FR-066) so a goal/loop-only patch does not change the
+// session's composed recency.
 func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	if err := validateSessionID(sessionID); err != nil {
 		return err
 	}
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 
 	meta, err := us.readMetaLocked(sessionID)
 	if err != nil {
 		return err
 	}
+
+	var identityTouched, goalTouched, loopTouched bool
+
 	if patch.Title != nil {
 		meta.Title = *patch.Title
+		identityTouched = true
 	}
 	if patch.Status != nil {
 		meta.Status = *patch.Status
+		identityTouched = true
 	}
 	if patch.TaskID != nil {
 		meta.TaskID = *patch.TaskID
+		identityTouched = true
 	}
 	if patch.Owner != nil {
 		meta.Owner = *patch.Owner
+		identityTouched = true
 	}
 	if patch.WorkspaceID != nil {
 		meta.WorkspaceID = *patch.WorkspaceID
+		identityTouched = true
 	}
-	meta.UpdatedAt = time.Now().UTC()
-	return us.writeMetaLocked(sessionID, meta)
+	if patch.ParentSessionID != nil {
+		meta.ParentSessionID = *patch.ParentSessionID
+		identityTouched = true
+	}
+	if patch.GoalID != nil {
+		meta.GoalID = *patch.GoalID
+		goalTouched = true
+	}
+	if patch.GoalCondition != nil {
+		meta.GoalCondition = *patch.GoalCondition
+		goalTouched = true
+	}
+	if patch.GoalRoundsUsed != nil {
+		meta.GoalRoundsUsed = *patch.GoalRoundsUsed
+		goalTouched = true
+	}
+	if patch.GoalMaxRounds != nil {
+		meta.GoalMaxRounds = *patch.GoalMaxRounds
+		goalTouched = true
+	}
+	if patch.GoalLatestReason != nil {
+		meta.GoalLatestReason = *patch.GoalLatestReason
+		goalTouched = true
+	}
+	if patch.GoalStartedAt != nil {
+		meta.GoalStartedAt = *patch.GoalStartedAt
+		goalTouched = true
+	}
+	if patch.GoalLastActivityAt != nil {
+		meta.GoalLastActivityAt = *patch.GoalLastActivityAt
+		goalTouched = true
+	}
+	if patch.GoalCriteriaJSON != nil {
+		meta.GoalCriteriaJSON = *patch.GoalCriteriaJSON
+		goalTouched = true
+	}
+	if patch.GoalPendingJSON != nil {
+		meta.GoalPendingJSON = *patch.GoalPendingJSON
+		goalTouched = true
+	}
+	if patch.LoopMode != nil {
+		meta.LoopMode = *patch.LoopMode
+		loopTouched = true
+	}
+	if patch.LoopPrompt != nil {
+		meta.LoopPrompt = *patch.LoopPrompt
+		loopTouched = true
+	}
+	if patch.LoopRunCount != nil {
+		meta.LoopRunCount = *patch.LoopRunCount
+		loopTouched = true
+	}
+	if patch.LoopMaxRuns != nil {
+		meta.LoopMaxRuns = *patch.LoopMaxRuns
+		loopTouched = true
+	}
+	if patch.LoopIntervalMS != nil {
+		meta.LoopIntervalMS = *patch.LoopIntervalMS
+		loopTouched = true
+	}
+	if patch.LoopNextDelayMS != nil {
+		meta.LoopNextDelayMS = *patch.LoopNextDelayMS
+		loopTouched = true
+	}
+	if patch.LoopJobID != nil {
+		meta.LoopJobID = *patch.LoopJobID
+		loopTouched = true
+	}
+	if patch.LoopStartedAt != nil {
+		meta.LoopStartedAt = *patch.LoopStartedAt
+		loopTouched = true
+	}
+	if patch.LoopLastActivityAt != nil {
+		meta.LoopLastActivityAt = *patch.LoopLastActivityAt
+		loopTouched = true
+	}
+
+	if identityTouched {
+		meta.UpdatedAt = time.Now().UTC()
+		if err := us.u5WriteIdentityLocked(sessionID, meta); err != nil {
+			return err
+		}
+	}
+	if patch.Status != nil {
+		// ADR-057 U6 W24 (FR-064): a Status transition is one of the four
+		// forced-flush points — a session about to pause/complete/error
+		// must not leave pending counter deltas stranded in the cache until
+		// the next periodic tick. This call already holds sessionID's shard
+		// (h, acquired above), so u6FlushDirtySessionLocked is safe to call
+		// directly. A flush failure here is logged, not returned: the
+		// Status write itself already succeeded durably above, and failing
+		// the whole SetMeta call would make a successfully-persisted status
+		// change look like a lost one (same rationale AppendTranscript uses
+		// for its own post-write stats failure).
+		if err := us.u6FlushDirtySessionLocked(sessionID); err != nil {
+			slog.Warn("unified_store: forced stats flush on status change failed",
+				"session_id", sessionID, "error", err)
+		}
+	}
+	if goalTouched {
+		if err := us.u5WriteGoalLocked(sessionID, meta); err != nil {
+			return err
+		}
+	}
+	if loopTouched {
+		if err := us.u5WriteLoopLocked(sessionID, meta); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SwitchAgent atomically updates the ActiveAgentID on a session.
-// The caller must NOT hold us.mu. Returns ErrAlreadyActive if the session
+// The caller must NOT already hold sessionID's shard (see lockSession) — was:
+// caller must NOT hold us.mu. Returns ErrAlreadyActive if the session
 // is already on newAgentID (idempotent — callers should treat this as success).
 // newAgentID is appended to AgentIDs if not already present.
 func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 	if err := validateSessionID(sessionID); err != nil {
 		return err
 	}
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 
 	meta, err := us.readMetaLocked(sessionID)
 	if err != nil {
@@ -596,23 +970,35 @@ func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 		meta.AgentIDs = append(meta.AgentIDs, newAgentID)
 	}
 	meta.UpdatedAt = time.Now().UTC()
-	return us.writeMetaLocked(sessionID, meta)
+	// ActiveAgentID/AgentIDs are identity-group fields (FR-053).
+	return us.u5WriteIdentityLocked(sessionID, meta)
 }
 
 // readMetaLocked returns an INDEPENDENT CLONE of sessionID's metadata,
 // never the live cache entry pointer, on both the cache-hit and cache-miss
-// paths. Caller must hold us.mu (the full write lock — see below).
+// paths. Caller must hold sessionID's shard (see lockSession) — was: caller
+// must hold us.mu (the full write lock). FROZEN SIGNATURE (cross-unit
+// contract, U2/U5): U2's AppendTranscriptStrict existence predicate is
+// "readMetaLocked returned a non-nil error"; U5's W23 file split may change
+// only this method's internals, never its signature.
+//
+// Internally this method touches metaCache ONLY under the narrower cacheMu
+// (FR-048(b)), and the disk read (readUnifiedMeta) happens OUTSIDE any
+// cacheMu critical section (FR-049 — cacheMu is never held across an os.*/
+// fileutil.* call). Correctness against a concurrent cache-miss reader for
+// the SAME sessionID still holds because the caller's session shard already
+// serializes that — cacheMu only needs to protect the map itself.
 //
 // MB-1 fix (cache/disk divergence on write failure): an earlier version of
 // this method returned the LIVE cache entry pointer on a hit, reasoning that
 // every read-modify-write caller (SetMeta, SwitchAgent, AppendTranscript,
-// GetOrCreateScheduledSession, GetMeta's cache-miss path) holds us.mu.Lock()
-// — the full exclusive lock — across its entire mutate-then-write, so no
-// RLock holder could observe the entry mid-mutation. That reasoning covered
-// the SUCCESS path but not FAILURE: those callers mutate the returned value
-// in place and then call writeMetaLocked; if the disk write failed,
-// writeMetaLocked returned early WITHOUT re-storing a clone — but the
-// in-place mutation had already corrupted the shared cached object, so
+// GetOrCreateScheduledSession, GetMeta's cache-miss path) holds the
+// session's shard across its entire mutate-then-write, so no reader of a
+// DIFFERENT session could observe this entry mid-mutation. That reasoning
+// covered the SUCCESS path but not FAILURE: those callers mutate the
+// returned value in place and then call writeMetaLocked; if the disk write
+// failed, writeMetaLocked returned early WITHOUT re-storing a clone — but
+// the in-place mutation had already corrupted the shared cached object, so
 // GetMeta/ListSessions would go on reporting the unpersisted, attempted
 // value while meta.json on disk still held the old one. Cloning on every
 // read (not just every write) closes this: every RMW caller now mutates its
@@ -621,54 +1007,150 @@ func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 // persisted (the prior cache value on a hit, or the freshly disk-read value
 // on a miss).
 //
-// Callers that hand this value to code outside us.mu (GetMeta's cache-miss
-// path, GetOrCreateScheduledSession) may return it directly — it is already
-// an independent clone — though both currently call .Clone() on it again
-// before returning; that second clone is redundant but harmless (kept as
-// defensive belt-and-braces so a future readMetaLocked change can never leak
-// a live cache pointer to those external-facing call sites).
+// Callers that hand this value to code outside the session's shard (GetMeta's
+// cache-miss path, GetOrCreateScheduledSession) may return it directly — it
+// is already an independent clone — though both currently call .Clone() on
+// it again before returning; that second clone is redundant but harmless
+// (kept as defensive belt-and-braces so a future readMetaLocked change can
+// never leak a live cache pointer to those external-facing call sites).
 //
-// On a cache miss, reads meta.json from disk, populates the cache with the
-// freshly-unmarshaled (necessarily unaliased) object, and returns a clone of
-// it.
+// On a cache miss, composes the session's meta from disk via readUnifiedMeta
+// (ADR-057 W23: meta.json plus stats.json/goal.json/loop.json, each
+// optional except meta.json — see readUnifiedMeta's doc comment), populates
+// the cache with the freshly-composed (necessarily unaliased) object, and
+// returns a clone of it.
 func (us *UnifiedStore) readMetaLocked(sessionID string) (*UnifiedMeta, error) {
+	us.cacheMu.RLock()
 	if meta, ok := us.metaCache[sessionID]; ok {
+		us.cacheMu.RUnlock()
 		return meta.Clone(), nil
 	}
+	us.cacheMu.RUnlock()
+
 	meta, err := readUnifiedMeta(filepath.Join(us.baseDir, sessionID))
 	if err != nil {
 		return nil, err
 	}
+	us.cacheMu.Lock()
 	us.metaCache[sessionID] = meta
+	us.cacheMu.Unlock()
+
+	// FR-097 (Defect-1 fix): wire the parent index on this cache-miss
+	// self-heal too — OUTSIDE the cacheMu critical section above (it takes
+	// cacheMu itself; sync.Mutex is not reentrant), exactly mirroring
+	// u5WriteIdentityLocked's own ADD-side call in unified_meta_files.go.
+	// Before this fix, this was the second of two metaCache-population
+	// paths (alongside loadMetaCacheLocked) that populated the cache
+	// without ever touching parentIndex/childToParent — every caller that
+	// reaches this branch (GetMeta, SetMeta, SwitchAgent, AppendTranscript,
+	// GetOrCreateScheduledSession, ListSessions' out-of-band reconcile) was
+	// silently leaving ChildCount under-reporting for the session it just
+	// composed from disk. A no-op when meta.ParentSessionID is empty;
+	// idempotent otherwise.
+	us.u4IndexAddChild(meta.ParentSessionID, sessionID)
 	return meta.Clone(), nil
 }
 
-// writeMetaLocked atomically writes meta.json for sessionID, acquiring an OS
-// flock for cross-process defense-in-depth, then refreshes metaCache with an
-// independent clone of the just-written value. Caller must hold us.mu.
+// writeMetaLocked is RETAINED, post-W23, as a backward-compatible DISPATCHER
+// over the four FR-054 targeted field-group writers
+// (u5WriteIdentityLocked/u5WriteStatsLocked/u5WriteGoalLocked/
+// u5WriteLoopLocked, unified_meta_files.go) — it is no longer "the single
+// invalidation/update point for every mutation path" (that whole-document
+// funnel is exactly what FR-084/Alternative-F forbids; see the doc comments
+// above metaCache and readMetaLocked). This file's OWN five mutation paths
+// (createSessionLocked, SetMeta, SwitchAgent, AppendTranscript,
+// NewChannelSession) call the four targeted writers DIRECTLY and never reach
+// this function.
 //
-// This is the single invalidation/update point for every mutation path:
-// createSessionLocked, SetMeta, SwitchAgent, AppendTranscript, and
-// NewChannelSession's direct post-create call all funnel through here, so
-// the cache can never observe a mutation that didn't also land on disk.
-// (writeUnifiedMetaDirect, used only by migrateLegacy before the cache
-// exists, does not need this hook.)
+// It survives only for pkg/session/unified_api.go's two call sites
+// (AppendTranscriptStrict's stats-only mutation, CreateSessionWithID's
+// identity-only Owner stamp) — U2's file, landed commit acfd0e5a in this
+// same wave BEFORE this rewrite reached unified.go, both passing one fully-
+// mutated *UnifiedMeta rather than a field-group-scoped patch. Ownership
+// Rule 1/2 forbids this unit from editing unified_api.go to convert those
+// two call sites itself, so this function closes the gap from this side of
+// the boundary: it diffs the supplied meta against the meta CURRENTLY
+// cached/persisted for sessionID to determine exactly which of the four
+// field groups actually changed (identity's own UpdatedAt is excluded from
+// that comparison — a Stats-only touch, e.g. AppendTranscriptStrict, always
+// changes the single in-memory UpdatedAt field, and that must not be
+// misread as an identity change), and calls ONLY the targeted writer(s)
+// for the group(s) that differ. This keeps FR-084's "update only its own
+// field group, never a wholesale cache replace" true for these two call
+// sites as well, and preserves W23's lazy-file-creation property (a
+// delegated child that only ever calls AppendTranscriptStrict never gains
+// an empty goal.json/loop.json it never touched).
+//
+// Caller must hold sessionID's shard (see lockSession) — was: caller must
+// hold us.mu. (writeUnifiedMetaDirect, used only by migrateLegacy before the
+// cache exists, is a SEPARATE, unmodified function — FR-060 forbids
+// changing it or providing a reader for its pre-split fused output; nothing
+// in this dispatcher touches it.)
 func (us *UnifiedStore) writeMetaLocked(sessionID string, meta *UnifiedMeta) error {
-	data, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return fmt.Errorf("unified_store: marshal meta: %w", err)
+	prev, prevErr := us.readMetaLocked(sessionID)
+
+	writeIdentity, writeStats, writeGoal, writeLoop := true, true, true, true
+	if prevErr == nil {
+		prevIdentity, curIdentity := u5IdentityFromMeta(prev), u5IdentityFromMeta(meta)
+		// UpdatedAt is the single in-memory field shared by BOTH the identity
+		// and stats groups (FR-066 composes them on read) — excluded here so
+		// a Stats-only caller (AppendTranscriptStrict) that bumps it does not
+		// register as an identity change too.
+		prevIdentity.UpdatedAt, curIdentity.UpdatedAt = time.Time{}, time.Time{}
+		writeIdentity = !u5SameJSON(prevIdentity, curIdentity)
+		writeStats = !u5SameJSON(u5StatsFromMeta(prev), u5StatsFromMeta(meta))
+		writeGoal = !u5SameJSON(u5GoalFromMeta(prev), u5GoalFromMeta(meta))
+		writeLoop = !u5SameJSON(u5LoopFromMeta(prev), u5LoopFromMeta(meta))
 	}
-	metaPath := filepath.Join(us.baseDir, sessionID, "meta.json")
-	if err := fileutil.WithFlock(metaPath, func() error {
-		return writeFileAtomicFn(metaPath, data, 0o600)
-	}); err != nil {
-		return err
+
+	if writeIdentity {
+		if err := us.u5WriteIdentityLocked(sessionID, meta); err != nil {
+			return err
+		}
 	}
-	us.metaCache[sessionID] = meta.Clone()
+	if writeStats {
+		if err := us.u5WriteStatsLocked(sessionID, meta); err != nil {
+			return err
+		}
+	}
+	if writeGoal {
+		if err := us.u5WriteGoalLocked(sessionID, meta); err != nil {
+			return err
+		}
+	}
+	if writeLoop {
+		if err := us.u5WriteLoopLocked(sessionID, meta); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // AppendTranscript appends an entry to {session-id}/transcript.jsonl.
+//
+// R-8 fix (ADR-057 FR-048): this used to take the store-global us.mu on
+// EVERY streamed line, held across the append AND a full meta rewrite — a
+// 24-way delegation fan-out serialised 24 fsync-bound creates/appends and
+// stalled token streaming in every OTHER session in the store. Now it takes
+// only sessionID's own shard, so a concurrent append/create against a
+// DIFFERENT session never waits on this one.
+//
+// STRICT (ADR-057 FR-002/W3a, AC-1). Before this change, the existence
+// check ran AFTER the transcript write: fileutil.AppendJSONL begins with
+// os.MkdirAll, so an append against a session id with no meta.json silently
+// minted an orphan directory, wrote the line into it, then failed the
+// follow-up meta-stats read, logged a WARN, and returned nil — "success"
+// for a write that both landed somewhere nobody asked for AND told its
+// caller nothing went wrong. That lenient branch is DELETED, not converted
+// into a strict SIBLING: AC-1's frozen text is a property of
+// AppendTranscript itself, so a sibling (AppendTranscriptStrict, U2's
+// unified_api.go) would only satisfy it for callers that switched to the
+// sibling — every one of the 22 tree-wide AppendTranscript( matches would
+// still be able to silently create (`[grill2 C2-3]`). The existence check
+// now runs FIRST, under sessionID's own shard, before ANY filesystem write:
+// an unknown session id returns a non-nil error and creates ZERO
+// directories (SC-001), matching AppendTranscriptStrict's contract exactly
+// — "a name, not a second behavior" per FR-002's own text.
 func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry) error {
 	if err := validateSessionID(sessionID); err != nil {
 		return err
@@ -677,20 +1159,23 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 		entry.Timestamp = time.Now().UTC()
 	}
 
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
+
+	// Existence check FIRST — see this method's doc comment above. No
+	// filesystem write of any kind happens before this succeeds.
+	meta, err := us.readMetaLocked(sessionID)
+	if err != nil {
+		return fmt.Errorf("unified_store: append transcript: session %q does not exist: %w", sessionID, err)
+	}
 
 	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
 	if err := fileutil.AppendJSONL(transcriptPath, entry); err != nil {
 		return fmt.Errorf("unified_store: append transcript: %w", err)
 	}
 
-	// Update stats and UpdatedAt in meta (best-effort).
-	meta, err := us.readMetaLocked(sessionID)
-	if err != nil {
-		slog.Warn("unified_store: could not update meta stats", "session_id", sessionID, "error", err)
-		return nil
-	}
+	// Update stats and UpdatedAt — targeted stats-group write only (FR-084);
+	// a transcript append never touches meta.json/goal.json/loop.json.
 	if entry.Role == "assistant" {
 		meta.Stats.TokensOut += entry.Tokens
 		meta.Stats.TokensCacheRead += entry.CacheReadTokens
@@ -715,15 +1200,18 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 		meta.Stats.MessageCount++
 	}
 	meta.UpdatedAt = entry.Timestamp
-	if writeErr := us.writeMetaLocked(sessionID, meta); writeErr != nil {
-		slog.Warn(
-			"unified_store: could not write meta after transcript append",
-			"session_id",
-			sessionID,
-			"error",
-			writeErr,
-		)
-	}
+	// ADR-057 U6 W24 (FR-061/FR-062): the per-token counter write is
+	// throttled — this mutates ONLY the cached entry (never touching
+	// stats.json on disk) and marks the session dirty for the periodic
+	// flusher (or the next forced-flush point) to persist. The transcript
+	// line itself already landed durably above via fileutil.AppendJSONL
+	// (FR-062: the append stays immediate and unthrottled); only the
+	// counters are deferred. Before this throttle, this call site invoked
+	// u5WriteStatsLocked directly — a full marshal + WithFlock + fsync +
+	// rename + directory fsync on EVERY streamed line (US-13's governing
+	// complaint). u6MarkStatsDirtyLocked can never fail (it is pure
+	// in-memory bookkeeping), so there is no error to log here.
+	us.u6MarkStatsDirtyLocked(sessionID, meta)
 	return nil
 }
 
@@ -741,7 +1229,9 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 // preserves backward compatibility with any call sites that cannot supply
 // a turn ID.
 //
-// Acquires the same in-process mutex as AppendTranscript. Does NOT touch
+// Acquires the same per-session shard as AppendTranscript (see lockSession),
+// so it serializes with any concurrent operation against THIS session
+// without contending with any other session's shard. Does NOT touch
 // context.jsonl (LLM history) — per FR-14a, the partial content there remains
 // untouched so the next turn's LLM context sees natural truncation.
 //
@@ -760,8 +1250,8 @@ func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID string) error {
 		)
 	}
 
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 
 	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
 	data, err := os.ReadFile(transcriptPath)
@@ -947,8 +1437,8 @@ func (us *UnifiedStore) UpdateToolCallStatusAndResult(
 		return false, nil
 	}
 
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 
 	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
 	data, err := os.ReadFile(transcriptPath)
@@ -1107,16 +1597,47 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 // reconcile against disk should not erase sessions this store already knows
 // about from a prior successful call.
 //
-// Reconciliation requires mutating metaCache (via readMetaLocked), which
-// needs the full write lock — an RLock cannot be upgraded to a Lock without
-// risking deadlock, so the whole method runs under us.mu.Lock() rather than
-// the previous RLock. This serializes ListSessions with writers for the
-// duration of the call, but ListSessions is not on a hot path, and the
+// Consistency model (FR-086, post-striping): a best-effort POINT-IN-TIME
+// snapshot. It MAY omit a session deleted DURING this call, MUST NOT panic
+// or deadlock, and MUST NOT return a partially-composed meta. It MUST NOT
+// return a session whose directory was already absent when the call began
+// (FR-086's "must not resurrect a gone session" clause) — ADR-057 U6 (Wave
+// D) closes this: the reconcile pass below now PRUNES a metaCache entry
+// whose directory vanished out of band (RetentionSweep, an operator rm, a
+// crashed deploy — FR-097a) in the SAME pass that adds newly-discovered
+// out-of-band directories, reusing the single os.ReadDir result for both
+// directions so the prune costs ZERO additional disk reads beyond what this
+// method already performed before FR-097a existed. A cacheLoadFailures
+// exclusion (Ambiguity item 8) is untouched by this: a session that failed
+// to load at construction was never admitted into metaCache, so it is never
+// a candidate for this prune.
+//
+// FR-051 locking (replacing the old store-global us.mu.Lock() for the whole
+// call): reconciliation of each out-of-band directory happens under THAT
+// session's own shard only (lockSession), never a store-global lock, so a
+// concurrent create/append/etc. against a DIFFERENT session is never blocked
+// by a ListSessions call in flight. The final snapshot is taken under
+// cacheMu.RLock — a short, I/O-free critical section (FR-049) — so the
 // steady-state (no out-of-band directories) cost is unchanged: one
-// os.ReadDir plus map lookups, still zero per-session disk reads.
-func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
-	us.mu.Lock()
+// os.ReadDir plus map lookups, zero per-session disk reads.
+//
+// FR-102 seam: u6ReconcileSnapshotBarrierFn (unified_stats_flush.go) fires
+// between the reconcile pass (add + prune) above and the final snapshot
+// below, letting an in-package test interleave a DeleteSession
+// deterministically at exactly that boundary (BDD-95/#92/SC-041) instead of
+// hoping go test -race happens to hit the window.
+//
+// Defect-2 fix seam: listSessionsPruneRaceBarrierFn fires right after the
+// os.ReadDir snapshot below is captured but BEFORE onDisk is built from it,
+// letting an in-package test deterministically create (or dirty-mark) a
+// session in the exact window a real concurrent goroutine would occupy
+// between this call's ReadDir and its stale-eviction pass further down —
+// see the stale-eviction loop's own doc comment for why that window used to
+// be able to permanently lose a session's unflushed stats and parent-index
+// edge. Default no-op; overridden only by a test in this package.
+var listSessionsPruneRaceBarrierFn = func() {}
 
+func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 	var listErr error
 	entries, err := os.ReadDir(us.baseDir)
 	if err != nil {
@@ -1125,6 +1646,8 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 			listErr = fmt.Errorf("unified_store: list sessions: read base dir %q: %w", us.baseDir, err)
 		}
 	} else {
+		listSessionsPruneRaceBarrierFn()
+		onDisk := make(map[string]struct{}, len(entries))
 		for _, entry := range entries {
 			if !entry.IsDir() || entry.Name() == ".context" {
 				continue
@@ -1133,14 +1656,23 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 			if err := validateSessionID(name); err != nil {
 				continue
 			}
-			if _, cached := us.metaCache[name]; cached {
+			onDisk[name] = struct{}{}
+
+			us.cacheMu.RLock()
+			_, cached := us.metaCache[name]
+			us.cacheMu.RUnlock()
+			if cached {
 				// Already cached — no per-file disk read needed.
 				continue
 			}
 			// Unknown on-disk directory: lazily load via the standard
-			// self-heal path, which also populates metaCache as a side
+			// self-heal path under ONLY this session's shard (never a
+			// store-global lock), which also populates metaCache as a side
 			// effect (see readMetaLocked's cache-miss branch).
-			if _, readErr := us.readMetaLocked(name); readErr != nil {
+			h := us.lockSession(name)
+			_, readErr := us.readMetaLocked(name)
+			h.Unlock()
+			if readErr != nil {
 				slog.Warn(
 					"unified_store: list sessions: skipping unreadable out-of-band session dir",
 					"dir", name, "error", readErr,
@@ -1148,18 +1680,158 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 				continue
 			}
 		}
+
+		// FR-097a: evict any cached session absent from onDisk — its
+		// directory vanished out of band since it was cached. Snapshot the
+		// stale ids first (a short cacheMu.RLock, no I/O), then evict each
+		// under ITS OWN shard (mirroring DeleteSession's own lock order:
+		// sessionLock(id) -> cacheMu -> u4IndexEvict) so a concurrent
+		// create/delete for the SAME id can never interleave mid-eviction.
+		//
+		// Defect-2 fix: onDisk above is a SNAPSHOT from the os.ReadDir call
+		// at the top of this method — it is stale the instant a concurrent
+		// goroutine creates a new session between that ReadDir and this loop
+		// reaching its id. Such a session is NOT a deletion (its directory
+		// exists right now); evicting it unconditionally would silently and
+		// permanently drop any cache-only-dirty stats delta it had accrued
+		// (u6MarkStatsDirtyLocked/D12 defers the stats.json write, so the
+		// cache entry can be the ONLY copy of a token/cost update) and its
+		// FR-097 parent-index edge, with no re-add path — the exact
+		// "success-shaped" silent data loss this whole spec exists to close
+		// out. So each candidate is RE-STAT'd, under its own shard, right
+		// before eviction — mirroring ClearAll's own re-stat pattern
+		// (unified.go, ClearAll's "remaining" sweep) — and only evicted when
+		// the directory is confirmed genuinely gone (os.ErrNotExist). An
+		// ambiguous stat error (e.g. a permission blip) also skips eviction,
+		// erring on the side of not losing data; a genuine deletion missed
+		// this way is simply re-observed as stale on a later ListSessions
+		// call once its absence is stable across an entire ReadDir snapshot.
+		us.cacheMu.RLock()
+		staleIDs := make([]string, 0)
+		for id := range us.metaCache {
+			if _, present := onDisk[id]; !present {
+				staleIDs = append(staleIDs, id)
+			}
+		}
+		us.cacheMu.RUnlock()
+		for _, id := range staleIDs {
+			h := us.lockSession(id)
+			if _, statErr := os.Stat(filepath.Join(us.baseDir, id)); !errors.Is(statErr, os.ErrNotExist) {
+				// The directory exists now (created/recreated after the
+				// ReadDir snapshot above) or the stat was inconclusive —
+				// this is a live session, not a deletion. Do not evict.
+				h.Unlock()
+				continue
+			}
+			us.cacheMu.Lock()
+			delete(us.metaCache, id)
+			delete(us.dirtyStats, id)
+			us.cacheMu.Unlock()
+			us.u4IndexEvict(id) // FR-097
+			h.Unlock()
+		}
 	}
 
+	// FR-102 barrier — see this method's doc comment.
+	u6ReconcileSnapshotBarrierFn()
+
+	us.cacheMu.RLock()
 	metas := make([]*UnifiedMeta, 0, len(us.metaCache))
 	for _, meta := range us.metaCache {
 		metas = append(metas, meta.Clone())
 	}
-	us.mu.Unlock()
+	us.cacheMu.RUnlock()
 
+	// FR-098-style stable ordering at the store layer: UpdatedAt descending
+	// with session id as a tiebreak, so two sessions sharing one timestamp
+	// (down to whatever resolution the clock/filesystem gives) cannot
+	// silently swap places between two calls with no intervening write —
+	// slices.SortFunc alone is not a stable sort, and comparing only
+	// UpdatedAt leaves ties resolved by map iteration order, which Go
+	// deliberately randomizes.
 	slices.SortFunc(metas, func(a, b *UnifiedMeta) int {
-		return b.UpdatedAt.Compare(a.UpdatedAt)
+		if c := b.UpdatedAt.Compare(a.UpdatedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
 	})
 	return metas, listErr
+}
+
+// SessionListPage is the ADR-057 FR-092 store-layer pagination result
+// (W16a): a bounded window of ListSessions' full recency-ordered sequence,
+// plus enough information for a caller to fetch the next page. Additive —
+// ListSessions() itself keeps its existing zero-arg, "return everything"
+// signature so every caller outside this migration's own session-list
+// pipeline (usage aggregation, boot sweep, admin tooling, and the many other
+// consumers `ListSessions()` already has across the tree) keeps compiling
+// unchanged. ListSessionsPage is the primitive AgentLoop.ListAllSessions
+// (pkg/agent/loop.go, U9, FR-098) is meant to call once it adopts
+// pagination end to end; U6 does not — cannot, per ownership Rule 2 — edit
+// that file itself.
+type SessionListPage struct {
+	// Sessions is this page's window, in the same UpdatedAt-descending,
+	// id-tiebroken order ListSessions() returns.
+	Sessions []*UnifiedMeta
+	// NextOffset is the offset to request for the next page, or -1 when
+	// this page reached the end of the sequence.
+	NextOffset int
+	// Total is the full sequence length (post FR-097a prune) at the moment
+	// this page was computed — informational only; callers MUST NOT assume
+	// it is stable across calls on a live store.
+	Total int
+}
+
+// ListSessionsPage returns a stably-ordered window of ListSessions' result
+// (FR-092/FR-098's "window correctness + stability", #100(a)): two identical
+// calls with no intervening write return a byte-identical window, because
+// the underlying ListSessions() ordering is itself now a total order (see
+// its doc comment). It performs the EXACT SAME reconcile + FR-097a prune
+// pass as ListSessions() — this is a bounded VIEW over that same call, not a
+// second listing mechanism, so it inherits ListSessions' consistency model
+// (FR-086) and its zero-per-session-disk-read warm-cache cost (FR-058/
+// FR-103) unchanged.
+//
+// limit <= 0 means "no limit" — the remainder of the sequence from offset is
+// returned in one page. offset < 0 is treated as 0. An offset at or beyond
+// the end of the sequence returns an empty, non-nil Sessions slice with
+// NextOffset == -1 — not an error.
+func (us *UnifiedStore) ListSessionsPage(offset, limit int) (SessionListPage, error) {
+	all, err := us.ListSessions()
+	if offset < 0 {
+		offset = 0
+	}
+	total := len(all)
+	if offset >= total {
+		return SessionListPage{Sessions: []*UnifiedMeta{}, NextOffset: -1, Total: total}, err
+	}
+	end := total
+	if limit > 0 && offset+limit < total {
+		end = offset + limit
+	}
+	nextOffset := -1
+	if end < total {
+		nextOffset = end
+	}
+	page := make([]*UnifiedMeta, end-offset)
+	copy(page, all[offset:end])
+	return SessionListPage{Sessions: page, NextOffset: nextOffset, Total: total}, err
+}
+
+// IsOrphan reports whether meta's ParentSessionID names a session that no
+// longer exists in this store's metaCache (BDD-106: "an orphaned child is
+// listed as a root, not dropped" — the U18/REST listing layer's roots-only
+// view needs to know this to avoid silently hiding such a child forever).
+// O(1), no disk read — a direct FR-097-adjacent metaCache membership check.
+// Returns false for a root (empty ParentSessionID) and for a nil meta.
+func (us *UnifiedStore) IsOrphan(meta *UnifiedMeta) bool {
+	if meta == nil || meta.ParentSessionID == "" {
+		return false
+	}
+	us.cacheMu.RLock()
+	defer us.cacheMu.RUnlock()
+	_, parentExists := us.metaCache[meta.ParentSessionID]
+	return !parentExists
 }
 
 // AddMessage implements SessionStore — appends a simple role/content message to context.jsonl.
@@ -1255,7 +1927,17 @@ func (us *UnifiedStore) Save(sessionKey string) error {
 }
 
 // Close implements SessionStore.
+//
+// ADR-057 U6 W24 (FR-064): UnifiedStore.Close had no flush hook at all
+// before this throttle existed — moot while every stats write was
+// synchronous, but a real gap now that AppendTranscript defers its counter
+// bump. Close is the third of FR-064's four forced-flush points: it stops
+// the periodic flusher goroutine FIRST (so no tick can race the final flush
+// below or fire after Close returns) and then flushes every still-dirty
+// session's stats.json synchronously, before closing the context backend.
 func (us *UnifiedStore) Close() error {
+	us.stopStatsFlusher()
+	us.flushAllDirtyStats()
 	return us.backend.Close()
 }
 
@@ -1268,8 +1950,8 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 	if err := validateSessionID(sessionID); err != nil {
 		return err
 	}
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 
 	dir := filepath.Join(us.baseDir, sessionID)
 	if _, err := os.Stat(dir); err != nil {
@@ -1278,10 +1960,28 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 		}
 		return fmt.Errorf("unified_store: stat session %q: %w", sessionID, err)
 	}
+	// ADR-057 U6 W24 (FR-064) — DeleteSession's stated ordered sequence,
+	// step 2 of 6 ("flush the session's dirty stats under that shard"),
+	// BEFORE the directory removal in step 3. This still holds sessionID's
+	// shard (h, acquired above), so a concurrent periodic-flusher tick that
+	// already snapshotted this id as dirty either loses the shard race and
+	// finds the cache entry gone once it gets the shard (skips, no write —
+	// see u6FlushDirtySessionLocked), or wins it and flushes before this
+	// call even starts. A flush failure here is logged, not returned: the
+	// session is being deleted either way, so a stale/never-written
+	// stats.json is moot the instant os.RemoveAll below succeeds.
+	if err := us.u6FlushDirtySessionLocked(sessionID); err != nil {
+		slog.Warn("unified_store: forced stats flush before delete failed",
+			"session_id", sessionID, "error", err)
+	}
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("unified_store: delete session %q: %w", sessionID, err)
 	}
+	us.cacheMu.Lock()
 	delete(us.metaCache, sessionID)
+	delete(us.dirtyStats, sessionID) // step 5: drop the dirty-set entry too
+	us.cacheMu.Unlock()
+	us.u4IndexEvict(sessionID) // FR-097: drop sessionID from the parent index either as a parent or as a child
 	contextFile := filepath.Join(us.baseDir, ".context", sessionID+".jsonl")
 	os.Remove(contextFile) // best-effort, ignore error if file does not exist
 
@@ -1304,9 +2004,17 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 // continues to the next entry — but the failure is still surfaced to the
 // caller so a "clear all sessions" request cannot silently under-deliver on
 // this privacy-sensitive, destructive action.
+// Locking (FR-050(a) exception): ClearAll takes ALL 64 session shards, in
+// strictly ascending index order, via lockAllSessionShards — never
+// lockSession, which would deadlock (sync.Mutex is not reentrant and every
+// shard is already held by this goroutine). metaCache/cacheLoadFailures/the
+// parent index are still touched only under cacheMu, exactly as everywhere
+// else — holding every session shard does not exempt this method from that
+// rule, it only means no OTHER goroutine can be mid-mutation on any session
+// while this runs.
 func (us *UnifiedStore) ClearAll() (int, error) {
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	unlock := us.lockAllSessionShards()
+	defer unlock()
 
 	entries, err := os.ReadDir(us.baseDir)
 	if err != nil {
@@ -1329,7 +2037,11 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 			errs = append(errs, fmt.Errorf("unified_store: clear all: remove session dir %q: %w", entry.Name(), err))
 			continue
 		}
+		us.cacheMu.Lock()
 		delete(us.metaCache, entry.Name())
+		delete(us.dirtyStats, entry.Name())
+		us.cacheMu.Unlock()
+		us.u4IndexEvict(entry.Name()) // FR-097
 		contextFile := filepath.Join(us.baseDir, ".context", entry.Name()+".jsonl")
 		os.Remove(contextFile) // best-effort, ignore error if file does not exist
 		// Cascade-delete uploads for this session.
@@ -1350,32 +2062,160 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 	// leaving ListSessions to resurrect sessions that are gone from disk.
 	// Entries whose directory survived (a failed removal above) are kept, since
 	// those sessions genuinely still exist.
+	us.cacheMu.RLock()
+	remaining := make([]string, 0, len(us.metaCache))
 	for id := range us.metaCache {
+		remaining = append(remaining, id)
+	}
+	us.cacheMu.RUnlock()
+	for _, id := range remaining {
 		if _, statErr := os.Stat(filepath.Join(us.baseDir, id)); errors.Is(statErr, os.ErrNotExist) {
+			us.cacheMu.Lock()
 			delete(us.metaCache, id)
+			delete(us.dirtyStats, id)
+			us.cacheMu.Unlock()
+			us.u4IndexEvict(id) // FR-097
 		}
 	}
 
 	return removed, errors.Join(errs...)
 }
 
-// readUnifiedMeta reads meta.json from sessionDir, handling both legacy SessionMeta
-// (without Type) and UnifiedMeta (with Type).
+// --- ADR-057 FR-097: in-memory session parent index (surface) ---
+//
+// See UnifiedStore's parentIndex/childToParent field doc comment above for
+// the full design. Every method below assumes it is called OUTSIDE any
+// cacheMu critical section (it takes cacheMu itself) and OUTSIDE
+// lockAllSessionShards' held-shards window is NOT required —
+// DeleteSession/ClearAll/RetentionSweep call these after releasing cacheMu
+// but while still holding the relevant session shard(s), which is fine: the
+// lock order is sessionLock -> cacheMu, and these methods only ever take
+// cacheMu.
+
+// u4IndexAddChild registers childID as a direct child of parentID in the
+// FR-097 parent index. A no-op when parentID is empty (a root has no parent
+// to register under) or when parentID == childID (a malformed self-parent
+// must never be indexed — it would make ChildCount and the eventual
+// roots-only listing walk into themselves). Idempotent: registering the same
+// pair twice is harmless.
+//
+// WIRED (ADR-057 U5, Wave C): called from u5WriteIdentityLocked
+// (unified_meta_files.go) every time a session's identity group is written
+// — see the parentIndex field's doc comment above for the full call-site
+// list. This is the ADD half of the FR-097 surface; u4IndexEvict (below)
+// remains the DELETE/EVICT half, wired by U4 into
+// DeleteSession/ClearAll/RetentionSweep.
+func (us *UnifiedStore) u4IndexAddChild(parentID, childID string) {
+	if parentID == "" || parentID == childID {
+		return
+	}
+	us.cacheMu.Lock()
+	defer us.cacheMu.Unlock()
+	if us.parentIndex[parentID] == nil {
+		us.parentIndex[parentID] = make(map[string]struct{})
+	}
+	us.parentIndex[parentID][childID] = struct{}{}
+	us.childToParent[childID] = parentID
+}
+
+// u4IndexEvict removes id from the FR-097 parent index entirely, handling
+// both roles id may hold:
+//
+//   - If id is itself a tracked CHILD of some parent, that edge is dropped
+//     (the parent's child_count decrements — dataset row 5, "DeleteSession on
+//     a child").
+//   - If id is itself a tracked PARENT, every one of its former children has
+//     its own childToParent entry cleared, making each an orphan ROOT at the
+//     index level (dataset row 6, "DeleteSession on the parent"). Their own
+//     on-disk ParentSessionID is untouched here — patching that (once FR-008
+//     lands) belongs to whichever unit wires the write path, not this
+//     read/evict-only surface.
+//
+// Called whenever id's metaCache entry is deleted for a reason that means
+// the session itself is gone (DeleteSession, ClearAll, RetentionSweep's
+// empty-dir removal) — i.e. FR-097's "delete" and "eviction" mutation
+// points that this unit owns. Idempotent and safe to call for an id that was
+// never indexed at all.
+func (us *UnifiedStore) u4IndexEvict(id string) {
+	us.cacheMu.Lock()
+	defer us.cacheMu.Unlock()
+	if parentID, ok := us.childToParent[id]; ok {
+		if kids := us.parentIndex[parentID]; kids != nil {
+			delete(kids, id)
+			if len(kids) == 0 {
+				delete(us.parentIndex, parentID)
+			}
+		}
+		delete(us.childToParent, id)
+	}
+	if kids, ok := us.parentIndex[id]; ok {
+		for childID := range kids {
+			delete(us.childToParent, childID)
+		}
+		delete(us.parentIndex, id)
+	}
+}
+
+// ChildCount returns the number of DIRECT children sessionID has in the
+// FR-097 parent index, resolved in O(1) — the mechanism FR-091's per-root
+// child_count and FR-106-style orphan detection need. Returns 0 for a
+// session with no tracked children (including one never indexed at all —
+// the zero value of a missing map key). This is the "U6 consumes it for
+// listing" half of FR-097's stated ownership split; U6's Wave D listing
+// layer is the intended caller once it exists.
+func (us *UnifiedStore) ChildCount(sessionID string) int {
+	us.cacheMu.RLock()
+	defer us.cacheMu.RUnlock()
+	return len(us.parentIndex[sessionID])
+}
+
+// readUnifiedMeta reads sessionDir's meta and composes the ADR-057 W23
+// four-file split (FR-053) back into one *UnifiedMeta: meta.json (identity),
+// stats.json, goal.json, loop.json.
+//
+// FR-055: meta.json is REQUIRED — its absence or parse failure is always an
+// error (unchanged from the pre-split contract: this is the "does this
+// session exist at all" predicate every strict caller, including
+// AppendTranscript/AppendTranscriptStrict, keys on). stats.json/goal.json/
+// loop.json are each OPTIONAL: absent composes as that group's ZERO value
+// (a session that never ran a goal, never started a loop, or never had a
+// stats-touching write yet is not an error — dataset rows 2/3/8). FR-056: a
+// file that IS present but fails to parse surfaces an error for THAT group
+// specifically, never silently substituted with a zero value — "corrupt"
+// and "absent" are deliberately different outcomes (BDD-62).
+//
+// FR-060: this is the ONLY reader for the four-file split. It does NOT (and
+// must not) also accept a pre-split fused meta.json carrying embedded
+// Stats/Goal*/Loop* fields — greenfield permits this (ADR-057 v4 operator
+// decision 1: no migration, no back-compat) and migrateLegacy's own freshly
+// migrated sessions carry zero-valued Stats/Goal/Loop anyway, so composing
+// them from four files (three of which don't exist yet) yields the
+// identical zero result a fused reader would have.
 func readUnifiedMeta(sessionDir string) (*UnifiedMeta, error) {
-	data, err := os.ReadFile(filepath.Join(sessionDir, "meta.json"))
+	identity, err := u5ReadIdentityFile(sessionDir)
 	if err != nil {
-		return nil, fmt.Errorf("unified_store: read meta.json in %q: %w", sessionDir, err)
+		return nil, err
 	}
-	var meta UnifiedMeta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, fmt.Errorf("unified_store: parse meta.json in %q: %w", sessionDir, err)
+	stats, err := u5ReadStatsFile(sessionDir)
+	if err != nil {
+		return nil, fmt.Errorf("unified_store: read stats.json in %q: %w", sessionDir, err)
 	}
+	goal, err := u5ReadGoalFile(sessionDir)
+	if err != nil {
+		return nil, fmt.Errorf("unified_store: read goal.json in %q: %w", sessionDir, err)
+	}
+	loop, err := u5ReadLoopFile(sessionDir)
+	if err != nil {
+		return nil, fmt.Errorf("unified_store: read loop.json in %q: %w", sessionDir, err)
+	}
+
+	meta := u5ComposeUnifiedMeta(identity, stats, goal, loop)
 	// If Type is not set (legacy PartitionStore session), default to chat.
 	if meta.Type == "" {
 		meta.Type = SessionTypeChat
 	}
 	meta.PostLoad()
-	return &meta, nil
+	return meta, nil
 }
 
 // writeUnifiedMetaDirect atomically writes meta.json to sessionDir with an OS

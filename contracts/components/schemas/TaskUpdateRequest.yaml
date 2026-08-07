@@ -5,7 +5,7 @@ description: >
   `BoardTaskUpdateRequest`). No back-compat aliases. All fields are optional; only
   provided fields are updated (PATCH semantics). At least one field is required.
 
-  `status` accepts the full 7-state vocabulary. Note: `blocked` is normally an
+  `status` accepts the full 6-state vocabulary (ADR-051 D5). Note: `blocked` is normally an
   AUTO side-state managed by the dependency engine (set when a `blocked_by` dep is
   unmet, cleared to `next` when deps complete); setting it directly is allowed but
   the engine may override on the next dependency evaluation. Advancing a partial
@@ -36,12 +36,11 @@ properties:
     enum:
       - inbox
       - next
-      - planning
       - in_progress
       - blocked
       - done
       - failed
-    description: New task status (7-state lifecycle, Detail #1).
+    description: New task status (6-state lifecycle, ADR-051 D5).
     example: "in_progress"
   agent_id:
     type: string
@@ -81,10 +80,65 @@ properties:
       field updates (an empty `due` string is not a valid date-time and would be
       rejected).
     example: true
-  milestone_id:
+  tags:
+    type: array
+    maxItems: 16
+    items:
+      type: string
+      maxLength: 64
+    description: >
+      Replacement tag set (ADR-049 D1) — replaces the current `tags`
+      atomically. Lowercase, trimmed, deduplicated after normalization, at
+      most 16 per task, each at most 64 characters.
+    example:
+      - "milestone:v1.0-launch"
+  plan_id:
     type: string
-    description: New milestone grouping.
-    example: "m-5678"
+    description: >
+      New Plan grouping (ADR-049 D1/D4). Same-workspace FK — rejected 400 if
+      the plan is in a different workspace.
+    example: "01J3ZQK8N2H8VXNRP5T7C9M4WE"
+  write_set:
+    type: array
+    items:
+      type: string
+    description: >
+      ADR-053 §Contract Surface. Replacement set of concrete paths this plan
+      member creates/edits — see `Task.write_set`. Meaningful only alongside
+      `plan_id`; empty/absent for an exploratory member (D10) or a standalone
+      task.
+    example:
+      - "pkg/plan/plan_lint.go"
+  stream:
+    type: string
+    description: ADR-053 §Contract Surface — the parallel-group id this member belongs to.
+    example: "stream-schema"
+  is_join:
+    type: boolean
+    description: >
+      ADR-053 §Contract Surface — true marks this member as an authored
+      join/assemble member with its own criteria. Absent/false is the
+      common case — no schema `default:` (see `Task.yaml`'s `is_join` for
+      why: combining `default:` with an absent-from-`required` field
+      makes openapi-typescript emit it as non-optional regardless).
+    example: false
+  criteria:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterion.yaml
+    description: >
+      Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces
+      the current `criteria` atomically. Agent tool paths reject an update
+      that reduces the count below 1.
+  max_attempts:
+    type: integer
+    minimum: 1
+    nullable: true
+    description: >
+      New per-task override of the attempt ceiling before the goal loop
+      wakes the owner (ADR-049 D7/FR-9). Null clears the override (inherit
+      the global default).
+    example: 5
   surface:
     type: string
     enum:

@@ -72,6 +72,7 @@ func TestEffectiveFSPolicy_ReturnsConsistentPolicyShape(t *testing.T) {
 				filepath.Join(realHome, "credentials.json"),
 				filepath.Join(realHome, "agents"),
 				filepath.Join(realHome, "workspaces"),
+				filepath.Join(realHome, "entities"),
 			}
 			if len(policy.CarveOuts) != len(wantCarveOuts) {
 				t.Fatalf("CarveOuts = %v, want %v", policy.CarveOuts, wantCarveOuts)

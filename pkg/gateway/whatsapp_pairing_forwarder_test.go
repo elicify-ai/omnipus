@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // WhatsApp pairing WS-forwarder tests (#283): EventKindWhatsAppPairing →
 // whatsapp_pairing frame, the qr/message pointer mapping, and the per-connection
 // interest scoping (Option B) — a connection receives the QR only after it

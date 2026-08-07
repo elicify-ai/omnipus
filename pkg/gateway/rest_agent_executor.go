@@ -1,5 +1,3 @@
-//go:build !cgo
-
 package gateway
 
 import (
@@ -123,30 +121,6 @@ func executorConfigFromRequest(kind, cli string) (*config.ExecutorConfig, string
 	default:
 		return nil, fmt.Sprintf("executor.kind %q is invalid (valid: native, external-cli, remote-a2a)", kind)
 	}
-}
-
-// executorConfigToMap serializes a *config.ExecutorConfig into the JSON-map shape
-// written under agents.list[*].subagents.executor by the safeUpdateConfigJSON
-// writers. cli is omitted when empty (matches the `omitempty` on the Go struct).
-// cli_path, env_overrides, cli_args are similarly omitted when empty.
-func executorConfigToMap(ec *config.ExecutorConfig) map[string]any {
-	if ec == nil {
-		return nil
-	}
-	m := map[string]any{"kind": string(ec.EffectiveKind())}
-	if ec.CLI != "" {
-		m["cli"] = ec.CLI
-	}
-	if ec.CLIPath != "" {
-		m["cli_path"] = ec.CLIPath
-	}
-	if len(ec.EnvOverrides) > 0 {
-		m["env_overrides"] = ec.EnvOverrides
-	}
-	if ec.CLIArgs != "" {
-		m["cli_args"] = ec.CLIArgs
-	}
-	return m
 }
 
 // setAgentExecutorResponse populates the generated Agent.Executor response field

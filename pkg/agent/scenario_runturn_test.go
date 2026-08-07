@@ -230,6 +230,16 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 	// session ID. The routing layer resolves this to DMScopeMain (default),
 	// which produces session key "agent:main:main" via BuildAgentMainSessionKey.
 	// This is the key under which history is stored — not the caller-supplied key.
+	//
+	// ADR-058 (tool-denial semantics) strengthening: this denial is emitted by
+	// loop.go's TOCTOU policy-deny site (site 1), which is uniformly rewired
+	// through ClassifyDenial/denialPayloadJSON (spec §4.1 row 9, "policy_denied").
+	// The original assertion only checked for the substring "permission_denied"
+	// — that would pass even if the payload were malformed or a hardcoded
+	// stub. Parsing the JSON and asserting every field against the ADR-058
+	// classification table (rather than a re-derived call to ClassifyDenial,
+	// which would let a broken classifier grade its own homework) proves the
+	// real, honest, classified content reaches persisted history.
 	// -----------------------------------------------------------------------
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent, "default agent must exist after boot")
@@ -254,6 +264,47 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 		"session history must contain a role=tool message with 'permission_denied' in content; history: %v", history)
 	assert.Equal(t, "tool", toolDenyMsg.Role,
 		"synthetic deny result must have role=tool (not system or assistant)")
+
+	// ADR-058 FR-058-05/06 content test: decode the persisted payload and
+	// assert on every field's ACTUAL value, not just substring presence.
+	var denyPayload struct {
+		Error     string `json:"error"`
+		Message   string `json:"message"`
+		Tool      string `json:"tool"`
+		Reason    string `json:"reason"`
+		Permanent bool   `json:"permanent"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(toolDenyMsg.Content), &denyPayload),
+		"the persisted permission_denied message must be valid JSON, not a truncated/malformed string: %q",
+		toolDenyMsg.Content)
+
+	assert.Equal(t, "permission_denied", denyPayload.Error)
+	assert.Equal(t, "dangerous_tool", denyPayload.Tool,
+		"payload must name the ACTUAL denied tool — a hardcoded tool name would fail this")
+	assert.Equal(t, "policy_denied", denyPayload.Reason,
+		"ADR-058 spec §4.1 row 9: the TOCTOU policy-deny site's loop-pseudo-reason")
+	assert.True(t, denyPayload.Permanent,
+		"ADR-058 D1 row 8: a policy deny is PERMANENT — this is the pre-ADR-058 control case "+
+			"(§1.2 of the ADR) that already behaved correctly; it must keep doing so")
+	assert.Equal(t, "Tool execution denied by policy.", denyPayload.Message,
+		"ADR-058 D2's pinned literal for the policy-deny row — 'unchanged, already true' per the ADR; "+
+			"a paraphrase or drifted string must fail this")
+
+	// FR-058-06 negative guard: this reason must never claim a human denied
+	// anything (no human was ever asked — the policy pointer just flipped).
+	assert.NotContains(t, strings.ToLower(denyPayload.Message), denialUserMarker,
+		"a policy_denied message must never contain %q — nobody was asked, so nobody could have denied it",
+		denialUserMarker)
+
+	// Differentiation guard (anti-stub): if every denial reason rendered the
+	// SAME hardcoded message, this test's exact-match assertions above could
+	// still be satisfied by a classifier that ignores its input entirely.
+	// Cross-check against a DIFFERENT reason's pinned message to prove the
+	// classification is reason-specific, not a shared constant.
+	userCls, _ := ClassifyDenial("user")
+	assert.NotEqual(t, userCls.ModelMessage, denyPayload.Message,
+		"policy_denied and user must render DIFFERENT messages — an implementation that returns "+
+			"the same message for every reason would falsely pass every assertion above")
 
 	// -----------------------------------------------------------------------
 	// Assert (d): ScenarioProvider.CallCount() == 2 — both LLM steps fired.

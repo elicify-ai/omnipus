@@ -141,8 +141,12 @@ export async function startGateway(opts: StartGatewayOptions): Promise<GatewayHa
 
   const baseURL = `http://localhost:${opts.port}`;
 
-  // Wait for /health to return 200.
-  await waitForHealth(baseURL);
+  // Wait for /health to return 200. Pass the child process so a crash that
+  // happens AFTER the "listening" log line (but before /health ever answers)
+  // is reported immediately as the real exit, not after paying the full
+  // polling budget — the TS-side equivalent of the Go harness checking
+  // gw.bootErr every iteration (see pollUntilHealthy's checkFatalError).
+  await waitForHealth(baseURL, 15_000, proc);
 
   // Onboard the first admin.
   await onboardAdmin(baseURL, adminUsername, adminPassword);
@@ -168,21 +172,192 @@ export async function stopGateway(handle: GatewayHandle | null): Promise<void> {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Readiness polling — extracted so the decision logic is unit-testable
+// without booting a real gateway. See setup.poll.selfcheck.ts (named to avoid
+// Playwright's default testMatch, "**/*.@(spec|test).?(c|m)[jt]s?(x)" —
+// picking it up as a Playwright test file would misfire since it uses
+// node:test, not @playwright/test; run it directly with
+// `node --experimental-strip-types --test tests/e2e/setup.poll.selfcheck.ts`).
+//
+// This mirrors pkg/agent/testutil/gateway_harness.go's pollUntilReady (Go
+// twin of this fix) so both harnesses share the same semantics:
+//
+//   1. Failure requires `consecutiveFailThreshold` CONSECUTIVE failed probes,
+//      not elapsed wall-clock time. The old design (`while (Date.now() <
+//      deadline)`) trusted wall-clock time as the failure signal, which
+//      breaks down under a host freeze (CI scheduling stall, IO stall): the
+//      entire deadline budget can be consumed while zero probes run at all,
+//      and then the very next probe — which might just catch the gateway a
+//      moment before it starts listening — gets treated as terminal, with
+//      the whole freeze duration reported as if it were "wait time",
+//      undiagnosable from a genuine boot failure.
+//   2. `checkFatalError`, when provided, is checked every iteration BEFORE
+//      probing, so a fast, genuine failure (e.g. the gateway process itself
+//      already exited) is reported immediately with the real cause, never
+//      masked by the polling budget.
+//   3. `hardBackstopMs` is an absolute wall-clock ceiling — a backstop, not
+//      the primary signal — so a gateway that is genuinely wedged (hanging
+//      on every request rather than failing fast) still cannot hang CI
+//      forever.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ProbeOutcome {
+  ok: boolean;
+  error?: unknown;
+}
+
+export type PollOutcomeKind = 'ready' | 'fatal-error' | 'consecutive-failures' | 'hard-backstop';
+
+export interface PollResult {
+  kind: PollOutcomeKind;
+  attempts: number;
+  elapsedMs: number;
+  consecutiveFailures: number;
+  lastProbeError?: unknown;
+  fatalError?: unknown;
+}
+
+export interface PollUntilHealthyConfig {
+  probe: () => Promise<ProbeOutcome>;
+  /** Checked every iteration before probing. Return a truthy value (e.g. an
+   * Error) to fail fast; return undefined/null to keep polling. */
+  checkFatalError?: () => unknown;
+  intervalMs: number;
+  consecutiveFailThreshold: number;
+  hardBackstopMs: number;
+  /** Injectable clock/sleep so the decision logic is testable with a fake
+   * clock — no real gateway, no real network, no real waiting required. */
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
 /**
- * Poll /health until it returns 200 or the timeout expires.
+ * Polls cfg.probe at cfg.intervalMs until it reports healthy. See the
+ * section doc comment above for the full rationale.
  */
-export async function waitForHealth(baseURL: string, timeoutMs = 15_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`${baseURL}/health`);
-      if (res.ok) return;
-    } catch {
-      // Not ready yet — keep polling.
+export async function pollUntilHealthy(cfg: PollUntilHealthyConfig): Promise<PollResult> {
+  const now = cfg.now ?? (() => Date.now());
+  const sleep = cfg.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const start = now();
+  let attempts = 0;
+  let consecutiveFailures = 0;
+  let lastProbeError: unknown;
+
+  for (;;) {
+    if (cfg.checkFatalError) {
+      const fatal = cfg.checkFatalError();
+      if (fatal) {
+        return {
+          kind: 'fatal-error',
+          attempts,
+          elapsedMs: now() - start,
+          consecutiveFailures,
+          fatalError: fatal,
+        };
+      }
     }
-    await new Promise((r) => setTimeout(r, 200));
+
+    attempts++;
+    const outcome = await cfg.probe();
+    if (outcome.ok) {
+      return { kind: 'ready', attempts, elapsedMs: now() - start, consecutiveFailures };
+    }
+
+    lastProbeError = outcome.error;
+    consecutiveFailures++;
+    const elapsedMs = now() - start;
+
+    // Backstop check first: it must fire regardless of how the failures are
+    // patterned (e.g. very few, very slow failures), since it exists purely
+    // to bound total wall-clock time.
+    if (elapsedMs >= cfg.hardBackstopMs) {
+      return { kind: 'hard-backstop', attempts, elapsedMs, consecutiveFailures, lastProbeError };
+    }
+    if (consecutiveFailures >= cfg.consecutiveFailThreshold) {
+      return { kind: 'consecutive-failures', attempts, elapsedMs, consecutiveFailures, lastProbeError };
+    }
+
+    await sleep(cfg.intervalMs);
   }
-  throw new Error(`${baseURL}/health did not return 200 within ${timeoutMs}ms`);
+}
+
+/**
+ * Poll /health until it returns 200.
+ *
+ * `proc`, when provided, is checked every iteration — if the gateway process
+ * has already exited, waitForHealth fails immediately with the real exit
+ * code instead of waiting out the full polling budget.
+ *
+ * Constants: intervalMs (200ms, unchanged from the previous design) and
+ * consecutiveFailThreshold are chosen so that `consecutiveFailThreshold *
+ * intervalMs == timeoutMs` — i.e. a run of CONTINUOUSLY failing probes gets
+ * the exact same real-time budget the old wall-clock deadline granted
+ * (default 15s), except it can now only be consumed by actual failed
+ * attempts, never by a frozen/stalled host doing nothing. hardBackstopMs is
+ * 2x that budget (default 30s, matching the Go harness's hard backstop) as
+ * an absolute ceiling for a gateway that is wedged rather than merely slow
+ * to boot — see pollUntilHealthy's doc comment for why that's a backstop and
+ * not the primary signal. Each probe itself is bounded to 2s via
+ * AbortSignal.timeout so one hung request cannot silently eat most of the
+ * hard backstop by itself.
+ */
+export async function waitForHealth(
+  baseURL: string,
+  timeoutMs = 15_000,
+  proc?: ChildProcess,
+): Promise<void> {
+  const intervalMs = 200;
+  const consecutiveFailThreshold = Math.max(1, Math.ceil(timeoutMs / intervalMs));
+  const hardBackstopMs = timeoutMs * 2;
+  const probeTimeoutMs = 2_000;
+
+  const result = await pollUntilHealthy({
+    probe: async () => {
+      try {
+        const res = await fetch(`${baseURL}/health`, { signal: AbortSignal.timeout(probeTimeoutMs) });
+        if (res.ok) return { ok: true };
+        return { ok: false, error: new Error(`health endpoint returned status ${res.status}`) };
+      } catch (err) {
+        return { ok: false, error: err };
+      }
+    },
+    checkFatalError: proc
+      ? () =>
+          proc.exitCode !== null
+            ? new Error(`gateway process exited with code ${proc.exitCode} while waiting for /health`)
+            : undefined
+      : undefined,
+    intervalMs,
+    consecutiveFailThreshold,
+    hardBackstopMs,
+  });
+
+  if (result.kind === 'ready') return;
+
+  if (result.kind === 'fatal-error') {
+    throw new Error(
+      `${baseURL}/health: gateway failed before becoming healthy: ${String(result.fatalError)} ` +
+        `(fast-fail: ${result.attempts} probe attempt(s), ${result.elapsedMs}ms elapsed — this is a genuine ` +
+        `failure surfaced immediately, not a timeout)`,
+    );
+  }
+
+  if (result.kind === 'consecutive-failures') {
+    throw new Error(
+      `${baseURL}/health never returned 200 after ${result.consecutiveFailures} consecutive failed probes ` +
+        `(${result.elapsedMs}ms elapsed) — this indicates a genuine boot failure, not a scheduling stall ` +
+        `(a frozen host would produce FEW probes, not failed ones); last probe error: ${String(result.lastProbeError)}`,
+    );
+  }
+
+  // result.kind === 'hard-backstop'
+  throw new Error(
+    `${baseURL}/health hit the ${hardBackstopMs}ms hard backstop after only ${result.attempts} probe attempt(s) ` +
+      `(${result.elapsedMs}ms elapsed) without becoming healthy — this is the absolute ceiling, not the primary ` +
+      `failure signal; probes are likely hanging (gateway wedged/hung, not merely slow to boot); ` +
+      `last probe error: ${String(result.lastProbeError)}`,
+  );
 }
 
 /**

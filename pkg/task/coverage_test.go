@@ -26,7 +26,7 @@
 //   - cascadeDeleteEdges: multi-dep where remaining deps are all done → reports
 //     unblocked; remaining dep NOT done → not reported
 //   - AdvanceBlockedDependents: dep-deleted (gone from graph) path
-//   - Filter: AgentID, MilestoneID, CreatedBy, BlockedByID, ParentTaskIDSet
+//   - Filter: AgentID, PlanID, CreatedBy, BlockedByID, ParentTaskIDSet
 //   - priority sort order and List differentiation
 //   - normalize length limits (title 200, description 2000, prompt 10000,
 //     result 50000)
@@ -34,7 +34,7 @@
 //     rejected; manual trigger with no config accepted
 //   - validateTransition internal hatch: internal=true permits blocked↔*
 //   - updateLocked partial update fields: Trigger clear, Artifacts, SessionID,
-//     StartedAt, CompletedAt, SourceChannel, SourceChatID, MilestoneID, Due
+//     StartedAt, CompletedAt, SourceChannel, SourceChatID, PlanID, Due
 
 package task
 
@@ -194,15 +194,14 @@ func TestValidateTransition_LegalTransitions(t *testing.T) {
 	// Traces to: store.go line 452 — validateTransition legal paths
 	legal := []struct{ from, to Status }{
 		{StatusInbox, StatusNext},
-		{StatusNext, StatusPlanning},
 		{StatusNext, StatusInProgress},
-		{StatusPlanning, StatusInProgress},
 		{StatusInProgress, StatusDone},
 		{StatusInProgress, StatusFailed},
-		{StatusFailed, StatusInbox}, // retry path
-		{StatusFailed, StatusNext},  // retry path
-		{StatusInbox, StatusInbox},  // no-op
-		{StatusDone, StatusDone},    // no-op
+		{StatusFailed, StatusInbox},      // retry path
+		{StatusFailed, StatusNext},       // retry path
+		{StatusFailed, StatusInProgress}, // direct re-run path (SPA ▶ Run on a genuinely-failed task; ADR-052 §6.8)
+		{StatusInbox, StatusInbox},       // no-op
+		{StatusDone, StatusDone},         // no-op
 	}
 	for _, tc := range legal {
 		t.Run(fmt.Sprintf("%s→%s", tc.from, tc.to), func(t *testing.T) {
@@ -217,7 +216,12 @@ func TestValidateTransition_DoneIsFrozen(t *testing.T) {
 	// repeating=false throughout: this is the general (non-repeating-trigger)
 	// frozen behavior; TestTransition_DoneRepeatingCarveOut below covers the
 	// narrow repeating=true exception.
-	frozen := []Status{StatusInbox, StatusNext, StatusPlanning, StatusInProgress, StatusFailed}
+	//
+	// StatusPlanning does not exist on this branch (ADR-051 removed the
+	// planning status — plans-as-filter over the combined board superseded
+	// it); release/v0.1.1 still had it at the point this test was written
+	// there. Dropped from the enumeration to match our status set.
+	frozen := []Status{StatusInbox, StatusNext, StatusInProgress, StatusFailed}
 	for _, to := range frozen {
 		t.Run(fmt.Sprintf("done→%s", to), func(t *testing.T) {
 			err := validateTransition(StatusDone, to, false, false)
@@ -238,7 +242,7 @@ func TestTransition_DoneRepeatingCarveOut(t *testing.T) {
 	err := validateTransition(StatusDone, StatusInProgress, false, true)
 	require.NoError(t, err, "done→in_progress must be permitted for a repeating trigger")
 
-	stillFrozen := []Status{StatusInbox, StatusNext, StatusPlanning, StatusFailed}
+	stillFrozen := []Status{StatusInbox, StatusNext, StatusFailed}
 	for _, to := range stillFrozen {
 		t.Run(fmt.Sprintf("done→%s still frozen even when repeating", to), func(t *testing.T) {
 			err := validateTransition(StatusDone, to, false, true)
@@ -398,6 +402,37 @@ func TestSpawnReset_RejectsInProgress(t *testing.T) {
 	_, err = s.SpawnReset(tk.ID)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrAlreadyRunning), "in_progress → ErrAlreadyRunning")
+}
+
+func TestSpawnReset_DerivesBlockedStateWhenDependencyUnmet(t *testing.T) {
+	// Regression fix (code review on bc66345f): SpawnReset was the one
+	// status-writing path the S2 UAT finding A derivation fix missed — it set
+	// Status=StatusNext unconditionally, with no recomputeBlockedStateLocked
+	// call, unlike Create/updateLocked/RestartReset/AddDependency (see that
+	// function's own doc comment). Reached from the trigger scheduler (a
+	// recurring/once/every re-fire), this let a recurring-trigger task with a
+	// still-unmet dependency persist as a dispatchable `next` task
+	// indefinitely instead of landing on the derived `blocked` side-state the
+	// contract promises.
+	s := newStore(t)
+	dep := mkTask("dep", "ws")
+	dep.Status = StatusNext // NOT done — the dependency is still unmet
+	mustCreate(t, s, dep)
+
+	tk := mkTask("recurring", "ws")
+	tk.Status = StatusDone // a prior run just finished
+	tk.BlockedBy = []string{dep.ID}
+	mustCreate(t, s, tk)
+
+	reset, err := s.SpawnReset(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusBlocked, reset.Status,
+		"SpawnReset must derive `blocked` (not `next`) when a blocked_by dependency is unmet")
+
+	// Verify persistence.
+	got, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusBlocked, got.Status)
 }
 
 // ---- AppendTodo ------------------------------------------------------------
@@ -768,6 +803,46 @@ func TestDropOrphanEdges_WriteFailureSurfacesError(t *testing.T) {
 		"the orphan edge must remain on disk since the write never landed")
 }
 
+func TestDropOrphanEdges_PromotesBlockedTaskWhenOnlyBlockerOrphaned(t *testing.T) {
+	// Regression fix (code review on bc66345f): DropOrphanEdges writes
+	// blocked_by directly via MarshalIndent+WriteFileAtomic, bypassing
+	// updateLocked's terminal recomputeBlockedStateLocked step entirely —
+	// unlike every other blocked_by-mutating path in this package. Before the
+	// fix, a `blocked` task whose ONLY blocker was orphaned here was left on
+	// disk as `status: blocked` with an emptied `blocked_by` — a state
+	// AdvanceBlockedDependents can never rescue (it requires
+	// containsString(t.BlockedBy, completedID), unsatisfiable on an empty
+	// list): a permanently-stuck task with no self-heal path at all.
+	s := newStore(t)
+	dep := mkTask("dep", "ws")
+	dep.Status = StatusNext // not done — so tk correctly latches `blocked` at create
+	mustCreate(t, s, dep)
+
+	tk := mkTask("dependent", "ws")
+	tk.Status = StatusNext
+	tk.BlockedBy = []string{dep.ID}
+	mustCreate(t, s, tk)
+
+	setupGot, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, setupGot.Status, "setup: dependent must be blocked before the dep is orphaned")
+
+	// Remove dep's file out-of-band (simulate manual deletion / crash),
+	// bypassing Delete's cascade — dep is now an orphan reference.
+	require.NoError(t, removeFileRaw(s, dep.ID))
+
+	removed, err := s.DropOrphanEdges()
+	require.NoError(t, err)
+	assert.Equal(t, 1, removed, "one orphan edge removed")
+
+	got, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.BlockedBy, "orphan edge dropped")
+	assert.Equal(t, StatusNext, got.Status,
+		"DropOrphanEdges must re-derive `next` rather than leaving `blocked` with an emptied "+
+			"blocked_by, which AdvanceBlockedDependents can never rescue")
+}
+
 // ---- cascadeDeleteEdges multi-dep logic ------------------------------------
 
 func TestCascadeDeleteEdges_MultiDepRemainingDone(t *testing.T) {
@@ -910,19 +985,35 @@ func TestListFilterByAgentID(t *testing.T) {
 	assert.NotEqual(t, got[0].AgentID, got2[0].AgentID)
 }
 
-func TestListFilterByMilestoneID(t *testing.T) {
-	// Traces to: store.go line 150 — Filter.MilestoneID match
+func TestListFilterByPlanID(t *testing.T) {
+	// Traces to: store.go — Filter.PlanID match (ADR-049 D1, replaces the
+	// removed Filter.MilestoneID)
 	s := newStore(t)
 	ms := mkTask("t", "ws")
-	ms.MilestoneID = "milestone-1"
+	ms.PlanID = "plan-1"
 	mustCreate(t, s, ms)
 
 	other := mkTask("other", "ws")
 	mustCreate(t, s, other)
 
-	got, _ := s.List(Filter{MilestoneID: "milestone-1"})
+	got, _ := s.List(Filter{PlanID: "plan-1"})
 	require.Len(t, got, 1)
-	assert.Equal(t, "milestone-1", got[0].MilestoneID)
+	assert.Equal(t, "plan-1", got[0].PlanID)
+}
+
+func TestListFilterByTag(t *testing.T) {
+	// Traces to: store.go — Filter.Tag match (ADR-049 D1)
+	s := newStore(t)
+	tagged := mkTask("t", "ws")
+	tagged.Tags = []string{"release-42"}
+	mustCreate(t, s, tagged)
+
+	other := mkTask("other", "ws")
+	mustCreate(t, s, other)
+
+	got, _ := s.List(Filter{Tag: "release-42"})
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0].Tags, "release-42")
 }
 
 func TestListFilterByCreatedBy(t *testing.T) {
@@ -1082,6 +1173,157 @@ func TestUpdateTitleEmpty(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrValidation))
 }
 
+// TestCreateTitleWhitespaceOnlyRejected is a regression test for the task-title
+// sibling of S2 UAT finding B (an untrimmed `== ""` required-field check let a
+// whitespace-only Plan title through as 201; the exact same pattern existed
+// here — `t.Title == ""` never matched " \t "). A whitespace-only title must
+// be rejected exactly like an empty one.
+func TestCreateTitleWhitespaceOnlyRejected(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("   \t  ", "ws")
+	err := s.Create(tk)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrValidation))
+}
+
+// TestCreateTitleTrimmed proves the flip side: a legitimate title with
+// incidental leading/trailing whitespace is accepted (not rejected) and
+// persisted trimmed, not verbatim.
+func TestCreateTitleTrimmed(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("  Analyze logs  ", "ws")
+	require.NoError(t, s.Create(tk))
+	assert.Equal(t, "Analyze logs", tk.Title, "in-memory Title must be trimmed")
+
+	got, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "Analyze logs", got.Title, "persisted Title must be trimmed")
+}
+
+// TestUpdateTitleWhitespaceOnlyRejected mirrors TestCreateTitleWhitespaceOnlyRejected
+// for the Patch path (patch.Title's own untrimmed `== ""` check had the same gap).
+func TestUpdateTitleWhitespaceOnlyRejected(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	mustCreate(t, s, tk)
+
+	_, err := s.Update(tk.ID, Patch{Title: ptr("   \t  ")})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrValidation))
+}
+
+// TestUpdateTitleTrimmed mirrors TestCreateTitleTrimmed for the Patch path.
+func TestUpdateTitleTrimmed(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	mustCreate(t, s, tk)
+
+	updated, err := s.Update(tk.ID, Patch{Title: ptr("  Renamed Task  ")})
+	require.NoError(t, err)
+	assert.Equal(t, "Renamed Task", updated.Title)
+
+	got, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "Renamed Task", got.Title, "persisted Title must be trimmed")
+}
+
+// TestHasVisibleContent is the unit-level regression for UAT round-2 S3
+// finding "invisible codepoints bypass title validation": strings.TrimSpace
+// only strips unicode.IsSpace, so a title built entirely from zero-width /
+// format characters (all IsSpace()==false) survived it unchanged. Covers the
+// exact seven codepoints the tester verified empirically, plus the flip side
+// (real content, and mixed visible+invisible) so the fix doesn't overreach
+// into rejecting legitimate titles that merely CONTAIN a zero-width rune.
+// Codepoints are spelled as \u escapes (not embedded raw) so the fixture is
+// legible in a plain terminal/diff rather than rendering as blank/invisible.
+func TestHasVisibleContent(t *testing.T) {
+	const (
+		zwsp    = "\u200b" // ZERO WIDTH SPACE (Cf)
+		zwnj    = "\u200c" // ZERO WIDTH NON-JOINER (Cf)
+		zwj     = "\u200d" // ZERO WIDTH JOINER (Cf)
+		wj      = "\u2060" // WORD JOINER (Cf)
+		bom     = "\ufeff" // BOM / ZERO WIDTH NO-BREAK SPACE (Cf)
+		shy     = "\u00ad" // SOFT HYPHEN (Cf)
+		braille = "\u2800" // BRAILLE PATTERN BLANK (So, Cf-adjacent)
+	)
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"empty string", "", false},
+		{"real whitespace only", "   \t\n  ", false},
+		{"ZERO WIDTH SPACE U+200B only", zwsp + zwsp + zwsp, false},
+		{"ZERO WIDTH NON-JOINER U+200C only", zwnj, false},
+		{"ZERO WIDTH JOINER U+200D only", zwj, false},
+		{"WORD JOINER U+2060 only", wj, false},
+		{"BOM / ZWNBSP U+FEFF only", bom, false},
+		{"SOFT HYPHEN U+00AD only", shy, false},
+		{"BRAILLE PATTERN BLANK U+2800 only", braille, false},
+		{"all seven mixed with real whitespace", "  " + zwsp + zwnj + zwj + wj + bom + shy + braille + "  ", false},
+		{"ordinary visible text", "Ship the epic", true},
+		{"visible text padded with real whitespace", "  hi  ", true},
+		{"visible text with an embedded ZWSP", "Hello" + zwsp + "World", true},
+		{"single visible char amid invisible ones", zwsp + "A" + zwsp, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := HasVisibleContent(c.in)
+			assert.Equal(t, c.want, got, "HasVisibleContent(%q)", c.in)
+		})
+	}
+}
+
+// TestCreateTitleInvisibleOnlyRejected is the store-Create regression for the
+// same finding: a title consisting only of invisible/zero-width/format
+// codepoints must be rejected exactly like "" or a real-whitespace-only
+// title, not merely blacklisting the specific codepoints a tester tried.
+func TestCreateTitleInvisibleOnlyRejected(t *testing.T) {
+	const (
+		zwsp    = "\u200b"
+		zwnj    = "\u200c"
+		zwj     = "\u200d"
+		wj      = "\u2060"
+		bom     = "\ufeff"
+		shy     = "\u00ad"
+		braille = "\u2800"
+	)
+	invisibleOnly := []string{
+		zwsp + zwsp + zwsp,    // three ZWSPs (the tester's literal repro)
+		zwnj + zwj + wj + bom, // ZWNJ + ZWJ + word joiner + BOM
+		shy,                   // soft hyphen alone
+		braille + braille,     // braille pattern blank (Cf-adjacent, category So)
+		"  " + zwsp + "  " + shy + "  " + braille + "  ", // mixed with real whitespace
+	}
+	for _, title := range invisibleOnly {
+		t.Run(fmt.Sprintf("title=%q", title), func(t *testing.T) {
+			s := newStore(t)
+			tk := mkTask(title, "ws")
+			err := s.Create(tk)
+			require.Error(t, err, "expected invisible-only title to be rejected")
+			assert.True(t, errors.Is(err, ErrValidation))
+		})
+	}
+}
+
+// TestUpdateTitleInvisibleOnlyRejected mirrors
+// TestCreateTitleInvisibleOnlyRejected for the Patch path, and proves the
+// rejected patch never lands on disk.
+func TestUpdateTitleInvisibleOnlyRejected(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("Original Title", "ws")
+	mustCreate(t, s, tk)
+
+	invisibleOnly := "\u200b\u200b\u200b" // three ZWSPs
+	_, err := s.Update(tk.ID, Patch{Title: ptr(invisibleOnly)})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrValidation))
+
+	got, getErr := s.Get(tk.ID)
+	require.NoError(t, getErr)
+	assert.Equal(t, "Original Title", got.Title, "title must not change on a rejected patch")
+}
+
 func TestUpdatePriorityOutOfRange(t *testing.T) {
 	// Traces to: store.go line 539 — priority 1-5 on update
 	s := newStore(t)
@@ -1114,7 +1356,7 @@ func TestUpdatePatchAllScalarFields(t *testing.T) {
 		AgentID:       ptr("agent-1"),
 		Priority:      ptr(2),
 		Due:           ptr("2026-12-31"),
-		MilestoneID:   ptr("ms-1"),
+		PlanID:        ptr("plan-1"),
 		Surface:       ptr(SurfaceHeartbeat),
 		SessionID:     ptr("sess-1"),
 		StartedAt:     ptr("2026-01-01T00:00:00Z"),
@@ -1133,7 +1375,7 @@ func TestUpdatePatchAllScalarFields(t *testing.T) {
 	assert.Equal(t, "agent-1", got.AgentID)
 	assert.Equal(t, 2, got.Priority)
 	assert.Equal(t, "2026-12-31", got.Due)
-	assert.Equal(t, "ms-1", got.MilestoneID)
+	assert.Equal(t, "plan-1", got.PlanID)
 	assert.Equal(t, SurfaceHeartbeat, got.Surface)
 	assert.Equal(t, "sess-1", got.SessionID)
 	assert.Equal(t, "2026-01-01T00:00:00Z", got.StartedAt)
@@ -1401,7 +1643,7 @@ func TestCreatePersistsAllFields(t *testing.T) {
 		Description:   "desc alpha",
 		Prompt:        "prompt alpha",
 		Surface:       SurfaceHeartbeat,
-		MilestoneID:   "ms-1",
+		PlanID:        "plan-1",
 		Due:           "2026-12-01",
 		SourceChannel: "telegram",
 		SourceChatID:  "chat-1",
@@ -1431,7 +1673,7 @@ func TestCreatePersistsAllFields(t *testing.T) {
 	assert.Equal(t, 1, r1.Priority)
 	assert.Equal(t, "agent-a", r1.AgentID)
 	assert.Equal(t, SurfaceHeartbeat, r1.Surface)
-	assert.Equal(t, "ms-1", r1.MilestoneID)
+	assert.Equal(t, "plan-1", r1.PlanID)
 	assert.Len(t, r1.Todos, 1)
 	require.NotNil(t, r1.Trigger)
 	assert.Equal(t, TriggerRecurring, r1.Trigger.Type)
@@ -1448,4 +1690,586 @@ func TestCreatePersistsAllFields(t *testing.T) {
 	assert.NotEqual(t, r1.Title, r2.Title)
 	assert.NotEqual(t, r1.WorkspaceID, r2.WorkspaceID)
 	assert.NotEqual(t, r1.Priority, r2.Priority)
+}
+
+// ---- CancelReason (ADR-052 FR-028) ------------------------------------------
+
+// TestCancelReason_SetClearRoundTrip exercises the full user-Stop → restart
+// lifecycle: a failed task is stopped by a user (CancelReason set to
+// stopped_by_user, mirroring handleTaskStop's own future patch), persists,
+// then a restart-style patch (failed→next + CancelReason cleared) succeeds
+// and the clear persists too (FR-028: "restart MUST clear it").
+func TestCancelReason_SetClearRoundTrip(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusInProgress
+	mustCreate(t, s, tk)
+
+	// User Stop: in_progress -> failed, cancel_reason set.
+	stopped, err := s.Update(tk.ID, Patch{
+		Status:       ptr(StatusFailed),
+		CancelReason: ptr(CancelReasonStoppedByUser),
+	})
+	require.NoError(t, err, "stop patch must be accepted")
+	assert.Equal(t, StatusFailed, stopped.Status)
+	assert.Equal(t, CancelReasonStoppedByUser, stopped.CancelReason)
+
+	// Persistence check: reload from disk.
+	got, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, CancelReasonStoppedByUser, got.CancelReason, "cancel_reason must persist")
+
+	// Restart-style patch: failed -> next, cancel_reason cleared, in the SAME call.
+	empty := CancelReason("")
+	restarted, err := s.Update(tk.ID, Patch{
+		Status:       ptr(StatusNext),
+		CancelReason: &empty,
+	})
+	require.NoError(t, err, "failed->next with cancel_reason clear must be accepted")
+	assert.Equal(t, StatusNext, restarted.Status)
+	assert.Empty(t, restarted.CancelReason, "cancel_reason must be cleared")
+
+	got2, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got2.CancelReason, "cleared cancel_reason must persist")
+}
+
+func TestCancelReason_InvalidValueRejected(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusFailed
+	mustCreate(t, s, tk)
+
+	bogus := CancelReason("bogus_reason")
+	_, err := s.Update(tk.ID, Patch{CancelReason: &bogus})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrValidation), "invalid cancel_reason must wrap ErrValidation")
+}
+
+// TestCancelReason_RequiresFailedStatus locks in the FR-028 coupling
+// invariant (mirrors plan.Plan's FailedReason/State coupling): a non-empty
+// CancelReason is only valid when Status is failed, checked against the
+// FULLY merged patch (not just whichever field was touched).
+func TestCancelReason_RequiresFailedStatus(t *testing.T) {
+	s := newStore(t)
+
+	t.Run("set on a non-failed task is rejected", func(t *testing.T) {
+		tk := mkTask("t1", "ws")
+		tk.Status = StatusNext
+		mustCreate(t, s, tk)
+
+		_, err := s.Update(tk.ID, Patch{CancelReason: ptr(CancelReasonStoppedByUser)})
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrValidation))
+	})
+
+	t.Run("leaving failed without clearing cancel_reason auto-clears (fix-wave #3)", func(t *testing.T) {
+		tk := mkTask("t2", "ws")
+		tk.Status = StatusInProgress
+		mustCreate(t, s, tk)
+		mustUpdate(t, s, tk.ID, Patch{
+			Status:       ptr(StatusFailed),
+			CancelReason: ptr(CancelReasonStoppedByUser),
+		})
+
+		// A status-only patch leaving failed (e.g. run_task resuming a
+		// stopped task) now auto-clears the stale cancel_reason instead of
+		// being rejected — see TestCancelReason_AutoClearOnStatusLeavingFailed
+		// for the full dedicated coverage.
+		updated, err := s.Update(tk.ID, Patch{Status: ptr(StatusNext)})
+		require.NoError(t, err, "status leaving failed must auto-clear a stale cancel_reason")
+		assert.Equal(t, StatusNext, updated.Status)
+		assert.Empty(t, updated.CancelReason, "cancel_reason must be auto-cleared")
+
+		got, gerr := s.Get(tk.ID)
+		require.NoError(t, gerr)
+		assert.Equal(t, StatusNext, got.Status)
+		assert.Empty(t, got.CancelReason, "auto-cleared cancel_reason must persist")
+	})
+
+	t.Run("create-time coupling is also enforced", func(t *testing.T) {
+		bad := &Task{
+			Title: "x", Action: ActionLLM, WorkspaceID: "ws",
+			Status: StatusNext, CancelReason: CancelReasonStoppedByUser,
+		}
+		err := s.Create(bad)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrValidation))
+	})
+}
+
+// TestCancelReason_AutoClearOnStatusLeavingFailed is the ADR-052 fix-wave
+// regression lock for finding #3 ("run_task on a stopped task breaks"): when
+// a patch moves Status OFF failed and does NOT also touch CancelReason in
+// the same call, the store auto-clears the stale CancelReason before the
+// merged cross-field check runs (mirrors RestartReset's clear-on-restart),
+// rather than rejecting the patch outright. An explicit CancelReason
+// supplied in the SAME patch as a status leaving failed is still rejected —
+// the auto-clear is a convenience for the common "forgot to also clear it"
+// case, not a license to silently drop explicit conflicting data.
+func TestCancelReason_AutoClearOnStatusLeavingFailed(t *testing.T) {
+	s := newStore(t)
+
+	t.Run("run_task-shaped patch: failed+stopped_by_user -> in_progress succeeds, reason cleared", func(t *testing.T) {
+		tk := mkTask("t1", "ws")
+		tk.Status = StatusInProgress
+		mustCreate(t, s, tk)
+		mustUpdate(t, s, tk.ID, Patch{
+			Status:       ptr(StatusFailed),
+			CancelReason: ptr(CancelReasonStoppedByUser),
+		})
+
+		updated, err := s.Update(tk.ID, Patch{Status: ptr(StatusInProgress)})
+		require.NoError(t, err, "run_task resuming a stopped task must succeed")
+		assert.Equal(t, StatusInProgress, updated.Status)
+		assert.Empty(t, updated.CancelReason, "cancel_reason must be auto-cleared")
+
+		got, gerr := s.Get(tk.ID)
+		require.NoError(t, gerr)
+		assert.Equal(t, StatusInProgress, got.Status)
+		assert.Empty(t, got.CancelReason, "auto-cleared cancel_reason must persist")
+	})
+
+	t.Run("failed -> next auto-clears too (no explicit cancel_reason in the patch)", func(t *testing.T) {
+		tk := mkTask("t2", "ws")
+		tk.Status = StatusInProgress
+		mustCreate(t, s, tk)
+		mustUpdate(t, s, tk.ID, Patch{
+			Status:       ptr(StatusFailed),
+			CancelReason: ptr(CancelReasonStoppedByUser),
+		})
+
+		restarted, err := s.Update(tk.ID, Patch{Status: ptr(StatusNext)})
+		require.NoError(t, err)
+		assert.Equal(t, StatusNext, restarted.Status)
+		assert.Empty(t, restarted.CancelReason)
+	})
+
+	t.Run("explicit cancel_reason supplied alongside a status leaving failed is still rejected (backstop)", func(t *testing.T) {
+		tk := mkTask("t3", "ws")
+		tk.Status = StatusInProgress
+		mustCreate(t, s, tk)
+		mustUpdate(t, s, tk.ID, Patch{
+			Status:       ptr(StatusFailed),
+			CancelReason: ptr(CancelReasonStoppedByUser),
+		})
+
+		_, err := s.Update(tk.ID, Patch{
+			Status:       ptr(StatusInProgress),
+			CancelReason: ptr(CancelReasonStoppedByUser),
+		})
+		require.Error(t, err, "explicit conflicting cancel_reason must never be silently dropped")
+		assert.True(t, errors.Is(err, ErrValidation))
+
+		got, gerr := s.Get(tk.ID)
+		require.NoError(t, gerr)
+		assert.Equal(t, StatusFailed, got.Status, "rejected patch must not mutate the task")
+		assert.Equal(t, CancelReasonStoppedByUser, got.CancelReason)
+	})
+
+	t.Run("a patch that does not touch Status at all is unaffected (no auto-clear)", func(t *testing.T) {
+		tk := mkTask("t4", "ws")
+		tk.Status = StatusInProgress
+		mustCreate(t, s, tk)
+		mustUpdate(t, s, tk.ID, Patch{
+			Status:       ptr(StatusFailed),
+			CancelReason: ptr(CancelReasonStoppedByUser),
+		})
+
+		updated, err := s.Update(tk.ID, Patch{Priority: ptr(3)})
+		require.NoError(t, err)
+		assert.Equal(t, StatusFailed, updated.Status)
+		assert.Equal(t, CancelReasonStoppedByUser, updated.CancelReason, "cancel_reason survives an unrelated patch")
+	})
+}
+
+// TestValidateTransition_FailedToNext_AnyReason confirms (ADR-052 §7) that
+// task-level failed→next is un-frozen unconditionally — i.e. NOT gated on
+// CancelReason the way the plan-level restart guard is gated on
+// FailedReason==stopped_by_user. A task that failed for a reason OTHER than
+// a user Stop (CancelReason empty — e.g. attempt-limit exhaustion) can still
+// retry/restart via failed→next.
+func TestValidateTransition_FailedToNext_AnyReason(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusInProgress
+	mustCreate(t, s, tk)
+
+	// Genuine failure: no CancelReason set at all.
+	mustUpdate(t, s, tk.ID, Patch{Status: ptr(StatusFailed)})
+	got, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	require.Empty(t, got.CancelReason, "genuine failure leaves cancel_reason empty")
+
+	// failed (no reason) -> next must still be legal.
+	restarted, err := s.Update(tk.ID, Patch{Status: ptr(StatusNext)})
+	require.NoError(t, err, "failed->next must be legal for a genuine (reason-less) failure")
+	assert.Equal(t, StatusNext, restarted.Status)
+}
+
+// ---- RestartReset (ADR-052 FR-016/017/028) ----------------------------------
+
+func TestRestartReset_HappyPath(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusFailed
+	tk.CancelReason = CancelReasonStoppedByUser
+	mustCreate(t, s, tk)
+
+	// Simulate a prior run's leftovers directly (bypassing the public API,
+	// mirroring TestSpawnReset_ClearsRunFields's own pattern).
+	const at = "2026-01-01T00:00:00Z"
+	loaded, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	loaded.AttemptCount = 2
+	loaded.Result = "old-result"
+	loaded.Artifacts = []string{"a.txt"}
+	loaded.SessionID = "sess-abc"
+	loaded.StartedAt = at
+	loaded.CompletedAt = at
+	loaded.FollowedUp = true
+	loaded.PendingJudgeClaim = "claim text"
+	require.NoError(t, s.write(loaded))
+
+	reset, err := s.RestartReset(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusNext, reset.Status, "no unmet deps -> next")
+	assert.Equal(t, 0, reset.AttemptCount, "attempt_count reset to 0")
+	assert.Empty(t, reset.CancelReason, "cancel_reason cleared")
+	assert.Empty(t, reset.Result)
+	assert.Nil(t, reset.Artifacts)
+	assert.Empty(t, reset.SessionID)
+	assert.Empty(t, reset.StartedAt)
+	assert.Empty(t, reset.CompletedAt)
+	assert.False(t, reset.FollowedUp)
+	assert.Empty(t, reset.PendingJudgeClaim)
+
+	// Persistence check.
+	got, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusNext, got.Status)
+	assert.Equal(t, 0, got.AttemptCount)
+	assert.Empty(t, got.CancelReason)
+}
+
+// TestRestartReset_ToBlockedWhenDepUnmet confirms the "reset to next/blocked"
+// half of DS-5: a failed member whose blocked_by dependency is not yet done
+// lands on the derived `blocked` side-state, not `next`.
+func TestRestartReset_ToBlockedWhenDepUnmet(t *testing.T) {
+	s := newStore(t)
+	dep := mkTask("dep", "ws")
+	dep.Status = StatusNext
+	mustCreate(t, s, dep)
+
+	member := mkTask("member", "ws")
+	member.Status = StatusFailed
+	member.CancelReason = CancelReasonStoppedByUser
+	member.BlockedBy = []string{dep.ID}
+	mustCreate(t, s, member)
+
+	reset, err := s.RestartReset(member.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusBlocked, reset.Status, "unmet dep -> blocked, not next")
+	assert.Equal(t, 0, reset.AttemptCount)
+	assert.Empty(t, reset.CancelReason)
+
+	// Once the dep completes, AdvanceBlockedDependents should later move it —
+	// out of scope here, this test only asserts RestartReset's own landing state.
+}
+
+// TestRestartReset_PreservesDoneMember confirms restart is a no-op error on
+// an already-`done` member (FR-017: "preserve done members" — the restart
+// orchestrator must skip done members rather than calling RestartReset on
+// them; this locks in that RestartReset itself refuses to touch one).
+func TestRestartReset_PreservesDoneMember(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusDone
+	tk.Result = "final result"
+	mustCreate(t, s, tk)
+
+	_, err := s.RestartReset(tk.ID)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNotRestartable))
+
+	got, gerr := s.Get(tk.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, StatusDone, got.Status, "done member must be untouched")
+	assert.Equal(t, "final result", got.Result, "done member's result must be preserved")
+}
+
+func TestRestartReset_RejectsNonFailed(t *testing.T) {
+	s := newStore(t)
+	cases := []Status{StatusInbox, StatusNext, StatusInProgress, StatusBlocked}
+	for _, st := range cases {
+		t.Run(string(st), func(t *testing.T) {
+			var tk *Task
+			if st == StatusBlocked {
+				dep := mkTask("dep-"+string(st), "ws")
+				mustCreate(t, s, dep)
+				tk = newBlockedTask("t-"+string(st), "ws", []string{dep.ID})
+			} else {
+				tk = mkTask("t-"+string(st), "ws")
+				tk.Status = st
+			}
+			mustCreate(t, s, tk)
+
+			_, err := s.RestartReset(tk.ID)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, ErrNotRestartable), "status %q must be rejected", st)
+		})
+	}
+}
+
+func TestRestartReset_NotFound(t *testing.T) {
+	s := newStore(t)
+	_, err := s.RestartReset("does-not-exist")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNotFound))
+}
+
+// TestValidateStandaloneRestart table-drives the standalone-task restart gate
+// (ADR-052 §6.7/§6.8, spec FR-026) in isolation — the pkg/task mirror of
+// plan.TestPlan_ValidateRestartTransition (pkg/plan/plan_test.go). Legal
+// ONLY from Status==failed with CancelReason==stopped_by_user; every other
+// (status, reason) pair is rejected with ErrStandaloneRestartNotPermitted
+// (wrapping ErrIllegalTransition, wrapping ErrValidation). This does NOT test
+// RestartReset itself (which stays reason-agnostic — see its doc comment) —
+// only the caller-side gate the REST handler (rest_tasks.go's
+// handleTaskRestart) applies in front of it.
+func TestValidateStandaloneRestart(t *testing.T) {
+	cases := []struct {
+		name         string
+		status       Status
+		cancelReason CancelReason
+		wantLegal    bool
+	}{
+		{"failed_stopped_by_user_ok", StatusFailed, CancelReasonStoppedByUser, true},
+		{"failed_empty_reason_rejected", StatusFailed, "", false},
+		{"failed_other_reason_rejected", StatusFailed, CancelReason("attempts_exhausted"), false},
+		{"inbox_rejected", StatusInbox, CancelReasonStoppedByUser, false},
+		{"next_rejected", StatusNext, CancelReasonStoppedByUser, false},
+		{"in_progress_rejected", StatusInProgress, CancelReasonStoppedByUser, false},
+		{"blocked_rejected", StatusBlocked, CancelReasonStoppedByUser, false},
+		{"done_rejected_not_a_cancel", StatusDone, CancelReasonStoppedByUser, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := ValidateStandaloneRestart(c.status, c.cancelReason)
+			if c.wantLegal {
+				if err != nil {
+					t.Fatalf("expected restart to be legal from %s reason %q, got error: %v", c.status, c.cancelReason, err)
+				}
+				return
+			}
+			require.Error(t, err, "expected restart to be rejected from %s reason %q", c.status, c.cancelReason)
+			assert.True(t, errors.Is(err, ErrStandaloneRestartNotPermitted), "must be ErrStandaloneRestartNotPermitted, got %v", err)
+			assert.True(t, errors.Is(err, ErrIllegalTransition), "must wrap ErrIllegalTransition, got %v", err)
+			assert.True(t, errors.Is(err, ErrValidation), "must wrap ErrValidation (400-mapping), got %v", err)
+		})
+	}
+}
+
+// ---- Stop guarantee TOCTOU fix (ADR-052 FR-014/§6.4(b)) --------------------
+//
+// validateStopGuard (store.go) closes interleaving (b) from the FR-014
+// TOCTOU postmortem: a judge verdict computed just before a Stop landed
+// could otherwise resolve failed[stopped_by_user] -> done via a plain
+// Update, silently marking a user-cancelled task as successfully DONE — the
+// lifecycle matrix's own "failed is not frozen" rule (TestFailedCanBeRetried
+// above) exists precisely so a GENUINE failure stays retryable, and cannot
+// by itself distinguish that from "complete a cancelled one". UpdateIfStatus
+// closes the companion EXECUTOR-side gap: a stale in-memory task object plus
+// a separate later write can revive or clobber a task the store's own
+// CancelReason-only guard does not block (e.g. failed[stopped_by_user] ->
+// next, which must stay legal for the restart/re-run routes).
+
+// TestValidateStopGuard_RejectsDoneAfterUserStop is a direct unit test of
+// the extracted guard: failed[stopped_by_user] -> done is rejected,
+// regardless of what validateTransition alone would have permitted.
+func TestValidateStopGuard_RejectsDoneAfterUserStop(t *testing.T) {
+	stopped := &Task{Status: StatusFailed, CancelReason: CancelReasonStoppedByUser}
+	err := validateStopGuard(stopped, StatusDone)
+	require.Error(t, err, "failed[stopped_by_user] -> done must be rejected")
+	assert.True(t, errors.Is(err, ErrIllegalTransition))
+	assert.True(t, errors.Is(err, ErrValidation))
+}
+
+// TestValidateStopGuard_AllowsRestartAndRerunDirections proves the guard is
+// narrowly scoped to `-> done` only: the Play/restart direction (-> next)
+// and the Run re-run direction (-> in_progress) both stay legal, and a
+// GENUINE failure (no stopped_by_user reason) is never touched by this
+// guard at all — it is validateTransition's ordinary "failed is not frozen"
+// rule that governs those, unchanged.
+func TestValidateStopGuard_AllowsRestartAndRerunDirections(t *testing.T) {
+	stopped := &Task{Status: StatusFailed, CancelReason: CancelReasonStoppedByUser}
+	for _, to := range []Status{StatusNext, StatusInProgress} {
+		if err := validateStopGuard(stopped, to); err != nil {
+			t.Errorf("failed[stopped_by_user] -> %s must remain legal, got: %v", to, err)
+		}
+	}
+	genuine := &Task{Status: StatusFailed}
+	if err := validateStopGuard(genuine, StatusDone); err != nil {
+		t.Errorf("a GENUINE failure (no stopped_by_user reason) -> done must not be blocked by the stop "+
+			"guard (it has nothing to guard here), got: %v", err)
+	}
+}
+
+// TestUpdate_StopGuard_RejectsDoneOverwriteAfterStop is the store-level,
+// end-to-end proof of interleaving (b): a task the user Stopped (failed +
+// stopped_by_user, exactly what PlanEngine.cancelMemberLocked / handleTaskStop
+// write) can never be moved to done via a plain Update, even though nothing
+// else in the lifecycle matrix would have blocked failed -> done. This is
+// the PRE-FIX bug reproduced literally: before validateStopGuard existed,
+// this exact call succeeded and silently marked a cancelled task "done".
+func TestUpdate_StopGuard_RejectsDoneOverwriteAfterStop(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusInProgress
+	mustCreate(t, s, tk)
+
+	mustUpdate(t, s, tk.ID, Patch{
+		Status:       ptr(StatusFailed),
+		CancelReason: ptr(CancelReasonStoppedByUser),
+	})
+
+	_, err := s.Update(tk.ID, Patch{Status: ptr(StatusDone), Result: ptr("claims success")})
+	require.Error(t, err, "a stale MET verdict must not be able to overwrite a user Stop as done")
+	assert.True(t, errors.Is(err, ErrIllegalTransition))
+
+	got, gerr := s.Get(tk.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, StatusFailed, got.Status, "status must remain the Stop's own failed outcome")
+	assert.Equal(t, CancelReasonStoppedByUser, got.CancelReason, "cancel_reason must survive the rejected write")
+	assert.NotEqual(t, "claims success", got.Result, "the rejected write's Result must never land")
+}
+
+// ---- UpdateIfStatus (executor CAS primitive) --------------------------------
+
+func TestUpdateIfStatus_SucceedsWhenStatusMatches(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusInProgress
+	mustCreate(t, s, tk)
+
+	newAttempt := 1
+	nextStatus := StatusNext
+	got, err := s.UpdateIfStatus(tk.ID, StatusInProgress, Patch{AttemptCount: &newAttempt, Status: &nextStatus})
+	require.NoError(t, err)
+	assert.Equal(t, StatusNext, got.Status)
+	assert.Equal(t, 1, got.AttemptCount)
+
+	reread, gerr := s.Get(tk.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, StatusNext, reread.Status, "the write must persist")
+}
+
+// TestUpdateIfStatus_ConflictWhenStatusDiffers is the direct unit proof of
+// the CAS primitive's core contract: when the on-disk status no longer
+// matches `expected` (simulating a concurrent Stop that already landed —
+// "driving the store directly to simulate the interleaving"), NOTHING is
+// written and ErrStatusConflict is returned.
+func TestUpdateIfStatus_ConflictWhenStatusDiffers(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusInProgress
+	mustCreate(t, s, tk)
+
+	// Simulate a concurrent Stop landing between the caller's stale read and
+	// this write attempt.
+	mustUpdate(t, s, tk.ID, Patch{
+		Status:       ptr(StatusFailed),
+		CancelReason: ptr(CancelReasonStoppedByUser),
+	})
+
+	newAttempt := 1
+	nextStatus := StatusNext
+	_, err := s.UpdateIfStatus(tk.ID, StatusInProgress, Patch{AttemptCount: &newAttempt, Status: &nextStatus})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrStatusConflict))
+	assert.False(t, errors.Is(err, ErrValidation), "a CAS conflict is a race outcome, not a validation error")
+
+	got, gerr := s.Get(tk.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, StatusFailed, got.Status, "the dropped write must leave the Stop outcome untouched")
+	assert.Equal(t, CancelReasonStoppedByUser, got.CancelReason)
+	assert.Equal(t, 0, got.AttemptCount, "a dropped conflict write must not consume an attempt")
+}
+
+func TestUpdateIfStatus_NotFound(t *testing.T) {
+	s := newStore(t)
+	_, err := s.UpdateIfStatus("does-not-exist", StatusInProgress, Patch{})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNotFound))
+}
+
+func TestUpdateIfStatus_InvalidID(t *testing.T) {
+	s := newStore(t)
+	_, err := s.UpdateIfStatus("../escape", StatusInProgress, Patch{})
+	require.Error(t, err)
+}
+
+// TestUpdateIfStatus_StillHonorsStopGuard proves UpdateIfStatus routes
+// through the SAME updateLocked validation path as Update — a CAS success
+// on the status check does not bypass the Stop guard (belt-and-suspenders:
+// even if a caller mistakenly passed StatusFailed as `expected` against an
+// already-stopped task, the done-overwrite is still rejected).
+func TestUpdateIfStatus_StillHonorsStopGuard(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusInProgress
+	mustCreate(t, s, tk)
+	mustUpdate(t, s, tk.ID, Patch{
+		Status:       ptr(StatusFailed),
+		CancelReason: ptr(CancelReasonStoppedByUser),
+	})
+
+	_, err := s.UpdateIfStatus(tk.ID, StatusFailed, Patch{Status: ptr(StatusDone)})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrIllegalTransition), "UpdateIfStatus must still honor the Stop guard")
+}
+
+// ---- Run-route AttemptCount decision (item iii) -----------------------------
+
+// TestAttemptCount_NotResetOnRunRoute pins the deliberate decision
+// documented at updateLocked's CancelReason auto-clear site: a genuinely-
+// failed task's AttemptCount survives a plain Update-based re-run (the
+// "Run" PATCH route, failed -> in_progress), unlike RestartReset (the
+// "Play" route) which always zeroes it. This is the "resuming-the-budget is
+// defensible" branch — Run continues the existing budget, it is not amnesty.
+func TestAttemptCount_NotResetOnRunRoute(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusFailed
+	mustCreate(t, s, tk)
+	// Simulate a genuine attempt-exhaustion failure (no cancel_reason) that
+	// already consumed its full budget.
+	newAttempt := 3
+	mustUpdate(t, s, tk.ID, Patch{AttemptCount: &newAttempt})
+
+	got, err := s.Update(tk.ID, Patch{Status: ptr(StatusInProgress)})
+	require.NoError(t, err, "Run route (failed -> in_progress) must remain legal for a genuine failure")
+	assert.Equal(t, 3, got.AttemptCount, "AttemptCount must NOT be reset by the plain Run route")
+	assert.Empty(t, got.CancelReason, "cancel_reason auto-clear is unaffected by this decision")
+
+	reread, gerr := s.Get(tk.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, 3, reread.AttemptCount, "the unreset AttemptCount must persist")
+}
+
+// TestAttemptCount_IsResetByRestartReset contrasts the above: the Play
+// route (RestartReset) DOES reset AttemptCount to 0 — the two routes are
+// deliberately asymmetric, not an oversight.
+func TestAttemptCount_IsResetByRestartReset(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusFailed
+	tk.CancelReason = CancelReasonStoppedByUser
+	mustCreate(t, s, tk)
+	newAttempt := 2
+	mustUpdate(t, s, tk.ID, Patch{AttemptCount: &newAttempt})
+
+	got, err := s.RestartReset(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, got.AttemptCount, "RestartReset (Play) always resets AttemptCount to 0")
 }

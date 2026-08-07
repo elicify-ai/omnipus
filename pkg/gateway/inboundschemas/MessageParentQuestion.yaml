@@ -1,0 +1,54 @@
+type: object
+title: MessageParentQuestion
+description: >
+  `message_parent` child tool call, `kind: question` (ADR-053 §5.1,
+  R§8.2). `wait: true` parks the CALLING child in `needs_input` (native
+  only — a 3P child never calls this kind, D5). `authority` is
+  child-authored and NEVER trusted at face value — the runtime's
+  `deriveQuestionAuthority(q)` re-derives the effective authority
+  server-side (fail-closed default `owner_required` on omission; a child
+  can only be UPGRADED to `owner_required`, never downgraded). Counts
+  toward the per-child unacked ceiling (D15, max 20 open
+  question+blocker) — payload-only, see `MessageParentProgress` for the
+  request/record split rationale.
+required:
+  - kind
+  - text
+  - wait
+additionalProperties: false
+properties:
+  kind:
+    type: string
+    enum:
+      - question
+    example: "question"
+  message_id:
+    type: string
+    description: Optional child-supplied dedupe key.
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WK"
+  text:
+    type: string
+    minLength: 1
+    maxLength: 32768
+    description: Untrusted question text.
+    example: "Should I overwrite the existing config.json backup?"
+  wait:
+    type: boolean
+    description: True parks the calling child in `needs_input` awaiting a `respond`.
+    example: true
+  authority:
+    type: string
+    enum:
+      - self_ok
+      - owner_required
+    description: >
+      Child-authored authority tag. Untrusted (M3) — see
+      `SessionMessageQuestion.authority` for the identical fail-closed
+      derivation rule.
+    example: "self_ok"
+  correlation_id:
+    type: string
+    description: >
+      Optional child-supplied correlation id (server-generated when
+      absent) that a subsequent `respond` will reference.
+    example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"

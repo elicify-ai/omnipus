@@ -101,7 +101,22 @@ func TestAgentModelConfig_MarshalObject(t *testing.T) {
 	}
 }
 
-func TestAgentConfig_FullParse(t *testing.T) {
+// TestAgentConfig_FullParse_AgentsListNeverUnmarshals is a pinning test for
+// Bug 1's fix (AgentsConfig.List json:"-", see its doc comment on config.go):
+// a raw json.Unmarshal of a config.json-shaped payload carrying an
+// "agents.list" array must NOT populate cfg.Agents.List — the field is
+// structurally invisible to JSON now, both marshal and unmarshal, so no
+// config-write path can ever re-inject the roster (SaveConfig) and no
+// legacy-load path can ever read it back into this typed field either
+// (legacy content is instead detected/dropped from the raw file bytes by
+// legacy_agents_list.go's stripAgentsListOnDisk). Every OTHER field in the
+// same payload — agents.defaults, bindings, session — must still parse
+// normally; only "list" is inert.
+//
+// Formerly named TestAgentConfig_FullParse, when this exact payload asserted
+// the opposite (that Agents.List DID populate with 2 agents) — that was the
+// pre-Bug-1-fix behavior this change deliberately reverses.
+func TestAgentConfig_FullParse_AgentsListNeverUnmarshals(t *testing.T) {
 	jsonData := `{
 		"agents": {
 			"defaults": {
@@ -153,30 +168,20 @@ func TestAgentConfig_FullParse(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if len(cfg.Agents.List) != 2 {
-		t.Fatalf("agents.list len = %d, want 2", len(cfg.Agents.List))
+	// The heart of Bug 1's fix: json:"-" means this raw unmarshal must never
+	// populate the field, regardless of what the payload's "list" key holds.
+	if len(cfg.Agents.List) != 0 {
+		t.Fatalf("agents.list len = %d, want 0 — AgentsConfig.List must be json:\"-\" "+
+			"(structurally non-serializable); got %+v", len(cfg.Agents.List), cfg.Agents.List)
 	}
 
-	sales := cfg.Agents.List[0]
-	if sales.ID != "sales" || !sales.Default || sales.Name != "Sales Bot" {
-		t.Errorf("sales = %+v", sales)
+	// agents.defaults, a genuine SETTING (not part of the roster), must still
+	// parse normally alongside the now-inert list key.
+	if cfg.Agents.Defaults.Home != "~/.omnipus/workspace" {
+		t.Errorf("Agents.Defaults.Home = %q", cfg.Agents.Defaults.Home)
 	}
-	if sales.Model == nil || sales.Model.Primary != "gpt-4" {
-		t.Errorf("sales.Model = %+v", sales.Model)
-	}
-
-	support := cfg.Agents.List[1]
-	if support.ID != "support" || support.Name != "Support Bot" {
-		t.Errorf("support = %+v", support)
-	}
-	if support.Model == nil || support.Model.Primary != "claude-opus" {
-		t.Errorf("support.Model = %+v", support.Model)
-	}
-	if len(support.Model.Fallbacks) != 1 || support.Model.Fallbacks[0] != "haiku" {
-		t.Errorf("support.Model.Fallbacks = %v", support.Model.Fallbacks)
-	}
-	if support.Subagents == nil || len(support.Subagents.AllowAgents) != 1 {
-		t.Errorf("support.Subagents = %+v", support.Subagents)
+	if cfg.Agents.Defaults.MaxTokens != 8192 {
+		t.Errorf("Agents.Defaults.MaxTokens = %d", cfg.Agents.Defaults.MaxTokens)
 	}
 
 	if len(cfg.Bindings) != 1 {
@@ -1737,21 +1742,20 @@ func TestLoadConfig_LegacySandboxProfileFields_Ignored(t *testing.T) {
 		t.Fatalf("LoadConfig must not error on legacy sandbox_profile fields, got: %v", err)
 	}
 
-	// The agent carrying the retired per-agent field must still load, with
-	// its other real fields intact.
-	if len(cfg.Agents.List) != 1 {
-		t.Fatalf("expected exactly one agent, got %d", len(cfg.Agents.List))
-	}
-	agent := cfg.Agents.List[0]
-	if agent.ID != "legacy-agent" {
-		t.Errorf("agent.ID = %q, want %q", agent.ID, "legacy-agent")
-	}
-	if agent.Name != "Legacy Agent" {
-		t.Errorf("agent.Name = %q, want %q — the unknown sandbox_profile key must not corrupt sibling fields",
-			agent.Name, "Legacy Agent")
-	}
-	if agent.Description != "carries a retired per-agent sandbox_profile key" {
-		t.Errorf("agent.Description = %q, unexpected", agent.Description)
+	// ADR-054 (entity/config separation) landed after this test was
+	// originally written: agents.list is no longer an entity inside
+	// config.json — stripLegacyAgentsList unconditionally drops any legacy
+	// agents.list content on load (loudly, via a WARN log), regardless of
+	// whether an individual agent also carries a retired key like
+	// sandbox_profile. So "legacy-agent" above no longer proves "an unknown
+	// per-agent key doesn't corrupt sibling fields" (agents.list is emptied
+	// either way now) — it still usefully proves LoadConfig doesn't error out
+	// on the retired key while parsing the now-to-be-dropped legacy roster.
+	// This pinning test's real remaining assertion is the sandbox section
+	// below.
+	if len(cfg.Agents.List) != 0 {
+		t.Fatalf("expected agents.list to be stripped by ADR-054's stripLegacyAgentsList, got %d agent(s): %+v",
+			len(cfg.Agents.List), cfg.Agents.List)
 	}
 
 	// The global sandbox section's retired default_profile key must not
@@ -1822,6 +1826,70 @@ func TestLoadConfig_LegacyPreviewFields_Ignored(t *testing.T) {
 	if !cfg.IsPreviewEnabled() {
 		t.Error("cfg.IsPreviewEnabled() should be true — the legacy preview_listener_enabled key " +
 			"must not be silently reinterpreted as the new preview_enabled")
+	}
+}
+
+// TestLoadConfig_LegacyTurnSyntheticErrorFloor_Ignored is a pinning test for
+// ADR-058 (tool-denial semantics): FR-084's synthetic-error turn-abort floor
+// and its gateway.turn_synthetic_error_floor config key are deleted in full,
+// with no migration (docs/internal/specs/adr-058-tool-denial-semantics-spec.md
+// FR-058-14 — "FR-084 is deleted in full: config.GatewayConfig.
+// TurnSyntheticErrorFloor, ..., and every comment referencing them";
+// docs/internal/specs/tool-registry-redesign-spec.md's FR-084 entry is
+// retained but marked superseded). LoadConfig has no DisallowUnknownFields
+// anywhere on the config-load path, so a persisted config.json from before
+// this change — carrying a "turn_synthetic_error_floor" key under "gateway"
+// — must still load without error today (unknown keys silently ignored),
+// with every other field in the same gateway object intact.
+//
+// This mirrors TestLoadConfig_LegacySandboxProfileFields_Ignored (ADR-035)
+// and TestLoadConfig_LegacyPreviewFields_Ignored (ADR-044) directly above:
+// both were written explicitly as pins against "a future change to the
+// config-load path (e.g. adding strict decoding somewhere, which this
+// codebase does elsewhere)" silently turning a harmless legacy key into a
+// boot-time hard failure. This closes the identical gap for ADR-058's own
+// retired key, discharging spec §10's DoD item verbatim: "One boot with a
+// legacy `turn_synthetic_error_floor` key present in config.json starts
+// cleanly" — previously verified only by hand with a throwaway program
+// during implementation, with no regression guard left behind.
+//
+// The two gateway sibling-field assertions below are the positive lower
+// bound (Binding Rule 4): without them, this test would pass equally well
+// for a broken implementation that silently discarded the whole gateway
+// section — or returned an empty *Config — whenever it hit an unrecognised
+// key inside it. Asserting Host/Port survive with their ACTUAL configured
+// values (not just "LoadConfig returned no error") is what rules that stub
+// out.
+func TestLoadConfig_LegacyTurnSyntheticErrorFloor_Ignored(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+	rawCfg := `{
+		"version": 1,
+		"agents": {
+			"defaults": {"workspace": "` + tmpDir + `", "model_name": "test-model", "max_tokens": 4096}
+		},
+		"gateway": {
+			"host": "127.0.0.1",
+			"port": 5000,
+			"turn_synthetic_error_floor": 8
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig must not error on the legacy turn_synthetic_error_floor key, got: %v", err)
+	}
+
+	if cfg.Gateway.Host != "127.0.0.1" {
+		t.Errorf("cfg.Gateway.Host = %q, want %q — must survive alongside the retired "+
+			"turn_synthetic_error_floor key", cfg.Gateway.Host, "127.0.0.1")
+	}
+	if cfg.Gateway.Port != 5000 {
+		t.Errorf("cfg.Gateway.Port = %d, want 5000 — must survive alongside the retired "+
+			"turn_synthetic_error_floor key", cfg.Gateway.Port)
 	}
 }
 

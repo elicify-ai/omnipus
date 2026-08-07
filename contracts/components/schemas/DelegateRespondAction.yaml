@@ -1,0 +1,42 @@
+type: object
+title: DelegateRespondAction
+description: >
+  `delegate` tool call, `action: respond` (ADR-053 §5.1). Answers a
+  `question`/`decision_request` by `correlation_id`; out-of-order answers
+  are safe. Native: warm-resumes the SAME child session generation. 3P
+  (external CLI): spawns a NEW corrective session (original prompt +
+  answer folded in, D5) — never an in-place warm resume, since external
+  CLIs have no warm-resume primitive. The runtime REJECTS a `respond`
+  targeting a question whose derived authority is `owner_required`
+  (R§8.2) — a business rule enforced at the handler, not schema-
+  expressible.
+required:
+  - action
+  - session_id
+  - text
+  - correlation_id
+additionalProperties: false
+properties:
+  action:
+    type: string
+    enum:
+      - respond
+    example: "respond"
+  session_id:
+    type: string
+    minLength: 1
+    description: The child session being answered.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  text:
+    type: string
+    minLength: 1
+    maxLength: 16384
+    description: >
+      The answer. For a `decision_request`, names the chosen option
+      verbatim.
+    example: "Yes, overwrite it — the backup is stale."
+  correlation_id:
+    type: string
+    minLength: 1
+    description: The `correlation_id` of the question/decision_request being answered.
+    example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"

@@ -266,6 +266,48 @@ func TestConfigSet_UnknownKeyRejected(t *testing.T) {
 	}
 }
 
+// TestConfigSet_AgentsListRejected pins ADR-054 §11 checklist item 6:
+// agents.list is the retired agent-roster entity blob and must be rejected by
+// set_config even though "agents." is a known prefix — agent CRUD now goes
+// exclusively through create_agent/update_agent/delete_agent.
+//
+// Traces to: ADR-054 §11 checklist item 6.
+func TestConfigSet_AgentsListRejected(t *testing.T) {
+	deps, _ := newTestDeps()
+	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
+		"key":   "agents.list",
+		"value": []any{},
+	})
+	if !result.IsError {
+		t.Fatalf("expected error for agents.list, got success: %s", result.ForLLM)
+	}
+	m := parseError(t, result.ForLLM)
+	errBlock, _ := m["error"].(map[string]any)
+	if errBlock["code"] != "INVALID_KEY" {
+		t.Errorf("code = %v, want INVALID_KEY", errBlock["code"])
+	}
+}
+
+// TestConfigSet_AgentsDefaultsStillWorks is the regression a reviewer caught
+// in ADR-054 v2: rejecting agents.list must NOT collaterally reject
+// agents.defaults.* — agents.defaults is a SETTING (D1) and stays fully
+// writable via set_config.
+//
+// Traces to: ADR-054 §11 checklist item 6 / v2 review finding C-3.
+func TestConfigSet_AgentsDefaultsStillWorks(t *testing.T) {
+	deps, cfg := newTestDeps()
+	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
+		"key":   "agents.defaults.model_name",
+		"value": "glm-4.7",
+	})
+	if result.IsError {
+		t.Fatalf("set agents.defaults.model_name failed: %s", result.ForLLM)
+	}
+	if cfg.Agents.Defaults.ModelName != "glm-4.7" {
+		t.Errorf("cfg.Agents.Defaults.ModelName = %q, want %q", cfg.Agents.Defaults.ModelName, "glm-4.7")
+	}
+}
+
 // TestConfigSet_PreviousValueReturned verifies that set_config returns the old value
 // in previous_value.
 //

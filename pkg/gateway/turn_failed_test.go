@@ -1,8 +1,3 @@
-//go:build !cgo
-
-// This test file uses //go:build !cgo so it compiles when CGO is disabled.
-// See websocket_test.go for the same rationale.
-
 package gateway
 
 import (

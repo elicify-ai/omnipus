@@ -1,0 +1,210 @@
+type: object
+title: SessionLifecycleRecord
+description: >
+  The durable, per-entity-JSONL 8-state session-lifecycle record (ADR-053
+  §Contract Surface, S2). Distinct from `Session.status` (active/archived/
+  interrupted — the older chat-transcript-metadata status) and from
+  `Plan.state` (the 5-state draft/approved/running/done/failed plan
+  state machine) — do not conflate the three. This record is the durable
+  authority the boot sweep (§5), idle settlement, `blocked_by`, and the
+  S4 interlock state machine all read from. The immutable-terminal
+  invariant (L-3) holds: a terminal record (`completed`/`failed`/
+  `cancelled`/`timed_out`) is never mutated in place — `follow_up`/Play
+  mint a NEW record with a new `generation`, linked back via
+  `resumed_from`.
+required:
+  - session_id
+  - generation
+  - state
+  - terminal
+  - owner_scope_kind
+  - workspace_id
+  - agent_id
+  - is_3p
+  - launch_profile
+  - undelivered_message_ids
+  - created_at
+  - updated_at
+additionalProperties: false
+properties:
+  session_id:
+    type: string
+    minLength: 1
+    description: Unique durable session identifier.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  generation:
+    type: integer
+    minimum: 0
+    description: >
+      This session's generation number. A `follow_up`/Play mints a new
+      generation via `resumed_from` rather than mutating a terminal
+      record.
+    example: 0
+  resumed_from:
+    type: string
+    nullable: true
+    description: >
+      The prior generation's `session_id` this record resumed from.
+      Null for generation 0 (the original spawn).
+    example: null
+  state:
+    type: string
+    enum:
+      - queued
+      - running
+      - needs_input
+      - paused
+      - completed
+      - failed
+      - cancelled
+      - timed_out
+    description: >
+      The durable 8-state lifecycle (S2, the S4 interlock state machine's
+      authority). `paused` covers BOTH cooperative cancel-soft grace AND
+      a plan-owner session idling while its plan is durably
+      `plan_phase=awaiting_supervision` (that condition itself lives
+      on the Plan record, not as a 9th state here — see `Plan.plan_phase`
+      and R§8.10's lifecycle-to-pill crosswalk).
+    example: "running"
+  terminal:
+    type: boolean
+    readOnly: true
+    description: >
+      Server-derived: true iff `state` is one of `completed`/`failed`/
+      `cancelled`/`timed_out`.
+    example: false
+  owner_scope_kind:
+    type: string
+    enum:
+      - parent_session
+      - plan
+      - human
+    description: >
+      SHAPE DECISION (flagged for review): the spec's field table
+      describes `owner_scope` as a union of `parent_session_id | plan_id
+      | human`. A bare `oneOf` of untagged strings has no discriminator
+      and is not meaningfully validatable/codegen-friendly, so it is
+      split into this enum tag plus `owner_scope_id` below (empty for
+      `human`, which has no single owning id — N-9 top-level chat-goal
+      sessions are owned by the human/chat-principal).
+    example: "human"
+  owner_scope_id:
+    type: string
+    description: >
+      The `parent_session_id` or `plan_id` this session's ownership
+      resolves to, per `owner_scope_kind`. Absent/empty when
+      `owner_scope_kind == human`.
+    example: ""
+  owns_plan_id:
+    type: string
+    description: >
+      Set when THIS session is a plan's OWNER session — the reciprocal of
+      `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a
+      `paused` owner session whose `owner_scope_kind == human` but which
+      is legitimately idle awaiting an owner correction on the named
+      plan.
+    example: "01J3ZQK8N2H8VXNRP5T7C9M4WE"
+  goal_ref:
+    type: string
+    description: The goal-id this session is servicing, when it is goal-bearing.
+    example: "goal_01J3ZQK8N2H8VXNRP5T7C9M4WU"
+  workspace_id:
+    type: string
+    minLength: 1
+    description: Workspace this session belongs to.
+    example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  agent_id:
+    type: string
+    minLength: 1
+    description: The agent running this session.
+    example: "ray"
+  is_3p:
+    type: boolean
+    description: >
+      True when this session dispatches via an external CLI runner
+      (subagent_3p: claude-code/codex/opencode) rather than natively. 3P
+      sessions never advertise `question`/`needs_input`/warm-resume (D5).
+    example: false
+  launch_profile:
+    type: string
+    enum:
+      - utility
+      - specialist
+    description: >
+      `utility` — visibility=outcome, steering=none, child_messaging=
+      progress_only (fire-and-collect). `specialist` — visibility=
+      checkpoints, steering=parent_and_human, child_messaging=full (a 3P
+      child on this profile still degrades to fire-and-collect). Illegal
+      combinations are rejected at `delegate.run`, not schema-enforced
+      here (see `DelegateRunAction`).
+    example: "specialist"
+  last_checkpoint_ref:
+    type: string
+    description: >
+      The `message_id` of the most recent `SessionMessageCheckpoint` this
+      session emitted, or the go-git `commit_ref` it carried. Used for
+      boot-sweep recover-to-checkpoint (§5).
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WF"
+  undelivered_message_ids:
+    type: array
+    items:
+      type: string
+    description: >
+      `message_id`s not yet delivered/acked at the time of the last
+      persist — carried forward across a boot-sweep `failed(interrupted)`
+      transition so the reason is inspectable.
+    example: []
+  needs_input:
+    type: object
+    required:
+      - correlation_id
+      - ttl_deadline
+      - reconstructable
+    additionalProperties: false
+    description: >
+      Present iff `state == needs_input`; absent otherwise (no schema
+      `nullable: true` — an optional-object field paired with `nullable`
+      generates a `T | null | undefined` Zod type against an
+      openapi-typescript TS type that only ever emits `T | undefined` for
+      a nullable, non-required, non-scalar property, a real codegen
+      mismatch between the two generators for this shape; plain
+      optional-only is unambiguous and matches how every other optional
+      nested object in this contract set is expressed). `reconstructable`
+      is a PARK-TIME HINT ONLY (m5) — the authoritative determination is
+      `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6),
+      never this stored value.
+    properties:
+      correlation_id:
+        type: string
+        minLength: 1
+        description: The open question/decision_request this session is parked on.
+        example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"
+      ttl_deadline:
+        type: string
+        format: date-time
+        description: When this park auto-`handback(pause)`s if unanswered (default 24h, INV-5).
+        example: "2026-07-23T10:00:00Z"
+      reconstructable:
+        type: boolean
+        description: >
+          Park-time hint (m5) — NOT authoritative. See description above.
+        example: true
+  failed_reason:
+    type: string
+    description: >
+      Set only when `state == failed`. An open string, not a closed enum
+      — the spec enumerates this non-exhaustively ("e.g. `interrupted`,
+      `budget_exhausted`, `judge_rounds_exhausted`"), unlike
+      `Plan.failed_reason`'s closed enum, so this field is left
+      open rather than guessing at a complete set (flagged for review).
+    example: "interrupted"
+  created_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp this session record was created.
+    example: "2026-07-22T10:00:00Z"
+  updated_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp of the last state transition or persist.
+    example: "2026-07-22T10:05:00Z"

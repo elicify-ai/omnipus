@@ -232,6 +232,73 @@ describe('WorkspaceTeamGraph — AgentNode keyboard guard (bubbling hijack regre
   })
 })
 
+// ── Implicit System agent node (the Judge, ADR-049 D3) ──────────────────────
+//
+// Operator-reported: the Judge "looks absent" from the Team tab because
+// pkg/workspace/find_for_agent.go's isImplicitMember resolves System-agent
+// membership implicitly for EVERY workspace (never via core_team). Rendered
+// as a non-removable, non-editable, non-connectable node with a muted
+// "Verifier" badge — see teamGraphModel.test.ts for the render-only /
+// never-persisted guarantee at the model layer.
+describe('WorkspaceTeamGraph — implicit System agent node (Judge, ADR-049 D3)', () => {
+  const JUDGE = agent('judge', { name: 'Judge', type: 'system' })
+  const AGENTS_WITH_JUDGE = [...AGENTS, JUDGE]
+
+  function renderGraphWithJudge(overrides: Partial<Parameters<typeof WorkspaceTeamGraph>[0]> = {}) {
+    const model = buildTeamGraphModel(STATE, AGENTS_WITH_JUDGE)
+    const props = {
+      nodes: model.nodes,
+      edges: model.edges,
+      workerIds: WORKER_IDS,
+      editState: STATE,
+      defaultDepth: model.defaultDepth,
+      onConnect: vi.fn(),
+      onToggleMode: vi.fn(),
+      onSetDepth: vi.fn(),
+      onDeleteEdge: vi.fn(),
+      onRemoveMember: vi.fn(),
+      onRejectConnection: vi.fn(),
+      onOpenAgent: vi.fn(),
+      ...overrides,
+    }
+    const utils = render(<WorkspaceTeamGraph {...props} />)
+    return { props, ...utils }
+  }
+
+  it('renders a node for the Judge with the muted "Verifier" badge', () => {
+    renderGraphWithJudge()
+    const judgeNode = screen.getByTestId('team-node-judge')
+    expect(judgeNode).toHaveAttribute('data-implicit', 'true')
+    expect(screen.getByText('Judge')).toBeInTheDocument()
+    expect(screen.getByTestId('team-node-implicit-badge-judge')).toHaveTextContent(
+      'Verifier — implicit member of every workspace',
+    )
+  })
+
+  it('renders no remove or edit affordance on the Judge node (non-removable, non-editable)', () => {
+    renderGraphWithJudge()
+    const judgeNode = screen.getByTestId('team-node-judge')
+    expect(judgeNode.querySelector('[aria-label="Remove Judge from team"]')).toBeNull()
+    expect(judgeNode.querySelector('[aria-label="Edit Judge"]')).toBeNull()
+    expect(judgeNode.querySelector('[data-testid="mock-delegate-judge"]')).toBeNull()
+  })
+
+  it('renders no connection handle on the Judge node — it can never be a delegation source or target', () => {
+    renderGraphWithJudge()
+    const judgeNode = screen.getByTestId('team-node-judge')
+    expect(judgeNode.querySelector('.react-flow__handle')).toBeNull()
+  })
+
+  it('the Judge node is not clickable — no role=button, no tabIndex, click is a no-op', () => {
+    const { props } = renderGraphWithJudge()
+    const judgeNode = screen.getByTestId('team-node-judge')
+    expect(judgeNode.getAttribute('role')).toBeNull()
+    expect(judgeNode.getAttribute('tabindex')).toBeNull()
+    fireEvent.click(judgeNode)
+    expect(props.onOpenAgent).not.toHaveBeenCalled()
+  })
+})
+
 describe('WorkspaceTeamGraph — delegate picker wiring', () => {
   it('a valid keyboard delegation reaches onConnect via the same handleConnect path as a drag', () => {
     const { props } = renderGraph()

@@ -1,0 +1,111 @@
+type: object
+title: RevisionEntry
+description: >
+  A single owner-loop plan correction record (ADR-053 §Contract Surface —
+  "Revision entry"). Committed transactionally with the tail members +
+  edges it introduces via the write-ahead intent-log (INV-6/N-8) — the
+  intent record, the tail members, their edges, and the plan-record patch
+  land all-or-nothing. This is the single canonical shape for a revision
+  record; `SessionMessageRevisionEntry` (the SessionMessage transport
+  variant, `kind: revision_entry`) nests this same schema under a
+  `revision` key rather than duplicating its fields — see that file's
+  description for why the two `generation` concepts cannot be flattened
+  into one object.
+required:
+  - revision_id
+  - plan_id
+  - generation
+  - verb
+  - falsified_assumption
+  - tail_adds
+  - reason
+  - created_at
+additionalProperties: false
+properties:
+  revision_id:
+    type: string
+    minLength: 1
+    description: Unique identifier for this revision entry.
+    example: "rev_01J3ZQK8N2H8VXNRP5T7C9M4WR"
+  plan_id:
+    type: string
+    minLength: 1
+    description: The plan this revision corrects.
+    example: "01J3ZQK8N2H8VXNRP5T7C9M4WE"
+  generation:
+    type: integer
+    minimum: 0
+    description: The plan's generation this revision was recorded against.
+    example: 1
+  verb:
+    type: string
+    enum:
+      - append
+      - supersede
+      - targeted_retry
+      - abandon
+    description: >
+      `append` adds a new tail to the DAG. `supersede` marks a `done`
+      member's outcome as superseded by a corrective tail (the superseded
+      member's own record stays immutable — only Judge weighting
+      changes). `targeted_retry` resets a single frozen-transient member
+      for another attempt. `abandon` (ADR-055/FR-046b) is the honest exit:
+      the adjudicator judges the Definition of Done unreachable from the
+      plan's current state and adds no corrective work at all, terminating
+      the plan `failed(dod_unreachable)` with the falsified assumption on
+      the record — as opposed to burning the remaining round budget on
+      corrections that cannot succeed. It is the one verb that adds no
+      tail members and names no existing member.
+    example: "append"
+  falsified_assumption:
+    type: string
+    minLength: 1
+    maxLength: 2000
+    description: >
+      The owner's stated reason the prior plan state was wrong — the
+      assumption the correction falsifies.
+    example: "Assumed the shard schema was stable; it changed upstream."
+  tail_adds:
+    type: array
+    items:
+      type: object
+      required:
+        - member_id
+      additionalProperties: false
+      properties:
+        member_id:
+          type: string
+          minLength: 1
+          description: ID of the new tail member task this revision adds.
+          example: "550e8400-e29b-41d4-a716-446655440099"
+        blocked_by:
+          type: array
+          items:
+            type: string
+          description: Dependency edges for the new tail member (DAG ordering only).
+          example:
+            - "550e8400-e29b-41d4-a716-446655440001"
+    description: >
+      Member IDs + their dependency edges this revision adds to the DAG.
+      May be empty for a pure `supersede`/`targeted_retry` that adds no
+      new tail.
+    example: []
+  superseded_member_id:
+    type: string
+    description: Present iff `verb == supersede` — the `done` member being superseded.
+    example: "550e8400-e29b-41d4-a716-446655440002"
+  retried_member_id:
+    type: string
+    description: Present iff `verb == targeted_retry` — the frozen-transient member being retried.
+    example: "550e8400-e29b-41d4-a716-446655440003"
+  reason:
+    type: string
+    minLength: 1
+    maxLength: 2000
+    description: Human-readable rationale for this correction.
+    example: "Shard schema drifted; re-run the shard member against the new schema."
+  created_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp this revision was recorded.
+    example: "2026-07-22T10:00:00Z"

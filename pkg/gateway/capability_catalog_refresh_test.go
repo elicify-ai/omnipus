@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // capability_catalog_refresh_test.go — FIX-2 regression test.
 //
 // gateway.go's capability-catalog refresh goroutine (FR-024/FR-025/FR-026)

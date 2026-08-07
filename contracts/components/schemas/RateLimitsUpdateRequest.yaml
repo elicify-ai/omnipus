@@ -1,17 +1,16 @@
 title: RateLimitsUpdateRequest
 description: >
   Request body for PUT /api/v1/security/rate-limits.
-  Partial update — any subset of the three cap fields.
+  Partial update — any subset of the two sliding-window cap fields.
   Strict type validation rejects JSON strings in numeric fields, floats in integer fields,
   negative values, NaN/Inf, and overflow. Changes are hot-reloaded.
+
+  Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the
+  endpoint rejects that field with HTTP 400. Use
+  /api/v1/settings/token-budget to set the app-level token spend brake.
 type: object
 additionalProperties: false
 properties:
-  daily_cost_cap_usd:
-    type: number
-    format: double
-    minimum: 0
-    description: Daily cost cap in USD. 0 = unlimited.
   max_agent_llm_calls_per_hour:
     type: integer
     format: int64

@@ -238,10 +238,11 @@ test('rate-limit hot-reload: GET reflects new cap within 2s of PUT', async () =>
   // T0.1: OPENROUTER_API_KEY soft-skip removed. OPENROUTER_API_KEY_CI is required
   // in CI. The GET-readback variant used here does not require live LLM calls.
 
-  // ── Step 1: set a known baseline (100 LLM calls/hour, no cost cap) ──────
+  // ── Step 1: set a known baseline (100 LLM calls/hour, unlimited tools) ──
+  // ADR-053 D12 / #540 retired daily_cost_cap_usd — the sole spend brake is
+  // the app-level token budget. PUT rejects the retired field with 400.
   const putBaseline = await authedPut('/api/v1/security/rate-limits', {
     max_agent_llm_calls_per_hour: 100,
-    daily_cost_cap_usd: 0,
     max_agent_tool_calls_per_minute: 0,
   });
   expect(putBaseline.status, 'PUT baseline rate-limits must return 200').toBe(200);
@@ -314,11 +315,11 @@ test('rate-limit hot-reload: GET reflects new cap within 2s of PUT', async () =>
 
   // ── Step 5: validate partial-update semantics — only send one field ───────
   // Partial updates: unset fields must not be zeroed.
-  // First record that we set llm_calls=1 above; now only change cost cap.
+  // First record that we set llm_calls=1 above; now only change tool-call cap.
   const putPartial = await authedPut('/api/v1/security/rate-limits', {
-    daily_cost_cap_usd: 25.5,
+    max_agent_tool_calls_per_minute: 30,
   });
-  expect(putPartial.status, 'partial PUT (only cost cap) must return 200').toBe(200);
+  expect(putPartial.status, 'partial PUT (only tool-call cap) must return 200').toBe(200);
 
   // Verify llm_calls_per_hour still reads as 1 (not zeroed by partial update)
   const getAfterPartial = await authedGet('/api/v1/security/rate-limits');
@@ -326,15 +327,22 @@ test('rate-limit hot-reload: GET reflects new cap within 2s of PUT', async () =>
     (getAfterPartial.body as Record<string, unknown>).max_agent_llm_calls_per_hour,
     'partial update must NOT zero previously-set max_agent_llm_calls_per_hour',
   ).toBe(1);
-  // daily_cost_cap (without _usd suffix) is the GET field name per rest_rate_limits.go
   expect(
-    (getAfterPartial.body as Record<string, unknown>).daily_cost_cap,
-    'partial update must persist daily_cost_cap_usd=25.5',
-  ).toBe(25.5);
+    (getAfterPartial.body as Record<string, unknown>).max_agent_tool_calls_per_minute,
+    'partial update must persist max_agent_tool_calls_per_minute=30',
+  ).toBe(30);
+
+  // ── Step 6: retired daily_cost_cap_usd field is rejected (D12 / #540) ────
+  const putRetired = await authedPut('/api/v1/security/rate-limits', {
+    daily_cost_cap_usd: 25.5,
+  });
+  expect(
+    putRetired.status,
+    'retired daily_cost_cap_usd must return 400 (ADR-053 D12)',
+  ).toBe(400);
 
   // ── Teardown: restore unlimited caps ────────────────────────────────────
   await authedPut('/api/v1/security/rate-limits', {
-    daily_cost_cap_usd: 0,
     max_agent_llm_calls_per_hour: 0,
     max_agent_tool_calls_per_minute: 0,
   });

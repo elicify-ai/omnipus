@@ -27,6 +27,8 @@ properties:
       - channel
       - scheduled
       - heartbeat
+      - verifier
+      - delegate
     description: >
       Session classification. Legacy sessions without a type field are treated as "chat"
       by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a
@@ -34,7 +36,17 @@ properties:
       be accepted here or GET /api/v1/sessions fails SPA schema validation once any
       scheduled/heartbeat session exists. "heartbeat" tags the eager standing session
       created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron
-      job continues this session rather than starting a fresh one.
+      job continues this session rather than starting a fresh one. "verifier" (ADR-052
+      FR-036) tags a session created for a verifier-role adjudication (the Judge, or a
+      future custom verifier) — persisted with normal 90-day retention but hidden by
+      default from GET /api/v1/sessions (see `include_verifier`); Sidebar and
+      SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is
+      visible there), and the ActivityPanel / verdict drill-down surface it on demand.
+      "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when
+      minted by a delegation — it always carries a non-empty `parent_session_id`.
+      Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally
+      absent from SessionCreateRequest.yaml's narrower create-time enum (a client
+      cannot POST /sessions directly into this type).
     example: "chat"
   protected:
     type: boolean
@@ -131,3 +143,23 @@ properties:
     description: Per-agent compaction summaries (multi-agent sessions only).
     additionalProperties:
       type: string
+  parent_session_id:
+    type: string
+    description: >
+      ADR-057 FR-008/FR-091. The direct parent's session id, present only on a
+      subordinate ("delegate") session created by a delegation. Absent (never
+      empty-string) on a root session. A session whose parent_session_id names
+      an id that no longer resolves is still surfaced as a root by
+      GET /api/v1/sessions rather than being silently dropped (FR-091, BDD-106).
+    example: "660e8400-e29b-41d4-a716-446655440000"
+  child_count:
+    type: integer
+    minimum: 0
+    description: >
+      Computed field (ADR-057 FR-091/FR-097/FR-104): count of this session's
+      DIRECT children, resolved from the in-memory parent index in O(1) per
+      row. Populated on GET /api/v1/sessions (both the default roots-only
+      listing and flat=true) and on GET /api/v1/sessions?parent_session_id=...
+      listings; zero for a session with no children. Not necessarily present
+      on GET /api/v1/sessions/{id} single-session detail.
+    example: 3

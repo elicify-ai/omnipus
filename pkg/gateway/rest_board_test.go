@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_board_test.go — unified task REST API tests (Sprint 2).
 //
 // Sprint 2 replaced pkg/boardtask (GTD board) and pkg/taskstore (workflow queue)
@@ -64,7 +62,6 @@ func createTaskViaAPI(t *testing.T, api *restAPI, title, workspaceID string) gen
 // status via the correct legal transition path. Legal paths are:
 //
 //	inbox → next (needs description for the partial-task guard)
-//	inbox → next → planning
 //	inbox → next → in_progress
 //	inbox → next → in_progress → done
 //	inbox → next → in_progress → failed
@@ -87,15 +84,6 @@ func createTaskWithStatusViaAPI(t *testing.T, api *restAPI, title, workspaceID, 
 	if status == "next" {
 		var updated gen.Task
 		require.NoError(t, json.Unmarshal(wNext.Body.Bytes(), &updated))
-		return updated
-	}
-	// next → planning
-	if status == "planning" {
-		w := patchTask(t, api, tsk.Id, `{"status":"planning"}`)
-		require.Equal(t, http.StatusOK, w.Code,
-			"createTaskWithStatusViaAPI: next→planning must return 200; body=%s", w.Body.String())
-		var updated gen.Task
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
 		return updated
 	}
 	// next → in_progress
@@ -540,35 +528,21 @@ func TestHandleTasks_FKValidation(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestHandleTasks_ExtendedFields verifies that POST /api/v1/tasks accepts
-// prompt, priority, and milestone_id and that GET echoes them back.
-// BDD: Given a workspace P with milestone M,
-// When POST /api/v1/tasks with prompt="Do this", priority=2, milestone_id=M,
-// Then 201; GET same task returns prompt="Do this", priority=2, milestone_id=M.
-// Traces to: project-task-milestone-spec.md — FR-L2-005 prompt, FR-L2-007 priority, FR-L2-008 milestone_id
+// prompt, priority, and tags and that GET echoes them back.
+// BDD: Given a workspace P,
+// When POST /api/v1/tasks with prompt="Do this", priority=2, tags=["release-1"],
+// Then 201; GET same task returns prompt="Do this", priority=2, tags=["release-1"].
+// Traces to: planning-goals-spec.md — FR-009/FR-010 (tags, replaces the
+// removed milestone_id per ADR-049 D1)
 func TestHandleTasks_ExtendedFields(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	projID := createWorkspaceViaAPI(t, api, "ExtendedFieldsProject", "")
 
-	// Create a milestone in the project.
-	midBody := `{"name":"Ext Test Milestone"}`
-	wMil := httptest.NewRecorder()
-	rMil := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+projID+"/milestones",
-		strings.NewReader(midBody))
-	rMil.Header.Set("Content-Type", "application/json")
-	rMil.URL.Path = "/api/v1/workspaces/" + projID + "/milestones"
-	api.HandleMilestones(wMil, rMil)
-	require.Equal(t, http.StatusCreated, wMil.Code, "create milestone for test must return 201")
-	var milResp struct {
-		ID string `json:"id"`
-	}
-	require.NoError(t, json.Unmarshal(wMil.Body.Bytes(), &milResp))
-	milID := milResp.ID
-
 	// POST task with extended fields.
 	priority := 2
 	body := fmt.Sprintf(
-		`{"title":"Extended Task","action":"llm","workspace_id":%q,"milestone_id":%q,"prompt":"Do this","priority":%d}`,
-		projID, milID, priority,
+		`{"title":"Extended Task","action":"llm","workspace_id":%q,"tags":["release-1"],"prompt":"Do this","priority":%d}`,
+		projID, priority,
 	)
 	wPost := httptest.NewRecorder()
 	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
@@ -586,8 +560,8 @@ func TestHandleTasks_ExtendedFields(t *testing.T) {
 	assert.Equal(t, "Do this", *created.Prompt, "prompt must match request")
 	require.NotNil(t, created.Priority, "priority must not be nil in response")
 	assert.Equal(t, priority, *created.Priority, "priority must match request")
-	require.NotNil(t, created.MilestoneId, "milestone_id must not be nil in response")
-	assert.Equal(t, milID, *created.MilestoneId, "milestone_id must match request")
+	require.NotNil(t, created.Tags, "tags must not be nil in response")
+	assert.Contains(t, *created.Tags, "release-1", "tags must match request")
 
 	// GET same task — fields must persist.
 	wGet := httptest.NewRecorder()
@@ -601,8 +575,8 @@ func TestHandleTasks_ExtendedFields(t *testing.T) {
 	assert.Equal(t, "Do this", *got.Prompt, "GET: prompt must equal created value")
 	require.NotNil(t, got.Priority, "GET: priority must persist")
 	assert.Equal(t, priority, *got.Priority, "GET: priority must equal created value")
-	require.NotNil(t, got.MilestoneId, "GET: milestone_id must persist")
-	assert.Equal(t, milID, *got.MilestoneId, "GET: milestone_id must equal created value")
+	require.NotNil(t, got.Tags, "GET: tags must persist")
+	assert.Contains(t, *got.Tags, "release-1", "GET: tags must equal created value")
 }
 
 // TestHandleTasks_Priority_DefaultsToThree verifies POST without priority returns priority=3.
@@ -642,15 +616,29 @@ func TestHandleTasks_Priority_DefaultsToThree(t *testing.T) {
 
 // TestHandleTasks_Priority_Validation verifies priority range validation.
 // BDD:
-//   - priority=0 → 201 (treated as unset; Sprint 2 unified store defaults to 3 on read).
+//   - priority=0 → 400 (explicit zero is rejected, NOT treated as unset).
 //   - priority=6 → 400 (out of range 1–5).
 //   - priority=1 → 201 (boundary min).
 //   - priority=5 → 201 (boundary max).
 //
-// Sprint 2 change: priority=0 is no longer rejected with 400. The unified store
-// treats 0 as "unset" and stores/returns effective priority=3 (default). Old "400 on 0"
-// was the legacy boardtask behavior. The new store.Create normalizes 0 → 3.
-// Traces to: project-task-milestone-spec.md — FR-L2-007 (priority 1–5, 0=unset/default)
+// M2(a) fix (2026-08, uat-report-adr057-CONSOLIDATED-2026-08-03.md): this test
+// previously asserted `priority=0 → 201`, on the Sprint-2-era reasoning that
+// "the unified store treats 0 as unset". That reasoning conflated two
+// different things: Task.Priority==0 legitimately means "unset" once a Task
+// struct already exists with no priority ever supplied (e.g. the field
+// omitted from the request body entirely — see
+// TestHandleTasks_Priority_DefaultsToThree, unaffected by this fix) — but an
+// EXPLICIT `"priority":0` in the request body is a wire *int that IS non-nil,
+// and discarding that presence information before validating (as
+// handleTaskCreate used to do) meant a caller who explicitly sent 0 got a 201
+// with their input silently replaced by the default (persisted/read back as
+// 3) instead of an error telling them their value was invalid. `absent`
+// (nil pointer, never validated) and `explicit 0` (non-nil pointer to 0, now
+// validated and rejected) are no longer the same case — this is the
+// intentional, reviewed behavior change that closes M2(a), not a weakened
+// assertion: 0 now correctly ERRORS where it previously silently succeeded
+// with the wrong data.
+// Traces to: project-task-milestone-spec.md — FR-L2-007 (priority 1–5, 0=unset/default on the omitted-field path only)
 func TestHandleTasks_Priority_Validation(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	wsID := ensureTestWorkspace(t, api)
@@ -660,7 +648,7 @@ func TestHandleTasks_Priority_Validation(t *testing.T) {
 		priority     int
 		expectedCode int
 	}{
-		{"priority zero", 0, http.StatusCreated}, // Sprint 2: 0=unset→default 3 (not 400)
+		{"priority zero", 0, http.StatusBadRequest}, // M2(a): explicit 0 is now rejected, not silently defaulted
 		{"priority six", 6, http.StatusBadRequest},
 		{"priority one boundary min", 1, http.StatusCreated},
 		{"priority five boundary max", 5, http.StatusCreated},
@@ -794,82 +782,6 @@ func TestHandleTasks_FilterByAgentID(t *testing.T) {
 	}
 	assert.NotEqual(t, alphaIDs, betaIDs,
 		"filter by different agent_id must produce different task sets (not hardcoded)")
-}
-
-// TestHandleTasks_FilterByMilestoneID verifies GET ?milestone_id= returns only matching tasks.
-// BDD: Given task T1 with milestone_id=M1 and task T2 with milestone_id=M2,
-// When GET /api/v1/tasks?milestone_id=M1,
-// Then only T1 is returned.
-// Traces to: project-task-milestone-spec.md — FR-L2-030 (milestone_id filter)
-func TestHandleTasks_FilterByMilestoneID(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	// Set up two projects, each with a milestone.
-	proj1ID := createWorkspaceViaAPI(t, api, "MilFilterProj1", "")
-	proj2ID := createWorkspaceViaAPI(t, api, "MilFilterProj2", "")
-
-	// Create milestone M1 in proj1.
-	wM1 := httptest.NewRecorder()
-	rM1 := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+proj1ID+"/milestones",
-		strings.NewReader(`{"name":"Milestone Filter 1"}`))
-	rM1.Header.Set("Content-Type", "application/json")
-	rM1.URL.Path = "/api/v1/workspaces/" + proj1ID + "/milestones"
-	api.HandleMilestones(wM1, rM1)
-	require.Equal(t, http.StatusCreated, wM1.Code)
-	var m1 struct {
-		ID string `json:"id"`
-	}
-	require.NoError(t, json.Unmarshal(wM1.Body.Bytes(), &m1))
-
-	// Create milestone M2 in proj2.
-	wM2 := httptest.NewRecorder()
-	rM2 := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+proj2ID+"/milestones",
-		strings.NewReader(`{"name":"Milestone Filter 2"}`))
-	rM2.Header.Set("Content-Type", "application/json")
-	rM2.URL.Path = "/api/v1/workspaces/" + proj2ID + "/milestones"
-	api.HandleMilestones(wM2, rM2)
-	require.Equal(t, http.StatusCreated, wM2.Code)
-	var m2 struct {
-		ID string `json:"id"`
-	}
-	require.NoError(t, json.Unmarshal(wM2.Body.Bytes(), &m2))
-
-	// Create one task per milestone.
-	body1 := fmt.Sprintf(`{"title":"Task for M1","action":"llm","workspace_id":%q,"milestone_id":%q}`, proj1ID, m1.ID)
-	wT1 := httptest.NewRecorder()
-	rT1 := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body1))
-	rT1.Header.Set("Content-Type", "application/json")
-	rT1.URL.Path = "/api/v1/tasks"
-	api.HandleTasks(wT1, rT1)
-	require.Equal(t, http.StatusCreated, wT1.Code)
-	var task1 gen.Task
-	require.NoError(t, json.Unmarshal(wT1.Body.Bytes(), &task1))
-
-	body2 := fmt.Sprintf(`{"title":"Task for M2","action":"llm","workspace_id":%q,"milestone_id":%q}`, proj2ID, m2.ID)
-	wT2 := httptest.NewRecorder()
-	rT2 := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body2))
-	rT2.Header.Set("Content-Type", "application/json")
-	rT2.URL.Path = "/api/v1/tasks"
-	api.HandleTasks(wT2, rT2)
-	require.Equal(t, http.StatusCreated, wT2.Code)
-	var task2 gen.Task
-	require.NoError(t, json.Unmarshal(wT2.Body.Bytes(), &task2))
-
-	// GET ?milestone_id=M1 → only task1 returned.
-	wFilter := httptest.NewRecorder()
-	rFilter := httptest.NewRequest(http.MethodGet, "/api/v1/tasks?milestone_id="+m1.ID, nil)
-	rFilter.URL.Path = "/api/v1/tasks"
-	api.HandleTasks(wFilter, rFilter)
-	require.Equal(t, http.StatusOK, wFilter.Code)
-	var respItems []gen.Task
-	require.NoError(t, json.Unmarshal(wFilter.Body.Bytes(), &respItems))
-
-	m1IDs := make([]string, 0, len(respItems))
-	for _, item := range respItems {
-		m1IDs = append(m1IDs, item.Id)
-	}
-	assert.Contains(t, m1IDs, task1.Id, "task1 must appear in ?milestone_id=M1 response")
-	assert.NotContains(t, m1IDs, task2.Id, "task2 must NOT appear in ?milestone_id=M1 response")
 }
 
 // TestHandleTasks_TaskCount_IncludesAllTasks verifies project task_count counts all unified tasks.

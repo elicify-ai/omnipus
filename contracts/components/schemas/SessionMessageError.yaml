@@ -1,0 +1,72 @@
+type: object
+title: SessionMessageError
+description: >
+  SessionMessage `oneOf` variant, `kind: error` (ADR-053 §Contract
+  Surface). Child -> parent. Envelope fields are duplicated inline
+  (ADR-034 precedent, see SessionMessageProgress for the rationale).
+required:
+  - message_id
+  - session_id
+  - direction
+  - kind
+  - depth
+  - created_at
+  - sender_identity
+  - untrusted_origin
+  - text
+  - fatal
+additionalProperties: false
+properties:
+  message_id:
+    type: string
+    minLength: 1
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WP"
+  session_id:
+    type: string
+    minLength: 1
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  parent_session_id:
+    type: string
+    nullable: true
+    example: "660e8400-e29b-41d4-a716-446655440000"
+  generation:
+    type: integer
+    minimum: 0
+    example: 0
+  direction:
+    type: string
+    enum:
+      - child_to_parent
+    example: "child_to_parent"
+  kind:
+    type: string
+    enum:
+      - error
+    example: "error"
+  depth:
+    type: integer
+    minimum: 0
+    maximum: 5
+    example: 0
+  created_at:
+    type: string
+    format: date-time
+    example: "2026-07-22T10:00:00Z"
+  sender_identity:
+    type: string
+    minLength: 1
+    example: "ray"
+  untrusted_origin:
+    type: boolean
+    example: true
+  text:
+    type: string
+    maxLength: 32768
+    description: Untrusted error description.
+    example: "go-git worktree add failed: disk quota exceeded."
+  fatal:
+    type: boolean
+    description: >
+      True when the child cannot continue (the session will terminate);
+      false for a recoverable error the child is still working past.
+    example: false

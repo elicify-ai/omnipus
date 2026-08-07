@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -28,6 +26,15 @@ var blockedPaths = []config.ConfigKey{
 	"security",
 	config.GatewayUsers,
 	config.GatewayDevModeBypass,
+	// ADR-054 §11 checklist item 7: block agents.list SPECIFICALLY, not the
+	// whole "agents" key. agents.defaults (a SETTING, D1 — including
+	// agents.defaults.default_agent_id, D6.4) must remain writable via this
+	// endpoint; blocking the "agents" ancestor would make
+	// {"agents":{"defaults":{...}}} match matchBlockedPath's ancestor rule
+	// and reject every agents.defaults write too. Agent CRUD now goes
+	// exclusively through the agent store / dedicated /api/v1/agents
+	// endpoints.
+	config.AgentsList,
 }
 
 // matchBlockedPath reports whether body contains any entry in blocked at any

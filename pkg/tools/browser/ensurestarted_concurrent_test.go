@@ -82,6 +82,19 @@ func TestEnsureStarted_Concurrent_LosersDiscard(t *testing.T) {
 	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "")
 
 	cfg := newExecPathTestConfig(t, t.TempDir())
+	// Trust the fake PATH chrome planted above instead of falling through to
+	// resolveExecPath's step-4 managed download: with the security-hardened
+	// TrustPathChrome=false default, resolve() discards this test's
+	// self-sufficient PATH candidate (WARN-BROWSER-007) and falls through to
+	// EnsureChromium -> cftPlatform, which errors on any non-amd64 Linux
+	// ("chrome-for-testing has no linux/arm64 build") — confirmed by the
+	// Cross-Platform CI matrix (ubuntu-24.04-arm, arm64) failing here. This
+	// test's subject is ensureStarted's m.mu release/discard discipline
+	// around resolveExecPath, not which resolution tier wins, so opting in to
+	// the already-existing TrustPathChrome seam (same opt-in
+	// TestResolveExecPath_SkipsBrokenPATHCandidate uses) makes the test both
+	// arch-independent and network-free rather than gating it to amd64.
+	cfg.TrustPathChrome = true
 	m := &BrowserManager{cfg: cfg}
 	// CRIT-001: the fake "google-chrome" above only satisfies resolveExecPath's
 	// --version probe — launching it for real over the CDP pipe would fail

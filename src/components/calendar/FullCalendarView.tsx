@@ -26,7 +26,6 @@ import {
   XCircle,
   Circle,
   Clock,
-  Flag,
   SkipForward,
 } from '@phosphor-icons/react'
 
@@ -54,7 +53,6 @@ const ICON_MAP: Record<StatusIconKey, IconComponent> = {
   XCircle,
   Circle,
   Clock,
-  Flag,
   SkipForward,
 }
 
@@ -169,7 +167,7 @@ export function EventChip({ arg }: { arg: EventContentArg }) {
   // pre-existing gap in Agenda view generally, not something introduced by
   // or specific to the now-marker; a real fix would need Agenda's own
   // focus/keyboard harness, out of scope here.
-  const statusText = ext.kind === 'milestone' ? 'Milestone' : occurrenceStatusLabel(ext.status)
+  const statusText = occurrenceStatusLabel(ext.status)
   const chipLabel = [arg.event.title, statusText, timeText].filter(Boolean).join(', ')
 
   return (

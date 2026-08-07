@@ -65,12 +65,22 @@ func NewToolRegistry() *ToolRegistry {
 	}
 }
 
-// registerToolLocked saves a tool entry into the registry. Must be called with r.mu held.
-func (r *ToolRegistry) registerToolLocked(tool Tool, isCore bool, warnPrefix, debugLabel string) {
+// registerToolLocked saves a tool entry into the registry. Must be called
+// with r.mu held. warnOnOverwrite distinguishes a genuinely unexpected
+// name collision (Register/RegisterHidden — logged at WARN so an operator
+// notices) from an intentional, expected replacement (RegisterReplacing —
+// logged at DEBUG only): both still overwrite the entry identically, only
+// the log level differs.
+func (r *ToolRegistry) registerToolLocked(tool Tool, isCore bool, warnPrefix, debugLabel string, warnOnOverwrite bool) {
 	name := tool.Name()
 	if _, exists := r.tools[name]; exists {
-		logger.WarnCF("tools", warnPrefix+" overwrites existing tool",
-			map[string]any{"name": name})
+		if warnOnOverwrite {
+			logger.WarnCF("tools", warnPrefix+" overwrites existing tool",
+				map[string]any{"name": name})
+		} else {
+			logger.DebugCF("tools", warnPrefix+" replaced existing tool (expected)",
+				map[string]any{"name": name})
+		}
 	}
 	r.tools[name] = &ToolEntry{
 		Tool:   tool,
@@ -93,14 +103,31 @@ func (r *ToolRegistry) registerToolLocked(tool Tool, isCore bool, warnPrefix, de
 func (r *ToolRegistry) Register(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.registerToolLocked(tool, true, "Tool registration", "Registered core tool")
+	r.registerToolLocked(tool, true, "Tool registration", "Registered core tool", true)
 }
 
 // RegisterHidden saves hidden tools (visible only via TTL)
 func (r *ToolRegistry) RegisterHidden(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.registerToolLocked(tool, false, "Hidden tool registration", "Registered hidden tool")
+	r.registerToolLocked(tool, false, "Hidden tool registration", "Registered hidden tool", true)
+}
+
+// RegisterReplacing saves a core tool entry exactly like Register, except a
+// same-name collision is treated as an EXPECTED, intentional replacement —
+// logged at DEBUG, not WARN. Use this at a wiring site that legitimately
+// re-registers the same tool name more than once as part of normal
+// operation (e.g. pkg/agent's wirePlanToolsForAgent/SetPlanStore re-wiring
+// the ADR-052 plan/task tool surface for every already-registered agent
+// once the real plan.Store becomes available — previously this produced 4
+// spurious "Tool registration overwrites existing tool" WARNs per agent on
+// every such re-wire, 7-reviewer gate item 5). Register/RegisterHidden
+// remain the right choice everywhere a same-name collision is NOT expected
+// and should stay loud.
+func (r *ToolRegistry) RegisterReplacing(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.registerToolLocked(tool, true, "Tool registration", "Registered core tool", false)
 }
 
 // SetMediaStore injects a MediaStore into all registered tools that can

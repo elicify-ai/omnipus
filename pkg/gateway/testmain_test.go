@@ -1,5 +1,3 @@
-//go:build !cgo
-
 package gateway
 
 // TestMain registers the real gateway.RunContext into pkg/agent/testutil so

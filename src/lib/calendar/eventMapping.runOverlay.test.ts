@@ -68,7 +68,7 @@ describe('four-state chip rule — state 1: instant with a matching run', () => 
       ],
     })
 
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events).toHaveLength(1)
     const ext = events[0].extendedProps
     expect(ext?.kind).toBe('task-occurrence')
@@ -93,7 +93,7 @@ describe('four-state chip rule — state 1: instant with a matching run', () => 
       ],
     })
 
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('failed')
     expect(events[0].extendedProps?.icon).toBe('XCircle')
     expect(events[0].backgroundColor).toBe('#F87171')
@@ -109,7 +109,7 @@ describe('four-state chip rule — state 1: instant with a matching run', () => 
       ],
     })
 
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('in_progress')
     expect(events[0].extendedProps?.icon).toBe('CircleNotch')
     expect(events[0].backgroundColor).toBe('#60A5FA')
@@ -128,7 +128,7 @@ describe('four-state chip rule — state 1: instant with a matching run', () => 
       ],
     })
 
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('done') // NOT 'blocked'
     expect(events[0].extendedProps?.icon).toBe('CheckCircle') // NOT 'Prohibit'
   })
@@ -142,7 +142,7 @@ describe('four-state chip rule — state 2: no run, future instant', () => {
     const task = makeTask({ status: 'failed' }) // aggregate task.status must NOT leak through
     const set = makeOccurrenceSet({ occurrences_ms: [occurrenceMs] })
 
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('scheduled')
     expect(events[0].extendedProps?.icon).toBe('Clock')
     expect(events[0].backgroundColor).not.toBe('#F87171') // not task.status=failed's red
@@ -155,7 +155,7 @@ describe('four-state chip rule — state 2: no run, future instant', () => {
   it('an instant exactly equal to now is treated as scheduled (>= boundary)', () => {
     const task = makeTask()
     const set = makeOccurrenceSet({ occurrences_ms: [NOW] })
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('scheduled')
   })
 })
@@ -168,7 +168,7 @@ describe('four-state chip rule — state 3: no run, past instant ("no record")',
     const task = makeTask({ status: 'done' })
     const set = makeOccurrenceSet({ occurrences_ms: [occurrenceMs] })
 
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     const ext = events[0].extendedProps
     expect(ext?.status).toBe('no_record')
     expect(ext?.icon).not.toBe('Clock')
@@ -186,7 +186,7 @@ describe('four-state chip rule — state 3: no run, past instant ("no record")',
     const task = makeTask()
     const set = makeOccurrenceSet({ occurrences_ms: [occurrenceMs] })
 
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).not.toBe('scheduled')
     expect(events[0].extendedProps?.status).toBe('no_record')
   })
@@ -197,7 +197,7 @@ describe('four-state chip rule — state 3: no run, past instant ("no record")',
     const task = makeTask()
     const set = makeOccurrenceSet({ occurrences_ms: [past, future] })
 
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     const byMs = new Map(
       events
         .filter((e) => e.extendedProps?.kind === 'task-occurrence')
@@ -228,7 +228,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
       ],
     })
 
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events).toHaveLength(1)
     const ext = events[0].extendedProps
     expect(ext?.kind).toBe('task-occurrence-agg')
@@ -255,7 +255,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
         },
       ],
     })
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('in_progress')
     expect(events[0].extendedProps?.icon).toBe('CircleNotch')
   })
@@ -275,7 +275,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
         },
       ],
     })
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('done')
     expect(events[0].extendedProps?.icon).toBe('CheckCircle')
   })
@@ -295,7 +295,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
         },
       ],
     })
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('scheduled')
     expect(events[0].extendedProps?.icon).toBe('Clock')
     expect(events[0].extendedProps?.kind === 'task-occurrence-agg' && events[0].extendedProps.tooltip).toBe(
@@ -318,7 +318,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
         },
       ],
     })
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     // Even though 9/10 are done and task.status is 'done', the ONE failure wins.
     expect(events[0].extendedProps?.status).toBe('failed')
   })
@@ -355,7 +355,7 @@ describe('four-state chip rule — state 5: skipped (overlap-guard run outcome)'
       ],
     })
 
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     const ext = events[0].extendedProps
     expect(ext?.status).toBe('skipped')
     expect(ext?.icon).toBe('SkipForward')
@@ -376,7 +376,7 @@ describe('four-state chip rule — state 5: skipped (overlap-guard run outcome)'
       ],
     })
 
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('skipped') // NOT 'done'
     expect(events[0].backgroundColor).not.toBe('#94A3B8') // not the grey STATUS_STYLE_FALLBACK/NO_RECORD_STYLE
     expect(events[0].backgroundColor).not.toBe('#34D399') // not task.status=done's green
@@ -397,7 +397,7 @@ describe('four-state chip rule — state 5: skipped (overlap-guard run outcome)'
         },
       ],
     })
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     const ext = events[0].extendedProps
     expect(ext?.status).toBe('skipped')
     expect(ext?.icon).toBe('SkipForward')
@@ -421,7 +421,7 @@ describe('four-state chip rule — state 5: skipped (overlap-guard run outcome)'
         },
       ],
     })
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('failed')
     expect(events[0].extendedProps?.icon).toBe('XCircle')
   })
@@ -447,7 +447,7 @@ describe('four-state chip rule — bucket fallback when run_counts is absent', (
       ],
     })
 
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     const ext = events[0].extendedProps
     expect(ext?.status).toBe('scheduled') // NOT 'failed' (task.status)
     expect(ext?.icon).toBe('Clock')
@@ -463,7 +463,7 @@ describe('four-state chip rule — bucket fallback when run_counts is absent', (
     const set = makeOccurrenceSet({
       day_buckets: [{ day_start_ms: NOW, day_end_ms: NOW + 86_400_000, count: 5, first_ms: NOW, interval_ms: null }],
     })
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('scheduled')
   })
 
@@ -477,7 +477,7 @@ describe('four-state chip rule — bucket fallback when run_counts is absent', (
       ],
     })
 
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     const ext = events[0].extendedProps
     expect(ext?.status).toBe('no_record') // NOT 'done' (task.status), NOT 'scheduled'
     expect(ext?.icon).toBe('Circle')
@@ -565,7 +565,7 @@ describe('occurrenceMs / dayStartMs threading', () => {
     const a = NOW + 1000
     const b = NOW + 2000
     const set = makeOccurrenceSet({ occurrences_ms: [a, b] })
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     const ms = events.map((e) => (e.extendedProps as { occurrenceMs: number }).occurrenceMs).sort()
     expect(ms).toEqual([a, b])
   })
@@ -578,7 +578,7 @@ describe('occurrenceMs / dayStartMs threading', () => {
         { day_start_ms: dayStart, day_end_ms: dayStart + 86_400_000, count: 2, first_ms: dayStart, interval_ms: null },
       ],
     })
-    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect((events[0].extendedProps as { dayStartMs: number }).dayStartMs).toBe(dayStart)
   })
 })

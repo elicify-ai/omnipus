@@ -52,11 +52,20 @@ func TestApprovalGrantStore_SurvivesReconnect(t *testing.T) {
 // TestApprovalGrantStore_Inherit verifies delegation inheritance: a child
 // agent inherits the parent's grant set at spawn time (copy-at-spawn,
 // union not replace), scoped to the tool(s) actually granted.
+//
+// ADR-057 FR-031 retired the single-key Inherit in favor of the two-key
+// InheritFrom (pkg/agent/subturn.go, unit U7); same-session (src==dst) is
+// still a valid same-session-delegation fixture shape, so this test is
+// adapted to call InheritFrom directly with sessionID repeated as both
+// source and destination — byte-identical to what the retired shim itself
+// did. See approvalgrants_adr057_test.go for the new two-key coverage
+// (TestApprovalGrants_InheritFromTwoKeys et al.), which is the primary
+// regression coverage for the two-key contract going forward.
 func TestApprovalGrantStore_Inherit(t *testing.T) {
 	s := NewApprovalGrantStore()
 	s.Record("session-1", "parent", "exec")
 
-	s.Inherit("session-1", "parent", "child")
+	s.InheritFrom("session-1", "parent", "session-1", "child")
 
 	if !s.IsAllowed("session-1", "child", "exec") {
 		t.Error("child must inherit the parent's granted tool")
@@ -71,25 +80,25 @@ func TestApprovalGrantStore_Inherit(t *testing.T) {
 func TestApprovalGrantStore_InheritNoParentGrant(t *testing.T) {
 	s := NewApprovalGrantStore()
 
-	s.Inherit("session-1", "parent", "child")
+	s.InheritFrom("session-1", "parent", "session-1", "child")
 
 	if s.IsAllowed("session-1", "child", "exec") {
 		t.Error("child must inherit nothing when the parent has no grants")
 	}
 }
 
-// TestApprovalGrantStore_InheritPreservesChildOwnGrants verifies Inherit is
-// a union, not a replace: a grant the child already holds independently
+// TestApprovalGrantStore_InheritPreservesChildOwnGrants verifies InheritFrom
+// is a union, not a replace: a grant the child already holds independently
 // survives inheriting the parent's (different) grants.
 func TestApprovalGrantStore_InheritPreservesChildOwnGrants(t *testing.T) {
 	s := NewApprovalGrantStore()
 	s.Record("session-1", "child", "read_file")
 	s.Record("session-1", "parent", "exec")
 
-	s.Inherit("session-1", "parent", "child")
+	s.InheritFrom("session-1", "parent", "session-1", "child")
 
 	if !s.IsAllowed("session-1", "child", "read_file") {
-		t.Error("child's own pre-existing grant must survive Inherit")
+		t.Error("child's own pre-existing grant must survive InheritFrom")
 	}
 	if !s.IsAllowed("session-1", "child", "exec") {
 		t.Error("child must also gain the parent's grant")
@@ -141,9 +150,9 @@ func TestApprovalGrantStore_NilStoreNeverPanicsNeverAutoApproves(t *testing.T) {
 	if s.IsAllowed("session-1", "agent-a", "exec") {
 		t.Error("nil store must never report a grant as allowed")
 	}
-	s.Record("session-1", "agent-a", "exec")  // must be a no-op, not a panic
-	s.Inherit("session-1", "parent", "child") // must be a no-op, not a panic
-	s.ClearSession("session-1")               // must be a no-op, not a panic
+	s.Record("session-1", "agent-a", "exec")                   // must be a no-op, not a panic
+	s.InheritFrom("session-1", "parent", "session-1", "child") // must be a no-op, not a panic
+	s.ClearSession("session-1")                                // must be a no-op, not a panic
 	if s.IsAllowed("session-1", "agent-a", "exec") {
 		t.Error("nil store must still report false after no-op writes")
 	}

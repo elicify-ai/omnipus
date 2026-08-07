@@ -29,9 +29,10 @@ import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, fetchAgents, logout } from '@/lib/api'
 import { logError } from '@/lib/telemetry'
-import type { Workspace } from '@/lib/api'
+import type { Workspace, Session } from '@/lib/api'
 import { useSessionStore } from '@/store/session'
 import { useSelectSession } from '@/components/chat/useSelectSession'
+import { SessionTree, SessionExpandToggle, useSessionForest, type SessionTreeFlatRow } from '@/components/sessions/SessionTree'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -165,6 +166,13 @@ export function Sidebar() {
   })
 
   // Sessions + agents — used by the workspace accordion's expanded session list.
+  // ADR-052 FR-036: verifier-role adjudication sessions (type "verifier")
+  // MUST stay hidden from this list — GET /sessions defaults to excluding
+  // them (include_verifier=false) unless the caller explicitly opts in.
+  // fetchSessions() below is called with NO 3rd (opts) argument — the
+  // includeVerifier opt-in exists on the signature (UsageScreen uses it)
+  // but is intentionally omitted here, so this stays the excluded default
+  // by construction — do not add it.
   const { data: allSessions = [], isError: sessionsError } = useQuery({
     queryKey: ['sessions'],
     queryFn: () => fetchSessions(),
@@ -443,6 +451,28 @@ export function Sidebar() {
             .map((project) => {
             const isActive = activeWorkspaceId === project.id
             const isExpanded = expandedWorkspaceIds.has(project.id)
+            // ADR-057 FR-093 (US-19, operator decision 1 — NESTED UNDER
+            // PARENT, not the `verifier` hidden-with-a-flag precedent): the
+            // `maxVisible` budget below MUST be spent on ROOT sessions only,
+            // so a wide delegation fan-out (e.g. 24 children) can never evict
+            // the parent chat itself. Delegate children (`parent_session_id`
+            // set) are never top-level rows — they render nested under their
+            // real parent via WorkspaceSessionTree below, fetched on expand.
+            //
+            // `allSessions` (fetchSessions() with no opts, above) already IS
+            // the server's roots-only page — FR-091's orphan clause
+            // (pkg/agent/loop.go's u9FilterSessionHierarchy) returns a
+            // session as a root when it has no parent OR its declared parent
+            // no longer resolves, and it does NOT null out that stale
+            // `parent_session_id` field on the wire. A prior version of this
+            // filter re-checked `!s.parent_session_id` here as a defensive
+            // measure, which actively broke that orphan promotion: an
+            // orphaned session (parent deleted) still carries its old
+            // parent_session_id, so it was silently re-excluded from every
+            // workspace — permanently invisible even though the server
+            // correctly classified it as a root. Trust the server contract
+            // instead of re-deriving root-ness from a field that doesn't
+            // reliably indicate it once a parent can be deleted.
             const workspaceSessions = allSessions
               .filter((s) => s.workspace_id === project.id)
               .sort((a, b) => {
@@ -516,29 +546,17 @@ export function Sidebar() {
                       <p className="pl-3 pr-4 py-1 text-[13px] text-[var(--color-muted)] opacity-60">No sessions yet</p>
                     ) : (
                       // Pure navigation rows — manage lives behind "More…".
-                      visibleSessions.map((s) => {
-                        const sActive = s.id === activeSessionId
-                        return (
-                          <button tabIndex={0}
-                            key={s.id}
-                            type="button"
-                            onClick={() => selectSession(s)}
-                            aria-current={sActive ? 'page' : undefined}
-                            className={cn(
-                              'flex items-center gap-1.5 w-full pl-3 pr-4 py-1.5 text-[13px] transition-colors text-left',
-                              sActive
-                                ? 'text-[var(--color-accent)] font-medium'
-                                : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
-                            )}
-                          >
-                            {sActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
-                            <span className="flex-1 truncate">{s.title || 'Untitled'}</span>
-                            {s.type === 'heartbeat' && (
-                              <span className="text-[9px] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
-                            )}
-                          </button>
-                        )
-                      })
+                      // ADR-057 US-19/FR-093: renders a TREE, not a flat list
+                      // — a root session with delegated children (child_count
+                      // > 0) gets an expand chevron; its children are fetched
+                      // a page at a time only once the user expands it
+                      // (WorkspaceSessionTree -> useSessionForest), never
+                      // loaded or counted against maxVisible up front.
+                      <WorkspaceSessionTree
+                        rootSessions={visibleSessions}
+                        activeSessionId={activeSessionId}
+                        selectSession={selectSession}
+                      />
                     )}
                     {/* Always the last entry — opens the session search pre-filtered to this workspace */}
                     {workspaceSessions.length > 0 && (
@@ -819,6 +837,148 @@ export function Sidebar() {
           />
         )}
       </AnimatePresence>
+    </>
+  )
+}
+
+// ── ADR-057 US-19/W16f: the workspace accordion's session TREE ───────────────
+//
+// Root sessions (already filtered + sorted + maxVisible-sliced by the
+// caller) rendered as a forest: a session with delegated children
+// (`child_count > 0`) gets an expand chevron; its children are fetched a
+// page at a time — never up front — only once the user expands it
+// (`useSessionForest`, SessionTree.tsx). Not virtualized: the sidebar's
+// visible-root budget already bounds the DOM (≤ 9 roots), unlike SearchModal
+// (FR-094), which can render far more nodes and virtualizes.
+function WorkspaceSessionTree({
+  rootSessions,
+  activeSessionId,
+  selectSession,
+}: {
+  rootSessions: Session[]
+  activeSessionId: string | null
+  selectSession: (session: Session) => void
+}) {
+  const {
+    tree,
+    expandedIds,
+    toggleExpand,
+    isLoadingChildren,
+    isErrorChildren,
+    hasMoreChildren,
+    loadMoreChildren,
+  } = useSessionForest(rootSessions)
+
+  return (
+    <SessionTree
+      nodes={tree}
+      expandedIds={expandedIds}
+      renderRow={(row) => (
+        <SidebarSessionRow
+          row={row}
+          isActive={row.node.session.id === activeSessionId}
+          isLoading={isLoadingChildren(row.node.session.id)}
+          isError={isErrorChildren(row.node.session.id)}
+          hasMore={hasMoreChildren(row.node.session.id)}
+          onToggleExpand={() => toggleExpand(row.node.session.id)}
+          onLoadMore={() => loadMoreChildren(row.node.session.id)}
+          onSelect={() => selectSession(row.node.session)}
+        />
+      )}
+    />
+  )
+}
+
+function SidebarSessionRow({
+  row,
+  isActive,
+  isLoading,
+  isError,
+  hasMore,
+  onToggleExpand,
+  onLoadMore,
+  onSelect,
+}: {
+  row: SessionTreeFlatRow
+  isActive: boolean
+  isLoading: boolean
+  isError: boolean
+  /** True iff this node's children are loaded but the server has more (child_count > loaded count). */
+  hasMore: boolean
+  onToggleExpand: () => void
+  onLoadMore: () => void
+  onSelect: () => void
+}) {
+  const { node, depth, hasChildren, isExpanded, childrenEmpty } = row
+  const session = node.session
+  const title = session.title || 'Untitled'
+  const indent = depth > 0 ? 12 + depth * 14 : 12
+  return (
+    <>
+      <div className="flex items-center pr-4" style={{ paddingLeft: indent }}>
+        {hasChildren ? (
+          <SessionExpandToggle
+            expanded={isExpanded}
+            onToggle={onToggleExpand}
+            loading={isLoading}
+            error={isError}
+            expandLabel={`Expand ${title} delegated sessions`}
+            collapseLabel={`Collapse ${title} delegated sessions`}
+          />
+        ) : (
+          <span className="w-[18px] shrink-0" aria-hidden="true" />
+        )}
+        <button tabIndex={0}
+          type="button"
+          onClick={onSelect}
+          aria-current={isActive ? 'page' : undefined}
+          className={cn(
+            'flex items-center gap-1.5 flex-1 min-w-0 py-1.5 pl-1 text-[13px] transition-colors text-left',
+            isActive
+              ? 'text-[var(--color-accent)] font-medium'
+              : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
+          )}
+        >
+          {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
+          <span className="flex-1 truncate">{title}</span>
+          {session.type === 'heartbeat' && (
+            <span className="text-[9px] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
+          )}
+          {hasChildren && (
+            <span className="text-[9px] text-[var(--color-muted)] flex-shrink-0" aria-hidden="true">
+              {session.child_count}
+            </span>
+          )}
+        </button>
+      </div>
+      {/* childrenEmpty: expanded, fetched, and the fetch came back with zero
+          rows despite child_count > 0 — a stale/incorrect server count must
+          not render as an open toggle with nothing beneath it and no
+          explanation. */}
+      {childrenEmpty && (
+        <p
+          className="py-1 text-[12px] text-[var(--color-muted)] opacity-70"
+          style={{ paddingLeft: indent + 18 }}
+        >
+          No delegated sessions found
+        </p>
+      )}
+      {/* hasMore: this node has additional children pages beyond what's
+          currently loaded (ADR-057 FR-092 continued paging) — the
+          child_count badge above can report a total larger than what's
+          rendered; this is the explicit "load the rest" affordance rather
+          than silently capping the fan-out at one page. */}
+      {isExpanded && hasMore && (
+        <button tabIndex={0}
+          type="button"
+          onClick={onLoadMore}
+          disabled={isLoading}
+          style={{ paddingLeft: indent + 18 }}
+          className="flex items-center gap-1 py-1 pr-4 text-[12px] text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline transition-opacity"
+        >
+          {isLoading ? 'Loading…' : 'Load more'}
+        </button>
+      )}
     </>
   )
 }

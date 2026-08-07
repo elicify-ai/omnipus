@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // channel_instance_crud_test.go — ADR-029 US-6/US-10/US-11 gateway handler tests.
 // Covers:
 //   - F-6: rejection tests assert nothing persisted (SC-002)
@@ -184,6 +182,13 @@ func TestSetChannelRouting_Bound_AgentNotInTeam_NothingPersisted(t *testing.T) {
 		`{"workspace_id":"sales","default_agent_id":"jim"}`)
 	require.Equal(t, http.StatusUnprocessableEntity, w.Code,
 		"agent not in CoreTeam must be 422 (FR-006)")
+	// Content check (anti-shortcut, mirrors channel_routing_binding_test.go's
+	// TestSetChannelRouting_Bound_AgentNotInTeam): "agent not found" is ALSO a
+	// 422 in the bound flow — pin the actual rejection reason so a regression
+	// that silently drops "jim" from the roster is caught here, not masked by
+	// the shared status code.
+	assert.Contains(t, w.Body.String(), "not a member of workspace",
+		"rejection must be the team-membership check (FR-006), not a generic agent-not-found")
 
 	cfg := api.agentLoop.GetConfig()
 	inst, ok := cfg.Channels["whatsapp.eu"]
@@ -228,6 +233,13 @@ func TestSetChannelRouting_Bound_WorkerAgent_NothingPersisted(t *testing.T) {
 		`{"workspace_id":"sales","default_agent_id":"worker1"}`)
 	require.Equal(t, http.StatusUnprocessableEntity, w.Code,
 		"worker agent must be 422 (FR-008/MIN-002)")
+	// Content check (anti-shortcut, mirrors channel_routing_binding_test.go's
+	// TestSetChannelRouting_Bound_WorkerAgent): "agent not found" is ALSO a
+	// 422 in the bound flow — pin the actual rejection reason so a regression
+	// that silently drops "worker1" from the roster is caught here, not
+	// masked by the shared status code.
+	assert.Contains(t, w.Body.String(), "workers are not chat targets",
+		"rejection must be the worker-type check (FR-008), not a generic agent-not-found")
 
 	cfg := api.agentLoop.GetConfig()
 	inst, ok := cfg.Channels["whatsapp.eu"]

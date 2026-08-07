@@ -60,23 +60,31 @@ func (r *Root) Rename(fromRel, toRel string) (os.FileInfo, error) {
 	if _, err := r.root.Stat(fromRel); err != nil {
 		return nil, translateErr(err)
 	}
-	if _, err := r.root.Stat(toRel); err == nil {
-		return nil, ErrAlreadyExists
-	} else if !os.IsNotExist(err) {
-		return nil, translateErr(err)
-	}
-	// Case-insensitive collision backstop (see caseInsensitiveMatch's doc):
-	// the exact-case Stat miss above only proves no entry exists with
-	// toRel's EXACT casing — not that no colliding sibling exists. A
-	// destination sibling differing only in case is either (a) the very
-	// file being renamed — a legitimate case-only relabel (e.g.
-	// "Report.txt" -> "report.txt"), which the OS's own Rename call
-	// already handles correctly on every platform Omnipus targets (NTFS
-	// and APFS/HFS+ rename a name to a different case of itself in place;
-	// ext4 sees two genuinely distinct names and performs an ordinary
-	// rename) — or (b) some OTHER file, which must be rejected everywhere
-	// Omnipus runs, not only on filesystems that happen to enforce it
-	// natively.
+	// Case-insensitive collision backstop (see caseInsensitiveMatch's doc)
+	// is the SOLE existence check for toRel, not a fallback reached only
+	// after an exact-case Stat "miss". FIX (real data-loss/false-rejection
+	// bug, not a test-platform assumption): on a genuinely case-insensitive
+	// filesystem (macOS's default APFS, Windows/NTFS-typical) an exact-name
+	// r.root.Stat(toRel) SUCCEEDS by case-folding onto a DIFFERENTLY-CASED
+	// existing entry — indistinguishable from a true exact match by return
+	// value alone. The previous version trusted that success as "toRel
+	// already exists" and returned ErrAlreadyExists immediately, which
+	// short-circuited PAST this backstop's sameEntry special case below —
+	// rejecting a legitimate case-only relabel ("Report.txt" ->
+	// "report.txt") with a spurious conflict before ever checking whether
+	// the "existing" entry found IS the file being renamed. Confirmed by
+	// the Cross-Platform CI matrix (macos-latest, arm64)'s
+	// TestLibraryRename_CaseOnlyRelabel_Allowed failure. A directory
+	// listing name scan (caseInsensitiveMatch) already subsumes an
+	// exact-case existence check — an exact match is trivially fold-equal —
+	// so no separate Stat(toRel) is needed to decide existence at all; the
+	// sameEntry classification below (a) the very file being renamed — a
+	// legitimate case-only relabel, which the OS's own Rename call already
+	// handles correctly on every platform Omnipus targets (NTFS and
+	// APFS/HFS+ rename a name to a different case of itself in place; ext4
+	// sees two genuinely distinct names and performs an ordinary rename) —
+	// or (b) some OTHER file, which must be rejected everywhere Omnipus
+	// runs, not only on filesystems that happen to enforce it natively.
 	toDir := dirParent(toRel)
 	if _, found, ciErr := r.caseInsensitiveMatch(toDir, path.Base(toRel)); ciErr != nil {
 		return nil, ciErr

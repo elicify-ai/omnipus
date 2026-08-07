@@ -6,15 +6,15 @@
  *
  * Sprint 2 migration: TaskDetailPanel now uses the unified Task type — the
  * old two-mode (workflow/gtd) API is gone. BoardTask is gone. All tasks use
- * the 7-state lifecycle: inbox/next/planning/in_progress/blocked/done/failed.
+ * the 6-state lifecycle (ADR-051 D5): inbox/next/in_progress/blocked/done/failed.
  */
 
 import { useState } from 'react'
-import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TaskDetailPanel } from './TaskDetailPanel'
-import type { Task, TaskUpdateRequest, TaskRun } from '@/lib/api'
+import type { Task, TaskUpdateRequest, Plan, TaskRun } from '@/lib/api'
 
 // DateTimePicker (shadcn Calendar + Select) needs these jsdom polyfills to open
 // (same gap noted in date-time-picker.test.tsx).
@@ -87,9 +87,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchSubtasks: vi.fn().mockResolvedValue([]),
-    fetchMilestones: vi.fn().mockResolvedValue([]),
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
     fetchTasks: vi.fn().mockResolvedValue([]),
+    // ADR-051 plans-as-filter — the "Move to plan…" picker's plans query.
+    fetchPlans: vi.fn().mockResolvedValue([]),
+    fetchTaskEvidence: vi.fn().mockResolvedValue([]),
+    fetchTaskVerdicts: vi.fn().mockResolvedValue([]),
     // Fix B: the assignee picker's workspace-team scoping — see the
     // "assignee picker is workspace-team-scoped" describe block below.
     fetchWorkspaceDelegation: vi.fn(),
@@ -97,14 +100,15 @@ vi.mock('@/lib/api', async (importOriginal) => {
     deleteTask: vi.fn().mockResolvedValue(undefined),
     setTaskTodos: vi.fn().mockResolvedValue({}),
     setTaskDependencies: vi.fn().mockResolvedValue({}),
-    // ADR-050 / task-run-history-spec §4.4 — the Runs section (TaskRunsList)
-    // and the "Retry" re-run wiring both go through these.
+    stopTaskGoalLoop: vi.fn().mockResolvedValue({}),
     fetchTaskRuns: vi.fn().mockResolvedValue([]),
     runTaskNow: vi.fn().mockResolvedValue(undefined),
     isApiError: vi.fn().mockReturnValue(false),
     tasksQueryKeys: actual.tasksQueryKeys,
-    milestonesQueryKeys: actual.milestonesQueryKeys,
+    taskEvidenceQueryKeys: actual.taskEvidenceQueryKeys,
+    taskVerdictsQueryKeys: actual.taskVerdictsQueryKeys,
     workspacesQueryKeys: actual.workspacesQueryKeys,
+    plansQueryKeys: actual.plansQueryKeys,
   }
 })
 
@@ -182,6 +186,7 @@ beforeEach(async () => {
   vi.mocked(api.setTaskDependencies).mockReset().mockResolvedValue({} as never)
   vi.mocked(api.fetchTasks).mockReset().mockResolvedValue([])
   vi.mocked(api.fetchSubtasks).mockReset().mockResolvedValue([])
+  vi.mocked(api.fetchPlans).mockReset().mockResolvedValue([])
   // Default: the workspace-team query fails (unmocked in most tests, which
   // don't care about team-scoping) — this is the DEGRADED fallback path
   // (buildTaskAssigneeItems / useWorkspaceTeamIds), which offers the full
@@ -254,12 +259,12 @@ describe('TaskDetailPanel — task without session (closed panel)', () => {
   })
 })
 
-// ── 7-state lifecycle tests ───────────────────────────────────────────────────
+// ── 6-state lifecycle tests (ADR-051 D5) ──────────────────────────────────────
 // Verify the unified status vocabulary renders correctly.
 
-describe('TaskDetailPanel — 7-state status rendering', () => {
-  it('renders Start Task button for inbox/next/planning tasks', async () => {
-    for (const status of ['inbox', 'next', 'planning'] as const) {
+describe('TaskDetailPanel — 6-state status rendering', () => {
+  it('renders Start Task button for inbox/next tasks', async () => {
+    for (const status of ['inbox', 'next'] as const) {
       const task = makeTask({ status })
       const { unmount } = renderPanel(task)
       expect(await screen.findByRole('button', { name: /Start Task/i })).toBeInTheDocument()
@@ -670,6 +675,104 @@ describe('TaskDetailPanel — worker-type agents are offered as assignees', () =
   })
 })
 
+// ── Plan field (ADR-051 plans-as-filter) ────────────────────────────────────────
+// The "Move to plan…" picker — the explicit cross-plan reassignment path: the
+// Board doesn't change a task's plan via drag; use this dropdown to move it.
+
+function makePlan(overrides: Partial<Plan> = {}): Plan {
+  return {
+    id: 'plan-1',
+    workspace_id: 'ws-test',
+    title: 'Launch',
+    state: 'draft',
+    plan_phase: 'idle',
+    owner_agent_id: 'jim',
+    owner: 'admin',
+    created_by: 'admin',
+    created_at: '2026-06-20T10:00:00Z',
+    updated_at: '2026-06-20T10:00:00Z',
+    ...overrides,
+  }
+}
+
+// Open the Plan field's SmartSelect (mirrors openAgentPicker above).
+async function openPlanPicker(): Promise<HTMLElement> {
+  const planLabel = await screen.findByText('Plan')
+  const fieldRoot = planLabel.parentElement as HTMLElement
+  const planTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
+  fireEvent.click(planTrigger)
+  return planTrigger
+}
+
+describe('TaskDetailPanel — Plan field', () => {
+  // Radix Select needs `scrollIntoView` to open (see the worker-inclusion
+  // describe block above, which deletes it off the shared prototype after
+  // each of its own tests) — reinstate it for this block too.
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn()
+  })
+  afterEach(() => {
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('renders the workspace plans as options, alongside "No plan"', async () => {
+    const { fetchPlans } = await import('@/lib/api')
+    vi.mocked(fetchPlans).mockResolvedValue([
+      makePlan({ id: 'plan-1', title: 'Launch' }),
+      makePlan({ id: 'plan-2', title: 'Onboarding' }),
+    ] as never)
+
+    renderPanel(taskWithPrompt)
+    await openPlanPicker()
+
+    await waitFor(() => {
+      const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+        (el) => el.textContent ?? '',
+      )
+      expect(options.some((t) => t.includes('Launch'))).toBe(true)
+      expect(options.some((t) => t.includes('Onboarding'))).toBe(true)
+      expect(options.some((t) => t.includes('No plan'))).toBe(true)
+    })
+  })
+
+  it('selecting a plan sends its id via updateTask', async () => {
+    const { fetchPlans, updateTask } = await import('@/lib/api')
+    vi.mocked(fetchPlans).mockResolvedValue([makePlan({ id: 'plan-1', title: 'Launch' })] as never)
+    vi.mocked(updateTask).mockResolvedValue({} as never)
+
+    renderPanel(taskWithPrompt)
+    await openPlanPicker()
+
+    const option = await screen.findByRole('option', { name: 'Launch' })
+    fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+    fireEvent.click(option)
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledWith(
+      taskWithPrompt.id,
+      expect.objectContaining({ plan_id: 'plan-1' }),
+    ))
+  })
+
+  it('selecting "No plan" sends an empty plan_id', async () => {
+    const { fetchPlans, updateTask } = await import('@/lib/api')
+    vi.mocked(fetchPlans).mockResolvedValue([makePlan({ id: 'plan-1', title: 'Launch' })] as never)
+    vi.mocked(updateTask).mockResolvedValue({} as never)
+
+    const plannedTask = makeTask({ id: 'task-planned', plan_id: 'plan-1' })
+    renderPanel(plannedTask)
+    await openPlanPicker()
+
+    const option = await screen.findByRole('option', { name: 'No plan' })
+    fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+    fireEvent.click(option)
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledWith(
+      'task-planned',
+      expect.objectContaining({ plan_id: '' }),
+    ))
+  })
+})
+
 // ── Team-scoping (Fix B) ──────────────────────────────────────────────────────
 // The assignee picker is scoped to task.workspace_id's TEAM (core_team ∪
 // delegation edges) — see useWorkspaceTeamIds / buildTaskAssigneeItems.
@@ -916,11 +1019,16 @@ describe('TaskDetailPanel — renders subtask section when subtasks exist', () =
 // ── Full task UX edits (trigger / depends-on / due / todos) ────────────────────
 
 describe('TaskDetailPanel — editable trigger', () => {
-  // FR-011/D3/FR-005: recurring-trigger editing is removed from the generic
-  // detail panel entirely — it exists only in the calendar editor. The two
-  // tests that used to select "Recurring" and edit a cron expression from
-  // this panel are replaced by the trim + FR-023 defensive-guard tests below.
-  it('the Trigger dropdown offers only "None (manual)" and "Once (at a time)" for a manual/once task', async () => {
+  // FR-011/D3/FR-005, updated by operator ruling 2026-08-07: recurring- AND
+  // once-trigger SCHEDULE editing are both removed from the generic detail
+  // panel entirely — actual date/time entry exists only in the calendar
+  // editor. The trigger-KIND switch (manual ⇄ once) still lives here, tested
+  // by the two tests below. Every/recurring/once-at-rest all get the
+  // calendar-redirect rendering, tested in the FR-023 describe block below
+  // (which used to cover only recurring/every — the once-DateTimePicker test
+  // that used to live here is replaced by that block's "once" case, since
+  // once now gets the identical treatment).
+  it('the Trigger dropdown offers only "None (manual)" and "Once (at a time)" for a manual task', async () => {
     Element.prototype.scrollIntoView = vi.fn()
     renderPanel(makeTask({ id: 'task-trig', status: 'next' }))
 
@@ -935,43 +1043,83 @@ describe('TaskDetailPanel — editable trigger', () => {
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
   })
 
-  it('picking a date + time for the "Once" trigger PATCHes trigger.config.at_ms', async () => {
-    // Note: triggerKind (and therefore whether the "Once" DateTimePicker is
-    // rendered at all) is derived straight from `task.trigger?.type`, not
-    // from any local echo of a SmartSelect pick — this test's `task` prop
-    // (via renderPanel) is static, so it starts already on the "once" kind
-    // with no at_ms yet (mirrors a freshly-created once-trigger task), rather
-    // than switching kinds through the SmartSelect mid-test.
+  it('Binding Rule 4 positive control: selecting "Once (at a time)" on a manual/no-trigger task still switches the trigger kind via updateTask', async () => {
+    // Operator ruling 2026-08-07 moved once-SCHEDULE editing (the actual
+    // date/time) to the calendar-only redirect — it did NOT touch the
+    // trigger-KIND switch (manual → once), which stays inline right here,
+    // exactly as before. This proves a manual/no-trigger task still gets
+    // that inline editing today, unaffected by the ruling.
+    Element.prototype.scrollIntoView = vi.fn()
     const { updateTask } = await import('@/lib/api')
-    renderPanel(makeTask({ id: 'task-trig-once', status: 'next', trigger: { type: 'once', config: {} } }))
+    renderPanel(makeTask({ id: 'task-trig-manual-switch', status: 'next' }))
 
-    fireEvent.click(await screen.findByRole('button', { name: /trigger date and time/i }))
-    navigateToMonth('2026-09-10')
-    clickDay('2026-09-10')
-    selectOption('Hour', '08')
-    selectOption('Minute', '15')
+    const label = await screen.findByText(/^trigger$/i)
+    const fieldRoot = label.parentElement as HTMLElement
+    const combo = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
+    fireEvent.click(combo)
 
-    const expectedAtMs = new Date('2026-09-10T08:15').getTime()
-    // Debounced autosave — poll the LAST recorded PATCH until it reflects the
-    // fully-composed pick (robust regardless of how many PATCHes preceded it).
+    const option = await screen.findByRole('option', { name: /once \(at a time\)/i })
+    fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+    fireEvent.click(option)
+
     await waitFor(() => {
       const arg = lastUpdateArg(updateTask)
       expect(arg.trigger?.type).toBe('once')
-      expect(arg.trigger?.config.at_ms).toBe(expectedAtMs)
-    }, { timeout: 3000 })
+      expect(typeof arg.trigger?.config.at_ms).toBe('number')
+    })
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
   })
 })
 
 // ── FR-023 defensive guard ────────────────────────────────────────────────────
-// Board/List already exclude every/recurring tasks (BoardView/ListView's
-// isRecurringTrigger filter) — this panel should never receive one in
-// practice. These tests force-feed one directly as the `task` prop (the
-// documented "stale cache or a race" path, Acceptance Scenario 5) and assert
-// the defensive read-only rendering: a plain-English summary, an "Edit in
-// workspace calendar" link, no SmartSelect trigger picker, and — critically —
-// no raw cron/rule string anywhere in the rendered output.
+// Board/List already exclude every schedule-bearing task (BoardView/
+// ListView's isScheduledTrigger filter — once/every/recurring alike, per
+// operator ruling 2026-08-07) — this panel should rarely receive one in
+// practice (reachable via a dependency chip, subtask row, search result,
+// stale cache, or a race). These tests force-feed one directly as the `task`
+// prop and assert the defensive read-only rendering: a plain-English
+// summary, an "Edit in workspace calendar" link, no SmartSelect trigger
+// picker, no inline DateTimePicker, and — critically — no raw cron/rule
+// string anywhere in the rendered output.
 
-describe('TaskDetailPanel — FR-023 defensive guard for a force-fed recurring task', () => {
+describe('TaskDetailPanel — FR-023 defensive guard for a force-fed scheduled task (once/every/recurring)', () => {
+  it('a task already on a "once" schedule shows the calendar-redirect affordance, not an inline DateTimePicker (operator ruling 2026-08-07)', async () => {
+    // Supersedes the pre-ruling test this used to be: picking a date+time via
+    // an inline DateTimePicker that PATCHed trigger.config.at_ms directly.
+    // `once` is now calendar-only, exactly like every/recurring — same
+    // read-only summary + "Edit in workspace calendar" link, no inline
+    // "Trigger date and time" picker, no trigger-kind SmartSelect.
+    renderPanel(makeTask({
+      id: 'task-trig-once',
+      status: 'next',
+      workspace_id: 'ws-test',
+      trigger: { type: 'once', config: { at_ms: new Date('2026-09-10T08:15').getTime() } },
+    }))
+
+    expect(await screen.findByText(/runs once/i)).toBeInTheDocument()
+    expect(await screen.findByText(/edit in workspace calendar/i)).toBeInTheDocument()
+    // No inline DateTimePicker for the trigger time…
+    expect(screen.queryByRole('button', { name: /trigger date and time/i })).toBeNull()
+    // …and no trigger-kind SmartSelect either — matches the every/recurring
+    // rendering below exactly.
+    const label = await screen.findByText(/^trigger$/i)
+    const fieldRoot = label.parentElement as HTMLElement
+    expect(fieldRoot.querySelector('[role="combobox"]')).toBeNull()
+  })
+
+  it('omits the calendar link for a force-fed "once" task with no workspace_id, but still shows the read-only summary', async () => {
+    renderPanel(makeTask({
+      id: 'task-once-no-ws',
+      status: 'next',
+      workspace_id: '',
+      trigger: { type: 'once', config: { at_ms: new Date('2026-09-10T08:15').getTime() } },
+    }))
+
+    expect(await screen.findByText(/runs once/i)).toBeInTheDocument()
+    expect(screen.queryByText(/edit in workspace calendar/i)).toBeNull()
+  })
+
   it('renders a read-only summary and an "Edit in workspace calendar" link for a recurring (cron) task — never the raw cron string', async () => {
     renderPanel(makeTask({
       id: 'task-recurring-forced',
@@ -1129,6 +1277,37 @@ describe('TaskDetailPanel — editable dependencies (blocked_by)', () => {
     await waitFor(() => expect(vi.mocked(setTaskDependencies)).toHaveBeenCalled())
     expect(vi.mocked(setTaskDependencies).mock.calls[0][1]).toEqual(['other-1'])
   })
+
+  it('lists only SAME-plan tasks as candidates (cross-plan / plan-less excluded)', async () => {
+    const { fetchTasks } = await import('@/lib/api')
+    vi.mocked(fetchTasks).mockResolvedValueOnce([
+      makeTask({ id: 'same-1', title: 'Same Plan Sibling', plan_id: 'plan-x', workspace_id: 'ws-test' }),
+      makeTask({ id: 'other-1', title: 'Other Plan Task', plan_id: 'plan-y', workspace_id: 'ws-test' }),
+      makeTask({ id: 'loose-1', title: 'Loose Task', workspace_id: 'ws-test' }),
+    ])
+    renderPanel(makeTask({ id: 'task-scoped', status: 'next', plan_id: 'plan-x', workspace_id: 'ws-test' }))
+
+    fireEvent.click(await screen.findByText(/no dependencies/i))
+
+    expect(await screen.findByText('Same Plan Sibling')).toBeInTheDocument()
+    expect(screen.queryByText('Other Plan Task')).not.toBeInTheDocument()
+    expect(screen.queryByText('Loose Task')).not.toBeInTheDocument()
+  })
+
+  it('still shows an existing cross-plan dependency as a chip (removable, not silently dropped)', async () => {
+    const { fetchTasks } = await import('@/lib/api')
+    vi.mocked(fetchTasks).mockResolvedValueOnce([
+      makeTask({ id: 'legacy-dep', title: 'Legacy Cross-Plan Dep', plan_id: 'plan-y', workspace_id: 'ws-test' }),
+    ])
+    // task is in plan-x but already depends on a plan-y task (pre-enforcement /
+    // agent-set): the candidate list won't offer it, but the chip must still
+    // render (title resolved from the full task list) so it stays removable.
+    renderPanel(
+      makeTask({ id: 'task-legacy', status: 'next', plan_id: 'plan-x', workspace_id: 'ws-test', blocked_by: ['legacy-dep'] }),
+    )
+
+    expect(await screen.findByText('Legacy Cross-Plan Dep')).toBeInTheDocument()
+  })
 })
 
 describe('TaskDetailPanel — editable todos checklist', () => {
@@ -1235,8 +1414,10 @@ describe('TaskDetailPanel — done-terminal status guard', () => {
 
     const statusLabel = await screen.findByText(/^status$/i)
     const fieldRoot = statusLabel.parentElement as HTMLElement
-    // 6 options → SmartSelect renders a SearchableSelect (button, listbox popup).
-    const trigger = fieldRoot.querySelector('[aria-haspopup="dialog"]') as HTMLElement
+    // 5 options (ADR-051 D5 removed `planning`) → at/under SmartSelect's
+    // SEARCHABLE_THRESHOLD, so it renders the plain Radix Select (combobox
+    // trigger), not the searchable cmdk popover.
+    const trigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
     expect(trigger).toBeTruthy()
     fireEvent.click(trigger)
 

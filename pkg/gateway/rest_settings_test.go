@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_settings_test.go — 7-reviewer-gate finding: HandleClearSessions
 // hand-assembled its response as a bare map[string]any instead of the
 // generated gen.ClearAllSessionsResponse contract type, so a future field
@@ -53,7 +51,7 @@ func TestHandleClearSessions_NoSessions_ReturnsContractShapeNoWarnings(t *testin
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 
 	status, _ := resp["status"].(string)
-	assert.Equal(t, "cleared", status, "status must match the gen.Cleared enum value")
+	assert.Equal(t, "cleared", status, "status must match the gen.ClearAllSessionsResponseStatusCleared enum value")
 
 	count, hasCount := resp["count"]
 	require.True(t, hasCount, "count key must always be present")

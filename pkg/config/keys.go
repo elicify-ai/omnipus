@@ -49,4 +49,17 @@ const (
 	// every operator to migrate their config.json. The constant is named
 	// after the current tool to keep restart-gated key tracking readable.
 	ToolsWebServeWarmup ConfigKey = "tools.run_in_workspace.warmup_timeout_seconds"
+
+	// AgentsList is the retired agents.list entity roster (ADR-054). It must
+	// be blocked from the generic PUT /api/v1/config endpoint and rejected by
+	// system.config.set — agent CRUD now goes exclusively through the agent
+	// store / dedicated agent endpoints (POST/PUT/DELETE /api/v1/agents),
+	// never through generic config mutation. NOTE: this is deliberately
+	// narrower than "agents" — agents.defaults (including
+	// agents.defaults.default_agent_id, D6.4) is a SETTING (D1) and MUST
+	// remain writable via both surfaces; blocking the whole "agents" key
+	// would make agents.defaults unwritable via PUT /api/v1/config, and
+	// removing the "agents." prefix from knownConfigPrefixes would make it
+	// unwritable via system.config.set too.
+	AgentsList ConfigKey = "agents.list"
 )

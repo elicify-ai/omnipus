@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_workspace_delete_media_test.go — regression tests for two review
 // findings in DELETE /api/v1/workspaces/{id}'s media-library cascade step
 // (handleWorkspaceDelete, rest_workspaces.go):

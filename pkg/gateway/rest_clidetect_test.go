@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Tests for GET /api/v1/system/cli-detect and DELETE /api/v1/agents/{id}.
 // Both endpoints are part of the Wave-6 closeout:
 //   - GET /system/cli-detect probes whether the three external-CLI runner
@@ -164,6 +162,31 @@ func TestHandleSystemCliDetect_MethodNotAllowed(t *testing.T) {
 // Traces to: agent-form-requirements.md §6.1 — Edit slide-over Delete flow.
 func TestHandleAgentsDelete_OK(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
+	// ADR-054: deleteAgent removes the agent's entity record directly via
+	// agentstore (entities/agents/<id>.json), bypassing config.json entirely,
+	// then calls a.triggerReloadAndWait to refresh the in-memory
+	// cfg.Agents.List (populateAgentsListFromStore) so the deletion is
+	// reflected before the handler returns. newTestRestAPIWithHome's bare
+	// AgentLoop never wires SetReloadFunc (mirrors production: AgentLoop.Run()
+	// is never started in these unit tests), so without this,
+	// triggerReloadAndWait's "reload not configured" branch treats the reload
+	// as an intentional no-op (see rest_auth.go) and cfg.Agents.List is never
+	// refreshed — the deleted agent would keep appearing to GET requests even
+	// though its entity record is genuinely gone from disk. Wire the real
+	// reload path (same as gateway.go's boot-time SetReloadFunc(reloadTrigger))
+	// so this test exercises the actual delete-then-404 contract, matching
+	// the established pattern already used elsewhere in this package (e.g.
+	// rest_test.go, rest_auth_test.go) for tests that care about reload
+	// semantics rather than wiring a no-op.
+	api.agentLoop.SetReloadFunc(func() error {
+		// Mirror gateway.go's real reloadTrigger: clear the pending flag once
+		// this reload completes (defer runs even on error) so
+		// triggerReloadAndWait's poll loop returns immediately instead of
+		// spinning for its full 5-second deadline waiting for a flag that
+		// TriggerReload itself only clears on the ERROR path.
+		defer api.agentLoop.ClearReloadPending()
+		return api.refreshConfigAndRewireServices(api.configPath())
+	})
 
 	// Create a custom agent first so we have something to delete. model + soul
 	// are required on POST (mirrors the create-agent contract: soul is

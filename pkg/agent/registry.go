@@ -1,12 +1,17 @@
 package agent
 
 import (
+	"errors"
+	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
@@ -24,6 +29,13 @@ type AgentRegistry struct {
 	resolver             *routing.RouteResolver
 	mu                   sync.RWMutex
 	defaultAgentOverride string // from config.Agents.Defaults.DefaultAgentID
+
+	// degraded/degradedReason back MarkDefaultAgentDegraded/DefaultAgentDegraded
+	// (ADR-054 R3): set when the configured default agent's entity record
+	// exists but failed to load. Never gates GetDefaultAgent's own fallback
+	// ladder — purely a health-surface signal.
+	degraded       bool
+	degradedReason string
 }
 
 // SetDefaultAgentOverride sets the agent ID to use as the default agent.
@@ -47,13 +59,37 @@ func NewAgentRegistry(
 	// Always register the default/system agent. This handles messages that
 	// don't target a specific custom agent (e.g., system agent in webchat,
 	// unrouted channel messages). Uses the default workspace.
-	// Note: Default is intentionally false here — this sentinel is found via the
-	// DefaultAgentID fallback in GetDefaultAgent (priority 3), not via the
-	// routing-default flag (priority 1). Setting it true would shadow any
-	// per-agent Default=true flag (e.g. Mia's) and break F3.
+	// Note: Default is intentionally false here — AgentConfig.Default is no
+	// longer consulted anywhere in GetDefaultAgent's resolution ladder at all
+	// (ADR-054 D6.4 withdrew the old "per-agent Default=true flag" priority
+	// entirely; see GetDefaultAgent's own doc comment for the current
+	// 3-priority ladder). The field survives on the struct only as a
+	// display-derived reflection of cfg.Agents.Defaults.DefaultAgentID
+	// (computed at the REST read boundary), so leaving it false here has no
+	// resolution-time effect either way — it is simply the honest value for a
+	// synthetic sentinel that was never "set" by anyone.
+	//
+	// Tools is deliberately non-nil: an AgentConfig with a nil Tools field
+	// resolves every tool policy through agentToolsCfgToPolicy's a=="" branch,
+	// which falls through to whatever the GLOBAL sandbox.tool_policies floor
+	// says (pkg/tools/compositor.go's resolveEffectivePolicyWith, case
+	// g=="" /* never true here */ ... case a=="": return g). Since the seeded
+	// global floor allows several high-impact tools (bash, write_file,
+	// edit_file, delegate, send_email — pkg/config/defaults.go), an
+	// unpoliced "main" sentinel silently inherited "allow" for all of them —
+	// worse, "main" is never a member of cfg.Agents.List, so
+	// config.ValidateToolPolicyCoverage's boot/write-time coverage gate
+	// (Hard Constraint #6) has never validated it. coreagent.
+	// NewCustomAgentToolsCfg() is the same conservative, fully-enumerated,
+	// wildcard-free deny-by-default seed AgentCreateTool gives every brand
+	// new custom agent (read_file/list_directory/remember/recall_memory
+	// allow, everything else explicit deny) — reusing it here means the
+	// sentinel is governed like any other agent instead of the permissive
+	// floor, with no new policy vocabulary introduced.
 	defaultAgent := &config.AgentConfig{
 		ID:      DefaultAgentID,
 		Default: false,
+		Tools:   coreagent.NewCustomAgentToolsCfg(),
 	}
 	defaultInstance := NewAgentInstance(defaultAgent, &cfg.Agents.Defaults, cfg, provider)
 	// The default "main" agent is a core agent (it runs system.* tools seeded by the registry).
@@ -94,6 +130,26 @@ func NewAgentRegistry(
 				"model":     instance.Model,
 			})
 	}
+
+	// ADR-054 R3 (§0): surface a configured-default-agent load failure as
+	// degraded rather than silently swallowing it. cfg.SkippedAgentIDs is
+	// already populated by the time this constructor runs — every real call
+	// site (pkg/gateway's populateAgentsListFromEntityStore at boot and on
+	// every reload; pkg/agent's own reload path) fills it in BEFORE
+	// constructing/rebuilding the registry — so this can run unconditionally
+	// here instead of requiring every caller to remember a follow-up call.
+	// A cfg with no SkippedAgentIDs (tests, or a boot path that never had a
+	// load failure) is a strict no-op: EvaluateDefaultAgentHealth only ever
+	// flips `degraded` when the configured default agent ID actually appears
+	// in the skipped set, and a freshly-constructed registry already starts
+	// with degraded=false, so there is nothing to clear either. Reading the
+	// resulting signal (DefaultAgentDegraded) via /health still requires a
+	// caller with access to the running HealthServer to compose it into
+	// SetDegradedFunc — see this method's package doc / the ADR-054 handoff
+	// note for the exact one-line composition (pkg/health.Server's
+	// SetDegradedFunc is a single-slot hook already owned elsewhere in
+	// pkg/gateway, so it must be composed with, not replaced).
+	registry.EvaluateDefaultAgentHealth(cfg.Agents.Defaults.DefaultAgentID, cfg.SkippedAgentIDs)
 
 	return registry
 }
@@ -228,50 +284,72 @@ func (r *AgentRegistry) Close() {
 
 // GetDefaultAgent returns the default agent instance.
 //
-// Resolution order (canonical — matches channel routing's resolveDefaultAgentID):
-//  1. An agent whose config has Default==true (the per-agent routing-default
-//     flag set by SeedConfig / the Agents-screen "star"). Deterministic: if
-//     multiple agents somehow carry Default==true (operator error — F11 repairs
-//     this at boot), the one with the lexicographically smallest ID wins.
-//  2. The configurable override from config.Agents.Defaults.DefaultAgentID,
-//     when the named agent exists in the registry and is not a worker.
-//  3. The built-in "main" sentinel agent, when it is not a worker.
-//  4. The lexicographically first registered non-worker agent (deterministic
+// Resolution order — the authority for THIS registry's own in-memory agent
+// map only. pkg/routing.RouteResolver.resolveDefaultAgentID follows the same
+// 3-tier shape (override → built-in fallback → deterministic last resort) for
+// the channel-binding-cascade's own "default" match, but the two are
+// independent resolvers over different data, not one delegating to the
+// other, and they are NOT guaranteed to agree in every case:
+//   - This method walks r.agents (the constructed registry map, which always
+//     contains the implicit DefaultAgentID/"main" sentinel) and tests
+//     candidates with AgentInstance.IsWorker(); its Priority 3 fallback sorts
+//     candidate IDs lexicographically.
+//   - resolveDefaultAgentID walks cfg.Agents.List (the raw config slice,
+//     which never contains an implicit "main" entry) and tests candidates
+//     with AgentConfig.IsChatTarget(); its own fallback returns the first
+//     chat-target agent in LIST ORDER, not sorted, and only reaches the
+//     literal "main" constant when cfg.Agents.List has no chat-target agent
+//     at all.
+//
+// Concretely: with no override configured and at least one chat-target
+// custom/core agent present in cfg.Agents.List, resolveDefaultAgentID
+// resolves to that agent (e.g. Mia) while this method still resolves to the
+// generic "main" sentinel (Priority 2) — the two are consulted in different
+// contexts (this method for registry-level lookups with no routing input at
+// all; the resolver for the channel binding cascade's final "default" tier)
+// so the divergence has not been a live bug, but callers must not assume the
+// two names always match.
+//
+// ADR-054 D6.4 removed the old Priority 1 ("an agent whose AgentConfig.Default
+// field is true"): splitting agents into independent per-entity files means two
+// concurrent writes to two DIFFERENT agents could each set Default=true with no
+// shared lock to serialize them — each write's delta is individually valid, but
+// the composition (two "the" defaults) is not. Rather than inventing a new
+// cross-entity lock for a single bool, the default pointer moved OUT of the
+// entity entirely and into the settings singleton below, which cannot have this
+// problem: there is exactly one string field, guarded by the existing
+// config-write lock, so "two winners" is structurally impossible. What remains:
+//  1. The configurable override from config.Agents.Defaults.DefaultAgentID
+//     (settings, not an entity field), when the named agent exists in the
+//     registry and is not a worker. R3: if the named agent does NOT exist here
+//     — because it was never configured, OR because its entity record failed
+//     to load (skipped at boot) — resolution falls through to priority 2/3
+//     rather than black-holing traffic; callers that also have the `skipped`
+//     set from agentstore.Store.List should call EvaluateDefaultAgentHealth so
+//     this case is surfaced as degraded rather than silently swallowed.
+//  2. The built-in "main" sentinel agent, when it is not a worker.
+//  3. The lexicographically first registered non-worker agent (deterministic
 //     fallback, M10). Workers are never chat targets, so every priority skips them.
 func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Priority 1: agent explicitly marked as the routing default.
-	// Collect all matching IDs and sort for deterministic selection when
-	// operator misconfiguration leaves multiple agents with Default==true.
-	var defaultIDs []string
-	for id, ag := range r.agents {
-		if ag.IsRoutingDefault {
-			defaultIDs = append(defaultIDs, id)
-		}
-	}
-	if len(defaultIDs) > 0 {
-		sort.Strings(defaultIDs)
-		return r.agents[defaultIDs[0]]
-	}
-
-	// Priority 2: explicit override from config.Agents.Defaults.DefaultAgentID.
+	// Priority 1: explicit override from config.Agents.Defaults.DefaultAgentID.
 	// A worker is never a chat target, so a hand-edited override pointing at one
-	// is skipped (defense in depth; consistent with the Priority-4 hardening).
+	// is skipped (defense in depth; consistent with the Priority-3 hardening).
 	if r.defaultAgentOverride != "" {
 		if agent, ok := r.agents[r.defaultAgentOverride]; ok && !agent.IsWorker() {
 			return agent
 		}
 	}
 
-	// Priority 3: the "main" built-in sentinel — unless it is somehow a worker
-	// (degenerate/tampered config), in which case fall through to Priority 4.
+	// Priority 2: the "main" built-in sentinel — unless it is somehow a worker
+	// (degenerate/tampered config), in which case fall through to Priority 3.
 	if agent, ok := r.agents[DefaultAgentID]; ok && !agent.IsWorker() {
 		return agent
 	}
 
-	// Priority 4: lexicographically first registered agent (M10) — but never a
+	// Priority 3: lexicographically first registered agent (M10) — but never a
 	// worker. Workers are not chat targets and must not be resolved as the
 	// default even in the last-resort fallback. Prefer the first non-worker; only
 	// if EVERY registered agent is a worker do we fall back to the first overall
@@ -291,4 +369,561 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 		}
 	}
 	return r.agents[ids[0]]
+}
+
+// UpsertAgent inserts or replaces a single agent instance in the registry
+// in-place, without rebuilding the other N-1 agents (ADR-054 §5 originally
+// designed this as the target of a pkg/agentstore write-notification hook so
+// routing/read paths — GetAgent, ResolveRoute, GetDefaultAgent — could
+// observe a create/update at zero extra disk I/O, without a full registry
+// rebuild).
+//
+// STATUS (issue #571): this is now called in production, by
+// AgentLoop.UpsertAgentFast — but never against the LIVE, published
+// registry. UpsertAgentFast calls it against a private cloneAgents() copy
+// that is fully wired (registerSharedTools, tier1/3 deps, sysagent deps,
+// audit-logger/rate-limiter re-wiring, delegation/working-dir injectors —
+// the exact list this comment used to warn a bare caller into replicating by
+// hand) and only THEN published via an atomic pointer swap. This method
+// itself still performs only the bare map swap under the registry's own
+// write lock, exactly as before — instance must already be fully
+// constructed (NewAgentInstance plus any required wiring) — UpsertAgentFast
+// is what supplies that discipline, not this method.
+//
+// Directly tested (TestAgentRegistry_UpsertAgent / _ReplacesExisting below)
+// independent of UpsertAgentFast's own wiring/atomicity behavior.
+func (r *AgentRegistry) UpsertAgent(instance *AgentInstance) {
+	if instance == nil || instance.ID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id := routing.NormalizeAgentID(instance.ID)
+	r.agents[id] = instance
+}
+
+// cloneAgents returns a new, unpublished *AgentRegistry that shares every
+// existing agent instance pointer with r (no AgentInstance rebuild — the
+// whole point of UpsertAgentFast) but owns its own map. resolver and
+// defaultAgentOverride are deliberately left at their zero values: callers
+// (UpsertAgentFast — see TRAP 1 in its doc comment) must always rebuild both
+// fresh from the same cfg the upserted instance itself was built from, never
+// inherit a stale snapshot from r. degraded/degradedReason ARE copied so a
+// pre-existing default-agent health signal survives the swap; the caller
+// should still call EvaluateDefaultAgentHealth afterward so a
+// since-repaired record can clear it.
+func (r *AgentRegistry) cloneAgents() *AgentRegistry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	agents := make(map[string]*AgentInstance, len(r.agents)+1)
+	for k, v := range r.agents {
+		agents[k] = v
+	}
+	return &AgentRegistry{
+		agents:         agents,
+		degraded:       r.degraded,
+		degradedReason: r.degradedReason,
+	}
+}
+
+// maxFastUpsertAttempts bounds UpsertAgentFast's optimistic-concurrency
+// retry loop (TRAP 2 below). A genuine livelock would require another
+// al.registry publisher (a concurrent UpsertAgentFast, or a full
+// ReloadProviderAndConfig) to win the race on every single attempt — real
+// request rates never sustain that. The cap exists purely so a pathological
+// case fails loudly instead of spinning forever.
+const maxFastUpsertAttempts = 50
+
+// fastUpsertMu serializes the ENTIRE clone+wire+publish pipeline inside
+// UpsertAgentFast across every call, process-wide. This is NOT redundant
+// with the CAS publish loop below (TRAP 2's "lost update" concern) — it
+// closes a DIFFERENT, race-detector-confirmed bug: registerSharedTools and
+// the wiring passes after it mutate the Tools registry of EVERY agent
+// already present in the clone, including pre-existing agents whose
+// *AgentInstance pointer is SHARED across two concurrent calls' otherwise-
+// independent clones (cloneAgents reuses existing instances verbatim — the
+// whole point of the fast path). Some of that wiring is a bare,
+// unsynchronized struct-field write on a shared tool object (e.g.
+// tools.DelegateTool.SetSteeringSink via wireSessionMessagingForAgent) —
+// two concurrent UpsertAgentFast calls (e.g. Ava creating several team
+// members in parallel) each re-wiring the SAME pre-existing "main"/other
+// agent's delegate tool at the same time is a genuine data race, verified
+// under `go test -race` on TestUpsertAgentFast_ConcurrentDifferentAgents_
+// NoLostUpdate before this mutex was added (2 goroutines writing
+// DelegateTool.steering with no synchronization between them).
+//
+// A single package-level sync.Mutex — not a field on *AgentLoop — because a
+// production process runs exactly one AgentLoop, so global and per-instance
+// serialization are equivalent there; it only over-serializes in a test
+// that deliberately runs TRUE concurrent fast-upserts across two SEPARATE
+// AgentLoop instances at once, which merely queues rather than races.
+// Holding it for the whole pipeline (not just the final publish) does give
+// up SOME of the "Ava building a team" parallelism the CAS loop was written
+// to allow — concurrent fast-upserts now queue instead of running their
+// wiring passes in parallel — but each call is still a fast, in-memory
+// operation, nowhere near the cost of the full reload this feature replaces
+// (see UpsertAgentFast's own doc comment), and correctness comes first.
+var fastUpsertMu sync.Mutex
+
+// upsertAgentFastTestHook is a test-only synchronization seam (see its call
+// site inside UpsertAgentFast's retry loop). Always nil in production; never
+// set outside a _test.go file.
+var upsertAgentFastTestHook func(attempt int)
+
+// UpsertAgentFast is the read-path counterpart to a full config reload for a
+// SINGLE agent create/update (issue #571: "Agent create/update triggers a
+// full config reload — finish ADR-054's split on the read path"). ADR-054
+// already split agents into per-entity files, fixing *parallel* agent
+// creation on the WRITE side; this closes the matching gap on the READ
+// side — AgentRegistry, which actually serves GetAgent/ResolveRoute/
+// GetDefaultAgent, was still rebuilt from scratch (NewAgentRegistry) for a
+// one-agent change, which is what forced a full handleConfigReload
+// (channels/cron/schedulers/the plan engine all restart, up to ~60s under
+// load — 30s service drain + 30s provider rebuild, worst case).
+//
+// cfg must already reflect the agent identified by agentID in
+// cfg.Agents.List — callers pass the AgentLoop's own already-refreshed
+// config (a.agentLoop.GetConfig() after the entity write, which
+// updateConfigJSONLocked's refreshConfigAndRewireServices call has already
+// repopulated from the entity store and, for a default-agent-ID change,
+// from the just-written config.json) rather than doing any disk I/O here —
+// see pkg/gateway/rest.go's fastAgentUpsert. Several of the wiring passes
+// below (e.g. wireExecToolDepsOn's per-agent ShellPolicy lookup) read the
+// agent's config back OUT of cfg.Agents.List by ID, not from a
+// caller-supplied *config.AgentConfig, which is why this looks the agent up
+// itself instead of accepting one.
+//
+// Design, per the issue's own investigation comment: reuse NewAgentInstance
+// (the SAME constructor NewAgentRegistry itself calls per agent) plus the
+// SAME wiring functions ReloadProviderAndConfig runs against a freshly-built
+// registry — registerSharedTools and every pass after it — so the new/
+// updated instance's tool set, security wiring (bash god-mode/policy-
+// auditor/deny patterns, web_serve, system.* tools, delegation/working-dir
+// injectors) and resolved tool policy cannot silently drift from what a full
+// reload would have produced. That is parity BY CONSTRUCTION, not a
+// hand-kept checklist — the exact risk UpsertAgent's own doc comment used to
+// warn a bare caller into.
+//
+// TRAP 1 (routing/default-agent staleness): AgentRegistry.resolver is built
+// once, at construction, with no setter, and defaultAgentOverride is
+// likewise sticky. A bare map swap would leave the new/updated agent visible
+// to GetAgent but invisible to ResolveRoute and GetDefaultAgent — exactly
+// the ADR-037 "reports success, changes nothing" anti-pattern this project
+// bans. Closed by rebuilding both, fresh, from cfg (the SAME cfg the
+// instance itself was built from) on every call — see cloneAgents' doc
+// comment for why they are deliberately excluded from the clone.
+//
+// TRAP 2 (atomicity + lost updates): wiring never runs against the live,
+// published al.registry. A private clone is built first (existing
+// AgentInstance pointers reused verbatim, so the other N-1 agents are never
+// rebuilt), wired completely off to the side, and ONLY THEN published —
+// mirroring ReloadProviderAndConfig's own top-level discipline one layer
+// down (it, too, builds and wires a whole new registry before ever taking
+// al.mu; wireDelegationInjectors' own doc comment spells out why that is
+// safe: "no other goroutine holds a reference to registry yet"). A
+// concurrent GetAgent/ResolveRoute/GetDefaultAgent therefore always
+// observes either the fully-wired OLD registry or the fully-wired NEW one —
+// never an agent that is in the map but not yet wired.
+//
+// The publish itself is an optimistic-concurrency compare-and-swap, not a
+// bare write: two concurrent callers (e.g. Ava creating several team
+// members in parallel — the exact scenario ADR-054 fixed on the write side)
+// each start from the SAME al.registry snapshot, and a bare "read, clone,
+// wire, write" would let the second publisher silently overwrite the
+// first's agent with a clone that never saw it (registerSharedTools et al.
+// only re-wire whatever the clone's OWN map already contains — they never
+// merge two independently-built clones). Detecting "al.registry changed
+// since my snapshot" and retrying against the new baseline instead closes
+// that gap — including the narrower case of racing a concurrent full
+// ReloadProviderAndConfig swap, which publishes through the exact same
+// al.registry pointer.
+//
+// FIXED (this change — "BUG 1: cfg never rebased across a lost publish
+// race"): earlier revisions refreshed `oldRegistry` on every retry attempt
+// but never touched the `cfg` parameter itself. A retry that lost the CAS
+// race to a concurrent ReloadProviderAndConfig kept building the new
+// instance, the RouteResolver, and the default-agent override from the
+// PRE-reload cfg snapshot, and the eventual successful publish's
+// `al.cfg = cfg` line silently reverted every change that reload had just
+// installed (routing table, default-agent override, everyone else's
+// settings) — while this function still reported success.
+//
+// Since fastUpsertMu (above) already serializes every UpsertAgentFast call
+// against every OTHER UpsertAgentFast call, the two remaining publishers that
+// can win this CAS race are a concurrent ReloadProviderAndConfig (swaps
+// al.cfg AND al.registry together, under al.mu.Lock — see its own tail:
+// `al.cfg = cfg; al.registry = registry`) and a concurrent SwapConfig (swaps
+// al.cfg ALONE, al.registry untouched — the path EVERY REST-initiated
+// config write goes through per pkg/gateway/rest.go's
+// refreshConfigAndRewireServices doc comment: "the single authoritative
+// refresh path for EVERY REST-initiated config write — agent create/update/
+// delete, channel configure, tool-policy write, mailbox grant, god-mode
+// toggle, all of it").
+//
+// DEFECT 2 (concurrency review, fixed here): an earlier revision of this
+// comment claimed "the only thing that can ever win this CAS race is a
+// concurrent ReloadProviderAndConfig ... so 'al.registry changed since my
+// snapshot' and 'al.cfg changed since my snapshot' are the same event here."
+// That premise was false — SwapConfig is proof by construction that al.cfg
+// can change with al.registry held fixed. A CAS check keyed on the registry
+// pointer alone is blind to that case: a concurrent SwapConfig lands, this
+// function's own `al.registry != oldRegistry` reads false ("no race"), and
+// the eventual publish's `al.cfg = cfg` silently reverts whatever SwapConfig
+// just installed — e.g. a tool-policy tightening or a god-mode disable that
+// had already been reported 200 OK to its own caller.
+//
+// Fixed by tracking al.configGen (see its doc comment on the AgentLoop
+// struct), a monotonic counter bumped under al.mu.Lock by BOTH SwapConfig
+// and ReloadProviderAndConfig's own swap — so "has al.cfg changed since my
+// snapshot" is answered directly instead of inferred from the registry
+// pointer. The CAS check below is `al.registry != oldRegistry ||
+// al.configGen.Load() != oldGen`: a plain atomic load, no extra locking, so
+// the cost on this hot REST path is one uint64 compare per attempt — the
+// wiring pass this function exists to avoid re-running per request remains
+// exactly as expensive as before, just correctly re-triggered.
+//
+// On a lost race (either leg), this loop captures the freshly-published
+// al.cfg (while still holding the lock) and rebases `cfg`/`ac` onto it
+// before retrying: via cfg.Clone() (the existing clone-mutate-discard idiom
+// used elsewhere, e.g. pkg/gateway/rest.go's candidate-config validation —
+// never mutating the live, shared al.cfg in place, since GetConfig hands out
+// that exact pointer to every other concurrent reader) with THIS call's own
+// requested AgentConfig (`wantAC`, captured once up front, before the retry
+// loop, so it survives untouched across any number of rebases) spliced back
+// into the clone's Agents.List by ID. That guarantees every retry publishes
+// on top of whatever the other writer just installed (no more silent
+// revert, from either publisher), AND the caller's own upsert is never lost
+// even if a racing reload's own disk read predates the caller's entity write
+// and doesn't yet reflect it.
+//
+// DEFECT 1 (concurrency review, fixed here): the "not found in the rebased
+// config, so append it" branch used to fire unconditionally whenever `id`
+// was absent from the live config being rebased onto — which is also
+// exactly what a concurrent DELETE of THIS SAME agent produces (deleteAgent,
+// pkg/gateway/rest.go, calls agentstore.Store.Delete then
+// triggerReloadAndWait, which legitimately drops `id` from both
+// cfg.Agents.List and the registry via ReloadProviderAndConfig's swap).
+// Appending wantAC back unconditionally cannot distinguish "a genuine create
+// whose entity write predates this reload's disk read" from "this agent was
+// just deleted" — both look identical from cfg alone — and would silently
+// resurrect a legitimately deleted agent. Distinguished by asking the
+// durable entity store directly (agentstore.Store.Get, not cfg): a real
+// create always durably writes the entity record BEFORE calling
+// UpsertAgentFast (see pkg/gateway/rest.go's createAgent, which calls
+// agentstore.Store.Create synchronously ahead of fastAgentUpsert), so by the
+// time this rebase runs the record is already on disk for that case. If Get
+// instead reports entity.ErrNotFound, the agent is genuinely gone — this
+// aborts with an error instead of resurrecting it, and the caller
+// (fastAgentUpsert) falls back to a full reload, which will correctly NOT
+// contain the deleted agent.
+//
+// This does not itself serialize against gateway.go's
+// services.reloadCoalesceMu single-flight (the mechanism that already
+// prevents two full reloads from racing each other) — a concurrent reload
+// or SwapConfig can still start and finish at any point during this
+// function's run. That is fine now: every such interleaving is caught by
+// the CAS check and rebased as described above, however many times it
+// happens (bounded by maxFastUpsertAttempts). This is a narrower version of
+// a pre-existing hazard class (any two writers of al.registry/al.cfg), not a
+// regression this change introduces — closed here for the
+// pkg/agent/pkg/gateway/rest.go surface this fix targets. MutateConfig
+// (mutates al.cfg's fields in place, under al.mu.Lock, without replacing the
+// pointer or bumping configGen) is a residual, narrower hazard this fix does
+// NOT cover: a concurrent MutateConfig mutating the very same *config.Config
+// object this call's `cfg` parameter aliases (GetConfig hands out the live
+// pointer, so `cfg` IS `al.cfg` unless/until a rebase clones it) races this
+// function's own unsynchronized field reads during the wiring pass. Flagged
+// for follow-up, out of scope for this fix.
+func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*AgentInstance, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("upsert agent fast: config is nil")
+	}
+	id := routing.NormalizeAgentID(agentID)
+	if id == "" {
+		return nil, fmt.Errorf("upsert agent fast: agent id is empty")
+	}
+	if id == DefaultAgentID {
+		return nil, fmt.Errorf("upsert agent fast: agent id %q is reserved", DefaultAgentID)
+	}
+	var ac *config.AgentConfig
+	for i := range cfg.Agents.List {
+		if routing.NormalizeAgentID(cfg.Agents.List[i].ID) == id {
+			ac = &cfg.Agents.List[i]
+			break
+		}
+	}
+	if ac == nil {
+		return nil, fmt.Errorf("upsert agent fast: agent %q not found in cfg.Agents.List", agentID)
+	}
+	// wantAC is a value copy of the AgentConfig this call was asked to
+	// apply, captured once from the caller's own snapshot. It survives
+	// untouched across any cfg rebase below (BUG 1 fix) so a retry can
+	// always re-splice the caller's actual request into a fresher config,
+	// rather than trusting that the fresher config already contains it.
+	wantAC := *ac
+
+	// See fastUpsertMu's doc comment: this closes a genuine data race on
+	// shared pre-existing agents' tool objects, not merely a lost-update risk.
+	fastUpsertMu.Lock()
+	defer fastUpsertMu.Unlock()
+
+	for attempt := 0; attempt < maxFastUpsertAttempts; attempt++ {
+		al.mu.RLock()
+		oldRegistry := al.registry
+		oldGen := al.configGen.Load()
+		al.mu.RUnlock()
+		if oldRegistry == nil {
+			return nil, fmt.Errorf("upsert agent fast: registry not initialized")
+		}
+		// Test-only seam (always nil in production): fires right after this
+		// attempt's oldRegistry/cfg snapshot, before any of the (potentially
+		// slow) wiring work below — the exact window BUG 1 exploited, per its
+		// own doc comment's traced interleaving ("A snapshots oldRegistry = R0,
+		// then spends time in registerSharedTools/wireTier13DepsLocked").
+		// Lets registry_fast_upsert_race_test.go force a concurrent
+		// ReloadProviderAndConfig to land inside this window deterministically,
+		// instead of relying on real scheduling luck.
+		if upsertAgentFastTestHook != nil {
+			upsertAgentFastTestHook(attempt)
+		}
+		provider, ok := extractProvider(oldRegistry)
+		if !ok || provider == nil {
+			return nil, fmt.Errorf("upsert agent fast: no provider available on current registry")
+		}
+
+		// Same constructor NewAgentRegistry itself uses per agent.
+		instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider)
+		if instance.AgentType == "custom" && coreagent.IsCoreAgent(id) {
+			instance.SetAgentType("core")
+		}
+
+		newRegistry := oldRegistry.cloneAgents()
+		newRegistry.UpsertAgent(instance)
+		// TRAP 1: fresh resolver + default-agent override, from the SAME cfg.
+		newRegistry.resolver = routing.NewRouteResolver(cfg)
+		if cfg.Agents.Defaults.DefaultAgentID != "" {
+			newRegistry.SetDefaultAgentOverride(cfg.Agents.Defaults.DefaultAgentID)
+		}
+		newRegistry.EvaluateDefaultAgentHealth(cfg.Agents.Defaults.DefaultAgentID, cfg.SkippedAgentIDs)
+
+		// Re-run the SAME wiring ReloadProviderAndConfig runs against a
+		// freshly-built registry, against this one instead. registerSharedTools
+		// et al. iterate registry.ListAgentIDs()/GetAgent() themselves, so this
+		// re-touches the other N-1 agents' tool registrations too (idempotent —
+		// same config, same singleton deps, so "cheap" per the issue's own
+		// design note) while giving the one new/updated instance full parity.
+		registerSharedTools(al, cfg, al.bus, newRegistry, provider)
+		if al.tier13Deps != nil {
+			al.wireTier13DepsLocked(newRegistry, *al.tier13Deps)
+		}
+		al.wireExecToolDepsOn(newRegistry)
+		if al.sysagentDeps != nil {
+			al.wireSysagentDepsLocked(newRegistry, al.sysagentDeps)
+		}
+		if al.auditLogger != nil {
+			al.wireMemoryAuditLoggerOn(newRegistry, al.auditLogger)
+		}
+		if al.memoryRateLimiter != nil {
+			al.wireMemoryRateLimiterOn(newRegistry, al.memoryRateLimiter)
+		}
+		wireDelegationInjectors(al, newRegistry)
+		wireWorkingDirInjectors(al, newRegistry)
+		// MediaStore is deliberately left nil by registerSharedTools' send_file
+		// wiring (see its own doc comment) because it may not exist yet on the
+		// very first wiring pass inside NewAgentLoop; every real reload
+		// re-applies it afterward via SetMediaStore. Mirror that here so every
+		// agent touched by the re-wiring above doesn't transiently lose media
+		// capability relative to a full reload's end state.
+		if ms := al.GetMediaStore(); ms != nil {
+			for _, aid := range newRegistry.ListAgentIDs() {
+				if inst, ok := newRegistry.GetAgent(aid); ok {
+					inst.Tools.SetMediaStore(ms)
+				}
+			}
+		}
+
+		al.mu.Lock()
+		if al.registry != oldRegistry || al.configGen.Load() != oldGen {
+			// Lost the race: another publisher changed al.registry and/or
+			// al.cfg out from under this attempt's snapshot — either a full
+			// ReloadProviderAndConfig (swaps both together) or a bare
+			// SwapConfig (swaps al.cfg alone; DEFECT 2). Grab that
+			// freshly-published al.cfg now, while still holding the lock, so
+			// the retry below can rebase onto it (BUG 1 fix) instead of
+			// continuing to build off our now-superseded snapshot.
+			liveCfg := al.cfg
+			al.mu.Unlock()
+			if closeErr := instance.Close(); closeErr != nil {
+				logger.WarnCF("agent", "upsert agent fast: failed to close discarded instance after a lost publish race",
+					map[string]any{"agent_id": id, "error": closeErr.Error()})
+			}
+
+			// Rebase cfg (and ac, which points into it) onto the live config
+			// instead of retrying with the pre-reload snapshot — otherwise the
+			// eventual successful publish's `al.cfg = cfg` below would revert
+			// everything the other writer just installed. Clone rather than
+			// mutate liveCfg in place: al.cfg is shared with every other
+			// concurrent reader (GetConfig hands out this exact pointer, never
+			// a copy), so mutating its Agents.List in place would itself be a
+			// data race. Splice this call's own requested AgentConfig
+			// (wantAC) into the clone by ID so the upsert this caller asked
+			// for is never lost, whether or not liveCfg's own disk read
+			// happened to already include it.
+			if liveCfg != nil && liveCfg != cfg {
+				rebased, cloneErr := liveCfg.Clone()
+				if cloneErr != nil {
+					return nil, fmt.Errorf("upsert agent fast: rebase onto live config after lost publish race: %w", cloneErr)
+				}
+				replaced := false
+				for i := range rebased.Agents.List {
+					if routing.NormalizeAgentID(rebased.Agents.List[i].ID) == id {
+						rebased.Agents.List[i] = wantAC
+						replaced = true
+						break
+					}
+				}
+				if !replaced {
+					// DEFECT 1: `id` is absent from the config we are rebasing
+					// onto. This is expected for a genuine create racing a
+					// reload/SwapConfig whose disk read predates this agent's
+					// entity write (agentstore.Store.Create always runs,
+					// synchronously, before fastAgentUpsert/UpsertAgentFast is
+					// ever called — see pkg/gateway/rest.go's createAgent) —
+					// but it is ALSO exactly what a concurrent DELETE of this
+					// same agent produces (deleteAgent's agentstore.Delete +
+					// triggerReloadAndWait already dropped `id` from both
+					// cfg.Agents.List AND the registry). cfg alone cannot tell
+					// those two apart; ask the durable entity store instead.
+					if _, getErr := agentstore.New(al.homePath).Get(id); getErr != nil {
+						if errors.Is(getErr, entity.ErrNotFound) {
+							return nil, fmt.Errorf(
+								"upsert agent fast: agent %q was deleted by a concurrent request; refusing to resurrect it",
+								id)
+						}
+						return nil, fmt.Errorf(
+							"upsert agent fast: could not confirm agent %q still exists before rebasing onto a concurrent config change: %w",
+							id, getErr)
+					}
+					rebased.Agents.List = append(rebased.Agents.List, wantAC)
+				}
+				cfg = rebased
+				ac = nil
+				for i := range cfg.Agents.List {
+					if routing.NormalizeAgentID(cfg.Agents.List[i].ID) == id {
+						ac = &cfg.Agents.List[i]
+						break
+					}
+				}
+				if ac == nil {
+					// Unreachable: wantAC was just appended-or-replaced above
+					// under this exact id.
+					return nil, fmt.Errorf("upsert agent fast: agent %q vanished from rebased config", agentID)
+				}
+			}
+			continue
+		}
+		al.cfg = cfg
+		al.registry = newRegistry
+		al.mu.Unlock()
+		return instance, nil
+	}
+
+	return nil, fmt.Errorf(
+		"upsert agent fast: gave up after %d attempts racing concurrent registry publishers",
+		maxFastUpsertAttempts,
+	)
+}
+
+// RemoveAgent deletes a single agent instance from the registry (post
+// entity-delete, ADR-054 D6 rule 5). Reports whether an instance was present.
+// The DefaultAgentID ("main") sentinel is never removable through this path —
+// mirrors the reserved-ID protection NewAgentRegistry already applies to
+// custom/core agent registration.
+//
+// HONEST STATUS as of this commit: no production code calls this — see
+// UpsertAgent's doc comment immediately above for the full explanation
+// (system.agent.delete triggers a full AgentLoop.ReloadProviderAndConfig
+// instead, via deps.ReloadFunc). Directly tested
+// (TestAgentRegistry_RemoveAgent below) and available as the delete-side
+// counterpart of UpsertAgent for a future narrower-than-full-reload caller.
+func (r *AgentRegistry) RemoveAgent(id string) bool {
+	normalized := routing.NormalizeAgentID(id)
+	if normalized == DefaultAgentID {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.agents[normalized]; !ok {
+		return false
+	}
+	delete(r.agents, normalized)
+	return true
+}
+
+// MarkDefaultAgentDegraded records that the configured default agent
+// (config.Agents.Defaults.DefaultAgentID) could not be resolved because its
+// backing entity record exists but failed to load (ADR-054 R3 / §0). This is
+// an AVAILABILITY signal, not a fail-closed gate: GetDefaultAgent has already
+// continued down the ladder (priority 2/3) by the time this is called, so
+// traffic is never black-holed by a single corrupt file — the degraded flag
+// exists purely so an operator can find out via /health (pkg/health.Server.
+// SetDegradedFunc expects exactly this method's signature) rather than
+// silently routing to a fallback agent forever. Idempotent; the most recent
+// reason wins. Call ClearDefaultAgentDegraded to reset after the record is
+// repaired and a reload has re-evaluated health.
+func (r *AgentRegistry) MarkDefaultAgentDegraded(reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.degraded = true
+	r.degradedReason = reason
+	logger.ErrorCF("agent", "default agent entity record unparseable; system marked degraded (routing continues via fallback ladder, not black-holed)",
+		map[string]any{"reason": reason})
+}
+
+// ClearDefaultAgentDegraded resets the degraded flag set by
+// MarkDefaultAgentDegraded. Called after a reload confirms the configured
+// default agent now resolves cleanly.
+func (r *AgentRegistry) ClearDefaultAgentDegraded() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.degraded = false
+	r.degradedReason = ""
+}
+
+// DefaultAgentDegraded reports whether the default-agent resolution ladder is
+// currently degraded and why. Matches the func() (bool, string) shape
+// pkg/health.Server.SetDegradedFunc expects, so wiring this up at boot is a
+// one-line `healthServer.SetDegradedFunc(registry.DefaultAgentDegraded)`.
+func (r *AgentRegistry) DefaultAgentDegraded() (bool, string) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.degraded, r.degradedReason
+}
+
+// EvaluateDefaultAgentHealth checks whether the configured default agent ID
+// (config.Agents.Defaults.DefaultAgentID) names an entity that was SKIPPED at
+// load time — i.e. its record exists on disk but failed to parse — as opposed
+// to simply being unconfigured or never created. Only the skipped case is
+// R3-degraded; an empty/unconfigured default or one that legitimately never
+// existed is ordinary, non-degraded operation (the ladder's priority 2/3
+// fallback handles it silently, by design).
+//
+// Callers should invoke this once after constructing/reloading a registry,
+// passing the `skipped` slice returned by agentstore.Store.List(), and wire
+// DefaultAgentDegraded to /health. Not calling this is safe (GetDefaultAgent's
+// behavior is unaffected either way) — it only affects whether the degraded
+// signal is ever raised.
+func (r *AgentRegistry) EvaluateDefaultAgentHealth(defaultAgentID string, skipped []string) {
+	defaultAgentID = strings.TrimSpace(defaultAgentID)
+	if defaultAgentID == "" {
+		return
+	}
+	normalizedDefault := routing.NormalizeAgentID(defaultAgentID)
+	for _, id := range skipped {
+		if routing.NormalizeAgentID(id) == normalizedDefault {
+			r.MarkDefaultAgentDegraded(fmt.Sprintf(
+				"configured default agent %q has an entity record that failed to load", defaultAgentID))
+			return
+		}
+	}
 }

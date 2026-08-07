@@ -20,7 +20,17 @@ type ProviderValidation = {
 };
 type Session = {
   id: string;
-  type?: ("chat" | "task" | "channel" | "scheduled" | "heartbeat") | undefined;
+  type?:
+    | (
+        | "chat"
+        | "task"
+        | "channel"
+        | "scheduled"
+        | "heartbeat"
+        | "verifier"
+        | "delegate"
+      )
+    | undefined;
   protected?: boolean | undefined;
   agent_id: string;
   title: string;
@@ -38,6 +48,8 @@ type Session = {
   agent_ids?: Array<string> | undefined;
   active_agent_id?: string | undefined;
   compaction_summaries?: {} | undefined;
+  parent_session_id?: string | undefined;
+  child_count?: number | undefined;
 };
 type SessionStats = {
   tokens_in: number;
@@ -65,7 +77,14 @@ type SessionDetail = {
 type Message = {
   id: string;
   type?:
-    | ("message" | "compaction" | "system" | "tool_call" | "turn_canceled")
+    | (
+        | "message"
+        | "compaction"
+        | "system"
+        | "tool_call"
+        | "turn_canceled"
+        | "judge_verdict"
+      )
     | undefined;
   role?: ("user" | "assistant" | "system") | undefined;
   content?: string | undefined;
@@ -85,6 +104,7 @@ type Message = {
   cancel_method?: ("graceful" | "hard") | undefined;
   descendants_canceled?: Array<string> | undefined;
   model?: string | undefined;
+  verdict?: JudgeVerdict | undefined;
 };
 type Attachment = {
   type: "image" | "audio" | "video" | "file";
@@ -102,11 +122,34 @@ type ToolCall = {
     | "denied"
     | "running"
     | "cancelled"
-    | "interrupted";
+    | "interrupted"
+    | "parked";
   duration_ms?: number | undefined;
   parameters?: {} | undefined;
   result?: {} | undefined;
   parent_tool_call_id?: string | undefined;
+};
+type JudgeVerdict = {
+  id: string;
+  scope: "task" | "plan" | "goal";
+  task_id?: string | undefined;
+  plan_id?: string | undefined;
+  round: number;
+  met: boolean;
+  per_criterion: Array<CriterionVerdict>;
+  model: string;
+  judged_at: string;
+  judge_agent_id: string;
+};
+type CriterionVerdict = {
+  criterion_id: string;
+  met: boolean;
+  reason: string;
+};
+type SessionPage = {
+  sessions: Array<Session>;
+  next_cursor?: string | undefined;
+  partial_errors?: Array<string> | undefined;
 };
 type LibraryUploadResponse = {
   entries: Array<LibraryEntry>;
@@ -147,6 +190,7 @@ type Agent = {
   updated_at?: string | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
+  memory_enabled?: boolean | undefined;
 };
 type AgentToolsCfg = Partial<{
   builtin: {
@@ -314,6 +358,7 @@ type AgentUpdateRequest = Partial<{
   skills: Array<string>;
   voice: string | null;
   executor: ExecutorConfig;
+  memory_enabled: boolean;
 }>;
 type ExecutorDefaults = {
   cli: ExternalCliTool;
@@ -413,22 +458,24 @@ type Task = {
   description?: string | undefined;
   prompt?: string | undefined;
   action: "llm";
-  status:
-    | "inbox"
-    | "next"
-    | "planning"
-    | "in_progress"
-    | "blocked"
-    | "done"
-    | "failed";
+  status: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
   agent_id?: string | undefined;
+  cancel_reason?: ("stopped_by_user" | null) | undefined;
   agent_name?: string | undefined;
   priority?: number | undefined;
   blocked_by?: Array<string> | undefined;
   todos?: Array<Todo> | undefined;
   parent_task_id?: string | undefined;
   workspace_id: string;
-  milestone_id?: string | undefined;
+  tags?: Array<string> | undefined;
+  plan_id?: string | undefined;
+  write_set?: Array<string> | undefined;
+  stream?: string | undefined;
+  is_join?: boolean | undefined;
+  judge_rounds?: number | undefined;
+  criteria?: Array<AcceptanceCriterion> | undefined;
+  attempt_count?: number | undefined;
+  max_attempts?: (number | null) | undefined;
   trigger?: TaskTrigger | undefined;
   due?: string | undefined;
   surface?: ("user" | "heartbeat") | undefined;
@@ -450,7 +497,6 @@ type Task = {
         status:
           | "inbox"
           | "next"
-          | "planning"
           | "in_progress"
           | "blocked"
           | "done"
@@ -461,6 +507,30 @@ type Task = {
 type Todo = {
   text: string;
   status: "pending" | "in_progress" | "completed";
+};
+type AcceptanceCriterion = {
+  id?: string | undefined;
+  kind: "check" | "prose" | "behavior";
+  text: string;
+  check?:
+    | {
+        command: string;
+        expected_exit_code: number;
+      }
+    | undefined;
+  behavior?:
+    | {
+        tool: string;
+        min_count?: number | undefined;
+        max_count?: number | undefined;
+        scope?: ("attempt" | "task_session") | undefined;
+      }
+    | undefined;
+  author: {
+    kind: "agent" | "user";
+    id: string;
+  };
+  status: "pending" | "met" | "unmet";
 };
 type TaskTrigger = {
   type: "manual" | "once" | "every" | "recurring";
@@ -584,7 +654,13 @@ type TaskCreateRequest = {
   todos?: Array<Todo> | undefined;
   parent_task_id?: string | undefined;
   workspace_id: string;
-  milestone_id?: string | undefined;
+  tags?: Array<string> | undefined;
+  plan_id?: string | undefined;
+  write_set?: Array<string> | undefined;
+  stream?: string | undefined;
+  is_join?: boolean | undefined;
+  criteria?: Array<AcceptanceCriterion> | undefined;
+  max_attempts?: (number | null) | undefined;
   due?: string | undefined;
   surface?: ("user" | "heartbeat") | undefined;
   source_channel?: string | undefined;
@@ -594,14 +670,7 @@ type TaskUpdateRequest = Partial<{
   title: string;
   description: string;
   prompt: string;
-  status:
-    | "inbox"
-    | "next"
-    | "planning"
-    | "in_progress"
-    | "blocked"
-    | "done"
-    | "failed";
+  status: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
   agent_id: string;
   priority: number;
   blocked_by: Array<string>;
@@ -609,7 +678,13 @@ type TaskUpdateRequest = Partial<{
   trigger: TaskTrigger;
   due: string;
   clear_due: boolean;
-  milestone_id: string;
+  tags: Array<string>;
+  plan_id: string;
+  write_set: Array<string>;
+  stream: string;
+  is_join: boolean;
+  criteria: Array<AcceptanceCriterion>;
+  max_attempts: number | null;
   surface: "user" | "heartbeat";
   result: string;
   artifacts: Array<string>;
@@ -825,20 +900,104 @@ type WorkspaceDelegationEdge = {
 type WorkspaceDelegationUpdateRequest = {
   edges: Array<WorkspaceDelegationEdge>;
 };
-type MilestoneListResponse = {
-  milestones: Array<Milestone>;
-  total: number;
-};
-type Milestone = {
+type Plan = {
   id: string;
   workspace_id: string;
-  name: string;
+  title: string;
+  goal?: string | undefined;
   description?: string | undefined;
-  due_date?: (string | null) | undefined;
+  state: "draft" | "approved" | "running" | "done" | "failed";
+  plan_phase?:
+    | (
+        | "dispatching"
+        | "judging"
+        | "synthesizing"
+        | "idle"
+        | "awaiting_supervision"
+        | "stalled"
+      )
+    | undefined;
+  last_unmet_terminal_signature?: string | undefined;
+  owner_session_id?: string | undefined;
+  failed_reason?:
+    | (
+        | "judge_rounds_exhausted"
+        | "stopped_by_user"
+        | "idle_expired"
+        | "budget_exhausted"
+        | "dod_unreachable"
+        | "supervision_unavailable"
+      )
+    | undefined;
+  supervision?:
+    | Partial<{
+        wake_at: string;
+        wake_error: string;
+        attempts: number;
+        correction_rounds: number;
+        session_id: string;
+      }>
+    | undefined;
+  source_channel?: string | undefined;
+  source_chat_id?: string | undefined;
+  owner_agent_id: string;
+  dod?: Array<AcceptanceCriterion> | undefined;
+  rationale?: string | undefined;
+  bounds?:
+    | Partial<{
+        plan_judge_max_rounds: number;
+        idle_expiry_days: number;
+        supervision_turn_timeout_seconds: number;
+        supervision_max_attempts: number;
+      }>
+    | undefined;
+  judge_rounds?: number | undefined;
+  active_loop?: boolean | undefined;
+  paused_reason?: string | undefined;
+  last_activity_at?: string | undefined;
+  progress?: number | undefined;
+  owner: string;
+  created_by: string;
   created_at: string;
   updated_at: string;
-  owner?: string | undefined;
-  progress?: number | undefined;
+  approved_at?: string | undefined;
+  started_at?: string | undefined;
+  completed_at?: string | undefined;
+};
+type PlanCreateRequest = {
+  workspace_id: string;
+  title: string;
+  goal?: string | undefined;
+  description?: string | undefined;
+  owner_agent_id: string;
+  dod?: Array<AcceptanceCriterion> | undefined;
+  rationale?: string | undefined;
+  bounds?:
+    | Partial<{
+        plan_judge_max_rounds: number;
+        idle_expiry_days: number;
+        supervision_turn_timeout_seconds: number;
+        supervision_max_attempts: number;
+      }>
+    | undefined;
+};
+type PlanUpdateRequest = Partial<{
+  title: string;
+  goal: string;
+  description: string;
+  state: "draft" | "approved" | "running" | "done" | "failed";
+  owner_agent_id: string;
+  dod: Array<AcceptanceCriterion>;
+  bounds: Partial<{
+    plan_judge_max_rounds: number;
+    idle_expiry_days: number;
+    supervision_turn_timeout_seconds: number;
+    supervision_max_attempts: number;
+  }>;
+}>;
+type PlanListResponse = {
+  plans: Array<Plan>;
+  total: number;
 };
 type AgentTokenEntry = {
   agent_id: string;
@@ -859,6 +1018,424 @@ type TokenUsageSummary = {
   by_model?: {} | undefined;
   partial?: boolean | undefined;
   partial_error_count?: number | undefined;
+};
+type SessionMessage =
+  | SessionMessageProgress
+  | SessionMessageCheckpoint
+  | SessionMessageArtifact
+  | SessionMessageBlocker
+  | SessionMessageQuestion
+  | SessionMessageDecisionRequest
+  | SessionMessageError
+  | SessionMessageHandback
+  | SessionMessageRevisionEntry
+  | SessionMessageGoalStatus
+  | SessionMessageSteer
+  | SessionMessageRespond;
+type SessionMessageProgress = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "progress";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  text: string;
+  pct?: number | undefined;
+};
+type SessionMessageCheckpoint = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "checkpoint";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  summary: string;
+  result_so_far?: string | undefined;
+  commit_ref?: string | undefined;
+};
+type SessionMessageArtifact = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "artifact";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  paths: Array<string>;
+  note?: string | undefined;
+};
+type SessionMessageBlocker = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "blocker";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  text: string;
+  severity: "low" | "medium" | "high";
+  correlation_id?: string | undefined;
+};
+type SessionMessageQuestion = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "question";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  text: string;
+  wait: boolean;
+  correlation_id: string;
+  authority?: ("self_ok" | "owner_required") | undefined;
+};
+type SessionMessageDecisionRequest = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "decision_request";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  text: string;
+  options: Array<string>;
+  correlation_id: string;
+  authority?: ("self_ok" | "owner_required") | undefined;
+};
+type SessionMessageError = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "error";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  text: string;
+  fatal: boolean;
+};
+type SessionMessageHandback = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "handback";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  result_so_far: string;
+  artifacts: Array<string>;
+  open_questions: Array<string>;
+  mode: "final" | "pause";
+};
+type SessionMessageRevisionEntry = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "engine";
+  kind: "revision_entry";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  revision: RevisionEntry;
+};
+type RevisionEntry = {
+  revision_id: string;
+  plan_id: string;
+  generation: number;
+  verb: "append" | "supersede" | "targeted_retry" | "abandon";
+  falsified_assumption: string;
+  tail_adds: Array<{
+    member_id: string;
+    blocked_by?: Array<string> | undefined;
+  }>;
+  superseded_member_id?: string | undefined;
+  retried_member_id?: string | undefined;
+  reason: string;
+  created_at: string;
+};
+type SessionMessageGoalStatus = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "session_to_ui";
+  kind: "goal_status";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  condition: "met" | "waiting_on_user";
+  goal_id: string;
+};
+type SessionMessageSteer = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "parent_to_child";
+  kind: "steer";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  text: string;
+  correlation_id?: string | undefined;
+};
+type SessionMessageRespond = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "parent_to_child";
+  kind: "respond";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  text: string;
+  correlation_id: string;
+};
+type Goal = {
+  goal_id: string;
+  binding_kind: "session" | "task" | "plan";
+  binding_id: string;
+  source: "chat_compiled" | "task_explicit" | "plan_dod";
+  prompt: string;
+  definition?: string | undefined;
+  criteria: Array<AcceptanceCriterion>;
+  attempts_max: number;
+  judge_rounds_max: number;
+  round: number;
+  state: "active" | "done" | "failed" | "cleared";
+  created_at: string;
+};
+type PlanRestartResponse = {
+  plan: Plan;
+  new_session_id: string;
+  generation: number;
+  resumed_from?: (string | null) | undefined;
+};
+type DelegateActionRequest =
+  | DelegateRunAction
+  | DelegateStatusAction
+  | DelegateInboxAction
+  | DelegateInboxAckAction
+  | DelegateSteerAction
+  | DelegateRespondAction
+  | DelegateCancelAction
+  | DelegateFollowUpAction
+  | DelegatePeekAction;
+type DelegateRunAction = {
+  action: "run";
+  target_agent_id: string;
+  task: string;
+  label?: string | undefined;
+  launch_profile: "utility" | "specialist";
+  wait?: boolean | undefined;
+  allow_blocking_question?: boolean | undefined;
+  critical?: boolean | undefined;
+  timeout_seconds?: number | undefined;
+  snapshot?:
+    | Partial<{
+        references: Array<string>;
+        notes: string;
+      }>
+    | undefined;
+};
+type DelegateStatusAction = {
+  action: "status";
+  session_id: string;
+  task_id?: string | undefined;
+};
+type DelegateInboxAction = {
+  action: "inbox";
+  session_id: string;
+  since_cursor?: string | undefined;
+  max?: number | undefined;
+};
+type DelegateInboxAckAction = {
+  action: "inbox_ack";
+  session_id: string;
+  message_ids: Array<string>;
+};
+type DelegateSteerAction = {
+  action: "steer";
+  session_id: string;
+  text: string;
+  correlation_id?: string | undefined;
+};
+type DelegateRespondAction = {
+  action: "respond";
+  session_id: string;
+  text: string;
+  correlation_id: string;
+};
+type DelegateCancelAction = {
+  action: "cancel";
+  session_id: string;
+  hard?: boolean | undefined;
+};
+type DelegateFollowUpAction = {
+  action: "follow_up";
+  session_id: string;
+  task?: string | undefined;
+};
+type DelegatePeekAction = {
+  action: "peek";
+  session_id: string;
+};
+type DelegateStatusResponse = {
+  session: SessionLifecycleRecord;
+  last_checkpoint?:
+    | Partial<{
+        summary: string;
+        result_so_far: string;
+        commit_ref: string;
+        created_at: string;
+      }>
+    | undefined;
+  last_progress?:
+    | Partial<{
+        text: string;
+        pct: number;
+        created_at: string;
+      }>
+    | undefined;
+  unacked_count: number;
+};
+type SessionLifecycleRecord = {
+  session_id: string;
+  generation: number;
+  resumed_from?: (string | null) | undefined;
+  state:
+    | "queued"
+    | "running"
+    | "needs_input"
+    | "paused"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "timed_out";
+  terminal: boolean;
+  owner_scope_kind: "parent_session" | "plan" | "human";
+  owner_scope_id?: string | undefined;
+  owns_plan_id?: string | undefined;
+  goal_ref?: string | undefined;
+  workspace_id: string;
+  agent_id: string;
+  is_3p: boolean;
+  launch_profile: "utility" | "specialist";
+  last_checkpoint_ref?: string | undefined;
+  undelivered_message_ids: Array<string>;
+  needs_input?:
+    | {
+        correlation_id: string;
+        ttl_deadline: string;
+        reconstructable: boolean;
+      }
+    | undefined;
+  failed_reason?: string | undefined;
+  created_at: string;
+  updated_at: string;
+};
+type DelegateInboxResponse = {
+  messages: Array<SessionMessage>;
+  has_more: boolean;
+  next_cursor?: string | undefined;
+};
+type DelegateRespondResponse = {
+  acknowledged: boolean;
+  corrective_session?: DelegateSessionResponse | undefined;
+};
+type DelegateSessionResponse = {
+  session_id: string;
+  generation: number;
+  resumed_from?: (string | null) | undefined;
+  is_3p: boolean;
+  state:
+    | "queued"
+    | "running"
+    | "needs_input"
+    | "paused"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "timed_out";
+};
+type MessageParentRequest =
+  | MessageParentProgress
+  | MessageParentCheckpoint
+  | MessageParentArtifact
+  | MessageParentBlocker
+  | MessageParentQuestion
+  | MessageParentHandback;
+type MessageParentProgress = {
+  kind: "progress";
+  message_id?: string | undefined;
+  text: string;
+  pct?: number | undefined;
+};
+type MessageParentCheckpoint = {
+  kind: "checkpoint";
+  message_id?: string | undefined;
+  summary: string;
+  result_so_far?: string | undefined;
+  commit_ref?: string | undefined;
+};
+type MessageParentArtifact = {
+  kind: "artifact";
+  message_id?: string | undefined;
+  paths: Array<string>;
+  note?: string | undefined;
+};
+type MessageParentBlocker = {
+  kind: "blocker";
+  message_id?: string | undefined;
+  text: string;
+  severity: "low" | "medium" | "high";
+};
+type MessageParentQuestion = {
+  kind: "question";
+  message_id?: string | undefined;
+  text: string;
+  wait: boolean;
+  authority?: ("self_ok" | "owner_required") | undefined;
+  correlation_id?: string | undefined;
+};
+type MessageParentHandback = {
+  kind: "handback";
+  message_id?: string | undefined;
+  result_so_far: string;
+  artifacts?: Array<string> | undefined;
+  open_questions?: Array<string> | undefined;
+  mode: "final" | "pause";
 };
 
 export const LoginRequest = z.object({
@@ -1070,7 +1647,15 @@ export const SessionStats: z.ZodType<SessionStats> = z
 export const Session: z.ZodType<Session> = z.object({
   id: z.string(),
   type: z
-    .enum(["chat", "task", "channel", "scheduled", "heartbeat"])
+    .enum([
+      "chat",
+      "task",
+      "channel",
+      "scheduled",
+      "heartbeat",
+      "verifier",
+      "delegate",
+    ])
     .optional(),
   protected: z.boolean().optional(),
   agent_id: z.string(),
@@ -1089,6 +1674,13 @@ export const Session: z.ZodType<Session> = z.object({
   agent_ids: z.array(z.string()).optional(),
   active_agent_id: z.string().optional(),
   compaction_summaries: z.record(z.string()).optional(),
+  parent_session_id: z.string().optional(),
+  child_count: z.number().int().gte(0).optional(),
+});
+export const SessionPage: z.ZodType<SessionPage> = z.object({
+  sessions: z.array(Session),
+  next_cursor: z.string().optional(),
+  partial_errors: z.array(z.string()).optional(),
 });
 export const SessionCreateRequest = z
   .object({ agent_id: z.string(), type: z.enum(["chat", "task", "channel"]) })
@@ -1110,16 +1702,41 @@ export const ToolCall: z.ZodType<ToolCall> = z.object({
     "running",
     "cancelled",
     "interrupted",
+    "parked",
   ]),
   duration_ms: z.number().int().gte(0).optional(),
   parameters: z.object({}).partial().passthrough().optional(),
   result: z.object({}).partial().passthrough().optional(),
   parent_tool_call_id: z.string().optional(),
 });
+export const CriterionVerdict: z.ZodType<CriterionVerdict> = z.object({
+  criterion_id: z.string().min(1),
+  met: z.boolean(),
+  reason: z.string(),
+});
+export const JudgeVerdict: z.ZodType<JudgeVerdict> = z.object({
+  id: z.string(),
+  scope: z.enum(["task", "plan", "goal"]),
+  task_id: z.string().optional(),
+  plan_id: z.string().optional(),
+  round: z.number().int().gte(1),
+  met: z.boolean(),
+  per_criterion: z.array(CriterionVerdict),
+  model: z.string(),
+  judged_at: z.string().datetime({ offset: true }),
+  judge_agent_id: z.string(),
+});
 export const Message: z.ZodType<Message> = z.object({
   id: z.string(),
   type: z
-    .enum(["message", "compaction", "system", "tool_call", "turn_canceled"])
+    .enum([
+      "message",
+      "compaction",
+      "system",
+      "tool_call",
+      "turn_canceled",
+      "judge_verdict",
+    ])
     .optional(),
   role: z.enum(["user", "assistant", "system"]).optional(),
   content: z.string().optional(),
@@ -1139,6 +1756,7 @@ export const Message: z.ZodType<Message> = z.object({
   cancel_method: z.enum(["graceful", "hard"]).optional(),
   descendants_canceled: z.array(z.string()).optional(),
   model: z.string().optional(),
+  verdict: JudgeVerdict.optional(),
 });
 export const SessionDetail: z.ZodType<SessionDetail> = z.object({
   session: Session,
@@ -1242,6 +1860,7 @@ export const Agent: z.ZodType<Agent> = z
     updated_at: z.string().datetime({ offset: true }).optional(),
     voice: z.string().nullish(),
     executor: ExecutorConfig.optional(),
+    memory_enabled: z.boolean().optional().default(true),
   })
   .passthrough();
 export const AgentCreateRequestMain =
@@ -1400,6 +2019,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     skills: z.array(z.string()),
     voice: z.string().nullable(),
     executor: ExecutorConfig,
+    memory_enabled: z.boolean(),
   })
   .partial();
 export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
@@ -1598,15 +2218,12 @@ export const PromptGuardUpdateResponse = z.object({
 export const RateLimitsResponse = z
   .object({
     enabled: z.boolean(),
-    daily_cost_usd: z.number().gte(0),
-    daily_cost_cap: z.number().gte(0),
     max_agent_llm_calls_per_hour: z.number().int().gte(0),
     max_agent_tool_calls_per_minute: z.number().int().gte(0),
   })
   .passthrough();
 export const RateLimitsUpdateRequest = z
   .object({
-    daily_cost_cap_usd: z.number().gte(0),
     max_agent_llm_calls_per_hour: z.number().int().gte(0),
     max_agent_tool_calls_per_minute: z.number().int().gte(0),
   })
@@ -1617,7 +2234,6 @@ export const RateLimitsUpdateResponse = z
     requires_restart: z.boolean(),
     applied: z
       .object({
-        daily_cost_cap_usd: z.number().gte(0),
         max_agent_llm_calls_per_hour: z.number().int().gte(0),
         max_agent_tool_calls_per_minute: z.number().int().gte(0),
       })
@@ -1733,14 +2349,14 @@ export const RetentionSweepResult = z
   .passthrough();
 export const PerformanceSettings = z
   .object({
-    max_parallel_agents: z.number().int().gte(2).lte(16),
-    effective_max_parallel_agents: z.number().int().gte(2).lte(16),
+    max_parallel_agents: z.number().int().gte(1),
+    effective_max_parallel_agents: z.number().int().gte(1),
     tools_on_demand: z.boolean(),
   })
   .partial();
 export const PerformanceSettingsUpdate = z
   .object({
-    max_parallel_agents: z.number().int().gte(2).lte(16),
+    max_parallel_agents: z.number().int().gte(0),
     tools_on_demand: z.boolean(),
   })
   .partial();
@@ -1920,6 +2536,7 @@ export const SlashCommand = z.object({
   label: z.string(),
   description: z.string(),
   usage: z.string().optional(),
+  argument_hint: z.string().optional(),
   aliases: z.array(z.string()).optional(),
   available_while_streaming: z.boolean().optional(),
   delivery: z.enum(["client", "agent"]),
@@ -2033,6 +2650,30 @@ export const Todo: z.ZodType<Todo> = z.object({
   text: z.string().min(1).max(500),
   status: z.enum(["pending", "in_progress", "completed"]),
 });
+export const AcceptanceCriterion: z.ZodType<AcceptanceCriterion> = z.object({
+  id: z.string().optional(),
+  kind: z.enum(["check", "prose", "behavior"]),
+  text: z.string().min(1).max(1000),
+  check: z
+    .object({
+      command: z.string().min(1),
+      expected_exit_code: z.number().int().gte(0).lte(255),
+    })
+    .optional(),
+  behavior: z
+    .object({
+      tool: z.string().min(1),
+      min_count: z.number().int().gte(0).optional().default(1),
+      max_count: z.number().int().gte(0).optional(),
+      scope: z
+        .enum(["attempt", "task_session"])
+        .optional()
+        .default("task_session"),
+    })
+    .optional(),
+  author: z.object({ kind: z.enum(["agent", "user"]), id: z.string().min(1) }),
+  status: z.enum(["pending", "met", "unmet"]),
+});
 export const TaskTrigger: z.ZodType<TaskTrigger> = z.object({
   type: z.enum(["manual", "once", "every", "recurring"]),
   config: z
@@ -2057,20 +2698,28 @@ export const Task: z.ZodType<Task> = z
     status: z.enum([
       "inbox",
       "next",
-      "planning",
       "in_progress",
       "blocked",
       "done",
       "failed",
     ]),
     agent_id: z.string().optional(),
+    cancel_reason: z.literal("stopped_by_user").nullish(),
     agent_name: z.string().optional(),
     priority: z.number().int().gte(1).lte(5).optional().default(3),
     blocked_by: z.array(z.string()).optional(),
     todos: z.array(Todo).optional(),
     parent_task_id: z.string().optional(),
     workspace_id: z.string(),
-    milestone_id: z.string().optional(),
+    tags: z.array(z.string().max(64)).max(16).optional(),
+    plan_id: z.string().optional(),
+    write_set: z.array(z.string()).optional(),
+    stream: z.string().optional(),
+    is_join: z.boolean().optional(),
+    judge_rounds: z.number().int().gte(0).optional(),
+    criteria: z.array(AcceptanceCriterion).optional(),
+    attempt_count: z.number().int().gte(0).optional(),
+    max_attempts: z.number().int().gte(1).nullish(),
     trigger: TaskTrigger.optional(),
     due: z.string().datetime({ offset: true }).optional(),
     surface: z.enum(["user", "heartbeat"]).optional().default("user"),
@@ -2093,7 +2742,6 @@ export const Task: z.ZodType<Task> = z
           status: z.enum([
             "inbox",
             "next",
-            "planning",
             "in_progress",
             "blocked",
             "done",
@@ -2116,7 +2764,13 @@ export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
   todos: z.array(Todo).optional(),
   parent_task_id: z.string().optional(),
   workspace_id: z.string(),
-  milestone_id: z.string().optional(),
+  tags: z.array(z.string().max(64)).max(16).optional(),
+  plan_id: z.string().optional(),
+  write_set: z.array(z.string()).optional(),
+  stream: z.string().optional(),
+  is_join: z.boolean().optional(),
+  criteria: z.array(AcceptanceCriterion).optional(),
+  max_attempts: z.number().int().gte(1).nullish(),
   due: z.string().datetime({ offset: true }).optional(),
   surface: z.enum(["user", "heartbeat"]).optional().default("user"),
   source_channel: z.string().optional(),
@@ -2163,7 +2817,6 @@ export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
     status: z.enum([
       "inbox",
       "next",
-      "planning",
       "in_progress",
       "blocked",
       "done",
@@ -2176,7 +2829,13 @@ export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
     trigger: TaskTrigger,
     due: z.string().datetime({ offset: true }),
     clear_due: z.boolean(),
-    milestone_id: z.string(),
+    tags: z.array(z.string().max(64)).max(16),
+    plan_id: z.string(),
+    write_set: z.array(z.string()),
+    stream: z.string(),
+    is_join: z.boolean(),
+    criteria: z.array(AcceptanceCriterion),
+    max_attempts: z.number().int().gte(1).nullable(),
     surface: z.enum(["user", "heartbeat"]),
     result: z.string().max(50000),
     artifacts: z.array(z.string()),
@@ -2184,6 +2843,19 @@ export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
     completed_at: z.string().datetime({ offset: true }),
   })
   .partial();
+export const EvidenceRecord = z.object({
+  id: z.string(),
+  task_id: z.string(),
+  criterion_id: z.string(),
+  attempt: z.number().int().gte(1),
+  command: z.string(),
+  exit_code: z.number().int(),
+  output: z.string(),
+  truncated: z.boolean(),
+  timed_out: z.boolean(),
+  policy_denied: z.boolean(),
+  recorded_at: z.string().datetime({ offset: true }),
+});
 export const TaskRun = z.object({
   run_id: z.string(),
   task_id: z.string(),
@@ -2488,37 +3160,121 @@ export const WorkspaceInstructionsResponse = z.object({ content: z.string() });
 export const WorkspaceInstructionsRequest = z.object({
   content: z.string().max(262144),
 });
-export const Milestone: z.ZodType<Milestone> = z
+export const Plan: z.ZodType<Plan> = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  title: z.string().min(1).max(200),
+  goal: z.string().max(2000).optional(),
+  description: z.string().max(2000).optional(),
+  state: z.enum(["draft", "approved", "running", "done", "failed"]),
+  plan_phase: z
+    .enum([
+      "dispatching",
+      "judging",
+      "synthesizing",
+      "idle",
+      "awaiting_supervision",
+      "stalled",
+    ])
+    .optional()
+    .default("idle"),
+  last_unmet_terminal_signature: z.string().optional(),
+  owner_session_id: z.string().optional(),
+  failed_reason: z
+    .enum([
+      "judge_rounds_exhausted",
+      "stopped_by_user",
+      "idle_expired",
+      "budget_exhausted",
+      "dod_unreachable",
+      "supervision_unavailable",
+    ])
+    .optional(),
+  supervision: z
+    .object({
+      wake_at: z.string().datetime({ offset: true }),
+      wake_error: z.string(),
+      attempts: z.number().int().gte(0),
+      correction_rounds: z.number().int().gte(0),
+      session_id: z.string(),
+    })
+    .partial()
+    .optional(),
+  source_channel: z.string().optional(),
+  source_chat_id: z.string().optional(),
+  owner_agent_id: z.string(),
+  dod: z.array(AcceptanceCriterion).optional(),
+  rationale: z.string().max(4000).optional(),
+  bounds: z
+    .object({
+      plan_judge_max_rounds: z.number().int().gte(1),
+      idle_expiry_days: z.number().int().gte(1),
+      supervision_turn_timeout_seconds: z.number().int().gte(1),
+      supervision_max_attempts: z.number().int().gte(1),
+    })
+    .partial()
+    .optional(),
+  judge_rounds: z.number().int().gte(0).optional(),
+  active_loop: z.boolean().optional(),
+  paused_reason: z.string().optional(),
+  last_activity_at: z.string().datetime({ offset: true }).optional(),
+  progress: z.number().gte(0).lte(1).optional(),
+  owner: z.string(),
+  created_by: z.string(),
+  created_at: z.string().datetime({ offset: true }),
+  updated_at: z.string().datetime({ offset: true }),
+  approved_at: z.string().datetime({ offset: true }).optional(),
+  started_at: z.string().datetime({ offset: true }).optional(),
+  completed_at: z.string().datetime({ offset: true }).optional(),
+});
+export const PlanListResponse: z.ZodType<PlanListResponse> = z.object({
+  plans: z.array(Plan),
+  total: z.number().int(),
+});
+export const PlanCreateRequest: z.ZodType<PlanCreateRequest> = z.object({
+  workspace_id: z.string(),
+  title: z.string().min(1).max(200),
+  goal: z.string().max(2000).optional(),
+  description: z.string().max(2000).optional(),
+  owner_agent_id: z.string().min(1),
+  dod: z.array(AcceptanceCriterion).optional(),
+  rationale: z.string().max(4000).optional(),
+  bounds: z
+    .object({
+      plan_judge_max_rounds: z.number().int().gte(1),
+      idle_expiry_days: z.number().int().gte(1),
+      supervision_turn_timeout_seconds: z.number().int().gte(1),
+      supervision_max_attempts: z.number().int().gte(1),
+    })
+    .partial()
+    .optional(),
+});
+export const PlanUpdateRequest: z.ZodType<PlanUpdateRequest> = z
   .object({
-    id: z.string(),
-    workspace_id: z.string(),
-    name: z.string().min(1).max(200),
-    description: z.string().max(2000).optional(),
-    due_date: z.string().nullish(),
-    created_at: z.string().datetime({ offset: true }),
-    updated_at: z.string().datetime({ offset: true }),
-    owner: z.string().optional(),
-    progress: z.number().gte(0).lte(1).optional(),
-  })
-  .passthrough();
-export const MilestoneListResponse: z.ZodType<MilestoneListResponse> = z
-  .object({ milestones: z.array(Milestone), total: z.number().int() })
-  .passthrough();
-export const MilestoneCreateRequest = z
-  .object({
-    name: z.string().min(1).max(200),
-    description: z.string().max(2000).optional(),
-    due_date: z.string().nullish(),
-  })
-  .passthrough();
-export const MilestoneUpdateRequest = z
-  .object({
-    name: z.string().min(1).max(200),
+    title: z.string().min(1).max(200),
+    goal: z.string().max(2000),
     description: z.string().max(2000),
-    due_date: z.string().nullable(),
+    state: z.enum(["draft", "approved", "running", "done", "failed"]),
+    owner_agent_id: z.string().min(1),
+    dod: z.array(AcceptanceCriterion),
+    bounds: z
+      .object({
+        plan_judge_max_rounds: z.number().int().gte(1),
+        idle_expiry_days: z.number().int().gte(1),
+        supervision_turn_timeout_seconds: z.number().int().gte(1),
+        supervision_max_attempts: z.number().int().gte(1),
+      })
+      .partial(),
   })
-  .partial()
-  .passthrough();
+  .partial();
+export const PlanApproveError = z
+  .object({
+    error: z.string(),
+    task_errors: z.array(
+      z.object({ task_id: z.string(), title: z.string(), reason: z.string() })
+    ),
+  })
+  .partial();
 export const AgentTokenEntry: z.ZodType<AgentTokenEntry> = z
   .object({
     agent_id: z.string(),
@@ -2584,9 +3340,6 @@ export const ToolPolicy = z.enum(["allow", "ask", "deny"]);
 export const RateLimitConfig = z
   .object({
     enabled: z.boolean(),
-    daily_cost_usd: z.number().gte(0),
-    daily_cost_cap: z.number().gte(0),
-    daily_cost_cap_usd: z.number().gte(0),
     max_agent_llm_calls_per_hour: z.number().int().gte(0),
     max_agent_tool_calls_per_minute: z.number().int().gte(0),
   })
@@ -2636,6 +3389,502 @@ export const ChannelConfigureRequest: z.ZodType<ChannelConfigureRequest> = z
 export const RetentionUpdateRequest = z
   .object({ session_days: z.number().int().gte(0), disabled: z.boolean() })
   .partial();
+export const SessionMessageProgress =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("child_to_parent"),
+    kind: z.literal("progress"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    text: z.string().max(32768),
+    pct: z.number().int().gte(0).lte(100).optional(),
+  }) satisfies z.ZodType<SessionMessageProgress>;
+export const SessionMessageCheckpoint =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("child_to_parent"),
+    kind: z.literal("checkpoint"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    summary: z.string().min(1).max(500),
+    result_so_far: z.string().max(32768).optional(),
+    commit_ref: z.string().optional(),
+  }) satisfies z.ZodType<SessionMessageCheckpoint>;
+export const SessionMessageArtifact =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("child_to_parent"),
+    kind: z.literal("artifact"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    paths: z.array(z.string()).min(1),
+    note: z.string().max(4096).optional(),
+  }) satisfies z.ZodType<SessionMessageArtifact>;
+export const SessionMessageBlocker = z.object(
+  {
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("child_to_parent"),
+    kind: z.literal("blocker"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    text: z.string().max(32768),
+    severity: z.enum(["low", "medium", "high"]),
+    correlation_id: z.string().optional(),
+  }
+) satisfies z.ZodType<SessionMessageBlocker>;
+export const SessionMessageQuestion =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("child_to_parent"),
+    kind: z.literal("question"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    text: z.string().max(32768),
+    wait: z.boolean(),
+    correlation_id: z.string().min(1),
+    authority: z.enum(["self_ok", "owner_required"]).optional(),
+  }) satisfies z.ZodType<SessionMessageQuestion>;
+export const SessionMessageDecisionRequest =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("child_to_parent"),
+    kind: z.literal("decision_request"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    text: z.string().max(32768),
+    options: z.array(z.string()).min(2),
+    correlation_id: z.string().min(1),
+    authority: z.enum(["self_ok", "owner_required"]).optional(),
+  }) satisfies z.ZodType<SessionMessageDecisionRequest>;
+export const SessionMessageError = z.object({
+  message_id: z.string().min(1),
+  session_id: z.string().min(1),
+  parent_session_id: z.string().nullish(),
+  generation: z.number().int().gte(0).optional(),
+  direction: z.literal("child_to_parent"),
+  kind: z.literal("error"),
+  depth: z.number().int().gte(0).lte(5),
+  created_at: z.string().datetime({ offset: true }),
+  sender_identity: z.string().min(1),
+  untrusted_origin: z.boolean(),
+  text: z.string().max(32768),
+  fatal: z.boolean(),
+}) satisfies z.ZodType<SessionMessageError>;
+export const SessionMessageHandback =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("child_to_parent"),
+    kind: z.literal("handback"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    result_so_far: z.string().max(50000),
+    artifacts: z.array(z.string()),
+    open_questions: z.array(z.string()),
+    mode: z.enum(["final", "pause"]),
+  }) satisfies z.ZodType<SessionMessageHandback>;
+export const RevisionEntry: z.ZodType<RevisionEntry> = z.object({
+  revision_id: z.string().min(1),
+  plan_id: z.string().min(1),
+  generation: z.number().int().gte(0),
+  verb: z.enum(["append", "supersede", "targeted_retry", "abandon"]),
+  falsified_assumption: z.string().min(1).max(2000),
+  tail_adds: z.array(
+    z.object({
+      member_id: z.string().min(1),
+      blocked_by: z.array(z.string()).optional(),
+    })
+  ),
+  superseded_member_id: z.string().optional(),
+  retried_member_id: z.string().optional(),
+  reason: z.string().min(1).max(2000),
+  created_at: z.string().datetime({ offset: true }),
+});
+export const SessionMessageRevisionEntry =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("engine"),
+    kind: z.literal("revision_entry"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    revision: RevisionEntry,
+  }) satisfies z.ZodType<SessionMessageRevisionEntry>;
+export const SessionMessageGoalStatus =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("session_to_ui"),
+    kind: z.literal("goal_status"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    condition: z.enum(["met", "waiting_on_user"]),
+    goal_id: z.string().min(1),
+  }) satisfies z.ZodType<SessionMessageGoalStatus>;
+export const SessionMessageSteer = z.object({
+  message_id: z.string().min(1),
+  session_id: z.string().min(1),
+  parent_session_id: z.string().nullish(),
+  generation: z.number().int().gte(0).optional(),
+  direction: z.literal("parent_to_child"),
+  kind: z.literal("steer"),
+  depth: z.number().int().gte(0).lte(5),
+  created_at: z.string().datetime({ offset: true }),
+  sender_identity: z.string().min(1),
+  untrusted_origin: z.boolean(),
+  text: z.string().max(16384),
+  correlation_id: z.string().optional(),
+}) satisfies z.ZodType<SessionMessageSteer>;
+export const SessionMessageRespond = z.object(
+  {
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("parent_to_child"),
+    kind: z.literal("respond"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    text: z.string().max(16384),
+    correlation_id: z.string().min(1),
+  }
+) satisfies z.ZodType<SessionMessageRespond>;
+export const SessionMessage = z.discriminatedUnion(
+  "kind",
+  [
+    SessionMessageProgress,
+    SessionMessageCheckpoint,
+    SessionMessageArtifact,
+    SessionMessageBlocker,
+    SessionMessageQuestion,
+    SessionMessageDecisionRequest,
+    SessionMessageError,
+    SessionMessageHandback,
+    SessionMessageRevisionEntry,
+    SessionMessageGoalStatus,
+    SessionMessageSteer,
+    SessionMessageRespond,
+  ]
+) satisfies z.ZodType<SessionMessage>;
+export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
+  z.object({
+    session_id: z.string().min(1),
+    generation: z.number().int().gte(0),
+    resumed_from: z.string().nullish(),
+    state: z.enum([
+      "queued",
+      "running",
+      "needs_input",
+      "paused",
+      "completed",
+      "failed",
+      "cancelled",
+      "timed_out",
+    ]),
+    terminal: z.boolean(),
+    owner_scope_kind: z.enum(["parent_session", "plan", "human"]),
+    owner_scope_id: z.string().optional(),
+    owns_plan_id: z.string().optional(),
+    goal_ref: z.string().optional(),
+    workspace_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    is_3p: z.boolean(),
+    launch_profile: z.enum(["utility", "specialist"]),
+    last_checkpoint_ref: z.string().optional(),
+    undelivered_message_ids: z.array(z.string()),
+    needs_input: z
+      .object({
+        correlation_id: z.string().min(1),
+        ttl_deadline: z.string().datetime({ offset: true }),
+        reconstructable: z.boolean(),
+      })
+      .optional(),
+    failed_reason: z.string().optional(),
+    created_at: z.string().datetime({ offset: true }),
+    updated_at: z.string().datetime({ offset: true }),
+  });
+export const Goal: z.ZodType<Goal> = z.object({
+  goal_id: z.string().min(1),
+  binding_kind: z.enum(["session", "task", "plan"]),
+  binding_id: z.string().min(1),
+  source: z.enum(["chat_compiled", "task_explicit", "plan_dod"]),
+  prompt: z.string().min(1).max(4000),
+  definition: z.string().max(4000).optional(),
+  criteria: z.array(AcceptanceCriterion),
+  attempts_max: z.number().int().gte(1),
+  judge_rounds_max: z.number().int().gte(1),
+  round: z.number().int().gte(0),
+  state: z.enum(["active", "done", "failed", "cleared"]),
+  created_at: z.string().datetime({ offset: true }),
+});
+export const TokenBudgetStatus = z.object({
+  budget: z.number().int().gte(0),
+  consumed: z.number().int().gte(0),
+  remaining: z.number().int(),
+  exhausted: z.boolean(),
+  advisory: z.string().optional(),
+  by_scope: z.object({
+    owner: z.number().int().gte(0),
+    member: z.number().int().gte(0),
+    verifier: z.number().int().gte(0),
+    judge: z.number().int().gte(0),
+  }),
+});
+export const PlanRestartResponse: z.ZodType<PlanRestartResponse> = z.object({
+  plan: Plan,
+  new_session_id: z.string().min(1),
+  generation: z.number().int().gte(0),
+  resumed_from: z.string().nullish(),
+});
+export const DelegateRunAction = z.object({
+  action: z.literal("run"),
+  target_agent_id: z.string().min(1),
+  task: z.string().min(1).max(10000),
+  label: z.string().max(100).optional(),
+  launch_profile: z.enum(["utility", "specialist"]),
+  wait: z.boolean().optional(),
+  allow_blocking_question: z.boolean().optional(),
+  critical: z.boolean().optional(),
+  timeout_seconds: z.number().int().gte(0).optional(),
+  snapshot: z
+    .object({ references: z.array(z.string()), notes: z.string().max(8192) })
+    .partial()
+    .optional(),
+}) satisfies z.ZodType<DelegateRunAction>;
+export const DelegateStatusAction = z.object({
+  action: z.literal("status"),
+  session_id: z.string().min(1),
+  task_id: z.string().optional(),
+}) satisfies z.ZodType<DelegateStatusAction>;
+export const DelegateInboxAction = z.object({
+  action: z.literal("inbox"),
+  session_id: z.string().min(1),
+  since_cursor: z.string().optional(),
+  max: z.number().int().gte(1).lte(200).optional(),
+}) satisfies z.ZodType<DelegateInboxAction>;
+export const DelegateInboxAckAction =
+  z.object({
+    action: z.literal("inbox_ack"),
+    session_id: z.string().min(1),
+    message_ids: z.array(z.string()).min(1),
+  }) satisfies z.ZodType<DelegateInboxAckAction>;
+export const DelegateSteerAction = z.object({
+  action: z.literal("steer"),
+  session_id: z.string().min(1),
+  text: z.string().min(1).max(16384),
+  correlation_id: z.string().optional(),
+}) satisfies z.ZodType<DelegateSteerAction>;
+export const DelegateRespondAction = z.object(
+  {
+    action: z.literal("respond"),
+    session_id: z.string().min(1),
+    text: z.string().min(1).max(16384),
+    correlation_id: z.string().min(1),
+  }
+) satisfies z.ZodType<DelegateRespondAction>;
+export const DelegateCancelAction = z.object({
+  action: z.literal("cancel"),
+  session_id: z.string().min(1),
+  hard: z.boolean().optional(),
+}) satisfies z.ZodType<DelegateCancelAction>;
+export const DelegateFollowUpAction =
+  z.object({
+    action: z.literal("follow_up"),
+    session_id: z.string().min(1),
+    task: z.string().max(10000).optional(),
+  }) satisfies z.ZodType<DelegateFollowUpAction>;
+export const DelegatePeekAction = z.object({
+  action: z.literal("peek"),
+  session_id: z.string().min(1),
+}) satisfies z.ZodType<DelegatePeekAction>;
+export const DelegateActionRequest =
+  z.discriminatedUnion("action", [
+    DelegateRunAction,
+    DelegateStatusAction,
+    DelegateInboxAction,
+    DelegateInboxAckAction,
+    DelegateSteerAction,
+    DelegateRespondAction,
+    DelegateCancelAction,
+    DelegateFollowUpAction,
+    DelegatePeekAction,
+  ]) satisfies z.ZodType<DelegateActionRequest>;
+export const DelegateSessionResponse: z.ZodType<DelegateSessionResponse> =
+  z.object({
+    session_id: z.string().min(1),
+    generation: z.number().int().gte(0),
+    resumed_from: z.string().nullish(),
+    is_3p: z.boolean(),
+    state: z.enum([
+      "queued",
+      "running",
+      "needs_input",
+      "paused",
+      "completed",
+      "failed",
+      "cancelled",
+      "timed_out",
+    ]),
+  });
+export const DelegateStatusResponse: z.ZodType<DelegateStatusResponse> =
+  z.object({
+    session: SessionLifecycleRecord,
+    last_checkpoint: z
+      .object({
+        summary: z.string(),
+        result_so_far: z.string(),
+        commit_ref: z.string(),
+        created_at: z.string().datetime({ offset: true }),
+      })
+      .partial()
+      .optional(),
+    last_progress: z
+      .object({
+        text: z.string(),
+        pct: z.number().int().gte(0).lte(100),
+        created_at: z.string().datetime({ offset: true }),
+      })
+      .partial()
+      .optional(),
+    unacked_count: z.number().int().gte(0),
+  });
+export const DelegateInboxResponse: z.ZodType<DelegateInboxResponse> = z.object(
+  {
+    messages: z.array(SessionMessage),
+    has_more: z.boolean(),
+    next_cursor: z.string().optional(),
+  }
+);
+export const DelegateRespondResponse: z.ZodType<DelegateRespondResponse> =
+  z.object({
+    acknowledged: z.boolean(),
+    corrective_session: DelegateSessionResponse.optional(),
+  });
+export const DelegatePeekResponse = z.object({
+  session_id: z.string().min(1),
+  state: z.enum([
+    "queued",
+    "running",
+    "needs_input",
+    "paused",
+    "completed",
+    "failed",
+    "cancelled",
+    "timed_out",
+  ]),
+  latest_checkpoint_summary: z.string().optional(),
+  latest_progress_text: z.string().optional(),
+  latest_progress_pct: z.number().int().gte(0).lte(100).optional(),
+});
+export const MessageParentProgress = z.object(
+  {
+    kind: z.literal("progress"),
+    message_id: z.string().optional(),
+    text: z.string().min(1).max(32768),
+    pct: z.number().int().gte(0).lte(100).optional(),
+  }
+) satisfies z.ZodType<MessageParentProgress>;
+export const MessageParentCheckpoint =
+  z.object({
+    kind: z.literal("checkpoint"),
+    message_id: z.string().optional(),
+    summary: z.string().min(1).max(500),
+    result_so_far: z.string().max(32768).optional(),
+    commit_ref: z.string().optional(),
+  }) satisfies z.ZodType<MessageParentCheckpoint>;
+export const MessageParentArtifact = z.object(
+  {
+    kind: z.literal("artifact"),
+    message_id: z.string().optional(),
+    paths: z.array(z.string()).min(1),
+    note: z.string().max(4096).optional(),
+  }
+) satisfies z.ZodType<MessageParentArtifact>;
+export const MessageParentBlocker = z.object({
+  kind: z.literal("blocker"),
+  message_id: z.string().optional(),
+  text: z.string().min(1).max(32768),
+  severity: z.enum(["low", "medium", "high"]),
+}) satisfies z.ZodType<MessageParentBlocker>;
+export const MessageParentQuestion = z.object(
+  {
+    kind: z.literal("question"),
+    message_id: z.string().optional(),
+    text: z.string().min(1).max(32768),
+    wait: z.boolean(),
+    authority: z.enum(["self_ok", "owner_required"]).optional(),
+    correlation_id: z.string().optional(),
+  }
+) satisfies z.ZodType<MessageParentQuestion>;
+export const MessageParentHandback = z.object(
+  {
+    kind: z.literal("handback"),
+    message_id: z.string().optional(),
+    result_so_far: z.string().max(50000),
+    artifacts: z.array(z.string()).optional(),
+    open_questions: z.array(z.string()).optional(),
+    mode: z.enum(["final", "pause"]),
+  }
+) satisfies z.ZodType<MessageParentHandback>;
+export const MessageParentRequest =
+  z.discriminatedUnion("kind", [
+    MessageParentProgress,
+    MessageParentCheckpoint,
+    MessageParentArtifact,
+    MessageParentBlocker,
+    MessageParentQuestion,
+    MessageParentHandback,
+  ]) satisfies z.ZodType<MessageParentRequest>;
+export const MessageParentResponse = z.object({
+  accepted: z.boolean(),
+  message_id: z.string().optional(),
+  correlation_id: z.string().optional(),
+  error: z.string().optional(),
+});
 
 const endpoints = makeApi([
   {
@@ -5115,7 +6364,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/performance",
     alias: "getPerformanceSettings",
-    description: `Returns the max-parallel-agents cap and the effective (clamped) value currently in use.
+    description: `Returns the max-parallel-agents cap and the effective (resolved, auto-detected or explicit) value currently in use.
 `,
     requestFormat: "json",
     response: PerformanceSettings,
@@ -5136,7 +6385,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/performance",
     alias: "updatePerformanceSettings",
-    description: `Updates max_parallel_agents. The effective value is clamped to [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16. Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT).
+    description: `Updates max_parallel_agents. An explicit value is honored exactly as given — there is no ceiling, only a floor of 1; a value is never silently lowered. Set to 0 to restore the auto-detected default (available memory / ~3.5 MB per agent, floored at 2, physically bounded around 2000). Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT).
 `,
     requestFormat: "json",
     parameters: [
@@ -5156,6 +6405,210 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 503,
         description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/plans/:id",
+    alias: "getPlan",
+    description: `Returns a single plan with &#x60;progress&#x60;/&#x60;plan_phase&#x60;/&#x60;failed_reason&#x60; server-computed read-time (ADR-049 D1).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Plan,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/plans/:id",
+    alias: "updatePlan",
+    description: `Partially updates plan fields (PATCH semantics — only provided fields change). &#x60;state&#x60; drives the canonical 5-value state machine; illegal transitions are rejected 400. Use POST /plans/{id}/approve for the tiered-DoD-checked draft-&gt;approved transition rather than setting &#x60;state&#x60; directly here (this endpoint applies &#x60;plan.ValidateStateTransition&#x60; with no DoD/criteria gating).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: PlanUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Plan,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/plans/:id",
+    alias: "deletePlan",
+    description: `Deletes a plan by ID. A &#x60;running&#x60; plan cannot be deleted (409) — stop it first via POST /plans/{id}/stop. Deleting a non-running plan clears &#x60;plan_id&#x60; on its member tasks (best-effort, SD-A5).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/plans/:id/approve",
+    alias: "approvePlan",
+    description: `Transitions a &#x60;draft&#x60; plan to &#x60;approved&#x60; (ADR-049 D1/D5, Round-1 Grill Reconciliation R1). Runs the tiered Definition-of-Done check (strict for agent-authored plans, soft for human/UI-authored plans) and the UNCONDITIONAL member-task-criteria gate (FR-084 — every member task must carry &gt;&#x3D;1 criterion in every tier). On success the single plan-engine instance auto-advances &#x60;approved&#x60; -&gt; &#x60;running&#x60; on its next tick and begins dispatch — there is no separate &quot;start&quot; action.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Plan,
+    errors: [
+      {
+        status: 400,
+        description: `Approval rejected — either a plan-level gate (not in draft state, or a strict-tier plan with an empty Definition of Done) or the unconditional per-task criteria gate.
+`,
+        schema: PlanApproveError,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/plans/:id/restart",
+    alias: "restartPlan",
+    description: `Restarts a plan previously stopped by the user (&#x60;state: failed&#x60;, &#x60;failed_reason: stopped_by_user&#x60;) — the Play route (ADR-052 FR-026). Resets every non-&#x60;done&#x60; member task to &#x60;next&#x60;/&#x60;blocked&#x60; with &#x60;attempt_count&#x60; reset to 0, resets the plan&#x27;s &#x60;judge_rounds&#x60; to 0, preserves &#x60;done&#x60; members and their evidence, clears &#x60;failed_reason&#x60;, and transitions the plan to &#x60;approved&#x60; (NOT directly to &#x60;running&#x60;) via a store-level reason-aware guard that permits only &#x60;failed[stopped_by_user] -&gt; approved&#x60; — the engine then promotes &#x60;approved -&gt; running&#x60; under the global active-loop cap on its next tick, exactly like a first execute (restarting straight to &#x60;running&#x60; would skip cap admission). Rejected 409 when the plan is not &#x60;failed&#x60;, or its &#x60;failed_reason&#x60; is not &#x60;stopped_by_user&#x60; (e.g. &#x60;judge_rounds_exhausted&#x60; or &#x60;idle_expired&#x60; are not restartable — no Play offered for those). Rejected 400 on a malformed request.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Plan,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/plans/:id/stop",
+    alias: "stopPlan",
+    description: `Transitions a &#x60;running&#x60; plan to &#x60;failed&#x60; with &#x60;failed_reason: stopped_by_user&#x60; (ADR-049 D4, SD-C5 — Stop/Clear may be optimistic client-side, as this cannot validation-fail). Rejected 400 when the plan is not currently &#x60;running&#x60;.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Plan,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
         schema: ErrorResponse,
       },
     ],
@@ -6022,7 +7475,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     method: "get",
     path: "/sessions",
     alias: "listSessions",
-    description: `Returns all sessions visible to the authenticated user. Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the response still returns HTTP 200 but includes a partial_errors array alongside the sessions array.
+    description: `Returns root sessions (parent_session_id &#x3D;&#x3D; &quot;&quot;) visible to the authenticated user, paged, each carrying a child_count (ADR-057 US-19/FR-091). Subordinate (&quot;delegate&quot;) sessions are reached a page at a time via the parent_session_id filter, or all at once (roots and subordinates together) via flat&#x3D;true (FR-104). Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the page still returns its healthy rows plus a populated partial_errors and a valid next_cursor (FR-098). Verifier-role sessions (type &quot;verifier&quot;, ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier&#x3D;true is passed, and are never counted in child_count unless it is passed.
 `,
     requestFormat: "json",
     parameters: [
@@ -6034,19 +7487,50 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         name: "type",
         type: "Query",
-        schema: z.enum(["chat", "task", "channel", "scheduled"]).optional(),
+        schema: z
+          .enum([
+            "chat",
+            "task",
+            "channel",
+            "scheduled",
+            "verifier",
+            "delegate",
+          ])
+          .optional(),
+      },
+      {
+        name: "include_verifier",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+      {
+        name: "parent_session_id",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+      {
+        name: "flat",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().gte(1).optional(),
+      },
+      {
+        name: "offset",
+        type: "Query",
+        schema: z.number().int().gte(0).optional(),
       },
     ],
-    response: z.union([
-      z.array(Session),
-      z
-        .object({
-          sessions: z.array(Session),
-          partial_errors: z.array(z.string()),
-        })
-        .passthrough(),
-    ]),
+    response: SessionPage,
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
@@ -6673,7 +8157,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "get",
     path: "/tasks",
     alias: "listTasks",
-    description: `Returns tasks in a workspace, filterable by status, agent, milestone, and surface. This is the unified task surface (Sprint 2) — it subsumes the former GTD /board/tasks listing. By default only top-level tasks (parent_task_id absent) and &#x60;surface: user&#x60; tasks are returned; use the filters to widen. Workspace-scoped.
+    description: `Returns tasks in a workspace, filterable by status, agent, and surface. This is the unified task surface (Sprint 2) — it subsumes the former GTD /board/tasks listing. By default only top-level tasks (parent_task_id absent) and &#x60;surface: user&#x60; tasks are returned; use the filters to widen. Workspace-scoped.
 `,
     requestFormat: "json",
     parameters: [
@@ -6686,24 +8170,11 @@ Polled by the SPA StatusBar every 15 seconds.
         name: "status",
         type: "Query",
         schema: z
-          .enum([
-            "inbox",
-            "next",
-            "planning",
-            "in_progress",
-            "blocked",
-            "done",
-            "failed",
-          ])
+          .enum(["inbox", "next", "in_progress", "blocked", "done", "failed"])
           .optional(),
       },
       {
         name: "agent_id",
-        type: "Query",
-        schema: z.string().optional(),
-      },
-      {
-        name: "milestone_id",
         type: "Query",
         schema: z.string().optional(),
       },
@@ -6912,6 +8383,72 @@ Polled by the SPA StatusBar every 15 seconds.
   },
   {
     method: "get",
+    path: "/tasks/:id/evidence",
+    alias: "listTaskEvidence",
+    description: `Returns every persisted EvidenceRecord for this task (ADR-049 D2, spec Part A §C) — one record per (criterion_id, attempt) machine-check execution, redacted and size-capped at write time. Read-only surface; evidence is written only by the evidence-ladder judge, never via this endpoint. Returns an empty array for a task with no machine checks.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(EvidenceRecord),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/tasks/:id/restart",
+    alias: "restartTask",
+    description: `Restarts a standalone (non-plan-member) task previously stopped by the user (&#x60;status: failed&#x60;, &#x60;cancel_reason: stopped_by_user&#x60;) — the Play route (ADR-052 FR-026). Resets &#x60;attempt_count&#x60; to 0, clears &#x60;cancel_reason&#x60;, and transitions the task to &#x60;next&#x60; so the goal loop picks it up again. Rejected 409 when the task belongs to a plan (restart the plan instead, via POST /plans/{id}/restart, which re-runs its non-done members) or is not in a restartable state (not &#x60;failed&#x60;, or &#x60;failed&#x60; for a reason other than &#x60;stopped_by_user&#x60;).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Task,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/tasks/:id/runs",
     alias: "listTaskRuns",
     description: `Returns every execution record (TaskRun) for a task, newest first (ADR-050 / task-run-history-spec §3.6) — the authoritative history list, independent of whether the task&#x27;s current trigger can still project a run&#x27;s occurrence_ms (a series whose schedule was edited still lists every past run). Retention-bounded (day-partitioned sweep with a keep-newest-day floor); full result strings. Read-only; no state change. Rate-limited by the same dedicated taskReadLimiter (240 requests/min) as GET /tasks/occurrences.
@@ -6995,6 +8532,39 @@ Polled by the SPA StatusBar every 15 seconds.
     ],
   },
   {
+    method: "post",
+    path: "/tasks/:id/stop",
+    alias: "stopTask",
+    description: `Cancels the task&#x27;s in-flight worker turn (if any, via the same cancellation path as a chat /cancel) and transitions the task to &#x60;failed&#x60; with a &#x60;stopped by user&#x60; result (SD-C5 — Stop/Clear may be optimistic client-side, as this cannot validation-fail). Rejected 400 when the task is already terminal (&#x60;done&#x60;/&#x60;failed&#x60;) or &#x60;blocked&#x60; (nothing running to stop).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Task,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "get",
     path: "/tasks/:id/subtasks",
     alias: "listSubtasks",
@@ -7041,6 +8611,39 @@ Polled by the SPA StatusBar every 15 seconds.
       },
     ],
     response: Task,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/tasks/:id/verdicts",
+    alias: "listTaskVerdicts",
+    description: `Returns every judge_verdict transcript entry recorded for this task&#x27;s goal-loop attempts (ADR-049 D2, spec Part A §C / Round-1 Reconciliation R3), oldest first. Read from the task&#x27;s session transcript (the durable carrier — the live JudgeVerdictFrame WS push is the other, ephemeral carrier of the same shape). Returns an empty array for a task that has not yet been judged (e.g. no criteria, or no attempt has completed).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(JudgeVerdict),
     errors: [
       {
         status: 400,
@@ -7974,8 +9577,10 @@ Returns HTTP 201 on success.
   },
   {
     method: "get",
-    path: "/workspaces/:id/milestones",
-    alias: "listWorkspaceMilestones",
+    path: "/workspaces/:id/plans",
+    alias: "listWorkspacePlans",
+    description: `Returns every Plan whose workspace_id matches, newest-first by created_at, with &#x60;progress&#x60;/&#x60;plan_phase&#x60;/&#x60;failed_reason&#x60; server-computed (ADR-049 D1, mirrors the removed MilestoneListResponse).
+`,
     requestFormat: "json",
     parameters: [
       {
@@ -7984,8 +9589,13 @@ Returns HTTP 201 on success.
         schema: z.string(),
       },
     ],
-    response: MilestoneListResponse,
+    response: PlanListResponse,
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
@@ -8000,14 +9610,16 @@ Returns HTTP 201 on success.
   },
   {
     method: "post",
-    path: "/workspaces/:id/milestones",
-    alias: "createWorkspaceMilestone",
+    path: "/workspaces/:id/plans",
+    alias: "createWorkspacePlan",
+    description: `Creates a new Plan in &#x60;draft&#x60; state (ADR-049 D1). Member tasks are linked afterward via &#x60;Task.plan_id&#x60; (same-workspace FK, validated).
+`,
     requestFormat: "json",
     parameters: [
       {
         name: "body",
         type: "Body",
-        schema: MilestoneCreateRequest,
+        schema: PlanCreateRequest,
       },
       {
         name: "id",
@@ -8015,116 +9627,13 @@ Returns HTTP 201 on success.
         schema: z.string(),
       },
     ],
-    response: Milestone,
+    response: Plan,
     errors: [
       {
         status: 400,
         description: `Bad request — missing or invalid field.`,
         schema: ErrorResponse,
       },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/workspaces/:id/milestones/:milestoneId",
-    alias: "getWorkspaceMilestone",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-      {
-        name: "milestoneId",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: Milestone,
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "put",
-    path: "/workspaces/:id/milestones/:milestoneId",
-    alias: "updateWorkspaceMilestone",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: MilestoneUpdateRequest,
-      },
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-      {
-        name: "milestoneId",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: Milestone,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "delete",
-    path: "/workspaces/:id/milestones/:milestoneId",
-    alias: "deleteWorkspaceMilestone",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-      {
-        name: "milestoneId",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: z.void(),
-    errors: [
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
@@ -8150,7 +9659,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
 
 export const AuthFrame = z
   .object({
@@ -8233,6 +9742,7 @@ export const SessionStartedFrame = z
     type: z.literal("session_started"),
     session_id: z.string().min(1),
     agent_id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -8242,6 +9752,7 @@ export const TokenFrame = z
     session_id: z.string().min(1).max(128),
     content: z.string().max(65536),
     agent_id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -8265,6 +9776,7 @@ export const DoneFrame = z
     type: z.literal("done"),
     session_id: z.string().min(1),
     stats: DoneStats.optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -8307,6 +9819,7 @@ export const ToolCallStartFrame = z
     params: z.record(z.unknown()),
     parent_call_id: z.string().optional(),
     agent_id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -8355,6 +9868,7 @@ export const ToolCallResultFrame = z
     error: z.string().optional(),
     parent_call_id: z.string().optional(),
     agent_id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -8366,6 +9880,7 @@ export const SubagentStartFrame = z
     parent_call_id: z.string().min(1),
     task_label: z.string().max(100),
     agent_id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -8374,13 +9889,46 @@ export const SubagentEndFrame = z
     type: z.literal("subagent_end"),
     session_id: z.string().min(1),
     span_id: z.string().min(1),
-    status: z.enum(["success", "error", "cancelled", "interrupted", "timeout"]),
+    status: z.enum(["success", "error", "cancelled", "interrupted", "timeout", "parked"]),
     duration_ms: z.number().int().optional(),
     final_result: z.string().optional(),
     reason: z.enum(["parent_timeout", "parent_cancelled", "parent_done_early", "unknown"]).optional(),
     agent_id: z.string().optional(),
     parent_call_id: z.string().optional(),
     message: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const SubagentMessageFrame = z
+  .object({
+    type: z.literal("subagent_message"),
+    session_id: z.string().min(1),
+    span_id: z.string().min(1),
+    message_id: z.string().min(1),
+    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond"]),
+    text: z.string().optional(),
+    pct: z.number().int().min(0).max(100).optional(),
+    correlation_id: z.string().optional(),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    created_at: z.string(),
+  })
+  .strict();
+
+export const SubagentStateFrame = z
+  .object({
+    type: z.literal("subagent_state"),
+    session_id: z.string().min(1),
+    span_id: z.string().min(1),
+    state: z.enum(["queued", "running", "needs_input", "paused", "completed", "failed", "cancelled", "timed_out"]),
+    steering_receipt: z
+    .object({
+      correlation_id: z.string(),
+      applied_at: z.string(),
+    })
+    .strict().optional(),
+    created_at: z.string(),
   })
   .strict();
 
@@ -8389,8 +9937,9 @@ export const TaskStatusChangedFrame = z
     type: z.literal("task_status_changed"),
     session_id: z.string().min(1),
     task_id: z.string().min(1),
-    status: z.enum(["inbox", "next", "planning", "in_progress", "blocked", "done", "failed"]),
+    status: z.enum(["inbox", "next", "in_progress", "blocked", "done", "failed"]),
     agent_id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -8463,6 +10012,7 @@ export const MediaFrame = z
     type: z.literal("media"),
     session_id: z.string().min(1),
     parts: z.array(MediaPart).min(1).max(32),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -8472,6 +10022,7 @@ export const AgentSwitchedFrame = z
     session_id: z.string().min(1),
     agent_id: z.string().optional(),
     message: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -8486,6 +10037,7 @@ export const ToolApprovalRequiredFrame = z
     session_id: z.string().min(1),
     turn_id: z.string().min(1),
     expires_in_ms: z.number().int().min(0).max(86400000),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -8513,6 +10065,7 @@ export const SystemOverloadFrame = z
     type: z.literal("system_overload"),
     session_id: z.string().min(1),
     message: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -8536,6 +10089,7 @@ export const CancelStageFrame = z
     type: z.literal("cancel_stage"),
     session_id: z.string().min(1),
     stage: z.enum(["graceful", "hard", "detached"]),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -8544,6 +10098,7 @@ export const SessionCloseAckFrame = z
     type: z.literal("session_close_ack"),
     session_id: z.string().min(1),
     id: z.string().optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -8765,6 +10320,68 @@ export const BrowserCaptureControlFrame = z
   })
   .strict();
 
+export const GoalStatusFrame = z
+  .object({
+    type: z.literal("goal_status"),
+    session_id: z.string().min(1),
+    goal_id: z.string().min(1).optional(),
+    condition: z.string(),
+    round: z.number().int().min(0),
+    max_rounds: z.number().int().min(1),
+    latest_reason: z.string(),
+    active_loops: z.number().int().min(0),
+    cap: z.number().int().min(1),
+    state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared"]),
+    producing_session_id: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const LoopStatusFrame = z
+  .object({
+    type: z.literal("loop_status"),
+    session_id: z.string().min(1),
+    mode: z.enum(["interval", "self_paced"]),
+    run: z.number().int().min(0),
+    max_runs: z.number().int().min(1),
+    next_delay: z.number().int().optional(),
+    state: z.string(),
+    producing_session_id: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const PlanStatusFrame = z
+  .object({
+    type: z.literal("plan_status"),
+    plan_id: z.string(),
+    state: z.enum(["draft", "approved", "running", "done", "failed"]),
+    plan_phase: z.enum(["dispatching", "judging", "synthesizing", "idle", "awaiting_supervision", "stalled"]),
+    progress: z.number().min(0).max(1),
+    paused_reason: z.string().optional(),
+  })
+  .strict();
+
+export const JudgeVerdictFrame = z
+  .object({
+    type: z.literal("judge_verdict"),
+    id: z.string(),
+    scope: z.enum(["task", "plan", "goal"]),
+    task_id: z.string().optional(),
+    plan_id: z.string().optional(),
+    round: z.number().int().min(1),
+    met: z.boolean(),
+    per_criterion: z.array(z
+    .object({
+      criterion_id: z.string().min(1),
+      met: z.boolean(),
+      reason: z.string(),
+    })
+    .strict()),
+    model: z.string(),
+    judged_at: z.string(),
+    judge_agent_id: z.string(),
+  })
+  .strict();
+
 export const ErrorPayload = z
   .object({
     llm_error: LLMError,
@@ -8795,6 +10412,8 @@ export const WsFrame = z.discriminatedUnion("type", [
   ToolCallResultFrame,
   SubagentStartFrame,
   SubagentEndFrame,
+  SubagentMessageFrame,
+  SubagentStateFrame,
   TaskStatusChangedFrame,
   TaskRunStatusFrame,
   ReplayMessageFrame,
@@ -8829,6 +10448,10 @@ export const WsFrame = z.discriminatedUnion("type", [
   BrowserCaptureOfferFrame,
   BrowserCaptureAnswerFrame,
   BrowserCaptureControlFrame,
+  GoalStatusFrame,
+  LoopStatusFrame,
+  PlanStatusFrame,
+  JudgeVerdictFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

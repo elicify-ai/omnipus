@@ -2,7 +2,6 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import {
   ReactFlow,
   ReactFlowProvider,
-  Background,
   Controls,
   Handle,
   Position,
@@ -23,8 +22,9 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import '../reactflow-theme.css'
-import { Star, Lightning, Trash, Warning, PencilSimple, X } from '@phosphor-icons/react'
+import { Star, Lightning, Trash, Warning, PencilSimple, X, Scales } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
+import { Badge } from '@/components/ui/badge'
 import { cn, initialOf } from '@/lib/utils'
 import { EdgeModeEditor, EdgeLabelChip } from './EdgeModeEditor'
 import { AgentDelegatePicker } from './AgentDelegatePicker'
@@ -125,9 +125,11 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
 
   // Delegation is BOUNDED, not tier-gated (Sprint-3 backend): ANY real team
   // member may be a delegation SOURCE — including a worker (the backend seeds
-  // Planner→Researcher, both workers). Only a GHOST (deleted, no backing agent)
-  // can't start a connection. Depth is bounded per-edge in the edge editor.
-  const canBeSource = !model.isGhost
+  // Planner→Researcher, both workers). A GHOST (deleted, no backing agent) or
+  // an IMPLICIT System agent (never a real team member — see the isImplicit
+  // branch below) can't start a connection. Depth is bounded per-edge in the
+  // edge editor.
+  const canBeSource = !model.isGhost && !model.isImplicit
 
   if (model.isGhost) {
     return (
@@ -178,6 +180,55 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
             <X size={13} weight="bold" />
           </button>
         </div>
+      </div>
+    )
+  }
+
+  // Implicit System agent (the Judge, ADR-049 D3) — pkg/workspace/
+  // find_for_agent.go's isImplicitMember treats every System agent as an
+  // implicit member of EVERY workspace; it can never be added to or removed
+  // from core_team (the gateway 400s that). Rendered as a non-interactive,
+  // non-removable, non-editable node: no connection handles (it is never a
+  // valid delegation source or target — see validateConnection's `not-member`
+  // check, which this node can never satisfy since it is never in
+  // TeamEditState.members), no click-to-edit, no remove/edit affordances.
+  if (model.isImplicit) {
+    return (
+      <div
+        data-testid={`team-node-${model.id}`}
+        data-implicit="true"
+        className="group relative w-[220px] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 shadow-sm"
+        title={`${model.name} — Verifier, implicit member of every workspace. System agents cannot be added to or removed from the team roster.`}
+      >
+        <div className="flex items-center gap-2.5">
+          <div
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold text-[var(--color-secondary)]"
+            style={{ backgroundColor: model.color ?? 'var(--color-surface-3)' }}
+            aria-hidden="true"
+          >
+            {model.icon ? (
+              <IconRenderer icon={model.icon} size={16} className="text-[var(--color-secondary)]" />
+            ) : (
+              initial
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <span className="block truncate font-headline text-sm font-bold text-[var(--color-secondary)]">
+              {model.name}
+            </span>
+            <span className="mt-0.5 block text-[10px] font-medium text-[var(--color-muted)]">
+              {model.role}
+            </span>
+          </div>
+        </div>
+        <Badge
+          variant="muted"
+          data-testid={`team-node-implicit-badge-${model.id}`}
+          className="mt-2 inline-flex w-fit items-center gap-1 whitespace-normal rounded px-1.5 py-0.5 text-[9px] font-medium uppercase leading-tight tracking-wide"
+        >
+          <Scales size={9} weight="bold" aria-hidden="true" />
+          Verifier — implicit member of every workspace
+        </Badge>
       </div>
     )
   }
@@ -472,12 +523,21 @@ function WorkspaceTeamGraphInner({
     }
   }, [edges, selectedEdgeId])
 
+  // SD-C17 defense-in-depth: resolve a candidate target's Agent `type`
+  // straight off the rendered node set so `validateConnection` can reject a
+  // System-agent target even though a System agent cannot become a team
+  // member through the supported flow (AddAgentPicker already excludes it).
+  const isSystemNodeId = useCallback(
+    (id: string | null | undefined) => nodes.some((n) => n.id === id && n.type === 'system'),
+    [nodes],
+  )
+
   const isValidConnection: IsValidConnection<DelegationFlowEdge> = useCallback(
     (conn) => {
       if (!conn.source || !conn.target) return false
-      return validateConnection(conn.source, conn.target, editState, workerIds) === null
+      return validateConnection(conn.source, conn.target, editState, workerIds, isSystemNodeId(conn.target)) === null
     },
-    [editState, workerIds],
+    [editState, workerIds, isSystemNodeId],
   )
 
   const handleConnect = useCallback(
@@ -485,14 +545,14 @@ function WorkspaceTeamGraphInner({
       // `conn.source` is the node the drag STARTED on (the delegator),
       // `conn.target` is where it was DROPPED (the delegate). source → target.
       if (!conn.source || !conn.target) return
-      const reason = validateConnection(conn.source, conn.target, editState, workerIds)
+      const reason = validateConnection(conn.source, conn.target, editState, workerIds, isSystemNodeId(conn.target))
       if (reason !== null) {
         onRejectConnection(REJECTION_MESSAGE[reason] ?? 'Connection not allowed.')
         return
       }
       onConnect(conn.source, conn.target)
     },
-    [editState, workerIds, onConnect, onRejectConnection],
+    [editState, workerIds, isSystemNodeId, onConnect, onRejectConnection],
   )
 
   // Bug fix (live-UAT): React Flow only calls `onConnect` when
@@ -511,10 +571,11 @@ function WorkspaceTeamGraphInner({
         connectionState.isValid,
         editState,
         workerIds,
+        isSystemNodeId(connectionState.toNode?.id),
       )
       if (message) onRejectConnection(message)
     },
-    [editState, workerIds, onRejectConnection],
+    [editState, workerIds, isSystemNodeId, onRejectConnection],
   )
 
   // Keyboard "Delegate…" picker (WCAG 2.1.1) → the SAME validated mutation
@@ -617,7 +678,7 @@ function WorkspaceTeamGraphInner({
     <div
       ref={canvasDomRef}
       data-testid="team-graph-canvas"
-      className="h-full w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)]"
+      className="h-full w-full bg-[var(--color-surface-0)]"
     >
       <TeamGraphCanvasContext.Provider value={canvasContextValue}>
         <ReactFlow
@@ -647,7 +708,6 @@ function WorkspaceTeamGraphInner({
           defaultEdgeOptions={{ type: 'delegation' }}
           colorMode="dark"
         >
-          <Background color="var(--color-border)" gap={20} />
           <Controls
             showInteractive={false}
             className="!border-[var(--color-border)] !bg-[var(--color-surface-1)]"

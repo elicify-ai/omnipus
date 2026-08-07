@@ -90,15 +90,6 @@ vi.mock('@/components/workspaces/TaskDetailSlideOver', () => ({
   },
 }))
 
-const capturedMilestonePopover = { milestoneId: '' }
-
-vi.mock('@/components/calendar/MilestoneDatePopover', () => ({
-  MilestoneDatePopover: ({ milestone }: { milestone: { id: string } | null }) => {
-    capturedMilestonePopover.milestoneId = milestone?.id ?? ''
-    return <div data-testid="milestone-date-popover" />
-  },
-}))
-
 // ── 3. Mock @/lib/api ─────────────────────────────────────────────────────────
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -106,21 +97,16 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchTasks: vi.fn(),
-    fetchMilestones: vi.fn(),
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchWorkspaceDelegation: vi.fn().mockRejectedValue(new Error('not mocked')),
     updateTask: vi.fn(),
-    updateMilestone: vi.fn(),
     tasksQueryKeys: {
       list: (params?: Record<string, unknown>) => ['tasks', params ?? {}],
-    },
-    milestonesQueryKeys: {
-      list: (workspaceId: string) => ['milestones', workspaceId],
     },
   }
 })
 
-import { fetchTasks, fetchMilestones } from '@/lib/api'
+import { fetchTasks } from '@/lib/api'
 
 // ── 4. Mock useOccurrences (module boundary — no real fetch/URL parsing) ────
 
@@ -195,14 +181,12 @@ beforeEach(() => {
   capturedEventSlideOver.open = false
   capturedEventSlideOver.taskId = ''
   capturedTaskDetailSlideOver.taskId = ''
-  capturedMilestonePopover.milestoneId = ''
 
   // A real task by default so `filteredEvents.length > 0` — the marker's
   // inclusion condition requires at least one real item to divide (see
   // makeTask's own comment). The dedicated "no real events" test below
   // overrides this back to `[]` to cover that path explicitly.
   vi.mocked(fetchTasks).mockResolvedValue([makeTask()])
-  vi.mocked(fetchMilestones).mockResolvedValue([])
   mockAddToast.mockReset()
   mockUseOccurrences.mockReturnValue({ data: [], isError: false, isLoading: false })
 })
@@ -284,7 +268,6 @@ describe('CalendarScreen — Agenda "now" marker inclusion (listWeek only, in-ra
 
   it('never shows the marker when there are zero real events — it would coexist with the "No scheduled items" empty-state hint, which reads as contradictory', async () => {
     vi.mocked(fetchTasks).mockResolvedValue([])
-    vi.mocked(fetchMilestones).mockResolvedValue([])
     renderCalendarScreen()
 
     await waitFor(() => expect(capturedProps.onDatesSet).not.toBeNull())
@@ -304,7 +287,7 @@ describe('CalendarScreen — Agenda "now" marker inclusion (listWeek only, in-ra
 })
 
 describe('CalendarScreen — now-marker click is a no-op (mirrors task-occurrence-more)', () => {
-  it('clicking the now-marker does not open the event slide-over, task detail panel, or milestone popover, and does not throw', async () => {
+  it('clicking the now-marker does not open the event slide-over or task detail panel, and does not throw', async () => {
     renderCalendarScreen()
 
     await waitFor(() => expect(capturedProps.onEventClick).not.toBeNull())
@@ -322,7 +305,6 @@ describe('CalendarScreen — now-marker click is a no-op (mirrors task-occurrenc
 
     expect(capturedEventSlideOver.open).toBe(false)
     expect(capturedTaskDetailSlideOver.taskId).toBe('')
-    expect(capturedMilestonePopover.milestoneId).toBe('')
   })
 })
 

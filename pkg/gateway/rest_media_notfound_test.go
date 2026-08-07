@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_media_notfound_test.go — regression tests for serveMedia's
 // not-found/failure error mapping (media.ErrNotFound / library.ErrNotFound
 // vs. a genuine resolution failure).

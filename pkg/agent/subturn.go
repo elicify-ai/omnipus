@@ -38,6 +38,29 @@ var (
 	ErrDepthLimitExceeded   = errors.New("sub-turn depth limit exceeded")
 	ErrInvalidSubTurnConfig = errors.New("invalid sub-turn config")
 	ErrConcurrencyTimeout   = errors.New("timeout waiting for concurrency slot")
+	// ErrDelegationTargetUnresolved is returned when SubTurnConfig.TargetAgentID
+	// names an agent that is not in the registry — deleted, renamed, or its
+	// entities/agents/<id>.json record failed to load (ADR-054 D7/§9). The
+	// sub-turn is aborted rather than silently falling back to the parent's
+	// own identity/tool policy (see spawnSubTurn's execSource resolution).
+	ErrDelegationTargetUnresolved = errors.New("subturn: delegation target agent not found")
+	// ErrSessionCancelling is returned by spawnSubTurn when parentTS or any
+	// of its ancestors (walked via parentTurnState) has already been marked
+	// cancelling (turnState.cancelling, set by markTurnsCancelling —
+	// steering.go — the instant Interrupt/InterruptSessionHard resolves it
+	// as a cancel target). This is the GATE half of the chain-reaction
+	// supersession of ADR-057 FR-024: it closes, by construction, the window
+	// where a brand-new delegate spawn is dispatched WHILE its own parent's
+	// (or an ancestor's) cancellation is already underway — a child born in
+	// that window would otherwise have to be caught after the fact by
+	// recursion (the fresh re-scan / pendingSpawn-latch machinery in
+	// cancel.go), which can only reach a spawn that has ALREADY registered
+	// or is ALREADY known to be imminent, never one that has not been
+	// attempted at all. Refusing outright (rather than creating the child
+	// and immediately tearing it down) means no session/workspace/transcript
+	// state is ever created for a delegation that was never going to be
+	// allowed to run.
+	ErrSessionCancelling = errors.New("subturn: refused — session is being cancelled")
 )
 
 // getSubTurnConfig returns the effective SubTurn configuration with defaults applied.
@@ -217,7 +240,140 @@ type SubTurnConfig struct {
 	// getSubTurnConfig's own (shared-function) resolution.
 	ResolvedMaxDepth *int
 
+	// DelegateSessionID, when non-empty, is the ADR-053 durable session_id
+	// (S2) the caller (pkg/tools/delegate.go's executeRun) already minted
+	// and persisted a `queued` LifecycleRecord under BEFORE calling this
+	// spawner — spawnSubTurn reuses it verbatim as childID/sessionKey (see
+	// the childID assignment) rather than generating a fresh counter-based
+	// one, so a caller-issued session_id is always the child's real
+	// steering-queue scope. Empty means "let spawnSubTurn generate one" —
+	// the pre-ADR-053 default for any caller that does not set this.
+	DelegateSessionID string
+
+	// IsResume marks this dispatch as a WARM RESUME of an existing,
+	// store-backed session — native `delegate follow_up`'s own use case —
+	// rather than a brand-new session mint. DelegateSessionID in this case
+	// names a session that already exists on disk (the terminal session
+	// being resumed for its next generation): spawnSubTurn verifies it still
+	// exists (GetMeta) instead of calling CreateSessionWithID, which would
+	// ALWAYS collide with FR-096's create-path collision guard — a resume is
+	// not a create and must never be routed through that primitive. false
+	// (the default) is every other caller's existing create-path behavior,
+	// unchanged; the ParentSessionID edge is also left untouched on a
+	// resume (see spawnSubTurn's own comment at the call site).
+	IsResume bool
+
+	// ContextSnapshot carries the DISCRETIONARY portion of the ADR-053 D1
+	// curated context snapshot (R§8.5) — parent-named artifact references
+	// (not contents) plus optional parent-authored notes. Deny-by-default:
+	// nothing beyond this + the MANDATORY core (SystemPrompt/task prompt +
+	// ActualSystemPrompt/target identity, both already carried by this
+	// struct's existing fields — assembled server-side via execSource per
+	// ADR-032, never from the parent's own transcript/credentials/sibling
+	// context) reaches the child. nil/zero-value means "no discretionary
+	// snapshot" (an empty, valid snapshot). Validate with
+	// ValidateContextSnapshot BEFORE spawning — spawnSubTurn does not
+	// itself enforce the cap; the caller (pkg/tools/delegate.go's
+	// executeRun) MUST call ValidateContextSnapshot and reject the
+	// `delegate.run` call on error rather than let an over-cap snapshot
+	// through.
+	ContextSnapshot *ContextSnapshot
+
 	// Can be extended with temperature, topP, etc.
+}
+
+// ContextSnapshot is the DISCRETIONARY portion of the ADR-053 D1 curated
+// context snapshot (R§8.5) a parent may attach to a `delegate.run` call.
+// The MANDATORY core (task prompt + compiled criteria + engine-injected
+// target identity) is assembled server-side and is EXEMPT from
+// snapshot_max_bytes (m4) — it is never represented by this type, which
+// covers ONLY the parent-named references + optional notes.
+type ContextSnapshot struct {
+	// References are parent-named artifact path/ref strings (NOT contents)
+	// visible to the child. Never the parent's own transcript, credentials,
+	// or sibling context (D1 deny-by-default).
+	References []string
+	// Notes are optional parent-authored free text, counted against
+	// snapshotMaxBytes alongside References.
+	Notes string
+}
+
+// ADR-053 §Contract Surface / R§8.5 defaults for the curated context
+// snapshot's discretionary-portion caps. Overridable via
+// SubTurnConfig.SnapshotMaxBytes/SnapshotMaxRefs-style config plumbing in a
+// later wave (config is outside this wave's write-set) — ValidateContextSnapshot
+// accepts explicit overrides so a caller with real config values never has
+// to touch these constants.
+const (
+	defaultSnapshotMaxBytes = 8 * 1024 // 8 KiB, per ADR §Contract Surface
+	defaultSnapshotMaxRefs  = 50
+)
+
+// ErrSnapshotOverCap is returned by ValidateContextSnapshot when the
+// DISCRETIONARY portion (references + notes) exceeds its byte or count cap.
+// The MANDATORY core (task prompt + criteria + identity) is NEVER subject
+// to this check (m4) — only what this function is handed.
+var ErrSnapshotOverCap = errors.New("agent: curated context snapshot exceeds the discretionary cap")
+
+// ValidateContextSnapshot enforces R§8.5's deny-by-default, hard-capped
+// curated context snapshot on the DISCRETIONARY portion only
+// (snap.References + snap.Notes). maxBytes/maxRefs <= 0 fall back to the
+// ADR §Contract Surface defaults (8 KiB / 50 refs). A nil snap is always
+// valid (no discretionary content — an empty snapshot never trips the
+// cap). Returns a wrapped ErrSnapshotOverCap naming exactly which cap was
+// exceeded so the caller can render a "narrow the snapshot" tool error
+// (never silently truncate, per R§8.5/FR-124).
+func ValidateContextSnapshot(snap *ContextSnapshot, maxBytes, maxRefs int) error {
+	if snap == nil {
+		return nil
+	}
+	if maxBytes <= 0 {
+		maxBytes = defaultSnapshotMaxBytes
+	}
+	if maxRefs <= 0 {
+		maxRefs = defaultSnapshotMaxRefs
+	}
+	if len(snap.References) > maxRefs {
+		return fmt.Errorf("%w: %d references exceeds snapshot_max_refs (%d) — narrow the snapshot",
+			ErrSnapshotOverCap, len(snap.References), maxRefs)
+	}
+	total := len(snap.Notes)
+	for _, ref := range snap.References {
+		total += len(ref)
+	}
+	if total > maxBytes {
+		return fmt.Errorf("%w: %d bytes exceeds snapshot_max_bytes (%d) — narrow the snapshot",
+			ErrSnapshotOverCap, total, maxBytes)
+	}
+	return nil
+}
+
+// renderContextSnapshot renders the DISCRETIONARY portion of a curated
+// context snapshot as plain text woven into the child's task prompt. Empty
+// for a nil snapshot or a snapshot with no references/notes — the common
+// case, so a call with no snapshot produces byte-for-byte the same task
+// text as before this field existed.
+func renderContextSnapshot(snap *ContextSnapshot) string {
+	if snap == nil || (len(snap.References) == 0 && strings.TrimSpace(snap.Notes) == "") {
+		return ""
+	}
+	var b strings.Builder
+	if len(snap.References) > 0 {
+		b.WriteString("References:\n")
+		for _, ref := range snap.References {
+			b.WriteString("- ")
+			b.WriteString(ref)
+			b.WriteString("\n")
+		}
+	}
+	if strings.TrimSpace(snap.Notes) != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("Notes: ")
+		b.WriteString(snap.Notes)
+	}
+	return b.String()
 }
 
 // ====================== Context Keys ======================
@@ -359,6 +515,14 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		MaxContextRunes:    cfg.MaxContextRunes,
 		TaskLabel:          cfg.TaskLabel,
 		ResolvedMaxDepth:   cfg.ResolvedMaxDepth,
+		DelegateSessionID:  cfg.DelegateSessionID,
+		IsResume:           cfg.IsResume,
+	}
+	if cfg.ContextSnapshot != nil {
+		agentCfg.ContextSnapshot = &ContextSnapshot{
+			References: cfg.ContextSnapshot.References,
+			Notes:      cfg.ContextSnapshot.Notes,
+		}
 	}
 
 	return spawnSubTurn(ctx, s.al, parentTS, agentCfg)
@@ -367,6 +531,32 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 // NewSubTurnSpawner creates a SubTurnSpawner for the given AgentLoop.
 func NewSubTurnSpawner(al *AgentLoop) *AgentLoopSpawner {
 	return &AgentLoopSpawner{al: al}
+}
+
+// MarkPendingDelegateSpawn implements tools.DelegateSpawnMarker. DelegateTool
+// calls this (via the interface, wired automatically by SetSpawner's type
+// assertion — see delegate.go's SetSpawner) synchronously, on the delegating
+// parent's own tool-execution goroutine, immediately before dispatching the
+// goroutine that will call SpawnSubTurn — never after. This is what makes it
+// safe for spawnSubTurn's own cleanup (below) to assume "a marker was set
+// implies a spawn attempt is genuinely in flight for this identity": there is
+// no caller that marks without following through.
+//
+// See pendingSpawns' field doc comment on the cancelPreArm struct
+// (cancel_prearm.go) for the full mark/clear/TTL contract this closes —
+// turnImminentForIdentity's only OTHER evidence source (al.sessionWorkers) is
+// structurally blind to a delegate sub-turn, which is dispatched straight to
+// al.runTurn from a bare goroutine and never touches the inbound-message
+// dispatch loop that populates sessionWorkers.
+func (s *AgentLoopSpawner) MarkPendingDelegateSpawn(sessionID, channel, chatID string) {
+	if s == nil || s.al == nil || s.al.cancelPreArm == nil {
+		return
+	}
+	keys := pendingSpawnKeys(sessionID, channel, chatID)
+	if len(keys) == 0 {
+		return
+	}
+	s.al.cancelPreArm.markPendingSpawn(time.Now(), keys...)
 }
 
 // SpawnSubTurn is the exported entry point for tools to spawn sub-turns.
@@ -395,6 +585,85 @@ func spawnSubTurn(
 	parentTS *turnState,
 	cfg SubTurnConfig,
 ) (result *tools.ToolResult, err error) {
+	// Delegate-spawn pending-marker cleanup (cancel_prearm.go's pendingSpawns
+	// / DelegateSpawnMarker seam): pkg/tools/delegate.go's executeAsync may
+	// have called MarkPendingDelegateSpawn for parentTS's own identity
+	// (routingSessionID, channel, chatID — inherited verbatim by the
+	// child below, so the SAME keys apply regardless of whether this call
+	// ever reaches child construction) immediately before dispatching the
+	// goroutine that reached this function. That marker's ONLY job is to
+	// make turnImminentForIdentity report "imminent" for the brief window
+	// before the child registers below; once this function exits — whether
+	// by registering the child (the common case) or by returning early
+	// (depth limit, concurrency timeout, invalid config, unresolved
+	// delegation target, or a panic) — the marker must not outlive it, or
+	// it would make turnImminentForIdentity report true forever for an
+	// identity with no turn actually coming, reopening the
+	// TestPreArmedCancel_FinishedSession_DoesNotArmOrPoisonNextTurn hazard
+	// from the delegate-spawn side instead of the message-dispatch side.
+	//
+	// registeredForCancel flips true the instant the child is registered
+	// (al.registerActiveTurn below) — at that point the child's own
+	// turnState is real, discoverable evidence
+	// (GetActiveTurnHookForSession/sessionTurnsStillAlive) and the marker is
+	// cleared explicitly, right there, rather than left for this defer.
+	// This defer is the catch-all for every OTHER exit — every early
+	// `return` between here and that point, and a panic anywhere in
+	// between (this defer is registered first, so it is still live — Go
+	// defers registered before a panic still run during that panic's
+	// unwind — regardless of whether a LATER defer, e.g. the panic-recovery
+	// one further down, ever got registered at all).
+	// ADR-057 FR-016 (W4 subturn half): this is one of the three DIRECT reads
+	// re-based onto routingSessionID (the other two are cancel_prearm.go:354,
+	// :355, U15's file, this same wave) — routingSessionID is inherited
+	// verbatim by the child a few lines below (childTS.routingSessionID =
+	// parentTS.routingSessionID), so the SAME keys this call computes are the
+	// ones a subsequently-registered child turn would be checked against
+	// on the pre-arm-latch side. Was parentTS.transcriptSessionID, which
+	// under D1 is now the PARENT's own real session id (potentially a
+	// delegated child's own id for a nested spawn) rather than the routing
+	// identity a chat-wide Stop click resolves against.
+	pendingSpawnKeysForThisCall := pendingSpawnKeys(string(parentTS.routingSessionID), parentTS.channel, parentTS.chatID)
+	registeredForCancel := false
+	if al.cancelPreArm != nil && len(pendingSpawnKeysForThisCall) > 0 {
+		defer func() {
+			if !registeredForCancel {
+				al.cancelPreArm.clearPendingSpawn(pendingSpawnKeysForThisCall...)
+			}
+		}()
+	}
+
+	// -0.5. Cancellation gate (chain-reaction supersession of ADR-057
+	// FR-024 — the GATE half, see turnState.cancelling's doc comment, turn.go,
+	// and ErrSessionCancelling's doc comment, above, for the full rationale).
+	// Walk parentTS's own ancestor chain via parentTurnState, checking
+	// whether parentTS itself or ANY ancestor has already been marked
+	// cancelling by markTurnsCancelling (steering.go, called from
+	// Interrupt/InterruptSessionHard the instant either resolves that turn
+	// as a cancel target). A hit means a Stop (or a `delegate action=cancel`)
+	// targeting this turn or an ancestor of it is already underway — refuse
+	// the spawn outright rather than create a child that would immediately
+	// need to be torn down, or that recursion would have to notice and chase
+	// down after the fact. Checked BEFORE the concurrency semaphore
+	// acquisition below so a doomed spawn never occupies a slot at all.
+	//
+	// This walk terminates: parentTurnState is nil for a root turn (turn.go's
+	// own field doc comment), and every child's parentTurnState is set to a
+	// SPECIFIC, already-constructed parent turnState at spawn time (below,
+	// `childTS.parentTurnState = parentTS`) — never to itself or to a turn
+	// constructed later — so the chain is a strictly finite, acyclic list
+	// bounded by the actual (already depth-limited) delegation tree, not
+	// something this check could loop on by itself.
+	for p := parentTS; p != nil; p = p.parentTurnState {
+		if p.cancelling.Load() {
+			logger.WarnCF("subturn", "Refusing to spawn — parent or an ancestor is already being cancelled", map[string]any{
+				"parent_turn_id":     parentTS.turnID,
+				"cancelling_turn_id": p.turnID,
+			})
+			return nil, ErrSessionCancelling
+		}
+	}
+
 	// Get effective SubTurn configuration
 	rtCfg := al.getSubTurnConfig()
 
@@ -475,6 +744,22 @@ func spawnSubTurn(
 		return nil, ErrInvalidSubTurnConfig
 	}
 
+	// 2b. ADR-053 D1/R§8.5: weave the curated context snapshot's
+	// DISCRETIONARY portion (parent-named references + notes — already
+	// cap-validated by the caller via ValidateContextSnapshot, e.g.
+	// pkg/tools/delegate.go's executeRun) into the SAME task text every
+	// dispatch kind reads (cfg.SystemPrompt becomes the child's first user
+	// message on the native path and composeDelegateInput's task text on
+	// the external-cli path below) — one composition point covers BOTH,
+	// so a snapshot reaches the child regardless of native/3P dispatch.
+	// The MANDATORY core (task prompt + criteria + target identity) is
+	// untouched by this — it is already cfg.SystemPrompt/ActualSystemPrompt
+	// themselves, assembled by the caller, never subject to the
+	// snapshot_max_bytes cap (m4).
+	if snapshotText := renderContextSnapshot(cfg.ContextSnapshot); snapshotText != "" {
+		cfg.SystemPrompt = cfg.SystemPrompt + "\n\n---\nContext (parent-provided, read-only references):\n" + snapshotText
+	}
+
 	// 3. Determine timeout for child SubTurn
 	timeout := cfg.Timeout
 	if timeout <= 0 {
@@ -494,7 +779,19 @@ func spawnSubTurn(
 	childCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	childID := al.generateSubTurnID()
+	// ADR-053 S2/D1: when the caller (pkg/tools/delegate.go's executeRun)
+	// already minted a durable session_id BEFORE dispatch (so it could
+	// persist the initial `queued` LifecycleRecord and hand the id back to
+	// the caller synchronously), reuse that EXACT value as childID rather
+	// than generating a fresh counter-based one. childID becomes
+	// childTS.sessionKey below, which is also the steering-queue scope key
+	// (steering.go) — this alignment is what lets delegate.go's steer/
+	// respond/cancel/peek actions address a child purely by the durable
+	// session_id it returned from `run`, with no separate id-mapping table.
+	childID := cfg.DelegateSessionID
+	if childID == "" {
+		childID = al.generateSubTurnID()
+	}
 
 	// FR-H-003: Extract the parent spawn tool call's ID from context. This was injected
 	// by loop.go via withSpawnToolCallID before calling ExecuteWithContext on the spawn tool.
@@ -541,35 +838,32 @@ func spawnSubTurn(
 	// that delegating to this target was authorized (the workspace
 	// delegation-graph gate, enforced before spawnSubTurn is reached) — see
 	// the execSource construction below for the full field list this covers.
-	// Resolution is best-effort: an unresolvable target (deleted/renamed
-	// since delegation was configured, or self-delegation where
-	// TargetAgentID=="") falls back to baseAgent, so a sub-turn is never
-	// silently dropped — self-delegation trivially satisfies "inherit
-	// nothing from the parent" by being its own source.
+	//
+	// ADR-054 D7/§9 (REVISED — the earlier "best-effort fall back to
+	// baseAgent" posture is withdrawn): a named target that does not resolve
+	// — deleted, renamed since delegation was configured, or its
+	// entities/agents/<id>.json record failed to load — must ABORT the
+	// sub-turn, never substitute the parent's identity/tool policy. Falling
+	// back to baseAgent here was exactly the bug D7 named: execSource would
+	// then be the PARENT, and StoreToolPolicy(execSource.LoadToolPolicy())
+	// below would run the child with the PARENT's tool policy — inverting
+	// the entire reason to delegate to a distinct, possibly more-restricted
+	// worker. Self-delegation (cfg.TargetAgentID == "") is unaffected and
+	// still trivially uses baseAgent as its own source.
 	var targetAgent *AgentInstance
-	// FIX 3 (silent failure F1 / arch #5): when TargetAgentID is set but does
-	// not resolve (deleted/renamed delegate), the fallback below to the
-	// parent's own config must not be SILENT — the caller/LLM and the
-	// session/audit trail both need to learn a different agent ran than the
-	// one that was asked for. targetAgentUnresolved is only set in this
-	// branch, never for benign self-delegation (cfg.TargetAgentID == "").
-	var targetAgentUnresolved bool
-	var targetAgentFallbackWarning string
 	if cfg.TargetAgentID != "" {
 		if t, ok := al.registry.GetAgent(cfg.TargetAgentID); ok && t != nil {
 			targetAgent = t
 		} else {
-			targetAgentUnresolved = true
-			targetAgentFallbackWarning = fmt.Sprintf(
-				"[delegation warning: target agent %q was not found; ran with the parent's own configuration instead] ",
-				cfg.TargetAgentID)
 			slog.Warn(
-				"subturn: target agent not found in registry; dispatch falls back to parent's own executor config",
+				"subturn: target agent not found in registry; aborting sub-turn "+
+					"(ADR-054 D7 — never falls back to the parent's identity/tool policy)",
 				"target_agent_id",
 				cfg.TargetAgentID,
 				"parent_id",
 				parentTS.turnID,
 			)
+			return nil, fmt.Errorf("%w: %q", ErrDelegationTargetUnresolved, cfg.TargetAgentID)
 		}
 	}
 	execSource := baseAgent
@@ -662,7 +956,6 @@ func spawnSubTurn(
 		LightCandidates:           execSource.LightCandidates,
 		LightProvider:             execSource.LightProvider,
 		AgentType:                 execSource.AgentType,
-		IsRoutingDefault:          execSource.IsRoutingDefault,
 	}
 	// providerPool is tied to the SAME Candidates it was built for — now that
 	// Candidates is execSource's own (above), the pool must match, or
@@ -713,10 +1006,23 @@ func spawnSubTurn(
 	// actually be looked up under keeps this correct whether execSource is
 	// baseAgent (self-delegation — a harmless same-key union) or a resolved
 	// target (agent.ID == targetAgent.ID, the real delegate).
-	al.ApprovalGrants().Inherit(parentTS.transcriptSessionID, parentTS.agentID, agent.ID)
+	// ADR-057 FR-031 (W10a): the retired single-key Inherit(sessionID,
+	// parentAgentID, childAgentID) used ONE session id for both the source
+	// lookup and the destination write — correct only while parent and
+	// child shared a session id. Under D1 every delegated child owns its
+	// OWN real session (childID), so the two-key InheritFrom is required:
+	// source = the PARENT's own session id + the PARENT's agent id (where
+	// its grants actually live); destination = the CHILD's OWN session id
+	// (childID) + the child's agent id. This field intentionally stays
+	// parentTS.transcriptSessionID, NOT parentTS.routingSessionID — grant
+	// inheritance is not in FR-014's closed routingSessionID consumer set
+	// (WS payload stamping, the role-B predicates, pre-arm keys), and
+	// transcriptSessionID is exactly "the parent's own real session id"
+	// (its own childID when the parent is itself a delegated child).
+	al.ApprovalGrants().InheritFrom(parentTS.transcriptSessionID, parentTS.agentID, childID, agent.ID)
 
-	// FR-H-006 REVERSAL (live UAT, 2026-07-12): "delegate" is NO LONGER excluded
-	// from the child's registry. Note: distinct from the identity-swap
+	// FR-H-006 REVERSAL: "delegate" is NO LONGER excluded from the child's
+	// registry. Note: distinct from the identity-swap
 	// load_tool bug documented just above (ID/ContextBuilder, ~line 663) —
 	// that one was wrong AGENT IDENTITY (an unswapped childTS.agentID made
 	// canLoad resolve the PARENT's policy instead of the child's own); this
@@ -794,11 +1100,91 @@ func spawnSubTurn(
 		)
 	}
 
+	// ADR-057 US-2/D1 (W1 agent half, FR-005/FR-006/FR-008/FR-009/FR-010):
+	// mint a REAL, store-backed session under the EXACT childID computed
+	// above — the child no longer shares the parent's transcript.jsonl.
+	// Minted into the SAME shared *session.UnifiedStore the delegate tool
+	// holds (pkg/agent/loop.go:1727-1728's sharedStore/al.GetSessionStore()),
+	// or ChildCount/drill-down/cascade-cancel-by-lineage would all read an
+	// empty store for this child. CreateSessionWithID (pkg/session/
+	// unified_api.go) also copies the parent's Owner verbatim (FR-006)
+	// under its own read-then-release two-step protocol (FR-082) and
+	// refuses a childID that already exists on disk (FR-096) — both a nil
+	// store (degraded boot, see loop.go:609-620) and a parent id that does
+	// not name a real session surface here as a loud, non-nil error rather
+	// than a silent delegation-without-a-real-session, which is exactly the
+	// success-shaped failure this whole migration exists to close (see this
+	// spec's governing note). SessionTypeDelegate is FR-008's "subordinate"
+	// value.
+	sharedStore := al.GetSessionStore()
+	if sharedStore == nil {
+		return nil, fmt.Errorf("subturn: no shared session store wired — cannot mint a real session for delegated child %q", childID)
+	}
+	if cfg.IsResume {
+		// Warm resume (native `delegate follow_up` on a terminal session —
+		// see SubTurnConfig.IsResume's doc comment): childID already names a
+		// REAL, store-backed session, minted by that session's very first
+		// generation. Routing a resume through CreateSessionWithID would
+		// ALWAYS collide with FR-096's own create-path collision guard
+		// (BDD-107, doc comment below) — that guard exists to refuse a
+		// create over an already-existing directory, and a resume is
+		// definitionally not a create; it must never be sent through that
+		// primitive (doing so was the exact regression this branch fixes —
+		// every `follow_up` on a terminal session failed this guard 100% of
+		// the time, since the directory it is "creating" is the very one it
+		// means to resume). Verify the session genuinely still exists
+		// instead, so a vanished/corrupted session on disk still surfaces as
+		// a real, non-nil error here rather than silently "resuming" into
+		// nothing.
+		if _, getErr := sharedStore.GetMeta(childID); getErr != nil {
+			return nil, fmt.Errorf("subturn: resume child session %q: %w", childID, getErr)
+		}
+		// No SetMeta here: this is not a new parent->child edge. childID's
+		// ParentSessionID was already stamped by the session's FIRST
+		// generation (the create branch below) and must not be re-derived
+		// from THIS caller — the follow_up caller is not necessarily the
+		// agent that originally spawned the session (spawnCorrectiveFollowUp's
+		// own doc comment on ParentAgentID makes the identical point for the
+		// lifecycle record; the same non-re-parenting rule applies here to
+		// the session store's own parent edge).
+	} else {
+		if _, createErr := sharedStore.CreateSessionWithID(
+			childID,
+			parentTS.transcriptSessionID,
+			session.SessionTypeDelegate,
+			parentTS.channel,
+			agent.ID,
+		); createErr != nil {
+			return nil, fmt.Errorf("subturn: create child session %q: %w", childID, createErr)
+		}
+		// FR-008 (the parent->child edge itself): CreateSessionWithID mints the
+		// session but never persists ParentSessionID (grep -c ParentSessionID
+		// pkg/session/unified_api.go == 0) — SetMeta is the sole writer of that
+		// field and is also what wires the FR-097 in-memory parent index
+		// (u5WriteIdentityLocked, unified_meta_files.go), which is what makes
+		// ChildCount(parentID) non-zero and the whole nested-session hierarchy
+		// (sidebar/search tree, drill-down, durable-walk Stop, cascade delete)
+		// resolvable at all. Skipping this call leaves meta.json's
+		// ParentSessionID at its zero value with a green build and no compiler
+		// or runtime signal — the exact silent-success shape this migration
+		// exists to end. Applies to a genuine create only — a resume (above)
+		// keeps its ORIGINAL edge untouched.
+		childParentSessionID := parentTS.transcriptSessionID
+		if setMetaErr := sharedStore.SetMeta(childID, session.MetaPatch{ParentSessionID: &childParentSessionID}); setMetaErr != nil {
+			return nil, fmt.Errorf("subturn: stamp parent edge for child %q: %w", childID, setMetaErr)
+		}
+	}
+
 	// Create processOptions for the child turn.
-	// FR-6a: inherit TranscriptSessionID from parent so that cascade cancel in
-	// InterruptSession can match this sub-turn via ts.transcriptSessionID == sessionID.
-	// Without this, every sub-turn has transcriptSessionID == "" and the cascade
-	// matches only the parent turn (the load-bearing bug fixed here).
+	// ADR-057 FR-007/FR-009: TranscriptSessionID is now the child's OWN
+	// session id (childID) — every delegated child writes its own
+	// transcript, never the parent's. Cascade-cancel reachability no
+	// longer depends on a SHARED transcriptSessionID matching inside the
+	// (now-retired) InterruptSession entry point, which is what this
+	// comment used to describe — it is carried instead by
+	// routingSessionID, inherited verbatim from the parent immediately
+	// below (FR-011) and consumed by the collapsed Interrupt(id, scope,
+	// hint) entry point (FR-041) via the role-B predicates (FR-015).
 	//
 	// Soul composition: the system role is the DELEGATE's own soul
 	// (config.AgentConfig.Soul or the compiled coreagent.GetPrompt), and the
@@ -829,9 +1215,15 @@ func spawnSubTurn(
 		DefaultResponse:         "",
 		EnableSummary:           false,
 		SendResponse:            false,
-		NoHistory:               true, // SubTurns don't use session history
+		// ADR-057 FR-007: NoHistory MUST NOT be set for a delegated child —
+		// was `true` here ("SubTurns don't use session history"). Left at
+		// its zero value (false) so the child goes through the same
+		// history load/save path as any other turn, against its own
+		// ephemeral in-memory store (agent.Sessions above) — a separate
+		// concept from the transcript.jsonl persistence TranscriptSessionID/
+		// TranscriptStore below govern.
 		SkipInitialSteeringPoll: true,
-		TranscriptSessionID:     parentTS.transcriptSessionID,
+		TranscriptSessionID:     childID, // FR-007: the child's OWN session id, not the parent's
 		TranscriptStore:         parentTS.transcriptStore,
 		// FIX 1 (re-review): WorkspaceID inherits from the PARENT turn, not
 		// execSource (the resolved delegate). This is deliberately NOT covered
@@ -867,6 +1259,15 @@ func spawnSubTurn(
 
 	// Create child turnState using the new API
 	childTS := newTurnState(&agent, opts, scope)
+	// ADR-057 FR-011 (W4 subturn half): OVERWRITE the routing id
+	// newTurnState just defaulted to this child's OWN session id (correct
+	// only for a root turn) with the PARENT's routingSessionID, inherited
+	// verbatim through the whole delegation subtree — see
+	// turnState.routingSessionID's doc comment (turn.go) for the full
+	// contract this closes. Skipping this overwrite silently leaves a
+	// child's routing/interrupt-scope key equal to its own session id
+	// instead of the root's, and a chat-wide Stop stops reaching it.
+	childTS.routingSessionID = parentTS.routingSessionID
 
 	// Set SubTurn-specific fields
 	childTS.cancelFunc = cancel
@@ -881,42 +1282,6 @@ func spawnSubTurn(
 	// FR-H-003: set parentSpawnCallID so all ToolExec* events emitted by this child turn
 	// carry the parent spawn's ToolCall.ID as ParentSpawnCallID.
 	childTS.parentSpawnCallID = parentSpawnCallID
-
-	// FIX 3 (silent failure F1 / arch #5): surface the target-resolution
-	// fallback in the session/audit trail — not just the process-log
-	// slog.Warn above — using the same EventKindError + appendErrorTranscript
-	// pair the LLM-call-error and rate-limit paths already use (loop.go
-	// ~965-991, ~6188-6200), so a session replay after page reload still
-	// shows the anomaly. The ToolResult.ForLLM prefix (surfacing it to the
-	// delegating caller/LLM) is applied uniformly for every return path in
-	// the cleanup defer below.
-	if targetAgentUnresolved {
-		fallbackMsg := strings.TrimSpace(targetAgentFallbackWarning)
-		// Review-pass fix (ErrorPayload.Code was write-only at every site but
-		// one — populate it here too so the WS forwarder can use the
-		// already-computed code instead of re-translating this curated
-		// message from scratch). providerErr is nil (this is an internal
-		// delegation-resolution fallback, never a provider error).
-		fallbackLLM := TranslateLLMError(nil, fallbackMsg)
-		al.emitEvent(
-			EventKindError,
-			childTS.eventMeta("spawnSubTurn", "subturn.delegation_fallback"),
-			ErrorPayload{
-				Stage: "subturn_delegation",
-				Code:  string(fallbackLLM.Code),
-				// Also stamp ChatID (childTS.opts.ChatID, inherited from
-				// parentTS.chatID at construction above) — every other
-				// ErrorPayload site sets it, and the WS forwarder's
-				// matchesChatID gate never matches an empty ChatID, so this
-				// event was silently dropped for every live subscriber.
-				ChatID:  childTS.opts.ChatID,
-				Message: fallbackMsg,
-			},
-		)
-		childTS.appendErrorTranscript(
-			EventKindError.String(), "spawnSubTurn", fallbackMsg,
-		)
-	}
 
 	// Token budget initialization/inheritance
 	// If InitialTokenBudget is explicitly provided (e.g., by team tool), use it.
@@ -935,12 +1300,85 @@ func spawnSubTurn(
 	// IMPORTANT: Put childTS into childCtx so that code inside runTurn can retrieve it
 	childCtx = withTurnState(childCtx, childTS)
 	childCtx = WithAgentLoop(childCtx, al) // Propagate AgentLoop to child turn
+	// ADR-053 S2/D1: expose the child's own durable session_id (== childID
+	// above) to its OWN tool calls (message_parent.go reads this via
+	// tools.ToolDelegateSessionID) — historically distinct from the
+	// transcript session id (tools.ToolTranscriptSessionID), which this
+	// context also carries via runTurn below. Under ADR-057 FR-007 the two
+	// have converged for a delegated child: TranscriptSessionID is now
+	// childID as well (see the processOptions construction above), so both
+	// context values name the same real session; ToolDelegateSessionID is
+	// kept as its own carrier rather than removed, since callers resolve
+	// delegation identity through it independently of transcript wiring.
+	childCtx = tools.WithDelegateSessionID(childCtx, childID)
 
 	childTS.ctx = childCtx
 
-	// Register child turn state so GetAllActiveTurns/Subagents can find it
-	al.activeTurnStates.Store(childID, childTS)
-	defer al.activeTurnStates.Delete(childID)
+	// Register child turn state so GetAllActiveTurns/Subagents can find it.
+	//
+	// registerActiveTurn (turn.go), not a bare activeTurnStates.Store: a
+	// cancel that arrived for this session BEFORE the child existed at all
+	// (RequestCancel found nothing yet — e.g. the delegating parent's own
+	// turn already finished, the common case for `delegate async=true`,
+	// since DelegateTool.executeAsync dispatches this whole call on a fresh
+	// goroutine and returns an immediate ack) arms a pre-registration cancel
+	// latch (cancel_prearm.go) instead of silently no-op'ing. Only
+	// registerActiveTurn calls consumePreArmedCancel, so this MUST be the
+	// registration path — a bare Store here left that latch unconsumed at
+	// the earliest (and safest) possible moment, relying entirely on
+	// al.runTurn's OWN later internal registerActiveTurn call (loop.go) to
+	// pick it up instead. That still usually worked, but only by accident of
+	// timing: it pushed the latch's already-bounded 5s TTL window out across
+	// every step runTurn does first (workspace-dir resolution, citation
+	// tracker setup, ...) for no reason, and under real load (slow disk,
+	// contended CPU) that widened window is exactly what let a genuine Stop
+	// click's latch expire unconsumed — the turn then ran to completion with
+	// no cancellation and no turn_canceled transcript entry (e2e T24a
+	// regression, tests/e2e/cancel-cross-channel.spec.ts:665). Registering
+	// here consumes the latch (if any) the INSTANT the child becomes
+	// reachable, before any of that later setup work — see
+	// TestRepro_SpawnSubTurn_RawStoreBypassesPreArmedCancel for a
+	// deterministic proof this closes, and TestRepro_AsyncDelegateCancel_
+	// ArmsBeforeChildRegisters for the full end-to-end cascade.
+	//
+	// Safe to call unconditionally: consumePreArmedCancel is an exactly-once,
+	// map-delete-guarded no-op when no latch is armed, so a turn spawned with
+	// no pending cancel behaves identically to the old bare Store.
+	al.registerActiveTurn(childTS)
+	// CompareAndDelete via clearActiveTurnStateEntry, not a bare Delete. A
+	// native `follow_up` warm-resume reuses childID VERBATIM for its next
+	// generation once this generation's LifecycleRecord reaches a terminal
+	// state (see spawnCorrectiveFollowUp's doc comment, pkg/tools/delegate.go)
+	// — and this generation's own tail (the re-Store below plus the cleanup
+	// defer's up-to-~935ms updateToolCallStatusWithRetry backoff) can still be
+	// in flight when that happens. If follow_up's registerActiveTurn(childTS2)
+	// lands in that window, a bare `Delete(childID)` here would unconditionally
+	// erase whatever is CURRENTLY stored under childID when this defer finally
+	// fires — which by then is the NEW generation's live, running turnState,
+	// not this (finished) one. That silently makes the new generation
+	// unreachable to GetActiveTurnHookForSession/Interrupt/
+	// sessionTurnsStillAlive for the rest of its life: no cancel (graceful,
+	// hard, or detach) can ever find it again, and it runs unchecked until its
+	// own MaxIterations ceiling. clearActiveTurnStateEntry only removes the
+	// entry if it is STILL this exact childTS, so a since-registered newer
+	// generation is left untouched — mirrors the identical guard
+	// orphan_watch.go already uses for al.orphanWatches
+	// (fireOrphanForegroundTurnWatch's CompareAndDelete) and clearActiveTurn
+	// uses for the parent's own ts.sessionKey.
+	defer al.clearActiveTurnStateEntry(childID, childTS)
+
+	// The child is now real, discoverable evidence of its own (findable via
+	// GetActiveTurnHookForSession/sessionTurnsStillAlive by routingSessionID,
+	// re-based from transcriptSessionID by U3's role split, ADR-057 FR-015) —
+	// the pending-spawn marker's whole job was to stand in for that evidence
+	// during the window that just closed. Clear it explicitly, right here,
+	// rather than leaving it for this function's own early-return defer
+	// (above): that defer only fires when registeredForCancel is still
+	// false, so setting it true and clearing now are the same operation
+	// from two angles — mark the marker "no longer needed" and remove it in
+	// the same breath, at the earliest point that is true.
+	registeredForCancel = true
+	al.cancelPreArm.clearPendingSpawn(pendingSpawnKeysForThisCall...)
 
 	// 5. Establish parent-child relationship (thread-safe)
 	parentTS.mu.Lock()
@@ -976,10 +1414,32 @@ func spawnSubTurn(
 				ParentSpawnCallID: session.ToolCallID(parentSpawnCallID),
 				TaskLabel:         taskLabel,
 				ChatID:            parentTS.chatID,
-				SessionID:         parentTS.transcriptSessionID,
+				// ADR-057 FR-017/W21c: pinned to the PARENT's routingSessionID
+				// (SubTurnSpawnPayload.SessionID's own doc comment, U23,
+				// events.go, is the frozen contract this satisfies) — was
+				// parentTS.transcriptSessionID before U3's role split landed.
+				// Do NOT repoint to the child's own id: the child's id already
+				// rides this same payload as Label.
+				SessionID: string(parentTS.routingSessionID),
 			},
 		)
 	}
+
+	// lastTurnStatus mirrors turnRes.status (assigned immediately after the
+	// al.runTurn call in step 8 below) so the cleanup defer registered right
+	// here — textually BEFORE turnRes even exists as a local variable, and
+	// therefore unable to reference it directly — can still read the turn's
+	// real terminal status. M4 (2026-08-04, UAT): pkg/agent/loop.go's
+	// abortTurn Case 1 (a tool-call-time hard interrupt/cancel) deliberately
+	// returns turnResult{status: TurnEndStatusAborted} with a NIL error (see
+	// abortTurn's own doc comment: a clean, user-initiated stop, not a
+	// failure) — so the endStatus switch below, which used to branch solely
+	// on `err != nil`, fell through every case for that nil-error abort and
+	// reported endStatus=Success for a genuinely killed child (live UAT:
+	// chat-wide Stop killing a child blocked in a bash tool call reported
+	// success). Declaring this here, in the same top-level scope as the
+	// defer literal below, is what makes it a valid closure upvalue.
+	var lastTurnStatus TurnEndStatus
 
 	// 7. Defer cleanup: deliver result (for async), emit End event, and recover from panics
 	defer func() {
@@ -994,14 +1454,6 @@ func spawnSubTurn(
 				"panic", fmt.Sprintf("%v", r),
 				"stack", string(debug.Stack()),
 			)
-		}
-
-		// FIX 3 (silent failure F1 / arch #5): prefix the delegation-fallback
-		// warning onto ForLLM for every return path (dispatch-reject, external-cli,
-		// native, and the async-delivered copy below) — one insertion point so the
-		// caller/LLM sees it regardless of which branch produced the result.
-		if targetAgentUnresolved && result != nil {
-			result.ForLLM = targetAgentFallbackWarning + result.ForLLM
 		}
 
 		// Result Delivery Strategy (Async vs Sync)
@@ -1076,6 +1528,47 @@ func spawnSubTurn(
 				}
 			case err != nil:
 				endStatus = SubTurnStatusError
+			case lastTurnStatus == TurnEndStatusAborted:
+				// M4 (2026-08-04, UAT): every case above is gated on
+				// err != nil, but abortTurn's Case 1 (pkg/agent/loop.go) — a
+				// tool-call-time hard interrupt/cancel — deliberately
+				// returns a NIL error for that specific, intentional stop
+				// (see abortTurn's own doc comment). Without this case, a
+				// genuinely hard-aborted child (e.g. chat-wide Stop killing
+				// a child mid bash-tool-call) fell all the way through to
+				// the endStatus := SubTurnStatusSuccess initializer above,
+				// reporting a killed span as having succeeded. A hard abort
+				// is definitionally a cancellation, never a success,
+				// regardless of which specific mechanism armed it or
+				// whether childCtx itself (rather than one of its
+				// request-scoped descendants, e.g. the per-LLM-call
+				// turnCtx/providerCancel requestHardAbort actually cancels)
+				// ever observably transitions to context.Canceled. Placed
+				// after the three err != nil cases above and gated on
+				// err == nil implicitly (every err != nil abort is already
+				// handled by one of those, unchanged) so this can only ever
+				// ADD coverage for the previously-unhandled nil-error gap —
+				// it can never change the classification of an existing,
+				// already-tested err != nil path.
+				endStatus = SubTurnStatusCancelled
+			case lastTurnStatus == TurnEndStatusParked:
+				// ADR-057 UAT defect C2 fix (2026-08-04): runTurn returns
+				// turnResult{status: TurnEndStatusParked} with a NIL error
+				// (pkg/agent/loop.go's park early-return, modeled on
+				// abortTurn's Case 1 above) when this sub-turn's own
+				// message_parent(kind="question", wait=true) call parked its
+				// session in needs_input. Without this case, a parked child
+				// fell all the way through to the endStatus :=
+				// SubTurnStatusSuccess initializer — the exact bug this fix
+				// closes: the live subagent_end WS frame said "success" for
+				// a child that is genuinely still waiting on its parent, so
+				// the UI showed it as finished. Mutually exclusive with the
+				// TurnEndStatusAborted case above by construction (runTurn
+				// returns exactly one terminal turnResult per invocation),
+				// so ordering relative to it is immaterial; placed after it
+				// only to read as an addendum to the same nil-error gap this
+				// file's M4 fix already established.
+				endStatus = SubTurnStatusParked
 			}
 
 			// Finding F (A-I4 round 5): mirror endStatus onto the returned/
@@ -1225,11 +1718,29 @@ func spawnSubTurn(
 					ParentSpawnCallID: session.ToolCallID(parentSpawnCallID),
 					DurationMS:        subTurnDurationMS,
 					ChatID:            parentTS.chatID,
-					SessionID:         parentTS.transcriptSessionID,
-					Reason:            endReason,
+					// ADR-057 FR-017/W21c: pinned to the PARENT's
+					// routingSessionID (SubTurnEndPayload.SessionID's own
+					// doc comment, U23, events.go) — was
+					// parentTS.transcriptSessionID before U3's role split
+					// landed. Do NOT repoint to the child's own id.
+					SessionID: string(parentTS.routingSessionID),
+					Reason:    endReason,
 				},
 			)
 		}
+
+		// ADR-057 FR-033/W10d (US-6 AS-4): the child-turn-terminal CloseSession
+		// call site — verified absent from the tree before this change (the
+		// only non-test callers were websocket.go:1038 "explicit",
+		// loop.go:1048/:1064 "idle", session_end.go:865 "bootstrap"). Runs
+		// unconditionally, regardless of cfg.Async/emitSpanEvents/panic, since
+		// it is bounded per-session store cleanup (grant set, loadedTools
+		// bucket, metaCache entry — U17b's session_end.go) tied to the
+		// CHILD's own session lifetime, not to span/event emission. Without
+		// this call, a delegated child's inherited grants (FR-031 above)
+		// never expire when the child ends, and its metaCache entry leaks for
+		// the process lifetime of every ever-delegated child.
+		al.CloseSession(childID, "delegate_terminal")
 	}()
 
 	// 8. Execute the sub-turn. The executor on the resolved DELEGATE's config
@@ -1273,6 +1784,11 @@ func spawnSubTurn(
 
 	// Native path (default, existing behavior — unchanged).
 	turnRes, turnErr := al.runTurn(childCtx, childTS)
+	// M4/C2 (2026-08-04): mirror the real terminal status into the
+	// pre-declared upvalue the cleanup defer above reads — see
+	// lastTurnStatus's own doc comment for why a direct reference from that
+	// closure is not possible.
+	lastTurnStatus = turnRes.status
 
 	// Re-register childTS in activeTurnStates: runTurn's OWN internal defer
 	// chain (loop.go) already deleted it — al.clearActiveTurn(ts) (keyed by
@@ -1325,6 +1841,27 @@ func spawnSubTurn(
 		result = &tools.ToolResult{
 			ForLLM:  turnRes.finalContent,
 			ForUser: turnRes.finalContent,
+		}
+		// C2 (2026-08-04): surface the park onto the ToolResult the caller
+		// (pkg/tools/delegate.go's executeSync/executeAsync, for the
+		// synchronous and asynchronous delegation paths respectively) sees.
+		// KNOWN GAP, reported rather than fixed here (outside this file's
+		// scope): as of this change, neither executeSync's nor executeAsync's
+		// own post-dispatch switch (delegate.go, ~L2026 and ~L1837) checks
+		// this field yet — both still fall through to their `default` case
+		// and unconditionally call transitionLifecycle(..., LifecycleCompleted),
+		// overwriting the needs_input state message_parent.go's parkNeedsInput
+		// (and this fix) correctly left in place. A parked child dispatched
+		// via the real `delegate` tool therefore still reproduces the "session
+		// ... is not parked" respond() failure today, from a DIFFERENT cause
+		// than the one this file's fix closes (the turn loop no longer keeps
+		// running past the park, but delegate.go's own bookkeeping still
+		// stomps the record afterward). The exact fix: add a
+		// `case result.ParksTurn:` branch (checked before `default`) in both
+		// switches that skips transitionLifecycle entirely — message_parent.go
+		// already correctly parked the record; it must not be touched again.
+		if turnRes.status == TurnEndStatusParked {
+			result.ParksTurn = true
 		}
 	}
 

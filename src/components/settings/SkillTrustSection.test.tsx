@@ -114,6 +114,17 @@ describe('SkillTrustSection — allow_all warning', () => {
       expect(screen.getByRole('alert')).toBeInTheDocument()
     })
     expect(screen.getByRole('alert')).toHaveTextContent(/supply-chain/i)
+
+    // Wait for the mutation to actually settle (onSuccess -> "Saved") before the
+    // test returns. The warning panel above is driven by the synchronous
+    // `selected` state set in handleChange, not by mutation settlement, so
+    // without this the mocked promise resolves and calls setState after this
+    // test's jsdom environment has been torn down (pool: 'forks', per-file
+    // isolation — see src/test/setup.ts lines 11-39 for the established
+    // precedent on this exact shard).
+    await waitFor(() => {
+      expect(screen.getByText(/saved/i)).toBeInTheDocument()
+    })
   })
 
   it('does not show warning panel when warn_unverified is selected', async () => {
@@ -148,6 +159,14 @@ describe('SkillTrustSection — autosave', () => {
     await waitFor(() => {
       expect(updateSkillTrust).toHaveBeenCalledWith('block_unverified')
     })
+
+    // `toHaveBeenCalledWith` above is true the instant mutationFn is invoked —
+    // well before the mocked promise resolves and onSuccess runs. Wait for
+    // settlement too, so the mutation's setState doesn't fire after this
+    // test's jsdom teardown (pool: 'forks' per-file isolation).
+    await waitFor(() => {
+      expect(screen.getByText(/saved/i)).toBeInTheDocument()
+    })
   })
 
   it('no Save button is rendered for admin', async () => {
@@ -171,6 +190,17 @@ describe('SkillTrustSection — autosave', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/saving/i)).toBeInTheDocument()
+    })
+
+    // The mocked promise resolves via a REAL setTimeout(50ms), not fake timers.
+    // Without waiting for it here, the 50ms-delayed resolution (and its
+    // onSuccess -> setSaveState('saved') call) is left dangling past this
+    // test's return, firing after jsdom teardown under pool: 'forks'
+    // per-file isolation — the root cause of the "window is not defined"
+    // unhandled rejection in this shard. Wait for the terminal "Saved" state
+    // so the promise settles inside this test's own lifetime.
+    await waitFor(() => {
+      expect(screen.getByText(/saved/i)).toBeInTheDocument()
     })
   })
 

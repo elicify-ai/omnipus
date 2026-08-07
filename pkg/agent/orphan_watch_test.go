@@ -89,8 +89,15 @@ func TestOrphanWatch_GraceElapses_ReapInvokedOnceWithOrphanReason(t *testing.T) 
 	rootTS := &turnState{
 		turnID:              "root-basic-fire",
 		transcriptSessionID: sessionID,
-		depth:               0,
-		finishedChan:        make(chan struct{}),
+		// ADR-057 FR-011/FR-015 fixture repair `[grill C-1]`:
+		// ArmOrphanForegroundTurnWatch/fireOrphanForegroundTurnWatch resolve
+		// the session's live turn via GetActiveTurnHookForSession, a role-B
+		// predicate that now matches on routingSessionID, not
+		// transcriptSessionID — without it, arming itself is refused (no
+		// active turn hook found for the session).
+		routingSessionID: session.RoutingSessionID(sessionID),
+		depth:            0,
+		finishedChan:     make(chan struct{}),
 		// providerCancel intentionally nil: this bare turnState never finishes
 		// on its own, so it stays "alive" for the whole test.
 	}
@@ -175,8 +182,11 @@ func TestOrphanWatch_DisarmAfterFire_NoOpOnAlreadyReapedTurn(t *testing.T) {
 	rootTS := &turnState{
 		turnID:              "root-disarm-after-fire",
 		transcriptSessionID: sessionID,
-		depth:               0,
-		finishedChan:        make(chan struct{}),
+		// ADR-057 FR-011/FR-015 fixture repair: see the identical note in
+		// TestOrphanWatch_GraceElapses_ReapInvokedOnceWithOrphanReason above.
+		routingSessionID: session.RoutingSessionID(sessionID),
+		depth:            0,
+		finishedChan:     make(chan struct{}),
 	}
 	al.activeTurnStates.Store(sessionID, rootTS)
 	defer al.activeTurnStates.Delete(sessionID)
@@ -345,8 +355,11 @@ func TestOrphanWatch_ReArmReplacesPriorTimer(t *testing.T) {
 	rootTS := &turnState{
 		turnID:              "root-rearm",
 		transcriptSessionID: sessionID,
-		depth:               0,
-		finishedChan:        make(chan struct{}),
+		// ADR-057 FR-011/FR-015 fixture repair: see the identical note on
+		// TestOrphanWatch_GraceElapses_ReapInvokedOnceWithOrphanReason above.
+		routingSessionID: session.RoutingSessionID(sessionID),
+		depth:            0,
+		finishedChan:     make(chan struct{}),
 	}
 	al.activeTurnStates.Store(sessionID, rootTS)
 	defer al.activeTurnStates.Delete(sessionID)
@@ -480,9 +493,14 @@ func TestOrphanWatch_TaskSessionType_NeverArmed(t *testing.T) {
 func TestOrphanWatch_DifferentRootAtFireTime_StillReaped(t *testing.T) {
 	al, sessionID := newOrphanTestAgentLoop(t)
 
+	// ADR-057 FR-011/FR-015 fixture repair `[grill C-1]`: see the identical
+	// note on TestOrphanWatch_GraceElapses_ReapInvokedOnceWithOrphanReason
+	// above — applies to both roots here, since GetActiveTurnHookForSession
+	// must resolve whichever one is live at fire time.
 	rootV1 := &turnState{
 		turnID:              "root-v1",
 		transcriptSessionID: sessionID,
+		routingSessionID:    session.RoutingSessionID(sessionID),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 	}
@@ -498,6 +516,7 @@ func TestOrphanWatch_DifferentRootAtFireTime_StillReaped(t *testing.T) {
 	rootV2 := &turnState{
 		turnID:              "root-v2",
 		transcriptSessionID: sessionID,
+		routingSessionID:    session.RoutingSessionID(sessionID),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 	}
@@ -582,8 +601,11 @@ func TestOrphanWatch_Close_StopsTimerAndNeverReaps(t *testing.T) {
 	rootTS := &turnState{
 		turnID:              "root-close-test",
 		transcriptSessionID: sessionID,
-		depth:               0,
-		finishedChan:        make(chan struct{}),
+		// ADR-057 FR-011/FR-015 fixture repair: see the identical note on
+		// TestOrphanWatch_GraceElapses_ReapInvokedOnceWithOrphanReason above.
+		routingSessionID: session.RoutingSessionID(sessionID),
+		depth:            0,
+		finishedChan:     make(chan struct{}),
 	}
 	al.activeTurnStates.Store(sessionID, rootTS)
 	defer al.activeTurnStates.Delete(sessionID)

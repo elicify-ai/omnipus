@@ -1,12 +1,13 @@
-//go:build !cgo
-
 package integration
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -171,9 +172,26 @@ func wsConnect(tb testing.TB, gw *testutil.TestGateway) *websocket.Conn {
 // When sessionID is non-empty it is included in the frame so the gateway
 // continues an existing session rather than minting a fresh one for each
 // message (a fresh session would silently lose mid-turn handoff state).
+//
+// MUST be called from the test goroutine only. It calls tb.Fatalf, and Go's
+// testing contract forbids FailNow (and therefore Fatalf) from any goroutine
+// other than the one running the test. From a spawned goroutine, use
+// sendMessageErr and report the error back to the test goroutine.
+//
 // Traces to: Bug-3 (concurrent sessions).
 func sendMessage(tb testing.TB, conn *websocket.Conn, content string, sessionID ...string) {
 	tb.Helper()
+	if err := sendMessageErr(conn, content, sessionID...); err != nil {
+		tb.Fatalf("sendMessage: %v", err)
+	}
+}
+
+// sendMessageErr is the goroutine-safe form of sendMessage: it returns the
+// write error instead of calling tb.Fatalf, so it is legal to call from a
+// goroutine other than the test's own.
+//
+// Traces to: Bug-3 (concurrent sessions).
+func sendMessageErr(conn *websocket.Conn, content string, sessionID ...string) error {
 	var frame string
 	if len(sessionID) > 0 && sessionID[0] != "" {
 		frame = fmt.Sprintf(`{"type":"message","content":%s,"session_id":%s}`,
@@ -181,9 +199,7 @@ func sendMessage(tb testing.TB, conn *websocket.Conn, content string, sessionID 
 	} else {
 		frame = fmt.Sprintf(`{"type":"message","content":%s}`, jsonQuote(content))
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, []byte(frame)); err != nil {
-		tb.Fatalf("sendMessage: %v", err)
-	}
+	return conn.WriteMessage(websocket.TextMessage, []byte(frame))
 }
 
 // extractSessionID scans frames for the first session_started frame and
@@ -201,18 +217,80 @@ func extractSessionID(frames []map[string]any) string {
 	return ""
 }
 
-// waitForFirstToken reads frames from conn until it sees a token/done/content
-// frame (indicating the LLM responded) or the deadline is reached.
-// Returns the first assistant frame type received.
+// wsWaitError is the classified failure of waitForFirstTokenErr. Its whole
+// reason to exist is to keep two failure modes apart that a concurrency test
+// MUST NOT confuse:
+//
+//   - ReadTimeout=true  — the read deadline expired while the connection was
+//     still healthy. Nothing arrived. This is the evidence a starvation
+//     assertion is entitled to rely on.
+//   - ReadTimeout=false — the transport itself broke (close, reset, EOF,
+//     protocol error). This says NOTHING about starvation: the connection
+//     died before the agent ever got the chance to reply. A test that reports
+//     this as a starvation bug sends its reader hunting for a concurrency bug
+//     that does not exist.
+//
+// FramesSeen records the non-assistant frames read before the failure, which
+// further separates "the session was never even acknowledged" from "the
+// session started but no token ever came".
+type wsWaitError struct {
+	ReadTimeout bool
+	Waited      time.Duration
+	FramesSeen  []string
+	Err         error
+}
+
+func (e *wsWaitError) Error() string {
+	kind := "TRANSPORT ERROR — the WebSocket broke (this is NOT evidence of starvation)"
+	if e.ReadTimeout {
+		kind = "READ TIMEOUT — connection stayed healthy, no assistant frame arrived"
+	}
+	return fmt.Sprintf("%s after %v: %v (non-assistant frames seen first: %v)",
+		kind, e.Waited, e.Err, e.FramesSeen)
+}
+
+// isReadDeadlineExceeded reports whether err is this connection's own read
+// deadline expiring, as opposed to the transport failing. A deadline expiry
+// surfaces as os.ErrDeadlineExceeded / a net.Error with Timeout()==true;
+// close, reset and EOF errors (including *websocket.CloseError) do not
+// implement that, so they correctly classify as transport failures.
+func isReadDeadlineExceeded(err error) bool {
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return ne.Timeout()
+	}
+	return false
+}
+
+// waitForFirstTokenErr reads frames from conn until it sees a token/done/content
+// frame (indicating the LLM responded) or the deadline is reached, returning a
+// classified *wsWaitError rather than calling tb.Fatalf. That makes it legal to
+// call from a goroutine other than the test's own: a Fatalf runs runtime.Goexit
+// on the CALLING goroutine, so a collector goroutine would die before it could
+// deliver its result and the waiting test would report whatever its own timeout
+// branch says — historically, a transport error was announced as same-agent
+// starvation.
+//
+// The concrete *wsWaitError return (rather than error) is deliberate: it keeps
+// callers from tripping the typed-nil interface trap on the success path.
+//
 // Traces to: Bug-3 (concurrent sessions).
-func waitForFirstToken(tb testing.TB, conn *websocket.Conn, timeout time.Duration) string {
-	tb.Helper()
+func waitForFirstTokenErr(conn *websocket.Conn, timeout time.Duration) (string, *wsWaitError) {
 	deadline := time.Now().Add(timeout)
+	var seen []string
 	for {
 		_ = conn.SetReadDeadline(deadline)
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			tb.Fatalf("waitForFirstToken: read error (deadline=%v): %v", timeout, err)
+			return "", &wsWaitError{
+				ReadTimeout: isReadDeadlineExceeded(err),
+				Waited:      timeout,
+				FramesSeen:  seen,
+				Err:         err,
+			}
 		}
 		var frame struct {
 			Type string `json:"type"`
@@ -222,11 +300,29 @@ func waitForFirstToken(tb testing.TB, conn *websocket.Conn, timeout time.Duratio
 		}
 		switch frame.Type {
 		case "session_started", "session_state", "status":
+			seen = append(seen, frame.Type)
 			continue
 		case "token", "content", "text", "assistant_message", "done":
-			return frame.Type
+			return frame.Type, nil
 		}
 	}
+}
+
+// wsReply is one collector goroutine's outcome, delivered back to the test
+// goroutine so that IT — never the collector — decides what the failure means
+// and calls Fatalf. waitErr==nil means frameType holds the frame that arrived.
+type wsReply struct {
+	idx       int
+	frameType string
+	waitErr   *wsWaitError
+}
+
+// collectFirstToken runs waitForFirstTokenErr and delivers the classified
+// outcome to out. It never touches testing.T, so it is safe in a goroutine.
+// out must be buffered enough that this never blocks after the test returns.
+func collectFirstToken(out chan<- wsReply, idx int, conn *websocket.Conn, timeout time.Duration) {
+	ft, waitErr := waitForFirstTokenErr(conn, timeout)
+	out <- wsReply{idx: idx, frameType: ft, waitErr: waitErr}
 }
 
 // collectAllFrames reads all frames from conn until the connection closes or

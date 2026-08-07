@@ -6,6 +6,7 @@ package agent
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -22,11 +23,20 @@ import (
 // Traces to: central tool registry redesign spec — "ScopeSystem is retired;
 // policy-only governance replaces WireSystemTools".
 func TestCustomAgent_HasNoSystemToolsRegistered(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "sysagent-policy-test-*")
+	tmpDirOuter, err := os.MkdirTemp("", "sysagent-policy-test-*")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Home = tmpDir

@@ -1,9 +1,35 @@
-import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useCallback, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Info } from '@phosphor-icons/react'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { GraphView } from './graph/GraphView'
 import { TaskDetailSlideOver } from './TaskDetailSlideOver'
-import { fetchTasks, fetchAgents, tasksQueryKeys } from '@/lib/api'
+import {
+  fetchTasks,
+  fetchAgents,
+  fetchPlans,
+  setTaskDependencies,
+  isApiError,
+  tasksQueryKeys,
+  plansQueryKeys,
+} from '@/lib/api'
+import {
+  planDisplayColor,
+  planDisplayLabel,
+  planPhaseChip,
+  planPhaseExplanation,
+  planSecondaryChipLabel,
+} from '@/lib/planStateColors'
+import { cn } from '@/lib/utils'
+import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useUiStore } from '@/store/ui'
+import { planDependencyReconnect } from './dependencyReconnect'
 
 // ── F2 COMPONENT BOUNDARY ────────────────────────────────────────────────────
 // The Graph (Task DAG) tab. Tasks as nodes, `blocked_by` as dependency edges,
@@ -12,8 +38,21 @@ import { fetchTasks, fetchAgents, tasksQueryKeys } from '@/lib/api'
 // The DAG canvas itself lives in ./graph/GraphView (presentational, testable).
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Sentinel for the "All tasks" option in the plan switcher — Radix Select
+// requires a non-empty string value, so this stands in for `activePlanId ===
+// null` (the store field itself uses `null`, same as the "no tag filter"
+// null sentinel in `planFilter.ts` — Select just can't carry `null` as an
+// item value).
+const GRAPH_PLAN_ALL = '__all__'
+
 interface WorkspaceGraphTabProps {
   workspaceId: string
+  /** Hide the in-graph "By plan" dropdown — set true when a parent screen
+   * (the combined Tasks screen's PlansFilterBand) already exposes plan
+   * selection, so the two controls don't duplicate each other. Defaults to
+   * false so standalone use of this tab is unaffected. The plan info strip
+   * (state/goal/progress) still renders regardless. */
+  hidePlanSelector?: boolean
 }
 
 /**
@@ -21,8 +60,15 @@ interface WorkspaceGraphTabProps {
  * cache (for avatar colour/icon), renders the DAG canvas, and opens the shared
  * task detail slide-over on node click — mirroring the Board's onTaskClick.
  */
-export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
+export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: WorkspaceGraphTabProps) {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+
+  // Plan scope (ADR-051 — plans-as-filter): the SAME store field the Board's
+  // lane ⑂ button writes before navigating here, so the graph opens already
+  // scoped to the plan that was clicked. The switcher below reads and writes
+  // this same field, so Board ⇄ Graph stay in sync either way.
+  const activePlanId = useWorkspacesStore((s) => s.activePlanId)
+  const setActivePlanId = useWorkspacesStore((s) => s.setActivePlanId)
 
   const {
     data: tasks = [],
@@ -43,8 +89,93 @@ export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
     staleTime: 60_000,
   })
 
+  const { data: plans = [], isError: plansError } = useQuery({
+    queryKey: plansQueryKeys.list(workspaceId),
+    queryFn: () => fetchPlans(workspaceId),
+    staleTime: 30_000,
+    enabled: !!workspaceId,
+  })
+
+  const activePlan = activePlanId != null ? (plans.find((p) => p.id === activePlanId) ?? null) : null
+
   const selectedTask =
     selectedTaskId != null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null
+
+  const queryClient = useQueryClient()
+  const { addToast } = useUiStore()
+
+  // Persist a dependency add/remove made by dragging (or deleting) an edge on
+  // the canvas — PUT /tasks/{id}/dependencies replaces the blocked set
+  // atomically. On BOTH outcomes we re-invalidate the tasks query so the canvas
+  // re-seeds to server truth: a rejected add (backend rejects cycles; cross-plan
+  // is guarded below) never lingers, and a failed delete is restored.
+  const depMutation = useMutation({
+    mutationFn: ({ taskId, blockedBy }: { taskId: string; blockedBy: string[] }) =>
+      setTaskDependencies(taskId, blockedBy),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+    },
+    onError: (err) => {
+      addToast({
+        message: isApiError(err)
+          ? err.userMessage
+          : err instanceof Error
+            ? err.message
+            : 'Failed to update dependencies',
+        variant: 'error',
+      })
+    },
+  })
+
+  // Drag connect: the source handle is the blocker, the target handle is the
+  // blocked task → add `blockerId` to blocked.blocked_by. Guard self / duplicate
+  // / cross-plan (a dependency edge must stay inside one plan's DAG) before the
+  // PUT; the backend additionally rejects cycles.
+  const handleConnectDependency = useCallback(
+    (blockerId: string, blockedId: string) => {
+      if (blockerId === blockedId) return
+      const blocked = tasks.find((t) => t.id === blockedId)
+      const blocker = tasks.find((t) => t.id === blockerId)
+      if (!blocked || !blocker) return
+      if ((blocker.plan_id || null) !== (blocked.plan_id || null)) {
+        addToast({ message: 'Dependencies must be within the same plan.', variant: 'error' })
+        return
+      }
+      const current = blocked.blocked_by ?? []
+      if (current.includes(blockerId)) return
+      depMutation.mutate({ taskId: blockedId, blockedBy: [...current, blockerId] })
+    },
+    [tasks, addToast, depMutation],
+  )
+
+  const handleRemoveDependency = useCallback(
+    (blockerId: string, blockedId: string) => {
+      const blocked = tasks.find((t) => t.id === blockedId)
+      const current = blocked?.blocked_by ?? []
+      if (!current.includes(blockerId)) return
+      depMutation.mutate({ taskId: blockedId, blockedBy: current.filter((x) => x !== blockerId) })
+    },
+    [tasks, depMutation],
+  )
+
+  // Reconnect: drag an edge endpoint onto another task to MOVE the dependency.
+  // GraphView optimistically reconnects the edge; the pure `planDependencyReconnect`
+  // decides the exact PUT(s) (or rejects), and on any no-op/rejection we
+  // re-invalidate so the canvas reverts to server truth.
+  const handleReconnectDependency = useCallback(
+    (oldDep: { blocker: string; blocked: string }, newDep: { blocker: string; blocked: string }) => {
+      const plan = planDependencyReconnect(tasks, oldDep, newDep)
+      if (plan.error === 'same-plan') {
+        addToast({ message: 'Dependencies must be within the same plan.', variant: 'error' })
+      }
+      if (plan.puts.length === 0) {
+        void queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+        return
+      }
+      for (const put of plan.puts) depMutation.mutate(put)
+    },
+    [tasks, addToast, depMutation, queryClient],
+  )
 
   if (tasksLoading) {
     return <GraphSkeleton />
@@ -75,12 +206,171 @@ export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
           Agent details failed to load — task avatars may be missing.
         </div>
       )}
+      {plansError && (
+        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)]">
+          <Info size={12} weight="fill" className="shrink-0" />
+          Plans failed to load — the plan filter may be incomplete.
+        </div>
+      )}
+
+      {/* Graph toolbar — flat, borderless (no top rule on the canvas). Skipped
+          entirely when it would be empty: embedded in the Tasks screen the plan
+          selector is hidden, so with no active plan there's nothing to show and
+          an empty bordered strip read as a stray line above the canvas. */}
+      {(!hidePlanSelector || activePlan) && (
+      <div className="flex items-center gap-3 px-4 py-2 flex-shrink-0">
+        {!hidePlanSelector && (
+          <>
+            <span className="text-xs font-medium text-[var(--color-muted)] flex-shrink-0">By plan</span>
+            <Select
+              value={activePlanId ?? GRAPH_PLAN_ALL}
+              onValueChange={(v) => setActivePlanId(v === GRAPH_PLAN_ALL ? null : v)}
+            >
+              <SelectTrigger className="h-8 w-56 text-xs" aria-label="Filter the graph by plan">
+                <SelectValue placeholder="All tasks" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={GRAPH_PLAN_ALL} className="text-xs">
+                  All tasks
+                </SelectItem>
+                {plans.map((p) => (
+                  <SelectItem key={p.id} value={p.id} className="text-xs">
+                    {p.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </>
+        )}
+
+        {activePlan && (() => {
+          // ADR-053 FE-2 §7 (D7) — the plan's runtime sub-phase. The
+          // re-planning hold (`plan_phase: awaiting_supervision`) is the
+          // durable, operator-actionable signal: the plan reached
+          // all-terminal-but-unmet and is waiting on an owner correction to
+          // continue — rendered as a warning chip so it can't blend into the
+          // gold Running badge. The other non-idle sub-phases
+          // (dispatching/judging/synthesizing) render as a quieter info chip.
+          const chip = planPhaseChip(activePlan)
+          // Swimlane-board UAT fix — `stalled` is a SECOND warning-tone
+          // phase (a live DAG nothing can currently dispatch, distinct from
+          // the judge dead end above); planPhaseExplanation resolves the
+          // phase-specific copy so the two conditions never share text.
+          const explanation = planPhaseExplanation(activePlan)
+          // S3 UAT finding — `failed_reason` (e.g. `judge_rounds_exhausted`)
+          // was on the wire but never rendered; the UI showed only the word
+          // "Failed" with no explanation. Skip the user-cancel case — that
+          // already renders as "Cancelled" via planDisplayLabel, so a second
+          // "stopped by user" line here would be redundant.
+          const failureReason =
+            activePlan.state === 'failed' &&
+            activePlan.failed_reason &&
+            activePlan.failed_reason !== 'stopped_by_user'
+              ? planSecondaryChipLabel(activePlan)
+              : null
+          return (
+          <div className="flex flex-1 min-w-0 flex-col gap-1 pl-2">
+            <div className="flex flex-1 min-w-0 items-center gap-2">
+              {/* ADR-052 FR-015/US-8 — a user-cancelled plan renders
+                  "Cancelled" (orange), distinct from a genuine "Failed" (red),
+                  via the shared planDisplayColor/planDisplayLabel helpers. */}
+              <span
+                className="flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold"
+                style={{
+                  color: planDisplayColor(activePlan),
+                  backgroundColor: `${planDisplayColor(activePlan)}1a`,
+                }}
+              >
+                {planDisplayLabel(activePlan)}
+              </span>
+
+              {chip && (
+                <span
+                  data-testid={`plan-phase-chip-${activePlan.id}`}
+                  className={cn(
+                    'flex-shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-none',
+                    chip.tone === 'warning'
+                      ? 'border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
+                      : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)]',
+                  )}
+                >
+                  {chip.label}
+                </span>
+              )}
+              {activePlan.goal && (
+                <p
+                  className="flex-1 min-w-0 truncate text-xs text-[var(--color-muted)]"
+                  title={activePlan.goal}
+                >
+                  {activePlan.goal}
+                </p>
+              )}
+              {/* Selected plan's completion — the share of its tasks that are
+                  `done`. Labelled + tooltipped so it reads as plan progress, not
+                  some ambient metric. */}
+              <div
+                className="flex flex-shrink-0 items-center gap-1.5"
+                role="img"
+                aria-label={`Plan progress: ${Math.round((activePlan.progress ?? 0) * 100)}% of tasks done`}
+                title={`Plan progress — ${Math.round((activePlan.progress ?? 0) * 100)}% of this plan's tasks are done`}
+              >
+                <div className="h-1.5 w-16 rounded-full bg-[var(--color-surface-2)] overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-[var(--color-accent)]"
+                    style={{ width: `${Math.round((activePlan.progress ?? 0) * 100)}%` }}
+                  />
+                </div>
+                <span className="flex-shrink-0 text-right text-[10px] text-[var(--color-muted)]">
+                  {Math.round((activePlan.progress ?? 0) * 100)}% done
+                </span>
+              </div>
+            </div>
+
+            {/* S2 UAT finding — replaces the hover-only `title` tooltip
+                (dead on touch, easy to miss) with always-visible plain-
+                language text: what the plan is waiting for, and the one
+                REAL control available right now (Stop), never inventing UI
+                that doesn't exist for the three corrective verbs. */}
+            {explanation && (
+              <p
+                data-testid={`plan-phase-explanation-${activePlan.id}`}
+                className="text-[11px] leading-snug text-[color:var(--color-warning)]"
+              >
+                {explanation}
+              </p>
+            )}
+
+            {failureReason && (
+              <p
+                data-testid={`plan-failed-reason-${activePlan.id}`}
+                className="text-[11px] leading-snug text-[var(--color-muted)]"
+              >
+                Why: {failureReason}
+              </p>
+            )}
+          </div>
+          )
+        })()}
+      </div>
+      )}
+
       <div className="relative flex-1 min-h-0">
         <GraphView
           tasks={tasks}
           agents={agents}
           selectedTaskId={selectedTaskId}
           onTaskClick={(task) => setSelectedTaskId(task.id)}
+          // Only scope the canvas to a plan once it's actually resolvable
+          // against the loaded `plans` list (`activePlan` above) — while
+          // plansError/loading/just-cleared leaves `activePlanId` pointing at
+          // a plan that ISN'T in that list, scoping to it would silently
+          // filter the canvas down to nothing and show the misleading "This
+          // plan has no dependencies yet" empty state (review-gate fix #3).
+          planId={activePlan ? activePlanId : null}
+          collapseOrphans
+          onConnectDependency={handleConnectDependency}
+          onRemoveDependency={handleRemoveDependency}
+          onReconnectDependency={handleReconnectDependency}
         />
       </div>
 

@@ -93,21 +93,21 @@ vi.mock('@/store/session', () => ({
 
 // WorkspacesStore — the component calls it with NO selector, getting back the full state
 const mockSetActiveWorkspaceId = vi.fn()
-const mockSetActiveMilestoneId = vi.fn()
+const mockSetActivePlanId = vi.fn()
 vi.mock('@/store/workspacesStore', () => ({
   useWorkspacesStore: (selector?: ((s: {
     activeWorkspaceId: string | null
     setActiveWorkspaceId: (id: string | null) => void
-    activeMilestoneId: string | null
-    setActiveMilestoneId: (id: string | null) => void
+    activePlanId: string | null
+    setActivePlanId: (id: string | null) => void
     boardAltitude: string
     setBoardAltitude: (a: string) => void
   }) => unknown)) => {
     const state = {
       activeWorkspaceId: null,
       setActiveWorkspaceId: mockSetActiveWorkspaceId,
-      activeMilestoneId: null,
-      setActiveMilestoneId: mockSetActiveMilestoneId,
+      activePlanId: null,
+      setActivePlanId: mockSetActivePlanId,
       boardAltitude: 'top-level',
       setBoardAltitude: vi.fn(),
     }
@@ -159,13 +159,13 @@ describe('WorkspaceTabContainer — layout', () => {
     expect(topBar.contains(hamburger)).toBe(true)
   })
 
-  it('renders all six workspace tabs inside the top bar row (settings via the name button)', async () => {
+  it('renders all four workspace tabs inside the top bar row (settings via the name button)', async () => {
     await act(async () => {
       render(<WorkspaceTabContainer workspaceId="ws-1" />)
     })
 
     const topBar = screen.getByTestId('workspace-top-bar')
-    const segments = ['chat', 'board', 'list', 'graph', 'calendar', 'team']
+    const segments = ['chat', 'board', 'calendar', 'team']
     for (const seg of segments) {
       // WorkspaceTabBar renders each segment twice (full strip + sr-only strip).
       const tabs = screen.getAllByTestId(`workspace-tab-${seg}`)

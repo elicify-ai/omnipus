@@ -1,0 +1,48 @@
+type: object
+title: PlanRestartResponse
+description: >
+  ADR-053 §Contract Surface — "Cancel / restart". The Play route mints a
+  new owner-session generation via `resumed_from` (cancelled -> approved
+  edge) rather than mutating the terminal owner session in place; done
+  members are preserved, failed/cancelled members resume from the last
+  git boundary commit (no-commit -> fresh attempt, D13), and JudgeRounds
+  reset to 0.
+
+  NOT YET WIRED (flagged for review, Phase-0 scope): this schema is
+  authored and added to `components.schemas` for codegen per the 5-step
+  process, but the EXISTING `POST /plans/{id}/restart` path's 200
+  response is left unchanged (`$ref: '#/components/schemas/Plan'`) in
+  this contracts-only pass — that endpoint already ships and is
+  consumed by live Go/TS code (ADR-052 FR-026); swapping its response
+  shape is Phase-1/2 consuming-code work, not Phase-0 contract
+  authoring. Phase 1 wires this schema onto that path (or a
+  `generation`-aware successor) alongside the owner-loop implementation.
+required:
+  - plan
+  - new_session_id
+  - generation
+additionalProperties: false
+properties:
+  plan:
+    $ref: './Plan.yaml'
+  new_session_id:
+    type: string
+    minLength: 1
+    description: >
+      The plan-owner session id for the newly-minted generation (may
+      equal the prior owner session's id if the owner session itself
+      warm-resumes; a new id when a fresh owner session was spawned).
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  generation:
+    type: integer
+    minimum: 0
+    description: The new owner-session generation this Play minted.
+    example: 2
+  resumed_from:
+    type: string
+    nullable: true
+    description: >
+      The prior owner-session id this generation resumed from. Null only
+      if this is somehow generation 0 (should not occur for a restart —
+      present for schema symmetry with `SessionLifecycleRecord.resumed_from`).
+    example: "660e8400-e29b-41d4-a716-446655440000"

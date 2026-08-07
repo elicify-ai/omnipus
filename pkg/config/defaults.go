@@ -37,6 +37,23 @@ func DefaultConfig() *Config {
 				SummarizeMessageThreshold: 20,
 				SummarizeTokenPercent:     75,
 				SteeringMode:              "one-at-a-time",
+				// Concurrency-gate consolidation (2026-08-04, commit
+				// 536b7340's follow-up fix): SubTurn.MaxConcurrent is
+				// deliberately left UNSET (Go zero value) rather than seeded.
+				// A fresh install previously seeded this to a fixed 16
+				// (ADR-057 FR-095 / grill #2 M2-1) so getSubTurnConfig's and
+				// ResolveRootDelegationCap's `if maxConcurrent <= 0` fallback
+				// branch (pkg/agent/subturn.go, pkg/agent/admission.go) would
+				// never fire — that reasoning depended on
+				// Performance.EffectiveMaxParallelAgents() ALSO being
+				// hard-clamped to 16 at the time. 536b7340 removed that
+				// ceiling, so a fixed 16 seed here would become a SECOND,
+				// independent concurrency cap silently disagreeing with the
+				// operator's own max_parallel_agents setting — leaving this
+				// field at zero makes Performance.EffectiveMaxParallelAgents()
+				// the single, central authority both fallback branches
+				// resolve to, with no seeded value to drift out of sync. See
+				// SubTurnConfig.MaxConcurrent's doc comment (config.go).
 				ToolFeedback: ToolFeedbackConfig{
 					Enabled:       false,
 					MaxArgsLength: 300,
@@ -48,6 +65,11 @@ func DefaultConfig() *Config {
 		Bindings: []AgentBinding{},
 		Session: SessionConfig{
 			DMScope: "per-channel-peer",
+			// ADR-057 FR-067 (grill m-5, operator decision 2): seeded
+			// explicitly so a fresh install's config.json is
+			// self-documenting; EffectiveStatsFlushInterval re-applies the
+			// same default for any zeroed-out value.
+			StatsFlushInterval: duration(DefaultSessionStatsFlushInterval),
 		},
 		// Channels starts as an empty map; no default instances are pre-seeded
 		// (greenfield — FR-2.9). Channels are added via REST PUT /api/v1/channels/{id}/configure.
@@ -273,7 +295,8 @@ func DefaultConfig() *Config {
 			// exactly like any operator-set entry.
 			//
 			// Every entry below mirrors pkg/coreagent/core.go's allStaticToolNames
-			// literal-for-literal (80 tools: 34 general + 11 browser + 35 sysagent) —
+			// literal-for-literal (the full static catalog; the pkg/gateway
+			// catalog-sync test is authoritative for the count, not this comment) —
 			// pkg/config cannot import pkg/coreagent (coreagent already imports
 			// config, so the reverse would cycle), so this list is a second,
 			// independent hardcoded literal. A drift between the two is caught
@@ -297,6 +320,7 @@ func DefaultConfig() *Config {
 				"find_skills":         "allow",
 				"install_skill":       "allow",
 				"delegate":            "allow",
+				"message_parent":      "allow",
 				"list_tasks":          "allow",
 				"create_task":         "allow",
 				"update_task":         "allow",
@@ -365,7 +389,202 @@ func DefaultConfig() *Config {
 				"create_agent":             "allow",
 				"update_agent":             "allow",
 				"delete_agent":             "ask", // irreversible delete
+
+				// --- ADR-052 (autonomous agent plan execution) planning/
+				// verifier tools --- Ceiling is "allow" for the three
+				// plan-execution tools — never absent, never deny.
+				//
+				// It was seeded "ask" (the spec's literal FR-005/FR-027/DS-6
+				// Test-2 seed matrix value) until 2026-07-28, when that turned
+				// out to be the THIRD instance of the same landed defect the
+				// inspect_session note below and the ADR-055 note further down
+				// each record: the runtime global x agent merge is
+				// strictest-wins, deny > ask > allow, applied whenever BOTH
+				// sides have an entry
+				// (pkg/tools/compositor.go:resolveEffectivePolicyWith). An
+				// "ask" ceiling here therefore OVERRULED Jim's own seeded
+				// "allow" (pkg/coreagent/core.go's IDJim case) and resolved
+				// "ask" for him too — making FR-005/R2-06's "Jim is the ONLY
+				// seeded agent granted unprompted plan-execution" dead on
+				// every install, in a build where the seed data still read
+				// exactly as the spec required.
+				//
+				// Observed cost before the fix: a 300 s stall per call.
+				// run_task raised an approval nobody was there to answer, the
+				// turn blocked on the default timeout in
+				// pkg/gateway/approvals.go, and the tool never executed at all.
+				//
+				// Raising the ceiling grants these tools to NOBODY by itself —
+				// it only raises the level an agent's own policy may be granted
+				// UP TO. Every seeded agent except Jim carries an explicit
+				// per-agent "ask" for all three (pkg/coreagent/core.go's
+				// coreAgentSeed), the Judge carries an explicit "deny"
+				// (systemAgentSeed, DS-6), and the Worker's sparse
+				// tightenGlobalCeiling map carries its own explicit entries.
+				// All of those still win under strictest-wins, so the only
+				// resolution this change moves is Jim's, from "ask" to the
+				// "allow" he was always seeded. This mirrors exactly what
+				// inspect_session (below) and ADR-055's plan_correct/stop_plan
+				// already do, for the same reason.
+				//
+				// Regression coverage:
+				// pkg/coreagent/tool_policy_effective_resolution_test.go
+				// resolves the seeds end-to-end through the real resolver
+				// (tools.ResolveEffectivePolicy), so a future ceiling
+				// tightening that silently overrules a seeded per-agent
+				// "allow" — for these three tools OR any other, see that
+				// file's bug-class test — fails the build rather than
+				// shipping.
+				// inspect_session is verifier-role-only (fix-wave finding #2,
+				// architect F2 half 1). The runtime global x agent merge is
+				// strictest-wins (deny > ask > allow,
+				// pkg/tools/compositor.go:resolveEffectivePolicyWith), so a
+				// ceiling "deny" here would have OVERRULED the Judge's own
+				// seeded "allow" and resolved the Judge to deny — exactly
+				// the landed defect this seed inverts. The ceiling therefore
+				// seeds "allow" (raising the CEILING an agent's own policy
+				// can be granted UP TO, same as every other non-destructive
+				// tool — it does not, by itself, grant the tool to anyone);
+				// EVERY seeded non-Judge agent carries an explicit per-agent
+				// "deny" for inspect_session (pkg/coreagent/core.go's
+				// coreAgentSeed/systemAgentSeed — denyAllThenOverride's
+				// fully-enumerated deny-by-default already covers every
+				// core/subagent-tier agent; the Worker's sparse
+				// tightenGlobalCeiling map now carries an explicit override
+				// too, since it would otherwise silently inherit this
+				// ceiling's "allow"), so the strictest-wins merge still
+				// resolves deny for everyone except the Judge, whose own
+				// "allow" now merges cleanly against an "allow" ceiling.
+				// Custom/unlisted agents are NOT deny-backfilled for this
+				// tool — the coverage repair only fills gaps, and this
+				// ceiling entry means inspect_session is never a gap — so a
+				// custom agent with no override resolves "allow" at the
+				// policy layer. Their real protection is the engine-set,
+				// fail-closed verifier-session scope lock
+				// (tools.VerifierSessionScopeAllows): a turn without the
+				// scope is refused every session id regardless of policy.
+				"create_plan":     "allow",
+				"execute_plan":    "allow",
+				"run_task":        "allow",
+				"inspect_session": "allow",
+
+				// --- ADR-055 (PlanSupervisor) supervision/containment ---
+				// Both ceilings are "allow". Two independent reasons, both
+				// recorded because either alone breaks the feature:
+				//
+				// 1. plan_correct: an "ask" or "deny" ceiling would OVERRULE
+				//    PlanSupervisor's own seeded "allow" under the
+				//    strictest-wins global x agent merge
+				//    (pkg/tools/compositor.go:resolveEffectivePolicyWith) and
+				//    the correction loop would be dead on every install —
+				//    exactly the landed defect the inspect_session note above
+				//    describes, on the very next tool. Raising the ceiling
+				//    grants the tool to nobody by itself: every seeded agent
+				//    except PlanSupervisor carries an explicit per-agent
+				//    "deny" (pkg/coreagent's denyAllThenOverride), and the
+				//    REAL control against an agent with no per-agent entry
+				//    (e.g. one persisted before this tool name existed, which
+				//    would inherit this "allow") is the engine's exact-identity
+				//    gate on the correction path, not the policy layer.
+				//
+				// 2. stop_plan: an "ask" ceiling would silently defeat the
+				//    FR-006b seeding rule. pkg/coreagent seeds stop_plan
+				//    alongside execute_plan at the same per-agent value, so
+				//    Jim gets "allow" — and an "ask" ceiling here would merge
+				//    that back down to "ask", making the plan owner stopping
+				//    their OWN plan depend on a human answering a prompt.
+				//    (Until 2026-07-28 execute_plan's own ceiling was "ask"
+				//    and this note cited that asymmetry as deliberate; it was
+				//    in fact the same defect, and execute_plan's ceiling has
+				//    since been raised to "allow" too — see the ADR-052 note
+				//    above. The reasoning for stop_plan is unchanged and was
+				//    always correct; only the contrast it drew is gone.)
+				"plan_correct": "allow",
+				"stop_plan":    "allow",
+
+				// --- ADR-056 (list_jobs) background-job roster ---
+				// "allow", for three reasons, the third of which is the one
+				// that would actually break something:
+				//
+				// 1. It mutates nothing. list_jobs is strictly read-only, is
+				//    fail-closed on an unresolvable caller identity (it refuses
+				//    rather than returning the whole installation's roster),
+				//    scopes every row to the calling principal, and bounds its
+				//    own output. There is no destructive action for an "ask" to
+				//    stand in front of.
+				// 2. An "ask" ceiling would put a human prompt in front of an
+				//    agent reading its OWN work roster, on every call — the
+				//    highest-frequency, lowest-consequence call in the planning
+				//    surface.
+				// 3. Under the strictest-wins global x agent merge
+				//    (pkg/tools/compositor.go:resolveEffectivePolicyWith) an
+				//    "ask" ceiling would drag every per-agent "allow" down to
+				//    "ask" — including Jim's. Jim's stop_plan resolves "allow"
+				//    precisely so a runaway plan can be contained with no human
+				//    in the loop, and stop_plan takes a PLAN ID. Gating the one
+				//    tool that produces that id behind a prompt hands the human
+				//    dependency straight back and makes the asymmetric stop_plan
+				//    ceiling directly above pointless. Same defect shape as
+				//    inspect_session and plan_correct, third time.
+				//
+				// As always, raising the ceiling grants the tool to nobody by
+				// itself: the four base agents carry an explicit per-agent
+				// "allow" and every other seeded agent an explicit "deny"
+				// (pkg/coreagent/core.go's ROSTER VISIBILITY seed rule,
+				// including the Worker's sparse-map deny — an absent key there
+				// would inherit this "allow").
+				"list_jobs": "allow",
 			},
+		},
+		// Planning holds the Planning & Goals epic's global loop bounds
+		// (ADR-049 D7, spec Part A §G). Populated explicitly here (rather than
+		// left zero and default-applied only at boot) so a fresh install's
+		// config.json is self-documenting; validateBootConfig still applies
+		// the same defaults for any field an operator zeroes out later.
+		Planning: PlanningConfig{
+			TaskMaxAttempts:      DefaultTaskMaxAttempts,
+			GoalMaxRounds:        DefaultGoalMaxRounds,
+			PlanJudgeMaxRounds:   DefaultPlanJudgeMaxRounds,
+			LoopMaxRuns:          DefaultLoopMaxRuns,
+			IdleExpiryDays:       DefaultIdleExpiryDays,
+			GlobalActiveLoopCap:  DefaultGlobalActiveLoopCap,
+			CheckTimeoutSeconds:  DefaultCheckTimeoutSeconds,
+			VerifierWindowTokens: DefaultVerifierWindowTokens,
+		},
+		// SessionMessaging holds the ADR-053 §8 session-control-plane
+		// operability config (FR-195's 21 keys). Seeded explicitly so a fresh
+		// install's config.json is self-documenting and the plane is LIVE by
+		// default (enabled=true). validateBootConfig re-applies the same
+		// defaults for any field an operator zeroes out later.
+		SessionMessaging: SessionMessagingConfig{
+			Enabled:             DefaultSessionMessagingEnabled,
+			WakeEnabled:         DefaultSessionMessagingWakeEnabled,
+			AdjudicationEnabled: DefaultSessionMessagingAdjudicationEnabled,
+
+			ChildSendRatePerMinute: DefaultSMChildSendRatePerMinute,
+			ChildSendBody:          DefaultSMChildSendBodyBytes,
+			ChildSendDepth:         DefaultSMChildSendMaxDepth,
+
+			InboxUnackedMax:     DefaultSMInboxUnackedMax,
+			InboxPerTypeCeiling: DefaultSMInboxPerTypeCeiling,
+
+			SteerRatePerMinute: DefaultSMSteerRatePerMinute,
+			SteerBody:          DefaultSMSteerBodyBytes,
+
+			CancelGrace:   duration(DefaultSMCancelGrace),
+			NeedsInputTTL: duration(DefaultSMNeedsInputTTL),
+
+			WakeDebounce:   duration(DefaultSMWakeDebounce),
+			WakeMaxPerHour: DefaultSMWakeMaxPerHour,
+
+			IdleQuietWindow: duration(DefaultSMIdleQuietWindow),
+
+			AttemptsMax:    DefaultSMAttemptsMax,
+			JudgeRoundsMax: DefaultSMJudgeRoundsMax,
+
+			MessageRetention:     DefaultSMMessageRetention,
+			AuditRetention:       DefaultSMAuditRetention,
+			UndeliveredRetention: DefaultSMUndeliveredRetention,
 		},
 		Tools: ToolsConfig{
 			FilterSensitiveData: true,

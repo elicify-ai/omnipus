@@ -1,5 +1,3 @@
-//go:build !cgo
-
 package gateway
 
 import (
@@ -79,10 +77,11 @@ func parseCommandsResponse(t *testing.T, w *httptest.ResponseRecorder) []gen.Sla
 	return cmds
 }
 
-// TestHandleListCommands_Web verifies surface=web returns exactly 9 commands.
+// TestHandleListCommands_Web verifies surface=web returns exactly 11 commands.
 // Post ADR-026: /skill+/use removed; /skills and /agents gained the web surface.
-// The three memory commands (remember/recall/retrospective) are also
-// all-surface (agent-delivery), bringing the web count from 6 to 9.
+// The three memory commands (remember/recall/retrospective) are all-surface
+// (agent-delivery), bringing the web count to 9; ADR-049's /goal and /loop
+// (also all-surface, agent-delivery) bring it to 11.
 func TestHandleListCommands_Web(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "web", true)
@@ -92,8 +91,8 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 9 {
-		t.Errorf("web: expected 9 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 11 {
+		t.Errorf("web: expected 11 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
 	wantNames := map[string]bool{
@@ -106,6 +105,8 @@ func TestHandleListCommands_Web(t *testing.T) {
 		"remember":      true,
 		"recall":        true,
 		"retrospective": true,
+		"goal":          true, // ADR-049: /goal proof-driven session loop (agent-delivery, all surfaces)
+		"loop":          true, // ADR-049: /loop time-driven loop (agent-delivery, all surfaces)
 	}
 	for _, c := range cmds {
 		if !wantNames[c.Name] {
@@ -118,9 +119,10 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 }
 
-// TestHandleListCommands_CLI verifies surface=cli returns all 13 canonical commands.
+// TestHandleListCommands_CLI verifies surface=cli returns all 15 canonical commands.
 // Post ADR-026: /skill (singular) removed, so the canonical set was 10 (was 11);
-// the memory commands (remember/recall/retrospective) bring it to 13.
+// the memory commands (remember/recall/retrospective) bring it to 13, and
+// ADR-049's /goal and /loop bring it to 15.
 func TestHandleListCommands_CLI(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "cli", true)
@@ -130,8 +132,8 @@ func TestHandleListCommands_CLI(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 13 {
-		t.Errorf("cli: expected 13 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 15 {
+		t.Errorf("cli: expected 15 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
 	allCanonical := []string{
@@ -148,6 +150,8 @@ func TestHandleListCommands_CLI(t *testing.T) {
 		"remember",
 		"recall",
 		"retrospective",
+		"goal", // ADR-049
+		"loop", // ADR-049
 	}
 	nameSet := make(map[string]bool, len(cmds))
 	for _, c := range cmds {
@@ -170,8 +174,8 @@ func TestHandleListCommands_Channel(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 13 {
-		t.Errorf("channel: expected 13 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 15 {
+		t.Errorf("channel: expected 15 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 }
 
@@ -186,9 +190,9 @@ func TestHandleListCommands_DefaultSurface(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 9 {
+	if len(cmds) != 11 {
 		t.Errorf(
-			"default surface (web): expected 9 commands, got %d: %v",
+			"default surface (web): expected 11 commands, got %d: %v",
 			len(cmds),
 			commandNames(cmds),
 		)
@@ -205,9 +209,9 @@ func TestHandleListCommands_UnknownSurface(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 9 {
+	if len(cmds) != 11 {
 		t.Errorf(
-			"unknown surface should default to web (9 cmds), got %d: %v",
+			"unknown surface should default to web (11 cmds), got %d: %v",
 			len(cmds),
 			commandNames(cmds),
 		)
@@ -267,6 +271,8 @@ func TestHandleListCommands_DeliveryFields(t *testing.T) {
 		"remember":      true,
 		"recall":        true,
 		"retrospective": true,
+		"goal":          true, // ADR-049: agent-delivery
+		"loop":          true, // ADR-049: agent-delivery
 	}
 
 	seen := make(map[string]bool, len(cmds))

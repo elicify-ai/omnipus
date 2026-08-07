@@ -12,7 +12,7 @@
 //                        when agentId is absent or doesn't match any known
 //                        agent (see useRunningActivity's resolveAgent).
 
-import { Terminal, UserCircle } from '@phosphor-icons/react'
+import { Terminal, UserCircle, Scales } from '@phosphor-icons/react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import type { ActivityItem } from '@/hooks/useRunningActivity'
@@ -39,6 +39,19 @@ export function ActivityAvatar({ item, size = 'md' }: ActivityAvatarProps) {
       <Avatar size={size} className="border border-[var(--color-border)]">
         <AvatarFallback className="bg-[var(--color-surface-2)] text-[var(--color-muted)]">
           <Terminal size={iconSize} aria-hidden="true" />
+        </AvatarFallback>
+      </Avatar>
+    )
+  }
+
+  // ADR-049 D2/D4/US-13: judge verdicts — a distinct, Forge-Gold-tinted
+  // "scales" glyph so a judge row reads as a different kind of thing at a
+  // glance, same rationale as the 3p-agent badge above.
+  if (item.kind === 'judge') {
+    return (
+      <Avatar size={size} className="border border-[var(--color-accent)]/30">
+        <AvatarFallback className="bg-[var(--color-accent)]/10 text-[var(--color-accent)]">
+          <Scales size={iconSize} weight="fill" aria-hidden="true" />
         </AvatarFallback>
       </Avatar>
     )

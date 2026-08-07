@@ -66,18 +66,18 @@ properties:
     enum:
       - inbox
       - next
-      - planning
       - in_progress
       - blocked
       - done
       - failed
     description: >
-      Current lifecycle state (Detail #1, 7-state). `inbox` captured/untriaged ·
-      `next` triaged & ready · `planning` agent decomposing (light in Tier 2) ·
-      `in_progress` worked by a human OR agent (decoupled from /start) · `blocked`
-      auto side-state for an unmet dependency (set automatically; clears to `next`
-      when all `blocked_by` deps reach `done`) · `done` · `failed`. Everything
-      lands in `inbox` by default; nothing auto-lands in `next`.
+      Current lifecycle state (ADR-051 D5, 6-state). `inbox` captured/untriaged ·
+      `next` triaged & ready (also the landing state for a task remapped from the
+      removed `planning` status) · `in_progress` worked by a human OR agent
+      (decoupled from /start) · `blocked` auto side-state for an unmet dependency
+      (set automatically; clears to `next` when all `blocked_by` deps reach
+      `done`) · `done` · `failed`. Everything lands in `inbox` by default; nothing
+      auto-lands in `next`.
     example: "inbox"
   agent_id:
     type: string
@@ -85,6 +85,21 @@ properties:
       ID of the agent assigned to this task. Optional — human-only tasks have
       none.
     example: "jim"
+  cancel_reason:
+    type: string
+    nullable: true
+    enum:
+      - stopped_by_user
+    description: >
+      Cancelled-task discriminator (ADR-052 FR-028), mirroring
+      `Plan.failed_reason`. Set only when `status == failed` AND the task was
+      terminated via POST /tasks/{id}/stop (distinguishes a user-cancelled
+      task, rendered with an orange "Cancelled" marker in the Failed column,
+      from a genuine failure, e.g. attempts exhausted, which leaves this
+      field null/absent). POST /tasks/{id}/restart clears it — a restarted
+      task is no longer "stopped by user"; a later genuine failure records
+      its own outcome via `result` with this field absent.
+    example: "stopped_by_user"
   agent_name:
     type: string
     description: >
@@ -132,10 +147,112 @@ properties:
       Workspace this task belongs to. Required-scoped — every task lives in a
       workspace; reads and writes are workspace-scoped.
     example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-  milestone_id:
+  tags:
+    type: array
+    maxItems: 16
+    items:
+      type: string
+      maxLength: 64
+    description: >
+      Workspace-scoped, free-form tags (ADR-049 D1) — lowercase, trimmed,
+      deduplicated after normalization, at most 16 per task, each at most 64
+      characters. Replaces the removed `milestone_id` grouping; the
+      milestone migration seeds a `milestone:<name>` tag onto member tasks.
+      `prefix:value` (e.g. `milestone:`, `release:`) is convention only, not
+      schema. There is no global tag registry — identical tag strings in
+      different workspaces are unrelated.
+    example:
+      - "milestone:v1.0-launch"
+  plan_id:
     type: string
-    description: Optional milestone this task is grouped under.
-    example: "m-1234"
+    description: >
+      Optional Plan this task belongs to (ADR-049 D1/D4). Same-workspace
+      FK — referencing a plan in a different workspace is rejected 400.
+      Absent for tasks not grouped under a plan.
+    example: "01J3ZQK8N2H8VXNRP5T7C9M4WE"
+  write_set:
+    type: array
+    items:
+      type: string
+    description: >
+      ADR-053 §Contract Surface — "write_sets + rationale on create_plan"
+      (US-11/G-16). Concrete paths this plan MEMBER task creates/edits.
+      Plan-lint reads this at approve to reject overlapping parallel
+      `stream`s and join-less convergence points. Empty for an
+      exploratory member whose write footprint is unknowable up front —
+      it runs in its own isolated checkout at the highest available
+      isolation rung (worktree -> go-git clone -> subdir, FR-154) rather
+      than declaring a write-set (D10). Meaningful only when `plan_id` is
+      set; ignored on a standalone task.
+    example:
+      - "pkg/plan/plan_lint.go"
+      - "pkg/plan/plan_lint_test.go"
+  stream:
+    type: string
+    description: >
+      ADR-053 §Contract Surface — the parallel-group id this plan member
+      belongs to (US-11/g4). Members sharing a `stream` run serially
+      within it; different streams may run concurrently provided their
+      `write_set`s are disjoint (plan-lint invariant). Absent for a
+      member not part of a parallel decomposition.
+    example: "stream-schema"
+  is_join:
+    type: boolean
+    description: >
+      ADR-053 §Contract Surface — true marks this plan member as an
+      authored join/assemble member with its own criteria, converging one
+      or more parallel `stream`s into a single artifact (g5 shard+assemble
+      topology). Plan-lint rejects a convergence point with no authored
+      join member (join-less plan, US-11 AS-2). Absent/false is the
+      common case (not a join member) — deliberately no schema `default:`
+      alongside this optional field (see the `priority`/`surface`
+      convention note in this file's `required` comment: combining
+      `default:` with an absent-from-`required` field makes
+      openapi-typescript emit it as NON-optional in the plain TS type
+      regardless of the `required` list, which would make `is_join`
+      falsely mandatory on every existing `Task` literal across the SPA
+      test suite).
+    example: false
+  judge_rounds:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      ADR-053 §Contract Surface — "Budget / bounds". Per-task adjudication
+      rounds consumed so far, mirroring `Plan.judge_rounds` at task/goal
+      scope (R§8.9 — one round = one adjudication, claim-triggered or
+      idle-settled). Distinct from `attempt_count`, which tracks retry
+      attempts, not adjudications.
+    example: 0
+  criteria:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterion.yaml
+    description: >
+      Acceptance criteria (Definition of Done) for this task (ADR-049
+      D2/D5/FR-3). Agent-created tasks require at least one; UI/human
+      creation is soft (falls back to judging title+description when
+      empty). Immutable once a recurring Trigger run has started (per-run
+      snapshot).
+  attempt_count:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      Current run's attempt index within its goal loop (ADR-049 D7).
+      Read-only, server-set; the UI renders "attempt N/M" against
+      `max_attempts` (or the inherited `PlanningConfig.task_max_attempts`
+      default).
+    example: 1
+  max_attempts:
+    type: integer
+    minimum: 1
+    nullable: true
+    description: >
+      Per-task override of the attempt ceiling before the goal loop wakes
+      the owner (ADR-049 D7/FR-9). Null/absent inherits the global
+      `PlanningConfig.task_max_attempts` default (3).
+    example: 5
   trigger:
     $ref: ./TaskTrigger.yaml
   due:
@@ -244,7 +361,6 @@ properties:
           enum:
             - inbox
             - next
-            - planning
             - in_progress
             - blocked
             - done
