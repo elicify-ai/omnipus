@@ -187,6 +187,17 @@ type TaskExecutor struct {
 	// TaskExecutor, so a still-running goal-loop chain could keep writing
 	// session/transcript/run-history files after Close() returned).
 	wg sync.WaitGroup
+
+	// draining, once set by Drain, makes ExecuteTask/StartTaskNow refuse NEW
+	// dispatch immediately (ErrExecutorDraining). Without this gate Drain's
+	// wg.Wait could never return: a goal-loop redispatch chain's trailing
+	// defer re-enters dispatch synchronously (see wg's doc comment), so with
+	// intake open the counter never observably empties — and a chain
+	// re-dispatching against stores Close() is about to tear down spins
+	// failure-allocations flat out (observed as runner OOM/SIGTERM on all
+	// three CI matrix legs before this gate existed). Never reset: a drained
+	// executor belongs to an AgentLoop that is shutting down for good.
+	draining atomic.Bool
 }
 
 // evidenceGateMaxConsecutiveRejections is N in ADR-052 FR-035's "after N
@@ -236,6 +247,10 @@ func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
 // returns) can never hang Close() forever; on timeout it logs a warning and
 // returns so the rest of teardown can proceed.
 func (te *TaskExecutor) Drain(budget time.Duration) {
+	// Close intake FIRST — see draining's doc comment: with intake open the
+	// goal-loop's synchronous redispatch chains keep wg forever non-empty
+	// and spin against half-torn-down stores.
+	te.draining.Store(true)
 	done := make(chan struct{})
 	go func() {
 		te.wg.Wait()
@@ -450,6 +465,9 @@ func (te *TaskExecutor) ClearEvidenceGateStreak(taskID string) {
 // StartOccurrenceRun (the user-initiated launch paths) record
 // task.RunKindManual instead.
 func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string, occurrenceMs *int64) error {
+	if te.draining.Load() {
+		return ErrExecutorDraining
+	}
 	return te.executeTask(ctx, taskID, occurrenceMs, task.RunKindScheduled, false)
 }
 
@@ -2276,6 +2294,9 @@ func (te *TaskExecutor) failTask(taskID, reason string) {
 // an empty string and an error when the task cannot be found, already has no
 // agent, or the concurrency cap is exhausted.
 func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string, error) {
+	if te.draining.Load() {
+		return "", ErrExecutorDraining
+	}
 	t, err := te.store.Get(taskID)
 	if err != nil {
 		return "", fmt.Errorf("task_executor: StartTaskNow get task %q: %w", taskID, err)
@@ -2655,6 +2676,13 @@ func (te *TaskExecutor) DispatchSemaCap() int {
 func (te *TaskExecutor) TryAcquireDispatchSema() (bool, func()) {
 	return te.dispatchSema.TryAcquire()
 }
+
+// ErrExecutorDraining is returned by ExecuteTask/StartTaskNow once Drain has
+// closed intake during AgentLoop.Close() — new dispatch (including a
+// goal-loop chain's own trailing redispatch) is refused so the drain can
+// complete instead of chasing an ever-refilling WaitGroup. See
+// TaskExecutor.draining's doc comment for the CI OOM this prevents.
+var ErrExecutorDraining = errors.New("task_executor: executor is draining for shutdown — new dispatch refused")
 
 // ErrPlanNotExecuting is returned by requirePlanExecuting (and therefore by
 // ExecuteTask/StartTaskNow) when a plan MEMBER task's parent plan WAS
