@@ -391,7 +391,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           // set() above already ran) — not the raw hint. When a user pin
           // rejected the hint, remembering the raw hint would hand the same
           // losing value back on the next attach.
-          agentId: (agentId ?? get().activeAgentId) ?? null,
+          agentId: get().activeAgentId ?? null,
         }
         set((state) => ({
           sessionByWorkspace: { ...state.sessionByWorkspace, [wsId]: descriptor },
@@ -450,7 +450,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           type,
           title: title ?? null,
           // Effective agent, not the raw hint — see setActiveSession.
-          agentId: (agentId ?? get().activeAgentId) ?? null,
+          agentId: get().activeAgentId ?? null,
         }
         set((state) => ({
           sessionByWorkspace: { ...state.sessionByWorkspace, [wsId]: descriptor },
@@ -487,7 +487,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           type,
           title: title ?? null,
           // Effective agent, not the raw hint — see setActiveSession.
-          agentId: (agentId ?? get().activeAgentId) ?? null,
+          agentId: get().activeAgentId ?? null,
         }
         set((state) => ({
           sessionByWorkspace: { ...state.sessionByWorkspace, [wsId]: descriptor },
