@@ -2303,29 +2303,38 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// Tool-result file sweep runs alongside the transcript sweep on the same
 	// retention window. setupAndStartServices already constructed the store.
 	//
-	// This assignment MUST stay ABOVE startRetentionSweepLoop. The sweep loop
-	// performs a deliberate boot-time sweep BEFORE its first ticker wait
-	// (retention_goroutine.go:81), so it reads retentionToolResultSweepFn
-	// immediately — and that var is a bare package-level func with no mutex or
-	// atomic. Assigning it after the goroutine was launched was a real data
-	// race, caught by `-race` on tests/integration once the package became
-	// race-buildable:
+	// These assignments MUST stay ABOVE startRetentionSweepLoop. The sweep
+	// loop performs a deliberate boot-time sweep BEFORE its first ticker wait
+	// (retention_goroutine.go:81), so it reads retentionToolResultSweepFn AND
+	// retentionTaskRunSweepFn immediately — both are bare package-level funcs
+	// with no mutex or atomic. Assigning either one after the goroutine was
+	// launched is a real data race, caught by `-race` on tests/integration
+	// once the package became race-buildable:
 	//
-	//	Read at … executeSweepTick() retention_goroutine.go:145
+	//	Read at … executeSweepTick() retention_goroutine.go:145 (tool-result var)
 	//	Previous write at … RunContextWithOptions() gateway.go:1955
 	//
-	// The user-visible symptom was the boot-time tool-result sweep
-	// nondeterministically observing nil and silently skipping — which
-	// executeSweepTick's own comment used to excuse as "tests with a disabled
-	// toolStore". Ordering is sufficient rather than a mutex: this is the ONLY
-	// writer in the tree, so once the goroutine starts the value never changes.
+	// The user-visible symptom is the boot-time sweep nondeterministically
+	// observing nil and silently skipping — which executeSweepTick's own
+	// comment used to excuse as "tests with a disabled toolStore" for the
+	// tool-result var. Ordering is sufficient rather than a mutex: these are
+	// the ONLY writers in the tree, so once the goroutine starts neither
+	// value ever changes.
+	//
+	// REGRESSION (found while chasing an unrelated tests/integration -race
+	// failure, 2026-08-07): retentionTaskRunSweepFn used to be wired in its
+	// own block AFTER startRetentionSweepLoop below — reintroducing the
+	// EXACT race this comment already documents fixing, just for the sibling
+	// var (WARNING: DATA RACE, retention_goroutine.go:161 vs this file's
+	// former line 2335). Per-task run-history pruning (ADR-050 RD9/RD10,
+	// pkg/gateway/retention_task_runs.go) could nondeterministically no-op on
+	// the very first boot-time tick in production, not just under -race —
+	// the race detector only makes an existing ordering bug loud, it doesn't
+	// create the bug. Moved up alongside the tool-result wiring so both
+	// hooks are fully wired before the sweep goroutine can ever read them.
 	if runningServices.toolStore != nil {
 		retentionToolResultSweepFn = runningServices.toolStore.retentionSweep
 	}
-	if sharedStore := agentLoop.GetSessionStore(); sharedStore != nil {
-		startRetentionSweepLoop(ctx, sharedStore, agentLoop.GetConfig, 24*time.Hour)
-	}
-
 	// Per-task run-history prune + stuck-run reaper (ADR-050 RD9/RD10) runs
 	// alongside the transcript sweep on the same retention window/cadence —
 	// see pkg/gateway/retention_task_runs.go. GetTaskStore returns nil only
@@ -2335,6 +2344,9 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		retentionTaskRunSweepFn = func(cutoff time.Time) (int, error) {
 			return pruneAllTaskRuns(tStore, cutoff)
 		}
+	}
+	if sharedStore := agentLoop.GetSessionStore(); sharedStore != nil {
+		startRetentionSweepLoop(ctx, sharedStore, agentLoop.GetConfig, 24*time.Hour)
 	}
 
 	// FR-031: Launch the nightly retro sweep goroutine alongside the session sweep.

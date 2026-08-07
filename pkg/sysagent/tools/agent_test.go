@@ -467,10 +467,28 @@ func TestWithConfig_SerializesReaderWriter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
+	// wg tracks every writer/reader goroutine below so the test can block
+	// until each has actually RETURNED from its loop — not merely until ctx
+	// has been signaled Done. <-ctx.Done() alone (the test's previous final
+	// line) only waits for the DEADLINE to fire; it says nothing about
+	// whether a goroutine's in-flight createTool.Execute call (which writes
+	// real agent-entity files under deps.Home == t.TempDir()) has finished
+	// and the goroutine has looped back around to observe ctx.Done() and
+	// return. Without this wg, the test function could return — and
+	// t.TempDir()'s cleanup could call os.RemoveAll — while a writer
+	// goroutine was still mid-write into the entities/ subtree, racing a
+	// "TempDir RemoveAll cleanup: directory not empty" failure (the same
+	// defect class as TestDelegate_StatusReflectsRealState in pkg/tools and
+	// the TaskExecutor goal-loop drain in pkg/agent — an unwaited background
+	// goroutine outliving the test function).
+	var wg sync.WaitGroup
+
 	// Writers: call system.agent.create concurrently.
 	const numWriters = 4
+	wg.Add(numWriters)
 	for i := range numWriters {
 		go func() {
+			defer wg.Done()
 			for {
 				select {
 				case <-ctx.Done():
@@ -493,8 +511,10 @@ func TestWithConfig_SerializesReaderWriter(t *testing.T) {
 	// handlers that call GetConfig → RLock). Here we simulate a concurrent
 	// reader by acquiring the mutex in read mode via a secondary lock.
 	const numReaders = 4
+	wg.Add(numReaders)
 	for range numReaders {
 		go func() {
+			defer wg.Done()
 			for {
 				select {
 				case <-ctx.Done():
@@ -513,6 +533,7 @@ func TestWithConfig_SerializesReaderWriter(t *testing.T) {
 	}
 
 	<-ctx.Done()
+	wg.Wait()
 }
 
 // TestSystemConfigSet_RollbackOnSaveFailure verifies that system.config.set

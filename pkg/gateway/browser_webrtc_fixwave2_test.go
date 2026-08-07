@@ -317,7 +317,7 @@ func TestWatchEncoderLiveness_StopsSession_WhenVideoPacketsFrozenDespiteFreshPin
 		}
 	}()
 
-	go handler.watchEncoderLiveness(cs, "watchdog-stall-agent")
+	go handler.watchEncoderLiveness(cs, "watchdog-stall-agent", encoderLivenessCheckInterval, encoderLivenessStaleAfter)
 
 	require.Eventually(
 		t,
@@ -379,8 +379,9 @@ func TestWatchEncoderLiveness_DoesNotStop_WhenVideoPacketsAdvancing(t *testing.T
 	}()
 
 	watchdogDone := make(chan struct{})
+	checkInterval, staleAfter := encoderLivenessCheckInterval, encoderLivenessStaleAfter
 	go func() {
-		handler.watchEncoderLiveness(cs, "watchdog-progress-agent")
+		handler.watchEncoderLiveness(cs, "watchdog-progress-agent", checkInterval, staleAfter)
 		close(watchdogDone)
 	}()
 	t.Cleanup(cs.Stop)

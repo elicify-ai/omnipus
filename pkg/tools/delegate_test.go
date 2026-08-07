@@ -268,7 +268,17 @@ func TestDelegate_StatusReflectsRealState(t *testing.T) {
 	// This test's concern is action:"status" tracking, not the delegation-policy gate.
 	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
 	// ADR-057 FR-021/BDD-20 (W7a): see TestDelegate_DefaultIsAsync's comment.
+	// Cleanup is registered AFTER t.TempDir() so LIFO ordering drains the
+	// async goroutine's own lifecycle-store write before the temp dir is
+	// removed. This test polls action:"status" for "status=completed" below,
+	// but that only observes the in-memory state flip — executeAsync's
+	// completion goroutine (delegate.go) still has its own terminal
+	// lifecycle-store write in flight at that instant, which otherwise races
+	// t.TempDir()'s cleanup into "directory not empty" (this test was
+	// missing the WaitForAsyncTasks call TestDelegate_DefaultIsAsync already
+	// established for the identical setup, immediately above).
 	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
+	t.Cleanup(tool.WaitForAsyncTasks)
 	runCtx := WithAgentID(context.Background(), "test-agent")
 
 	release := make(chan struct{})

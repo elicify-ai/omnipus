@@ -726,29 +726,37 @@ const encoderLivenessVideoStallTicks = 6
 // session by ensureCaptureSession's newFn — the same "exactly once per
 // session" discipline EnsureCaptureSession already guarantees for newFn
 // itself. Stops the session on either of two independent staleness signals:
-// no ping beacon within encoderLivenessStaleAfter (original fix 3), OR no
-// video RTP progress across encoderLivenessVideoStallTicks consecutive
-// checks while a viewer is attached (fix-wave HIGH addition, see that
-// const's doc comment).
-func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agentID string) {
-	// Snapshot BOTH test-shrinkable knobs ONCE, synchronously, on entry —
-	// never re-read the package-level vars later in this function. checkInterval
-	// was already effectively snapshotted this way (time.NewTicker evaluates
-	// its argument immediately), but staleAfter used to be re-read from the
-	// live global on every tick, for the lifetime of this goroutine — which
-	// this loop runs until cs.Stop() (any cause). cs.Stop() closing cs.Done()
-	// does not block for THIS goroutine to observe it and return, so a test
-	// that calls cs.Stop() in a Cleanup and then restores
-	// encoderLivenessStaleAfter/encoderLivenessCheckInterval in an
-	// earlier-registered (so later-run, LIFO) Cleanup can race this loop's
-	// still-in-flight tick — a genuine data race (WARNING: DATA RACE,
-	// browser_webrtc.go:568 vs browser_webrtc_fixwave2_test.go:328, caught
-	// under `go test -race`), not a flake. Capturing both up front removes
-	// every later read of the package vars from this function; production
-	// behavior is unchanged since neither var is ever mutated outside tests.
-	checkInterval := encoderLivenessCheckInterval
-	staleAfter := encoderLivenessStaleAfter
-
+// no ping beacon within staleAfter (original fix 3), OR no video RTP
+// progress across encoderLivenessVideoStallTicks consecutive checks while a
+// viewer is attached (fix-wave HIGH addition, see that const's doc comment).
+//
+// checkInterval/staleAfter are passed in by the caller rather than read from
+// the encoderLivenessCheckInterval/encoderLivenessStaleAfter package vars
+// IN HERE, and this is load-bearing, not a style choice. An earlier version
+// of this function snapshotted those vars into locals once, at function
+// entry, reasoning that a single read (vs. re-reading every tick) was safe
+// once cs.Stop() started the goroutine's shutdown. That reasoning had a gap:
+// the snapshot read still happened on THIS goroutine, which the caller only
+// ever fire-and-forgets (`go h.watchEncoderLiveness(...)`) — nothing
+// guarantees this goroutine reaches its first statement before the SAME
+// test returns, let alone before a LATER test's setup overwrites the
+// package vars for its own shrunk-timing scenario. That is exactly what
+// happened under `go test -race`: a capture session started by one test
+// left its watchdog goroutine scheduled-but-not-yet-run, and a later test's
+// bare `encoderLivenessCheckInterval = 5*time.Millisecond` write raced this
+// goroutine's still-pending entry-snapshot read (WARNING: DATA RACE,
+// browser_webrtc.go:749/750 vs browser_webrtc_fixwave2_test.go:274/275,
+// TestWatchEncoderLiveness_StopsSession_WhenVideoPacketsFrozenDespiteFreshPings).
+// Moving the read to the CALL SITE closes this for good: Go evaluates a `go`
+// statement's arguments on the CALLING goroutine, synchronously, before the
+// new goroutine is even spawned — so every caller below reads the package
+// vars (or, for the production call site, the vars stay hard-coded live
+// values with no test ever touching them concurrently) on a goroutine whose
+// ordering relative to the next test IS already established by the normal
+// sequential-test happens-before chain. This function itself never touches
+// the package vars at all, so no lifetime of the watchdog goroutine — however
+// long a slow CI runner leaves it scheduled — can race a later test again.
+func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agentID string, checkInterval, staleAfter time.Duration) {
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
@@ -843,7 +851,12 @@ func (h *BrowserWSHandler) ensureCaptureSession(
 				audit.SeverityInfo, map[string]any{"agent_id": agentID})
 			h.notifyViewersStreamStopped(cs.ViewerIDs())
 		})
-		go h.watchEncoderLiveness(cs, agentID)
+		// Reading encoderLivenessCheckInterval/encoderLivenessStaleAfter HERE
+		// (as `go` statement arguments, evaluated on THIS goroutine before the
+		// watchdog goroutine is spawned) rather than inside
+		// watchEncoderLiveness is load-bearing — see that function's doc
+		// comment for the data race this closes.
+		go h.watchEncoderLiveness(cs, agentID, encoderLivenessCheckInterval, encoderLivenessStaleAfter)
 		return cs, nil
 	})
 }
