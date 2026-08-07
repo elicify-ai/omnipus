@@ -13,6 +13,7 @@ import { TaskActionButton } from './TaskActionButton'
 import { cn } from '@/lib/utils'
 // 6-state unified vocabulary + colour — single source of truth.
 import { STATUS_ORDER, statusLabel, taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
+import { isScheduledTrigger } from './taskFormFields'
 import type { Task, Agent } from '@/lib/api'
 
 type SortKey = 'priority' | 'title' | 'status' | 'agent' | 'updated'
@@ -79,9 +80,17 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
   const [tagFilter, setTagFilter] = useState<Set<string>>(new Set())
   const [agentFilter, setAgentFilter] = useState<Set<string>>(new Set())
 
-  // Filter out heartbeat/non-user surface tasks from the general list view.
+  // Filter out heartbeat/non-user surface tasks from the general list view,
+  // AND schedule-bearing tasks (trigger.type ∈ {once, every, recurring}) —
+  // those are calendar-only (operator ruling 2026-08-07, superseding the
+  // narrower every/recurring-only D3 boundary). Presentation-only: the task
+  // store/REST API are untouched, the task still exists and runs — it just
+  // never renders as a List row.
   const userTasks = useMemo(
-    () => tasks.filter((t) => t.surface === 'user' || t.surface === undefined),
+    () =>
+      tasks.filter(
+        (t) => (t.surface === 'user' || t.surface === undefined) && !isScheduledTrigger(t.trigger),
+      ),
     [tasks],
   )
 

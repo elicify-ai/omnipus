@@ -18,7 +18,7 @@ import {
 } from '@dnd-kit/core'
 import { Info } from '@phosphor-icons/react'
 import { TaskCard } from './TaskCard'
-import { isRecurringTrigger } from './taskFormFields'
+import { isRecurringTrigger, isScheduledTrigger } from './taskFormFields'
 import { STATUS_COLORS, STATUS_LABELS, STATUS_ORDER } from '@/lib/statusColors'
 import { taskMoveErrorMessage } from '@/lib/api'
 import type { Task, Agent, Plan } from '@/lib/api'
@@ -288,8 +288,15 @@ export function BoardView({
   onTaskMove,
   onMoveRejected,
 }: BoardViewProps) {
-  // Filter out non-user-surface tasks (e.g. heartbeat tasks are hidden from general views).
-  const userTasks = tasks.filter((t) => t.surface === 'user' || t.surface === undefined)
+  // Filter out non-user-surface tasks (e.g. heartbeat tasks are hidden from
+  // general views) AND schedule-bearing tasks (trigger.type ∈ {once, every,
+  // recurring}) — those are calendar-only (operator ruling 2026-08-07,
+  // superseding the narrower every/recurring-only D3 boundary). Presentation
+  // -only: the task store/REST API are untouched, the task still exists and
+  // runs — it just never renders as a Board card.
+  const userTasks = tasks.filter(
+    (t) => (t.surface === 'user' || t.surface === undefined) && !isScheduledTrigger(t.trigger),
+  )
   // Board shows only top-level tasks — subtasks (parent_task_id present) are
   // NEVER rendered as standalone cards. They nest under their parent (altitude 'show-all').
   const rootTasks = useMemo(() => userTasks.filter((t) => !t.parent_task_id), [userTasks])

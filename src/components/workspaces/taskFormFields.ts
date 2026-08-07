@@ -83,14 +83,34 @@ export function dateToDatetimeLocal(date: Date | null): string {
 }
 
 /**
- * Whether a trigger is a calendar-only recurring trigger (`every`/`recurring`,
- * FR-011/D3). Board and List exclude tasks whose trigger matches this
- * predicate — recurring tasks live exclusively on the workspace calendar.
- * Accepts `trigger` directly (not the whole `Task`) so BoardView/ListView can
- * call it inline as `isRecurringTrigger(t.trigger)`.
+ * Whether a trigger is a repeat-rule trigger (`every`/`recurring`). NARROWER
+ * than the calendar-only boundary (see `isScheduledTrigger` below, which is
+ * the one Board/List actually use to decide visibility) — this predicate is
+ * for call sites that specifically care about REPEATING behaviour, not mere
+ * schedule-bearing: `canDropTransition`'s repeating-task drag guard
+ * (BoardView.tsx — a failed repeating task can't be restarted by dragging)
+ * and TaskDetailPanel's raw-cron/rrule-hiding guard (a `once` trigger has no
+ * rule string to hide, so it stays fully editable there). Accepts `trigger`
+ * directly (not the whole `Task`) so callers can use it inline as
+ * `isRecurringTrigger(t.trigger)`.
  */
 export function isRecurringTrigger(trigger?: TaskTrigger | null): trigger is TaskTrigger {
   return trigger?.type === 'every' || trigger?.type === 'recurring'
+}
+
+/**
+ * Whether a trigger carries ANY schedule — a concrete one-shot instant
+ * (`once`), a fixed interval (`every`), or a repeat rule (`recurring`).
+ * Superset of `isRecurringTrigger` (adds `once`). Board and List exclude
+ * every task whose trigger matches this predicate — schedule-bearing tasks
+ * live exclusively on the workspace calendar (operator ruling 2026-08-07:
+ * "recurring and ALL scheduled tasks are calendar-only"). Only a `manual`
+ * trigger (or no trigger at all — the default) leaves a task on Board/List.
+ * Accepts `trigger` directly (not the whole `Task`) so BoardView/ListView can
+ * call it inline as `isScheduledTrigger(t.trigger)`.
+ */
+export function isScheduledTrigger(trigger?: TaskTrigger | null): trigger is TaskTrigger {
+  return trigger?.type === 'once' || trigger?.type === 'every' || trigger?.type === 'recurring'
 }
 
 /**
