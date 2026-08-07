@@ -374,8 +374,11 @@ func TestUpdateTaskInWorkspace_AgentCreatorStillAllowed(t *testing.T) {
 		WorkspaceID: testWorkspaceID, AgentID: "ray", CreatedByAgentID: "jim",
 	})
 
+	// Issue #593: "failed", not "in_progress" — this test's concern is the
+	// agent-creator ownership gate, not the status value; in_progress is no
+	// longer directly settable via update_task_in_workspace.
 	res := systools.NewTaskUpdateTool(deps).Execute(callerCtx("jim"), map[string]any{
-		"id": "01JXCREATOR_ALLOWED00001", "status": "in_progress",
+		"id": "01JXCREATOR_ALLOWED00001", "status": "failed",
 	})
 	require.False(t, res.IsError, "the dispatching agent must still be able to update: %s", res.ForLLM)
 }

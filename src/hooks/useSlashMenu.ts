@@ -306,6 +306,49 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // surface, e.g. AgentPicker" (ref is stale — clear the announcement).
   const lastAnnouncedAgentIdRef = useRef<string | null>(null)
 
+  // #472 root-cause fix (trace-evidenced slash-menu self-close race) — the
+  // pending timer id `onInputBlur` schedules below (setTimeout(closeSlash,
+  // 150)). A Playwright trace on `cancel-cross-channel.spec.ts` T24a caught
+  // the exact failure mode this ref exists to prevent: the palette opened on
+  // "/new" (passed a `toBeVisible` check, listbox + option in the DOM), then
+  // the ENTIRE listbox vanished ~15ms later with the composer's text
+  // unchanged the whole time (still exactly "/new") and nothing afterward
+  // re-running `onInputChange` to reopen it — so the next `.click()` hung
+  // until timeout.
+  //
+  // Mechanism: `onInputBlur` fires (e.g. from an agent-picker interaction
+  // immediately before the "/new" step) and schedules a close 150ms out —
+  // deliberately delayed so a mousedown-select on a menu item can beat it
+  // (see that test coverage below). But the timer is fire-and-forget: if the
+  // input instead just REGAINS focus and the user types a brand-new
+  // "/"-prefixed value before those 150ms elapse — exactly
+  // `input.click(); input.pressSequentially('/new')` in the real test, or
+  // any real click-back-in-and-type — the timer has no idea a fresh menu
+  // opened in the meantime. It fires anyway and closes THAT menu, even
+  // though nothing about the CURRENT state warrants a close (no new blur,
+  // no selection, text still slash-prefixed). That is "an unrelated state
+  // settle closes a freshly-opened menu" precisely: the settle here is a
+  // stale timer whose triggering blur is no longer current reality.
+  //
+  // Fix: track the pending timer's id and cancel it the instant the input
+  // proves it's focused and being actively driven again — a keystroke
+  // (`onInputChange`) or a menu keydown (`handleKeyDown`) can only fire
+  // while the element has focus, so either one is unambiguous proof the
+  // blur that scheduled this timer no longer describes reality. This
+  // removes the causal close outright rather than widening the delay or
+  // debouncing it — a longer delay would only move the race, not close it.
+  const blurCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Cancel a pending blur-close timer on unmount so it never fires
+  // setState after the hook is gone.
+  useEffect(() => {
+    return () => {
+      if (blurCloseTimeoutRef.current !== null) {
+        clearTimeout(blurCloseTimeoutRef.current)
+      }
+    }
+  }, [])
+
   // US-4 / FR-008: fetch the web-surface command list from the single
   // source of truth. On error the palette shows nothing crash-wise (per
   // integration boundary spec) — `commandsError` lets the caller render a
@@ -429,6 +472,24 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
         setGhostCommandLabel(null)
         setGhostCommandArgumentHint(null)
       }
+      // #472 investigation note: this closeSlash call was also audited as a
+      // candidate for the self-close race. Ruled out for the observed
+      // trace (composer text unchanged at "/new" throughout): `getState()`
+      // reads straight through to the live composer core on every call
+      // (verified against @assistant-ui/core's ThreadComposerRuntimeImpl /
+      // LazyMemoizeSubject — no caching of a stale prior snapshot), so
+      // `runtimeText` here always reflects the actual current text, not a
+      // lagging one — this branch only closes when the text has genuinely
+      // stopped being "/"- or "@"-prefixed. Separately confirmed (same
+      // source read) that the underlying core's `subscribe` fires on ANY of
+      // ~12 composer fields changing (attachments, isEditing, runConfig,
+      // role, queue, …), not just `text` — so this callback re-derives
+      // open/closed state more often than "the text changed." That is a
+      // real but DIFFERENT and narrower risk than #472 (it could in theory
+      // re-open a menu the user just explicitly Escaped, if an unrelated
+      // field changes before any further keystroke) and is left alone here
+      // — fixing it is out of this task's scope (a close race, not a
+      // reopen race) and not evidenced in the #472 trace.
       if (runtimeText.startsWith('/') || runtimeText.startsWith('@')) {
         setSlashOpen(true)
       } else {
@@ -452,6 +513,18 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // externally-driven `activeAgentId` change fixes both: the stale text is
   // removed, and the NEXT mention selection of that agent becomes a real
   // `null -> name` transition that DOES announce.
+  //
+  // #472 investigation note: this effect was named as a candidate for the
+  // slash-menu self-close race (a fresh "@"/"/" palette vanishing without
+  // user input). Confirmed it is NOT one: its only write is
+  // `setMentionAnnouncement`, which never touches `slashOpen`/`closeSlash`
+  // directly or indirectly (it does not call anything that reaches the
+  // composerRuntime either). Pinned by the "ruled-out suspects" tests in
+  // useSlashMenu.test.ts. If this effect is ever extended to reach into
+  // slash-menu state, gate that on an explicit reason (e.g. "an agent switch
+  // mid-menu should close it"), never on this settle alone — an
+  // `activeAgentId` resolving from `null` on mount/auto-select is exactly
+  // the kind of no-user-input settle this race class is about.
   useEffect(() => {
     if (activeAgentId !== lastAnnouncedAgentIdRef.current) {
       setMentionAnnouncement(null)
@@ -614,6 +687,15 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   const slashItemKeys = slashItems.map((i) => i.key).join(',')
   useEffect(() => { setSlashHighlight(0) }, [slashItemKeys])
 
+  // #472 audit of every call site: a direct DOM event handler reacting to
+  // something the user just did (a keystroke that no longer starts with
+  // "/"/"@", an explicit Escape, an explicit item selection), the
+  // composerRuntime-subscribe reconciliation above (reads the live core
+  // fresh every time — see that call site's own note), or the
+  // blurCloseTimeoutRef-guarded delayed blur-close below — see that ref's
+  // own comment for the one call site that used to fire for reasons
+  // divorced from current reality, and how it's now cancelled the instant
+  // the input proves it's in active use again.
   function closeSlash() {
     setSlashOpen(false)
     setSlashHighlight(0)
@@ -905,6 +987,21 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // the fetch was in flight, and their latest text is the only thing worth
   // acting on. Runs only on a `commandsFirstLoadPending` transition, and the
   // ref is cleared before dispatch so a re-render cannot double-fire it.
+  //
+  // #472 investigation note: this effect was named as the OTHER candidate
+  // for the slash-menu self-close race. Confirmed it is NOT one for the
+  // "just typing, never submitted" shape the race actually has: the early
+  // `return` on the next line means it does NOTHING unless a submit was
+  // ACTUALLY deferred (`deferredSlashSubmitRef.current`), which only ever
+  // becomes true from a real Enter press while the first fetch was still in
+  // flight (see `interceptClientCommand`'s readiness gate above) — never
+  // from typing alone. It also only runs once per mount (`isLoading` can
+  // only go true->false a single time per React Query lifetime; a later
+  // background refetch never re-triggers `isLoading`), so by the time a
+  // command is already resolvable in the palette (proving the first fetch
+  // already landed), this effect's one-shot transition is long past and
+  // cannot fire again. Pinned by the "ruled-out suspects" tests in
+  // useSlashMenu.test.ts.
   useEffect(() => {
     if (commandsFirstLoadPending) return
     if (!deferredSlashSubmitRef.current) return
@@ -929,6 +1026,14 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   }, [commandsFirstLoadPending])
 
   function onInputChange(val: string) {
+    // #472 hardening: a keystroke is unambiguous proof the input is focused
+    // and being driven right now — cancel any still-pending blur-close timer
+    // (see blurCloseTimeoutRef's own comment) so it cannot fire later and
+    // close a menu this very keystroke just opened or is keeping open.
+    if (blurCloseTimeoutRef.current !== null) {
+      clearTimeout(blurCloseTimeoutRef.current)
+      blurCloseTimeoutRef.current = null
+    }
     setInputValue(val)
     // Clear ghost if value no longer exactly matches `/<ghostSkillId> `
     if (ghostSkillId && val !== `/${ghostSkillId} `) {
@@ -958,7 +1063,17 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     setGhostArgumentHint(null)
     setGhostCommandLabel(null)
     setGhostCommandArgumentHint(null)
-    setTimeout(closeSlash, 150)
+    // #472 hardening: replace, never stack, a pending blur-close timer — a
+    // second blur before the first's 150ms elapses (e.g. blur, quick
+    // refocus-then-reblur) must not leave two timers racing to close the
+    // same menu independently.
+    if (blurCloseTimeoutRef.current !== null) {
+      clearTimeout(blurCloseTimeoutRef.current)
+    }
+    blurCloseTimeoutRef.current = setTimeout(() => {
+      blurCloseTimeoutRef.current = null
+      closeSlash()
+    }, 150)
   }
 
   function onHoverItem(index: number) {
@@ -967,6 +1082,16 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
 
   function handleKeyDown(e: ReactKeyboardEvent) {
     if (!shouldShowSlash) return
+
+    // #472 hardening: a keydown the menu is actually handling can only fire
+    // while the input has focus, same rationale as onInputChange above — any
+    // earlier blur's pending close timer is now stale and must not be left
+    // to fire later and undo whatever this keydown does (e.g. reopening via
+    // ArrowDown, or just keeping the menu open while the user navigates it).
+    if (blurCloseTimeoutRef.current !== null) {
+      clearTimeout(blurCloseTimeoutRef.current)
+      blurCloseTimeoutRef.current = null
+    }
 
     // Fix D (bugfixes3 sign-off): shouldShowSlash stays true even when
     // slashItems is empty (the LOW S8 commandsError carve-out — see

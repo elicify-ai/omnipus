@@ -245,9 +245,13 @@ func TestUpdateTaskInWorkspace_OwnershipAllowedForOwner(t *testing.T) {
 
 	update := systools.NewTaskUpdateTool(deps)
 	ctx := tools.WithAgentID(context.Background(), "caller-agent")
+	// Issue #593: "failed", not "in_progress" — in_progress is no longer
+	// directly settable via update_task_in_workspace (see
+	// task_status_guard_test.go's InProgressForgeRejected coverage); this
+	// test's own concern is the ownership gate, not the status value.
 	result := update.Execute(ctx, map[string]any{
 		"id":     "01JXOWNED00000000000002",
-		"status": "in_progress",
+		"status": "failed",
 	})
 	require.False(t, result.IsError, "owner must be able to update its own task; got: %s", result.ForLLM)
 }

@@ -121,7 +121,10 @@ func (s *inMemoryMemoryStore) SearchEntries(query string, limit int) ([]tools.Me
 //	Given a workspace exists
 //	When  create_task_in_workspace is called with name="Chain Test"
 //	Then  the task appears in list_tasks_in_workspace
-//	And   update_task_in_workspace changes its status to "in_progress"
+//	And   update_task_in_workspace changes its status to "done" (issue #593:
+//	      in_progress is no longer directly settable via update_task_in_workspace
+//	      — it is reached only through real dispatch — so this chain now
+//	      exercises a status update tool CAN still make directly)
 //	And   the updated status is visible in a fresh list
 //	And   delete_task_in_workspace removes it (list is empty afterward)
 //
@@ -172,9 +175,12 @@ func TestToolChain_TaskCRUD(t *testing.T) {
 	}
 
 	// ── step 3: update status ─────────────────────────────────────────────
+	// Issue #593: "done", not "in_progress" — in_progress is no longer
+	// directly settable via update_task_in_workspace (it is reached only
+	// through real dispatch: run_task / the executor / REST PATCH).
 	updateResult := systools.NewTaskUpdateTool(deps).Execute(ctx, map[string]any{
 		"id":     taskID,
-		"status": "in_progress",
+		"status": "done",
 	})
 	if updateResult.IsError {
 		t.Fatalf("update_task: %s", updateResult.ForLLM)
@@ -187,8 +193,8 @@ func TestToolChain_TaskCRUD(t *testing.T) {
 	if listResult2.IsError {
 		t.Fatalf("list_tasks after update: %s", listResult2.ForLLM)
 	}
-	if !strings.Contains(listResult2.ForLLM, "in_progress") {
-		t.Errorf("list_tasks after update: 'in_progress' status not in result:\n%s", listResult2.ForLLM)
+	if !strings.Contains(listResult2.ForLLM, "done") {
+		t.Errorf("list_tasks after update: 'done' status not in result:\n%s", listResult2.ForLLM)
 	}
 
 	// ── step 4: delete ────────────────────────────────────────────────────

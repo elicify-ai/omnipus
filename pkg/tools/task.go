@@ -872,7 +872,9 @@ func (t *TaskUpdateTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskUpdateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskUpdateTool) Description() string {
-	return "Update a task assigned to you or that you created. Mark status (in_progress/done/failed) and optionally edit title, priority, due date, agent_id, or blocked_by. Only provided fields are updated."
+	return "Update a task assigned to you or that you created. Mark status (done/failed — in_progress " +
+		"is reached only through real dispatch via run_task, never written directly here) and optionally " +
+		"edit title, priority, due date, agent_id, or blocked_by. Only provided fields are updated."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -884,9 +886,10 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 				"description": "ID of the task to update",
 			},
 			"status": map[string]any{
-				"type":        "string",
-				"enum":        []string{"in_progress", "done", "failed"},
-				"description": "New status for the task",
+				"type": "string",
+				"enum": []string{"done", "failed"},
+				"description": "New status for the task. in_progress is NOT settable here (issue #593) — " +
+					"it is only ever reached through real dispatch; use run_task to actually start this task.",
 			},
 			"result": map[string]any{
 				"type":        "string",
@@ -980,6 +983,23 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		st := task.Status(statusStr)
 		if !task.IsValidStatus(st) {
 			return ErrorResult(fmt.Sprintf("invalid status %q", statusStr))
+		}
+		// Issue #593 (Option A): in_progress is a DISPATCH state, not a
+		// caller-settable status the way done/failed are. The only legitimate
+		// writers are the executor's ClaimForRun, REST's handleTaskPatch,
+		// run_task, and set_todos-via-Create — none of which call this tool.
+		// Before this guard, ANY permitted caller — including the task's own
+		// creator, who passes the ownership union check above — could force
+		// next/inbox -> in_progress here with no session, no goroutine, and
+		// nothing that will ever revisit it: the task then reads "running"
+		// forever. Mirror the existing done-with-criteria guard's shape below
+		// (reject outright, name the real path) rather than silently accept a
+		// forged state. A resend on a task that is ALREADY in_progress is a
+		// harmless no-op and is let through unchanged — only a transition INTO
+		// in_progress from a different status is rejected.
+		if st == task.StatusInProgress && existing.Status != task.StatusInProgress {
+			return ErrorResult("in_progress cannot be set directly — it is only ever reached through " +
+				"real dispatch; call run_task to actually start this task")
 		}
 		newStatus = st
 		updatedFields = append(updatedFields, "status")

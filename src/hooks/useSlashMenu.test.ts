@@ -953,6 +953,161 @@ describe('useSlashMenu — onInputBlur (delayed close)', () => {
   })
 })
 
+// #472 — trace-evidenced slash-menu self-close race. A Playwright trace on
+// cancel-cross-channel.spec.ts T24a caught the palette opening on "/new"
+// (passed a toBeVisible check), then the ENTIRE listbox vanishing ~15ms
+// later with the composer's text UNCHANGED the whole time (still exactly
+// "/new") and nothing afterward re-running onInputChange to reopen it — the
+// next .click() hung until timeout.
+//
+// Root cause: onInputBlur schedules a 150ms-delayed closeSlash so a
+// mousedown-select can beat it (see the describe block above). That timer is
+// fire-and-forget: if the input regains focus and the user types a fresh
+// "/"-prefixed value before the 150ms elapse — exactly
+// `input.click(); input.pressSequentially('/new')`, matching the real T24a
+// steps (an agent-picker interaction blurs the composer immediately before
+// this block) — the timer has no idea a brand-new menu opened in the
+// meantime, fires anyway, and closes it even though nothing about the
+// CURRENT state warrants a close.
+//
+// Two other candidates named in the #472 investigation comment — the
+// `activeAgentId` reconciliation effect and the `commandsFirstLoadPending`
+// flush effect — were audited and ruled out; see their own inline notes in
+// useSlashMenu.ts and the "ruled-out suspects" block below.
+describe('useSlashMenu — #472 stale blur-close timer race (trace-evidenced)', () => {
+  it('typing a fresh command after refocus cancels the pending blur-close timer — the fresh menu survives past the original 150ms mark', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+
+    // Open the menu, then blur — e.g. the agent-picker interaction that
+    // precedes "/new" in the real T24a flow. Schedules closeSlash at T+150.
+    act(() => result.current.onInputChange('/'))
+    act(() => result.current.onInputBlur())
+
+    // Refocus and type a fresh command WELL inside the 150ms window —
+    // mirrors `input.click(); input.pressSequentially('/new')`.
+    act(() => { vi.advanceTimersByTime(100) })
+    act(() => result.current.onInputChange('/new'))
+    expect(result.current.slashOpen).toBe(true)
+
+    // Advance PAST the ORIGINAL blur's 150ms mark (50 more ms = T+150 from
+    // the blur). Before the fix, the stale timer fires here and closes the
+    // freshly-typed "/new" menu even though the text never stopped being
+    // "/new", no new blur happened, and nothing was selected.
+    act(() => { vi.advanceTimersByTime(50) })
+
+    expect(result.current.slashOpen).toBe(true)
+    expect(result.current.slashItems.map((i) => i.key)).toContain('/new')
+  })
+
+  it('keyboard navigation after refocus (no retyping) also cancels the pending blur-close timer', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+
+    act(() => result.current.onInputChange('/'))
+    act(() => result.current.onInputBlur())
+    act(() => { vi.advanceTimersByTime(100) })
+
+    // Refocus without retyping — e.g. clicking back into the composer and
+    // navigating the still-open palette with the keyboard.
+    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.slashOpen).toBe(true)
+
+    act(() => { vi.advanceTimersByTime(50) })
+    expect(result.current.slashOpen).toBe(true)
+  })
+
+  it('a SECOND blur before the first timer elapses replaces it rather than stacking two independent closes', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+
+    act(() => result.current.onInputChange('/'))
+    act(() => result.current.onInputBlur())
+    act(() => { vi.advanceTimersByTime(100) })
+    // Refocus + reblur without typing in between.
+    act(() => result.current.onInputBlur())
+
+    // 100ms after the SECOND blur (only 50ms past the first blur's own
+    // 150ms mark) — the second timer has not reached its own 150ms yet.
+    act(() => { vi.advanceTimersByTime(100) })
+    expect(result.current.slashOpen).toBe(true)
+
+    // The second timer's own 150ms mark (50ms further) closes it.
+    act(() => { vi.advanceTimersByTime(50) })
+    expect(result.current.slashOpen).toBe(false)
+  })
+
+  // Positive controls — the fix must not turn closeSlash into a no-op.
+  it('control: a blur with no subsequent re-engagement still closes after 150ms', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/'))
+    act(() => result.current.onInputBlur())
+    act(() => { vi.advanceTimersByTime(150) })
+    expect(result.current.slashOpen).toBe(false)
+  })
+
+  it('control: clearing the input still closes the menu immediately (onInputChange\'s own explicit-reason close is untouched)', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/new'))
+    expect(result.current.slashOpen).toBe(true)
+    act(() => result.current.onInputChange(''))
+    expect(result.current.slashOpen).toBe(false)
+  })
+
+  it('control: an explicit selection still closes the menu immediately', () => {
+    const startNewSession = vi.fn()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ startNewSession })))
+    act(() => result.current.onInputChange('/'))
+    const item = result.current.slashItems.find((i) => i.key === '/new')!
+    act(() => item.onSelect())
+    expect(result.current.slashOpen).toBe(false)
+  })
+
+  it('control: an explicit Escape still closes the menu immediately', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/new'))
+    act(() => result.current.handleKeyDown({ key: 'Escape', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.slashOpen).toBe(false)
+  })
+})
+
+// #472 investigation — the two OTHER candidates named in the trace-evidenced
+// lead comment. Both audited in useSlashMenu.ts (see their own inline
+// notes): neither touches slashOpen/closeSlash under the "just typing, never
+// submitted" shape this race actually has. These pin that finding as a
+// regression guard, not a race reproduction — they already pass without the
+// stale-timer fix above.
+describe('useSlashMenu — #472 investigation: ruled-out suspects', () => {
+  it('activeAgentId resolving (e.g. an auto-select settle after mount) does not touch an open "/" menu', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/new'))
+    expect(result.current.slashOpen).toBe(true)
+
+    // Simulate the auto-select-first-ready-agent settle (AgentPicker-style)
+    // resolving activeAgentId from null to a real id, with NO mention
+    // selection involved — exactly the reconciliation effect's own trigger.
+    act(() => { useSessionStore.setState({ activeAgentId: 'mia' }) })
+
+    expect(result.current.slashOpen).toBe(true)
+    expect(result.current.slashItems.map((i) => i.key)).toContain('/new')
+  })
+
+  it('the commandsFirstLoadPending transition (list finishing its first load) does not touch an open "/" menu when nothing was deferred', () => {
+    commandsQueryIsLoading = true
+    const { result, rerender } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/'))
+    expect(result.current.slashOpen).toBe(true)
+
+    // The list lands — the exact transition the #472 comment named as a
+    // candidate — with no Enter ever pressed (nothing deferred).
+    commandsQueryIsLoading = false
+    act(() => { rerender() })
+
+    expect(result.current.slashOpen).toBe(true)
+  })
+})
+
 describe('useSlashMenu — onHoverItem', () => {
   it('moves the keyboard highlight to the hovered index, and Enter selects that hovered item', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))

@@ -34,6 +34,12 @@ function resetAll() {
     activeSessionId: null,
     activeAgentId: null,
     activeAgentType: null,
+    // Explicit baseline (see session.agent-precedence.test.ts's resetStores):
+    // without this, a test that sets a user pin ('user' + a non-null
+    // activeAgentId) would leak that pin into whichever test runs next in
+    // this file, since setState here is a merge, not a replace.
+    agentSelectionSource: 'auto',
+    agentSelectionWorkspaceId: null,
     attachedSessionType: null,
     attachedTaskTitle: null,
     sessionByWorkspace: {},
@@ -979,5 +985,105 @@ describe('pruneSessionDescriptor — round-2 fix: no zombie reattach after delet
       title: 'Alive',
       agentId: 'agent-2',
     })
+  })
+})
+
+describe('sessionByWorkspace descriptor — pin-rejection regression (#600, fix 02e62a45)', () => {
+  // Personal merge-review finding 3 (ab1c1aad review, fixed by 02e62a45): the
+  // descriptor-writing sites in setActiveSession/attachToSession wrote
+  //   agentId: (agentId ?? get().activeAgentId) ?? null
+  // under a comment mandating the EFFECTIVE agent (post-precedence-rule
+  // activeAgentId), not the raw hint. With an ACTIVE USER PIN
+  // (agentSelectionSource: 'user', a non-null activeAgentId — see
+  // `adoptsAgentHint` in session.ts) the precedence set() correctly keeps the
+  // pin winner in activeAgentId, but the buggy descriptor line still preferred
+  // the truthy raw `agentId` HINT argument over the winner, storing the exact
+  // REJECTED value the surrounding comment forbade. Because sessionByWorkspace
+  // is persisted to localStorage, that losing agent got replayed as the
+  // "remembered" agent on every subsequent workspace re-entry.
+  //
+  // The existing suites (this file, session.agent-precedence.test.ts) never
+  // caught this because they only ever assert `activeAgentId` — the live
+  // routing target — never the descriptor's own `agentId` field under a
+  // pin+hint combination. These tests close that gap.
+  beforeEach(resetAll)
+
+  const PERSISTED_KEY = 'omnipus.sessionByWorkspace.v1'
+
+  /** Reads the descriptor's agentId back out of the persisted localStorage
+   *  blob exactly as a real reload would (see readPersistedSessionByWorkspace
+   *  in session.ts) — proves the fix holds through the round-trip, not just
+   *  in the in-memory Zustand slice. */
+  function readPersistedAgentId(workspaceId: string): string | null | undefined {
+    const raw = localStorage.getItem(PERSISTED_KEY)
+    if (!raw) return undefined
+    const parsed = JSON.parse(raw) as Record<string, { agentId: string | null } | null>
+    return parsed[workspaceId]?.agentId
+  }
+
+  it('setActiveSession: with an active user pin, the descriptor remembers the PIN WINNER, not the rejected hint', () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    // An active pin: agentSelectionSource: 'user' + a non-null activeAgentId
+    // (adoptsAgentHint returns false for exactly this combination).
+    useSessionStore.setState({
+      agentSelectionSource: 'user',
+      agentSelectionWorkspaceId: 'ws-1',
+      activeAgentId: 'jim',
+    })
+
+    // The hint argument ('ray') is a DIFFERENT agent than the pin winner —
+    // adoptsAgentHint rejects it, so the precedence rule must keep 'jim'.
+    useSessionStore.getState().setActiveSession('sess-pin-setActive', 'ray', 'core')
+
+    // The pin still wins for routing (pre-existing coverage, re-asserted here
+    // as the setup check for what follows).
+    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+
+    // The regression: the descriptor must remember the EFFECTIVE agent
+    // ('jim'), never the rejected hint ('ray').
+    const descriptor = useSessionStore.getState().sessionByWorkspace['ws-1']
+    expect(descriptor?.agentId).toBe('jim')
+    expect(descriptor?.agentId).not.toBe('ray')
+
+    // And the localStorage round-trip — the value replayed on the NEXT
+    // workspace re-entry — carries the same winner, not the hint.
+    expect(readPersistedAgentId('ws-1')).toBe('jim')
+    expect(readPersistedAgentId('ws-1')).not.toBe('ray')
+  })
+
+  it('attachToSession (connected): with an active user pin, the descriptor remembers the PIN WINNER, not the rejected hint', () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    useConnectionStore.setState({ connection: makeMockConnection() as never, isConnected: true })
+    useSessionStore.setState({
+      agentSelectionSource: 'user',
+      agentSelectionWorkspaceId: 'ws-1',
+      activeAgentId: 'jim',
+    })
+
+    useSessionStore.getState().attachToSession('sess-pin-attach', 'chat', 'Pinned chat', 'ray')
+
+    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+
+    const descriptor = useSessionStore.getState().sessionByWorkspace['ws-1']
+    expect(descriptor?.agentId).toBe('jim')
+    expect(descriptor?.agentId).not.toBe('ray')
+
+    expect(readPersistedAgentId('ws-1')).toBe('jim')
+    expect(readPersistedAgentId('ws-1')).not.toBe('ray')
+  })
+
+  it('Binding Rule 4 (positive control): with NO pin, the hint IS adopted and stored — in the slice and via the localStorage round-trip', () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    // No pin: agentSelectionSource defaults to 'auto' via resetAll() above,
+    // so adoptsAgentHint returns true and the hint below must win outright.
+
+    useSessionStore.getState().setActiveSession('sess-no-pin', 'ray', 'core')
+
+    expect(useSessionStore.getState().activeAgentId).toBe('ray')
+
+    const descriptor = useSessionStore.getState().sessionByWorkspace['ws-1']
+    expect(descriptor?.agentId).toBe('ray')
+
+    expect(readPersistedAgentId('ws-1')).toBe('ray')
   })
 })
