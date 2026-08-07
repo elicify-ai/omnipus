@@ -171,6 +171,22 @@ type TaskExecutor struct {
 	// of the capacity they set, so auto-resync is opt-in-by-construction
 	// rather than always-on.
 	autoSyncDispatchCapacity bool
+
+	// wg tracks every in-flight task-dispatch goroutine (runTask,
+	// runTaskFromInProgress) end-to-end, INCLUDING the goal-loop's own
+	// re-dispatch chain (consumeAttemptOrExhaust/rejectBareEvidenceClaim
+	// flipping a task back to `next` and the owning goroutine's trailing
+	// defer re-entering ExecuteTask/StartTaskNow for another attempt). Add(1)
+	// happens at each of the two goroutine-launch sites, immediately before
+	// the `go` statement; Done() is deferred as the OUTERMOST defer in each
+	// goroutine body, so it fires only after that goroutine's own trailing
+	// redispatch call (if any) has synchronously performed the NEXT
+	// attempt's Add(1) — the counter is therefore never observably zero
+	// mid-chain. See Drain's doc comment for why AgentLoop.Close() needs
+	// this (previously Close() drained recaps/session-workers but never
+	// TaskExecutor, so a still-running goal-loop chain could keep writing
+	// session/transcript/run-history files after Close() returned).
+	wg sync.WaitGroup
 }
 
 // evidenceGateMaxConsecutiveRejections is N in ADR-052 FR-035's "after N
@@ -203,6 +219,34 @@ func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
 		dispatchSema:             newDispatchSemaphore(capacity),
 		evidenceRejectStreak:     make(map[string]int),
 		autoSyncDispatchCapacity: true,
+	}
+}
+
+// Drain blocks until every in-flight task-dispatch goroutine tracked by wg —
+// including a goal-loop's own chain of re-dispatch attempts, see wg's doc
+// comment — has completed, OR until budget elapses, whichever comes first.
+// Mirrors AgentLoop.waitRecapDrain's identical bounded-drain rationale
+// (loop.go): called from AgentLoop.Close(), BEFORE session workers, browser
+// managers, and the stores those goroutines write through are torn down, so
+// a task goroutine can never still be writing session/transcript/run-history
+// files after Close() returns and races a caller's own teardown (e.g. a
+// test's t.TempDir() cleanup removing the directory tree those files live
+// under — the exact "TempDir RemoveAll cleanup: directory not empty" failure
+// this closes). Bounded so a wedged execution (a mock/real LLM that never
+// returns) can never hang Close() forever; on timeout it logs a warning and
+// returns so the rest of teardown can proceed.
+func (te *TaskExecutor) Drain(budget time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		te.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// All task-dispatch goroutines drained cleanly.
+	case <-time.After(budget):
+		logger.WarnCF("task_executor", "Drain: task-goroutine drain budget exceeded; proceeding with teardown",
+			map[string]any{"budget": budget.String()})
 	}
 }
 
@@ -553,6 +597,7 @@ func (te *TaskExecutor) executeTask(
 	te.running[taskID] = &taskSlot{cancel: cancel, reserved: false}
 	te.mu.Unlock()
 
+	te.wg.Add(1)
 	go te.runTask(taskCtx, t, taskSessionID, cancel, release, occurrenceMs, kind)
 	return nil
 }
@@ -637,6 +682,11 @@ func (te *TaskExecutor) runTask(
 ) {
 	var redispatchTaskID string
 	defer func() {
+		// Outermost defer within this closure: fires LAST, after the
+		// redispatch call below (if any) has already run — see wg's doc
+		// comment for why this ordering is what keeps the counter from ever
+		// being observably zero mid-chain.
+		defer te.wg.Done()
 		release()
 		cancel()
 		te.mu.Lock()
@@ -2370,6 +2420,7 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	te.mu.Unlock()
 	slotReleased = true // goroutine now owns the slot; don't let releaseSlot clear it
 
+	te.wg.Add(1)
 	go te.runTaskFromInProgress(taskCtx, t, taskSessionID, cancel, release)
 	return taskSessionID, nil
 }
@@ -2401,6 +2452,11 @@ func (te *TaskExecutor) runTaskFromInProgress(
 ) {
 	var redispatchTaskID string
 	defer func() {
+		// Outermost defer within this closure: fires LAST, after the
+		// redispatch call below (if any) has already run — see
+		// TaskExecutor.wg's doc comment for why this ordering is what keeps
+		// the counter from ever being observably zero mid-chain.
+		defer te.wg.Done()
 		release()
 		cancel()
 		te.mu.Lock()

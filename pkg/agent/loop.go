@@ -3647,6 +3647,21 @@ func (al *AgentLoop) Close() {
 	// that didn't finish writing, which is strictly better than a frozen process.
 	al.waitRecapDrain(30 * time.Second)
 
+	// Drain in-flight task-dispatch goroutines (runTask/runTaskFromInProgress,
+	// including any goal-loop redispatch chain they trigger — see
+	// TaskExecutor.wg's doc comment) BEFORE tearing down session workers,
+	// browser managers, and the stores those goroutines write through —
+	// mirrors waitRecapDrain's identical bounded-drain rationale immediately
+	// above. Previously Close() never drained TaskExecutor at all, so a
+	// still-running task goroutine (or its goal-loop's chain of re-dispatch
+	// attempts) could keep writing session/transcript/run-history files after
+	// Close() returned, racing a caller's own teardown (e.g. a test's
+	// t.TempDir() cleanup removing the directory tree those files live
+	// under).
+	if al.taskExecutor != nil {
+		al.taskExecutor.Drain(30 * time.Second)
+	}
+
 	// Cancel all active session workers and wait for them to drain (5 s budget).
 	// stopSessionWorkers is idempotent — safe to call here even if Run() has
 	// already called it on context-cancellation, because workers cancel their

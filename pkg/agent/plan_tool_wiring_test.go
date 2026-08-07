@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -199,36 +198,32 @@ func TestWirePlanTools_RunTaskAndInspectSessionWiredFromFirstPass(t *testing.T) 
 		t.Errorf("inspect_session reports an unwired store: %q", inspectResult.ForLLM)
 	}
 
-	// Wait for runTaskFromInProgress (the goroutine StartTaskNow launched
-	// above) to actually finish before this test function returns.
-	// AgentLoop.Close() (registered via t.Cleanup inside
+	// No test-side wait needed for runTaskFromInProgress (the goroutine
+	// StartTaskNow launched above) to finish before this test function
+	// returns: AgentLoop.Close() (registered via t.Cleanup inside
 	// newPlanToolWiringTestLoop, which runs BEFORE t.TempDir()'s own
-	// cleanup) drains recaps, session workers, and browser managers/
-	// coordinator on teardown, but never touches TaskExecutor's running-
-	// goroutine map — so without this wait, that goroutine can still be
-	// writing session/transcript files under t.TempDir()'s tasks/<id>/
-	// subtree at the exact moment t.TempDir()'s cleanup calls os.RemoveAll
-	// on it, racing a "directory not empty" failure into RemoveAll. This
-	// only ever flaked on the slower macOS CI runner (Cross-Platform CI
-	// matrix, macos-latest arm64) — its wider scheduling latency widens the
-	// goroutine-vs-cleanup race window enough to hit it; the mock LLM
-	// provider returns instantly with no tool calls, so in practice the
-	// goroutine finishes in well under a second and this bound is generous.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		fresh, gerr := taskStore.Get(tk.ID)
-		if gerr == nil && fresh.Status != task.StatusInProgress {
-			break
-		}
-		if time.Now().After(deadline) {
-			status := task.StatusInProgress
-			if gerr == nil {
-				status = fresh.Status
-			}
-			t.Fatalf("task %q did not leave StatusInProgress within 5s (status=%v, err=%v)", tk.ID, status, gerr)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// cleanup, since t.Cleanup runs LIFO and TempDir's own cleanup was
+	// registered first) now calls TaskExecutor.Drain, which blocks until
+	// every in-flight task-dispatch goroutine — including this one and any
+	// goal-loop redispatch chain it triggers — has actually finished writing
+	// its session/transcript/run-history files, not merely until the task
+	// record itself leaves StatusInProgress.
+	//
+	// An earlier version of this test polled taskStore.Get(tk.ID) waiting
+	// for Status != StatusInProgress as a manual substitute for that drain.
+	// That polling loop was itself racy and is why this comment replaces it:
+	// consumeAttemptOrExhaust's goal-loop redispatch (task_executor.go) CASes
+	// the task to StatusNext and returns its ID so the owning goroutine's
+	// own trailing defer can re-enter ExecuteTask for the NEXT attempt —
+	// which re-claims the task back to StatusInProgress. A poll landing in
+	// that brief StatusNext window between attempts declared the task
+	// "finished" while a fresh goroutine for the next attempt was already
+	// about to start, so on a slower runner (the Cross-Platform CI matrix's
+	// macos-latest arm64 leg) the test could return — and t.TempDir()'s
+	// os.RemoveAll could fire — while a LATER attempt's goroutine was still
+	// writing files, racing a "directory not empty" cleanup failure. Fixed
+	// at the root (TaskExecutor.wg / Drain, task_executor.go) rather than by
+	// widening this test's own wait bound.
 }
 
 // TestPlanExecuteWired_CreatePlanAttachMemberExecutePlanEndToEnd is the
