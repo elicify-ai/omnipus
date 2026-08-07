@@ -961,14 +961,30 @@ func TestCheckBrowserPackageChrome_MalformedManifest_DistinctFromHashMismatch(t 
 // DT_NEEDED entry pointing to "libc.so.6" — the same soname the host's
 // glibc lives under on every mainstream Linux distribution, so the
 // in-process WARN-BROWSER-005 ELF walk resolves it cleanly and the
-// SHA-256 path can be tested in isolation. macOS test runs skip the ELF
-// check entirely (the runtime.GOOS == "linux" gate), so the synthetic
-// binary need not be a valid Mach-O on darwin.
+// SHA-256 path can be tested in isolation.
+//
+// On darwin the stale assumption here used to be that macOS test runs
+// "skip the ELF check entirely" with no analog — false: checkBrowserPackageChrome's
+// switch (command.go) also runs an in-process Mach-O dependency walk
+// (missingChromeLibsMachO) when runtime.GOOS == "darwin", and an ELF64
+// binary is not valid Mach-O. That mismatch made this helper's "clean,
+// no-warning" fixture spuriously surface WARN-BROWSER-005 ("not a valid
+// Mach-O executable") on every darwin CI run — confirmed by the
+// Cross-Platform CI matrix (macos-latest, arm64) failing
+// TestCheckBrowserPackageChrome_HashMatch_StaysSilent's "must surface no
+// warning" assertion. Build a Mach-O with a single @rpath/ dependency on
+// darwin instead — dylibResolves treats @rpath/ names as always-present
+// (see TestMissingChromeLibsMachO_RpathSkipped), so the Mach-O walk
+// resolves it cleanly regardless of what is actually installed on the
+// CI runner, mirroring the ELF branch's "resolves cleanly" property.
 //
 // Returns the synthetic chromium/ root (the path the doctor sees as
 // "package chrome root"). All test artifacts live under this directory.
 func withSyntheticPackageChrome(t *testing.T) string {
 	t.Helper()
+	if runtime.GOOS == "darwin" {
+		return withSyntheticPackageChromeContent(t, buildMinimalMachO64(t, "@rpath/libSystem.dylib"))
+	}
 	return withSyntheticPackageChromeContent(t, buildMinimalELF64(t, "libc.so.6"))
 }
 

@@ -133,34 +133,58 @@ func (r *Root) WriteContent(rel string, content []byte) (os.FileInfo, error) {
 	if err := r.requireParentDir(rel); err != nil {
 		return nil, err
 	}
-	if existing, statErr := r.root.Stat(rel); statErr == nil {
+	// Case-insensitive collision backstop (see caseInsensitiveMatch's doc)
+	// is the SOLE existence check here, not a fallback reached only after
+	// an exact-case os.Root.Stat "miss". FIX (real data-loss bug, not a
+	// test-platform assumption): on a genuinely case-insensitive
+	// filesystem (macOS's default APFS, Windows/NTFS-typical) an
+	// exact-name r.root.Stat(rel) SUCCEEDS by case-folding onto a
+	// DIFFERENTLY-CASED existing entry — indistinguishable from a true
+	// exact match by return value alone. The previous version trusted that
+	// success as "rel already exists under this exact name" and proceeded
+	// straight to the in-place overwrite below, silently overwriting the
+	// WRONG file's content on those hosts instead of ever reaching the
+	// collision-rejection logic — a branch a case-folding Stat can never
+	// take once ANY case variant already exists (os.IsNotExist(statErr)
+	// was never true). Confirmed by the Cross-Platform CI matrix
+	// (macos-latest, arm64)'s TestLibraryContent_CaseInsensitiveCollision_409
+	// failure: the intended 409 never fired and the write silently landed
+	// on "Report.txt" for a request naming "report.txt". A directory
+	// listing name scan (caseInsensitiveMatch) already subsumes an
+	// exact-case existence check — an exact match is trivially fold-equal —
+	// so classifying the ACTUAL on-disk name it returns, rather than
+	// trusting Stat's ambiguous success, is both sufficient and correct on
+	// every host.
+	match, found, ciErr := r.caseInsensitiveMatch(dirParent(rel), path.Base(rel))
+	if ciErr != nil {
+		return nil, ciErr
+	}
+	switch {
+	case found && match == path.Base(rel):
+		// The ACTUAL on-disk entry name (from the directory listing, not
+		// the request) matches rel's exact casing — the normal
+		// edit-and-save path (GET .../content returns entries by their
+		// exact on-disk name, and a well-behaved caller echoes that same
+		// name back to PUT), so proceed to the in-place overwrite below.
+		existing, statErr := r.root.Stat(rel)
+		if statErr != nil {
+			return nil, translateErr(statErr)
+		}
 		if existing.IsDir() {
 			return nil, ErrIsDir
 		}
-		// rel names an existing FILE exactly — this is the normal
-		// edit-and-save path (GET .../content returns entries by their
-		// exact on-disk name, and a well-behaved caller echoes that same
-		// name back to PUT), so proceed to the in-place overwrite below
-		// with no case concern.
-	} else if !os.IsNotExist(statErr) {
-		return nil, translateErr(statErr)
-	} else {
-		// No entry exists at rel's EXACT casing. Case-insensitive
-		// collision backstop (see caseInsensitiveMatch's doc): a
-		// differently-cased sibling would mean this exact PUT call
-		// creates a brand-new file on a case-sensitive host (Linux) while
-		// silently overwriting the EXISTING file's content on
-		// Windows/macOS instead — two different outcomes from the same
+	case found:
+		// A differently-cased sibling occupies this slot: this exact PUT
+		// call would create a brand-new file on a case-sensitive host
+		// (Linux) while silently overwriting the EXISTING file's content
+		// on Windows/macOS instead — two different outcomes from the same
 		// request depending on which OS happens to be running it. Reject
 		// rather than guess which one the caller wanted; the caller can
 		// resolve it explicitly (write to the existing entry's exact
 		// name, or rename first).
-		if _, found, ciErr := r.caseInsensitiveMatch(dirParent(rel), path.Base(rel)); ciErr != nil {
-			return nil, ciErr
-		} else if found {
-			return nil, ErrAlreadyExists
-		}
+		return nil, ErrAlreadyExists
 	}
+	// !found: no case-insensitive sibling at all — brand-new file, proceed.
 
 	tmpRel := fmt.Sprintf("%s.tmp-%d-%d", rel, os.Getpid(), time.Now().UnixNano())
 	f, err := r.root.OpenFile(tmpRel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)

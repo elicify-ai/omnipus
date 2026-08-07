@@ -75,8 +75,14 @@ type qaInputHarness struct {
 func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte)) *qaInputHarness {
 	t.Helper()
 
-	if runtime.GOOS != "linux" {
-		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux")
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		// chrome-for-testing publishes no linux/arm64 build (installer.go's
+		// cftPlatform errors before findInstalledBuild ever inspects the
+		// fake binary this test plants below), so ClassifyVideoCapability
+		// can never report Capable=true on linux/arm64 either — confirmed
+		// by the Cross-Platform CI matrix (ubuntu-24.04-arm, arm64) failing
+		// "capability gate must report Capable=true" here.
+		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux/amd64")
 	}
 
 	// Reserve a real TCP listener FIRST so cfg.Gateway.Port matches the

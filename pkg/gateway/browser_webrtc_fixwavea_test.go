@@ -272,8 +272,14 @@ func TestHandleWebRTCOffer_SupersededByDetachDuringNegotiation_TearsDownCleanly(
 // handleWebRTCOffer to return at all), since Stop() ran synchronously INSIDE
 // the captureFenceMu-held critical section.
 func TestHandleWebRTCOffer_SupersedeDoesNotBlockFenceOnSlowStop(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux")
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		// chrome-for-testing publishes no linux/arm64 build (installer.go's
+		// cftPlatform errors before findInstalledBuild ever inspects the
+		// fake binary this test plants below), so ClassifyVideoCapability
+		// can never report Capable=true on linux/arm64 either — confirmed
+		// by the Cross-Platform CI matrix (ubuntu-24.04-arm, arm64) failing
+		// here.
+		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux/amd64")
 	}
 	// See TestHandleWebRTCOffer_CaptureFenceMu_SerializesFenceCheckAndEnsure's
 	// identical Setenv for why: forces the exec resolver onto the fake

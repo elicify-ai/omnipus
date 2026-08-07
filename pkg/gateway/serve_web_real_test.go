@@ -444,8 +444,21 @@ func TestServeWeb_TokenExpiry_Returns404(t *testing.T) {
 		0o644,
 	))
 
-	// Register with a very short TTL.
-	token, _, err := ss.Register("expire-agent", workDir, time.Millisecond)
+	// Register with a very short TTL. FIX: this used to be time.Millisecond,
+	// which raced the "before expiry" check below against the deadline
+	// itself — constructing the httptest.ResponseRecorder, routing through
+	// api.ServeHTTP, and resolving ServedSubdirs.Lookup all cost real wall
+	// clock time, and on a slower/loaded CI runner (confirmed by the
+	// Cross-Platform CI matrix, macos-latest arm64, where this whole
+	// package's suite ran ~230s vs a much faster amd64 leg) that cost alone
+	// could exceed 1ms, making the token already-expired by the time the
+	// "must return 200 before expiry" request even fires — a pure
+	// test-timing race, not an OS-specific filesystem/network semantic
+	// (every other Register call in this file uses time.Hour). 150ms gives
+	// the first request a comfortable margin while still keeping the test
+	// fast and the BDD intent (a short-lived token expires, and the expired
+	// token then 404s) unchanged.
+	token, _, err := ss.Register("expire-agent", workDir, 150*time.Millisecond)
 	require.NoError(t, err)
 
 	// Ensure it works before expiry.
@@ -453,7 +466,7 @@ func TestServeWeb_TokenExpiry_Returns404(t *testing.T) {
 	assert.Equal(t, http.StatusOK, recBefore.Code, "must return 200 before expiry")
 
 	// Wait past the deadline.
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 
 	// Now it must be 404.
 	recAfter := getFromAPI(api, "/preview/expire-agent/"+token+"/")

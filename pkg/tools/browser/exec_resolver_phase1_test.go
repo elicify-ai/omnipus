@@ -94,9 +94,32 @@ func TestPackageChromeRoot_RuntimeComputed(t *testing.T) {
 	require.NoError(t, err)
 	got := packageChromeRootCandidates()
 	require.NotEmpty(t, got)
-	// The first candidate must equal filepath.Join(filepath.Dir(exe), "..", "chromium").
+	// The first candidate must equal filepath.Join(filepath.Dir(exe), "..", "chromium")
+	// on every platform — package_chrome.go's darwin and non-darwin branches
+	// both start with this one.
 	want := filepath.Join(filepath.Dir(exe), "..", "chromium")
 	assert.Equal(t, want, got[0], "first packageChromeRootCandidate must be computed at runtime from os.Executable()")
+
+	// The rest of the list is genuinely, deliberately platform-specific
+	// (package_chrome.go's packageChromeRootCandidates, ADR-052 Phase 3 /
+	// C3): darwin returns a 2-element list (no FHS share/libexec layout —
+	// the Google-signed full Chrome must live OUTSIDE the signed .app
+	// bundle, so its only other candidate is three levels up from exeDir,
+	// beside <Gateway.app>). Linux/other platforms return the 3-element
+	// FHS/nfpms list this test used to assert unconditionally on every
+	// platform, panicking with "index out of range [2] with length 2" on
+	// darwin's shorter list — confirmed by the Cross-Platform CI matrix
+	// (macos-latest, arm64) failure. This is a test-authoring gap (a
+	// pre-existing, documented platform difference in production code the
+	// test never accounted for), not a production defect.
+	if runtime.GOOS == "darwin" {
+		require.Len(t, got, 2, "darwin's packageChromeRootCandidates must return exactly its 2 documented candidates")
+		wantAppSibling := filepath.Join(filepath.Dir(exe), "..", "..", "..", "chromium")
+		assert.Equal(t, wantAppSibling, got[1],
+			"second darwin candidate must be the sibling-of-.app layout (three levels up from exeDir)")
+		return
+	}
+	require.Len(t, got, 3, "non-darwin packageChromeRootCandidates must return exactly its 3 documented candidates")
 	// Second candidate must be the FHS share/ layout.
 	wantShare := filepath.Join(filepath.Dir(exe), "..", "share", "omnipus", "chromium")
 	assert.Equal(t, wantShare, got[1], "second candidate must be the install.sh FHS share/ layout")

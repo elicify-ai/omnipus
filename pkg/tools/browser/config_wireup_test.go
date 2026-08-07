@@ -106,8 +106,20 @@ func TestClassifyVideoCapability_EmptySHA_NotCapable(t *testing.T) {
 // TestFindPackageChrome_BinaryPresentSHAProvided happy path's
 // failure-side guarantee.
 func TestClassifyVideoCapability_VerificationFailed_NotCapable(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skipf("Phase 1 validates linux only; runtime=%s", runtime.GOOS)
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		// withCapabilitySeams fakes goosForCapability so the videoCapableOS
+		// gate itself is arch-independent, but ClassifyVideoCapability calls
+		// cftPlatform() (installer.go) unconditionally right after that gate,
+		// and cftPlatform reads the REAL runtime.GOARCH — deliberately never
+		// faked (see goosForCapability's doc comment: "EnsureChromium and
+		// selectDownloadBuild... must never be faked"). On linux/arm64,
+		// cftPlatform errors before this test's package-chrome SHA-mismatch
+		// path is ever reached, so ClassifyVideoCapability returns
+		// "unsupported platform for managed chromium: ..." instead of the
+		// "chrome.sha256 verification failed" reason this test asserts —
+		// confirmed by the Cross-Platform CI matrix (ubuntu-24.04-arm, arm64)
+		// failing this exact Contains check.
+		t.Skipf("Phase 1 validates linux/amd64 only; runtime=%s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 	withCapabilitySeams(t, "linux")
 

@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -196,6 +197,37 @@ func TestWirePlanTools_RunTaskAndInspectSessionWiredFromFirstPass(t *testing.T) 
 	}
 	if strings.Contains(inspectResult.ForLLM, "session store is not available") {
 		t.Errorf("inspect_session reports an unwired store: %q", inspectResult.ForLLM)
+	}
+
+	// Wait for runTaskFromInProgress (the goroutine StartTaskNow launched
+	// above) to actually finish before this test function returns.
+	// AgentLoop.Close() (registered via t.Cleanup inside
+	// newPlanToolWiringTestLoop, which runs BEFORE t.TempDir()'s own
+	// cleanup) drains recaps, session workers, and browser managers/
+	// coordinator on teardown, but never touches TaskExecutor's running-
+	// goroutine map — so without this wait, that goroutine can still be
+	// writing session/transcript files under t.TempDir()'s tasks/<id>/
+	// subtree at the exact moment t.TempDir()'s cleanup calls os.RemoveAll
+	// on it, racing a "directory not empty" failure into RemoveAll. This
+	// only ever flaked on the slower macOS CI runner (Cross-Platform CI
+	// matrix, macos-latest arm64) — its wider scheduling latency widens the
+	// goroutine-vs-cleanup race window enough to hit it; the mock LLM
+	// provider returns instantly with no tool calls, so in practice the
+	// goroutine finishes in well under a second and this bound is generous.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		fresh, gerr := taskStore.Get(tk.ID)
+		if gerr == nil && fresh.Status != task.StatusInProgress {
+			break
+		}
+		if time.Now().After(deadline) {
+			status := task.StatusInProgress
+			if gerr == nil {
+				status = fresh.Status
+			}
+			t.Fatalf("task %q did not leave StatusInProgress within 5s (status=%v, err=%v)", tk.ID, status, gerr)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
