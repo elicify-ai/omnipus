@@ -97,6 +97,7 @@ func TestRequestCancel_RootAlreadyClaimed_FallsBackToLiveDescendant(t *testing.T
 	parentTS := &turnState{
 		turnID:              "turn-parent-already-claimed",
 		transcriptSessionID: sessionID,
+		routingSessionID:    session.RoutingSessionID(sessionID),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 		transcriptStore:     store,
@@ -111,6 +112,7 @@ func TestRequestCancel_RootAlreadyClaimed_FallsBackToLiveDescendant(t *testing.T
 	childTS := &turnState{
 		turnID:              "turn-child-live-unclaimed",
 		transcriptSessionID: sessionID,
+		routingSessionID:    session.RoutingSessionID(sessionID),
 		depth:               1,
 		parentTurnID:        "turn-parent-already-claimed",
 		finishedChan:        make(chan struct{}),

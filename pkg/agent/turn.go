@@ -808,7 +808,15 @@ func (al *AgentLoop) claimAnyTurnForSession(sessionID string) TurnCancelHook {
 	var claimed *turnState
 	al.activeTurnStates.Range(func(_, value any) bool {
 		ts := value.(*turnState)
-		if ts.transcriptSessionID != sessionID || !ts.IsAlive() {
+		// ADR-057 merge rebase: release wrote this predicate pre-identity-split,
+		// matching transcriptSessionID. Post-D1 a delegated child's
+		// transcriptSessionID is its OWN id, so that match can never find the
+		// live background/Critical delegate this fallback exists for. The
+		// cancel-reachability key is routingSessionID (inherited verbatim down
+		// the tree, == the chat root's id) — the same rebase every other
+		// role-B cancel predicate received. This adds one reader to
+		// routingSessionID's FR-014 reader set, in the same role-B class.
+		if ts.routingSessionID != session.RoutingSessionID(sessionID) || !ts.IsAlive() {
 			return true
 		}
 		if ts.ClaimCancel() {

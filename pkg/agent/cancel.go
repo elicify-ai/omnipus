@@ -376,6 +376,24 @@ func (al *AgentLoop) RequestCancel(
 	}
 
 	wasFired := activeTurn != nil && activeTurn.ClaimCancel()
+	// Fallback (release/v0.1.1 cancel-cascade fix, restored in the merge
+	// review — the resolution had kept this function and its CancelOutcome
+	// documentation but dropped the one production call site): when the
+	// PRIMARY resolved turn could not be claimed — most commonly because it
+	// already fired from an earlier, unrelated cancel — a DIFFERENT live,
+	// never-canceled turn sharing the session (a background/Critical async
+	// delegate is the common case) may still be claimable. Without this,
+	// the whole descendant cascade and the turn_canceled transcript/audit
+	// write sit behind wasFired computed from that ONE turn alone, so the
+	// claimable descendant is silently skipped. See
+	// claimAnyTurnForSession's doc comment (turn.go) and
+	// cancel_descendant_fallback_test.go.
+	if !wasFired && !armed {
+		if fallback := al.claimAnyTurnForSession(sessionID); fallback != nil {
+			activeTurn = fallback
+			wasFired = true
+		}
+	}
 
 	// --- Audit: attempt (always, even for duplicate, no-turn, or armed-latch cancels) ---
 	audit.Emit(ctx, auditLogger, audit.EventTurnCancelAttempt, audit.SeverityInfo, map[string]any{
