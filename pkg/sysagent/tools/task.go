@@ -476,7 +476,7 @@ func NewTaskUpdateTool(d *Deps) *TaskUpdateTool  { return &TaskUpdateTool{deps: 
 func (t *TaskUpdateTool) Name() string           { return "update_task_in_workspace" }
 func (t *TaskUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskUpdateTool) Description() string {
-	return "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/in_progress/blocked/done/failed), due (RFC 3339), priority (1 highest to 5 lowest), blocked_by (array of task IDs, replaces existing list), result (completion summary; used as the judge's claim text — required in practice for a done claim on a task with acceptance criteria, since only the criteria's own assignee running that task can force one through). Only provided fields are updated. A status:\"done\" call on a task with acceptance criteria is NOT applied immediately — it is adjudicated by the judge during that task's own run."
+	return "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/blocked/done/failed — in_progress is reached only through real dispatch via run_task, never written directly here), due (RFC 3339), priority (1 highest to 5 lowest), blocked_by (array of task IDs, replaces existing list), result (completion summary; used as the judge's claim text — required in practice for a done claim on a task with acceptance criteria, since only the criteria's own assignee running that task can force one through). Only provided fields are updated. A status:\"done\" call on a task with acceptance criteria is NOT applied immediately — it is adjudicated by the judge during that task's own run."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -612,6 +612,24 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 	pendingJudgeNote := ""
 	if v, ok := args["status"].(string); ok && isValidTaskStatus(v) {
 		st := task.Status(v)
+		// Issue #593 (Option A): in_progress is a DISPATCH state, not a
+		// caller-settable status the way done/failed are — this privileged,
+		// cross-workspace twin of update_task is MORE permissive than the
+		// plain tool (it can mutate another agent's task once the delegation
+		// gate above clears) and was flagged as the SAME hole. The only
+		// legitimate writers are the executor's ClaimForRun, REST's
+		// handleTaskPatch, run_task, and set_todos-via-Create — none of which
+		// call this tool. Mirror the plain update_task tool's guard (same
+		// rejection shape, same run_task pointer): reject a transition INTO
+		// in_progress from any other status outright, rather than persist a
+		// "running" task with no session and no executor. A resend on a task
+		// that is ALREADY in_progress is a harmless no-op and is let through
+		// unchanged.
+		if st == task.StatusInProgress && existing.Status != task.StatusInProgress {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT",
+				"in_progress cannot be set directly — it is only ever reached through real dispatch; "+
+					"call run_task to actually start this task", "status"))
+		}
 		if deferWorkspaceDoneClaimToJudge(existing, st) {
 			// review r2 Chunk 1: close the privileged-tool judge-bypass — this
 			// tool (update_task_in_workspace) previously wrote status:"done"

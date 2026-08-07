@@ -677,9 +677,11 @@ func TestTaskUpdate_EditsTitle(t *testing.T) {
 	tool := NewTaskUpdateTool(store)
 	ctx := WithAgentID(context.Background(), "agent-a")
 
+	// Issue #593: status is deliberately OMITTED here (it was incidental
+	// filler value updStatusInProg before the in_progress-forge guard landed —
+	// this test's actual concern is title-only field-patch semantics).
 	res := tool.Execute(ctx, map[string]any{
 		"task_id": tk.ID,
-		"status":  updStatusInProg,
 		"title":   "renamed title",
 	})
 	if res.IsError {
@@ -716,9 +718,10 @@ func TestTaskUpdate_EditsPriorityAndDue(t *testing.T) {
 	dueA := "2026-07-01T12:00:00Z"
 	dueB := "2026-08-15T09:30:00Z"
 
+	// Issue #593: status omitted (incidental filler before the in_progress-forge
+	// guard — this test's concern is priority/due, not status).
 	if res := tool.Execute(ctx, map[string]any{
 		"task_id":  tk.ID,
-		"status":   updStatusInProg,
 		"priority": float64(2),
 		"due":      dueA,
 	}); res.IsError {
@@ -734,7 +737,6 @@ func TestTaskUpdate_EditsPriorityAndDue(t *testing.T) {
 
 	if res := tool.Execute(ctx, map[string]any{
 		"task_id":  tk.ID,
-		"status":   updStatusInProg,
 		"priority": float64(5),
 		"due":      dueB,
 	}); res.IsError {
@@ -765,9 +767,10 @@ func TestTaskUpdate_EditsAgentID(t *testing.T) {
 	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
 	ctx := WithAgentID(context.Background(), "agent-a")
 
+	// Issue #593: status omitted (incidental filler — this test's concern is
+	// agent_id reassignment, not status).
 	res := tool.Execute(ctx, map[string]any{
 		"task_id":  tk.ID,
-		"status":   updStatusInProg,
 		"agent_id": "agent-b",
 	})
 	if res.IsError {
@@ -793,9 +796,12 @@ func TestTaskUpdate_SetsBlockedBy(t *testing.T) {
 	tool := NewTaskUpdateTool(store)
 	ctx := WithAgentID(context.Background(), "agent-a")
 
+	// Issue #593: status omitted (incidental filler — this test's concern is
+	// blocked_by, not status; leaving status:in_progress here would now be
+	// rejected before blocked_by is ever processed, since the seeded task
+	// starts at StatusNext).
 	res := tool.Execute(ctx, map[string]any{
 		"task_id":    dep.ID,
-		"status":     updStatusInProg,
 		"blocked_by": []any{blocker.ID},
 	})
 	if res.IsError {
@@ -828,10 +834,12 @@ func TestTaskUpdate_BlockedByRejectsCycle(t *testing.T) {
 	tool := NewTaskUpdateTool(store)
 	ctx := WithAgentID(context.Background(), "agent-a")
 
-	// Attempt a→b: forms a cycle a→b→a. Must be rejected.
+	// Attempt a→b: forms a cycle a→b→a. Must be rejected. (Issue #593: status
+	// omitted — this test's concern is the cycle rejection, not status; the
+	// seeded task starts at StatusNext, so an in_progress filler value would
+	// now be rejected first, for the wrong reason.)
 	res := tool.Execute(ctx, map[string]any{
 		"task_id":    a.ID,
-		"status":     updStatusInProg,
 		"blocked_by": []any{b.ID},
 	})
 	if !res.IsError {
@@ -861,9 +869,9 @@ func TestTaskUpdate_BlockedByRejectsCrossWorkspace(t *testing.T) {
 	tool := NewTaskUpdateTool(store)
 	ctx := WithAgentID(context.Background(), "agent-a")
 
+	// Issue #593: status omitted — see TestTaskUpdate_BlockedByRejectsCycle.
 	res := tool.Execute(ctx, map[string]any{
 		"task_id":    dep.ID,
-		"status":     updStatusInProg,
 		"blocked_by": []any{blocker.ID},
 	})
 	if !res.IsError {
@@ -938,9 +946,13 @@ func TestTaskUpdate_StatusOnlyBackcompat(t *testing.T) {
 	tool := NewTaskUpdateTool(store)
 	ctx := WithAgentID(context.Background(), "agent-a")
 
+	// Issue #593: updStatusFailed, not updStatusInProg — in_progress is no
+	// longer directly settable via update_task (see TestTaskUpdate_
+	// InProgressForgeRejected), so this back-compat proof now uses "failed" as
+	// its example of a direct, caller-settable status.
 	res := tool.Execute(ctx, map[string]any{
 		"task_id": tk.ID,
-		"status":  updStatusInProg,
+		"status":  updStatusFailed,
 	})
 	if res.IsError {
 		t.Fatalf("status-only task_update: %s", res.ForLLM)
@@ -950,8 +962,8 @@ func TestTaskUpdate_StatusOnlyBackcompat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.Status != task.StatusInProgress {
-		t.Errorf("expected status in_progress, got %q", got.Status)
+	if got.Status != task.StatusFailed {
+		t.Errorf("expected status failed, got %q", got.Status)
 	}
 	// No other fields touched.
 	if got.Title != originalTitle {
@@ -1008,6 +1020,168 @@ func TestTaskUpdate_DoneFailedTerminal(t *testing.T) {
 		})
 	}
 }
+
+// TestTaskUpdate_InProgressForgeRejected is the Issue #593 regression test.
+//
+// update_task previously let ANY permitted caller — including the task's own
+// creator/delegator — write status:"in_progress" directly, with no session,
+// no goroutine, and no dispatch actually starting: the task then read
+// "running" forever on the board. This proves the fix (Option A):
+//
+//   - (a) a next-status task's creator calling update_task(status:"in_progress")
+//     is REJECTED with a message naming run_task as the correct path, and the
+//     task is unchanged on disk (re-read to confirm — not just a non-nil error).
+//   - (b) positive control: status:"failed" and a plain title edit both still
+//     succeed and persist — the guard does not overreach into other status
+//     values or other fields.
+//   - (c) a task that is ALREADY in_progress is not broken by an unrelated
+//     (non-status) update — the guard only fires on a transition INTO
+//     in_progress from a different status, never on an already-in_progress
+//     task being otherwise edited.
+func TestTaskUpdate_InProgressForgeRejected(t *testing.T) {
+	t.Parallel()
+
+	t.Run("creator forging next to in_progress is rejected, task unchanged on disk", func(t *testing.T) {
+		t.Parallel()
+		store := task.New(t.TempDir())
+		// Delegator "mia" creates a task assigned to "worker" via the AGENT path
+		// (CreatedByAgentID stamped), mirroring the UAT repro in issue #593: the
+		// creator is a legitimate update_task caller via the ownership union
+		// check, even though the task is assigned to someone else.
+		tk := &task.Task{
+			Title: "delegated work", Action: task.ActionLLM, Status: task.StatusNext,
+			WorkspaceID: "ws-1", AgentID: "worker",
+		}
+		if err := store.CreateByAgent(tk, "mia"); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		beforeUpdatedAt := tk.UpdatedAt
+
+		tool := NewTaskUpdateTool(store)
+		ctx := WithAgentID(context.Background(), "mia")
+
+		res := tool.Execute(ctx, map[string]any{
+			"task_id": tk.ID,
+			"status":  "in_progress",
+		})
+		if !res.IsError {
+			t.Fatalf("expected the forged in_progress write to be rejected, got success: %s", res.ForLLM)
+		}
+		if !strings.Contains(res.ForLLM, "run_task") {
+			t.Errorf("expected rejection message to name run_task as the correct path, got: %s", res.ForLLM)
+		}
+
+		// Read back from disk: status AND updated_at must be untouched — this is
+		// not just "an error was returned", it is "nothing was persisted".
+		got, err := store.Get(tk.ID)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if got.Status != task.StatusNext {
+			t.Errorf("task must remain %q on disk, got %q", task.StatusNext, got.Status)
+		}
+		if got.StartedAt != "" {
+			t.Errorf("started_at must NOT be stamped by a rejected write, got %q", got.StartedAt)
+		}
+		if got.UpdatedAt != beforeUpdatedAt {
+			t.Errorf("updated_at must be unchanged by a rejected write, got %q (was %q)",
+				got.UpdatedAt, beforeUpdatedAt)
+		}
+	})
+
+	t.Run("positive control: failed and title edits still work", func(t *testing.T) {
+		t.Parallel()
+		store := task.New(t.TempDir())
+		tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+		tool := NewTaskUpdateTool(store)
+		ctx := WithAgentID(context.Background(), "agent-a")
+
+		// A title-only edit (no status at all) must still succeed.
+		if res := tool.Execute(ctx, map[string]any{
+			"task_id": tk.ID,
+			"title":   "renamed",
+		}); res.IsError {
+			t.Fatalf("title edit must succeed: %s", res.ForLLM)
+		}
+		got, err := store.Get(tk.ID)
+		if err != nil {
+			t.Fatalf("get after title edit: %v", err)
+		}
+		if got.Title != "renamed" {
+			t.Errorf("expected title 'renamed', got %q", got.Title)
+		}
+
+		// status:"failed" (the deliberately-NOT-guarded abort primitive) must
+		// still be settable directly.
+		if res := tool.Execute(ctx, map[string]any{
+			"task_id": tk.ID,
+			"status":  "failed",
+			"result":  "gave up",
+		}); res.IsError {
+			t.Fatalf("status:failed must succeed: %s", res.ForLLM)
+		}
+		got, err = store.Get(tk.ID)
+		if err != nil {
+			t.Fatalf("get after failed: %v", err)
+		}
+		if got.Status != task.StatusFailed {
+			t.Errorf("expected status failed, got %q", got.Status)
+		}
+	})
+
+	t.Run("already in_progress: unrelated update is not broken", func(t *testing.T) {
+		t.Parallel()
+		store := task.New(t.TempDir())
+		tk := seedTask(t, store, "agent-a", "agent-a", "ws-1")
+		// Move the task to in_progress through a legitimate path (direct store
+		// write, standing in for the executor's real ClaimForRun) rather than
+		// through update_task, so this sub-test's own seed does not depend on
+		// the very tool behavior under test.
+		if _, err := store.Update(tk.ID, task.Patch{Status: statusPtr(task.StatusInProgress)}); err != nil {
+			t.Fatalf("seed in_progress: %v", err)
+		}
+
+		tool := NewTaskUpdateTool(store)
+		ctx := WithAgentID(context.Background(), "agent-a")
+
+		// An unrelated field edit (title) must succeed and leave status alone.
+		if res := tool.Execute(ctx, map[string]any{
+			"task_id": tk.ID,
+			"title":   "still running, renamed",
+		}); res.IsError {
+			t.Fatalf("unrelated update on an already-in_progress task must succeed: %s", res.ForLLM)
+		}
+		got, err := store.Get(tk.ID)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if got.Status != task.StatusInProgress {
+			t.Errorf("status must remain in_progress, got %q", got.Status)
+		}
+		if got.Title != "still running, renamed" {
+			t.Errorf("expected title updated, got %q", got.Title)
+		}
+
+		// A resend of status:"in_progress" on an ALREADY in_progress task is a
+		// no-op, not a forge, and must be allowed through unchanged.
+		if res := tool.Execute(ctx, map[string]any{
+			"task_id": tk.ID,
+			"status":  "in_progress",
+		}); res.IsError {
+			t.Fatalf("a same-status resend on an already in_progress task must not be rejected: %s", res.ForLLM)
+		}
+		got, err = store.Get(tk.ID)
+		if err != nil {
+			t.Fatalf("get after resend: %v", err)
+		}
+		if got.Status != task.StatusInProgress {
+			t.Errorf("status must remain in_progress after resend, got %q", got.Status)
+		}
+	})
+}
+
+// statusPtr returns a pointer to s, for building task.Patch literals inline.
+func statusPtr(s task.Status) *task.Status { return &s }
 
 // TestTaskCreate_WithBlockedBy proves task_create with blocked_by persists the
 // deps at creation.
@@ -1546,9 +1720,12 @@ func TestTaskUpdate_ResponseCarriesUpdatedFields(t *testing.T) {
 	tool := NewTaskUpdateTool(store)
 	ctx := WithAgentID(context.Background(), "agent-a")
 
+	// Issue #593: updStatusFailed, not updStatusInProg — this test only cares
+	// that "status" appears among the updated FIELD NAMES, which is unaffected
+	// by which valid direct status is used.
 	res := tool.Execute(ctx, map[string]any{
 		"task_id":  tk.ID,
-		"status":   updStatusInProg,
+		"status":   updStatusFailed,
 		"title":    "new title",
 		"priority": float64(2),
 	})
@@ -1751,10 +1928,12 @@ func TestTaskUpdate_AgentIDReassignment_SameAgentSkipsGate(t *testing.T) {
 
 	ctx := WithAgentID(context.Background(), "agent-a")
 	// Reassign to the SAME agent (plus a status change so the call is valid) —
-	// the gate must NOT be consulted for the same-agent value.
+	// the gate must NOT be consulted for the same-agent value. Issue #593:
+	// updStatusFailed, not updStatusInProg — the seeded task starts at
+	// StatusNext, so in_progress would now be rejected by the forge guard.
 	res := tool.Execute(ctx, map[string]any{
 		"task_id":  tk.ID,
-		"status":   updStatusInProg,
+		"status":   updStatusFailed,
 		"agent_id": "agent-a",
 	})
 	if res.IsError {

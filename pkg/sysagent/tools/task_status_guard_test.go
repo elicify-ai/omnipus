@@ -155,16 +155,26 @@ func TestSysagentTaskUpdate_ValidStatusApplied(t *testing.T) {
 // wire write to `blocked` is rejected with ErrBlockedNotSettable. That guard is
 // covered separately by TestSysagentTaskUpdate_BlockedNotSettable below.
 //
-// Traces to: Sprint-2 unified task store — the five directly-settable statuses
-// are writable; `blocked` is derived (pkg/task/store.go ErrBlockedNotSettable).
+// `in_progress` is ALSO excluded as of issue #593 (Option A): it is a DISPATCH
+// state reached only through real execution (run_task / the executor's
+// ClaimForRun / REST's handleTaskPatch / set_todos-via-Create) — a direct
+// system.task.update write into in_progress from any other status is now
+// rejected, mirroring the `blocked` derived-state guard in spirit (not
+// caller-settable) though the mechanism differs (an explicit forge-rejection
+// check, not ErrBlockedNotSettable). That guard is covered separately by
+// TestSysagentTaskUpdate_InProgressForgeRejected below.
+//
+// Traces to: Sprint-2 unified task store — the four remaining directly-settable
+// statuses are writable; `blocked` is derived (pkg/task/store.go
+// ErrBlockedNotSettable) and `in_progress` is dispatch-only (issue #593).
 func TestSysagentTaskUpdate_AllSettableStatusesApplied(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 
-	// All six canonical statuses EXCEPT the derived `blocked` side-state.
+	// All six canonical statuses EXCEPT the derived `blocked` side-state and
+	// the dispatch-only `in_progress` state (issue #593).
 	statuses := []task.Status{
 		task.StatusInbox,
 		task.StatusNext,
-		task.StatusInProgress,
 		task.StatusDone,
 		task.StatusFailed,
 	}
@@ -228,6 +238,110 @@ func TestSysagentTaskUpdate_BlockedNotSettable(t *testing.T) {
 		"system.task.update with status='blocked' must be rejected (derived side-state); got: %s", result.ForLLM)
 	assert.Equal(t, task.StatusInbox, diskTaskStatus(t, home, taskID),
 		"on-disk status must remain 'inbox' — the rejected blocked write must not apply")
+}
+
+// TestSysagentTaskUpdate_InProgressForgeRejected is the issue #593 regression
+// test for update_task_in_workspace — the MORE permissive twin of the plain
+// update_task tool flagged as the same hole (it can mutate another agent's
+// task once the delegation gate clears, unlike the plain tool's strict
+// assignee/creator-only ownership union).
+//
+//   - (a) the delegator/creator of a `next` task (agent-namespaced
+//     CreatedByAgentID, distinct from the assignee) calling
+//     system.task.update(status:"in_progress") is REJECTED with a message
+//     naming run_task, and the task is unchanged on disk (re-read, not just a
+//     non-nil error).
+//   - (b) positive control: status:"failed" and a plain name (title) edit
+//     both still succeed and persist.
+//   - (c) a task that is ALREADY in_progress is not broken by an unrelated
+//     (non-status) update, and a same-status resend is a harmless no-op.
+func TestSysagentTaskUpdate_InProgressForgeRejected(t *testing.T) {
+	t.Run("creator forging next to in_progress is rejected, task unchanged on disk", func(t *testing.T) {
+		deps, home := newTestDepsWithHome(t)
+		seedWorkspace(t, home, testWorkspaceID)
+
+		const taskID = "01JXSTATUSGUARD_FORGE0001"
+		// Delegator "mia" dispatched this task to "worker" via the AGENT path
+		// (CreatedByAgentID stamped) — mirroring the issue #593 UAT repro. The
+		// creator passes the ownership union check even though the task is
+		// assigned to someone else.
+		writeTask(t, home, task.Task{
+			ID: taskID, Title: "delegated work", Status: task.StatusNext,
+			WorkspaceID: testWorkspaceID, AgentID: "worker", CreatedByAgentID: "mia",
+		})
+
+		tool := systools.NewTaskUpdateTool(deps)
+		result := tool.Execute(callerCtx("mia"), map[string]any{
+			"id":     taskID,
+			"status": "in_progress",
+		})
+
+		assert.True(t, result.IsError,
+			"expected the forged in_progress write to be rejected, got success: %s", result.ForLLM)
+		assert.Contains(t, result.ForLLM, "run_task",
+			"expected rejection message to name run_task as the correct path")
+
+		store := task.New(filepath.Join(home, "tasks"))
+		got, err := store.Get(taskID)
+		require.NoError(t, err)
+		assert.Equal(t, task.StatusNext, got.Status, "task must remain 'next' on disk")
+		assert.Empty(t, got.StartedAt, "started_at must NOT be stamped by a rejected write")
+	})
+
+	t.Run("positive control: failed and name edits still work", func(t *testing.T) {
+		deps, home := newTestDepsWithHome(t)
+
+		const taskID = "01JXSTATUSGUARD_FORGE0002"
+		seedTask(t, home, taskID, "original name", task.StatusNext, nil)
+
+		tool := systools.NewTaskUpdateTool(deps)
+
+		nameResult := tool.Execute(callerCtx("caller-agent"), map[string]any{
+			"id":   taskID,
+			"name": "renamed",
+		})
+		require.False(t, nameResult.IsError, "name edit must succeed: %s", nameResult.ForLLM)
+
+		failResult := tool.Execute(callerCtx("caller-agent"), map[string]any{
+			"id":     taskID,
+			"status": "failed",
+			"result": "gave up",
+		})
+		require.False(t, failResult.IsError, "status:failed must succeed: %s", failResult.ForLLM)
+		assert.Equal(t, task.StatusFailed, diskTaskStatus(t, home, taskID))
+
+		store := task.New(filepath.Join(home, "tasks"))
+		got, err := store.Get(taskID)
+		require.NoError(t, err)
+		assert.Equal(t, "renamed", got.Title, "name edit must have persisted")
+	})
+
+	t.Run("already in_progress: unrelated update is not broken", func(t *testing.T) {
+		deps, home := newTestDepsWithHome(t)
+
+		const taskID = "01JXSTATUSGUARD_FORGE0003"
+		seedTask(t, home, taskID, "already running", task.StatusInProgress, nil)
+
+		tool := systools.NewTaskUpdateTool(deps)
+
+		// Unrelated field edit must succeed and leave status alone.
+		nameResult := tool.Execute(callerCtx("caller-agent"), map[string]any{
+			"id":   taskID,
+			"name": "still running, renamed",
+		})
+		require.False(t, nameResult.IsError,
+			"unrelated update on an already-in_progress task must succeed: %s", nameResult.ForLLM)
+		assert.Equal(t, task.StatusInProgress, diskTaskStatus(t, home, taskID))
+
+		// A same-status resend is a no-op, not a forge, and must be allowed.
+		resendResult := tool.Execute(callerCtx("caller-agent"), map[string]any{
+			"id":     taskID,
+			"status": "in_progress",
+		})
+		require.False(t, resendResult.IsError,
+			"a same-status resend on an already in_progress task must not be rejected: %s", resendResult.ForLLM)
+		assert.Equal(t, task.StatusInProgress, diskTaskStatus(t, home, taskID))
+	})
 }
 
 // TestSysagentTaskUpdate_Differentiation verifies that two different valid

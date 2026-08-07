@@ -446,9 +446,13 @@ func TestTaskUpdateTool_NilDenyChecker_FailsClosed(t *testing.T) {
 	// No SetDelegationDenyChecker installed at all.
 
 	ctx := WithAgentID(context.Background(), "agent-a")
+	// Issue #593: status "failed", not "in_progress" — the seeded task starts
+	// at StatusNext, so "in_progress" would now be rejected by the
+	// in_progress-forge guard before the reassignment's delegation-deny gate
+	// (this test's actual concern) is ever reached.
 	result := tool.Execute(ctx, map[string]any{
 		"task_id":  tk.ID,
-		"status":   "in_progress",
+		"status":   "failed",
 		"agent_id": "agent-b",
 	})
 	if result == nil || !result.IsError {
