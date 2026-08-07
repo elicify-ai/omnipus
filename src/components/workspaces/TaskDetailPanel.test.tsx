@@ -1019,11 +1019,16 @@ describe('TaskDetailPanel — renders subtask section when subtasks exist', () =
 // ── Full task UX edits (trigger / depends-on / due / todos) ────────────────────
 
 describe('TaskDetailPanel — editable trigger', () => {
-  // FR-011/D3/FR-005: recurring-trigger editing is removed from the generic
-  // detail panel entirely — it exists only in the calendar editor. The two
-  // tests that used to select "Recurring" and edit a cron expression from
-  // this panel are replaced by the trim + FR-023 defensive-guard tests below.
-  it('the Trigger dropdown offers only "None (manual)" and "Once (at a time)" for a manual/once task', async () => {
+  // FR-011/D3/FR-005, updated by operator ruling 2026-08-07: recurring- AND
+  // once-trigger SCHEDULE editing are both removed from the generic detail
+  // panel entirely — actual date/time entry exists only in the calendar
+  // editor. The trigger-KIND switch (manual ⇄ once) still lives here, tested
+  // by the two tests below. Every/recurring/once-at-rest all get the
+  // calendar-redirect rendering, tested in the FR-023 describe block below
+  // (which used to cover only recurring/every — the once-DateTimePicker test
+  // that used to live here is replaced by that block's "once" case, since
+  // once now gets the identical treatment).
+  it('the Trigger dropdown offers only "None (manual)" and "Once (at a time)" for a manual task', async () => {
     Element.prototype.scrollIntoView = vi.fn()
     renderPanel(makeTask({ id: 'task-trig', status: 'next' }))
 
@@ -1038,43 +1043,83 @@ describe('TaskDetailPanel — editable trigger', () => {
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
   })
 
-  it('picking a date + time for the "Once" trigger PATCHes trigger.config.at_ms', async () => {
-    // Note: triggerKind (and therefore whether the "Once" DateTimePicker is
-    // rendered at all) is derived straight from `task.trigger?.type`, not
-    // from any local echo of a SmartSelect pick — this test's `task` prop
-    // (via renderPanel) is static, so it starts already on the "once" kind
-    // with no at_ms yet (mirrors a freshly-created once-trigger task), rather
-    // than switching kinds through the SmartSelect mid-test.
+  it('Binding Rule 4 positive control: selecting "Once (at a time)" on a manual/no-trigger task still switches the trigger kind via updateTask', async () => {
+    // Operator ruling 2026-08-07 moved once-SCHEDULE editing (the actual
+    // date/time) to the calendar-only redirect — it did NOT touch the
+    // trigger-KIND switch (manual → once), which stays inline right here,
+    // exactly as before. This proves a manual/no-trigger task still gets
+    // that inline editing today, unaffected by the ruling.
+    Element.prototype.scrollIntoView = vi.fn()
     const { updateTask } = await import('@/lib/api')
-    renderPanel(makeTask({ id: 'task-trig-once', status: 'next', trigger: { type: 'once', config: {} } }))
+    renderPanel(makeTask({ id: 'task-trig-manual-switch', status: 'next' }))
 
-    fireEvent.click(await screen.findByRole('button', { name: /trigger date and time/i }))
-    navigateToMonth('2026-09-10')
-    clickDay('2026-09-10')
-    selectOption('Hour', '08')
-    selectOption('Minute', '15')
+    const label = await screen.findByText(/^trigger$/i)
+    const fieldRoot = label.parentElement as HTMLElement
+    const combo = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
+    fireEvent.click(combo)
 
-    const expectedAtMs = new Date('2026-09-10T08:15').getTime()
-    // Debounced autosave — poll the LAST recorded PATCH until it reflects the
-    // fully-composed pick (robust regardless of how many PATCHes preceded it).
+    const option = await screen.findByRole('option', { name: /once \(at a time\)/i })
+    fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+    fireEvent.click(option)
+
     await waitFor(() => {
       const arg = lastUpdateArg(updateTask)
       expect(arg.trigger?.type).toBe('once')
-      expect(arg.trigger?.config.at_ms).toBe(expectedAtMs)
-    }, { timeout: 3000 })
+      expect(typeof arg.trigger?.config.at_ms).toBe('number')
+    })
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
   })
 })
 
 // ── FR-023 defensive guard ────────────────────────────────────────────────────
-// Board/List already exclude every/recurring tasks (BoardView/ListView's
-// isRecurringTrigger filter) — this panel should never receive one in
-// practice. These tests force-feed one directly as the `task` prop (the
-// documented "stale cache or a race" path, Acceptance Scenario 5) and assert
-// the defensive read-only rendering: a plain-English summary, an "Edit in
-// workspace calendar" link, no SmartSelect trigger picker, and — critically —
-// no raw cron/rule string anywhere in the rendered output.
+// Board/List already exclude every schedule-bearing task (BoardView/
+// ListView's isScheduledTrigger filter — once/every/recurring alike, per
+// operator ruling 2026-08-07) — this panel should rarely receive one in
+// practice (reachable via a dependency chip, subtask row, search result,
+// stale cache, or a race). These tests force-feed one directly as the `task`
+// prop and assert the defensive read-only rendering: a plain-English
+// summary, an "Edit in workspace calendar" link, no SmartSelect trigger
+// picker, no inline DateTimePicker, and — critically — no raw cron/rule
+// string anywhere in the rendered output.
 
-describe('TaskDetailPanel — FR-023 defensive guard for a force-fed recurring task', () => {
+describe('TaskDetailPanel — FR-023 defensive guard for a force-fed scheduled task (once/every/recurring)', () => {
+  it('a task already on a "once" schedule shows the calendar-redirect affordance, not an inline DateTimePicker (operator ruling 2026-08-07)', async () => {
+    // Supersedes the pre-ruling test this used to be: picking a date+time via
+    // an inline DateTimePicker that PATCHed trigger.config.at_ms directly.
+    // `once` is now calendar-only, exactly like every/recurring — same
+    // read-only summary + "Edit in workspace calendar" link, no inline
+    // "Trigger date and time" picker, no trigger-kind SmartSelect.
+    renderPanel(makeTask({
+      id: 'task-trig-once',
+      status: 'next',
+      workspace_id: 'ws-test',
+      trigger: { type: 'once', config: { at_ms: new Date('2026-09-10T08:15').getTime() } },
+    }))
+
+    expect(await screen.findByText(/runs once/i)).toBeInTheDocument()
+    expect(await screen.findByText(/edit in workspace calendar/i)).toBeInTheDocument()
+    // No inline DateTimePicker for the trigger time…
+    expect(screen.queryByRole('button', { name: /trigger date and time/i })).toBeNull()
+    // …and no trigger-kind SmartSelect either — matches the every/recurring
+    // rendering below exactly.
+    const label = await screen.findByText(/^trigger$/i)
+    const fieldRoot = label.parentElement as HTMLElement
+    expect(fieldRoot.querySelector('[role="combobox"]')).toBeNull()
+  })
+
+  it('omits the calendar link for a force-fed "once" task with no workspace_id, but still shows the read-only summary', async () => {
+    renderPanel(makeTask({
+      id: 'task-once-no-ws',
+      status: 'next',
+      workspace_id: '',
+      trigger: { type: 'once', config: { at_ms: new Date('2026-09-10T08:15').getTime() } },
+    }))
+
+    expect(await screen.findByText(/runs once/i)).toBeInTheDocument()
+    expect(screen.queryByText(/edit in workspace calendar/i)).toBeNull()
+  })
+
   it('renders a read-only summary and an "Edit in workspace calendar" link for a recurring (cron) task — never the raw cron string', async () => {
     renderPanel(makeTask({
       id: 'task-recurring-forced',
