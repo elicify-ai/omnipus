@@ -14,6 +14,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -25,8 +26,46 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
+
+// taskRunNowSuccessProvider is a scripted LLMProvider that always returns a
+// genuine ADR-043 completion signal (TASK_STATUS marker, preceded by the
+// ADR-052 FR-035 [goal:evidence] line the evidence-marker gate requires) —
+// the same fixed content proven to reach task.StatusDone with no Judge System
+// Agent registered in TestStartOccurrenceRun_IdempotentAgainstConcurrentSchedulerFire
+// (pkg/agent/task_run_history_test.go): with no acceptance criteria, the soft
+// tier applies (adjudicateClaim, pkg/agent/task_executor.go) and, finding no
+// Judge agent in this minimal test harness's registry, trusts the claim
+// directly.
+//
+// Exists because restMockProvider's bare &providers.LLMResponse{} (no
+// parseable TASK_STATUS line) makes a task land on `failed` for an ordinary,
+// UNRELATED reason ("no completion signal") — a Status of Failed by itself
+// cannot distinguish that from the context-cancellation bug's own failure
+// ("execution error: turn not started: context canceled",
+// pkg/agent/task_executor.go's finishTaskRun). Only a provider that can
+// actually reach a genuine Done, with real Result content the canceled-ctx
+// path could never produce, proves the fix — not merely "some terminal
+// status, whichever it is".
+type taskRunNowSuccessProvider struct{}
+
+const taskRunNowSuccessSummary = "run-now-live-server-check: verified"
+
+func (p *taskRunNowSuccessProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	return &providers.LLMResponse{
+		Content: "Done.\n[goal:evidence] verified\nTASK_STATUS: success\nTASK_SUMMARY: " + taskRunNowSuccessSummary,
+	}, nil
+}
+
+func (p *taskRunNowSuccessProvider) GetDefaultModel() string { return "test-model" }
 
 // getTaskRuns sends GET /api/v1/tasks/{id}/runs through HandleTasks (the
 // real dispatcher a live request takes) and returns the recorder.
@@ -245,10 +284,21 @@ func TestTaskRunsEndpoint(t *testing.T) {
 // occurrence Run-now ({"occurrence_ms":N}) and a normal/once re-run (empty
 // body). Both must return 202, and — the actual regression assertion — the
 // dispatched run must round-trip via GET /tasks/{id}/runs and reach a
-// TERMINAL status (done/failed), proving the execution was not silently
-// canceled by the request's context tearing down when the handler returned.
+// GENUINE Done with the scripted provider's real completion content, not
+// merely "some terminal status". An earlier version of this test accepted
+// done OR failed, on the theory that a canceled dispatch would strand the
+// run in_progress forever; that reasoning was wrong; a context-canceled
+// dispatch (pkg/agent/task_executor.go's finishTaskRun, on err != nil) closes
+// the run as `failed` with Result "execution error: turn not started:
+// context canceled" — itself a terminal status — so "reaches done or
+// failed" passes whether or not the bug is present and would have shipped
+// this exact regression silently (live-UAT-reproduced twice against the
+// merged release build, 2026-08-07, after the original 2026-07-20 fix
+// (commit 4352ebbe) was lost in a later cross-branch merge). Asserting the
+// specific Done status plus the scripted provider's own summary text in
+// Result is what a canceled-context failure can never produce.
 func TestTaskRunNow_LiveExecutor_ViaRealServer(t *testing.T) {
-	api := newTestRestAPIAlignedStores(t)
+	api := newTestRestAPIAlignedStoresWithProvider(t, &taskRunNowSuccessProvider{})
 	wsID := ensureTestWorkspace(t, api)
 	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
 
@@ -283,10 +333,10 @@ func TestTaskRunNow_LiveExecutor_ViaRealServer(t *testing.T) {
 
 		// The run row is opened asynchronously inside the dispatched goroutine
 		// (handleTaskRunNow's own doc comment) — poll GET /tasks/{id}/runs
-		// until this occurrence's run appears AND reaches done/failed. A
-		// spurious context-cancel would strand it in_progress forever (no
-		// reaper backstop, per pkg/agent/task_executor.go's runTask comment),
-		// so this Eventually is the actual regression assertion.
+		// until this occurrence's run appears AND reaches the specific status
+		// gen.TaskRunStatusDone (NOT "done or failed" — see this test's own
+		// doc comment for why accepting Failed here would let the
+		// context-cancellation bug masquerade as a pass).
 		var matched gen.TaskRun
 		require.Eventually(t, func() bool {
 			w := getTaskRuns(t, api, tsk.Id)
@@ -298,20 +348,27 @@ func TestTaskRunNow_LiveExecutor_ViaRealServer(t *testing.T) {
 				return false
 			}
 			for _, run := range runs {
-				if run.OccurrenceMs != nil && *run.OccurrenceMs == occMs &&
-					(run.Status == gen.TaskRunStatusDone || run.Status == gen.TaskRunStatusFailed) {
+				if run.OccurrenceMs != nil && *run.OccurrenceMs == occMs && run.Status == gen.TaskRunStatusDone {
 					matched = run
 					return true
 				}
 			}
 			return false
 		}, 10*time.Second, 20*time.Millisecond,
-			"the occurrence run must round-trip via GET /tasks/{id}/runs and reach a terminal status — "+
-				"a spurious request-context cancel would strand it in_progress forever")
+			"the occurrence run must round-trip via GET /tasks/{id}/runs and reach a genuine Done — "+
+				"a spurious request-context cancel closes the run as `failed` instead (finishTaskRun's "+
+				"err != nil branch), which is itself a terminal status and would otherwise pass unnoticed")
 
 		assert.Equal(t, tsk.Id, matched.TaskId)
 		assert.Equal(t, gen.TaskRunKindManual, matched.Kind, "Run-now always opens a manual-kind run")
 		require.NotNil(t, matched.EndedAt, "a terminal run must carry ended_at")
+		require.NotNil(t, matched.Result, "a genuine Done run must carry the worker's claim as its Result")
+		assert.Contains(t, *matched.Result, taskRunNowSuccessSummary,
+			"Result must be the scripted provider's own real completion content, not a canceled-context "+
+				"failure string — proves the dispatch actually reached the LLM call, not merely that it "+
+				"landed on SOME terminal status")
+		assert.NotContains(t, *matched.Result, "context canceled",
+			"a genuine Done result must never contain the context-cancellation failure text")
 	})
 
 	t.Run("normal re-run: POST with empty body returns 202 and reaches a terminal status", func(t *testing.T) {
@@ -326,6 +383,7 @@ func TestTaskRunNow_LiveExecutor_ViaRealServer(t *testing.T) {
 		require.NoError(t, resp.Body.Close())
 		require.Equal(t, http.StatusAccepted, resp.StatusCode, "body=%s", string(respBody))
 
+		var matched gen.TaskRun
 		require.Eventually(t, func() bool {
 			w := getTaskRuns(t, api, tsk.Id)
 			if w.Code != http.StatusOK {
@@ -336,13 +394,22 @@ func TestTaskRunNow_LiveExecutor_ViaRealServer(t *testing.T) {
 				return false
 			}
 			for _, run := range runs {
-				if run.OccurrenceMs == nil &&
-					(run.Status == gen.TaskRunStatusDone || run.Status == gen.TaskRunStatusFailed) {
+				if run.OccurrenceMs == nil && run.Status == gen.TaskRunStatusDone {
+					matched = run
 					return true
 				}
 			}
 			return false
 		}, 10*time.Second, 20*time.Millisecond,
-			"the ad-hoc re-run (empty body) must round-trip via GET /tasks/{id}/runs and reach a terminal status")
+			"the ad-hoc re-run (empty body) must round-trip via GET /tasks/{id}/runs and reach a genuine "+
+				"Done — see the occurrence-run subtest's own comment for why 'done or failed' cannot "+
+				"distinguish this from the context-cancellation bug")
+
+		require.NotNil(t, matched.Result, "a genuine Done run must carry the worker's claim as its Result")
+		assert.Contains(t, *matched.Result, taskRunNowSuccessSummary,
+			"Result must be the scripted provider's own real completion content, not a canceled-context "+
+				"failure string")
+		assert.NotContains(t, *matched.Result, "context canceled",
+			"a genuine Done result must never contain the context-cancellation failure text")
 	})
 }

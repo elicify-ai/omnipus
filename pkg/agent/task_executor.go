@@ -2610,11 +2610,45 @@ func (te *TaskExecutor) SpawnTriggeredRun(ctx context.Context, taskID string, oc
 // goroutine, not here) is what then makes this idempotent against a run
 // either side already opened — see
 // TestStartOccurrenceRun_IdempotentAgainstConcurrentSchedulerFire.
-func (te *TaskExecutor) StartOccurrenceRun(ctx context.Context, taskID string, occurrenceMs *int64) error {
+//
+// The caller-supplied context is intentionally IGNORED as the dispatch
+// parent (hence "_", not "ctx"). handleTaskRunNow's only production caller
+// invokes this with r.Context(), and executeTask derives the goroutine's
+// context as a direct child of its own ctx argument via context.WithCancel —
+// net/http cancels a request's context the instant the handler returns
+// after WriteHeader(202) flushes, which would abort the just-launched agent
+// run almost immediately with "turn not started: context canceled"
+// (live-UAT-reproduced 2/2 against the merged release build, 2026-08-07).
+// Detaching onto context.Background() mirrors StartTaskNow's identical fix
+// (this file — see its own "Detach from the caller's context" comment) and
+// PlanEngine.dispatchReadyMembers' context.WithoutCancel(ctx) use
+// (plan_engine.go) before its own executeTaskPlanVerified call, for the
+// exact same reason; the per-task cancel stored in te.running[taskID]
+// remains the intended cancellation path (a future "cancel task" API).
+//
+// This exact fix already shipped once, 7-reviewer-approved, on 2026-07-20
+// (commit 4352ebbe: "Run-now cancelled itself... Detach onto
+// context.Background() (mirrors StartTaskNow)") but was lost in a later
+// cross-branch merge (ab1c1aad, 2026-08-06, release/v0.1.1 into
+// feature/plan-swimlane-board) that resolved this function back to
+// threading ctx through — the regression that then rode PR #597 into the
+// release build. Re-applying it here; do not re-thread ctx through again.
+//
+// The draining check mirrors the one 3bef0d16 added to ExecuteTask/
+// StartTaskNow (but never to this sibling entry point): detaching onto
+// context.Background() removes the free "canceled the moment the caller's
+// context dies" backstop request-context threading accidentally provided —
+// without this check, a Run-now racing AgentLoop.Close/TaskExecutor.Drain
+// could dispatch a goroutine Drain's bounded wg.Wait can only wait out, not
+// prevent from starting in the first place.
+func (te *TaskExecutor) StartOccurrenceRun(_ context.Context, taskID string, occurrenceMs *int64) error {
+	if te.draining.Load() {
+		return ErrExecutorDraining
+	}
 	if _, err := te.store.SpawnReset(taskID); err != nil {
 		return fmt.Errorf("task_executor: StartOccurrenceRun: reset task %q: %w", taskID, err)
 	}
-	return te.executeTask(ctx, taskID, occurrenceMs, task.RunKindManual, false)
+	return te.executeTask(context.Background(), taskID, occurrenceMs, task.RunKindManual, false)
 }
 
 // ResizeDispatchSema updates the global dispatch semaphore capacity.
