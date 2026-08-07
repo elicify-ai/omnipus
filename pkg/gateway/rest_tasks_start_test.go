@@ -28,6 +28,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -576,7 +577,23 @@ func TestHandleTaskPatch_StatusPreservedWhenExecutorNil(t *testing.T) {
 //
 // The agent loop puts the task store at filepath.Dir(workspace)/tasks. We pass
 // that exact path to task.New so the two stores share the same files.
+//
+// Uses restMockProvider (bare &providers.LLMResponse{}, no parseable
+// TASK_STATUS signal) — fine for tests that only need a task to reach SOME
+// terminal state. A test that must prove genuine successful completion
+// content (e.g. distinguishing a real Done from a context-cancellation
+// failure that also lands on a terminal status) needs
+// newTestRestAPIAlignedStoresWithProvider with a scripted provider instead.
 func newTestRestAPIAlignedStores(t *testing.T) *restAPI {
+	t.Helper()
+	return newTestRestAPIAlignedStoresWithProvider(t, &restMockProvider{})
+}
+
+// newTestRestAPIAlignedStoresWithProvider is newTestRestAPIAlignedStores
+// parameterized on the LLM provider, so a caller that needs the agent's
+// response content to be genuine and meaningful (not the bare no-op
+// restMockProvider) can supply its own scripted providers.LLMProvider.
+func newTestRestAPIAlignedStoresWithProvider(t *testing.T, provider providers.LLMProvider) *restAPI {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
@@ -601,7 +618,7 @@ func newTestRestAPIAlignedStores(t *testing.T) *restAPI {
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
 
 	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	al := mustAgentLoop(t, cfg, msgBus, provider)
 
 	// Both the executor and the API use the same tasks directory.
 	sharedTaskStore := task.New(tmpDir + "/tasks")
