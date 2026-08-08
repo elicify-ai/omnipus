@@ -30,7 +30,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BoardView, canDropTransition, buildBoardAnnouncements, boardKeyboardCoordinateGetter } from './BoardView'
 import { isRecurringTrigger } from '@/components/workspaces/taskFormFields'
@@ -687,6 +687,55 @@ describe('BoardView — outcome live region (UAT round-2 N2: never announce a mo
         'Task "Draggable task" could not be moved to the Blocked column: Blocked is set automatically when a dependency is unmet — you can’t move a task here. It remains in the Inbox column.',
       )
       expect(region).not.toHaveTextContent(/was moved/i)
+    })
+  })
+
+  // 14-reviewer sign-off Finding #4 (LOW): two overlapping drags — a slow
+  // drag A whose onTaskMove promise settles AFTER a faster, more recent
+  // drag B has already announced its own outcome — must not have A's now-
+  // stale result clobber B's correct, more-recent announcement.
+  it('a slow drag whose promise settles AFTER a faster, more recent overlapping drag has already announced its own outcome does not clobber it (Finding #4)', async () => {
+    await withMockedBoardRects(async () => {
+      let resolveSlow!: () => void
+      const slow = new Promise<void>((resolve) => {
+        resolveSlow = resolve
+      })
+      const onTaskMove = vi
+        .fn()
+        .mockReturnValueOnce(slow) // drag A (Inbox -> Next): slow, not yet resolved
+        .mockReturnValueOnce(Promise.resolve()) // drag B (Inbox -> In Progress): resolves immediately
+      const task = baseTask({ id: 'task-1', title: 'Draggable task', status: 'inbox' })
+      renderBoard({ tasks: [task], onTaskMove })
+
+      const card = screen.getByText('Draggable task').closest('[role="button"]') as HTMLElement
+      card.focus()
+
+      // Drag A: one column right (Inbox -> Next). Slow — its promise is not
+      // resolved yet when drag B starts (the overlap).
+      await dragOneColumnRight(card)
+      expect(onTaskMove).toHaveBeenCalledTimes(1)
+
+      // Drag B: two columns right (Inbox -> In Progress). Fast — resolves
+      // immediately, settling BEFORE drag A's still-pending promise.
+      await dragColumnsRight(card, 2)
+      expect(onTaskMove).toHaveBeenCalledTimes(2)
+
+      const region = screen.getByTestId('board-move-outcome')
+      // B's (fast, more recent) outcome lands first.
+      await waitFor(() =>
+        expect(region).toHaveTextContent('Task "Draggable task" was moved to the In Progress column.'),
+      )
+
+      // Now resolve drag A's stale, slow promise. Its outcome ("...to the
+      // Next column.") must NOT overwrite drag B's already-announced, more
+      // recent result — without the generation guard, this assertion fails.
+      await act(async () => {
+        resolveSlow()
+        await slow
+        await Promise.resolve()
+      })
+      expect(region).toHaveTextContent('Task "Draggable task" was moved to the In Progress column.')
+      expect(region).not.toHaveTextContent('was moved to the Next column')
     })
   })
 })

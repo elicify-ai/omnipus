@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   DndContext,
   PointerSensor,
@@ -432,6 +432,18 @@ function StatusColumnsRow({
   // `buildBoardAnnouncements`'s doc comment for the other half of this fix,
   // which stopped dnd-kit's OWN drop announcement from claiming "moved").
   const [moveOutcome, setMoveOutcome] = useState('')
+  // 14-reviewer sign-off Finding #4: two overlapping drags (a slow drop A
+  // whose onTaskMove promise settles AFTER a faster, more recent drop B has
+  // already announced its own outcome) could have A's now-stale outcome
+  // clobber B's correct, more-recent announcement — dnd-kit itself imposes
+  // no "only one drag at a time" ordering guarantee on the ASYNC tail of a
+  // drop once the mechanical drag has ended. Bumped once per drag-end that
+  // will actually produce an outcome (sync guard rejection or the async
+  // mutation path) — NOT on the early no-op returns above (same-status /
+  // dropped outside any column), which never touch `moveOutcome` at all —
+  // so a later async resolution can check whether it's still the most
+  // recent drag before writing to the live region.
+  const dragGenerationRef = useRef(0)
 
   const sensors = useSensors(
     // A small activation distance lets a plain click still open the detail panel
@@ -469,6 +481,13 @@ function StatusColumnsRow({
     const targetLabel = COLUMNS.find((c) => c.status === targetStatus)?.label ?? targetStatus
     const originLabel = COLUMNS.find((c) => c.status === dragged.status)?.label ?? dragged.status
 
+    // Finding #4: this drag-end WILL produce an outcome (sync or async) —
+    // claim a new generation before doing so. Any earlier, still-pending
+    // async resolution (from an overlapping drag that started before this
+    // one finished) checks this same ref before writing to `moveOutcome`
+    // and no-ops if it's no longer current.
+    const generation = ++dragGenerationRef.current
+
     const verdict = canDropTransition(dragged.status, targetStatus, isRecurringTrigger(dragged.trigger))
     if (!verdict.ok) {
       if (verdict.reason) onMoveRejected?.(verdict.reason)
@@ -488,9 +507,14 @@ function StatusColumnsRow({
     // about the same rejected drop.
     void Promise.resolve(onTaskMove?.(dragged, targetStatus)).then(
       () => {
+        // Stale (Finding #4): a newer drag has already claimed a later
+        // generation and (by definition, since it also reached this point)
+        // already announced its own outcome — don't clobber it.
+        if (dragGenerationRef.current !== generation) return
         setMoveOutcome(`Task "${dragged.title}" was moved to the ${targetLabel} column.`)
       },
       (err: unknown) => {
+        if (dragGenerationRef.current !== generation) return
         const reason = taskMoveErrorMessage(err, plans)
         setMoveOutcome(
           `Task "${dragged.title}" could not be moved to the ${targetLabel} column: ${reason} It remains in the ${originLabel} column.`,
