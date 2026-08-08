@@ -518,42 +518,58 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 // every grant filed under the child's key the MOMENT this one delegation
 // ends. Since every delegation mints a brand-new, effectively single-use
 // child session id (subturn.go's childID), a grant recorded only under that
-// key can never survive to be inherited by the NEXT delegation: it is
-// written and cleared within the same delegation's own lifetime.
+// key can never survive past this one delegation's own lifetime.
 //
-// InheritFrom (pkg/security/approvalgrants.go), the mechanism that seeds
-// each new child's grant set, always reads its SOURCE from the caller's own
-// (parentTS.transcriptSessionID, parentTS.agentID) — the DELEGATING PARENT's
-// own durable identity, per its own doc comment: "source = the PARENT's own
-// session id + the PARENT's agent id". A grant that only ever lives under
-// the CHILD's key is therefore invisible to every future InheritFrom call
-// that delegation makes, no matter how many more delegations follow in the
-// same chat — "Always Allow" silently re-prompts forever, exactly the
-// user-visible MAJOR regression this closes.
-//
-// # The fix
+// # The fix — and the boundary it must not cross (2026-08 security review)
 //
 // In addition to the existing record under (entry.SessionID, entry.AgentID)
 // — which keeps the grant immediately effective for any further tool calls
 // within THIS SAME child turn — also record it under the acting session's
-// OWN immediate parent's (session id, resolved agent id), reconstructed via
-// the session store's ParentSessionID (ADR-057 FR-008) and AgentForSession.
-// That is, by construction, EXACTLY the key InheritFrom will read as SOURCE
-// the next time this same parent turn delegates again (whether to the same
-// target agent or another), so the grant is copied forward into every
-// sibling (and, transitively, every further descendant) delegation from
-// that point on — surviving past this one child's own "delegate_terminal"
-// teardown, which only ever clears the CHILD's own key.
+// OWN immediate parent's SESSION id (reconstructed via the session store's
+// ParentSessionID, ADR-057 FR-008) paired with entry.AgentID: the EXACT
+// (session, agent) identity the approval modal displayed to the user. The
+// parent session outlives any one child's "delegate_terminal" teardown
+// (ClearSession only ever wipes the CHILD's own key), so this durably
+// survives that teardown while staying scoped to the agent identity the
+// user actually reviewed.
+//
+// An earlier version of this fix keyed the second component by
+// AgentForSession(meta.ParentSessionID) — the PARENT turn's OWN driving
+// agent (e.g. "Mia", delegating to "Jim") — reasoning that this exactly
+// matches the SOURCE key pkg/agent/subturn.go's spawnSubTurn reads via
+// InheritFrom (parentTS.transcriptSessionID, parentTS.agentID) at the next
+// delegation, so the grant would auto-propagate into every future sibling
+// delegation regardless of target agent. That was a real security defect:
+// the approval modal named "Jim," and a user clicking Always Allow for Jim
+// never reviewed or consented to Mia's OWN future tool calls, nor to
+// whatever DIFFERENT agent Mia might delegate to next — recording under
+// Mia's identity silently escalated a Jim-scoped decision across an agent
+// boundary the user never saw. Keying by entry.AgentID instead closes that
+// leak: the grant only ever benefits the SAME agent identity again, e.g. if
+// that agent is later switched in as the directly-active agent on this same
+// parent session (pkg/agent/loop.go's per-turn
+// `ApprovalGrants().IsAllowed(ts.transcriptSessionID, ts.agentID, ...)`
+// check then matches (parentSessionID, entry.AgentID) exactly).
+//
+// Trade-off accepted deliberately: because subturn.go's InheritFrom always
+// SOURCES from the PARENT's own agent id, not the previous child's, this
+// narrower key is no longer picked up by that standard spawn-time
+// inheritance call — a grant approved for Jim during one delegation does
+// NOT automatically flow into the NEXT delegation (to Jim again, or anyone
+// else) the way the wider, boundary-crossing key used to. Re-prompting on
+// the next delegation is the accepted cost of not silently crossing an
+// agent boundary the user never reviewed.
 //
 // A no-op (nothing extra recorded) when the acting session is not itself a
 // delegated child (ParentSessionID == "", the common case for approvals
 // raised directly in a real user chat turn) — that case already resolves
-// correctly today, since entry.SessionID there already equals whatever
-// InheritFrom will read as source when THIS session itself later delegates.
-// Also a no-op, logged at Warn, when the parent session's owning agent
-// cannot be resolved (deleted agent, corrupt meta) — the immediate grant
-// above already succeeded, so the tool call itself is unaffected; only
-// future cross-delegation survival is missed.
+// correctly today, since entry.SessionID there already equals whatever a
+// future delegation FROM this session will read as source. Also a no-op,
+// logged at Warn, when the parent session's owning agent cannot be resolved
+// (deleted agent, corrupt meta) — kept as a liveness gate on the delegation
+// relationship itself, even though its value no longer supplies the grant
+// key; the immediate grant above already succeeded, so the tool call itself
+// is unaffected, only this extra durability is missed.
 func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID string) {
 	store := a.agentLoop.GetSessionStore()
 	if store == nil {
@@ -565,6 +581,10 @@ func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID
 		// to propagate; the direct record above already covers this case.
 		return
 	}
+	// AgentForSession is a liveness/validity gate on the delegation
+	// relationship (does the parent session still resolve to a real,
+	// currently-registered agent?), not the grant key itself — the key's
+	// second component is entry.AgentID (see doc comment above).
 	parentAgent, err := a.agentLoop.AgentForSession(meta.ParentSessionID)
 	if err != nil || parentAgent == nil {
 		slog.Warn("tool-approval: could not resolve the delegating parent's agent for grant inheritance; "+
@@ -575,13 +595,15 @@ func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID
 			"error", err)
 		return
 	}
-	if a.agentLoop.ApprovalGrants().Record(meta.ParentSessionID, parentAgent.ID, entry.ToolName) {
-		slog.Info("tool-approval: also recorded Always-Allow grant on the delegating parent's durable identity "+
-			"so it survives this delegation's own teardown and is inherited by future sibling delegations",
+	if a.agentLoop.ApprovalGrants().Record(meta.ParentSessionID, entry.AgentID, entry.ToolName) {
+		slog.Info("tool-approval: also recorded Always-Allow grant on the delegating parent's session, "+
+			"scoped to the SAME agent identity the approval modal named, so it survives this delegation's "+
+			"own teardown without crossing into the parent's own agent identity",
 			"approval_id", approvalID,
 			"child_session_id", entry.SessionID,
 			"parent_session_id", meta.ParentSessionID,
 			"parent_agent_id", parentAgent.ID,
+			"agent_id", entry.AgentID,
 			"tool", entry.ToolName)
 	}
 }

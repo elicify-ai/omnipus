@@ -8,11 +8,21 @@
 // that child's single-use session id (pkg/gateway/rest_tool_registry.go's
 // HandleToolApprovals), which is then wiped the moment the child's own
 // "delegate_terminal" CloseSession teardown fires (pkg/agent/subturn.go).
-// Since InheritFrom (pkg/security/approvalgrants.go) always seeds a NEW
-// child's grant set from the DELEGATING PARENT's own (session, agent)
-// identity, a grant that only ever lived under the child's key can never
-// reach the next sibling delegation — the user is prompted again on every
-// single delegation, forever.
+//
+// UPDATED 2026-08 (fix-wave finding #2, security): the original fix also
+// propagated the grant onto the delegating PARENT's OWN agent identity
+// (AgentForSession(meta.ParentSessionID)) so it would land exactly on
+// InheritFrom's source key and auto-flow into every future sibling
+// delegation. That was itself a security defect — the approval modal named
+// the CHILD agent, and recording under the PARENT's identity silently
+// escalated a child-scoped decision across an agent boundary the user never
+// reviewed (see rest_tool_registry.go's recordGrantOnDelegationParent doc
+// comment for the full rationale). The fix now keys the durable record by
+// (meta.ParentSessionID, entry.AgentID) — the parent's persistent SESSION id
+// paired with the SAME agent identity the modal displayed — trading away
+// automatic propagation into a DIFFERENT future delegation (InheritFrom's
+// source is always the parent's OWN agent id, never a prior child's, so it
+// no longer finds this narrower key) for not crossing that agent boundary.
 //
 // This file is a NEW addition alongside pkg/agent/session_end_fix_test.go
 // (the fix-wave brief's named new-test file). Defect 2's fix lives entirely
@@ -83,12 +93,15 @@ func newDefect2TestRestAPI(t *testing.T) *restAPI {
 	}
 }
 
-// TestToolApproval_AlwaysAllow_SurvivesAcrossSiblingDelegations is the
-// Defect 2 red/green pair, end to end through the real production call
-// chain: HandleToolApprovals (the grant WRITER) -> ApprovalGrantStore (the
-// real registry) -> CloseSession/ClearSession (the real child teardown) ->
-// InheritFrom (the real next-delegation seeding).
-func TestToolApproval_AlwaysAllow_SurvivesAcrossSiblingDelegations(t *testing.T) {
+// TestToolApproval_AlwaysAllow_SurvivesChildTeardown_ScopedToChildAgent is
+// the Defect 2 / security-narrowing red/green pair, end to end through the
+// real production call chain: HandleToolApprovals (the grant WRITER) ->
+// ApprovalGrantStore (the real registry) -> CloseSession/ClearSession (the
+// real child teardown). It proves the grant survives the acting child
+// session's own teardown (Defect 2's original point) while staying scoped
+// to the CHILD's own agent identity — never escalating onto the delegating
+// PARENT's own agent id (the security fix).
+func TestToolApproval_AlwaysAllow_SurvivesChildTeardown_ScopedToChildAgent(t *testing.T) {
 	api := newDefect2TestRestAPI(t)
 	reg := newApprovalRegistryV2(64, 300*time.Second)
 	api.approvalReg = reg
@@ -100,7 +113,7 @@ func TestToolApproval_AlwaysAllow_SurvivesAcrossSiblingDelegations(t *testing.T)
 	require.NotNil(t, grants, "test harness must wire a real ApprovalGrantStore")
 
 	// Root chat session: Jim's own real, durable session — mirrors a real
-	// user chat turn that will delegate to Ava multiple times.
+	// user chat turn that delegates to Ava.
 	parentMeta, err := store.NewSession(session.SessionTypeChat, "web", "jim")
 	require.NoError(t, err)
 	parentSessionID := parentMeta.ID
@@ -115,11 +128,13 @@ func TestToolApproval_AlwaysAllow_SurvivesAcrossSiblingDelegations(t *testing.T)
 
 	// Precondition: no grants exist anywhere yet.
 	require.False(t, grants.IsAllowed(child1ID, "ava", "bash"))
+	require.False(t, grants.IsAllowed(parentSessionID, "ava", "bash"))
 	require.False(t, grants.IsAllowed(parentSessionID, "jim", "bash"))
 
 	// --- Act 1: an approval raised from WITHIN Ava's own child turn (the
 	// acting session is child1ID, per approvalEntry.SessionID's own doc
-	// comment), resolved with "always". ---
+	// comment), resolved with "always". The approval modal named "ava" —
+	// entry.AgentID — never "jim". ---
 	entry, accepted := reg.requestApproval(
 		"tc-1", "bash", map[string]any{"command": "ls"}, "ava", child1ID, "turn-1",
 	)
@@ -132,17 +147,23 @@ func TestToolApproval_AlwaysAllow_SurvivesAcrossSiblingDelegations(t *testing.T)
 	assert.True(t, grants.IsAllowed(child1ID, "ava", "bash"),
 		"the acting session's own key must still be granted for within-turn reuse")
 
-	// (2) THE FIX: the grant must ALSO now be recorded under the delegating
-	// PARENT's own durable (session, agent) identity — exactly the source
-	// key InheritFrom reads for every future sibling delegation Jim makes.
-	assert.True(t, grants.IsAllowed(parentSessionID, "jim", "bash"),
-		"Defect 2 violated: the grant did not propagate onto the delegating parent's durable identity")
+	// (2) THE FIX (narrowed 2026-08): the grant must ALSO now be recorded
+	// under the delegating parent's own durable SESSION id, but scoped to
+	// entry.AgentID ("ava") — the SAME identity the approval modal named —
+	// not the parent's own driving agent ("jim").
+	assert.True(t, grants.IsAllowed(parentSessionID, "ava", "bash"),
+		"the grant must propagate onto the parent session under the CHILD's own agent identity")
 
-	// Scoping proof: propagation must not leak to an unrelated tool or agent.
-	assert.False(t, grants.IsAllowed(parentSessionID, "jim", "read_file"),
+	// Security boundary proof: propagation must NEVER escalate onto the
+	// delegating parent's own agent identity — that is exactly the
+	// cross-agent-boundary leak the 2026-08 security review closed. Before
+	// that fix this assertion failed (the grant landed on "jim").
+	assert.False(t, grants.IsAllowed(parentSessionID, "jim", "bash"),
+		"security regression: the grant must not cross into the delegating PARENT's own agent identity")
+
+	// Scoping proof: propagation must not leak to an unrelated tool.
+	assert.False(t, grants.IsAllowed(parentSessionID, "ava", "read_file"),
 		"propagation must not leak to a different tool")
-	assert.False(t, grants.IsAllowed(parentSessionID, "ava", "bash"),
-		"propagation must land on the PARENT's own agent id (jim), not the acting child's (ava)")
 
 	// --- Act 2: mirror subturn.go's real teardown for child1
 	// (al.CloseSession(childID, "delegate_terminal"), called unconditionally
@@ -154,16 +175,25 @@ func TestToolApproval_AlwaysAllow_SurvivesAcrossSiblingDelegations(t *testing.T)
 	assert.False(t, grants.IsAllowed(child1ID, "ava", "bash"),
 		"sanity: the child's own key must be cleared by its own session teardown")
 
-	// THE CRUX: the parent's durable key must SURVIVE the CHILD's teardown —
-	// before the fix, ClearSession(child1ID) was the ONLY place the grant
-	// had ever been recorded, so this assertion is exactly where the old
-	// code lost it.
-	assert.True(t, grants.IsAllowed(parentSessionID, "jim", "bash"),
-		"Defect 2 violated: the parent's durable grant was wiped by the CHILD's own session teardown")
+	// THE CRUX (Defect 2's original point, still holds under the narrowed
+	// key): the parent-session-scoped key must SURVIVE the CHILD's own
+	// teardown — before Defect 2's fix, ClearSession(child1ID) was the ONLY
+	// place the grant had ever been recorded, so this assertion is exactly
+	// where the original bug lost it.
+	assert.True(t, grants.IsAllowed(parentSessionID, "ava", "bash"),
+		"Defect 2 violated: the parent-scoped durable grant was wiped by the CHILD's own session teardown")
 
-	// --- Act 3: the NEXT sibling delegation — a brand-new child session,
-	// with spawnSubTurn's real InheritFrom(source=parent, dest=child2) call
-	// reproduced verbatim. ---
+	// --- Act 3: the accepted trade-off of the 2026-08 narrowing — a NEW
+	// sibling delegation, via subturn.go's real spawn-time InheritFrom call,
+	// sources from (parentSessionID, "jim") — the PARENT's OWN agent id,
+	// per InheritFrom's documented contract — never from the narrower
+	// (parentSessionID, "ava") key this fix now writes to. That key holds no
+	// grants, so nothing is copied into the new child: the standard
+	// cross-delegation auto-inheritance path no longer fires for this grant.
+	// This is intentional — see recordGrantOnDelegationParent's doc comment
+	// ("Trade-off accepted deliberately") — re-prompting on the next
+	// delegation is the accepted cost of not crossing the agent boundary the
+	// user never reviewed. ---
 	child2Meta, err := store.NewSession(session.SessionTypeDelegate, "delegate", "ava")
 	require.NoError(t, err)
 	child2ID := child2Meta.ID
@@ -171,13 +201,22 @@ func TestToolApproval_AlwaysAllow_SurvivesAcrossSiblingDelegations(t *testing.T)
 
 	grants.InheritFrom(parentSessionID, "jim", child2ID, "ava")
 
-	// THE PAYOFF: the second delegation's child inherits the grant WITHOUT a
-	// fresh approval prompt. Before the fix, this assertion fails — the
-	// exact user-visible MAJOR regression Defect 2 describes ("prompted
-	// again on the very next delegation, forever").
-	assert.True(t, grants.IsAllowed(child2ID, "ava", "bash"),
-		"Defect 2 violated: the next sibling delegation did not inherit the Always-Allow grant — "+
-			"the user would be prompted again on every single delegation, forever")
+	assert.False(t, grants.IsAllowed(child2ID, "ava", "bash"),
+		"standard spawn-time InheritFrom sources from the PARENT's own agent id, which this fix "+
+			"deliberately does not write to — the next sibling delegation must re-prompt rather than "+
+			"silently inherit trust that was never reviewed for it")
+
+	// --- Act 4: the path the narrowed key DOES still serve — the SAME
+	// agent identity ("ava") later becomes the directly-active agent ON the
+	// parent's own persistent session (e.g. an in-chat agent switch), rather
+	// than a freshly-spawned child. pkg/agent/loop.go's per-turn approval
+	// check keys off (ts.transcriptSessionID, ts.agentID) — which now
+	// matches (parentSessionID, "ava") exactly, so the durable grant this
+	// fix recorded is not dead weight: it is reachable via same-identity
+	// reuse on the parent session itself. ---
+	assert.True(t, grants.IsAllowed(parentSessionID, "ava", "bash"),
+		"the narrowed key must still resolve when the SAME agent identity is later active directly "+
+			"on the parent's own session — the one path this fix intentionally preserves")
 }
 
 // TestToolApproval_AlwaysAllow_RootSessionNoSpuriousParentWrite proves the
