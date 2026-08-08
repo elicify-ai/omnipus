@@ -155,6 +155,77 @@ const RECENTLY_FINISHED_CAP = 8
  */
 const firstSeenAtMap = new Map<string, number>()
 
+/**
+ * key -> first-observed-FINISHED timestamp (ms). Module-level singleton, same
+ * rationale as `firstSeenAtMap` (survives unmount/remount, stamped once and
+ * then stable across re-renders) but tracking the OPPOSITE transition:
+ * agent spans and background bash sessions carry no wire-level completion
+ * timestamp (see file header), so the first render that observes an item as
+ * no-longer-running is used as its recency signal for the merge below.
+ * Cleared when the same key is later observed running again, so a later
+ * finish gets a fresh stamp instead of reusing a stale one.
+ *
+ * 14-reviewer sign-off Finding #2: judge verdicts (a GLOBAL, app-lifetime
+ * feed capped at 8 in their own store — see judgeActivity.ts) used to be
+ * unconditionally tail-appended to `recentlyFinished` after every agent/bash
+ * item, so a STALE judge verdict always survived the trailing
+ * `.slice(-RECENTLY_FINISHED_CAP)` cut regardless of genuine recency —
+ * silently evicting more-recently-finished agent/bash items instead of the
+ * judge item, breaking the "most-recent-first" invariant. The fix merges all
+ * three sources by a real, comparable recency signal before capping: this
+ * map's observed-finish time for agent/bash items, and the verdict's own
+ * real `judged_at` server timestamp for judge items (both are Unix-ms scale,
+ * so they compare directly) — see `mergeAndCapFinished` below.
+ */
+const finishedObservedAtMap = new Map<string, number>()
+
+/** Records `key` as finished NOW if not already recorded; returns the stamp
+ * (first-observation time, stable across re-renders). See `finishedObservedAtMap`. */
+function observeFinishedAt(key: string): number {
+  const existing = finishedObservedAtMap.get(key)
+  if (existing !== undefined) return existing
+  const now = Date.now()
+  finishedObservedAtMap.set(key, now)
+  return now
+}
+
+/** Clears `key`'s finished-observation stamp — called whenever `key` is seen
+ * running again, so a subsequent finish is stamped fresh rather than reusing
+ * a stale time from a previous finish. */
+function clearFinishedAt(key: string): void {
+  finishedObservedAtMap.delete(key)
+}
+
+/** A finished `ActivityItem` plus its recency signal, pending merge. */
+interface FinishedCandidate {
+  item: ActivityItem
+  /** Unix-ms recency signal — `observeFinishedAt`'s stamp for agent/bash
+   * items, `Date.parse(verdict.judged_at)` for judge items. */
+  time: number
+  /** Deterministic tie-breaker for candidates whose `time` is identical
+   * (routine: several items finishing within the same synchronous render
+   * pass all observe the same `Date.now()` millisecond) — assigned in the
+   * stable push order the caller iterates its three sources in, so ties
+   * resolve identically on every render. */
+  seq: number
+}
+
+/**
+ * Merges finished items from all three ActivityItem sources (agent spans,
+ * bash sessions, judge verdicts) by real recency (`time`, falling back to
+ * `seq` on an exact tie) and caps at `RECENTLY_FINISHED_CAP` — replacing the
+ * old "push in source order, then slice(-CAP)" approach that always kept
+ * whichever source was iterated LAST (judge verdicts) regardless of actual
+ * recency (Finding #2). Exported (pure) so the ordering/eviction contract is
+ * unit-testable in isolation from the hook's data-fetching machinery.
+ */
+export function mergeAndCapFinished(candidates: FinishedCandidate[]): ActivityItem[] {
+  return [...candidates]
+    .sort((a, b) => b.time - a.time || b.seq - a.seq)
+    .slice(0, RECENTLY_FINISHED_CAP)
+    .map((c) => c.item)
+}
+
 interface ResolvedAgent {
   agentName: string
   agentType: 'native' | '3p' | 'unknown'
