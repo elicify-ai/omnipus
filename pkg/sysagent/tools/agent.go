@@ -375,15 +375,30 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 	// *AgentInstance into the live AgentRegistry (AgentLoop.UpsertAgentFast)
 	// instead of restarting channels/cron/schedulers/the plan engine for a
 	// one-agent change. See Deps.UpsertAgentFastFunc's doc comment.
+	// publishWarning surfaces a live-publish failure IN the success payload
+	// (fix-wave finding #3) rather than only in the server log: the entity
+	// record and workspace files above are already durably written by this
+	// point, so this remains a real success, but an unqualified
+	// {"id":...,"status":"active"} response would tell the calling agent the
+	// new agent is live and routable when it is NOT — it keeps 404ing on
+	// chat/delegate until the next restart or config reload. Pattern mirrors
+	// pkg/tools/task.go's update_task advance_warning field.
+	var publishWarning string
 	if t.deps.UpsertAgentFastFunc != nil {
 		if err := t.deps.UpsertAgentFastFunc(finalID); err != nil {
 			slog.Warn("sysagent: fast agent upsert after agent create failed — agent available after restart",
 				"id", finalID, "error", err)
+			publishWarning = fmt.Sprintf(
+				"agent %q was created but is not yet live: fast publish failed (%s); it will become routable "+
+					"after the next config reload or gateway restart", finalID, err.Error())
 		}
 	} else if t.deps.ReloadFunc != nil {
 		if err := t.deps.ReloadFunc(); err != nil {
 			slog.Warn("sysagent: hot-reload after agent create failed — agent available after restart",
 				"id", finalID, "error", err)
+			publishWarning = fmt.Sprintf(
+				"agent %q was created but is not yet live: hot-reload failed (%s); it will become routable "+
+					"after the next gateway restart", finalID, err.Error())
 		}
 	}
 
@@ -397,6 +412,9 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 	if agentType == "subagent_3p" {
 		result["cli"] = execCLI
 		result["cli_path"] = execCLIPath
+	}
+	if publishWarning != "" {
+		result["publish_warning"] = publishWarning
 	}
 	return tools.NewToolResult(successJSON(result))
 }
@@ -588,23 +606,40 @@ func (t *AgentUpdateTool) Execute(_ context.Context, args map[string]any) *tools
 
 	// Publish the update so it takes effect immediately in routing,
 	// list_agents, and GET /api/v1/agents, without a restart — same
-	// fast-path-first pattern as AgentCreateTool.Execute above.
+	// fast-path-first pattern as AgentCreateTool.Execute above. A publish
+	// failure here is surfaced IN the success payload (fix-wave finding #3),
+	// not just logged: the store.Update above already durably persisted
+	// `updated`, so this is a real success, but an unqualified
+	// {"id":...,"updated_fields":[...]} response would tell the calling
+	// agent the change took effect when the LIVE routing/registry state
+	// still reflects the OLD config until the next restart or reload.
+	var publishWarning string
 	if t.deps.UpsertAgentFastFunc != nil {
 		if err := t.deps.UpsertAgentFastFunc(id); err != nil {
 			slog.Warn("sysagent: fast agent upsert after agent update failed — change available after restart",
 				"id", id, "error", err)
+			publishWarning = fmt.Sprintf(
+				"agent %q was updated but the change is not yet live: fast publish failed (%s); it will take "+
+					"effect after the next config reload or gateway restart", id, err.Error())
 		}
 	} else if t.deps.ReloadFunc != nil {
 		if err := t.deps.ReloadFunc(); err != nil {
 			slog.Warn("sysagent: hot-reload after agent update failed — change available after restart",
 				"id", id, "error", err)
+			publishWarning = fmt.Sprintf(
+				"agent %q was updated but the change is not yet live: hot-reload failed (%s); it will take "+
+					"effect after the next gateway restart", id, err.Error())
 		}
 	}
 
-	return tools.NewToolResult(successJSON(map[string]any{
+	result := map[string]any{
 		"id":             id,
 		"updated_fields": updated,
-	}))
+	}
+	if publishWarning != "" {
+		result["publish_warning"] = publishWarning
+	}
+	return tools.NewToolResult(successJSON(result))
 }
 
 // ---- system.agent.delete ----
@@ -710,15 +745,30 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 	// still calls triggerReloadAndWait unconditionally — so keeping delete on
 	// the full reload here maintains parity with that call rather than
 	// introducing a new asymmetry between the two delete entry points.
+	// A reload failure here is surfaced IN the success payload (fix-wave
+	// finding #3), not just logged: store.Delete above already durably
+	// removed the entity record, so this stays a real success, but an
+	// unqualified {"id":...,"deleted":true} response would tell the calling
+	// agent the agent is gone when it in fact keeps ROUTING (stale
+	// in-memory registry/RouteResolver, per this function's own doc comment
+	// above) until the next restart.
+	var publishWarning string
 	if t.deps.ReloadFunc != nil {
 		if err := t.deps.ReloadFunc(); err != nil {
 			slog.Warn("sysagent: hot-reload after agent delete failed — agent remains routable/listed until restart",
 				"id", id, "error", err)
+			publishWarning = fmt.Sprintf(
+				"agent %q was deleted from storage but hot-reload failed (%s); it may remain routable and "+
+					"listed until the next gateway restart", id, err.Error())
 		}
 	}
 
-	return tools.NewToolResult(successJSON(map[string]any{
+	result := map[string]any{
 		"id":      id,
 		"deleted": true,
-	}))
+	}
+	if publishWarning != "" {
+		result["publish_warning"] = publishWarning
+	}
+	return tools.NewToolResult(successJSON(result))
 }
