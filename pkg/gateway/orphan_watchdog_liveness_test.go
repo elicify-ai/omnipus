@@ -453,7 +453,11 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 	// genuinely, permanently active. Wait for the watchdog to eventually
 	// force-fire the synthetic interrupted frame past the reschedule ceiling.
 	var sawForcedInterrupted bool
-	deadline := time.After(5 * time.Second)
+	// #605/#606 hardening: nominal force-fire is ~200ms with this test's
+	// 50ms/ceiling-3 overrides; 15s adds starvation margin for saturated CI
+	// runners without weakening the assertion (a broken force-fire path never
+	// emits the frame at any deadline).
+	deadline := time.After(15 * time.Second)
 	for !sawForcedInterrupted {
 		select {
 		case raw := <-ch:

@@ -3314,6 +3314,21 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 	// Accessed only from the single eventForwarder goroutine — no mutex needed.
 	openSpans := make(map[string]*openSpanEntry)
 
+	// rootTurnEnded latches whether the root turn for this connection has
+	// already ended, and with what watchdog reason (#605). The root TurnEnd
+	// and a delegate's SubTurnSpawn are emitted from DIFFERENT goroutines
+	// (the parent turn's vs the detached async-delegate's), so a spawn event
+	// can legally reach this forwarder AFTER the root turn_end. The
+	// EventKindTurnEnd case below only arms spans already registered in
+	// openSpans — without this latch, such a late-registered span would
+	// never be armed and would stay invisible to the orphan watchdog
+	// forever. EventKindSubTurnSpawn consults the latch to arm late
+	// registrations immediately; a NEW root turn's TurnStart resets it so
+	// spans of a live root turn are not spuriously armed.
+	// Single-goroutine state like openSpans — no mutex needed.
+	rootTurnEnded := false
+	rootTurnEndReason := ""
+
 	// closeSpan marks a span as resolved and signals its watchdog to stop.
 	closeSpan := func(parentCallID string) {
 		if entry, ok := openSpans[parentCallID]; ok {
@@ -3489,6 +3504,21 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 
 	for evt := range sub.C {
 		switch evt.Kind {
+		case agent.EventKindTurnStart:
+			// #605: a NEW root turn began on this chat — reset the
+			// root-turn-ended latch so spans it spawns are registered
+			// unarmed (their root is alive; the TurnEnd case will arm them).
+			// Only a ROOT turn's start may reset: a child's own turn-start
+			// arrives between its SubTurnSpawn and the next root turn, and
+			// resetting on it would reopen the arming hole for a sibling
+			// delegate's later-arriving spawn event.
+			p, ok := evt.Payload.(agent.TurnStartPayload)
+			if !ok || !p.IsRoot || !matchesEvent(p.ChatID, "") {
+				continue
+			}
+			rootTurnEnded = false
+			rootTurnEndReason = ""
+
 		case agent.EventKindSubTurnSpawn:
 			// FR-H-004: emit subagent_start when a sub-turn is spawned.
 			p, ok := evt.Payload.(agent.SubTurnSpawnPayload)
@@ -3527,6 +3557,14 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				closeCh:      make(chan struct{}),
 			}
 			openSpans[string(p.ParentSpawnCallID)] = entry
+			// #605: if the root turn already ended, the EventKindTurnEnd case
+			// has already run its arming loop and will never see this entry —
+			// arm it now, or the span stays invisible to the orphan watchdog
+			// forever (no reschedule ceiling, no forced interrupted frame).
+			if rootTurnEnded {
+				entry.parentTurnEnded = true
+				startOrphanWatchdog(entry, rootTurnEndReason)
+			}
 
 		case agent.EventKindSubTurnEnd:
 			// FR-H-004: emit subagent_end when a sub-turn finishes.
@@ -3597,6 +3635,10 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			default:
 				watchdogReason = "unknown"
 			}
+			// #605: latch the root-turn-ended state for spans whose
+			// SubTurnSpawn arrives after this event (see rootTurnEnded decl).
+			rootTurnEnded = true
+			rootTurnEndReason = watchdogReason
 			for _, entry := range openSpans {
 				if !entry.parentTurnEnded {
 					entry.parentTurnEnded = true

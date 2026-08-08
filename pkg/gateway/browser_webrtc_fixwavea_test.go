@@ -352,7 +352,16 @@ func TestHandleWebRTCOffer_SupersedeDoesNotBlockFenceOnSlowStop(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	const fenceBudget = 2 * time.Second
+	// #606: the budget bounds more than the fence — `done` closes only when
+	// handleWebRTCOffer fully returns, which includes the post-fence cs.Start
+	// (a real Chrome-launch attempt against the planted always-failing fake
+	// binary) whose failure detection is bounded by 20s internal ceilings
+	// (cdppipe defaultDialTimeout, captureStartTimeout). Nominal is ~10ms, but
+	// a saturated CI runner can stretch it far past 2s with no product bug. A
+	// genuine regression of the fix under test (Stop() inline under the fence)
+	// blocks until releaseStop() — i.e. fails deterministically at ANY finite
+	// budget — so widening does not weaken what this test discriminates.
+	const fenceBudget = 10 * time.Second
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
