@@ -544,6 +544,21 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /api/v1/workspaces/{id}/media* — workspace media library (ADR-051-rev4:
+	// list, get/delete by id, POST attachments). Suffix matching is wrong for
+	// this family (a hypothetical id containing "media" as a substring would
+	// misroute here, and /media/{mediaID} has a trailing segment), so this
+	// checks the actual second path segment instead. Restored for #609: this
+	// dispatch existed on the release parent (41e16237) and was dropped in the
+	// #597 merge resolution, orphaning HandleWorkspaceMedia entirely — the
+	// regression test in rest_workspaces_media_dispatch_test.go goes through
+	// HandleWorkspaces, not the handler directly, so the wiring itself is
+	// what's guarded.
+	if segs := strings.Split(strings.TrimPrefix(rest, "/"), "/"); len(segs) >= 2 && segs[1] == "media" {
+		a.HandleWorkspaceMedia(w, r)
+		return
+	}
+
 	// /api/v1/workspaces/{id}
 	if len(rest) > 1 {
 		id := strings.TrimPrefix(rest, "/")
