@@ -286,9 +286,45 @@ type wireTodo = struct {
 	Text   string              `json:"text"`
 }
 
+// rollupIndex groups every task in a per-request snapshot by ParentTaskID, so
+// a single upstream task.Store.List call can serve computeRollup for every
+// task returned by a list-shaped endpoint. Before this, computeRollup issued
+// one additional full Store.List scan PER RETURNED TASK, making
+// GET /api/v1/tasks (and GET /tasks/{id}/subtasks) O(n^2) in the number of
+// task files on disk — 200 returned tasks against a 2000-task store meant
+// ~400k file reads for one request (fix-wave finding #1a). nil is a valid,
+// common value of this type: every single-task endpoint (get/create/patch/
+// stop/restart/...) passes nil and computeRollup falls back to its own,
+// bounded (one-call) List.
+type rollupIndex map[string][]task.Task
+
+// buildRollupIndex fetches every task in the store ONCE — an unfiltered
+// Store.List, matching computeRollup's own pre-existing (unscoped-by-
+// workspace) ParentTaskID filter semantics exactly — and groups the results
+// by ParentTaskID for O(1) lookups. handleTaskList and handleTaskSubtasks
+// build this once per request and thread it through toWireTask/computeRollup
+// for every task in the batch, replacing the previous
+// one-List-call-per-returned-task pattern.
+func (a *restAPI) buildRollupIndex() (rollupIndex, error) {
+	all, err := a.taskStore.List(task.Filter{})
+	if err != nil {
+		return nil, err
+	}
+	idx := make(rollupIndex, len(all))
+	for _, t := range all {
+		if t.ParentTaskID == "" {
+			continue
+		}
+		idx[t.ParentTaskID] = append(idx[t.ParentTaskID], t)
+	}
+	return idx, nil
+}
+
 // toWireTask converts an internal task.Task to the generated wire type, filling
-// the read-time agent_name and rollup fields from the registry / store.
-func (a *restAPI) toWireTask(t task.Task) gen.Task {
+// the read-time agent_name and rollup fields from the registry / store. idx is
+// an optional shared rollupIndex (see its doc comment) for batch callers; pass
+// nil for a single-task response.
+func (a *restAPI) toWireTask(t task.Task, idx rollupIndex) gen.Task {
 	out := gen.Task{
 		Id:          t.ID,
 		Title:       t.Title,
@@ -402,7 +438,7 @@ func (a *restAPI) toWireTask(t task.Task) gen.Task {
 	}
 
 	// Read-time rollup: live child sub-agent runs (parent_task_id == t.ID).
-	out.Rollup = a.computeRollup(t.ID)
+	out.Rollup = a.computeRollup(t.ID, idx)
 	return out
 }
 
@@ -683,13 +719,28 @@ func criteriaFromUpdateWire(items []struct {
 // computeRollup returns the read-time roll-up of live child sub-agent runs for
 // parentID, or nil when there are none. A "live" child is one that is not yet
 // terminal. Never stored on the task record (Detail #6).
-func (a *restAPI) computeRollup(parentID string) *[]struct {
+//
+// When idx is non-nil (a batch caller's shared rollupIndex, see its doc
+// comment), children are read from the index — an in-memory grouping already
+// built from ONE Store.List call — instead of issuing a fresh List call here.
+// idx == nil (every single-task call site) preserves the original behavior:
+// one bounded List call scoped to this parentID.
+func (a *restAPI) computeRollup(parentID string, idx rollupIndex) *[]struct {
 	AgentId string               `json:"agent_id"`
 	Label   string               `json:"label"`
 	Status  gen.TaskRollupStatus `json:"status"`
 } {
-	children, err := a.taskStore.List(task.Filter{ParentTaskID: parentID, ParentTaskIDSet: true})
-	if err != nil || len(children) == 0 {
+	var children []task.Task
+	if idx != nil {
+		children = idx[parentID]
+	} else {
+		var err error
+		children, err = a.taskStore.List(task.Filter{ParentTaskID: parentID, ParentTaskIDSet: true})
+		if err != nil {
+			return nil
+		}
+	}
+	if len(children) == 0 {
 		return nil
 	}
 	type rollupItem = struct {
@@ -949,9 +1000,19 @@ func (a *restAPI) handleTaskList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Fix-wave finding #1a: build the rollup index ONCE for this whole
+	// response batch instead of letting each toWireTask call trigger its own
+	// full Store.List scan (previously O(n^2) — see rollupIndex's doc
+	// comment).
+	idx, ridxErr := a.buildRollupIndex()
+	if ridxErr != nil {
+		slog.Error("rest: task list: build rollup index failed", "error", ridxErr)
+		jsonErr(w, http.StatusInternalServerError, "could not list tasks")
+		return
+	}
 	out := make([]gen.Task, 0, len(tasks))
 	for _, t := range tasks {
-		out = append(out, a.toWireTask(t))
+		out = append(out, a.toWireTask(t, idx))
 	}
 	jsonOK(w, out)
 }
@@ -972,7 +1033,7 @@ func (a *restAPI) handleTaskGet(w http.ResponseWriter, id string) {
 		jsonErr(w, http.StatusInternalServerError, "could not read task")
 		return
 	}
-	jsonOK(w, a.toWireTask(*t))
+	jsonOK(w, a.toWireTask(*t, nil))
 }
 
 // handleTaskSubtasks handles GET /api/v1/tasks/{id}/subtasks.
@@ -987,9 +1048,18 @@ func (a *restAPI) handleTaskSubtasks(w http.ResponseWriter, parentID string) {
 		jsonErr(w, http.StatusInternalServerError, "could not list subtasks")
 		return
 	}
+	// Fix-wave finding #1a: each subtask's OWN rollup (its grandchildren)
+	// previously triggered its own full Store.List scan per loop iteration —
+	// build the shared index once instead (see rollupIndex's doc comment).
+	idx, ridxErr := a.buildRollupIndex()
+	if ridxErr != nil {
+		slog.Error("rest: task subtasks: build rollup index failed", "parent_id", parentID, "error", ridxErr)
+		jsonErr(w, http.StatusInternalServerError, "could not list subtasks")
+		return
+	}
 	out := make([]gen.Task, 0, len(children))
 	for _, t := range children {
-		out = append(out, a.toWireTask(t))
+		out = append(out, a.toWireTask(t, idx))
 	}
 	jsonOK(w, out)
 }
@@ -1148,7 +1218,7 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	if a.agentLoop != nil {
 		a.agentLoop.NotifyTaskUpserted(t)
 	}
-	jsonCreated(w, a.toWireTask(*t))
+	jsonCreated(w, a.toWireTask(*t, nil))
 }
 
 // handleTaskPatch handles PATCH /api/v1/tasks/{id}.
@@ -1567,7 +1637,7 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	if a.agentLoop != nil {
 		a.agentLoop.NotifyTaskUpserted(updated)
 	}
-	jsonOK(w, a.toWireTask(*updated))
+	jsonOK(w, a.toWireTask(*updated, nil))
 }
 
 // handleTaskDelete handles DELETE /api/v1/tasks/{id} → 204.
@@ -1678,7 +1748,7 @@ func (a *restAPI) applyTaskFieldUpdate(w http.ResponseWriter, id string, patch t
 		return
 	}
 	a.auditTask("task.update", id)
-	jsonOK(w, a.toWireTask(*updated))
+	jsonOK(w, a.toWireTask(*updated, nil))
 }
 
 // --- evidence / verdicts / stop (ADR-049 D2, Wave 2-C1 deferred REST paths) --
@@ -1719,6 +1789,17 @@ func toWireJudgeVerdict(v task.JudgeVerdict) gen.JudgeVerdict {
 	if v.PlanID != "" {
 		out.PlanId = ptr(v.PlanID)
 	}
+	// Fix-wave finding #3: PerCriterion is a required array on the wire
+	// (openapi_types.gen.go, no `omitempty`) — a nil slice marshals as JSON
+	// `null`, which fails the SPA's zod schema for a required array and gets
+	// dropped. An empty (zero-criteria) verdict must still round-trip as `[]`,
+	// so start from a non-nil, empty slice rather than appending onto a nil
+	// one.
+	out.PerCriterion = make([]struct {
+		CriterionId string `json:"criterion_id"`
+		Met         bool   `json:"met"`
+		Reason      string `json:"reason"`
+	}, 0, len(v.PerCriterion))
 	for _, c := range v.PerCriterion {
 		out.PerCriterion = append(out.PerCriterion, struct {
 			CriterionId string `json:"criterion_id"`
@@ -1897,7 +1978,7 @@ func (a *restAPI) handleTaskStop(w http.ResponseWriter, r *http.Request, id stri
 			if outcome, handled := taskStopConflictOutcome(reread); handled {
 				if outcome.alreadyStopped {
 					a.auditTask("task.stop", id)
-					jsonOK(w, a.toWireTask(*reread))
+					jsonOK(w, a.toWireTask(*reread, nil))
 					return
 				}
 				jsonErr(w, http.StatusConflict, outcome.message)
@@ -1912,7 +1993,7 @@ func (a *restAPI) handleTaskStop(w http.ResponseWriter, r *http.Request, id stri
 	// do not double-emit here. Audit logging remains a REST-layer concern
 	// (the engine package writes no audit entries).
 	a.auditTask("task.stop", id)
-	jsonOK(w, a.toWireTask(*updated))
+	jsonOK(w, a.toWireTask(*updated, nil))
 }
 
 // taskStopOutcome is what taskStopConflictOutcome decided for a task re-read
@@ -2014,7 +2095,7 @@ func (a *restAPI) handleTaskRestart(w http.ResponseWriter, id string) {
 	if a.agentLoop != nil {
 		a.agentLoop.NotifyTaskUpserted(updated)
 	}
-	jsonOK(w, a.toWireTask(*updated))
+	jsonOK(w, a.toWireTask(*updated, nil))
 }
 
 // --- helpers ----------------------------------------------------------------

@@ -135,11 +135,37 @@ func (a *restAPI) isAgentID(id string) bool {
 
 // --- wire mapping ------------------------------------------------------------
 
+// taskSnapshotLister implements plan.TaskLister over an already-fetched batch
+// of tasks, filtering it in memory via task.Filter.Matches instead of issuing
+// a fresh Store.List disk scan. handleWorkspacePlansList builds one of these
+// ONCE per request (a single task.Store.List call) and passes it to every
+// toWirePlan call in its list loop, so plan.ComputeProgress no longer scans
+// the whole task store once PER PLAN — fix-wave finding #1b (mirrors
+// rest_tasks.go's rollupIndex fix for the equivalent per-task N+1).
+type taskSnapshotLister struct {
+	tasks []task.Task
+}
+
+// List implements plan.TaskLister by filtering the snapshot in memory. It
+// never touches disk and never errors.
+func (s taskSnapshotLister) List(filter task.Filter) ([]task.Task, error) {
+	out := make([]task.Task, 0, len(s.tasks))
+	for _, t := range s.tasks {
+		if filter.Matches(&t) {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
 // toWirePlan converts an internal plan.Plan to the generated wire type,
 // server-computing `progress` read-time via plan.ComputeProgress (R4/C19,
 // mirrors the removed milestone's computeMilestoneCounts pattern —
-// rest_milestones.go:153, now deleted).
-func (a *restAPI) toWirePlan(p plan.Plan) gen.Plan {
+// rest_milestones.go:153, now deleted). lister is the plan.TaskLister used for
+// that ComputeProgress call: pass a.taskStore directly for a single-plan
+// response (unchanged behavior, one bounded List call), or a shared
+// taskSnapshotLister for a batch/list-loop caller (see its doc comment).
+func (a *restAPI) toWirePlan(p plan.Plan, lister plan.TaskLister) gen.Plan {
 	out := gen.Plan{
 		Id:           p.ID,
 		WorkspaceId:  p.WorkspaceID,
@@ -292,8 +318,21 @@ func (a *restAPI) toWirePlan(p plan.Plan) gen.Plan {
 		}
 		out.Supervision = &s
 	}
-	if a.taskStore != nil {
-		if _, _, progress, err := plan.ComputeProgress(p.ID, a.taskStore); err == nil {
+	// Resolve the effective lister explicitly rather than assigning
+	// a.taskStore straight into the plan.TaskLister interface unconditionally:
+	// a.taskStore is a concrete *task.Store, and a nil *task.Store boxed into
+	// an interface value is a NON-nil interface (the classic Go typed-nil
+	// trap) — so the nilness check must happen on the concrete pointer before
+	// the assignment, not on the interface afterward.
+	var effLister plan.TaskLister
+	switch {
+	case lister != nil:
+		effLister = lister
+	case a.taskStore != nil:
+		effLister = a.taskStore
+	}
+	if effLister != nil {
+		if _, _, progress, err := plan.ComputeProgress(p.ID, effLister); err == nil {
 			pr := float32(progress)
 			out.Progress = &pr
 		} else {
@@ -560,9 +599,34 @@ func (a *restAPI) handleWorkspacePlansList(w http.ResponseWriter, workspaceID st
 		return
 	}
 	sort.SliceStable(plans, func(i, j int) bool { return plans[i].CreatedAt > plans[j].CreatedAt })
+
+	// Fix-wave finding #1b: fetch every task in this workspace ONCE and reuse
+	// it as a shared plan.TaskLister for every plan below, instead of letting
+	// each toWirePlan -> plan.ComputeProgress call trigger its own full
+	// task.Store.List scan (previously O(n) List calls for n plans, each an
+	// O(m) scan of the whole task store). Scoping the snapshot to
+	// workspaceID — rather than every task in the store — is safe: a task can
+	// only carry a plan_id belonging to its OWN workspace
+	// (validateTaskPlanID/ValidatePlanWorkspace enforce that FK), so no task
+	// outside this workspace could ever match one of these plans' IDs anyway.
+	var lister plan.TaskLister
+	if a.taskStore != nil {
+		snapshotTasks, sErr := a.taskStore.List(task.Filter{WorkspaceID: workspaceID})
+		if sErr != nil {
+			// Non-fatal, mirrors the original per-plan resilience: a task
+			// snapshot failure here just means progress falls back to being
+			// computed per-plan (toWirePlan(p, nil) below uses a.taskStore
+			// directly), each of which logs its own Warn and omits progress
+			// rather than failing the whole plan list.
+			slog.Warn("rest: plan list: task snapshot fetch failed; progress will be computed per-plan instead",
+				"workspace_id", workspaceID, "error", sErr)
+		} else {
+			lister = taskSnapshotLister{tasks: snapshotTasks}
+		}
+	}
 	wire := make([]gen.Plan, 0, len(plans))
 	for _, p := range plans {
-		wire = append(wire, a.toWirePlan(p))
+		wire = append(wire, a.toWirePlan(p, lister))
 	}
 	resp, err := planListResponse(wire)
 	if err != nil {
@@ -665,7 +729,7 @@ func (a *restAPI) handleWorkspacePlanCreate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	a.auditPlan("plan.create", p.ID)
-	jsonCreated(w, a.toWirePlan(*p))
+	jsonCreated(w, a.toWirePlan(*p, nil))
 }
 
 // --- handlers: /api/v1/plans/{id}[/approve|/stop] ---------------------------
@@ -745,7 +809,7 @@ func (a *restAPI) handlePlanGet(w http.ResponseWriter, id string) {
 		jsonErr(w, http.StatusInternalServerError, "could not read plan")
 		return
 	}
-	jsonOK(w, a.toWirePlan(*p))
+	jsonOK(w, a.toWirePlan(*p, nil))
 }
 
 // handlePlanPut handles PUT /api/v1/plans/{id}. Plain field update — NEVER a
@@ -952,7 +1016,7 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	a.auditPlan("plan.update", id)
-	jsonOK(w, a.toWirePlan(*updated))
+	jsonOK(w, a.toWirePlan(*updated, nil))
 }
 
 // handlePlanDelete handles DELETE /api/v1/plans/{id} → 204. A running plan
@@ -1163,7 +1227,7 @@ func (a *restAPI) handlePlanApprove(w http.ResponseWriter, id string) {
 		return
 	}
 	a.auditPlan("plan.approve", id)
-	jsonOK(w, a.toWirePlan(*updated))
+	jsonOK(w, a.toWirePlan(*updated, nil))
 }
 
 // handlePlanStop handles POST /api/v1/plans/{id}/stop (ADR-052 US-6/FR-009/
@@ -1246,7 +1310,7 @@ func (a *restAPI) handlePlanStop(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 	a.auditPlan("plan.stop", id)
-	jsonOK(w, a.toWirePlan(*updated))
+	jsonOK(w, a.toWirePlan(*updated, nil))
 }
 
 // handlePlanRestart handles POST /api/v1/plans/{id}/restart (ADR-052 §6.7 +
@@ -1337,5 +1401,5 @@ func (a *restAPI) handlePlanRestart(w http.ResponseWriter, r *http.Request, id s
 		jsonErr(w, http.StatusInternalServerError, "plan restarted but could not be re-read")
 		return
 	}
-	jsonOK(w, a.toWirePlan(*updated))
+	jsonOK(w, a.toWirePlan(*updated, nil))
 }

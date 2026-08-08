@@ -1442,14 +1442,26 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// crosses the credentials package boundary — DeriveSubkey runs HKDF
 	// internally and returns 32 bytes of independent key material.
 	//
-	// Failure here is logged and not fatal: audit.NewLogger will fall
-	// back to its dev-only deterministic key with a sticky slog.Warn.
-	// Operators running with audit_log=true should treat this warning as
-	// a configuration bug.
+	// CORRECTED (14-reviewer sign-off, MEDIUM — this comment previously
+	// claimed a fallback that does not exist in production): a derivation
+	// failure here does not itself abort boot — it is logged and
+	// audit.SetProcessChainKey is simply never called — but that is NOT the
+	// same as audit.NewLogger silently running with a dev-only key.
+	// audit.NewLogger's own resolveChainKey (pkg/audit/hmac.go) gates its
+	// deterministic dev key behind testing.Testing(): a real gateway binary
+	// with no process chain key fails that resolution outright, and the
+	// agent.NewAgentLoop call below maps the resulting
+	// audit.LoggerConstructionError to a fatal SandboxBootError whenever the
+	// operator has cfg.Sandbox.AuditLog enabled (see the errors.As branch a
+	// few lines down). So: with audit_log=true, a derivation failure here is
+	// an imminent boot abort a few lines later, not a soft warning to
+	// dismiss; with audit_log=false, audit.NewLogger is never even
+	// constructed and this WARN is genuinely inconsequential.
 	if chainKey, derrErr := credStore.DeriveSubkey(audit.AuditChainKeyInfo); derrErr == nil {
 		audit.SetProcessChainKey(chainKey)
 	} else {
-		slog.Warn("audit: could not derive HMAC chain key from master key — audit chain will use dev-only fallback",
+		slog.Warn("audit: could not derive HMAC chain key from master key — "+
+			"audit.NewLogger will fail closed below if sandbox.audit_log is enabled",
 			"error", derrErr)
 	}
 
@@ -2726,7 +2738,44 @@ func runReloadCycle(
 		if cfg == nil {
 			loaded, err := loadNext()
 			if err != nil {
+				// Retry once: a coalesced follow-up (or the manual /reload
+				// path, which also enters here on its very first iteration)
+				// re-reads config.json from disk, and a concurrent writer
+				// (e.g. safeUpdateConfigJSON's atomic temp-file-then-rename)
+				// can transiently race that read. One immediate retry
+				// self-heals the common transient case without giving up on
+				// a request beginReload already promised to serve.
+				loaded, err = loadNext()
+			}
+			if err != nil {
+				// FIX (14-reviewer sign-off, MEDIUM): a genuine, non-transient
+				// config load failure here used to log-and-return, letting
+				// the deferred abandonReload(agentLoop.ClearReloadPending)
+				// clear the agent loop's reload-pending flag exactly as a
+				// NORMAL completion would. Every triggerReloadAndWaitOutcome
+				// poller still waiting on this cycle then observed
+				// IsReloadPending()==false and reported confirmed=true — a
+				// false "your change is live" for a request that beginReload
+				// had recorded (markPending) but that this cycle never
+				// actually served: no valid config was available, so exec
+				// never ran for it.
+				//
+				// Mirror newReloadTrigger's own abandonReload(nil) fail-safe
+				// a few dozen lines above — used for the identical reason (a
+				// request recorded but never served): release the
+				// single-flight slot, so future reloads are not wedged
+				// forever (per abandonReload's own doc comment), but leave
+				// the agent loop's pending flag SET. A poller then either
+				// observes the NEXT reload cycle's genuine completion
+				// (success or failure) clear it, or times out and correctly
+				// reports confirmed=false — never the false confirmed=true
+				// this replaces. Also mark the service degraded so GET
+				// /health surfaces the failure immediately rather than only
+				// through the (now honestly-still-set) pending flag.
 				logger.Errorf("Config reload aborted: %v", err)
+				runningServices.markReloadDegraded(fmt.Errorf("config reload aborted: reading config: %w", err))
+				runningServices.abandonReload(nil)
+				slotHeld = false
 				return
 			}
 			cfg = loaded
@@ -3316,6 +3365,20 @@ func setupAndStartServices(
 	// can emit FR-039 omnipus_tool_filter_total counters. (C4)
 	tools.SetToolMetricsRecorder(globalToolMetrics)
 
+	// FIX (14-reviewer sign-off, HIGH): tools.SetMessageParentWakeFailureLogger
+	// was never called anywhere in the codebase, so message_parent's default
+	// logMessageParentWakeFailure — a deliberate no-op — was the ONLY logger
+	// ever installed on the production runtime path. A delegated child's
+	// failure to wake its parent session (B.6: the bounded typed wake that
+	// backs question/blocker/handback delivery) therefore vanished silently —
+	// no log line, no metric, nothing an operator could see. Install a
+	// slog-backed handler here, right alongside the sibling tool-level wiring
+	// immediately above, so a wake failure is surfaced as a slog.Warn.
+	tools.SetMessageParentWakeFailureLogger(func(kind string, err error) {
+		slog.Warn("gateway: message_parent: failed to wake parent session",
+			"kind", kind, "error", err)
+	})
+
 	// REST API endpoints for frontend data.
 	onboardingMgr := onboarding.NewManager(homePath)
 	tStore := agent.GetTaskStore(agentLoop)
@@ -3388,13 +3451,31 @@ func setupAndStartServices(
 	// sec-MINOR-3/#539: derive the intent-log's own HMAC-chain key from the
 	// master key, domain-separated from the audit-chain key (distinct info
 	// tag) — mirrors the audit-chain derivation earlier in bootRun (see
-	// audit.SetProcessChainKey's call site). Failure here is logged and not
-	// fatal: NewIntentLog falls back to its dev-only deterministic key with a
-	// sticky slog.Warn, exactly like audit.NewLogger's fallback.
+	// audit.SetProcessChainKey's call site).
+	//
+	// CORRECTED + FIXED (14-reviewer sign-off, MEDIUM/security): this used to
+	// WARN and continue with a nil key, on the claim that this "mirrors
+	// audit.NewLogger's fallback, exactly." That comparison was false on both
+	// sides. audit.NewLogger's OWN resolveChainKey (pkg/audit/hmac.go) fails
+	// CLOSED in production — its dev-only key is gated behind
+	// testing.Testing() and never taken by a real binary — and the caller a
+	// few hundred lines up in this same function maps that failure to a
+	// fatal SandboxBootError whenever audit_log is enabled; it does not run
+	// with a guessable key. plan.NewIntentLog's resolveChainKey
+	// (pkg/plan/intent_log_hmac.go), by contrast, has no such gate today: a
+	// nil key here makes it silently install the SAME public, hardcoded
+	// dev-only constant as the tamper-evidence chain key for every
+	// production install, forever — defeating the entire purpose of the HMAC
+	// chain (anyone who has read the source can forge or re-chain
+	// plan_intents entries undetected). Treat this exactly like the sibling
+	// ilDirErr immediately below: abort boot rather than run with a known
+	// key. (A companion fix is making plan.NewIntentLog itself reject an
+	// empty key outside tests; this check does not depend on that landing —
+	// it stops the bad key from ever reaching NewIntentLog in the first
+	// place, against the constructor's current dir-only-error signature.)
 	intentLogChainKey, ilKeyErr := credStore.DeriveSubkey(plan.IntentLogChainKeyInfo)
 	if ilKeyErr != nil {
-		slog.Warn("intent_log: could not derive HMAC chain key from master key — intent log will use dev-only fallback",
-			"error", ilKeyErr)
+		return nil, fmt.Errorf("gateway: failed to derive intent log HMAC chain key: %w", ilKeyErr)
 	}
 	lifecycleStore := session.NewLifecycleStore(filepath.Join(homePath, "session_lifecycle"))
 	intentLog, ilDirErr := plan.NewIntentLog(filepath.Join(homePath, "plan_intents"), intentLogChainKey)
@@ -3415,9 +3496,13 @@ func setupAndStartServices(
 	// session.NewMessageInboxStore's doc specifies "<OMNIPUS_HOME>/session_messages"
 	// as the conventional dir every consumer agrees on.
 	messageInboxStore := session.NewMessageInboxStore(filepath.Join(homePath, "session_messages"))
-	// Apply the live config's caps to the store so a session_messaging edit
-	// (hot-reloaded) is reflected on the next Append (the store's own caps are
-	// plain fields, re-read per call).
+	// Apply the live config's caps to the store (the store's own caps are
+	// plain fields, re-read per call). This boot-time application alone does
+	// NOT make a session_messaging edit hot-reload — restartServices
+	// (pkg/gateway/gateway.go) re-applies these same five fields from
+	// al.GetMessageInboxStore() on every config reload; that is what actually
+	// keeps a live edit in effect. See restartServices' own comment at that
+	// call site for the incident this split (boot-only vs boot+reload) fixed.
 	smCfg := agentLoop.GetConfig().SessionMessaging
 	messageInboxStore.ChildSendRatePerMinute = smCfg.EffectiveChildSendRatePerMinute()
 	messageInboxStore.ChildSendBodyBytes = smCfg.EffectiveChildSendBodyBytes()
@@ -4280,10 +4365,27 @@ func restartServices(
 ) error {
 	cfg := al.GetConfig()
 
+	// FIX (14-reviewer sign-off, MEDIUM): this used to derive the home dir as
+	// filepath.Dir(cfg.AgentHomeBasePath()) — i.e. assuming
+	// cfg.Agents.Defaults.Home is always exactly "<OMNIPUS_HOME>/agents", so
+	// stepping one directory up recovers OMNIPUS_HOME. Boot
+	// (setupAndStartServices) never made that assumption: it takes homePath
+	// as an explicit parameter and joins directly off it, storing the same
+	// value in runningServices.homePath for exactly this reason (see that
+	// field's doc comment). Whenever an operator customizes
+	// agents.defaults.home to a path whose parent isn't OMNIPUS_HOME (or that
+	// doesn't even live under it), the two derivations diverge and a hot
+	// reload silently re-homes the notification store / task-trigger
+	// scheduler / loop scheduler onto a different, likely-empty directory —
+	// the operator's existing notifications/triggers/loop jobs would appear
+	// to vanish. Use the SAME field boot used, not a re-derivation, so the
+	// two paths are equal by construction rather than by convention.
+	homePath := runningServices.homePath
+
 	if runningServices.notifStore == nil {
 		// Derive the home dir from the workspace path (workspace == <home>/workspace).
 		runningServices.notifStore = notifications.NewStore(
-			filepath.Join(filepath.Dir(cfg.AgentHomeBasePath()), "notifications"),
+			filepath.Join(homePath, "notifications"),
 		)
 	}
 	var err error
@@ -4329,7 +4431,7 @@ func restartServices(
 	// Restart the task time-trigger scheduler on its dedicated CronService. The
 	// previous instance was already Stop()'d in stopAndCleanupServices(isReload).
 	if tStore := agent.GetTaskStore(al); tStore != nil {
-		triggerStorePath := filepath.Join(filepath.Dir(cfg.AgentHomeBasePath()), "tasks_triggers", "jobs.json")
+		triggerStorePath := filepath.Join(homePath, "tasks_triggers", "jobs.json")
 		runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
 			triggerStorePath, tStore, agent.GetTaskExecutor(al),
 		)
@@ -4348,7 +4450,7 @@ func restartServices(
 	// stopAndCleanupServices(isReload) — mirrors the task trigger restart
 	// immediately above.
 	{
-		loopSchedStorePath := filepath.Join(filepath.Dir(cfg.AgentHomeBasePath()), "loops", "jobs.json")
+		loopSchedStorePath := filepath.Join(homePath, "loops", "jobs.json")
 		runningServices.LoopScheduler = agent.NewLoopScheduler(loopSchedStorePath, al)
 		if startErr := runningServices.LoopScheduler.Start(); startErr != nil {
 			return fmt.Errorf("error restarting loop scheduler: %w", startErr)
@@ -4487,6 +4589,31 @@ func restartServices(
 		logger.InfoCF("voice", "Transcription re-enabled (agent-level)", map[string]any{"provider": transcriber.Name()})
 	} else {
 		logger.InfoCF("voice", "Transcription disabled", nil)
+	}
+
+	// FIX (14-reviewer sign-off, MEDIUM): re-apply the live session_messaging
+	// caps to the durable inbox store on every reload. setupAndStartServices'
+	// own comment at the boot call site ("Apply the live config's caps to the
+	// store so a session_messaging edit (hot-reloaded) is reflected on the
+	// next Append") was a promise this function never kept — the caps were
+	// only ever written once, at boot, and restartServices never revisited
+	// them. An operator editing session_messaging.* limits and reloading saw
+	// "Config reload completed successfully" while the inbox kept enforcing
+	// the ORIGINAL boot-time caps for the rest of the process's life. The
+	// store itself is process-lifetime (never reconstructed on reload, unlike
+	// CronService/MediaStore above), so re-fetch it via the agent loop and
+	// overwrite its plain-field caps in place — the store's own doc comment
+	// on these fields (pkg/session/message_inbox.go) already documents them
+	// as "re-read per call", so this is safe to do without touching the
+	// store's other state.
+	if inbox := al.GetMessageInboxStore(); inbox != nil {
+		smCfg := cfg.SessionMessaging
+		inbox.ChildSendRatePerMinute = smCfg.EffectiveChildSendRatePerMinute()
+		inbox.ChildSendBodyBytes = smCfg.EffectiveChildSendBodyBytes()
+		inbox.ChildSendMaxDepth = smCfg.EffectiveChildSendMaxDepth()
+		inbox.InboxUnackedMax = smCfg.EffectiveInboxUnackedMax()
+		inbox.InboxPerTypeCeiling = smCfg.EffectiveInboxPerTypeCeiling()
+		fmt.Println("  ✓ Session-messaging caps re-applied from live config")
 	}
 
 	return nil

@@ -260,6 +260,18 @@ func (f Filter) matches(t *Task) bool {
 	return true
 }
 
+// Matches reports whether t passes every active filter field. It is the
+// exported form of matches, for callers outside this package that hold an
+// already-fetched batch of tasks (typically from one prior List call) and
+// need to re-derive a filtered subset in memory rather than paying for a
+// second Store.List disk scan. This is what lets a request-scoped snapshot
+// (e.g. the gateway's per-request task listing reused across every rollup/
+// progress computation in that request — fix-wave finding #1) stay filter-
+// semantic-identical to Store.List without duplicating the filter logic.
+func (f Filter) Matches(t *Task) bool {
+	return f.matches(t)
+}
+
 // scanTaskIDs returns the task IDs present in the store directory, derived
 // from every regular *.json file's name (ReadDir → skip subdirectories and
 // non-.json entries → trim the .json suffix). It is the shared "scan the task

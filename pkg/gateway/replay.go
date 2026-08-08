@@ -1070,6 +1070,17 @@ func toJudgeVerdictFrame(v task.JudgeVerdict) generated.JudgeVerdictFrame {
 		planIDCopy := v.PlanID
 		f.PlanId = &planIDCopy
 	}
+	// Fix-wave finding #3: PerCriterion is a required array on the wire
+	// (asyncapi_types.gen.go, no `omitempty`) — a nil slice marshals as JSON
+	// `null`, which fails the SPA's zod schema for a required array and gets
+	// dropped. An empty (zero-criteria) verdict must still round-trip as `[]`,
+	// so start from a non-nil, empty slice rather than appending onto a nil
+	// one.
+	f.PerCriterion = make([]struct {
+		CriterionId string `json:"criterion_id"`
+		Met         bool   `json:"met"`
+		Reason      string `json:"reason"`
+	}, 0, len(v.PerCriterion))
 	for _, c := range v.PerCriterion {
 		f.PerCriterion = append(f.PerCriterion, struct {
 			CriterionId string `json:"criterion_id"`

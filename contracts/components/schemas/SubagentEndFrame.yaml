@@ -72,3 +72,11 @@ properties:
     description: >
       Internal reason string emitted by the orphan-watchdog synthetic end
       frame. Not rendered directly in the UI.
+  producing_session_id:
+    type: string
+    minLength: 1
+    description: >
+      ADR-057 FR-012/FR-013. Present iff it differs from session_id.
+      Class (b) (FR-089): absent for this frame type — producing ==
+      routing by construction (FR-017). Kept in sync by hand with the
+      inline copy in contracts/asyncapi.yaml (components.schemas.SubagentEndFrame).
