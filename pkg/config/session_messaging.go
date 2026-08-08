@@ -127,9 +127,26 @@ const (
 // messaging path, SC-015).
 type SessionMessagingConfig struct {
 	// --- Kill-switch trio (FR-196) ---
-	Enabled             bool `json:"enabled,omitempty"`
-	WakeEnabled         bool `json:"wake_enabled,omitempty"`
-	AdjudicationEnabled bool `json:"adjudication_enabled,omitempty"`
+	//
+	// *bool, not bool (fix-wave finding #4): the PlanBounds *int convention
+	// (pkg/plan/plan.go's PlanJudgeMaxRounds/IdleExpiryDays) — nil means
+	// "operator did not set this key", a non-nil pointer (even one pointing
+	// at false) means "operator explicitly chose this value". A plain bool
+	// cannot represent that distinction: encoding/json leaves an ABSENT bool
+	// key at its Go zero value (false), which is byte-for-byte identical to
+	// an operator writing `"enabled": false` on purpose. That ambiguity is
+	// exactly what let validateBootConfig's old "all three false means
+	// unset" heuristic silently overrule a genuine full-off config back to
+	// all-true on the next boot — see validateBootConfig's own comment at
+	// this section for the fix. `omitempty` on a *bool omits the key only
+	// when the POINTER is nil, never when the pointed-to value is false, so
+	// an explicit false now also round-trips through marshal/unmarshal
+	// without disappearing. Always read these via EffectiveEnabled /
+	// EffectiveWakeEnabled / EffectiveAdjudicationEnabled below, never the
+	// raw field, so "unset" resolves through one place.
+	Enabled             *bool `json:"enabled,omitempty"`
+	WakeEnabled         *bool `json:"wake_enabled,omitempty"`
+	AdjudicationEnabled *bool `json:"adjudication_enabled,omitempty"`
 
 	// --- Child-send caps (3) ---
 	ChildSendRatePerMinute int `json:"child_send_rate,omitempty"`
@@ -167,17 +184,44 @@ type SessionMessagingConfig struct {
 
 // EffectiveEnabled reports whether the session-messaging plane is live. When
 // false, the consumer no-ops and the tools fail-closed (FR-196 global kill
-// switch). Read live per event — never cached at boot.
+// switch). Read live per event — never cached at boot. nil (key never set)
+// resolves to DefaultSessionMessagingEnabled; a non-nil pointer is always the
+// operator's own explicit choice, including an explicit false — see the
+// field's own doc comment for why this must be a pointer.
 func (c SessionMessagingConfig) EffectiveEnabled() bool {
-	return c.Enabled
+	if c.Enabled != nil {
+		return *c.Enabled
+	}
+	return DefaultSessionMessagingEnabled
 }
 
 // EffectiveWakeEnabled reports whether the bounded typed-wake path is live
 // (FR-196). When false, messages still reach the durable inbox but no wake
-// fires. Read live per event.
+// fires. Read live per event. nil resolves to
+// DefaultSessionMessagingWakeEnabled — see EffectiveEnabled's doc comment.
 func (c SessionMessagingConfig) EffectiveWakeEnabled() bool {
-	return c.WakeEnabled
+	if c.WakeEnabled != nil {
+		return *c.WakeEnabled
+	}
+	return DefaultSessionMessagingWakeEnabled
 }
+
+// EffectiveAdjudicationEnabled reports whether the goal/plan adjudication
+// trigger is live (FR-196, the third kill-switch-trio member). nil resolves
+// to DefaultSessionMessagingAdjudicationEnabled — see EffectiveEnabled's doc
+// comment for why the field is a pointer.
+func (c SessionMessagingConfig) EffectiveAdjudicationEnabled() bool {
+	if c.AdjudicationEnabled != nil {
+		return *c.AdjudicationEnabled
+	}
+	return DefaultSessionMessagingAdjudicationEnabled
+}
+
+// boolPtr returns a pointer to a copy of v — the standard way to populate a
+// *bool struct field (the kill-switch trio above, mirroring pkg/plan's *int
+// PlanBounds fields) from a literal or a named bool constant, which cannot be
+// addressed directly.
+func boolPtr(v bool) *bool { return &v }
 
 // EffectiveChildSendRatePerMinute resolves the child-send rate cap (SC-015:
 // every numeric tunable resolves from a key, no magic constants).

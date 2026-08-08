@@ -357,13 +357,30 @@ func validateBootConfig(cfg *Config) error {
 	// --- ADR-053 §8: session_messaging (FR-195's 21 keys) ---
 	// The kill-switch trio defaults to ENABLED (the plane is live on a fresh
 	// install). Numeric tunables default to the ADR §Contract Surface values
-	// when zero (SC-015: no magic constants). An operator who genuinely wants
-	// the plane off sets enabled:false explicitly; an all-zero section is
-	// treated as absent and seeded live (matching PlanningConfig's convention).
-	if !cfg.SessionMessaging.Enabled && !cfg.SessionMessaging.WakeEnabled && !cfg.SessionMessaging.AdjudicationEnabled {
-		cfg.SessionMessaging.Enabled = DefaultSessionMessagingEnabled
-		cfg.SessionMessaging.WakeEnabled = DefaultSessionMessagingWakeEnabled
-		cfg.SessionMessaging.AdjudicationEnabled = DefaultSessionMessagingAdjudicationEnabled
+	// when zero (SC-015: no magic constants).
+	//
+	// Fix-wave finding #4: this used to be a single cross-field heuristic —
+	// "all three false means the section is unset" — that forced all three
+	// back to true whenever an operator's config happened to have every kill
+	// switch off. That heuristic could never actually tell "operator
+	// deliberately turned the whole plane off" apart from "config predates
+	// this section and the struct is at its Go zero value", because a plain
+	// bool has no way to represent "absent" separately from "explicitly
+	// false". Now that the three fields are *bool (nil = never set by the
+	// operator — see SessionMessagingConfig's own doc comment), each is
+	// defaulted INDEPENDENTLY, exactly like every other *_ = Default... line
+	// in this function: nil is seeded to the default, any non-nil value
+	// (including a pointer to false) is the operator's own explicit choice
+	// and is left completely alone. An all-three-explicit-false config now
+	// stays off across load/validate/re-marshal.
+	if cfg.SessionMessaging.Enabled == nil {
+		cfg.SessionMessaging.Enabled = boolPtr(DefaultSessionMessagingEnabled)
+	}
+	if cfg.SessionMessaging.WakeEnabled == nil {
+		cfg.SessionMessaging.WakeEnabled = boolPtr(DefaultSessionMessagingWakeEnabled)
+	}
+	if cfg.SessionMessaging.AdjudicationEnabled == nil {
+		cfg.SessionMessaging.AdjudicationEnabled = boolPtr(DefaultSessionMessagingAdjudicationEnabled)
 	}
 	if cfg.SessionMessaging.ChildSendRatePerMinute == 0 {
 		cfg.SessionMessaging.ChildSendRatePerMinute = DefaultSMChildSendRatePerMinute
