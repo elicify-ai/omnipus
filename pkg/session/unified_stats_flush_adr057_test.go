@@ -415,3 +415,149 @@ func TestStatsThrottle_ConcurrentAppendsAndIntervalChangesDoNotRace(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, 50, got.Stats.TokensIn)
 }
+
+// ---------------------------------------------------------------------
+// 14-reviewer fix wave, finding #2: u6FlushDirtySessionLocked must clear a
+// dirty mark whose cache backing has vanished, and FlushAndEvictSessionMeta
+// must close the flush-then-evict two-shard-acquisition race.
+// ---------------------------------------------------------------------
+
+// TestFlushDirtySession_ClearsStrandedMarkWhenCacheEntryGone is the
+// regression guard for the "stranded dirtyStats entry" half of finding #2.
+//
+// BEFORE the fix: if a session's metaCache entry was evicted (by
+// EvictSessionMeta, FlushAndEvictSessionMeta, or an FR-097a stale-session
+// prune) WITHOUT its pending stats delta ever being flushed first,
+// u6FlushDirtySessionLocked found dirty==true but metaClone==nil and
+// returned nil WITHOUT clearing the dirty mark — every subsequent flush
+// attempt (periodic tick or forced-flush point) hit the exact same
+// dead-end forever: the mark could never be cleared, and the map entry
+// leaked for the rest of the process's life.
+func TestFlushDirtySession_ClearsStrandedMarkWhenCacheEntryGone(t *testing.T) {
+	store := u6NewTestStore(t)
+	store.SetStatsFlushInterval(time.Hour) // isolate from the periodic ticker
+
+	meta, err := store.NewSession(SessionTypeChat, "", "agent-1")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{Role: "user", Content: "hi", Tokens: 1}))
+
+	// RED baseline: the append genuinely marked this session dirty (the
+	// FR-061 in-memory-only throttle) — a positive lower bound proving the
+	// rest of this test exercises a real pending delta, not a no-op.
+	dirtyBefore := store.u6SnapshotDirtySessions()
+	require.Contains(t, dirtyBefore, sessionID, "fixture broken: AppendTranscript must mark the session dirty")
+
+	// Simulate the cache entry vanishing WITHOUT a prior successful flush —
+	// e.g. a concurrent eviction landing before this session's delta ever
+	// reached disk. EvictSessionMeta alone (not FlushAndEvictSessionMeta)
+	// reproduces exactly this: drop the cache, leave the dirty mark set.
+	store.EvictSessionMeta(sessionID)
+
+	// Act: retry the flush against a dirty mark whose cache backing is gone.
+	require.NoError(t, store.FlushSessionStats(sessionID),
+		"a flush against a stranded dirty mark must not error")
+
+	// GREEN: the dirty mark must be CLEARED, not left stranded — proving the
+	// fix, not just that the call didn't panic.
+	dirtyAfter := store.u6SnapshotDirtySessions()
+	assert.NotContains(t, dirtyAfter, sessionID,
+		"the dirty mark must be cleared once its cache backing is gone, not left permanently stranded")
+}
+
+// TestFlushAndEvictSessionMeta_ClosesTwoShardRace is the correctness guard
+// for the single-shard-acquisition primitive itself: one call flushes AND
+// evicts, and on success the pending delta is durably on disk (real bytes
+// read back, not just a cache check) AND the cache entry is gone (self-heal
+// on the next GetMeta).
+func TestFlushAndEvictSessionMeta_ClosesTwoShardRace(t *testing.T) {
+	store := u6NewTestStore(t)
+	store.SetStatsFlushInterval(time.Hour) // isolate from the periodic ticker
+
+	meta, err := store.NewSession(SessionTypeChat, "", "agent-1")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{Role: "user", Content: "hi", Tokens: 7}))
+
+	// RED baseline: nothing on disk yet (the throttle keeps this in-memory
+	// only until a forced flush or periodic tick).
+	statsPath := filepath.Join(store.BaseDir(), sessionID, "stats.json")
+	_, statErrBefore := os.Stat(statsPath)
+	require.True(t, os.IsNotExist(statErrBefore), "fixture broken: stats.json must not exist before any forced flush")
+
+	require.NoError(t, store.FlushAndEvictSessionMeta(sessionID))
+
+	// GREEN 1: the delta is durably on disk — real bytes, not a cache-only
+	// value.
+	data, err := os.ReadFile(statsPath)
+	require.NoError(t, err, "FlushAndEvictSessionMeta must persist the pending delta before evicting")
+	var onDisk struct {
+		TokensIn int `json:"tokens_in"`
+	}
+	require.NoError(t, json.Unmarshal(data, &onDisk))
+	assert.Equal(t, 7, onDisk.TokensIn)
+
+	// GREEN 2: the cache entry is gone — the dirty mark was cleared (a
+	// successful flush always clears it) and the session self-heals from
+	// disk on the next GetMeta, reproducing the SAME TokensIn value.
+	dirtyAfter := store.u6SnapshotDirtySessions()
+	assert.NotContains(t, dirtyAfter, sessionID)
+
+	after, err := store.GetMeta(sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, 7, after.Stats.TokensIn)
+
+	// Dataset row 8 precedent (ADR-057, "Session parent index"): eviction is
+	// never deletion — the session's directory must still exist on disk.
+	_, statErr := os.Stat(filepath.Join(store.BaseDir(), sessionID))
+	assert.NoError(t, statErr, "FlushAndEvictSessionMeta must not delete the session directory (eviction != deletion)")
+}
+
+// TestFlushAndEvictSessionMeta_FlushFailureDoesNotEvict proves the ordering
+// guarantee: on a flush failure the cache entry (and dirty mark) must
+// survive untouched, so a later retry still has something to read —
+// mirroring TestCloseSession_FlushFailure_DoesNotStrandRetryByEvictingCache
+// (pkg/agent/session_end_fix_test.go) but exercised directly against the
+// new pkg/session primitive.
+func TestFlushAndEvictSessionMeta_FlushFailureDoesNotEvict(t *testing.T) {
+	store := u6NewTestStore(t)
+	store.SetStatsFlushInterval(time.Hour)
+
+	meta, err := store.NewSession(SessionTypeChat, "", "agent-1")
+	require.NoError(t, err)
+	sessionID := meta.ID
+	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{Role: "user", Content: "hi", Tokens: 3}))
+
+	// Inject a genuine, uid-independent disk write failure: pre-create
+	// stats.json's OWN path as a directory, so u5WriteStatsLocked's
+	// os.OpenFile(O_CREATE) fails with EISDIR regardless of privilege level
+	// (mirrors pkg/agent/session_end_fix_test.go's identical technique and
+	// its doc comment explaining why a chmod-based injection is NOT
+	// uid-independent — root's CAP_DAC_OVERRIDE bypasses it).
+	statsPath := filepath.Join(store.BaseDir(), sessionID, "stats.json")
+	require.NoError(t, os.Mkdir(statsPath, 0o700))
+	t.Cleanup(func() { _ = os.RemoveAll(statsPath) })
+
+	err = store.FlushAndEvictSessionMeta(sessionID)
+	require.Error(t, err, "a genuine disk write failure must be surfaced, not swallowed")
+
+	// GREEN: the dirty mark and cache entry must have SURVIVED the failure —
+	// the eviction must not have run.
+	dirtyAfter := store.u6SnapshotDirtySessions()
+	assert.Contains(t, dirtyAfter, sessionID, "a failed flush must leave the dirty mark intact for the next retry")
+
+	// Clear the injected failure and retry — the surviving cache entry must
+	// still hold the original delta.
+	require.NoError(t, os.Remove(statsPath))
+	require.NoError(t, store.FlushAndEvictSessionMeta(sessionID))
+
+	data, err := os.ReadFile(statsPath)
+	require.NoError(t, err)
+	var onDisk struct {
+		TokensIn int `json:"tokens_in"`
+	}
+	require.NoError(t, json.Unmarshal(data, &onDisk))
+	assert.Equal(t, 3, onDisk.TokensIn, "the retry must persist the ORIGINAL delta, not a corrupted/lost one")
+}

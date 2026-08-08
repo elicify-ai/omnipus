@@ -106,6 +106,21 @@ func (us *UnifiedStore) u6FlushDirtySessionLocked(sessionID string) error {
 	if dirty {
 		if cached, ok := us.metaCache[sessionID]; ok {
 			metaClone = cached.Clone()
+		} else {
+			// Bug fix (14-reviewer finding #2): the cache entry backing this
+			// dirty mark is gone (evicted by a concurrent
+			// EvictSessionMeta/FlushAndEvictSessionMeta, or an FR-097a
+			// stale-session prune) — there is nothing left in memory to
+			// flush, and retrying forever can never make progress since the
+			// source of truth for the pending delta no longer exists. Clear
+			// the mark now rather than stranding it: without this, a dirty
+			// entry whose cache backing vanished stayed in dirtyStats
+			// PERMANENTLY — every future flush attempt (periodic tick or
+			// forced-flush point) found dirty==true, metaClone==nil, and
+			// silently no-op'd forever, both leaking the map entry and
+			// misreporting "this session has an unflushed delta" to any
+			// future caller that checks.
+			delete(us.dirtyStats, sessionID)
 		}
 	}
 	us.cacheMu.Unlock()
@@ -200,6 +215,48 @@ func (us *UnifiedStore) EvictSessionMeta(sessionID string) {
 	us.cacheMu.Lock()
 	delete(us.metaCache, sessionID)
 	us.cacheMu.Unlock()
+}
+
+// FlushAndEvictSessionMeta is the single-shard-acquisition primitive
+// pkg/agent/session_end.go's CloseSession doc comment named as the fix for
+// its flush-then-evict race (14-reviewer finding #2): it flushes sessionID's
+// pending in-memory-only stats delta (if any) AND evicts its metaCache
+// entry under ONE lockSession(sessionID) hold, rather than two separate
+// FlushSessionStats/EvictSessionMeta calls that each acquire and release
+// the shard independently.
+//
+// THE RACE THIS CLOSES. With two separate acquisitions, a concurrent
+// AppendTranscript (or any other u6MarkStatsDirtyLocked caller) landing in
+// the window between FlushSessionStats releasing the shard and
+// EvictSessionMeta re-acquiring it re-marks the session dirty with a FRESH
+// cache entry — which the unconditional evict then destroyed before that
+// delta was ever flushed, permanently losing it (no error, no crash, just a
+// silently stale/missing stats.json). Holding the SAME shard across both
+// steps makes that window impossible: no AppendTranscript/
+// u6MarkStatsDirtyLocked call for this SAME session id can interleave,
+// since it needs the identical shard this method already holds.
+//
+// Eviction happens ONLY when the flush succeeds — mirroring CloseSession's
+// own prior best-effort ordering (flush-before-evict) and
+// u6FlushDirtySessionLocked's own retry contract: on a flush failure the
+// dirty mark and cache entry are left exactly as u6FlushDirtySessionLocked
+// left them (untouched, so the next periodic tick or forced-flush point can
+// retry), and the error is returned to the caller instead of proceeding to
+// evict data the retry still needs.
+func (us *UnifiedStore) FlushAndEvictSessionMeta(sessionID string) error {
+	if err := validateSessionID(sessionID); err != nil {
+		return err
+	}
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
+
+	if err := us.u6FlushDirtySessionLocked(sessionID); err != nil {
+		return err
+	}
+	us.cacheMu.Lock()
+	delete(us.metaCache, sessionID)
+	us.cacheMu.Unlock()
+	return nil
 }
 
 // --- the periodic flusher goroutine (FR-063, FR-067) ---

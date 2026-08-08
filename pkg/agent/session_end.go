@@ -80,41 +80,31 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	// concern documented on approvalGrants above), so both are skipped rather
 	// than panicking when there is no store.
 	//
-	// Bug fix (regression introduced alongside this ADR): FlushSessionStats
-	// and EvictSessionMeta are two SEPARATE shard acquisitions — pkg/session
-	// exposes no primitive that holds sessionID's shard across both. Running
-	// the evict UNCONDITIONALLY, even when the flush failed, had two costs:
-	//  1. Deterministic: on a flush failure (e.g. a disk write error),
-	//     u6FlushDirtySessionLocked (pkg/session/unified_stats_flush.go)
-	//     deliberately KEEPS the dirty mark for the next periodic tick or
-	//     forced-flush point to retry — but that retry only does anything if
-	//     BOTH the dirty mark AND a live metaCache entry exist. The
-	//     unconditional evict removed the one thing the retry needs,
-	//     stranding the dirty mark (and the lost delta) for the rest of the
-	//     process's life: every later flush attempt finds dirty==true but
-	//     metaClone==nil and silently no-ops forever.
-	//  2. Racy: a concurrent AppendTranscript landing in the window between
-	//     FlushSessionStats releasing the shard and EvictSessionMeta
-	//     re-acquiring it re-marks the session dirty with a fresh cache
-	//     entry, which the unconditional evict then destroys before it is
-	//     ever flushed.
-	// Evicting ONLY on a successful flush closes case 1 completely (the
-	// cache entry the retry needs survives). Case 2 is a genuine cross-call
-	// race that can only be closed by a single-shard-acquisition primitive in
-	// pkg/session (e.g. a `FlushAndEvictSessionMeta(sessionID) error` that
-	// evicts under the SAME lockSession(sessionID) hold the flush uses,
-	// evicting only when the flush succeeds) — not implemented here because
-	// pkg/session is outside this file's ownership; reported as a follow-up
-	// with this exact signature.
+	// Bug fix, closed (14-reviewer finding #2): the OLD code called
+	// FlushSessionStats and EvictSessionMeta as two SEPARATE shard
+	// acquisitions. Running the evict unconditionally, even when the flush
+	// failed, had two costs: (1) deterministic — on a flush failure,
+	// u6FlushDirtySessionLocked (pkg/session/unified_stats_flush.go)
+	// deliberately KEEPS the dirty mark for the next periodic tick or
+	// forced-flush point to retry, but that retry only does anything if BOTH
+	// the dirty mark AND a live metaCache entry exist, and the unconditional
+	// evict removed the one thing the retry needs; (2) racy — a concurrent
+	// AppendTranscript landing in the window between the two separate calls
+	// re-marks the session dirty with a FRESH cache entry, which the
+	// unconditional evict then destroyed before it was ever flushed.
+	// FlushAndEvictSessionMeta (pkg/session/unified_stats_flush.go) closes
+	// both: it holds sessionID's shard across the flush AND the evict, so no
+	// AppendTranscript for this same session id can interleave between them,
+	// and it evicts ONLY when the flush actually succeeded — a failed flush
+	// leaves the dirty mark and cache entry exactly as
+	// u6FlushDirtySessionLocked left them, for the next retry.
 	if store := al.sharedSessionStore; store != nil {
-		if err := store.FlushSessionStats(sessionID); err != nil {
+		if err := store.FlushAndEvictSessionMeta(sessionID); err != nil {
 			slog.Warn("session_end: forced stats flush failed at close",
 				"session_id", sessionID,
 				"trigger", trigger,
 				"error", err,
 			)
-		} else {
-			store.EvictSessionMeta(sessionID)
 		}
 	}
 
