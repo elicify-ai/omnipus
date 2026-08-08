@@ -397,6 +397,11 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 		p.JudgeRounds = *patch.JudgeRounds
 	}
 	if patch.PausedReason != nil {
+		// Fix-wave finding 6(b): closed-set validation, mirroring the
+		// PlanPhase/FailedReason checks immediately below.
+		if *patch.PausedReason != "" && !IsValidPausedReason(*patch.PausedReason) {
+			return nil, verr("invalid paused_reason %q", *patch.PausedReason)
+		}
 		p.PausedReason = *patch.PausedReason
 	}
 	if patch.LastActivityAt != nil {

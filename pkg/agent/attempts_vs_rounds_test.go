@@ -12,7 +12,7 @@ import (
 // TestAttemptsVsRounds_DistinctBrakes pins FR-178: the per-member/task
 // attempts brake (Task.AttemptCount, sole writer
 // TaskExecutor.consumeAttemptOrExhaust) and the per-goal/plan judge-rounds
-// brake (plan.JudgeRounds, sole writer PlanEngine.applyJudgeRoundOutcomeLocked)
+// brake (plan.JudgeRounds, sole writer PlanEngine.applyJudgeRoundOutcome)
 // are TWO DISTINCT counters — never conflated, and whichever trips first stops
 // its OWN scope locally. The matrix row 58 claimed this test; it did not exist.
 //

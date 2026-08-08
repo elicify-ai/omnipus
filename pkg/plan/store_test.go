@@ -346,7 +346,7 @@ func TestPlan_CountersPersistAndReload(t *testing.T) {
 	}
 
 	rounds := 3
-	paused := "owner disabled"
+	paused := PausedReasonOwnerDisabled
 	lastActivity := "2026-07-19T00:00:00Z"
 	phase := PhaseJudging
 	updated, err := s.Update(p.ID, Patch{
@@ -446,7 +446,7 @@ func TestPlan_RestartTransition_ViaStoreUpdate(t *testing.T) {
 		if err := s.Create(p); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		failedPlan := driveToFailed(t, s, p.ID, FailedReasonStoppedByUser, 2, "owner paused mid-run")
+		failedPlan := driveToFailed(t, s, p.ID, FailedReasonStoppedByUser, 2, PausedReasonOwnerDisabled)
 		if failedPlan.FailedReason != FailedReasonStoppedByUser || failedPlan.JudgeRounds != 2 {
 			t.Fatalf("setup: unexpected pre-restart state: %+v", failedPlan)
 		}
@@ -473,7 +473,7 @@ func TestPlan_RestartTransition_ViaStoreUpdate(t *testing.T) {
 		if restarted.ApprovedAt == "" {
 			t.Fatalf("restart must stamp ApprovedAt, got empty")
 		}
-		if restarted.PausedReason != "owner paused mid-run" {
+		if restarted.PausedReason != PausedReasonOwnerDisabled {
 			t.Fatalf("restart must NOT touch paused_reason (orthogonal), got %q", restarted.PausedReason)
 		}
 

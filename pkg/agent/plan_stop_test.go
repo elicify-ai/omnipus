@@ -286,7 +286,7 @@ func TestPlanEngine_StopPlan_DropsStaleVerdictAfterConcurrentJudgeRound(t *testi
 // already-stopped plan. This drives the plan store DIRECTLY to simulate a
 // Stop having already landed (the sanctioned "driving the store directly to
 // simulate the interleaving" technique — mirrors the task-level FR-014
-// tests) and calls applyJudgeRoundOutcomeLocked — the exact function
+// tests) and calls applyJudgeRoundOutcome — the exact function
 // runPlanJudgeRound now delegates to — directly with a freshly-computed
 // UNMET verdict, proving its OWN re-check (not a stale caller-side one)
 // drops the outcome entirely: JudgeRounds/PlanPhase never move, the Stop's
@@ -307,7 +307,7 @@ func TestApplyJudgeRoundOutcomeLocked_UnmetWrite_DroppedAfterConcurrentStop(t *t
 		t.Fatalf("simulate concurrent Stop: %v", err)
 	}
 
-	h.pe.applyJudgeRoundOutcomeLocked("p1", JudgeCriteriaResult{
+	h.pe.applyJudgeRoundOutcome("p1", JudgeCriteriaResult{
 		Verdict: &task.JudgeVerdict{
 			Met:          false,
 			PerCriterion: []task.CriterionVerdict{{CriterionID: "c1", Met: false, Reason: "not done yet"}},
@@ -350,7 +350,7 @@ func TestApplyJudgeRoundOutcomeLocked_MetWrite_DroppedAfterConcurrentStop(t *tes
 		t.Fatalf("simulate concurrent Stop: %v", err)
 	}
 
-	h.pe.applyJudgeRoundOutcomeLocked("p1", JudgeCriteriaResult{
+	h.pe.applyJudgeRoundOutcome("p1", JudgeCriteriaResult{
 		Verdict: &task.JudgeVerdict{Met: true},
 	}, false, "")
 
@@ -378,7 +378,7 @@ func TestApplyJudgeRoundOutcomeLocked_AppliesWhenStillRunning(t *testing.T) {
 	h := newTestPlanEngine(t)
 	mustCreateRunningPlan(t, h.plans, "p1", "owner")
 
-	h.pe.applyJudgeRoundOutcomeLocked("p1", JudgeCriteriaResult{
+	h.pe.applyJudgeRoundOutcome("p1", JudgeCriteriaResult{
 		Verdict: &task.JudgeVerdict{
 			Met:          false,
 			PerCriterion: []task.CriterionVerdict{{CriterionID: "c1", Met: false, Reason: "not done yet"}},

@@ -35,6 +35,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -105,6 +106,22 @@ type FeasibilityRejection struct {
 type CompileResult struct {
 	Goal      *CompiledGoal
 	Rejection *FeasibilityRejection
+}
+
+// Compiled reports whether r represents a successful compile and returns the
+// compiled goal — a defensive accessor (fix-wave finding 6(f)) for
+// consumers that would otherwise dereference r.Goal directly and trust the
+// "exactly one of Goal/Rejection is set" invariant compileGoalIntent's
+// return paths currently uphold but do not enforce at the type level. A
+// nil-check-free `res.Goal` deref at a consumer is one accidental future
+// producer bug away from a nil-pointer panic; Compiled() collapses both the
+// Rejection-set and the Goal-nil cases into a single, ordinary "not
+// compiled" false return.
+func (r CompileResult) Compiled() (*CompiledGoal, bool) {
+	if r.Rejection != nil || r.Goal == nil {
+		return nil, false
+	}
+	return r.Goal, true
 }
 
 // --- Co-located marker parser (B2/Gate-2: parser + teaching fragment) -------
@@ -735,6 +752,13 @@ func (t *UnableToVerifyTracker) NoteUnableToVerify(criterionID string) (persiste
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// Fix-wave finding 6(g): lazily init a nil map so a zero-value
+	// &UnableToVerifyTracker{} (constructed without NewUnableToVerifyTracker)
+	// is safe to use rather than panicking on this write ("assignment to
+	// entry in nil map").
+	if t.reruns == nil {
+		t.reruns = make(map[string]int)
+	}
 	t.reruns[criterionID]++
 	return t.reruns[criterionID] > t.maxReruns
 }
@@ -785,6 +809,13 @@ func (g *UnjudgeableEscalationGate) ShouldEscalate(goalID string) bool {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	// Fix-wave finding 6(g): lazily init a nil map so a zero-value
+	// &UnjudgeableEscalationGate{} (constructed without
+	// NewUnjudgeableEscalationGate) is safe to use rather than panicking on
+	// the write below ("assignment to entry in nil map").
+	if g.escalated == nil {
+		g.escalated = make(map[string]bool)
+	}
 	if g.escalated[goalID] {
 		return false
 	}
@@ -898,15 +929,28 @@ func marshalCompiledGoal(g *CompiledGoal) (string, error) {
 // loadCompiledGoal deserializes a CompiledGoal from GoalCriteriaJSON. Returns
 // nil for an empty/unparseable value (callers fall back to a single prose
 // criterion from GoalCondition for back-compat with pre-Phase-2 goals).
+//
+// Fix-wave finding 6(h): an EMPTY raw value is the legitimately absent case
+// (silent nil — a pre-Phase-2 goal with no compiled ladder yet, or none at
+// all) and stays silent. A NON-EMPTY raw value that fails to parse, or
+// parses but carries zero criteria, is CORRUPT — logged loud (still
+// returning nil, so the caller's fallback behavior is unchanged) so a real
+// persisted-record bug is never silently indistinguishable from "nothing was
+// ever compiled here".
 func loadCompiledGoal(raw string) *CompiledGoal {
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
 	var g CompiledGoal
 	if err := json.Unmarshal([]byte(raw), &g); err != nil {
+		logger.WarnCF("agent", "goal: GoalCriteriaJSON is non-empty but failed to parse as a CompiledGoal "+
+			"(falling back to a single prose criterion from GoalCondition)",
+			map[string]any{"error": err.Error()})
 		return nil
 	}
 	if len(g.Criteria) == 0 {
+		logger.WarnCF("agent", "goal: GoalCriteriaJSON parsed but carries zero criteria "+
+			"(falling back to a single prose criterion from GoalCondition)", nil)
 		return nil
 	}
 	return &g

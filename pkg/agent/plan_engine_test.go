@@ -458,7 +458,7 @@ func TestPlanEngine_JudgeMet_PersistBeforeWake(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 
-	h.pe.applyJudgeRoundOutcomeLocked("p1", JudgeCriteriaResult{
+	h.pe.applyJudgeRoundOutcome("p1", JudgeCriteriaResult{
 		Verdict: &task.JudgeVerdict{Met: true},
 	}, false, "")
 

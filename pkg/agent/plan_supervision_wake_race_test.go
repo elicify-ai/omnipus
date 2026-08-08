@@ -31,7 +31,7 @@ import (
 
 // unmetJudgeResultFn is a fakePlanJudge.resultFn that always returns an UNMET
 // verdict — used to force a plan-level judge round into the DoD-unmet
-// supervision wake path (applyJudgeRoundOutcomeLocked -> wakeSupervisor).
+// supervision wake path (applyJudgeRoundOutcome -> wakeSupervisor).
 func unmetJudgeResultFn(in JudgeCriteriaInput) JudgeCriteriaResult {
 	return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{
 		Met:          false,
@@ -108,7 +108,7 @@ func resolveStuckMemberForUnmetRound(t *testing.T, h *planWakeHarness, fx stalle
 //     plan becomes all-terminal with an UNMET judge verdict — a DIFFERENT
 //     wake reason (DoD-unmet), exactly as observed.
 //
-// Before the fix, applyJudgeRoundOutcomeLocked's newPark computation reads
+// Before the fix, applyJudgeRoundOutcome's newPark computation reads
 // the plan's freshly-reloaded phase as plan.PhaseJudging (set by
 // beginPlanJudgeRound moments earlier) — NOT supervision-eligible — so it
 // treats this as a brand-new park and wakeSupervisor mints and dispatches a

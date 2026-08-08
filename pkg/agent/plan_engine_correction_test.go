@@ -50,7 +50,7 @@ func mustSeedAwaitingCorrection(t *testing.T, h *planEngineHarness, planID strin
 	}
 	mustCreatePlan(t, h.plans, p)
 	// Record the unmet signature in the engine's in-memory gate so
-	// processPlan won't re-judge (mirrors what applyJudgeRoundOutcomeLocked does).
+	// processPlan won't re-judge (mirrors what applyJudgeRoundOutcome does).
 	h.pe.recordUnmetTerminalSignature(planID, sig)
 	for _, m := range members {
 		m.PlanID = planID

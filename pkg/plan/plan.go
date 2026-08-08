@@ -386,6 +386,33 @@ var validFailedReasons = map[FailedReason]bool{ //nolint:gochecknoglobals
 // IsValidFailedReason reports whether r is a known, explicit failed reason.
 func IsValidFailedReason(r FailedReason) bool { return validFailedReasons[r] }
 
+// PausedReasonOwnerDisabled is the one PausedReason value production code
+// sets today (PausePlansOwnedBy/ResumePlansOwnedBy, pkg/agent/plan_engine.go):
+// a running plan's owner agent was disabled mid-loop.
+//
+// Fix-wave finding 6(b) (14-reviewer sign-off): Plan.PausedReason is
+// deliberately kept typed `string` (NOT a named PausedReason type like
+// PlanPhase/FailedReason on the same struct) — several call sites outside
+// this package consume it as a bare string via concatenation/strings.TrimSpace
+// (pkg/tools/list_jobs_row.go) or assign it directly into a wire `*string`
+// field (pkg/gateway/rest_plans.go, gateway.go, websocket.go), all of which a
+// named type would break without editing those files. The "closed enum" is
+// instead enforced as a runtime-validated set of string constants, mirroring
+// FailedReason/PlanPhase's validity CONCEPT without their Go type.
+const PausedReasonOwnerDisabled = "owner_disabled"
+
+// validPausedReasons is the closed set IsValidPausedReason checks against.
+// The empty string ("not paused") is handled separately by every caller
+// (never a member of this set), exactly like PlanPhase/FailedReason's own
+// "empty means unset" convention.
+var validPausedReasons = map[string]bool{ //nolint:gochecknoglobals
+	PausedReasonOwnerDisabled: true,
+}
+
+// IsValidPausedReason reports whether r is a known, explicit non-empty
+// paused reason (fix-wave finding 6(b)).
+func IsValidPausedReason(r string) bool { return validPausedReasons[r] }
+
 // PlanBounds holds per-plan overrides of the global config.PlanningConfig
 // bounds (ADR D7/FR-9, spec Part A §A). A nil field inherits that field's
 // global default via config.PlanningConfig's Effective* resolvers. NO
@@ -677,6 +704,9 @@ func (p *Plan) normalize() error {
 	}
 	if p.PlanPhase != "" && !IsValidPlanPhase(p.PlanPhase) {
 		return verr("invalid plan_phase %q", p.PlanPhase)
+	}
+	if p.PausedReason != "" && !IsValidPausedReason(p.PausedReason) {
+		return verr("invalid paused_reason %q", p.PausedReason)
 	}
 	if p.FailedReason != "" {
 		if !IsValidFailedReason(p.FailedReason) {

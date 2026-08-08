@@ -242,6 +242,13 @@ func (l *IntentLog) lockFor(planID string) *sync.Mutex {
 // before calling writeLocked (AppendIntent; markLocked assumes the directory
 // already exists from an earlier AppendIntent).
 func (l *IntentLog) writeLocked(planID string, rec *IntentRecord) error {
+	// Fix-wave finding 6(a): reject a path-traversal/separator-bearing
+	// planID before it ever reaches l.path (a bare filepath.Join with no
+	// escaping) — mirrors pkg/plan/store.go's own validateID gate for plan
+	// files.
+	if err := validateID(planID); err != nil {
+		return fmt.Errorf("intent_log: %w", err)
+	}
 	previous, err := l.readAllLocked(planID)
 	if err != nil {
 		return fmt.Errorf("intent_log: read existing for hmac chain: %w", err)
@@ -285,6 +292,10 @@ func (l *IntentLog) AppendIntent(rec IntentRecord) error {
 // lifecycle store's tail convention. This preserves the audit trail and keeps
 // the status update a single temp+rename-free append.
 func (l *IntentLog) markLocked(planID, intentID string, status IntentStatus) error {
+	// Fix-wave finding 6(a): see writeLocked's identical gate.
+	if err := validateID(planID); err != nil {
+		return fmt.Errorf("intent_log: %w", err)
+	}
 	records, err := l.readAllLocked(planID)
 	if err != nil {
 		return err
@@ -334,6 +345,10 @@ func (l *IntentLog) MarkDone(planID, intentID string) error {
 // readAllLocked reads every record in planID's log file. The caller MUST hold
 // the per-plan lock (or accept a best-effort read).
 func (l *IntentLog) readAllLocked(planID string) ([]IntentRecord, error) {
+	// Fix-wave finding 6(a): see writeLocked's identical gate.
+	if err := validateID(planID); err != nil {
+		return nil, fmt.Errorf("intent_log: %w", err)
+	}
 	f, err := os.Open(l.path(planID))
 	if err != nil {
 		if os.IsNotExist(err) {

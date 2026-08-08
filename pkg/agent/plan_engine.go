@@ -50,6 +50,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/constants"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -193,15 +194,16 @@ const (
 	// the two decision wakes, stall and DoD-UNMET, moved off the plan's owner
 	// onto this agent; the three OUTCOME wakes stayed on the owner).
 	//
-	// It is a local literal rather than coreagent.IDPlanSupervisor ONLY
-	// because the coreagent seed lands in a sibling change; the value is the
-	// contract-documented id (`plansupervisor`, see Plan.yaml's plan_phase
-	// description) and MUST equal coreagent.IDPlanSupervisor once that
-	// constant exists. dispatchPlanTurn's own agent-resolution check is what
-	// keeps a mismatch loud rather than silent: an unresolvable supervisor is
-	// a recorded wake error that escalates to failed(supervision_unavailable),
-	// never a turn quietly run by whatever agent happens to be default.
-	planSupervisorAgentID = "plansupervisor"
+	// Fix-wave finding 6(c): now sourced from coreagent.IDPlanSupervisor (the
+	// seeded System Agent constant) instead of a local literal — the sibling
+	// coreagent seed this comment used to wait on has landed. Kept as a
+	// package-level string constant (not a bare reference at each call site)
+	// so every usage below is unchanged. dispatchPlanTurn's own
+	// agent-resolution check is what keeps a mismatch loud rather than
+	// silent: an unresolvable supervisor is a recorded wake error that
+	// escalates to failed(supervision_unavailable), never a turn quietly run
+	// by whatever agent happens to be default.
+	planSupervisorAgentID = string(coreagent.IDPlanSupervisor)
 
 	// defaultSupervisionTurnTimeout is FR-021's observation deadline: how
 	// long after a supervision wake the engine waits before concluding the
@@ -332,7 +334,7 @@ type PlanEngine struct {
 	// verifierRegistry above — a bare struct-literal test engine never
 	// nil-map-panics. It is NOT the whole story: C1 durability shadows it on
 	// the plan record itself — pkg/plan/plan.go's Plan.LastUnmetTerminalSignature
-	// — which applyJudgeRoundOutcomeLocked persists (mirroring the in-memory
+	// — which applyJudgeRoundOutcome persists (mirroring the in-memory
 	// entry) whenever a round ends UNMET, and bootReconcile re-seeds THIS map
 	// from at boot for every plan still awaiting supervision. So a process
 	// restart does NOT drop the gate's authority: the durable field survives,
@@ -1698,7 +1700,7 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	}
 	// F2 round-burn gate (acceptance G-9): the signature of the EXACT
 	// all-terminal member state this round is about to judge. If the round
-	// ends UNMET, applyJudgeRoundOutcomeLocked records this so a later
+	// ends UNMET, applyJudgeRoundOutcome records this so a later
 	// unchanged idle tick's processPlan skips re-judging it.
 	terminalSig := planTerminalSignature(tasks)
 
@@ -1711,14 +1713,14 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	if len(criteria) == 0 {
 		// SD-A7 soft tier: title/description/goal all empty too — nothing to
 		// judge at all. Trust completion directly rather than looping
-		// forever. Still routed through applyJudgeRoundOutcomeLocked's own
+		// forever. Still routed through applyJudgeRoundOutcome's own
 		// fresh State==running re-check (FR-014) — a Stop can land during the
 		// taskStore.List call above just as easily as during a real judge
 		// call, so this short-circuit gets the SAME atomicity guarantee as
 		// the real-verdict path below, not a bespoke unlocked shortcut.
 		// nothingToJudge always trusts completion (never UNMET), so
 		// terminalSig is passed through but never recorded.
-		pe.applyJudgeRoundOutcomeLocked(planID, JudgeCriteriaResult{}, true, terminalSig)
+		pe.applyJudgeRoundOutcome(planID, JudgeCriteriaResult{}, true, terminalSig)
 		return
 	}
 
@@ -1751,13 +1753,13 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	// lock precisely so a slow-but-alive judge call never blocks other
 	// plans' dispatch — see beginPlanJudgeRound's doc comment), so a Stop
 	// can land on this exact plan at any point up to and including the
-	// instant this call returns. Delegate to applyJudgeRoundOutcomeLocked,
+	// instant this call returns. Delegate to applyJudgeRoundOutcome,
 	// which re-checks State==running and applies the outcome as ONE atomic
 	// critical section under planDecisionMu.
-	pe.applyJudgeRoundOutcomeLocked(planID, result, false, terminalSig)
+	pe.applyJudgeRoundOutcome(planID, result, false, terminalSig)
 }
 
-// applyJudgeRoundOutcomeLocked applies a just-computed plan-level judge
+// applyJudgeRoundOutcome applies a just-computed plan-level judge
 // round result to planID — but ONLY after acquiring planDecisionMu and
 // re-confirming, from a FRESH read, that the plan is still `running`, and it
 // keeps holding that lock across every write the outcome requires.
@@ -1789,7 +1791,7 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 // on an UNMET verdict it is recorded as this plan's "already judged this,
 // don't re-judge until it changes" marker so a later unchanged idle tick's
 // processPlan skips re-invoking beginPlanJudgeRound.
-func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCriteriaResult, nothingToJudge bool, terminalSig string) {
+func (pe *PlanEngine) applyJudgeRoundOutcome(planID string, result JudgeCriteriaResult, nothingToJudge bool, terminalSig string) {
 	pe.planDecisionMu.Lock()
 	defer pe.planDecisionMu.Unlock()
 
@@ -1904,7 +1906,7 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCr
 // ordinary, possibly-never-answered chat turn) before finalizing the
 // mechanical outcome. plan_phase is deliberately left at "synthesizing" after
 // Done as a historical marker of how the plan finished. Caller must hold
-// planDecisionMu (see applyJudgeRoundOutcomeLocked/completePlan).
+// planDecisionMu (see applyJudgeRoundOutcome/completePlan).
 //
 // Fix-wave finding 2 (14-reviewer sign-off): this USED TO persist
 // plan_phase=synthesizing, wake the owner (telling them the plan is MET),
@@ -1912,7 +1914,7 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCr
 // logged. A persist failure there left the plan stuck at State=running
 // forever (still picked up by the dispatch/idle-expiry loop) even though the
 // owner had already been told the outcome was final. Mirrors the sibling
-// UNMET path (applyJudgeRoundOutcomeLocked): persist the terminal outcome
+// UNMET path (applyJudgeRoundOutcome): persist the terminal outcome
 // FIRST as a single write, and wake only after that write actually
 // succeeds — a persist failure here means the round "didn't happen" from the
 // owner's perspective, so no wake fires and a later tick can retry.
@@ -1950,7 +1952,7 @@ func (pe *PlanEngine) synthesizeAndComplete(p *plan.Plan, newRounds int) {
 // title/description/goal text worth judging at all): nothing to adjudicate,
 // so the plan is trusted complete directly, mirroring
 // TaskExecutor.adjudicateClaim's identical "structurally empty, trust it"
-// branch. Caller must hold planDecisionMu (applyJudgeRoundOutcomeLocked's
+// branch. Caller must hold planDecisionMu (applyJudgeRoundOutcome's
 // own re-checked lock, or FR-041/idle-expiry's — every call site already
 // holds it before reaching here).
 func (pe *PlanEngine) completePlan(p *plan.Plan) {
@@ -2669,7 +2671,7 @@ func (pe *PlanEngine) touchActivity(planID string) {
 // The five sites fork into the two families FR-012 already splits them into,
 // because their delivery requirements are opposites:
 //
-//	(A) SUPERVISION wakes — surfaceStallIfAny, applyJudgeRoundOutcomeLocked's
+//	(A) SUPERVISION wakes — surfaceStallIfAny, applyJudgeRoundOutcome's
 //	    UNMET limb. Target: PlanSupervisor. Seam: DIRECT dispatch to the agent
 //	    loop, no bus, no notifier, SendResponse=false. The adjudicator's
 //	    deliberation MUST NOT reach the owner's conversation (FR-016), and
@@ -2893,7 +2895,7 @@ func supervisionUnitForPlan(planID string) string { return "supervision:" + plan
 // ⚠ CONCURRENCY FIX (production race, confirmed live): a plan-level judge
 // round completing UNMET transitions the plan THROUGH plan.PhaseJudging —
 // which is NOT in the supervision-eligible phase set — on its way to
-// awaiting_supervision. That makes applyJudgeRoundOutcomeLocked's newPark
+// awaiting_supervision. That makes applyJudgeRoundOutcome's newPark
 // computation (!IsSupervisionEligiblePhase(current-phase-at-reload)) come out
 // true even when a PRIOR supervision wake (e.g. a stall diagnosis) is STILL
 // being reasoned about by a turn that has not yet completed: the plan's
