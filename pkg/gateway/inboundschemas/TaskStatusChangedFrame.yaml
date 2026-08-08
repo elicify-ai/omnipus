@@ -37,3 +37,11 @@ properties:
   agent_id:
     type: string
     description: Agent managing this task.
+  producing_session_id:
+    type: string
+    minLength: 1
+    description: >
+      ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
+      (FR-089) — see this frame's top-level description. Kept in sync by
+      hand with the inline copy in contracts/asyncapi.yaml
+      (components.schemas.TaskStatusChangedFrame).
