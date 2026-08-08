@@ -2918,17 +2918,27 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 	// which pauses them instead — see the workspace member-heartbeat
 	// enable/disable path in rest_workspaces.go, this codebase's only
 	// per-agent enable/disable toggle). Checked before the destructive config
-	// write below. Nil-safe: a pre-boot/degraded engine (not yet wired) is
-	// not treated as "no active plans" — HasActivePlansOwnedBy itself already
-	// fails safe (returns false only on a genuine empty-store read), and a
-	// nil engine here simply means Wave 2-C1's plan feature is unavailable in
-	// this process, which is a legitimate skip, not a fail-open on real data.
-	if pe := agent.GetPlanEngine(a.agentLoop); pe != nil && pe.HasActivePlansOwnedBy(id) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": "agent owns active plans; stop or reassign them before deleting this agent",
-			"code":  "agent_owns_active_plans",
-		})
-		return
+	// write below. Nil-safe: a pre-boot/degraded engine (not yet wired) is a
+	// legitimate skip (Wave 2-C1's plan feature simply isn't available in
+	// this process), not a fail-open on real data. When the engine IS wired,
+	// HasActivePlansOwnedBy fails CLOSED on a plan-store read error (fix-wave
+	// finding 1) — this handler mirrors that by refusing the delete (503)
+	// rather than treating "could not verify" as "no active plans".
+	if pe := agent.GetPlanEngine(a.agentLoop); pe != nil {
+		hasActive, err := pe.HasActivePlansOwnedBy(id)
+		if err != nil {
+			slog.Error("delete agent: could not verify active plan ownership", "agent_id", id, "error", err)
+			jsonErr(w, http.StatusServiceUnavailable,
+				"could not verify plan ownership; try again")
+			return
+		}
+		if hasActive {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": "agent owns active plans; stop or reassign them before deleting this agent",
+				"code":  "agent_owns_active_plans",
+			})
+			return
+		}
 	}
 	// Snapshot the audit fields BEFORE we mutate config.json — `found` still
 	// points into the in-memory config and the safeUpdateConfigJSON callback

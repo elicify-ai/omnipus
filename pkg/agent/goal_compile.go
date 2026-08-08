@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -791,8 +792,39 @@ func (g *UnjudgeableEscalationGate) ShouldEscalate(goalID string) bool {
 	return true
 }
 
-// Reset clears the escalation marker for a goal (used on /goal clear or a
-// confirmed amendment that mints a new generation).
+// Reset clears the escalation marker for the given key.
+//
+// Fix-wave finding 3 (14-reviewer sign-off): this was documented as "used on
+// /goal clear or a confirmed amendment that mints a new generation" but had
+// ZERO production callers — the gate is process-wide and was keyed purely by
+// chat session (verifierUnitID/verifierUnitForGoal), so a session that
+// escalated once for one goal could never escalate again for ANY later goal
+// in that same session, including a totally unrelated one started after
+// `/goal clear`.
+//
+// The fix does NOT wire an explicit Reset call here — clearGoal and
+// confirmPendingGoal (the two call sites the old doc comment named) live in
+// goal_loop.go, outside this package area's fix-wave scope. It also would
+// not have been sufficient on its own: confirmPendingGoal's own contract
+// deliberately keeps the SAME GoalID across a confirmed amendment ("the same
+// goal being refined, not a new one"), so re-keying — or resetting — by
+// GoalID alone silently fails to free a fresh escalation slot for an
+// amendment, only for a `/goal clear` + fresh goal.
+//
+// Instead, judge.go folds a fingerprint of the ACTUAL criteria ladder being
+// judged into the goal-scope escalation key (see
+// goalCriteriaLadderFingerprint / judge.go's escalationKey). Criterion IDs
+// are server-set random UUIDs minted fresh by every compileGoalIntent call
+// and persisted unchanged for the rest of that generation's rounds, so the
+// fingerprint is stable across repeated rounds of one still-active goal
+// (preserving "escalate at most once per generation") and changes on every
+// fresh compile — a clear+restate AND a confirmed amendment both recompile,
+// so both get a fresh, unescalated key with no explicit Reset call needed.
+//
+// This method is retained as a general utility (direct unit testing, a
+// caller with a raw key already in hand, or a future scope that isn't
+// self-fingerprinting) — it is deliberately still safe to call, just no
+// longer required for the goal path's correctness.
 func (g *UnjudgeableEscalationGate) Reset(goalID string) {
 	if g == nil {
 		return
@@ -800,6 +832,26 @@ func (g *UnjudgeableEscalationGate) Reset(goalID string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	delete(g.escalated, goalID)
+}
+
+// goalCriteriaLadderFingerprint returns a stable fingerprint for a compiled
+// goal's criteria ladder, built from its criterion IDs (sorted for order-
+// independence). See UnjudgeableEscalationGate.Reset's doc comment
+// (fix-wave finding 3) for why this — not an explicit Reset call, and not a
+// meta.GoalID rekey — is what scopes "escalate once" to one generation of a
+// /goal loop rather than to the chat session forever. Returns "" for an
+// empty ladder (defensive; a criterion just triggered classifyNonVerdict, so
+// callers always have at least one).
+func goalCriteriaLadderFingerprint(criteria []task.AcceptanceCriterion) string {
+	if len(criteria) == 0 {
+		return ""
+	}
+	ids := make([]string, len(criteria))
+	for i, c := range criteria {
+		ids[i] = c.ID
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ",")
 }
 
 // --- Feasibility adapter + compiled-goal persistence -----------------------

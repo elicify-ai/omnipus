@@ -568,7 +568,9 @@ func TestDeleteAgent_OwningActivePlan_Rejected(t *testing.T) {
 	_, rerr := api.planStore.Update(p.Id, plan.Patch{State: &running})
 	require.NoError(t, rerr)
 
-	assert.True(t, pe.HasActivePlansOwnedBy(testPlansAgentID))
+	hasActive, haErr := pe.HasActivePlansOwnedBy(testPlansAgentID)
+	require.NoError(t, haErr)
+	assert.True(t, hasActive)
 
 	wDel := httptest.NewRecorder()
 	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/"+testPlansAgentID, nil)
@@ -579,6 +581,43 @@ func TestDeleteAgent_OwningActivePlan_Rejected(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(wDel.Body.Bytes(), &body))
 	assert.Equal(t, "agent_owns_active_plans", body["code"])
+}
+
+// TestDeleteAgent_PlanStoreListError_FailsClosed is the fix-wave regression
+// for finding 1 (14-reviewer sign-off): when HasActivePlansOwnedBy cannot
+// determine plan ownership (a plan-store List() error), the delete-guard
+// must refuse the delete (503) rather than silently treating "unknown" as
+// "no active plans" and letting a possibly-owning agent be deleted out from
+// under a live plan.
+func TestDeleteAgent_PlanStoreListError_FailsClosed(t *testing.T) {
+	api := newTestRestAPIWithPlans(t)
+	wsID := createTestWorkspace(t, api, "Owner WS 2")
+
+	pe := agent.NewPlanEngine(api.agentLoop, api.planStore, api.taskStore, api.taskExecutor)
+	api.agentLoop.SetPlanEngine(pe)
+	t.Cleanup(pe.Stop)
+
+	wCreate := postPlan(t, api, wsID,
+		`{"workspace_id":"`+wsID+`","title":"Owned plan 2","owner_agent_id":"`+testPlansAgentID+`"}`)
+	require.Equal(t, http.StatusCreated, wCreate.Code)
+	var p gen.Plan
+	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+	require.Equal(t, http.StatusOK, postPlanAction(t, api, p.Id, "approve").Code)
+	running := plan.StateRunning
+	_, rerr := api.planStore.Update(p.Id, plan.Patch{State: &running})
+	require.NoError(t, rerr)
+
+	// Force plan.Store.List to fail with a genuine (non-ENOENT) read error by
+	// making the plans directory unreadable.
+	dir := api.planStore.Dir()
+	require.NoError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	wDel := httptest.NewRecorder()
+	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/"+testPlansAgentID, nil)
+	rDel.URL.Path = "/api/v1/agents/" + testPlansAgentID
+	api.HandleAgents(wDel, rDel)
+	assert.Equal(t, http.StatusServiceUnavailable, wDel.Code, "body=%s", wDel.Body.String())
 }
 
 // TestPlanEngineBoot_ConstructStartStop is a smoke test of gateway.go's exact

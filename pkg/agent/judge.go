@@ -317,6 +317,26 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 	unitKey := verifierUnitID(in)
 	tracker := currentUnableToVerifyTracker()
 	gate := currentUnjudgeableEscalationGate()
+	// Fix-wave finding 3 (14-reviewer sign-off): the escalate-once gate must
+	// NOT stay keyed by chat session alone for goal scope — unitKey for a
+	// goal is verifierUnitForGoal(GoalSessionID), i.e. the SAME key for every
+	// goal ever run in that session. Without more, a session that escalated
+	// once could never escalate again for any later, unrelated goal (a fresh
+	// `/goal` after `/goal clear`, or a confirmed amendment). Folding a
+	// fingerprint of the ACTUAL criteria ladder being judged this round into
+	// the escalation key (goalCriteriaLadderFingerprint, goal_compile.go)
+	// scopes "escalate once" to one generation's ladder: stable across that
+	// generation's repeated rounds (the persisted ladder is reloaded
+	// unchanged each round), fresh on every recompile (compileGoalIntent
+	// mints new criterion IDs every call — see that function's doc comment
+	// chain). Task/plan scope are unaffected — their unitKey already
+	// identifies one concrete task/plan instance, not a reusable session.
+	escalationKey := unitKey
+	if in.Scope == task.VerdictScopeGoal {
+		if fp := goalCriteriaLadderFingerprint(in.Criteria); fp != "" {
+			escalationKey = unitKey + ":" + fp
+		}
+	}
 	noteNonVerdict := func(criterionID string, class NonVerdictClass) (withheld bool) {
 		key := unitKey + "/" + criterionID
 		switch class {
@@ -327,8 +347,9 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 			// Ran but formed no judgment → unmet for this adjudication (the
 			// unmet verdict was already added by the producer) + escalate-to-
 			// owner ONCE per unit (FR-115/FR-138). The escalation SURFACES the
-			// mis-compile; it does not halt round consumption.
-			if gate.ShouldEscalate(unitKey) {
+			// mis-compile; it does not halt round consumption. Keyed on
+			// escalationKey (see above), not the raw unitKey.
+			if gate.ShouldEscalate(escalationKey) {
 				unjudgeableEscalateFn(unitKey, criterionID)
 			}
 			return false

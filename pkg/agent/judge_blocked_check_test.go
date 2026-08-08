@@ -300,6 +300,73 @@ func TestCriterionUnjudgeable_RanNoJudgment_EscalateOnce(t *testing.T) {
 	}
 }
 
+// TestCriterionUnjudgeable_GoalScope_EscalatesOncePerGeneration is the
+// fix-wave regression for finding 3 (14-reviewer sign-off): the escalate-once
+// gate for GOAL scope must not stay keyed by chat session alone. unitKey for
+// a goal is verifierUnitForGoal(GoalSessionID) — the SAME key for every goal
+// ever run in that session — so without the criteria-ladder fingerprint
+// (goalCriteriaLadderFingerprint, folded into judge.go's escalationKey), a
+// session that escalated once for one goal could never escalate again for a
+// later, unrelated goal in that same session (a fresh `/goal` after `/goal
+// clear`, or a confirmed amendment — both recompile a brand new criteria
+// ladder with fresh criterion IDs). This proves BOTH halves: repeated rounds
+// of the SAME generation still escalate only once, and a second generation
+// sharing the session gets its own escalation.
+func TestCriterionUnjudgeable_GoalScope_EscalatesOncePerGeneration(t *testing.T) {
+	resetVerifierBlockedCheckSeams(t)
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+
+	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{Content: ""}, nil // ran, no judgment
+	}}
+
+	var escMu sync.Mutex
+	escalations := 0
+	prev := unjudgeableEscalateFn
+	unjudgeableEscalateFn = func(unitKey, criterionID string) {
+		escMu.Lock()
+		defer escMu.Unlock()
+		escalations++
+	}
+	t.Cleanup(func() { unjudgeableEscalateFn = prev })
+
+	const sessionID = "sess-goal-fingerprint" // SAME session for every call below
+	runOnce := func(criterionID string) JudgeCriteriaResult {
+		return al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
+			Scope:           task.VerdictScopeGoal,
+			GoalSessionID:   sessionID,
+			AssigneeAgentID: "native-agent",
+			Criteria:        []task.AcceptanceCriterion{proseCriterion(criterionID, "the feature works")},
+			Attempt:         1,
+			ClaimText:       "done",
+		})
+	}
+
+	// Generation 1 (criterion "gen1-c1"): first round escalates, a repeat
+	// round of the SAME generation must not re-escalate.
+	runOnce("gen1-c1")
+	runOnce("gen1-c1")
+	escMu.Lock()
+	got := escalations
+	escMu.Unlock()
+	if got != 1 {
+		t.Fatalf("generation 1: expected exactly 1 escalation across 2 rounds of the same generation, got %d", got)
+	}
+
+	// Generation 2, SAME session (simulating `/goal clear` + a fresh `/goal`,
+	// or a confirmed amendment): a distinct criterion id, exactly as a fresh
+	// compileGoalIntent call would mint. Pre-fix, the session-only key would
+	// have silently suppressed this escalation.
+	runOnce("gen2-c1")
+	escMu.Lock()
+	got = escalations
+	escMu.Unlock()
+	if got != 2 {
+		t.Fatalf("generation 2 (same session, new criteria ladder): expected a SECOND escalation (got %d) — "+
+			"a stale session-keyed escalation must not block an unrelated later goal", got)
+	}
+}
+
 // --- Real workspace diff fed into the prose Judge (G-3/G-15) ---------------
 
 // TestJudge_DiffEvidence_FedIntoProseJudge proves the write-set-scoped

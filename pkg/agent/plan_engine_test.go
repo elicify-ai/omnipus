@@ -428,6 +428,59 @@ func TestPlanEngine_JudgeMet_TransitionsSynthesizingThenDone(t *testing.T) {
 	}
 }
 
+// TestPlanEngine_JudgeMet_PersistBeforeWake is the fix-wave regression for
+// finding 2 (14-reviewer sign-off): synthesizeAndComplete must durably
+// persist State=done (atomically with plan_phase=synthesizing) BEFORE waking
+// the owner — never the other way around. Pre-fix, the owner was told the
+// plan was MET via a first, separate write of plan_phase=synthesizing, and
+// only a SECOND, later write actually flipped State to done; a failure on
+// that second write was only logged, leaving the plan stuck at
+// State=running forever even though the owner had already been notified.
+//
+// This is exercised with a plan.Store.OnChange hook (a real extension point,
+// not a test-only seam) that makes the plans directory read-only the instant
+// it observes a write landing with plan_phase=synthesizing while State is
+// NOT YET done — exactly the intermediate on-disk state that only the
+// pre-fix two-write sequence could ever produce. The fixed code persists
+// both fields in one atomic write, so that intermediate state never hits
+// disk, the hook never fires, and the plan reaches Done normally.
+func TestPlanEngine_JudgeMet_PersistBeforeWake(t *testing.T) {
+	h := newTestPlanEngine(t)
+	mustCreateRunningPlan(t, h.plans, "p1", "owner")
+
+	dir := h.plans.Dir()
+	h.plans.OnChange = func(p *plan.Plan) {
+		if p.ID == "p1" && p.PlanPhase == plan.PhaseSynthesizing && p.State != plan.StateDone {
+			if err := os.Chmod(dir, 0o555); err != nil {
+				t.Fatalf("chmod plans dir read-only: %v", err)
+			}
+		}
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	h.pe.applyJudgeRoundOutcomeLocked("p1", JudgeCriteriaResult{
+		Verdict: &task.JudgeVerdict{Met: true},
+	}, false, "")
+
+	got, err := h.plans.Get("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wakeFired := false
+	for _, e := range h.notif.eventList() {
+		if e.SourceKind == "plan_judge_met" {
+			wakeFired = true
+		}
+	}
+	if got.State != plan.StateDone {
+		t.Fatalf("state = %q, want done — a plan_judge_met wake fired (%v) claiming the plan is MET "+
+			"while it was left at State=running is exactly finding 2's bug", got.State, wakeFired)
+	}
+	if !wakeFired {
+		t.Fatal("expected the plan_judge_met wake to fire once State=done was durably persisted")
+	}
+}
+
 func TestPlanEngine_JudgeUnmet_StoresSteeringAndWakesOwnerWithoutTerminal(t *testing.T) {
 	h := newTestPlanEngine(t)
 	mustCreatePlan(t, h.plans, &plan.Plan{
@@ -693,7 +746,11 @@ func TestPlanEngine_PauseAndResumePlansOwnedBy(t *testing.T) {
 	if got2.PausedReason != "" {
 		t.Fatal("expected p2 (owner-b) to be untouched")
 	}
-	if !h.pe.HasActivePlansOwnedBy("owner-a") {
+	hasActive, err := h.pe.HasActivePlansOwnedBy("owner-a")
+	if err != nil {
+		t.Fatalf("HasActivePlansOwnedBy: unexpected error: %v", err)
+	}
+	if !hasActive {
 		t.Fatal("HasActivePlansOwnedBy should still report true for a paused-but-running plan")
 	}
 
@@ -729,8 +786,38 @@ func TestPlanEngine_HasActivePlansOwnedBy_FalseWhenNoneRunning(t *testing.T) {
 	mustCreatePlan(t, h.plans, &plan.Plan{
 		ID: "p1", Title: "Plan 1", WorkspaceID: "ws", OwnerAgentID: "owner", State: plan.StateDraft,
 	})
-	if h.pe.HasActivePlansOwnedBy("owner") {
+	hasActive, err := h.pe.HasActivePlansOwnedBy("owner")
+	if err != nil {
+		t.Fatalf("HasActivePlansOwnedBy: unexpected error: %v", err)
+	}
+	if hasActive {
 		t.Fatal("expected false: the only plan owned by this agent is draft, not running")
+	}
+}
+
+// TestPlanEngine_HasActivePlansOwnedBy_FailsClosedOnStoreError is the fix-wave
+// regression for finding 1 (14-reviewer sign-off): a plan-store List() error
+// (e.g. a transient read failure) must be propagated to the caller, NOT
+// swallowed into a bare `false` ("no active plans"). The gateway's
+// agent-delete guard relies on this to fail CLOSED — refusing the delete
+// rather than assuming it's safe — when it cannot actually verify plan
+// ownership.
+func TestPlanEngine_HasActivePlansOwnedBy_FailsClosedOnStoreError(t *testing.T) {
+	h := newTestPlanEngine(t)
+	mustCreateRunningPlan(t, h.plans, "p1", "owner-a")
+
+	dir := h.plans.Dir()
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatalf("chmod plans dir unreadable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	hasActive, err := h.pe.HasActivePlansOwnedBy("owner-a")
+	if err == nil {
+		t.Fatal("expected an error when the plan store's List() call fails, got nil (fail-open bug)")
+	}
+	if hasActive {
+		t.Fatal("expected false alongside the error — caller must gate on err, not this value")
 	}
 }
 

@@ -1896,43 +1896,54 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCr
 }
 
 // synthesizeAndComplete records the PASS round (or, for completePlan's
-// nothing-to-judge case, leaves JudgeRounds unchanged), sets
-// plan_phase=synthesizing, wakes the owner to write the closing synthesis,
-// then transitions the plan terminal Done — "plan judge PASS" IS the
-// definition of Done (plan.go's own StateDone doc comment); the engine does
-// not block waiting for the owner's synthesis reply (which is an ordinary,
-// possibly-never-answered chat turn) before finalizing the mechanical
-// outcome. plan_phase is deliberately left at "synthesizing" after Done as a
-// historical marker of how the plan finished. Caller must hold
+// nothing-to-judge case, leaves JudgeRounds unchanged), persists
+// plan_phase=synthesizing AND State=done in ONE atomic store write, and only
+// THEN wakes the owner to write the closing synthesis — "plan judge PASS" IS
+// the definition of Done (plan.go's own StateDone doc comment); the engine
+// does not block waiting for the owner's synthesis reply (which is an
+// ordinary, possibly-never-answered chat turn) before finalizing the
+// mechanical outcome. plan_phase is deliberately left at "synthesizing" after
+// Done as a historical marker of how the plan finished. Caller must hold
 // planDecisionMu (see applyJudgeRoundOutcomeLocked/completePlan).
+//
+// Fix-wave finding 2 (14-reviewer sign-off): this USED TO persist
+// plan_phase=synthesizing, wake the owner (telling them the plan is MET),
+// and only THEN persist State=done — with that final write's error only
+// logged. A persist failure there left the plan stuck at State=running
+// forever (still picked up by the dispatch/idle-expiry loop) even though the
+// owner had already been told the outcome was final. Mirrors the sibling
+// UNMET path (applyJudgeRoundOutcomeLocked): persist the terminal outcome
+// FIRST as a single write, and wake only after that write actually
+// succeeds — a persist failure here means the round "didn't happen" from the
+// owner's perspective, so no wake fires and a later tick can retry.
 func (pe *PlanEngine) synthesizeAndComplete(p *plan.Plan, newRounds int) {
 	synthesizing := plan.PhaseSynthesizing
+	done := plan.StateDone
 	if _, err := pe.planStore.Update(p.ID, plan.Patch{
 		JudgeRounds: &newRounds,
 		PlanPhase:   &synthesizing,
+		State:       &done,
 	}); err != nil {
-		logger.ErrorCF("plan_engine", "could not set plan_phase=synthesizing",
+		logger.ErrorCF("plan_engine", "could not persist plan judge PASS (phase=synthesizing, state=done)",
 			map[string]any{"plan_id": p.ID, "error": err.Error()})
 		return
 	}
+	p.PlanPhase = synthesizing
+	p.State = done
+
 	// ⚠ REGRESSION ANCHOR (FR-012/FR-012b): this wake target and its ordering
 	// are pinned. This is the ONLY wake on the plan's success path — do NOT
 	// re-target it to the supervisor, or a plan that SUCCEEDS notifies nobody.
 	// The owner is also the right author of a closing synthesis: it is the
 	// agent accountable to the requester and the only one holding the
-	// requester's conversational context.
-	p.PlanPhase = synthesizing
+	// requester's conversational context. It fires only once the State=done
+	// write above has actually landed (see fix-wave finding 2 above) — never
+	// before.
 	pe.wakeOwner(p, fmt.Sprintf(
 		"Plan %q: the plan judge confirmed the Definition of Done is MET. "+
 			"Please write a closing synthesis summarizing the outcome for the requester.",
 		p.Title,
 	), "plan_judge_met")
-
-	done := plan.StateDone
-	if _, err := pe.planStore.Update(p.ID, plan.Patch{State: &done}); err != nil {
-		logger.ErrorCF("plan_engine", "could not transition plan to done after judge PASS",
-			map[string]any{"plan_id": p.ID, "error": err.Error()})
-	}
 }
 
 // completePlan handles the SD-A7 soft-tier-empty case (no DoD, no
@@ -3811,19 +3822,28 @@ func (pe *PlanEngine) setPausedForOwner(agentID, newReason string, pausing bool)
 // HasActivePlansOwnedBy reports whether agentID owns at least one running
 // (State=running, paused or not) plan — the gateway's delete-guard (400
 // while owning active loops) calls this before allowing an agent delete.
-func (pe *PlanEngine) HasActivePlansOwnedBy(agentID string) bool {
+//
+// Fails CLOSED (fix-wave finding 1): a plan-store List() error is returned to
+// the caller rather than silently folded into a bare `false`. Prior to this
+// fix, a transient store-read failure (permission error, disk issue, etc.)
+// reported "no active plans" — which the delete-guard read as "safe to
+// delete" — even though the true answer was unknown, not "none". Callers
+// MUST check err before trusting the bool; on error the correct behavior is
+// to refuse the delete (fail closed), never to fall back to this return
+// value.
+func (pe *PlanEngine) HasActivePlansOwnedBy(agentID string) (bool, error) {
 	plans, err := pe.planStore.List(plan.Filter{})
 	if err != nil {
 		logger.WarnCF("plan_engine", "HasActivePlansOwnedBy: list failed",
 			map[string]any{"agent_id": agentID, "error": err.Error()})
-		return false
+		return false, fmt.Errorf("plan_engine: list plans: %w", err)
 	}
 	for i := range plans {
 		if plans[i].OwnerAgentID == agentID && plans[i].State == plan.StateRunning {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // --- ADR-053 Phase 2: owner loop + correction (§3/§3b/§3c, G-9..G-12) -----
