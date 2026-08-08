@@ -758,3 +758,83 @@ func TestEvidenceMarkerGate_MarkdownEmphasisTolerated(t *testing.T) {
 		}
 	}
 }
+
+// TestFindEvidenceImmediatelyBefore directly exercises the helper extracted
+// for fix-wave finding #6 — the "nearest non-blank line above the marker"
+// scan that used to be copy-duplicated between checkEvidenceMarkerGate and
+// parseGoalStatusMarker. Both call sites are already exhaustively covered
+// (every TestEvidenceMarkerGate_*/TestGoalStatusMarkerParser_Family case
+// above/in goal_triggers_test.go still passes unchanged after the
+// extraction), so this test's job is narrower: pin the shared helper's own
+// contract directly, so a future edit to one caller's expectations cannot
+// silently diverge from the other without touching (and re-verifying) this
+// one function.
+func TestFindEvidenceImmediatelyBefore(t *testing.T) {
+	cases := []struct {
+		name        string
+		output      string
+		wantText    string
+		wantHonored bool
+	}{
+		{
+			name:        "genuine evidence line immediately before",
+			output:      "did the work\n[goal:evidence] verified against the spec\nTASK_STATUS: success",
+			wantText:    "verified against the spec",
+			wantHonored: true,
+		},
+		{
+			name:        "blank lines tolerated between evidence and marker",
+			output:      "[goal:evidence] verified\n\n\nTASK_STATUS: success",
+			wantText:    "verified",
+			wantHonored: true,
+		},
+		{
+			name:        "no line at all before the marker is bare",
+			output:      "TASK_STATUS: success",
+			wantText:    "",
+			wantHonored: false,
+		},
+		{
+			name:        "only blank lines before the marker is bare",
+			output:      "\n\nTASK_STATUS: success",
+			wantText:    "",
+			wantHonored: false,
+		},
+		{
+			name:        "non-evidence nearest line is bare",
+			output:      "did the work\nTASK_STATUS: success",
+			wantText:    "",
+			wantHonored: false,
+		},
+		{
+			name:        "empty evidence text is bare",
+			output:      "[goal:evidence]   \nTASK_STATUS: success",
+			wantText:    "",
+			wantHonored: false,
+		},
+		{
+			name:        "fenced evidence line does not count",
+			output:      "```\n[goal:evidence] verified\n```\nTASK_STATUS: success",
+			wantText:    "",
+			wantHonored: false,
+		},
+		{
+			name:        "bulleted evidence line does not count",
+			output:      "* [goal:evidence] verified\nTASK_STATUS: success",
+			wantText:    "",
+			wantHonored: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lines := strings.Split(tc.output, "\n")
+			fenced := computeFencedLines(lines)
+			statusIdx := len(lines) - 1 // every case above puts the marker on the last line
+			gotText, gotHonored := findEvidenceImmediatelyBefore(lines, fenced, statusIdx)
+			if gotHonored != tc.wantHonored || gotText != tc.wantText {
+				t.Errorf("findEvidenceImmediatelyBefore(%q) = (%q, %v), want (%q, %v)",
+					tc.output, gotText, gotHonored, tc.wantText, tc.wantHonored)
+			}
+		})
+	}
+}

@@ -479,29 +479,47 @@ func checkEvidenceMarkerGate(output string) evidenceGateVerdict {
 		return evidenceGateVerdict{Applicable: false}
 	}
 
-	for j := statusIdx - 1; j >= 0; j-- {
+	if _, honored := findEvidenceImmediatelyBefore(lines, fenced, statusIdx); honored {
+		return evidenceGateVerdict{Applicable: true, Honored: true}
+	}
+	return evidenceGateVerdict{Applicable: true, Honored: false, SteeringText: evidenceGateSteeringText}
+}
+
+// findEvidenceImmediatelyBefore scans lines backward from beforeIdx-1 for the
+// nearest non-blank line and reports whether it is a genuine (non-fenced,
+// non-excluded), non-empty `[goal:evidence] <text>` line — the "immediately
+// precedes, tolerating intervening blank lines" rule shared by
+// checkEvidenceMarkerGate and parseGoalStatusMarker (fix-wave finding #6:
+// this scan was previously copy-duplicated between the two, one written to
+// return an evidenceGateVerdict and the other a goalStatusMarker's
+// HasEvidence/EvidenceText pair — extracted here so the two can never
+// silently drift apart on what counts as "evidence"). Returns ("", false)
+// for every non-honored case: no non-blank line before beforeIdx at all, a
+// fenced/excluded candidate, a line that doesn't match goalEvidenceLineRe, or
+// a match whose trailing text is empty/whitespace-only. Returns (text, true)
+// — text already trimmed — only when a genuine evidence line was found.
+func findEvidenceImmediatelyBefore(lines []string, fenced []bool, beforeIdx int) (text string, honored bool) {
+	for j := beforeIdx - 1; j >= 0; j-- {
 		trimmedR := strings.TrimRight(lines[j], "\r")
 		if strings.TrimSpace(trimmedR) == "" {
 			continue // blank lines are tolerated between evidence and marker
 		}
 		if fenced[j] || isExcludedMarkerLine(trimmedR) {
-			return evidenceGateVerdict{
-				Applicable: true, Honored: false, SteeringText: evidenceGateSteeringText,
-			}
+			return "", false
 		}
 		m := goalEvidenceLineRe.FindStringSubmatch(trimmedR)
-		if m == nil || strings.TrimSpace(m[1]) == "" {
-			return evidenceGateVerdict{
-				Applicable: true, Honored: false, SteeringText: evidenceGateSteeringText,
-			}
+		if m == nil {
+			return "", false
 		}
-		return evidenceGateVerdict{Applicable: true, Honored: true}
+		if txt := strings.TrimSpace(m[1]); txt != "" {
+			return txt, true
+		}
+		return "", false
 	}
-
-	// No non-blank line at all before the marker (it's the first line of
+	// No non-blank line at all before beforeIdx (it's the first line of
 	// output, or everything above it was blank) — nothing to have been
 	// evidence, so the claim is bare.
-	return evidenceGateVerdict{Applicable: true, Honored: false, SteeringText: evidenceGateSteeringText}
+	return "", false
 }
 
 // --- ADR-053 Phase-2 S6 family: GOAL_STATUS typed marker (FR-101/FR-104) ---
@@ -636,27 +654,14 @@ func parseGoalStatusMarker(output string) goalStatusMarker {
 	if canonical != goalStatusMet {
 		return out // evidence only meaningful for a `met` claim
 	}
-	// Reuse checkEvidenceMarkerGate's exact "nearest non-blank line above"
-	// contract so the goal loop and the family never disagree on what counts
-	// as evidence. A fenced/excluded candidate, an empty evidence line, or no
+	// Reuse findEvidenceImmediatelyBefore's exact "nearest non-blank line
+	// above" contract (shared with checkEvidenceMarkerGate — fix-wave finding
+	// #6) so the goal loop and the family never disagree on what counts as
+	// evidence. A fenced/excluded candidate, an empty evidence line, or no
 	// line at all above the marker all leave HasEvidence=false (bare claim).
-	for j := statusIdx - 1; j >= 0; j-- {
-		trimmedR := strings.TrimRight(lines[j], "\r")
-		if strings.TrimSpace(trimmedR) == "" {
-			continue // blank lines tolerated between evidence and marker
-		}
-		if fenced[j] || isExcludedMarkerLine(trimmedR) {
-			return out // bare
-		}
-		em := goalEvidenceLineRe.FindStringSubmatch(trimmedR)
-		if em == nil {
-			return out // nearest non-blank line is not an evidence line → bare
-		}
-		if txt := strings.TrimSpace(em[1]); txt != "" {
-			out.HasEvidence = true
-			out.EvidenceText = txt
-		}
-		return out
+	if txt, honored := findEvidenceImmediatelyBefore(lines, fenced, statusIdx); honored {
+		out.HasEvidence = true
+		out.EvidenceText = txt
 	}
-	return out // marker is the first line → bare
+	return out
 }
