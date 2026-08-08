@@ -649,11 +649,11 @@ func TestMessageInboxStore_Compaction_DrainCursorSurvivesCompaction(t *testing.T
 	// are POSITIONED BEFORE t1/t2/t3 in the file, so this shifts t1/t2/t3's
 	// array indices down by 2. A raw-index cursor from page1 would now
 	// silently resume from the WRONG logical point.
-	if _, err := s.Append(ownerKey, progressMsg(t, fillerChild, "filler-3")); err != nil {
-		t.Fatalf("Append filler-3: %v", err)
+	if _, appendErr := s.Append(ownerKey, progressMsg(t, fillerChild, "filler-3")); appendErr != nil {
+		t.Fatalf("Append filler-3: %v", appendErr)
 	}
-	if err := s.Ack(ownerKey, []string{"filler-3"}); err != nil {
-		t.Fatalf("Ack filler-3 (triggers compaction): %v", err)
+	if ackErr := s.Ack(ownerKey, []string{"filler-3"}); ackErr != nil {
+		t.Fatalf("Ack filler-3 (triggers compaction): %v", ackErr)
 	}
 
 	// Sanity: prove the compaction actually ran and actually dropped
