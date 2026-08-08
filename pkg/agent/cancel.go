@@ -908,8 +908,9 @@ func stringSliceSetDiff(a, b []string) (onlyInA, onlyInB []string) {
 // registered right now) would silently miss exactly the descendants
 // FR-027/FR-025 exist to reach. Reads no turnState field at all — in
 // particular never ts.routingSessionID, whose reader set FR-014 closes to
-// the seven role-B predicates plus WS-payload stamping plus the three
-// pre-arm reads — so this walk is unaffected by that restriction.
+// the role-B predicates plus WS-payload stamping plus the pre-arm reads
+// (exact census: routing_session_id_consumer_set_adr057_test.go) — so this
+// walk is unaffected by that restriction.
 //
 // Returns (nil, nil) when lifecycleStore is nil or rootSessionID is empty,
 // which degrades resolveBackgroundKillSessionIDs to exactly today's
@@ -1079,7 +1080,8 @@ func (al *AgentLoop) cancelDurableDescendantLifecycleRecords(rootSessionID strin
 // RequestCancel's PHASE B/C escalation gate (FR-024, below via
 // liveTurnStatesAmong) consult the EXACT descendant set a legitimate role-B
 // predicate call (collectDescendantTurnIDs, steering.go) already produced,
-// without adding an eighth, illegitimate read site of its own.
+// without adding an illegitimate read site of its own (the closed census
+// lives in routing_session_id_consumer_set_adr057_test.go).
 func (al *AgentLoop) turnStatesByTurnID(ids []string) []*turnState {
 	if len(ids) == 0 {
 		return nil

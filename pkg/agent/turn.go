@@ -317,9 +317,13 @@ type turnState struct {
 	// store key, transcript write target, ownership predicate, approval-grant
 	// key, uploads-directory key, tool-manifest bucket, lifecycle-record
 	// field, or audit session_id (those all keep using transcriptSessionID
-	// above). Within this file the only reads are the three role-B
-	// predicates FR-015 names: GetActiveTurnHookForSession,
-	// resolveSessionIDByChannelChat and getActiveRootTurnStateForSession.
+	// above). Within this file the reads are the three role-B predicates
+	// FR-015 names — GetActiveTurnHookForSession,
+	// resolveSessionIDByChannelChat and getActiveRootTurnStateForSession —
+	// plus claimAnyTurnForSession, the cancel descendant fallback added
+	// post-merge in the same role-B class (see the FR-014 allowlist test,
+	// routing_session_id_consumer_set_adr057_test.go, the authority on the
+	// exact reader census).
 	// The remaining closed-set readers have all LANDED (U7/U8/U9/U15, this
 	// same branch) — do not go looking for unfinished work here: the
 	// steering.go role-B predicates (U8), the pre-arm latch keys in
