@@ -651,7 +651,7 @@ function TagFilterMultiSelect({ tasks, value, onChange }: TagFilterMultiSelectPr
 
 function BoardSkeleton() {
   return (
-    <div className="flex gap-3 p-4 overflow-x-auto flex-1">
+    <div className="flex gap-3 p-4 overflow-x-auto overscroll-contain flex-1">
       {[1, 2, 3, 4, 5, 6].map((i) => (
         <div
           key={i}

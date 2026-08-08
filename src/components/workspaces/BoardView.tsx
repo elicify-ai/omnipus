@@ -341,7 +341,7 @@ export function BoardView({
           the header row and each lane's own count stay meaningful no matter
           how far any single lane is scrolled, and two lanes' cards can be
           visible at once. */}
-      <div className="relative flex-1 min-h-0 overflow-x-auto overflow-y-hidden">
+      <div className="relative flex-1 min-h-0 overflow-x-auto overflow-y-hidden overscroll-contain">
         <div className="min-w-max flex flex-col h-full">
           <StatusHeaderRow counts={counts} />
           <StatusColumnsRow
