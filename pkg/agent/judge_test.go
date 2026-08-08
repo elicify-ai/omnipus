@@ -300,6 +300,43 @@ func TestJudge_MachineCheck_TimeoutClassifiedUnableToVerify(t *testing.T) {
 	}
 }
 
+// TestJudge_MachineCheck_TimedOutField_IsAuthoritative is the fix-wave
+// regression for finding 4 (14-reviewer sign-off): interpretBashResult must
+// key its timeout classification on the STRUCTURED ToolResult.TimedOut
+// field, never on a prose sniff over worker-controllable output. Pre-fix,
+// the exact-marker sniff ran unconditionally BEFORE the IsError check, so a
+// check that genuinely exited 0 (a real pass) whose own output happened to
+// CONTAIN the timeout marker text — e.g. a log line narrating an earlier,
+// unrelated retry that itself timed out — was misclassified
+// unable_to_verify: a passing check silently blocked from ever being scored
+// MET, resurfacing every round until the tracker's K-3 cap turned it into a
+// permanent unmet.
+func TestJudge_MachineCheck_TimedOutField_IsAuthoritative(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	workerInst, _ := al.GetRegistry().GetAgent("native-agent")
+	fakeBash := &fakeBashTool{result: &tools.ToolResult{
+		ForLLM:  "retry log: command timed out after 5 seconds on attempt 1, succeeded on retry\n\n[Command exited with code 0]",
+		IsError: false, // the REAL command genuinely exited 0 — TimedOut left at its zero value
+	}}
+	workerInst.Tools.Register(fakeBash)
+	allowBashPolicy(workerInst)
+
+	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
+		Scope:           task.VerdictScopeTask,
+		TaskID:          "t-timeout-prose-false-positive",
+		AssigneeAgentID: "native-agent",
+		Criteria:        []task.AcceptanceCriterion{machineCriterion("c1", "x", 0)},
+		Attempt:         1,
+	})
+	if result.Unavailable {
+		t.Fatalf("a genuinely passing (exit 0, TimedOut=false) check must not be misclassified "+
+			"unable_to_verify just because its own output mentions timeout prose: %s", result.Reason)
+	}
+	if !result.Verdict.PerCriterion[0].Met {
+		t.Errorf("met = false, want true (reason: %s)", result.Verdict.PerCriterion[0].Reason)
+	}
+}
+
 func TestJudge_MachineCheck_ExitCodeClassification(t *testing.T) {
 	cases := []struct {
 		name            string

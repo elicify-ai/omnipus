@@ -108,6 +108,21 @@ type ToolResult struct {
 	// a valid, meaningful exit code that must be distinguishable from "not
 	// set".
 	ExitCode *int `json:"exit_code,omitempty"`
+
+	// TimedOut is set directly (never scraped from output text) by the bash
+	// tool's own timeout path (pkg/tools/shell.go's foregroundResultFromSandbox
+	// / runUnconstrained) when the command was killed for exceeding
+	// timeout_seconds. Fix-wave finding 4: this is the AUTHORITATIVE source
+	// for a machine-check criterion's timeout classification
+	// (pkg/agent/judge.go's interpretBashResult reads it directly, exactly
+	// like ExitCode) — unlike sniffing ForLLM for the human-readable "command
+	// timed out after Ns" prose, it can never be true for a check that
+	// genuinely exited 0 just because its own output happens to CONTAIN that
+	// text (e.g. a log line describing an unrelated retry). Always false for
+	// a non-timeout result, and false by default for producers that predate
+	// this field (the prose sniff survives only as a legacy fallback for
+	// that case — see interpretBashResult's doc comment).
+	TimedOut bool `json:"timed_out,omitempty"`
 }
 
 // ContentForLLM returns the normalized textual content to append to the

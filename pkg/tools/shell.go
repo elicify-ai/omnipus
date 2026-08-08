@@ -834,10 +834,11 @@ func foregroundResultFromSandbox(res sandbox.Result, timeoutSeconds int32) *Tool
 			msg += "\n\nPartial output before timeout:\n" + output
 		}
 		return &ToolResult{
-			ForLLM:  msg,
-			ForUser: msg,
-			IsError: true,
-			Err:     errors.New("command timeout"),
+			ForLLM:   msg,
+			ForUser:  msg,
+			IsError:  true,
+			Err:      errors.New("command timeout"),
+			TimedOut: true,
 		}
 	}
 
@@ -946,10 +947,11 @@ func (t *ExecTool) runUnconstrained(
 			msg += fmt.Sprintf("\n\nPartial output before timeout (ran %s):\n%s", dur.Round(time.Millisecond), output)
 		}
 		return &ToolResult{
-			ForLLM:  msg,
-			ForUser: msg,
-			IsError: true,
-			Err:     errors.New("command timeout"),
+			ForLLM:   msg,
+			ForUser:  msg,
+			IsError:  true,
+			Err:      errors.New("command timeout"),
+			TimedOut: true,
 		}
 	}
 

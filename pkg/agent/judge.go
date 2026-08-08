@@ -673,6 +673,15 @@ func (al *AgentLoop) runMachineCheck(
 // "[Command exited with code 0]" suffix into output while the real command
 // actually failed (review r1 M1, silent-failure CRITICAL).
 //
+//   - result.TimedOut (fix-wave finding 4): checked FIRST and structurally —
+//     set directly by the bash tool's own timeout path
+//     (foregroundResultFromSandbox / runUnconstrained), never scraped from
+//     worker-controllable text. Pre-fix, the prose sniff below ran
+//     unconditionally BEFORE the IsError check, so a check that genuinely
+//     exited 0 whose own output happened to CONTAIN the timeout marker text
+//     (e.g. a log line narrating an earlier, unrelated retry) was
+//     misclassified unable_to_verify — a passing check silently blocked from
+//     ever being scored MET. Structured-first closes that.
 //   - !IsError: the real command genuinely exited 0 — trust it directly, no
 //     further parsing needed.
 //   - IsError: the real command did NOT exit 0.
@@ -683,14 +692,17 @@ func (al *AgentLoop) runMachineCheck(
 //     self-contradictory ExitCode==0 alongside IsError==true fails closed
 //     to the -1 sentinel rather than being trusted.
 //   - result.ExitCode nil (a test double, or a producer that predates the
-//     structured field): FALL BACK to exitCodeSuffixRe, taking the LAST
-//     occurrence of the text suffix — an earlier occurrence in the
-//     command's own output can only be a spoof attempt — and only trusting
-//     it when it reports a genuinely non-zero code. NOTE this fallback is
-//     text-based and thus reproduces the exact truncation gap the
-//     structured field exists to close (see exitCodeSuffixRe's own doc
-//     comment) — it is retained only for producers that don't set
-//     ExitCode, not as an equally-trustworthy alternative.
+//     structured field): the LEGACY fallback branch — the exact-marker prose
+//     sniff (judgeTimedOutMarker) runs HERE ONLY (fix-wave finding 4;
+//     restricted from its old unconditional position above), then falls
+//     back further to exitCodeSuffixRe, taking the LAST occurrence of the
+//     text suffix — an earlier occurrence in the command's own output can
+//     only be a spoof attempt — and only trusting it when it reports a
+//     genuinely non-zero code. NOTE this fallback is text-based and thus
+//     reproduces the exact truncation gap the structured fields exist to
+//     close (see exitCodeSuffixRe's own doc comment) — it is retained only
+//     for producers that don't set TimedOut/ExitCode, not as an
+//     equally-trustworthy alternative.
 //     No match, or a non-numeric/zero match, fails closed to the -1
 //     sentinel, which can never equal a criterion's declared 0..255
 //     expected code, so it always fails closed. This also covers the
@@ -705,7 +717,7 @@ func interpretBashResult(result *tools.ToolResult) (timedOut bool, exitCode int,
 	if output == "" && result.Err != nil {
 		output = result.Err.Error()
 	}
-	if strings.Contains(strings.ToLower(output), judgeTimedOutMarker) {
+	if result.TimedOut {
 		return true, -1, output
 	}
 	if !result.IsError {
@@ -716,6 +728,12 @@ func interpretBashResult(result *tools.ToolResult) (timedOut bool, exitCode int,
 			return false, code, output
 		}
 		return false, -1, output
+	}
+	// Legacy fallback ONLY (IsError true, no structured ExitCode): a
+	// passing (!IsError) result already returned above and can never reach
+	// this prose sniff.
+	if strings.Contains(strings.ToLower(output), judgeTimedOutMarker) {
+		return true, -1, output
 	}
 	if matches := exitCodeSuffixRe.FindAllStringSubmatch(output, -1); len(matches) > 0 {
 		last := matches[len(matches)-1]
