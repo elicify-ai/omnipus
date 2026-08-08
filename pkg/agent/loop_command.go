@@ -111,7 +111,7 @@ func (al *AgentLoop) applyLoopCommandPrompt(
 	// first, mirroring /goal's FR-068 one-per-session discipline.
 	if existing, merr := store.GetMeta(sessionID); merr == nil && existing != nil && existing.LoopMode != "" {
 		ls.RemoveJob(existing.LoopJobID)
-		al.stopLoop(sessionID, store, "replaced by new /loop")
+		al.stopLoop(sessionID, store, existing.LoopMode, existing.LoopMaxRuns, existing.LoopRunCount, "replaced by new /loop")
 	}
 
 	maxRuns := config.DefaultLoopMaxRuns
@@ -258,10 +258,12 @@ func (al *AgentLoop) loopStatusReply(sessionID string, store *session.UnifiedSto
 func (al *AgentLoop) stopLoopCommand(sessionID string, store *session.UnifiedStore, ls *LoopScheduler) string {
 	meta, err := store.GetMeta(sessionID)
 	hadLoop := err == nil && meta != nil && meta.LoopMode != ""
+	mode, maxRuns, run := "", 0, 0
 	if hadLoop {
 		ls.RemoveJob(meta.LoopJobID)
+		mode, maxRuns, run = meta.LoopMode, meta.LoopMaxRuns, meta.LoopRunCount
 	}
-	al.stopLoop(sessionID, store, "stopped by user")
+	al.stopLoop(sessionID, store, mode, maxRuns, run, "stopped by user")
 	if !hadLoop {
 		return "No active loop to stop."
 	}
@@ -273,7 +275,19 @@ func (al *AgentLoop) stopLoopCommand(sessionID string, store *session.UnifiedSto
 // replace-on-set. Does NOT remove the cron job itself; callers that know a
 // job is in flight (as opposed to already auto-deleted by cron for a
 // one-shot "at" fire) must call LoopScheduler.RemoveJob separately.
-func (al *AgentLoop) stopLoop(sessionID string, store *session.UnifiedStore, note string) {
+//
+// priorMode/priorMaxRuns/priorRun are the loop's OWN mode/max_runs/run_count
+// as the caller last read it, BEFORE this call zeroes the session's loop
+// fields out — sourced solely to populate the "stopped" status frame below.
+// The LoopStatusFrame contract requires mode ∈ {interval, self_paced} and
+// max_runs >= 1 (contracts/components/schemas/LoopStatusFrame.yaml);
+// emitting this call's own post-clear zeroed state (mode="", max_runs=0)
+// fails that validation, so the generated strict zod schema silently drops
+// the frame at the SPA edge and the loop status pill never clears. Passing
+// priorMode == "" (no loop was actually active — e.g. `/loop stop` with
+// nothing running) suppresses the frame entirely: there is no real
+// transition to report, and an all-zero frame would fail validation anyway.
+func (al *AgentLoop) stopLoop(sessionID string, store *session.UnifiedStore, priorMode string, priorMaxRuns, priorRun int, note string) {
 	empty := ""
 	zero := 0
 	var zeroMS int64
@@ -294,7 +308,18 @@ func (al *AgentLoop) stopLoop(sessionID string, store *session.UnifiedStore, not
 	if pe := GetPlanEngine(al); pe != nil {
 		pe.Release("loop") // paired with the Admit("loop") call at set time
 	}
-	al.emitLoopStatusFrame(sessionID, "", 0, 0, nil, "stopped")
+	if priorMode == "" {
+		return
+	}
+	maxRuns := priorMaxRuns
+	if maxRuns < 1 {
+		// Defensive fallback matching RunScheduled's own defaulting
+		// (loop_scheduler.go) — max_runs must be >=1 per the wire contract;
+		// a persisted 0 (should not happen, but never trust it blindly)
+		// would otherwise still fail LoopStatusFrame validation.
+		maxRuns = config.DefaultLoopMaxRuns
+	}
+	al.emitLoopStatusFrame(sessionID, priorMode, priorRun, maxRuns, nil, "stopped")
 }
 
 // emitLoopStatusFrame publishes a loop_status WS frame (FR-073).

@@ -230,7 +230,7 @@ func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (st
 	}
 
 	if newRun >= maxRuns {
-		s.al.stopLoop(sessionID, store, fmt.Sprintf("run cap reached (%d/%d)", newRun, maxRuns))
+		s.al.stopLoop(sessionID, store, meta.LoopMode, maxRuns, newRun, fmt.Sprintf("run cap reached (%d/%d)", newRun, maxRuns))
 		s.cs.RemoveJob(job.ID)
 		return reply, runErr
 	}
@@ -302,7 +302,7 @@ func (s *LoopScheduler) IdleExpirySweep(cfg config.PlanningConfig, now time.Time
 		s.RemoveJob(job.ID)
 		// stopLoop Releases the "loop" R5 admission-cap slot (paired with the
 		// Admit("loop") call at set time) as part of its shared body.
-		s.al.stopLoop(sessionID, store, fmt.Sprintf("idle-expired after %d day(s)", maxDays))
+		s.al.stopLoop(sessionID, store, meta.LoopMode, meta.LoopMaxRuns, meta.LoopRunCount, fmt.Sprintf("idle-expired after %d day(s)", maxDays))
 	}
 }
 
