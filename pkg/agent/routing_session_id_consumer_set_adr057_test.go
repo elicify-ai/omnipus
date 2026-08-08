@@ -57,10 +57,14 @@
 // (post-D1 a delegated child's transcriptSessionID is its own id, so the old
 // match could never find the live background/Critical delegate this
 // fallback exists for) — "the same rebase every other role-B cancel
-// predicate received," per that function's comment. This is a NINTH role-B
-// predicate, contributing ONE read (a single SelectorExpr at :819), making
-// this an intentional, reviewed addition to the FR-014 reader set rather
-// than a violation of it.
+// predicate received," per that function's comment. This is the EIGHTH
+// distinct role-B predicate FUNCTION (steering.go's 4 + turn.go's original
+// 3 + this one), contributing the NINTH read — read count already led
+// predicate count by one before this addition, because
+// resolveSessionIDByChannelChat alone contributes 2 reads from 1 predicate
+// (see above). Adding one more single-read predicate here keeps that same
+// one-read lead (8 predicates, 9 reads), making this an intentional,
+// reviewed addition to the FR-014 reader set rather than a violation of it.
 //
 // The four buckets that partition the closed set, each verified by file:line
 // below (u19ExpectedRoutingSessionIDReads is the single source of truth a
@@ -376,7 +380,8 @@ func u19CountClassAInWS5Artefact(t *testing.T) int {
 // (binding Rule 4 — proving the search is live) BEFORE asserting closure,
 // then asserts every read classifies into one of the four named buckets
 // with the exact expected per-bucket count, and finally asserts the grand
-// total is exactly K=16 — none outside the set, none silently missing.
+// total is exactly K=17 (9 role-B + 3 pre-arm + 4 WS-stamping + 1
+// inheritance-copy) — none outside the set, none silently missing.
 func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	fset := token.NewFileSet()
 	agentDir := "."
@@ -434,8 +439,8 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"subturn.go x2: SubTurnSpawnPayload + SubTurnEndPayload)", got)
 	}
 	if got := counts[u19BucketInheritance]; got != 1 {
-		t.Errorf("FR-011 inheritance-copy reads = %d, want 1 (subturn.go:1174, "+
-			"childTS.routingSessionID = parentTS.routingSessionID)", got)
+		t.Errorf("FR-011 inheritance-copy reads = %d, want 1 (subturn.go's spawnSubTurn, the "+
+			"childTS.routingSessionID = parentTS.routingSessionID assignment)", got)
 	}
 
 	const wantTotal = 17
