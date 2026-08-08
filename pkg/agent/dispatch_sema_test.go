@@ -110,6 +110,65 @@ func TestDispatchSema_Resize_ShrinkCap(t *testing.T) {
 	}
 }
 
+// TestDispatchSema_TryAcquire_DoubleReleaseIsIdempotent is the regression
+// proof for fix-wave finding #5: TryAcquire used to return the shared
+// ds.release METHOD VALUE directly — every call got the literal same
+// function, so releasing one caller's slot twice silently freed a slot that
+// some OTHER, still-legitimately-running holder currently occupied. Acquire
+// two slots (A, B) at a cap of 2, release A twice, and confirm InFlight
+// reflects exactly "A released, B still held" (1), never "both released" (0)
+// — the double-release of A must never touch B's slot.
+func TestDispatchSema_TryAcquire_DoubleReleaseIsIdempotent(t *testing.T) {
+	ds := newDispatchSemaphore(2)
+
+	okA, relA := ds.TryAcquire()
+	okB, relB := ds.TryAcquire()
+	if !okA || !okB {
+		t.Fatal("both acquires must succeed at cap=2")
+	}
+	if ds.InFlight() != 2 {
+		t.Fatalf("want InFlight=2 after both acquires, got %d", ds.InFlight())
+	}
+
+	relA()
+	relA() // double-release of the SAME slot: must be a no-op the second time
+
+	if got := ds.InFlight(); got != 1 {
+		t.Fatalf("want InFlight=1 after releasing A once (double-release must not double-count) "+
+			"— B's slot must still be held — got %d", got)
+	}
+
+	relB()
+	if got := ds.InFlight(); got != 0 {
+		t.Fatalf("want InFlight=0 after both real slots are released, got %d", got)
+	}
+}
+
+// TestDispatchSema_WaitAndAcquire_ReleaseIsAlsoIndependentPerCall pins that
+// WaitAndAcquire's release (fix-wave finding #5's newRelease, shared with
+// TryAcquire) is likewise a fresh closure per acquisition, not the same
+// shared method value two different WaitAndAcquire callers could conflate.
+func TestDispatchSema_WaitAndAcquire_ReleaseIsAlsoIndependentPerCall(t *testing.T) {
+	ds := newDispatchSemaphore(2)
+
+	relA := ds.WaitAndAcquire()
+	relB := ds.WaitAndAcquire()
+	if ds.InFlight() != 2 {
+		t.Fatalf("want InFlight=2 after both WaitAndAcquire calls, got %d", ds.InFlight())
+	}
+
+	relA()
+	relA() // double-release must not free B's slot
+
+	if got := ds.InFlight(); got != 1 {
+		t.Fatalf("want InFlight=1 after double-releasing A, got %d", got)
+	}
+	relB()
+	if got := ds.InFlight(); got != 0 {
+		t.Fatalf("want InFlight=0 after releasing both, got %d", got)
+	}
+}
+
 func TestDispatchSema_ConcurrentAcquireRelease(t *testing.T) {
 	// 50 goroutines each try to acquire and release once. With cap=5, at most 5
 	// are in-flight at any moment. Verify no slot counter overflows or panics.

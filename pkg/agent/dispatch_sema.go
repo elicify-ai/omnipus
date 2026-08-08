@@ -39,6 +39,14 @@ func newDispatchSemaphore(capacity int) *DispatchSemaphore {
 // TryAcquire attempts to claim one slot without blocking.
 // Returns true and a release function if a slot was available.
 // Returns false when the semaphore is at capacity.
+//
+// The returned release is a FRESH, once-guarded closure per call (fix-wave
+// finding #5, via newRelease) — it previously returned the shared ds.release
+// method value directly, so a caller that (by bug or defensive double-defer)
+// invoked its release twice would decrement ds.cur twice, freeing a slot that
+// some OTHER, still-legitimately-running holder currently occupies. Mirrors
+// RootDelegationAdmission.TryAdmit's identical once-guarded release
+// (admission.go): a double-release must never under-count cur.
 func (ds *DispatchSemaphore) TryAcquire() (bool, func()) {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
@@ -46,20 +54,34 @@ func (ds *DispatchSemaphore) TryAcquire() (bool, func()) {
 		return false, nil
 	}
 	ds.cur++
-	return true, ds.release
+	return true, ds.newRelease()
 }
 
-// release returns one slot to the semaphore.
-func (ds *DispatchSemaphore) release() {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-	if ds.cur > 0 {
-		ds.cur--
-	}
-	// Non-blocking signal so a goroutine waiting in WaitAndAcquire can wake.
-	select {
-	case ds.ch <- struct{}{}:
-	default:
+// newRelease returns a fresh, once-guarded release closure for one just-claimed
+// slot (fix-wave finding #5). Shared by TryAcquire and WaitAndAcquire so every
+// acquisition gets its OWN independent, idempotent release — never a shared
+// method value two different holders' callers could conflate into a
+// double-release that frees a slot out from under someone else. newRelease
+// itself touches no shared state (it only closes over a fresh `released`
+// flag), so it may be called with or without ds.mu held; the closure IT
+// returns takes ds.mu itself, on invocation, before touching ds.cur.
+func (ds *DispatchSemaphore) newRelease() func() {
+	released := false
+	return func() {
+		ds.mu.Lock()
+		defer ds.mu.Unlock()
+		if released {
+			return // idempotent: a double-release must never under-count cur
+		}
+		released = true
+		if ds.cur > 0 {
+			ds.cur--
+		}
+		// Non-blocking signal so a goroutine waiting in WaitAndAcquire can wake.
+		select {
+		case ds.ch <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -73,8 +95,9 @@ func (ds *DispatchSemaphore) WaitAndAcquire() func() {
 		ds.mu.Lock()
 		if ds.cur < ds.cap {
 			ds.cur++
+			release := ds.newRelease()
 			ds.mu.Unlock()
-			return ds.release
+			return release
 		}
 		ds.mu.Unlock()
 		// Drain the notification channel (may already have a pending signal).
