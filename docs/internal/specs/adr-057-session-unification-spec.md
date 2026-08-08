@@ -2237,15 +2237,29 @@ Original v3 text (superseded): *"Then the resolved value is the seeded default o
 - **Then** each direct-parent relationship enforces the ceiling independently
 - **And** the chat's aggregate equals (C × ceiling), not one shared pool
 
-#### BDD-85 — Scenario: A grandchild's `message_parent` is drained only by its direct parent
+#### BDD-85 — Scenario: A grandchild's `message_parent` lands in its direct parent's inbox, readable by any authorized ancestor
 
 **Traces to**: User Story 18, Acceptance Scenario 3
 **Category**: Happy Path
 
+> **Amended post-merge (14-reviewer sign-off, silent-failures lens).** The original
+> scenario asserted `A`'s inbox read "does not" see `D`'s message — but the shipped
+> FR-039 ownership walk deliberately authorizes ancestors up to 3 deep, and the
+> pre-amendment implementation satisfied the "does not" clause by opening the
+> CALLER's own (empty) inbox file: an authorized ancestor received a clean,
+> complete-looking `{"messages":[]}` indistinguishable from "the child reported
+> nothing" — a silent-empty defect, not an access boundary. Inbox/peek reads are
+> now keyed by the record's `ParentDurableKey` (where the message actually lives —
+> the same key `respond` always used), so an authorized ancestor sees the real
+> inbox. Storage is unchanged: the message still lives in `B`'s inbox only.
+> See `TestMessageParent_DrainedByDirectParentAtDepth3` (updated) and
+> `TestDelegateTool_Inbox_AuthorizedAncestor_SeesMessagesUnderDirectParentKey`.
+
 - **Given** chat `A`, child `B` and grandchild `D`
 - **When** `D` calls `message_parent`
-- **Then** `B`'s `delegate action=inbox` drains the message
-- **But** `A`'s `delegate action=inbox` does not, and does not return a clean empty success in place of it
+- **Then** the message is stored in `B`'s inbox, and `B`'s `delegate action=inbox` drains it
+- **And** `A` (an FR-039-authorized ancestor) reading via `delegate action=inbox` for `D` sees the message in `B`'s inbox rather than a silent clean empty success
+- **But** an agent OUTSIDE the FR-039 ownership walk gets an authorization error, never a clean empty success
 
 #### BDD-86 — Scenario: A 3P child's process group dies with the child
 
