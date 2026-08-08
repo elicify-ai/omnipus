@@ -1278,11 +1278,26 @@ const PLAN_STATUS_INVALIDATE_DEBOUNCE_MS = 1000
 let planStatusInvalidateTimer: ReturnType<typeof setTimeout> | undefined
 const pendingPlanStatusIds = new Set<string>()
 
-/** True when `planId` appears anywhere in a cached query's key. Pure/exported
- * so the scoping rule is unit-testable without populating the real queryClient
- * cache. */
+/**
+ * True when `planId` appears anywhere in a cached query's key — either as a
+ * top-level element (matches today's `plansQueryKeys.detail(workspaceId,
+ * planId)` shape, `['plans', workspaceId, planId]`) or as a `plan_id`/
+ * `planId` property on a top-level params-object element (matches
+ * `tasksQueryKeys.list({ ...params, plan_id })`'s `['tasks', cleanedParams]`
+ * shape — no live call site passes `plan_id` into that factory today, but
+ * this keeps the scoped invalidation correct if/when one does). Pure/exported
+ * so the scoping rule is unit-testable without populating the real
+ * queryClient cache.
+ */
 export function queryKeyMentionsPlanId(queryKey: readonly unknown[], planId: string): boolean {
-  return queryKey.includes(planId)
+  return queryKey.some((segment) => {
+    if (segment === planId) return true
+    if (segment && typeof segment === 'object' && !Array.isArray(segment)) {
+      const params = segment as Record<string, unknown>
+      return params.plan_id === planId || params.planId === planId
+    }
+    return false
+  })
 }
 
 function flushPlanStatusInvalidation(): void {

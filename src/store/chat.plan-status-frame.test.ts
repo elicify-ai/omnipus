@@ -62,6 +62,12 @@ afterEach(() => {
   act(() => {
     vi.runOnlyPendingTimers()
   })
+  // Each test creates its own `vi.spyOn(queryClient, 'invalidateQueries')` —
+  // without restoring it here, vitest reuses the SAME mock instance (with
+  // its accumulated call history) across tests, which silently corrupts the
+  // exact-count/exact-call assertions below (a later test's fresh spy would
+  // otherwise start pre-populated with every earlier test's calls).
+  vi.restoreAllMocks()
   vi.useRealTimers()
 })
 

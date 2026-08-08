@@ -12,6 +12,8 @@ import React from 'react'
 import { useChatStore } from '@/store/chat'
 import type { ChatMessage, SubagentSpan } from '@/store/chat'
 import type { Agent, ToolCall } from '@/lib/api'
+import { useJudgeActivityStore } from '@/store/judgeActivity'
+import type { JudgeVerdictFrame } from '@/lib/api/generated/asyncapi-types'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -19,7 +21,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import { fetchAgents } from '@/lib/api'
-import { useRunningActivity } from './useRunningActivity'
+import { useRunningActivity, mergeAndCapFinished } from './useRunningActivity'
+import type { ActivityItem, AgentActivityItem, JudgeActivityItem } from './useRunningActivity'
 
 // ── Wrapper (mirrors src/hooks/restart.test.ts's QueryClientProvider pattern) ──
 
@@ -890,6 +893,168 @@ describe('useRunningActivity — running is uncapped, recentlyFinished is capped
     // oldest (span_fin_0, span_fin_1) are dropped by the cap.
     expect(result.current.recentlyFinished[0].key).toBe('span_fin_9')
     expect(result.current.recentlyFinished[7].key).toBe('span_fin_2')
+    client.clear()
+  })
+})
+
+// ── Judge-verdict recency merge (14-reviewer sign-off Finding #2) ──────────
+//
+// Judge verdicts are a GLOBAL, app-lifetime feed (judgeActivity.ts, capped
+// at 8 independently of this hook's own RECENTLY_FINISHED_CAP=8). Before the
+// fix, the hook unconditionally tail-appended judge items to
+// `recentlyFinished` AFTER every agent/bash item, so a STALE judge verdict
+// (arbitrarily old `judged_at`) always survived `.slice(-CAP)` and evicted
+// genuinely more-recently-finished agent/bash items instead — breaking the
+// documented "most-recent-first" invariant. The fix merges all three
+// sources by a real, comparable recency signal (`judged_at` for judge items,
+// an observed-finish stamp for agent/bash items) before capping.
+//
+// This suite tests it TWO ways: a focused pure-function test of
+// `mergeAndCapFinished` (the sort/cap contract in isolation), and an
+// integration test through the REAL hook (renderHook), driving both
+// `useChatStore` and `useJudgeActivityStore` together — the prior judge
+// coverage (ActivityPanel.judge-row.test.tsx) injects a JudgeActivityItem
+// directly as a prop and never exercises this hook's own merge at all.
+
+function makeJudgeVerdictFrame(overrides: Partial<JudgeVerdictFrame> = {}): JudgeVerdictFrame {
+  return {
+    type: 'judge_verdict',
+    id: overrides.id ?? 'verdict_1',
+    scope: 'task',
+    round: 1,
+    met: true,
+    per_criterion: [],
+    model: 'test-model',
+    judge_agent_id: 'jim',
+    judged_at: '2000-01-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
+describe('mergeAndCapFinished — pure sort/cap contract', () => {
+  function stubItem(key: string): AgentActivityItem {
+    return {
+      kind: 'agent',
+      key,
+      agentName: key,
+      agentType: 'unknown',
+      taskLabel: 'x',
+      status: 'success',
+      steps: [],
+    }
+  }
+
+  it('sorts most-recent-first by `time` regardless of push order', () => {
+    const old = { item: stubItem('old'), time: 1000, seq: 0 }
+    const mid = { item: stubItem('mid'), time: 2000, seq: 1 }
+    const newest = { item: stubItem('newest'), time: 3000, seq: 2 }
+    // Pushed out of chronological order — the sort, not push order, must win.
+    const result = mergeAndCapFinished([mid, old, newest])
+    expect(result.map((i) => i.key)).toEqual(['newest', 'mid', 'old'])
+  })
+
+  it('breaks an exact `time` tie using `seq` descending (higher seq = more recently observed)', () => {
+    const a = { item: stubItem('a'), time: 5000, seq: 0 }
+    const b = { item: stubItem('b'), time: 5000, seq: 1 }
+    const result = mergeAndCapFinished([a, b])
+    expect(result.map((i) => i.key)).toEqual(['b', 'a'])
+  })
+
+  it('caps at RECENTLY_FINISHED_CAP (8), keeping only the most-recent 8 of a larger candidate set', () => {
+    const candidates = Array.from({ length: 12 }, (_, i) => ({
+      item: stubItem(`item_${i}`),
+      time: i, // ascending — item_11 is the most recent
+      seq: i,
+    }))
+    const result = mergeAndCapFinished(candidates)
+    expect(result).toHaveLength(8)
+    expect(result.map((i) => i.key)).toEqual([
+      'item_11', 'item_10', 'item_9', 'item_8', 'item_7', 'item_6', 'item_5', 'item_4',
+    ])
+  })
+})
+
+describe('useRunningActivity — judge verdict recency merge (real hook)', () => {
+  beforeEach(() => {
+    act(() => {
+      useJudgeActivityStore.getState().reset()
+    })
+  })
+
+  afterEach(() => {
+    act(() => {
+      useJudgeActivityStore.getState().reset()
+    })
+  })
+
+  it('does not let 8 STALE (ancient judged_at) judge verdicts evict genuinely more-recent finished agent items', async () => {
+    const client = makeClient()
+    act(() => {
+      useJudgeActivityStore.setState({
+        verdicts: Array.from({ length: 8 }, (_, i) =>
+          makeJudgeVerdictFrame({ id: `verdict_${i}`, judged_at: '2000-01-01T00:00:00.000Z' }),
+        ),
+      })
+      useChatStore.setState({
+        messages: [
+          makeAssistantMessage({
+            spans: [
+              makeSpan({ spanId: 'span_fresh_1', status: 'success', agentId: 'ray', durationMs: 10 }),
+              makeSpan({ spanId: 'span_fresh_2', status: 'success', agentId: 'ray', durationMs: 10 }),
+              makeSpan({ spanId: 'span_fresh_3', status: 'success', agentId: 'ray', durationMs: 10 }),
+            ],
+          }),
+        ],
+      })
+    })
+
+    const { result } = renderHook(() => useRunningActivity(), { wrapper: makeWrapper(client) })
+
+    await waitFor(() => {
+      expect(result.current.recentlyFinished).toHaveLength(8)
+    })
+
+    const kinds = result.current.recentlyFinished.map((i: ActivityItem) => i.kind)
+    // All 3 fresh (real-time-observed) agent items must survive the cap —
+    // they are genuinely more recent than every stale (year-2000) verdict.
+    // Under the pre-fix behavior, this would be 0 — all 3 agent items were
+    // silently dropped because judge verdicts were always pushed/kept last.
+    expect(kinds.filter((k) => k === 'agent')).toHaveLength(3)
+    expect(kinds.filter((k) => k === 'judge')).toHaveLength(5)
+    // Every agent item sorts strictly ahead of every judge item.
+    const firstJudgeIndex = kinds.indexOf('judge')
+    expect(firstJudgeIndex).toBeGreaterThan(-1)
+    expect(kinds.slice(0, firstJudgeIndex).every((k) => k === 'agent')).toBe(true)
+    client.clear()
+  })
+
+  it('a judge verdict with a judged_at NEWER than a finished agent span sorts ahead of it', async () => {
+    const client = makeClient()
+    const farFuture = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+    act(() => {
+      useChatStore.setState({
+        messages: [
+          makeAssistantMessage({
+            spans: [makeSpan({ spanId: 'span_old_ish', status: 'success', agentId: 'ray', durationMs: 10 })],
+          }),
+        ],
+      })
+      useJudgeActivityStore.setState({
+        verdicts: [makeJudgeVerdictFrame({ id: 'verdict_future', judged_at: farFuture })],
+      })
+    })
+
+    const { result } = renderHook(() => useRunningActivity(), { wrapper: makeWrapper(client) })
+
+    await waitFor(() => {
+      expect(result.current.recentlyFinished).toHaveLength(2)
+    })
+    // The judge item (dated a year in the future relative to the agent
+    // span's real-time observation) must be the most recent — real recency
+    // wins regardless of which source was iterated first internally.
+    expect(result.current.recentlyFinished[0].kind).toBe('judge')
+    expect((result.current.recentlyFinished[0] as JudgeActivityItem).key).toBe('verdict_future')
+    expect(result.current.recentlyFinished[1].kind).toBe('agent')
     client.clear()
   })
 })

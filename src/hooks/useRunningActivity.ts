@@ -515,7 +515,17 @@ export function useRunningActivity(): RunningActivity {
   const bashSessions = useMemo(() => groupBashSessions(allToolCalls), [allToolCalls])
 
   const running: ActivityItem[] = []
-  const recentlyFinished: ActivityItem[] = []
+  // Collected across all three sources, then merged by real recency and
+  // capped in one pass (see `mergeAndCapFinished`) instead of being pushed
+  // straight into a single array in source-iteration order — Finding #2:
+  // that used to let judge verdicts (always iterated last) permanently win
+  // the `.slice(-CAP)` cut regardless of actual recency.
+  const finishedCandidates: FinishedCandidate[] = []
+  // Deterministic tie-breaker for candidates whose `time` collides (see
+  // FinishedCandidate's doc comment) — assigned in the same stable
+  // agent-spans-then-bash-sessions-then-judge-verdicts push order every
+  // render, so ties resolve identically across re-renders.
+  let finishedSeq = 0
 
   for (const span of agentSpans) {
     const effectiveAgentId = resolveSpanAgentId(span, toolCallsById)
@@ -540,8 +550,12 @@ export function useRunningActivity(): RunningActivity {
       finalResult: terminal?.finalResult,
       interruptReason: terminal?.reason,
     }
-    if (span.status === 'running') running.push(item)
-    else recentlyFinished.push(item)
+    if (isSpanRunning) {
+      clearFinishedAt(span.spanId)
+      running.push(item)
+    } else {
+      finishedCandidates.push({ item, time: observeFinishedAt(span.spanId), seq: finishedSeq++ })
+    }
   }
 
   for (const [sessionId, session] of bashSessions) {
@@ -560,15 +574,23 @@ export function useRunningActivity(): RunningActivity {
       status: mapBashSessionStatus(session.latestStatus),
       durationMs,
     }
-    if (isRunning) running.push(item)
-    else recentlyFinished.push(item)
+    if (isRunning) {
+      clearFinishedAt(sessionId)
+      running.push(item)
+    } else {
+      finishedCandidates.push({ item, time: observeFinishedAt(sessionId), seq: finishedSeq++ })
+    }
   }
 
   // ADR-049 D2/D4/US-13/SD-C11: judge verdicts are a GLOBAL feed (the wire
   // frame carries no session_id — see judgeActivity.ts), always terminal —
   // there is no "judge started" frame, only the completed verdict push, so
-  // every item here goes straight to recentlyFinished, sharing the same
-  // RECENTLY_FINISHED_CAP with agent/bash items via the shared slice below.
+  // every item here is a finished candidate, sharing the same
+  // RECENTLY_FINISHED_CAP with agent/bash items via `mergeAndCapFinished`
+  // below. Its recency signal is the verdict's own real `judged_at` server
+  // timestamp (Unix-ms via Date.parse — comparable directly against the
+  // client-observed `time` stamps agent/bash items use above) rather than a
+  // client-observed stamp, since the verdict itself already carries one.
   for (const verdict of judgeVerdicts) {
     const item: JudgeActivityItem = {
       kind: 'judge',
@@ -588,16 +610,12 @@ export function useRunningActivity(): RunningActivity {
       judgedAt: verdict.judged_at,
       status: verdict.met ? 'success' : 'error',
     }
-    recentlyFinished.push(item)
+    finishedCandidates.push({ item, time: Date.parse(verdict.judged_at), seq: finishedSeq++ })
   }
 
   return {
     runningCount: running.length,
     running,
-    // Most-recent-first by arrival order. Neither type carries a real
-    // timestamp (see file header), so "arrival order" is the position in
-    // which each item was appended above (chronological within its own
-    // source — messages/toolCalls both preserve insertion order).
-    recentlyFinished: recentlyFinished.slice(-RECENTLY_FINISHED_CAP).reverse(),
+    recentlyFinished: mergeAndCapFinished(finishedCandidates),
   }
 }
