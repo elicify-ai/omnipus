@@ -45,6 +45,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 )
@@ -59,25 +60,48 @@ const IntentLogChainKeyInfo = "omnipus-intent-log-chain-v1"
 
 var intentLogDevKeyWarnOnce sync.Once
 
-// resolveChainKey returns key if non-empty (copied defensively), else a
-// deterministic dev-only fallback key with a sticky slog.Warn the first time
-// it's used — mirrors pkg/audit's resolveChainKey precedent (hmac.go) so a
-// misconfigured production boot (credStore.DeriveSubkey failing) is loud
-// rather than silently running with a weaker key, while tests and early-dev
-// boots without a credential store still work.
-func resolveChainKey(key []byte) []byte {
+// intentLogIsTestingFn resolves whether the process is a `go test` binary.
+// Defaults to testing.Testing(), swappable ONLY so a test can exercise
+// resolveChainKey's PRODUCTION fail-closed branch — testing.Testing() is
+// unconditionally true inside every go test binary, so without this seam
+// that branch would be unreachable from any test (mirrors this codebase's
+// established swappable-seam-for-testability pattern, e.g. pkg/session's
+// sessionLockAcquireFn/sessionLockReleaseFn).
+var intentLogIsTestingFn = testing.Testing //nolint:gochecknoglobals
+
+// resolveChainKey returns key if non-empty (copied defensively). Otherwise it
+// returns an error in production — mirrors pkg/audit/hmac.go's resolveChainKey
+// hardening (fix-wave finding 5): the dev-only fallback key below is a
+// PUBLIC, hardcoded constant readable by anyone with the source, so silently
+// installing it as a production intent-log's tamper-evidence chain key
+// defeats the entire point of the HMAC chain (sec-MINOR-3/#539) — anyone
+// could forge or re-chain plan_intents entries undetected, with no signal
+// that anything was ever wrong.
+//
+// The fallback is gated on intentLogIsTestingFn (testing.Testing() in
+// production), exactly like pkg/audit's precedent: tests and early-dev
+// `go test` runs that construct an IntentLog with no key still work, loud via
+// the sticky slog.Warn, while a real production binary (testing.Testing() ==
+// false) that somehow reaches this function with an empty key fails closed
+// instead of running with a known-to-everyone key forever.
+func resolveChainKey(key []byte) ([]byte, error) {
 	if len(key) > 0 {
 		out := make([]byte, len(key))
 		copy(out, key)
-		return out
+		return out, nil
 	}
-	intentLogDevKeyWarnOnce.Do(func() {
-		slog.Warn("intent_log: HMAC chain key not configured, using insecure dev-only fallback "+
-			"(pass a key derived via credentials.Store.DeriveSubkey(plan.IntentLogChainKeyInfo) to NewIntentLog)",
-			"info_tag", IntentLogChainKeyInfo)
-	})
-	h := sha256.Sum256([]byte("omnipus-intent-log-dev-only-key"))
-	return h[:]
+	if intentLogIsTestingFn() {
+		intentLogDevKeyWarnOnce.Do(func() {
+			slog.Warn("intent_log: HMAC chain key not configured, using insecure dev-only fallback "+
+				"(pass a key derived via credentials.Store.DeriveSubkey(plan.IntentLogChainKeyInfo) to NewIntentLog)",
+				"info_tag", IntentLogChainKeyInfo)
+		})
+		h := sha256.Sum256([]byte("omnipus-intent-log-dev-only-key"))
+		return h[:], nil
+	}
+	return nil, fmt.Errorf(
+		"intent_log: HMAC chain key not configured; pass a key derived via "+
+			"credentials.Store.DeriveSubkey(%q) to NewIntentLog", IntentLogChainKeyInfo)
 }
 
 // intentLogReanchorWarnOnce is the per-process sticky warn-once used by

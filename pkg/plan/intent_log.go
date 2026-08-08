@@ -192,9 +192,12 @@ type IntentLog struct {
 // subkey derived via credentials.Store.DeriveSubkey(IntentLogChainKeyInfo) in
 // production (mirrors how the gateway derives audit.AuditChainKeyInfo for
 // the audit logger — see pkg/gateway/gateway.go's boot wiring). A nil/empty
-// key falls back to a deterministic dev-only key with a sticky slog.Warn
-// (mirrors pkg/audit's resolveChainKey precedent), so tests and early-dev
-// boots without a credential store still run — loud, not silent.
+// key falls back to a deterministic dev-only key with a sticky slog.Warn ONLY
+// inside a `go test` binary (testing.Testing()) — mirrors pkg/audit's
+// resolveChainKey hardening (fix-wave finding 5) — so tests and early-dev
+// `go test` runs without a credential store still run, loud not silent, while
+// a real production binary gets a hard error instead of silently signing
+// every intent-log record with a public, hardcoded key forever.
 func NewIntentLog(dir string, chainKeys ...[]byte) (*IntentLog, error) {
 	var chainKey []byte
 	if len(chainKeys) > 0 {
@@ -212,7 +215,11 @@ func NewIntentLog(dir string, chainKeys ...[]byte) (*IntentLog, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("intent_log: mkdir: %w", err)
 	}
-	return &IntentLog{dir: dir, lock: &StripedLock{}, chainKey: resolveChainKey(chainKey)}, nil
+	resolvedKey, err := resolveChainKey(chainKey)
+	if err != nil {
+		return nil, fmt.Errorf("intent_log: %w", err)
+	}
+	return &IntentLog{dir: dir, lock: &StripedLock{}, chainKey: resolvedKey}, nil
 }
 
 // Dir returns the log's root directory.

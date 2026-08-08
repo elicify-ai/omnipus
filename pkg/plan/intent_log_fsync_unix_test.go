@@ -117,7 +117,11 @@ func TestIntentLog_AppendIntent_ActuallyFsyncs(t *testing.T) {
 	// comment for why that exclusivity is what makes the rendezvous
 	// deterministic). Its Close() delivers an immediate EOF, so readAllLocked
 	// observes "0 records" rather than hanging.
-	il := &IntentLog{dir: dir, lock: &StripedLock{}, chainKey: resolveChainKey(nil)}
+	testKey, keyErr := resolveChainKey(nil)
+	if keyErr != nil {
+		t.Fatalf("resolveChainKey: %v", keyErr)
+	}
+	il := &IntentLog{dir: dir, lock: &StripedLock{}, chainKey: testKey}
 
 	appendDone := make(chan error, 1)
 	go func() {
