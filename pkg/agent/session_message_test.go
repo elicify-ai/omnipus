@@ -182,6 +182,67 @@ func TestWakeParent_DebounceAndRateCap(t *testing.T) {
 	}
 }
 
+// TestWakeParent_SweepsQuiescentWakeWindows is the LOW-finding regression
+// guard (mirroring pkg/session/message_inbox.go's identical rateWindows
+// leak/fix): wakeWindows must not accumulate one permanent entry per
+// ever-woken parent conversation forever. Once the map's key count crosses
+// wakeWindowSweepThreshold, the next WakeParent call sweeps every OTHER key
+// whose window has fully expired (all timestamps older than the 1-hour rate
+// window), deleting it.
+func TestWakeParent_SweepsQuiescentWakeWindows(t *testing.T) {
+	al, msgBus := newAsyncNotifierTestLoop(t)
+	notifier := al.asyncNotifier
+
+	oldThreshold := wakeWindowSweepThreshold
+	wakeWindowSweepThreshold = 5
+	t.Cleanup(func() { wakeWindowSweepThreshold = oldThreshold })
+
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	notifier.SetWakeClock(func() time.Time { return now })
+
+	for i := 0; i < 5; i++ {
+		event := tools.MessageParentWakeEvent{
+			Channel: "slack", ChatID: "quiescent-" + string(rune('A'+i)), AgentID: "parent-agent", Content: "x",
+		}
+		if err := notifier.WakeParent(context.Background(), "blocker", event); err != nil {
+			t.Fatalf("WakeParent #%d failed: %v", i, err)
+		}
+		select {
+		case <-msgBus.InboundChan():
+		case <-time.After(time.Second):
+			t.Fatalf("WakeParent #%d: expected a publish", i)
+		}
+	}
+	if got := len(notifier.wakeWindows); got != 5 {
+		t.Fatalf("fixture broken: want 5 wake-window keys before advancing time, got %d", got)
+	}
+
+	// Advance well past the 1-hour rate window so all 5 existing keys are
+	// now fully quiescent, then push the map size past the (lowered)
+	// threshold with one more distinct conversation's wake — the call that
+	// must trigger the sweep.
+	now = now.Add(2 * time.Hour)
+	triggerEvent := tools.MessageParentWakeEvent{
+		Channel: "slack", ChatID: "trigger-conversation", AgentID: "parent-agent", Content: "x",
+	}
+	if err := notifier.WakeParent(context.Background(), "blocker", triggerEvent); err != nil {
+		t.Fatalf("trigger WakeParent failed: %v", err)
+	}
+	select {
+	case <-msgBus.InboundChan():
+	case <-time.After(time.Second):
+		t.Fatal("trigger WakeParent: expected a publish")
+	}
+
+	// Positive lower bound alongside the near-zero assertion: exactly the
+	// ONE key the triggering call itself just wrote must survive — proving
+	// the sweep is targeted (only quiescent keys), not "delete everything".
+	if got := len(notifier.wakeWindows); got != 1 {
+		t.Fatalf("want exactly 1 surviving wake-window key after the sweep (the triggering call's own), got %d: %v",
+			got, notifier.wakeWindows)
+	}
+}
+
 // TestValidateContextSnapshot_AllowlistAndCap proves R§8.5: a nil/empty
 // snapshot is always valid; an over-cap discretionary snapshot is rejected
 // with a narrow-the-snapshot error naming which cap was exceeded.

@@ -362,6 +362,46 @@ func (n *asyncNotifierImpl) SetWakeClock(now func() time.Time) {
 	}
 }
 
+// wakeWindowSweepThreshold bounds wakeWindows' key count before an
+// opportunistic full-map sweep removes fully-quiescent keys (14-reviewer
+// LOW finding, mirroring pkg/session/message_inbox.go's identical
+// rateWindows leak and fix): every distinct channel+chatID pair that ever
+// triggered even one bounded typed wake left a permanent map entry, since
+// allowWake only ever prunes/rewrites the ONE key it was called for — a key
+// belonging to a parent conversation that never wakes again is never
+// revisited by any future call, so it survives forever holding a handful of
+// now-expired timestamps. A `var` (not `const`) so an in-package test can
+// lower it without needing hundreds of real distinct conversations.
+var wakeWindowSweepThreshold = 512
+
+// pruneWakeWindow returns window with every timestamp at or before cutoff
+// removed, reusing window's backing array (same convention allowWake always
+// used).
+func pruneWakeWindow(window []time.Time, cutoff time.Time) []time.Time {
+	kept := window[:0]
+	for _, t := range window {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	return kept
+}
+
+// sweepQuiescentWakeWindows prunes every window in windows against cutoff
+// and deletes any key whose pruned window is now empty — the actual fix for
+// the "never delete quiescent keys" leak, since a single key's own
+// allowWake call can only ever observe or clean up ITSELF.
+func sweepQuiescentWakeWindows(windows map[string][]time.Time, cutoff time.Time) {
+	for k, w := range windows {
+		kept := pruneWakeWindow(w, cutoff)
+		if len(kept) == 0 {
+			delete(windows, k)
+		} else {
+			windows[k] = kept
+		}
+	}
+}
+
 // allowWake reports whether a wake for debounceKey (channel+"\x00"+chatID)
 // is currently permitted under the debounce+rate cap, and — if so —
 // records this wake so subsequent calls see it.
@@ -376,18 +416,19 @@ func (n *asyncNotifierImpl) allowWake(debounceKey string) bool {
 	defer n.wakeMu.Unlock()
 
 	window := n.wakeWindows[debounceKey]
-	kept := window[:0]
+	kept := pruneWakeWindow(window, cutoffHour)
 	var last time.Time
-	for _, t := range window {
-		if t.After(cutoffHour) {
-			kept = append(kept, t)
-			if t.After(last) {
-				last = t
-			}
+	for _, t := range kept {
+		if t.After(last) {
+			last = t
 		}
 	}
 	if !last.IsZero() && now.Sub(last) < sessionMessageWakeDebounce {
-		n.wakeWindows[debounceKey] = kept
+		if len(kept) == 0 {
+			delete(n.wakeWindows, debounceKey)
+		} else {
+			n.wakeWindows[debounceKey] = kept
+		}
 		return false
 	}
 	if len(kept) >= sessionMessageWakeMaxPerHour {
@@ -395,6 +436,14 @@ func (n *asyncNotifierImpl) allowWake(debounceKey string) bool {
 		return false
 	}
 	n.wakeWindows[debounceKey] = append(kept, now)
+
+	// LOW finding: sweep OTHER quiescent keys once the map has grown past
+	// the threshold — see wakeWindowSweepThreshold's doc comment. Amortized:
+	// runs only every time the map crosses the threshold again after a
+	// sweep brings it back down, not on every call.
+	if len(n.wakeWindows) > wakeWindowSweepThreshold {
+		sweepQuiescentWakeWindows(n.wakeWindows, cutoffHour)
+	}
 	return true
 }
 
