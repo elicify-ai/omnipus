@@ -197,12 +197,21 @@ func settleAskToolCallTranscript(
 // byte-identical (unknownReasonText) — so what this function renders in that
 // case is verbatim the model-directed instruction ("Treat this as permanent;
 // do not retry — stop and report the blocker."), not a separate human
-// sentence. As of this writing the one reason still reaching this fallback
-// in production is loop.go's headless-scheduled-run auto-deny literal
-// ("auto-denied: ask-policy tool not allowed in a headless scheduled run"),
-// which has no denialTable row; a sibling unit of this same epic is adding
-// one, which will remove it from the fallback described here — this
-// paragraph documents current behavior, not that eventual state.
+// sentence. loop.go's headless-scheduled-run auto-deny literal
+// (autoDenyHeadlessReason, "auto-denied: ask-policy tool not allowed in a
+// headless scheduled run") now HAS its own denialTable row (tool_denial.go)
+// and no longer reaches this fallback. As of this writing the two reasons
+// that DO still reach it in production are the hook-denial ledger literals
+// loop.go's before_tool hook branches record — "hook_denied"
+// (HookActionDenyTool) and "approval_hook_denied" (a ToolApprover hook's
+// rejection) — neither of which has a denialTable row (loop.go's own
+// comments there explain why: hook-supplied free text has no fixed literal
+// to classify against). Those two reasons reach askDenialText specifically
+// via the QUARANTINE REPLAY path: recordToolDenial caches the reason
+// alongside the payload on the tool's first hook-denied call in a turn, and
+// a later call to the same tool in the same turn is short-circuited through
+// quarantinedDenialFor -> settleAskToolCallTranscript with that cached
+// reason, landing here unclassified.
 //
 // ADR-058 D1: this is the transcript half of the single classification table
 // in tool_denial.go — it holds no switch of its own. Before this change the

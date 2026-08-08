@@ -191,13 +191,13 @@ func IsValidEventName(e EventName) bool {
 		"memory.remember",
 		"memory.retrospective",
 		"memory.rate_limited",
-		// Board tasks (pkg/gateway/rest_board.go), workspaces
-		// (pkg/gateway/rest_workspaces.go: workspace.create/update/delete),
-		// and milestones (pkg/gateway/rest_milestones.go). The legacy
-		// "project.*" names are retained here for back-compat with audit
-		// logs written before the project→workspace rename; no current
-		// handler emits them (rest_projects.go was renamed to
-		// rest_workspaces.go).
+		// Board tasks (pkg/gateway/rest_board.go) and workspaces
+		// (pkg/gateway/rest_workspaces.go: workspace.create/update/delete).
+		// The legacy "project.*" names are retained here for back-compat
+		// with audit logs written before the project→workspace rename; no
+		// current handler emits them (rest_projects.go was renamed to
+		// rest_workspaces.go). Milestones are likewise legacy-only now —
+		// see the "milestone.*" entries below.
 		"board_task.create",
 		"board_task.update",
 		"board_task.delete",
@@ -218,6 +218,14 @@ func IsValidEventName(e EventName) bool {
 		"project.create",
 		"project.update",
 		"project.delete",
+		// Legacy milestone.* events, retained for the same back-compat
+		// reason as project.* above: no current handler emits them.
+		// rest_milestones.go was deleted — its REST surface was superseded
+		// by the Plan (swimlane board) feature (pkg/gateway/rest_plans.go),
+		// and the underlying Milestone entity itself was migrated to a Task
+		// tag (`milestone:<name>`) by the one-way, boot-time
+		// pkg/task/migrate_milestones.go migration (ADR-049 D1). Audit logs
+		// written before that migration keep these names on disk.
 		"milestone.create",
 		"milestone.update",
 		"milestone.delete",
