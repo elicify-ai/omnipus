@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -99,6 +100,16 @@ func ValidatePriority(p int) error {
 type Store struct {
 	dir  string
 	lock *StripedLock
+	// listCalls counts invocations of ListWithUnreadable (and therefore
+	// List) — the full-directory scan-and-parse path. It exists purely as a
+	// test seam: callers that must issue a BOUNDED number of full-store
+	// scans per request (see rest_tasks.go's rollupIndex and
+	// rest_plans.go's taskSnapshotLister, fix-wave finding #1 — a prior
+	// version issued one scan PER RETURNED ITEM, making list endpoints
+	// O(n^2)) can snapshot ListCallCount() before/after an operation and
+	// assert the delta stays constant regardless of how many items are
+	// returned. Never read by any production code path/decision.
+	listCalls atomic.Int64
 }
 
 // New creates a Store rooted at dir using the process-wide TaskFileLock. dir
@@ -124,6 +135,11 @@ func New(dir string) *Store {
 
 // Dir returns the store's task directory.
 func (s *Store) Dir() string { return s.dir }
+
+// ListCallCount returns the cumulative number of List/ListWithUnreadable
+// calls (full-directory scans) issued against s so far. Test-only seam — see
+// the Store.listCalls field doc comment.
+func (s *Store) ListCallCount() int64 { return s.listCalls.Load() }
 
 // validateID rejects IDs containing path separators, "..", or null bytes.
 func validateID(id string) error {
@@ -319,6 +335,7 @@ func (s *Store) List(filter Filter) ([]Task, error) {
 // List so they can log loudly, by task ID, when a file stays unreadable
 // across repeated observations.
 func (s *Store) ListWithUnreadable(filter Filter) (tasks []Task, unreadableIDs []string, err error) {
+	s.listCalls.Add(1)
 	ids, err := s.scanTaskIDs()
 	if err != nil {
 		if os.IsNotExist(err) {
