@@ -645,12 +645,25 @@ func TestTriggerReloadAndWait_TimeoutIsReportedNotSwallowed(t *testing.T) {
 		"the wait must actually honour its full deadline before giving up")
 }
 
-// TestReloadCycle_FollowUpConfigLoadFailure_ReleasesSlotAndPollers guards the
-// abnormal exit: if the coalesced follow-up cannot load config from disk, the
-// cycle must still release the single-flight slot and clear the pending flag.
-// Holding either would wedge every future reload for the process lifetime and
-// hang every triggerReloadAndWait caller for its full 5s deadline.
-func TestReloadCycle_FollowUpConfigLoadFailure_ReleasesSlotAndPollers(t *testing.T) {
+// TestReloadCycle_FollowUpConfigLoadFailure_LeavesPendingSetAndMarksDegraded
+// guards the FIXED abnormal exit (14-reviewer sign-off finding #4). This test
+// used to assert the OPPOSITE — that a failed follow-up load clears the
+// reload-pending flag "or every triggerReloadAndWait caller hangs for its
+// full deadline" — but that was itself the bug: clearing the flag here made
+// every triggerReloadAndWaitOutcome poller still waiting on this cycle
+// observe IsReloadPending()==false and report confirmed=true, a false "your
+// change is live" for a request that beginReload/markPending had recorded
+// but that this cycle never actually served (no exec ever ran with a valid
+// config for it — loadNext failed before exec was reached).
+//
+// The single-flight SLOT must still be released (that part of the old
+// assertion was correct) or every future reload is wedged forever — see
+// abandonReload's own doc comment. What must NOT happen is treating "slot
+// released" and "pending cleared" as one inseparable unit: they are
+// deliberately decoupled here, mirroring newReloadTrigger's own
+// abandonReload(nil) fail-safe a few dozen lines above (used for the
+// identical reason — a request recorded but never served).
+func TestReloadCycle_FollowUpConfigLoadFailure_LeavesPendingSetAndMarksDegraded(t *testing.T) {
 	h := newReloadHarness(t)
 
 	require.True(t, h.svc.beginReload(h.al.MarkReloadPending), "slot must be free at the start of the test")
@@ -673,11 +686,73 @@ func TestReloadCycle_FollowUpConfigLoadFailure_ReleasesSlotAndPollers(t *testing
 	h.al.TriggerReload() //nolint:errcheck // sets reloadPending; the slot is already held above
 	runReloadCycle(h.al, h.svc, cfg, exec, failingLoad)
 
-	assert.Equal(t, 1, loadCalls, "the coalesced follow-up must have attempted a config load")
-	assert.False(t, h.al.IsReloadPending(),
-		"a failed follow-up load must still clear the reload-pending flag, "+
-			"or every triggerReloadAndWait caller hangs for its full deadline")
+	assert.Equal(t, 2, loadCalls,
+		"the coalesced follow-up must retry the load once (self-heals a transient read race) "+
+			"before giving up — failingLoad always errors, so exactly 2 attempts are expected")
+	assert.True(t, h.al.IsReloadPending(),
+		"a follow-up load failure (even after the retry) must LEAVE the reload-pending flag "+
+			"SET — clearing it reports a false confirmed=true to every "+
+			"triggerReloadAndWaitOutcome poller still waiting on this cycle, for a request that "+
+			"was never actually served")
 	assert.True(t, h.svc.beginReload(h.al.MarkReloadPending),
 		"a failed follow-up load must still release the single-flight slot, "+
 			"or every future reload is wedged")
+
+	h.svc.reloadMu.Lock()
+	degraded, reloadErr := h.svc.reloadDegraded, h.svc.reloadError
+	h.svc.reloadMu.Unlock()
+	assert.True(t, degraded,
+		"a follow-up load failure must mark the service degraded so GET /health surfaces it "+
+			"immediately rather than only through the (now honestly-still-set) pending flag")
+	assert.Error(t, reloadErr)
+}
+
+// TestReloadCycle_FollowUpConfigLoadFailure_TransientRetrySucceeds proves the
+// self-heal half of the same fix: a load that fails once (e.g. a concurrent
+// config.json writer racing safeUpdateConfigJSON's atomic rename against this
+// read) but succeeds on the immediate retry must complete the coalesced
+// reload NORMALLY — pending cleared, slot released, not degraded — rather
+// than being treated as the genuine, request-never-served failure the sibling
+// test above covers.
+func TestReloadCycle_FollowUpConfigLoadFailure_TransientRetrySucceeds(t *testing.T) {
+	h := newReloadHarness(t)
+
+	require.True(t, h.svc.beginReload(h.al.MarkReloadPending), "slot must be free at the start of the test")
+
+	loadCalls := 0
+	flakyLoad := func() (*config.Config, error) {
+		loadCalls++
+		if loadCalls == 1 {
+			return nil, fmt.Errorf("simulated transient config load failure")
+		}
+		return h.al.GetConfig(), nil
+	}
+	execCalls := 0
+	exec := func(c *config.Config) error {
+		execCalls++
+		if execCalls == 1 {
+			// First reload requests a follow-up, so the cycle takes the
+			// coalesced branch and reaches flakyLoad.
+			h.svc.reloadCoalesceMu.Lock()
+			h.svc.reloadRequested = true
+			h.svc.reloadCoalesceMu.Unlock()
+		}
+		return nil
+	}
+
+	cfg := h.al.GetConfig()
+	h.al.TriggerReload() //nolint:errcheck // sets reloadPending; the slot is already held above
+	runReloadCycle(h.al, h.svc, cfg, exec, flakyLoad)
+
+	assert.Equal(t, 2, loadCalls, "the retry must have fired exactly once, and it must have succeeded")
+	assert.Equal(t, 2, execCalls, "the coalesced reload must have run exec once the retried load succeeded")
+	assert.False(t, h.al.IsReloadPending(),
+		"a coalesced reload that completes normally (after a self-healed transient load "+
+			"failure) must clear the reload-pending flag exactly like any other successful cycle")
+	assert.True(t, h.svc.beginReload(h.al.MarkReloadPending), "the slot must be released on normal completion")
+
+	h.svc.reloadMu.Lock()
+	degraded := h.svc.reloadDegraded
+	h.svc.reloadMu.Unlock()
+	assert.False(t, degraded, "a self-healed transient load failure must not mark the service degraded")
 }

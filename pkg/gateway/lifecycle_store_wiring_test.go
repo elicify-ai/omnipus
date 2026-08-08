@@ -67,7 +67,15 @@ func TestSetupAndStartServices_TaskExecutorLifecycleStoreWiring(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 
-	credStore := credentials.NewStore(filepath.Join(tmpDir, "credentials.json"))
+	// FIX (14-reviewer sign-off finding #5): setupAndStartServices now aborts
+	// boot when it cannot derive the intent-log HMAC chain key (previously a
+	// WARN-and-continue that let plan.NewIntentLog silently install a public
+	// dev-only key in production — see gateway.go's boot wiring). A locked
+	// store (credentials.NewStore without Unlock) used to be tolerated here
+	// only because that derivation failure was non-fatal; use the real
+	// unlocked-store helper so this test still exercises the intended boot
+	// path rather than the now-fatal locked-store one.
+	credStore := newUnlockedStore(t, tmpDir)
 	builtinReg := tools.NewBuiltinRegistry()
 	mcpReg := tools.NewMCPRegistry()
 
