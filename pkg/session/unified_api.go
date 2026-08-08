@@ -58,14 +58,35 @@ import (
 // files").
 //
 // The stats-accumulation block below intentionally mirrors
-// UnifiedStore.AppendTranscript's byte-for-byte. Once U5 lands FR-002 that
-// method's body converges on this one, and — per FR-001's own text —
-// AppendTranscriptStrict becomes "a name, not a second behavior". It is
-// duplicated here, not extracted into a shared helper, because this unit
-// does not own unified.go (ownership Rule 2) and unified.go is being edited
-// concurrently by U5 in this same wave; requesting a shared helper from U5
-// would create exactly the cross-file coordination hazard Rule 2 exists to
-// avoid.
+// UnifiedStore.AppendTranscript's byte-for-byte. U5 has since landed FR-002
+// (unified.go's AppendTranscript now routes its own stats mutation through
+// u6MarkStatsDirtyLocked, the FR-061 in-memory-only throttle), and this
+// method converges on the exact same call per FR-001's own text — "a name,
+// not a second behavior" (14-reviewer fix wave finding #4).
+//
+// THE PROBLEM THAT CONVERGENCE CLOSES. Before this fix, this method still
+// called writeMetaLocked — which, to decide which of the four on-disk field
+// groups actually changed, unconditionally re-reads meta via a SECOND
+// readMetaLocked call and marshals all four groups' prev-vs-current JSON
+// (u5SameJSON) even though this method's own mutation scope is statically
+// known to touch ONLY Stats+UpdatedAt. At the turn engine's hottest call
+// sites (a streamed transcript line per token) that meant a redundant clone,
+// 8 marshal calls whose answer never varies, and a synchronous stats.json
+// fsync on every single line — the exact per-token cost AppendTranscript's
+// own FR-061 throttle exists to avoid, silently reintroduced here. Calling
+// u6MarkStatsDirtyLocked directly (see below) is not just cheaper — it also
+// means Strict inherits the throttle for the first time, matching the
+// non-strict path's cost profile exactly.
+//
+// What "strict" still means after this convergence: the pre-flight
+// existence check above (refusing to write against an unknown session,
+// creating nothing) and this call's own transcript.jsonl append error
+// propagation. u6MarkStatsDirtyLocked is pure in-memory bookkeeping and can
+// never fail, so there is no longer a synchronous meta-write error to
+// surface for the stats half — an unflushed delta is persisted by the
+// periodic flusher or the next forced-flush point (FlushSessionStats /
+// FlushAndEvictSessionMeta), exactly like every other u6MarkStatsDirtyLocked
+// caller in this store.
 func (us *UnifiedStore) AppendTranscriptStrict(sessionID string, entry TranscriptEntry) error {
 	if err := validateSessionID(sessionID); err != nil {
 		return err
@@ -122,14 +143,14 @@ func (us *UnifiedStore) AppendTranscriptStrict(sessionID string, entry Transcrip
 	}
 	meta.UpdatedAt = entry.Timestamp
 
-	// Unlike the lenient AppendTranscript (which WARNs and swallows a
-	// post-append meta-write failure), the strict entry point surfaces it:
-	// the entire point of this method is that a caller's error check must be
-	// trustworthy, and a meta-write failure here means the just-appended
-	// line's stats never landed durably.
-	if err := us.writeMetaLocked(sessionID, meta); err != nil {
-		return fmt.Errorf("unified_store: append transcript strict: write meta after append: %w", err)
-	}
+	// FR-061 throttle (see this method's doc comment for the convergence
+	// history): mutate ONLY the cached entry and mark the session dirty for
+	// the periodic flusher (or the next forced-flush point) to persist —
+	// the SAME call AppendTranscript's own hot path already makes, never a
+	// second stats-writing mechanism. What remains STRICT about this method
+	// is unchanged: the pre-flight existence check above, and the
+	// transcript.jsonl append error propagated earlier in this function.
+	us.u6MarkStatsDirtyLocked(sessionID, meta)
 	return nil
 }
 

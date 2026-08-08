@@ -17,10 +17,12 @@ package session
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -136,6 +138,55 @@ func TestAppendTranscriptStrict_KnownSession_AppendsExactlyOneLine(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, beforeLen+1, len(after), "AppendTranscriptStrict must append EXACTLY one line")
 	assert.Equal(t, "hi", after[len(after)-1].Content)
+}
+
+// TestAppendTranscriptStrict_StatsThrottled is the 14-reviewer fix-wave
+// finding #4 regression guard: AppendTranscriptStrict's stats bookkeeping
+// must go through the SAME FR-061 in-memory-only throttle AppendTranscript's
+// own hot path already uses (u6MarkStatsDirtyLocked), not a synchronous
+// writeMetaLocked call. Proven exactly like TestStatsThrottle_NoFileWriteWithinInterval
+// (unified_stats_flush_adr057_test.go) proves it for the non-strict sibling:
+// immediately after the call, the transcript line is durably on disk (never
+// throttled — FR-062) but stats.json is NOT, while the cache (GetMeta) is
+// already current; a forced flush then persists it.
+func TestAppendTranscriptStrict_StatsThrottled(t *testing.T) {
+	store := u2NewTestStore(t)
+	store.SetStatsFlushInterval(time.Hour) // isolate from the periodic ticker
+
+	meta, err := store.NewSession(SessionTypeChat, "", "agent-1")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	require.NoError(t, store.AppendTranscriptStrict(sessionID, TranscriptEntry{Role: "user", Content: "hi", Tokens: 5}))
+
+	// The transcript line itself is never throttled (FR-062) — real bytes on
+	// disk immediately.
+	transcript, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	require.Len(t, transcript, 1)
+
+	// GREEN 1: stats.json must NOT exist yet — the delta is in-memory only.
+	statsPath := filepath.Join(store.BaseDir(), sessionID, "stats.json")
+	_, statErr := os.Stat(statsPath)
+	assert.True(t, os.IsNotExist(statErr), "stats.json must not exist immediately after AppendTranscriptStrict — the FR-061 throttle must apply here too")
+
+	// GREEN 2: the cache is already current (GetMeta never touches disk on a
+	// cache hit) — a caller reading back through the store sees the update
+	// immediately despite the disk write being deferred.
+	cached, err := store.GetMeta(sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, 5, cached.Stats.TokensIn)
+
+	// GREEN 3: a forced flush persists the deferred delta — the throttle
+	// defers, it never drops.
+	require.NoError(t, store.FlushSessionStats(sessionID))
+	data, err := os.ReadFile(statsPath)
+	require.NoError(t, err)
+	var onDisk struct {
+		TokensIn int `json:"tokens_in"`
+	}
+	require.NoError(t, json.Unmarshal(data, &onDisk))
+	assert.Equal(t, 5, onDisk.TokensIn)
 }
 
 // ---------------------------------------------------------------------
