@@ -288,12 +288,25 @@ func TestDelegateTool_Respond_ParksThenResumes(t *testing.T) {
 		t.Errorf("delivered content = %q, want %q", msg.Content, "yes, go ahead")
 	}
 
+	// HIGH-1 (14-reviewer sign-off): respond now genuinely REDISPATCHES the
+	// child (reusing the isResume spawn machinery), not merely flips the
+	// lifecycle record and enqueues a steering message nothing will ever
+	// drain. That redispatch is asynchronous (mirrors follow_up's own
+	// fire-and-forget dispatch), so the record legitimately passes through
+	// `running` before mockDelegateSpawner's instant, error-free response
+	// carries it straight on to `completed` — asserting `running` here would
+	// be racing the dispatch goroutine (flaky depending on scheduling).
+	// Waiting for the async task to actually finish and asserting the
+	// TERMINAL state is the stronger proof: it can only be reached if a real
+	// turn was dispatched and ran to completion, not just "1 message
+	// pending" in a queue with no consumer.
+	tool.WaitForAsyncTasks()
 	rec, err := lc.Load("child-z")
 	if err != nil {
 		t.Fatalf("Load after respond failed: %v", err)
 	}
-	if rec.State != session.LifecycleRunning {
-		t.Errorf("state after respond = %q, want %q", rec.State, session.LifecycleRunning)
+	if rec.State != session.LifecycleCompleted {
+		t.Errorf("state after respond's redispatch completed = %q, want %q", rec.State, session.LifecycleCompleted)
 	}
 	if rec.NeedsInput != nil {
 		t.Error("NeedsInput should be cleared after respond")

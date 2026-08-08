@@ -1181,7 +1181,7 @@ func (t *DelegateTool) execute(ctx context.Context, args map[string]any, cb Asyn
 	case "steer":
 		return t.executeSteer(ctx, args)
 	case "respond":
-		return t.executeRespond(ctx, args)
+		return t.executeRespond(ctx, args, cb)
 	case "cancel":
 		return t.executeCancel(ctx, args)
 	case "follow_up":
@@ -2616,6 +2616,36 @@ func (t *DelegateTool) checkSteerCaps(sessionID, text string) error {
 
 	t.steerRateMu.Lock()
 	defer t.steerRateMu.Unlock()
+
+	// LOW-4 (14-reviewer sign-off): opportunistic full-map eviction, mirroring
+	// cancel_prearm.go::markPendingSpawn's own pattern. The per-session logic
+	// below always ends by storing THIS session's own entry back non-empty —
+	// either the rate-limited kept window (>= limit, so never empty) or
+	// kept+now (always >= 1) — so a session's own key never self-deletes,
+	// even long after that session is terminal and will never call
+	// steer/respond again. Left unaddressed, every distinct session_id ever
+	// steered/responded-to accumulates a permanent entry in this map for the
+	// life of the process. Sweep every OTHER session's window for entries
+	// older than the rate window on each call and drop any that are now
+	// fully empty, bounding the map to roughly the sessions actively
+	// steered within the last minute.
+	for sid, ts := range t.steerRateWindows {
+		if sid == sessionID {
+			continue // handled by the per-session logic below
+		}
+		live := ts[:0]
+		for _, t2 := range ts {
+			if t2.After(cutoff) {
+				live = append(live, t2)
+			}
+		}
+		if len(live) == 0 {
+			delete(t.steerRateWindows, sid)
+		} else {
+			t.steerRateWindows[sid] = live
+		}
+	}
+
 	window := t.steerRateWindows[sessionID]
 	kept := window[:0]
 	for _, ts := range window {
@@ -2778,7 +2808,20 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 		maxMessages = n
 	}
 
-	msgs, nextCursor, hasMore, derr := t.inbox.Drain(ownerKey, sessionID, sinceCursor, maxMessages)
+	// MEDIUM-2 (14-reviewer sign-off): key the Drain by rec.ParentDurableKey
+	// (the target session's own DIRECT parent — the key its messages were
+	// actually Appended under), NOT the calling ownerKey. verifyCallerOwnsSession
+	// above already grants an authorized ANCESTOR (grandparent, etc., up to
+	// SetOwnershipWalkMaxDepth — FR-039) reach into a descendant's inbox, but
+	// a message is always stored under the child's own direct parent's key
+	// (message_parent.go's Append call), never the calling ancestor's. Keying
+	// this read by ownerKey silently returned an empty inbox for exactly the
+	// authorized-ancestor case FR-039 exists to permit — the ownerKey
+	// variable above and its own presence check remain (a caller must still
+	// have SOME resolvable session identity to reach this far at all), but
+	// the store key must be the target's own ParentDurableKey. executeRespond
+	// already uses this correct key (see its own Drain call).
+	msgs, nextCursor, hasMore, derr := t.inbox.Drain(rec.ParentDurableKey, sessionID, sinceCursor, maxMessages)
 	if derr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox: %v", derr)).WithError(derr)
 	}
@@ -2917,9 +2960,22 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	))
 }
 
-func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any) *ToolResult {
+func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
 	if t.lifecycle == nil {
 		return ErrorResult("delegate: no lifecycle store configured")
+	}
+	// HIGH-1 (14-reviewer sign-off): a parked child's turn has already ENDED
+	// (TurnEndStatusParked, via message_parent(wait=true)) — respond must
+	// actually RESUME it, not merely unpark the lifecycle record and hope a
+	// live consumer is still around to read the steering queue (it never is
+	// — see the redispatch comment on the native path below). That resume
+	// goes through the same spawner-backed isResume machinery follow_up
+	// uses, so a missing spawner must be rejected up front, before touching
+	// anything, exactly like executeFollowUp's own posture (checked before
+	// any argument parsing) — never as a failure discovered mid-flow after
+	// some other state has already changed.
+	if t.spawner == nil {
+		return ErrorResult("delegate: respond: no sub-turn spawner configured to resume the session")
 	}
 	sessionID, err := requiredStringArg(args, "session_id")
 	if err != nil {
@@ -3015,10 +3071,15 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any) 
 		))
 	}
 
-	// Atomically transition the parked session out of needs_input via Mutate
-	// (Correctness-MAJOR-3): re-verify state + correlation UNDER the lock so a
-	// concurrent respond/cancel that already moved this session is rejected
-	// rather than double-applied.
+	// HIGH-1 ordering fix (14-reviewer sign-off): the un-park lifecycle
+	// transition used to commit BEFORE delivery was even attempted — an
+	// enqueue failure then left the record flipped away from needs_input
+	// (NeedsInput cleared) with NO way to retry respond(), since the
+	// correlation_id match it re-checks was already erased. Delivery is now
+	// attempted FIRST, while the session is still safely parked; the
+	// lifecycle is flipped only once delivery has genuinely succeeded, so a
+	// failure at any point below leaves the session exactly as parked as it
+	// was, ready for the caller to retry.
 	//
 	// Correctness-MAJOR-2 (3P respond state): a 3P respond spawns a NEW
 	// corrective session (spawnCorrectiveFollowUp) and never warm-resumes the
@@ -3038,7 +3099,82 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any) 
 		nextState = session.LifecycleCancelled
 		failedReason = "superseded by corrective re-dispatch (3P respond)"
 	}
-	if err := t.lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
+
+	if rec.Is3P {
+		// D5: 3P respond spawns a NEW corrective session — never an
+		// in-place warm resume (external CLIs have no such primitive).
+		// spawnCorrectiveFollowUp Persists the new generation under a
+		// DIFFERENT session_id and dispatches it; it never touches THIS
+		// (the original) record. Dispatch it FIRST — a failure here (e.g. a
+		// Persist I/O error, or the inner executeAsync call) never marks the
+		// original as superseded, so it stays parked and retryable.
+		dispatch := t.spawnCorrectiveFollowUp(ctx, sessionID, rec,
+			fmt.Sprintf("Answer to your question (correlation_id=%s): %s", correlationID, text), cb)
+		if dispatch.IsError {
+			return dispatch
+		}
+		// The corrective successor is confirmed dispatched — only now mark
+		// the ORIGINAL terminal (superseded by the successor).
+		if merr := t.lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
+			if cur == nil {
+				return session.ErrLifecycleNotFound
+			}
+			if cur.State != session.LifecycleNeedsInput || cur.NeedsInput == nil || cur.NeedsInput.CorrelationID != correlationID {
+				return fmt.Errorf("session %s is not parked on correlation_id %q", sessionID, correlationID)
+			}
+			cur.State = nextState
+			cur.NeedsInput = nil
+			cur.FailedReason = failedReason
+			return nil
+		}); merr != nil {
+			// The corrective successor is already running by this point —
+			// returning an error here would misleadingly tell the caller
+			// "respond failed" when the answer was in fact delivered. Log it
+			// instead; the original record is a display/bookkeeping nicety at
+			// this stage, not the source of truth for whether the answer landed.
+			slog.Warn("delegate: respond: 3P corrective successor dispatched but the original could not be marked superseded",
+				"session_id", sessionID, "error", merr)
+		}
+		return dispatch
+	}
+
+	// Native: the parked child's turn has already ENDED (TurnEndStatusParked)
+	// — the steering queue below has no live consumer, and even a freshly
+	// redispatched turn's OWN first iteration does not drain it
+	// (SkipInitialSteeringPoll, set unconditionally for every subturn spawn —
+	// see pkg/agent/subturn.go). EnqueueSteeringMessage is kept for any rare
+	// case where the turn is somehow still alive to read it, but the actual,
+	// guaranteed delivery mechanism is the redispatch below, which reuses the
+	// SAME isResume spawn machinery `delegate follow_up` uses
+	// (spawnCorrectiveFollowUp's native branch): the answer text becomes the
+	// resumed turn's own first message (processOptions.UserMessage), loaded
+	// against the child's existing, on-disk history.
+	//
+	// Enqueue is attempted FIRST, before any lifecycle mutation — an enqueue
+	// failure returns immediately with the record still untouched (still
+	// parked, retryable).
+	if t.steering == nil {
+		return ErrorResult("delegate: respond: no steering sink configured to deliver the answer")
+	}
+	if serr := t.steering.EnqueueSteeringMessage(sessionID, rec.AgentID, providers.Message{Role: "user", Content: text}); serr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: failed to deliver answer: %v", serr)).WithError(serr)
+	}
+
+	// Atomic claim: re-verify state + correlation UNDER the lock
+	// (Correctness-MAJOR-3) so a concurrent respond/cancel on this same
+	// session cannot double-apply. This MUST run BEFORE the redispatch below,
+	// not after: executeAsync's own internal transitionLifecycle call
+	// unconditionally (no correlation re-check) forces the record to
+	// `running` the instant dispatch begins, so a Mutate placed after that
+	// call would always observe a record no longer `needs_input` — even on
+	// the single-caller happy path — and spuriously reject it. Placing the
+	// claim here instead, immediately before a redispatch that cannot fail
+	// synchronously (t.spawner == nil was already rejected at the top of this
+	// function, before any side effect), delivers the same net effect the
+	// ordering fix requires: the record is only ever flipped once delivery
+	// (the enqueue above) has already succeeded, and never in a way an
+	// enqueue failure could leave half-applied.
+	if merr := t.lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return session.ErrLifecycleNotFound
 		}
@@ -3049,24 +3185,24 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any) 
 		cur.NeedsInput = nil
 		cur.FailedReason = failedReason
 		return nil
-	}); err != nil {
-		return ErrorResult(fmt.Sprintf("delegate: respond: failed to resume session: %v", err)).WithError(err)
+	}); merr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: failed to resume session: %v", merr)).WithError(merr)
 	}
 
-	if rec.Is3P {
-		// D5: 3P respond spawns a NEW corrective session — never an
-		// in-place warm resume (external CLIs have no such primitive). The
-		// original was marked terminal `cancelled` (superseded) above; the
-		// NEW session (minted in spawnCorrectiveFollowUp) carries the turn.
-		return t.spawnCorrectiveFollowUp(ctx, sessionID, rec,
-			fmt.Sprintf("Answer to your question (correlation_id=%s): %s", correlationID, text), nil)
+	label := ""
+	t.mu.Lock()
+	if taskID, ok := t.sessionIndex[sessionID]; ok {
+		if st, ok := t.tasks[taskID]; ok {
+			label = st.Label
+		}
 	}
+	t.mu.Unlock()
 
-	if t.steering == nil {
-		return ErrorResult("delegate: respond: no steering sink configured to deliver the answer")
-	}
-	if serr := t.steering.EnqueueSteeringMessage(sessionID, rec.AgentID, providers.Message{Role: "user", Content: text}); serr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: respond: failed to deliver answer: %v", serr)).WithError(serr)
+	dispatch := t.executeAsync(ctx,
+		fmt.Sprintf("Answer to your question (correlation_id=%s): %s", correlationID, text),
+		label, rec.AgentID, nil, sessionID, 0, nil, true, cb)
+	if dispatch.IsError {
+		return dispatch
 	}
 
 	resp := generated.DelegateRespondResponse{Acknowledged: true}
@@ -3075,6 +3211,33 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any) 
 		return NewToolResult("Answer delivered; session resumed.")
 	}
 	return NewToolResult(string(payload))
+}
+
+// cancelBackgroundShellWarnings renders the "could not be killed" /
+// "descendant walk incomplete" warning sentences shared by every
+// executeCancel outcome message — INCLUDING the TOCTOU "nothing to cancel"
+// branch (MEDIUM-3, 14-reviewer sign-off): a background-shell kill failure or
+// an incomplete descendant walk is real, caller-relevant information
+// regardless of whether the turn-level cancel itself found anything left to
+// cancel. Before this fix, killChildBackgroundShells' own warnings were
+// computed unconditionally but appended ONLY to the two success-message
+// branches below — the "terminated between the terminal check and the
+// cancel hook" branch discarded them outright, so a caller could be told
+// "nothing to cancel" while a background shell it just tried to kill was, in
+// fact, left running with no warning at all.
+func cancelBackgroundShellWarnings(killFailed int, walkIncomplete bool) string {
+	var warnings string
+	if killFailed > 0 {
+		warnings += fmt.Sprintf(
+			" WARNING: %d of that session's background shell(s) could not be killed and may still be running.",
+			killFailed,
+		)
+	}
+	if walkIncomplete {
+		warnings += " WARNING: the descendant walk for this session's background shells failed partway through — " +
+			"some of its descendants may not have been reached at all and their background shells could still be running."
+	}
+	return warnings
 }
 
 func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *ToolResult {
@@ -3177,20 +3340,11 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 			return ErrorResult(fmt.Sprintf(
 				"delegate: cancel: session %s terminated between the terminal check and the cancel hook — nothing to cancel",
 				sessionID,
-			))
+			) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
 		}
 		t.transitionLifecycle(sessionID, session.LifecycleCancelled, "stopped_by_user")
 		msg := fmt.Sprintf("Session %s hard-cancelled immediately.", sessionID)
-		if killFailed > 0 {
-			msg += fmt.Sprintf(
-				" WARNING: %d of that session's background shell(s) could not be killed and may still be running.",
-				killFailed,
-			)
-		}
-		if walkIncomplete {
-			msg += " WARNING: the descendant walk for this session's background shells failed partway through — " +
-				"some of its descendants may not have been reached at all and their background shells could still be running."
-		}
+		msg += cancelBackgroundShellWarnings(killFailed, walkIncomplete)
 		return NewToolResult(msg)
 	}
 
@@ -3205,7 +3359,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		return ErrorResult(fmt.Sprintf(
 			"delegate: cancel: session %s terminated between the terminal check and the cancel hook — nothing to cancel",
 			sessionID,
-		))
+		) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
 	}
 
 	// cancel(soft) = soft cooperative stop + a hard RequestCancel backstop
@@ -3247,16 +3401,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 			"after which a hard cancel backstop fires if it has not stopped on its own.",
 		sessionID, t.cancelGrace,
 	)
-	if killFailed > 0 {
-		msg += fmt.Sprintf(
-			" WARNING: %d of that session's background shell(s) could not be killed and may still be running.",
-			killFailed,
-		)
-	}
-	if walkIncomplete {
-		msg += " WARNING: the descendant walk for this session's background shells failed partway through — " +
-			"some of its descendants may not have been reached at all and their background shells could still be running."
-	}
+	msg += cancelBackgroundShellWarnings(killFailed, walkIncomplete)
 	return NewToolResult(msg)
 }
 
@@ -3440,7 +3585,12 @@ func (t *DelegateTool) executePeek(ctx context.Context, args map[string]any) *To
 	}
 	state := string(rec.State)
 
-	snap, perr := t.inbox.Peek(ownerKey, sessionID)
+	// MEDIUM-2 (14-reviewer sign-off): key the Peek by rec.ParentDurableKey,
+	// not the calling ownerKey — see executeInbox's identical fix above for
+	// the full rationale (FR-039 grants an authorized ancestor reach beyond
+	// the direct parent, but messages are always stored under the target's
+	// own direct parent's key).
+	snap, perr := t.inbox.Peek(rec.ParentDurableKey, sessionID)
 	if perr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: peek: %v", perr)).WithError(perr)
 	}

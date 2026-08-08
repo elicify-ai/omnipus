@@ -3,29 +3,40 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // ADR-057 U14 (Wave F), W12b/FR-076/FR-077 — the D16 inbox producer
-// (pkg/tools/message_parent.go:640, ownerKeyFor -> rec.ParentDurableKey)
-// and consumer (pkg/tools/delegate.go's executeInbox, callerOwnerKey ->
-// ToolTranscriptSessionID(ctx)) both key on the immediate parent's
-// ParentDurableKey — verified end to end against REAL store-backed state
-// (Rule 5), not a spy that merely records its argument.
+// (pkg/tools/message_parent.go:640, ownerKeyFor -> rec.ParentDurableKey).
 //
-// [Design note, recorded here per the fablize evidence-based/no-silent-
-// assumptions rule] BDD-85's "does not, and does not return a clean empty
-// success in place of it" is read here as: the grandparent's OWN inbox
-// read genuinely finds nothing (not silently substituted for the direct
-// parent's), proven by (a) a positive control showing the message DOES
-// exist and IS found via the direct parent, and (b) an explicit assertion
-// that the grandparent's own response carries zero messages — rather than
-// as a requirement that the ownership GATE itself reject the grandparent's
-// call outright. BDD-44's own worked example explicitly lists `inbox` as
-// one of the six actions a root chat is PERMITTED to invoke against a
-// grandchild (TestOwnershipWalk_AllSixGatedActions in
-// delegate_adr057_test.go covers that gate directly); this file's concern
-// is the separate, orthogonal question of which owner's inbox FILE a
-// message is routed into. If a stricter reading (the grandparent's call
-// itself must be REJECTED, not merely empty) was intended, that is a
-// one-line change to executeInbox's ownership check for this action only
-// — flagged for review rather than guessed silently.
+// [UPDATED, 14-reviewer sign-off MEDIUM-2, post release/v0.1.1] This test
+// originally also asserted the CONSUMER side (delegate.go's executeInbox)
+// keyed reads by callerOwnerKey (ToolTranscriptSessionID(ctx)) — i.e. the
+// grandparent A's own inbox read on grandchild D's session came back empty,
+// per BDD-85 ("A grandchild's message_parent is drained only by its direct
+// parent"). That was a real bug, found and fixed independently of this
+// file: verifyCallerOwnsSession's ownership GATE was later extended (FR-039)
+// to permit an authorized ANCESTOR (not just the direct parent) up to
+// SetOwnershipWalkMaxDepth hops — TestOwnershipWalk_AllSixGatedActions
+// (delegate_adr057_test.go) explicitly lists `inbox`/`peek` among the six
+// actions a root chat is PERMITTED to invoke against a grandchild — but
+// executeInbox/executePeek's own DATA READ was never updated to match: they
+// kept resolving the store partition from the CALLER's own key instead of
+// the target's rec.ParentDurableKey (the key the message was actually
+// Appended under), so an authorized ancestor's call succeeded (passed the
+// gate) yet silently returned empty — a success-shaped false negative, not
+// a genuine absence. executeRespond in the same file already used the
+// correct key (rec.ParentDurableKey) throughout, which is what exposed the
+// inconsistency. The fix keys executeInbox/executePeek's store reads by
+// rec.ParentDurableKey unconditionally, matching executeRespond and closing
+// the gap between "who may call this" (the FR-039 gate) and "what they
+// actually see" (the data key) — see pkg/tools/delegate_signoff14_test.go
+// for the dedicated regression coverage of both actions.
+//
+// This SUPERSEDES BDD-85/FR-077's original "only the direct parent" data-
+// visibility contract (docs/internal/specs/adr-057-session-unification-spec.md)
+// for any caller the FR-039 walk itself authorizes — BDD-85 predates that
+// walk's extension past a single hop and was never revisited when it
+// landed. Flagged here rather than silently reconciled: an architect should
+// confirm the spec text itself is updated (or BDD-85 is deliberately
+// narrowed to the *unauthorized* case) rather than leaving the traced
+// requirement and the code permanently disagreeing.
 
 package tools
 
@@ -39,10 +50,13 @@ import (
 )
 
 // TestMessageParent_DrainedByDirectParentAtDepth3 is test #66 (BDD-85,
-// FR-077, "Producer and consumer agree", AC-16). Chat A, child B,
-// grandchild D: D pushes a message via message_parent; B (D's DIRECT
-// parent) drains it via delegate action="inbox"; A (D's grandparent) does
-// not find it in ITS OWN inbox.
+// FR-077, "Producer and consumer agree", AC-16), UPDATED per the 14-reviewer
+// sign-off MEDIUM-2 fix (see file header). Chat A, child B, grandchild D: D
+// pushes a message via message_parent; B (D's DIRECT parent) drains it via
+// delegate action="inbox" — and so does A (D's grandparent, an ANCESTOR the
+// FR-039 ownership walk authorizes), since both are reading the SAME
+// correctly-keyed partition (rec.ParentDurableKey = B) regardless of which
+// authorized caller asks.
 func TestMessageParent_DrainedByDirectParentAtDepth3(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
@@ -93,18 +107,22 @@ func TestMessageParent_DrainedByDirectParentAtDepth3(t *testing.T) {
 		t.Errorf("expected B's inbox drain to contain D's actual message text, got: %s", bResult.ForLLM)
 	}
 
-	// A (grandparent, NOT the direct parent) does not find it in ITS OWN
-	// inbox — see the file-level design note above for why this asserts a
-	// genuinely empty result rather than an outright ownership rejection.
+	// A (grandparent, NOT the direct parent, but an ANCESTOR the FR-039
+	// ownership walk authorizes — TestOwnershipWalk_AllSixGatedActions lists
+	// `inbox` among the six permitted actions) now ALSO finds it: MEDIUM-2's
+	// fix keys the read by D's own rec.ParentDurableKey (= B) unconditionally,
+	// not by which authorized caller happens to ask. See this file's header
+	// comment for why this supersedes BDD-85's original "only the direct
+	// parent" data-visibility text.
 	aCtx := WithTranscriptSessionID(context.Background(), chatA)
 	aResult := delegateTool.Execute(aCtx, map[string]any{"action": "inbox", "session_id": grandchildD})
 	if aResult.IsError {
 		t.Fatalf("did not expect an ownership rejection for A against D (BDD-44 permits the ancestor "+
-			"walk here) — expected a genuinely empty inbox result instead, got error: %s", aResult.ForLLM)
+			"walk here) — expected A to successfully read D's inbox, got error: %s", aResult.ForLLM)
 	}
-	if strings.Contains(aResult.ForLLM, "grandchild is working") {
-		t.Fatalf("BDD-85: A's OWN inbox drain must NOT surface D's message (it was routed to B's inbox, "+
-			"not A's) — got: %s", aResult.ForLLM)
+	if !strings.Contains(aResult.ForLLM, "grandchild is working") {
+		t.Fatalf("MEDIUM-2: expected authorized ancestor A's inbox read to surface D's message (keyed by "+
+			"D's own rec.ParentDurableKey, same as B's read), got: %s", aResult.ForLLM)
 	}
 }
 
