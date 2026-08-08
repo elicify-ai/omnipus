@@ -99,6 +99,14 @@ type TaskExecutor struct {
 	// consumer of the same contract. Nil in test harnesses and on a degraded
 	// boot, in which case no evidence is recorded and Play takes its
 	// documented fresh-attempt path.
+	//
+	// Guarded by mu (fix-wave finding #3) — the SAME mutex protecting
+	// lifecycleStore/running, for the same reason: the gateway boot sequence
+	// starts TaskDrain-reachable dispatch (via newTaskExecutor) before it
+	// calls SetEvidenceCommitter, so a bare unsynchronized field write here
+	// raced recordEvidenceBoundary's unsynchronized read on another
+	// goroutine. Always go through SetEvidenceCommitter (write) and
+	// getEvidenceCommitter (read) — never touch the field directly.
 	evidence evidenceCommitter
 
 	// planStore is the shared *plan.Store (ADR-049/ADR-052), wired at the
@@ -112,6 +120,10 @@ type TaskExecutor struct {
 	// past gateway wiring — CheckQueuedTasks treats a nil store as fail-closed
 	// for any task that names a PlanID (never auto-dispatch a plan member
 	// whose parent plan's live state cannot be verified).
+	//
+	// Guarded by mu (fix-wave finding #3) — see evidence's doc comment above
+	// for the identical race this closes. Always go through SetPlanStore
+	// (write) and getPlanStore (read) — never touch the field directly.
 	planStore *plan.Store
 
 	// goroutineCtxHook is a test seam ONLY — production leaves it nil.
@@ -465,6 +477,25 @@ func (te *TaskExecutor) ClearEvidenceGateStreak(taskID string) {
 // StartOccurrenceRun (the user-initiated launch paths) record
 // task.RunKindManual instead.
 func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string, occurrenceMs *int64) error {
+	// Reserve a wg slot BEFORE checking draining (fix-wave finding #1): the
+	// old order — check draining, THEN wg.Add(1) only right before the `go`
+	// statement deep inside executeTask (past store reads, ClaimForRun, and
+	// the fsync-bound session-creation writes) — left the entire synchronous
+	// body of executeTask invisible to Drain's wg.Wait. A dispatch that
+	// passed the draining check a moment before Drain() stored the flag could
+	// still be reading/claiming/writing through stores Close() was about to
+	// tear down, with Drain already returned clean (wg observed 0 the whole
+	// time). Reserving here first, then re-checking draining, closes that
+	// window: sync/atomic operations are sequentially consistent (Go memory
+	// model, Go 1.19+), so either our Add(1) is ordered before Drain's
+	// Store(true) — in which case Drain's following wg.Wait is guaranteed to
+	// observe our outstanding count — or Drain's Store is ordered before our
+	// Add, in which case our own Load below is guaranteed to observe it and
+	// refuse before touching any store. The goroutine launched below (if any)
+	// gets its OWN independent Add(1)/Done() pair (te.wg's doc comment) that
+	// this defer does not double-count.
+	te.wg.Add(1)
+	defer te.wg.Done()
 	if te.draining.Load() {
 		return ErrExecutorDraining
 	}
@@ -1702,10 +1733,11 @@ func (te *TaskExecutor) completeTaskWithResult(
 // from "evidence recorded", which is exactly the signal whose absence made the
 // unwired state invisible.
 func (te *TaskExecutor) recordEvidenceBoundary(t *task.Task) {
-	if te.evidence == nil || t == nil {
+	evidence := te.getEvidenceCommitter()
+	if evidence == nil || t == nil {
 		return
 	}
-	res, err := te.evidence.CommitTaskBoundary(t)
+	res, err := evidence.CommitTaskBoundary(t)
 	switch {
 	case err != nil:
 		logger.WarnCF("task_executor", "evidence boundary commit failed — Play will fall back to a fresh attempt",
@@ -1766,8 +1798,24 @@ func (te *TaskExecutor) resumeWorkDirFor(t *task.Task) string {
 // SetEvidenceCommitter installs the boundary-commit producer (D13/G-12). Wired
 // at the gateway boot seam next to PlanEngine.SetCommitResolver; leaving it
 // unset disables evidence recording without affecting task execution.
+//
+// Guarded by mu (fix-wave finding #3): the gateway starts dispatch (via
+// newTaskExecutor) before this late-binding boot-seam call lands, so a
+// concurrent recordEvidenceBoundary read on another goroutine must never race
+// this write — see the evidence field's own doc comment.
 func (te *TaskExecutor) SetEvidenceCommitter(c evidenceCommitter) {
+	te.mu.Lock()
 	te.evidence = c
+	te.mu.Unlock()
+}
+
+// getEvidenceCommitter returns the installed evidence committer (nil if
+// unset), guarded by mu so a concurrent SetEvidenceCommitter never races a
+// goroutine reading it mid-dispatch. Mirrors getLifecycleStore exactly.
+func (te *TaskExecutor) getEvidenceCommitter() evidenceCommitter {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+	return te.evidence
 }
 
 // SetPlanStore installs the shared *plan.Store so CheckQueuedTasks' plan-gate
@@ -1777,8 +1825,22 @@ func (te *TaskExecutor) SetEvidenceCommitter(c evidenceCommitter) {
 // mirrors SetEvidenceCommitter's late-binding discipline. Leaving it unset
 // (nil, the test-harness default) makes the gate fail-closed for any task
 // carrying a PlanID — see planForGate.
+//
+// Guarded by mu (fix-wave finding #3) — see SetEvidenceCommitter's doc
+// comment for the identical race this closes.
 func (te *TaskExecutor) SetPlanStore(store *plan.Store) {
+	te.mu.Lock()
 	te.planStore = store
+	te.mu.Unlock()
+}
+
+// getPlanStore returns the installed plan store (nil if unset), guarded by mu
+// so a concurrent SetPlanStore never races a goroutine reading it mid-gate.
+// Mirrors getLifecycleStore exactly.
+func (te *TaskExecutor) getPlanStore() *plan.Store {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+	return te.planStore
 }
 
 // notifySourceChannel sends a compact task result back to the originating
@@ -2015,7 +2077,19 @@ func (te *TaskExecutor) notifyParentIfAllSiblingsDone(parentID string) {
 	sessionKey := fmt.Sprintf("agent:%s:task:%s", parent.AgentID, parent.ID)
 	followUp := fmt.Sprintf("All child tasks of task %q have completed.\n\n%s", parent.ID, summary)
 	parentChatID := "task:" + parent.ID
+	// Fix-wave finding #1: this goroutine calls processTaskDirect — a real
+	// agent turn that reads/writes session and transcript stores — exactly
+	// like runTask/runTaskFromInProgress, but until now it was launched with
+	// NO wg tracking at all, so Drain's wg.Wait could never see it and it
+	// could still be writing through stores Close() had already torn down.
+	// Add(1) before `go` (mirroring the other two dispatch sites); Done() is
+	// the FIRST defer registered inside the goroutine so it fires LAST (after
+	// the panic-recovery defer below, which is registered second and thus
+	// runs first) — Drain only ever sees this goroutine as "done" once it has
+	// genuinely finished, panic or not.
+	te.wg.Add(1)
 	go func() {
+		defer te.wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				logger.ErrorCF("task_executor", "Panic in parent follow-up",
@@ -2294,6 +2368,16 @@ func (te *TaskExecutor) failTask(taskID, reason string) {
 // an empty string and an error when the task cannot be found, already has no
 // agent, or the concurrency cap is exhausted.
 func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string, error) {
+	// Reserve a wg slot BEFORE checking draining — see ExecuteTask's identical
+	// fix and its doc comment (fix-wave finding #1) for the full race this
+	// closes and why the ordering (Add, then Load) is race-free under Go's
+	// sequentially-consistent atomics. Every early return below (agent not
+	// found, already running, dispatch cap reached, session-creation failure,
+	// ...) is now covered by this single deferred Done(); the goroutine
+	// launched near the bottom of this function keeps its own separate
+	// Add(1)/Done() pair (unchanged).
+	te.wg.Add(1)
+	defer te.wg.Done()
 	if te.draining.Load() {
 		return "", ErrExecutorDraining
 	}
@@ -2810,10 +2894,11 @@ func (te *TaskExecutor) requirePlanExecuting(t *task.Task) error {
 // never auto-dispatch, matching SetPlanStore's own "will remain fail-closed"
 // convention for a nil store.
 func (te *TaskExecutor) planForGate(planID string) (*plan.Plan, error) {
-	if te.planStore == nil {
+	planStore := te.getPlanStore()
+	if planStore == nil {
 		return nil, errors.New("task_executor: no plan store wired, cannot verify parent plan state")
 	}
-	return te.planStore.Get(planID)
+	return planStore.Get(planID)
 }
 
 // ErrRunTaskApprovalRequired is returned by executeTask's automatic-dispatch
