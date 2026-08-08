@@ -469,3 +469,262 @@ func messageIDOf(t *testing.T, msg generated.SessionMessage) string {
 	}
 	return p.MessageID
 }
+
+// TestMessageInboxStore_Append_SinglePassOverExistingMessages is the
+// Perf-HIGH-1 call-count regression guard: Append used to do a full dedupe
+// scan AND a separate full open-count scan over the stored message entries,
+// each calling peekEnvelope (a Marshal+Unmarshal) once per message — 2
+// peekEnvelope calls per existing message per Append, quadratic over a
+// chat's lifetime. The fix combines both into one pass. With `existing`
+// prior, non-duplicate message entries already stored, one more Append MUST
+// make EXACTLY `existing` peekEnvelope calls — a regression back to the
+// two-loop shape would double this to 2*existing.
+func TestMessageInboxStore_Append_SinglePassOverExistingMessages(t *testing.T) {
+	s := newTestInboxStore(t)
+	s.ChildSendRatePerMinute = 100000 // isolate from the unrelated rate cap
+
+	const existing = 50
+	for i := 0; i < existing; i++ {
+		msg := progressMsg(t, "child-bulk", "bulk-"+strconv.Itoa(i))
+		if _, err := s.Append("owner-bulk", msg); err != nil {
+			t.Fatalf("seed Append #%d failed: %v", i, err)
+		}
+	}
+
+	before := messageInboxPeekEnvelopeCalls.Load()
+	newMsg := progressMsg(t, "child-bulk", "bulk-new")
+	if _, err := s.Append("owner-bulk", newMsg); err != nil {
+		t.Fatalf("Append under test failed: %v", err)
+	}
+	delta := messageInboxPeekEnvelopeCalls.Load() - before
+
+	// +1 accounts for the ONE unavoidable peekEnvelope call on the new
+	// message itself (extracting its own envelope at the top of Append,
+	// before the existing-entries scan even starts) — everything beyond
+	// that must be exactly one call per existing message, not two.
+	want := int64(existing) + 1
+	if delta != want {
+		t.Fatalf("Append made %d peekEnvelope calls scanning %d existing messages, want exactly %d "+
+			"(one combined pass, not the old two-separate-loops shape)", delta, existing, want)
+	}
+}
+
+// TestMessageInboxStore_Compaction_PreservesUnackedAndRetainsNewestAcked is
+// the HIGH-finding compaction correctness test: every UNACKED message
+// entry must survive a compaction untouched, and among ACKED entries only
+// the newest AckedRetentionMax (by append order) are kept.
+func TestMessageInboxStore_Compaction_PreservesUnackedAndRetainsNewestAcked(t *testing.T) {
+	s := newTestInboxStore(t)
+	s.ChildSendRatePerMinute = 100000
+	s.AckedRetentionMax = 3
+	s.CompactionAckedTrigger = 5 // fires once ackedMsgTotal > 5
+
+	const ownerKey = "owner-compact"
+	const child = "child-compact"
+
+	// 10 messages, ids acked-0..acked-9.
+	var ids []string
+	for i := 0; i < 10; i++ {
+		id := "acked-" + strconv.Itoa(i)
+		ids = append(ids, id)
+		if _, err := s.Append(ownerKey, progressMsg(t, child, id)); err != nil {
+			t.Fatalf("Append %s: %v", id, err)
+		}
+	}
+	// Two messages left deliberately unacked.
+	unacked1 := progressMsg(t, child, "stays-unacked-1")
+	unacked2 := progressMsg(t, child, "stays-unacked-2")
+	if _, err := s.Append(ownerKey, unacked1); err != nil {
+		t.Fatalf("Append stays-unacked-1: %v", err)
+	}
+	if _, err := s.Append(ownerKey, unacked2); err != nil {
+		t.Fatalf("Append stays-unacked-2: %v", err)
+	}
+
+	// Ack all 10 in one call — ackedMsgTotal becomes 10 > trigger(5), so this
+	// Ack call itself opportunistically compacts.
+	if _, err := s.AckDetailed(ownerKey, ids); err != nil {
+		t.Fatalf("AckDetailed: %v", err)
+	}
+
+	// The two unacked messages must still be fully present and drainable —
+	// safety-critical state, never touched by compaction regardless of
+	// retention.
+	msgs, _, hasMore, err := s.Drain(ownerKey, child, "", 10)
+	if err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if hasMore {
+		t.Error("hasMore should be false — only 2 unacked messages remain")
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected exactly the 2 unacked messages to survive compaction, got %d", len(msgs))
+	}
+	gotIDs := map[string]bool{messageIDOf(t, msgs[0]): true, messageIDOf(t, msgs[1]): true}
+	if !gotIDs["stays-unacked-1"] || !gotIDs["stays-unacked-2"] {
+		t.Fatalf("compaction dropped or corrupted an unacked message; got ids=%v", gotIDs)
+	}
+
+	// Re-acking the newest-retained acked ids (acked-7, acked-8, acked-9 —
+	// the newest 3 by append order) must still be recognized as REAL known
+	// messages (Acknowledged, not Unknown) — proving they survived
+	// compaction, not just that the ack bookkeeping happens to tolerate
+	// unknown ids.
+	retained, err := s.AckDetailed(ownerKey, []string{"acked-7", "acked-8", "acked-9"})
+	if err != nil {
+		t.Fatalf("AckDetailed (retained re-ack): %v", err)
+	}
+	if len(retained.Acknowledged) != 3 {
+		t.Fatalf("expected the 3 newest acked messages to still be known after compaction, got Acknowledged=%v Unknown=%v",
+			retained.Acknowledged, retained.Unknown)
+	}
+
+	// The 7 OLDEST acked messages (acked-0..acked-6) are beyond the
+	// retention cap of 3 and must have been purged — re-acking them now
+	// reports Unknown, proving the file was actually rewritten smaller, not
+	// merely that a cap was computed and ignored.
+	purged, err := s.AckDetailed(ownerKey, []string{"acked-0", "acked-3", "acked-6"})
+	if err != nil {
+		t.Fatalf("AckDetailed (purged re-ack): %v", err)
+	}
+	if len(purged.Unknown) != 3 {
+		t.Fatalf("expected the 3 oldest acked messages to have been purged by compaction (Unknown), got Acknowledged=%v Unknown=%v",
+			purged.Acknowledged, purged.Unknown)
+	}
+}
+
+// TestMessageInboxStore_Compaction_DrainCursorSurvivesCompaction is the
+// critical cursor-safety regression guard for the compaction fix: a Drain
+// cursor issued BEFORE a compaction that physically removes entries
+// POSITIONED BEFORE the cursor's logical point must still resume correctly
+// afterward — neither skipping nor redelivering. A naive array-index-based
+// cursor breaks this exact scenario (removing earlier entries shifts every
+// later entry's position); the Seq-based cursor must not.
+func TestMessageInboxStore_Compaction_DrainCursorSurvivesCompaction(t *testing.T) {
+	s := newTestInboxStore(t)
+	s.ChildSendRatePerMinute = 100000
+	s.AckedRetentionMax = 1
+	s.CompactionAckedTrigger = 2 // fires once ackedMsgTotal > 2
+
+	const ownerKey = "owner-cursor"
+	const fillerChild = "filler-child"
+	const targetChild = "target-child"
+
+	// Two filler messages, acked together — ackedMsgTotal becomes 2, at
+	// (not over) the trigger, so no compaction yet.
+	if _, err := s.Append(ownerKey, progressMsg(t, fillerChild, "filler-1")); err != nil {
+		t.Fatalf("Append filler-1: %v", err)
+	}
+	if _, err := s.Append(ownerKey, progressMsg(t, fillerChild, "filler-2")); err != nil {
+		t.Fatalf("Append filler-2: %v", err)
+	}
+	if err := s.Ack(ownerKey, []string{"filler-1", "filler-2"}); err != nil {
+		t.Fatalf("Ack fillers: %v", err)
+	}
+
+	// The 3 target messages this test drains, positioned AFTER the (still
+	// present) filler entries.
+	for _, id := range []string{"t1", "t2", "t3"} {
+		if _, err := s.Append(ownerKey, progressMsg(t, targetChild, id)); err != nil {
+			t.Fatalf("Append %s: %v", id, err)
+		}
+	}
+
+	// Page 1: drain exactly t1, capture the cursor BEFORE any compaction has
+	// ever run against this file.
+	page1, cursor1, hasMore1, err := s.Drain(ownerKey, targetChild, "", 1)
+	if err != nil {
+		t.Fatalf("Drain page1: %v", err)
+	}
+	if len(page1) != 1 || messageIDOf(t, page1[0]) != "t1" {
+		t.Fatalf("page1: want [t1], got %v", page1)
+	}
+	if !hasMore1 {
+		t.Fatal("page1: expected hasMore=true (t2, t3 remain)")
+	}
+
+	// Trigger compaction: one more filler message, acked, pushes
+	// ackedMsgTotal to 3 > trigger(2). Compaction then keeps only the
+	// NEWEST 1 acked filler (filler-3) and drops filler-1/filler-2 — which
+	// are POSITIONED BEFORE t1/t2/t3 in the file, so this shifts t1/t2/t3's
+	// array indices down by 2. A raw-index cursor from page1 would now
+	// silently resume from the WRONG logical point.
+	if _, err := s.Append(ownerKey, progressMsg(t, fillerChild, "filler-3")); err != nil {
+		t.Fatalf("Append filler-3: %v", err)
+	}
+	if err := s.Ack(ownerKey, []string{"filler-3"}); err != nil {
+		t.Fatalf("Ack filler-3 (triggers compaction): %v", err)
+	}
+
+	// Sanity: prove the compaction actually ran and actually dropped
+	// filler-1/filler-2 (not a no-op) — re-acking them now reports Unknown.
+	sanity, err := s.AckDetailed(ownerKey, []string{"filler-1", "filler-2"})
+	if err != nil {
+		t.Fatalf("AckDetailed sanity check: %v", err)
+	}
+	if len(sanity.Unknown) != 2 {
+		t.Fatalf("fixture broken: expected filler-1/filler-2 to have been purged by compaction, got Acknowledged=%v Unknown=%v",
+			sanity.Acknowledged, sanity.Unknown)
+	}
+
+	// Page 2: resume from the PRE-compaction cursor. Must be exactly
+	// [t2, t3] — no redelivery of t1, no skipping either one.
+	page2, _, hasMore2, err := s.Drain(ownerKey, targetChild, cursor1, 10)
+	if err != nil {
+		t.Fatalf("Drain page2: %v", err)
+	}
+	gotIDs := make([]string, len(page2))
+	for i, m := range page2 {
+		gotIDs[i] = messageIDOf(t, m)
+	}
+	if len(page2) != 2 || gotIDs[0] != "t2" || gotIDs[1] != "t3" {
+		t.Fatalf("page2 (resumed across a compaction): got %v, want exactly [t2 t3] — "+
+			"a mismatch here means the cursor did not survive compaction (redelivery or silent skip)", gotIDs)
+	}
+	if hasMore2 {
+		t.Error("page2: expected hasMore=false after draining all remaining target messages")
+	}
+}
+
+// TestMessageInboxStore_RateWindows_SweepsQuiescentKeys is the LOW-finding
+// regression guard: rateWindows must not accumulate one permanent entry per
+// ever-seen child forever. Once the map's key count crosses
+// rateWindowSweepThreshold, the next call sweeps every OTHER key whose
+// window has fully expired, deleting it.
+func TestMessageInboxStore_RateWindows_SweepsQuiescentKeys(t *testing.T) {
+	s := newTestInboxStore(t)
+
+	oldThreshold := rateWindowSweepThreshold
+	rateWindowSweepThreshold = 5
+	t.Cleanup(func() { rateWindowSweepThreshold = oldThreshold })
+
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.SetClock(func() time.Time { return now })
+
+	for i := 0; i < 5; i++ {
+		msg := progressMsg(t, "quiescent-child-"+strconv.Itoa(i), "q-"+strconv.Itoa(i))
+		if _, err := s.Append("owner-sweep", msg); err != nil {
+			t.Fatalf("Append #%d: %v", i, err)
+		}
+	}
+	if got := len(s.rateWindows); got != 5 {
+		t.Fatalf("fixture broken: want 5 rate-window keys before advancing time, got %d", got)
+	}
+
+	// Advance well past the 1-minute rate window so all 5 existing keys are
+	// now fully quiescent, then push the map size past the (lowered)
+	// threshold with one more distinct child's send — the call that must
+	// trigger the sweep.
+	now = now.Add(2 * time.Minute)
+	if _, err := s.Append("owner-sweep", progressMsg(t, "trigger-child", "trigger-1")); err != nil {
+		t.Fatalf("trigger Append: %v", err)
+	}
+
+	// Positive lower bound alongside the near-zero assertion: exactly the
+	// ONE key the triggering call itself just wrote must survive — proving
+	// the sweep is targeted (only quiescent keys), not "delete everything".
+	if got := len(s.rateWindows); got != 1 {
+		t.Fatalf("want exactly 1 surviving rate-window key after the sweep (the triggering call's own), got %d: %v",
+			got, s.rateWindows)
+	}
+}
