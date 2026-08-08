@@ -529,6 +529,14 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string, occurren
 // caller of a dispatch primitive must go through ExecuteTask/StartTaskNow and
 // pay the real requirePlanExecuting check.
 func (te *TaskExecutor) executeTaskPlanVerified(ctx context.Context, taskID string) error {
+	// Same wg-before-draining gate as ExecuteTask/StartTaskNow (fix-wave
+	// finding #1) — this bypass entry point skipped both halves entirely,
+	// leaving plan-member dispatches invisible to Drain's wg.Wait.
+	te.wg.Add(1)
+	defer te.wg.Done()
+	if te.draining.Load() {
+		return ErrExecutorDraining
+	}
 	// Plan-member dispatch is never tied to a recurring occurrence — nil,
 	// task.RunKindScheduled (matching every other non-manual dispatch path).
 	return te.executeTask(ctx, taskID, nil, task.RunKindScheduled, true)
@@ -2726,6 +2734,11 @@ func (te *TaskExecutor) SpawnTriggeredRun(ctx context.Context, taskID string, oc
 // could dispatch a goroutine Drain's bounded wg.Wait can only wait out, not
 // prevent from starting in the first place.
 func (te *TaskExecutor) StartOccurrenceRun(_ context.Context, taskID string, occurrenceMs *int64) error {
+	// Same wg-before-draining order as ExecuteTask/StartTaskNow (fix-wave
+	// finding #1): reserve the slot first so a dispatch that passes the gate
+	// concurrently with Drain's Store(true) is still visible to its wg.Wait.
+	te.wg.Add(1)
+	defer te.wg.Done()
 	if te.draining.Load() {
 		return ErrExecutorDraining
 	}
