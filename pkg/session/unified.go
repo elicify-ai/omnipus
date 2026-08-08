@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
@@ -152,10 +153,23 @@ type UnifiedMeta struct {
 // a concurrent ListSessions/GetMeta clone-read racing that mutation would be
 // a real -race failure. Cloning on every cache insert and cache read keeps
 // the cache and every caller's copy fully independent in both directions.
+// unifiedMetaCloneCalls counts Clone() invocations process-wide — a
+// test-only observability seam (14-reviewer finding #3) proving
+// ListSessionsFiltered clones ONLY the entries its predicate approves,
+// rather than cloning every cached session and filtering afterward. The
+// atomic increment is unconditional and cheap (a single atomic add), so it
+// is never gated behind a test-only code path — same convention as
+// pkg/session/message_inbox.go's messageInboxPeekEnvelopeCalls seam. Clone
+// is called pervasively throughout this file (every GetMeta, every writer's
+// cache-miss fallback, etc.), so a test must measure the DELTA around one
+// specific call, never a raw total.
+var unifiedMetaCloneCalls atomic.Int64
+
 func (m *UnifiedMeta) Clone() *UnifiedMeta {
 	if m == nil {
 		return nil
 	}
+	unifiedMetaCloneCalls.Add(1)
 	c := *m
 	c.Partitions = slices.Clone(m.Partitions)
 	c.AgentIDs = slices.Clone(m.AgentIDs)
@@ -1637,7 +1651,50 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 // edge. Default no-op; overridden only by a test in this package.
 var listSessionsPruneRaceBarrierFn = func() {}
 
+// ListSessions returns every session this store currently knows about,
+// UpdatedAt-descending. See listSessionsFiltered (the shared implementation)
+// for the full reconcile/consistency-model doc comment.
 func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
+	return us.listSessionsFiltered(nil)
+}
+
+// ListSessionsFiltered performs the EXACT SAME reconcile + FR-097a prune
+// pass as ListSessions, but clones only the metas for which pred returns
+// true (14-reviewer fix-wave finding #3, MEDIUM perf).
+//
+// THE PROBLEM THIS ADDRESSES. ListSessions' final snapshot step
+// unconditionally Clone()s every cached session — the right default for a
+// caller that genuinely wants everything, but expensive for a caller that
+// only cares about a narrow subset. The ADR-053 goal-loop sweeps
+// (pkg/agent/goal_loop.go's goalIdleExpirySweep, pkg/agent/
+// goal_triggers.go's goalQuietWindowSettle) run on a 30s tick and both
+// immediately discard every meta whose GoalCondition is empty — at 1000
+// sessions with zero active goals, that is 1000 wasted clones every 30s
+// (4-8MB/min churn) for a result the caller throws away unfiltered. This
+// method lets such a caller pay only for the clones it keeps; ListSessions'
+// own public zero-arg behavior (and its exact byte-for-byte semantics) is
+// completely unchanged — it is now simply "ListSessionsFiltered(nil)".
+//
+// pred receives the SAME live, cacheMu-guarded *UnifiedMeta a caller would
+// otherwise get a CLONE of from ListSessions — pred MUST treat it as
+// read-only and MUST NOT retain the pointer or mutate any field on it
+// (mutating the store's live cache entry from outside its own locked
+// writers is exactly the aliasing hazard every Clone() call in this package
+// exists to prevent). Only entries pred approves are cloned before being
+// added to the returned slice, so the CALLER's own copy is always safe to
+// keep and mutate as usual. nil pred means "everything" — used internally
+// by ListSessions() itself so the two entry points can never silently
+// diverge on the reconcile/prune logic.
+//
+// Consistency model, locking, and the FR-097a prune pass are identical to
+// ListSessions — see below.
+func (us *UnifiedStore) ListSessionsFiltered(pred func(*UnifiedMeta) bool) ([]*UnifiedMeta, error) {
+	return us.listSessionsFiltered(pred)
+}
+
+// listSessionsFiltered is the shared implementation backing both
+// ListSessions and ListSessionsFiltered.
+func (us *UnifiedStore) listSessionsFiltered(pred func(*UnifiedMeta) bool) ([]*UnifiedMeta, error) {
 	var listErr error
 	entries, err := os.ReadDir(us.baseDir)
 	if err != nil {
@@ -1738,6 +1795,9 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 	us.cacheMu.RLock()
 	metas := make([]*UnifiedMeta, 0, len(us.metaCache))
 	for _, meta := range us.metaCache {
+		if pred != nil && !pred(meta) {
+			continue
+		}
 		metas = append(metas, meta.Clone())
 	}
 	us.cacheMu.RUnlock()

@@ -320,3 +320,98 @@ func TestIsOrphan_DetectsMissingParent(t *testing.T) {
 
 	assert.False(t, store.IsOrphan(nil), "nil meta must not panic")
 }
+
+// ---------------------------------------------------------------------
+// 14-reviewer fix wave, finding #3 (MEDIUM perf): ListSessionsFiltered.
+// ---------------------------------------------------------------------
+
+// TestListSessionsFiltered_NilPredMatchesListSessions proves
+// ListSessionsFiltered(nil) is byte-for-byte the same call ListSessions()
+// itself now delegates to — the two entry points can never silently
+// diverge on the reconcile/prune logic.
+func TestListSessionsFiltered_NilPredMatchesListSessions(t *testing.T) {
+	store := u6NewTestStore(t)
+	for i := 0; i < 5; i++ {
+		_, err := store.NewSession(SessionTypeChat, "", "agent-1")
+		require.NoError(t, err)
+	}
+
+	viaListSessions, err := store.ListSessions()
+	require.NoError(t, err)
+	viaFiltered, err := store.ListSessionsFiltered(nil)
+	require.NoError(t, err)
+
+	require.Equal(t, len(viaListSessions), len(viaFiltered))
+	for i := range viaListSessions {
+		assert.Equal(t, viaListSessions[i].ID, viaFiltered[i].ID)
+	}
+}
+
+// TestListSessionsFiltered_ReturnsOnlyMatches is the functional-correctness
+// half of finding #3: only sessions the predicate approves are returned,
+// with a positive lower bound (2 real matches, not just "not everything")
+// pairing the near-zero assertion (3 real non-matches excluded).
+func TestListSessionsFiltered_ReturnsOnlyMatches(t *testing.T) {
+	store := u6NewTestStore(t)
+
+	goalCond := "ship the feature"
+	var matchIDs []string
+	for i := 0; i < 2; i++ {
+		meta, err := store.NewSession(SessionTypeChat, "", "agent-1")
+		require.NoError(t, err)
+		require.NoError(t, store.SetMeta(meta.ID, MetaPatch{GoalCondition: &goalCond}))
+		matchIDs = append(matchIDs, meta.ID)
+	}
+	for i := 0; i < 3; i++ {
+		_, err := store.NewSession(SessionTypeChat, "", "agent-1") // no GoalCondition — must be excluded
+		require.NoError(t, err)
+	}
+
+	goalOnly := func(m *UnifiedMeta) bool { return m != nil && m.GoalCondition != "" }
+	got, err := store.ListSessionsFiltered(goalOnly)
+	require.NoError(t, err)
+
+	require.Len(t, got, 2, "want exactly the 2 sessions with a non-empty GoalCondition")
+	gotIDs := map[string]bool{got[0].ID: true, got[1].ID: true}
+	for _, id := range matchIDs {
+		assert.True(t, gotIDs[id], "expected match id %s in the filtered result", id)
+	}
+}
+
+// TestListSessionsFiltered_ClonesOnlyMatches is the PERFORMANCE half of
+// finding #3 — the actual claim this fix makes: ListSessionsFiltered must
+// clone ONLY the entries its predicate approves, not clone every cached
+// session and filter the result afterward (which would still pay the full
+// O(session count) clone cost the goal-loop sweeps were burning for
+// nothing). Measured directly via the unifiedMetaCloneCalls seam, so this
+// cannot pass via a filtered-after-the-fact implementation.
+func TestListSessionsFiltered_ClonesOnlyMatches(t *testing.T) {
+	store := u6NewTestStore(t)
+
+	const total = 40
+	const matching = 3
+	goalCond := "only these should be cloned"
+	var matchIDs []string
+	for i := 0; i < matching; i++ {
+		meta, err := store.NewSession(SessionTypeChat, "", "agent-1")
+		require.NoError(t, err)
+		require.NoError(t, store.SetMeta(meta.ID, MetaPatch{GoalCondition: &goalCond}))
+		matchIDs = append(matchIDs, meta.ID)
+	}
+	for i := 0; i < total-matching; i++ {
+		_, err := store.NewSession(SessionTypeChat, "", "agent-1")
+		require.NoError(t, err)
+	}
+
+	goalOnly := func(m *UnifiedMeta) bool { return m != nil && m.GoalCondition != "" }
+
+	before := unifiedMetaCloneCalls.Load()
+	got, err := store.ListSessionsFiltered(goalOnly)
+	require.NoError(t, err)
+	delta := unifiedMetaCloneCalls.Load() - before
+
+	require.Len(t, got, matching)
+	assert.Equal(t, int64(matching), delta,
+		"ListSessionsFiltered made %d Clone() calls scanning %d cached sessions with %d matches — "+
+			"want exactly %d (clone only matches), not %d (clone-then-filter)", delta, total, matching, matching, total)
+}
