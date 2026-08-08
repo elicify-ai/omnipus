@@ -265,3 +265,30 @@ func TestClaimAnyTurnForSession_LiveUnclaimedMatch_Claims(t *testing.T) {
 	assert.Equal(t, "live-unclaimed", got.TurnID())
 	assert.True(t, ts.cancelFired.Load(), "claimAnyTurnForSession must actually claim the match")
 }
+
+// TestClaimAnyTurnForSession_EmptySessionID_NeverClaimsEmptyRoutingTurn guards
+// the empty-sessionID gate (14-reviewer sign-off, cancel-cascade lens): turns
+// with an empty routingSessionID legally exist (system messages with no async
+// transcript id, channel messages with no msg.SessionID), and a Tier B cancel
+// in an idle chat resolves its sessionID to "". The base release gated the
+// RequestCancel fallback with sessionID != ""; the merge restoration (7f4eab0b)
+// dropped that half, letting claimAnyTurnForSession("") claim an arbitrary
+// unrelated empty-routing-id turn — consuming its first-cancel-wins latch and
+// reporting fired=true for a cancel that reached nothing.
+func TestClaimAnyTurnForSession_EmptySessionID_NeverClaimsEmptyRoutingTurn(t *testing.T) {
+	al := &AgentLoop{}
+	ts := &turnState{
+		turnID:              "empty-routing-victim",
+		transcriptSessionID: "",
+		routingSessionID:    session.RoutingSessionID(""),
+		finishedChan:        make(chan struct{}),
+	}
+	al.activeTurnStates.Store(ts.turnID, ts)
+
+	got := al.claimAnyTurnForSession("")
+	assert.Nil(t, got,
+		"BUG REGRESSION: an empty-sessionID fallback query must claim nothing — "+
+			"matching it against empty-routing-id turns cancels an unrelated turn")
+	assert.False(t, ts.cancelFired.Load(),
+		"the unrelated turn's first-cancel-wins latch must not be consumed")
+}

@@ -388,7 +388,15 @@ func (al *AgentLoop) RequestCancel(
 	// claimable descendant is silently skipped. See
 	// claimAnyTurnForSession's doc comment (turn.go) and
 	// cancel_descendant_fallback_test.go.
-	if !wasFired && !armed {
+	// sessionID != "" restores the base-release guard the merge restoration
+	// dropped: turns with an empty routingSessionID legally exist (system
+	// messages with no async transcript id, channel messages with no
+	// msg.SessionID), and a Tier B cancel in an idle chat resolves
+	// sessionID to "" — without the guard, claimAnyTurnForSession("")
+	// claims whichever unrelated empty-routing-id turn it scans first,
+	// consuming its first-cancel-wins latch and reporting fired=true for a
+	// cancel that reached nothing.
+	if !wasFired && !armed && sessionID != "" {
 		if fallback := al.claimAnyTurnForSession(sessionID); fallback != nil {
 			activeTurn = fallback
 			wasFired = true
