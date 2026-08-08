@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { buildTaskGraph, isDagRelevant } from './taskGraph'
+import { buildTaskGraph, isDagRelevant, buildBlockerReferencedIds, isDagRelevantFast } from './taskGraph'
 import type { Task } from '@/lib/api'
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -57,6 +57,75 @@ describe('isDagRelevant', () => {
   it('an empty-array blocked_by does not count as having a dependency', () => {
     const t = makeTask({ id: 'a', blocked_by: [] })
     expect(isDagRelevant(t, [t])).toBe(false)
+  })
+})
+
+// 14-reviewer sign-off Finding #5 (perf): `isDagRelevant` itself is still an
+// O(n) `.some()` scan per call (kept for backward compat — see its doc
+// comment), but `buildTaskGraph`'s `collapseOrphans` pass no longer calls it
+// per task; it precomputes `buildBlockerReferencedIds` ONCE and checks each
+// task with `isDagRelevantFast` instead. These tests lock the equivalence
+// between the two entry points and the precomputed set's own semantics
+// (including the self-reference exclusion) directly.
+describe('buildBlockerReferencedIds / isDagRelevantFast — precomputed-set fast path', () => {
+  it('produces the id of a task that is referenced as a blocker by another task', () => {
+    const a = makeTask({ id: 'a' })
+    const b = makeTask({ id: 'b', blocked_by: ['a'] })
+    const referenced = buildBlockerReferencedIds([a, b])
+    expect(referenced.has('a')).toBe(true)
+    expect(referenced.has('b')).toBe(false)
+  })
+
+  it('excludes a task that only references itself in its own blocked_by (self-loop, not a real dependent)', () => {
+    const selfLoop = makeTask({ id: 'a', blocked_by: ['a'] })
+    const referenced = buildBlockerReferencedIds([selfLoop])
+    // Mirrors isDagRelevant's own `other.id !== task.id` exclusion — a task
+    // referencing only itself must not count as "someone depends on me".
+    expect(referenced.has('a')).toBe(false)
+  })
+
+  it('an empty candidate list produces an empty set', () => {
+    expect(buildBlockerReferencedIds([]).size).toBe(0)
+  })
+
+  it('isDagRelevantFast agrees with isDagRelevant for every case in the suite above, given the equivalent precomputed set', () => {
+    const cases: { task: Task; candidates: Task[] }[] = [
+      { task: makeTask({ id: 'a' }), candidates: [makeTask({ id: 'a' }), makeTask({ id: 'b', blocked_by: ['a'] })] },
+      { task: makeTask({ id: 'b', blocked_by: ['a'] }), candidates: [makeTask({ id: 'a' }), makeTask({ id: 'b', blocked_by: ['a'] })] },
+      { task: makeTask({ id: 'a', plan_id: 'plan-1' }), candidates: [makeTask({ id: 'a', plan_id: 'plan-1' })] },
+      { task: makeTask({ id: 'a' }), candidates: [makeTask({ id: 'a' })] },
+      { task: makeTask({ id: 'a', blocked_by: ['a'] }), candidates: [makeTask({ id: 'a', blocked_by: ['a'] })] },
+    ]
+    for (const { task, candidates } of cases) {
+      const referenced = buildBlockerReferencedIds(candidates)
+      expect(isDagRelevantFast(task, referenced)).toBe(isDagRelevant(task, candidates))
+    }
+  })
+
+  it('scales correctly on a larger mixed graph: precomputing once still matches the per-task isDagRelevant result for every task', () => {
+    // 200 tasks: a long dependency chain (each blocked by the previous —
+    // every non-terminal one is DAG-relevant via "has a dependent"), a
+    // handful of plan members, and a batch of genuinely standalone orphans.
+    const chain: Task[] = Array.from({ length: 150 }, (_, i) =>
+      makeTask({ id: `chain-${i}`, blocked_by: i > 0 ? [`chain-${i - 1}`] : [] }),
+    )
+    const planMembers: Task[] = Array.from({ length: 25 }, (_, i) => makeTask({ id: `plan-${i}`, plan_id: 'plan-x' }))
+    const orphans: Task[] = Array.from({ length: 25 }, (_, i) => makeTask({ id: `orphan-${i}` }))
+    const all = [...chain, ...planMembers, ...orphans]
+
+    const referenced = buildBlockerReferencedIds(all)
+    for (const t of all) {
+      expect(isDagRelevantFast(t, referenced)).toBe(isDagRelevant(t, all))
+    }
+    // Sanity: the last chain link has no dependent and no plan_id, but IS
+    // itself blocked_by the previous link, so it's still relevant via that
+    // check alone (the same reason the very first per-task equivalence loop
+    // above already covers it) — every chain link is relevant.
+    expect(isDagRelevantFast(chain[chain.length - 1], referenced)).toBe(true)
+    // Every orphan is irrelevant; every plan member and every chain link is relevant.
+    for (const o of orphans) expect(isDagRelevantFast(o, referenced)).toBe(false)
+    for (const p of planMembers) expect(isDagRelevantFast(p, referenced)).toBe(true)
+    for (const c of chain) expect(isDagRelevantFast(c, referenced)).toBe(true)
   })
 })
 

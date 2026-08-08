@@ -147,11 +147,46 @@ export interface AgentLike {
  * dependency relationship.
  */
 export function isDagRelevant(task: Task, candidates: Task[]): boolean {
+  return isDagRelevantFast(task, buildBlockerReferencedIds(candidates))
+}
+
+/**
+ * Precomputes the set of task ids that appear as a BLOCKER somewhere in
+ * `candidates` — i.e. some OTHER task's `blocked_by` references them (the
+ * "something depends on me" half of `isDagRelevant`). A self-reference (a
+ * task listing its own id in its own `blocked_by`) is deliberately excluded,
+ * mirroring `isDagRelevant`'s own `other.id !== task.id` guard — see the
+ * "self, not a dependent" test case in taskGraph.orphanCollapse.test.ts.
+ *
+ * Building this once costs O(edges) (one scan of every task's `blocked_by`
+ * list); reusing it for every task's relevance check turns what used to be
+ * an O(n²) pass (each of n tasks running its own O(n) `.some()` scan, with a
+ * fresh closure/array iteration per call) into O(n + edges) overall — 14-
+ * reviewer sign-off Finding #5.
+ */
+export function buildBlockerReferencedIds(candidates: Task[]): Set<string> {
+  const referenced = new Set<string>()
+  for (const t of candidates) {
+    for (const blockerId of t.blocked_by ?? []) {
+      if (blockerId !== t.id) referenced.add(blockerId)
+    }
+  }
+  return referenced
+}
+
+/**
+ * Same semantics as `isDagRelevant`, but takes a PRECOMPUTED
+ * `buildBlockerReferencedIds` set instead of rescanning the full candidate
+ * list on every call — the O(n) building block `buildTaskGraph`'s
+ * `collapseOrphans` pass uses (computed once, outside its per-task loop) to
+ * get the O(n + edges) total cost described above. `isDagRelevant` itself
+ * keeps its original signature/semantics for existing callers/tests; use
+ * this directly when checking many tasks against the same candidate set.
+ */
+export function isDagRelevantFast(task: Task, referencedIds: ReadonlySet<string>): boolean {
   if (task.plan_id) return true
   if ((task.blocked_by?.length ?? 0) > 0) return true
-  return candidates.some(
-    (other) => other.id !== task.id && (other.blocked_by ?? []).includes(task.id),
-  )
+  return referencedIds.has(task.id)
 }
 
 /**
@@ -216,13 +251,16 @@ export function buildTaskGraph(
     visible = graphable.filter((t) => t.plan_id === planId)
     unlinked = []
   } else if (collapseOrphans) {
-    // Single pass — `isDagRelevant` is only evaluated once per task, not
-    // once per filter (it itself scans `graphable`, so evaluating it twice
-    // per task doubled that cost for no benefit).
+    // O(n + edges), not O(n²) (Finding #5): precompute the "referenced as a
+    // blocker" id set ONCE, then check every task against it via
+    // `isDagRelevantFast` instead of calling `isDagRelevant` per task — the
+    // latter would rescan all of `graphable` (its own O(n) `.some()`, with a
+    // fresh closure/array iteration) on EVERY one of the n calls.
     visible = []
     unlinked = []
+    const referencedIds = buildBlockerReferencedIds(graphable)
     for (const t of graphable) {
-      if (isDagRelevant(t, graphable)) visible.push(t)
+      if (isDagRelevantFast(t, referencedIds)) visible.push(t)
       else unlinked.push(t)
     }
   } else {
