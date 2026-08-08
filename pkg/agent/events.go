@@ -240,6 +240,13 @@ type TurnStartPayload struct {
 	ChatID      string
 	UserMessage string
 	MediaCount  int
+	// IsRoot is true when this turn has no parent (parentTurnID == "").
+	// The WS forwarder uses it to reset its root-turn-ended latch so that
+	// spans spawned by a NEW root turn are not spuriously armed at
+	// registration (#605); only a root turn's start may reset the latch,
+	// otherwise a child's own turn-start would reopen the arming hole for
+	// later-arriving sibling spawn events.
+	IsRoot bool
 }
 
 // TurnEndPayload describes the completion of a turn.

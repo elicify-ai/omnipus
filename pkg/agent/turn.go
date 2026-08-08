@@ -317,9 +317,13 @@ type turnState struct {
 	// store key, transcript write target, ownership predicate, approval-grant
 	// key, uploads-directory key, tool-manifest bucket, lifecycle-record
 	// field, or audit session_id (those all keep using transcriptSessionID
-	// above). Within this file the only reads are the three role-B
-	// predicates FR-015 names: GetActiveTurnHookForSession,
-	// resolveSessionIDByChannelChat and getActiveRootTurnStateForSession.
+	// above). Within this file the reads are the three role-B predicates
+	// FR-015 names — GetActiveTurnHookForSession,
+	// resolveSessionIDByChannelChat and getActiveRootTurnStateForSession —
+	// plus claimAnyTurnForSession, the cancel descendant fallback added
+	// post-merge in the same role-B class (see the FR-014 allowlist test,
+	// routing_session_id_consumer_set_adr057_test.go, the authority on the
+	// exact reader census).
 	// The remaining closed-set readers have all LANDED (U7/U8/U9/U15, this
 	// same branch) — do not go looking for unfinished work here: the
 	// steering.go role-B predicates (U8), the pre-arm latch keys in
@@ -776,10 +780,11 @@ func (al *AgentLoop) resolveSessionIDByChannelChat(channel, chatID string) strin
 }
 
 // claimAnyTurnForSession scans activeTurnStates for ANY turnState matching
-// sessionID (transcriptSessionID equality — the same predicate
+// sessionID (routingSessionID equality — the same role-B cancel predicate
 // GetActiveTurnHookForSession/collectDescendantTurnIDs/InterruptSession all
-// share) that is still alive (IsAlive()) and successfully wins the
-// first-cancel-wins ClaimCancel() check.
+// share post-ADR-057; see the rebase comment in the body) that is still
+// alive (IsAlive()) and successfully wins the first-cancel-wins
+// ClaimCancel() check.
 //
 // RequestCancel uses this as a fallback when the SINGLE hook
 // GetActiveTurnHookForSession resolved (root-preferring) could not be
@@ -805,6 +810,13 @@ func (al *AgentLoop) resolveSessionIDByChannelChat(channel, chatID string) strin
 // when no turnState matches sessionID, or every match is already finished
 // or already claimed.
 func (al *AgentLoop) claimAnyTurnForSession(sessionID string) TurnCancelHook {
+	// Defense in depth alongside RequestCancel's own sessionID != "" gate:
+	// turns with an empty routingSessionID legally exist, and matching them
+	// against an empty query would claim an arbitrary unrelated turn.
+	// Mirrors resolveSessionIDByChannelChat's empty-sid skip.
+	if sessionID == "" {
+		return nil
+	}
 	var claimed *turnState
 	al.activeTurnStates.Range(func(_, value any) bool {
 		ts := value.(*turnState)

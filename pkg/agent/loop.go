@@ -7726,6 +7726,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			ChatID:      ts.chatID,
 			UserMessage: ts.userMessage,
 			MediaCount:  len(ts.media),
+			IsRoot:      ts.parentTurnID == "",
 		},
 	)
 
