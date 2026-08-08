@@ -557,9 +557,13 @@ func DefaultConfig() *Config {
 		// default (enabled=true). validateBootConfig re-applies the same
 		// defaults for any field an operator zeroes out later.
 		SessionMessaging: SessionMessagingConfig{
-			Enabled:             DefaultSessionMessagingEnabled,
-			WakeEnabled:         DefaultSessionMessagingWakeEnabled,
-			AdjudicationEnabled: DefaultSessionMessagingAdjudicationEnabled,
+			// Fix-wave finding #4: these three are now *bool (nil = unset) —
+			// see SessionMessagingConfig's own doc comment. boolPtr wraps the
+			// named bool constants below since a constant cannot be addressed
+			// directly (&DefaultSessionMessagingEnabled does not compile).
+			Enabled:             boolPtr(DefaultSessionMessagingEnabled),
+			WakeEnabled:         boolPtr(DefaultSessionMessagingWakeEnabled),
+			AdjudicationEnabled: boolPtr(DefaultSessionMessagingAdjudicationEnabled),
 
 			ChildSendRatePerMinute: DefaultSMChildSendRatePerMinute,
 			ChildSendBody:          DefaultSMChildSendBodyBytes,

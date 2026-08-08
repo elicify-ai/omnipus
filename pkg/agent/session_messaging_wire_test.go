@@ -36,14 +36,23 @@ func seedLifecycleRecord(t *testing.T, ls *session.LifecycleStore, rec *session.
 }
 
 // enableSessionMessaging flips the session_messaging kill switch ON on the
-// loop's live config. The minimal test configs built by newAsyncNotifierTestLoop
-// have a zero-value SessionMessaging section (Enabled=false), so without this
-// the consumer correctly no-ops every event (FR-196). This both sets up the
-// positive test AND re-confirms the kill switch is the gate (flip it OFF in the
-// kill-switch test to prove the no-op).
+// loop's live config, explicitly, rather than relying on any default.
+//
+// Fix-wave finding #4 note: Enabled/WakeEnabled are now *bool (nil = apply
+// EffectiveEnabled/EffectiveWakeEnabled's own default, matching production's
+// documented fail-open posture — see sessionMessagingEnabledLive's "Nil
+// config -> enabled" comment, session_messaging_wire.go). The minimal test
+// configs newAsyncNotifierTestLoop builds leave the section at its Go zero
+// value (nil, "operator never set this"), which therefore already resolves
+// to enabled=true even without this helper. This function remains useful
+// (and is still called by every positive-path test below) because it makes
+// the precondition explicit and independent of whatever the default happens
+// to be — the ONE test that actually depends on a specific value is the
+// kill-switch test below, which sets Enabled: boolPtr(false) to positively
+// prove the gate, not the zero value.
 func enableSessionMessaging(al *AgentLoop) {
 	cfg := al.GetConfig()
-	cfg.SessionMessaging = config.SessionMessagingConfig{Enabled: true, WakeEnabled: true}
+	cfg.SessionMessaging = config.SessionMessagingConfig{Enabled: boolPtr(true), WakeEnabled: boolPtr(true)}
 }
 
 // waitFor polls cond until it returns true or the timeout elapses.
@@ -286,7 +295,7 @@ func TestSessionMessagingConsumer_KillSwitch_NoOpsWhenDisabled(t *testing.T) {
 	al, msgBus := newAsyncNotifierTestLoop(t)
 	// Flip the kill switch OFF on the live config.
 	cfg := al.GetConfig()
-	cfg.SessionMessaging = config.SessionMessagingConfig{Enabled: false}
+	cfg.SessionMessaging = config.SessionMessagingConfig{Enabled: boolPtr(false)}
 
 	inbox := session.NewMessageInboxStore(t.TempDir())
 	ls := session.NewLifecycleStore(t.TempDir())

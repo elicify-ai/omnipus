@@ -136,7 +136,7 @@ func newCancelCascadeAgentLoop(t *testing.T) (*AgentLoop, *session.LifecycleStor
 			},
 		},
 	}
-	cfg.SessionMessaging.Enabled = true
+	cfg.SessionMessaging.Enabled = boolPtr(true)
 
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})

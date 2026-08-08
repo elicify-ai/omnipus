@@ -137,7 +137,7 @@ func TestDelegateCancelHard_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 	// switch (isSessionMessagingAction("cancel") == true) — must be enabled
 	// or DelegateTool.Execute short-circuits before ever reaching
 	// executeCancel.
-	cfg.SessionMessaging.Enabled = true
+	cfg.SessionMessaging.Enabled = boolPtr(true)
 
 	msgBus := bus.NewMessageBus()
 	provider := newCtxCancelObservingProvider()
@@ -293,7 +293,7 @@ func TestDelegateCancelSoft_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 			Defaults: config.AgentDefaults{Provider: "mock"},
 		},
 	}
-	cfg.SessionMessaging.Enabled = true
+	cfg.SessionMessaging.Enabled = boolPtr(true)
 
 	msgBus := bus.NewMessageBus()
 	provider := newCtxCancelObservingProvider()
