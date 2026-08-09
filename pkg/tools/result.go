@@ -32,6 +32,12 @@ type ToolResult struct {
 	// When true, the result should be treated as an error.
 	IsError bool `json:"is_error"`
 
+	// Reason is an OPTIONAL, machine-checkable outcome discriminator,
+	// orthogonal to IsError. See ResultReason's doc comment below for why it
+	// exists and the backward-compatibility contract (zero value ""
+	// changes nothing for any existing caller).
+	Reason ResultReason `json:"reason,omitempty"`
+
 	// Async indicates whether the tool is running asynchronously.
 	// When true, the tool will complete later and notify via callback.
 	Async bool `json:"async"`
@@ -201,6 +207,57 @@ func AsyncResult(forLLM string) *ToolResult {
 	}
 }
 
+// ResultReason is an OPTIONAL machine-checkable outcome discriminator for a
+// ToolResult, orthogonal to IsError. It exists because RC-2 (delegation
+// fix-wave UAT, 2026-08) found a concrete production failure mode: ForLLM is
+// free-form prose meant for an LLM to read, and IsError alone only says
+// success-vs-failure — neither lets an ORCHESTRATING agent (reading a
+// sub-agent's own tool result, or a session-transcript reader) distinguish
+// "this request could not be completed because a precondition wasn't met,
+// but nothing is actually broken" (see ReasonAlreadyExists) from "this
+// request failed while executing" without brittle string-matching on
+// ForLLM's prose. write_file's overwrite=false guard
+// (pkg/tools/filesystem.go) and a genuine I/O failure two lines later used
+// to be IDENTICAL in shape (ErrorResult + a human-readable string), which is
+// exactly what let duplicate delegated writers misread "a sibling already
+// finished this work" as "the write failed" and spawn more duplicates.
+//
+// The zero value "" means "no discriminator was set" and MUST NOT change
+// any existing caller's behavior: every pre-existing ToolResult constructor
+// (ErrorResult, SilentResult, UserResult, ...) leaves it unset, so every
+// consumer that only reads IsError/ForLLM today keeps working exactly as
+// before. Only a new caller that explicitly checks Reason opts into the
+// finer-grained signal. It may be set alongside IsError either way — it
+// does not imply or require any particular IsError value.
+//
+// Kept as a plain string-backed type (not a func, not an interface) so it
+// stays trivially serializable — a future transcript-persistence layer can
+// store it verbatim without special-casing.
+//
+// This is deliberately a SMALL, evidence-driven set — see ReasonAlreadyExists.
+// Do not grow this into a large taxonomy speculatively; add a new value only
+// when a concrete call site needs a caller to distinguish it from every
+// existing value. Distinct from DelegationDenyReason below: that type
+// classifies WHICH delegation-policy axis denied a delegate/spawn/task_create
+// call (a narrower, delegation-specific concept with its own wire
+// serialization via DelegationFailure); ResultReason is the general-purpose
+// discriminator on ToolResult itself.
+type ResultReason string
+
+const (
+	// ReasonAlreadyExists marks a refusal to perform a write because the
+	// target already exists and the caller did not opt in to replacing it
+	// (write_file's overwrite=false guard, pkg/tools/filesystem.go's
+	// WriteFileTool.Execute). This is a PRECONDITION refusal, not an I/O
+	// failure: nothing broke, the target simply already holds content some
+	// writer (possibly this very caller, possibly a sibling) put there. A
+	// caller that sees this reason should treat it as "no action was taken
+	// because the work may already be done" rather than "retry or escalate"
+	// — unlike a bare ErrorResult with Reason=="" (e.g. the disk-write
+	// failure at the same call site), which is a real failure.
+	ReasonAlreadyExists ResultReason = "already_exists"
+)
+
 // DelegationDenyReason classifies WHICH delegation-policy axis rejected a
 // delegation/spawn/task_create call. It is the structured discriminator the SPA
 // uses to render a distinct delegation-failure block instead of relying on the
@@ -351,5 +408,18 @@ func (tr *ToolResult) MarshalJSON() ([]byte, error) {
 //	result := ErrorResult("Operation failed").WithError(err)
 func (tr *ToolResult) WithError(err error) *ToolResult {
 	tr.Err = err
+	return tr
+}
+
+// WithReason sets the structured outcome discriminator (see ResultReason's
+// doc comment) and returns the result for chaining, mirroring WithError.
+// Optional: a result with Reason left at its zero value "" behaves
+// identically to a ToolResult built before this field existed.
+//
+// Example:
+//
+//	result := ErrorResult("file already exists").WithReason(ReasonAlreadyExists)
+func (tr *ToolResult) WithReason(reason ResultReason) *ToolResult {
+	tr.Reason = reason
 	return tr
 }

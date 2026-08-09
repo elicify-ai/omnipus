@@ -811,7 +811,18 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	var clobberNote string
 	if !overwrite {
 		if _, statErr := handle.Stat(); statErr == nil {
-			return ErrorResult(fmt.Sprintf("file: %s already exists. Set overwrite=true to replace.", path))
+			// RC-2 (delegation fix-wave UAT): this is a PRECONDITION refusal,
+			// not a genuine I/O failure — mark it with ReasonAlreadyExists so
+			// a caller (e.g. an orchestrating agent re-reading a delegated
+			// sub-agent's tool result) can tell "a sibling already wrote
+			// this, no action needed" apart from the real write failure two
+			// branches below WITHOUT string-matching ForLLM's prose. IsError
+			// stays true deliberately: from the caller's point of view the
+			// content it asked to write was NOT written, so this remains an
+			// error outcome — see ResultReason's doc comment and
+			// pkg/tools/result.go's ReasonAlreadyExists constant.
+			return ErrorResult(fmt.Sprintf("file: %s already exists. Set overwrite=true to replace.", path)).
+				WithReason(ReasonAlreadyExists)
 		}
 	} else if _, statErr := handle.Stat(); statErr == nil {
 		// We are about to replace a file that already exists. Look up who
