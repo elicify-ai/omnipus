@@ -201,7 +201,14 @@ func (p *Provider) streamWithCallbacks(
 			}
 		}
 
-		if onChunk != nil && text.Len() != lastTextLen {
+		// Emit ONLY on growth, never on shrink. The agent loop's streaming
+		// consumer computes its delta as accumulated[len(lastChunk):]
+		// (loop.go), which panics with slice-out-of-range if a later
+		// accumulated value is shorter than an earlier one. Accumulate()
+		// should only ever grow the text, but a block reorder, a
+		// replacement, or a future SDK revision changing those semantics
+		// would otherwise crash the turn rather than degrade.
+		if onChunk != nil && text.Len() > lastTextLen {
 			lastTextLen = text.Len()
 			onChunk(text.String())
 		}

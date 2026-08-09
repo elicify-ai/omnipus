@@ -8355,7 +8355,21 @@ turnLoop:
 							abandonedWritesSuppressed.Add(1)
 							return
 						}
-						// Send only the new delta (accumulated minus what we already sent)
+						// Send only the new delta (accumulated minus what we already sent).
+						//
+						// Defensive: this slice panics with index-out-of-range if a
+						// provider ever emits an accumulated string SHORTER than its
+						// predecessor. The contract is monotonic growth, but a provider
+						// bug, a block reorder, or an SDK revision changing accumulation
+						// semantics would otherwise take down the whole turn. Treat a
+						// non-growing value as "nothing new" and skip it.
+						if len(accumulated) < len(lastChunk) {
+							logger.DebugCF("agent", "Streaming callback emitted a shorter accumulated string; ignoring", map[string]any{
+								"previous_len": len(lastChunk),
+								"new_len":      len(accumulated),
+							})
+							return
+						}
 						delta := accumulated[len(lastChunk):]
 						lastChunk = accumulated
 						if delta != "" {

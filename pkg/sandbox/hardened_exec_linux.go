@@ -197,19 +197,45 @@ func applyPostStartHardening(cmd *exec.Cmd, lim Limits) error {
 	}
 	nprocCap := baseline + childNProcSlack
 
-	// Preserve the child's existing HARD limit. Lowering Max is irreversible
-	// for the child and buys nothing (the soft limit is what contains a
-	// fork-bomb); clamping Cur to the inherited Max also avoids EINVAL when
-	// our computed cap exceeds a hard limit we lack CAP_SYS_RESOURCE to raise.
-	nprocLim := &unix.Rlimit{Cur: nprocCap, Max: nprocCap}
+	// Pin the HARD limit to the cap as well — do NOT inherit the child's
+	// existing Max.
+	//
+	// An unprivileged process may raise its own SOFT limit up to its HARD
+	// limit at will via setrlimit(2), and setrlimit/prlimit64 are not in the
+	// seccomp denylist (pkg/sandbox/seccomp_linux.go blocks ptrace, mount,
+	// module, kexec, bpf, perf_event_open — not resource limits). So leaving
+	// Max at the inherited value (commonly max_user_processes, or
+	// RLIM_INFINITY) would let a hostile child defeat the whole fork-bomb cap
+	// with one line:
+	//
+	//	ulimit -u unlimited; :(){ :|:& };:
+	//
+	// "The soft limit contains a fork-bomb" is true only for a COOPERATING
+	// child, and this control exists precisely for the adversarial one — see
+	// redteam_forkbomb_test.go, whose bomb never calls ulimit and so cannot
+	// observe the difference.
+	//
+	// We still clamp DOWN to any inherited hard limit: raising Max requires
+	// CAP_SYS_RESOURCE, so asking for more than we inherited would EINVAL.
+	// Clamping keeps that fix while restoring containment.
+	// Clamp DOWNWARD only, against both inherited limits:
+	//   - against Max, because raising a hard limit needs CAP_SYS_RESOURCE
+	//     and asking for more than we inherited would EINVAL;
+	//   - against Cur, because a HARDENING routine must never loosen an
+	//     operator-configured limit. Without this, a unit file specifying
+	//     LimitNPROC=512:4096 would be silently widened to baseline+128 for
+	//     every sandboxed child — a policy inversion, and a silent one.
+	nprocCapFinal := nprocCap
 	var existing unix.Rlimit
 	if err := unix.Prlimit(cmd.Process.Pid, unix.RLIMIT_NPROC, nil, &existing); err == nil {
-		cur := nprocCap
-		if existing.Max != unix.RLIM_INFINITY && cur > existing.Max {
-			cur = existing.Max
+		if existing.Max != unix.RLIM_INFINITY && nprocCapFinal > existing.Max {
+			nprocCapFinal = existing.Max
 		}
-		nprocLim = &unix.Rlimit{Cur: cur, Max: existing.Max}
+		if existing.Cur != unix.RLIM_INFINITY && nprocCapFinal > existing.Cur {
+			nprocCapFinal = existing.Cur
+		}
 	}
+	nprocLim := &unix.Rlimit{Cur: nprocCapFinal, Max: nprocCapFinal}
 
 	slog.Debug("sandbox: applying RLIMIT_NPROC to child",
 		"pid", cmd.Process.Pid,
