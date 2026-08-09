@@ -81,12 +81,29 @@ const memoryLimitSupported = true
 // protection.
 const childNProcSlack uint64 = 128
 
-// readCurrentUserNProc returns the number of processes currently owned by
-// the gateway's UID, for use as the RLIMIT_NPROC baseline. On read failure
+// readCurrentUserNProc returns the number of TASKS (threads) currently owned
+// by the gateway's UID, for use as the RLIMIT_NPROC baseline. On read failure
 // it returns 0 — the caller falls back to a conservative absolute cap.
 //
-// Implementation: scans /proc, summing entries whose UID matches ours. Linux
-// only; called on the hot path of every hardened-exec spawn so kept simple.
+// Why tasks and not processes: the kernel enforces RLIMIT_NPROC in
+// copy_process() against the per-UID task_struct counter, which is
+// incremented for EVERY task — including every thread created with
+// CLONE_THREAD. That is the same quantity `ulimit -u` reports. Counting only
+// the top-level /proc/<pid> entries (which are thread-group leaders)
+// undercounts by the entire thread multiplier: a Go gateway with the runtime
+// scheduler, chromedp and ~14 channels routinely holds 250+ threads across
+// fewer than 100 processes.
+//
+// Getting this wrong is not a tuning issue, it is a total outage of the
+// `bash` tool: if baseline+slack lands below the live task count, the cap is
+// already exceeded at the moment it is applied and EVERY fork() by the child
+// returns EAGAIN ("sh: Cannot fork") regardless of free memory or load. That
+// regression shipped once — see TestReadCurrentUserNProc_CountsThreadsNotProcesses.
+//
+// Implementation: scans /proc, and for each PID owned by us sums the entries
+// in /proc/<pid>/task. Linux only; called on the hot path of every
+// hardened-exec spawn so kept allocation-light. Tolerant of races: a process
+// or thread exiting mid-walk is skipped (counted as 1 for the leader).
 func readCurrentUserNProc() uint64 {
 	uid := uint64(os.Getuid())
 	dir, err := os.Open("/proc")
@@ -109,9 +126,17 @@ func readCurrentUserNProc() uint64 {
 			if statErr := unix.Stat("/proc/"+name, &st); statErr != nil {
 				continue
 			}
-			if uint64(st.Uid) == uid {
-				count++
+			if uint64(st.Uid) != uid {
+				continue
 			}
+			// Sum this process's threads. A read error means it exited
+			// between the stat and the readdir — count the leader only.
+			taskEntries, taskErr := os.ReadDir("/proc/" + name + "/task")
+			if taskErr != nil {
+				count++
+				continue
+			}
+			count += uint64(len(taskEntries))
 		}
 		if err != nil {
 			break
@@ -162,8 +187,48 @@ func applyPostStartHardening(cmd *exec.Cmd, lim Limits) error {
 		})
 		baseline = 1024
 	}
+	// Close the snapshot->apply race: the gateway may have spawned threads
+	// between the baseline read above and this point (Go's scheduler parks
+	// and creates Ms continuously). Re-read and take the higher value so the
+	// cap can never be applied already-exceeded, which would EAGAIN every
+	// fork the child attempts.
+	if live := readCurrentUserNProc(); live > baseline {
+		baseline = live
+	}
 	nprocCap := baseline + childNProcSlack
+
+	// Preserve the child's existing HARD limit. Lowering Max is irreversible
+	// for the child and buys nothing (the soft limit is what contains a
+	// fork-bomb); clamping Cur to the inherited Max also avoids EINVAL when
+	// our computed cap exceeds a hard limit we lack CAP_SYS_RESOURCE to raise.
 	nprocLim := &unix.Rlimit{Cur: nprocCap, Max: nprocCap}
+	var existing unix.Rlimit
+	if err := unix.Prlimit(cmd.Process.Pid, unix.RLIMIT_NPROC, nil, &existing); err == nil {
+		cur := nprocCap
+		if existing.Max != unix.RLIM_INFINITY && cur > existing.Max {
+			cur = existing.Max
+		}
+		nprocLim = &unix.Rlimit{Cur: cur, Max: existing.Max}
+	}
+
+	slog.Debug("sandbox: applying RLIMIT_NPROC to child",
+		"pid", cmd.Process.Pid,
+		"baseline_tasks", baseline,
+		"slack", childNProcSlack,
+		"soft_cap", nprocLim.Cur,
+		"hard_cap", nprocLim.Max)
+
+	// Tripwire: if the soft cap is at or below the live task count, every
+	// fork() by this child WILL fail with EAGAIN. That is the exact silent
+	// outage this code once shipped, so make it loud rather than leaving the
+	// operator with a bare "sh: Cannot fork".
+	if nprocLim.Cur <= baseline {
+		slog.Warn("sandbox: RLIMIT_NPROC soft cap is at or below the current task count; child fork() will fail",
+			"pid", cmd.Process.Pid,
+			"soft_cap", nprocLim.Cur,
+			"current_tasks", baseline)
+	}
+
 	if err := unix.Prlimit(cmd.Process.Pid, unix.RLIMIT_NPROC, nprocLim, nil); err != nil {
 		// EPERM here means the calling process lacks CAP_SYS_RESOURCE to
 		// raise (or even SET) the limit. On a non-root gateway that would

@@ -450,54 +450,20 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 //
 // Reads /proc; tolerant of races (processes/threads exiting mid-walk are
 // silently skipped).
+// It intentionally DELEGATES to the production counter rather than keeping a
+// private copy. A private copy is exactly how the fork-limit outage shipped:
+// this helper counted tasks (correctly) while production's
+// readCurrentUserNProc counted processes, so the red-team test measured a
+// quantity production never used and stayed green while every sandboxed
+// fork() in production failed with EAGAIN. One implementation, one behaviour
+// — see TestReadCurrentUserNProc_CountsThreadsNotProcesses.
 func countOurPIDs(t *testing.T) int {
 	t.Helper()
-	uid := os.Getuid()
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		t.Fatalf("read /proc: %v", err)
+	count := sandbox.ReadCurrentUserNProcForTest()
+	if count == 0 {
+		t.Fatalf("readCurrentUserNProc returned 0 — /proc unreadable?")
 	}
-	count := 0
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		// Skip non-PID entries (like /proc/cpuinfo, /proc/meminfo etc.).
-		name := e.Name()
-		isDigits := true
-		for _, r := range name {
-			if r < '0' || r > '9' {
-				isDigits = false
-				break
-			}
-		}
-		if !isDigits {
-			continue
-		}
-		// Stat /proc/<pid> to get owner UID. This may fail if the process
-		// exited between readdir and stat — that's fine, just skip it.
-		info, err := os.Stat("/proc/" + name)
-		if err != nil {
-			continue
-		}
-		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok {
-			continue
-		}
-		if int(stat.Uid) != uid {
-			continue
-		}
-		// Sum the threads (tasks) within this PID. /proc/<pid>/task/ has
-		// one subdir per task. Read errors mean the process exited mid-
-		// walk — skip with a 1 baseline (the PID itself).
-		taskEntries, terr := os.ReadDir("/proc/" + name + "/task")
-		if terr != nil {
-			count++
-			continue
-		}
-		count += len(taskEntries)
-	}
-	return count
+	return int(count)
 }
 
 // samplePeakPIDs polls our PID count until the context fires, returning
