@@ -35,6 +35,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
+	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
@@ -1853,6 +1854,18 @@ func registerSharedTools(
 			if sharedStore != nil {
 				delegateTool.SetSessionStore(sharedStore)
 			}
+			// G1 fix: wire the live tool-call-argument progress reader so
+			// action:"status" can tell "still generating a large tool-call
+			// argument" apart from "hung" for a running native child — see
+			// tools.DelegateProgressReader's doc comment. al itself
+			// implements the interface (AgentLoop.ProgressForSession,
+			// turn.go), reading straight from al.activeTurnStates — the
+			// same live-turn registry GetActiveTurnHookForSession/
+			// claimAnyTurnForSession already use for cancellation — so no
+			// typed-nil guard is needed here (unlike sharedStore above):
+			// al is the *AgentLoop this tool is being registered on, never
+			// nil at this point in construction.
+			delegateTool.SetProgressReader(al)
 			delegateTool.SetAgentRegistry(func() tools.DelegateAgentRegistry { return al.GetRegistry() })
 			// FR-028/BDD-29 (ADR-057 U14): wire the shared, process-wide
 			// SessionManager so `delegate action="cancel"` actually kills the
@@ -8240,6 +8253,40 @@ turnLoop:
 				return al.abortTurn(ts, "before_llm", decision.Reason)
 			}
 		}
+
+		// G1 fix: wire a cheap, non-blocking tool-call-argument progress
+		// callback so a `delegate action=status` poll on a running child can
+		// tell "still generating a large tool-call argument" apart from
+		// "hung" — see protocoltypes.OnToolCallProgressKey's doc comment for
+		// the incident this closes (an orchestrator polled a delegated
+		// worker 75 times over 46s, saw no activity because the only output
+		// was landing inside a streaming tool-call argument, and killed it
+		// mid-write).
+		//
+		// CRITICAL: injected HERE, after the BeforeLLM hook block above, not
+		// alongside the other llmOpts entries near the top of this
+		// iteration. A hook that returns HookActionModify replaces llmOpts
+		// WHOLESALE (`llmOpts = llmReq.Options` above) — including with a
+		// nil map — which would silently drop a callback set any earlier.
+		// Re-setting it here, unconditionally, after every branch of the
+		// hook switch that can still reach this point (Continue, Modify, or
+		// no hooks registered at all), guarantees the key survives
+		// regardless of what BeforeLLM did to the map. The two abort
+		// branches above return before reaching this line, but neither of
+		// them calls ChatStream, so there is nothing to instrument.
+		//
+		// The callback itself only does an atomic store per delta (see
+		// turnState.recordToolCallProgress) — cheap and non-blocking, safe
+		// to call synchronously from the provider's SSE read loop. ts is
+		// this turn's own turnState, captured by the closure: concurrent
+		// turns each get their own callback writing into their own state,
+		// never into another turn's.
+		if llmOpts == nil {
+			llmOpts = map[string]any{}
+		}
+		llmOpts[protocoltypes.OnToolCallProgressKey] = protocoltypes.OnToolCallProgress(func(p protocoltypes.ToolCallProgress) {
+			ts.recordToolCallProgress(p)
+		})
 
 		al.emitEvent(
 			EventKindLLMRequest,

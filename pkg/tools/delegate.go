@@ -293,6 +293,61 @@ type DelegateSessionStore interface {
 	ReadTranscript(sessionID string) ([]session.TranscriptEntry, error)
 }
 
+// ToolCallProgressSnapshot is DelegateProgressReader's read-side value type
+// (G1 fix): a point-in-time view of a running native delegate's live
+// tool-call-argument stream, as recorded turn-side by
+// agent.turnState.recordToolCallProgress. It deliberately carries no
+// argument CONTENT — see protocoltypes.ToolCallProgress's own doc comment,
+// which this mirrors on the read side of the tools<->agent boundary — only
+// enough to answer "is this still making forward progress, and on what?".
+type ToolCallProgressSnapshot struct {
+	// Name is the tool being called, once the stream has revealed it. May be
+	// empty for the first few deltas of a call.
+	Name string
+	// ArgsBytes is the byte count accumulated so far for the tool call that
+	// produced the most recent delta.
+	ArgsBytes int
+	// TotalArgsBytes is the byte count accumulated across every tool call in
+	// the current LLM response so far (may exceed ArgsBytes when more than
+	// one tool call is in flight in the same response).
+	TotalArgsBytes int
+	// LastActivity is the wall-clock time of the most recent recorded delta.
+	// Zero when no progress has ever been recorded for the turn.
+	LastActivity time.Time
+	// Age is time.Since(LastActivity), computed once at snapshot time so a
+	// caller renders a stable value even if it takes a moment to format the
+	// response.
+	Age time.Duration
+}
+
+// DelegateProgressReader is the seam action:"status" (G1 fix) reads a
+// running native delegate's LIVE tool-call-argument progress through —
+// distinct from DelegateSessionStore.ReadTranscript above, which only ever
+// sees data already flushed to the PERSISTED transcript at full-LLM-round
+// completion. A model spending tens of seconds streaming a large tool-call
+// argument (a multi-kilobyte SVG body, a long file write) produces nothing
+// on that persisted path until the round finishes — recentActivityLines
+// alone is blind to precisely the window a status poll most needs
+// visibility into, which is what let an orchestrator conclude a
+// still-working child had hung and kill it mid-write (see
+// protocoltypes.OnToolCallProgressKey's doc comment for the full incident).
+//
+// Implemented by *agent.AgentLoop (ToolCallProgressForSession, turn.go) and
+// wired via SetProgressReader at DelegateTool construction time (loop.go),
+// mirroring every other tools<->agent seam this tool already has
+// (SubTurnSpawner, DelegateAgentRegistry, DelegateSessionStore) to avoid a
+// tools<->agent import cycle: pkg/agent already imports pkg/tools, so the
+// dependency can only run tools->agent as an interface, never the reverse as
+// a concrete type.
+type DelegateProgressReader interface {
+	// ProgressForSession returns the live progress snapshot for the turn
+	// registered under sessionKey — expected to be a
+	// DelegateTaskState.DelegateSessionID — and false when no turn is
+	// registered under that key, or one is but has not yet recorded any
+	// tool-call-argument progress.
+	ProgressForSession(sessionKey string) (ToolCallProgressSnapshot, bool)
+}
+
 // DelegateTool is the unified delegation tool (FR-D1). Any agent — including
 // the main/orchestrating agent — uses this exact tool; access is governed
 // solely by the delegation-policy gate (trust set, modes, depth), never by
@@ -336,6 +391,15 @@ type DelegateTool struct {
 	// degrades gracefully — status falls back to the prompt-only summary it
 	// already returned before this feature.
 	sessionStore DelegateSessionStore
+
+	// progressReader, when set via SetProgressReader, is read from by
+	// action:"status" (G1 fix) to report a running native task's LIVE
+	// tool-call-argument progress — see DelegateProgressReader's doc
+	// comment for why this is a separate seam from sessionStore above
+	// (persisted transcript vs. live in-memory turn state). A nil/unset
+	// reader degrades gracefully — status falls back to sessionStore's
+	// persisted-transcript snapshot alone, matching pre-G1 behavior.
+	progressReader DelegateProgressReader
 
 	// sessionManager, when set via SetSessionManager, is the shared
 	// *SessionManager (pkg/tools/session.go — same package, no interface
@@ -792,6 +856,15 @@ func (t *DelegateTool) SetAgentRegistry(getRegistry func() DelegateAgentRegistry
 // action:"status" (W2). See the sessionStore field doc.
 func (t *DelegateTool) SetSessionStore(store DelegateSessionStore) {
 	t.sessionStore = store
+}
+
+// SetProgressReader installs the DelegateProgressReader action:"status"
+// (G1 fix) reads a running native task's live tool-call-argument progress
+// from. See the progressReader field and DelegateProgressReader's doc
+// comments for what this adds over sessionStore above. A nil reader (never
+// called) leaves action:"status" behaving exactly as before this fix.
+func (t *DelegateTool) SetProgressReader(reader DelegateProgressReader) {
+	t.progressReader = reader
 }
 
 // SetSessionManager installs the shared *SessionManager executeCancel uses
@@ -2488,6 +2561,22 @@ func (t *DelegateTool) delegateStatusExtra(task *DelegateTaskState) string {
 	if task.Is3P {
 		return delegate3PStatusNote
 	}
+
+	var sb strings.Builder
+
+	// G1 fix: check LIVE tool-call-argument progress first, before falling
+	// back to the persisted-transcript snapshot below. A model mid-stream on
+	// a large tool-call argument writes NOTHING to the persisted transcript
+	// until its LLM round completes (see DelegateProgressReader's doc
+	// comment) — this is precisely the window recentActivityLines alone
+	// cannot see, and precisely the window that got a genuinely-working
+	// child killed as "hung" in production.
+	if t.progressReader != nil {
+		if snap, ok := t.progressReader.ProgressForSession(task.DelegateSessionID); ok {
+			sb.WriteString(formatToolCallProgressLine(snap))
+		}
+	}
+
 	// ADR-057 FR-043: read the child's OWN durable session (DelegateSessionID),
 	// not task.SessionID (the delegating PARENT's own transcript id — see
 	// its doc comment). Post-FR-007 a delegated child writes its own
@@ -2497,15 +2586,52 @@ func (t *DelegateTool) delegateStatusExtra(task *DelegateTaskState) string {
 	// non-empty) were silently broken until this re-point.
 	lines := t.recentActivityLines(task.DelegateSessionID, task.SpawnCallID, maxStatusActivityLines)
 	if len(lines) == 0 {
-		return ""
+		return sb.String()
 	}
-	var sb strings.Builder
+	if sb.Len() > 0 {
+		sb.WriteString("\n")
+	}
 	sb.WriteString("  recent activity:")
 	for _, line := range lines {
 		sb.WriteString("\n    - ")
 		sb.WriteString(line)
 	}
 	return sb.String()
+}
+
+// maxToolCallProgressStaleness caps how long ago a recorded tool-call
+// progress update may be while still rendering as "generating" rather than
+// "stale" (G1 fix). Generous on purpose: the underlying callback only fires
+// on argument GROWTH (see protocoltypes.OnToolCallProgress's doc comment),
+// so a model that paused between deltas — a slow provider round-trip,
+// network jitter — should not read as hung just because its LAST delta was
+// a while ago. It exists only so a turnState whose progress was never
+// cleared (a crash mid-stream, rather than a clean turn end) does not
+// masquerade as live forever; delegateStatusExtra only ever renders this
+// note for a task whose Status is still "running" in the first place.
+const maxToolCallProgressStaleness = 5 * time.Minute
+
+// formatToolCallProgressLine renders a DelegateProgressReader snapshot as
+// the leading line of action:"status"'s extra section (G1 fix) — the signal
+// that lets a caller tell "still generating a large tool-call argument"
+// apart from "hung", which is the whole point of this feature. See
+// delegateStatusExtra's call site and DelegateProgressReader's doc comment
+// for the incident this closes.
+func formatToolCallProgressLine(snap ToolCallProgressSnapshot) string {
+	name := snap.Name
+	if name == "" {
+		name = "(name pending)"
+	}
+	verb := "generating"
+	if snap.Age > maxToolCallProgressStaleness {
+		verb = "stale — no update recently, may have stalled while generating"
+	}
+	if snap.TotalArgsBytes > snap.ArgsBytes {
+		return fmt.Sprintf("  progress: %s tool call %q — %d bytes (%d bytes total this round), last update %s ago",
+			verb, name, snap.ArgsBytes, snap.TotalArgsBytes, snap.Age.Round(time.Second))
+	}
+	return fmt.Sprintf("  progress: %s tool call %q — %d bytes, last update %s ago",
+		verb, name, snap.ArgsBytes, snap.Age.Round(time.Second))
 }
 
 // recentActivityLines reads back up to max of the most recent transcript

@@ -14,6 +14,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -411,6 +412,108 @@ type turnState struct {
 	// streaming path, setLastProducedModel is called by the streamer wrapper
 	// after each chat completes.
 	lastProducedModel string
+
+	// toolCallProgress is G1's turn-scoped liveness signal for an in-flight
+	// tool-call argument stream (see protocoltypes.OnToolCallProgressKey's
+	// doc comment for the incident it closes). Written from the provider's
+	// SSE read goroutine, via the callback loop.go wires into llmOpts, on
+	// every argument delta of a live stream — a high-frequency path. Read
+	// from a completely different goroutine: a `delegate action=status`
+	// poll on another turn (possibly another agent instance) reaching in via
+	// AgentLoop.ProgressForSession. atomicToolCallProgress is its
+	// own atomics-based type rather than a field guarded by ts.mu above,
+	// deliberately: contending on the turn's main RWMutex from a per-delta
+	// hot path would slow down every other ts.mu consumer (setLastStreamer,
+	// setProviderCancel, ...) purely for the sake of a monitoring signal
+	// that only ever needs eventual consistency with the rest of turnState,
+	// never linearizability.
+	toolCallProgress atomicToolCallProgress
+}
+
+// atomicToolCallProgress is the atomics-based store for turnState's live
+// tool-call-argument progress (G1). Every field is written independently via
+// plain atomic stores from recordToolCallProgress — no cross-field
+// invariant is required between them (a reader observing, say, a fresher
+// argsBytes than name for one instant is harmless: the next delta corrects
+// it, and the worst case is a status poll's snapshot lagging by one delta,
+// not a corrupted one). That is what makes plain atomics sufficient here
+// where turnState's other cross-goroutine fields use ts.mu or dedicated
+// atomic.Bool guards for actual coordination (cancelFired, abandoned, etc.)
+// — this state has no such coordination requirement.
+type atomicToolCallProgress struct {
+	// lastActivityUnixNano is 0 until the first delta arrives, which
+	// doubles as the "no progress recorded yet" sentinel read by the
+	// snapshot accessor below.
+	lastActivityUnixNano atomic.Int64
+	argsBytes            atomic.Int64
+	totalArgsBytes       atomic.Int64
+	// name is an atomic.Pointer rather than an atomic.Value: the callback
+	// stores a fresh *string on every delta (even once the name has
+	// stabilized, since the SSE loop doesn't know that), and
+	// atomic.Pointer's zero value is a valid, comparable nil — unlike
+	// atomic.Value, which panics if a later Store passes a different
+	// concrete type than an earlier one ever stored.
+	name atomic.Pointer[string]
+}
+
+// recordToolCallProgress is the write side of G1's progress signal, called
+// synchronously from the provider's SSE read loop via the
+// protocoltypes.OnToolCallProgress callback loop.go installs into llmOpts.
+// Three atomic stores, no lock, no I/O, no allocation beyond the one string
+// copy for Name — safe to call on every argument delta of a live stream.
+// Nil-safe so a callback captured before a turn is fully constructed (should
+// never happen, but costs nothing to guard) degrades to a no-op instead of a
+// panic.
+func (ts *turnState) recordToolCallProgress(p protocoltypes.ToolCallProgress) {
+	if ts == nil {
+		return
+	}
+	name := p.Name
+	ts.toolCallProgress.name.Store(&name)
+	ts.toolCallProgress.argsBytes.Store(int64(p.ArgsBytes))
+	ts.toolCallProgress.totalArgsBytes.Store(int64(p.TotalArgsBytes))
+	// Stamped LAST, deliberately: a concurrent reader that observes a fresh
+	// lastActivityUnixNano is guaranteed to also observe the argsBytes/name
+	// stores that happened-before it (each is its own atomic op, so there is
+	// no single-instruction guarantee across all four, but ordering the
+	// timestamp last means a reader can never see "recently active" paired
+	// with stale byte counts from a PRIOR delta — the worst residual case is
+	// the reverse, a reader catching lastActivity updated but not yet one of
+	// the byte counters, which just means it renders one delta stale for a
+	// single read, never ahead of reality).
+	ts.toolCallProgress.lastActivityUnixNano.Store(time.Now().UnixNano())
+}
+
+// ToolCallProgress returns the current live tool-call-argument progress
+// snapshot for this turn (G1), or the zero value with LastActivity.IsZero()
+// true when nothing has been recorded yet — either because this turn never
+// reached a streaming tool call, or because it hasn't (the common case for
+// most of a turn's lifetime, and for every non-streaming provider path).
+// Safe to call from any goroutine at any time, including concurrently with
+// recordToolCallProgress. Exported (capital, unlike most turnState methods)
+// because AgentLoop.ProgressForSession — the DelegateProgressReader
+// implementation delegate.go's action:"status" poll reaches through — lives
+// in the same package but is itself called from tools.DelegateTool.
+func (ts *turnState) ToolCallProgress() tools.ToolCallProgressSnapshot {
+	if ts == nil {
+		return tools.ToolCallProgressSnapshot{}
+	}
+	nanos := ts.toolCallProgress.lastActivityUnixNano.Load()
+	if nanos == 0 {
+		return tools.ToolCallProgressSnapshot{}
+	}
+	var name string
+	if np := ts.toolCallProgress.name.Load(); np != nil {
+		name = *np
+	}
+	lastActivity := time.Unix(0, nanos)
+	return tools.ToolCallProgressSnapshot{
+		Name:           name,
+		ArgsBytes:      int(ts.toolCallProgress.argsBytes.Load()),
+		TotalArgsBytes: int(ts.toolCallProgress.totalArgsBytes.Load()),
+		LastActivity:   lastActivity,
+		Age:            time.Since(lastActivity),
+	}
 }
 
 // setLastProducedModel stamps the model that produced the most recent
@@ -723,6 +826,47 @@ func (al *AgentLoop) GetActiveTurnHookForSession(sessionID string) TurnCancelHoo
 		return anyMatch
 	}
 	return nil
+}
+
+// ProgressForSession implements tools.DelegateProgressReader (G1 fix): it is
+// the consumer-side seam `delegate action=status` reaches through to read a
+// running native child's LIVE tool-call-argument progress, wired in via
+// delegateTool.SetProgressReader at DelegateTool construction (loop.go),
+// mirroring the existing SubTurnSpawner/DelegateAgentRegistry/
+// DelegateSessionStore seams this tool already uses to avoid a tools<->agent
+// import cycle.
+//
+// sessionKey here is expected to be a DelegateTaskState.DelegateSessionID —
+// the SAME id spawnSubTurn (subturn.go) registers the child's own turnState
+// under in al.activeTurnStates (`al.activeTurnStates.Store(childID, childTS)`
+// where childID := cfg.DelegateSessionID). This is a direct Load on that
+// existing registry, not a new one: activeTurnStates already exists
+// specifically to let cross-goroutine callers reach a live turn by a key
+// they hold (GetActiveTurnHookForSession/claimAnyTurnForSession above do the
+// same thing for cancellation), so a second, parallel registry would be an
+// unjustified duplicate of state that already lives here.
+//
+// Returns false when no turn is registered under sessionKey (child not yet
+// spawned, already finished, or a stale/mismatched id) or when a turn is
+// registered but has not yet recorded any tool-call-argument progress (e.g.
+// still generating plain text, or on a non-streaming provider path).
+func (al *AgentLoop) ProgressForSession(sessionKey string) (tools.ToolCallProgressSnapshot, bool) {
+	if al == nil || sessionKey == "" {
+		return tools.ToolCallProgressSnapshot{}, false
+	}
+	val, ok := al.activeTurnStates.Load(sessionKey)
+	if !ok {
+		return tools.ToolCallProgressSnapshot{}, false
+	}
+	ts, ok := val.(*turnState)
+	if !ok || ts == nil {
+		return tools.ToolCallProgressSnapshot{}, false
+	}
+	snap := ts.ToolCallProgress()
+	if snap.LastActivity.IsZero() {
+		return tools.ToolCallProgressSnapshot{}, false
+	}
+	return snap, true
 }
 
 // resolveSessionIDByChannelChat walks activeTurnStates for the turnState
