@@ -99,11 +99,23 @@ This makes "still working" and "silent for 90 seconds" visibly different, which 
 
 **Handler discipline.** The handler fires on every argument delta of a live stream. It MUST be cheap, non-blocking, and must not panic — a panic would unwind through the SSE read loop and take down the turn, which is strictly worse than the blindness being fixed. Providers invoke it synchronously; the implementation is responsible for its own throttling.
 
-### D4 — Machine-readable outcomes follow ADR-058, not a parallel mechanism
+### D4 — Machine-readable outcomes follow ADR-058, and the consumer is the CALLING agent
 
-A refusal that is *not* a failure — most concretely `write_file`'s "already exists" — must be distinguishable by the **agent**, and an agent reads text. Per ADR-058, the discriminator therefore belongs **inside the tool-result text the model receives**, as structured JSON, not in a Go struct field the model cannot see.
+A refusal that is *not* a failure — most concretely `write_file`'s "already exists" — must be distinguishable by the agent that **made the call**. Per ADR-058, the discriminator belongs **inside the tool-result text that agent receives**, as structured JSON, not in a Go struct field no model can see.
 
-**Rejected: a `Reason` field on `ToolResult`.** It was implemented and is hereby superseded before use. It is unreachable by its own documented consumer: `ToolResult` is never serialised across the model boundary, so the LLM sees only `ForLLM`, whose prose was unchanged. A Go field cannot fix an LLM's discrimination problem.
+**The consumer is the worker, not the orchestrator.** A tool result is delivered to the agent that invoked the tool. In a delegated flow that is the *subagent*. The correct chain is:
+
+1. the worker calls `write_file` and the file already exists;
+2. the worker receives a result it can unambiguously read as *precondition already satisfied*, not *write failed*;
+3. the worker concludes its task is effectively done and **reports that back to its parent in its own words**.
+
+The orchestrator learns through the worker's ordinary report. **No special channel from the tool to the parent is required, and none should be built.** Delegation already has a reporting path; this decision only has to make the worker's own read of the result unambiguous.
+
+Corollary: surfacing persisted failure text to a *parent* agent (e.g. via `inspect_session`) is a debugging and forensics convenience, not the mechanism by which a parent learns an outcome. It should not be justified as closing this gap.
+
+**Rejected: a `Reason` field on `ToolResult`.** Implemented earlier on this branch and superseded here before use. It is unreachable by any model: `ToolResult` is not serialised across the model boundary, so an agent sees only `ForLLM`, whose prose was unchanged. A Go field cannot fix a language model's discrimination problem.
+
+**Evidence limitation.** In the 2026-08-09 session all five workers that hit "already exists" were cancelled within seconds of the failed call — every one of their transcripts ends at the errored `write_file` with no assistant turn after it. So the incident shows the ambiguity being *created*, but never shows a worker acting on it. The step this decision improves was not reached. **[INFERRED]** that a clearer result would have produced a correct report.
 
 ---
 
