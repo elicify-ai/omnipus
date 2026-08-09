@@ -34,7 +34,7 @@ func TestParseStreamResponse_CtxCancel_ReturnsContextError(t *testing.T) {
 	t.Run("canceled context surfaces context.Canceled", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		_, err := parseStreamResponse(ctx, &errReader{err: bodyClosed}, func(string) {})
+		_, err := parseStreamResponse(ctx, &errReader{err: bodyClosed}, func(string) {}, nil)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("want errors.Is(err, context.Canceled); got %v", err)
 		}
@@ -46,7 +46,7 @@ func TestParseStreamResponse_CtxCancel_ReturnsContextError(t *testing.T) {
 	t.Run("deadline-exceeded context surfaces context.DeadlineExceeded", func(t *testing.T) {
 		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 		defer cancel()
-		_, err := parseStreamResponse(ctx, &errReader{err: bodyClosed}, func(string) {})
+		_, err := parseStreamResponse(ctx, &errReader{err: bodyClosed}, func(string) {}, nil)
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("want errors.Is(err, context.DeadlineExceeded); got %v", err)
 		}
@@ -55,7 +55,7 @@ func TestParseStreamResponse_CtxCancel_ReturnsContextError(t *testing.T) {
 	t.Run("genuine stream error (ctx alive) still reports streaming read error", func(t *testing.T) {
 		// No cancellation: a real server-side drop must still be a retryable
 		// "streaming read error" so the transient-retry path fires.
-		_, err := parseStreamResponse(context.Background(), &errReader{err: bodyClosed}, func(string) {})
+		_, err := parseStreamResponse(context.Background(), &errReader{err: bodyClosed}, func(string) {}, nil)
 		if err == nil || !strings.Contains(err.Error(), "streaming read error") {
 			t.Fatalf("live-ctx stream drop must report a streaming read error; got %v", err)
 		}

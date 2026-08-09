@@ -256,7 +256,7 @@ func (p *Provider) ChatStream(
 		resp.Body.Close()
 	}()
 
-	return parseStreamResponse(ctx, resp.Body, onChunk)
+	return parseStreamResponse(ctx, resp.Body, onChunk, protocoltypes.ToolCallProgressFromOptions(options))
 }
 
 // parseStreamResponse parses an OpenAI-compatible SSE stream.
@@ -264,10 +264,12 @@ func parseStreamResponse(
 	ctx context.Context,
 	reader io.Reader,
 	onChunk func(accumulated string),
+	onProgress protocoltypes.OnToolCallProgress,
 ) (*LLMResponse, error) {
 	var textContent strings.Builder
 	var finishReason string
 	var usage *UsageInfo
+	var totalArgsBytes int
 
 	// Tool call assembly: OpenAI streams tool calls as incremental deltas
 	type toolAccum struct {
@@ -337,7 +339,13 @@ func parseStreamResponse(
 			}
 		}
 
-		// Accumulate tool call deltas
+		// Accumulate tool call deltas.
+		//
+		// Every argument delta also emits a progress signal. Without it a
+		// model spending tens of seconds emitting a large tool argument
+		// produces no observable output at all — indistinguishable from a
+		// hung generation, which has caused healthy delegated workers to be
+		// killed mid-write. See protocoltypes.OnToolCallProgressKey.
 		for _, tc := range choice.Delta.ToolCalls {
 			acc, ok := activeTools[tc.Index]
 			if !ok {
@@ -353,6 +361,15 @@ func parseStreamResponse(
 				}
 				if tc.Function.Arguments != "" {
 					acc.argsJSON.WriteString(tc.Function.Arguments)
+					totalArgsBytes += len(tc.Function.Arguments)
+					if onProgress != nil {
+						onProgress(protocoltypes.ToolCallProgress{
+							Index:          tc.Index,
+							Name:           acc.name,
+							ArgsBytes:      acc.argsJSON.Len(),
+							TotalArgsBytes: totalArgsBytes,
+						})
+					}
 				}
 			}
 		}
