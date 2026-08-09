@@ -61,7 +61,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
-    "dompurify": "^3.4.12",
+    "dompurify": "^3.4.13",
     "framer-motion": "^12.42.2",
     "immer": "^11.1.15",
     "katex": "^0.18.1",
