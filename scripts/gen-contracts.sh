@@ -12,7 +12,16 @@
 # Required tools (verified by the child scripts, fail fast if missing):
 #   - npx + node_modules (openapi-typescript, openapi-zod-client, js-yaml, @asyncapi/parser, @redocly/cli)
 #   - go 1.22+ in PATH (or /usr/local/go/bin/go)
-#   - oapi-codegen v2 (install: go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest)
+#   - oapi-codegen v2 — PIN THE VERSION, do not use @latest:
+#         go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.7.0
+#     This MUST match the version pinned in .github/workflows/pr.yml, or
+#     `make verify-contracts` fails for reasons that have nothing to do with
+#     your change. v2.8.0 renames every enum constant (ExternalCli becomes
+#     ExecutorConfigKindExternalCli, and so on): regenerating with it rewrites
+#     ~5000 lines and breaks hand-written consumers such as
+#     pkg/api/generated/fixtures.go. The generator version is stamped into the
+#     header of pkg/api/generated/openapi_types.gen.go — check it if a
+#     regeneration produces a diff far larger than your schema change.
 #   - gofmt in PATH (ships with Go)
 
 set -euo pipefail
@@ -32,6 +41,36 @@ elif [ -d "${HOME}/go/bin" ] && ! echo "$PATH" | grep -q "${HOME}/go/bin"; then
 fi
 
 echo "[gen-contracts] Working directory: ${REPO_ROOT}"
+
+# ---------------------------------------------------------------------------
+# Step 0: Generator version guard
+# ---------------------------------------------------------------------------
+# oapi-codegen's output is version-dependent in ways that are NOT confined to
+# your schema change. v2.8.0 renames every enum constant (ExternalCli ->
+# ExecutorConfigKindExternalCli), which rewrites ~5000 lines and breaks
+# hand-written consumers like pkg/api/generated/fixtures.go. Regenerating with
+# the wrong version therefore produces a huge diff, a broken build, and a
+# verify-contracts failure that looks like it came from your change.
+#
+# This guard exists because that happened. Keep REQUIRED_OAPI_CODEGEN_VERSION
+# in lockstep with the version pinned in .github/workflows/pr.yml.
+REQUIRED_OAPI_CODEGEN_VERSION="v2.7.0"
+if command -v oapi-codegen >/dev/null 2>&1; then
+  ACTUAL_OAPI_CODEGEN_VERSION="$(oapi-codegen --version 2>/dev/null | tail -1 | tr -d '[:space:]')"
+  if [ "${ACTUAL_OAPI_CODEGEN_VERSION}" != "${REQUIRED_OAPI_CODEGEN_VERSION}" ]; then
+    echo "[gen-contracts] ERROR: oapi-codegen version mismatch." >&2
+    echo "  required: ${REQUIRED_OAPI_CODEGEN_VERSION} (matches .github/workflows/pr.yml)" >&2
+    echo "  found:    ${ACTUAL_OAPI_CODEGEN_VERSION:-<unknown>}" >&2
+    echo "  fix:      go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@${REQUIRED_OAPI_CODEGEN_VERSION}" >&2
+    echo "  why:      a different version rewrites unrelated generated code and breaks the build." >&2
+    exit 1
+  fi
+else
+  echo "[gen-contracts] ERROR: oapi-codegen not found on PATH." >&2
+  echo "  fix: go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@${REQUIRED_OAPI_CODEGEN_VERSION}" >&2
+  exit 1
+fi
+echo "[gen-contracts] oapi-codegen ${ACTUAL_OAPI_CODEGEN_VERSION} (pinned) OK"
 
 # ---------------------------------------------------------------------------
 # Step 1: Lint specs
