@@ -165,6 +165,14 @@ type c2ParkTestHarness struct {
 	parentDurableKey string
 	childSessionID   string
 	spawnResult      *tools.ToolResult
+	// parentTS is the SAME *turnState used to dispatch the original spawn
+	// below — kept so TestMessageParent_QuestionWaitTrue_ParkedChildResumableViaRespond
+	// can wrap its `delegate respond` call's context with it (see that test's
+	// own comment): AgentLoopSpawner.SpawnSubTurn (subturn.go) requires a real
+	// parent turnState in ctx, exactly mirroring how `delegate respond` is
+	// only ever invoked in production as a tool call from within the
+	// delegating parent's own live turn.
+	parentTS *turnState
 	// subTurnEndMu guards subTurnEndEvents (populated by a background
 	// goroutine draining al.SubscribeEvents — see setupC2ParkScenario).
 	subTurnEndMu     *sync.Mutex
@@ -198,6 +206,15 @@ func setupC2ParkScenario(t *testing.T) *c2ParkTestHarness {
 	al.RegisterTool(messageParentTool)
 
 	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
+	// Established test-harness pattern (delegate_sync_toolcall_completion_test.go,
+	// delegate_async_completion_test.go, et al.): a manually-constructed
+	// *tools.DelegateTool registered via al.RegisterTool overwrites the
+	// production one loop.go already auto-wires with a real spawner for every
+	// agent (loop.go's NewSubTurnSpawner(al) call at agent construction), so
+	// this harness must wire its own or `delegate respond` has no sub-turn
+	// spawner to resume the session with — production is never missing this,
+	// only a test fixture that forgets to mirror the wiring.
+	delegateTool.SetSpawner(NewSubTurnSpawner(al))
 	delegateTool.SetLifecycleStore(lifecycleStore)
 	delegateTool.SetMessageInbox(inboxStore)
 	delegateTool.SetSteeringSink(al)
@@ -284,6 +301,7 @@ func setupC2ParkScenario(t *testing.T) *c2ParkTestHarness {
 		parentDurableKey: parentTS.transcriptSessionID,
 		childSessionID:   childID,
 		spawnResult:      spawnResult,
+		parentTS:         parentTS,
 		subTurnEndMu:     &subTurnEndMu,
 		subTurnEndEvents: &subTurnEndEvents,
 	}
@@ -390,8 +408,20 @@ func TestMessageParent_QuestionWaitTrue_ParkedChildResumableViaRespond(t *testin
 	// Drive the REAL delegate `respond` action — the exact production path
 	// an owning parent uses to answer a parked question — from a context
 	// carrying the PARENT's own transcript session id (the ownership check
-	// DelegateTool.executeRespond enforces via verifyCallerOwnsSession).
+	// DelegateTool.executeRespond enforces via verifyCallerOwnsSession) AND
+	// the PARENT's own real turnState (withTurnState): respond redispatches
+	// the child via the SAME spawner-backed isResume machinery follow_up
+	// uses (executeAsync -> t.spawner.SpawnSubTurn), and
+	// AgentLoopSpawner.SpawnSubTurn (subturn.go) requires a real parent
+	// turnState in ctx — exactly mirroring production, where `delegate
+	// respond` is only ever invoked as a tool call issued by the delegating
+	// parent's own LLM from within its own live turn, never from a bare
+	// context. A bare context.Background() here (no turnState) fails with
+	// "parent turnState not found in context - cannot spawn sub-turn outside
+	// of a turn" — a test-harness gap, not a product defect, since no real
+	// caller of respond exists outside a live parent turn.
 	respondCtx := tools.WithTranscriptSessionID(context.Background(), h.parentDurableKey)
+	respondCtx = withTurnState(respondCtx, h.parentTS)
 	result := h.delegateTool.Execute(respondCtx, map[string]any{
 		"action":         "respond",
 		"session_id":     h.childSessionID,
@@ -417,4 +447,18 @@ func TestMessageParent_QuestionWaitTrue_ParkedChildResumableViaRespond(t *testin
 	assert.Equal(t, 1, h.al.pendingSteeringCountForScope(h.childSessionID),
 		"the answer must be queued as a steering message for the child's own session scope, "+
 			"ready to be delivered into a resumed turn")
+
+	// Drain the redispatch goroutine executeAsync launched above before this
+	// test returns and setupC2ParkScenario's t.Cleanup(al.Close) runs
+	// (registered first, so it fires AFTER this, LIFO) — otherwise that
+	// still-in-flight goroutine races al.Close()'s own session/workspace
+	// teardown and t.TempDir()'s RemoveAll, intermittently failing cleanup
+	// with "directory not empty" (harness-only; not a product race, since a
+	// real gateway process has no such teardown to race). The resumed turn's
+	// own script step legitimately has no route in c2ParkTestProvider (its
+	// "Answer to your question..." user message is never one of the two
+	// scripted cases), so it errors and fails closed — this test only cares
+	// that respond's synchronous contract (asserted above) held; draining
+	// the async remainder is purely for a clean, non-flaky shutdown.
+	h.delegateTool.WaitForAsyncTasks()
 }

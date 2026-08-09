@@ -117,9 +117,8 @@ func waitForCompletionContractTerminal(t *testing.T, al *AgentLoop, taskID strin
 			if meta, merr := sessStore.GetMeta(got.SessionID); merr == nil && meta.Status == session.StatusArchived {
 				return got
 			}
-			// Terminal, but the session archive write (finishTaskRun's last
-			// step) hasn't landed yet — keep polling rather than returning
-			// early.
+			// Terminal, but the session archive write hasn't landed yet —
+			// keep polling rather than returning early.
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -287,6 +286,19 @@ func TestTaskCompletionContract_FinishTaskRun_EmptyOutput_FailsClosed(t *testing
 	if final.AttemptCount == 0 {
 		t.Errorf("attempt_count = %d, want it to have been consumed by the goal loop", final.AttemptCount)
 	}
+
+	// waitForCompletionContractTerminal above only proves the TASK reached its
+	// terminal status with its session archived — completeTaskWithResult
+	// (task_executor.go) writes those two BEFORE it calls closeRun, so the
+	// run-history record this test is about to inspect can still be
+	// in-flight the instant the task+session condition is satisfied.
+	// waitForRunClosed (task_run_history_test.go, same package) closes that
+	// gap by polling the run record itself (EndedAt set) before any
+	// assertion below reads it — without this, the assertions raced
+	// closeRun's own write and observed a stale
+	// Status=in_progress/EndedAt=nil/Result="" record even though the task
+	// mirror was already correctly Failed with its real result.
+	waitForRunClosed(t, al, tk.ID, 5*time.Second)
 
 	runs, lerr := al.taskStore.ListRuns(tk.ID)
 	if lerr != nil {

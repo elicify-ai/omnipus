@@ -806,11 +806,28 @@ func TestPlanEngine_HasActivePlansOwnedBy_FailsClosedOnStoreError(t *testing.T) 
 	h := newTestPlanEngine(t)
 	mustCreateRunningPlan(t, h.plans, "p1", "owner-a")
 
+	// Uid-independent store-error injection: os.Chmod(dir, 0o000) forces a
+	// permission error for a normal user, but the CI worker runs this suite
+	// as uid=0 (root) — and root IGNORES permission bits entirely, so
+	// List()'s os.ReadDir would still succeed, err would be nil, and this
+	// test would report the exact "fail-open bug" it exists to catch, for a
+	// bug that does not exist (a false RED, root-only, reproduced on the CI
+	// worker but never on a non-root dev machine). Replacing the plans dir
+	// with a REGULAR FILE at the same path is uid-independent: os.ReadDir on
+	// a non-directory fails with ENOTDIR for root exactly as it does for any
+	// other user — a structural error, not a permission check — so this
+	// keeps real store-error coverage under CI's root user instead of
+	// falling back to a root-guard t.Skip (see pkg/agent/list_all_sessions_test.go,
+	// pkg/tools/write_file_reason_test.go for that fallback pattern, not
+	// needed here since this injection works for every uid).
 	dir := h.plans.Dir()
-	if err := os.Chmod(dir, 0o000); err != nil {
-		t.Fatalf("chmod plans dir unreadable: %v", err)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove plans dir: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if err := os.WriteFile(dir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("replace plans dir with a regular file: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(dir) })
 
 	hasActive, err := h.pe.HasActivePlansOwnedBy("owner-a")
 	if err == nil {
