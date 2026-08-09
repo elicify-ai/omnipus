@@ -271,91 +271,69 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 	case "subturn.go":
 		switch r.funcName {
 		case "spawnSubTurn":
-			// spawnSubTurn hosts all four of subturn.go's sites (pre-arm,
-			// the FR-011 inheritance copy, and both WS-payload stamps) —
-			// disambiguate by line number, verified 2026-08 against this
-			// tree (see the header comment's per-bucket file:line list).
-			switch r.line {
-			case 609, 626:
-				// Cancel-gate fix (2026-08-04, later same day): the pre-arm
-				// key read shifted 609 -> 626 (+17) once spawnSubTurn gained
-				// its "-0.5. Cancellation gate (chain-reaction supersession
-				// of ADR-057 FR-024)" check — ErrSessionCancelling's
-				// declaration (~17 lines, ahead of even the pre-arm block in
-				// source order) is the sole cause of this specific site's
-				// shift; the gate CHECK itself sits after the pre-arm read,
-				// so it does not additionally move this one. Still the same
-				// single site (pendingSpawnKeysForThisCall := pendingSpawnKeys(...)).
+			// spawnSubTurn hosts all four of subturn.go's sites (pre-arm, the
+			// FR-011 inheritance copy, and both WS-payload stamps).
+			//
+			// Disambiguated by an INTENT MARKER on the source line, not by
+			// line number. The line-number form broke twice on a single branch
+			// (once when a ~48-line transcript-persistence block landed ahead
+			// of three sites, once when a 5-line store fix moved the pre-arm
+			// read), and each repair was "append the new number" — which
+			// confirms the number, never the invariant the test exists to
+			// protect. A marker moves with the line it annotates, so a refactor
+			// that RELOCATES a read stays green while one that ADDS a read
+			// still fails closed, which is FR-014's actual requirement.
+			marker := u19MarkerFor(t, r)
+			switch marker {
+			case "pre-arm":
 				return u19BucketPreArm
-			case 1174, 1222, 1270, 1318:
-				// Cancel-gate fix: shifted 1174 -> 1222 (+48 total — the
-				// +17 ErrSessionCancelling declaration plus the ~31-line
-				// gate check block, both ahead of this site). Still the same
-				// single site (childTS.routingSessionID = parentTS.routingSessionID).
-				//
-				// Post-merge CI-fix pass (2026-08-07): shifted again, 1222
-				// -> 1270 (+48), re-verified directly against the current
-				// tree while closing out release/v0.1.1's remaining CI
-				// failures — same +48 magnitude as the WS-stamping sites'
-				// latest shift below, consistent with new lines landing
-				// ahead of all three sites together in this same fix pass.
+			case "inheritance":
 				return u19BucketInheritance
-			case 1327, 1375, 1423, 1471, 1612, 1630, 1678, 1726, 1774:
-				// C2/M4 (2026-08-04): the SubTurnEndPayload.SessionID site
-				// shifted from line 1573 to 1612 — pkg/agent/subturn.go grew
-				// ~39 lines earlier in spawnSubTurn (the lastTurnStatus
-				// upvalue declaration + the M4 endStatus switch case, both
-				// ahead of this site in source order) fixing two verified
-				// defects (C2: message_parent(wait=true) park propagation;
-				// M4: a tool-call-time hard-abort incorrectly reporting
-				// SubTurnStatusSuccess).
-				//
-				// C2-completion (2026-08-04, later same day): shifted again,
-				// 1612 -> 1630 (+18 lines), once the wire-status half of C2
-				// landed — the `case lastTurnStatus == TurnEndStatusParked`
-				// arm of the SAME endStatus switch (ahead of this site in
-				// source order), which is what actually makes a parked
-				// child's SubagentEndFrame.status say "parked" instead of
-				// falling through to "success".
-				//
-				// Cancel-gate fix (2026-08-04, later still): shifted again,
-				// 1630 -> 1678 (+48), same cause as the pre-arm/inheritance
-				// shifts above (ErrSessionCancelling + the gate check, both
-				// ahead of this site) — 1327 (the OTHER WS-stamping site,
-				// SubTurnSpawnPayload.SessionID) moved by the same +48 to
-				// 1375. Re-verified against the current tree: still the
-				// SAME two single sites — no new consumer was added, only
-				// relocated. Every historical value is kept (not replaced)
-				// as a record of the shift history.
-				//
-				// RC-5b (UAT root-cause fix): shifted again by a uniform
-				// +48 across ALL THREE post-insertion sites — inheritance
-				// 1270 -> 1318, and the two WS stamps 1423 -> 1471 and
-				// 1726 -> 1774. Cause: spawnSubTurn gained a ~48-line block
-				// that persists the delegated task text to the CHILD's own
-				// durable transcript (previously the task reached the LLM
-				// but was saved only to an in-memory ephemeral store, so
-				// every delegated worker's transcript had ZERO user
-				// messages and it was impossible to audit what a worker had
-				// been told). The block sits ahead of all three sites in
-				// source order and behind the pre-arm read, which is why
-				// 626 is unchanged. Re-verified against the current tree:
-				// still the same single sites, no new consumer.
-				//
-				// Post-merge CI-fix pass (2026-08-07): both sites shifted
-				// again by the same +48 as the inheritance copy above —
-				// SubTurnSpawnPayload.SessionID 1375 -> 1423, SubTurnEndPayload.
-				// SessionID 1678 -> 1726 — re-verified directly against the
-				// current tree while closing out release/v0.1.1's remaining
-				// CI failures. Still the SAME two single sites.
+			case "ws-stamping":
 				return u19BucketWSStamping
 			}
 		}
 	}
-	t.Fatalf("routingSessionID read %s falls OUTSIDE the FR-014 closed consumer set — "+
-		"either a real new consumer was added without updating this test, or the line-number "+
-		"disambiguation above has drifted and needs re-verifying against the current tree", r.String())
+	t.Fatalf("routingSessionID read %s falls OUTSIDE the FR-014 closed consumer set. "+
+		"If this is a NEW consumer, FR-014 forbids it — justify it against ADR-057 and add it to a "+
+		"bucket deliberately. If it is an EXISTING read you relocated or reworded, give the line its "+
+		"intent marker (`// u19:pre-arm`, `// u19:inheritance`, `// u19:ws-stamping`) so it classifies "+
+		"by intent rather than position", r.String())
 	return ""
+}
+
+// u19MarkerFor returns the `// u19:<intent>` marker annotating the source line
+// of read r, or fails the test if the line carries none.
+//
+// Why a marker and not a line number: the reads inside spawnSubTurn cannot be
+// told apart by file or enclosing function — all four share both — so
+// SOMETHING per-site is required. A line number is the one choice that changes
+// every time anything above it changes, which is why the previous form needed
+// re-pinning twice on a single branch. The marker is attached to the statement
+// itself, so it survives relocation and only needs touching when a read is
+// genuinely added, moved between buckets, or removed.
+func u19MarkerFor(t *testing.T, r u19RoutingSessionIDRead) string {
+	t.Helper()
+	path := filepath.Join(".", r.file)
+	src, err := os.ReadFile(path)
+	require.NoErrorf(t, err, "read %s to resolve the intent marker for %s", path, r.String())
+	lines := strings.Split(string(src), "\n")
+	require.Greaterf(t, len(lines), r.line-1,
+		"%s reports line %d but the file has only %d lines", r.file, r.line, len(lines))
+
+	line := lines[r.line-1]
+	idx := strings.Index(line, "// u19:")
+	require.GreaterOrEqualf(t, idx, 0,
+		"routingSessionID read %s carries no `// u19:<intent>` marker. Every read inside "+
+			"spawnSubTurn must declare which FR-014 bucket it belongs to on the line itself:\n  %s",
+		r.String(), strings.TrimSpace(line))
+
+	marker := strings.TrimSpace(line[idx+len("// u19:"):])
+	// Tolerate a trailing comment continuation, e.g. `// u19:pre-arm (see …)`.
+	if sp := strings.IndexAny(marker, " \t"); sp >= 0 {
+		marker = marker[:sp]
+	}
+	return marker
 }
 
 // u19CountClassAInWS5Artefact reads pkg/gateway/websocket.go's own FR-089 W5

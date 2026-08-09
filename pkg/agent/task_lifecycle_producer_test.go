@@ -124,9 +124,25 @@ func TestExecuteTask_LifecycleRecord_HappyPathReachesCompleted(t *testing.T) {
 		t.Fatal("final task has no session id")
 	}
 
-	rec, err := ls.Load(final.SessionID)
-	if err != nil {
-		t.Fatalf("load lifecycle record for %q: %v", final.SessionID, err)
+	// Poll for the lifecycle record's terminal state rather than reading it
+	// once. waitForCompletionContractTerminal returns as soon as the TASK is
+	// terminal, but the lifecycle record is transitioned by a SEPARATE write
+	// (finalizeTaskLifecycle -> transitionTaskLifecycle), so a single read can
+	// legitimately observe the record still "running". That is a test race,
+	// not a product defect: it surfaced only under -race, where the extra
+	// instrumentation widens the window between the two writes.
+	var rec *session.LifecycleRecord
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var err error
+		rec, err = ls.Load(final.SessionID)
+		if err != nil {
+			t.Fatalf("load lifecycle record for %q: %v", final.SessionID, err)
+		}
+		if rec.State == session.LifecycleCompleted || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if rec.State != session.LifecycleCompleted {
 		t.Errorf("lifecycle state = %q, want completed", rec.State)

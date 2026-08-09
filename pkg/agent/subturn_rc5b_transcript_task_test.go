@@ -78,7 +78,7 @@ func TestSpawnSubTurn_PersistsDelegatedTaskToChildTranscript(t *testing.T) {
 	require.NotEmpty(t, childEntries, "the child's own transcript file must contain entries")
 
 	var found bool
-	var gotEntries []session.TranscriptEntry
+	gotEntries := make([]session.TranscriptEntry, 0, len(childEntries))
 	for _, e := range childEntries {
 		gotEntries = append(gotEntries, e)
 		if e.Role == "user" && e.Content == taskText {

@@ -628,7 +628,7 @@ func spawnSubTurn(
 	// under D1 is now the PARENT's own real session id (potentially a
 	// delegated child's own id for a nested spawn) rather than the routing
 	// identity a chat-wide Stop click resolves against.
-	pendingSpawnKeysForThisCall := pendingSpawnKeys(string(parentTS.routingSessionID), parentTS.channel, parentTS.chatID)
+	pendingSpawnKeysForThisCall := pendingSpawnKeys(string(parentTS.routingSessionID), parentTS.channel, parentTS.chatID) // u19:pre-arm
 	registeredForCancel := false
 	if al.cancelPreArm != nil && len(pendingSpawnKeysForThisCall) > 0 {
 		defer func() {
@@ -1221,9 +1221,9 @@ func spawnSubTurn(
 			Content:   cfg.SystemPrompt,
 			Timestamp: time.Now().UTC(),
 		}
-		if err := sharedStore.AppendTranscriptStrict(childID, taskEntry); err != nil {
+		if taskErr := sharedStore.AppendTranscriptStrict(childID, taskEntry); taskErr != nil {
 			logger.WarnCF("subturn", "could not record delegated task to child transcript",
-				map[string]any{"child_id": childID, "error": err.Error()})
+				map[string]any{"child_id": childID, "error": taskErr.Error()})
 		}
 	}
 
@@ -1347,7 +1347,7 @@ func spawnSubTurn(
 	// contract this closes. Skipping this overwrite silently leaves a
 	// child's routing/interrupt-scope key equal to its own session id
 	// instead of the root's, and a chat-wide Stop stops reaching it.
-	childTS.routingSessionID = parentTS.routingSessionID
+	childTS.routingSessionID = parentTS.routingSessionID // u19:inheritance
 
 	// Set SubTurn-specific fields
 	childTS.cancelFunc = cancel
@@ -1500,7 +1500,7 @@ func spawnSubTurn(
 				// parentTS.transcriptSessionID before U3's role split landed.
 				// Do NOT repoint to the child's own id: the child's id already
 				// rides this same payload as Label.
-				SessionID: string(parentTS.routingSessionID),
+				SessionID: string(parentTS.routingSessionID), // u19:ws-stamping
 			},
 		)
 	}
@@ -1803,7 +1803,7 @@ func spawnSubTurn(
 					// doc comment, U23, events.go) — was
 					// parentTS.transcriptSessionID before U3's role split
 					// landed. Do NOT repoint to the child's own id.
-					SessionID: string(parentTS.routingSessionID),
+					SessionID: string(parentTS.routingSessionID), // u19:ws-stamping
 					Reason:    endReason,
 				},
 			)

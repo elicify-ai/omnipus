@@ -112,7 +112,7 @@ func TestSpawnSubTurn_PersistsDelegatedTaskToChildTranscript_WhenParentUsesLegac
 			"would silently drop this entry")
 
 	var found bool
-	var gotEntries []session.TranscriptEntry
+	gotEntries := make([]session.TranscriptEntry, 0, len(childEntries))
 	for _, e := range childEntries {
 		gotEntries = append(gotEntries, e)
 		if e.Role == "user" && e.Content == taskText {
