@@ -155,7 +155,7 @@ func fullyPopulatedPlan(t *testing.T, api *restAPI, wsID string) *plan.Plan {
 
 		JudgeRounds:    7,
 		ActiveLoop:     true,
-		PausedReason:   "waiting on a free active-loop slot",
+		PausedReason:   plan.PausedReasonOwnerDisabled,
 		LastActivityAt: planWireActivityAt,
 		ApprovedAt:     planWireApprovedAt,
 		StartedAt:      planWireStartedAt,

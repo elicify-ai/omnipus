@@ -607,11 +607,25 @@ func TestDeleteAgent_PlanStoreListError_FailsClosed(t *testing.T) {
 	_, rerr := api.planStore.Update(p.Id, plan.Patch{State: &running})
 	require.NoError(t, rerr)
 
-	// Force plan.Store.List to fail with a genuine (non-ENOENT) read error by
-	// making the plans directory unreadable.
+	// Force plan.Store.List to fail with a genuine (non-ENOENT) read error,
+	// UID-independently: root (this repo's CI worker runs as uid=0) has
+	// CAP_DAC_OVERRIDE and ignores permission bits entirely, so an
+	// os.Chmod(dir, 0o000) injection succeeds in listing anyway on CI while
+	// failing correctly on a non-root dev machine — a root-only false RED,
+	// not a real product bug (mirrors the os.Getuid()==0 skip-guard pattern
+	// used elsewhere, e.g. pkg/tools/write_file_reason_test.go,
+	// pkg/agent/list_all_sessions_test.go). Swap the plans directory for a
+	// regular file instead: os.ReadDir on a path that is not a directory
+	// returns ENOTDIR unconditionally, root included, because it is a
+	// path-type error rather than a DAC permission check.
 	dir := api.planStore.Dir()
-	require.NoError(t, os.Chmod(dir, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	backupDir := dir + ".bak"
+	require.NoError(t, os.Rename(dir, backupDir))
+	require.NoError(t, os.WriteFile(dir, []byte("not a directory"), 0o600))
+	t.Cleanup(func() {
+		_ = os.Remove(dir)
+		_ = os.Rename(backupDir, dir)
+	})
 
 	wDel := httptest.NewRecorder()
 	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/"+testPlansAgentID, nil)
