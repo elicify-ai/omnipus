@@ -332,32 +332,19 @@ func TestReadCurrentUserNProc_TracksNewThreads(t *testing.T) {
 		t.Skip("/proc unreadable in this environment")
 	}
 
+	// Park the threads via the shared helper, which BLOCKS until
+	// /proc/self/task actually reflects them.
+	//
+	// This previously spun on runtime.Gosched(), which yields the processor
+	// but never waits — so on a busy CI worker the loop completed before the
+	// runtime had materialised a single task_struct and the test failed with
+	// before == during (observed: 364 == 364 on the ci-omnipus worker). That
+	// was the test racing the Go scheduler, not the counter failing to see
+	// threads. Waiting on the kernel's own view removes the race entirely.
 	const extra = 24
-	requireNProcHeadroom(t, extra)
-	var wg sync.WaitGroup
-	release := make(chan struct{})
-	for i := 0; i < extra; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// Lock to a dedicated OS thread so the runtime must materialise
-			// a real task_struct, then hold it until released.
-			runtime.LockOSThread()
-			defer runtime.UnlockOSThread()
-			<-release
-		}()
-	}
-	// Give the runtime a moment to actually create the threads.
-	for i := 0; i < 100; i++ {
-		if readCurrentUserNProc() >= before+extra/2 {
-			break
-		}
-		runtime.Gosched()
-	}
-	during := readCurrentUserNProc()
-	close(release)
-	wg.Wait()
+	holdLockedOSThreads(t, extra)
 
+	during := readCurrentUserNProc()
 	if during <= before {
 		t.Fatalf("counter did not rise after locking %d OS threads (before=%d during=%d); "+
 			"a task-counting implementation must observe new threads", extra, before, during)
