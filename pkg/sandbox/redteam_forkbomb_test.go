@@ -26,6 +26,7 @@ package sandbox_test
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -434,6 +435,152 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 			peakPIDs,
 			safetyCap,
 		)
+	}
+}
+
+// TestRedteam_ForkBomb_UlimitRaiseThenFork_Contained documents
+// C3-INDIRECT-ULIMIT: a fork bomb that REMOVES its own cap before forking.
+//
+// Why this case exists. Every bomb payload in this file (and in
+// TestRedteam_ForkBomb_IndirectViaScript_Limited in particular) is a
+// COOPERATING adversary: it forks, but it never touches its own resource
+// limits. A soft-only RLIMIT_NPROC contains such a payload perfectly. So the
+// whole red-team suite stayed green during the window when hardening set the
+// child's soft limit but left its HARD limit at the inherited value — a
+// configuration in which the entire fork-bomb control is removable by an
+// unprivileged child in one line:
+//
+//	ulimit -u unlimited; :(){ :|:& };:
+//
+// setrlimit(2) permits raising the soft limit up to the hard limit without any
+// privilege, and neither setrlimit nor prlimit64 is in the seccomp denylist
+// (pkg/sandbox/seccomp_linux.go blocks ptrace, mount, module, kexec, bpf,
+// perf_event_open — not resource limits). The suite was structurally blind to
+// the one escape that actually shipped.
+//
+// Test mechanics and safety. Same shape as the indirect test — the bomb lives
+// in a script so the shell-guard regex never sees it, and the test process caps
+// its own RLIMIT_NPROC to bound host damage — with one addition that matters:
+//
+//	The bomb is GATED on stdin. After hardening is applied we read the child's
+//	limits back out of the kernel and check that the hard limit is pinned to
+//	the soft cap. If it is NOT pinned, we fail WITHOUT releasing the bomb: a
+//	payload that can raise its own soft limit is bounded only by the host's
+//	user-wide limit, and the test process's own cap would not contain it (each
+//	process carries its own limit; the child would have raised the one that
+//	governs it). Releasing a bomb we already know can escape would be reckless.
+//
+// Non-root only, like the indirect test: copy_process() skips the RLIMIT_NPROC
+// check entirely for uid 0.
+func TestRedteam_ForkBomb_UlimitRaiseThenFork_Contained(t *testing.T) {
+	t.Logf("documents C3-INDIRECT-ULIMIT (fork bomb that raises its own soft RLIMIT_NPROC " +
+		"before forking); the other bomb payloads never call ulimit and cannot observe this escape")
+
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux-only — this exercises Linux RLIMIT_NPROC")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("must run as non-root (the kernel exempts uid 0 from the RLIMIT_NPROC check)")
+	}
+
+	// SAFETY GUARD: identical to the indirect test — cap NPROC for the test
+	// process so an escaped bomb is still bounded. See the gate below for why
+	// this alone is not sufficient for THIS payload.
+	var oldRlim unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_NPROC, &oldRlim); err != nil {
+		t.Fatalf("getrlimit NPROC (safety probe): %v", err)
+	}
+	defer func() {
+		_ = unix.Setrlimit(unix.RLIMIT_NPROC, &oldRlim)
+	}()
+	safetyCap := uint64(countOurPIDs(t)) + 512
+	if oldRlim.Cur > 0 && safetyCap > oldRlim.Cur {
+		safetyCap = oldRlim.Cur
+	}
+	safetyRlim := unix.Rlimit{Cur: safetyCap, Max: oldRlim.Max}
+	if err := unix.Setrlimit(unix.RLIMIT_NPROC, &safetyRlim); err != nil {
+		t.Skipf("cannot set RLIMIT_NPROC for test safety (need a non-restricted user): %v", err)
+	}
+
+	workspace := t.TempDir()
+	scriptPath := filepath.Join(workspace, "escape.sh")
+	// `read gate` holds the payload until the test has verified the applied
+	// limits. The two ulimit forms cover both shells' spellings of "raise my
+	// soft limit as far as my hard limit allows".
+	bomb := `#!/bin/sh
+read gate
+ulimit -u unlimited 2>/dev/null || ulimit -u "$(ulimit -H -u)" 2>/dev/null
+:(){ :|:& };:
+`
+	if err := os.WriteFile(scriptPath, []byte(bomb), 0o755); err != nil {
+		t.Fatalf("write escape.sh: %v", err)
+	}
+
+	baselinePIDs := countOurPIDs(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", scriptPath)
+	cmd.Dir = workspace
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("StdinPipe: %v", err)
+	}
+	if err := sandbox.ApplyChildHardening(cmd, sandbox.Limits{}); err != nil {
+		t.Fatalf("ApplyChildHardening: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start gated bomb: %v", err)
+	}
+	defer func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	}()
+	if err := sandbox.ApplyChildPostStartHardening(cmd, sandbox.Limits{}); err != nil {
+		t.Fatalf("ApplyChildPostStartHardening (RLIMIT_NPROC): %v", err)
+	}
+
+	// THE ASSERTION, and the safety gate: is the cap actually un-removable?
+	var applied unix.Rlimit
+	if err := unix.Prlimit(cmd.Process.Pid, unix.RLIMIT_NPROC, nil, &applied); err != nil {
+		t.Fatalf("prlimit read-back on bomb pid %d: %v", cmd.Process.Pid, err)
+	}
+	if applied.Max != applied.Cur {
+		t.Fatalf("C3-INDIRECT-ULIMIT GAP CONFIRMED: hardening left the child's HARD "+
+			"RLIMIT_NPROC at %d while its soft cap is %d. An unprivileged child raises its own "+
+			"soft limit up to the hard limit with `ulimit -u`, so the fork-bomb cap is removable "+
+			"in one line and the control is decorative. The bomb was NOT released — with a "+
+			"removable cap its growth would be bounded only by the host-wide user limit, which "+
+			"this test's own safety cap cannot substitute for. (test safetyCap=%d)",
+			applied.Max, applied.Cur, safetyCap)
+	}
+
+	// Cap is pinned; releasing the bomb is now bounded by the kernel.
+	if _, err := io.WriteString(stdin, "go\n"); err != nil {
+		t.Fatalf("release gated bomb: %v", err)
+	}
+	_ = stdin.Close()
+
+	peakPIDs := samplePeakPIDs(t, ctx, baselinePIDs)
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+
+	// Same bound as the indirect test: childNProcSlack (128) plus transient
+	// slack. The payload having TRIED to raise its limit must make no
+	// difference to the outcome.
+	growth := peakPIDs - baselinePIDs
+	const productionCapWithSlack = 160
+	if growth > productionCapWithSlack {
+		t.Errorf("C3-INDIRECT-ULIMIT GAP CONFIRMED: a bomb that raised its own soft "+
+			"RLIMIT_NPROC grew the per-UID task count from %d to %d (+%d), exceeding the "+
+			"production bound %d. The soft cap was raised back out from under the control. "+
+			"(applied soft=%d hard=%d, test safetyCap=%d)",
+			baselinePIDs, peakPIDs, growth, productionCapWithSlack,
+			applied.Cur, applied.Max, safetyCap)
+	} else {
+		t.Logf("C3-INDIRECT-ULIMIT contained: growth=%d (baseline=%d, peak=%d) with the hard "+
+			"limit pinned at %d — `ulimit -u` could not widen the cap",
+			growth, baselinePIDs, peakPIDs, applied.Max)
 	}
 }
 
