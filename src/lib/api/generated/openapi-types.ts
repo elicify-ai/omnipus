@@ -3399,7 +3399,7 @@ export interface components {
              */
             tool: string;
             /**
-             * @description Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
+             * @description Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
              * @example success
              * @enum {string}
              */
@@ -3410,6 +3410,12 @@ export interface components {
              * @example 234
              */
             duration_ms?: number;
+            /**
+             * @description Human-readable failure reason when status is "error". Mirrors the equivalent field on ToolCallResultFrame so a reloaded transcript carries the same explanation the live WS frame did.
+             *     Previously this did not exist: the reason was computed in the agent loop and logged at ERROR level, but the persisted record kept only {tool, status, duration_ms, parameters} with a null result. Nothing — not the UI, not post-hoc analysis, and critically not the agent itself — could see WHY a call failed, so an orchestrating agent retried blindly against failures it had no way to understand.
+             * @example file: a.svg already exists. Set overwrite=true to replace.
+             */
+            error?: string;
             /**
              * @description Input parameters passed to the tool.
              * @example {

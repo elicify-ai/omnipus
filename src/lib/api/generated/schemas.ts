@@ -125,6 +125,7 @@ type ToolCall = {
     | "interrupted"
     | "parked";
   duration_ms?: number | undefined;
+  error?: string | undefined;
   parameters?: {} | undefined;
   result?: {} | undefined;
   parent_tool_call_id?: string | undefined;
@@ -1705,6 +1706,7 @@ export const ToolCall: z.ZodType<ToolCall> = z.object({
     "parked",
   ]),
   duration_ms: z.number().int().gte(0).optional(),
+  error: z.string().optional(),
   parameters: z.object({}).partial().passthrough().optional(),
   result: z.object({}).partial().passthrough().optional(),
   parent_tool_call_id: z.string().optional(),
