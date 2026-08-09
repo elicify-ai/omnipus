@@ -107,19 +107,117 @@ func (p *Provider) Chat(
 	return parseResponse(resp), nil
 }
 
+// ChatStream implements providers.StreamingProvider.
+//
+// Before this existed the Provider did not satisfy StreamingProvider at all,
+// so the agent loop's type assertion failed and EVERY Anthropic-backed call
+// — including delegated sub-turns — went down the non-streaming path. That
+// made the whole response a black box: no partial text, no tool-argument
+// progress, nothing to distinguish a model still working from one that had
+// hung. Delegated workers were killed on that ambiguity.
+func (p *Provider) ChatStream(
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	onChunk func(accumulated string),
+) (*LLMResponse, error) {
+	var opts []option.RequestOption
+	if p.tokenSource != nil {
+		tok, err := p.tokenSource()
+		if err != nil {
+			return nil, fmt.Errorf("refreshing token: %w", err)
+		}
+		opts = append(opts,
+			option.WithAuthToken(tok),
+			option.WithHeader("anthropic-beta", anthropicBetaHeader),
+		)
+	}
+
+	params, err := buildParams(messages, tools, model, options)
+	if err != nil {
+		return nil, err
+	}
+
+	return p.streamWithCallbacks(ctx, params, opts, onChunk,
+		protocoltypes.ToolCallProgressFromOptions(options))
+}
+
 func (p *Provider) chatStreaming(
 	ctx context.Context,
 	params anthropic.MessageNewParams,
 	opts []option.RequestOption,
 ) (*LLMResponse, error) {
+	return p.streamWithCallbacks(ctx, params, opts, nil, nil)
+}
+
+// streamWithCallbacks consumes the SSE stream, accumulating into a Message
+// exactly as before, and additionally reports forward progress.
+//
+// Progress is derived from the ACCUMULATED message after each event rather
+// than by decoding delta union types. That keeps this robust across SDK
+// revisions: whatever shape the deltas take, the accumulated content blocks
+// are the same ones parseResponse already reads.
+func (p *Provider) streamWithCallbacks(
+	ctx context.Context,
+	params anthropic.MessageNewParams,
+	opts []option.RequestOption,
+	onChunk func(accumulated string),
+	onProgress protocoltypes.OnToolCallProgress,
+) (*LLMResponse, error) {
 	stream := p.client.Messages.NewStreaming(ctx, params, opts...)
 	defer stream.Close()
 
 	var msg anthropic.Message
+	var lastTextLen int
+	lastArgsLen := map[int]int{}
+
 	for stream.Next() {
 		event := stream.Current()
 		if err := msg.Accumulate(event); err != nil {
 			return nil, fmt.Errorf("claude streaming accumulate: %w", err)
+		}
+		if onChunk == nil && onProgress == nil {
+			continue
+		}
+
+		// One pass to measure, then emit — so TotalArgsBytes is the true
+		// total across all blocks rather than a running partial.
+		var text strings.Builder
+		argsLen := make(map[int]int, len(msg.Content))
+		names := make(map[int]string, len(msg.Content))
+		totalArgs := 0
+		for i, block := range msg.Content {
+			switch block.Type {
+			case "text":
+				text.WriteString(block.AsText().Text)
+			case "tool_use":
+				tu := block.AsToolUse()
+				n := len(tu.Input)
+				argsLen[i] = n
+				names[i] = tu.Name
+				totalArgs += n
+			}
+		}
+
+		if onChunk != nil && text.Len() != lastTextLen {
+			lastTextLen = text.Len()
+			onChunk(text.String())
+		}
+		if onProgress != nil {
+			for i, n := range argsLen {
+				if n <= lastArgsLen[i] {
+					continue
+				}
+				lastArgsLen[i] = n
+				onProgress(protocoltypes.ToolCallProgress{
+					Index:          i,
+					Name:           names[i],
+					ArgsBytes:      n,
+					TotalArgsBytes: totalArgs,
+				})
+			}
 		}
 	}
 	if err := stream.Err(); err != nil {
