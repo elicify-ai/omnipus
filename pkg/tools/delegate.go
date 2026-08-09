@@ -3275,14 +3275,30 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 
 	// Cancelling an already-terminal session doesn't corrupt any state
 	// (cancelSoft/cancelHard against a session with no live turn are
-	// harmless no-ops), but it used to return the same success-shaped
-	// "cooperatively cancelled" / "hard-cancelled immediately" message as a
-	// genuine cancel — misleading a caller into believing an action was
-	// taken. The rec.Terminal() check below is a plain check-then-return,
-	// not a check-then-act race: a terminal session never leaves that state
-	// (L-3 immutable-terminal invariant), so there's nothing for a
-	// concurrent writer to race here — an explicit "already terminal" error
-	// is returned instead of a false success.
+	// harmless no-ops). #588 (N9) required this to NOT reuse the
+	// success-shaped "cooperatively cancelled" / "hard-cancelled
+	// immediately" message — that wording would misleadingly claim an
+	// action was taken when nothing happened. The rec.Terminal() check
+	// below is a plain check-then-return, not a check-then-act race: a
+	// terminal session never leaves that state (L-3 immutable-terminal
+	// invariant), so there's nothing for a concurrent writer to race here.
+	//
+	// RC-3 (UAT amplification-loop fix, 2026-08): #588's OWN requirement
+	// was narrower than the original implementation of it — it bars reusing
+	// the success-cancel WORDING, it does not require this to be a tool-call
+	// FAILURE. Reporting IsError:true here made an orchestrating agent read
+	// routine cleanup (a worker session finishing before the parent's
+	// cancel call landed) as breakage: in one real UAT session 20 of 28
+	// cancel calls hit this branch, and the caller re-issued cancels and
+	// re-spawned workers in a loop instead of treating "already done" as
+	// success. SessionManager.KillAll (pkg/tools/session.go:635-637)
+	// already treats an already-terminal candidate as a silent no-op —
+	// this brings cancel in line with that precedent. The response is
+	// still a SUCCESS with wording distinct from "cooperatively
+	// cancelled"/"hard-cancelled" so it can never be mistaken for "I just
+	// cancelled something" — do not re-fix this back to ErrorResult; that
+	// would resurrect the RC-3 amplification loop while only restoring a
+	// stricter reading of #588 than #588 itself required.
 	//
 	// There is, however, a TOCTOU window BETWEEN this check and the
 	// cancelSoft/cancelHard call below: a non-terminal session can terminate
@@ -3291,14 +3307,18 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 	// no-op. The pre-fix code discarded the descendants return and STILL
 	// reported the success-shaped message, so a cancel that landed nothing
 	// looked identical to one that actually interrupted. The cancelSoft/
-	// cancelHard calls below now capture descendants and return the same
-	// explicit "terminal — nothing to cancel" shape when len(descendants)==0
-	// and cerr==nil, closing the window. (L-3 makes the miss terminal for
-	// good — there is no follow-up state to race once the descendants-miss
-	// path fires.)
+	// cancelHard calls below now capture descendants and, when
+	// len(descendants)==0 and cerr==nil, return the same idempotent-no-op
+	// shape as this pre-dispatch check UNLESS a real background-shell kill
+	// failure or an incomplete descendant walk was also detected — that
+	// failure signal is a genuine partial failure, not a clean no-op, and
+	// signoff14's MEDIUM-3 fix (delegate_signoff14_test.go) requires it to
+	// still reach the caller as an actionable error rather than being
+	// silently downgraded to success by this fix. See the len(descendants)==0
+	// branches below for that split.
 	if rec.Terminal() {
-		return ErrorResult(fmt.Sprintf(
-			"delegate: cancel: session %s is already terminal (%s) — nothing to cancel", sessionID, rec.State,
+		return NewToolResult(fmt.Sprintf(
+			"Session %s is already terminal (%s) — no action needed.", sessionID, rec.State,
 		))
 	}
 
@@ -3337,8 +3357,24 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 			return ErrorResult(fmt.Sprintf("delegate: cancel: %v", cerr)).WithError(cerr)
 		}
 		if len(descendants) == 0 {
-			return ErrorResult(fmt.Sprintf(
-				"delegate: cancel: session %s terminated between the terminal check and the cancel hook — nothing to cancel",
+			// RC-3: a clean TOCTOU miss (no real kill failure, no incomplete
+			// walk) is an idempotent no-op, same as the pre-dispatch
+			// rec.Terminal() branch above — see that branch's comment for
+			// the full rationale. A real background-shell kill failure or
+			// an incomplete descendant walk is NOT a clean no-op though:
+			// signoff14's MEDIUM-3 fix requires that failure signal to
+			// still surface as an actionable error, so this branch keeps
+			// the original error shape whenever killFailed>0 or
+			// walkIncomplete (see delegate_signoff14_test.go's
+			// TestDelegateTool_Cancel_NothingToCancel_StillSurfacesShellKillWarnings).
+			if killFailed > 0 || walkIncomplete {
+				return ErrorResult(fmt.Sprintf(
+					"delegate: cancel: session %s terminated between the terminal check and the cancel hook — nothing to cancel",
+					sessionID,
+				) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
+			}
+			return NewToolResult(fmt.Sprintf(
+				"Session %s terminated between the terminal check and the cancel hook — no action needed.",
 				sessionID,
 			) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
 		}
@@ -3356,8 +3392,17 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", cerr)).WithError(cerr)
 	}
 	if len(softDescendants) == 0 {
-		return ErrorResult(fmt.Sprintf(
-			"delegate: cancel: session %s terminated between the terminal check and the cancel hook — nothing to cancel",
+		// RC-3: mirrors the hard-path branch above — a clean TOCTOU miss is
+		// an idempotent no-op; a real kill failure or incomplete walk keeps
+		// the original error shape (signoff14's MEDIUM-3 requirement).
+		if killFailed > 0 || walkIncomplete {
+			return ErrorResult(fmt.Sprintf(
+				"delegate: cancel: session %s terminated between the terminal check and the cancel hook — nothing to cancel",
+				sessionID,
+			) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
+		}
+		return NewToolResult(fmt.Sprintf(
+			"Session %s terminated between the terminal check and the cancel hook — no action needed.",
 			sessionID,
 		) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
 	}

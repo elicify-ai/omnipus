@@ -450,50 +450,94 @@ func TestDelegateTool_ResolvableSessionIDs_EmptyIndex(t *testing.T) {
 
 // --- #588 (N9): cancel on an already-terminal session -------------------
 
-func TestDelegateTool_Cancel_AlreadyTerminal_Rejected(t *testing.T) {
-	tool := NewDelegateTool("test-model", 0, 0)
-	tool.SetSessionMessagingEnabled(func() bool { return true })
-	lc := session.NewLifecycleStore(t.TempDir())
-	tool.SetLifecycleStore(lc)
-
-	var softCalled, hardCalled bool
-	tool.SetCancelHooks(
-		func(sessionID, hint string) ([]string, error) { softCalled = true; return nil, nil },
-		func(sessionID, hint string) ([]string, error) { hardCalled = true; return nil, nil },
-	)
-
-	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-already-done", State: session.LifecycleCompleted,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
-	}); err != nil {
-		t.Fatalf("seed failed: %v", err)
+// TestDelegateTool_Cancel_AlreadyTerminal_IsIdempotentNoOp covers #588 (N9)
+// AND its RC-3 amendment (2026-08, UAT amplification-loop fix) together.
+//
+// #588's ACTUAL requirement — preserved here — is that cancel on an
+// already-terminal session must never reuse the success-shaped
+// "cooperatively cancelled" / "hard-cancelled" wording, which would falsely
+// claim an action was taken when nothing happened.
+//
+// #588's original implementation over-generalised that into "must be a
+// tool-call FAILURE" (IsError:true). RC-3 found that this drove a real
+// orchestrating agent, in production UAT, to read routine cleanup (a worker
+// session finishing before the parent's cancel call landed) as breakage —
+// 20 of 28 cancel calls in one session hit this branch, and the caller
+// re-issued cancels and re-spawned workers in a loop. SessionManager.KillAll
+// (pkg/tools/session.go:635-637) already treats an already-terminal
+// candidate as a silent no-op; this test now pins THAT contract for cancel
+// too: idempotent SUCCESS, with wording distinct enough that it can never be
+// mistaken for "I just cancelled something". Do not "re-fix" this back to
+// ErrorResult — that resurrects the RC-3 loop while only restoring a
+// stricter reading of #588 than #588 itself required.
+func TestDelegateTool_Cancel_AlreadyTerminal_IsIdempotentNoOp(t *testing.T) {
+	terminalStates := []struct {
+		name         string
+		state        session.LifecycleState
+		failedReason string // Persist requires a non-empty reason when State==LifecycleFailed
+	}{
+		{"completed", session.LifecycleCompleted, ""},
+		{"cancelled", session.LifecycleCancelled, ""},
+		{"failed", session.LifecycleFailed, "rc3-test: forced failure"},
 	}
 
-	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
-	result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-already-done"})
-	if !result.IsError {
-		t.Fatalf("expected cancel on an already-terminal session to return an explicit error, "+
-			"got a success-shaped result: %s", result.ForLLM)
-	}
-	if !strings.Contains(result.ForLLM, "terminal") {
-		t.Errorf("expected a clear 'already terminal' message, got: %s", result.ForLLM)
-	}
-	if strings.Contains(result.ForLLM, "cooperatively cancelled") || strings.Contains(result.ForLLM, "hard-cancelled") {
-		t.Errorf("must not return the success-shaped cancel message for an already-terminal session, got: %s",
-			result.ForLLM)
-	}
-	if softCalled || hardCalled {
-		t.Error("expected neither cancel hook to be invoked for an already-terminal session")
-	}
+	for _, tc := range terminalStates {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := NewDelegateTool("test-model", 0, 0)
+			tool.SetSessionMessagingEnabled(func() bool { return true })
+			lc := session.NewLifecycleStore(t.TempDir())
+			tool.SetLifecycleStore(lc)
 
-	// State must remain unchanged (still "completed", never corrupted).
-	rec, err := lc.Load("child-already-done")
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-	if rec.State != session.LifecycleCompleted {
-		t.Errorf("state = %q, want unchanged %q", rec.State, session.LifecycleCompleted)
+			var softCalled, hardCalled bool
+			tool.SetCancelHooks(
+				func(sessionID, hint string) ([]string, error) { softCalled = true; return nil, nil },
+				func(sessionID, hint string) ([]string, error) { hardCalled = true; return nil, nil },
+			)
+
+			sessionID := "child-already-done-" + tc.name
+			if err := lc.Persist(&session.LifecycleRecord{
+				SessionID: sessionID, State: tc.state, FailedReason: tc.failedReason,
+				OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+				WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+			}); err != nil {
+				t.Fatalf("seed failed: %v", err)
+			}
+
+			ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+			args := map[string]any{"action": "cancel", "session_id": sessionID}
+
+			// Cancel twice in a row: true idempotency means both calls
+			// return the SAME shape (non-error, "already terminal" wording),
+			// not just that the first call is well-formed.
+			for attempt := 1; attempt <= 2; attempt++ {
+				result := tool.Execute(ctx, args)
+				if result.IsError {
+					t.Fatalf("attempt %d: expected cancel on an already-terminal session (%s) to be an idempotent "+
+						"SUCCESS (RC-3), got an error-shaped result: %s", attempt, tc.state, result.ForLLM)
+				}
+				if !strings.Contains(result.ForLLM, "terminal") {
+					t.Errorf("attempt %d: expected a clear 'already terminal' message, got: %s", attempt, result.ForLLM)
+				}
+				if strings.Contains(result.ForLLM, "cooperatively cancelled") ||
+					strings.Contains(result.ForLLM, "hard-cancelled") {
+					t.Errorf("attempt %d: must not return the success-cancel wording for an already-terminal "+
+						"session (that would falsely claim an action was taken — #588's actual requirement), got: %s",
+						attempt, result.ForLLM)
+				}
+			}
+			if softCalled || hardCalled {
+				t.Error("expected neither cancel hook to be invoked for an already-terminal session")
+			}
+
+			// State must remain unchanged (never corrupted by the no-op).
+			rec, err := lc.Load(sessionID)
+			if err != nil {
+				t.Fatalf("Load failed: %v", err)
+			}
+			if rec.State != tc.state {
+				t.Errorf("state = %q, want unchanged %q", rec.State, tc.state)
+			}
+		})
 	}
 }
 
@@ -542,6 +586,18 @@ func TestDelegateTool_Cancel_NonTerminal_StillSucceeds(t *testing.T) {
 // (len(descendants)==0, no error), executeCancel returns the explicit
 // "terminated between the terminal check and the cancel hook" message instead
 // of false success — for BOTH the hard and soft paths.
+//
+// RC-3 (2026-08) update: this test's own setup never wires a SessionManager,
+// so killChildBackgroundShells is a guaranteed no-op (killFailed==0,
+// walkIncomplete==false) — a CLEAN TOCTOU miss. Per the RC-3 fix in
+// executeCancel, a clean miss is now an idempotent SUCCESS (IsError:false),
+// same as the pre-dispatch rec.Terminal() branch covered by
+// TestDelegateTool_Cancel_AlreadyTerminal_IsIdempotentNoOp — the assertions
+// below were flipped accordingly. This must NOT be confused with a real
+// kill-failure/incomplete-walk miss, which delegate_signoff14_test.go's
+// TestDelegateTool_Cancel_NothingToCancel_StillSurfacesShellKillWarnings
+// pins as STILL an error — see executeCancel's own comment on the
+// len(descendants)==0 branches for the split.
 func TestDelegateTool_Cancel_DescendantsMiss_ReturnsTerminalMessage(t *testing.T) {
 	t.Run("hard", func(t *testing.T) {
 		tool := NewDelegateTool("test-model", 0, 0)
@@ -569,8 +625,12 @@ func TestDelegateTool_Cancel_DescendantsMiss_ReturnsTerminalMessage(t *testing.T
 
 		ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 		result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-racing", "hard": true})
-		if !result.IsError {
-			t.Fatalf("expected an explicit terminal-miss error, got success-shaped result: %s", result.ForLLM)
+		// RC-3: a clean TOCTOU miss (no shell-kill failure, no incomplete
+		// walk — this test wires no SessionManager) is an idempotent
+		// no-op SUCCESS, not an error.
+		if result.IsError {
+			t.Fatalf("expected a clean terminal-miss to be an idempotent SUCCESS (RC-3), got error-shaped result: %s",
+				result.ForLLM)
 		}
 		if !strings.Contains(result.ForLLM, "terminated between the terminal check and the cancel hook") {
 			t.Errorf("expected the TOCTOU terminal-miss message, got: %s", result.ForLLM)
@@ -616,8 +676,12 @@ func TestDelegateTool_Cancel_DescendantsMiss_ReturnsTerminalMessage(t *testing.T
 
 		ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 		result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-racing-soft"})
-		if !result.IsError {
-			t.Fatalf("expected an explicit terminal-miss error, got success-shaped result: %s", result.ForLLM)
+		// RC-3: a clean TOCTOU miss (no shell-kill failure, no incomplete
+		// walk — this test wires no SessionManager) is an idempotent
+		// no-op SUCCESS, not an error.
+		if result.IsError {
+			t.Fatalf("expected a clean terminal-miss to be an idempotent SUCCESS (RC-3), got error-shaped result: %s",
+				result.ForLLM)
 		}
 		if !strings.Contains(result.ForLLM, "terminated between the terminal check and the cancel hook") {
 			t.Errorf("expected the TOCTOU terminal-miss message, got: %s", result.ForLLM)
