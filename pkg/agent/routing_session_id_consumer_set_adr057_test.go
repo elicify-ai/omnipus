@@ -287,7 +287,7 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 				// so it does not additionally move this one. Still the same
 				// single site (pendingSpawnKeysForThisCall := pendingSpawnKeys(...)).
 				return u19BucketPreArm
-			case 1174, 1222, 1270:
+			case 1174, 1222, 1270, 1318:
 				// Cancel-gate fix: shifted 1174 -> 1222 (+48 total — the
 				// +17 ErrSessionCancelling declaration plus the ~31-line
 				// gate check block, both ahead of this site). Still the same
@@ -300,7 +300,7 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 				// latest shift below, consistent with new lines landing
 				// ahead of all three sites together in this same fix pass.
 				return u19BucketInheritance
-			case 1327, 1375, 1423, 1612, 1630, 1678, 1726:
+			case 1327, 1375, 1423, 1471, 1612, 1630, 1678, 1726, 1774:
 				// C2/M4 (2026-08-04): the SubTurnEndPayload.SessionID site
 				// shifted from line 1573 to 1612 — pkg/agent/subturn.go grew
 				// ~39 lines earlier in spawnSubTurn (the lastTurnStatus
@@ -327,6 +327,20 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 				// SAME two single sites — no new consumer was added, only
 				// relocated. Every historical value is kept (not replaced)
 				// as a record of the shift history.
+				//
+				// RC-5b (UAT root-cause fix): shifted again by a uniform
+				// +48 across ALL THREE post-insertion sites — inheritance
+				// 1270 -> 1318, and the two WS stamps 1423 -> 1471 and
+				// 1726 -> 1774. Cause: spawnSubTurn gained a ~48-line block
+				// that persists the delegated task text to the CHILD's own
+				// durable transcript (previously the task reached the LLM
+				// but was saved only to an in-memory ephemeral store, so
+				// every delegated worker's transcript had ZERO user
+				// messages and it was impossible to audit what a worker had
+				// been told). The block sits ahead of all three sites in
+				// source order and behind the pre-arm read, which is why
+				// 626 is unchanged. Re-verified against the current tree:
+				// still the same single sites, no new consumer.
 				//
 				// Post-merge CI-fix pass (2026-08-07): both sites shifted
 				// again by the same +48 as the inheritance copy above —
