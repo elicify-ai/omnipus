@@ -1186,22 +1186,38 @@ func spawnSubTurn(
 	// below (FR-011) and consumed by the collapsed Interrupt(id, scope,
 	// hint) entry point (FR-041) via the role-B predicates (FR-015).
 	//
-	// Soul composition: the system role is the DELEGATE's own soul
+	// Soul composition (RC-8 fix): the system role is the DELEGATE's own soul
 	// (config.AgentConfig.Soul or the compiled coreagent.GetPrompt), and the
-	// task becomes the first user message. When the spawn did not name a
-	// target agent (TargetAgentID == ""), the parent's own soul applies via
-	// the empty override — the loop's standard identity builder will pick up
-	// the parent's SOUL.md / compiled prompt as before. An explicit
-	// ActualSystemPrompt from the caller (legacy / future callers) takes
-	// precedence; otherwise we resolve the delegate's soul so a worker with
-	// an EMPTY soul runs with an EMPTY system role, NOT the legacy
-	// "You are a subagent" string.
-	systemOverride := cfg.ActualSystemPrompt
-	if systemOverride == "" {
-		if cfg.TargetAgentID != "" {
-			systemOverride = resolveDelegateSoul(al, cfg.TargetAgentID)
-		}
-	}
+	// task becomes the first user message. For the NATIVE dispatch path (this
+	// branch), that composition happens for free through childTS.agent's own
+	// ContextBuilder — agent.ContextBuilder above (~line 950) is copied
+	// verbatim from execSource (the resolved delegate, or baseAgent for
+	// self-delegation) per ADR-032's "no inheritance from the parent" rule,
+	// and ContextBuilder.BuildSystemPrompt/BuildMessages resolve the soul
+	// from that builder's OWN agentID when the child turn actually runs —
+	// see pkg/agent/context.go's compiled-prompt / SOUL.md / getIdentity()
+	// branches. There used to be a SECOND, parallel soul-resolution path
+	// here — an opts.SystemPromptOverride field computed via
+	// resolveDelegateSoul(al, cfg.TargetAgentID) — but ContextBuilder.
+	// BuildMessages (context.go) has no override parameter and never read
+	// it, and newTurnState (turn.go) never touched it either: it was dead
+	// from the day it was written, verified by grepping for every read of
+	// processOptions.SystemPromptOverride outside its own declaration and
+	// this one write site — none exist. Deleted rather than wired, since the
+	// live ContextBuilder path already does this correctly (see
+	// TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel
+	// in subturn_target_identity_test.go, and
+	// TestSpawnSubTurn_NativeDispatch_SystemPromptComesFromTargetContextBuilder
+	// in subturn_rc8_dead_override_test.go for the regression coverage that
+	// this deletion did not change native persona resolution).
+	//
+	// The EXTERNAL-CLI dispatch path (below, ~line 1774) composes the soul
+	// independently via composeDelegateInput(al, cfg.SystemPrompt,
+	// cfg.ActualSystemPrompt, cfg.TargetAgentID) — that call site resolves
+	// cfg.ActualSystemPrompt / cfg.TargetAgentID directly from cfg, not from
+	// any field on this opts literal, so it is entirely unaffected by this
+	// deletion. A worker with an EMPTY soul still runs with an EMPTY system
+	// role there, NOT the legacy "You are a subagent" string.
 	opts := processOptions{
 		SessionKey:              childID,
 		Channel:                 parentTS.channel,
@@ -1209,7 +1225,6 @@ func spawnSubTurn(
 		SenderID:                parentTS.opts.SenderID,
 		SenderDisplayName:       parentTS.opts.SenderDisplayName,
 		UserMessage:             cfg.SystemPrompt, // Task description becomes the first user message
-		SystemPromptOverride:    systemOverride,
 		Media:                   nil,
 		InitialSteeringMessages: cfg.InitialMessages,
 		DefaultResponse:         "",

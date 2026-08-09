@@ -6,8 +6,9 @@
 //     submitted task. The legacy "You are a subagent" string is REMOVED.
 //   - The same composition applies on the external-cli executor path so
 //     native and external-cli sub-turns are uniform.
-//   - An empty worker soul is valid and yields an empty system role (the
-//     worker's soul is OPTIONAL by design).
+//   - An empty soul is valid and yields an empty system role (soul is OPTIONAL
+//     by design). The worker itself now carries a compiled execution-discipline
+//     persona, so the soul-less subject in these tests is a custom agent.
 
 package agent
 
@@ -23,17 +24,54 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 )
 
-// TestResolveDelegateSoul_WorkerWithEmptySoulReturnsEmpty proves the seed
-// worker's compiled prompt is the empty string today and that the resolver
-// honors that — a worker with an empty soul is a worker with no persona text
-// (no panic at init, no fallback to a generic "You are a subagent" string).
-func TestResolveDelegateSoul_WorkerWithEmptySoulReturnsEmpty(t *testing.T) {
+// soullessAgentID is an agent with no compiled prompt and no SOUL.md on disk.
+// resolveDelegateSoul returns "" for it, which makes it the correct subject
+// for the empty-soul invariant now that `worker` carries a real persona.
+const soullessAgentID = "custom-agent-without-a-soul"
+
+// TestResolveDelegateSoul_WorkerHasCompiledPrompt proves the seed worker
+// carries a real compiled persona.
+//
+// This test previously asserted the OPPOSITE — that the worker's soul is empty
+// — and used `worker` as the canonical example of a soul-less delegate. That
+// was a description of a defect, not a requirement: because
+// prompts["worker"] was "", BuildSystemPrompt fell through both the
+// compiled-prompt and SOUL branches to the generic "You are Worker, a helpful
+// AI assistant" fallback. The single most-used delegation target was the only
+// seeded agent with no role-specific guidance, and it produced unbounded
+// output that looked like a hang.
+//
+// The empty-soul invariant those tests really protected is preserved below in
+// TestResolveDelegateSoul_SoullessAgentReturnsEmpty, with a subject that is
+// genuinely soul-less.
+func TestResolveDelegateSoul_WorkerHasCompiledPrompt(t *testing.T) {
 	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	got := resolveDelegateSoul(al, string(coreagent.IDWorker))
+	if got == "" {
+		t.Fatal("resolveDelegateSoul(worker) is empty; the worker must carry execution-discipline guidance")
+	}
+	// Must not have regressed to the legacy generic wrapper.
+	if containsAny(got, "You are a subagent", "subagent to complete", "Complete the given task") {
+		t.Fatalf("resolveDelegateSoul(worker) leaked the legacy subagent wrapper: %q", got)
+	}
+	// Must not be the generic assistant fallback the defect produced.
+	if containsAny(got, "a helpful AI assistant powered by Omnipus") {
+		t.Fatalf("resolveDelegateSoul(worker) returned the generic fallback identity: %q", got)
+	}
+}
+
+// TestResolveDelegateSoul_SoullessAgentReturnsEmpty preserves the original
+// invariant: an agent with no compiled prompt and no SOUL.md resolves to an
+// empty soul, with no panic and no fallback wrapper. Soul remains OPTIONAL.
+func TestResolveDelegateSoul_SoullessAgentReturnsEmpty(t *testing.T) {
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
+	defer cleanup()
+
+	got := resolveDelegateSoul(al, soullessAgentID)
 	if got != "" {
-		t.Fatalf("resolveDelegateSoul(worker) = %q, want empty (worker soul is OPTIONAL)", got)
+		t.Fatalf("resolveDelegateSoul(%s) = %q, want empty (soul is OPTIONAL)", soullessAgentID, got)
 	}
 }
 
@@ -56,16 +94,38 @@ func TestResolveDelegateSoul_BaseAgentUsesCompiledPrompt(t *testing.T) {
 	}
 }
 
-// TestComposeDelegateInput_WorkerEmptySoulReturnsTaskOnly proves the external
-// path's input is the TASK ALONE when the delegate's soul is empty. No
-// persona, no wrapper, no "## System" header.
-func TestComposeDelegateInput_WorkerEmptySoulReturnsTaskOnly(t *testing.T) {
+// TestComposeDelegateInput_EmptySoulReturnsTaskOnly proves the external path's
+// input is the TASK ALONE when the delegate's soul is empty. No persona, no
+// wrapper, no "## System" header.
+//
+// The subject moved from `worker` to a genuinely soul-less agent when the
+// worker gained a compiled persona; the invariant under test is unchanged.
+func TestComposeDelegateInput_EmptySoulReturnsTaskOnly(t *testing.T) {
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
+	defer cleanup()
+
+	got := composeDelegateInput(al, "summarize this file", "", soullessAgentID)
+	if got != "summarize this file" {
+		t.Fatalf("composeDelegateInput(soul-less, empty soul) = %q, want %q", got, "summarize this file")
+	}
+	if containsAny(got, "## System") {
+		t.Fatalf("composeDelegateInput must not add a wrapper for an empty soul: %q", got)
+	}
+}
+
+// TestComposeDelegateInput_WorkerPrependsSoul is the counterpart: now that the
+// worker has a persona, the external path composes (soul, task) for it exactly
+// as it does for a base agent.
+func TestComposeDelegateInput_WorkerPrependsSoul(t *testing.T) {
 	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	got := composeDelegateInput(al, "summarize this file", "", string(coreagent.IDWorker))
-	if got != "summarize this file" {
-		t.Fatalf("composeDelegateInput(worker, empty soul) = %q, want %q", got, "summarize this file")
+	if got == "summarize this file" {
+		t.Fatal("composeDelegateInput(worker, task) returned task only; the worker's soul should prepend")
+	}
+	if !containsAny(got, "## System", "## Task", "summarize this file") {
+		t.Fatalf("composeDelegateInput(worker) lost the (soul, task) composition: %q", got)
 	}
 }
 
@@ -120,17 +180,21 @@ func TestSpawnSubTurn_NativeWithWorkerTargetComposesSoulAndTask(t *testing.T) {
 
 	// Inspect the resolved soul via the same resolution path spawnSubTurn uses.
 	soul := resolveDelegateSoul(al, string(coreagent.IDWorker))
-	// Compose via the public helper to mirror what spawnSubTurn would
-	// assemble for the external-cli path.
+	if soul == "" {
+		t.Fatal("worker soul is empty; the worker must carry execution-discipline guidance")
+	}
+	if containsAny(soul, "You are a subagent", "Complete the given task") {
+		t.Fatalf("worker soul leaked the legacy subagent wrapper: %q", soul)
+	}
+
+	// Compose via the same helper spawnSubTurn uses for the external-cli path
+	// and assert both halves survive: the worker's persona AND the task.
 	composed := composeDelegateInput(al, "do the task", "", string(coreagent.IDWorker))
-	_ = composed
-	_ = soul
-	// Native path: SystemPromptOverride comes from resolveDelegateSoul when
-	// ActualSystemPrompt is empty and TargetAgentID is set. The worker's
-	// soul is "" (empty), so SystemPromptOverride MUST be the empty string
-	// — NOT the legacy "You are a subagent" wrapper.
-	if soul != "" {
-		t.Fatalf("expected worker soul to be empty (OPTIONAL); got %q", soul)
+	if !containsAny(composed, "do the task") {
+		t.Fatalf("composition dropped the task: %q", composed)
+	}
+	if !containsAny(composed, "## System", "## Task") {
+		t.Fatalf("composition lost the (soul, task) split: %q", composed)
 	}
 }
 
@@ -177,10 +241,13 @@ func TestSpawnSubTurn_ExternalCLI_WorkerEmptySoulDeliversTaskOnly(t *testing.T) 
 	task := "delegate this to the worker"
 
 	// Compose exactly what spawnSubTurn would assemble for the external-cli
-	// path with a worker target and empty soul.
-	composed := composeDelegateInput(al, task, "", string(coreagent.IDWorker))
+	// path with a SOUL-LESS target. The subject moved off `worker` when the
+	// worker gained a persona; the invariant — an empty soul reaches the
+	// external CLI as the bare task, with no "## System" wrapper injected
+	// over the CLI's own system prompt — is unchanged and still worth pinning.
+	composed := composeDelegateInput(al, task, "", soullessAgentID)
 	if composed != task {
-		t.Fatalf("composeDelegateInput(worker, empty soul) = %q, want %q (no wrapper)", composed, task)
+		t.Fatalf("composeDelegateInput(soul-less, empty soul) = %q, want %q (no wrapper)", composed, task)
 	}
 
 	// Drive the external dispatcher with the composed input and assert the

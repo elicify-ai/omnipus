@@ -5,6 +5,7 @@
 package coreagent_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -237,24 +238,35 @@ func TestWorkerToolPolicyTightensGlobalCeiling(t *testing.T) {
 	assert.False(t, hasRail, "worker must NOT carry the dead 'system.*' wildcard")
 }
 
-// TestWorkerSoulIsOptional_BootWithEmptySoul verifies the worker property-model
-// correction: a worker's soul/system-prompt is OPTIONAL. The init() invariant
-// exempts the worker from the mandatory-compiled-prompt check, and the seeded
-// worker's compiled prompt is intentionally empty. A worker with an empty
-// soul is a valid, bootable worker — the init() panic does NOT fire.
-func TestWorkerSoulIsOptional_BootWithEmptySoul(t *testing.T) {
+// TestWorkerHasCompiledExecutionDisciplinePrompt_BootSucceeds verifies the
+// RC-6 fix: the seeded worker (ID=worker, Type=worker) now carries a real,
+// non-empty compiled execution-discipline prompt (previously "" — an empty
+// compiled prompt meant every worker sub-turn silently fell back to
+// ContextBuilder's generic "You are Worker, a helpful AI assistant powered
+// by Omnipus" identity instead of any delegation-specific guidance). The
+// init() panic exemption (IsWorkerID skip) still applies to the worker tier
+// generally — it is what lets a CUSTOM (non-seeded) worker with no prompts
+// map entry at all boot without a panic — but that exemption is orthogonal
+// to whether the SEEDED "worker" entry itself happens to be non-empty.
+func TestWorkerHasCompiledExecutionDisciplinePrompt_BootSucceeds(t *testing.T) {
 	// BDD: Given the seeded worker (ID=worker, Type=worker),
 	//      When init() has run and GetPrompt("worker") is called,
-	//      Then init() does NOT panic and GetPrompt returns "" (the soul is
-	//      empty by design — composing soul+task at delegation time yields
-	//      system=""+user=task for a soul-less worker).
+	//      Then init() does NOT panic and GetPrompt returns a non-empty
+	//      execution-discipline prompt (RC-6) — NOT the bare generic
+	//      identity ContextBuilder.getIdentity() would otherwise produce.
 	prompt := coreagent.GetPrompt(string(coreagent.IDWorker))
-	assert.Empty(t, prompt,
-		"a worker with an empty soul is valid (soul is OPTIONAL) — GetPrompt returns the empty string")
+	assert.NotEmpty(t, prompt,
+		"worker must carry a real compiled prompt (RC-6) — an empty prompt silently falls back to the generic assistant identity")
+	for _, marker := range []string{"delegat", "task"} {
+		assert.Contains(t, strings.ToLower(prompt), marker,
+			"worker prompt must establish it is a focused delegated-task executor (looking for %q)", marker)
+	}
+	assert.NotContains(t, prompt, "helpful AI assistant powered by Omnipus",
+		"worker prompt must not be (or degrade to) the generic getIdentity() fallback text")
 
 	// The init() panic exemption: the worker is in All() but the boot path
-	// skips its compiled-prompt check. SeedConfig on an empty config must
-	// still succeed and the worker must be present.
+	// skips its compiled-prompt-map-entry check (IsWorkerID). SeedConfig on
+	// an empty config must still succeed and the worker must be present.
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))
 	worker := findSeeded(t, cfg, string(coreagent.IDWorker))

@@ -452,3 +452,88 @@ func TestReadMessages_MissingPartitionSkipped(t *testing.T) {
 	require.Len(t, entries, 1, "only messages from the surviving partition must be returned")
 	assert.Equal(t, "msg-2", entries[0].ID)
 }
+
+// TestAppendMessage_TokensIn_UnpopulatedByRealisticCaller is the RC-7
+// regression test. RC-7 defect: PartitionStore.AppendMessage folds
+// non-assistant-role TranscriptEntry.Tokens into meta.Stats.TokensIn, but no
+// production caller ever sets Tokens on a user/system-role entry — every
+// session in production reports tokens_in: 0, including sessions with
+// millions of tokens_out. This test has two halves:
+//
+//  1. It reproduces the REALISTIC production shape — a user-role
+//     TranscriptEntry built the way every real caller builds one (ID, Role,
+//     Content, Timestamp set; Tokens left at its zero value — mirroring
+//     pkg/agent/loop.go:6508's userEntry literal and the equivalent
+//     construction sites in pkg/gateway/sse.go and pkg/gateway/
+//     websocket.go) — and asserts TokensIn stays exactly 0 after several
+//     such messages plus an assistant reply. If this ever silently starts
+//     returning non-zero without any caller change, something is
+//     fabricating a token count from nowhere, which is worse than an
+//     honest 0.
+//  2. It proves the aggregation MECHANISM is not itself the bug: giving a
+//     non-assistant entry a real Tokens value (the shape a fixed caller
+//     WOULD produce once pkg/agent/turn.go or pkg/gateway is wired — see
+//     AppendMessage's doc comment for exactly where) correctly increments
+//     TokensIn. So the day a caller in one of those out-of-scope files
+//     starts setting entry.Tokens, TokensIn becomes meaningful with zero
+//     further changes needed in this file.
+//
+// Traces to: RC-7 (fix/uat-delegation-rootcauses root-cause investigation).
+func TestAppendMessage_TokensIn_UnpopulatedByRealisticCaller(t *testing.T) {
+	home := t.TempDir()
+	ps := NewPartitionStore(home, "rc7-tokens-in-agent")
+
+	meta, err := ps.NewSession("cli", "test-model", "anthropic")
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+
+	// Realistic shape: mirrors pkg/agent/loop.go:6508's userEntry literal —
+	// ID/Role/Content/Timestamp set, Tokens never touched. No production
+	// caller sets Tokens on a non-assistant entry today.
+	realisticUserEntry := TranscriptEntry{
+		ID:        "rc7-user-1",
+		Role:      "user",
+		Content:   "do something",
+		Timestamp: now,
+	}
+	require.NoError(t, ps.AppendMessage(meta.ID, realisticUserEntry))
+
+	// A large assistant reply, matching the reported production shape
+	// (millions of TokensOut, zero TokensIn).
+	assistantEntry := TranscriptEntry{
+		ID:        "rc7-assistant-1",
+		Role:      "assistant",
+		Content:   "reply",
+		Timestamp: now,
+		Tokens:    1_400_000,
+		Model:     "test-model",
+	}
+	require.NoError(t, ps.AppendMessage(meta.ID, assistantEntry))
+
+	afterRealistic, err := ps.GetMeta(meta.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, afterRealistic.Stats.TokensIn,
+		"TokensIn must stay honestly 0 when no caller populates Tokens on a non-assistant entry — "+
+			"a non-zero value here would mean something is fabricating a token count")
+	assert.Equal(t, 1_400_000, afterRealistic.Stats.TokensOut,
+		"TokensOut must still aggregate normally — this test isolates the TokensIn gap, not a general regression")
+
+	// Second half: prove the aggregation MECHANISM works once a caller DOES
+	// populate Tokens — i.e. the only gap is the missing caller-side write,
+	// not the summation in AppendMessage.
+	wiredUserEntry := TranscriptEntry{
+		ID:        "rc7-user-2",
+		Role:      "user",
+		Content:   "a second message from a hypothetically-fixed caller",
+		Timestamp: now,
+		Tokens:    42, // as if a caller had set this from providers.LLMResponse.Usage.PromptTokens
+	}
+	require.NoError(t, ps.AppendMessage(meta.ID, wiredUserEntry))
+
+	afterWired, err := ps.GetMeta(meta.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 42, afterWired.Stats.TokensIn,
+		"once a caller sets Tokens on a non-assistant entry, AppendMessage must correctly fold it into TokensIn — "+
+			"proving the aggregation logic itself is not the defect, only the missing caller-side wiring is")
+}

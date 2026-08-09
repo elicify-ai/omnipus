@@ -2573,13 +2573,50 @@ When a conversation is handed to you, your FIRST message greets the user in the 
 - NEVER handle everyday tasks or agent creation — hand off to Jim or Ava via the handoff tool
 `,
 
-	// worker: soul is OPTIONAL — kept empty on purpose. A worker with an empty
-	// soul is valid: at delegation time, the soul (if any) is composed with the
-	// submitted task as the system/user split, so a worker that has no soul is
-	// a worker with no persona text. Operators may set a soul via the agent's
-	// SOUL.md (custom-worker case) or leave it empty. The init() panic exemption
-	// keeps the worker out of the mandatory compiled-prompt invariant.
-	"worker": "",
+	// worker: RC-6 fix — the seeded general-purpose worker (IDWorker) now
+	// carries a real compiled execution-discipline prompt instead of the
+	// empty string it held before. The empty string was NOT harmless: an
+	// earlier version of this comment claimed a worker with no soul gets
+	// "workspace-only identity, empty persona" — that is factually WRONG
+	// about what the code does. With no compiled prompt and no on-disk
+	// SOUL.md, ContextBuilder.BuildSystemPrompt (pkg/agent/context.go) has no
+	// "empty persona" branch at all — it falls through to cb.getIdentity(),
+	// which yields the full GENERIC identity block ("You are Worker, a
+	// helpful AI assistant powered by Omnipus" + workspace/rules
+	// boilerplate). That is a real persona, just the wrong one. Worker is
+	// the single most-used delegation target (Jim's default edges route
+	// here), so in practice every worker sub-turn ran under that generic
+	// assistant identity instead of execution discipline suited to a
+	// delegation-only executor — the observed failure mode this fix closes:
+	// workers received good task text but produced unbounded, unfocused
+	// output with no sense of "the task has a finish line".
+	//
+	// This only changes the SEEDED "worker" ID. A custom (non-seeded)
+	// Type=worker agent is unaffected: coreagent.GetPrompt only resolves for
+	// the fixed set of IDs in this map, so a custom worker with no on-disk
+	// SOUL.md still falls through to getIdentity() exactly as before —
+	// operators may give it a persona via SOUL.md, or leave it soul-less.
+	// The worker is still exempt from init()'s "every core-agent ID needs a
+	// prompts map entry" check (IsWorkerID skip below) — that exemption is
+	// what lets a CUSTOM worker with no entry at all boot without a panic;
+	// it is unrelated to whether THIS specific entry happens to be non-empty.
+	"worker": `You are the Worker — a general-purpose delegation-only executor.
+
+You are invoked via delegation, never via chat. Your job: do exactly the task you were given, then report back concisely. You are not a persona the user talks to — you are a focused sub-task executor another agent is relying on to finish cleanly.
+
+## How you work
+
+- **Execute the delegated task, nothing more.** Stay inside the scope of the task you received. Do not expand it, do not take on adjacent work you were not asked to do, and do not ask the caller clarifying questions unless the task is genuinely unworkable as stated.
+- **Files over chat.** Prefer write_file for anything long — code, generated content, structured output — over pasting it into your reply. Report the file path, not the contents.
+- **The task has a finish line — find it.** Do the work, confirm it's done, then stop. Do not keep going "just in case" or pad the result with extra exploration nobody asked for.
+- **Report concisely when done.** Your caller is another agent reading a result, not a human reading a transcript — a few sentences on what you did and the outcome, not a wall of text.
+
+## What you never do
+
+- NEVER hold a conversation — you are not a chat persona.
+- NEVER produce unbounded output — a delegated task has a clear finish line; stop there.
+- NEVER pad your result with caveats, disclaimers, or restating the task back.
+`,
 
 	"planner": `You are the Planner — a delegation-only specialist subagent.
 

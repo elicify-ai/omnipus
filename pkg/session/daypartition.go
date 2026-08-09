@@ -221,6 +221,21 @@ type ModelTokens struct {
 
 // SessionStats aggregates usage across all partitions.
 type SessionStats struct {
+	// TokensIn is intended to be the running total of non-assistant-role
+	// (user/system) TranscriptEntry.Tokens values (see AppendMessage below).
+	// RC-7 (confirmed defect): as of this fix, NO production caller
+	// populates Tokens on a non-assistant TranscriptEntry before appending
+	// it, so this field is currently always 0 for every real session — a
+	// structurally dead metric, not an occasionally-empty one. The
+	// aggregation logic itself is correct and tested
+	// (TestSessionStatsAggregation, TestAppendMessage_TokensIn_
+	// UnpopulatedByRealisticCaller in daypartition_test.go); wiring real
+	// data requires a change in pkg/agent/turn.go / pkg/agent/loop.go /
+	// pkg/gateway (outside this package's ownership) — see AppendMessage's
+	// doc comment for exactly what and where. Kept as a wire-contract field
+	// (contracts/openapi.yaml, read by pkg/gateway and the SPA) rather than
+	// removed, since real data can be wired into it without a further
+	// schema change once a caller sets TranscriptEntry.Tokens.
 	TokensIn     int     `json:"tokens_in"`
 	TokensOut    int     `json:"tokens_out"`
 	TokensTotal  int     `json:"tokens_total"`
@@ -473,6 +488,44 @@ func (ps *PartitionStore) AppendMessage(sessionID string, entry TranscriptEntry)
 	// (uncached input + cache_read + cache_write + completion).
 	// TokensOut tracks the output-side total (full turn tokens for assistant turns)
 	// consistent with the existing convention. Cache tokens are tracked separately.
+	//
+	// RC-7 (confirmed, honest-metric fix): the "all other roles... contribute
+	// to TokensIn" half of that sentence describes what THIS aggregation
+	// does with whatever entry.Tokens it is given — it does NOT describe
+	// reality end to end. As of this fix, no production caller sets Tokens
+	// on a non-assistant-role TranscriptEntry before calling AppendMessage,
+	// so meta.Stats.TokensIn is currently always 0 for every real session,
+	// including ones with millions of TokensOut. This is not a bug in the
+	// summation below (TestSessionStatsAggregation in daypartition_test.go
+	// proves it correctly sums entry.Tokens into TokensIn whenever the field
+	// IS populated) — the gap is entirely on the caller side, and every
+	// caller site is outside this file's ownership (pkg/session/
+	// daypartition.go), so it cannot be closed here.
+	//
+	// What real wiring would need: the input-token count for a turn is only
+	// known AFTER the LLM responds (providers.LLMResponse.Usage.PromptTokens
+	// — already read for a different purpose at pkg/agent/loop.go:9046's
+	// llmResponseFields["prompt_tokens"] = response.Usage.PromptTokens), not
+	// at the point the user-role TranscriptEntry is constructed and appended
+	// (which happens BEFORE the LLM call, e.g. pkg/agent/loop.go:6508's
+	// userEntry literal, pkg/gateway/sse.go:163/253, pkg/gateway/
+	// websocket.go:1704/4772). A caller in one of those files (none owned by
+	// this package) would need to either (a) add a new field to
+	// TranscriptEntry that an ASSISTANT-role entry sets from
+	// response.Usage.PromptTokens (turn.go's four assistant-entry
+	// construction sites: ~1411, ~1473, ~1534, ~1719) and have AppendMessage
+	// fold that field into TokensIn instead of (or alongside) the
+	// non-assistant-role Tokens field, or (b) call the already-defined but
+	// currently NEVER-CALLED PartitionStore.UpdateStats (below in this same
+	// file) with SessionStats{TokensIn: response.Usage.PromptTokens} right
+	// after each LLM call resolves. Either path crosses this task's file
+	// ownership boundary (pkg/agent/turn.go and pkg/agent/loop.go are
+	// explicitly off-limits here), so it is reported rather than attempted.
+	// See TestAppendMessage_TokensIn_UnpopulatedByRealisticCaller in
+	// daypartition_test.go for the regression coverage: it fails if this
+	// honest-zero behavior silently changes without a real caller-side fix,
+	// and separately proves the aggregation mechanism itself still works the
+	// moment a caller does populate entry.Tokens.
 	if entry.Role == "assistant" {
 		meta.Stats.TokensOut += entry.Tokens
 		meta.Stats.TokensCacheRead += entry.CacheReadTokens
