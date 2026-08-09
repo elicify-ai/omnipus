@@ -244,15 +244,31 @@ func applyPostStartHardening(cmd *exec.Cmd, lim Limits) error {
 		"soft_cap", nprocLim.Cur,
 		"hard_cap", nprocLim.Max)
 
-	// Tripwire: if the soft cap is at or below the live task count, every
-	// fork() by this child WILL fail with EAGAIN. That is the exact silent
-	// outage this code once shipped, so make it loud rather than leaving the
-	// operator with a bare "sh: Cannot fork".
+	// FAIL CLOSED: if the cap we are about to apply is at or below the live
+	// task count, every fork() by this child will return EAGAIN — the child
+	// is born unusable. Return an error so the caller kills it and surfaces
+	// the reason (hardened_exec.go does exactly that on a hardening error).
+	//
+	// This must NOT be a mere log line. Before the clamp above existed, this
+	// situation surfaced as an EPERM from Prlimit and was therefore
+	// fail-closed and loud; clamping made Prlimit succeed, which would have
+	// converted it into a silent, fork-dead child whose only trace is a
+	// warning in a gateway log the operator may never read. That is the same
+	// silent-outage shape this file exists to prevent, reached through a
+	// different door.
+	//
+	// Note this can only trigger via the downward clamps (an operator limit
+	// genuinely lower than current usage). The unclamped cap is
+	// baseline+slack, so it can never trip this by construction — the real
+	// guard against a mis-measured baseline is
+	// TestReadCurrentUserNProc_CountsThreadsNotProcesses, which checks the
+	// counter against an independent kernel-sourced number.
 	if nprocLim.Cur <= baseline {
-		slog.Warn("sandbox: RLIMIT_NPROC soft cap is at or below the current task count; child fork() will fail",
-			"pid", cmd.Process.Pid,
-			"soft_cap", nprocLim.Cur,
-			"current_tasks", baseline)
+		return fmt.Errorf(
+			"RLIMIT_NPROC cap %d is at or below the current per-UID task count %d: "+
+				"the child could not fork at all (inherited soft=%d hard=%d); "+
+				"raise the process limit for this user",
+			nprocLim.Cur, baseline, existing.Cur, existing.Max)
 	}
 
 	if err := unix.Prlimit(cmd.Process.Pid, unix.RLIMIT_NPROC, nprocLim, nil); err != nil {

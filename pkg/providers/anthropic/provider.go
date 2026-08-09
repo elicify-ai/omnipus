@@ -189,14 +189,26 @@ func (p *Provider) streamWithCallbacks(
 		names := make(map[int]string, len(msg.Content))
 		totalArgs := 0
 		for i, block := range msg.Content {
+			// Read the union's DIRECT fields, never the As*() accessors.
+			//
+			// AsText()/AsToolUse() re-unmarshal from ContentBlockUnion.JSON.raw,
+			// and raw is only populated at content_block_start and re-marshalled
+			// at content_block_stop — the deltas in between mutate the direct
+			// fields and never touch raw. Using the accessors therefore reports
+			// text="" and Input="{}" (2 bytes) for the entire lifetime of a
+			// block, then everything at once when it closes.
+			//
+			// That is exactly the blackout this callback exists to eliminate: a
+			// 45-second, 40 KB tool argument would emit one 2-byte event at the
+			// start and nothing again until it was already finished. Verified
+			// empirically against anthropic-sdk-go v1.48.0.
 			switch block.Type {
 			case "text":
-				text.WriteString(block.AsText().Text)
+				text.WriteString(block.Text)
 			case "tool_use":
-				tu := block.AsToolUse()
-				n := len(tu.Input)
+				n := len(block.Input)
 				argsLen[i] = n
-				names[i] = tu.Name
+				names[i] = block.Name
 				totalArgs += n
 			}
 		}
