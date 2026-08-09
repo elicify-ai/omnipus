@@ -509,7 +509,6 @@ type processOptions struct {
 	UserID                  string                // Authenticated gateway principal (FR-017)
 	UserMessage             string                // User message content (may include prefix)
 	ForcedSkills            []string              // Skills explicitly requested for this message
-	SystemPromptOverride    string                // Override the default system prompt (Used by SubTurns)
 	Media                   []string              // media:// refs from inbound message
 	InitialSteeringMessages []providers.Message   // Steering messages from refactor/agent
 	DefaultResponse         string                // Response when LLM returns empty
@@ -10257,6 +10256,28 @@ turnLoop:
 				// preserving prior behavior for every other case. See
 				// delegate_result.go.
 				tcRecord.Result = r
+			}
+			// RC-5 (ADR-057 UAT root-cause fix): for every OTHER failed tool
+			// call — bash, write_file, async delegate, anything not covered by
+			// the two Result-populating branches above — persist the same
+			// human-readable reason already sent to the LLM (contentForLLM,
+			// computed above) so the durable transcript is never left with a
+			// null result and no explanation. Gated on tcRecord.Result == nil
+			// so a call that already carries a richer Result (media
+			// descriptors, or buildSyncDelegateResult's {"text":…,"error":true}
+			// shape) is not given a redundant, differently-shaped Error too.
+			//
+			// No new data exposure: contentForLLM at this point has already
+			// passed through the SEC-25 prompt-guard sanitizer (untrusted
+			// tools only) and cfg.FilterSensitiveData above — it is the exact
+			// same string already sent to the LLM as the tool-result message
+			// and already logged via ToolExecEndPayload.Result a few lines up
+			// (Duration/IsError block). Truncated via truncateRunes (reusing
+			// task_completion_signal.go's existing rune-safe truncation
+			// convention, not inventing a new one) to bound transcript growth
+			// from a single pathological tool error.
+			if toolResult.IsError && tcRecord.Result == nil {
+				tcRecord.Error = truncateRunes(contentForLLM, maxFailClosedOutputChars)
 			}
 			ts.appendToolCallTranscript(tcRecord)
 			messages = append(messages, toolResultMsg)

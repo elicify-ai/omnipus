@@ -403,6 +403,22 @@ type ToolCall struct {
 	// for the subagent span (FR-H-001). Empty for top-level tool calls.
 	// span_id = "span_" + ParentToolCallID (derivable, not stored separately).
 	ParentToolCallID ToolCallID `json:"parent_tool_call_id,omitempty"`
+	// Error is a human-readable failure reason, set when Status is "error" and
+	// no richer Result was already attached (media descriptors or a sync
+	// delegate result — both already carry their own explanatory text).
+	// Mirrors contracts/components/schemas/ToolCall.yaml's `error` property
+	// and generated.ToolCall.Error (pkg/api/generated/openapi_types.gen.go).
+	//
+	// RC-5 (ADR-057 UAT root-cause fix): before this field existed, a failed
+	// tool call persisted only {tool, status, duration_ms, parameters} with a
+	// nil Result — the failure reason existed solely in the gateway's ERROR
+	// log (ephemeral on some deployments) and in the live WS
+	// ToolCallResultFrame, never in the durable transcript. The orchestrating
+	// agent had no way to learn WHY a call failed and retried blindly. See
+	// pkg/agent/loop.go's tcRecord construction (runTurn) for the writer and
+	// pkg/gateway/replay.go's buildResult for the reader that restores
+	// live/reload parity (RC-5c).
+	Error string `json:"error,omitempty"`
 }
 
 // NewSessionID generates a ULID-based session ID prefixed with "session_".

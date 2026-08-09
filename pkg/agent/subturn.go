@@ -1175,6 +1175,39 @@ func spawnSubTurn(
 		}
 	}
 
+	// RC-5b (ADR-057 UAT root-cause fix): persist the delegated task text to
+	// the CHILD's OWN durable transcript as a role:"user" entry. The task
+	// text reaches the LLM as opts.UserMessage below (cfg.SystemPrompt), but
+	// that only ever lands in the ephemeral, in-memory ephemeralStore
+	// (agent.Sessions above) — deliberate, so a child turn's history never
+	// pollutes or persists to the delegate's real session (see
+	// newEphemeralSession's call site above). Meanwhile the durable
+	// transcript only ever received user-role entries from channel ingress,
+	// scheduled/heartbeat runs, and the websocket handler — a delegated
+	// sub-turn passes through none of those, so a delegated child's own
+	// transcript.jsonl never recorded what it was asked to do (observed
+	// live: 11 workers in a UAT session with zero user messages, making it
+	// impossible to audit what any of them were told). Mirrors the shape
+	// used by pkg/agent/loop.go's channelNeedsTranscript writer (runTurn),
+	// scoped to the child's own session id (childID) rather than a channel
+	// session, and does NOT touch parentTS's session history — the point is
+	// only that the child's own durable transcript records its own task.
+	// Fires on every generation, including a follow_up resume, since each
+	// generation's cfg.SystemPrompt is a genuinely new instruction to record.
+	if parentTS.transcriptStore != nil && strings.TrimSpace(cfg.SystemPrompt) != "" {
+		taskEntry := session.TranscriptEntry{
+			ID:        fmt.Sprintf("user-%d", time.Now().UnixNano()),
+			Role:      "user",
+			AgentID:   agent.ID,
+			Content:   cfg.SystemPrompt,
+			Timestamp: time.Now().UTC(),
+		}
+		if err := parentTS.transcriptStore.AppendTranscriptStrict(childID, taskEntry); err != nil {
+			logger.WarnCF("subturn", "could not record delegated task to child transcript",
+				map[string]any{"child_id": childID, "error": err.Error()})
+		}
+	}
+
 	// Create processOptions for the child turn.
 	// ADR-057 FR-007/FR-009: TranscriptSessionID is now the child's OWN
 	// session id (childID) — every delegated child writes its own

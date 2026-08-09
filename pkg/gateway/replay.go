@@ -203,6 +203,18 @@ func streamReplay(
 		if parentCallID != "" {
 			f.ParentCallId = &parentCallID
 		}
+		// RC-5c (ADR-057 UAT root-cause fix): restore live/replay parity for
+		// the failure reason. The live path (websocket.go's EventKindToolExecEnd
+		// handler) already populates ToolCallResultFrame.Error for the one
+		// hand-coded delegation-denial case; on reload this reconstruction
+		// previously never set .Error at all, so error context visible live
+		// silently vanished after a page refresh. tc.Error is now persisted
+		// for every failed tool call (RC-5, session.ToolCall.Error), not just
+		// delegation denials, so this copy covers all of them uniformly.
+		if tc.Error != "" {
+			errCopy := tc.Error
+			f.Error = &errCopy
+		}
 		return f
 	}
 
