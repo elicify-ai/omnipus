@@ -399,10 +399,13 @@ func AgentLoopFromContext(ctx context.Context) *AgentLoop {
 //
 // Resolution order:
 //  1. The compiled core prompt (coreagent.GetPrompt) — for seeded base agents
-//     and the worker. The worker prompt is intentionally empty today (a
-//     worker's soul is OPTIONAL), so a worker with no SOUL.md resolves to "".
-//  2. The agent's on-disk SOUL.md content — for custom agents and operators
-//     who have placed a SOUL.md in the worker workspace.
+//     and the seeded worker. As of the RC-6 fix (see coreagent.prompts'
+//     "worker" entry), the seeded worker's compiled prompt is no longer
+//     empty, so this step now resolves it to a real execution-discipline
+//     prompt like any other seeded agent.
+//  2. The agent's on-disk SOUL.md content — for custom (non-seeded) agents,
+//     including a custom Type=worker agent, whose soul is genuinely
+//     OPTIONAL: no on-disk SOUL.md resolves to "".
 //
 // An unknown agentID resolves to "" so an unresolved target never falls back
 // to the legacy generic "You are a subagent" string. The sub-turn's true
@@ -453,8 +456,10 @@ func resolveDelegateSoul(al *AgentLoop, agentID string) string {
 
 // composeDelegateInput builds the prompt string the external-cli runner sees
 // as its input, matching the native path's (system, user) split: the soul is
-// prepended (when present) and the task follows. When the soul is empty — the
-// worker case where the soul is OPTIONAL — the input is the task alone, with
+// prepended (when present) and the task follows. When the soul is empty —
+// a soul-less custom agent (a seeded worker's compiled prompt is non-empty
+// as of the RC-6 fix, so this now happens only for a custom agent with no
+// on-disk SOUL.md, worker or otherwise) — the input is the task alone, with
 // no persona text and no legacy "You are a subagent" wrapper.
 //
 // An explicit ActualSystemPrompt from the caller (legacy / future callers)
@@ -1194,7 +1199,21 @@ func spawnSubTurn(
 	// only that the child's own durable transcript records its own task.
 	// Fires on every generation, including a follow_up resume, since each
 	// generation's cfg.SystemPrompt is a genuinely new instruction to record.
-	if parentTS.transcriptStore != nil && strings.TrimSpace(cfg.SystemPrompt) != "" {
+	//
+	// Must write through sharedStore, NOT parentTS.transcriptStore: childID
+	// was minted a few lines above into sharedStore (al.GetSessionStore()) —
+	// that is the only store that has ever heard of it. parentTS.transcriptStore
+	// is whatever al.ResolveSessionStore(parentSessionID) (or, for a
+	// task-executor-triggered run, al.GetAgentStore(agentID) directly — see
+	// processTaskDirect/processTaskDirectExternalCLI in loop.go) resolved for
+	// the PARENT session, which for an old/legacy session is a per-agent
+	// store distinct from sharedStore. Writing through parentTS.transcriptStore
+	// in that case handed AppendTranscriptStrict a childID it had never seen,
+	// so the strict "refuse an unknown session" contract (see
+	// AppendTranscriptStrict's own doc comment) silently swallowed the write
+	// (WARN-logged, not propagated) for exactly the legacy-session deployments
+	// this fix was meant to help most.
+	if strings.TrimSpace(cfg.SystemPrompt) != "" {
 		taskEntry := session.TranscriptEntry{
 			ID:        fmt.Sprintf("user-%d", time.Now().UnixNano()),
 			Role:      "user",
@@ -1202,7 +1221,7 @@ func spawnSubTurn(
 			Content:   cfg.SystemPrompt,
 			Timestamp: time.Now().UTC(),
 		}
-		if err := parentTS.transcriptStore.AppendTranscriptStrict(childID, taskEntry); err != nil {
+		if err := sharedStore.AppendTranscriptStrict(childID, taskEntry); err != nil {
 			logger.WarnCF("subturn", "could not record delegated task to child transcript",
 				map[string]any{"child_id": childID, "error": err.Error()})
 		}
@@ -1272,7 +1291,20 @@ func spawnSubTurn(
 		// TranscriptStore below govern.
 		SkipInitialSteeringPoll: true,
 		TranscriptSessionID:     childID, // FR-007: the child's OWN session id, not the parent's
-		TranscriptStore:         parentTS.transcriptStore,
+		// Must be sharedStore, NOT parentTS.transcriptStore: childID was
+		// minted into sharedStore (al.GetSessionStore()) above, and
+		// parentTS.transcriptStore can be a different store instance (e.g. a
+		// task-executor-triggered run's al.GetAgentStore(agentID) legacy
+		// per-agent store — see loop.go's processTaskDirect/
+		// processTaskDirectExternalCLI, or any parent session
+		// al.ResolveSessionStore fell back on). The RC-5b task-entry write a
+		// few lines above this struct was fixed for the identical reason;
+		// this field governs every OTHER transcript write for the child's
+		// own turn (assistant messages, tool calls, etc. — turn.go's
+		// appendToolCallTranscript/recordAssistantMessage-style writers all
+		// key off opts.TranscriptStore) and would silently fail the exact
+		// same way if left pointed at the wrong store.
+		TranscriptStore: sharedStore,
 		// FIX 1 (re-review): WorkspaceID inherits from the PARENT turn, not
 		// execSource (the resolved delegate). This is deliberately NOT covered
 		// by ADR-032's "no inheritance from the parent" rule (see that ADR's
@@ -1815,10 +1847,11 @@ func spawnSubTurn(
 
 	if dispatchKind == runner.DispatchKindExternalCLI {
 		// External-cli dispatch: compose the same (soul, task) pair the
-		// native path uses. An empty soul yields task-only input (the
-		// worker's soul is OPTIONAL — the external CLI gets no persona text
-		// if there is none). The composed string is what the external CLI
-		// sees as its prompt, mirroring the native system+user split.
+		// native path uses. An empty soul yields task-only input (a
+		// soul-less custom agent — a seeded worker's compiled prompt is
+		// non-empty as of the RC-6 fix — gets no persona text if there is
+		// none). The composed string is what the external CLI sees as its
+		// prompt, mirroring the native system+user split.
 		externalInput := composeDelegateInput(al, cfg.SystemPrompt, cfg.ActualSystemPrompt, cfg.TargetAgentID)
 		extResult, extErr := runExternalCLISubTurn(childCtx, al, childTS, externalInput, timeout)
 		if semAcquired {

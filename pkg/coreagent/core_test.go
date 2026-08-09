@@ -160,12 +160,24 @@ func TestCoreAgentMetadataDifferentiation(t *testing.T) {
 func TestCoreAgentPromptsHardcoded(t *testing.T) {
 	// Traces to: wave5b-system-agent-spec.md line 152 (US-8 AC2)
 	for _, agent := range coreagent.All() {
-		// The sub-agent worker tier has an INTENTIONAL empty compiled prompt:
-		// the locked concept (`.preview-doc/agents.html`) says a worker's soul
-		// is OPTIONAL (may be left empty), and init() in core.go exempts
-		// workers from the mandatory-compiled-prompt invariant. The new
-		// TestWorkerSoulIsOptional_BootWithEmptySoul test asserts the
-		// empty-prompt design. Mirror the exemption here.
+		// The worker is skipped here only because init()'s
+		// mandatory-compiled-prompt invariant exempts it, and this test
+		// mirrors that exemption.
+		//
+		// It is NO LONGER true that the worker has an intentional empty
+		// prompt. It has a real compiled execution-discipline prompt (RC-6):
+		// the empty entry meant BuildSystemPrompt fell past both the
+		// compiled-prompt and SOUL branches to the generic "You are Worker, a
+		// helpful AI assistant" fallback, so the most-used delegation target
+		// was the only seeded agent with no role guidance — and it produced
+		// the unbounded output that looked like a hang.
+		//
+		// A worker's soul remains OPTIONAL in the sense that a CUSTOM worker
+		// may have none; that is unrelated to this loop, which iterates All()
+		// (the seeded roster) and never sees a custom agent.
+		// TestWorkerHasCompiledExecutionDisciplinePrompt_BootSucceeds in
+		// worker_seed_test.go now asserts the seeded worker's prompt is
+		// non-empty and is not the generic fallback.
 		if coreagent.IsWorkerID(agent.ID) {
 			continue
 		}

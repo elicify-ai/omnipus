@@ -5972,9 +5972,10 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// pair the native delegation path uses ahead of its own
 	// runExternalCLISubTurn call (subturn.go composeDelegateInput call site)
 	// so the target's own soul/persona travels with a TASK-mode dispatch too,
-	// not just an agent-to-agent delegate call. An empty soul (the worker
-	// case, where a soul is OPTIONAL) yields task-only input, identical to
-	// the pre-fix behavior.
+	// not just an agent-to-agent delegate call. An empty soul (a soul-less
+	// custom agent — a seeded worker's compiled prompt is non-empty as of
+	// the RC-6 fix, coreagent's "worker" prompts-map entry) yields
+	// task-only input, identical to the pre-fix behavior.
 	externalInput := composeDelegateInput(al, prompt, "", agent.ID)
 
 	result, err := runExternalCLISubTurn(dispatchCtx, al, ts, externalInput, rtCfg.defaultTimeout)
@@ -10330,13 +10331,29 @@ turnLoop:
 			//
 			// No new data exposure: contentForLLM at this point has already
 			// passed through the SEC-25 prompt-guard sanitizer (untrusted
-			// tools only) and cfg.FilterSensitiveData above — it is the exact
-			// same string already sent to the LLM as the tool-result message
-			// and already logged via ToolExecEndPayload.Result a few lines up
-			// (Duration/IsError block). Truncated via truncateRunes (reusing
-			// task_completion_signal.go's existing rune-safe truncation
-			// convention, not inventing a new one) to bound transcript growth
-			// from a single pathological tool error.
+			// tools only) and — CONDITIONALLY, only when
+			// cfg.Tools.IsFilterSensitiveDataEnabled() is true — cfg.
+			// FilterSensitiveData above (see the `if cfg.Tools.
+			// IsFilterSensitiveDataEnabled()` gate a few lines up); when that
+			// setting is off, contentForLLM here is unfiltered, matching what
+			// was actually sent to the LLM as the tool-result message and
+			// already logged via ToolExecEndPayload.Result a few lines up
+			// (Duration/IsError block) — this call is not introducing any
+			// exposure beyond what those two sinks already have. Truncated via
+			// truncateRunes (reusing task_completion_signal.go's existing
+			// rune-safe truncation convention, not inventing a new one) to
+			// bound transcript growth from a single pathological tool error.
+			//
+			// Not necessarily redundant with the in-memory session history:
+			// ts.agent.Sessions.AddFullMessage below (the tool-result message
+			// history write) is gated on `!ts.opts.NoHistory`, but
+			// appendToolCallTranscript (which persists tcRecord, including
+			// this Error field) is not — it only requires a wired
+			// transcriptStore/transcriptSessionID (turn.go's
+			// appendToolCallTranscript). So on a NoHistory turn (e.g. a
+			// delegated sub-turn's ephemeral history — see subturn.go), this
+			// durable transcript write is the ONLY copy of the failure reason
+			// that survives the turn at all.
 			if toolResult.IsError && tcRecord.Result == nil {
 				tcRecord.Error = truncateRunes(contentForLLM, maxFailClosedOutputChars)
 			}

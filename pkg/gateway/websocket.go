@@ -3759,9 +3759,33 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				pc := string(p.ParentSpawnCallID)
 				resultF.ParentCallId = &pc
 			}
-			if delegationErr != "" {
+			// Live/replay error parity (fixes the inverted-parity gap left by
+			// RC-5c in pkg/gateway/replay.go's buildResult): that replay
+			// reconstruction sets ToolCallResultFrame.Error from tc.Error for
+			// EVERY persisted failure (session.ToolCall.Error, populated in
+			// pkg/agent/loop.go's runTurn whenever toolResult.IsError and no
+			// richer Result was already attached — see tcRecord.Error's own
+			// RC-5 comment there), not just delegation denials. Before this,
+			// the live path here populated .Error ONLY via the
+			// parseDelegationFailure special case above, so a failed bash/
+			// write_file/etc. call showed NO error live but DID show one
+			// after a page reload — the exact opposite of parity. p.Result is
+			// ToolExecEndPayload.Result, which loop.go sets to the very same
+			// contentForLLM string tcRecord.Error is derived from (pre the
+			// persisted side's maxFailClosedOutputChars truncation, an
+			// unexported pkg/agent bound this package cannot reuse) — using
+			// it directly here is "the same string that gets persisted",
+			// just without that extra truncation step; resultF.Result
+			// already carries this same string live (subject to the
+			// InlineToolResultMaxBytes offload above), so Error introduces
+			// no new size exposure beyond what Result already has live.
+			switch {
+			case delegationErr != "":
 				de := delegationErr
 				resultF.Error = &de
+			case status == "error" && p.Result != "":
+				liveErr := p.Result
+				resultF.Error = &liveErr
 			}
 			// ADR-057 FR-012/FR-013 (W5b): tool_call_result is class (a) —
 			// genuinely child-turn-produced (BDD-16; generated.

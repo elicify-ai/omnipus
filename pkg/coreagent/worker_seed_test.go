@@ -243,11 +243,19 @@ func TestWorkerToolPolicyTightensGlobalCeiling(t *testing.T) {
 // non-empty compiled execution-discipline prompt (previously "" — an empty
 // compiled prompt meant every worker sub-turn silently fell back to
 // ContextBuilder's generic "You are Worker, a helpful AI assistant powered
-// by Omnipus" identity instead of any delegation-specific guidance). The
-// init() panic exemption (IsWorkerID skip) still applies to the worker tier
-// generally — it is what lets a CUSTOM (non-seeded) worker with no prompts
-// map entry at all boot without a panic — but that exemption is orthogonal
-// to whether the SEEDED "worker" entry itself happens to be non-empty.
+// by Omnipus" identity instead of any delegation-specific guidance).
+//
+// The init() panic exemption (IsWorkerID skip, coreagent.go's init()) has
+// NEVER been about a CUSTOM (non-seeded) worker: init() only iterates
+// All(), the fixed 8-entry seeded roster, and a custom Type=worker agent
+// config is never a member of that slice — it was never reachable by this
+// loop regardless of the skip. The skip exists solely for the ONE seeded
+// Worker() entry, and now that prompts["worker"] is non-empty (this RC-6
+// fix), the skip is VESTIGIAL — nothing in the loop would panic even
+// without it today. The real, still-live consequence: if this "worker"
+// prompt entry is emptied again, the skip means init() will NOT catch it —
+// boot stays silent and the regression (silent fallback to the generic
+// identity) would ship undetected.
 func TestWorkerHasCompiledExecutionDisciplinePrompt_BootSucceeds(t *testing.T) {
 	// BDD: Given the seeded worker (ID=worker, Type=worker),
 	//      When init() has run and GetPrompt("worker") is called,

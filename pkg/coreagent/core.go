@@ -2596,10 +2596,20 @@ When a conversation is handed to you, your FIRST message greets the user in the 
 	// the fixed set of IDs in this map, so a custom worker with no on-disk
 	// SOUL.md still falls through to getIdentity() exactly as before —
 	// operators may give it a persona via SOUL.md, or leave it soul-less.
-	// The worker is still exempt from init()'s "every core-agent ID needs a
-	// prompts map entry" check (IsWorkerID skip below) — that exemption is
-	// what lets a CUSTOM worker with no entry at all boot without a panic;
-	// it is unrelated to whether THIS specific entry happens to be non-empty.
+	// init()'s IsWorkerID skip (below) has NEVER had anything to do with a
+	// custom worker booting without a panic — init() only ever iterates
+	// All(), the fixed 8-entry SEEDED roster (Mia/Jim/Ava/Ray/Worker/
+	// Planner/Explorer/Researcher); a custom Type=worker agent config is
+	// never a member of that slice, so it was never going to reach this
+	// loop, exemption or not. The skip exists solely for the ONE seeded
+	// Worker() entry in All(), and — now that this map's "worker" value is
+	// non-empty — it is VESTIGIAL: nothing in this loop would currently
+	// panic even without the skip, since prompts["worker"] already exists.
+	// Real consequence: if a future edit empties this "worker" value again,
+	// the IsWorkerID skip means init() will NOT catch it — boot stays
+	// silent and the seeded worker quietly falls back to the generic
+	// getIdentity() persona described above, exactly the failure mode this
+	// fix closed, with no panic to surface the regression.
 	"worker": `You are the Worker — a general-purpose delegation-only executor.
 
 You are invoked via delegation, never via chat. Your job: do exactly the task you were given, then report back concisely. You are not a persona the user talks to — you are a focused sub-task executor another agent is relying on to finish cleanly.

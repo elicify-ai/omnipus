@@ -523,13 +523,21 @@ func (ps *PartitionStore) AppendMessage(sessionID string, entry TranscriptEntry)
 	// — already read for a different purpose at pkg/agent/loop.go:9046's
 	// llmResponseFields["prompt_tokens"] = response.Usage.PromptTokens), not
 	// at the point the user-role TranscriptEntry is constructed and appended
-	// (which happens BEFORE the LLM call, e.g. pkg/agent/loop.go:6508's
-	// userEntry literal, pkg/gateway/sse.go:163/253, pkg/gateway/
-	// websocket.go:1704/4772). A caller in one of those files (none owned by
-	// this package) would need to either (a) add a new field to
-	// TranscriptEntry that an ASSISTANT-role entry sets from
-	// response.Usage.PromptTokens (turn.go's four assistant-entry
-	// construction sites: ~1411, ~1473, ~1534, ~1719) and have AppendMessage
+	// (which happens BEFORE the LLM call). Genuine user-role, pre-LLM-call
+	// examples: pkg/agent/loop.go:6508's userEntry literal, pkg/gateway/
+	// sse.go's user-message append inside its chat handler (Role:"user"),
+	// and pkg/gateway/websocket.go's handleChatMessage user-message append
+	// (Role:"user"). A caller in one of those files (none owned by this
+	// package) would need to either (a) add a new field to TranscriptEntry
+	// that an ASSISTANT-role entry sets from response.Usage.PromptTokens —
+	// turn.go's actual assistant-entry construction sites are
+	// appendIntermediateAssistantTranscript and appendAssistantTranscript
+	// (turn.go's other two session.TranscriptEntry{} literals are
+	// appendToolCallTranscript's tool-call entry and appendErrorTranscript's
+	// system error entry — neither carries Role:"assistant", or any Role at
+	// all); pkg/gateway/sse.go's recordAssistantMessageStatus and pkg/
+	// gateway/websocket.go's wsStreamer.Finalize are the equivalent
+	// assistant-entry writers in those two files — and have AppendMessage
 	// fold that field into TokensIn instead of (or alongside) the
 	// non-assistant-role Tokens field, or (b) call the already-defined but
 	// currently NEVER-CALLED PartitionStore.UpdateStats (below in this same

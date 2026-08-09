@@ -395,6 +395,17 @@ func TestToolExecEnd_DelegationDenied_SubstitutesStructuredResult(t *testing.T) 
 
 // TestToolExecEnd_PlainError_NotSubstituted proves the negative case: an ordinary
 // error result is forwarded as the raw string, not parsed into an object.
+//
+// frame.Error's expectation was updated for the live/replay error-parity fix
+// (pkg/gateway/websocket.go's EventKindToolExecEnd handler): before that fix,
+// this test asserted frame.Error stayed EMPTY for a non-delegation failure —
+// which was itself the exact defect the fix closes (see
+// TestToolExecEnd_NonDelegationFailure_LivePathPopulatesError for the
+// dedicated regression coverage). A plain (non-delegation) error result is
+// still forwarded as the raw, unparsed string via frame.Result — that half
+// of "not substituted" is unchanged — but frame.Error is now populated from
+// that same string too, matching what pkg/gateway/replay.go's buildResult
+// already persists as session.ToolCall.Error for every failed tool call.
 func TestToolExecEnd_PlainError_NotSubstituted(t *testing.T) {
 	bus := agent.NewEventBus()
 	defer bus.Close()
@@ -421,7 +432,8 @@ func TestToolExecEnd_PlainError_NotSubstituted(t *testing.T) {
 	frame := drainFrame(t, ch)
 	assert.Equal(t, "tool_call_result", frame.Type)
 	assert.Equal(t, "error", frame.Status)
-	assert.Empty(t, frame.Error, "a plain error must not set the delegation error field")
+	assert.Equal(t, "permission denied", frame.Error,
+		"a plain (non-delegation) error must still populate frame.Error, for live/replay parity")
 	assert.Equal(t, "permission denied", frame.Result,
-		"a plain error result must be forwarded as the raw string")
+		"a plain error result must be forwarded as the raw string, not substituted with a parsed object")
 }
