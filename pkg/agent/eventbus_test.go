@@ -511,7 +511,15 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 
 	select {
 	case <-tool1ExecCh:
-	case <-time.After(2 * time.Second):
+	// 30s, not 2s. This is a LIVENESS wait — "has the first tool started
+	// yet" — not a performance assertion, so the deadline only needs to be
+	// long enough that a slow or contended runner cannot be mistaken for a
+	// hang. At 2s it tipped over on the CI worker under a full-package run
+	// (observed twice at 2.31s and 2.74s) while passing in isolation there
+	// in 0.297s, i.e. it was reporting scheduler contention as a product
+	// failure. Nothing about the behaviour under test is time-bounded: the
+	// tools are mock 50ms sleeps and the provider is in-memory.
+	case <-time.After(30 * time.Second):
 		t.Fatal("timeout waiting for tool_one to start")
 	}
 
