@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Omnipus CI worker entrypoint for a single gate run.
 # Usage: runci.sh <git-ref> <gate>
-#   gate ∈ { all | go-build | go-vet | lint | go-test | contracts | spa | gofmt | quick | embed-build | e2e }
+#   gate ∈ { all | go-build | go-vet | lint | go-test | go-race | contracts | spa | gofmt | quick | embed-build | e2e }
 # Requires env GIT_REMOTE (authenticated clone URL), set as a Fly secret.
 #   The `e2e` gate additionally requires OPENROUTER_API_KEY (Fly secret) — set on ci-omnipus via
 #   `fly secrets set OPENROUTER_API_KEY=<value> --app ci-omnipus`.
@@ -135,6 +135,44 @@ run_lint() {
 # phase roughly doubles vs -p4 (build is shared) — fine for a pre-merge gate. The isolated
 # re-run below is a single process, so it keeps the default (full) GOMAXPROCS to give a flagged
 # package maximum CPU when proving pass-vs-real-failure.
+# run_gorace — the data-race gate.
+#
+# This worker previously had NO race gate at all, so every "ALL GATES GREEN"
+# verdict it produced carried zero race signal, and the only place races were
+# ever detected was a GitHub Actions run — which requires a PR. That made the
+# repo's own standard CI surface structurally incapable of catching the defect
+# class it most needed to catch.
+#
+# The package list, timeout, CGO_ENABLED=1 and the DATA RACE carve-out are
+# COPIED FROM .github/workflows/pr.yml's "Run go test -race" step deliberately.
+# Do not "improve" one without the other: a worker gate that measures something
+# GitHub does not (or vice versa) is exactly how a green local verdict stops
+# predicting the real one. -race forces cgo, which is why CGO_ENABLED=1 here
+# does not weaken the pure-Go guarantee — that is proved by the CGO_ENABLED=0
+# build/test gates, not by this one.
+run_gorace() {
+  ensure_spa_stub
+  local out
+  out=$(CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 600s \
+    ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... \
+    ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... \
+    ./pkg/logger/... ./tests/integration/... 2>&1)
+  local code=$?
+  echo "$out"
+  # Checked BEFORE the exit-code short-circuit, for the same reason pr.yml and
+  # run_gotest do it: a race can be reported without flipping go test's exit
+  # code. A detected race is NEVER routed through a flake filter or given an
+  # isolated second chance — a race that appears under real parallelism and
+  # vanishes at -p 1 is the textbook signature of a genuine concurrency bug.
+  if [[ $out == *"DATA RACE"* ]]; then
+    echo ""
+    echo "=== DATA RACE detected — never excused by an isolated re-run ==="
+    echo "$out" | grep -aE '^FAIL[[:space:]]|DATA RACE' | head -20
+    return 1
+  fi
+  return $code
+}
+
 run_gotest() {
   ensure_spa_stub
   local out; out=$(GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 2 ./... 2>&1)
@@ -535,6 +573,7 @@ case "$GATE" in
   go-vet)          step go-vet run_govet ;;
   lint)            step golangci-lint run_lint ;;
   go-test)         step go-build run_gobuild; step go-test run_gotest ;;
+  go-race)         step go-race run_gorace ;;
   contracts)       step npm-ci run_npm; step verify-contracts run_contracts ;;
   spa)             step npm-ci run_npm; step typecheck run_typecheck; step vitest run_vitest ;;
   quick)           step gofmt run_gofmt; step go-build run_gobuild ;;
@@ -552,6 +591,7 @@ case "$GATE" in
     step typecheck run_typecheck
     step vitest run_vitest
     step go-test run_gotest
+    step go-race run_gorace
     step e2e run_e2e
     ;;
   *) echo "unknown gate: $GATE"; exit 64 ;;

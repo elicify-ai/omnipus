@@ -10,9 +10,14 @@ The worker runs a FASTER SUBSET of GitHub CI. Two limits that have already cause
 false sense of completeness (2026-07-26 — a green worker verdict was reported upstream
 as if it were a full pass):
 
-1. **There is no `-race` gate here at all.** `runci.sh` never invokes `go test -race`.
-   GitHub Actions (`.github/workflows/pr.yml`, the "Run go test -race" step) is the ONLY
-   place data races are detected. A green run from this worker carries **zero race signal**.
+1. ~~**There is no `-race` gate here at all.**~~ **Fixed 2026-08-10 — there is now a `go-race`
+   gate**, and it is included in `all`. It copies pr.yml's package list, `-timeout 600s`,
+   `CGO_ENABLED=1` and DATA RACE carve-out verbatim; keep the two in lockstep, because a worker
+   gate that measures something GitHub does not is how a green local verdict stops predicting the
+   real one. **Two limits remain:** (a) `go-test` and `go-race` are separate gates, so running
+   `go-test` alone still carries zero race signal — use `all` or run `go-race` explicitly; (b) the
+   package list is pr.yml's, which does **not** include `pkg/tools` or `pkg/providers`, so races
+   there are still caught by neither surface.
 2. **`run_gotest` excuses flakes.** A package that fails the parallel run but passes the
    isolated `-p 1` re-run prints `FLAKE (passed isolated)` and the gate still returns 0.
    That is intentional for timing-sensitive integration tests — but it means a green
