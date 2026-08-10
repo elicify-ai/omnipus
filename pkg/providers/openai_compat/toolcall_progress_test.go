@@ -155,3 +155,42 @@ func TestToolCallProgressFromOptions(t *testing.T) {
 		t.Errorf("callback not invoked correctly, got %d", got)
 	}
 }
+
+// TestParseStreamResponse_PanickingProgressHandlerDoesNotKillTheStream is the
+// production-caller half of ADR-059 AC-06.
+//
+// The handler runs synchronously inside this SSE read loop. Without a guard a
+// panic in a consumer unwinds through the parser and takes the whole turn with
+// it — a monitoring signal killing the work it monitors, strictly worse than
+// the blindness the callback exists to fix. The stream must complete and the
+// tool call must parse intact even when every single delta panics.
+func TestParseStreamResponse_PanickingProgressHandlerDoesNotKillTheStream(t *testing.T) {
+	argChunks := []string{`{"path":"a.svg",`, `"content":"<svg>`, strings.Repeat("x", 256), `</svg>"}`}
+	stream := toolArgsOnlyStream("write_file", argChunks)
+
+	var calls int
+	resp, err := parseStreamResponse(
+		t.Context(),
+		strings.NewReader(stream),
+		nil,
+		func(protocoltypes.ToolCallProgress) {
+			calls++
+			panic("consumer handler is broken")
+		},
+	)
+	if err != nil {
+		t.Fatalf("a panicking progress handler broke the stream: %v", err)
+	}
+	if calls != len(argChunks) {
+		t.Errorf("handler invoked %d times, want %d — the guard must be per-call, "+
+			"not a one-shot that silently stops reporting after the first panic",
+			calls, len(argChunks))
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call after a panicking handler, got %d", len(resp.ToolCalls))
+	}
+	content, _ := resp.ToolCalls[0].Arguments["content"].(string)
+	if len(content) != len("<svg>")+256+len("</svg>") {
+		t.Errorf("tool arguments truncated by the panicking handler: got %d bytes", len(content))
+	}
+}

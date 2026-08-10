@@ -230,7 +230,9 @@ func (p *Provider) streamWithCallbacks(
 					continue
 				}
 				lastArgsLen[i] = n
-				onProgress(protocoltypes.ToolCallProgress{
+				// SafeInvoke: this runs synchronously in the stream loop, so a
+				// panicking consumer would otherwise kill the turn (AC-06).
+				protocoltypes.SafeInvoke(onProgress, protocoltypes.ToolCallProgress{
 					Index:          i,
 					Name:           names[i],
 					ArgsBytes:      n,

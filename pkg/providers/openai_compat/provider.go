@@ -362,14 +362,15 @@ func parseStreamResponse(
 				if tc.Function.Arguments != "" {
 					acc.argsJSON.WriteString(tc.Function.Arguments)
 					totalArgsBytes += len(tc.Function.Arguments)
-					if onProgress != nil {
-						onProgress(protocoltypes.ToolCallProgress{
-							Index:          tc.Index,
-							Name:           acc.name,
-							ArgsBytes:      acc.argsJSON.Len(),
-							TotalArgsBytes: totalArgsBytes,
-						})
-					}
+					// SafeInvoke: the handler runs synchronously in this SSE
+					// read loop, so a panic in a consumer would unwind through
+					// the parser and kill the turn (ADR-059 AC-06).
+					protocoltypes.SafeInvoke(onProgress, protocoltypes.ToolCallProgress{
+						Index:          tc.Index,
+						Name:           acc.name,
+						ArgsBytes:      acc.argsJSON.Len(),
+						TotalArgsBytes: totalArgsBytes,
+					})
 				}
 			}
 		}
