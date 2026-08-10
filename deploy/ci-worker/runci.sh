@@ -145,6 +145,13 @@ run_lint() {
 #
 # The package list, timeout, CGO_ENABLED=1 and the DATA RACE carve-out are
 # COPIED FROM .github/workflows/pr.yml's "Run go test -race" step deliberately.
+#
+# pkg/task, pkg/plan, pkg/tools and pkg/providers joined the list on
+# 2026-08-10 (both files together, as the rule below demands) after a manual
+# scoped run found TWO data races in them on an otherwise fully green commit.
+# pkg/tools is NON-recursive on purpose: pkg/tools/browser fails under -race
+# headlessly for environmental reasons (no dbus, real Chrome), and a false-RED
+# gate gets ignored, which is worse than no gate. Tracked in #615.
 # Do not "improve" one without the other: a worker gate that measures something
 # GitHub does not (or vice versa) is exactly how a green local verdict stops
 # predicting the real one. -race forces cgo, which is why CGO_ENABLED=1 here
@@ -153,10 +160,11 @@ run_lint() {
 run_gorace() {
   ensure_spa_stub
   local out
-  out=$(CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 600s \
+  out=$(CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s \
     ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... \
     ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... \
-    ./pkg/logger/... ./tests/integration/... 2>&1)
+    ./pkg/logger/... ./pkg/task/... ./pkg/plan/... ./pkg/tools ./pkg/providers/... \
+    ./tests/integration/... 2>&1)
   local code=$?
   echo "$out"
   # Checked BEFORE the exit-code short-circuit, for the same reason pr.yml and

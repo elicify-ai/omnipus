@@ -484,6 +484,28 @@ jobs:
         # completes in ~1.3s under -race — negligible next to the headroom the
         # 240s→600s raise already bought pkg/agent/pkg/gateway/tests/integration.
         #
+        # pkg/task, pkg/plan, pkg/tools and pkg/providers were added 2026-08-10,
+        # and they earned it on the first run: `go test -race ./pkg/tools/...`
+        # reported TWO data races on a commit where every existing gate was
+        # green — one in production code (pkg/task's normalizeCriteria wrote
+        # server-set IDs through the CALLER's slice, so two goroutines
+        # normalising slices that share a backing array raced) and one in a
+        # test. Neither was reachable by any gate that existed before: this
+        # list is the only race surface in the project, and it omitted the
+        # packages holding the tool registry, the delegation tool, the task
+        # store and every LLM provider.
+        #
+        # pkg/tools is NON-recursive (`./pkg/tools`, not `./pkg/tools/...`) —
+        # deliberately, and this is the one place this list knowingly stops
+        # short. pkg/tools/browser fails under -race on a headless CI box for
+        # environmental reasons (no dbus, real Chrome launches), which would
+        # make this gate false-RED, and a false-RED gate gets ignored — which
+        # is worse than no gate. Tracked in #615; do not "fix" it by
+        # widening the glob without first making that package race-clean
+        # headlessly.
+        #
+        # Timeout raised 600s -> 900s to accommodate the added packages.
+        #
         # DATA RACE carve-out (never routed through the flake filter): a race
         # that manifests under the default parallel `-p` (NumCPU) run but
         # disappears when the same package is re-run isolated at -p 1 is the
@@ -499,7 +521,7 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           set +e
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 600s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... ./pkg/logger/... ./tests/integration/... 2>&1)
+          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 900s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... ./pkg/logger/... ./pkg/task/... ./pkg/plan/... ./pkg/tools ./pkg/providers/... ./tests/integration/... 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
