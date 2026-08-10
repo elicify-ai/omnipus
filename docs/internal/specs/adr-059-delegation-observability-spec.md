@@ -295,7 +295,7 @@ other registered tool UIs** have the identical broken `isError` (`BashOutput`, `
 `BrowserTool`, `FileReadPreview`, `FileTreeView`, `WebFetchPreview`, `WebSearchResult`,
 `WebServeUI`). A failed `bash` still renders "Done" today — arguably the worse instance, since `bash`
 is what a delegated worker uses most. The durable fix is one line in `src/lib/omnipus-runtime.ts`
-setting `isError` on the part, not a hook in each component. **Tracked, not done here.**
+setting `isError` on the part, not a hook in each component. **Tracked in [#617]; not done here.**
 
 **Two divergences the A6 repairs introduced, now closed.** Live said "Failed" where replay said "File
 already exists" — created by the very commit that fixed the previous divergence, with a test pinning
@@ -308,6 +308,11 @@ vitest worker oversubscription. The mitigation already existed in `deploy/ci-wor
 workers: 8 oversubscribe shared vCPUs") but lived in that one script, so GitHub Actions and every
 local run went uncapped. It now lives in `vite.config.ts`. Measured: uncapped 1–4 failures per run
 across five full runs; capped 413/413 green and faster.
+
+**Also left open, deliberately and tracked:** `permission_denied` is the third member of the
+structured-failure family and the only one with no contract schema, no allow-list entry and no
+renderer — so it still reaches the SPA as a raw JSON blob, and its two producers emit two different
+shapes via `fmt.Sprintf` with `%q` (Go quoting, not JSON). Tracked in [#618].
 
 **The pattern worth carrying forward:** three rounds running, the tests passed because they exercised
 the wrong input class — prose-only criteria, escape-free paths, an unreachable status pair. The
