@@ -283,6 +283,52 @@ func DelegationDeniedResult(tool string, d *DelegationDenial) *ToolResult {
 	}).WithError(fmt.Errorf("delegation policy denied (%s): %s", tool, reason))
 }
 
+// FileExistsRefusalResult builds the structured refusal write_file returns
+// when the target path already exists and overwrite was not requested.
+//
+// This is a PRECONDITION REFUSAL, not an I/O failure. The distinction matters
+// because the two used to be indistinguishable: both arrived as prose with
+// IsError set, so a worker could not tell "a sibling already wrote this, no
+// action needed" from "the write broke" without matching on wording, and
+// neither could the SPA.
+//
+// The payload is the tool's ForLLM verbatim, following DelegationDeniedResult
+// (ADR-058). That is deliberate and is the whole mechanism: the calling agent
+// reads ForLLM and nothing else, so a discriminator carried anywhere else —
+// a Go struct field, a side channel — is invisible to a language model. An
+// earlier attempt did exactly that and was deleted (ADR-059 W3).
+//
+// Reason keeps the original sentence, so nothing a human or a model reads is
+// lost; it gains a machine-checkable tag alongside it.
+func FileExistsRefusalResult(tool, path, reason string) *ToolResult {
+	if reason == "" {
+		reason = "file already exists"
+	}
+	refusal := generated.FileExistsRefusal{
+		Error:  FileExistsRefusalCode,
+		Reason: reason,
+		Tool:   tool,
+		Path:   path,
+	}
+	encoded, err := json.Marshal(refusal)
+	if err != nil {
+		// The contract requires non-empty reason/tool/path; a marshal failure
+		// here would ship a schema-invalid payload the SPA drops, leaving the
+		// caller with nothing. Prose is worse than the tag but far better than
+		// silence.
+		return ErrorResult(reason)
+	}
+	return (&ToolResult{
+		ForLLM:  string(encoded),
+		IsError: true,
+	}).WithError(fmt.Errorf("%s: %s", tool, reason))
+}
+
+// FileExistsRefusalCode is the fixed discriminator from the FileExistsRefusal
+// contract schema. Named here so producer and consumer cannot drift apart on a
+// string literal.
+const FileExistsRefusalCode = "file_exists"
+
 // ErrorResult creates a ToolResult representing an error.
 // Sets IsError=true and includes the error message.
 //

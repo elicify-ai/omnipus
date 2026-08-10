@@ -812,22 +812,19 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	if !overwrite {
 		if _, statErr := handle.Stat(); statErr == nil {
 			// A PRECONDITION refusal, not a genuine I/O failure: the file is
-			// already there. Today the only signal of that is this prose,
-			// which is the same shape as the real write failure two branches
-			// below (ErrorResult(err.Error())) — so a caller cannot tell
-			// "a sibling already wrote this, no action needed" from "the
-			// write broke" without matching on wording.
+			// already there. The prose alone was the same shape as the real
+			// write failure two branches below (ErrorResult(err.Error())), so
+			// a caller could not tell "a sibling already wrote this, no action
+			// needed" from "the write broke" without matching on wording.
 			//
-			// ADR-059 D4 decides the fix: a structured discriminator inside
-			// the text the CALLING AGENT reads, per ADR-058's convention —
-			// not a Go struct field, which no language model can see. That is
-			// work item W5, gated on §7's contract analysis (whether the SPA
-			// would begin rendering a JSON blob where it renders a sentence).
-			//
-			// An earlier attempt added a ToolResult.Reason field here; W3
-			// removed it because it was unreachable by its own documented
-			// consumer.
-			return ErrorResult(fmt.Sprintf("file: %s already exists. Set overwrite=true to replace.", path))
+			// ADR-059 W5 carries a discriminator inside the text the CALLING
+			// AGENT reads, per ADR-058's convention — not a Go struct field,
+			// which no language model can see. An earlier attempt added a
+			// ToolResult.Reason field here; W3 removed it for exactly that.
+			// The sentence itself is unchanged and travels as the payload's
+			// reason.
+			return FileExistsRefusalResult(t.Name(), path,
+				fmt.Sprintf("file: %s already exists. Set overwrite=true to replace.", path))
 		}
 	} else if _, statErr := handle.Stat(); statErr == nil {
 		// We are about to replace a file that already exists. Look up who

@@ -18,7 +18,7 @@ import (
 // TestToolExecEnd_NonDelegationFailure_LivePathPopulatesError is the
 // regression coverage for the inverted live/replay error-parity gap: the
 // EventKindToolExecEnd handler in pkg/gateway/websocket.go used to populate
-// generated.ToolCallResultFrame.Error ONLY via the parseDelegationFailure
+// generated.ToolCallResultFrame.Error ONLY via the parseStructuredToolFailure
 // special case, while pkg/gateway/replay.go's buildResult (RC-5c) populates
 // .Error from session.ToolCall.Error for EVERY persisted failure. That meant
 // a failed non-delegation tool call (e.g. bash) showed NO error live but DID
@@ -126,7 +126,7 @@ func TestToolExecEnd_OffloadedError_PopulatesErrorInstead(t *testing.T) {
 // TestToolExecEnd_DelegationDenial_StillUsesParsedReason confirms the
 // pre-existing delegation-denial special case is unaffected by the new
 // non-delegation fallback: when p.Result IS a parseable DelegationFailure
-// object, frame.Error must still come from parseDelegationFailure's reason,
+// object, frame.Error must still come from parseStructuredToolFailure's reason,
 // not the raw (JSON-encoded) p.Result string.
 func TestToolExecEnd_DelegationDenial_StillUsesParsedReason(t *testing.T) {
 	bus := agent.NewEventBus()

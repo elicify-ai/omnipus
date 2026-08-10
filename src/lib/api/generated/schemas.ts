@@ -9858,6 +9858,15 @@ export const DelegationFailure = z
   })
   .strict();
 
+export const FileExistsRefusal = z
+  .object({
+    error: z.literal("file_exists"),
+    reason: z.string().min(1),
+    tool: z.string().min(1),
+    path: z.string().min(1),
+  })
+  .strict();
+
 export const ToolCallResultFrame = z
   .object({
     type: z.literal("tool_call_result"),

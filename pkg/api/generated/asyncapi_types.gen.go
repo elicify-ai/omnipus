@@ -299,6 +299,18 @@ type ErrorPayload struct {
 	LlmError LLMError `json:"llm_error"`
 }
 
+// FileExistsRefusal — Structured tool-result payload emitted in the `result` field of a tool_call_result frame (status="error") when write_file refuses because the target path already exists and overwrite was not requested. This is a PRECONDITION REFUSAL, not an I/O failure: nothing went wrong, the file is simply already there. Before this existed the refusal was prose shaped exactly like a genuine write failure, so neither the calling agent nor the SPA could tell "a sibling already wrote this, no action needed" from "the write broke" without matching on wording. The calling agent reads the same JSON as its tool result (it is the tool's ForLLM verbatim), which is the point — a Go-side field would be invisible to a language model. The frame's top-level `error` field carries the same `reason`.
+type FileExistsRefusal struct {
+	// Fixed discriminator distinguishing a precondition refusal from an I/O failure.
+	Error string `json:"error"`
+	// The path that already exists, as the caller supplied it.
+	Path string `json:"path"`
+	// Human-readable explanation, including how to proceed (set overwrite=true).
+	Reason string `json:"reason"`
+	// The tool that refused (write_file).
+	Tool string `json:"tool"`
+}
+
 // GoalStatusFrame — Server → client. Status push for a session's active /goal loop (ADR-049 D6/D7/US-8; state enum + goal_id extended by ADR-053 §Contract Surface — "Pill-state enum"/R§8.10). Emitted on round completion, state change, and clear/stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep in sync by hand with components/schemas/GoalStatusFrame.yaml. Class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id until the audit classifies it.
 type GoalStatusFrame struct {
 	ActiveLoops int    `json:"active_loops"`

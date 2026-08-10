@@ -215,6 +215,32 @@ func streamReplay(
 			errCopy := tc.Error
 			f.Error = &errCopy
 		}
+		// ADR-059 W5 live/replay parity: a structured failure payload (a
+		// denied delegation, a write_file precondition refusal) is persisted
+		// as the raw JSON string in tc.Error, because RC-5 stores
+		// contentForLLM verbatim and these tools' contentForLLM IS the JSON.
+		// The live path parses it into a typed object and lifts the prose
+		// reason into Error; without the same treatment here a reload would
+		// show a raw JSON blob where the live view showed a sentence — the
+		// exact divergence this codebase maintains parity to avoid.
+		//
+		// Only fills Result when nothing richer is already there: a call that
+		// carries media descriptors or a sync-delegate payload keeps its own
+		// shape.
+		if obj, reason, isStructured := parseStructuredToolFailure(tc.Error); isStructured {
+			// tc.Result == nil, NOT f.Result == nil. truncateResult returns
+			// tc.Result unchanged when it is nil, and a nil map[string]any
+			// boxed into an `any` is a non-nil interface — so the obvious
+			// check silently never fires and the parity fix would be dead
+			// code that still compiles and still looks right.
+			if tc.Result == nil {
+				f.Result = obj
+			}
+			if reason != "" {
+				reasonCopy := reason
+				f.Error = &reasonCopy
+			}
+		}
 		return f
 	}
 

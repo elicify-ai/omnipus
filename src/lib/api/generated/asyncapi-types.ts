@@ -205,6 +205,13 @@ export interface DelegationFailure {
   target_agent_id?: string;
 }
 
+export interface FileExistsRefusal {
+  error: "file_exists";
+  reason: string;
+  tool: string;
+  path: string;
+}
+
 export interface ToolCallResultFrame {
   type: "tool_call_result";
   session_id: string;

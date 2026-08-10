@@ -23,6 +23,27 @@ function basename(p: string): string {
   return p.split(/[/\\]/).pop() ?? p
 }
 
+// A failed file op used to render as `write_file · a.svg · 1.2 KB · Failed`
+// with no reason at all, which is the same row whether the file already
+// existed, the disk was full, or the path was denied. ADR-059 W5 A4-3 fixes
+// the human-facing half of that.
+//
+// Two shapes arrive here. A structured refusal (write_file's FileExistsRefusal)
+// is an object carrying a prose `reason`; every other failure arrives as the
+// error text itself. Both are rendered the same way — the point is that the
+// row stops being silent, not that the user learns which shape it was.
+function failureReason(result: unknown): string | undefined {
+  if (typeof result === 'string') {
+    const trimmed = result.trim()
+    return trimmed === '' ? undefined : trimmed
+  }
+  if (result !== null && typeof result === 'object') {
+    const reason = (result as Record<string, unknown>)['reason']
+    if (typeof reason === 'string' && reason.trim() !== '') return reason.trim()
+  }
+  return undefined
+}
+
 function byteCount(s?: string): string {
   if (!s) return '0 B'
   const bytes = new TextEncoder().encode(s).length
@@ -44,6 +65,7 @@ function FileOpBlock({
   label,
   path,
   detail,
+  reason,
   isRunning,
   isError,
   isCancelled,
@@ -51,6 +73,7 @@ function FileOpBlock({
   label: string
   path: string
   detail?: string
+  reason?: string
   isRunning: boolean
   isError?: boolean
   isCancelled?: boolean
@@ -59,19 +82,29 @@ function FileOpBlock({
     isRunning ? 'running' : isCancelled ? 'cancelled' : isError ? 'error' : 'success',
     { size: 12, cancelledVariant: 'muted' }
   )
+  // Only on failure. A successful write has nothing to explain, and the
+  // reason line is deliberately NOT truncated the way the path is — a reason
+  // clipped to fit is a reason you have to go looking for elsewhere, which is
+  // the state this replaces.
+  const showReason = isError && !isRunning && reason
   return (
-    <div className="mt-2 flex items-center gap-2 py-1 text-xs font-mono">
-      {statusConfig.indicator}
-      <span className="text-[var(--color-muted)] shrink-0">{label}</span>
-      <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">
-        {basename(path)}
-      </span>
-      {detail && !isRunning && (
-        <span className="text-[var(--color-muted)] shrink-0">{detail}</span>
+    <div className="mt-2 py-1 text-xs font-mono">
+      <div className="flex items-center gap-2">
+        {statusConfig.indicator}
+        <span className="text-[var(--color-muted)] shrink-0">{label}</span>
+        <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">
+          {basename(path)}
+        </span>
+        {detail && !isRunning && (
+          <span className="text-[var(--color-muted)] shrink-0">{detail}</span>
+        )}
+        <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+          {statusConfig.label}
+        </span>
+      </div>
+      {showReason && (
+        <div className={cn('mt-0.5 pl-5 break-words', statusConfig.textClass)}>{reason}</div>
       )}
-      <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
-        {statusConfig.label}
-      </span>
     </div>
   )
 }
@@ -79,11 +112,12 @@ function FileOpBlock({
 function makeWriteFileUI(toolName: string) {
   return makeAssistantToolUI<WriteFileArgs, unknown>({
     toolName,
-    render: ({ args, status }) => (
+    render: ({ args, result, status }) => (
       <FileOpBlock
         label={toolName}
         path={args?.path ?? '(unknown)'}
         detail={byteCount(args?.content)}
+        reason={failureReason(result)}
         isRunning={status.type === 'running'}
         isError={status.type === 'incomplete'}
         isCancelled={isCancelledStatus(status)}
@@ -99,10 +133,11 @@ export const FileWriteAliasDotUI = makeWriteFileUI('file.write')
 
 export const EditFileConfirmUI = makeAssistantToolUI<EditFileArgs, unknown>({
   toolName: 'edit_file',
-  render: ({ args, status }) => (
+  render: ({ args, result, status }) => (
     <FileOpBlock
       label="edit_file"
       path={args?.path ?? '(unknown)'}
+      reason={failureReason(result)}
       isRunning={status.type === 'running'}
       isError={status.type === 'incomplete'}
       isCancelled={isCancelledStatus(status)}
@@ -112,11 +147,12 @@ export const EditFileConfirmUI = makeAssistantToolUI<EditFileArgs, unknown>({
 
 export const AppendFileConfirmUI = makeAssistantToolUI<AppendFileArgs, unknown>({
   toolName: 'append_file',
-  render: ({ args, status }) => (
+  render: ({ args, result, status }) => (
     <FileOpBlock
       label="append_file"
       path={args?.path ?? '(unknown)'}
       detail={byteCount(args?.content)}
+      reason={failureReason(result)}
       isRunning={status.type === 'running'}
       isError={status.type === 'incomplete'}
       isCancelled={isCancelledStatus(status)}

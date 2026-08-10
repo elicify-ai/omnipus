@@ -384,7 +384,7 @@ func TestHandleChatMessage_StampsWorkspaceOnSession(t *testing.T) {
 // structured delegation_denied result and ignores everything else.
 func TestParseDelegationFailure(t *testing.T) {
 	t.Run("denied", func(t *testing.T) {
-		obj, reason, ok := parseDelegationFailure(
+		obj, reason, ok := parseStructuredToolFailure(
 			`{"error":"delegation_denied","reason":"target untrusted","policy":"trust_set","tool":"spawn"}`,
 		)
 		require.True(t, ok)
@@ -393,15 +393,15 @@ func TestParseDelegationFailure(t *testing.T) {
 		assert.Equal(t, "trust_set", obj["policy"])
 	})
 	t.Run("ordinary error string is not a denial", func(t *testing.T) {
-		_, _, ok := parseDelegationFailure("some plain tool error")
+		_, _, ok := parseStructuredToolFailure("some plain tool error")
 		assert.False(t, ok)
 	})
 	t.Run("unrelated json object is not a denial", func(t *testing.T) {
-		_, _, ok := parseDelegationFailure(`{"error":"timeout"}`)
+		_, _, ok := parseStructuredToolFailure(`{"error":"timeout"}`)
 		assert.False(t, ok)
 	})
 	t.Run("empty string", func(t *testing.T) {
-		_, _, ok := parseDelegationFailure("")
+		_, _, ok := parseStructuredToolFailure("")
 		assert.False(t, ok)
 	})
 }

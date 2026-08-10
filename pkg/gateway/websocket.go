@@ -3717,18 +3717,19 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			// InlineToolResultMaxBytes (50 KiB), persist it to disk and substitute a
 			// generated.ToolResultRef sentinel so the WS frame stays small.
 			var liveResult any = p.Result
-			// Structured delegation failure (UAT fix): the delegation tools
-			// (spawn / subagent / task_create) emit a DelegationFailure JSON
-			// object as their result when the policy denies the call. Parse it
-			// into a real object so the SPA receives the typed shape (matched on
-			// the "delegation_denied" discriminator) and can render a distinct
-			// block instead of relying on the LLM to narrate the denial. Also
-			// surface the human-readable reason in the frame's error field.
-			var delegationErr string
+			// Structured tool failure (UAT fix, extended by ADR-059 W5): some
+			// tools emit a typed JSON object as their result rather than prose
+			// — a denied delegation (DelegationFailure) or a write_file
+			// precondition refusal (FileExistsRefusal). Parse it into a real
+			// object so the SPA receives the typed shape it can match on, and
+			// lift the human-readable reason into the frame's error field so
+			// renderers that show only `error` still show a sentence rather
+			// than a JSON blob.
+			var structuredErr string
 			if status == "error" {
-				if obj, reason, isDenial := parseDelegationFailure(p.Result); isDenial {
+				if obj, reason, isStructured := parseStructuredToolFailure(p.Result); isStructured {
 					liveResult = obj
-					delegationErr = reason
+					structuredErr = reason
 				}
 			}
 			if liveResult == any(p.Result) && len(p.Result) > InlineToolResultMaxBytes {
@@ -3767,7 +3768,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			// richer Result was already attached — see tcRecord.Error's own
 			// RC-5 comment there), not just delegation denials. Before this,
 			// the live path here populated .Error ONLY via the
-			// parseDelegationFailure special case above, so a failed bash/
+			// parseStructuredToolFailure special case above, so a failed bash/
 			// write_file/etc. call showed NO error live but DID show one
 			// after a page reload — the exact opposite of parity. p.Result is
 			// ToolExecEndPayload.Result, which loop.go sets to the very same
@@ -3794,9 +3795,9 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			//     live and a different way after a reload — the same class of
 			//     divergence this change set out to remove.
 			switch {
-			case delegationErr != "":
-				de := delegationErr
-				resultF.Error = &de
+			case structuredErr != "":
+				se := structuredErr
+				resultF.Error = &se
 			case status == "error" && p.Result != "" && liveResult != any(p.Result):
 				// Only when Result no longer carries the text itself.
 				//

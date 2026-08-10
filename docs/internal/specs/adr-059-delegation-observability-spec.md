@@ -141,6 +141,77 @@ is `additionalProperties: true` and needs no contract change; FR-007 does not ye
 prefix-positioning rule as a requirement; the compile-break site count is stale again; and the spec
 references no issue numbers while §10.5 says two gaps are "tracked separately".
 
+## 1.0d Amendment A4 — operator decisions (BINDING)
+
+Asked and answered 2026-08-10, after three grill passes. These settle every question the grills left
+open.
+
+**A4-1 — W1/W2/W4 are implemented in this branch, now.** Not deferred to a follow-up.
+
+**A4-2 — W5 takes SHAPE B, decided up front rather than after the SPA check.** The discriminator goes
+in `ToolCall.result` (`additionalProperties: true`, so **no contract change**), and `ForLLM` keeps its
+existing sentence unchanged. This is strictly better than shape A on the evidence: `GenericToolCall`
+already looks in `result` for structured payloads, ADR-058's own payload lands there too, and nothing
+a human reads changes — so the "JSON blob in chat" risk is avoided rather than tested for.
+**§6's gate is therefore closed by decision, not by investigation.** A1-5's prefix-positioning rule
+becomes moot for shape B (a structured field cannot be severed by text truncation) and is retained in
+FR-007 only as a constraint on any future shape-A revival.
+
+**A4-3 — the pre-existing live-UX gap is fixed as part of W5.** A failed write currently renders
+`write_file · a.svg · 1.2 KB · Failed` with no reason at all (grill #3, C3-03). W5 therefore becomes a
+frontend change as well as a backend one: `FileWriteConfirm` must surface the reason. This is a scope
+increase over the ADR, taken deliberately — W5's purpose is making write failures legible, and
+stopping at the backend would leave the human-facing half of that unfixed.
+
+**A4-4 — AC-06 gets a real guard, not a waiver.** The progress handler runs synchronously inside the
+provider's SSE read loop with no `recover()`, so a panicking handler unwinds through the parser and
+kills the turn — strictly worse than the blindness being fixed. A deferred recover at the call site
+plus a test that a panicking handler leaves the turn alive.
+
+---
+
+## 1.0e Amendment A5 — A4-2 REVERSED; W5 takes shape A (BINDING)
+
+Raised and decided 2026-08-10, during W5 implementation. **This supersedes A4-2.**
+
+**Shape B is not implementable as worded, and the evidence I gave for it was wrong.** A4-2 said the
+discriminator goes in `ToolCall.result` while `ForLLM` keeps its existing sentence. Tracing the
+plumbing shows there is no carrier for that:
+
+- The model reads `ToolResult.ForLLM` and nothing else (`ContentForLLM`, `pkg/tools/result.go`).
+- The wire `result` and `error` fields are both derived from that same string — live
+  (`pkg/gateway/websocket.go`, `liveResult = p.Result`) and persisted (`pkg/agent/loop.go`,
+  `tcRecord.Error = truncateRunes(contentForLLM, …)`).
+- ADR-058's payload reaches `result` **precisely because its `ForLLM` IS the JSON**
+  (`DelegationDeniedResult`). A4-2 cited that precedent as support for leaving `ForLLM` alone; the
+  precedent says the opposite. That was a factual error in the option as it was put to the operator.
+
+The only way to satisfy shape B literally is a new Go field on `ToolResult` — exactly what W3 deleted
+for being unreachable by a language model. So shape B collapses into the defect it was meant to
+replace.
+
+**W5 therefore takes shape A**, ADR-058's actual mechanism: the refusal's `ForLLM` becomes a JSON
+object carrying a fixed `error` discriminator plus the existing sentence as its `reason`, and the
+gateway parses it into a structured `result` the same way it parses delegation denials.
+
+Two facts that make this the cheap option rather than the expensive one:
+
+- A4-3 already commits to changing `FileWriteConfirm`. The SPA work that made shape B look cheaper is
+  happening either way, so B's sole advantage was never real.
+- `FileWriteConfirm`'s renderer receives `{ args, status }` only and never sees the result
+  (`src/components/chat/tools/FileWriteConfirm.tsx`) — confirming §6 item 3's correction. It shows a
+  bare `Failed` with no reason today, before W5 touches anything.
+
+**A1-5's prefix-positioning rule is live again**, not moot: under shape A the payload is text and
+truncation can sever it. FR-007 keeps that clause as a binding constraint, and TDD #9 (survives
+truncation at 2000 runes) is a required test rather than a shape-B leftover.
+
+**§6's gate is closed by this amendment.** Items 1–2: the payload rides in `result` (already a
+permissive `oneOf`) and in `error` (a plain string) — the frame shape does not change. Item 3: both
+renderers are addressed — a new contract variant gives the SPA a typed shape, and `FileWriteConfirm`
+gains the reason. Item 4: yes, the 5-step contract pipeline is required, because a hand-written Go
+struct for a wire payload is forbidden by Constraint #8.
+
 ---
 
 ## 1. Overview
@@ -445,7 +516,9 @@ required unless proven otherwise.**
 - **FR-005**: Progress MUST NOT carry argument content.
 - **FR-006**: `Index`'s documentation MUST state it is provider-scoped and not a tool-call ordinal.
 - **FR-007**: A precondition refusal MUST be machine-distinguishable from an I/O failure in the
-  result the calling agent reads.
+  result the calling agent reads, **and the discriminator MUST be prefix-positioned** — it has to
+  begin the string, so neither the 2000-rune persisted truncation nor the live frame bound can sever
+  or remove it (A1-5). A discriminator that survives only on short paths fails silently on long ones.
 - **FR-008**: A refusal MUST remain human-readable where it is displayed.
 - ~~**FR-009**: No test listed in §2.3 may change to accommodate the migration.~~ **WITHDRAWN (A1-1)**
   — it was unsatisfiable: W1 breaks the wiring test's compile and W2 deletes the function it asserts
@@ -505,10 +578,9 @@ are gaps in coverage, not gaps in the matrix.
 - **Making non-streaming providers report progress.** Azure, Bedrock and `anthropic_messages` have no
   `ChatStream`, and an agent with multiple fallback candidates takes the non-streaming path. Named,
   accepted, and to be recorded in ADR-059 §4 (A1-4). Not addressed here.
-- **Teaching `delegate status` to distinguish "quiet" from "cannot report".** On a non-reporting
-  install an orchestrator still sees silence, which the incident says it reads as "hung". Real gap,
-  tracked separately.
-- **`Is3P` (external-CLI) children**, which bypass the progress path entirely.
+- **Teaching `delegate status` to distinguish "quiet" from "cannot report"** — tracked as **#614**. On a non-reporting
+  install an orchestrator still sees silence, which the incident says it reads as "hung". Real gap.
+- **`Is3P` (external-CLI) children**, which bypass the progress path entirely (covered by #614).
 - **Wiring `tokens_in`** — unrelated, separately tracked.
 
 ## 10.6 Definition of done

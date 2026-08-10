@@ -274,16 +274,35 @@ func maybeOffloadResult(
 	}, true
 }
 
-// parseDelegationFailure inspects a tool result string and, when it is a JSON
-// object emitted by the delegation tools' structured-denial path (discriminator
-// "error":"delegation_denied" — the generated DelegationFailure wire type, built
-// in pkg/tools.DelegationDeniedResult), returns the
-// parsed object (for the frame's `result` field), the human-readable reason (for
-// the frame's `error` field), and true. Otherwise it returns (nil, "", false)
-// and the caller forwards the raw string unchanged. This is what lets the SPA
-// render a denied delegation as a distinct block instead of relying on the LLM
-// to narrate it (UAT fix).
-func parseDelegationFailure(result string) (obj map[string]any, reason string, ok bool) {
+// structuredFailureDiscriminators are the fixed `error` values that mark a
+// tool result string as a STRUCTURED failure payload rather than prose.
+//
+// Each corresponds to a contract schema whose producer writes it as the tool's
+// ForLLM verbatim, so the calling agent and the SPA read the same bytes:
+//   - "delegation_denied" → DelegationFailure   (pkg/tools.DelegationDeniedResult)
+//   - "file_exists"       → FileExistsRefusal   (pkg/tools.FileExistsRefusalResult)
+//
+// A discriminator that is not in this set is left as prose and forwarded
+// unchanged, which is why an unrelated `{"error":"timeout"}` from some other
+// tool is not mistaken for one of these.
+var structuredFailureDiscriminators = map[string]struct{}{
+	"delegation_denied": {},
+	"file_exists":       {},
+}
+
+// parseStructuredToolFailure inspects a tool result string and, when it is one
+// of the structured failure payloads above, returns the parsed object (for the
+// frame's `result` field), the human-readable reason (for the frame's `error`
+// field), and true. Otherwise it returns (nil, "", false) and the caller
+// forwards the raw string unchanged.
+//
+// This is what stops the SPA from rendering a raw JSON blob where it used to
+// render a sentence: the payload becomes a typed object the client can match
+// on, and the prose reason is lifted into the field that renderers already
+// show. BOTH the live path (websocket.go) and the replay reconstruction
+// (replay.go) must call it — a codebase that maintains live/replay parity
+// deliberately cannot afford one of them parsing and the other not.
+func parseStructuredToolFailure(result string) (obj map[string]any, reason string, ok bool) {
 	trimmed := strings.TrimSpace(result)
 	if trimmed == "" || trimmed[0] != '{' {
 		return nil, "", false
@@ -292,7 +311,8 @@ func parseDelegationFailure(result string) (obj map[string]any, reason string, o
 	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
 		return nil, "", false
 	}
-	if disc, _ := parsed["error"].(string); disc != "delegation_denied" {
+	disc, _ := parsed["error"].(string)
+	if _, known := structuredFailureDiscriminators[disc]; !known {
 		return nil, "", false
 	}
 	reason, _ = parsed["reason"].(string)
