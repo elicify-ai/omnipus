@@ -16,8 +16,12 @@ as if it were a full pass):
    gate that measures something GitHub does not is how a green local verdict stops predicting the
    real one — including pr.yml's **flake filter**, which the gate initially shipped without and which
    made it stricter than GitHub (a PR green upstream could show red here on a timing flake; a
-   false-RED gate gets ignored, which is worse than no gate). The filter can never excuse a real
-   race — the DATA RACE carve-out returns before it.
+   false-RED gate gets ignored, which is worse than no gate). The filter can never excuse a real race: the carve-out returns before it, AND the
+   isolated re-run is itself grepped for `DATA RACE` (checking only its exit code would
+   let a race reported in the second run be stamped `FLAKE (passed isolated)` — the
+   carve-out's own rationale is that a race can be reported without flipping the exit
+   code). **`.github/workflows/pr.yml` still has that second hole** — fix both together
+   or the two gates diverge.
    **Two limits remain:** (a) `go-test` and `go-race` are separate gates, so running
    `go-test` alone still carries zero race signal — use `all` or run `go-race` explicitly; (b) the
    package list is pr.yml's, which does **not** include `pkg/tools` or `pkg/providers`, so races

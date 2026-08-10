@@ -484,6 +484,33 @@ func (ts *turnState) recordToolCallProgress(p protocoltypes.ToolCallProgress) {
 	ts.toolCallProgress.lastActivityUnixNano.Store(time.Now().UnixNano())
 }
 
+// clearToolCallProgress drops the recorded tool-argument progress, so a later
+// reader sees "nothing being generated" rather than a stale claim.
+//
+// This MUST be called when an LLM round ends. Without it the signal is a lie
+// with the same shape as the bug it was built to fix, only inverted: a worker
+// that streamed a 300-byte `bash` argument in two seconds and is now BLOCKED
+// for twenty minutes inside that command still renders
+//
+//	generating tool call "bash" — 300 bytes, last update 3m41s ago
+//
+// The worker is not generating anything; it is stuck in tool execution. And
+// "generating" is precisely the word an orchestrator has been taught by this
+// feature to read as "leave it alone". The original defect killed healthy
+// workers; this one would suppress the kill a genuinely hung worker needs.
+//
+// Zeroing lastActivityUnixNano is sufficient: ProgressForSession treats a zero
+// timestamp as "no progress recorded" and returns ok=false, which is exactly
+// the state we want between rounds. The byte counters are left alone — they
+// are unreachable while the timestamp reads zero, and clearing them would
+// widen the window in which a concurrent reader sees a torn pair.
+func (ts *turnState) clearToolCallProgress() {
+	if ts == nil {
+		return
+	}
+	ts.toolCallProgress.lastActivityUnixNano.Store(0)
+}
+
 // ToolCallProgress returns the current live tool-call-argument progress
 // snapshot for this turn (G1), or the zero value with LastActivity.IsZero()
 // true when nothing has been recorded yet — either because this turn never
@@ -860,6 +887,19 @@ func (al *AgentLoop) ProgressForSession(sessionKey string) (tools.ToolCallProgre
 	}
 	ts, ok := val.(*turnState)
 	if !ok || ts == nil {
+		return tools.ToolCallProgressSnapshot{}, false
+	}
+	// A finished turn is not "generating", whatever it last recorded.
+	//
+	// activeTurnStates can legitimately hold a COMPLETED turnState: spawnSubTurn
+	// deliberately re-registers the child after runTurn returns, for a persist-
+	// retry window of roughly a second. During that window the delegate task is
+	// still marked running, so the caller's own status guard does not exclude
+	// it. At the poll rate the incident actually exhibited — 75 polls in 46
+	// seconds, roughly one every 600ms — a window that size is hit routinely,
+	// not rarely. Every other cross-goroutine reader of this registry checks
+	// IsAlive; this one must too.
+	if !ts.IsAlive() {
 		return tools.ToolCallProgressSnapshot{}, false
 	}
 	snap := ts.ToolCallProgress()

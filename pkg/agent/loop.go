@@ -8324,6 +8324,20 @@ turnLoop:
 			})
 
 		callLLM := func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
+			// Clear tool-argument progress when the round ends, on EVERY exit
+			// path (success, error, retry, recovery). Placed here rather than
+			// at the four call sites so no future path can forget it.
+			//
+			// Without this the signal keeps asserting "generating" for the rest
+			// of the turn — including while the tool it just finished streaming
+			// is actually EXECUTING. A worker blocked twenty minutes inside a
+			// bash command would still report as generating, and an
+			// orchestrator taught by this very feature to read that as "leave
+			// it alone" would leave a genuinely hung child alone. That is the
+			// original defect inverted: it killed healthy workers; this would
+			// suppress the kill a hung one needs.
+			defer ts.clearToolCallProgress()
+
 			// Normalize at the top of every provider call — initial and every
 			// retry/recovery — so that timeout-recovery and context-overflow-recovery
 			// paths (which rebuild callMessages via BuildMessages and continue back

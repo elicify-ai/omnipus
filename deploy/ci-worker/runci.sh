@@ -192,13 +192,25 @@ run_gorace() {
   echo "=== FLAKE FILTER (-race): re-running failed packages isolated (-p 1): $failed ==="
   local rc=0
   for p in $failed; do
-    if CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 600s -p 1 "$p" >/tmp/rr_race.log 2>&1; then
+    # The re-run is checked for DATA RACE too, not just its exit code.
+    #
+    # The carve-out above exists because "a race can be reported without
+    # flipping go test's exit code". That is equally true of the isolated
+    # re-run — so testing only the exit code here would let a race reported
+    # in the SECOND run be stamped "FLAKE (passed isolated)" and excused,
+    # which is precisely what the carve-out forbids. pr.yml has the same
+    # hole; fix both together or the gates diverge.
+    if CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 600s -p 1 "$p" >"/tmp/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
+       && ! grep -aq "DATA RACE" "/tmp/rr_race_$(echo "$p" | tr '/' '_').log"; then
       echo "FLAKE (passed isolated): $p"
       echo "  contended-run failures (each is a REAL BUG that has not been diagnosed yet):"
       grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' <<<"$out" | awk '{print $3}' | sort -u | sed 's/^/    /'
     else
       echo "REAL FAILURE (failed twice): $p"
-      grep -aE '^--- FAIL|DATA RACE' /tmp/rr_race.log | head
+      # Per-package log: a single shared path was overwritten each iteration,
+      # so on a multi-package failure only the last package's output survived
+      # for post-mortem.
+      grep -aE '^--- FAIL|DATA RACE' "/tmp/rr_race_$(echo "$p" | tr '/' '_').log" | head
       rc=1
     fi
   done
