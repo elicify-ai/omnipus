@@ -87,23 +87,26 @@ function FileOpBlock({
   // clipped to fit is a reason you have to go looking for elsewhere, which is
   // the state this replaces.
   const showReason = isError && !isRunning && reason
+  // The reason wraps onto its own line via flex-wrap + basis-full rather than
+  // living inside a nested row container. That keeps the status indicator as
+  // this element's FIRST CHILD, which FileTools.edge.test.tsx asserts
+  // positionally — a wrapper div would have broken four existing tests for a
+  // purely cosmetic reason.
   return (
-    <div className="mt-2 py-1 text-xs font-mono">
-      <div className="flex items-center gap-2">
-        {statusConfig.indicator}
-        <span className="text-[var(--color-muted)] shrink-0">{label}</span>
-        <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">
-          {basename(path)}
-        </span>
-        {detail && !isRunning && (
-          <span className="text-[var(--color-muted)] shrink-0">{detail}</span>
-        )}
-        <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
-          {statusConfig.label}
-        </span>
-      </div>
+    <div className="mt-2 flex flex-wrap items-center gap-2 py-1 text-xs font-mono">
+      {statusConfig.indicator}
+      <span className="text-[var(--color-muted)] shrink-0">{label}</span>
+      <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">
+        {basename(path)}
+      </span>
+      {detail && !isRunning && (
+        <span className="text-[var(--color-muted)] shrink-0">{detail}</span>
+      )}
+      <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+        {statusConfig.label}
+      </span>
       {showReason && (
-        <div className={cn('mt-0.5 pl-5 break-words', statusConfig.textClass)}>{reason}</div>
+        <span className={cn('basis-full pl-5 break-words', statusConfig.textClass)}>{reason}</span>
       )}
     </div>
   )
