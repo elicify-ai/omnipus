@@ -171,8 +171,14 @@ describe('TaskRunsList — populated', () => {
 // list shows only THAT day's runs, client-side filtered from the same
 // task-scoped fetch (no second network round-trip).
 describe('TaskRunsList — dayRange filter (H2)', () => {
-  const DAY_START = new Date(2026, 6, 20, 0, 0, 0).getTime()
-  const DAY_END = new Date(2026, 6, 21, 0, 0, 0).getTime()
+  // Date.UTC, not new Date(y, m, d) — the latter builds a LOCAL midnight, and
+  // the run fixtures below are UTC instants. Mixing the two makes the window
+  // slide by the runner's offset: at UTC+7 the window opens at 17:00Z on the
+  // 19th, so the "before the day" run at 23:00Z lands INSIDE it and two rows
+  // render instead of one. The test passed only in UTC and westward, which is
+  // where CI happens to run.
+  const DAY_START = Date.UTC(2026, 6, 20, 0, 0, 0)
+  const DAY_END = Date.UTC(2026, 6, 21, 0, 0, 0)
 
   it('renders only runs whose started_at falls within [startMs, endMs)', async () => {
     const inDay = makeRun({ run_id: 'run-in-day', started_at: '2026-07-20T14:00:00Z', result: 'In day.' })
