@@ -106,6 +106,41 @@ labelled as such in §10.7; it must not be counted as coverage.
 pre-agreed alternative shape if the answer is bad. That is the next decision, not a defect to paper
 over.
 
+## 1.0c Amendment A3 — post grill #3 (BINDING; supersedes A1/A2 where they conflict)
+
+Grill #3 **verified A2's claim**: all nine body edits physically exist, so pass #2's central finding
+(an amendment describing edits that were never made) is closed and did not recur. It then found four
+new blockers.
+
+**A3-1 — the implementer count has been wrong three passes running: 2 → 3 → 4. It is FOUR.**
+`openai_compat.Provider`, `anthropicprovider.Provider`, `HTTPProvider`, and — added by `45b01b14`,
+one commit before this spec was amended — **`ClaudeProvider`**, the wrapper the factory actually
+returns for Anthropic. Each previous count was published as "verified by enumeration" and each was
+wrong: the first walked only `pkg/providers/*/` and missed the top-level file; the second was correct
+when written and went stale when *this branch's own fix* added a fourth. **Rule: re-derive the count
+at the commit being described, never carry it forward.** §2.1, §2.2 and §10.6 are corrected.
+ADR-059 §3/§4/W6 still say three and must be amended to match.
+
+**A3-2 — §6's "known precedent" was inverted.** It claimed no SPA component special-cases ADR-058's
+structured payload. `GenericToolCall.tsx` does, via a bespoke `DelegationFailureDisplay` whose comment
+says it exists to avoid showing "a raw JSON blob". The house response to a structured payload is to
+*write a renderer*, so W5 should assume one is required. Corrected in §6.
+
+**A3-3 — the gate was assessing the wrong renderer, again, in the other direction.** `write_file` is a
+REGISTERED tool UI: **live** chat renders `FileWriteConfirm` (which shows no reason at all);
+`GenericToolCall` renders it only on **replay**. A1-3 corrected FileWriteConfirm→GenericToolCall and
+over-corrected. Both must be assessed. Consequence: **US-5 AC-1 is already false live, today, before
+W5** — and W5's real risk is live/replay divergence in a codebase that deliberately maintains parity.
+
+**A3-4 — §9's wiring-test row said "must pass unchanged" for a third pass**, contradicting §2.3,
+SC-002 and TDD #1. Corrected, and the struck FR-009's row is struck.
+
+**Still open and NOT fixed here** (recorded rather than silently carried): the W5 gate still has no
+pre-agreed alternative shape — pass #2 proposed putting the discriminator in `ToolCall.result`, which
+is `additionalProperties: true` and needs no contract change; FR-007 does not yet carry A1-5's
+prefix-positioning rule as a requirement; the compile-break site count is stale again; and the spec
+references no issue numbers while §10.5 says two gaps are "tracked separately".
+
 ---
 
 ## 1. Overview
@@ -162,6 +197,7 @@ release is a hook-contract break requiring deprecation, not a deletion.**
 | `openai_compat.Provider.ChatStream` | `pkg/providers/openai_compat/provider.go` | W1: implementer |
 | `anthropicprovider.Provider.ChatStream` | `pkg/providers/anthropic/provider.go` | W1: implementer |
 | `HTTPProvider.ChatStream` | `pkg/providers/http_provider.go` | W1: implementer (delegates through) |
+| `ClaudeProvider.ChatStream` | `pkg/providers/claude_provider.go` | W1: implementer — **the type the factory returns for Anthropic** |
 | `callLLM` closure | `pkg/agent/loop.go` | W1: sole caller; W2: injection removed here |
 | `OnToolCallProgressKey`, `ToolCallProgressFromOptions` | `pkg/providers/protocoltypes/progress.go` | **W2: deleted** |
 | `ToolCallProgress.Index` | `pkg/providers/protocoltypes/progress.go` | W4: doc corrected |
@@ -174,7 +210,7 @@ release is a hook-contract break requiring deprecation, not a deletion.**
 
 | Change | Risk | Direct dependents |
 |---|---|---|
-| `ChatStream` signature | **MEDIUM** | 3 in-tree implementers + 1 caller, all compile-enforced. **Breaks out-of-tree providers — loudly, at build time.** That is the intended trade. |
+| `ChatStream` signature | **MEDIUM** | **4** in-tree implementers + 1 caller, all compile-enforced. **Breaks out-of-tree providers — loudly, at build time.** That is the intended trade. |
 | Delete options-map plumbing | LOW | Nothing outside `protocoltypes` and `loop.go` after W1 |
 | `Index` doc comment | NONE | No production consumer exists |
 | `write_file` result text | **MEDIUM–HIGH** | Every agent that reads a `write_file` refusal; the SPA's `GenericToolCall.tsx` (which renders result/error content — `FileWriteConfirm.tsx` never reads the result, see A1-3); the persisted `ToolCall.error`; the replay path |
@@ -378,15 +414,25 @@ amendment:
 1. Does the changed refusal text flow into `ToolCall.error` (a field on a schema with
    `additionalProperties: false`), and does it still validate?
 2. Does the live `tool_call_result` frame change shape?
-3. **Does `src/components/chat/tools/GenericToolCall.tsx` render the refusal as a sentence today, and
+3. **(A3-3 — corrected again.) `write_file` is a REGISTERED tool UI, so LIVE chat renders
+   `FileWriteConfirm`, which shows `write_file · a.svg · 1.2 KB · Failed` and **no reason at all**;
+   `GenericToolCall` renders `write_file` only on REPLAY. So US-5 AC-1 is already false live, today,
+   before W5 — and the real W5 risk is LIVE/REPLAY DIVERGENCE in a codebase that deliberately
+   maintains that parity. Both renderers must be assessed, not one.**
+   Does `GenericToolCall.tsx` render the refusal as a sentence today, and
    would it show a JSON blob after the change?** (Not `FileWriteConfirm.tsx` — verified: it reads only
    `args` and `status`, never the result, so gating on it returns a false all-clear.) This is the user-visible question and the most likely reason to
    choose a different shape.
 4. Is the 5-step contract pipeline (`scripts/gen-contracts.sh` + `make verify-contracts`) required?
 
-**Known precedent, to be confirmed rather than assumed:** ADR-058 already ships structured JSON
-inside denial text today, and no SPA component appears to special-case it — suggesting such payloads
-already render as text. That is a lead, not an answer.
+**Correction (A3-2): the precedent argues the OTHER way.** An earlier draft of this gate claimed no
+SPA component special-cases ADR-058's structured payload. It does: `GenericToolCall.tsx` detects
+`error: "delegation_denied"` and renders it through a bespoke `DelegationFailureDisplay`, whose own
+comment says it exists to show "a distinct, human-readable block instead of a raw JSON blob". So the
+house response to a structured payload is *to write a renderer for it*, not to let it through as
+text. Note also that it lands in `result` (an object), whereas W5's discriminator lands in `error`
+(a string) which is rendered verbatim with no handling. **W5 should therefore assume a renderer is
+required unless proven otherwise.**
 
 ---
 
@@ -421,14 +467,14 @@ already render as text. That is a lead, not an answer.
 | Requirement | Story | Scenario | Test |
 |---|---|---|---|
 | FR-001, FR-002 | US-1 | Progress survives the transport migration | provider progress tests (§2.3) + new per-provider parameter test |
-| FR-003 | US-1 | Hook replacing options cannot silence progress | `toolcall_progress_wiring_test.go` (existing, must pass unchanged) |
+| FR-003 | US-1 | Hook replacing options cannot silence progress | `toolcall_progress_wiring_test.go` — **REWRITTEN per §2.3**, not unchanged; and per A2-4 it cannot fail after W1, so it is documentation, not coverage |
 | FR-001 | US-1 | Provider missing the parameter does not build | compile-time; `streaming_compliance_test.go` |
 | FR-004 | US-2 | No superseded plumbing remains | new grep-assertion test |
 | FR-005 | US-1 | — | existing progress tests assert byte counts only |
 | FR-006 | US-3 | — | doc assertion test on the field comment |
 | FR-007 | US-4 | A refusal is classifiable, a failure is not | new `write_file` discriminator test |
 | FR-008 | US-5 | The refusal stays readable | SPA render check (§6 item 3) |
-| FR-009 | US-2 | — | SC-002 |
+| ~~FR-009~~ | — | — | **struck — withdrawn by A1-1** |
 
 ### 9.1 ADR-059 acceptance criteria — mapping (A1-7)
 
@@ -469,7 +515,10 @@ are gaps in coverage, not gaps in the matrix.
 
 W1/W2/W4 are done when **all** hold:
 
-1. `ChatStream` carries the progress parameter and all three implementers accept it.
+1. `ChatStream` carries the progress parameter and **all four** implementers accept it:
+   `openai_compat.Provider`, `anthropicprovider.Provider`, `HTTPProvider`, **and
+   `ClaudeProvider`** (added by `45b01b14` — see A3-1; the wrapper the factory actually
+   returns for Anthropic).
 2. Every FROZEN test in §2.3 passes unchanged; every REWRITTEN test carries its named replacement.
 3. A tree-wide search for the options-map key returns no production matches.
 4. `go-test` and `go-race` are green on the CI worker at the final commit, parsed from the log rather

@@ -208,8 +208,8 @@ ineffective `steer` and the collision semantics of `write_file` — are addresse
 in this ADR respectively (see §8).
 
 **Negative / accepted.**
-- `ChatStream`'s signature changes; all three implementers (`openai_compat`, `anthropic`,
-  `HTTPProvider`) must be updated. This is a compile-enforced break, which is the point.
+- `ChatStream`'s signature changes; all FOUR implementers (`openai_compat`, `anthropic`,
+  `HTTPProvider`, `ClaudeProvider`) must be updated. This is a compile-enforced break, which is the point.
 - Per-delta handler invocation on the hot streaming path, bounded by D3's discipline.
 - Anthropic-backed **child** turns will now acquire the parent's streamer and push text into the
   parent's WS stream where previously they did not. `WSHandler.GetStreamer`
@@ -224,7 +224,8 @@ in this ADR respectively (see §8).
 ## 4. Out of scope
 
 **Progress reaches only streaming-capable providers.** Verified by enumeration: `anthropic`,
-`openai_compat` and `HTTPProvider` implement `ChatStream`; **Azure, Bedrock and `anthropic_messages`
+`openai_compat`, `HTTPProvider` and `ClaudeProvider` (the wrapper the factory returns for
+Anthropic) implement `ChatStream`; **Azure, Bedrock and `anthropic_messages`
 do not**, and an agent configured with more than one fallback candidate is routed through the
 non-streaming `Chat` path regardless of provider. Those installs report **no progress at all**, and
 Bedrock is first-class per ADR-053. This is a named, accepted limitation of D1–D3, not an oversight —
