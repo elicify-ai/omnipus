@@ -458,8 +458,8 @@ type atomicToolCallProgress struct {
 
 // recordToolCallProgress is the write side of G1's progress signal, called
 // synchronously from the provider's SSE read loop via the
-// protocoltypes.OnToolCallProgress callback loop.go installs into llmOpts.
-// Three atomic stores, no lock, no I/O, no allocation beyond the one string
+// protocoltypes.OnToolCallProgress callback loop.go passes to ChatStream.
+// Four atomic stores, no lock, no I/O, no allocation beyond the one string
 // copy for Name — safe to call on every argument delta of a live stream.
 // Nil-safe so a callback captured before a turn is fully constructed (should
 // never happen, but costs nothing to guard) degrades to a no-op instead of a

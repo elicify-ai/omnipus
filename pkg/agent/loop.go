@@ -8268,9 +8268,19 @@ turnLoop:
 		// in a way that had already produced one near-miss: a BeforeLLM hook
 		// returning HookActionModify replaces llmOpts wholesale — possibly
 		// with a nil map — so the key had to be re-injected after the hook
-		// block, in a specific position, with a comment explaining why.
-		// A parameter cannot be dropped by a hook, and the compiler enforces
-		// that every implementer accepts it.
+		// block, in a specific position, with a comment explaining why. A
+		// parameter cannot be dropped by a hook.
+		//
+		// It is NOT, however, compile-enforced on implementers, and an earlier
+		// version of this comment claimed it was. StreamingProvider is
+		// consulted by runtime type assertion a few hundred lines below
+		// (`activeProvider.(providers.StreamingProvider)`), so a provider that
+		// keeps the old signature simply stops satisfying the interface: the
+		// build succeeds and the turn silently drops to the non-streaming
+		// path. That is exactly how ClaudeProvider shipped with no ChatStream
+		// at all. The real enforcement is pkg/providers/compliance.go's
+		// `var _` assertions plus streaming_forwarding_test.go, and any new
+		// implementer has to be added to them by hand.
 		//
 		// The callback only does an atomic store per delta (see
 		// turnState.recordToolCallProgress) — cheap and non-blocking, safe

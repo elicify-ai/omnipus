@@ -214,6 +214,52 @@ struct for a wire payload is forbidden by Constraint #8.
 
 ---
 
+## 1.0f Amendment A6 — 7-reviewer wave findings (2026-08-10)
+
+The wave ran after W1–W5 landed. It found **five real defects**, four of them in W5, and two
+reviewers independently found the worst one. All are fixed in `53801b68`; each fix was verified by
+reverting it and watching the new test fail.
+
+**A6-1 — the A4-3 frontend fix was inert, and the bug was worse than recorded.** `FileWriteConfirm`
+gated the reason on `status.type === 'incomplete'`. AssistantUI's `toMessagePartStatus`
+short-circuits a tool-call part to `complete` whenever the part has a truthy `result`, and this SPA
+never sets `isError` on a part — so a refused write rendered with the **success** dot and a "Done"
+label, and the reason never mounted. **A4-3's own premise ("renders `… · Failed`") was therefore
+wrong**; it came from grill #3 and nobody traced the wiring. The row now reads the outcome from the
+chat store, as `GenericToolCall` always has. The tests passed because every case fed `incomplete`
+alongside a truthy result — a pair the runtime cannot emit.
+
+**A6-2 — replay rendered the payload as a raw JSON blob.** Live routes `write_file` to
+`FileWriteConfirm`; replay routes it to `GenericToolCall`, where an unrecognised object falls through
+to `plainResult`. A3-2 had predicted exactly this ("the house response is to write a renderer") and
+A5 nonetheless closed §6 claiming both renderers were addressed. Only one was.
+
+**A6-3 — a delegated worker's failure lost its reason on reload.** Replay has TWO frame builders;
+`emitNestedToolCalls` — the one that emits the calls a delegated worker made — set no `Error` at all,
+neither RC-5c's copy nor W5's parse. Both now share one helper. This is the third time this parity
+rule has been re-established in one builder and not the other.
+
+**A6-4 — a ~950-character path silently broke the discriminator.** The payload embeds the path twice,
+so it overflows the 2000-rune cap well inside `PATH_MAX`, and the gateway recovers the discriminator
+with a whole-JSON unmarshal — a truncated payload does not shorten, it stops parsing. **A1-5's
+prefix-positioning rule does not help**, because nothing downstream does a prefix match; the producer
+now bounds its fields so the cut never fires. My test comment had asserted this case was unreachable
+on macOS; the arithmetic says otherwise.
+
+**A6-5 — the wrapper providers had no forwarding coverage.** `ClaudeProvider`, `HTTPProvider` and
+`openai_compat` could each pass `nil` instead of `onProgress` and leave the entire suite green — the
+same class that shipped here once already. All three are now driven end-to-end against a real SSE
+server.
+
+**Also corrected:** the `var _ StreamingProvider` assertions moved from a test file to
+`pkg/providers/compliance.go`, so they are a `go build` failure — which is what D1 said they had to
+be and were not; four comments that asserted guarantees the code did not provide (including "the
+compiler enforces that every implementer accepts it", which is false for an optional interface read
+by type assertion); and this spec's own citation of a stale commit SHA for W5, which A3-1's
+"re-derive at the commit being described" rule was written to prevent.
+
+---
+
 ## 1. Overview
 
 ADR-059 fixes a defect where a delegated worker generating a large tool-call argument was
@@ -231,7 +277,7 @@ dominant risk is regressing something that currently works, not failing to build
 | **W2** | Delete the now-dead options-map plumbing | **Done** — `86b10dc7`. `OnToolCallProgressKey` and `ToolCallProgressFromOptions` are gone; one way to pass this, not two |
 | **W3** | Remove `ToolResult.Reason` | **Done** (§1.2) |
 | **W4** | Correct `ToolCallProgress.Index`'s doc comment | **Done** — `86b10dc7` |
-| **W5** | Structured discriminator in `write_file`'s refusal, per ADR-058 | **Done** — `fb14c632`, shape A per A5. Includes the gateway live/replay parity fix and the A4-3 SPA change |
+| **W5** | Structured discriminator in `write_file`'s refusal, per ADR-058 | **Done** — `0e085406`, shape A per A5. Includes the gateway live/replay parity fix and the A4-3 SPA change |
 | **A4-4** | `recover()` guard on the progress handler | **Done** — `6411a342`, with a production-caller test in each provider |
 
 **§6's gate is closed** — by A5, not by a separate investigation. **W6 no longer blocks anything.**
@@ -483,7 +529,7 @@ Scenario: The refusal stays readable to a human
 ## 6. W5 gate — contract impact — **CLOSED** (A5, 2026-08-10)
 
 **This gate no longer blocks anything.** It is retained because the questions it asked were the right
-ones and two of the answers are load-bearing. Answers, as delivered in `fb14c632`:
+ones and two of the answers are load-bearing. Answers, as delivered in `0e085406`:
 
 1. **No.** The payload rides in `result` (a permissive `oneOf`) and in `error` (a plain string, no
    `additionalProperties` constraint). Nothing invalidates. A new `FileExistsRefusal` variant was

@@ -45,12 +45,15 @@ type StatefulProvider interface {
 //
 // onProgress is a PER-CALL parameter, deliberately not a setter on the
 // provider (ADR-059 D1). AgentInstance.Provider is a single shared pointer
-// used concurrently by every turn that agent is running — a delegated
-// sub-turn, its parent, and any other parallel delegation all reach the same
-// value. A SetProgressHandler-style capability would therefore be
-// last-writer-wins: two concurrent delegations would silently report each
-// other's progress, which is worse than reporting none. Passing it down the
-// call stack keeps it bound to the one request that asked for it.
+// used concurrently by every turn running on THAT agent — parallel
+// delegations to the same target, and a self-delegating sub-turn alongside its
+// parent, all reach the same value. (A cross-agent delegation does not: per
+// ADR-032 the sub-turn runs as the target agent, whose provider is a different
+// object.) A SetProgressHandler-style capability would therefore be
+// last-writer-wins wherever the pointer IS shared: two concurrent delegations
+// would silently report each other's progress, which is worse than reporting
+// none. Passing it down the call stack keeps it bound to the one request that
+// asked for it.
 //
 // Both callbacks may be nil; a nil onProgress means the caller does not want
 // tool-argument progress and costs the provider nothing.

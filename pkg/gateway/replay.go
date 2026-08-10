@@ -903,9 +903,11 @@ func emitNestedToolCalls(
 //     (loop.go's RC-5 write), not just delegation denials.
 //
 //  2. ADR-059 W5: a STRUCTURED failure payload (a denied delegation, a
-//     write_file precondition refusal) is persisted as the raw JSON string,
-//     because the persisted value is contentForLLM and these tools'
-//     contentForLLM IS the JSON. Parse it into the typed object the live path
+//     write_file precondition refusal) is persisted as the raw JSON string
+//     (verbatim up to the 2000-rune cap, which the producers bound their
+//     fields to stay under), because the persisted value is contentForLLM and
+//     these tools' contentForLLM IS the JSON. Parse it into the object the
+//     live path
 //     delivers and lift the prose reason into Error, so a reload does not show
 //     a JSON blob where the live view showed a sentence.
 func applyPersistedFailureReason(f *generated.ToolCallResultFrame, tc session.ToolCall) {

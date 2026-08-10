@@ -63,16 +63,18 @@ func toolUseStreamServer(t *testing.T, toolName string, argChunks []string) *htt
 // content_block_stop. The deltas in between mutate the union's direct fields
 // and never touch raw.
 //
-// The assertion that catches this is MID-FLIGHT VISIBILITY, not event count.
-// Measured against this same stream (anthropic-sdk-go v1.48.0): reading via
-// the accessors yields exactly two events, [2, 360] — 2 bytes for "{}" when
-// the block opens, then the whole 360 bytes at once when it closes. Reading
-// the direct fields yields [2, 16, 32, 332, 340]. A naive "more than one
-// event" check therefore passes on the broken version, because the useless
-// close-time event counts. What distinguishes them is whether ANY event
-// lands strictly between the opening and the final byte count — that is the
-// difference between "I can see it working" and "I found out afterwards",
-// and afterwards is what got a healthy worker killed.
+// Two assertions catch it, and the count guard trips first: the accessors
+// yield 2 events against 4 deltas. Measured against this same stream
+// (anthropic-sdk-go v1.48.0), that broken sequence is [2, 360] — 2 bytes for
+// "{}" when the block opens, then the whole 360 at once when it closes;
+// reading the direct fields yields [2, 16, 32, 332, 340].
+//
+// The MID-FLIGHT check further down is the durable one, and it is why a naive
+// "more than one event" bar would not do: the useless close-time event counts
+// toward it. What actually distinguishes the two is whether ANY event lands
+// strictly between the opening and the final byte count — the difference
+// between "I can see it working" and "I found out afterwards", and afterwards
+// is what got a healthy worker killed.
 func TestChatStream_EmitsProgressForToolCallArguments(t *testing.T) {
 	argChunks := []string{`{"path":"a.svg",`, `"content":"<svg>`, strings.Repeat("x", 300), `</svg>"}`}
 	server := toolUseStreamServer(t, "write_file", argChunks)

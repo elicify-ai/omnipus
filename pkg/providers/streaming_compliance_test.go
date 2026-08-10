@@ -29,13 +29,14 @@ import (
 // this test green.
 //
 // Rule: if a wrapper is what the factory hands the agent loop, the wrapper is
-// what gets asserted here.
-var (
-	_ StreamingProvider = (*ClaudeProvider)(nil)
-	_ StreamingProvider = (*anthropicprovider.Provider)(nil)
-	_ StreamingProvider = (*openai_compat.Provider)(nil)
-	_ StreamingProvider = (*HTTPProvider)(nil)
-)
+// what gets asserted.
+//
+// The `var _` assertions themselves now live in compliance.go — a NON-test
+// file — so they are a `go build` failure rather than a `go test` failure.
+// They were in this file until the review wave pointed out that ADR-059 D1
+// explicitly names test-file placement as the reason the compile signal did
+// not count. What remains here is the runnable restatement, so the reasoning
+// survives in test output too.
 
 // TestStreamingProviderCompliance documents the invariant in a runnable form
 // so the reason survives in test output, not just as a var block.

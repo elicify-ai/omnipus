@@ -258,21 +258,40 @@ see §8).
 
 | ID | Decision | Change |
 |---|---|---|
-| W1 | D1 | Add `onProgress` to `StreamingProvider.ChatStream`; update all three implementers |
+| W1 | D1 | Add `onProgress` to `StreamingProvider.ChatStream`; update all **four** implementers (`openai_compat`, `anthropic`, `HTTPProvider`, `ClaudeProvider` — the count was wrong at three in earlier drafts) |
 | W2 | D1 | Delete `OnToolCallProgressKey`, `ToolCallProgressFromOptions` and the `llmOpts` injection once W1 lands |
 | W3 | D4 | Remove `ToolResult.Reason` / `ResultReason` / `WithReason`, its `write_file` call site and `write_file_reason_test.go` |
 | W4 | D2 | Correct `ToolCallProgress.Index`'s doc comment to the provider-scoped contract |
 | W5 | D4 | Emit a structured discriminator in `write_file`'s no-overwrite result, per ADR-058's convention |
-| W6 | §7 | Resolve the contract impact of W5 before implementing it |
+| W6 | §7 | Resolve the contract impact of W5 before implementing it — **CLOSED**, see §7 |
 | W7 | D3 | Keep the delivered turn-scoped record and pull seam (already landed in `64371fa3`) |
 
-## 7. Contract impact (Constraint #8) — to be investigated, not assumed
+## 7. Contract impact (Constraint #8) — **RESOLVED 2026-08-10; W6 is closed**
 
-**This section is incomplete and W6 blocks W5.** ADR-058 §3 deliberately scoped *out* the
-`*ToolResult` refusal family, pricing the extension as "not free"; D4 extends into exactly that class,
-so the same analysis is owed here.
+**W6 no longer blocks W5.** All four items below were traced and W5 shipped on that basis
+(`0e085406`, with the review-wave repairs in `53801b68`). Answers:
 
-What must be traced before W5 is implemented:
+1. **The refusal does not flow into `ToolCall.error` in a way that breaks validation.** It rides in
+   `result` (a permissive `oneOf`, now carrying an explicit `FileExistsRefusal` variant) and in
+   `error` (a plain string with no `additionalProperties` constraint).
+2. **The live frame keeps its shape.** Only the JSON *type* of `result` changes — string → object —
+   which the union already permits.
+3. **Yes, it would have rendered a JSON blob, and both renderers needed work.** `GenericToolCall`
+   (the REPLAY renderer for `write_file`) now has a `file_exists` detector and display, alongside the
+   `delegation_denied` one whose comment already stated the house rule. `FileWriteConfirm` (the LIVE
+   renderer) turned out to be worse than the gate assumed: it showed no reason at all AND labelled a
+   failed write as succeeded, because AssistantUI forces a tool-call part with any result to
+   `complete`. Fixed by reading the outcome from the chat store.
+4. **Yes, the 5-step pipeline was required.** A hand-written Go wire struct is forbidden by
+   Constraint #8, so `FileExistsRefusal` went through `contracts/asyncapi.yaml` and the generated
+   artifacts are committed with it.
+
+**Scope note for ADR-058 §3:** that ADR recorded that it "changes no wire contract" and priced
+extending to the `*ToolResult` refusal family as "not free". ADR-059 W5 crossed that boundary
+deliberately — a new schema in the `result` union — so the two ADRs should be read together on this
+point rather than as if the line were never crossed.
+
+The original items, as posed:
 
 1. `ForLLM` → `contentForLLM` (`loop.go:10058`) → `tcRecord.Error` → `ToolCall.error`, a top-level
    field on a schema with `additionalProperties: false`
