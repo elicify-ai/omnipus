@@ -159,3 +159,63 @@ func TestFileExistsRefusalResult_EmptyReasonStillClassifiable(t *testing.T) {
 	assert.Equal(t, FileExistsRefusalCode, parsed["error"])
 	assert.NotEmpty(t, parsed["reason"], "reason must never be empty — the contract requires minLength 1")
 }
+
+// TestWriteFile_RefusalPayloadFitsBudget_WithJSONEscaping is the regression
+// for the defect the review wave found in the FIRST version of this clamp.
+//
+// The budgets count INPUT runes; the 2000-rune cap counts ENCODED ones. Go's
+// encoder HTML-escapes < > & to six runes apiece and doubles " and \ — all
+// legal filename characters — so a path built from them encoded to 2018, 3605
+// and 4555 runes in three independent reproductions while the arithmetic on
+// ASCII said 1665. The original test used strings.Repeat("nested-directory/"),
+// which contains not one escapable character, so it asserted the bound on the
+// only input class where the bound held.
+func TestWriteFile_RefusalPayloadFitsBudget_WithJSONEscaping(t *testing.T) {
+	const cap2000 = 2000
+
+	for _, tc := range []struct{ name, unit string }{
+		{"ampersands", "a&b&c/"},
+		{"angle brackets", "<x>/"},
+		{"quotes", `q"q/`},
+		{"backslashes", `b\\b/`},
+		{"mixed", `R&D <2026> "final"/`},
+		{"plain ascii", "nested-directory/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			longPath := "/workspace/" + strings.Repeat(tc.unit, 300) + "f.txt"
+			res := FileExistsRefusalResult("write_file", longPath,
+				"file: "+longPath+" already exists. Set overwrite=true to replace.")
+
+			got := len([]rune(res.ForLLM))
+			require.LessOrEqual(t, got, cap2000,
+				"encoded payload is %d runes for a path of %q — over the 2000-rune cap, so the "+
+					"downstream truncation severs it and it stops parsing entirely", got, tc.unit)
+
+			// Still valid, still classifiable after all the shrinking.
+			parsed := decodeRefusal(t, res.ForLLM)
+			assert.Equal(t, FileExistsRefusalCode, parsed["error"])
+			for _, field := range []string{"reason", "tool", "path"} {
+				assert.NotEmpty(t, parsed[field], "%s must stay non-empty (contract minLength:1)", field)
+			}
+		})
+	}
+}
+
+// TestDelegationDeniedResult_PayloadFitsBudget covers the sibling producer.
+// Its reason and target carry model-supplied text (the delegate tool's own
+// arguments), so an unbounded payload is reachable by a hallucinated agent
+// name — the review wave found it had no clamping at all while its neighbour
+// did.
+func TestDelegationDeniedResult_PayloadFitsBudget(t *testing.T) {
+	huge := strings.Repeat("R&D <agent> \"name\"/", 400)
+	res := DelegationDeniedResult("delegate", &DelegationDenial{
+		Reason:        "delegation to agent " + huge + " is not permitted",
+		Policy:        DenyTrustSet,
+		TargetAgentID: huge,
+	})
+	require.True(t, res.IsError)
+	got := len([]rune(res.ForLLM))
+	assert.LessOrEqual(t, got, 2000,
+		"delegation-denied payload is %d runes — unbounded model-supplied text reaches this "+
+			"producer, and an over-cap payload is truncated into unparseable JSON", got)
+}

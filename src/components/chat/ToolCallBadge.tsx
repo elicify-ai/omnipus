@@ -7,7 +7,7 @@ import { humanizeToolName } from '@/lib/humanizeToolName'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall, shouldRenderToolCallInPanel } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, statusDot, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
-import { isDelegationFailure, policyAxisLabel } from './tools/GenericToolCall'
+import { isDelegationFailure, policyAxisLabel, isFileExistsRefusal } from './tools/GenericToolCall'
 
 interface ToolCallBadgeProps {
   toolCall: ToolCall & { call_id: string }
@@ -70,6 +70,13 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
   // "Delegation denied · <axis>" chip GenericToolCall's live/replay path
   // does, instead of a generic red "Failed".
   const delegationFailure = isDelegationFailure(toolCall.result) ? toolCall.result : null
+  // Same reasoning for the write_file precondition refusal (ADR-059 W5). This
+  // surface is the one that most needed it: ToolCallBadge renders SubagentBlock's
+  // nested steps — a DELEGATED worker's tool calls — which is exactly the case
+  // the gateway's own emitNestedToolCalls fix was written to carry. Without a
+  // branch here the backend delivers the structured object and this component
+  // drops it: red "Failed" plus the raw JSON in the expanded body.
+  const fileExistsRefusal = isFileExistsRefusal(toolCall.result) ? toolCall.result : null
   const isVisible =
     surface === 'panel'
       ? shouldRenderToolCallInPanel(toolCall.tool, verboseChatEnabled)
@@ -77,7 +84,7 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
           toolCall.tool,
           toolCall.params,
           verboseChatEnabled,
-          toolCall.status === 'error' || marshalErr || !!delegationFailure,
+          toolCall.status === 'error' || marshalErr || !!delegationFailure || !!fileExistsRefusal,
         )
   if (!isVisible) {
     return null
@@ -92,7 +99,12 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
         indicator: statusDot('bg-[var(--color-warning)]'),
         label: `Delegation denied · ${policyAxisLabel(delegationFailure.policy)}`,
       }
-    : getToolBadgeStatusConfig(toolCall.status, { durationMs: toolCall.duration_ms })
+    : fileExistsRefusal
+      ? {
+          indicator: statusDot('bg-[var(--color-warning)]'),
+          label: 'File already exists',
+        }
+      : getToolBadgeStatusConfig(toolCall.status, { durationMs: toolCall.duration_ms })
   const isRunning = toolCall.status === 'running'
 
   return (

@@ -292,6 +292,34 @@ var structuredFailureDiscriminators = map[string]struct{}{
 	tools.FileExistsRefusalCode: {},
 }
 
+// unparseableFailureWarns counts how many unparseable structured payloads we
+// have seen, so the warning below can be logged sparsely.
+var unparseableFailureWarns atomic.Uint64
+
+// warnUnparseableStructuredFailure logs the 1st, 10th, 100th… occurrence.
+//
+// Sparse on purpose. This fires from two hot paths: the per-CONNECTION event
+// forwarder (three open tabs on one chat means three identical warns per tool
+// result) and the replay reconstruction, which walks every persisted tool call
+// on every attach — and attach happens on page load, session switch, and each
+// WS reconnect. A session holding 200 bad payloads would emit 200 lines per
+// reconnect, into a log this project already has a documented flooding hazard
+// with. The signal is identical every time, so the first one is the whole
+// message; the rest is volume.
+func warnUnparseableStructuredFailure(err error, payload string) {
+	n := unparseableFailureWarns.Add(1)
+	if n != 1 && n%10 != 0 {
+		return
+	}
+	slog.Warn("gateway: structured tool-failure payload failed to parse; rendering as prose",
+		"error", err,
+		"len", len(payload),
+		// truncateRunesForFrame, not payload[:60] — a byte slice can cut a
+		// multi-byte rune in half and put invalid UTF-8 into a log field.
+		"prefix", truncateRunesForFrame(payload, 60),
+		"occurrences", n)
+}
+
 // parseStructuredToolFailure inspects a tool result string and, when it is one
 // of the structured failure payloads above, returns the parsed object (for the
 // frame's `result` field), the human-readable reason (for the frame's `error`
@@ -317,8 +345,7 @@ func parseStructuredToolFailure(result string) (obj map[string]any, reason strin
 		// something moved. Silence here would render a JSON fragment to the
 		// user with no trace of why, which is how this class stays invisible.
 		if strings.HasPrefix(trimmed, `{"error":"`) {
-			slog.Warn("gateway: structured tool-failure payload failed to parse; rendering as prose",
-				"error", err, "len", len(trimmed), "prefix", trimmed[:min(60, len(trimmed))])
+			warnUnparseableStructuredFailure(err, trimmed)
 		}
 		return nil, "", false
 	}

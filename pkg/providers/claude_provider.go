@@ -59,7 +59,7 @@ func (p *ClaudeProvider) Chat(
 // The delegate is held as an unexported, NON-EMBEDDED field, so nothing is
 // promoted automatically: each capability has to be forwarded deliberately.
 // Any future optional interface the delegate gains needs the same treatment,
-// and the compliance assertions in streaming_compliance_test.go must name
+// and the compliance assertions in compliance.go must name
 // THIS type — the one the factory actually returns — not the inner one.
 func (p *ClaudeProvider) ChatStream(
 	ctx context.Context,

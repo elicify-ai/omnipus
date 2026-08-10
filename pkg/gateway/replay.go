@@ -889,11 +889,12 @@ func emitNestedToolCalls(
 
 // applyPersistedFailureReason restores live/replay parity for a failed tool
 // call's reason. It is shared by BOTH frame builders deliberately: they are
-// the two places replay reconstructs a ToolCallResultFrame, and every time the
-// rule has been re-established in only one of them it has produced a
-// user-visible divergence (RC-5, RC-5c, and W5's own first cut, which fixed
-// the top-level builder and left the nested one — the delegated-worker path —
-// untouched).
+// the two places replay reconstructs a ToolCallResultFrame, and it has been
+// re-established in only one of them TWICE: RC-5c, and W5's own first cut,
+// which fixed the top-level builder and left the nested one — the
+// delegated-worker path — untouched. (An earlier version of this comment said
+// three and counted RC-5; that change is in loop.go's persistence write and
+// touches neither builder.)
 //
 // Two things happen here:
 //

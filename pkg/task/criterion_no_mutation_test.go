@@ -78,3 +78,72 @@ func TestNormalizeCriteria_NilStaysNil(t *testing.T) {
 		t.Errorf("normalizeCriteria(nil) = %#v, want nil — callers treat nil and empty differently", out)
 	}
 }
+
+// behaviourCriterion builds the ONE criterion kind that carries mutable
+// pointer state. This is the input class the first version of this file
+// missed: it exercised only KindProse, so it passed while a shallow copy left
+// the race fully live. The pointer fields are exactly what makes a shallow
+// copy insufficient, so they are exactly what has to be tested.
+func behaviourCriterion(text string) AcceptanceCriterion {
+	return AcceptanceCriterion{
+		Kind: KindBehavior, Text: text,
+		Author:   CriterionAuthor{Kind: AuthorKindUser, ID: "alice"},
+		Behavior: &CriterionBehavior{Tool: "bash"},
+	}
+}
+
+// TestNormalizeCriteria_DoesNotMutateCallerBehaviour is the deep-copy
+// contract. validateCriterionBehavior server-sets MinCount and Scope by
+// writing THROUGH the *CriterionBehavior pointer, so a shallow copy of the
+// slice shares that pointer and the store still scribbles into the caller's
+// memory — and two goroutines still race on it.
+func TestNormalizeCriteria_DoesNotMutateCallerBehaviour(t *testing.T) {
+	input := []AcceptanceCriterion{behaviourCriterion("does the thing")}
+
+	out, err := normalizeCriteria(input)
+	if err != nil {
+		t.Fatalf("normalizeCriteria() error = %v", err)
+	}
+
+	if input[0].Behavior.MinCount != nil {
+		t.Errorf("normalizeCriteria server-set MinCount=%d through the CALLER's Behavior pointer — "+
+			"the slice copy is shallow, so the pointed-to struct is still shared",
+			*input[0].Behavior.MinCount)
+	}
+	if input[0].Behavior.Scope != "" {
+		t.Errorf("normalizeCriteria server-set Scope=%q through the CALLER's Behavior pointer",
+			input[0].Behavior.Scope)
+	}
+
+	// The returned copy must still carry the normalization — deep-copying
+	// must not skip the work.
+	if out[0].Behavior == nil || out[0].Behavior.MinCount == nil || *out[0].Behavior.MinCount != 1 {
+		t.Error("the RETURNED criterion must carry the defaulted MinCount")
+	}
+	if out[0].Behavior.Scope != BehaviorScopeTaskSession {
+		t.Errorf("returned Scope = %q, want %q", out[0].Behavior.Scope, BehaviorScopeTaskSession)
+	}
+	if out[0].Behavior == input[0].Behavior {
+		t.Error("the returned criterion shares the caller's Behavior pointer — that IS the race")
+	}
+}
+
+// TestNormalizeCriteria_ConcurrentSharedBehaviour is the race regression for
+// the pointer-state case. It reports DATA RACE under -race against a shallow
+// copy; the prose-only version of this test does not, which is why the first
+// pass shipped a fix that only worked for prose.
+func TestNormalizeCriteria_ConcurrentSharedBehaviour(t *testing.T) {
+	shared := []AcceptanceCriterion{behaviourCriterion("a"), behaviourCriterion("b")}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := normalizeCriteria(shared); err != nil {
+				t.Errorf("normalizeCriteria() error = %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+}

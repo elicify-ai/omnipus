@@ -193,7 +193,8 @@ type AcceptanceCriterion struct {
 // tiered rule depends on caller identity (agent tool vs. human/UI) which the
 // store does not know; it is enforced by the caller.
 //
-// It works on a COPY and never writes through the caller's slice. It used to
+// It works on a DEEP copy and never writes through the caller's slice or the
+// structs it points at. It used to
 // mutate in place, which made the store scribble server-set IDs into memory
 // the caller still owned — so two goroutines normalising slices that share a
 // backing array raced, with no lock anywhere in sight to suggest they might.
@@ -210,6 +211,29 @@ func normalizeCriteria(criteria []AcceptanceCriterion) ([]AcceptanceCriterion, e
 	copy(normalized, criteria)
 	for i := range normalized {
 		c := &normalized[i]
+		// DEEP copy, not just the slice. AcceptanceCriterion holds two
+		// pointers, and validateCriterion server-sets values THROUGH them:
+		// validateCriterionBehavior writes b.MinCount and b.Scope. A shallow
+		// slice copy shares those structs, so the store would still scribble
+		// into the caller's memory and two goroutines would still race —
+		// which is exactly what the first version of this fix did, with a
+		// test that only exercised the one kind carrying no pointer state.
+		if c.Behavior != nil {
+			b := *c.Behavior
+			if b.MinCount != nil {
+				n := *b.MinCount
+				b.MinCount = &n
+			}
+			if b.MaxCount != nil {
+				n := *b.MaxCount
+				b.MaxCount = &n
+			}
+			c.Behavior = &b
+		}
+		if c.Check != nil {
+			ck := *c.Check
+			c.Check = &ck
+		}
 		if c.ID == "" {
 			c.ID = uuid.New().String()
 		}

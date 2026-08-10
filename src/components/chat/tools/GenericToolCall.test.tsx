@@ -733,3 +733,74 @@ describe('GenericToolCall — verbose chat gate', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 })
+
+describe('GenericToolCall — file-exists refusal sentinel (ADR-059 W5)', () => {
+  // This is the ONLY renderer on the replay path for write_file: ChatScreen
+  // routes historical tool calls here, while FileWriteConfirm is reachable only
+  // for the live streaming message. So the "what does a refusal look like after
+  // a reload" question — the one W5 exists to answer — is answered entirely by
+  // this component, and it shipped with no test at all.
+  const refusal = {
+    error: 'file_exists' as const,
+    reason: 'file: /w/a.svg already exists. Set overwrite=true to replace.',
+    tool: 'write_file',
+    path: '/w/a.svg',
+  }
+
+  it('renders the reason in a distinct block, NOT as raw JSON', () => {
+    render(
+      <GenericToolCall
+        toolName="write_file"
+        result={refusal}
+        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+      />
+    )
+    fireEvent.click(screen.getByRole('button'))
+
+    const block = screen.getByTestId('result-file-exists')
+    expect(block).toBeInTheDocument()
+    expect(block).toHaveTextContent('already exists')
+    expect(block).toHaveTextContent('overwrite=true')
+  })
+
+  it('labels it "File already exists", not "Failed"', () => {
+    // A precondition refusal is not an I/O failure — the file is simply
+    // already there, which is frequently the correct outcome when a sibling
+    // agent got there first. FileWriteConfirm (the LIVE renderer) says the
+    // same thing, deliberately: an earlier version of these two disagreed.
+    render(
+      <GenericToolCall
+        toolName="write_file"
+        result={refusal}
+        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+      />
+    )
+    expect(screen.getByText('File already exists')).toBeInTheDocument()
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
+  })
+
+  it('keeps the payload out of the plain-result JSON dump', () => {
+    const { container } = render(
+      <GenericToolCall
+        toolName="write_file"
+        result={refusal}
+        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+      />
+    )
+    fireEvent.click(screen.getByRole('button'))
+    // The discriminator is for machines. Seeing it means the object fell
+    // through to plainResult and is being dumped as text.
+    expect(container.textContent).not.toContain('file_exists')
+  })
+
+  it('does not claim an unrelated error payload', () => {
+    render(
+      <GenericToolCall
+        toolName="write_file"
+        result={{ error: 'timeout', reason: 'took too long' }}
+        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+      />
+    )
+    expect(screen.queryByTestId('result-file-exists')).not.toBeInTheDocument()
+  })
+})

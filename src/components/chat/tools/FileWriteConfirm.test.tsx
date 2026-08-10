@@ -97,10 +97,15 @@ describe('FileWriteConfirm failure reasons', () => {
     expect(container.textContent).toContain('overwrite=true')
   })
 
-  it('labels a refused write Failed, not Done', () => {
+  it('labels a refused write "File already exists", matching what replay shows', () => {
+    // NOT "Failed". GenericToolCall (the replay renderer for this same tool)
+    // deliberately labels a precondition refusal "File already exists", and an
+    // earlier version of this test pinned "Failed" here — so the identical
+    // event read one way during the turn and another after a reload, which is
+    // the divergence class this whole change set exists to remove.
     seedCall({ status: 'error', result: REFUSAL, error: REFUSAL.reason })
     const { container } = renderRow(captured.write!, REFUSAL)
-    expect(container.textContent).toContain('Failed')
+    expect(container.textContent).toContain('File already exists')
     expect(container.textContent).not.toContain('Done')
   })
 
@@ -134,10 +139,14 @@ describe('FileWriteConfirm failure reasons', () => {
     expect(container.textContent).toContain('Running')
   })
 
-  it('shows the reason for a cancelled op, under the cancelled label', () => {
-    seedCall({ status: 'cancelled', result: 'cancelled by user', error: 'cancelled by user' })
-    const { container } = renderRow(captured.write!, 'cancelled by user')
-    expect(container.textContent).toContain('cancelled by user')
+  it('renders a cancelled op under the cancelled label, without inventing a reason', () => {
+    // Production never attaches a reason to a cancelled call: the wire status
+    // enum is success|error only, and 'cancelled' is written solely by the
+    // running-sweep paths in the store, which set neither result nor error.
+    // So this asserts the label, not a reason the runtime cannot produce.
+    seedCall({ status: 'cancelled' })
+    const { container } = renderRow(captured.write!, undefined)
+    expect(container.textContent).toContain('write_file')
     expect(container.textContent).not.toContain('Failed')
   })
 
@@ -150,7 +159,13 @@ describe('FileWriteConfirm failure reasons', () => {
   })
 
   it('falls back to the part result when the store has no record of the call', () => {
-    // Replay and any post-eviction render reach the row with an empty store.
+    // The fallback exists for robustness, not for replay: a replayed row never
+    // reaches this component at all (ChatScreen routes historical tool calls to
+    // GenericToolCall — see that file's own file_exists tests). An earlier
+    // version of this case claimed to cover replay and fed a
+    // {truthy result + 'incomplete'} pair the runtime cannot emit, so it
+    // asserted nothing. This drives the producible pair and asserts only what
+    // the fallback really provides: the reason still renders.
     useChatStore.setState({ toolCalls: {} })
     const { container } = render(
       <>
@@ -158,11 +173,12 @@ describe('FileWriteConfirm failure reasons', () => {
           toolCallId: 'not-in-store',
           args: { path: '/w/a.svg', content: 'x' },
           result: REFUSAL,
-          status: { type: 'incomplete' },
+          status: { type: 'complete' },
         })}
       </>
     )
     expect(container.textContent).toContain('already exists')
+    expect(container.textContent).toContain('File already exists')
   })
 
   it('tolerates a result with no usable reason without rendering an empty line', () => {

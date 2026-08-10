@@ -175,8 +175,10 @@ describe('TaskRunsList — dayRange filter (H2)', () => {
   // the run fixtures below are UTC instants. Mixing the two makes the window
   // slide by the runner's offset: at UTC+7 the window opens at 17:00Z on the
   // 19th, so the "before the day" run at 23:00Z lands INSIDE it and two rows
-  // render instead of one. The test passed only in UTC and westward, which is
-  // where CI happens to run.
+  // render instead of one. It passed at UTC+0 and UTC-1 only — the "after the
+  // day" fixture at 21:00Z on the 21st falls inside a westward-shifted window
+  // for every offset from UTC-2 on, so the Americas failed too. CI runs UTC,
+  // which is why nothing caught it.
   const DAY_START = Date.UTC(2026, 6, 20, 0, 0, 0)
   const DAY_END = Date.UTC(2026, 6, 21, 0, 0, 0)
 

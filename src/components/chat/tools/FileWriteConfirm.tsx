@@ -1,5 +1,6 @@
 import { makeAssistantToolUI } from '@assistant-ui/react'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
+import { isFileExistsRefusal } from './GenericToolCall'
 import { useChatStore } from '@/store/chat'
 import { cn } from '@/lib/utils'
 
@@ -70,6 +71,7 @@ function FileOpBlock({
   isRunning,
   isError,
   isCancelled,
+  isRefusal,
 }: {
   label: string
   path: string
@@ -78,16 +80,29 @@ function FileOpBlock({
   isRunning: boolean
   isError?: boolean
   isCancelled?: boolean
+  isRefusal?: boolean
 }) {
-  const statusConfig = getToolBadgeStatusConfig(
-    isRunning ? 'running' : isCancelled ? 'cancelled' : isError ? 'error' : 'success',
-    { size: 12, cancelledVariant: 'muted' }
-  )
+  // A precondition refusal gets its own label, matching GenericToolCall (the
+  // REPLAY renderer for this same tool). Without this the identical event read
+  // "Failed" during the turn and "File already exists" after a reload — a
+  // live/replay divergence introduced by the very commit that fixed the last
+  // one. The distinction is also the point of W5: the file being already there
+  // is frequently the correct outcome, not a failure.
+  const statusConfig = isRefusal && !isRunning
+    ? {
+        indicator: <span className="inline-block size-[8px] shrink-0 rounded-full bg-[var(--color-warning)]" />,
+        label: 'File already exists',
+        textClass: 'text-[var(--color-warning)]',
+      }
+    : getToolBadgeStatusConfig(
+        isRunning ? 'running' : isCancelled ? 'cancelled' : isError ? 'error' : 'success',
+        { size: 12, cancelledVariant: 'muted' }
+      )
   // Shown on failure or cancellation, and deliberately NOT truncated the way
   // the path is — a reason clipped to fit is a reason you have to go looking
   // for elsewhere, which is the state this replaces. A successful write has
   // nothing to explain.
-  const showReason = (isError || isCancelled) && !isRunning && reason
+  const showReason = (isError || isCancelled || isRefusal) && !isRunning && reason
   // The reason wraps onto its own line via flex-wrap + basis-full rather than
   // living inside a nested row container. That keeps the status indicator as
   // this element's FIRST CHILD, which FileTools.edge.test.tsx asserts
@@ -114,13 +129,14 @@ function FileOpBlock({
 }
 
 // FileOpRow is a real component, not an inline render callback, because it
-// needs a hook: AssistantUI's own part status CANNOT report a failed tool call.
+// needs a hook: AssistantUI's part status cannot report a failed tool call
+// ONCE THAT CALL HAS A RESULT — which every finished call does.
 //
 // toMessagePartStatus (@assistant-ui/core, runtime/api/message-runtime.js)
 // short-circuits a tool-call part to {type:'complete'} the moment the part has
-// a truthy `result` — and this SPA never sets `isError` on a part
-// (src/lib/omnipus-runtime.ts builds every part with exactly toolCallId/
-// toolName/args/result). A refused write has a result, so its part status is
+// a truthy `result`. Setting the part's own `isError` would not help either —
+// toMessagePartStatus never reads it. A refused write has a result, so its
+// part status is
 // 'complete' and `status.type === 'incomplete'` is false. Gating on that alone
 // rendered a FAILED write with the success dot and a "Done" label, and the
 // reason line never mounted at all.
@@ -147,6 +163,10 @@ function FileOpRow({
   status: { type: string }
 }) {
   const storeCall = useChatStore((s) => s.toolCalls[toolCallId])
+  // The gateway parses the structured refusal into the frame's `result`, so
+  // the object is what lands in the store — the same shape GenericToolCall
+  // matches on for replay.
+  const isRefusal = isFileExistsRefusal(storeCall?.result) || isFileExistsRefusal(result)
   const isRunning = status.type === 'running' || storeCall?.status === 'running'
   const isCancelled = isCancelledStatus(status) || storeCall?.status === 'cancelled'
   const isError = !isCancelled && (status.type === 'incomplete' || storeCall?.status === 'error')
@@ -162,6 +182,7 @@ function FileOpRow({
       isRunning={isRunning}
       isError={isError}
       isCancelled={isCancelled}
+      isRefusal={isRefusal}
     />
   )
 }

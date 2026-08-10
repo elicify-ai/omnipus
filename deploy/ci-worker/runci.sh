@@ -149,9 +149,11 @@ run_lint() {
 # pkg/task, pkg/plan, pkg/tools and pkg/providers joined the list on
 # 2026-08-10 (both files together, as the rule below demands) after a manual
 # scoped run found TWO data races in them on an otherwise fully green commit.
-# pkg/tools is NON-recursive on purpose: pkg/tools/browser fails under -race
-# headlessly for environmental reasons (no dbus, real Chrome), and a false-RED
-# gate gets ignored, which is worse than no gate. Tracked in #615.
+# pkg/tools is NON-recursive on purpose: pkg/tools/browser itself fails under
+# -race headlessly, and a false-RED gate gets ignored, which is worse than no
+# gate (#615). Its four SUBpackages are listed explicitly — a bare
+# `./pkg/tools` silently dropped five packages while the comment named one,
+# and cdppipe/webrtc carry the densest concurrency tests in the tree.
 # Do not "improve" one without the other: a worker gate that measures something
 # GitHub does not (or vice versa) is exactly how a green local verdict stops
 # predicting the real one. -race forces cgo, which is why CGO_ENABLED=1 here
@@ -163,7 +165,10 @@ run_gorace() {
   out=$(CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s \
     ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... \
     ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... \
-    ./pkg/logger/... ./pkg/task/... ./pkg/plan/... ./pkg/tools ./pkg/providers/... \
+    ./pkg/logger/... ./pkg/task/... ./pkg/plan/... ./pkg/tools \
+    ./pkg/tools/browser/cdppipe/... ./pkg/tools/browser/webrtc/... \
+    ./pkg/tools/browser/captureext/... ./pkg/tools/browser/chromeintegrity/... \
+    ./pkg/providers/... \
     ./tests/integration/... 2>&1)
   local code=$?
   echo "$out"

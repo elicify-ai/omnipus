@@ -495,14 +495,18 @@ jobs:
         # packages holding the tool registry, the delegation tool, the task
         # store and every LLM provider.
         #
-        # pkg/tools is NON-recursive (`./pkg/tools`, not `./pkg/tools/...`) —
-        # deliberately, and this is the one place this list knowingly stops
-        # short. pkg/tools/browser fails under -race on a headless CI box for
-        # environmental reasons (no dbus, real Chrome launches), which would
-        # make this gate false-RED, and a false-RED gate gets ignored — which
-        # is worse than no gate. Tracked in #615; do not "fix" it by
-        # widening the glob without first making that package race-clean
+        # pkg/tools is NON-recursive (`./pkg/tools`, not `./pkg/tools/...`)
+        # because pkg/tools/browser itself fails under -race on a headless box.
+        # A false-RED gate gets ignored, which is worse than no gate. Tracked
+        # in #615; do not widen without first making that package race-clean
         # headlessly.
+        #
+        # Its four SUBpackages are listed explicitly rather than swept up with
+        # it. `./pkg/tools` alone silently excluded five packages while the
+        # comment named one — and cdppipe and webrtc hold some of the most
+        # concurrency-dense tests in the tree (allocator/dialer/pipeconn,
+        # backpressure/ordering/shed/sustained-growth). All four verified
+        # race-clean before being added here.
         #
         # Timeout raised 600s -> 900s to accommodate the added packages.
         #
@@ -521,7 +525,7 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           set +e
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 900s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... ./pkg/logger/... ./pkg/task/... ./pkg/plan/... ./pkg/tools ./pkg/providers/... ./tests/integration/... 2>&1)
+          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 900s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... ./pkg/logger/... ./pkg/task/... ./pkg/plan/... ./pkg/tools ./pkg/tools/browser/cdppipe/... ./pkg/tools/browser/webrtc/... ./pkg/tools/browser/captureext/... ./pkg/tools/browser/chromeintegrity/... ./pkg/providers/... ./tests/integration/... 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a

@@ -261,17 +261,22 @@ func DelegationDeniedResult(tool string, d *DelegationDenial) *ToolResult {
 	if !validDelegationPolicy(policy) {
 		policy = DenyTrustSet
 	}
+	// reason and target are model-influenced (the delegate tool's arguments
+	// reach them), so they are clamped for the same reason the write refusal
+	// clamps its path: an unbounded payload is truncated downstream and then
+	// no longer parses at all.
+	reason = clampRefusalField(reason, maxRefusalReasonRunes)
 	failure := generated.DelegationFailure{
-		Error:  "delegation_denied",
+		Error:  DelegationDeniedCode,
 		Reason: reason,
 		Policy: string(policy),
 		Tool:   tool,
 	}
 	if d.TargetAgentID != "" {
-		tgt := d.TargetAgentID
+		tgt := clampRefusalField(d.TargetAgentID, maxRefusalPathRunes)
 		failure.TargetAgentId = &tgt
 	}
-	encoded, err := json.Marshal(failure)
+	encoded, err := marshalWithinBudget(&failure, &failure.Reason, failure.TargetAgentId)
 	if err != nil {
 		// Fall back to a plain text error if marshaling somehow fails.
 		return ErrorResult("delegation denied: " + reason).
@@ -329,13 +334,14 @@ func FileExistsRefusalResult(tool, path, reason string) *ToolResult {
 	// nothing downstream does a prefix match.
 	path = clampRefusalField(path, maxRefusalPathRunes)
 	reason = clampRefusalField(reason, maxRefusalReasonRunes)
+	tool = clampRefusalField(tool, maxRefusalToolRunes)
 	refusal := generated.FileExistsRefusal{
 		Error:  FileExistsRefusalCode,
 		Reason: reason,
 		Tool:   tool,
 		Path:   path,
 	}
-	encoded, err := json.Marshal(refusal)
+	encoded, err := marshalWithinBudget(&refusal, &refusal.Path, &refusal.Reason)
 	if err != nil {
 		// The contract requires non-empty reason/tool/path; a marshal failure
 		// here would ship a schema-invalid payload the SPA drops, leaving the
@@ -361,17 +367,65 @@ const (
 	DelegationDeniedCode  = "delegation_denied"
 )
 
-// Field budgets for a structured refusal payload.
+// Field budgets for a structured refusal payload, and the hard ceiling they
+// serve.
 //
-// Chosen so the ENCODED JSON stays under the 2000-rune cap the persisted
-// transcript and the live frame both apply — see FileExistsRefusalResult for
-// why a truncated payload is unrecoverable rather than merely shortened. The
-// reason embeds the path, so the two budgets together (plus ~120 bytes of
-// envelope) must fit inside that cap with room to spare.
+// maxRefusalPayloadRunes is the real contract: the ENCODED JSON must stay
+// under the 2000-rune cap that the persisted transcript
+// (pkg/agent.maxFailClosedOutputChars) and the live frame
+// (pkg/gateway.maxLiveErrorChars) both apply. A payload cut at that boundary
+// does not merely lose its tail — it stops being JSON, so the gateway's
+// whole-document unmarshal fails and the reader gets a fragment instead of a
+// sentence.
+//
+// The per-field budgets are a cheap FIRST pass, not the guarantee. An earlier
+// version treated them as the guarantee and was wrong: they count INPUT runes
+// while the cap counts ENCODED ones, and encoding/json HTML-escapes < > & to
+// six runes each and doubles " and \. All are legal filename characters, so a
+// path holding ~67 of them overflowed a budget that arithmetic on ASCII said
+// was safe. marshalWithinBudget closes that by measuring the encoded result.
 const (
-	maxRefusalPathRunes   = 700
-	maxRefusalReasonRunes = 900
+	maxRefusalPayloadRunes = 1900 // leaves headroom under the 2000-rune cap
+	maxRefusalPathRunes    = 700
+	maxRefusalReasonRunes  = 900
+	maxRefusalToolRunes    = 64
 )
+
+// marshalWithinBudget encodes v and, if the result exceeds
+// maxRefusalPayloadRunes, shrinks the two caller-supplied fields it is given
+// and re-encodes until it fits.
+//
+// It measures the ENCODED size because that is the only thing the downstream
+// truncation sees. Clamping inputs cannot bound it: JSON escaping expands
+// characters by up to 6x, and which characters appear is entirely up to
+// whoever named the file.
+//
+// The loop is bounded and always terminates: each round halves every
+// shrinkable field, so within a handful of iterations they are single
+// characters and the envelope alone is far under the cap. If it somehow still
+// does not fit, the last encoding is returned rather than an error — an
+// over-long payload that might get truncated is strictly better than none.
+func marshalWithinBudget(v any, shrinkable ...*string) ([]byte, error) {
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	for i := 0; i < 16 && len([]rune(string(encoded))) > maxRefusalPayloadRunes; i++ {
+		for _, f := range shrinkable {
+			if f == nil {
+				continue
+			}
+			if n := len([]rune(*f)); n > 1 {
+				*f = clampRefusalField(*f, max(1, n/2))
+			}
+		}
+		encoded, err = json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return encoded, nil
+}
 
 // clampRefusalField bounds s to maxRunes, keeping the TAIL rather than the
 // head. For a filesystem path the basename is the informative part and the

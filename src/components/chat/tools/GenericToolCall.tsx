@@ -14,7 +14,7 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import type { TruncatedResult, MarshalErrorResult } from '@/lib/ws'
-import type { ToolResultRef, DelegationFailure } from '@/lib/api/generated/asyncapi-types'
+import type { ToolResultRef, DelegationFailure, FileExistsRefusal } from '@/lib/api/generated/asyncapi-types'
 import { isClientTruncatedResult, isToolResultRef } from '@/store/chat'
 import type { ClientTruncatedResult } from '@/store/chat'
 import { useQuery } from '@tanstack/react-query'
@@ -103,9 +103,7 @@ export function isDelegationFailure(value: unknown): value is DelegationFailure 
  * routes write_file to its own registered UI (FileWriteConfirm) while replay
  * routes it here.
  */
-export function isFileExistsRefusal(
-  value: unknown
-): value is { error: string; reason: string; tool: string; path: string } {
+export function isFileExistsRefusal(value: unknown): value is FileExistsRefusal {
   return (
     typeof value === 'object' &&
     value !== null &&

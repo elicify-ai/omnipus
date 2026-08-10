@@ -53,6 +53,31 @@ export default defineConfig({
     include: ['src/**/*.test.{ts,tsx}'],
     css: false,
     pool: 'forks',
+    // Cap forks at half the LOGICAL cores, i.e. roughly one per physical core.
+    //
+    // This lived only in deploy/ci-worker/runci.sh ("cap workers: 8
+    // oversubscribe shared vCPUs → perf-test timeouts") — so the worker was
+    // protected and the other two places the suite runs were not: GitHub
+    // Actions (.github/workflows/pr.yml) and every developer's `npx vitest
+    // run`. Uncapped, each fork carries a full jsdom environment, and on a
+    // 4-physical/8-logical machine the pool oversubscribes badly: the runner
+    // starts reporting `[vitest-pool]: Timeout starting forks runner`, whichever
+    // test is mid-flight dies on the 15s testTimeout, and a test that times out
+    // leaves its DOM mounted — which then surfaces somewhere else entirely as a
+    // "found multiple elements" assertion failure. The failing set moved
+    // between runs and every test passed in isolation, which is what made it
+    // read as unrelated flakiness for so long (issue #616).
+    //
+    // Measured on this repo, 4 physical cores, full suite: uncapped → 1–4
+    // failures per run across five runs; capped → 413/413 files green, and
+    // FASTER (import 3694s → 2209s, tests 1308s → 552s), because the forks
+    // stop fighting over memory bandwidth.
+    //
+    // A percentage rather than a literal so a 32-core CI box still gets 16
+    // workers instead of the worker script's hardcoded 4. (Vitest 4 takes this
+    // as a top-level `maxWorkers`; the older `poolOptions.forks.maxForks`
+    // shape is not in this version's config type and fails typecheck.)
+    maxWorkers: '50%',
     testTimeout: 15000,
     // beforeAll in onboarding.test.tsx dynamically imports the route module which
     // triggers TanStack router plugin transform across all route files — this can

@@ -26,7 +26,7 @@ import (
 // four stops satisfying the interface.
 //
 // Rule: assert the type the FACTORY RETURNS, not the delegate it wraps. That
-// distinction is not pedantic — this test previously pinned
+// distinction is not pedantic — the assertion list previously pinned
 // *anthropicprovider.Provider, which does satisfy the interface, while
 // *ClaudeProvider (the only thing that constructs it, holding it as an
 // unexported non-embedded field so nothing is promoted) did not. Every

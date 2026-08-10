@@ -266,8 +266,8 @@ func TestValidateTrigger_RruleInputBounds(t *testing.T) {
 		elapsed := time.Since(start)
 		require.Error(t, err, "a rule that can never fire (Feb 31) must be rejected")
 		assert.True(t, errors.Is(err, ErrValidation))
-		assert.Lessf(t, elapsed, 1*time.Second,
-			"liveness bound must complete quickly (SC-008: <1s), not stall; took %s", elapsed)
+		assert.Lessf(t, elapsed, livenessBound,
+			"liveness bound must complete quickly (SC-008), not stall; took %s (bound %s)", elapsed, livenessBound)
 	})
 
 	t.Run("row11: rrule longer than 512 characters rejected", func(t *testing.T) {

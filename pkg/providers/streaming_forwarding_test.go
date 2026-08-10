@@ -16,18 +16,19 @@ import (
 // ClaudeProvider and HTTPProvider hold their real provider as an unexported,
 // NON-EMBEDDED field and forward every call by hand. Satisfying
 // StreamingProvider is therefore not the same as working: a wrapper can accept
-// onProgress and quietly pass nil. It compiles, streaming_compliance_test.go
-// still passes — that file asserts interface satisfaction, not behaviour — and
+// onProgress and quietly pass nil. It compiles, compliance.go's assertions
+// still hold — they assert interface satisfaction, not behaviour — and
 // every install behind that wrapper silently reports zero tool-call progress.
 //
-// This is not hypothetical. The same class already shipped here once:
+// This is not hypothetical. The same class already occurred on this branch:
 // ClaudeProvider had no ChatStream at all, the agent loop's type assertion
-// failed, and ALL Anthropic traffic took the non-streaming path with a green
-// suite throughout (see ClaudeProvider.ChatStream's doc comment). The
-// compliance test was then fixed to name the factory-returned type. That
-// closed "does it satisfy the interface". This closes "does what it accepts
-// actually arrive" — the half that was still open, and the half the progress
-// signal actually depends on.
+// failed, and ALL Anthropic traffic took the non-streaming path while the
+// compliance test stayed green (see ClaudeProvider.ChatStream's doc comment).
+// It was caught before the branch was pushed, so it never reached a release —
+// but nothing in the suite was going to catch it. The compliance assertions
+// were then fixed to name the factory-returned type, which closed "does it
+// satisfy the interface". This closes "does what it accepts actually arrive"
+// — the half that was still open, and the half the progress signal depends on.
 //
 // Both tests drive the wrapper's real ChatStream against a real SSE server, so
 // they exercise the production path end to end rather than asserting on source
