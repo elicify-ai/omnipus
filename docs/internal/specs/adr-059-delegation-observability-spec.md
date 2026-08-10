@@ -1,6 +1,6 @@
 # Spec — ADR-059 work items W1–W5 (delegation observability)
 
-- **Status:** Draft (pre-grill)
+- **Status:** Draft — amended after grill #1 (A1) and grill #2 (A2). Body edits applied, not merely described.
 - **Date:** 2026-08-10
 - **Authority:** [ADR-059](../architecture/ADR-059-delegation-observability.md) (Accepted 2026-08-10). Where this spec and the ADR disagree, the ADR wins.
 - **Also binding:** [ADR-058](../architecture/ADR-058-tool-denial-semantics.md) §3/§7 (W5's convention and the contract-impact discipline it demands), Constraint #8 (contract-first), Constraint #7 (no "pre-existing" closure path).
@@ -38,8 +38,11 @@ targets `src/components/chat/tools/GenericToolCall.tsx` (which takes `result?: u
 result content, including sentinels), the persisted `ToolCall.error`, and the replay path. §2.2's
 dependent list is corrected likewise.
 
-**A1-4 (C-04) — SCOPE: progress reaches only two providers. Named and accepted.** Verified by
-enumeration: **only `anthropic` and `openai_compat` implement `ChatStream`.** `azure`,
+**A1-4 (C-04) — SCOPE: progress reaches only streaming-capable providers. Named and accepted.**
+*Corrected by grill #2: there are **three** implementers, not two — `HTTPProvider`
+(`pkg/providers/http_provider.go:51`) is the third, as ADR-059 W1 already said. The original A1-4
+enumeration walked only `pkg/providers/*/` subdirectories and missed the top-level file.*
+**`anthropic`, `openai_compat` and `HTTPProvider` implement `ChatStream`;** `azure`,
 `bedrock` and `anthropic_messages` do not, so those installs take the non-streaming `Chat` path and
 report **no progress at all** — as does any agent with more than one fallback candidate
 (`loop.go` routes those through `Chat`). Bedrock is first-class per ADR-053.
@@ -69,6 +72,39 @@ and **AC-06 has neither test nor waiver**. These are recorded as required work, 
 §6's four gate questions are also reduced to the one that is genuinely open: items 1 and 4 were
 answerable from the tree (`ToolCall.error` is `type: string`, so JSON-inside-a-string always
 validates, and `additionalProperties: false` only bites on *added* fields, which W5 does not add).
+
+## 1.0b Amendment A2 — post re-grill #2 (BINDING; supersedes A1 where they conflict)
+
+Grill #2 returned **BLOCK** (5 CRITICAL). Report:
+[adr-059-delegation-observability-spec-review-pass2.md](adr-059-delegation-observability-spec-review-pass2.md).
+
+**A2-1 — A1 described edits that were never applied. THIS IS THE FINDING THAT MATTERS.** Six of A1's
+statements were falsifiable claims about this document's own contents (§6 retargeted, §2.2 corrected,
+§4 scoped, SC-001 reclassified, §9 mapped, sections added) and only §2.3 had actually been rewritten.
+Intent was written in the past tense. **All six edits are now applied to the body** — §2.2, §4, §6,
+SC-001/SC-002, FR-009, §9.1, §10.5, §10.6, §10.7 — and A1 should be read as the rationale for them,
+not as a claim that they exist.
+
+**A2-2 — A1-4 was wrong on a number. Corrected in place.** There are **three** `ChatStream`
+implementers, not two: `HTTPProvider` is the third, exactly as ADR-059 W1 states. A1 contradicted the
+ADR it is bound to. The scope conclusion — that Azure, Bedrock and `anthropic_messages` report no
+progress — is unaffected and stands.
+
+**A2-3 — chasing A2-2 found a production bug, now fixed.** `anthropicprovider.NewProvider` has one
+non-test caller: `ClaudeProvider`, which held its delegate as an unexported non-embedded field and so
+did **not** satisfy `StreamingProvider`. Proven by compile check. Every Anthropic install silently
+took the non-streaming path, making the native emitter — and the stale-accessor fix applied to it —
+unreachable. `streaming_compliance_test.go` asserted the *inner* type, which is why it stayed green.
+Fixed: `ClaudeProvider` forwards `ChatStream`, and the assertions now name the factory-returned type
+first. **Rule recorded: assert the type the factory returns, never the delegate it wraps.**
+
+**A2-4 — TDD #2 cannot fail after W1.** Once the callback is a parameter, "a hook replacing the
+options map cannot silence progress" is true by construction. It is kept as documentation and
+labelled as such in §10.7; it must not be counted as coverage.
+
+**Still open, deliberately:** the W5 gate has one genuinely open question (§6 item 3) and still lacks a
+pre-agreed alternative shape if the answer is bad. That is the next decision, not a defect to paper
+over.
 
 ---
 
@@ -141,7 +177,7 @@ release is a hook-contract break requiring deprecation, not a deletion.**
 | `ChatStream` signature | **MEDIUM** | 3 in-tree implementers + 1 caller, all compile-enforced. **Breaks out-of-tree providers — loudly, at build time.** That is the intended trade. |
 | Delete options-map plumbing | LOW | Nothing outside `protocoltypes` and `loop.go` after W1 |
 | `Index` doc comment | NONE | No production consumer exists |
-| `write_file` result text | **MEDIUM–HIGH** | Every agent that reads a `write_file` refusal; the SPA's `FileWriteConfirm.tsx`; the persisted `ToolCall.error` |
+| `write_file` result text | **MEDIUM–HIGH** | Every agent that reads a `write_file` refusal; the SPA's `GenericToolCall.tsx` (which renders result/error content — `FileWriteConfirm.tsx` never reads the result, see A1-3); the persisted `ToolCall.error`; the replay path |
 
 ### 2.3 Test disposition (replaces the withdrawn "unchanged" list — see A1-1)
 
@@ -254,7 +290,9 @@ the product.
 
 ## 4. Behavioral contract
 
-- When a provider streams tool-call arguments, the system reports forward progress to the caller.
+- When a **streaming-capable** provider streams tool-call arguments, the system reports forward
+  progress to the caller. On a non-streaming provider (Azure, Bedrock, `anthropic_messages`) or an
+  agent with multiple fallback candidates, **no progress is reported at all** — see A1-4.
 - When a provider is given no progress callback, the system reports nothing and does not fail.
 - When request options are replaced by a hook, progress reporting is unaffected.
 - When a write is refused because the file exists, the result identifies it as a precondition refusal.
@@ -340,8 +378,9 @@ amendment:
 1. Does the changed refusal text flow into `ToolCall.error` (a field on a schema with
    `additionalProperties: false`), and does it still validate?
 2. Does the live `tool_call_result` frame change shape?
-3. **Does the SPA's `FileWriteConfirm.tsx` render the refusal as a sentence today, and would it show
-   a JSON blob after the change?** This is the user-visible question and the most likely reason to
+3. **Does `src/components/chat/tools/GenericToolCall.tsx` render the refusal as a sentence today, and
+   would it show a JSON blob after the change?** (Not `FileWriteConfirm.tsx` — verified: it reads only
+   `args` and `status`, never the result, so gating on it returns a false all-clear.) This is the user-visible question and the most likely reason to
    choose a different shape.
 4. Is the 5-step contract pipeline (`scripts/gen-contracts.sh` + `make verify-contracts`) required?
 
@@ -362,12 +401,17 @@ already render as text. That is a lead, not an answer.
 - **FR-007**: A precondition refusal MUST be machine-distinguishable from an I/O failure in the
   result the calling agent reads.
 - **FR-008**: A refusal MUST remain human-readable where it is displayed.
-- **FR-009**: No test listed in §2.3 may change to accommodate the migration.
+- ~~**FR-009**: No test listed in §2.3 may change to accommodate the migration.~~ **WITHDRAWN (A1-1)**
+  — it was unsatisfiable: W1 breaks the wiring test's compile and W2 deletes the function it asserts
+  through. Replaced by §2.3's FROZEN/REWRITTEN split.
 
 ## 8. Success criteria
 
-- **SC-001**: Removing the progress parameter from any in-tree provider produces a build failure.
-- **SC-002**: Every test in §2.3 passes unchanged after W1 and W2.
+- **SC-001** *(review obligation, not a runnable check — A1-6)*: removing the progress parameter from
+  any in-tree provider must produce a build failure. Nothing in CI deletes a parameter, so this is
+  asserted by `streaming_compliance_test.go` plus reviewer attention.
+- **SC-002** *(restated — FR-009 is withdrawn, A1-1)*: every FROZEN test in §2.3 passes unchanged, and
+  every REWRITTEN test carries the replacement assertion named there.
 - **SC-003**: A tree-wide search for the options-map key returns no production matches.
 - **SC-004**: `go-test` and `go-race` are green on the worker at the final commit.
 - **SC-005**: W5 is not merged until §6 is answered in an appended amendment.
@@ -386,6 +430,21 @@ already render as text. That is a lead, not an answer.
 | FR-008 | US-5 | The refusal stays readable | SPA render check (§6 item 3) |
 | FR-009 | US-2 | — | SC-002 |
 
+### 9.1 ADR-059 acceptance criteria — mapping (A1-7)
+
+The ADR's own §8 criteria, each mapped or explicitly marked as an open gap. Three were unmapped; they
+are gaps in coverage, not gaps in the matrix.
+
+| ADR AC | Covered by | Status |
+|---|---|---|
+| AC-01 loop supplies a non-nil handler | TDD #1 | mapped |
+| AC-02 survives hook replacing options | TDD #2 | mapped, but see the note — after W1 it cannot fail |
+| AC-03 progress fires before the call completes, **per implementing provider** | TDD #3 | **GAP — no Anthropic test exists** |
+| AC-04 a mid-generation child reads as progressing | `delegate_toolcall_progress_test.go` (FROZEN) | mapped, **scoped to streaming-capable providers only (A1-4)** |
+| AC-05 race-free under concurrent write/read | `toolcall_progress_race_test.go` (FROZEN) covers one turn; TDD #4 covers two | **PARTIAL — cross-turn half untested** |
+| AC-06 a panicking handler does not kill the turn | TDD #5 | **GAP — no test, no waiver** |
+| AC-07 W5 plumbing test (bar waived for D4) | TDD #8, #9 | mapped, W5 only |
+
 ## 10. Ambiguity audit
 
 | Ambiguity | Likely agent assumption | Question to resolve |
@@ -394,6 +453,50 @@ already render as text. That is a lead, not an answer.
 | Exact JSON shape for W5 | Mirror ADR-058's `{"error":…,"message":…}` | Confirm field names before implementing |
 | Should the refusal keep `IsError: true`? | Yes — the content was not written | Confirm |
 | Does W2 delete the `protocoltypes` file entirely? | No — `ToolCallProgress` stays | Confirm the type survives, only the map plumbing goes |
+
+## 10.5 Out of scope
+
+- **Making non-streaming providers report progress.** Azure, Bedrock and `anthropic_messages` have no
+  `ChatStream`, and an agent with multiple fallback candidates takes the non-streaming path. Named,
+  accepted, and to be recorded in ADR-059 §4 (A1-4). Not addressed here.
+- **Teaching `delegate status` to distinguish "quiet" from "cannot report".** On a non-reporting
+  install an orchestrator still sees silence, which the incident says it reads as "hung". Real gap,
+  tracked separately.
+- **`Is3P` (external-CLI) children**, which bypass the progress path entirely.
+- **Wiring `tokens_in`** — unrelated, separately tracked.
+
+## 10.6 Definition of done
+
+W1/W2/W4 are done when **all** hold:
+
+1. `ChatStream` carries the progress parameter and all three implementers accept it.
+2. Every FROZEN test in §2.3 passes unchanged; every REWRITTEN test carries its named replacement.
+3. A tree-wide search for the options-map key returns no production matches.
+4. `go-test` and `go-race` are green on the CI worker at the final commit, parsed from the log rather
+   than the SSH exit code, with no `FLAKE (passed isolated)` lines.
+5. ADR-059's AC-01…AC-07 are each mapped in §9 to a test, or carry an explicit written waiver.
+
+W5 is done when, additionally, §6's open question is answered in an appended amendment **and** the
+answer is acted on — including choosing a different shape if the SPA renders a blob.
+
+## 10.7 TDD plan
+
+| # | Test | Level | Traces to | Notes |
+|---|---|---|---|---|
+| 1 | Stub provider receives a non-nil `onProgress` **parameter** | Unit (pkg/agent) | US-1 / FR-001 | Rewrite of the wiring test; replaces the options-map assertion |
+| 2 | Progress survives a `BeforeLLM` hook replacing options | Unit (pkg/agent) | US-1 / FR-003 | **After W1 this can no longer fail by construction** — keep it as documentation, or delete it and say why. Do not present it as coverage. |
+| 3 | Tool-args-only stream emits monotonic progress — **per implementing provider** | Unit (providers) | US-1 / FR-002, ADR-059 AC-03 | **Anthropic has no such test today.** Required, not optional. |
+| 4 | Two concurrent sub-turns on one agent record progress independently | Integration (pkg/agent) | ADR-059 AC-05 | The cross-turn half is currently untested — it is the exact hazard that rewrote D1 |
+| 5 | A panicking progress handler does not kill the turn | Unit (providers) | ADR-059 AC-06 | Or an explicit written waiver |
+| 6 | Options-map key absent from the tree | Unit | US-2 / FR-004 | Guards W2 |
+| 7 | `Index` doc states the provider-scoped contract | Unit | US-3 / FR-006 | Cheap; guards W4 |
+| 8 | Refusal carries a discriminator; I/O failure does not | Unit (pkg/tools) | US-4 / FR-007 | W5 only |
+| 9 | Discriminator survives truncation at 2000 runes | Unit | US-4 / FR-007, A1-5 | Prefix-positioned, so the cut cannot remove it |
+
+**Stub resistance.** Tests 1 and 3 must drive a real provider call path, not assert on a struct a test
+built. ADR-059 §8's inherited bar applies verbatim: *a green test that does not exercise a production
+caller does not satisfy this ADR.* Test 3 in particular must exercise the type the **factory returns**
+— asserting an inner delegate is precisely how the Anthropic emitter shipped unreachable.
 
 ## 11. Holdout evaluation scenarios *(not for development; excluded from §9)*
 

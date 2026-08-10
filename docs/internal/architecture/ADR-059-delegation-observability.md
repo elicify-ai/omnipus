@@ -223,6 +223,17 @@ in this ADR respectively (see §8).
 
 ## 4. Out of scope
 
+**Progress reaches only streaming-capable providers.** Verified by enumeration: `anthropic`,
+`openai_compat` and `HTTPProvider` implement `ChatStream`; **Azure, Bedrock and `anthropic_messages`
+do not**, and an agent configured with more than one fallback candidate is routed through the
+non-streaming `Chat` path regardless of provider. Those installs report **no progress at all**, and
+Bedrock is first-class per ADR-053. This is a named, accepted limitation of D1–D3, not an oversight —
+but it means an orchestrator on such an install still sees silence, which §1.1's evidence says it
+reads as "hung". Closing that needs `delegate status` to distinguish "quiet" from "cannot report",
+which this ADR does not decide.
+
+**`Is3P` (external-CLI) children** bypass the progress path entirely and retain the same blindness.
+
 Whether `steer` should be deliverable mid-round; whether unbounded worker output should be bounded by
 mechanism rather than prompt guidance; whether `write_file` should expose "who wrote this and when" to
 a racing sibling; whether `inspect_session` should surface persisted failure reasons (not yet tracked —
