@@ -260,6 +260,63 @@ by type assertion); and this spec's own citation of a stale commit SHA for W5, w
 
 ---
 
+## 1.0g Amendment A7 — second review wave; A6-1 and A6-4 CORRECTED (2026-08-10)
+
+A second 6-reviewer wave ran over A6's repairs. It found that **two of those repairs did not work**
+and that the CI gate added alongside them **would have gone red**. Fixed in `3c962e73`, each verified
+by reverting it and watching a test fail.
+
+**A6-4 is WRONG as written and is corrected here.** It claimed the producer "bounds its fields so the
+cut never fires". The budgets count INPUT runes; the 2000-rune cap counts ENCODED ones, and
+`encoding/json` escapes `<` `>` `&` to six runes each and doubles `"` and `\`. Three reviewers
+independently built payloads of 2018, 3605 and 4555 runes from paths made of ordinary legal filename
+characters. The regression test used `strings.Repeat("nested-directory/", …)` — not one escapable
+character in it — so it asserted the bound on the single input class where the bound held. **Payloads
+are now measured after encoding and shrunk until they fit**, and the same treatment covers
+`DelegationDeniedResult`, whose `reason` and `target_agent_id` carry model-supplied text and had no
+clamping at all.
+
+**The A6 race fix was incomplete.** `normalizeCriteria`'s copy was shallow, and `AcceptanceCriterion`
+holds two pointers — `validateCriterionBehavior` server-sets `MinCount` and `Scope` by writing
+*through* them. A `KindBehavior` criterion therefore still wrote into the caller's struct and still
+raced. The tests used `KindProse` exclusively, the one kind carrying no pointer state. Deep copy now,
+with the pointer-bearing kind under test.
+
+**The race gate would have gone deterministically red.** `pkg/task` asserts a wall-clock bound
+(SC-008, <1s) that race instrumentation blows — reproduced 3/3 isolated at 1.1–1.9s. That is the
+false-RED hazard the gate's own comment invokes to exclude `pkg/tools/browser`; it just missed this
+one. The bound is now build-tagged per detector. Separately, `./pkg/tools` non-recursive silently
+excluded **five** packages while the comment named one: `cdppipe`, `webrtc`, `captureext` and
+`chromeintegrity` are all race-clean and are now listed explicitly.
+
+**A6-1 is RE-SCOPED.** It reads as a `FileWriteConfirm` defect. It is not — it is a runtime-layer gap:
+AssistantUI's part status cannot report a failed tool call once that call has a result, and **eight
+other registered tool UIs** have the identical broken `isError` (`BashOutput`, `BrowserNavigate`,
+`BrowserTool`, `FileReadPreview`, `FileTreeView`, `WebFetchPreview`, `WebSearchResult`,
+`WebServeUI`). A failed `bash` still renders "Done" today — arguably the worse instance, since `bash`
+is what a delegated worker uses most. The durable fix is one line in `src/lib/omnipus-runtime.ts`
+setting `isError` on the part, not a hook in each component. **Tracked, not done here.**
+
+**Two divergences the A6 repairs introduced, now closed.** Live said "Failed" where replay said "File
+already exists" — created by the very commit that fixed the previous divergence, with a test pinning
+the wrong side. And `ToolCallBadge`, the renderer for a *delegated worker's* nested steps and hence
+the exact surface the nested-builder fix was written to feed, had no branch at all and rendered raw
+JSON. The replay renderer also shipped with no tests despite being the only renderer on that path.
+
+**Also closed: the SPA flake issue (#616), by root cause rather than deferral.** The failures were
+vitest worker oversubscription. The mitigation already existed in `deploy/ci-worker/runci.sh` ("cap
+workers: 8 oversubscribe shared vCPUs") but lived in that one script, so GitHub Actions and every
+local run went uncapped. It now lives in `vite.config.ts`. Measured: uncapped 1–4 failures per run
+across five full runs; capped 413/413 green and faster.
+
+**The pattern worth carrying forward:** three rounds running, the tests passed because they exercised
+the wrong input class — prose-only criteria, escape-free paths, an unreachable status pair. The
+reviewers caught each one. "Does this test fail on the broken code?" was asked and answered each
+time; the question that was NOT asked is "is the input I am feeding it the input production
+produces?".
+
+---
+
 ## 1. Overview
 
 ADR-059 fixes a defect where a delegated worker generating a large tool-call argument was
