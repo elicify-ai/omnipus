@@ -225,13 +225,16 @@ This spec covers the ADR's remaining work items, which are a **migration of work
 behavioural change** — not a new feature. That framing drives the whole verification approach: the
 dominant risk is regressing something that currently works, not failing to build something new.
 
-| Item | What | Risk |
+| Item | What | Status |
 |---|---|---|
-| **W1** | Move the progress callback from the `options` map to a `ChatStream` parameter | Migration — must not regress |
-| **W2** | Delete the now-dead options-map plumbing | Migration — must not regress |
+| **W1** | Move the progress callback from the `options` map to a `ChatStream` parameter | **Done** — `86b10dc7`. Four implementers (`openai_compat`, `anthropic`, `HTTPProvider`, `ClaudeProvider`), one caller, ~13 test sites |
+| **W2** | Delete the now-dead options-map plumbing | **Done** — `86b10dc7`. `OnToolCallProgressKey` and `ToolCallProgressFromOptions` are gone; one way to pass this, not two |
 | **W3** | Remove `ToolResult.Reason` | **Done** (§1.2) |
-| **W4** | Correct `ToolCallProgress.Index`'s doc comment | Documentation only |
-| **W5** | Structured discriminator in `write_file`'s refusal, per ADR-058 | **Behavioural** — gated on W6 |
+| **W4** | Correct `ToolCallProgress.Index`'s doc comment | **Done** — `86b10dc7` |
+| **W5** | Structured discriminator in `write_file`'s refusal, per ADR-058 | **Done** — `fb14c632`, shape A per A5. Includes the gateway live/replay parity fix and the A4-3 SPA change |
+| **A4-4** | `recover()` guard on the progress handler | **Done** — `6411a342`, with a production-caller test in each provider |
+
+**§6's gate is closed** — by A5, not by a separate investigation. **W6 no longer blocks anything.**
 
 ### 1.1 Why W1 at all, when the delivered mechanism works
 
@@ -477,10 +480,26 @@ Scenario: The refusal stays readable to a human
 
 ---
 
-## 6. W5 gate — contract impact (must complete before W5 is implemented)
+## 6. W5 gate — contract impact — **CLOSED** (A5, 2026-08-10)
 
-W5 is **blocked** until each of these is answered in writing and appended to this spec as an
-amendment:
+**This gate no longer blocks anything.** It is retained because the questions it asked were the right
+ones and two of the answers are load-bearing. Answers, as delivered in `fb14c632`:
+
+1. **No.** The payload rides in `result` (a permissive `oneOf`) and in `error` (a plain string, no
+   `additionalProperties` constraint). Nothing invalidates. A new `FileExistsRefusal` variant was
+   added to the `result` union so the SPA gets a typed shape rather than an anonymous object.
+2. **No.** The frame keeps its shape; only the JSON *type* of `result` changes, from string to
+   object, which the union already permits.
+3. **Both renderers were changed, and the answer to the original question was the discovery that
+   mattered.** `GenericToolCall` would indeed have shown a JSON blob, so the gateway now lifts the
+   prose reason into `error` and hands the parsed object to `result` — on the LIVE path and, newly,
+   on REPLAY. Replay was the real hazard: it reconstructs from a persisted raw JSON string, so
+   without the same parse a page reload would replace a sentence with a blob. Separately,
+   `FileWriteConfirm` was fixed under A4-3: it showed no reason at all, before W5 touched anything.
+4. **Yes.** A hand-written Go struct for a wire payload is forbidden by Constraint #8, so the schema
+   went through the 5-step pipeline and the generated artifacts are committed with it.
+
+The original questions, as posed:
 
 1. Does the changed refusal text flow into `ToolCall.error` (a field on a schema with
    `additionalProperties: false`), and does it still validate?
