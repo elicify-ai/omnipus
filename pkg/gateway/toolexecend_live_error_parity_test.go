@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -60,10 +61,66 @@ func TestToolExecEnd_NonDelegationFailure_LivePathPopulatesError(t *testing.T) {
 	frame := drainFrame(t, ch)
 	assert.Equal(t, "tool_call_result", frame.Type, "frame type must be tool_call_result")
 	assert.Equal(t, "error", frame.Status, "status must be error")
-	assert.Equal(t, failureText, frame.Error,
-		"a non-delegation tool failure must populate the live frame's Error field "+
-			"from the same string (ToolExecEndPayload.Result) that pkg/agent/loop.go "+
-			"persists as session.ToolCall.Error, so live and replay agree")
+	assert.Equal(t, failureText, frame.Result,
+		"the reason must reach the client — here via Result, which carries it verbatim")
+	assert.Empty(t, frame.Error,
+		"Error must stay EMPTY when Result already carries the reason: setting both ships "+
+			"the identical text twice in one frame. The invariant is 'the reason is reachable', "+
+			"not 'Error is always set' — see TestToolExecEnd_OffloadedError_PopulatesErrorInstead "+
+			"for the case where Result cannot carry it and Error must.")
+}
+
+// TestToolExecEnd_OffloadedError_PopulatesErrorInstead is the other half of the
+// contract, and the reason Error exists on the live path at all.
+//
+// When a failure exceeds InlineToolResultMaxBytes the gateway writes it to disk
+// and replaces Result with a small ToolResultRef sentinel, so the frame no
+// longer carries any readable reason. Error must then carry it — bounded, so it
+// cannot re-inline the payload the offload just removed.
+func TestToolExecEnd_OffloadedError_PopulatesErrorInstead(t *testing.T) {
+	bus := agent.NewEventBus()
+	defer bus.Close()
+
+	// A real tool-result store, so the offload actually fires. Without one
+	// maybeOffloadResult is a no-op and Result keeps the raw payload — which
+	// would make this test silently exercise the ordinary path instead of the
+	// offloaded one, and pass for the wrong reason.
+	h := makeMinimalHandler()
+	h.toolStore = newToolResultStore(t.TempDir())
+
+	wc, ch := makeForwarderTestConn(64)
+	done := runForwarder(h, wc, "chat-1", bus)
+
+	huge := strings.Repeat("x", InlineToolResultMaxBytes+1024)
+
+	bus.Emit(agent.Event{
+		Kind: agent.EventKindToolExecEnd,
+		Payload: agent.ToolExecEndPayload{
+			ToolCallID: session.ToolCallID("call-huge"),
+			ChatID:     "chat-1",
+			SessionID:  "sess-1",
+			Tool:       "bash",
+			IsError:    true,
+			Result:     huge,
+		},
+	})
+
+	bus.Close()
+	<-done
+
+	require.Len(t, ch, 1)
+	frame := drainFrame(t, ch)
+	assert.Equal(t, "error", frame.Status)
+
+	// Result must NOT be the raw payload — the offload must have replaced it.
+	if s, isString := frame.Result.(string); isString && len(s) >= InlineToolResultMaxBytes {
+		t.Fatalf("Result still carries the raw %d-byte payload; the offload did not fire", len(s))
+	}
+
+	require.NotEmpty(t, frame.Error,
+		"with Result offloaded, Error is the only readable reason left in the frame")
+	assert.Less(t, len(frame.Error), InlineToolResultMaxBytes,
+		"Error must be bounded — re-inlining the payload here would defeat the offload it just went through")
 }
 
 // TestToolExecEnd_DelegationDenial_StillUsesParsedReason confirms the

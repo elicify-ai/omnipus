@@ -3772,19 +3772,52 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			// after a page reload — the exact opposite of parity. p.Result is
 			// ToolExecEndPayload.Result, which loop.go sets to the very same
 			// contentForLLM string tcRecord.Error is derived from (pre the
-			// persisted side's maxFailClosedOutputChars truncation, an
-			// unexported pkg/agent bound this package cannot reuse) — using
-			// it directly here is "the same string that gets persisted",
-			// just without that extra truncation step; resultF.Result
-			// already carries this same string live (subject to the
-			// InlineToolResultMaxBytes offload above), so Error introduces
-			// no new size exposure beyond what Result already has live.
+			// persisted side's truncation) — so it is the same string the
+			// transcript records.
+			//
+			// It MUST be truncated to the same bound the persisted side uses,
+			// for two independent reasons:
+			//
+			//  1. SIZE. resultF.Result is subject to the
+			//     InlineToolResultMaxBytes offload a few lines above: a result
+			//     over 50 KiB is written to disk and replaced with a small
+			//     ToolResultRef sentinel, because a multi-megabyte frame can
+			//     OOM a constrained client (see maybeOffloadResult). Assigning
+			//     the raw p.Result to Error would put the entire string back
+			//     into the very same frame, defeating that guard — and the
+			//     error path is where large payloads are MOST likely (stderr
+			//     dumps, stack traces, build logs).
+			//
+			//  2. PARITY, which is the whole point of this branch. The
+			//     persisted side caps at maxFailClosedOutputChars, so an
+			//     untruncated live value means a long error renders one way
+			//     live and a different way after a reload — the same class of
+			//     divergence this change set out to remove.
 			switch {
 			case delegationErr != "":
 				de := delegationErr
 				resultF.Error = &de
-			case status == "error" && p.Result != "":
-				liveErr := p.Result
+			case status == "error" && p.Result != "" && liveResult != any(p.Result):
+				// Only when Result no longer carries the text itself.
+				//
+				// `liveResult != any(p.Result)` is true exactly when Result was
+				// REPLACED above — either offloaded to disk as a ToolResultRef
+				// sentinel (over InlineToolResultMaxBytes) or parsed into a
+				// structured object. In those cases the frame would otherwise
+				// reach the client with no readable reason at all, so Error is
+				// the only thing carrying it.
+				//
+				// When Result IS still the plain string, setting Error would
+				// ship the identical text twice in one frame. That is pure
+				// duplication: the SPA already has the reason in Result.
+				//
+				// Replay is unaffected and still sets Error unconditionally
+				// from the persisted record — it must, because on the persisted
+				// side Result is nil for ordinary tool failures (only media and
+				// synchronous delegate calls populate it), so Error is the ONLY
+				// carrier there. That asymmetry is deliberate: each path sets
+				// Error precisely when its own Result cannot carry the reason.
+				liveErr := truncateRunesForFrame(p.Result, maxLiveErrorChars)
 				resultF.Error = &liveErr
 			}
 			// ADR-057 FR-012/FR-013 (W5b): tool_call_result is class (a) —

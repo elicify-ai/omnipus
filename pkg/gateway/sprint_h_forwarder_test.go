@@ -432,8 +432,13 @@ func TestToolExecEnd_PlainError_NotSubstituted(t *testing.T) {
 	frame := drainFrame(t, ch)
 	assert.Equal(t, "tool_call_result", frame.Type)
 	assert.Equal(t, "error", frame.Status)
-	assert.Equal(t, "permission denied", frame.Error,
-		"a plain (non-delegation) error must still populate frame.Error, for live/replay parity")
 	assert.Equal(t, "permission denied", frame.Result,
 		"a plain error result must be forwarded as the raw string, not substituted with a parsed object")
+	assert.Empty(t, frame.Error,
+		"Error must stay EMPTY when Result already carries the reason verbatim — setting both would "+
+			"ship the identical text twice in one frame. Error is populated live only when Result "+
+			"cannot carry the reason (offloaded to a ToolResultRef sentinel, or replaced by a parsed "+
+			"object), and unconditionally on REPLAY, where the persisted Result is nil for ordinary "+
+			"tool failures. This assertion was briefly inverted while establishing live/replay parity; "+
+			"the original expectation was correct.")
 }

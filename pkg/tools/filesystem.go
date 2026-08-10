@@ -811,18 +811,23 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	var clobberNote string
 	if !overwrite {
 		if _, statErr := handle.Stat(); statErr == nil {
-			// RC-2 (delegation fix-wave UAT): this is a PRECONDITION refusal,
-			// not a genuine I/O failure — mark it with ReasonAlreadyExists so
-			// a caller (e.g. an orchestrating agent re-reading a delegated
-			// sub-agent's tool result) can tell "a sibling already wrote
-			// this, no action needed" apart from the real write failure two
-			// branches below WITHOUT string-matching ForLLM's prose. IsError
-			// stays true deliberately: from the caller's point of view the
-			// content it asked to write was NOT written, so this remains an
-			// error outcome — see ResultReason's doc comment and
-			// pkg/tools/result.go's ReasonAlreadyExists constant.
-			return ErrorResult(fmt.Sprintf("file: %s already exists. Set overwrite=true to replace.", path)).
-				WithReason(ReasonAlreadyExists)
+			// A PRECONDITION refusal, not a genuine I/O failure: the file is
+			// already there. Today the only signal of that is this prose,
+			// which is the same shape as the real write failure two branches
+			// below (ErrorResult(err.Error())) — so a caller cannot tell
+			// "a sibling already wrote this, no action needed" from "the
+			// write broke" without matching on wording.
+			//
+			// ADR-059 D4 decides the fix: a structured discriminator inside
+			// the text the CALLING AGENT reads, per ADR-058's convention —
+			// not a Go struct field, which no language model can see. That is
+			// work item W5, gated on §7's contract analysis (whether the SPA
+			// would begin rendering a JSON blob where it renders a sentence).
+			//
+			// An earlier attempt added a ToolResult.Reason field here; W3
+			// removed it because it was unreachable by its own documented
+			// consumer.
+			return ErrorResult(fmt.Sprintf("file: %s already exists. Set overwrite=true to replace.", path))
 		}
 	} else if _, statErr := handle.Stat(); statErr == nil {
 		// We are about to replace a file that already exists. Look up who
