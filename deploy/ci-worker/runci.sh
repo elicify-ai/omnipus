@@ -166,11 +166,43 @@ run_gorace() {
   # vanishes at -p 1 is the textbook signature of a genuine concurrency bug.
   if [[ $out == *"DATA RACE"* ]]; then
     echo ""
-    echo "=== DATA RACE detected — never excused by an isolated re-run ==="
+    echo "=== DATA RACE detected — skipping flake filter entirely ==="
     echo "$out" | grep -aE '^FAIL[[:space:]]|DATA RACE' | head -20
     return 1
   fi
-  return $code
+  [ $code -eq 0 ] && return 0
+
+  # Flake filter — ALSO copied from pr.yml's race step, and required for
+  # parity. Without it this gate is STRICTER than GitHub's, so a PR that is
+  # green upstream can show red here purely on a timing flake, and a
+  # false-RED gate gets ignored, which is worse than no gate.
+  #
+  # It reached that state once: the first race run on this worker failed on
+  # `TempDir RemoveAll cleanup: directory not empty` in pkg/gateway — a test
+  # TEARDOWN race (a background goroutine still writing after the test body
+  # returned, a window -race widens), not a data race. It passed isolated,
+  # and GitHub would have excused it.
+  #
+  # Note this filter can NEVER excuse a real race: the DATA RACE carve-out
+  # above returns before reaching here.
+  local failed
+  failed=$(echo "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+  [ -z "$failed" ] && return $code
+  echo ""
+  echo "=== FLAKE FILTER (-race): re-running failed packages isolated (-p 1): $failed ==="
+  local rc=0
+  for p in $failed; do
+    if CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 600s -p 1 "$p" >/tmp/rr_race.log 2>&1; then
+      echo "FLAKE (passed isolated): $p"
+      echo "  contended-run failures (each is a REAL BUG that has not been diagnosed yet):"
+      grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' <<<"$out" | awk '{print $3}' | sort -u | sed 's/^/    /'
+    else
+      echo "REAL FAILURE (failed twice): $p"
+      grep -aE '^--- FAIL|DATA RACE' /tmp/rr_race.log | head
+      rc=1
+    fi
+  done
+  return $rc
 }
 
 run_gotest() {

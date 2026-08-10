@@ -14,7 +14,11 @@ as if it were a full pass):
    gate**, and it is included in `all`. It copies pr.yml's package list, `-timeout 600s`,
    `CGO_ENABLED=1` and DATA RACE carve-out verbatim; keep the two in lockstep, because a worker
    gate that measures something GitHub does not is how a green local verdict stops predicting the
-   real one. **Two limits remain:** (a) `go-test` and `go-race` are separate gates, so running
+   real one — including pr.yml's **flake filter**, which the gate initially shipped without and which
+   made it stricter than GitHub (a PR green upstream could show red here on a timing flake; a
+   false-RED gate gets ignored, which is worse than no gate). The filter can never excuse a real
+   race — the DATA RACE carve-out returns before it.
+   **Two limits remain:** (a) `go-test` and `go-race` are separate gates, so running
    `go-test` alone still carries zero race signal — use `all` or run `go-race` explicitly; (b) the
    package list is pr.yml's, which does **not** include `pkg/tools` or `pkg/providers`, so races
    there are still caught by neither surface.
