@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -111,9 +112,14 @@ func TestDelegateTool_DelegationDenyChecker_Aborts(t *testing.T) {
 // spawner.
 func TestDelegateTool_DelegationDenyChecker_Allows(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
-	spawned := false
+	// atomic.Bool, not a plain bool: the spawner runs on the async goroutine
+	// while the test body is still executing, so a plain flag is a genuine
+	// data race — `go test -race ./pkg/tools/...` reports it. The old comment
+	// below said the race "is not asserted", which is true and beside the
+	// point: the detector flags the unsynchronised ACCESS, not the assertion.
+	var spawned atomic.Bool
 	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
-		spawned = true
+		spawned.Store(true)
 		return NewToolResult("ran"), nil
 	}))
 	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
@@ -131,13 +137,18 @@ func TestDelegateTool_DelegationDenyChecker_Allows(t *testing.T) {
 	if result == nil || result.IsError {
 		t.Fatalf("expected allowed delegate call to succeed, got %+v", result)
 	}
-	// DelegateTool launches the spawner in a goroutine for async=true (default);
-	// we only assert the call was accepted (Async) here — the goroutine race on
-	// `spawned` is not asserted.
+	// DelegateTool launches the spawner in a goroutine for async=true
+	// (default), so the spawn has not necessarily happened yet — this asserts
+	// only that the call was ACCEPTED. Whether the spawner actually ran is
+	// checked after the async work drains, below.
 	if !result.Async {
 		t.Error("expected an async result for an allowed background delegate call")
 	}
-	_ = spawned
+	tool.WaitForAsyncTasks()
+	if !spawned.Load() {
+		t.Error("the allowed delegate call never reached the spawner — the deny-checker's " +
+			"allow path is what this test exists to prove, and it was previously not asserted at all")
+	}
 }
 
 // TestTaskCreateTool_DelegationDenyChecker_Aborts proves the deny-checker aborts a

@@ -192,9 +192,24 @@ type AcceptanceCriterion struct {
 // NOT enforce "at least one criterion" (SD-A7's agent-path tiering) — that
 // tiered rule depends on caller identity (agent tool vs. human/UI) which the
 // store does not know; it is enforced by the caller.
+//
+// It works on a COPY and never writes through the caller's slice. It used to
+// mutate in place, which made the store scribble server-set IDs into memory
+// the caller still owned — so two goroutines normalising slices that share a
+// backing array raced, with no lock anywhere in sight to suggest they might.
+// Found by `go test -race ./pkg/tools/...`, a package neither CI race gate
+// covered; the reporting sites were two parallel subtests sharing one
+// fixture slice, but the hazard is the API's, not the test's: every one of
+// the five call sites already assigns the returned slice, so nothing wanted
+// the in-place behaviour in the first place.
 func normalizeCriteria(criteria []AcceptanceCriterion) ([]AcceptanceCriterion, error) {
-	for i := range criteria {
-		c := &criteria[i]
+	if criteria == nil {
+		return nil, nil
+	}
+	normalized := make([]AcceptanceCriterion, len(criteria))
+	copy(normalized, criteria)
+	for i := range normalized {
+		c := &normalized[i]
 		if c.ID == "" {
 			c.ID = uuid.New().String()
 		}
@@ -205,7 +220,7 @@ func normalizeCriteria(criteria []AcceptanceCriterion) ([]AcceptanceCriterion, e
 			return nil, err
 		}
 	}
-	return criteria, nil
+	return normalized, nil
 }
 
 // NormalizeCriteria is the exported form of normalizeCriteria, for other

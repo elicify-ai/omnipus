@@ -1,0 +1,80 @@
+package task
+
+import (
+	"sync"
+	"testing"
+)
+
+// TestNormalizeCriteria_DoesNotMutateCallerSlice pins the contract that
+// removed a real data race.
+//
+// normalizeCriteria used to server-set IDs by writing through the caller's
+// slice. That made the store scribble into memory the caller still owned, so
+// two goroutines normalising slices that share a backing array raced — with no
+// lock anywhere nearby to hint that they might. It was invisible because
+// neither CI race gate covered a package that reaches this path.
+//
+// Every call site already assigns the returned slice, so nothing ever wanted
+// the in-place behaviour.
+func TestNormalizeCriteria_DoesNotMutateCallerSlice(t *testing.T) {
+	input := []AcceptanceCriterion{
+		{Kind: KindProse, Text: "does the thing",
+			Author: CriterionAuthor{Kind: AuthorKindUser, ID: "alice"}},
+	}
+
+	out, err := normalizeCriteria(input)
+	if err != nil {
+		t.Fatalf("normalizeCriteria() error = %v", err)
+	}
+
+	if input[0].ID != "" {
+		t.Errorf("normalizeCriteria wrote a server-set ID into the CALLER's slice (%q) — "+
+			"that is the in-place mutation whose racing writes this contract removes", input[0].ID)
+	}
+	if input[0].Status != "" {
+		t.Errorf("normalizeCriteria defaulted Status in the CALLER's slice (%q)", input[0].Status)
+	}
+	if out[0].ID == "" {
+		t.Error("the RETURNED slice must carry the server-set ID — copying must not skip the work")
+	}
+	if out[0].Status != CritPending {
+		t.Errorf("returned Status = %q, want %q", out[0].Status, CritPending)
+	}
+}
+
+// TestNormalizeCriteria_ConcurrentSharedBackingArray is the race regression
+// itself: two goroutines normalising slices that share one backing array. It
+// reports a data race under -race on the pre-fix code and passes on the fixed
+// code. Without -race it still passes either way — which is exactly why the
+// package has to be in a race gate, not merely in `go test`.
+func TestNormalizeCriteria_ConcurrentSharedBackingArray(t *testing.T) {
+	shared := []AcceptanceCriterion{
+		{Kind: KindProse, Text: "a", Author: CriterionAuthor{Kind: AuthorKindUser, ID: "alice"}},
+		{Kind: KindProse, Text: "b", Author: CriterionAuthor{Kind: AuthorKindAgent, ID: "jim"}},
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := normalizeCriteria(shared); err != nil {
+				t.Errorf("normalizeCriteria() error = %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// TestNormalizeCriteria_NilStaysNil guards the one behaviour a naive copy
+// would change: callers distinguish a nil criteria slice from an empty one
+// (pkg/task/store.go's Update nils out an empty result explicitly).
+func TestNormalizeCriteria_NilStaysNil(t *testing.T) {
+	out, err := normalizeCriteria(nil)
+	if err != nil {
+		t.Fatalf("normalizeCriteria(nil) error = %v", err)
+	}
+	if out != nil {
+		t.Errorf("normalizeCriteria(nil) = %#v, want nil — callers treat nil and empty differently", out)
+	}
+}
