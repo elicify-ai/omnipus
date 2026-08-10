@@ -78,7 +78,20 @@ export default defineConfig({
     // as a top-level `maxWorkers`; the older `poolOptions.forks.maxForks`
     // shape is not in this version's config type and fails typecheck.)
     maxWorkers: '50%',
-    testTimeout: 15000,
+    // 30s, not 15s. The comment on hookTimeout below already establishes why:
+    // importing a route/screen module triggers the router plugin's transform
+    // across every route file, "20–30s on a cold run". That budget was granted
+    // to HOOKS only — but ~23 test files do the same `await import('./X')`
+    // inside the test BODY, where only testTimeout applies. Those are exactly
+    // the files that kept timing out (#616): -app-auth, ConnectorsScreen,
+    // ConnectorsScreen.keyRemount all import their subject in the body.
+    //
+    // Capping workers above cut the contention that made the transform slow
+    // enough to matter, but did not remove it — the suite still lost one test
+    // per run or two. 30s is under the documented worst case yet still an
+    // order of magnitude above a healthy test, so it remains a real hang
+    // detector rather than a blanket suppression.
+    testTimeout: 30000,
     // beforeAll in onboarding.test.tsx dynamically imports the route module which
     // triggers TanStack router plugin transform across all route files — this can
     // take 20–30s on a cold run. Raise hookTimeout to prevent spurious timeouts.
