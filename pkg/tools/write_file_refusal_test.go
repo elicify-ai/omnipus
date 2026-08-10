@@ -84,44 +84,68 @@ func TestWriteFile_RefusalCarriesDiscriminator_FailureDoesNot(t *testing.T) {
 			"discriminator distinguishes nothing")
 }
 
-// TestWriteFile_RefusalDiscriminatorSurvivesTruncation is TDD #9 (A1-5's
-// prefix-positioning rule).
+// TestWriteFile_RefusalDiscriminatorSurvivesTruncation is TDD #9.
 //
 // Both the persisted transcript and the live error frame cap this string at
 // 2000 runes (maxFailClosedOutputChars in pkg/agent, maxLiveErrorChars in
-// pkg/gateway). A payload long enough to blow that budget must not be able to
-// push the discriminator past the cut — a severed payload is unparseable, so
-// FR-007 would fail silently on exactly the deeply-nested paths a delegated
-// worker in a shared workspace is most likely to produce.
+// pkg/gateway). The consumer that matters — the gateway's
+// parseStructuredToolFailure — recovers the discriminator with a WHOLE-JSON
+// unmarshal, so a payload cut at that boundary does not merely lose its tail:
+// it stops parsing entirely, and replay then renders the JSON fragment
+// verbatim where the live view showed a sentence.
 //
-// This drives the constructor rather than tool.Execute deliberately, and the
-// reason is a real constraint rather than convenience: the operating system
-// caps a full path well below the truncation bound (1024 bytes on macOS), so
-// no filesystem state can produce a 2000-rune payload here at all. Driving it
-// through Execute would silently assert nothing on this platform and something
-// else on Linux. The property under test belongs to the payload's field order,
-// not to the filesystem — and the test above already proves the production
-// caller emits this exact payload.
+// Prefix-positioning the discriminator does NOT save that. An earlier version
+// of this test asserted only prefix position and justified skipping the
+// long-payload case with "the OS caps a path below the truncation bound" —
+// which is false: the path appears twice in the payload, so ~950 characters
+// already overflows, well inside macOS's 1024-byte PATH_MAX and trivially
+// inside Linux's 4096. The real fix is at the producer, which bounds its
+// fields so the encoded payload can never reach the cap.
 //
-// The guarantee comes from field order: encoding/json emits struct fields in
-// declaration order and Error is declared first, so the discriminator sits
-// within the first ~30 bytes no matter how long the path is.
+// This drives the constructor rather than tool.Execute because the failing
+// input is a long PATH, and the filesystem cannot hold one long enough on
+// macOS — a test driven through Execute would assert nothing here and
+// something else on Linux. The production caller is covered by the test above.
 func TestWriteFile_RefusalDiscriminatorSurvivesTruncation(t *testing.T) {
 	const truncationBound = 2000 // maxFailClosedOutputChars / maxLiveErrorChars
 
 	longPath := "/workspace/" + strings.Repeat("nested-directory/", 200) + "f.txt"
+	require.Greater(t, len(longPath), truncationBound,
+		"test premise: the raw path must exceed the bound, or nothing is being clamped")
+
 	refusal := FileExistsRefusalResult("write_file", longPath,
 		"file: "+longPath+" already exists. Set overwrite=true to replace.")
 
-	require.Greater(t, len([]rune(refusal.ForLLM)), truncationBound,
-		"test premise: the payload must actually exceed the truncation bound")
+	// The whole payload must fit, so the downstream cut never fires at all.
+	require.LessOrEqual(t, len([]rune(refusal.ForLLM)), truncationBound,
+		"the encoded payload exceeds the 2000-rune cap applied downstream; once truncated it no "+
+			"longer parses, and a reload shows a JSON fragment instead of a sentence")
 
-	truncated := string([]rune(refusal.ForLLM)[:truncationBound])
-	assert.Contains(t, truncated, FileExistsRefusalCode,
-		"the discriminator was cut off by truncation — it must be prefix-positioned so no path "+
-			"length can push it past the cap")
+	// And it must still be valid, classifiable JSON after all that clamping.
+	parsed := decodeRefusal(t, refusal.ForLLM)
+	assert.Equal(t, FileExistsRefusalCode, parsed["error"])
+	assert.NotEmpty(t, parsed["path"], "path is minLength:1 in the contract")
+	assert.NotEmpty(t, parsed["reason"], "reason is minLength:1 in the contract")
+
+	// The basename survives: clamping cuts from the FRONT, because the leading
+	// directories are the repetitive part and the filename is the part a
+	// reader needs.
+	assert.Contains(t, parsed["path"], "f.txt",
+		"clamping must keep the tail of the path — the basename is the informative part")
+
 	assert.True(t, strings.HasPrefix(refusal.ForLLM, `{"error":"`+FileExistsRefusalCode+`"`),
-		"the discriminator must be the FIRST field; anything else makes survival a matter of luck")
+		"the discriminator must still be the first field")
+}
+
+// TestFileExistsRefusalResult_DefendsEveryRequiredField covers the other three
+// contract minLength:1 fields, not just reason. A schema-invalid payload is
+// dropped at the SPA edge, which leaves the caller with nothing — worse than
+// the prose the tag replaced.
+func TestFileExistsRefusalResult_DefendsEveryRequiredField(t *testing.T) {
+	parsed := decodeRefusal(t, FileExistsRefusalResult("", "", "").ForLLM)
+	for _, field := range []string{"error", "reason", "tool", "path"} {
+		assert.NotEmpty(t, parsed[field], "%s must never be empty — the contract requires minLength 1", field)
+	}
 }
 
 // TestFileExistsRefusalResult_EmptyReasonStillClassifiable defends the

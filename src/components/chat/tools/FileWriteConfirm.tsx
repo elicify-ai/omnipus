@@ -1,5 +1,6 @@
 import { makeAssistantToolUI } from '@assistant-ui/react'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
+import { useChatStore } from '@/store/chat'
 import { cn } from '@/lib/utils'
 
 interface WriteFileArgs {
@@ -82,11 +83,11 @@ function FileOpBlock({
     isRunning ? 'running' : isCancelled ? 'cancelled' : isError ? 'error' : 'success',
     { size: 12, cancelledVariant: 'muted' }
   )
-  // Only on failure. A successful write has nothing to explain, and the
-  // reason line is deliberately NOT truncated the way the path is — a reason
-  // clipped to fit is a reason you have to go looking for elsewhere, which is
-  // the state this replaces.
-  const showReason = isError && !isRunning && reason
+  // Shown on failure or cancellation, and deliberately NOT truncated the way
+  // the path is — a reason clipped to fit is a reason you have to go looking
+  // for elsewhere, which is the state this replaces. A successful write has
+  // nothing to explain.
+  const showReason = (isError || isCancelled) && !isRunning && reason
   // The reason wraps onto its own line via flex-wrap + basis-full rather than
   // living inside a nested row container. That keeps the status indicator as
   // this element's FIRST CHILD, which FileTools.edge.test.tsx asserts
@@ -112,18 +113,70 @@ function FileOpBlock({
   )
 }
 
+// FileOpRow is a real component, not an inline render callback, because it
+// needs a hook: AssistantUI's own part status CANNOT report a failed tool call.
+//
+// toMessagePartStatus (@assistant-ui/core, runtime/api/message-runtime.js)
+// short-circuits a tool-call part to {type:'complete'} the moment the part has
+// a truthy `result` — and this SPA never sets `isError` on a part
+// (src/lib/omnipus-runtime.ts builds every part with exactly toolCallId/
+// toolName/args/result). A refused write has a result, so its part status is
+// 'complete' and `status.type === 'incomplete'` is false. Gating on that alone
+// rendered a FAILED write with the success dot and a "Done" label, and the
+// reason line never mounted at all.
+//
+// The store is the only place the outcome actually lives: ToolCall.status and
+// ToolCall.error, set from the tool_call_result frame. GenericToolCall already
+// works this way (`status.type === 'incomplete' || !!error`, with `error`
+// threaded in from the store by ChatScreen's FallbackToolUI) — this brings the
+// registered file-op UIs onto the same footing rather than inventing a
+// second mechanism.
+function FileOpRow({
+  label,
+  toolCallId,
+  path,
+  detail,
+  result,
+  status,
+}: {
+  label: string
+  toolCallId: string
+  path: string
+  detail?: string
+  result: unknown
+  status: { type: string }
+}) {
+  const storeCall = useChatStore((s) => s.toolCalls[toolCallId])
+  const isRunning = status.type === 'running' || storeCall?.status === 'running'
+  const isCancelled = isCancelledStatus(status) || storeCall?.status === 'cancelled'
+  const isError = !isCancelled && (status.type === 'incomplete' || storeCall?.status === 'error')
+  return (
+    <FileOpBlock
+      label={label}
+      path={path}
+      detail={detail}
+      // The store's own error string is preferred: for a plain failure the
+      // gateway puts the reason there and leaves `result` as the raw text,
+      // and on replay `result` can be absent entirely.
+      reason={failureReason(storeCall?.error) ?? failureReason(storeCall?.result ?? result)}
+      isRunning={isRunning}
+      isError={isError}
+      isCancelled={isCancelled}
+    />
+  )
+}
+
 function makeWriteFileUI(toolName: string) {
   return makeAssistantToolUI<WriteFileArgs, unknown>({
     toolName,
-    render: ({ args, result, status }) => (
-      <FileOpBlock
+    render: ({ toolCallId, args, result, status }) => (
+      <FileOpRow
         label={toolName}
+        toolCallId={toolCallId}
         path={args?.path ?? '(unknown)'}
         detail={byteCount(args?.content)}
-        reason={failureReason(result)}
-        isRunning={status.type === 'running'}
-        isError={status.type === 'incomplete'}
-        isCancelled={isCancelledStatus(status)}
+        result={result}
+        status={status}
       />
     ),
   })
@@ -136,29 +189,27 @@ export const FileWriteAliasDotUI = makeWriteFileUI('file.write')
 
 export const EditFileConfirmUI = makeAssistantToolUI<EditFileArgs, unknown>({
   toolName: 'edit_file',
-  render: ({ args, result, status }) => (
-    <FileOpBlock
+  render: ({ toolCallId, args, result, status }) => (
+    <FileOpRow
       label="edit_file"
+      toolCallId={toolCallId}
       path={args?.path ?? '(unknown)'}
-      reason={failureReason(result)}
-      isRunning={status.type === 'running'}
-      isError={status.type === 'incomplete'}
-      isCancelled={isCancelledStatus(status)}
+      result={result}
+      status={status}
     />
   ),
 })
 
 export const AppendFileConfirmUI = makeAssistantToolUI<AppendFileArgs, unknown>({
   toolName: 'append_file',
-  render: ({ args, result, status }) => (
-    <FileOpBlock
+  render: ({ toolCallId, args, result, status }) => (
+    <FileOpRow
       label="append_file"
+      toolCallId={toolCallId}
       path={args?.path ?? '(unknown)'}
       detail={byteCount(args?.content)}
-      reason={failureReason(result)}
-      isRunning={status.type === 'running'}
-      isError={status.type === 'incomplete'}
-      isCancelled={isCancelledStatus(status)}
+      result={result}
+      status={status}
     />
   ),
 })

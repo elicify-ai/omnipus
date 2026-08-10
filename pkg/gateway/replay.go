@@ -203,44 +203,7 @@ func streamReplay(
 		if parentCallID != "" {
 			f.ParentCallId = &parentCallID
 		}
-		// RC-5c (ADR-057 UAT root-cause fix): restore live/replay parity for
-		// the failure reason. The live path (websocket.go's EventKindToolExecEnd
-		// handler) already populates ToolCallResultFrame.Error for the one
-		// hand-coded delegation-denial case; on reload this reconstruction
-		// previously never set .Error at all, so error context visible live
-		// silently vanished after a page refresh. tc.Error is now persisted
-		// for every failed tool call (RC-5, session.ToolCall.Error), not just
-		// delegation denials, so this copy covers all of them uniformly.
-		if tc.Error != "" {
-			errCopy := tc.Error
-			f.Error = &errCopy
-		}
-		// ADR-059 W5 live/replay parity: a structured failure payload (a
-		// denied delegation, a write_file precondition refusal) is persisted
-		// as the raw JSON string in tc.Error, because RC-5 stores
-		// contentForLLM verbatim and these tools' contentForLLM IS the JSON.
-		// The live path parses it into a typed object and lifts the prose
-		// reason into Error; without the same treatment here a reload would
-		// show a raw JSON blob where the live view showed a sentence — the
-		// exact divergence this codebase maintains parity to avoid.
-		//
-		// Only fills Result when nothing richer is already there: a call that
-		// carries media descriptors or a sync-delegate payload keeps its own
-		// shape.
-		if obj, reason, isStructured := parseStructuredToolFailure(tc.Error); isStructured {
-			// tc.Result == nil, NOT f.Result == nil. truncateResult returns
-			// tc.Result unchanged when it is nil, and a nil map[string]any
-			// boxed into an `any` is a non-nil interface — so the obvious
-			// check silently never fires and the parity fix would be dead
-			// code that still compiles and still looks right.
-			if tc.Result == nil {
-				f.Result = obj
-			}
-			if reason != "" {
-				reasonCopy := reason
-				f.Error = &reasonCopy
-			}
-		}
+		applyPersistedFailureReason(&f, tc)
 		return f
 	}
 
@@ -904,6 +867,13 @@ func emitNestedToolCalls(
 				agentIDCopy := effectiveAgentID
 				resultFrame.AgentId = &agentIDCopy
 			}
+			// Same treatment as the top-level builder. This path emits the
+			// tool calls a DELEGATED worker made — the exact calls this whole
+			// change set is named after — and it previously set no Error at
+			// all, neither RC-5c's copy nor W5's parse. A delegated worker's
+			// failed write showed its reason live and a bare failure after a
+			// reload.
+			applyPersistedFailureReason(&resultFrame, tc)
 			if err2 := emitFrame(resultFrame); err2 != nil {
 				return totalDurationMS, aggregateStatus, err2
 			}
@@ -915,6 +885,54 @@ func emitNestedToolCalls(
 		}
 	}
 	return totalDurationMS, aggregateStatus, nil
+}
+
+// applyPersistedFailureReason restores live/replay parity for a failed tool
+// call's reason. It is shared by BOTH frame builders deliberately: they are
+// the two places replay reconstructs a ToolCallResultFrame, and every time the
+// rule has been re-established in only one of them it has produced a
+// user-visible divergence (RC-5, RC-5c, and W5's own first cut, which fixed
+// the top-level builder and left the nested one — the delegated-worker path —
+// untouched).
+//
+// Two things happen here:
+//
+//  1. RC-5c: copy the persisted reason onto Error. The live path populates it;
+//     without this a reload silently drops error context that was visible
+//     during the turn. tc.Error is persisted for every failed tool call
+//     (loop.go's RC-5 write), not just delegation denials.
+//
+//  2. ADR-059 W5: a STRUCTURED failure payload (a denied delegation, a
+//     write_file precondition refusal) is persisted as the raw JSON string,
+//     because the persisted value is contentForLLM and these tools'
+//     contentForLLM IS the JSON. Parse it into the typed object the live path
+//     delivers and lift the prose reason into Error, so a reload does not show
+//     a JSON blob where the live view showed a sentence.
+func applyPersistedFailureReason(f *generated.ToolCallResultFrame, tc session.ToolCall) {
+	if tc.Error == "" {
+		return
+	}
+	errCopy := tc.Error
+	f.Error = &errCopy
+
+	obj, reason, isStructured := parseStructuredToolFailure(tc.Error)
+	if !isStructured {
+		return
+	}
+	// tc.Result == nil, NOT f.Result == nil. truncateResult returns tc.Result
+	// unchanged when it is nil, and a nil map[string]any boxed into an `any`
+	// is a non-nil interface — so the obvious check silently never fires and
+	// this would be dead code that still compiles and still looks right.
+	//
+	// Only fills Result when nothing richer is already there: a call carrying
+	// media descriptors or a sync-delegate payload keeps its own shape.
+	if tc.Result == nil {
+		f.Result = obj
+	}
+	if reason != "" {
+		reasonCopy := reason
+		f.Error = &reasonCopy
+	}
 }
 
 // truncateResult JSON-encodes tc.Result and applies the two-tier size policy:

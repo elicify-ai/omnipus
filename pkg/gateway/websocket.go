@@ -3796,7 +3796,11 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			//     divergence this change set out to remove.
 			switch {
 			case structuredErr != "":
-				se := structuredErr
+				// Truncated for the same two reasons the comment above states
+				// as MUST, and which the branch below already honours: frame
+				// size, and parity with the persisted side's own 2000-rune
+				// cap. This branch was the one place that skipped it.
+				se := truncateRunesForFrame(structuredErr, maxLiveErrorChars)
 				resultF.Error = &se
 			case status == "error" && p.Result != "" && liveResult != any(p.Result):
 				// Only when Result no longer carries the text itself.

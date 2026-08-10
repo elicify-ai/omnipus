@@ -301,9 +301,34 @@ func DelegationDeniedResult(tool string, d *DelegationDenial) *ToolResult {
 // Reason keeps the original sentence, so nothing a human or a model reads is
 // lost; it gains a machine-checkable tag alongside it.
 func FileExistsRefusalResult(tool, path, reason string) *ToolResult {
+	// Every field carries minLength:1 in the contract. A payload violating
+	// that is schema-invalid, and the SPA drops it — leaving the caller with
+	// nothing at all, which is strictly worse than the prose this replaces.
 	if reason == "" {
 		reason = "file already exists"
 	}
+	if tool == "" {
+		tool = "write_file"
+	}
+	if path == "" {
+		path = "(unknown path)"
+	}
+	// Bound the two caller-supplied strings so the ENCODED payload cannot
+	// exceed the 2000-rune cap applied downstream (maxFailClosedOutputChars
+	// when persisted, maxLiveErrorChars on the live frame).
+	//
+	// This is not cosmetic. The gateway recovers the discriminator with a
+	// whole-JSON json.Unmarshal, so a severed payload does not degrade — it
+	// stops parsing entirely, and replay then renders the truncated JSON
+	// fragment verbatim where the live view showed a sentence. That is the
+	// exact regression W5 exists to prevent, and it is reachable: the path
+	// appears TWICE (once in path, once inside reason), so a ~950-character
+	// path already overflows the budget. Under Linux's 4096-byte PATH_MAX
+	// that is an ordinary deeply-nested workspace path, not a pathological
+	// one. Prefix-positioning the discriminator does not help here, because
+	// nothing downstream does a prefix match.
+	path = clampRefusalField(path, maxRefusalPathRunes)
+	reason = clampRefusalField(reason, maxRefusalReasonRunes)
 	refusal := generated.FileExistsRefusal{
 		Error:  FileExistsRefusalCode,
 		Reason: reason,
@@ -324,10 +349,42 @@ func FileExistsRefusalResult(tool, path, reason string) *ToolResult {
 	}).WithError(fmt.Errorf("%s: %s", tool, reason))
 }
 
-// FileExistsRefusalCode is the fixed discriminator from the FileExistsRefusal
-// contract schema. Named here so producer and consumer cannot drift apart on a
-// string literal.
-const FileExistsRefusalCode = "file_exists"
+// FileExistsRefusalCode and DelegationDeniedCode are the fixed discriminators
+// from the FileExistsRefusal and DelegationFailure contract schemas.
+//
+// They are exported so the gateway's structured-failure allow-list keys off
+// the same symbols the producers write, rather than re-typing the literals —
+// which is what it did at first, making an earlier version of this comment's
+// "cannot drift apart" claim false on arrival.
+const (
+	FileExistsRefusalCode = "file_exists"
+	DelegationDeniedCode  = "delegation_denied"
+)
+
+// Field budgets for a structured refusal payload.
+//
+// Chosen so the ENCODED JSON stays under the 2000-rune cap the persisted
+// transcript and the live frame both apply — see FileExistsRefusalResult for
+// why a truncated payload is unrecoverable rather than merely shortened. The
+// reason embeds the path, so the two budgets together (plus ~120 bytes of
+// envelope) must fit inside that cap with room to spare.
+const (
+	maxRefusalPathRunes   = 700
+	maxRefusalReasonRunes = 900
+)
+
+// clampRefusalField bounds s to maxRunes, keeping the TAIL rather than the
+// head. For a filesystem path the basename is the informative part and the
+// leading directories are the repetitive part, so cutting from the front is
+// what a reader would do by hand.
+func clampRefusalField(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	const ellipsis = "…"
+	return ellipsis + string(runes[len(runes)-maxRunes+1:])
+}
 
 // ErrorResult creates a ToolResult representing an error.
 // Sets IsError=true and includes the error message.

@@ -91,6 +91,29 @@ export function isDelegationFailure(value: unknown): value is DelegationFailure 
   )
 }
 
+/**
+ * Detects the structured write_file precondition refusal (ADR-059 W5,
+ * error: "file_exists" — the generated FileExistsRefusal contract).
+ *
+ * Needed for the same reason isDelegationFailure is: without a detector the
+ * payload falls through to `plainResult` and renders as a raw JSON blob. That
+ * is the house rule this file already states one function up — "the house
+ * response to a structured payload is to write a renderer, not to let it
+ * through as text" — and it applies on REPLAY specifically, because live chat
+ * routes write_file to its own registered UI (FileWriteConfirm) while replay
+ * routes it here.
+ */
+export function isFileExistsRefusal(
+  value: unknown
+): value is { error: string; reason: string; tool: string; path: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<string, unknown>)['error'] === 'file_exists' &&
+    typeof (value as Record<string, unknown>)['reason'] === 'string'
+  )
+}
+
 /** Human label for the policy axis that blocked the delegation. */
 export function policyAxisLabel(policy: DelegationFailure['policy']): string {
   switch (policy) {
@@ -284,6 +307,7 @@ export function GenericToolCall({
   // load_tool; see the gate comment below and toolVisibility.ts's doc
   // comment for the per-tool-class rule.
   const delegationFailure = isDelegationFailure(result) ? result : null
+  const fileExistsRefusal = isFileExistsRefusal(result) ? result : null
 
   // Marshal-error sentinel: the backend emits `{_marshal_error: "..."}` when
   // JSON-marshaling a tool result fails during replay-frame construction —
@@ -314,7 +338,7 @@ export function GenericToolCall({
       toolName,
       args as Record<string, unknown> | undefined,
       verboseChatEnabled,
-      isError || !!delegationFailure || !!marshalErr,
+      isError || !!delegationFailure || !!fileExistsRefusal || !!marshalErr,
     )
   ) {
     return null
@@ -350,6 +374,15 @@ export function GenericToolCall({
       indicator: statusDot('bg-[var(--color-warning)]'),
       label: `Delegation denied · ${policyAxisLabel(delegationFailure.policy)}`,
     }
+  } else if (fileExistsRefusal) {
+    // A precondition refusal is NOT an I/O failure — the file is simply
+    // already there, which is frequently the correct outcome when a sibling
+    // agent got there first. Labelling it "Failed" is the same conflation the
+    // backend half of W5 removed for the calling agent.
+    statusConfig = {
+      indicator: statusDot('bg-[var(--color-warning)]'),
+      label: 'File already exists',
+    }
   } else if (isError) {
     statusConfig = getToolBadgeStatusConfig('error', { size: 12 })
   } else {
@@ -364,7 +397,7 @@ export function GenericToolCall({
   const clientTruncated = isClientTruncatedResult(result) ? result : null
   const toolRef = isToolResultRef(result) ? result : null
   const plainResult =
-    !truncated && !marshalErr && !clientTruncated && !toolRef && !delegationFailure
+    !truncated && !marshalErr && !clientTruncated && !toolRef && !delegationFailure && !fileExistsRefusal
       ? result
       : undefined
 
@@ -505,6 +538,15 @@ export function GenericToolCall({
               {/* Structured delegation-denied sentinel — render a distinct,
                   human-readable block instead of a raw JSON blob. */}
               {delegationFailure && <DelegationFailureDisplay failure={delegationFailure} />}
+              {fileExistsRefusal && (
+                <div
+                  data-testid="result-file-exists"
+                  className="border-l-2 pl-2.5 py-2 mb-1 font-sans text-[10px] text-[var(--color-secondary)]"
+                  style={{ borderColor: 'color-mix(in srgb, var(--color-warning) 60%, transparent)' }}
+                >
+                  {fileExistsRefusal.reason}
+                </div>
+              )}
 
               {/* Plain result: normal rendering */}
               {plainResult !== undefined && (

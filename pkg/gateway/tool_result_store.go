@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/tools"
+
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
@@ -286,8 +288,8 @@ func maybeOffloadResult(
 // unchanged, which is why an unrelated `{"error":"timeout"}` from some other
 // tool is not mistaken for one of these.
 var structuredFailureDiscriminators = map[string]struct{}{
-	"delegation_denied": {},
-	"file_exists":       {},
+	tools.DelegationDeniedCode:  {},
+	tools.FileExistsRefusalCode: {},
 }
 
 // parseStructuredToolFailure inspects a tool result string and, when it is one
@@ -309,6 +311,15 @@ func parseStructuredToolFailure(result string) (obj map[string]any, reason strin
 	}
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		// A string that OPENS like one of our payloads but does not parse is
+		// almost certainly one that got truncated downstream — the producers
+		// bound their fields precisely so this cannot happen, so if it does,
+		// something moved. Silence here would render a JSON fragment to the
+		// user with no trace of why, which is how this class stays invisible.
+		if strings.HasPrefix(trimmed, `{"error":"`) {
+			slog.Warn("gateway: structured tool-failure payload failed to parse; rendering as prose",
+				"error", err, "len", len(trimmed), "prefix", trimmed[:min(60, len(trimmed))])
+		}
 		return nil, "", false
 	}
 	disc, _ := parsed["error"].(string)

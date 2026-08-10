@@ -113,3 +113,79 @@ func TestReplay_PlainToolFailure_Unchanged(t *testing.T) {
 	assert.Equal(t, plain, result.Error)
 	assert.Nil(t, result.Result, "a prose failure must not gain a fabricated result object")
 }
+
+// TestReplay_DelegatedWorkerFailure_KeepsItsReason covers the SECOND frame
+// builder — the one that emits the tool calls a DELEGATED worker made, nested
+// inside its spawn's span.
+//
+// Those calls are skipped by the top-level pass and emitted only through
+// emitNestedToolCalls, which set no Error at all: not RC-5c's copy, not W5's
+// parse. So a delegated worker's refused write showed its reason live and a
+// bare failure with no explanation after a reload — in the exact code path
+// this whole change set is named after, and the one where the orchestrator is
+// least able to guess what happened.
+func TestReplay_DelegatedWorkerFailure_KeepsItsReason(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c1",
+		Tool:       "delegate",
+		Status:     "success",
+		Parameters: map[string]any{"task": "draw the logo", "label": "builder"},
+	}
+	nestedTC := session.ToolCall{
+		ID:               "t2",
+		Tool:             "write_file",
+		Status:           "error",
+		DurationMS:       12,
+		ParentToolCallID: "c1",
+		Error:            writeRefusalPayload,
+	}
+	frames, _ := runReplay(t, []session.TranscriptEntry{assistantEntry("delegating", "mia", spawnTC, nestedTC)})
+
+	var nested *replayFrameDecoder
+	for i := range frames {
+		if frames[i].Type == "tool_call_result" && frames[i].CallID == "t2" {
+			nested = &frames[i]
+			break
+		}
+	}
+	require.NotNil(t, nested, "expected a tool_call_result frame for the delegated worker's call")
+
+	require.NotEmpty(t, nested.Error,
+		"the delegated worker's failure reason vanished on reload — this frame builder never set "+
+			"Error at all, so the reason was visible live and gone after a refresh")
+	assert.Contains(t, nested.Error, "already exists")
+	assert.NotContains(t, nested.Error, `{"error"`,
+		"the raw payload must not be left in the error field")
+
+	obj, isObject := nested.Result.(map[string]any)
+	require.True(t, isObject, "expected the typed object in result, got %T", nested.Result)
+	assert.Equal(t, "file_exists", obj["error"])
+}
+
+// TestReplay_DelegatedWorkerPlainFailure_KeepsItsReason is the same path for an
+// ordinary (unstructured) failure, which RC-5c was supposed to cover and this
+// builder also missed.
+func TestReplay_DelegatedWorkerPlainFailure_KeepsItsReason(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c1",
+		Tool:       "delegate",
+		Status:     "success",
+		Parameters: map[string]any{"task": "build it"},
+	}
+	nestedTC := session.ToolCall{
+		ID:               "t2",
+		Tool:             "bash",
+		Status:           "error",
+		ParentToolCallID: "c1",
+		Error:            "exit status 127: command not found",
+	}
+	frames, _ := runReplay(t, []session.TranscriptEntry{assistantEntry("delegating", "mia", spawnTC, nestedTC)})
+
+	for i := range frames {
+		if frames[i].Type == "tool_call_result" && frames[i].CallID == "t2" {
+			assert.Equal(t, "exit status 127: command not found", frames[i].Error)
+			return
+		}
+	}
+	t.Fatal("no tool_call_result frame for the delegated worker's call")
+}
