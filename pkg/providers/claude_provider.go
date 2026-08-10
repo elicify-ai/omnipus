@@ -44,6 +44,34 @@ func (p *ClaudeProvider) Chat(
 	return resp, nil
 }
 
+// ChatStream implements StreamingProvider by forwarding to the delegate,
+// exactly as HTTPProvider does.
+//
+// Without this method ClaudeProvider does not satisfy StreamingProvider, and
+// ClaudeProvider is the ONLY thing that constructs the native Anthropic
+// provider (see NewClaudeProvider / NewClaudeProviderWithTokenSource — the
+// inner type has no other non-test caller). The agent loop's
+// `activeProvider.(providers.StreamingProvider)` assertion therefore failed
+// for every Anthropic install, silently taking the non-streaming path — so the
+// delegate's ChatStream, and the tool-argument progress it emits, were
+// unreachable in production.
+//
+// The delegate is held as an unexported, NON-EMBEDDED field, so nothing is
+// promoted automatically: each capability has to be forwarded deliberately.
+// Any future optional interface the delegate gains needs the same treatment,
+// and the compliance assertions in streaming_compliance_test.go must name
+// THIS type — the one the factory actually returns — not the inner one.
+func (p *ClaudeProvider) ChatStream(
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	onChunk func(accumulated string),
+) (*LLMResponse, error) {
+	return p.delegate.ChatStream(ctx, messages, tools, model, options, onChunk)
+}
+
 func (p *ClaudeProvider) GetDefaultModel() string {
 	return p.delegate.GetDefaultModel()
 }

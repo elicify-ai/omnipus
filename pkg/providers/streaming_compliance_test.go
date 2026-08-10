@@ -20,7 +20,18 @@ import (
 // Anthropic-backed call took the non-streaming path. Nothing failed loudly;
 // there was simply no signal. These assertions make that a build error rather
 // than a silent behavioural downgrade.
+// These must name the types the FACTORY RETURNS, not the inner types they
+// wrap. Asserting the inner type is how this test gave false confidence: it
+// pinned *anthropicprovider.Provider, which does satisfy the interface — while
+// the only thing that ever constructs it, *ClaudeProvider, did not, because it
+// holds its delegate as an unexported non-embedded field so nothing is
+// promoted. Every Anthropic install silently took the non-streaming path with
+// this test green.
+//
+// Rule: if a wrapper is what the factory hands the agent loop, the wrapper is
+// what gets asserted here.
 var (
+	_ StreamingProvider = (*ClaudeProvider)(nil)
 	_ StreamingProvider = (*anthropicprovider.Provider)(nil)
 	_ StreamingProvider = (*openai_compat.Provider)(nil)
 	_ StreamingProvider = (*HTTPProvider)(nil)
@@ -33,7 +44,8 @@ func TestStreamingProviderCompliance(t *testing.T) {
 		name string
 		p    any
 	}{
-		{"anthropic", (*anthropicprovider.Provider)(nil)},
+		{"claude_provider (what the factory returns)", (*ClaudeProvider)(nil)},
+		{"anthropic (inner delegate)", (*anthropicprovider.Provider)(nil)},
 		{"openai_compat", (*openai_compat.Provider)(nil)},
 		{"http_provider", (*HTTPProvider)(nil)},
 	}
