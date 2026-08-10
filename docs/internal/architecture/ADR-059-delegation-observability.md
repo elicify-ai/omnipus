@@ -1,6 +1,6 @@
 # ADR-059: Delegation observability — tell a working subagent apart from a hung one
 
-- **Status:** Proposed
+- **Status:** Accepted (operator, 2026-08-10). Adversarially reviewed before acceptance — verdict BLOCK, 26 findings — and rewritten against them; the review is preserved at [ADR-059-delegation-observability-review.md](ADR-059-delegation-observability-review.md). A spec follows separately (§6 work items W1–W5 are unbuilt at acceptance time; the delivered implementation uses the options-map mechanism D1 rejects, recorded honestly in D1 and scheduled for migration by W1/W2).
 - **Date:** 2026-08-10
 - **Related:** [ADR-057](ADR-057-session-parent-child-parity.md) (session parent/child parity), [ADR-058](ADR-058-tool-denial-semantics.md) (what the system *tells the model* when a call is refused — governing precedent for D4 and for §7), [ADR-032](ADR-032-external-agent-workspace-execution.md) (delegation identity — a sub-turn runs as the target agent's own instance), [ADR-036](ADR-036-consolidate-shell-and-subagent-tools.md) (`bash` consolidation)
 - **Deciders:** Operator (Daniel Piatkowski)
