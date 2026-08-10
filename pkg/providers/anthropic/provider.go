@@ -122,6 +122,7 @@ func (p *Provider) ChatStream(
 	model string,
 	options map[string]any,
 	onChunk func(accumulated string),
+	onProgress protocoltypes.OnToolCallProgress,
 ) (*LLMResponse, error) {
 	var opts []option.RequestOption
 	if p.tokenSource != nil {
@@ -140,8 +141,7 @@ func (p *Provider) ChatStream(
 		return nil, err
 	}
 
-	return p.streamWithCallbacks(ctx, params, opts, onChunk,
-		protocoltypes.ToolCallProgressFromOptions(options))
+	return p.streamWithCallbacks(ctx, params, opts, onChunk, onProgress)
 }
 
 func (p *Provider) chatStreaming(

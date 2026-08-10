@@ -330,7 +330,7 @@ type ToolCallProgressSnapshot struct {
 // alone is blind to precisely the window a status poll most needs
 // visibility into, which is what let an orchestrator conclude a
 // still-working child had hung and kill it mid-write (see
-// protocoltypes.OnToolCallProgressKey's doc comment for the full incident).
+// protocoltypes.ToolCallProgress's doc comment for the full incident).
 //
 // Implemented by *agent.AgentLoop (ToolCallProgressForSession, turn.go) and
 // wired via SetProgressReader at DelegateTool construction time (loop.go),

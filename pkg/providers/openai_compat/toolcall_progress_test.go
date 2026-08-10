@@ -128,34 +128,6 @@ func TestParseStreamResponse_NilProgressCallbackIsSafe(t *testing.T) {
 	}
 }
 
-// TestToolCallProgressFromOptions covers the options-map plumbing, including
-// the bare-func form callers are most likely to write.
-func TestToolCallProgressFromOptions(t *testing.T) {
-	if cb := protocoltypes.ToolCallProgressFromOptions(nil); cb != nil {
-		t.Error("nil options should yield nil callback")
-	}
-	if cb := protocoltypes.ToolCallProgressFromOptions(map[string]any{}); cb != nil {
-		t.Error("absent key should yield nil callback")
-	}
-	if cb := protocoltypes.ToolCallProgressFromOptions(map[string]any{
-		protocoltypes.OnToolCallProgressKey: "not a callback",
-	}); cb != nil {
-		t.Error("wrong type should yield nil callback, not panic")
-	}
-
-	var got int
-	cb := protocoltypes.ToolCallProgressFromOptions(map[string]any{
-		protocoltypes.OnToolCallProgressKey: func(p protocoltypes.ToolCallProgress) { got = p.ArgsBytes },
-	})
-	if cb == nil {
-		t.Fatal("bare func form should be accepted")
-	}
-	cb(protocoltypes.ToolCallProgress{ArgsBytes: 42})
-	if got != 42 {
-		t.Errorf("callback not invoked correctly, got %d", got)
-	}
-}
-
 // TestParseStreamResponse_PanickingProgressHandlerDoesNotKillTheStream is the
 // production-caller half of ADR-059 AC-06.
 //

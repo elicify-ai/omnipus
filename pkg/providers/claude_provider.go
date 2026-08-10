@@ -68,8 +68,9 @@ func (p *ClaudeProvider) ChatStream(
 	model string,
 	options map[string]any,
 	onChunk func(accumulated string),
+	onProgress OnToolCallProgress,
 ) (*LLMResponse, error) {
-	return p.delegate.ChatStream(ctx, messages, tools, model, options, onChunk)
+	return p.delegate.ChatStream(ctx, messages, tools, model, options, onChunk, onProgress)
 }
 
 func (p *ClaudeProvider) GetDefaultModel() string {

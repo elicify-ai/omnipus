@@ -414,9 +414,9 @@ type turnState struct {
 	lastProducedModel string
 
 	// toolCallProgress is G1's turn-scoped liveness signal for an in-flight
-	// tool-call argument stream (see protocoltypes.OnToolCallProgressKey's
-	// doc comment for the incident it closes). Written from the provider's
-	// SSE read goroutine, via the callback loop.go wires into llmOpts, on
+	// tool-call argument stream (see protocoltypes.ToolCallProgress's doc
+	// comment for the incident it closes). Written from the provider's SSE
+	// read goroutine, via the callback loop.go passes to ChatStream, on
 	// every argument delta of a live stream — a high-frequency path. Read
 	// from a completely different goroutine: a `delegate action=status`
 	// poll on another turn (possibly another agent instance) reaching in via

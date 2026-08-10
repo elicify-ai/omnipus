@@ -210,6 +210,7 @@ func (p *Provider) ChatStream(
 	model string,
 	options map[string]any,
 	onChunk func(accumulated string),
+	onProgress protocoltypes.OnToolCallProgress,
 ) (*LLMResponse, error) {
 	if p.apiBase == "" {
 		return nil, fmt.Errorf("API base not configured")
@@ -256,7 +257,7 @@ func (p *Provider) ChatStream(
 		resp.Body.Close()
 	}()
 
-	return parseStreamResponse(ctx, resp.Body, onChunk, protocoltypes.ToolCallProgressFromOptions(options))
+	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress)
 }
 
 // parseStreamResponse parses an OpenAI-compatible SSE stream.
@@ -345,7 +346,7 @@ func parseStreamResponse(
 		// model spending tens of seconds emitting a large tool argument
 		// produces no observable output at all — indistinguishable from a
 		// hung generation, which has caused healthy delegated workers to be
-		// killed mid-write. See protocoltypes.OnToolCallProgressKey.
+		// killed mid-write. See protocoltypes.ToolCallProgress.
 		for _, tc := range choice.Delta.ToolCalls {
 			acc, ok := activeTools[tc.Index]
 			if !ok {

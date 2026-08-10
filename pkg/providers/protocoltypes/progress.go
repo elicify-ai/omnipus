@@ -1,9 +1,9 @@
 package protocoltypes
 
-// OnToolCallProgressKey is the well-known `options` map key carrying an
-// OnToolCallProgress callback into a provider's ChatStream. It is passed
-// through the existing `options map[string]any` parameter so no provider
-// interface signature has to change.
+// ToolCallProgress is a liveness signal emitted while a tool call's arguments
+// are still streaming in. It deliberately carries no argument CONTENT: the
+// arguments are frequently large and often sensitive, and the only question a
+// consumer needs answered is "is this still making forward progress?".
 //
 // Why this exists: an OpenAI-compatible stream reports a tool call as a
 // sequence of argument deltas. Those deltas were previously accumulated
@@ -16,14 +16,20 @@ package protocoltypes
 // delegated worker 75 times over 46 seconds, saw no activity, concluded the
 // worker was stalled, and killed it mid-generation — repeatedly. Progress
 // reporting exists so "still generating" can be told apart from "hung".
-const OnToolCallProgressKey = "on_tool_call_progress"
-
-// ToolCallProgress is a liveness signal emitted while a tool call's arguments
-// are still streaming in. It deliberately carries no argument CONTENT: the
-// arguments are frequently large and often sensitive, and the only question a
-// consumer needs answered is "is this still making forward progress?".
 type ToolCallProgress struct {
-	// Index is the tool call's position in the response (OpenAI's delta index).
+	// Index identifies WHICH concurrent tool call this progress belongs to,
+	// within one response, from one provider. It is NOT a stable tool-call
+	// ordinal and must not be treated as one (ADR-059 D2):
+	//
+	//   - OpenAI-compatible streams report it as the tool_calls delta index,
+	//     which does count tool calls: 0, 1, 2…
+	//   - Anthropic reports it as the CONTENT-BLOCK index, and content blocks
+	//     include text. A response that emits a paragraph and then one tool
+	//     call reports that tool call at Index 1, not 0.
+	//
+	// The only contract a consumer may rely on is that two progress events
+	// with the same Index, within the same response, describe the same tool
+	// call. Use Name if you need to know what is being called.
 	Index int
 	// Name is the tool being called, once the stream has revealed it. It may
 	// be empty for the first few deltas, since providers commonly send the
@@ -37,27 +43,17 @@ type ToolCallProgress struct {
 	TotalArgsBytes int
 }
 
-// OnToolCallProgress is the callback shape stored under OnToolCallProgressKey.
+// OnToolCallProgress is the callback shape passed to a provider's ChatStream.
+//
+// It is a per-call PARAMETER rather than provider state (ADR-059 D1): the
+// provider pointer is shared by every concurrent turn on an agent, so anything
+// stored on it would be last-writer-wins between parallel delegations.
 //
 // Implementations MUST be cheap and non-blocking: this fires on every
 // argument delta of a live SSE stream, so anything expensive here throttles
 // token consumption. Consumers that need rate limiting should throttle on
 // their own side rather than blocking the parser.
+//
+// Providers must invoke it via SafeInvoke, never directly — see that
+// function's doc comment.
 type OnToolCallProgress func(ToolCallProgress)
-
-// ToolCallProgressFromOptions extracts the progress callback from a provider
-// options map, returning nil when absent or of an unexpected type. Callers
-// treat nil as "no progress reporting requested".
-func ToolCallProgressFromOptions(options map[string]any) OnToolCallProgress {
-	if options == nil {
-		return nil
-	}
-	switch cb := options[OnToolCallProgressKey].(type) {
-	case OnToolCallProgress:
-		return cb
-	case func(ToolCallProgress):
-		return OnToolCallProgress(cb)
-	default:
-		return nil
-	}
-}

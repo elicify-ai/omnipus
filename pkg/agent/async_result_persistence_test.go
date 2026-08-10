@@ -320,6 +320,7 @@ func (p *asyncResultStreamingProvider) GetDefaultModel() string { return "mock-s
 func (p *asyncResultStreamingProvider) ChatStream(
 	_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
 	onChunk func(accumulated string),
+	_ providers.OnToolCallProgress,
 ) (*providers.LLMResponse, error) {
 	onChunk(p.content)
 	return &providers.LLMResponse{Content: p.content}, nil

@@ -8255,37 +8255,32 @@ turnLoop:
 			}
 		}
 
-		// G1 fix: wire a cheap, non-blocking tool-call-argument progress
-		// callback so a `delegate action=status` poll on a running child can
-		// tell "still generating a large tool-call argument" apart from
-		// "hung" — see protocoltypes.OnToolCallProgressKey's doc comment for
-		// the incident this closes (an orchestrator polled a delegated
+		// G1 fix: a cheap, non-blocking tool-call-argument progress callback,
+		// so a `delegate action=status` poll on a running child can tell
+		// "still generating a large tool-call argument" apart from "hung".
+		// The incident this closes: an orchestrator polled a delegated
 		// worker 75 times over 46s, saw no activity because the only output
 		// was landing inside a streaming tool-call argument, and killed it
-		// mid-write).
+		// mid-write.
 		//
-		// CRITICAL: injected HERE, after the BeforeLLM hook block above, not
-		// alongside the other llmOpts entries near the top of this
-		// iteration. A hook that returns HookActionModify replaces llmOpts
-		// WHOLESALE (`llmOpts = llmReq.Options` above) — including with a
-		// nil map — which would silently drop a callback set any earlier.
-		// Re-setting it here, unconditionally, after every branch of the
-		// hook switch that can still reach this point (Continue, Modify, or
-		// no hooks registered at all), guarantees the key survives
-		// regardless of what BeforeLLM did to the map. The two abort
-		// branches above return before reaching this line, but neither of
-		// them calls ChatStream, so there is nothing to instrument.
+		// This is passed to ChatStream as an explicit ARGUMENT, not smuggled
+		// through the llmOpts map (ADR-059 W1/D1). The map route was fragile
+		// in a way that had already produced one near-miss: a BeforeLLM hook
+		// returning HookActionModify replaces llmOpts wholesale — possibly
+		// with a nil map — so the key had to be re-injected after the hook
+		// block, in a specific position, with a comment explaining why.
+		// A parameter cannot be dropped by a hook, and the compiler enforces
+		// that every implementer accepts it.
 		//
-		// The callback itself only does an atomic store per delta (see
+		// The callback only does an atomic store per delta (see
 		// turnState.recordToolCallProgress) — cheap and non-blocking, safe
 		// to call synchronously from the provider's SSE read loop. ts is
 		// this turn's own turnState, captured by the closure: concurrent
 		// turns each get their own callback writing into their own state,
-		// never into another turn's.
-		if llmOpts == nil {
-			llmOpts = map[string]any{}
-		}
-		llmOpts[protocoltypes.OnToolCallProgressKey] = protocoltypes.OnToolCallProgress(func(p protocoltypes.ToolCallProgress) {
+		// never into another turn's. That per-turn binding is the reason the
+		// handler travels with the call rather than being set on the
+		// provider, which is shared across every concurrent turn.
+		onToolCallProgress := protocoltypes.OnToolCallProgress(func(p protocoltypes.ToolCallProgress) {
 			ts.recordToolCallProgress(p)
 		})
 
@@ -8439,7 +8434,7 @@ turnLoop:
 								logger.DebugCF("agent", "Streaming update error (client may have disconnected)", map[string]any{"error": err.Error()})
 							}
 						}
-					})
+					}, onToolCallProgress)
 					// Do NOT finalize here — the turn may continue with tool calls.
 					// Store the streamer so the turn-level code can finalize once,
 					// after the last LLM call, preventing premature "done" frames

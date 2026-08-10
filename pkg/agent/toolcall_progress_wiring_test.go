@@ -6,21 +6,23 @@
 //
 // protocoltypes.ToolCallProgress support was added to the anthropic and
 // openai_compat providers, but nothing in production ever supplied the
-// options[protocoltypes.OnToolCallProgressKey] callback those providers read
-// from — verified by grep: only the two provider call sites and test files
-// referenced the key, never a real caller. The consequence: a model
+// callback those providers read from — verified by grep: only the two
+// provider call sites and test files referenced it, never a real caller.
+// The consequence: a model
 // streaming a multi-kilobyte tool-call argument (a large SVG, a long file
 // write) produced ZERO observable output on any surface, indistinguishable
 // from a hung generation. An orchestrator polled a delegated worker 75 times
 // over 46 seconds, saw nothing, and killed it mid-write — repeatedly.
 //
-// These tests prove loop.go actually wires the callback into the options
-// map ChatStream is called with — the ONLY thing that would ever notice this
-// wiring being silently dropped again, e.g. by a future BeforeLLM hook
-// change. TestRunTurn_ToolCallProgressCallback_SurvivesBeforeLLMOptionsReplacement
-// specifically covers the documented CRITICAL HAZARD: a hook taking
-// HookActionModify replaces llmOpts wholesale, which would silently drop an
-// earlier-set callback were it not re-injected AFTER the hook block.
+// These tests prove loop.go actually passes the callback to ChatStream —
+// the ONLY thing that would ever notice this wiring being silently dropped
+// again. The callback now travels as an explicit ChatStream ARGUMENT rather
+// than a key in the llmOpts map (ADR-059 W1), which is what closes the
+// original hazard by construction: a BeforeLLM hook taking HookActionModify
+// replaces llmOpts wholesale and previously could silently drop the
+// callback. TestRunTurn_ToolCallProgressCallback_SurvivesBeforeLLMOptionsReplacement
+// is kept, unchanged in intent, to prove that hazard stays closed — it now
+// asserts the callback arrives even though the hook wiped the options map.
 
 package agent
 
@@ -44,9 +46,10 @@ import (
 // called with, so a test can inspect exactly what loop.go handed the
 // provider — the boundary review finding G1 identifies as unwired.
 type progressCapturingStreamProvider struct {
-	mu         sync.Mutex
-	content    string
-	gotOptions []map[string]any
+	mu          sync.Mutex
+	content     string
+	gotOptions  []map[string]any
+	gotProgress []protocoltypes.OnToolCallProgress
 }
 
 func (p *progressCapturingStreamProvider) Chat(
@@ -63,9 +66,11 @@ func (p *progressCapturingStreamProvider) GetDefaultModel() string { return "moc
 func (p *progressCapturingStreamProvider) ChatStream(
 	_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, opts map[string]any,
 	onChunk func(accumulated string),
+	onProgress protocoltypes.OnToolCallProgress,
 ) (*providers.LLMResponse, error) {
 	p.mu.Lock()
 	p.gotOptions = append(p.gotOptions, opts)
+	p.gotProgress = append(p.gotProgress, onProgress)
 	p.mu.Unlock()
 	onChunk(p.content)
 	return &providers.LLMResponse{Content: p.content}, nil
@@ -82,6 +87,19 @@ func (p *progressCapturingStreamProvider) lastOptions() map[string]any {
 		return nil
 	}
 	return p.gotOptions[len(p.gotOptions)-1]
+}
+
+// lastProgress returns the onProgress argument from the most recent
+// ChatStream call, and whether ChatStream was called at all. The two are
+// distinct: a nil callback from a real call is the failure this file exists
+// to catch, and must not be confused with "never called".
+func (p *progressCapturingStreamProvider) lastProgress() (protocoltypes.OnToolCallProgress, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.gotProgress) == 0 {
+		return nil, false
+	}
+	return p.gotProgress[len(p.gotProgress)-1], true
 }
 
 // newProgressWiringTestLoop builds a real, single-default-agent AgentLoop
@@ -112,10 +130,9 @@ func newProgressWiringTestLoop(t *testing.T, provider providers.LLMProvider) (*A
 // producer proof (no BeforeLLM hooks registered beyond the always-present,
 // no-op HookManager pass-through — see NewAgentLoop's `al.hooks =
 // NewHookManager(...)`): a real turn's ChatStream call must receive a
-// non-nil callback under protocoltypes.OnToolCallProgressKey. This is
-// exactly what would have caught G1 before it shipped: pre-fix, llmOpts
-// never carried this key at all, so protocoltypes.ToolCallProgressFromOptions
-// would have returned nil here.
+// non-nil onProgress argument. This is exactly what would have caught G1
+// before it shipped: pre-fix, no caller supplied the callback at all, so
+// this argument would have arrived nil.
 func TestRunTurn_ToolCallProgressCallback_WiredIntoChatStream(t *testing.T) {
 	provider := &progressCapturingStreamProvider{content: "hello there"}
 	al, msgBus := newProgressWiringTestLoop(t, provider)
@@ -139,14 +156,12 @@ func TestRunTurn_ToolCallProgressCallback_WiredIntoChatStream(t *testing.T) {
 	require.NotEmpty(t, streamer.updates, "test setup invariant: the streaming path must have engaged "+
 		"(ChatStream, not Chat) — otherwise this test proves nothing about the streaming call site")
 
-	opts := provider.lastOptions()
-	require.NotNil(t, opts, "provider must have been called with a non-nil options map")
-
-	cb := protocoltypes.ToolCallProgressFromOptions(opts)
-	require.NotNil(t, cb, "options[protocoltypes.OnToolCallProgressKey] must be set on the options map "+
-		"ChatStream is called with — this is the exact wiring gap review finding G1 identifies: nothing "+
-		"in production ever supplied this callback, so a delegated worker streaming a large tool-call "+
-		"argument produced zero observable progress and was killed as 'hung'")
+	cb, called := provider.lastProgress()
+	require.True(t, called, "ChatStream must have been called")
+	require.NotNil(t, cb, "ChatStream must receive a non-nil onProgress argument — this is the exact "+
+		"wiring gap review finding G1 identifies: nothing in production ever supplied this callback, "+
+		"so a delegated worker streaming a large tool-call argument produced zero observable progress "+
+		"and was killed as 'hung'")
 
 	// The callback must be safe to actually invoke (it is called
 	// synchronously from the provider's SSE loop in production) — a smoke
@@ -162,11 +177,11 @@ func TestRunTurn_ToolCallProgressCallback_WiredIntoChatStream(t *testing.T) {
 
 // optionsReplacingHook simulates a BeforeLLM hook that takes
 // HookActionModify and replaces llmReq.Options wholesale with a fresh map of
-// its own — entirely unaware of protocoltypes.OnToolCallProgressKey. This is
-// the documented CRITICAL HAZARD in loop.go's runTurn: `llmOpts =
-// llmReq.Options` (the hook-modify branch) can silently drop any
-// previously-set option, including the progress callback, if it is not
-// re-applied afterward.
+// its own. This was the documented CRITICAL HAZARD in loop.go's runTurn while
+// the progress callback lived in that map: `llmOpts = llmReq.Options` (the
+// hook-modify branch) silently dropped any previously-set option. Moving the
+// callback to a ChatStream parameter closes it structurally; this hook keeps
+// the hazard under test so it cannot be reopened by moving it back.
 type optionsReplacingHook struct{}
 
 func (h *optionsReplacingHook) BeforeLLM(_ context.Context, req *LLMHookRequest) (*LLMHookRequest, HookDecision, error) {
@@ -182,12 +197,10 @@ func (h *optionsReplacingHook) AfterLLM(_ context.Context, resp *LLMHookResponse
 var _ LLMInterceptor = (*optionsReplacingHook)(nil)
 
 // TestRunTurn_ToolCallProgressCallback_SurvivesBeforeLLMOptionsReplacement
-// proves loop.go's fix for the CRITICAL HAZARD: even when a BeforeLLM hook
-// replaces llmOpts entirely (HookActionModify with a fresh Options map that
-// never carried the progress key), the callback still reaches ChatStream.
-// This must FAIL if the progress-key injection were moved back to
-// alongside the other llmOpts entries (before the hook block) instead of
-// after it — the exact regression this test guards against.
+// proves the CRITICAL HAZARD stays closed: even when a BeforeLLM hook
+// replaces llmOpts entirely (HookActionModify with a fresh Options map), the
+// callback still reaches ChatStream. It must FAIL if anyone reverts the
+// callback to an options-map entry set before the hook block runs.
 func TestRunTurn_ToolCallProgressCallback_SurvivesBeforeLLMOptionsReplacement(t *testing.T) {
 	provider := &progressCapturingStreamProvider{content: "hello there"}
 	al, msgBus := newProgressWiringTestLoop(t, provider)
@@ -216,9 +229,9 @@ func TestRunTurn_ToolCallProgressCallback_SurvivesBeforeLLMOptionsReplacement(t 
 	require.True(t, hasReplacedMarker,
 		"test setup invariant: the hook must have actually replaced llmOpts — got: %+v", opts)
 
-	cb := protocoltypes.ToolCallProgressFromOptions(opts)
+	cb, called := provider.lastProgress()
+	require.True(t, called, "ChatStream must have been called")
 	require.NotNil(t, cb, "the progress callback must survive a BeforeLLM hook that replaces llmOpts "+
-		"wholesale via HookActionModify — loop.go must re-inject "+
-		"protocoltypes.OnToolCallProgressKey AFTER the hook block runs, unconditionally, so it survives "+
-		"regardless of what BeforeLLM did to the map")
+		"wholesale via HookActionModify — it travels as a ChatStream argument precisely so no hook can "+
+		"reach it")
 }

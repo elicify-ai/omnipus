@@ -54,6 +54,7 @@ func TestChatStream_RequestBodyHasStreamOptionsIncludeUsage(t *testing.T) {
 		"gpt-4o",
 		nil,
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("ChatStream() error = %v", err)
@@ -138,6 +139,7 @@ func TestChatStream_FinalChunkUsageParsedIntoResponse(t *testing.T) {
 		"gpt-4o",
 		nil,
 		func(accumulated string) { chunks = append(chunks, accumulated) },
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("ChatStream() error = %v", err)
@@ -204,7 +206,7 @@ func TestChatStream_DifferentInputsDifferentContent(t *testing.T) {
 	resp1, err := p.ChatStream(
 		t.Context(),
 		[]Message{{Role: "user", Content: "First question"}},
-		nil, "gpt-4o", nil, nil,
+		nil, "gpt-4o", nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("ChatStream call 1 error = %v", err)
@@ -213,7 +215,7 @@ func TestChatStream_DifferentInputsDifferentContent(t *testing.T) {
 	resp2, err := p.ChatStream(
 		t.Context(),
 		[]Message{{Role: "user", Content: "Second question"}},
-		nil, "gpt-4o", nil, nil,
+		nil, "gpt-4o", nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("ChatStream call 2 error = %v", err)
