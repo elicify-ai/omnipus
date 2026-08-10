@@ -168,6 +168,16 @@ func holdLockedOSThreads(t *testing.T, n int) {
 	t.Helper()
 	requireNProcHeadroom(t, uint64(n))
 
+	// Baseline BEFORE spawning. The wait below must be for GROWTH, not for an
+	// absolute count: a Go test binary already holds well over 24 threads
+	// (runtime scheduler Ms, GC workers, sysmon, plus whatever earlier tests
+	// in the package left parked), so a `selfTaskCount() >= n` condition is
+	// already true on entry and returns before a single new thread has been
+	// materialised. That is not hypothetical — it made
+	// TestReadCurrentUserNProc_TracksNewThreads report before == during
+	// (368 == 368) in 0.01s on the CI worker while appearing to wait.
+	baseline := selfTaskCount(t)
+
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
@@ -183,14 +193,21 @@ func holdLockedOSThreads(t *testing.T, n int) {
 	release := func() { once.Do(func() { close(stop); wg.Wait() }) }
 	t.Cleanup(release)
 
+	// Require MOST of the requested threads rather than all of them: the
+	// runtime may reuse an already-parked M for a LockOSThread goroutine, so
+	// demanding an exact +n is over-strict. Callers' assertions are built on
+	// a margin (nprocTestThreads is 192 against a slack of 128), so a small
+	// shortfall cannot rescue a process-counting implementation.
+	want := baseline + uint64(n) - uint64(n)/8
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		if selfTaskCount(t) >= uint64(n) {
+		if got := selfTaskCount(t); got >= want {
 			return
 		}
 		if time.Now().After(deadline) {
 			got := selfTaskCount(t)
-			t.Skipf("runtime materialised only %d OS threads within 30s (wanted >= %d)", got, n)
+			t.Skipf("runtime materialised only %d of %d requested OS threads within 30s "+
+				"(baseline %d, needed >= %d)", got-baseline, n, baseline, want)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
