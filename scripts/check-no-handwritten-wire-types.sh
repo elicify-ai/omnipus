@@ -45,6 +45,47 @@
 #          - Any line that bears `// not-wire-format` (case-insensitive)
 #            with a justification of >= 40 characters after the annotation.
 #
+#   GO (Rule 4, issue #618): Any Go string literal — raw (`{"error":"x"}`) or
+#       interpreted with escaped quotes ("{\"error\":\"x\"}") — that opens
+#       with the shape `{"error":"<value>"` in pkg/gateway/, pkg/agent/, or
+#       pkg/tools/ (non-generated, non-test) is a hand-built structured-
+#       failure wire payload UNLESS <value> is one of the already-governed
+#       discriminators in KNOWN_STRUCTURED_FAILURE_DISCRIMINATORS below
+#       (kept in lockstep with pkg/tools/result.go's exported *Code
+#       constants and pkg/gateway/tool_result_store.go's
+#       structuredFailureDiscriminators allow-list). This is the guard that
+#       would have caught issue #618's fourth ungoverned member
+#       (tool_assembly_duplicate, pkg/agent/loop.go) BEFORE it shipped: that
+#       literal opened with `{"error":"tool_assembly_duplicate"` and carried
+#       no contract schema, no allow-list entry, and no length budget.
+#
+#       A discriminator-shaped value (bare identifier, no spaces/format
+#       verbs) that is NOT in the known set is flagged — it is either a new
+#       structured-failure member that skipped the contract-first process
+#       (add a schema + a marshalWithinBudget-routed producer, then add it
+#       here), or a typo. Prose "error" fields (e.g.
+#       `{"error":"failed to serialize response: %s"}`) do not match the
+#       bare-identifier capture at all and are never flagged — they are not
+#       discriminators, just ad hoc human-readable fallback text.
+#
+#       Exclusions: same as Rule 1 (pkg/api/generated/, *_test.go), plus
+#       whole-line `//` comments (so documentation quoting a discriminator
+#       literal, e.g. this file's own doc comments, is never flagged) and
+#       `// not-wire-format` opt-out lines (same >= 40-char justification
+#       rule as Rule 1).
+#
+#       Rule 1's struct-based scan is DELIBERATELY left scoped to
+#       pkg/gateway/ only (not widened to pkg/agent/pkg/tools alongside
+#       Rule 4). A structural drift audit of pkg/agent/ + pkg/tools/ package-
+#       level structs against Rule 1's json-tag-count heuristic surfaced 77
+#       hits — internal hook-RPC/external-CLI-event-parsing/inbound-parsing
+#       structs never crossing the gateway/SPA boundary at all, not the
+#       fmt.Sprintf-built discriminator literals issue #618 is about. Rule 4
+#       targets the ACTUAL defect mechanism (hand-built JSON via string
+#       formatting, not typed structs) precisely, with zero tree-wide
+#       triage; widening Rule 1's struct scan to those packages is a
+#       separate, much larger audit outside this issue's scope.
+#
 # Exit code: 0 if no offenders found, 1 if any found.
 #
 # Usage:
@@ -91,8 +132,12 @@ if [[ "$SELF_TEST_MODE" -eq 1 ]]; then
     printf '%s\n' "$content" > "${TMP_SELF}/${subpath}"
   }
   _st_clear() {
-    # Reset both target files to empty so previous fixtures don't bleed through
+    # Reset all target files to empty so previous fixtures don't bleed through
     _st_setup_go "pkg/gateway/fixture.go" 'package gateway
+// empty'
+    _st_setup_go "pkg/agent/fixture.go" 'package agent
+// empty'
+    _st_setup_go "pkg/tools/fixture.go" 'package tools
 // empty'
     _st_setup_ts "src/lib/api.ts"  '// empty'
     _st_setup_ts "src/lib/ws.ts"   '// empty'
@@ -335,6 +380,81 @@ func myHandler() {
   OUT=$(_st_run)
   _st_assert_contains "st17-found" "SomeHelper" "$OUT"
   _st_assert_contains "st17-rule"  "ts-wire-type" "$OUT"
+
+  # ── ST-18: Rule 4 — unknown discriminator literal in pkg/agent is caught ──
+  echo ""
+  echo "ST-18: Go hand-built {\"error\":\"<unknown>\"} literal in pkg/agent is caught"
+  _st_clear
+  _st_setup_go "pkg/agent/fixture.go" 'package agent
+
+import "fmt"
+
+func f(err error) string {
+	return fmt.Sprintf(`{"error":"a_brand_new_fifth_member","message":%q}`, err.Error())
+}
+'
+  OUT=$(_st_run)
+  _st_assert_contains "st18-found" "a_brand_new_fifth_member" "$OUT"
+  _st_assert_contains "st18-rule"  "go-wire-discriminator" "$OUT"
+
+  # ── ST-19: Rule 4 — known/governed discriminator literal is NOT caught ────
+  echo ""
+  echo "ST-19: Go hand-built {\"error\":\"permission_denied\"} literal (governed) is NOT caught"
+  _st_clear
+  _st_setup_go "pkg/tools/fixture.go" 'package tools
+
+import "fmt"
+
+func f(err error) string {
+	return fmt.Sprintf(`{"error":"permission_denied","message":%q}`, err.Error())
+}
+'
+  OUT=$(_st_run)
+  _st_assert_not_contains "st19-skipped" "go-wire-discriminator" "$OUT"
+
+  # ── ST-20: Rule 4 — prose "error" value (not a bare discriminator) is NOT
+  #    caught, e.g. a fallback message embedding a %s/%v verb ─────────────────
+  echo ""
+  echo "ST-20: Go {\"error\":\"prose text: %s\"} fallback is NOT caught (not a discriminator shape)"
+  _st_clear
+  _st_setup_go "pkg/tools/fixture.go" 'package tools
+
+import "fmt"
+
+func f(marshalErr error) string {
+	return fmt.Sprintf(`{"error":"failed to serialize response: %s"}`, marshalErr.Error())
+}
+'
+  OUT=$(_st_run)
+  _st_assert_not_contains "st20-skipped" "go-wire-discriminator" "$OUT"
+
+  # ── ST-21: Rule 4 — not-wire-format opt-out (>=40 chars) is respected ─────
+  echo ""
+  echo "ST-21: Go discriminator literal with valid not-wire-format opt-out is skipped"
+  _st_clear
+  _st_setup_go "pkg/agent/fixture.go" 'package agent
+
+import "fmt"
+
+func f(err error) string {
+	return fmt.Sprintf(`{"error":"a_brand_new_fifth_member","message":%q}`, err.Error()) // not-wire-format: local test-only fixture literal, never emitted over any wire boundary
+}
+'
+  OUT=$(_st_run)
+  _st_assert_not_contains "st21-skipped" "go-wire-discriminator" "$OUT"
+
+  # ── ST-22: Rule 4 — a whole-line comment quoting a discriminator literal
+  #    (e.g. this script's own doc header) is NOT caught ───────────────────
+  echo ""
+  echo "ST-22: Go whole-line comment quoting a discriminator literal is NOT caught"
+  _st_clear
+  _st_setup_go "pkg/agent/fixture.go" 'package agent
+
+// Example: an unrelated tool once emitted `{"error":"a_brand_new_fifth_member"}` in prose.
+func f() {}
+'
+  OUT=$(_st_run)
+  _st_assert_not_contains "st22-skipped" "go-wire-discriminator" "$OUT"
 
   # ── ST-14: doc header example has sufficient justification (meta-test) ─────
   echo ""
@@ -795,6 +915,132 @@ if [[ -n "$TS_OFFENDERS" ]]; then
     FINDING_LINES+=("$line")
     FINDINGS=$((FINDINGS + 1))
   done <<< "$TS_OFFENDERS"
+fi
+
+# ─── Rule 4: Go — hand-built `{"error":"<discriminator>"` JSON literals in
+#     pkg/gateway/, pkg/agent/, pkg/tools/ whose discriminator is not already
+#     governed (issue #618) ──────────────────────────────────────────────────
+#
+# See the doc header's "GO (Rule 4, issue #618)" section for the full
+# rationale. Scans for the shape `{"error":"<value>"` in both raw
+# (`{"error":"x"}`) and interpreted ("{\"error\":\"x\"}") Go string literals.
+# A <value> that does not look like a bare discriminator identifier (i.e.
+# contains a space, `%`, or any other non `[A-Za-z0-9_]` character) does not
+# match the capture at all and is silently ignored — it is ad hoc prose, not
+# a discriminator.
+
+GO_DISCRIMINATOR_OFFENDERS=$(python3 - "$REPO_ROOT" <<'PYEOF'
+import re
+import os
+import sys
+
+repo_root = sys.argv[1] if len(sys.argv) > 1 else '.'
+generated_dir = os.path.join(repo_root, 'pkg', 'api', 'generated')
+
+# KNOWN_STRUCTURED_FAILURE_DISCRIMINATORS must stay in lockstep with
+# pkg/tools/result.go's exported *Code constants and
+# pkg/gateway/tool_result_store.go's structuredFailureDiscriminators map.
+# Adding a new discriminator to BOTH of those without adding it here (or vice
+# versa) is exactly the drift class issue #618 closes.
+KNOWN_STRUCTURED_FAILURE_DISCRIMINATORS = {
+    'delegation_denied',
+    'file_exists',
+    'permission_denied',
+    'tool_assembly_duplicate',
+}
+
+# Matches both raw-string (`{"error":"x"}`) and interpreted-string
+# ("{\"error\":\"x\"}") source forms: each quote may optionally be preceded
+# by a literal backslash (\\?) as it appears in the RAW SOURCE TEXT (this
+# script reads files as plain text, not Go-escape-decoded). The captured
+# group requires a bare [A-Za-z0-9_]+ token immediately followed by a
+# (possibly backslash-escaped) closing quote — prose containing spaces or
+# format verbs (e.g. "failed to serialize response: %s") cannot match this
+# shape at all.
+DISCRIMINATOR_LITERAL = re.compile(
+    r'\{\\?"error\\?"\s*:\s*\\?"([A-Za-z0-9_]+)\\?"'
+)
+NOT_WIRE_FORMAT = re.compile(r'//\s*not-wire-format', re.IGNORECASE)
+NOT_WIRE_FORMAT_WITH_CAPTURE = re.compile(r'//\s*not-wire-format\s*:?\s*(.*)', re.IGNORECASE)
+MIN_JUSTIFICATION_LEN = 40
+
+findings = []
+
+for sub in ('pkg/gateway', 'pkg/agent', 'pkg/tools'):
+    scan_dir = os.path.join(repo_root, sub)
+    if not os.path.isdir(scan_dir):
+        continue
+    for dirpath, dirnames, filenames in os.walk(scan_dir):
+        for fname in sorted(filenames):
+            if not fname.endswith('.go') or fname.endswith('_test.go'):
+                continue
+            fpath = os.path.join(dirpath, fname)
+            if os.path.commonpath([fpath, generated_dir]) == generated_dir:
+                continue
+
+            try:
+                with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
+                    lines = f.readlines()
+            except OSError:
+                continue
+
+            relpath = os.path.relpath(fpath, repo_root)
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                # Whole-line comments never carry real code — skip them so a
+                # doc comment quoting a discriminator literal (like this
+                # script's own header, or tool_result_store.go's allow-list
+                # doc comment) is never flagged.
+                if stripped.startswith('//'):
+                    continue
+
+                m = DISCRIMINATOR_LITERAL.search(line)
+                if not m:
+                    continue
+
+                discriminator = m.group(1)
+                if discriminator in KNOWN_STRUCTURED_FAILURE_DISCRIMINATORS:
+                    continue
+
+                if NOT_WIRE_FORMAT.search(line):
+                    cap_m = NOT_WIRE_FORMAT_WITH_CAPTURE.search(line)
+                    justification = cap_m.group(1).strip() if cap_m else ''
+                    if len(justification) < MIN_JUSTIFICATION_LEN:
+                        findings.append(
+                            f"{relpath}:{i+1}: [go-wire-type-justification] "
+                            f"'// not-wire-format' on discriminator literal '{discriminator}' has "
+                            f"{len(justification)}-char justification (minimum {MIN_JUSTIFICATION_LEN}) — "
+                            f"add a descriptive reason"
+                        )
+                    continue
+
+                findings.append(
+                    f"{relpath}:{i+1}: [go-wire-discriminator] "
+                    f"hand-built structured-failure literal with discriminator '{discriminator}' — "
+                    f"not in the known allow-list (delegation_denied, file_exists, permission_denied, "
+                    f"tool_assembly_duplicate). Add a contracts/asyncapi.yaml schema, a "
+                    f"marshalWithinBudget-routed producer in pkg/tools, and register the discriminator "
+                    f"in pkg/gateway/tool_result_store.go's structuredFailureDiscriminators AND in this "
+                    f"script's KNOWN_STRUCTURED_FAILURE_DISCRIMINATORS — or mark the line "
+                    f"'// not-wire-format: <reason>' if it genuinely is not a wire payload"
+                )
+
+for f in findings:
+    print(f)
+PYEOF
+)
+
+_PY_EXIT=$?
+if [[ $_PY_EXIT -ne 0 ]]; then
+  echo "check-no-handwritten-wire-types: ERROR — Go discriminator-literal Python sub-pass exited ${_PY_EXIT}" >&2
+  exit 2
+fi
+
+if [[ -n "$GO_DISCRIMINATOR_OFFENDERS" ]]; then
+  while IFS= read -r line; do
+    FINDING_LINES+=("$line")
+    FINDINGS=$((FINDINGS + 1))
+  done <<< "$GO_DISCRIMINATOR_OFFENDERS"
 fi
 
 # ─── Output ───────────────────────────────────────────────────────────────────
