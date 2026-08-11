@@ -3,7 +3,9 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -238,6 +240,30 @@ func validDelegationPolicy(p DelegationDenyReason) bool {
 	}
 }
 
+// structuredFailureMarshalFailureTotal counts how many times a structured
+// tool-failure producer in this package fell back to its plain-text/static
+// fallback because marshalWithinBudget (or the json.Marshal beneath it)
+// returned an error. This should never fire in production — every producer
+// below marshals a plain, statically-shaped struct with no unmarshalable
+// field (no channel, func, or cycle) — but issue #618 shipped from a caller
+// reasoning "this input class can't reach here" and being wrong, so the
+// fallback path is made observable rather than silently swallowed.
+var structuredFailureMarshalFailureTotal atomic.Int64
+
+// warnStructuredFailureMarshalError logs a marshal-failure fallback with
+// enough context to diagnose it (producer, tool, discriminator, error) and
+// bumps structuredFailureMarshalFailureTotal.
+func warnStructuredFailureMarshalError(producer, tool, discriminator string, err error) {
+	structuredFailureMarshalFailureTotal.Add(1)
+	slog.Warn("tools: structured failure payload marshal failed; using fallback",
+		"producer", producer,
+		"tool", tool,
+		"discriminator", discriminator,
+		"error", err,
+		"failure_total", structuredFailureMarshalFailureTotal.Load(),
+	)
+}
+
 // DelegationDeniedResult builds a structured error ToolResult for a denied
 // delegation. ForLLM is the JSON-encoded DelegationFailure (the generated wire
 // type, contracts/asyncapi.yaml → pkg/api/generated) so both the LLM and the
@@ -246,8 +272,12 @@ func validDelegationPolicy(p DelegationDenyReason) bool {
 //
 // Invariant defense: the contract requires reason (minLength:1) and a policy
 // enum value. A denial that arrives with an empty reason or an unrecognized
-// policy would serialize a schema-invalid payload the SPA silently drops, so we
-// default a non-empty reason and a valid policy axis before marshaling.
+// policy would serialize a schema-invalid payload — today that means
+// documentary schema drift, not an enforced drop, since neither the Go
+// generated types nor the TS/Zod generated types actually validate the
+// ToolCallResultFrame.result oneOf at runtime (see PermissionDeniedPayload's
+// doc comment for the full explanation) — so we default a non-empty reason
+// and a valid policy axis before marshaling regardless.
 func DelegationDeniedResult(tool string, d *DelegationDenial) *ToolResult {
 	if d == nil {
 		// Defensive: never produce a "denied" result without a denial.
@@ -279,6 +309,7 @@ func DelegationDeniedResult(tool string, d *DelegationDenial) *ToolResult {
 	encoded, err := marshalWithinBudget(&failure, &failure.Reason, failure.TargetAgentId)
 	if err != nil {
 		// Fall back to a plain text error if marshaling somehow fails.
+		warnStructuredFailureMarshalError("DelegationDeniedResult", tool, DelegationDeniedCode, err)
 		return ErrorResult("delegation denied: " + reason).
 			WithError(fmt.Errorf("delegation policy denied (%s): %s", tool, reason))
 	}
@@ -307,8 +338,14 @@ func DelegationDeniedResult(tool string, d *DelegationDenial) *ToolResult {
 // lost; it gains a machine-checkable tag alongside it.
 func FileExistsRefusalResult(tool, path, reason string) *ToolResult {
 	// Every field carries minLength:1 in the contract. A payload violating
-	// that is schema-invalid, and the SPA drops it — leaving the caller with
-	// nothing at all, which is strictly worse than the prose this replaces.
+	// that is schema-invalid — the oneOf is not actually enforced anywhere
+	// today (see PermissionDeniedPayload's doc comment for why), so nothing
+	// currently drops it at a boundary, but a schema-invalid payload is
+	// still a broken contract and downstream json.Unmarshal callers
+	// (parseStructuredToolFailure) still choke on outright-malformed JSON.
+	// Defaulting empty fields keeps the payload both schema-valid and
+	// parseable, which is strictly better than forwarding a caller's empty
+	// string unchanged.
 	if reason == "" {
 		reason = "file already exists"
 	}
@@ -344,9 +381,12 @@ func FileExistsRefusalResult(tool, path, reason string) *ToolResult {
 	encoded, err := marshalWithinBudget(&refusal, &refusal.Path, &refusal.Reason)
 	if err != nil {
 		// The contract requires non-empty reason/tool/path; a marshal failure
-		// here would ship a schema-invalid payload the SPA drops, leaving the
-		// caller with nothing. Prose is worse than the tag but far better than
-		// silence.
+		// here would ship no machine-checkable discriminator at all, only
+		// prose — worse than the tag this replaces, even though nothing
+		// today actually enforces the oneOf at a boundary (see
+		// PermissionDeniedPayload's doc comment). Logged because "this can't
+		// happen" was the exact reasoning that let issue #618 ship.
+		warnStructuredFailureMarshalError("FileExistsRefusalResult", tool, FileExistsRefusalCode, err)
 		return ErrorResult(reason)
 	}
 	return (&ToolResult{
@@ -371,6 +411,27 @@ const (
 	ToolAssemblyDuplicateCode = "tool_assembly_duplicate"
 )
 
+// AllStructuredFailureCodes returns every structured tool-failure
+// discriminator this package defines. This is the SINGLE authoritative
+// enumeration a new producer's Code constant must be added to — pkg/gateway
+// derives its structuredFailureFamily/allow-list membership from this
+// rather than re-typing the same four literals independently in a second
+// package, which is what let issue #618 ship: a discriminator could exist
+// here with a real producer while the gateway's hand-maintained list simply
+// never learned about it. This does not, by itself, guarantee every new
+// producer registers here — that still depends on a future author following
+// the pattern — but it collapses "two lists that must stay in lockstep" to
+// "one list plus its dependents", which is the direction the drift class
+// closes in, not just relocates.
+func AllStructuredFailureCodes() []string {
+	return []string{
+		DelegationDeniedCode,
+		FileExistsRefusalCode,
+		PermissionDeniedCode,
+		ToolAssemblyDuplicateCode,
+	}
+}
+
 // PermissionDeniedPayload builds the JSON-encoded, budget-bounded
 // PermissionDenied wire payload (contracts/asyncapi.yaml PermissionDenied
 // schema) shared by BOTH permission-denial producers in this codebase
@@ -389,13 +450,22 @@ const (
 // quoting. It is provably unsafe for this payload: it breaks on invalid
 // UTF-8 and on any C0/C1 control byte outside \n\t\r (%q emits \xNN, which
 // is not a legal JSON escape — json.Unmarshal fails with "invalid character
-// 'x' in string escape code"). reason is attacker/environment-influenced in
-// both callers — an MCP-declared tool name on one side, a *os.PathError
-// whose Error() concatenates the raw, unescaped filesystem path on the
-// other — so this is reachable, not theoretical: an ordinary ~830-character
-// path (a quarter of Linux PATH_MAX) already overflows the old per-field
-// budget once escaped, and ResolvePath's ErrOutsideScope embeds rawPath
-// three times.
+// 'x' in string escape code"). reason and tool are both attacker/
+// environment-influenced — an MCP-declared tool name is not statically
+// enumerable, and a *os.PathError's Error() concatenates the raw, unescaped
+// filesystem path — so this is reachable, not theoretical: an ordinary
+// ~830-character path (a fifth of Linux's 4096-byte PATH_MAX) already
+// overflows a naive per-field budget once JSON-escaped, and
+// resolvepath.go's ErrOutsideScope error message embeds three path-shaped
+// values (the raw path, its resolved form, and the working directory) —
+// only one of which is the raw path itself, but any one of the three can
+// individually be long enough to matter.
+//
+// There was never an "old per-field budget" this schema shipped with and
+// then tightened — the whole point of #618 was that PRE-fix, this payload
+// had NO length budget at all (hand-built with %q, unmeasured). The 1900-
+// rune maxRefusalPayloadRunes cap and the per-field clamps below are the
+// first budget this payload has ever had.
 //
 // permanent has no default here: both callers always know a concrete
 // boolean value (ClassifyDenial's DenialClass.Permanent, or "always true"
@@ -403,9 +473,15 @@ const (
 // and must pass it explicitly.
 func PermissionDeniedPayload(tool, message, reason string, permanent bool) ([]byte, error) {
 	// The contract requires all three string fields non-empty (minLength:1).
-	// A payload violating that is schema-invalid and the SPA drops it
-	// entirely — worse than the prose this replaces — so default rather
-	// than forward an empty caller value, mirroring FileExistsRefusalResult.
+	// A payload violating that is schema-invalid — nothing today actually
+	// enforces the ToolCallResultFrame.result oneOf at a boundary (neither
+	// the generated Go type, `any`-typed, nor the generated Zod schema,
+	// z.unknown()-typed, validate it at runtime; the oneOf is documentary),
+	// but shipping malformed structure is still wrong on its own terms, and
+	// an empty required field would make parseStructuredToolFailure's
+	// downstream reason-lifting less useful even where json.Unmarshal still
+	// succeeds. Default rather than forward an empty caller value, mirroring
+	// FileExistsRefusalResult.
 	if message == "" {
 		message = "Access to this action is denied."
 	}
@@ -425,19 +501,37 @@ func PermissionDeniedPayload(tool, message, reason string, permanent bool) ([]by
 		Reason:    reason,
 		Permanent: permanent,
 	}
-	// message is always a short fixed literal at every call site (never
-	// model- or filesystem-influenced), so only reason (and, defensively,
-	// message) are offered to the shrink loop — reason is the one field an
-	// attacker-controlled path or tool name can actually inflate.
-	return marshalWithinBudget(&payload, &payload.Reason, &payload.Message)
+	// All three of reason, tool, and message are offered to the shrink
+	// loop, in this PRIORITY ORDER (marshalWithinBudget exhausts each field
+	// fully before touching the next): reason first (the field most likely
+	// to actually be long — an escape-heavy filesystem path or a verbose
+	// approval-flow explanation), then tool (an MCP-declared name; already
+	// clamped to maxRefusalToolRunes above, but that clamp alone was H3's
+	// finding — the sole protection for an attacker/environment-influenced
+	// field must not be a single deletable line, so it is also shrinkable
+	// here), and message LAST — message is always a short fixed literal at
+	// every real call site (the model-facing "do not retry" guidance), so it
+	// should only ever be touched as a last resort, never degraded just
+	// because reason needed shrinking (an earlier version of this loop
+	// shrank every field every round in lockstep, which could reduce
+	// message's actionable guidance to a fragment even though message
+	// itself was never the field that made the payload oversized).
+	return marshalWithinBudget(&payload, &payload.Reason, &payload.Tool, &payload.Message)
 }
 
 // ToolAssemblyDuplicatePayload builds the JSON-encoded, budget-bounded
 // ToolAssemblyDuplicate wire payload (contracts/asyncapi.yaml
 // ToolAssemblyDuplicate schema) for pkg/agent/loop.go's tool-call dedup
 // invariant guard (checkToolDedupInvariant) — issue #618's fourth,
-// previously fully ungoverned member (no schema, no allow-list entry, no
-// SPA detector, %q-built, unbounded message).
+// previously fully ungoverned member (no schema, no allow-list entry,
+// %q-built, unbounded message).
+//
+// This payload is emitted as plain message content (providers.Message,
+// role="system"), never as a ToolCallResultFrame's `result` field — it has
+// no SPA detector BY DESIGN, not as a gap: parseStructuredToolFailure is
+// only ever invoked on a tool_call_result frame's result string or a
+// persisted ToolCall.Error string, and this producer's call site
+// (pkg/agent/loop.go) never populates either. It is LLM-facing only.
 //
 // Uses encoding/json rather than fmt.Sprintf's %q for the same reason
 // PermissionDeniedPayload does (see its doc comment). message is
@@ -479,36 +573,62 @@ const (
 )
 
 // marshalWithinBudget encodes v and, if the result exceeds
-// maxRefusalPayloadRunes, shrinks the two caller-supplied fields it is given
-// and re-encodes until it fits.
+// maxRefusalPayloadRunes, shrinks the caller-supplied fields it is given and
+// re-encodes until it fits.
 //
 // It measures the ENCODED size because that is the only thing the downstream
 // truncation sees. Clamping inputs cannot bound it: JSON escaping expands
 // characters by up to 6x, and which characters appear is entirely up to
 // whoever named the file.
 //
-// The loop is bounded and always terminates: each round halves every
-// shrinkable field, so within a handful of iterations they are single
-// characters and the envelope alone is far under the cap. If it somehow still
-// does not fit, the last encoding is returned rather than an error — an
-// over-long payload that might get truncated is strictly better than none.
+// shrinkable is shrunk in PRIORITY ORDER, not in lockstep: this function
+// fully exhausts shrinkable[0] (halving it down to a single rune if
+// necessary) before touching shrinkable[1], and so on. An earlier version
+// halved every field every round together, which meant an oversized field
+// near the end of the payload could drag a short, fixed-literal field near
+// the front (e.g. PermissionDeniedPayload's model-facing `message` guidance)
+// down to a near-empty fragment even though that field was never what made
+// the payload oversized. Callers should therefore order shrinkable from
+// "most likely to actually need shrinking" to "shrink only as a last
+// resort" — see each producer's own call site for its reasoning.
+//
+// No field is ever shrunk to the empty string — clampRefusalField's floor is
+// 1 rune — so every field this function is given as shrinkable stays
+// non-empty (and therefore minLength:1-valid) even if the budget is never
+// met: a required field going empty would make the payload schema-invalid
+// in a way prose "worse than nothing" replaces gracefully; a 1-rune field
+// does not.
+//
+// The loop is bounded and always terminates: each round on a given field
+// halves it, so within a handful of iterations per field it reaches a
+// single character and the envelope alone is far under the cap. If the
+// budget is still not met after exhausting every shrinkable field (only
+// possible if the fixed, non-shrinkable parts of v's JSON shape alone
+// exceed the cap — none of this package's producers are anywhere close),
+// the last encoding is returned rather than an error: an over-long payload
+// that might get truncated downstream is strictly better than none.
 func marshalWithinBudget(v any, shrinkable ...*string) ([]byte, error) {
 	encoded, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
 	}
-	for i := 0; i < 16 && len([]rune(string(encoded))) > maxRefusalPayloadRunes; i++ {
-		for _, f := range shrinkable {
-			if f == nil {
-				continue
+	for _, f := range shrinkable {
+		if f == nil {
+			continue
+		}
+		for i := 0; i < 16 && len([]rune(string(encoded))) > maxRefusalPayloadRunes; i++ {
+			n := len([]rune(*f))
+			if n <= 1 {
+				break
 			}
-			if n := len([]rune(*f)); n > 1 {
-				*f = clampRefusalField(*f, max(1, n/2))
+			*f = clampRefusalField(*f, max(1, n/2))
+			encoded, err = json.Marshal(v)
+			if err != nil {
+				return nil, err
 			}
 		}
-		encoded, err = json.Marshal(v)
-		if err != nil {
-			return nil, err
+		if len([]rune(string(encoded))) <= maxRefusalPayloadRunes {
+			break
 		}
 	}
 	return encoded, nil

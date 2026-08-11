@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,9 +43,27 @@ var adversarialInputs = []struct {
 	{"embedded_newline", "path/\nfile.txt"},
 	{"json_injection_attempt", `x","admin":true,"y":"z`},
 	{"non_ascii", "路径/文件/パス/файл.txt"},
-	{"over_long_830_chars", "/workspace/" + strings.Repeat("nested-directory/", 49) + "f.txt"},   // > 830 chars
+	// This case cannot actually exercise the budget: even with ALL bounding
+	// (clamp + shrink) removed it encodes to well under 2000 runes (~991) —
+	// it exercises the %q/escaping regression at a size an ordinary
+	// deeply-nested workspace path (a fifth of Linux's 4096-byte PATH_MAX)
+	// would realistically hit, not budget enforcement. See
+	// downstreamCapLiteralIsExercised below for the case that actually
+	// forces the shrink loop to run.
+	{"over_long_830_chars_escaping_not_budget", "/workspace/" + strings.Repeat("nested-directory/", 49) + "f.txt"},   // > 830 chars
 	{"over_long_4000_chars", "/workspace/" + strings.Repeat("nested-directory/", 240) + "f.txt"}, // > 4000 chars
 }
+
+// downstreamCapRunes mirrors the 2000-rune hard cap applied downstream —
+// pkg/agent.maxFailClosedOutputChars on the persisted transcript and
+// pkg/gateway.maxLiveErrorChars on the live frame — as a LITERAL, not as
+// maxRefusalPayloadRunes (the production constant this package's own budget
+// logic is built around). Asserting against maxRefusalPayloadRunes would be
+// self-referential: bump that constant and the assertion below moves with
+// it and never catches the regression it exists to catch. pkg/tools cannot
+// import pkg/agent or pkg/gateway (import direction), so the literal is
+// pinned here with a comment instead of a shared symbol.
+const downstreamCapRunes = 2000
 
 func TestPermissionDeniedPayload_SurvivesAdversarialInputs(t *testing.T) {
 	require.GreaterOrEqual(t, len(adversarialInputs[len(adversarialInputs)-2].s), 830,
@@ -67,11 +86,38 @@ func TestPermissionDeniedPayload_SurvivesAdversarialInputs(t *testing.T) {
 			assert.Equal(t, true, parsed["permanent"])
 
 			runeLen := len([]rune(string(encoded)))
-			assert.LessOrEqual(t, runeLen, maxRefusalPayloadRunes,
-				"encoded payload is %d runes for adversarial input %q — exceeds the %d-rune budget",
-				runeLen, tc.name, maxRefusalPayloadRunes)
+			assert.LessOrEqual(t, runeLen, downstreamCapRunes,
+				"encoded payload is %d runes for adversarial input %q — exceeds the %d-rune downstream "+
+					"truncation cap (pkg/agent.maxFailClosedOutputChars / pkg/gateway.maxLiveErrorChars)",
+				runeLen, tc.name, downstreamCapRunes)
 		})
 	}
+}
+
+// TestPermissionDeniedPayload_ShrinkLoopHandlesEscapeHeavyOverflow is the
+// case adversarialInputs cannot construct: exactly maxRefusalReasonRunes
+// (900) characters, ALL of them JSON-HTML-escape-expanding ('<', which
+// encoding/json expands to the 6-rune <). The pre-shrink-loop, clamped-
+// only encoded size for reason ALONE is ~5400 runes — nearly 3x the whole
+// 1900-rune payload budget — so this input cannot pass without the shrink
+// loop genuinely running past the input-level clamp; a test built only from
+// moderate-length adversarial strings (like the table above) cannot tell a
+// working shrink loop from a deleted one, because the input clamp alone
+// already gets those under budget.
+func TestPermissionDeniedPayload_ShrinkLoopHandlesEscapeHeavyOverflow(t *testing.T) {
+	reason := strings.Repeat("<", maxRefusalReasonRunes)
+	encoded, err := PermissionDeniedPayload("write_file", "Access to this path is denied by filesystem policy.", reason, true)
+	require.NoError(t, err)
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &parsed), "payload must remain valid JSON: %s", encoded)
+	assert.Equal(t, PermissionDeniedCode, parsed["error"])
+	assert.NotEmpty(t, parsed["reason"])
+
+	runeLen := len([]rune(string(encoded)))
+	assert.LessOrEqualf(t, runeLen, downstreamCapRunes,
+		"encoded payload is %d runes — exceeds the %d-rune downstream cap; the shrink loop did not "+
+			"actually run past the input-level clamp", runeLen, downstreamCapRunes)
 }
 
 func TestPermissionDeniedPayload_PermanentFalseSurvivesRoundTrip(t *testing.T) {
@@ -113,11 +159,119 @@ func TestToolAssemblyDuplicatePayload_SurvivesAdversarialInputs(t *testing.T) {
 			assert.NotEmpty(t, parsed["message"], "message must stay non-empty (contract minLength:1)")
 
 			runeLen := len([]rune(string(encoded)))
-			assert.LessOrEqual(t, runeLen, maxRefusalPayloadRunes,
-				"encoded payload is %d runes for adversarial input %q — exceeds the %d-rune budget",
-				runeLen, tc.name, maxRefusalPayloadRunes)
+			assert.LessOrEqual(t, runeLen, downstreamCapRunes,
+				"encoded payload is %d runes for adversarial input %q — exceeds the %d-rune downstream cap",
+				runeLen, tc.name, downstreamCapRunes)
 		})
 	}
+}
+
+// TestPermissionDeniedPayload_SurvivesAdversarialToolName drives every
+// adversarialInputs entry through the `tool` parameter instead of `reason`
+// (H3): tool is MCP-declared and not statically enumerable, so it is just
+// as attacker/environment-influenced as reason, but before this test no
+// case exercised it. clampRefusalField(tool, maxRefusalToolRunes) at the
+// PermissionDeniedPayload call site is tool's ONLY input-level bound, and
+// marshalWithinBudget's shrink loop is its second, independent bound (added
+// alongside this test) — this covers both, and the table already contains
+// a >=4000-char entry and several control-byte entries, satisfying the
+// ">=4000 chars, plus control bytes" adversarial requirement.
+func TestPermissionDeniedPayload_SurvivesAdversarialToolName(t *testing.T) {
+	for _, tc := range adversarialInputs {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := PermissionDeniedPayload(tc.s, "Access to this action is denied.", "policy_denied", true)
+			require.NoError(t, err, "PermissionDeniedPayload must not error for adversarial tool name %q", tc.name)
+
+			var parsed map[string]any
+			uerr := json.Unmarshal(encoded, &parsed)
+			require.NoError(t, uerr,
+				"payload must remain valid JSON for adversarial tool name class %q; got: %s", tc.name, encoded)
+
+			assert.Equal(t, PermissionDeniedCode, parsed["error"])
+			assert.NotEmpty(t, parsed["tool"], "tool must stay non-empty (contract minLength:1)")
+
+			runeLen := len([]rune(string(encoded)))
+			assert.LessOrEqual(t, runeLen, downstreamCapRunes,
+				"encoded payload is %d runes for adversarial tool name %q — exceeds the %d-rune downstream cap",
+				runeLen, tc.name, downstreamCapRunes)
+		})
+	}
+}
+
+// TestPermissionDeniedPayload_JSONInjectionCannotForgeFields is M2's
+// stronger check on the "json_injection_attempt" adversarial row
+// (`x","admin":true,"y":"z`). Discriminator equality, non-empty reason, and
+// a size bound (the checks TestPermissionDeniedPayload_SurvivesAdversarialInputs
+// already runs) all pass even for a HYPOTHETICAL concatenating producer that
+// naively spliced this string into `..."reason":"` + s + `","tool":...` —
+// that would parse, carry the right discriminator, a non-empty reason, and
+// stay small. What it would NOT do is round-trip reason back to the exact
+// input string, or keep the key set to exactly the five contract fields
+// (a naive splice adds "admin":true as a SIXTH key). Both are asserted here.
+func TestPermissionDeniedPayload_JSONInjectionCannotForgeFields(t *testing.T) {
+	const injection = `x","admin":true,"y":"z`
+	encoded, err := PermissionDeniedPayload("write_file", "Access to this path is denied by filesystem policy.", injection, true)
+	require.NoError(t, err)
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &parsed))
+
+	// Exact key set: a successful injection would add "admin" (and/or "y")
+	// as extra top-level keys.
+	wantKeys := []string{"error", "message", "tool", "reason", "permanent"}
+	gotKeys := make([]string, 0, len(parsed))
+	for k := range parsed {
+		gotKeys = append(gotKeys, k)
+	}
+	assert.ElementsMatch(t, wantKeys, gotKeys,
+		"payload must have EXACTLY the five contract fields — an extra key means the injection attempt "+
+			"escaped the reason string and forged a sibling field")
+
+	// reason must round-trip to the exact input — proper JSON-encoding the
+	// value is what keeps the embedded quotes/colons INSIDE the string
+	// rather than becoming structure.
+	assert.Equal(t, injection, parsed["reason"],
+		"reason must round-trip byte-for-byte; a value that decodes to something else means the quotes "+
+			"in the input were interpreted as JSON structure rather than escaped string content")
+
+	// Belt and suspenders: unmarshal into the generated type with unknown
+	// fields disallowed — any forged sibling field fails this decode too.
+	dec := json.NewDecoder(strings.NewReader(string(encoded)))
+	dec.DisallowUnknownFields()
+	var typed generated.PermissionDenied
+	require.NoError(t, dec.Decode(&typed),
+		"payload must decode into generated.PermissionDenied with no unknown fields")
+	assert.Equal(t, injection, typed.Reason)
+}
+
+// TestPermissionDeniedPayload_ShrinkExhaustionStaysSchemaValid is the
+// exhaustion path: message, tool, AND reason are all simultaneously large
+// enough that the shrink loop runs every shrinkable field down toward its
+// 1-rune floor. The concern is whether the EMITTED payload is still valid
+// JSON and still schema-valid at the end of that — in particular whether
+// any of the three minLength:1 string fields ever goes empty. It must not:
+// clampRefusalField's floor is 1 rune, never 0, so exhaustion degrades
+// fields to near-uselessness but never to schema-invalidity.
+func TestPermissionDeniedPayload_ShrinkExhaustionStaysSchemaValid(t *testing.T) {
+	huge := strings.Repeat(`<"&\`, 5000) // 20,000 runes, heavy JSON/HTML escaping
+	encoded, err := PermissionDeniedPayload(huge, huge, huge, true)
+	require.NoError(t, err)
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &parsed), "payload must remain valid JSON under exhaustion: %s", encoded)
+
+	assert.Equal(t, PermissionDeniedCode, parsed["error"])
+	for _, field := range []string{"message", "tool", "reason"} {
+		s, ok := parsed[field].(string)
+		require.True(t, ok, "%s must still be a JSON string", field)
+		assert.NotEmpty(t, s, "%s must never go empty under shrink exhaustion — the contract requires minLength 1", field)
+	}
+	assert.Equal(t, true, parsed["permanent"])
+
+	runeLen := len([]rune(string(encoded)))
+	assert.LessOrEqualf(t, runeLen, downstreamCapRunes,
+		"encoded payload is %d runes under exhaustion — exceeds the %d-rune downstream cap even after "+
+			"the shrink loop ran every field to its floor", runeLen, downstreamCapRunes)
 }
 
 func TestToolAssemblyDuplicatePayload_DefendsRequiredField(t *testing.T) {

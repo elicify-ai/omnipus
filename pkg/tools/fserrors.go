@@ -58,13 +58,17 @@ var ErrPathInvalid = errors.New("invalid path")
 // %q verb — that is Go-string quoting, not JSON quoting, and broke on any
 // path containing invalid UTF-8 or a C0/C1 control byte outside \n\t\r,
 // producing unparseable output the gateway's whole-document json.Unmarshal
-// would reject. It also carried no length budget at all: ResolvePath's
-// ErrOutsideScope embeds rawPath three times, so an ordinary ~830-character
-// path (a quarter of Linux PATH_MAX) already overflowed the downstream
-// 2000-rune truncation cap before it stopped being valid JSON. Both defects
-// are now closed by routing through PermissionDeniedPayload, which
-// marshals with encoding/json and clamps to the same 1900-rune budget every
-// other structured refusal in this file uses.
+// would reject. It also carried no length budget at all: resolvepath.go's
+// ErrOutsideScope error message embeds three path-shaped values (the raw
+// path, its resolved form, and the working directory — only one of which is
+// rawPath itself), so an ordinary ~830-character path (a fifth of Linux's
+// 4096-byte PATH_MAX) already overflowed the downstream 2000-rune
+// truncation cap before it stopped being valid JSON. Both defects are now
+// closed by routing through PermissionDeniedPayload, which marshals with
+// encoding/json and clamps to the same 1900-rune budget the other
+// structured refusal producer in pkg/tools/result.go uses (this file has
+// exactly one structured refusal producer of its own — PermissionDeniedResult
+// below).
 //
 // classErr is the typed sentinel (ErrOutsideScope/ErrCarveOut/ErrPathInvalid/
 // ...) ResolvePath returned; it is preserved on the result via WithError for
@@ -90,8 +94,17 @@ func PermissionDeniedResult(toolName string, classErr error, detail string) *Too
 	encoded, err := PermissionDeniedPayload(toolName, message, reason, true)
 	if err != nil {
 		// Fall back to a plain text error if marshaling somehow fails —
-		// prose the caller can still read is better than nothing.
-		return ErrorResult(fmt.Sprintf("%s (%s)", message, reason)).WithError(classErr)
+		// prose the caller can still read is better than nothing. reason
+		// may still be "" here (detail=="" && classErr==nil): guard it so
+		// the fallback never reads "Access to this path is denied by
+		// filesystem policy. ()" — an empty parenthetical with nothing
+		// inside it.
+		warnStructuredFailureMarshalError("PermissionDeniedResult", toolName, PermissionDeniedCode, err)
+		fallbackReason := reason
+		if fallbackReason == "" {
+			fallbackReason = "no additional detail available"
+		}
+		return ErrorResult(fmt.Sprintf("%s (%s)", message, fallbackReason)).WithError(classErr)
 	}
 
 	return (&ToolResult{

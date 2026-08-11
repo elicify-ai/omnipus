@@ -120,6 +120,27 @@ var (
 	sessionManagerMu     sync.RWMutex
 )
 
+// marshalErrorFallback builds a safe minimal JSON payload for the rare case
+// where json.Marshal(resp) itself fails on one of the ExecResponse
+// constructions below. Uses encoding/json rather than fmt.Sprintf's %s,
+// which interpolated marshalErr.Error() — an arbitrary, unescaped string —
+// directly into a JSON string literal: exactly the #618 hand-built-JSON
+// defect class (Go-string/verb substitution instead of JSON quoting) fixed
+// elsewhere in this codebase (pkg/tools/result.go's marshalWithinBudget
+// producers). json.Marshal of a map[string]string cannot itself fail for any
+// valid Go string — encoding/json replaces invalid UTF-8 rather than
+// rejecting it — so the inner error branch is unreachable in practice; it
+// exists only so this helper never panics or returns invalid JSON.
+func marshalErrorFallback(marshalErr error) []byte {
+	data, err := json.Marshal(map[string]string{
+		"error": "failed to serialize response: " + marshalErr.Error(),
+	})
+	if err != nil {
+		return []byte(`{"error":"failed to serialize response"}`)
+	}
+	return data
+}
+
 func getSessionManager() *SessionManager {
 	sessionManagerMu.RLock()
 	defer sessionManagerMu.RUnlock()
@@ -1192,7 +1213,7 @@ func (t *ExecTool) runBackground(
 	data, marshalErr := json.Marshal(resp)
 	if marshalErr != nil {
 		logger.WarnCF("bash", "failed to marshal bash start response", map[string]any{"error": marshalErr.Error()})
-		data = []byte(fmt.Sprintf(`{"error":"failed to serialize response: %s"}`, marshalErr.Error()))
+		data = marshalErrorFallback(marshalErr)
 	}
 	return &ToolResult{
 		ForLLM:  string(data),
@@ -1284,7 +1305,7 @@ func (t *ExecTool) executePoll(ctx context.Context, args map[string]any) *ToolRe
 	data, marshalErr := json.Marshal(resp)
 	if marshalErr != nil {
 		logger.WarnCF("bash", "failed to marshal bash poll response", map[string]any{"error": marshalErr.Error()})
-		data = []byte(fmt.Sprintf(`{"error":"failed to serialize response: %s"}`, marshalErr.Error()))
+		data = marshalErrorFallback(marshalErr)
 	}
 	return &ToolResult{
 		ForLLM:  string(data),
@@ -1308,7 +1329,7 @@ func (t *ExecTool) executeRead(ctx context.Context, args map[string]any) *ToolRe
 	data, marshalErr := json.Marshal(resp)
 	if marshalErr != nil {
 		logger.WarnCF("bash", "failed to marshal bash read response", map[string]any{"error": marshalErr.Error()})
-		data = []byte(fmt.Sprintf(`{"error":"failed to serialize response: %s"}`, marshalErr.Error()))
+		data = marshalErrorFallback(marshalErr)
 	}
 	return &ToolResult{
 		ForLLM:  string(data),
@@ -1361,7 +1382,7 @@ func (t *ExecTool) sessionActionResult(sessionID string, session *ProcessSession
 	data, marshalErr := json.Marshal(resp)
 	if marshalErr != nil {
 		logger.WarnCF("bash", "failed to marshal bash kill response", map[string]any{"error": marshalErr.Error()})
-		data = []byte(fmt.Sprintf(`{"error":"failed to serialize response: %s"}`, marshalErr.Error()))
+		data = marshalErrorFallback(marshalErr)
 	}
 	return &ToolResult{
 		ForLLM:  string(data),
