@@ -2,16 +2,27 @@
  * omnipus-runtime.issue-617-isError.test.ts
  *
  * C2 hardening (second review wave on branch fix/615-617-618-hardening): the
- * three `isError: resolved.status === "error"` assignments in
- * omnipus-runtime.ts (pushHistoryParts's two construction sites, plus
- * buildContentParts's live-tool-call site) ARE the #617 fix for the live
- * AssistantUI runtime path — everything else in that file is plumbing. No
- * existing test imported or exercised them: `convertMessage` is already
- * exported and unit-tested by omnipus-runtime.model-field.test.ts, but only
- * for the per-turn `model` field, never for a tool-call part's `isError`.
- * Deleting all three lines would leave the whole SPA test suite green while
- * every tool call in a live/streamed thread silently reverted to rendering
- * failures as successes.
+ * `isError: resolved.status === "error"` assignment in omnipus-runtime.ts
+ * exists at TWO live construction sites — pushHistoryParts's single
+ * interleave loop, plus buildContentParts's own live-tool-call site — and
+ * IS the #617 fix for the live AssistantUI runtime path; everything else in
+ * that file is plumbing. No existing test imported or exercised them:
+ * `convertMessage` is already exported and unit-tested by
+ * omnipus-runtime.model-field.test.ts, but only for the per-turn `model`
+ * field, never for a tool-call part's `isError`. Deleting either line would
+ * leave the whole SPA test suite green while every tool call in a
+ * live/streamed thread silently reverted to rendering failures as
+ * successes.
+ *
+ * F5 (later pass, same wave): pushHistoryParts used to also carry a THIRD,
+ * `textAtToolCallStart === undefined` fallback construction site with its
+ * own copy of this same `isError` line. That third site was dead code — its
+ * sole caller (buildContentParts) always passes a defined `Record` (see
+ * pushHistoryParts's own doc comment) — so it was unreachable from
+ * `convertMessage` and could never have been exercised by a test regardless
+ * of coverage effort. It has since been deleted along with the rest of that
+ * unreachable branch; this file's coverage of the two REAL sites was
+ * already complete before that deletion and needed no changes.
  *
  * Approach mirrors omnipus-runtime.model-field.test.ts: drive `convertMessage`
  * directly (it's a pure function) rather than mounting the full
@@ -45,10 +56,10 @@ function findToolCallPart(content: unknown): { toolCallId: string; isError?: boo
 }
 
 describe('convertMessage — issue #617 isError derivation (history path, pushHistoryParts)', () => {
-  // isLastAssistant=false routes through pushHistoryParts's "with snapshot"
-  // branch (buildContentParts always passes a defined textAtToolCallStart
-  // object, even {} — see pushHistoryParts's own `if (textAtToolCallStart)`
-  // check, which is therefore always taken from convertMessage's call path).
+  // isLastAssistant=false routes through pushHistoryParts's (sole, since F5)
+  // interleave loop — buildContentParts always passes a defined
+  // textAtToolCallStart object, even {} (see pushHistoryParts's own doc
+  // comment for why that parameter is required, not optional).
   const EMPTY_TEXT_AT_TOOL_CALL_START = {}
   const EMPTY_TOOL_CALL_ORDER: string[] = []
 

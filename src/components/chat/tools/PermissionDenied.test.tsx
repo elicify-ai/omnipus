@@ -11,7 +11,8 @@
 
 import { describe, it, expect } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { GenericToolCall, isPermissionDenied } from './GenericToolCall'
+import { GenericToolCall } from './GenericToolCall'
+import { isPermissionDenied } from './toolResultSentinels'
 import { ToolCallBadge } from '../ToolCallBadge'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import type { ToolCall } from '@/lib/api'

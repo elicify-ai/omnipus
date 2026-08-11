@@ -18,10 +18,8 @@ import type { TruncatedResult, MarshalErrorResult } from '@/lib/ws'
 import type {
   ToolResultRef,
   DelegationFailure,
-  FileExistsRefusal,
   PermissionDenied,
 } from '@/lib/api/generated/asyncapi-types'
-import { PermissionDenied as PermissionDeniedSchema } from '@/lib/api/generated/schemas'
 import { isClientTruncatedResult, isToolResultRef } from '@/store/chat'
 import type { ClientTruncatedResult } from '@/store/chat'
 import { useQuery } from '@tanstack/react-query'
@@ -31,10 +29,10 @@ import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import {
   getToolBadgeStatusConfig,
-  statusDot,
   isCancelledStatus,
   type ToolBadgeStatusConfig,
 } from '@/lib/toolStatusConfig'
+import { detectToolResultSentinels, policyAxisLabel } from './toolResultSentinels'
 
 interface GenericToolCallProps {
   toolName: string
@@ -91,83 +89,20 @@ function isMarshalErrorResult(value: unknown): value is MarshalErrorResult {
   )
 }
 
-/**
- * Returns true when the result is the structured delegation-denied sentinel the
- * backend emits when a delegation tool call is refused by policy. Mirrors the
- * sentinel-type detector pattern above; matched against the generated
- * DelegationFailure contract (error: "delegation_denied").
- */
-// Exported so ToolCallBadge.tsx (the historical-list / SubagentBlock-step
-// renderer for the same delegation-denied outcome) can reuse the exact same
-// detection + label logic instead of re-deriving it — both callers must
-// render pixel-identical "Delegation denied · <axis>" chips for the same
-// sentinel shape.
-export function isDelegationFailure(value: unknown): value is DelegationFailure {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as Record<string, unknown>)['error'] === 'delegation_denied'
-  )
-}
-
-/**
- * Detects the structured write_file precondition refusal (ADR-059 W5,
- * error: "file_exists" — the generated FileExistsRefusal contract).
- *
- * Needed for the same reason isDelegationFailure is: without a detector the
- * payload falls through to `plainResult` and renders as a raw JSON blob. That
- * is the house rule this file already states one function up — "the house
- * response to a structured payload is to write a renderer, not to let it
- * through as text" — and it applies on REPLAY specifically, because live chat
- * routes write_file to its own registered UI (FileWriteConfirm) while replay
- * routes it here.
- */
-export function isFileExistsRefusal(value: unknown): value is FileExistsRefusal {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as Record<string, unknown>)['error'] === 'file_exists' &&
-    typeof (value as Record<string, unknown>)['reason'] === 'string'
-  )
-}
-
-/**
- * Detects the structured permission-denied sentinel (issue #618, the generated
- * PermissionDenied contract, error: "permission_denied"). Covers ONE backend
- * producer, not two: `pkg/tools/fserrors.go`'s filesystem-scope denial path
- * emits this shape as a tool CALL RESULT, which lands in `session.ToolCall`
- * and reaches this detector. `pkg/agent`'s tool-policy denial path does NOT —
- * it emits `EventKindToolExecSkipped`, which the gateway's event switch never
- * translates into a `ToolCall` (only `ToolExecStart`/`ToolExecEnd` are
- * handled, and `ToolExecStart` only fires once the denial gate has already
- * been passed); that denial is LLM-facing only, surfaced to the calling agent
- * via `pkg/agent/approval_transcript.go`'s own human-facing `denied`
- * transcript entry, a separate path this component never sees. Constraint #8
- * (contract-first wire formats): validated via the generated Zod schema
- * (`PermissionDeniedSchema`, `.strict()`, all five fields required) rather
- * than a hand-rolled field check, so this stays in sync with the contract by
- * construction instead of silently drifting from it (the drift that let
- * #618 ship with permission_denied having no SPA detector at all). Exported
- * for ToolCallBadge.tsx, mirroring isDelegationFailure/isFileExistsRefusal
- * above.
- */
-export function isPermissionDenied(value: unknown): value is PermissionDenied {
-  return PermissionDeniedSchema.safeParse(value).success
-}
-
-/** Human label for the policy axis that blocked the delegation. */
-export function policyAxisLabel(policy: DelegationFailure['policy']): string {
-  switch (policy) {
-    case 'trust_set':
-      return 'Trust set'
-    case 'mode':
-      return 'Delegation mode'
-    case 'depth':
-      return 'Delegation depth'
-    default:
-      return policy
-  }
-}
+// F1 (second review wave on branch fix/615-617-618-hardening): the
+// isDelegationFailure / isFileExistsRefusal / isPermissionDenied detectors
+// and policyAxisLabel used to be defined here, byte-identical to a second
+// copy in a dead, never-imported toolResultSentinels.ts — six edits across
+// two files for any fourth sentinel, and the exact gap that let #618 ship
+// with permission_denied having no SPA detector at all. They now live in
+// ./toolResultSentinels (imported above as detectToolResultSentinels /
+// policyAxisLabel) — the ONE place that detects the three structured-failure
+// sentinels and derives their shared amber status config. This component
+// still needs the individual delegationFailure/fileExistsRefusal/
+// permissionDenied objects beyond just the status config — for
+// PermissionDeniedDisplay, fileExistsRefusal.reason, and excluding a matched
+// sentinel from the plain-JSON-result fallback below — see
+// detectToolResultSentinels's return type doc comment.
 
 /** Format bytes into a human-readable size string (e.g. "2.3 MiB"). */
 function humanSize(bytes: number): string {
@@ -361,13 +296,24 @@ function PermissionDeniedDisplay({ failure }: { failure: PermissionDenied }) {
         <dd className="text-[var(--color-secondary)] break-words">{failure.reason}</dd>
         <dt>Retry</dt>
         <dd className="text-[var(--color-secondary)]">
-          {/* F4: fail SAFE, not fail open. Render "Not this turn" (permanent)
-              for anything except an EXPLICIT `permanent === false` — mirrors
-              the Go side's own fail-safe default (ClassifyDenial returns
-              Permanent: true for anything unclassified). A payload missing
-              `permanent` (e.g. a transcript replayed from before this field
-              existed) must never read as "may succeed later" — the opposite
-              of a permanent denial. */}
+          {/* F4/F7: fail SAFE, not fail open. Render "Not this turn"
+              (permanent) for anything except an EXPLICIT `permanent ===
+              false` — mirrors the Go side's own fail-safe default
+              (ClassifyDenial returns Permanent: true for anything
+              unclassified). This component never actually receives a
+              `permanent`-missing payload — `failure` here is already narrowed by
+              detectToolResultSentinels' `.strict()` Zod validation
+              (./toolResultSentinels), which requires `permanent` as one of
+              its five required fields. A pre-#618 transcript (or any other
+              payload missing the field) fails that validation and falls
+              through to the plain-JSON-result dump instead of reaching this
+              component at all — a worse outcome for a human reader, but not
+              a "may succeed later" misread, since no denial reaches here
+              without `permanent` already set one way or the other. The
+              `!== false` ternary (rather than `permanent ? … : …`) is kept
+              anyway as cheap, harmless defense-in-depth against a future
+              relaxation of that schema, not because today's payload can
+              omit the field. */}
           {failure.permanent === false ? 'May succeed later this turn' : 'Not this turn'}
         </dd>
       </dl>
@@ -397,22 +343,24 @@ export function GenericToolCall({
   const isError = isErrorProp ?? (status.type === 'incomplete' || !!error)
   const isCancelled = isCancelledStatus(status)
 
-  // G17: a delegation denial is an error-status result; surface it in the
-  // COLLAPSED header ("Delegation denied · <axis>") instead of a generic
-  // "Failed" so the user sees the policy block without expanding. The full
-  // reason stays in the expanded DelegationFailureDisplay. Computed here
-  // (rather than after the gate below) because the gate below also consults
-  // it — though (revised 2026-07-16) it is only actually HONORED there for
-  // load_tool; see the gate comment below and toolVisibility.ts's doc
-  // comment for the per-tool-class rule.
-  const delegationFailure = isDelegationFailure(result) ? result : null
-  const fileExistsRefusal = isFileExistsRefusal(result) ? result : null
-  // issue #618: the structured permission-denied sentinel, shared by
-  // pkg/agent's tool-policy denial path and pkg/tools' filesystem-scope
-  // denial path. Computed alongside the other two structured-failure
-  // sentinels for the same reasons (visibility gate + plainResult exclusion
-  // below both need it).
-  const permissionDenied = isPermissionDenied(result) ? result : null
+  // G17/F1: a delegation denial, file-exists refusal, or permission denial
+  // is an error-status result; surface it in the COLLAPSED header
+  // ("Delegation denied · <axis>" / "File already exists" / "Permission
+  // denied") instead of a generic "Failed" so the user sees the outcome
+  // without expanding. The full detail stays in each sentinel's own expanded
+  // Display component below. Computed here (rather than after the gate
+  // below) because the gate below also consults `sentinels.any` — though
+  // (revised 2026-07-16) it is only actually HONORED there for load_tool;
+  // see the gate comment below and toolVisibility.ts's doc comment for the
+  // per-tool-class rule. detectToolResultSentinels (./toolResultSentinels)
+  // is the ONE place that detects all three; it does NOT decide precedence
+  // between them and isRunning/isCancelled — that stays here, on purpose:
+  // a still-running or cancelled call must never show a sentinel label even
+  // if `result` happens to already carry one (e.g. a stale/replayed partial
+  // result) — see the statusConfig chain below, where isRunning/isCancelled
+  // are checked BEFORE sentinels.statusConfig.
+  const sentinels = detectToolResultSentinels(result)
+  const { delegationFailure, fileExistsRefusal, permissionDenied } = sentinels
 
   // Marshal-error sentinel: the backend emits `{_marshal_error: "..."}` when
   // JSON-marshaling a tool result fails during replay-frame construction —
@@ -430,7 +378,7 @@ export function GenericToolCall({
   // Client-side render gate (verbose-chat off by default): hides noisy
   // background infra calls (load_tool, background delegate/bash dispatch,
   // status polls) unless the user has opted into verbose chat. The
-  // isError/delegationFailure/marshalErr outcome signal passed below is only
+  // isError/sentinels.any/marshalErr outcome signal passed below is only
   // honored by shouldRenderToolCall's load_tool case (toolVisibility.ts doc
   // comment) — a load_tool call still forces visible on error/denial/
   // marshal-failure, but delegate and background-bash do NOT get that
@@ -443,7 +391,7 @@ export function GenericToolCall({
       toolName,
       args as Record<string, unknown> | undefined,
       verboseChatEnabled,
-      isError || !!delegationFailure || !!fileExistsRefusal || !!permissionDenied || !!marshalErr,
+      isError || sentinels.any || !!marshalErr,
     )
   ) {
     return null
@@ -465,36 +413,20 @@ export function GenericToolCall({
     useUiStore.getState().openBrowserPanel(sid, activeAgentId)
   }
 
+  // F1: isRunning/isCancelled are checked BEFORE sentinels.statusConfig —
+  // a still-running or cancelled call never shows a sentinel label even if
+  // `result` happens to already carry one (e.g. a stale/replayed partial
+  // result). This ordering is GenericToolCall's own precedence choice, not
+  // the shared module's — see detectToolResultSentinels's doc comment
+  // (./toolResultSentinels) for why ToolCallBadge orders it the other way
+  // (sentinel detection ABOVE all four ordinary statuses).
   let statusConfig: ToolBadgeStatusConfig
   if (isRunning) {
     statusConfig = getToolBadgeStatusConfig('running', { size: 12 })
   } else if (isCancelled) {
     statusConfig = getToolBadgeStatusConfig('cancelled', { size: 12, cancelledVariant: 'muted' })
-  } else if (delegationFailure) {
-    // No equivalent status in getToolBadgeStatusConfig's 4-value domain (see
-    // src/lib/toolStatusConfig.tsx's file header), so this stays a local
-    // literal — but reuses the shared `statusDot` helper so its dot matches
-    // the other four statuses exactly.
-    statusConfig = {
-      indicator: statusDot('bg-[var(--color-warning)]'),
-      label: `Delegation denied · ${policyAxisLabel(delegationFailure.policy)}`,
-    }
-  } else if (fileExistsRefusal) {
-    // A precondition refusal is NOT an I/O failure — the file is simply
-    // already there, which is frequently the correct outcome when a sibling
-    // agent got there first. Labelling it "Failed" is the same conflation the
-    // backend half of W5 removed for the calling agent.
-    statusConfig = {
-      indicator: statusDot('bg-[var(--color-warning)]'),
-      label: 'File already exists',
-    }
-  } else if (permissionDenied) {
-    // issue #618: same treatment as delegationFailure/fileExistsRefusal —
-    // a distinct collapsed-header label instead of a generic "Failed".
-    statusConfig = {
-      indicator: statusDot('bg-[var(--color-warning)]'),
-      label: 'Permission denied',
-    }
+  } else if (sentinels.statusConfig) {
+    statusConfig = sentinels.statusConfig
   } else if (isError) {
     statusConfig = getToolBadgeStatusConfig('error', { size: 12 })
   } else {

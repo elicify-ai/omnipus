@@ -34,6 +34,7 @@ import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { GenericToolCall } from './tools/GenericToolCall'
+import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { WebServeBlock } from './tools/WebServeUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
 import { RateLimitIndicator } from './RateLimitIndicator'
@@ -315,9 +316,24 @@ function InlineThinkingIndicator() {
 // when Result still holds the plain text ("setting Error would ship the
 // identical text twice in one frame"). The result rendered a green "Done".
 //
-// Sourced from the store's status rather than the part's isError prop for the
-// same reason the replay branch is: the store record is the one signal that is
-// populated on every path, live and reloaded alike.
+// F3 (second review wave on branch fix/615-617-618-hardening): `isError={
+// props.isError ?? liveCall?.status === 'error'}` below — the PROP wins, the
+// store is only a fallback for when the prop is undefined. This is the
+// correct precedence, not an inversion: FallbackToolUI is mounted ONLY via
+// AssistantUI's `MessagePrimitive.Parts` `tools.Fallback` slot, which itself
+// renders ONLY inside the LIVE `ThreadPrimitive.Messages` (the "Live
+// streaming message" block near the bottom of this file) — replayed/
+// historical messages render through VirtualAssistantMessageRow instead,
+// a wholly separate code path that never touches this component. On that
+// single live surface, omnipus-runtime.ts's convertMessage always
+// constructs every tool-call part with `isError: resolved.status ===
+// "error"` — a defined boolean, never `undefined` (see pushHistoryParts's
+// and buildContentParts's own construction sites) — so `props.isError` is
+// never undefined here in practice; the `?? liveCall?.status === 'error'`
+// fallback is inert on this surface. It is kept anyway as a defensive
+// default (this prop is optional in the type, and a future AssistantUI
+// internal change to when/how Fallback parts are constructed could
+// plausibly omit it) — not because today's live path ever needs it.
 function FallbackToolUI(props: {
   toolCallId: string
   toolName: string
@@ -420,66 +436,20 @@ function InlineMedia() {
 }
 
 /**
- * Returns true when the result is the structured delegation-denied sentinel
- * (mirrors GenericToolCall.tsx's/ToolCallBadge.tsx's detector of the same
- * name — duplicated locally rather than imported, same as ToolCallBadge.tsx
- * already does for isMarshalErrorResult below, so ChatScreen.tsx's import of
- * GenericToolCall.tsx stays limited to the component itself; many sibling
- * ChatScreen.*.test.tsx files fully replace that module with a bare-bones
- * `{ GenericToolCall: ... }` stub via vi.mock, and importing anything else
- * from it here would silently break every one of those mocks).
+ * Returns true when the result is the marshal-error sentinel from replay.go.
+ * Mirrors GenericToolCall.tsx's/ToolCallBadge.tsx's detector of the same
+ * name. Kept as a local duplicate (not imported) because it is NOT one of
+ * the three sentinels the shared ./tools/toolResultSentinels module covers
+ * (that module is deliberately scoped to the three STRUCTURED-FAILURE
+ * sentinels — delegation-denied, file-exists refusal, permission-denied; a
+ * marshal error is a serialization glitch, not a domain failure) — see that
+ * module's own file header.
  */
-function isDelegationFailureResult(value: unknown): boolean {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as Record<string, unknown>)['error'] === 'delegation_denied'
-  )
-}
-
-/** Returns true when the result is the marshal-error sentinel from replay.go. Mirrors GenericToolCall.tsx's/ToolCallBadge.tsx's detector of the same name — see isDelegationFailureResult's comment for why this is a local duplicate, not an import. */
 function isMarshalErrorSentinel(value: unknown): boolean {
   return (
     typeof value === 'object' &&
     value !== null &&
     typeof (value as Record<string, unknown>)['_marshal_error'] === 'string'
-  )
-}
-
-/**
- * Returns true when the result is the structured write_file precondition
- * refusal sentinel (ADR-059 W5, error: "file_exists"). Mirrors
- * GenericToolCall.tsx's/ToolCallBadge.tsx's isFileExistsRefusal detector —
- * see isDelegationFailureResult's comment above for why this is a local
- * duplicate, not an import.
- */
-function isFileExistsRefusalResult(value: unknown): boolean {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as Record<string, unknown>)['error'] === 'file_exists' &&
-    typeof (value as Record<string, unknown>)['reason'] === 'string'
-  )
-}
-
-/**
- * Returns true when the result is the structured permission-denied sentinel
- * (issue #618, error: "permission_denied"). Mirrors GenericToolCall.tsx's/
- * ToolCallBadge.tsx's isPermissionDenied detector — see
- * isDelegationFailureResult's comment above for why this is a local
- * duplicate, not an import. Added alongside the other two structured-failure
- * detectors (F6): without it, a hidden-by-default tool call (delegate, bash,
- * load_tool) whose only failure signal is a permission_denied result would
- * disagree with GenericToolCall/ToolCallBadge on whether the call counts as
- * an error for the thread-visibility gate below.
- */
-function isPermissionDeniedResult(value: unknown): boolean {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as Record<string, unknown>)['error'] === 'permission_denied' &&
-    typeof (value as Record<string, unknown>)['message'] === 'string' &&
-    typeof (value as Record<string, unknown>)['reason'] === 'string'
   )
 }
 
@@ -508,13 +478,30 @@ function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled')
  * (the D-fix UAT defect resurfacing once the thread started hiding
  * delegation/background-bash by default — toolVisibility.ts). Reuses the
  * same sentinel-detection semantics and the shouldRenderToolCall classifier
- * those components call directly — not re-derived logic, just a local copy
- * of the four small detector predicates (delegation-denied, marshal-error,
- * file-exists refusal, permission-denied — F6: all four structured-failure
- * sentinels GenericToolCall/ToolCallBadge know about, kept in sync with them
- * so a hidden-by-default tool call's only failure signal being one of the
- * latter two doesn't disagree with what those two renderers would show; see
- * their own comments for why these are local copies, not imports).
+ * those components call directly.
+ *
+ * F2 (second review wave on branch fix/615-617-618-hardening): the three
+ * structured-failure sentinels (delegation-denied, file-exists refusal,
+ * permission-denied) are now detected via the SAME shared module
+ * (./tools/toolResultSentinels's detectToolResultSentinels) GenericToolCall.
+ * tsx and ToolCallBadge.tsx use — not a local re-derivation. Previously this
+ * function carried its own local copy of all three detectors, and the
+ * permission-denied one had drifted: a loose 3-field check (`error`,
+ * `message`, `reason`) against GenericToolCall's real detector, which uses
+ * the generated Zod schema's `.strict()` validation requiring all FIVE
+ * fields (including `tool` and `permanent`). A pre-#618 transcript payload
+ * with only three fields used to count as an error for this visibility gate
+ * while GenericToolCall/ToolCallBadge did NOT recognize it as a sentinel —
+ * same object, two verdicts, in the one place a comment claimed there was
+ * only one. Importing the real detector here (rather than re-deriving it)
+ * makes that divergence structurally impossible: this file, GenericToolCall,
+ * and ToolCallBadge now all agree by construction, at the cost of the same
+ * false-negative-until-parsed 3-field payload now failing to force
+ * visibility HERE too — matching what the other two renderers would show
+ * for it (a raw JSON blob, not a sentinel chip), rather than the reverse
+ * (all three recognizing it). isMarshalErrorSentinel stays a local
+ * duplicate, not part of the shared module — see its own doc comment above
+ * for why.
  *
  * `errorFlag` is the outcome signal each call site already carries under a
  * different name (a baked ToolCall's `.error` string, or a live/streaming
@@ -538,12 +525,7 @@ function wouldToolCallBeVisible(
   errorFlag: boolean,
   verboseChatEnabled: boolean,
 ): boolean {
-  const isError =
-    errorFlag ||
-    isDelegationFailureResult(result) ||
-    isMarshalErrorSentinel(result) ||
-    isFileExistsRefusalResult(result) ||
-    isPermissionDeniedResult(result)
+  const isError = errorFlag || isMarshalErrorSentinel(result) || detectToolResultSentinels(result).any
   return shouldRenderToolCall(tool, params, verboseChatEnabled, isError)
 }
 
@@ -935,8 +917,22 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // hoisted here so both the emptiness check and the render loop share one
   // computation instead of drifting into two different notions of "visible".
   const hasContent = !!message.content?.trim().length
+  // F4 (second review wave on branch fix/615-617-618-hardening): `tc` here
+  // is a baked PositionedToolCall, which — like every other #617-era call
+  // site in this file — carries BOTH a `.status` and a (frequently empty)
+  // `.error` string. `!!tc.error` alone is exactly the signal #617
+  // established is empty for an ordinary failure (pkg/gateway/websocket.go
+  // deliberately leaves `Result.Error` unset when `Result` still holds the
+  // text). This call's two siblings already moved off that proxy — the live
+  // path below passes `!!part.isError`, and the actual render for this same
+  // `tc` uses `tc.status === 'error'` — but this one was left on it, so a
+  // failed tool call with status:'error' and no `error` string (e.g. a
+  // failed load_tool) computed isError:false here while the row itself
+  // (whose own visibility gate reads `tc.status === 'error'` directly)
+  // still rendered — producing a ghost ThinkingIndicator ABOVE the visible
+  // failed row (see hasVisibleToolCalls/showEmptyPlaceholder below).
   const visibleToolCalls = positionedToolCalls.filter((tc) =>
-    wouldToolCallBeVisible(tc.tool, tc.params, tc.result, !!tc.error, verboseChatEnabled),
+    wouldToolCallBeVisible(tc.tool, tc.params, tc.result, tc.status === 'error' || !!tc.error, verboseChatEnabled),
   )
   const hasVisibleToolCalls = visibleToolCalls.length > 0
   const hasMedia = mediaItems.length > 0
