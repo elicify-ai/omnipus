@@ -333,6 +333,51 @@ describe('WebFetchBlock — flat text-line status dot', () => {
   })
 })
 
+// M7 (second review wave): every test above drives `captured['web_fetch']`
+// — the LEGACY alias registration (WebFetchLegacyUI, kept only for old
+// transcript replay). The CANONICAL registration the backend actually emits
+// post-§7-rename, `captured['fetch_url']` (WebFetchPreviewUI), was never
+// separately exercised — both are distinct `makeAssistantToolUI({...})` call
+// sites in WebFetchPreview.tsx, each with its own `render` closure, so
+// proving the alias threads `isError` correctly says nothing about whether
+// the canonical one does.
+describe('WebFetchPreviewUI — canonical fetch_url registration wiring (issue #617)', () => {
+  it('captures a distinct render function under "fetch_url"', () => {
+    expect(captured['fetch_url']).toBeDefined()
+    expect(captured['fetch_url']).not.toBe(captured['web_fetch'])
+  })
+
+  it('a genuine error outcome (isError=true from the real render prop) renders the error dot and "Failed" label', () => {
+    const renderFn = captured['fetch_url']!
+    const { container, getByText } = render(
+      renderFn({
+        args: { url: 'https://example.com' },
+        result: null,
+        status: { type: 'complete' },
+        isError: true,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+    expect(getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('a finished call with content but isError=false renders the success dot, not error', () => {
+    const renderFn = captured['fetch_url']!
+    const { container, getByText } = render(
+      renderFn({
+        args: { url: 'https://example.com' },
+        result: 'page content',
+        status: { type: 'complete' },
+        isError: false,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(getByText('Done')).toBeInTheDocument()
+  })
+})
+
 describe('WebSearchBlock — flat text-line status dot', () => {
   const structuredResult = '1. Example Site\n   https://example.com\n   Site description here.\n'
 

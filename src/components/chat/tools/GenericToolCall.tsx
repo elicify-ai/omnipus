@@ -21,6 +21,7 @@ import type {
   FileExistsRefusal,
   PermissionDenied,
 } from '@/lib/api/generated/asyncapi-types'
+import { PermissionDenied as PermissionDeniedSchema } from '@/lib/api/generated/schemas'
 import { isClientTruncatedResult, isToolResultRef } from '@/store/chat'
 import type { ClientTruncatedResult } from '@/store/chat'
 import { useQuery } from '@tanstack/react-query'
@@ -42,6 +43,18 @@ interface GenericToolCallProps {
   status: MessagePartStatus
   /** Optional error text from the store */
   error?: string
+  /**
+   * Issue #617: the tool call's real error outcome, sourced from the store's
+   * resolved ToolCall.status. When provided this is authoritative and wins
+   * over the `status`/`error`-derived fallback below — `status` is hardcoded
+   * to `{type:'complete'}` on replay (ChatScreen.tsx), so deriving isError
+   * from it alone can never see a failure that offloaded its `result` (>50
+   * KiB) or replaced it with a parsed object, both of which leave `error`
+   * empty per pkg/gateway/websocket.go's own documented behavior. Optional
+   * (not every caller has a resolved ToolCall to read a status off of) —
+   * omitted falls back to the pre-existing status/error derivation.
+   */
+  isError?: boolean
   /** Optional duration in milliseconds */
   durationMs?: number
   /** Lite-mode: tool calls start collapsed so the virtualizer skips measuring large expanded content. */
@@ -120,20 +133,26 @@ export function isFileExistsRefusal(value: unknown): value is FileExistsRefusal 
 
 /**
  * Detects the structured permission-denied sentinel (issue #618, the generated
- * PermissionDenied contract, error: "permission_denied"). Shared by TWO backend
- * producers — pkg/agent's tool-policy denial path and pkg/tools' filesystem-scope
- * denial path — so this one detector covers both regardless of which enforcement
- * layer produced the denial. Exported for ToolCallBadge.tsx, mirroring
- * isDelegationFailure/isFileExistsRefusal above.
+ * PermissionDenied contract, error: "permission_denied"). Covers ONE backend
+ * producer, not two: `pkg/tools/fserrors.go`'s filesystem-scope denial path
+ * emits this shape as a tool CALL RESULT, which lands in `session.ToolCall`
+ * and reaches this detector. `pkg/agent`'s tool-policy denial path does NOT —
+ * it emits `EventKindToolExecSkipped`, which the gateway's event switch never
+ * translates into a `ToolCall` (only `ToolExecStart`/`ToolExecEnd` are
+ * handled, and `ToolExecStart` only fires once the denial gate has already
+ * been passed); that denial is LLM-facing only, surfaced to the calling agent
+ * via `pkg/agent/approval_transcript.go`'s own human-facing `denied`
+ * transcript entry, a separate path this component never sees. Constraint #8
+ * (contract-first wire formats): validated via the generated Zod schema
+ * (`PermissionDeniedSchema`, `.strict()`, all five fields required) rather
+ * than a hand-rolled field check, so this stays in sync with the contract by
+ * construction instead of silently drifting from it (the drift that let
+ * #618 ship with permission_denied having no SPA detector at all). Exported
+ * for ToolCallBadge.tsx, mirroring isDelegationFailure/isFileExistsRefusal
+ * above.
  */
 export function isPermissionDenied(value: unknown): value is PermissionDenied {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as Record<string, unknown>)['error'] === 'permission_denied' &&
-    typeof (value as Record<string, unknown>)['message'] === 'string' &&
-    typeof (value as Record<string, unknown>)['reason'] === 'string'
-  )
+  return PermissionDeniedSchema.safeParse(value).success
 }
 
 /** Human label for the policy axis that blocked the delegation. */
@@ -342,7 +361,14 @@ function PermissionDeniedDisplay({ failure }: { failure: PermissionDenied }) {
         <dd className="text-[var(--color-secondary)] break-words">{failure.reason}</dd>
         <dt>Retry</dt>
         <dd className="text-[var(--color-secondary)]">
-          {failure.permanent ? 'Not this turn' : 'May succeed later this turn'}
+          {/* F4: fail SAFE, not fail open. Render "Not this turn" (permanent)
+              for anything except an EXPLICIT `permanent === false` — mirrors
+              the Go side's own fail-safe default (ClassifyDenial returns
+              Permanent: true for anything unclassified). A payload missing
+              `permanent` (e.g. a transcript replayed from before this field
+              existed) must never read as "may succeed later" — the opposite
+              of a permanent denial. */}
+          {failure.permanent === false ? 'May succeed later this turn' : 'Not this turn'}
         </dd>
       </dl>
     </div>
@@ -355,6 +381,7 @@ export function GenericToolCall({
   result,
   status,
   error,
+  isError: isErrorProp,
   durationMs,
   // defaultCollapsed: accepted but not used — tool calls always start collapsed.
   defaultCollapsed: _defaultCollapsed,
@@ -364,7 +391,10 @@ export function GenericToolCall({
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
 
   const isRunning = status.type === 'running'
-  const isError = status.type === 'incomplete' || !!error
+  // Issue #617: the caller's resolved outcome wins when supplied — see
+  // isErrorProp's doc comment on GenericToolCallProps for why the
+  // status/error fallback below can silently miss a real failure.
+  const isError = isErrorProp ?? (status.type === 'incomplete' || !!error)
   const isCancelled = isCancelledStatus(status)
 
   // G17: a delegation denial is an error-status result; surface it in the

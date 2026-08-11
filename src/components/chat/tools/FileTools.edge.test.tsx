@@ -71,7 +71,7 @@ vi.mock('@assistant-ui/react', async (importOriginal) => {
 // Static imports: vi.mock intercepts makeAssistantToolUI before these run.
 import { FileReadPreviewUI, FileReadAliasDotUI } from './FileReadPreview'
 import { FileWriteConfirmUI, EditFileConfirmUI, AppendFileConfirmUI } from './FileWriteConfirm'
-import { FileTreeViewUI } from './FileTreeView'
+import { FileTreeViewUI, FileListAliasDotUI } from './FileTreeView'
 
 // ── FileReadBlock result edge cases ───────────────────────────────────────────
 
@@ -399,6 +399,45 @@ describe('FileReadBlock — flat text-line status dot', () => {
   })
 })
 
+// M7 (second review wave): `captured['file.read']` (the BRD C.6.1.4
+// dot-notation alias, FileReadAliasDotUI) previously only got the
+// `.not.toThrow()` smoke coverage above — never an isError-threading
+// assertion. It is a SEPARATE `makeAssistantToolUI({...})` render closure
+// from the canonical `read_file` registration (FileReadPreview.tsx), so the
+// canonical block's coverage above says nothing about whether this one
+// wires `isError` correctly.
+describe('FileReadBlock (file.read alias) live wiring — issue #617', () => {
+  it('isError=true renders the error dot and "Failed" label', () => {
+    const renderFn = captured['file.read']!
+    const { container, getByText } = render(
+      renderFn({
+        args: { path: '/workspace/file.ts' },
+        result: null,
+        status: { type: 'complete' },
+        isError: true,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+    expect(getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('isError=false with a result renders the success dot, not error', () => {
+    const renderFn = captured['file.read']!
+    const { container } = render(
+      renderFn({
+        args: { path: '/workspace/file.ts' },
+        result: 'const x = 1\n',
+        status: { type: 'complete' },
+        isError: false,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-error)]')
+  })
+})
+
 describe('FileOpBlock (write/edit/append) — flat text-line status dot', () => {
   const WRITE_CALL_ID = 'call-write-1'
 
@@ -599,6 +638,49 @@ describe('FileTreeBlock — flat text-line status dot', () => {
       expect(row.querySelector('svg')).toBeTruthy()
       expect((row as HTMLElement).style.paddingLeft).toBeDefined()
     })
+  })
+})
+
+// M7 (second review wave): `captured['file.list']` (the BRD C.6.1.4
+// dot-notation alias, FileListAliasDotUI) had ZERO coverage — not even a
+// `.not.toThrow()` smoke test, unlike its `file.read` sibling. It is a
+// SEPARATE `makeAssistantToolUI({...})` render closure from the canonical
+// `list_dir` registration (FileTreeView.tsx).
+describe('FileTreeBlock (file.list alias) live wiring — issue #617', () => {
+  it('is registered as a distinct render function from the canonical list_dir registration', () => {
+    expect(FileListAliasDotUI).toBeDefined()
+    expect(captured['file.list']).toBeDefined()
+    expect(captured['file.list']).not.toBe(captured['list_dir'])
+  })
+
+  it('isError=true renders the error dot and "Failed" label', () => {
+    const renderFn = captured['file.list']!
+    const { container, getByText } = render(
+      renderFn({
+        args: { path: '.' },
+        result: null,
+        status: { type: 'complete' },
+        isError: true,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+    expect(getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('isError=false with a result renders the success dot, not error', () => {
+    const renderFn = captured['file.list']!
+    const { container } = render(
+      renderFn({
+        args: { path: '.' },
+        result: 'file1.txt\nfile2.txt\n',
+        status: { type: 'complete' },
+        isError: false,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-error)]')
   })
 })
 

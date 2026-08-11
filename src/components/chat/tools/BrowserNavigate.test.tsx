@@ -266,7 +266,26 @@ describe('BrowserNavigateUI / BrowserNavigateUnderscoreUI wiring — issue #617'
     expect(getByText('Failed')).toBeInTheDocument()
   })
 
-  it('cancellation still renders correctly through the real wiring (isCancelledStatus, unaffected by the isError-prop change)', () => {
+  // Second-review-wave correction: this test's ORIGINAL title claimed
+  // cancellation renders correctly "through the real wiring." That overstates
+  // it — `status:{type:'incomplete',reason:'cancelled'}` is not a shape the
+  // live AssistantUI pipeline can actually hand to this render callback.
+  // ChatScreen only mounts the live `ThreadPrimitive.Messages` tree (where
+  // `capturedNavigate.dot` is registered) while `hasStreamingMessage` is true
+  // (ChatScreen.tsx), and `buildMessageStatus` (omnipus-runtime.ts) returns
+  // `{type:'running'}` for exactly as long as `msg.isStreaming` holds — the
+  // message (and every resultless part inheriting its status, per
+  // omnipus-runtime.ts's own doc comment on `toMessagePartStatus`) can only
+  // become `incomplete`/cancelled AFTER streaming stops, by which point the
+  // message has already moved to the historical/replay render path
+  // (VirtualAssistantMessageRow → BrowserToolReplayBlock, not this live
+  // registration) and never mounts this callback again. So real cancellation
+  // for browser.navigate is only ever OBSERVABLE via the replay path, not
+  // this one. What this test legitimately proves — and all it claims to
+  // prove now — is that BrowserNavigateBlock's OWN `isCancelledStatus(status)`
+  // check renders the cancelled treatment correctly when handed that status,
+  // a still-useful unit-level check of the render callback's internal logic.
+  it('BrowserNavigateBlock renders the cancelled treatment when handed an incomplete/cancelled status (unit-level; not a claim this shape reaches the callback via the live pipeline — see comment above)', () => {
     expect(capturedNavigate.dot).toBeDefined()
     const { container, getByText } = render(
       capturedNavigate.dot!({

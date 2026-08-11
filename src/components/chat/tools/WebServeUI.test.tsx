@@ -50,6 +50,8 @@ describe('WebServeUI — kind=static', () => {
         }}
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
 
@@ -80,6 +82,8 @@ describe('WebServeUI — kind=static', () => {
         }}
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
 
@@ -100,6 +104,8 @@ describe('WebServeUI — kind=static', () => {
         }}
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
 
@@ -115,6 +121,8 @@ describe('WebServeUI — kind=static', () => {
         result={null}
         isRunning={true}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
     expect(screen.getByText(/waiting for/i)).toBeInTheDocument()
@@ -139,6 +147,8 @@ describe('WebServeUI — kind=dev', () => {
         }}
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
 
@@ -173,6 +183,8 @@ describe('WebServeUI — kind=dev', () => {
         }}
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
 
@@ -198,6 +210,8 @@ describe('WebServeUI — kind=dev', () => {
         }}
         isRunning={false}
         toolName="run_in_workspace"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
 
@@ -238,6 +252,8 @@ describe('WebServeUI — malformed result block (B1.3e)', () => {
         result={{ unexpected_field: 'some_value', nested: { a: 1 } }}
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
 
@@ -258,6 +274,8 @@ describe('WebServeUI — malformed result block (B1.3e)', () => {
         result="this is not an object"
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
 
@@ -273,6 +291,8 @@ describe('WebServeUI — malformed result block (B1.3e)', () => {
         result={null}
         isRunning={true}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
 
@@ -289,6 +309,8 @@ describe('WebServeUI — malformed result block (B1.3e)', () => {
         result={null}
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
 
@@ -307,6 +329,8 @@ describe('WebServeUI — malformed result block (B1.3e)', () => {
         }}
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
 
@@ -346,6 +370,7 @@ describe('WebServeUI — real isError signal (issue #617)', () => {
         isRunning={false}
         isError={true}
         toolName="web_serve"
+        isCancelled={undefined}
       />
     )
 
@@ -366,6 +391,7 @@ describe('WebServeUI — real isError signal (issue #617)', () => {
         isRunning={false}
         isError={false}
         toolName="web_serve"
+        isCancelled={undefined}
       />
     )
 
@@ -385,10 +411,53 @@ describe('WebServeUI — real isError signal (issue #617)', () => {
         }}
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
 
     expect(screen.getByText('Done')).toBeInTheDocument()
+  })
+
+  // Reviewer note (H1 hardening): the `hasResult`→`isError` rename in
+  // PreviewToolHeader.tsx only actually changes behavior for a NULL result —
+  // under the old `hasResult={typedResult !== null}` proxy, `result === null`
+  // always forced "Failed" regardless of the real outcome. Every case above
+  // exercises a well-formed (non-null) result, so none of them would fail on
+  // a revert of that rename. This one does.
+  it('a null result with isError=false renders "Done", not "Failed" (the hasResult-proxy case)', () => {
+    render(
+      <WebServeBlock
+        args={{ path: 'elicify-hello' }}
+        result={null}
+        isRunning={false}
+        isError={false}
+        toolName="web_serve"
+        isCancelled={undefined}
+      />
+    )
+
+    expect(screen.getByText('Done')).toBeInTheDocument()
+    expect(screen.queryByText('Failed')).toBeNull()
+  })
+
+  // F2 (issue #617 follow-up): WebServeBlock previously had no cancellation
+  // signal at all — a cancelled web_serve call rendered as a plain "Done".
+  it('isCancelled=true renders "Cancelled", not "Done" or "Failed"', () => {
+    render(
+      <WebServeBlock
+        args={{ path: 'elicify-hello' }}
+        result={null}
+        isRunning={false}
+        isError={false}
+        isCancelled={true}
+        toolName="web_serve"
+      />
+    )
+
+    expect(screen.getByText('Cancelled')).toBeInTheDocument()
+    expect(screen.queryByText('Done')).toBeNull()
+    expect(screen.queryByText('Failed')).toBeNull()
   })
 })
 
@@ -408,6 +477,8 @@ describe('WebServeUI — malformed result block flat styling', () => {
         result={{ unexpected_field: 'some_value' }}
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
     const block = screen.getByTestId('webserve-malformed-block')
@@ -423,6 +494,8 @@ describe('WebServeUI — malformed result block flat styling', () => {
         result={{ unexpected_field: 'some_value' }}
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
     const pre = document.querySelector('pre')
@@ -443,14 +516,28 @@ describe('WebServeUI — malformed result block flat styling', () => {
 describe('WebServeUI — single status source (no duplicate status icons)', () => {
   it('static mode, running: exactly one spinner renders (not two)', () => {
     render(
-      <WebServeBlock args={{ path: 'elicify-hello' }} result={null} isRunning={true} toolName="web_serve" />
+      <WebServeBlock
+        args={{ path: 'elicify-hello' }}
+        result={null}
+        isRunning={true}
+        toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
+      />
     )
     expect(document.querySelectorAll('.animate-spin').length).toBe(1)
   })
 
   it('static mode, running: the Globe mode icon is muted, not status-tinted/pulsing', () => {
     render(
-      <WebServeBlock args={{ path: 'elicify-hello' }} result={null} isRunning={true} toolName="web_serve" />
+      <WebServeBlock
+        args={{ path: 'elicify-hello' }}
+        result={null}
+        isRunning={true}
+        toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
+      />
     )
     const header = screen.getByTestId('webserve-tool-header')
     // The Globe icon is the header's second child (first is the status dot/spinner).
@@ -469,6 +556,8 @@ describe('WebServeUI — single status source (no duplicate status icons)', () =
         result={{ kind: 'static', url: '/preview/jim/tok/', path: 'x', expires_at: '2099-01-01T00:00:00Z' }}
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
     const header = screen.getByTestId('webserve-tool-header')
@@ -478,7 +567,16 @@ describe('WebServeUI — single status source (no duplicate status icons)', () =
   })
 
   it('static mode, no result (error/no-run terminal state): no trailing status icon duplicates the leading dot', () => {
-    render(<WebServeBlock args={{}} result={null} isRunning={false} toolName="web_serve" />)
+    render(
+      <WebServeBlock
+        args={{}}
+        result={null}
+        isRunning={false}
+        toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
+      />
+    )
     // Only the header's own leading indicator remains — no second
     // CheckCircle/XCircle/ArrowsClockwise trailing icon.
     expect(document.querySelectorAll('.animate-spin').length).toBe(0)
@@ -486,7 +584,14 @@ describe('WebServeUI — single status source (no duplicate status icons)', () =
 
   it('dev mode, running: exactly one spinner renders and the Terminal mode icon stays muted', () => {
     render(
-      <WebServeBlock args={{ command: 'vite dev', port: 3000 }} result={null} isRunning={true} toolName="web_serve" />
+      <WebServeBlock
+        args={{ command: 'vite dev', port: 3000 }}
+        result={null}
+        isRunning={true}
+        toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
+      />
     )
     expect(document.querySelectorAll('.animate-spin').length).toBe(1)
     const header = screen.getByTestId('webserve-tool-header')
@@ -508,6 +613,8 @@ describe('WebServeUI — single status source (no duplicate status icons)', () =
         }}
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
     expect(screen.getByText(':18000')).toBeInTheDocument()
@@ -521,7 +628,14 @@ describe('WebServeUI — single status source (no duplicate status icons)', () =
 describe('WebServeUI — no descendant card-frame classes', () => {
   it('the malformed-result block has no descendant carrying rounded-md/overflow-hidden/bg-surface-1', () => {
     render(
-      <WebServeBlock args={{}} result={{ unexpected_field: 'some_value' }} isRunning={false} toolName="web_serve" />
+      <WebServeBlock
+        args={{}}
+        result={{ unexpected_field: 'some_value' }}
+        isRunning={false}
+        toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
+      />
     )
     const root = screen.getByTestId('webserve-malformed-block')
     expect(
@@ -541,6 +655,8 @@ describe('WebServeUI — no descendant card-frame classes', () => {
         }}
         isRunning={false}
         toolName="web_serve"
+        isError={undefined}
+        isCancelled={undefined}
       />
     )
     const root = screen.getByTestId('webserve-tool-header')

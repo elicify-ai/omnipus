@@ -43,6 +43,7 @@ describe.each([
             args={{}}
             result={result}
             status={{ type: 'complete' }}
+            isError={undefined}
             summary="(no selector)"
           />
         )
@@ -74,6 +75,7 @@ describe.each([
             args={args}
             result={null}
             status={{ type: 'running' }}
+            isError={undefined}
             summary="test"
           />
         )
@@ -99,6 +101,7 @@ describe.each([
             args={{ selector: '#main' }}
             result={result}
             status={status}
+            isError={undefined}
             summary="#main"
           />
         )
@@ -126,6 +129,7 @@ describe.each([
             args={{}}
             result={null}
             status={{ type: 'running' }}
+            isError={undefined}
             summary={summary}
           />
         )
@@ -184,6 +188,7 @@ describe.each([
             args={frame.params as Record<string, unknown>}
             result={result}
             status={{ type: statusType }}
+            isError={undefined}
             summary={String((frame.params as Record<string, unknown>).selector ?? frame.tool)}
           />
         )
@@ -241,6 +246,7 @@ describe.each([
             args={{}}
             result={frame.result}
             status={{ type: statusType }}
+            isError={undefined}
             summary={frame.tool}
           />
         )
@@ -260,6 +266,7 @@ it('renders toolName as visible text', () => {
       args={{ url: 'https://example.com' }}
       result={null}
       status={{ type: 'running' }}
+      isError={undefined}
       summary="https://example.com"
     />
   )
@@ -274,6 +281,7 @@ it('null result with complete status renders without showing a <script> tag (XSS
       args={{ script: '<script>alert(1)</script>' }}
       result={'<script>window.__xss=true</script>'}
       status={{ type: 'complete' }}
+      isError={undefined}
       summary="evaluate"
     />
   )
@@ -304,6 +312,7 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
         args={{}}
         result={null}
         status={{ type: 'running' }}
+        isError={undefined}
         summary="#btn"
       />
     )
@@ -319,6 +328,7 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
         args={{}}
         result={{ ok: true }}
         status={{ type: 'complete' }}
+        isError={undefined}
         summary="#btn"
       />
     )
@@ -376,6 +386,7 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
         args={{}}
         result={{ ok: true }}
         status={{ type: 'complete' }}
+        isError={undefined}
         summary="#btn"
       />
     )
@@ -390,6 +401,7 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
         args={{}}
         result={null}
         status={{ type: 'incomplete', reason: 'cancelled' }}
+        isError={undefined}
         summary="#btn"
       />
     )
@@ -406,6 +418,7 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
         args={{}}
         result={null}
         status={{ type: 'complete' }}
+        isError={undefined}
         summary="#btn"
       />
     )
@@ -419,6 +432,7 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
         args={{}}
         result={null}
         status={{ type: 'complete' }}
+        isError={undefined}
         summary="#btn"
       />
     )
@@ -434,6 +448,7 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
         args={{ expression: 'document.title' }}
         result={{ result: 'My Page' }}
         status={{ type: 'complete' }}
+        isError={undefined}
         summary="document.title"
       />
     )
@@ -451,6 +466,7 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
         args={{}}
         result={{ ok: true }}
         status={{ type: 'complete' }}
+        isError={undefined}
         summary="#btn"
       />
     )
@@ -468,6 +484,7 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
         args={{ expression: 'document.title' }}
         result={{ result: 'My Page' }}
         status={{ type: 'complete' }}
+        isError={undefined}
         summary="document.title"
       />
     )

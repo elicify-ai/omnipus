@@ -61,6 +61,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useChatStore } from '@/store/chat'
 import type { ChatMessage, PositionedToolCall, SubagentSpan } from '@/store/chat'
+import type { MessagePartStatus } from '@assistant-ui/react'
 import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
@@ -423,6 +424,59 @@ function isMarshalErrorSentinel(value: unknown): boolean {
 }
 
 /**
+ * Returns true when the result is the structured write_file precondition
+ * refusal sentinel (ADR-059 W5, error: "file_exists"). Mirrors
+ * GenericToolCall.tsx's/ToolCallBadge.tsx's isFileExistsRefusal detector —
+ * see isDelegationFailureResult's comment above for why this is a local
+ * duplicate, not an import.
+ */
+function isFileExistsRefusalResult(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<string, unknown>)['error'] === 'file_exists' &&
+    typeof (value as Record<string, unknown>)['reason'] === 'string'
+  )
+}
+
+/**
+ * Returns true when the result is the structured permission-denied sentinel
+ * (issue #618, error: "permission_denied"). Mirrors GenericToolCall.tsx's/
+ * ToolCallBadge.tsx's isPermissionDenied detector — see
+ * isDelegationFailureResult's comment above for why this is a local
+ * duplicate, not an import. Added alongside the other two structured-failure
+ * detectors (F6): without it, a hidden-by-default tool call (delegate, bash,
+ * load_tool) whose only failure signal is a permission_denied result would
+ * disagree with GenericToolCall/ToolCallBadge on whether the call counts as
+ * an error for the thread-visibility gate below.
+ */
+function isPermissionDeniedResult(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<string, unknown>)['error'] === 'permission_denied' &&
+    typeof (value as Record<string, unknown>)['message'] === 'string' &&
+    typeof (value as Record<string, unknown>)['reason'] === 'string'
+  )
+}
+
+/**
+ * F2: derives the replay MessagePartStatus object from the store's resolved
+ * ToolCall.status, instead of the old hardcoded `{type:'complete'}`.
+ * BrowserToolReplayBlock and GenericToolCall both consult `status` (via
+ * isCancelledStatus) to decide whether to render the cancelled treatment —
+ * hardcoding 'complete' meant isCancelledStatus could never be true on
+ * replay, so a genuinely cancelled call rendered as a plain success. The
+ * `isError` prop each of those two components also takes is passed
+ * separately and explicitly at each call site (issue #617), so widening
+ * `status.type` to 'incomplete' here does not reopen #617 — it is never
+ * consulted for the error bit once an explicit `isError` prop is supplied.
+ */
+function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled'): MessagePartStatus {
+  return status === 'cancelled' ? { type: 'incomplete', reason: 'cancelled' } : { type: 'complete' }
+}
+
+/**
  * Mirrors the per-tool-call visibility gate GenericToolCall/BashOutput/
  * ToolCallBadge each apply at render time (Fix 3, 2026-07-16). Used ONLY to
  * decide whether a message has any VISIBLE content, so the ghost-bubble
@@ -432,7 +486,12 @@ function isMarshalErrorSentinel(value: unknown): boolean {
  * delegation/background-bash by default — toolVisibility.ts). Reuses the
  * same sentinel-detection semantics and the shouldRenderToolCall classifier
  * those components call directly — not re-derived logic, just a local copy
- * of the two small detector predicates (see their own comments for why).
+ * of the four small detector predicates (delegation-denied, marshal-error,
+ * file-exists refusal, permission-denied — F6: all four structured-failure
+ * sentinels GenericToolCall/ToolCallBadge know about, kept in sync with them
+ * so a hidden-by-default tool call's only failure signal being one of the
+ * latter two doesn't disagree with what those two renderers would show; see
+ * their own comments for why these are local copies, not imports).
  *
  * `errorFlag` is the outcome signal each call site already carries under a
  * different name (a baked ToolCall's `.error` string, or a live/streaming
@@ -456,7 +515,12 @@ function wouldToolCallBeVisible(
   errorFlag: boolean,
   verboseChatEnabled: boolean,
 ): boolean {
-  const isError = errorFlag || isDelegationFailureResult(result) || isMarshalErrorSentinel(result)
+  const isError =
+    errorFlag ||
+    isDelegationFailureResult(result) ||
+    isMarshalErrorSentinel(result) ||
+    isFileExistsRefusalResult(result) ||
+    isPermissionDeniedResult(result)
   return shouldRenderToolCall(tool, params, verboseChatEnabled, isError)
 }
 
@@ -963,6 +1027,11 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   // below — previously this row always rendered "Done"
                   // regardless of whether the call actually failed.
                   isError={tc.status === 'error'}
+                  // F2: same fix for the CANCELLED case — WebServeBlock has no
+                  // `status` prop to derive cancellation from (unlike
+                  // BrowserToolReplayBlock/GenericToolCall), so it needs the
+                  // outcome threaded explicitly.
+                  isCancelled={tc.status === 'cancelled'}
                   toolName={tc.tool}
                 />
               )
@@ -979,6 +1048,15 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             // tool call rendered "OK" unconditionally — mirror the
             // GenericToolCall branch below (`error={tc.error}`) by passing the
             // store's real outcome as `isError`.
+            //
+            // #617 follow-up (F2): `status` itself was ALSO hardcoded to
+            // `{type:'complete'}`, so a CANCELLED replayed call (tc.status ===
+            // 'cancelled') fell through the isError check (false, correctly)
+            // but still rendered as a plain success — isCancelledStatus(status)
+            // can only ever be true when status.type is 'incomplete' with
+            // reason 'cancelled', never 'complete'. replayPartStatus derives
+            // the real status object so both BrowserToolReplayBlock's and
+            // GenericToolCall's own isCancelledStatus checks see it.
             if (isReplayBrowserToolName(tc.tool)) {
               return (
                 <BrowserToolReplayBlock
@@ -986,7 +1064,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   toolName={tc.tool}
                   args={tc.params}
                   result={tc.result}
-                  status={{ type: 'complete' }}
+                  status={replayPartStatus(tc.status)}
                   isError={tc.status === 'error'}
                 />
               )
@@ -997,8 +1075,14 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                 toolName={tc.tool}
                 args={tc.params}
                 result={tc.result}
-                status={{ type: 'complete' }}
+                status={replayPartStatus(tc.status)}
                 error={tc.error}
+                // Issue #617: pass the store's real outcome explicitly rather
+                // than letting GenericToolCall infer it from `status`/`error`
+                // — see GenericToolCallProps.isError's doc comment for why the
+                // inferred fallback misses a real failure whose `result` was
+                // offloaded/replaced server-side with `error` left empty.
+                isError={tc.status === 'error'}
                 durationMs={tc.duration_ms}
                 defaultCollapsed={liteMode}
                 sessionId={activeSessionId ?? ''}

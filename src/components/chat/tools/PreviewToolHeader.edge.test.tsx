@@ -30,6 +30,7 @@ describe.each([
             toolName={toolName}
             isRunning={false}
             isError={false}
+            isCancelled={false}
           />
         )
       ).not.toThrow()
@@ -59,6 +60,7 @@ describe.each([
             label={label}
             isRunning={false}
             isError={false}
+            isCancelled={false}
           />
         )
       ).not.toThrow()
@@ -84,6 +86,7 @@ describe.each([
             toolName="web_serve"
             isRunning={isRunning}
             isError={isError}
+            isCancelled={false}
           />
         )
       ).not.toThrow()
@@ -109,6 +112,7 @@ describe.each([
             toolName="web_serve"
             isRunning={false}
             isError={false}
+            isCancelled={false}
           />
         )
       ).not.toThrow()
@@ -136,6 +140,7 @@ describe.each([
             trailing={trailing}
             isRunning={false}
             isError={false}
+            isCancelled={false}
           />
         )
       ).not.toThrow()
@@ -161,6 +166,7 @@ describe.each([
             data-testid={testId}
             isRunning={false}
             isError={true}
+            isCancelled={false}
           />
         )
       ).not.toThrow()
@@ -180,6 +186,7 @@ it('renders the toolName as visible text', () => {
       toolName="web_serve"
       isRunning={false}
       isError={false}
+      isCancelled={false}
     />
   )
   expect(screen.getByText('web_serve')).toBeInTheDocument()
@@ -193,6 +200,7 @@ it('renders a label when provided', () => {
       label="npm run dev"
       isRunning={true}
       isError={true}
+      isCancelled={false}
     />
   )
   expect(screen.getByText('run_in_workspace')).toBeInTheDocument()
@@ -214,7 +222,7 @@ describe('PreviewToolHeader — flat text-line status dot', () => {
 
   it('running: indicator is the spinning icon, not a dot', () => {
     const { container } = render(
-      <PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={true} isError={true} />
+      <PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={true} isError={true} isCancelled={false} />
     )
     const indicator = getIndicatorEl(container)
     expect(indicator?.tagName.toLowerCase()).toBe('svg')
@@ -223,7 +231,7 @@ describe('PreviewToolHeader — flat text-line status dot', () => {
 
   it('not running, no error: indicator is an 8px success-colored dot', () => {
     const { container } = render(
-      <PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} isError={false} />
+      <PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} isError={false} isCancelled={false} />
     )
     const indicator = getIndicatorEl(container)
     expect(indicator?.tagName.toLowerCase()).toBe('span')
@@ -233,7 +241,7 @@ describe('PreviewToolHeader — flat text-line status dot', () => {
 
   it('not running, errored: indicator is an 8px error-colored dot', () => {
     const { container } = render(
-      <PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} isError={true} />
+      <PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} isError={true} isCancelled={false} />
     )
     const indicator = getIndicatorEl(container)
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
@@ -246,24 +254,46 @@ describe('PreviewToolHeader — flat text-line status dot', () => {
         toolName="web_serve"
         isRunning={false}
         isError={false}
+        isCancelled={false}
       />
     )
     expect(screen.getByTestId('type-icon')).toBeInTheDocument()
   })
 
   it('running: renders the muted "Running..." status text (label is no longer computed and discarded)', () => {
-    render(<PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={true} isError={true} />)
+    render(<PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={true} isError={true} isCancelled={false} />)
     expect(screen.getByText('Running...')).toBeInTheDocument()
   })
 
   it('not running, no error: renders the muted "Done" status text', () => {
-    render(<PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} isError={false} />)
+    render(<PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} isError={false} isCancelled={false} />)
     expect(screen.getByText('Done')).toBeInTheDocument()
   })
 
   it('not running, errored: renders the muted "Failed" status text', () => {
-    render(<PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} isError={true} />)
+    render(<PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} isError={true} isCancelled={false} />)
     expect(screen.getByText('Failed')).toBeInTheDocument()
+  })
+
+  // F2 (issue #617 follow-up): PreviewToolHeader previously had no cancelled
+  // state at all — WebServeBlock had no `status` object to derive it from,
+  // so a cancelled web_serve call rendered as a plain success dot ("Done").
+  it('not running, cancelled: indicator is an 8px muted-colored dot with a "Cancelled" label, not the success dot', () => {
+    const { container } = render(
+      <PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} isError={false} isCancelled={true} />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-success)]')
+    expect(screen.getByText('Cancelled')).toBeInTheDocument()
+  })
+
+  it('cancelled wins over errored — a cancelled call never shows "Failed"', () => {
+    render(
+      <PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} isError={true} isCancelled={true} />
+    )
+    expect(screen.getByText('Cancelled')).toBeInTheDocument()
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
   })
 
   it('the header has no card-frame classes — flat/transparent, no rounded-t-md/border/bg-surface-1', () => {
@@ -274,6 +304,7 @@ describe('PreviewToolHeader — flat text-line status dot', () => {
         data-testid="webserve-tool-header"
         isRunning={false}
         isError={false}
+        isCancelled={false}
       />
     )
     const root = screen.getByTestId('webserve-tool-header')
@@ -291,6 +322,7 @@ describe('PreviewToolHeader — flat text-line status dot', () => {
         data-testid="webserve-tool-header"
         isRunning={false}
         isError={false}
+        isCancelled={false}
       />
     )
     const root = screen.getByTestId('webserve-tool-header')

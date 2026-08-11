@@ -73,8 +73,15 @@ interface BrowserToolBlockProps {
    * ChatScreen.tsx). `status` above is still used for isRunning/isCancelled
    * — only the error derivation moved off `status.type === 'incomplete'`,
    * which can never be true for a finished call carrying a result.
+   *
+   * F5: required (nullable), not optional. An omitted optional prop is
+   * `undefined` → falsy → renders success, silently reopening the exact bug
+   * this field exists to fix. Making it `boolean | undefined` (required)
+   * forces every call site to pass it explicitly — zero runtime change for
+   * the two existing callers (BrowserToolReplayBlock, createBrowserToolUI's
+   * renderBlock), both of which already do.
    */
-  isError?: boolean
+  isError: boolean | undefined
   summary: string
 }
 
@@ -454,8 +461,10 @@ export function BrowserToolReplayBlock({
   /** Issue #617: the tool call's real error outcome (tc.status === 'error'
    *  at the ChatScreen.tsx call site) — replaces the old `status.type ===
    *  'incomplete'` derivation, which is never true for a finished replayed
-   *  call (ChatScreen always passes `status={{type:'complete'}}`). */
-  isError?: boolean
+   *  call. F5: required (nullable) rather than optional — see
+   *  BrowserToolBlockProps.isError's doc comment for why an optional prop
+   *  here would silently reopen the bug this fixes. */
+  isError: boolean | undefined
 }) {
   const spec = BROWSER_TOOL_SPECS[toolName]
   if (!spec) return null

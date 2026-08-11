@@ -34,6 +34,15 @@ export interface PreviewToolHeaderProps {
    * instead of deriving it from whether parsing succeeded.
    */
   isError: boolean
+  /**
+   * F2 (issue #617 follow-up): whether the tool call was cancelled. Adds a
+   * third terminal state alongside isRunning/isError — WebServeUI's replay
+   * path has no `status` object to derive this from the way the
+   * isCancelledStatus(status) callers do, so callers pass the outcome
+   * explicitly. Required (not optional) for the same reason `isError` is —
+   * see WebServeUI.tsx's isCancelled prop doc comment.
+   */
+  isCancelled: boolean
   /** Optional data-testid for targeted e2e tests. */
   'data-testid'?: string
 }
@@ -45,6 +54,7 @@ export function PreviewToolHeader({
   trailing,
   isRunning,
   isError,
+  isCancelled,
   'data-testid': testId,
 }: PreviewToolHeaderProps) {
   // Flat text-line redesign (ticket "Tool components in chat", P2): the old
@@ -55,9 +65,10 @@ export function PreviewToolHeader({
   // `icon` still renders alongside it since (unlike those callers) it is the
   // only thing distinguishing preview kind — WebServeUI passes an
   // identical `toolName` ("web_serve") for both its static and dev modes.
-  const statusConfig = getToolBadgeStatusConfig(isRunning ? 'running' : isError ? 'error' : 'success', {
-    size: 13,
-  })
+  const statusConfig = getToolBadgeStatusConfig(
+    isRunning ? 'running' : isCancelled ? 'cancelled' : isError ? 'error' : 'success',
+    { size: 13, cancelledVariant: 'muted' },
+  )
 
   return (
     <div data-testid={testId} className="flex items-center gap-2 py-1 font-mono text-xs">
