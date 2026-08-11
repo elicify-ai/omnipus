@@ -404,6 +404,18 @@ func FileExistsRefusalResult(tool, path, reason string) *ToolResult {
 // the same symbols the producers write, rather than re-typing the literals —
 // which is what it did at first, making an earlier version of this comment's
 // "cannot drift apart" claim false on arrival.
+//
+// ADR-060 (docs/internal/architecture/ADR-060-structured-tool-failure-family.md)
+// is the canonical reference for this family: D1 states the 5-requirement
+// membership checklist (inline schema, exported *Code constant here, a
+// single marshalWithinBudget-routed producer, a family-register entry in
+// scripts/check-no-handwritten-wire-types.sh, and — for toolResult-channel
+// members only — an allow-list entry / oneOf entry / SPA detector). D2
+// defines the toolResult-vs-message delivery-channel taxonomy that decides
+// which of those apply to a given member; D5 names, rather than hides, the
+// four ways a fifth member can still slip past both enforcement mechanisms.
+// Read there before adding a fifth discriminator, rather than re-deriving
+// the rule from these four constants.
 const (
 	FileExistsRefusalCode     = "file_exists"
 	DelegationDeniedCode      = "delegation_denied"

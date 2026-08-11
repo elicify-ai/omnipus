@@ -51,7 +51,19 @@ type discriminatorFixture struct {
 // six runes each and doubles " and \, so arithmetic on ASCII input runes
 // understates the encoded size). Reused across every fixture below so all
 // four producers are exercised against the same adversarial shape.
-var hugeEscapable = strings.Repeat(`R&D <agent> "name"\path/`, 300)
+//
+// The HTML-escaping characters alone do not exercise #618's ENCODING defect
+// (they are all legal under fmt.Sprintf's %q too) — only a raw C0/C1
+// control byte outside \n\t\r or invalid UTF-8 does that (%q emits \xNN,
+// not a legal JSON escape). The suffix below adds one of each: \x01 (a
+// control byte %q cannot represent as valid JSON), \xff (a lone invalid
+// UTF-8 byte, the exact shape a *os.PathError's Error() can contain
+// byte-for-byte from the OS), and \xe2\x28 (a truncated 3-byte UTF-8
+// sequence). pkg/tools/permission_denied_test.go's adversarialInputs table
+// drives these classes individually and in isolation; this suffix makes
+// sure the SAME size-stress fixtures this file's coverage test already
+// runs also exercise the encoding class, not just the budget class.
+var hugeEscapable = strings.Repeat(`R&D <agent> "name"\path/`, 300) + "\x01\x7f\xff\xe2\x28"
 
 // discriminatorCoverageRegistry is the fixture for every discriminator
 // structuredFailureDiscriminators (tool_result_store.go) currently

@@ -50,8 +50,8 @@ var adversarialInputs = []struct {
 	// would realistically hit, not budget enforcement. See
 	// downstreamCapLiteralIsExercised below for the case that actually
 	// forces the shrink loop to run.
-	{"over_long_830_chars_escaping_not_budget", "/workspace/" + strings.Repeat("nested-directory/", 49) + "f.txt"},   // > 830 chars
-	{"over_long_4000_chars", "/workspace/" + strings.Repeat("nested-directory/", 240) + "f.txt"}, // > 4000 chars
+	{"over_long_830_chars_escaping_not_budget", "/workspace/" + strings.Repeat("nested-directory/", 49) + "f.txt"}, // > 830 chars
+	{"over_long_4000_chars", "/workspace/" + strings.Repeat("nested-directory/", 240) + "f.txt"},                   // > 4000 chars
 }
 
 // downstreamCapRunes mirrors the 2000-rune hard cap applied downstream —
