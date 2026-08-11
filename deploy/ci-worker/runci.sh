@@ -198,9 +198,24 @@ run_lint() {
 run_gorace() {
   ensure_spa_stub
   local out
+  # CI=true is REQUIRED here, and is the single thing that makes this gate
+  # predict GitHub's. GitHub Actions always sets CI, so pkg/tools/browser's
+  # skipIfNoBrowser(t) skips every real-Chrome test in GitHub's -race step.
+  # This worker is a plain SSH shell with no CI in the environment, so without
+  # this line the SAME command runs ~58 real-Chrome e2e tests under -race here
+  # and zero of them there.
+  #
+  # That is not a theoretical divergence — it is what #615's glob widening
+  # actually produced on this worker: race instrumentation plus a shared real
+  # Chrome made a DIFFERENT handful of browser e2e tests fail on each run
+  # (execute/inspect/text-selector), while GitHub's identical step was
+  # unaffected. Real-Chrome coverage belongs to the dedicated browser-e2e job
+  # (.github/workflows/pr.yml), which runs WITHOUT -race and with Chrome as a
+  # declared dependency. This gate's job is the concurrency logic.
+  #
   # shellcheck disable=SC2046 — intentional word-splitting: race-packages.sh
   # emits a space-separated package list that must expand to separate args.
-  out=$(CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s \
+  out=$(CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s \
     $(scripts/race-packages.sh) 2>&1)
   local code=$?
   echo "$out"
@@ -252,7 +267,11 @@ run_gorace() {
     # yet got less time. With ./pkg/tools/... now in the glob, a slow package
     # that trips the flake filter could time out at 600s and be stamped
     # "REAL FAILURE (failed twice)" — a false RED that reads as a code defect.
-    if CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s -p 1 "$p" >"/tmp/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
+    # CI=true for the same reason as the contended run above: the isolated
+    # re-run must measure the SAME thing, or a package that only "fails" here
+    # because it launched a real Chrome would be re-run without one and
+    # stamped a flake — or vice versa.
+    if CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s -p 1 "$p" >"/tmp/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
        && ! grep -aq "DATA RACE" "/tmp/rr_race_$(echo "$p" | tr '/' '_').log"; then
       echo "FLAKE (passed isolated): $p"
       echo "  contended-run failures (each is a REAL BUG that has not been diagnosed yet):"
