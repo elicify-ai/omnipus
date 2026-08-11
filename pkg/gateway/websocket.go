@@ -4288,11 +4288,18 @@ type wsStreamer struct {
 	// Populates the "done" frame so the chat UI shows real token counts and
 	// cost instead of zeros (issue #12). Mutex-protected because SetTurnStats
 	// and Finalize may be called from different goroutines.
-	statsMu         sync.Mutex
-	statsTokens     int64
-	statsCostUSD    float64
-	statsDuration   time.Duration
-	statsTurnFailed bool // set by SetTurnFailed when the engine used a synthetic fallback
+	statsMu sync.Mutex
+	// statsPromptTokens/statsCompletionTokens/statsCacheRead/statsCacheWrite
+	// carry the provider's token split so Finalize can stamp it onto the
+	// TranscriptEntry it writes. Guarded by statsMu like the fields below.
+	statsPromptTokens     int
+	statsCompletionTokens int
+	statsCacheRead        int
+	statsCacheWrite       int
+	statsTokens           int64
+	statsCostUSD          float64
+	statsDuration         time.Duration
+	statsTurnFailed       bool // set by SetTurnFailed when the engine used a synthetic fallback
 
 	// transcriptPersisted records that the agent loop already wrote this
 	// streamer's narration to the transcript via
@@ -4504,6 +4511,21 @@ func (s *wsStreamer) SetTurnStats(tokens int64, costUSD float64, duration time.D
 	s.statsDuration = duration
 }
 
+// SetTurnIOStats receives the provider's input/output and cache token split
+// from the agent loop's finalizeStreamer (streamerIOStatsSetter).
+//
+// SetTurnStats above carries only a collapsed total, which is why a streamed
+// turn used to persist an entry with no split at all — leaving tokens_in at 0
+// for every webchat session.
+func (s *wsStreamer) SetTurnIOStats(promptTokens, completionTokens, cacheReadTokens, cacheWriteTokens int) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	s.statsPromptTokens = promptTokens
+	s.statsCompletionTokens = completionTokens
+	s.statsCacheRead = cacheReadTokens
+	s.statsCacheWrite = cacheWriteTokens
+}
+
 // SetTurnFailed is called by the agent loop's finalizeStreamer when the turn
 // ended via the engine's error/limit fallback rather than a real model response.
 // Conditions that set the flag: (1) LLM returned empty after retries and the
@@ -4700,6 +4722,12 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	s.statsMu.Lock()
 	tokensF := float64(s.statsTokens)
 	costF := s.statsCostUSD
+	// Read the split under the same lock as the total, so the entry cannot
+	// carry a total from one turn and a split from another.
+	promptTokensF := s.statsPromptTokens
+	completionTokensF := s.statsCompletionTokens
+	cacheReadF := s.statsCacheRead
+	cacheWriteF := s.statsCacheWrite
 	durF := float64(s.statsDuration.Milliseconds())
 	transcriptAlreadyPersisted := s.transcriptPersisted
 	producedModel := s.producedModel
@@ -4845,6 +4873,14 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 				Tokens:    int(tokensF),
 				Cost:      costF,
 				Model:     producedModel,
+				// The provider's token split. Without these four fields the
+				// session-stats aggregator sees no split and falls back to
+				// booking the whole turn total as output, which is how every
+				// webchat session came to report tokens_in: 0.
+				PromptTokens:     promptTokensF,
+				CompletionTokens: completionTokensF,
+				CacheReadTokens:  cacheReadF,
+				CacheWriteTokens: cacheWriteF,
 				// ParentSpawnCallID: stamped via SetParentSpawnCallID so a
 				// delegation child sub-turn's own streamed narration/final
 				// response carries the same nesting correlation its

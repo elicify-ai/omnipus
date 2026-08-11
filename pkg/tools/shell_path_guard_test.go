@@ -24,6 +24,26 @@ package tools
 // plus a regression guard for the attached-flag fix itself (a hyphenated
 // relative path segment like `build-x/output` must not be mistaken for a
 // `-x` flag with an attached absolute path).
+//
+// A SECOND follow-up review found that the colon-list carve-out above had
+// swung too far the other way: it skipped a matching candidate WHOLESALE,
+// so none of its `:`-separated segments was checked against the workspace
+// boundary at all. That made `cat /etc/passwd:/etc/hosts`,
+// `PATH=/etc/shadow:/usr/bin make`, `PATH=/usr/bin:/etc/shadow make`, and
+// `cat ~/.ssh/id_rsa:/dev/null` — every one of them BLOCKED before the
+// colon-list carve-out existed — silently ALLOWED. guardCommand now splits a
+// colon-list candidate on `:` and checks each segment independently (see
+// checkPathSegment), so those four shapes are blocked again below in
+// TestGuardCommand_TruePositivesStillBlocked. That fix also flips the
+// original `PATH=/usr/bin:/usr/local/bin make` and the compiler-flag
+// false-positive case from "allowed" to "blocked": both reference segments
+// (`/usr/bin`, `/usr/local/bin`, `/usr/include`, `/usr/local/include`) sit
+// outside the test workspace, exactly like the bare `/usr/local/bin/node`
+// candidate in TestGuardCommand_TruePositivesStillBlocked — so per-segment
+// checking blocks them for the same reason a single such candidate would be
+// blocked today. They have moved to TestGuardCommand_TruePositivesStillBlocked
+// accordingly; a new false-positive case below proves a colon-list whose
+// segments are ALL inside the workspace still passes.
 
 import (
 	"path/filepath"
@@ -109,14 +129,9 @@ func TestGuardCommand_FalsePositives(t *testing.T) {
 			why:  "the attached-flag alternative requires the '-X' to sit at a token start (start of command or after whitespace); 'd' precedes '-x' here, not whitespace, so 'build-x/output' must not be re-sliced into a fabricated '/output'",
 		},
 		{
-			name: "PATH assignment with a colon-joined absolute path list",
-			cmd:  `PATH=/usr/bin:/usr/local/bin make`,
-			why:  "colon-joined path lists (PATH=, -I a:b) are common shell/build-tool syntax and must not be evaluated as a single malformed absolute path",
-		},
-		{
-			name: "compiler include flag with a colon-joined path list",
-			cmd:  `gcc -Ia:b -I/usr/include:/usr/local/include -c foo.c`,
-			why:  "-I with an attached colon-joined path list must be recognized as an env-list value, not a single bad path",
+			name: "colon-joined path list entirely inside the workspace",
+			cmd:  `PATH=` + filepath.Join(cwd, "bin") + `:` + filepath.Join(cwd, "lib") + ` make`,
+			why:  "a colon-joined list is recognized as that shape (not fragmented into malformed single-path candidates) and, since every segment resolves inside the workspace, must be allowed",
 		},
 	}
 
@@ -222,6 +237,31 @@ func TestGuardCommand_TruePositivesStillBlocked(t *testing.T) {
 		{
 			name: "single absolute path with a stray colon suffix is not exempted as a colon list",
 			cmd:  `cat /etc/passwd:evil`,
+			want: "path outside working dir",
+		},
+		{
+			name: "colon-joined list of two out-of-workspace paths",
+			cmd:  `cat /etc/passwd:/etc/hosts`,
+			want: "path outside working dir",
+		},
+		{
+			name: "PATH assignment with a colon-joined absolute path list, first segment out of workspace",
+			cmd:  `PATH=/etc/shadow:/usr/bin make`,
+			want: "path outside working dir",
+		},
+		{
+			name: "PATH assignment with a colon-joined absolute path list, second segment out of workspace",
+			cmd:  `PATH=/usr/bin:/etc/shadow make`,
+			want: "path outside working dir",
+		},
+		{
+			name: "tilde-expanded colon-joined list mixing a real path with a safe device",
+			cmd:  `cat ~/.ssh/id_rsa:/dev/null`,
+			want: "path outside working dir",
+		},
+		{
+			name: "compiler include flag with a colon-joined path list, both segments out of workspace",
+			cmd:  `gcc -Ia:b -I/usr/include:/usr/local/include -c foo.c`,
 			want: "path outside working dir",
 		},
 	}

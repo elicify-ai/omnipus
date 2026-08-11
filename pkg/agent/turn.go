@@ -1269,6 +1269,21 @@ type streamerStatsSetter interface {
 	SetTurnStats(tokens int64, costUSD float64, duration time.Duration)
 }
 
+// streamerIOStatsSetter is an optional interface a Streamer may implement to
+// receive the provider's input/output token split, and the cache split,
+// before Finalize is called.
+//
+// It exists because streamerStatsSetter carries only a COLLAPSED total, and
+// the streamer builds its own TranscriptEntry. Without this, a streamed turn —
+// which is every ordinary webchat turn — wrote an entry with no split, so
+// session stats fell back to booking the whole total as output and tokens_in
+// stayed 0. That is the exact defect the split was added to fix; wiring it
+// only into the non-streaming path fixed headless runs and left the flagship
+// chat surface reporting the same wrong numbers.
+type streamerIOStatsSetter interface {
+	SetTurnIOStats(promptTokens, completionTokens, cacheReadTokens, cacheWriteTokens int)
+}
+
 // streamerFailedSetter is an optional interface a Streamer may implement to
 // receive the turn-failed flag before Finalize is called. When implemented,
 // finalizeStreamer calls SetTurnFailed(true) whenever the turn ended via the
@@ -1350,11 +1365,18 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 	duration := time.Since(ts.startedAt)
 	finalContent := ts.finalContent
 	failed := ts.turnFailed
+	promptTokens := ts.turnPromptTokens
+	completionTokens := ts.turnCompletionTokens
+	cacheRead := ts.turnCacheRead
+	cacheWrite := ts.turnCacheWrite
 	ts.lastStreamer = nil
 	ts.mu.Unlock()
 	if s != nil {
 		if setter, ok := s.(streamerStatsSetter); ok {
 			setter.SetTurnStats(tokens, cost, duration)
+		}
+		if iosetter, ok := s.(streamerIOStatsSetter); ok {
+			iosetter.SetTurnIOStats(promptTokens, completionTokens, cacheRead, cacheWrite)
 		}
 		if fsetter, ok := s.(streamerFailedSetter); ok {
 			fsetter.SetTurnFailed(failed)

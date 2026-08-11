@@ -127,6 +127,14 @@ func ParseMode(s string) (Mode, error) {
 //
 // Order-independent. Each entry matches itself and any child path (prefix
 // match on the directory boundary).
+//
+// The list is DECLARED in Linux/POSIX terms. Platform aliases are NOT listed
+// here — isSystemRestricted derives them by resolving each entry against the
+// running filesystem, which is what makes "/etc" also cover macOS's real
+// /private/etc without hard-coding a second, drift-prone table. In particular
+// "/private/var" is deliberately absent: /var is not restricted on any
+// platform, and listing its macOS alias would sweep in $TMPDIR
+// (/private/var/folders/…) and turn the per-user temp directory read-only.
 var SystemRestrictedPaths = []string{
 	"/etc",
 	"/proc",
@@ -139,11 +147,29 @@ var SystemRestrictedPaths = []string{
 // isSystemRestricted returns true if path equals or lies under any entry in
 // SystemRestrictedPaths. The path is cleaned first so that traversal sequences
 // like "../../../etc" resolve to /etc before the check.
+//
+// Both the candidate and each restricted entry are compared in every form the
+// kernel could reach them by — cleaned-as-declared and symlink-resolved — and
+// case-insensitively (comparisonForms / pathCoversFold in exec_paths.go carry
+// the full rationale). Without that, three macOS spellings of one directory
+// slipped past a literal compare: "/private/etc" (the real location; /etc is a
+// symlink to it), "/ETC" (case-insensitive APFS), and "/Private/Etc" (same,
+// with the real /private component keeping its typed case through
+// EvalSymlinks). Each rendered as (allow file-write* (subpath "/private/etc")),
+// leaving only Unix file ownership between a root-run gateway and /etc.
+//
+// This intentionally does NOT treat an ANCESTOR of a restricted path as
+// restricted: allowed_paths "/" or "/private" still get the write bit, exactly
+// as before. Widening that is a separate policy change, not part of closing
+// the alias gap.
 func isSystemRestricted(path string) bool {
-	clean := filepath.Clean(path)
-	for _, restricted := range SystemRestrictedPaths {
-		if clean == restricted || strings.HasPrefix(clean, restricted+string(filepath.Separator)) {
-			return true
+	for _, candidate := range comparisonForms(path) {
+		for _, restricted := range SystemRestrictedPaths {
+			for _, r := range comparisonForms(restricted) {
+				if pathCoversFold(r, candidate) {
+					return true
+				}
+			}
 		}
 	}
 	return false

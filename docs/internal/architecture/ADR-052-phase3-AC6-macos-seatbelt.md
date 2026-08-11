@@ -56,7 +56,17 @@ Seatbelt confines by path, not inode, so a hardlink inside the workspace pointin
 - Exploitation requires an **unconfined** actor to pre-place the link inside the agent workspace; such an actor can already write into that workspace directly.
 - Hardlinks cannot cross filesystems.
 
-This is a property of path-based MAC generally, not a defect of this implementation. It is asserted in the test suite so a behaviour change surfaces as a failure.
+**The gap also runs in the WRITE direction, which an earlier draft of this
+section missed.** A pre-placed hardlink whose inode is a binary inside a
+read+execute-only directory lets the confined child rewrite that binary and
+then execute the rewritten version. The mitigation argued above — "an attacker
+with that capability can already write into the workspace directly" — does not
+carry here: writing into the workspace is not the same as modifying a binary
+in a directory the policy declares non-writable and executable.
+
+This is a property of path-based MAC generally, not a defect of this
+implementation. It is asserted in the test suite so a behaviour change surfaces
+as a failure.
 
 ### 3.2 Structural limitation: the gateway process is not confined
 
@@ -91,9 +101,25 @@ documented:
   `TestSeatbelt_RealChild_ExecPathIsNotWritable`, which uses a directory the
   test user owns — so it demonstrates Seatbelt overriding Unix ownership, which
   is why granting exec on a user-owned Homebrew prefix is safe.
-- **Never writable AND executable.** An entry overlapping any writable grant —
-  the operator's `allowed_paths` or the unconditional `$OMNIPUS_HOME` / `/tmp` /
-  `$TMPDIR` grants — is dropped with a warning; the write grant wins.
+- **No ADDITIONAL directory becomes writable AND executable.** An entry
+  overlapping any writable grant — the operator's `allowed_paths` or the
+  unconditional `$OMNIPUS_HOME` / `/tmp` / `$TMPDIR` grants — is dropped with a
+  warning; the write grant wins.
+
+  Stated precisely, because an earlier draft of this section over-claimed:
+  the baseline policy ALREADY grants write+execute on `$OMNIPUS_HOME`, `/tmp`
+  and `$TMPDIR`, and a confined child can write a binary into any of them and
+  run it. That is deliberate — the sandbox has never tried to stop an agent
+  running code it authored; its job is bounding what that code can reach. What
+  this guard buys is that `allowed_exec_paths` cannot EXTEND that property to a
+  new directory.
+
+  The comparison runs on symlink-resolved, case-folded paths, because it was
+  originally a case-sensitive textual compare and macOS APFS is
+  case-insensitive: `allowed_paths: [".../work"]` plus
+  `allowed_exec_paths: [".../WORK"]` passed the guard silently and produced a
+  live writable+executable directory. A symlinked exec entry pointing into a
+  writable tree did the same. Both are closed and regression-tested.
   `TestSeatbeltAdversarial_CannotDropBinaryIntoExecPath` executes all five
   planting vectors (cp / mv / ln -s / ln / redirect) and each is denied.
 - **Narrow.** Homebrew is enumerated at `bin`/`lib`/`Cellar`/… rather than by

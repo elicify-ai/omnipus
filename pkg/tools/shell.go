@@ -343,10 +343,13 @@ var (
 	//     ONE candidate rather than split into several fragments that each
 	//     independently look like a bare absolute path outside the
 	//     workspace. guardCommand recognizes that specific shape
-	//     (colonPathListPattern) and treats it as an environment-style
-	//     value rather than a direct file reference — see guardCommand's
-	//     colon-list check for why splitting does not by itself fix the
-	//     false positive.
+	//     (colonPathListPattern) and evaluates EACH `:`-separated segment
+	//     against the same workspace-boundary check applied to a bare
+	//     candidate (safePaths / allowedPathPatterns exemption, then
+	//     containment) — see guardCommand's colon-list check. A list is
+	//     allowed only when every segment is inside the workspace or
+	//     exempt; a list containing any out-of-workspace segment is
+	//     blocked, same as a single bare candidate would be.
 	//
 	// Worked examples:
 	//   - `which node 2>/dev/null; echo done` -> candidate "/dev/null", exempt
@@ -358,8 +361,11 @@ var (
 	//     where the space after `-o` prevents the flag alternative from
 	//     firing.
 	//   - `PATH=/usr/bin:/usr/local/bin make` -> candidate
-	//     "/usr/bin:/usr/local/bin" (ONE match, per rule 3), recognized and
-	//     skipped by guardCommand's colon-list check.
+	//     "/usr/bin:/usr/local/bin" (ONE match, per rule 3); guardCommand's
+	//     colon-list check splits it into "/usr/bin" and "/usr/local/bin"
+	//     and evaluates each — both are outside the workspace, so the
+	//     command is BLOCKED (consistent with what a bare `/usr/bin`
+	//     candidate would do).
 	//
 	// Callers MUST read group 1, not the whole match, since the match also
 	// consumes the leading boundary text (which may be more than one
@@ -377,9 +383,12 @@ var (
 	// `:` (see that pattern's rule 3), so a colon-joined list is captured
 	// as a single raw candidate rather than fragmented at each colon.
 	// guardCommand matches that raw candidate against this pattern and, on
-	// a match, treats it as an environment-variable-style value rather
-	// than a direct file reference: none of the segments is evaluated
-	// against the workspace boundary. This is deliberately narrow — every
+	// a match, SPLITS it on `:` and evaluates each segment independently
+	// against the same workspace-boundary check applied to a bare
+	// candidate (safePaths exemption, allowedPathPatterns exemption, then
+	// containment relative to cwd). A list is allowed only when every
+	// segment clears that check; a list containing any out-of-workspace,
+	// non-exempt segment is blocked. This is deliberately narrow — every
 	// segment must independently look like an absolute path (start with
 	// `/`, contain none of the same excluded punctuation) — so it does not
 	// exempt a single path with a stray colon suffix appended to it
@@ -799,10 +808,19 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		raw := cmd[start:end]
 
 		// Colon-joined path list (PATH= assignments, -I a:b-style flags):
-		// treated as an environment-style value, not a direct file
-		// reference. See colonPathListPattern's doc comment for why this
-		// is narrower than "any candidate containing a colon".
+		// each `:`-separated segment is checked independently against the
+		// workspace boundary (the same check applied to a bare candidate
+		// below), rather than the whole list being skipped wholesale. See
+		// colonPathListPattern's doc comment for why this shape is
+		// recognized narrowly, and why an unconditional skip here would
+		// have let a colon-joined list smuggle an out-of-workspace segment
+		// past the guard entirely.
 		if strings.Contains(raw, ":") && colonPathListPattern.MatchString(raw) {
+			for _, seg := range strings.Split(raw, ":") {
+				if msg := t.checkPathSegment(seg, cwdPath); msg != "" {
+					return msg
+				}
+			}
 			continue
 		}
 
@@ -820,26 +838,38 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 			}
 		}
 
-		p, err := filepath.Abs(raw)
-		if err != nil {
-			return "Command blocked by safety guard (cannot resolve path)"
-		}
-		if safePaths[p] {
-			continue
-		}
-		if isAllowedPath(p, t.allowedPathPatterns) {
-			continue
-		}
-
-		rel, err := filepath.Rel(cwdPath, p)
-		if err != nil {
-			return "Command blocked by safety guard (cannot resolve relative path)"
-		}
-		if strings.HasPrefix(rel, "..") {
-			return "Command blocked by safety guard (path outside working dir)"
+		if msg := t.checkPathSegment(raw, cwdPath); msg != "" {
+			return msg
 		}
 	}
 
+	return ""
+}
+
+// checkPathSegment evaluates a single absolute-path candidate — either a
+// bare candidate from the main scan loop, or one `:`-separated segment of a
+// colon-joined path list — against the safePaths exemption, the
+// operator-configured allowlist, and the workspace-containment boundary.
+// Returns "" when the segment is allowed, or a rejection message otherwise.
+func (t *ExecTool) checkPathSegment(raw, cwdPath string) string {
+	p, err := filepath.Abs(raw)
+	if err != nil {
+		return "Command blocked by safety guard (cannot resolve path)"
+	}
+	if safePaths[p] {
+		return ""
+	}
+	if isAllowedPath(p, t.allowedPathPatterns) {
+		return ""
+	}
+
+	rel, err := filepath.Rel(cwdPath, p)
+	if err != nil {
+		return "Command blocked by safety guard (cannot resolve relative path)"
+	}
+	if strings.HasPrefix(rel, "..") {
+		return "Command blocked by safety guard (path outside working dir)"
+	}
 	return ""
 }
 
