@@ -136,17 +136,32 @@ func TestPackageChromeRoot_EmptySlot1Skipped_FindsSlot2(t *testing.T) {
 		t.Skip("Phase 1 deferral: packageChromeRoot returns empty on Windows")
 	}
 	base := t.TempDir()
-	exe := filepath.Join(base, "bin", "omnipus")
+	// The exe sits four levels below base so that EVERY platform's candidate
+	// list lands inside t.TempDir(): darwin's second candidate is three levels
+	// up from exeDir (the sibling-of-.app layout), which from a shallower exe
+	// would resolve outside base and into the shared system temp dir.
+	exe := filepath.Join(base, "opt", "omnipus", "bin", "omnipus")
 	require.NoError(t, os.MkdirAll(filepath.Dir(exe), 0o755))
 	require.NoError(t, os.WriteFile(exe, []byte("binary"), 0o755))
-	slot1 := filepath.Join(base, "chromium")
-	slot2 := filepath.Join(base, "share", "omnipus", "chromium")
-	require.NoError(t, os.MkdirAll(slot1, 0o755))
-	seedPackageChrome(t, slot2, true)
 
 	previousExecutable := osExecutable
 	osExecutable = func() (string, error) { return exe, nil }
 	t.Cleanup(func() { osExecutable = previousExecutable })
+
+	// Derive the two slots from the real candidate list rather than hardcoding
+	// the linux FHS share/ layout: darwin's packageChromeRootCandidates returns
+	// a 2-element list with NO share/omnipus/ entry (ADR-052 Phase 3 / C3), so a
+	// hardcoded slot2 was never probed there and the probe correctly returned
+	// slot1/ProbeEmptyRoot. What this test actually pins is platform-agnostic —
+	// an existing-but-empty first slot is skipped in favour of the first
+	// candidate holding a valid payload — so read the slots from the contract.
+	candidates := packageChromeRootCandidates()
+	require.GreaterOrEqual(t, len(candidates), 2,
+		"every non-windows platform must expose at least two package-root candidates")
+	slot1, slot2 := candidates[0], candidates[1]
+	require.NoError(t, os.MkdirAll(slot1, 0o755))
+	seedPackageChrome(t, slot2, true)
+
 	previousRoot := packageChromeRootForTest
 	packageChromeRootForTest = ""
 	t.Cleanup(func() { packageChromeRootForTest = previousRoot })
