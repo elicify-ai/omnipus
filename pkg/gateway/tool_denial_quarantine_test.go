@@ -206,12 +206,26 @@ func TestRunTurn_QuarantineAfterFirstPermanentDenial_NoFurtherRegistryRoundTrip(
 	// Tool never executed — a permanent denial is never treated as approval.
 	assert.Equal(t, 0, stub.executed, "bash must never execute — every one of the 3 calls was denied")
 
-	// BDD-04's wall-clock bound: under 3x the configured approval window.
-	// A do-nothing implementation that opened a real round-trip for EACH of
-	// the 3 calls would take ~3x approvalWindow; genuine quarantine takes
-	// ~1x (only call 1 waits on the real timer; calls 2/3 are instant cache
-	// replays).
-	assert.Less(t, elapsed, 3*approvalWindow,
-		"elapsed wall-clock must be bounded by ~1 approval window, not 3 — "+
-			"a non-quarantining implementation would open 3 real round-trips")
+	// BDD-04's wall-clock bound. The property under test is "ONE real approval
+	// round-trip, not three": genuine quarantine waits on the real timer only
+	// for call 1, and replays calls 2/3 from cache instantly.
+	//
+	// The bound must account for FIXED TURN OVERHEAD, which the original 3x
+	// bound implicitly assumed was zero. Total elapsed is
+	// (approval waits) + O, where O is agent-loop/provider-stub/teardown cost
+	// unrelated to approvals. Measured O here is ~1.0-1.1s, so:
+	//
+	//   quarantining (1 wait):     500ms + O  ≈ 1.6s
+	//   non-quarantining (3 waits): 1500ms + O ≈ 2.6s
+	//
+	// A 3x bound (1.5s) therefore sits BELOW the passing case and failed
+	// deterministically — it was measuring O, not the property. 4x (2.0s) sits
+	// cleanly between the two and still fails a non-quarantining implementation
+	// by a ~600ms margin. The registry-entry assertion above is the primary,
+	// timing-independent proof of the same property; this is the corroborating
+	// bound, so it should be robust rather than maximally tight.
+	assert.Less(t, elapsed, 4*approvalWindow,
+		"elapsed wall-clock must reflect ONE approval round-trip plus fixed turn "+
+			"overhead, not three round-trips — a non-quarantining implementation "+
+			"would spend 3x the approval window waiting")
 }
