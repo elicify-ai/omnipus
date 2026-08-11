@@ -226,3 +226,125 @@ func TestStructuredFailureDiscriminators_HaveSchemaAndBudgetBoundedProducer(t *t
 			"schema %q", code, fixture.schemaName)
 	}
 }
+
+// buildToolCallResultFrame wraps result inside a minimal, otherwise-valid
+// ToolCallResultFrame object (every required sibling field populated) and
+// returns its JSON encoding. Used by the through-frame tests below to
+// validate a family member's payload the way it actually crosses the wire —
+// nested inside result — rather than standalone against its own named
+// schema, which is all TestStructuredFailureDiscriminators_HaveSchemaAndBudgetBoundedProducer
+// above checks.
+func buildToolCallResultFrame(t *testing.T, result any) []byte {
+	t.Helper()
+	frame := map[string]any{
+		"type":       "tool_call_result",
+		"session_id": "sess-coverage-1",
+		"tool":       "coverage_tool",
+		"call_id":    "call-coverage-1",
+		"status":     "error",
+		"result":     result,
+	}
+	raw, err := json.Marshal(frame)
+	require.NoError(t, err, "failed to marshal synthetic ToolCallResultFrame fixture")
+	return raw
+}
+
+// TestStructuredFailureDiscriminators_ValidateThroughToolCallResultFrame is
+// the round-2 regression guard for reviewer finding F1/F2: the standalone
+// per-member checks above (validateFixtureAgainstAsyncAPISchema against each
+// member's OWN named schema, e.g. "PermissionDenied") passed even while
+// ToolCallResultFrame.result's union was an anyOf that could never reject
+// anything once wrapped — an absence the standalone checks could not catch
+// because they never validate against the wrapping frame's "ToolCallResultFrame"
+// schema at all. This test closes that gap: it wraps each real producer's
+// output inside a full ToolCallResultFrame (every required sibling field
+// populated, exactly as the gateway would emit it) and validates the WHOLE
+// frame against contracts/asyncapi.yaml's "ToolCallResultFrame" schema —
+// exercising result's oneOf as it is actually used, not in isolation.
+func TestStructuredFailureDiscriminators_ValidateThroughToolCallResultFrame(t *testing.T) {
+	for code, fixture := range discriminatorCoverageRegistry {
+		t.Run(code, func(t *testing.T) {
+			raw, err := fixture.build()
+			require.NoError(t, err, "producer for %q returned an error", code)
+
+			var resultPayload any
+			require.NoError(t, json.Unmarshal(raw, &resultPayload),
+				"producer for %q emitted invalid JSON: %s", code, raw)
+
+			frameRaw := buildToolCallResultFrame(t, resultPayload)
+
+			verr := validateFixtureAgainstAsyncAPISchema(t, "ToolCallResultFrame", frameRaw)
+			require.NoError(t, verr, "discriminator %q's real payload fails validation once wrapped in a "+
+				"real ToolCallResultFrame — result's oneOf must accept every family member through the "+
+				"actual frame, not just standalone against its own schema", code)
+		})
+	}
+}
+
+// TestToolCallResultFrame_MalformedPermissionDenied_Rejected is the negative
+// half of the F1 fix: a PermissionDenied object missing its required
+// "permanent" field must be REJECTED by ToolCallResultFrame.result's oneOf.
+// Under the anyOf this branch replaces, a malformed member like this one
+// silently validated anyway (it always matched the permissive first branch),
+// which is the exact defect F1 named: "nothing is ever rejected... including
+// a malformed PermissionDenied missing permanent". A real oneOf must reject
+// it because it matches neither the object catch-all (excluded — it carries
+// the reserved "error" key) nor its own $ref (missing a required property).
+func TestToolCallResultFrame_MalformedPermissionDenied_Rejected(t *testing.T) {
+	malformed := map[string]any{
+		"error":   tools.PermissionDeniedCode,
+		"message": "Access to this action is denied.",
+		"tool":    "write_file",
+		"reason":  "access denied: path is outside the effective filesystem scope",
+		// "permanent" deliberately omitted — required, minLength/type n/a, just absent.
+	}
+	frameRaw := buildToolCallResultFrame(t, malformed)
+
+	verr := validateFixtureAgainstAsyncAPISchema(t, "ToolCallResultFrame", frameRaw)
+	require.Error(t, verr, "a PermissionDenied missing the required 'permanent' field must FAIL "+
+		"ToolCallResultFrame.result's oneOf — it must not silently pass through the permissive object "+
+		"catch-all branch just because it carries the reserved 'error' key")
+}
+
+// TestToolCallResultFrame_MalformedFileExistsRefusal_Rejected is a second
+// family member exercising the same negative path as the test above (missing
+// "path", one of FileExistsRefusal's four required fields), so the rejection
+// guard is not proven by a single member's accident of field ordering.
+func TestToolCallResultFrame_MalformedFileExistsRefusal_Rejected(t *testing.T) {
+	malformed := map[string]any{
+		"error":  tools.FileExistsRefusalCode,
+		"reason": "file already exists",
+		"tool":   "write_file",
+		// "path" deliberately omitted — required.
+	}
+	frameRaw := buildToolCallResultFrame(t, malformed)
+
+	verr := validateFixtureAgainstAsyncAPISchema(t, "ToolCallResultFrame", frameRaw)
+	require.Error(t, verr, "a FileExistsRefusal missing the required 'path' field must FAIL "+
+		"ToolCallResultFrame.result's oneOf, not silently pass through the permissive catch-all")
+}
+
+// TestToolCallResultFrame_GenericResultShapes_StillValidate proves the F1
+// fix's non-family catch-all branches were not accidentally tightened along
+// with the discriminator exclusion: an ordinary opaque object (no reserved
+// key), a bare string, and a null result — the documented contract for
+// error-status frames with no structured payload — must all still validate.
+func TestToolCallResultFrame_GenericResultShapes_StillValidate(t *testing.T) {
+	cases := map[string]any{
+		"opaque object": map[string]any{"files_changed": 3, "summary": "done"},
+		"plain string":  "operation completed",
+		"null":          nil,
+		"plain array":   []any{"a", "b", "c"},
+		"plain number":  float64(42),
+		"plain boolean": true,
+	}
+	for name, result := range cases {
+		t.Run(name, func(t *testing.T) {
+			frameRaw := buildToolCallResultFrame(t, result)
+			verr := validateFixtureAgainstAsyncAPISchema(t, "ToolCallResultFrame", frameRaw)
+			require.NoError(t, verr, "generic result shape %q must still validate against "+
+				"ToolCallResultFrame.result after the F1 oneOf fix — the catch-all branches must "+
+				"remain permissive for anything not carrying a reserved discriminator key", name)
+		})
+	}
+}
