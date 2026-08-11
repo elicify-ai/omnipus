@@ -74,6 +74,32 @@
 #       `// not-wire-format` opt-out lines (same >= 40-char justification
 #       rule as Rule 1).
 #
+#       Match shape (round-2 review, F8): the pattern is `\{\s*[^{}]{0,120}?
+#       "error"\s*:\s*"<value>"`, not `\{"error":"<value>"` anchored at the
+#       very start of the literal. This deliberately catches two shapes a
+#       developer reaches for innocently that an earlier, stricter version of
+#       this rule missed entirely (both had zero self-test coverage before):
+#         - a space (or other whitespace) between the opening brace and the
+#           first key, e.g. `{ "error":"new_code", ...}`
+#         - "error" NOT the first key in the literal, e.g.
+#           `{"message":%q,"error":"new_code"}`
+#       The `[^{}]{0,120}?` gap is non-greedy and bounded, and explicitly
+#       excludes `{`/`}` so it cannot skip over an unrelated nested literal
+#       or jump past the end of a DIFFERENT brace pair to find a coincidental
+#       "error" key elsewhere in the file — it only looks INSIDE the same,
+#       still-open literal.
+#
+#       Known remaining gaps, not closed by this change (still real, still
+#       worth a future author's attention, but out of scope for the F8 fix):
+#       string-variable concatenation (`` `{"error":"` + code + `"}` `` —
+#       the value is not a single quoted literal so the capture group can't
+#       match it at all) and a literal split across multiple PHYSICAL lines
+#       (pretty-printed JSON) — this rule still scans one line at a time, so
+#       `{\n  "error": "code"\n}` is invisible to it. Both would require
+#       either AST-level analysis or a whole-file (not per-line) scan with
+#       comment-stripping and multi-line line-number bookkeeping; deferred
+#       as a larger follow-up rather than folded into this fix.
+#
 #       Rule 1's struct-based scan is DELIBERATELY left scoped to
 #       pkg/gateway/ only (not widened to pkg/agent/pkg/tools alongside
 #       Rule 4). A structural drift audit of pkg/agent/ + pkg/tools/ package-
@@ -455,6 +481,38 @@ func f() {}
 '
   OUT=$(_st_run)
   _st_assert_not_contains "st22-skipped" "go-wire-discriminator" "$OUT"
+
+  # ── ST-23: Rule 4 — space after the opening brace is caught (F8) ──────────
+  echo ""
+  echo "ST-23: Go {\" \"error\":\"<unknown>\"} with a space after the brace is caught"
+  _st_clear
+  _st_setup_go "pkg/agent/fixture.go" 'package agent
+
+import "fmt"
+
+func f(err error) string {
+	return fmt.Sprintf(`{ "error":"a_brand_new_fifth_member","message":%q}`, err.Error())
+}
+'
+  OUT=$(_st_run)
+  _st_assert_contains "st23-found" "a_brand_new_fifth_member" "$OUT"
+  _st_assert_contains "st23-rule"  "go-wire-discriminator" "$OUT"
+
+  # ── ST-24: Rule 4 — "error" not the first key is caught (F8) ──────────────
+  echo ""
+  echo "ST-24: Go {\"message\":%q,\"error\":\"<unknown>\"} (error not first key) is caught"
+  _st_clear
+  _st_setup_go "pkg/agent/fixture.go" 'package agent
+
+import "fmt"
+
+func f(err error) string {
+	return fmt.Sprintf(`{"message":%q,"error":"a_brand_new_fifth_member"}`, err.Error())
+}
+'
+  OUT=$(_st_run)
+  _st_assert_contains "st24-found" "a_brand_new_fifth_member" "$OUT"
+  _st_assert_contains "st24-rule"  "go-wire-discriminator" "$OUT"
 
   # ── ST-14: doc header example has sufficient justification (meta-test) ─────
   echo ""
@@ -968,8 +1026,19 @@ KNOWN_STRUCTURED_FAILURE_DISCRIMINATORS = {
 # (possibly backslash-escaped) closing quote — prose containing spaces or
 # format verbs (e.g. "failed to serialize response: %s") cannot match this
 # shape at all.
+#
+# F8 (round-2 review): the opening `\{` is no longer required to be
+# IMMEDIATELY followed by `"error"`. A bounded, non-greedy gap of up to 120
+# characters of anything except `{`/`}` is allowed between the brace and the
+# "error" key, so this also catches:
+#   - a space/whitespace right after the brace: `{ "error":"code", ...}`
+#   - "error" as a non-first key: `{"message":%q,"error":"code"}`
+# The `[^{}]` exclusion keeps the gap from crossing into a different,
+# unrelated brace pair (nested literal, or the end of an enclosing block),
+# so it still only matches an "error" key belonging to the SAME literal that
+# opened with the matched `{`.
 DISCRIMINATOR_LITERAL = re.compile(
-    r'\{\\?"error\\?"\s*:\s*\\?"([A-Za-z0-9_]+)\\?"'
+    r'\{[^{}]{0,120}?\\?"error\\?"\s*:\s*\\?"([A-Za-z0-9_]+)\\?"'
 )
 NOT_WIRE_FORMAT = re.compile(r'//\s*not-wire-format', re.IGNORECASE)
 NOT_WIRE_FORMAT_WITH_CAPTURE = re.compile(r'//\s*not-wire-format\s*:?\s*(.*)', re.IGNORECASE)
