@@ -280,16 +280,23 @@ func maybeOffloadResult(
 // tool result string as a STRUCTURED failure payload rather than prose.
 //
 // Each corresponds to a contract schema whose producer writes it as the tool's
-// ForLLM verbatim, so the calling agent and the SPA read the same bytes:
-//   - "delegation_denied" → DelegationFailure   (pkg/tools.DelegationDeniedResult)
-//   - "file_exists"       → FileExistsRefusal   (pkg/tools.FileExistsRefusalResult)
+// ForLLM verbatim (or, for the two agent-side denial producers, as message
+// content), so the calling agent and the SPA read the same bytes:
+//   - "delegation_denied"       → DelegationFailure       (pkg/tools.DelegationDeniedResult)
+//   - "file_exists"             → FileExistsRefusal       (pkg/tools.FileExistsRefusalResult)
+//   - "permission_denied"       → PermissionDenied        (pkg/tools.PermissionDeniedPayload,
+//     shared by pkg/tools.PermissionDeniedResult and pkg/agent's denialPayloadJSON — issue #618)
+//   - "tool_assembly_duplicate" → ToolAssemblyDuplicate   (pkg/tools.ToolAssemblyDuplicatePayload,
+//     pkg/agent/loop.go's checkToolDedupInvariant guard — issue #618, the fourth ungoverned member)
 //
 // A discriminator that is not in this set is left as prose and forwarded
 // unchanged, which is why an unrelated `{"error":"timeout"}` from some other
 // tool is not mistaken for one of these.
 var structuredFailureDiscriminators = map[string]struct{}{
-	tools.DelegationDeniedCode:  {},
-	tools.FileExistsRefusalCode: {},
+	tools.DelegationDeniedCode:      {},
+	tools.FileExistsRefusalCode:     {},
+	tools.PermissionDeniedCode:      {},
+	tools.ToolAssemblyDuplicateCode: {},
 }
 
 // unparseableFailureWarns counts how many unparseable structured payloads we

@@ -355,17 +355,104 @@ func FileExistsRefusalResult(tool, path, reason string) *ToolResult {
 	}).WithError(fmt.Errorf("%s: %s", tool, reason))
 }
 
-// FileExistsRefusalCode and DelegationDeniedCode are the fixed discriminators
-// from the FileExistsRefusal and DelegationFailure contract schemas.
+// FileExistsRefusalCode, DelegationDeniedCode, PermissionDeniedCode, and
+// ToolAssemblyDuplicateCode are the fixed discriminators from the
+// FileExistsRefusal, DelegationFailure, PermissionDenied, and
+// ToolAssemblyDuplicate contract schemas (the last two added by issue #618).
 //
 // They are exported so the gateway's structured-failure allow-list keys off
 // the same symbols the producers write, rather than re-typing the literals —
 // which is what it did at first, making an earlier version of this comment's
 // "cannot drift apart" claim false on arrival.
 const (
-	FileExistsRefusalCode = "file_exists"
-	DelegationDeniedCode  = "delegation_denied"
+	FileExistsRefusalCode     = "file_exists"
+	DelegationDeniedCode      = "delegation_denied"
+	PermissionDeniedCode      = "permission_denied"
+	ToolAssemblyDuplicateCode = "tool_assembly_duplicate"
 )
+
+// PermissionDeniedPayload builds the JSON-encoded, budget-bounded
+// PermissionDenied wire payload (contracts/asyncapi.yaml PermissionDenied
+// schema) shared by BOTH permission-denial producers in this codebase
+// (issue #618):
+//
+//   - pkg/agent's tool-policy denial path (tool_denial.go's
+//     denialPayloadJSON), for approval-flow outcomes (user / timeout /
+//     saturated / policy_denied / no_approver_configured / the headless
+//     ask-policy auto-deny / ...).
+//   - pkg/tools' filesystem-scope denial path (PermissionDeniedResult
+//     below), for ResolvePath's ErrOutsideScope / ErrCarveOut /
+//     ErrPathInvalid classification.
+//
+// Uses encoding/json (via marshalWithinBudget), NOT fmt.Sprintf's %q — both
+// call sites used %q before this fix, and %q is Go-string quoting, not JSON
+// quoting. It is provably unsafe for this payload: it breaks on invalid
+// UTF-8 and on any C0/C1 control byte outside \n\t\r (%q emits \xNN, which
+// is not a legal JSON escape — json.Unmarshal fails with "invalid character
+// 'x' in string escape code"). reason is attacker/environment-influenced in
+// both callers — an MCP-declared tool name on one side, a *os.PathError
+// whose Error() concatenates the raw, unescaped filesystem path on the
+// other — so this is reachable, not theoretical: an ordinary ~830-character
+// path (a quarter of Linux PATH_MAX) already overflows the old per-field
+// budget once escaped, and ResolvePath's ErrOutsideScope embeds rawPath
+// three times.
+//
+// permanent has no default here: both callers always know a concrete
+// boolean value (ClassifyDenial's DenialClass.Permanent, or "always true"
+// for a filesystem-scope denial — see PermissionDeniedResult's own comment)
+// and must pass it explicitly.
+func PermissionDeniedPayload(tool, message, reason string, permanent bool) ([]byte, error) {
+	// The contract requires all three string fields non-empty (minLength:1).
+	// A payload violating that is schema-invalid and the SPA drops it
+	// entirely — worse than the prose this replaces — so default rather
+	// than forward an empty caller value, mirroring FileExistsRefusalResult.
+	if message == "" {
+		message = "Access to this action is denied."
+	}
+	if tool == "" {
+		tool = "(unknown tool)"
+	}
+	if reason == "" {
+		reason = "no additional detail available"
+	}
+	tool = clampRefusalField(tool, maxRefusalToolRunes)
+	message = clampRefusalField(message, maxRefusalReasonRunes)
+	reason = clampRefusalField(reason, maxRefusalReasonRunes)
+	payload := generated.PermissionDenied{
+		Error:     PermissionDeniedCode,
+		Message:   message,
+		Tool:      tool,
+		Reason:    reason,
+		Permanent: permanent,
+	}
+	// message is always a short fixed literal at every call site (never
+	// model- or filesystem-influenced), so only reason (and, defensively,
+	// message) are offered to the shrink loop — reason is the one field an
+	// attacker-controlled path or tool name can actually inflate.
+	return marshalWithinBudget(&payload, &payload.Reason, &payload.Message)
+}
+
+// ToolAssemblyDuplicatePayload builds the JSON-encoded, budget-bounded
+// ToolAssemblyDuplicate wire payload (contracts/asyncapi.yaml
+// ToolAssemblyDuplicate schema) for pkg/agent/loop.go's tool-call dedup
+// invariant guard (checkToolDedupInvariant) — issue #618's fourth,
+// previously fully ungoverned member (no schema, no allow-list entry, no
+// SPA detector, %q-built, unbounded message).
+//
+// Uses encoding/json rather than fmt.Sprintf's %q for the same reason
+// PermissionDeniedPayload does (see its doc comment). message is
+// dedupErr.Error(), unbounded input, so it is bounded by
+// marshalWithinBudget exactly like the two adjacent producers.
+func ToolAssemblyDuplicatePayload(message string) ([]byte, error) {
+	if message == "" {
+		message = "duplicate tool assembly detected"
+	}
+	payload := generated.ToolAssemblyDuplicate{
+		Error:   ToolAssemblyDuplicateCode,
+		Message: clampRefusalField(message, maxRefusalReasonRunes),
+	}
+	return marshalWithinBudget(&payload, &payload.Message)
+}
 
 // Field budgets for a structured refusal payload, and the hard ceiling they
 // serve.

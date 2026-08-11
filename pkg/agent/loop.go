@@ -8093,7 +8093,23 @@ turnLoop:
 		// If a duplicate is detected, emit HIGH audit and return an error turn result
 		// so the loop does not feed a malformed tool list to the LLM.
 		if dedupErr := al.checkToolDedupInvariant(ts, policyFilteredTools); dedupErr != nil {
-			denyMsg := fmt.Sprintf(`{"error":"tool_assembly_duplicate","message":%q}`, dedupErr.Error())
+			// issue #618 (fourth ungoverned member): this used to be built by
+			// hand with fmt.Sprintf's %q verb — Go-string quoting, not JSON
+			// quoting, unbounded, no contract schema, no allow-list entry, no
+			// SPA detector. tools.ToolAssemblyDuplicatePayload (the generated
+			// ToolAssemblyDuplicate schema) fixes all three: encoding/json
+			// escaping (valid on invalid UTF-8 and C0/C1 control bytes alike),
+			// a 1900-rune encoded budget via marshalWithinBudget, and a real
+			// contract schema wired into the structured-failure allow-list.
+			denyMsg := ""
+			if encoded, encErr := tools.ToolAssemblyDuplicatePayload(dedupErr.Error()); encErr == nil {
+				denyMsg = string(encoded)
+			} else {
+				// Fully static fallback — no interpolated content — so a
+				// marshal failure can never itself reintroduce the escaping
+				// bug this fix exists to close.
+				denyMsg = `{"error":"tool_assembly_duplicate","message":"An internal error occurred while building the duplicate tool-assembly payload."}`
+			}
 			syntheticDenyMsg := providers.Message{Role: "system", Content: denyMsg}
 			if !ts.opts.NoHistory {
 				ts.agent.Sessions.AddFullMessage(ts.sessionKey, syntheticDenyMsg)

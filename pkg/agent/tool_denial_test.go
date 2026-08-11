@@ -204,6 +204,34 @@ func TestDenialPayloadJSON_ShapeAndFields(t *testing.T) {
 	}
 }
 
+// TestDenialPayloadJSON_ControlCharacterToolNameIsValidJSON is the direct
+// regression for issue #618: denialPayloadJSON used to build this string
+// with fmt.Sprintf's %q verb, which is Go-string quoting, not JSON quoting.
+// %q emits \xNN for a control byte outside \n\t\r, and \x is not a legal
+// JSON escape, so json.Unmarshal used to fail here with "invalid character
+// 'x' in string escape code". tool is reachable with adversarial content
+// because it takes MCP-declared tool names, which are not statically
+// enumerable (see denialPayloadJSON's doc comment).
+func TestDenialPayloadJSON_ControlCharacterToolNameIsValidJSON(t *testing.T) {
+	cls, known := ClassifyDenial("policy_denied")
+	require.True(t, known, "test setup: policy_denied must be a known row")
+
+	adversarialTools := []string{
+		"mcp_tool_\x01bad",
+		"mcp_tool_\x7f",
+		"mcp_tool_\xff", // invalid UTF-8
+		"mcp_tool_\"quoted\"",
+		"mcp_tool_\\backslash",
+	}
+	for _, tool := range adversarialTools {
+		raw := denialPayloadJSON(tool, "policy_denied", cls)
+		var decoded map[string]any
+		err := json.Unmarshal([]byte(raw), &decoded)
+		require.NoErrorf(t, err, "denialPayloadJSON produced invalid JSON for adversarial tool name %q: %s", tool, raw)
+		require.Equal(t, "permission_denied", decoded["error"])
+	}
+}
+
 // TestToolDenialAbortReason_PinnedFormat asserts the exact abort-reason
 // format pinned by spec §3.8/§9 — every downstream consumer (W4's
 // abortTurn call, W5's assertions on Task.Result) depends on this literal
