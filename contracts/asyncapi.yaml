@@ -1815,7 +1815,7 @@ components:
         carve-out). Before this schema existed, both producers hand-built this JSON with fmt.Sprintf''s %q verb, which
         is Go-string quoting, not JSON quoting, and silently produced invalid JSON for a path or approval-tool name
         containing invalid UTF-8 or a C0/C1 control byte outside \n\t\r. The frame''s top-level `error` field carries the
-        same `message`.
+        same `reason` (parseStructuredToolFailure lifts `reason`, not `message`, for every member of this family).
 
         '
       type: object
