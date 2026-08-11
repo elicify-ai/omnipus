@@ -424,9 +424,17 @@ func TestResolve_Step3_TrustPathChromeTrue_AllowsPATH(t *testing.T) {
 // hard-fail-in-the-safe-direction behavior: package chrome present with a
 // chrome.sha256 whose digest disagrees with the binary's actual SHA-256 —
 // step 3 logs WARN and falls through to step 4 (managed download). The
-// fixture here has nothing on $PATH and no pre-installed managed binary,
-// so step 4 will fail in this test environment too; the test asserts the
-// PACKAGE binary was NOT returned (its mismatch rejected it).
+// fixture here has nothing on $PATH and no pre-installed managed binary, so
+// step 4 must fail — deterministically and fast, via withManifestURL
+// pointing at an unreachable local address, NOT by assuming the real
+// chrome-for-testing endpoint happens to be unreachable from the test host.
+// #615 found this test hanging for the full go-test-race timeout (900s) on
+// any host WITH real internet access (e.g. GitHub Actions runners): the
+// original comment's "step 4 will fail in this test environment too"
+// assumption only held on an offline host, and this test package is not
+// gated by skipIfNoBrowser (only the real-Chrome-launching tests are) —
+// see installer_test.go's TestInstaller_PrefersInstalledBinary for the same
+// unreachable-local-URL pattern, established for exactly this reason.
 func TestResolve_Step3_SHAMismatchFallsThroughToManaged(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell-script test double")
@@ -434,6 +442,7 @@ func TestResolve_Step3_SHAMismatchFallsThroughToManaged(t *testing.T) {
 	if _, err := cftPlatform(); err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
+	withManifestURL(t, "http://127.0.0.1:1/unreachable-manifest")
 
 	binDir := t.TempDir()
 	for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
@@ -469,10 +478,12 @@ func TestResolve_Step3_SHAMismatchFallsThroughToManaged(t *testing.T) {
 // TestResolve_Step3_SHAMissingFallsThrough proves the SEC-ADR052-001
 // fail-closed contract on the resolve path: a package Chrome without a
 // sibling chrome.sha256 is REFUSED at step 3 (not an unverified acceptance).
-// Resolution falls through to step 4 (managed download). In this test
-// environment step 4 will also fail (no manifest server, no pre-installed
-// binary) — the relevant assertion is that pkgBin is NOT the returned
-// path.
+// Resolution falls through to step 4 (managed download), which must fail —
+// deterministically and fast, via withManifestURL pointing at an
+// unreachable local address (see the sibling test above for why: #615
+// found the un-mocked version of this pattern hanging for the full
+// go-test-race timeout on any host with real internet access, since the
+// "step 4 will also fail" comment's assumption only holds offline).
 func TestResolve_Step3_SHAMissingFallsThrough(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell-script test double")
@@ -480,6 +491,7 @@ func TestResolve_Step3_SHAMissingFallsThrough(t *testing.T) {
 	if _, err := cftPlatform(); err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
+	withManifestURL(t, "http://127.0.0.1:1/unreachable-manifest")
 
 	binDir := t.TempDir()
 	for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {

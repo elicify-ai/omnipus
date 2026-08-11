@@ -243,8 +243,17 @@ func TestFindInstalledBuild_NewestVersionWins(t *testing.T) {
 	// Plant a second, NEWER version dir.
 	newerVersionDir := filepath.Join(root, "999.999.999.999")
 	newerBinDir := filepath.Join(newerVersionDir, build.subdir(platform))
-	require.NoError(t, os.MkdirAll(newerBinDir, 0o755))
 	newerBin := filepath.Join(newerBinDir, build.binaryPath())
+	// mkdir the BINARY's own parent, not just newerBinDir: on darwin,
+	// build.binaryPath() nests the binary inside a .app bundle (e.g.
+	// "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for
+	// Testing"), so newerBinDir alone omits the bundle's intermediate
+	// directories and writeExecutable below failed with ENOENT (#615 found
+	// this failing unconditionally on macOS — reproduced without -race too,
+	// so it was never a race-detector artifact, just an untested darwin
+	// path: CI only ever runs this suite on Linux, where build.binaryPath()
+	// has no nested bundle and the bug is invisible).
+	require.NoError(t, os.MkdirAll(filepath.Dir(newerBin), 0o755))
 	writeExecutable(t, newerBin, "#!/bin/sh\nexit 0\n")
 
 	got := findInstalledBuild(root, platform, build)
