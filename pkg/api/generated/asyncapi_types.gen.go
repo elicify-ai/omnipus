@@ -430,6 +430,20 @@ type NotificationFrame struct {
 	Type             string  `json:"type"`
 }
 
+// PermissionDenied — Structured tool-result payload emitted (as a tool_call_result frame's `result`, or embedded verbatim as message content elsewhere) when a tool call is refused for permission reasons. TWO producers share this one shape and one discriminator (issue #618): pkg/agent's tool-policy denial path (approval outcomes — user/timeout/ saturated/policy_denied/no_approver_configured/... — and the headless ask-policy auto-deny) and pkg/tools' filesystem-scope denial path (ResolvePath rejecting a path outside the effective scope, or on a protected carve-out). Before this schema existed, both producers hand-built this JSON with fmt.Sprintf's %q verb, which is Go-string quoting, not JSON quoting, and silently produced invalid JSON for a path or approval-tool name containing invalid UTF-8 or a C0/C1 control byte outside \n\t\r. The frame's top-level `error` field carries the same `message`.
+type PermissionDenied struct {
+	// Fixed discriminator the SPA matches on.
+	Error string `json:"error"`
+	// Model-facing guidance on how to proceed (e.g. "do not retry; stop and report the blocker").
+	Message string `json:"message"`
+	// Whether the model should treat this denial as terminal for the rest of the turn. True for essentially every reason; false only for the transient "saturated" approval-queue condition, which may succeed on a later retry within the same turn. A filesystem-scope denial is always true — the same path against the same effective scope fails identically on retry.
+	Permanent bool `json:"permanent"`
+	// The denial reason: an approval-flow reason code (user / timeout / saturated / policy_denied / ...) for a tool-policy denial, or the filesystem-scope classification error's message (e.g. "access denied: path is outside the effective filesystem scope") for a ResolvePath denial.
+	Reason string `json:"reason"`
+	// The tool call that was denied.
+	Tool string `json:"tool"`
+}
+
 // PingFrame — Client → server heartbeat.
 type PingFrame struct {
 	Type string `json:"type"`
@@ -665,6 +679,14 @@ type ToolApprovalRequiredFrame struct {
 	ToolName           string  `json:"tool_name"`
 	TurnId             string  `json:"turn_id"`
 	Type               string  `json:"type"`
+}
+
+// ToolAssemblyDuplicate — Structured payload emitted (as message content, role="system") when pkg/agent/loop.go's tool-call dedup invariant guard (checkToolDedupInvariant) finds the assembled tools[] list is not name-unique right before an LLM call, and aborts the turn rather than feeding the LLM a malformed tool list. Before this schema existed the payload was hand-built with fmt.Sprintf's %q verb (the same defect PermissionDenied fixes — see its description) and carried no contract schema, no allow-list entry, and no SPA detector at all (issue #618, the fourth ungoverned member).
+type ToolAssemblyDuplicate struct {
+	// Fixed discriminator the SPA matches on.
+	Error string `json:"error"`
+	// Human-readable explanation of the duplicate tool-assembly refusal.
+	Message string `json:"message"`
 }
 
 // ToolCallResultFrame — Server → client tool execution completed. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.

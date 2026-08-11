@@ -212,6 +212,19 @@ export interface FileExistsRefusal {
   path: string;
 }
 
+export interface PermissionDenied {
+  error: "permission_denied";
+  message: string;
+  tool: string;
+  reason: string;
+  permanent: boolean;
+}
+
+export interface ToolAssemblyDuplicate {
+  error: "tool_assembly_duplicate";
+  message: string;
+}
+
 export interface ToolCallResultFrame {
   type: "tool_call_result";
   session_id: string;

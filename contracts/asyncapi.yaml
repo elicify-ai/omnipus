@@ -1805,6 +1805,80 @@ components:
           type: string
           minLength: 1
           description: The path that already exists, as the caller supplied it.
+    PermissionDenied:
+      title: PermissionDenied
+      description: 'Structured tool-result payload emitted (as a tool_call_result frame''s `result`, or embedded verbatim
+        as message content elsewhere) when a tool call is refused for permission reasons. TWO producers share this one
+        shape and one discriminator (issue #618): pkg/agent''s tool-policy denial path (approval outcomes — user/timeout/
+        saturated/policy_denied/no_approver_configured/... — and the headless ask-policy auto-deny) and pkg/tools''
+        filesystem-scope denial path (ResolvePath rejecting a path outside the effective scope, or on a protected
+        carve-out). Before this schema existed, both producers hand-built this JSON with fmt.Sprintf''s %q verb, which
+        is Go-string quoting, not JSON quoting, and silently produced invalid JSON for a path or approval-tool name
+        containing invalid UTF-8 or a C0/C1 control byte outside \n\t\r. The frame''s top-level `error` field carries the
+        same `message`.
+
+        '
+      type: object
+      required:
+      - error
+      - message
+      - tool
+      - reason
+      - permanent
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+          const: permission_denied
+          description: Fixed discriminator the SPA matches on.
+        message:
+          type: string
+          minLength: 1
+          description: Model-facing guidance on how to proceed (e.g. "do not retry; stop and report the blocker").
+        tool:
+          type: string
+          minLength: 1
+          description: The tool call that was denied.
+        reason:
+          type: string
+          minLength: 1
+          description: 'The denial reason: an approval-flow reason code (user / timeout / saturated / policy_denied /
+            ...) for a tool-policy denial, or the filesystem-scope classification error''s message (e.g. "access denied:
+            path is outside the effective filesystem scope") for a ResolvePath denial.
+
+            '
+        permanent:
+          type: boolean
+          description: 'Whether the model should treat this denial as terminal for the rest of the turn. True for
+            essentially every reason; false only for the transient "saturated" approval-queue condition, which may
+            succeed on a later retry within the same turn. A filesystem-scope denial is always true — the same path
+            against the same effective scope fails identically on retry.
+
+            '
+    ToolAssemblyDuplicate:
+      title: ToolAssemblyDuplicate
+      description: 'Structured payload emitted (as message content, role="system") when pkg/agent/loop.go''s tool-call
+        dedup invariant guard (checkToolDedupInvariant) finds the assembled tools[] list is not name-unique right before
+        an LLM call, and aborts the turn rather than feeding the LLM a malformed tool list. Before this schema existed
+        the payload was hand-built with fmt.Sprintf''s %q verb (the same defect PermissionDenied fixes — see its
+        description) and carried no contract schema, no allow-list entry, and no SPA detector at all (issue #618, the
+        fourth ungoverned member).
+
+        '
+      type: object
+      required:
+      - error
+      - message
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+          const: tool_assembly_duplicate
+          description: Fixed discriminator the SPA matches on.
+        message:
+          type: string
+          minLength: 1
+          description: Human-readable explanation of the duplicate tool-assembly refusal.
     ToolCallResultFrame:
       title: ToolCallResultFrame
       description: >
@@ -1853,6 +1927,8 @@ components:
           - $ref: '#/components/schemas/ToolResultRef'
           - $ref: '#/components/schemas/DelegationFailure'
           - $ref: '#/components/schemas/FileExistsRefusal'
+          - $ref: '#/components/schemas/PermissionDenied'
+          - $ref: '#/components/schemas/ToolAssemblyDuplicate'
         status:
           type: string
           enum:

@@ -9867,6 +9867,23 @@ export const FileExistsRefusal = z
   })
   .strict();
 
+export const PermissionDenied = z
+  .object({
+    error: z.literal("permission_denied"),
+    message: z.string().min(1),
+    tool: z.string().min(1),
+    reason: z.string().min(1),
+    permanent: z.boolean(),
+  })
+  .strict();
+
+export const ToolAssemblyDuplicate = z
+  .object({
+    error: z.literal("tool_assembly_duplicate"),
+    message: z.string().min(1),
+  })
+  .strict();
+
 export const ToolCallResultFrame = z
   .object({
     type: z.literal("tool_call_result"),
