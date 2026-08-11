@@ -373,7 +373,7 @@ func TestLiveView_RebindScreencast_NoFalseDeathBroadcast(t *testing.T) {
 	require.NotNil(t, lv.listenCtx, "rebindScreencast must install a new epoch's listenCtx after a "+
 		"successful switch, not leave the live view dead (F1)")
 	assert.True(t, lv.listenCtx != oldListenCtx, "the new epoch's listenCtx must be a fresh context, not the old one")
-	assert.Equal(t, newTabCtx, lv.tabCtx, "lv.tabCtx must now point at the newly active tab")
+	assert.True(t, sameChromedpContext(newTabCtx, lv.tabCtx), "lv.tabCtx must now point at the newly active tab")
 }
 
 // TestLiveView_RebindScreencast_StartFailure_NotifiesStatusSink is the
@@ -661,7 +661,7 @@ func TestLiveView_RebindScreencast_ConcurrentRebind_ConvergesOnLatestActiveTab(t
 	lv.mu.Unlock()
 
 	require.NotNil(t, finalListenCtx, "the live view must not be left with no active screencast epoch")
-	assert.Equal(t, tabCurrent, finalTabCtx,
+	assert.True(t, sameChromedpContext(tabCurrent, finalTabCtx),
 		"Finding B: the screencast must converge on the ACTUAL current active tab (tabCurrent) — not "+
 			"get stuck on the stale target (tabStale) just because that caller's install happened to "+
 			"land first")

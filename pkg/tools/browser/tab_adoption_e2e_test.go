@@ -23,6 +23,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// sameChromedpContext reports whether two chromedp session contexts are the
+// SAME context value, compared by interface identity rather than by deep
+// structural equality.
+//
+// Do NOT go back to testify's Equal/NotEqual on these. Those route through
+// reflect.DeepEqual, which walks the whole context chain down into chromedp's
+// *Target — whose fields are mutated concurrently by chromedp's own event
+// goroutines (Target.Execute cancels a per-call sub-context, and
+// context.cancelCtx.cancel does an atomic.AddInt32 on it). Under -race that is
+// a genuine data race between the assertion goroutine and the browser event
+// loop, and it is exactly what the #615 race-gate widening surfaced the first
+// time this package was ever run under -race:
+//
+//	WARNING: DATA RACE
+//	Read at ... reflect.Value.Int() <- reflect.deepValueEqual <- require.NotEqual
+//	  tab_adoption_e2e_test.go:146
+//	Previous write at ... sync/atomic.AddInt32 <- context.(*cancelCtx).cancel
+//	  <- chromedp.(*Target).Execute.func1 <- chromedp.runListeners
+//
+// Identity is also what these assertions actually mean — "the same tab's
+// context" or "a distinct tab's context". Structural equality of a live
+// context is not a stable property in the first place.
+func sameChromedpContext(a, b context.Context) bool { return a == b }
+
 // targetBlankServer serves a page whose only link opens a second page in a NEW
 // tab via target="_blank" — the canonical "book a slot →" shape.
 func targetBlankServer(t *testing.T) *httptest.Server {
@@ -143,7 +167,7 @@ func TestOpenTab_RealChromium_SecondTabSharesSameBrowser(t *testing.T) {
 	// resulting title.
 	tab1Ctx, err := mgr.Session(defaultSessionID)
 	require.NoError(t, err)
-	require.NotEqual(t, tab0Ctx, tab1Ctx, "tab 0 and tab 1 must be distinct chromedp contexts")
+	require.False(t, sameChromedpContext(tab0Ctx, tab1Ctx), "tab 0 and tab 1 must be distinct chromedp contexts")
 	var title string
 	require.NoError(t, chromedp.Run(tab1Ctx, chromedp.Navigate(srv.URL), chromedp.Title(&title)),
 		"tab 1 must be able to navigate — it is a real, independently-usable tab in the running browser")
@@ -156,7 +180,7 @@ func TestOpenTab_RealChromium_SecondTabSharesSameBrowser(t *testing.T) {
 	require.NoError(t, err)
 	tab0CtxAgain, err := mgr.Session(defaultSessionID)
 	require.NoError(t, err)
-	assert.Equal(t, tab0Ctx, tab0CtxAgain, "Session must follow SwitchTab back to the original tab 0 context")
+	assert.True(t, sameChromedpContext(tab0Ctx, tab0CtxAgain), "Session must follow SwitchTab back to the original tab 0 context")
 	var heading string
 	require.NoError(t, chromedp.Run(tab0CtxAgain, chromedp.Text("h1", &heading, chromedp.ByQuery)))
 	assert.Equal(t, "Contact", heading)
@@ -251,13 +275,13 @@ func TestSwitchTab_RealChromium_SessionFollowsActiveTab(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, chromedp.Run(tab1Ctx, chromedp.Navigate(srv.URL+"/booked")))
 
-	require.NotEqual(t, tab0Ctx, tab1Ctx, "tab 0 and tab 1 must be distinct chromedp contexts")
+	require.False(t, sameChromedpContext(tab0Ctx, tab1Ctx), "tab 0 and tab 1 must be distinct chromedp contexts")
 
 	_, err = mgr.SwitchTab(defaultSessionID, 0)
 	require.NoError(t, err)
 	followedCtx, err := mgr.Session(defaultSessionID)
 	require.NoError(t, err)
-	assert.Equal(t, tab0Ctx, followedCtx, "Session(default) must follow SwitchTab back to tab 0")
+	assert.True(t, sameChromedpContext(tab0Ctx, followedCtx), "Session(default) must follow SwitchTab back to tab 0")
 	var title string
 	require.NoError(t, chromedp.Run(followedCtx, chromedp.Title(&title)))
 	assert.Equal(t, "Contact", title, "tab 0 must still show its OWN page (Contact), not tab 1's (Booked)")
@@ -266,7 +290,7 @@ func TestSwitchTab_RealChromium_SessionFollowsActiveTab(t *testing.T) {
 	require.NoError(t, err)
 	followedCtx2, err := mgr.Session(defaultSessionID)
 	require.NoError(t, err)
-	assert.Equal(t, tab1Ctx, followedCtx2, "Session(default) must follow SwitchTab to tab 1")
+	assert.True(t, sameChromedpContext(tab1Ctx, followedCtx2), "Session(default) must follow SwitchTab to tab 1")
 	var title2 string
 	require.NoError(t, chromedp.Run(followedCtx2, chromedp.Title(&title2)))
 	assert.Equal(t, "Booked", title2, "tab 1 must retain ITS own navigation state independent of tab 0")
