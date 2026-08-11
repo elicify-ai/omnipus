@@ -55,6 +55,41 @@ jobs:
           fi
           echo "OK: no removed CLI verbs in infra."
 
+  race-lockstep:
+    name: "#615 CI Guards: race lockstep + browser test gating"
+    # #615 regression guards, both structural/grep-based checks (no Go build
+    # needed, so this job stays fast):
+    #
+    # 1. The `-race` package list must be identical (as a set) between this
+    #    workflow's own "Run go test -race" step and
+    #    deploy/ci-worker/runci.sh's run_gorace — a worker gate that measures
+    #    something GitHub does not (or vice versa) is exactly how a green
+    #    local verdict stops predicting the real one. #615 found the two
+    #    files had already drifted in their surrounding rationale comments
+    #    while the package lists themselves stayed accidentally in sync;
+    #    this makes the invariant mechanical instead of relying on manual
+    #    review to catch it. See scripts/check-race-package-lockstep.sh for
+    #    the extraction/compare logic and deploy/ci-worker/CLAUDE.md for the
+    #    runci.sh redeploy step required whenever a fix here touches
+    #    deploy/ci-worker/runci.sh.
+    #
+    # 2. Every pkg/tools/browser test that can launch a real Chrome (or
+    #    trigger the ~100MB Chrome-for-Testing download that precedes it)
+    #    must call the package's own skipIfNoBrowser(t) convention. #615
+    #    found 17 tests that didn't — 15 gated only by the wrong/no-op
+    #    testing.Short(), and 2 with no gate at all. See
+    #    scripts/check-browser-tests-gated.sh.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Verify -race package lists match
+        run: bash scripts/check-race-package-lockstep.sh
+
+      - name: Verify pkg/tools/browser real-Chrome tests are skipIfNoBrowser-gated
+        run: bash scripts/check-browser-tests-gated.sh
+
   typecheck:
     name: TypeScript Type Check
     # Runs `tsc -b --noEmit` (project-references build mode) against the repo
@@ -522,20 +557,31 @@ jobs:
         # packages holding the tool registry, the delegation tool, the task
         # store and every LLM provider.
         #
-        # pkg/tools is NON-recursive (`./pkg/tools`, not `./pkg/tools/...`)
-        # because pkg/tools/browser itself fails under -race on a headless box.
-        # A false-RED gate gets ignored, which is worse than no gate. Tracked
-        # in #615; do not widen without first making that package race-clean
-        # headlessly.
-        #
-        # Its four SUBpackages are listed explicitly rather than swept up with
-        # it. `./pkg/tools` alone silently excluded five packages while the
-        # comment named one — and cdppipe and webrtc hold some of the most
-        # concurrency-dense tests in the tree (allocator/dialer/pipeconn,
-        # backpressure/ordering/shed/sustained-growth). All four verified
-        # race-clean before being added here.
-        #
-        # Timeout raised 600s -> 900s to accommodate the added packages.
+        # pkg/tools/browser joined the recursive glob on 2026-08-11 (#615).
+        # It was originally left off `./pkg/tools/...` on the theory that the
+        # package "launches real Chrome and hits missing dbus headlessly" —
+        # that diagnosis was WRONG: the package already ran its real-Chrome
+        # tests and PASSED in the plain (non-race) `go test ./...` gate above
+        # on these same runners (e.g. run 31184160184: `ok
+        # .../pkg/tools/browser 48.108s`), so dbus availability cannot explain
+        # a race-only exclusion. The real cause was that its 15 real-Chrome
+        # tests (plus two more found ungated entirely during the #615 fix —
+        # see pkg/tools/browser/coordinator_test.go's
+        # TestCoordinator_OwnershipMarker_RoundTrip and
+        # coordinator_window_size_test.go's
+        # TestCoordinator_Register_CreateTargetParams_PinsWindowSize) were
+        # only gated by `testing.Short()` (or, for those two, not gated at
+        # all) instead of the package's own `skipIfNoBrowser` convention, and
+        # two tight wall-clock assertions in coldstart_bound_test.go were
+        # exactly the shape pkg/task hit in the entry above (race
+        # instrumentation blowing a <200ms bound). Both are fixed: every
+        # real-Chrome test now uses skipIfNoBrowser (which also removed an
+        # undeclared ~100MB Chrome-for-Testing network download from every CI
+        # gate that reached these tests), and the two wall-clock assertions
+        # now use a //go:build race / !race split bound
+        # (runFirstAttachPromptBound) exactly like pkg/task's livenessBound.
+        # `go test -race ./pkg/tools/...` is verified race-clean before this
+        # change lands.
         #
         # DATA RACE carve-out (never routed through the flake filter): a race
         # that manifests under the default parallel `-p` (NumCPU) run but
@@ -552,7 +598,7 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           set +e
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 900s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... ./pkg/logger/... ./pkg/task/... ./pkg/plan/... ./pkg/tools ./pkg/tools/browser/cdppipe/... ./pkg/tools/browser/webrtc/... ./pkg/tools/browser/captureext/... ./pkg/tools/browser/chromeintegrity/... ./pkg/providers/... ./tests/integration/... 2>&1)
+          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 900s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... ./pkg/logger/... ./pkg/task/... ./pkg/plan/... ./pkg/tools/... ./pkg/providers/... ./tests/integration/... 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a

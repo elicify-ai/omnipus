@@ -117,7 +117,16 @@ run_lint() {
     curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
       | sh -s -- -b /cache/go/bin "$GOLANGCI_VERSION" || return 1
   fi
-  CGO_ENABLED=0 golangci-lint run --build-tags="$TAGS"
+  CGO_ENABLED=0 golangci-lint run --build-tags="$TAGS" || return 1
+  # #615 regression guards (both check the same thing on their respective CI
+  # surfaces — see the matching job in .github/workflows/pr.yml):
+  #   - the -race package list must stay identical (as a set) between this
+  #     file's own run_gorace and pr.yml's "Run go test -race" step, or a
+  #     green worker verdict stops predicting the real GitHub one.
+  #   - every pkg/tools/browser real-Chrome test must be gated by the
+  #     package's own skipIfNoBrowser(t) convention.
+  bash scripts/check-race-package-lockstep.sh || return 1
+  bash scripts/check-browser-tests-gated.sh
 }
 # Full suite with a flake filter: a package that fails the contended full run but passes when
 # re-run isolated (-p 1) is a timing flake → not a real failure. Fails both = real.
@@ -149,12 +158,29 @@ run_lint() {
 # pkg/task, pkg/plan, pkg/tools and pkg/providers joined the list on
 # 2026-08-10 (both files together, as the rule below demands) after a manual
 # scoped run found TWO data races in them on an otherwise fully green commit.
-# pkg/tools is NON-recursive on purpose: pkg/tools/browser itself fails under
-# -race headlessly, and a false-RED gate gets ignored, which is worse than no
-# gate (#615). Its four SUBpackages are listed explicitly — a bare
-# `./pkg/tools` silently dropped five packages while the comment named one,
-# and cdppipe/webrtc carry the densest concurrency tests in the tree.
-# Do not "improve" one without the other: a worker gate that measures something
+#
+# pkg/tools/browser joined the recursive glob on 2026-08-11 (#615). It was
+# originally left off `./pkg/tools/...` on the theory that the package
+# "launches real Chrome and hits missing dbus headlessly" — that diagnosis
+# was WRONG: the package already ran its real-Chrome tests and PASSED in the
+# plain (non-race) `go test ./...` gate (run_gotest) on these same runners,
+# so dbus availability cannot explain a race-only exclusion. The real cause
+# was that its 15 real-Chrome tests (plus two more found ungated entirely
+# during the #615 fix — pkg/tools/browser/coordinator_test.go's
+# TestCoordinator_OwnershipMarker_RoundTrip and
+# coordinator_window_size_test.go's
+# TestCoordinator_Register_CreateTargetParams_PinsWindowSize) were only
+# gated by `testing.Short()` (or, for those two, not gated at all) instead
+# of the package's own `skipIfNoBrowser` convention, and two tight
+# wall-clock assertions in coldstart_bound_test.go were exactly the shape
+# pkg/task hit above (race instrumentation blowing a <200ms bound). Both are
+# fixed: every real-Chrome test now uses skipIfNoBrowser (which also removed
+# an undeclared ~100MB Chrome-for-Testing network download from every CI
+# gate that reached these tests), and the two wall-clock assertions now use
+# a //go:build race / !race split bound (runFirstAttachPromptBound), exactly
+# like pkg/task's livenessBound above.
+#
+# Do not "improve" one file without the other: a worker gate that measures something
 # GitHub does not (or vice versa) is exactly how a green local verdict stops
 # predicting the real one. -race forces cgo, which is why CGO_ENABLED=1 here
 # does not weaken the pure-Go guarantee — that is proved by the CGO_ENABLED=0
@@ -165,9 +191,7 @@ run_gorace() {
   out=$(CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s \
     ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... \
     ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... \
-    ./pkg/logger/... ./pkg/task/... ./pkg/plan/... ./pkg/tools \
-    ./pkg/tools/browser/cdppipe/... ./pkg/tools/browser/webrtc/... \
-    ./pkg/tools/browser/captureext/... ./pkg/tools/browser/chromeintegrity/... \
+    ./pkg/logger/... ./pkg/task/... ./pkg/plan/... ./pkg/tools/... \
     ./pkg/providers/... \
     ./tests/integration/... 2>&1)
   local code=$?
