@@ -126,7 +126,11 @@ run_lint() {
   #   - every pkg/tools/browser real-Chrome test must be gated by the
   #     package's own skipIfNoBrowser(t) convention.
   bash scripts/check-race-package-lockstep.sh || return 1
-  bash scripts/check-browser-tests-gated.sh
+  bash scripts/check-browser-tests-gated.sh || return 1
+  # #617 regression guard, same lockstep reasoning: pr.yml runs this in its own
+  # tool-error-status-lint job, so omitting it here lets the worker report a
+  # green lint while GitHub's is red.
+  bash scripts/check-no-tool-error-from-status.sh
 }
 # Full suite with a flake filter: a package that fails the contended full run but passes when
 # re-run isolated (-p 1) is a timing flake → not a real failure. Fails both = real.
