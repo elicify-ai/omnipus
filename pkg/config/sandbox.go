@@ -268,6 +268,30 @@ type OmnipusSandboxConfig struct {
 	// Paths outside this list (and the agent workspace) are inaccessible.
 	AllowedPaths []string `json:"allowed_paths,omitempty"`
 
+	// AllowedExecPaths lists directories the sandbox may READ and EXECUTE
+	// from, and never write to. It exists because AllowedPaths cannot express
+	// "run the tools installed here": that list grants read+write and never
+	// the execute bit, so before this field an operator had no way at all to
+	// let an agent run a toolchain outside the handful of system binary
+	// directories baked into the kernel policy.
+	//
+	// That gap made agents unable to run node, npm, python or anything else
+	// installed by Homebrew (/usr/local, /opt/homebrew) or a version manager
+	// (fnm, nvm, volta, asdf, pyenv, rbenv, cargo), which is where these tools
+	// live on a normal developer machine.
+	//
+	// Entries are read+execute ONLY — never writable. That separation is what
+	// keeps this safe: a directory the agent can execute from but cannot write
+	// to does not let it drop a binary and run it. The kernel enforces this
+	// regardless of Unix ownership, so it holds even for Homebrew directories
+	// owned by the console user.
+	//
+	// A leading ~ is expanded to the current user's home directory. Entries
+	// that do not exist are skipped harmlessly. Overlapping an entry with
+	// AllowedPaths is rejected at validation, because the union would be a
+	// writable AND executable directory.
+	AllowedExecPaths []string `json:"allowed_exec_paths,omitempty"`
+
 	// AuditLog enables the structured security audit log per SEC-17.
 	// Written to ~/.omnipus/system/audit.jsonl.
 	AuditLog bool `json:"audit_log,omitempty"`

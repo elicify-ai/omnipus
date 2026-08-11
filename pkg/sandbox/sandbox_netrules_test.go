@@ -11,7 +11,7 @@ import "testing"
 // This is the legacy default and ensures pre-ABI-v4 kernels remain
 // unrestricted on the network axis.
 func TestDefaultPolicy_NetRulesNilByDefault(t *testing.T) {
-	policy := DefaultPolicy("/tmp/home", nil, nil, nil)
+	policy := DefaultPolicy("/tmp/home", nil, nil, nil, nil)
 	if len(policy.BindPortRules) != 0 {
 		t.Errorf("BindPortRules: got %d, want 0", len(policy.BindPortRules))
 	}
@@ -22,7 +22,7 @@ func TestDefaultPolicy_NetRulesNilByDefault(t *testing.T) {
 // 18000-18002 is three bind ports.
 func TestDefaultPolicy_NetRulesExpanded(t *testing.T) {
 	bindPorts := []uint16{18000, 18001, 18002}
-	policy := DefaultPolicy("/tmp/home", nil, nil, bindPorts)
+	policy := DefaultPolicy("/tmp/home", nil, nil, nil, bindPorts)
 
 	if got, want := len(policy.BindPortRules), 3; got != want {
 		t.Errorf("BindPortRules count: got %d, want %d", got, want)
@@ -41,7 +41,7 @@ func TestDefaultPolicy_NetRulesExpanded(t *testing.T) {
 // Important because callers may build a slice and then never append.
 func TestDefaultPolicy_NetRulesEmptyVsNil(t *testing.T) {
 	empty := []uint16{}
-	policy := DefaultPolicy("/tmp/home", nil, nil, empty)
+	policy := DefaultPolicy("/tmp/home", nil, nil, nil, empty)
 	if len(policy.BindPortRules) != 0 {
 		t.Errorf("BindPortRules from empty slice: got %d, want 0", len(policy.BindPortRules))
 	}
@@ -60,7 +60,7 @@ func TestDefaultPolicy_NetRulesEmptyVsNil(t *testing.T) {
 // would silently re-open the raw-TCP-egress hole that was closed by
 // re-introducing ConnectPortRules.
 func TestDefaultPolicy_ConnectRulesSeeded(t *testing.T) {
-	policy := DefaultPolicy("/tmp/home", nil, nil, nil)
+	policy := DefaultPolicy("/tmp/home", nil, nil, nil, nil)
 
 	if got, want := len(policy.ConnectPortRules), len(DefaultConnectPorts); got != want {
 		t.Fatalf("ConnectPortRules count: got %d, want %d", got, want)
@@ -99,14 +99,14 @@ func TestDefaultPolicy_ConnectRulesSeeded(t *testing.T) {
 // this isolation, an agent loop that appends extra ports for one agent
 // would silently widen every other agent's allow-list.
 func TestDefaultPolicy_ConnectRulesNotMutatedByCallers(t *testing.T) {
-	policy := DefaultPolicy("/tmp/home", nil, nil, nil)
+	policy := DefaultPolicy("/tmp/home", nil, nil, nil, nil)
 	// Mutate the returned slice.
 	if len(policy.ConnectPortRules) > 0 {
 		policy.ConnectPortRules[0].Port = 9999
 	}
 
 	// A fresh call must still see the original {53, 80, 443}.
-	fresh := DefaultPolicy("/tmp/home", nil, nil, nil)
+	fresh := DefaultPolicy("/tmp/home", nil, nil, nil, nil)
 	for i, want := range DefaultConnectPorts {
 		if got := fresh.ConnectPortRules[i].Port; got != want {
 			t.Errorf("DefaultConnectPorts polluted by caller mutation: fresh[%d]=%d, want %d", i, got, want)

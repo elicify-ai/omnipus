@@ -1191,7 +1191,27 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 	// Update stats and UpdatedAt — targeted stats-group write only (FR-084);
 	// a transcript append never touches meta.json/goal.json/loop.json.
 	if entry.Role == "assistant" {
-		meta.Stats.TokensOut += entry.Tokens
+		// Prefer the provider's real input/output split when the entry carries
+		// it. Before TranscriptEntry had these fields, TokensOut received the
+		// whole turn TOTAL and TokensIn was only ever fed by non-assistant
+		// entries — which no production caller populates — so every session
+		// reported tokens_in=0 with the entire volume booked as output, and
+		// the per-model In/Out pair sat at 0 beside a non-zero Total.
+		//
+		// Assigning TokensOut the completion count (not the total) is what
+		// makes in + out + cache reconcile against TokensTotal. The fallback
+		// preserves the historical behaviour for entries with no split —
+		// transcripts written before this change, and any provider that
+		// reports only a total — so old sessions keep rendering as they did.
+		promptTokens, completionTokens := entry.PromptTokens, entry.CompletionTokens
+		hasSplit := promptTokens > 0 || completionTokens > 0
+
+		if hasSplit {
+			meta.Stats.TokensIn += promptTokens
+			meta.Stats.TokensOut += completionTokens
+		} else {
+			meta.Stats.TokensOut += entry.Tokens
+		}
 		meta.Stats.TokensCacheRead += entry.CacheReadTokens
 		meta.Stats.TokensCacheWrite += entry.CacheWriteTokens
 		if entry.Model != "" {
@@ -1199,6 +1219,8 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 				meta.Stats.ByModel = make(map[string]ModelTokens)
 			}
 			mt := meta.Stats.ByModel[entry.Model]
+			mt.In += promptTokens
+			mt.Out += completionTokens
 			mt.CacheRead += entry.CacheReadTokens
 			mt.CacheWrite += entry.CacheWriteTokens
 			mt.Total += entry.Tokens

@@ -224,3 +224,107 @@ func TestServedSubdirs_MultipleAgents(t *testing.T) {
 		t.Fatalf("Lookup tokenB failed: got %+v", entryB)
 	}
 }
+
+// TestServedSubdirs_ReRegisterSamePath_ReusesToken pins the fix for a preview
+// URL dying under the agent's normal workflow.
+//
+// Observed in a real session: the agent served a directory, gave the user the
+// URL, edited the files, re-served the SAME directory, and the URL it had
+// already handed over began returning 404. Re-serving after an edit is the
+// common case, not an edge case.
+func TestServedSubdirs_ReRegisterSamePath_ReusesToken(t *testing.T) {
+	t.Parallel()
+	s := NewServedSubdirs()
+	defer s.Stop()
+
+	dir := t.TempDir()
+
+	first, firstDeadline, err := s.Register("jim", dir, time.Hour)
+	if err != nil {
+		t.Fatalf("first Register: %v", err)
+	}
+
+	second, secondDeadline, err := s.Register("jim", dir, 2*time.Hour)
+	if err != nil {
+		t.Fatalf("second Register: %v", err)
+	}
+
+	if first != second {
+		t.Errorf("re-serving the same directory must reuse the token: got %q, want %q", second, first)
+	}
+	if s.Lookup(first) == nil {
+		t.Error("the URL already given to the user must still resolve after a re-serve")
+	}
+	if !secondDeadline.After(firstDeadline) {
+		t.Errorf("re-serving must renew the deadline: second %v not after first %v", secondDeadline, firstDeadline)
+	}
+	if entry := s.Lookup(first); entry != nil && entry.AbsDir != dir {
+		t.Errorf("AbsDir = %q, want %q", entry.AbsDir, dir)
+	}
+}
+
+// TestServedSubdirs_ReRegisterDifferentPath_StillRotates proves the fix did not
+// dissolve the per-agent cap: switching to a different directory must still
+// invalidate the old token, so a stale URL cannot keep serving content the
+// agent has moved on from.
+func TestServedSubdirs_ReRegisterDifferentPath_StillRotates(t *testing.T) {
+	t.Parallel()
+	s := NewServedSubdirs()
+	defer s.Stop()
+
+	dirA, dirB := t.TempDir(), t.TempDir()
+
+	first, _, err := s.Register("jim", dirA, time.Hour)
+	if err != nil {
+		t.Fatalf("Register dirA: %v", err)
+	}
+	second, _, err := s.Register("jim", dirB, time.Hour)
+	if err != nil {
+		t.Fatalf("Register dirB: %v", err)
+	}
+
+	if first == second {
+		t.Error("serving a different directory must mint a new token")
+	}
+	if s.Lookup(first) != nil {
+		t.Error("the superseded token must stop resolving")
+	}
+	entry := s.Lookup(second)
+	if entry == nil {
+		t.Fatal("the new token must resolve")
+	}
+	if entry.AbsDir != dirB {
+		t.Errorf("AbsDir = %q, want %q", entry.AbsDir, dirB)
+	}
+}
+
+// TestServedSubdirs_ReRegisterAfterExpiry_MintsNewToken covers the boundary
+// between the two behaviours above: an expired registration must not be
+// renewed back to life under its old token.
+func TestServedSubdirs_ReRegisterAfterExpiry_MintsNewToken(t *testing.T) {
+	t.Parallel()
+	s := NewServedSubdirs()
+	defer s.Stop()
+
+	dir := t.TempDir()
+
+	first, _, err := s.Register("jim", dir, 1*time.Millisecond)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if s.Lookup(first) != nil {
+		t.Fatal("precondition: the first registration should have expired")
+	}
+
+	second, _, err := s.Register("jim", dir, time.Hour)
+	if err != nil {
+		t.Fatalf("re-Register: %v", err)
+	}
+	if first == second {
+		t.Error("an expired token must not be resurrected")
+	}
+	if s.Lookup(second) == nil {
+		t.Error("the fresh token must resolve")
+	}
+}

@@ -173,3 +173,65 @@ func TestSeatbeltAdversarial_ProfileInjectionRejected(t *testing.T) {
 	require.Error(t, err, "a path containing a quote must never reach the profile")
 	assert.Contains(t, err.Error(), "forbidden character")
 }
+
+// TestSeatbeltAdversarial_CannotDropBinaryIntoExecPath executes the attack the
+// allowed_exec_paths design is judged against: the agent authors a payload in
+// its own writable workspace, then tries every way of getting it into a
+// directory it is allowed to execute from.
+//
+// If any placement succeeded, granting exec on a user-owned prefix such as
+// Homebrew's would be equivalent to granting arbitrary code execution outside
+// the workspace.
+func TestSeatbeltAdversarial_CannotDropBinaryIntoExecPath(t *testing.T) {
+	ws, _, policy := advWorkspace(t)
+
+	execDir := t.TempDir()
+	policy.FilesystemRules = append(policy.FilesystemRules,
+		PathRule{Path: execDir, Access: AccessRead | AccessExecute})
+
+	payload := filepath.Join(ws, "payload.sh")
+	require.NoError(t, os.WriteFile(payload, []byte("#!/bin/sh\necho PWNED\n"), 0o755))
+
+	for _, tc := range []struct {
+		name   string
+		script string
+	}{
+		{"copy", "cp " + payload + " " + filepath.Join(execDir, "p.sh")},
+		{"move", "mv " + payload + " " + filepath.Join(execDir, "p.sh")},
+		{"symlink", "ln -s " + payload + " " + filepath.Join(execDir, "p.sh")},
+		{"hardlink", "ln " + payload + " " + filepath.Join(execDir, "p.sh")},
+		{"redirect", "echo '#!/bin/sh' > " + filepath.Join(execDir, "p.sh")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := advRun(t, policy, ws, tc.script)
+			assert.Error(t, err, "planting a binary in an exec path must fail; output=%s", out)
+			assert.NoFileExists(t, filepath.Join(execDir, "p.sh"),
+				"a payload reached a directory the agent can execute from")
+		})
+	}
+}
+
+// TestSeatbeltAdversarial_ExecGrantDoesNotWidenReadBoundary guards against a
+// future widening of the granted subtree. The seeded config names
+// /usr/local/bin and friends specifically, NOT /usr/local, because the parent
+// holds things like /usr/local/etc/wireguard. This asserts a sibling of the
+// granted directory stays unreadable.
+func TestSeatbeltAdversarial_ExecGrantDoesNotWidenReadBoundary(t *testing.T) {
+	ws, _, policy := advWorkspace(t)
+
+	prefix := t.TempDir()
+	execDir := filepath.Join(prefix, "bin")
+	secretDir := filepath.Join(prefix, "etc")
+	require.NoError(t, os.MkdirAll(execDir, 0o755))
+	require.NoError(t, os.MkdirAll(secretDir, 0o755))
+
+	secret := filepath.Join(secretDir, "private.key")
+	require.NoError(t, os.WriteFile(secret, []byte("PRIVATE-KEY-MATERIAL"), 0o600))
+
+	policy.FilesystemRules = append(policy.FilesystemRules,
+		PathRule{Path: execDir, Access: AccessRead | AccessExecute})
+
+	out, err := advRun(t, policy, ws, "cat "+secret)
+	assert.Error(t, err, "a sibling of the exec path must stay unreadable; output=%s", out)
+	assert.NotContains(t, out, "PRIVATE-KEY-MATERIAL")
+}

@@ -6368,13 +6368,13 @@ type AgentTokenEntry struct {
 		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
 		CacheWrite *int `json:"cache_write,omitempty"`
 
-		// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+		// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
 		In *int `json:"in,omitempty"`
 
-		// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
-		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 
@@ -9043,13 +9043,13 @@ type ModelTokens struct {
 	// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
 	CacheWrite *int `json:"cache_write,omitempty"`
 
-	// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+	// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
 	In *int `json:"in,omitempty"`
 
-	// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+	// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 	Out *int `json:"out,omitempty"`
 
-	// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+	// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
 	Total int `json:"total"`
 }
 
@@ -10912,13 +10912,13 @@ type Session struct {
 			// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
 			CacheWrite *int `json:"cache_write,omitempty"`
 
-			// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+			// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
 			In *int `json:"in,omitempty"`
 
-			// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
 
-			// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+			// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
 
@@ -11185,13 +11185,13 @@ type SessionDetail struct {
 				// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
 				CacheWrite *int `json:"cache_write,omitempty"`
 
-				// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+				// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
 				In *int `json:"in,omitempty"`
 
-				// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+				// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 				Out *int `json:"out,omitempty"`
 
-				// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+				// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
 				Total int `json:"total"`
 			} `json:"by_model,omitempty"`
 
@@ -11828,13 +11828,13 @@ type SessionStats struct {
 		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
 		CacheWrite *int `json:"cache_write,omitempty"`
 
-		// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+		// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
 		In *int `json:"in,omitempty"`
 
-		// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
-		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 
@@ -12891,13 +12891,13 @@ type TokenUsageSummary struct {
 			// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
 			CacheWrite *int `json:"cache_write,omitempty"`
 
-			// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+			// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
 			In *int `json:"in,omitempty"`
 
-			// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
 
-			// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+			// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
 
@@ -12919,13 +12919,13 @@ type TokenUsageSummary struct {
 		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
 		CacheWrite *int `json:"cache_write,omitempty"`
 
-		// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+		// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
 		In *int `json:"in,omitempty"`
 
-		// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
-		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 

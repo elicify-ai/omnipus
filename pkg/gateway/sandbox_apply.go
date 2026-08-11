@@ -383,7 +383,16 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 		// pkg/tools/browser/cdppipe), which needs no bind() at all, so there
 		// is nothing to allow-list for it anymore.
 	}
-	policy := sandbox.DefaultPolicy(opts.HomePath, allowedPaths, warnFn, bindPorts)
+	// allowedExecPaths is read+execute-only (see sandbox.buildExecPathRules).
+	// Deliberately NOT folded into configTouched below: it is seeded non-empty
+	// on a fresh install, so treating it as "the operator configured something"
+	// would make configTouched permanently true and silently disable the
+	// Docker permissive auto-downgrade.
+	var allowedExecPaths []string
+	if opts.Cfg != nil {
+		allowedExecPaths = opts.Cfg.Sandbox.AllowedExecPaths
+	}
+	policy := sandbox.DefaultPolicy(opts.HomePath, allowedPaths, allowedExecPaths, warnFn, bindPorts)
 
 	// Extend the connect-port allow-list (v0.2 #155 item 4). DefaultPolicy
 	// pre-seeds {53, 80, 443}; we append every port in DevServerPortRange so

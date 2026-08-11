@@ -213,10 +213,11 @@ var SecretFilesRelative = []string{
 func DefaultChildPolicy(
 	homePath string,
 	allowedPaths []string,
+	allowedExecPaths []string,
 	warnFn func(msg string, path string),
 	bindPorts []uint16,
 ) SandboxPolicy {
-	policy := DefaultPolicy(homePath, allowedPaths, warnFn, bindPorts)
+	policy := DefaultPolicy(homePath, allowedPaths, allowedExecPaths, warnFn, bindPorts)
 	if homePath == "" {
 		return policy
 	}
@@ -305,6 +306,7 @@ func DefaultChildPolicy(
 func DefaultPolicy(
 	homePath string,
 	allowedPaths []string,
+	allowedExecPaths []string,
 	warnFn func(msg string, path string),
 	bindPorts []uint16,
 ) SandboxPolicy {
@@ -392,6 +394,20 @@ func DefaultPolicy(
 			Access: AccessRead | AccessWrite,
 		})
 	}
+
+	// Execute-capable toolchain paths (config: sandbox.allowed_exec_paths).
+	//
+	// These are the ONLY rules in this function that pair read with execute and
+	// deliberately withhold write. Without them an agent cannot run anything
+	// installed outside the system binary directories — Homebrew, fnm/nvm,
+	// cargo, pyenv — which on a developer machine is nearly every tool it needs.
+	//
+	// The read+exec-without-write shape is what makes this safe: the kernel
+	// denies writes to these directories regardless of Unix ownership, so the
+	// agent cannot drop a binary into one and execute it. buildExecPathRule
+	// hard-codes the access bits so a future edit cannot widen them by
+	// extending a shared loop.
+	rules = append(rules, buildExecPathRules(allowedExecPaths, allowedPaths, warnFn)...)
 
 	var bindRules []NetPortRule
 	if len(bindPorts) > 0 {

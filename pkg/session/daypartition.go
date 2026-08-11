@@ -281,6 +281,13 @@ type TranscriptEntry struct {
 	// this assistant turn. Both are 0 for non-assistant entries and for legacy
 	// entries written before Wave 1 token tracking. Used to accumulate
 	// SessionStats.TokensCacheRead/Write and ByModel per-model breakdown.
+	// PromptTokens and CompletionTokens carry the provider's input/output
+	// split for this entry. Tokens (above) is the collapsed total and cannot
+	// express the split, which is why SessionStats.TokensIn and the per-model
+	// In/Out fields were structurally always 0 before these existed.
+	PromptTokens     int `json:"prompt_tokens,omitempty"`
+	CompletionTokens int `json:"completion_tokens,omitempty"`
+
 	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 
@@ -551,7 +558,27 @@ func (ps *PartitionStore) AppendMessage(sessionID string, entry TranscriptEntry)
 	// and separately proves the aggregation mechanism itself still works the
 	// moment a caller does populate entry.Tokens.
 	if entry.Role == "assistant" {
-		meta.Stats.TokensOut += entry.Tokens
+		// Prefer the provider's real input/output split when the entry carries
+		// it. Before TranscriptEntry had these fields, TokensOut received the
+		// whole turn TOTAL and TokensIn was only ever fed by non-assistant
+		// entries — which no production caller populates — so every session
+		// reported tokens_in=0 with the entire volume booked as output, and
+		// the per-model In/Out pair sat at 0 beside a non-zero Total.
+		//
+		// Assigning TokensOut the completion count (not the total) is what
+		// makes in + out + cache reconcile against TokensTotal. The fallback
+		// preserves the historical behaviour for entries with no split —
+		// transcripts written before this change, and any provider that
+		// reports only a total — so old sessions keep rendering as they did.
+		promptTokens, completionTokens := entry.PromptTokens, entry.CompletionTokens
+		hasSplit := promptTokens > 0 || completionTokens > 0
+
+		if hasSplit {
+			meta.Stats.TokensIn += promptTokens
+			meta.Stats.TokensOut += completionTokens
+		} else {
+			meta.Stats.TokensOut += entry.Tokens
+		}
 		meta.Stats.TokensCacheRead += entry.CacheReadTokens
 		meta.Stats.TokensCacheWrite += entry.CacheWriteTokens
 		if entry.Model != "" {
@@ -559,6 +586,8 @@ func (ps *PartitionStore) AppendMessage(sessionID string, entry TranscriptEntry)
 				meta.Stats.ByModel = make(map[string]ModelTokens)
 			}
 			mt := meta.Stats.ByModel[entry.Model]
+			mt.In += promptTokens
+			mt.Out += completionTokens
 			mt.CacheRead += entry.CacheReadTokens
 			mt.CacheWrite += entry.CacheWriteTokens
 			mt.Total += entry.Tokens

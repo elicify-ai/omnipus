@@ -97,7 +97,7 @@ func runSecretReadChild(target string) {
 	// /tmp gets RWX, and the standard system read paths get R+X. This is
 	// EXACTLY the policy DefaultPolicy returns, so if a real production
 	// child can read master.key under it, this child will too.
-	policy := sandbox.DefaultChildPolicy(home, nil, nil, nil)
+	policy := sandbox.DefaultChildPolicy(home, nil, nil, nil, nil)
 
 	if err := backend.Apply(policy); err != nil {
 		fmt.Fprintf(os.Stderr, "Apply failed (skip): %v\n", err)

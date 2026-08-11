@@ -24,7 +24,7 @@ import (
 func TestDefaultChildPolicy_OmitsHomeRoot(t *testing.T) {
 	home := t.TempDir()
 
-	policy := DefaultChildPolicy(home, nil, nil, nil)
+	policy := DefaultChildPolicy(home, nil, nil, nil, nil)
 
 	cleanHome := filepath.Clean(home)
 	for _, r := range policy.FilesystemRules {
@@ -48,7 +48,7 @@ func TestDefaultChildPolicy_GrantsSubdirsRWX(t *testing.T) {
 		}
 	}
 
-	policy := DefaultChildPolicy(home, nil, nil, nil)
+	policy := DefaultChildPolicy(home, nil, nil, nil, nil)
 
 	wantPaths := []string{"workspace", "sessions", "memory", "skills", "logs", "system"}
 	for _, want := range wantPaths {
@@ -87,7 +87,7 @@ func TestDefaultChildPolicy_OmitsSecretFiles(t *testing.T) {
 		t.Fatalf("write config.json: %v", err)
 	}
 
-	policy := DefaultChildPolicy(home, nil, nil, nil)
+	policy := DefaultChildPolicy(home, nil, nil, nil, nil)
 
 	for _, secret := range SecretFilesRelative {
 		secretPath := filepath.Clean(filepath.Join(home, secret))
@@ -119,7 +119,7 @@ func TestDefaultChildPolicy_OmitsSecretFiles(t *testing.T) {
 // the rest of the policy).
 func TestDefaultChildPolicy_PreservesSystemPaths(t *testing.T) {
 	home := t.TempDir()
-	policy := DefaultChildPolicy(home, nil, nil, nil)
+	policy := DefaultChildPolicy(home, nil, nil, nil, nil)
 
 	expected := []string{"/tmp", "/lib", "/usr/lib", "/usr/bin", "/etc/ssl", "/dev/null"}
 	for _, want := range expected {
@@ -141,7 +141,7 @@ func TestDefaultChildPolicy_PreservesSystemPaths(t *testing.T) {
 // returns a policy that grants no $OMNIPUS_HOME content (the safe default).
 func TestDefaultChildPolicy_NoEnumerationFailsSafe(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
-	policy := DefaultChildPolicy(missing, nil, nil, nil)
+	policy := DefaultChildPolicy(missing, nil, nil, nil, nil)
 
 	cleanMissing := filepath.Clean(missing)
 	for _, r := range policy.FilesystemRules {

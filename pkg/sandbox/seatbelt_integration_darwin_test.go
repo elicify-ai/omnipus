@@ -216,7 +216,7 @@ func TestSeatbelt_ApplyToCmd_PassesProfileInline(t *testing.T) {
 // child actually spawns at that size rather than failing with E2BIG in
 // production while every small-policy test stays green.
 func TestSeatbelt_ProductionScaleProfile_Spawns(t *testing.T) {
-	policy := DefaultPolicy(t.TempDir(), nil, nil, nil)
+	policy := DefaultPolicy(t.TempDir(), nil, nil, nil, nil)
 	for p := 20000; p < 21000; p++ {
 		policy.BindPortRules = append(policy.BindPortRules, NetPortRule{Port: uint16(p)})
 		policy.ConnectPortRules = append(policy.ConnectPortRules, NetPortRule{Port: uint16(p)})
@@ -264,4 +264,95 @@ func TestSeatbelt_HardenedExec_WrapsChildren(t *testing.T) {
 	require.NoError(t, applyPlatformHardening(wrapped, Limits{}))
 	assert.Equal(t, seatbeltExecPath, wrapped.Path, "installed policy must confine spawned children")
 	assert.True(t, wrapped.SysProcAttr.Setpgid, "Setpgid must survive the wrap")
+}
+
+// execFixture writes a runnable script into dir and returns its path.
+func execFixture(t *testing.T, dir, marker string) string {
+	t.Helper()
+	p := filepath.Join(dir, "tool.sh")
+	require.NoError(t, os.WriteFile(p, []byte("#!/bin/sh\necho "+marker+"\n"), 0o755))
+	return p
+}
+
+// TestSeatbelt_RealChild_ExecutesBinaryInAllowedExecPath is the positive
+// control for sandbox.allowed_exec_paths: a binary in a granted directory must
+// actually run. Before this existed, an agent on macOS could not run node, npm
+// or anything else installed by Homebrew or a version manager.
+//
+// A temp dir is used rather than a real Homebrew path so the test passes on a
+// runner with no Homebrew installed.
+func TestSeatbelt_RealChild_ExecutesBinaryInAllowedExecPath(t *testing.T) {
+	ws, policy := seatbeltTestWorkspace(t)
+
+	toolDir := t.TempDir()
+	tool := execFixture(t, toolDir, "TOOL-RAN")
+	policy.FilesystemRules = append(policy.FilesystemRules,
+		PathRule{Path: toolDir, Access: AccessRead | AccessExecute})
+
+	out, err := runSandboxed(t, policy, ws, "/bin/sh", tool)
+	require.NoError(t, err, "a binary in an allowed exec path must run; output=%s", out)
+	assert.Contains(t, out, "TOOL-RAN")
+}
+
+// TestSeatbelt_RealChild_DeniesExecOutsideAllowedExecPaths is the negative
+// control. Without it, the positive test above could pass simply because the
+// sandbox was not enforcing anything.
+func TestSeatbelt_RealChild_DeniesExecOutsideAllowedExecPaths(t *testing.T) {
+	ws, policy := seatbeltTestWorkspace(t)
+
+	grantedDir := t.TempDir()
+	policy.FilesystemRules = append(policy.FilesystemRules,
+		PathRule{Path: grantedDir, Access: AccessRead | AccessExecute})
+
+	// Identical script, different directory, deliberately NOT in the policy.
+	ungrantedDir := t.TempDir()
+	tool := execFixture(t, ungrantedDir, "SHOULD-NOT-RUN")
+
+	out, err := runSandboxed(t, policy, ws, "/bin/sh", tool)
+	require.Error(t, err, "exec outside the granted paths must fail; output=%s", out)
+	assert.NotContains(t, out, "SHOULD-NOT-RUN")
+}
+
+// TestSeatbelt_RealChild_ExecPathIsNotWritable proves the central safety claim
+// of allowed_exec_paths at the kernel level rather than by inspection: the
+// directory an agent may execute from is one it cannot write to. Note the
+// temp dir is owned and writable by the test user — so a pass here shows
+// Seatbelt overriding ordinary Unix permissions, which is exactly why granting
+// exec on a user-owned Homebrew prefix does not let an agent plant a binary.
+func TestSeatbelt_RealChild_ExecPathIsNotWritable(t *testing.T) {
+	ws, policy := seatbeltTestWorkspace(t)
+
+	toolDir := t.TempDir()
+	policy.FilesystemRules = append(policy.FilesystemRules,
+		PathRule{Path: toolDir, Access: AccessRead | AccessExecute})
+
+	planted := filepath.Join(toolDir, "planted.sh")
+	out, err := runSandboxed(t, policy, ws, "/bin/bash", "-c", "echo x > "+planted)
+	require.Error(t, err, "writing into an exec-only path must fail; output=%s", out)
+	assert.NoFileExists(t, planted, "sandbox allowed a write into a read+exec directory")
+}
+
+// TestSeatbelt_RealChild_ExecPathViaSymlinkChain mirrors the Homebrew layout
+// (bin/tool -> ../Cellar/tool/1.0/bin/tool). Homebrew resolves every binary
+// through such a chain, so if this broke, granting the prefix would appear to
+// work in unit tests and fail for every real tool.
+func TestSeatbelt_RealChild_ExecPathViaSymlinkChain(t *testing.T) {
+	ws, policy := seatbeltTestWorkspace(t)
+
+	prefix := t.TempDir()
+	realDir := filepath.Join(prefix, "Cellar", "tool", "1.0", "bin")
+	require.NoError(t, os.MkdirAll(realDir, 0o755))
+	real := execFixture(t, realDir, "SYMLINKED-TOOL-RAN")
+
+	binDir := filepath.Join(prefix, "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	link := filepath.Join(binDir, "tool.sh")
+	require.NoError(t, os.Symlink(real, link))
+
+	policy.FilesystemRules = append(policy.FilesystemRules,
+		PathRule{Path: prefix, Access: AccessRead | AccessExecute})
+
+	out, err := runSandboxed(t, policy, ws, "/bin/sh", link)
+	require.NoError(t, err, "a Homebrew-style symlink chain must resolve; output=%s", out)
+	assert.Contains(t, out, "SYMLINKED-TOOL-RAN")
 }

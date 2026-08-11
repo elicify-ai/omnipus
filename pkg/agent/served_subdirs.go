@@ -82,8 +82,13 @@ func (s *ServedSubdirs) SetOnEvict(fn func(tokens []string)) {
 }
 
 // Register creates a new web_serve static-mode registration for agentID pointing
-// at absDir with a lifetime of duration. Any previous registration for agentID
-// is atomically replaced (per-agent cap).
+// at absDir with a lifetime of duration.
+//
+// Per-agent cap: an agent has at most one active registration. Re-registering
+// the SAME absDir RENEWS the existing registration and returns the SAME token,
+// so a preview URL already handed to a user keeps working across the ordinary
+// edit-then-re-serve loop. Registering a DIFFERENT absDir still atomically
+// replaces the previous registration and invalidates its token.
 //
 // Returns the token (for embedding in the URL) and the registration's
 // expiry time.
@@ -102,6 +107,31 @@ func (s *ServedSubdirs) Register(
 	// Invalidate previous registration for this agent (per-agent cap ).
 	var evicted []string
 	if prev, ok := s.byAgent[agentID]; ok {
+		// RENEW IN PLACE when the agent re-serves the SAME directory.
+		//
+		// The per-agent cap is "at most one active registration", not "rotate
+		// the token on every call". Minting a fresh token here unconditionally
+		// meant that an agent doing the normal edit-then-re-serve loop silently
+		// 404'd a URL it had already given to the user — observed in a real
+		// session, where the link handed over at 15:56 was dead by 15:59.
+		//
+		// absDir is already canonicalised by the caller (ResolvePath /
+		// RealPath, the ADR-046 chokepoint), so comparing it is robust to
+		// different spellings of the same directory and still rotates when the
+		// agent genuinely switches to serving something else.
+		if prevEntry, found := s.byToken[prev]; found &&
+			prevEntry.AbsDir == absDir && time.Now().Before(prevEntry.Deadline) {
+			// Replace the struct rather than mutating it: Lookup hands the
+			// *ServedEntry to callers and reads Deadline AFTER dropping the
+			// read lock, so an in-place write here would be a data race.
+			s.byToken[prev] = &ServedEntry{
+				AgentID:  agentID,
+				AbsDir:   absDir,
+				Deadline: deadline,
+			}
+			s.mu.Unlock()
+			return prev, deadline, nil
+		}
 		delete(s.byToken, prev)
 		evicted = []string{prev}
 	}

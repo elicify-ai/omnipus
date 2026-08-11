@@ -9148,6 +9148,11 @@ turnLoop:
 			ts.AddTurnStats(int64(response.Usage.TotalTokens), callCost)
 			// Accumulate cache token split for transcript entry (Wave 1 token tracking).
 			ts.AddTurnCacheStats(response.Usage.CacheReadTokens, response.Usage.CacheWriteTokens)
+			// Accumulate the input/output split. The provider reports it and
+			// estimateLLMCallCost above already consumes it, but until this
+			// call existed it was dropped here — AddTurnStats carries only the
+			// collapsed total — so session stats could never report tokens_in.
+			ts.AddTurnIOStats(response.Usage.PromptTokens, response.Usage.CompletionTokens)
 		}
 
 		if len(response.ToolCalls) == 0 || gracefulTerminal {

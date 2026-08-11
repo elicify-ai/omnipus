@@ -283,7 +283,32 @@ var (
 	}
 
 	// absolutePathPattern matches absolute file paths in commands (Unix and Windows).
-	absolutePathPattern = regexp.MustCompile(`[A-Za-z]:\\[^\\\"']+|/[^\s\"']+`)
+	// absolutePathPattern extracts absolute-path candidates from raw command
+	// TEXT so guardCommand can reject references outside the workspace.
+	//
+	// Two properties are load-bearing, and both were added to fix false
+	// positives that made ordinary commands unrunnable:
+	//
+	//  1. The path BODY stops at shell metacharacters (; | & ( ) < >), not just
+	//     at whitespace and quotes. The previous class was `[^\s"']+`, so the
+	//     ubiquitous idiom `2>/dev/null;` extracted the candidate `/dev/null;`
+	//     — WITH the semicolon — which does not match the safePaths key
+	//     "/dev/null". The exemption silently missed and the whole command was
+	//     rejected, including every innocent fragment chained beside it.
+	//
+	//  2. The match must begin at a TOKEN BOUNDARY (start of string, or after
+	//     whitespace/quote/=/:/ a metacharacter), captured in group 1. Without
+	//     the boundary the pattern matched the first `/` found ANYWHERE,
+	//     including one in the middle of a relative path: `-o build/app.min.js`
+	//     yielded the fabricated candidate `/app.min.js`, which resolves to the
+	//     filesystem root and was rejected as outside the workspace — even
+	//     though the real argument was a relative path inside it.
+	//
+	// The boundary set and the excluded body set are deliberately the same
+	// metacharacters, so a path appearing right after an operator (`ls;/etc/x`)
+	// is still detected. Callers MUST read group 1, not the whole match, since
+	// the match also consumes the leading boundary character.
+	absolutePathPattern = regexp.MustCompile(`(?:^|[\s"'=:;|&()<>])([A-Za-z]:\\[^\\\s"';|&()<>]+|/[^\s"';|&()<>]+)`)
 
 	// safePaths are kernel pseudo-devices that are always safe to reference in
 	// commands, regardless of workspace restriction. They contain no user data
@@ -680,12 +705,20 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	// so file:// URIs are still validated against the workspace boundary.
 	webSchemes := []string{"http:", "https:", "ftp:", "ftps:", "sftp:", "ssh:", "git:"}
 
-	matchIndices := absolutePathPattern.FindAllStringIndex(cmd, -1)
+	// Group 1 is the path itself; the full match also consumes the leading
+	// boundary character, so indices 2:4 (not 0:2) are what we want. Reading
+	// the whole match here would re-introduce the leading space/operator into
+	// every candidate and break both filepath.Abs and the safePaths lookup.
+	matchIndices := absolutePathPattern.FindAllStringSubmatchIndex(cmd, -1)
 	for _, loc := range matchIndices {
-		raw := cmd[loc[0]:loc[1]]
+		start, end := loc[2], loc[3]
+		if start < 0 || end < 0 {
+			continue
+		}
+		raw := cmd[start:end]
 
-		if strings.HasPrefix(raw, "//") && loc[0] > 0 {
-			before := cmd[:loc[0]]
+		if strings.HasPrefix(raw, "//") && start > 0 {
+			before := cmd[:start]
 			isWebURL := false
 			for _, scheme := range webSchemes {
 				if strings.HasSuffix(before, scheme) {

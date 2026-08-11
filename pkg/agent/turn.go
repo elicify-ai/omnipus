@@ -260,8 +260,12 @@ type turnState struct {
 	// Cache token split accumulated across all LLM iterations in this turn.
 	// Populated from UsageInfo.CacheReadTokens / CacheWriteTokens so the
 	// transcript entry can carry the full breakdown for SessionStats.ByModel.
-	turnCacheRead  int
-	turnCacheWrite int
+	turnCacheRead int
+	// turnPromptTokens/turnCompletionTokens carry the provider's input/output
+	// split, which turnTokens (a pre-collapsed total) cannot express.
+	turnPromptTokens     int
+	turnCompletionTokens int
+	turnCacheWrite       int
 
 	// turnFailed is set to true when the turn ended via the engine's error/limit
 	// fallback rather than a real model response.  Three conditions trigger it:
@@ -1715,6 +1719,7 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 	// path (#411). GetTurnStats is safe to call here — the turn is finishing.
 	turnTokens, turnCost := ts.GetTurnStats()
 	turnCacheRead, turnCacheWrite := ts.GetTurnCacheStats()
+	turnPromptTokens, turnCompletionTokens := ts.GetTurnIOStats()
 	entry := session.TranscriptEntry{
 		ID:      uuid.New().String(),
 		Role:    "assistant",
@@ -1736,6 +1741,8 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 		Tokens:           int(turnTokens),
 		Cost:             turnCost,
 		Model:            model,
+		PromptTokens:     turnPromptTokens,
+		CompletionTokens: turnCompletionTokens,
 		CacheReadTokens:  turnCacheRead,
 		CacheWriteTokens: turnCacheWrite,
 		// ParentSpawnCallID: see appendIntermediateAssistantTranscript's
@@ -2106,6 +2113,32 @@ func (ts *turnState) AddTurnCacheStats(cacheRead, cacheWrite int) {
 	defer ts.mu.Unlock()
 	ts.turnCacheRead += cacheRead
 	ts.turnCacheWrite += cacheWrite
+}
+
+// AddTurnIOStats accumulates the prompt/completion split from a single LLM
+// iteration. It is a sibling of AddTurnCacheStats and must be called alongside
+// AddTurnStats for every LLM call.
+//
+// AddTurnStats only ever carried Usage.TotalTokens, so the input/output split
+// the provider already reports was discarded at that call site. Everything
+// downstream then had nothing to record, which is why every session's
+// tokens_in read 0 while tokens_out carried the entire volume.
+// B4: suppressed when the turn is marked abandoned.
+func (ts *turnState) AddTurnIOStats(promptTokens, completionTokens int) {
+	if ts.abandoned.Load() {
+		return
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.turnPromptTokens += promptTokens
+	ts.turnCompletionTokens += completionTokens
+}
+
+// GetTurnIOStats returns the accumulated prompt/completion split for this turn.
+func (ts *turnState) GetTurnIOStats() (promptTokens, completionTokens int) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.turnPromptTokens, ts.turnCompletionTokens
 }
 
 // GetTurnStats returns the accumulated turn stats.

@@ -9288,13 +9288,13 @@ export interface components {
         /** @description Per-model token breakdown within a session or usage summary. */
         ModelTokens: {
             /**
-             * @description Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
-             * @example 0
+             * @description Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
+             * @example 820
              */
             in?: number;
             /**
-             * @description Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
-             * @example 0
+             * @description Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
+             * @example 180
              */
             out?: number;
             /**
@@ -9308,7 +9308,7 @@ export interface components {
              */
             cache_write?: number;
             /**
-             * @description Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+             * @description Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
              * @example 1000
              */
             total: number;

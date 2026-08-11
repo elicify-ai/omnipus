@@ -275,6 +275,13 @@ func DefaultConfig() *Config {
 			LogLevel:  "warn",
 		},
 		Sandbox: OmnipusSandboxConfig{
+			// Read+execute-only toolchain directories. Seeded as install-time
+			// DATA (an operator can edit or empty it in config.json), not a
+			// fallback branch in the binary. loadConfig unmarshals the
+			// operator's JSON over DefaultConfig(), so this seed reaches
+			// EXISTING installs whose config.json predates the key, and is
+			// fully replaced — including to empty — when the key is present.
+			AllowedExecPaths: DefaultAllowedExecPaths(),
 			// Seeded, fully-enumerated GLOBAL CEILING for a fresh install: every
 			// static builtin tool defaults to "allow" except irreversible
 			// delete_*/remove_* actions, which ask for confirmation. This is a
