@@ -105,8 +105,10 @@ func TestPermissionDeniedPayload_SurvivesAdversarialInputs(t *testing.T) {
 // working shrink loop from a deleted one, because the input clamp alone
 // already gets those under budget.
 func TestPermissionDeniedPayload_ShrinkLoopHandlesEscapeHeavyOverflow(t *testing.T) {
+	const wantTool = "write_file"
+	const wantMessage = "Access to this path is denied by filesystem policy."
 	reason := strings.Repeat("<", maxRefusalReasonRunes)
-	encoded, err := PermissionDeniedPayload("write_file", "Access to this path is denied by filesystem policy.", reason, true)
+	encoded, err := PermissionDeniedPayload(wantTool, wantMessage, reason, true)
 	require.NoError(t, err)
 
 	var parsed map[string]any
@@ -118,6 +120,32 @@ func TestPermissionDeniedPayload_ShrinkLoopHandlesEscapeHeavyOverflow(t *testing
 	assert.LessOrEqualf(t, runeLen, downstreamCapRunes,
 		"encoded payload is %d runes — exceeds the %d-rune downstream cap; the shrink loop did not "+
 			"actually run past the input-level clamp", runeLen, downstreamCapRunes)
+
+	// F5 (round-2 review): PermissionDeniedPayload offers marshalWithinBudget
+	// its fields in PRIORITY order — reason, tool, message — and the loop
+	// fully exhausts each field before touching the next (see
+	// marshalWithinBudget's doc comment in result.go). Here only reason is
+	// oversized (900 runes, all '<', which encoding/json expands 6x to
+	// ~5400 runes alone — nearly 3x the whole 1900-rune payload budget), so
+	// exhausting reason alone must already bring the payload under budget.
+	// tool and message — both short, fixed inputs never nominated as the
+	// cause of the overflow — must therefore survive completely untouched.
+	//
+	// This is the exact property the SUPERSEDED lockstep-halving algorithm
+	// violated: it shrank every shrinkable field together on each round, so
+	// an oversized reason dragged the short, fixed-literal message down to a
+	// near-empty fragment even though message was never what made the
+	// payload oversized. Measured directly against this test's own inputs
+	// (see the revert-proof recorded in the PR/commit message and ADR-060 D1
+	// requirement 3's correction): under the fix message stays the full
+	// 51-rune literal; under lockstep halving it degrades to 12 runes.
+	assert.Equal(t, wantTool, parsed["tool"],
+		"tool must stay byte-for-byte untouched — only reason overflowed, and priority order must not "+
+			"touch tool while exhausting reason alone already gets the payload under budget")
+	assert.Equal(t, wantMessage, parsed["message"],
+		"message must stay byte-for-byte untouched (all 51 runes) — priority order means a short, fixed "+
+			"field must never be shrunk merely because a DIFFERENT field overflowed; the superseded "+
+			"lockstep-halving algorithm this guards against would truncate this to a fragment instead")
 }
 
 func TestPermissionDeniedPayload_PermanentFalseSurvivesRoundTrip(t *testing.T) {
@@ -176,6 +204,18 @@ func TestToolAssemblyDuplicatePayload_SurvivesAdversarialInputs(t *testing.T) {
 // alongside this test) — this covers both, and the table already contains
 // a >=4000-char entry and several control-byte entries, satisfying the
 // ">=4000 chars, plus control bytes" adversarial requirement.
+// maxRefusalToolRunesLiteral mirrors the 64-rune tool-field clamp
+// (maxRefusalToolRunes in result.go) as a LITERAL, not as the production
+// constant itself — for the same reason downstreamCapRunes above is pinned
+// as a literal rather than referencing maxRefusalPayloadRunes: asserting
+// against the constant it is supposed to police is self-referential (F6,
+// round-2 review). Deleting the 64-rune tool clamp in result.go left
+// pkg/tools green because the shrink loop alone happened to mask its
+// absence for every case the table already ran; pinning the bound as 64
+// here, independent of the production symbol, is what actually catches that
+// regression.
+const maxRefusalToolRunesLiteral = 64
+
 func TestPermissionDeniedPayload_SurvivesAdversarialToolName(t *testing.T) {
 	for _, tc := range adversarialInputs {
 		t.Run(tc.name, func(t *testing.T) {
@@ -188,7 +228,22 @@ func TestPermissionDeniedPayload_SurvivesAdversarialToolName(t *testing.T) {
 				"payload must remain valid JSON for adversarial tool name class %q; got: %s", tc.name, encoded)
 
 			assert.Equal(t, PermissionDeniedCode, parsed["error"])
-			assert.NotEmpty(t, parsed["tool"], "tool must stay non-empty (contract minLength:1)")
+			toolVal, ok := parsed["tool"].(string)
+			require.True(t, ok, "tool must decode as a JSON string")
+			assert.NotEmpty(t, toolVal, "tool must stay non-empty (contract minLength:1)")
+
+			// F6: the input-level clamp (clampRefusalField(tool, maxRefusalToolRunes)
+			// at the PermissionDeniedPayload call site) must actually bound
+			// tool to 64 runes. Every other assertion in this test (valid
+			// JSON, correct discriminator, non-empty tool, <=2000-rune whole
+			// payload) is satisfied by the shrink loop alone even with the
+			// clamp deleted — this is the one assertion that specifically
+			// dies if the clamp is removed.
+			toolRuneLen := len([]rune(toolVal))
+			assert.LessOrEqualf(t, toolRuneLen, maxRefusalToolRunesLiteral,
+				"decoded tool is %d runes for adversarial tool name %q — exceeds the %d-rune tool clamp; "+
+					"the input-level clampRefusalField(tool, maxRefusalToolRunes) call must bound this "+
+					"independent of the shrink loop", toolRuneLen, tc.name, maxRefusalToolRunesLiteral)
 
 			runeLen := len([]rune(string(encoded)))
 			assert.LessOrEqual(t, runeLen, downstreamCapRunes,
