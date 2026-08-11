@@ -7,7 +7,12 @@ import { humanizeToolName } from '@/lib/humanizeToolName'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall, shouldRenderToolCallInPanel } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, statusDot, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
-import { isDelegationFailure, policyAxisLabel, isFileExistsRefusal } from './tools/GenericToolCall'
+import {
+  isDelegationFailure,
+  policyAxisLabel,
+  isFileExistsRefusal,
+  isPermissionDenied,
+} from './tools/GenericToolCall'
 
 interface ToolCallBadgeProps {
   toolCall: ToolCall & { call_id: string }
@@ -77,6 +82,13 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
   // branch here the backend delivers the structured object and this component
   // drops it: red "Failed" plus the raw JSON in the expanded body.
   const fileExistsRefusal = isFileExistsRefusal(toolCall.result) ? toolCall.result : null
+  // issue #618: structured permission-denied sentinel, shared by pkg/agent's
+  // tool-policy denial path and pkg/tools' filesystem-scope denial path.
+  // Detected here for the same reason delegationFailure/fileExistsRefusal
+  // are — SubagentBlock's nested steps render a DELEGATED worker's tool
+  // calls, which is exactly where a filesystem-scope or tool-policy denial
+  // reaches the model.
+  const permissionDenied = isPermissionDenied(toolCall.result) ? toolCall.result : null
   const isVisible =
     surface === 'panel'
       ? shouldRenderToolCallInPanel(toolCall.tool, verboseChatEnabled)
@@ -84,7 +96,11 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
           toolCall.tool,
           toolCall.params,
           verboseChatEnabled,
-          toolCall.status === 'error' || marshalErr || !!delegationFailure || !!fileExistsRefusal,
+          toolCall.status === 'error' ||
+            marshalErr ||
+            !!delegationFailure ||
+            !!fileExistsRefusal ||
+            !!permissionDenied,
         )
   if (!isVisible) {
     return null
@@ -104,7 +120,12 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
           indicator: statusDot('bg-[var(--color-warning)]'),
           label: 'File already exists',
         }
-      : getToolBadgeStatusConfig(toolCall.status, { durationMs: toolCall.duration_ms })
+      : permissionDenied
+        ? {
+            indicator: statusDot('bg-[var(--color-warning)]'),
+            label: 'Permission denied',
+          }
+        : getToolBadgeStatusConfig(toolCall.status, { durationMs: toolCall.duration_ms })
   const isRunning = toolCall.status === 'running'
 
   return (

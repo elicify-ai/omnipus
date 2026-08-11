@@ -3,6 +3,7 @@ import {
   ArrowsClockwise,
   XCircle,
   Prohibit,
+  Lock,
   CaretDown,
   CaretUp,
   Warning,
@@ -14,7 +15,12 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import type { TruncatedResult, MarshalErrorResult } from '@/lib/ws'
-import type { ToolResultRef, DelegationFailure, FileExistsRefusal } from '@/lib/api/generated/asyncapi-types'
+import type {
+  ToolResultRef,
+  DelegationFailure,
+  FileExistsRefusal,
+  PermissionDenied,
+} from '@/lib/api/generated/asyncapi-types'
 import { isClientTruncatedResult, isToolResultRef } from '@/store/chat'
 import type { ClientTruncatedResult } from '@/store/chat'
 import { useQuery } from '@tanstack/react-query'
@@ -108,6 +114,24 @@ export function isFileExistsRefusal(value: unknown): value is FileExistsRefusal 
     typeof value === 'object' &&
     value !== null &&
     (value as Record<string, unknown>)['error'] === 'file_exists' &&
+    typeof (value as Record<string, unknown>)['reason'] === 'string'
+  )
+}
+
+/**
+ * Detects the structured permission-denied sentinel (issue #618, the generated
+ * PermissionDenied contract, error: "permission_denied"). Shared by TWO backend
+ * producers — pkg/agent's tool-policy denial path and pkg/tools' filesystem-scope
+ * denial path — so this one detector covers both regardless of which enforcement
+ * layer produced the denial. Exported for ToolCallBadge.tsx, mirroring
+ * isDelegationFailure/isFileExistsRefusal above.
+ */
+export function isPermissionDenied(value: unknown): value is PermissionDenied {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<string, unknown>)['error'] === 'permission_denied' &&
+    typeof (value as Record<string, unknown>)['message'] === 'string' &&
     typeof (value as Record<string, unknown>)['reason'] === 'string'
   )
 }
@@ -278,6 +302,53 @@ function DelegationFailureDisplay({ failure }: { failure: DelegationFailure }) {
   )
 }
 
+/**
+ * Renders the structured permission-denied sentinel (issue #618). Mirrors
+ * DelegationFailureDisplay's layout: a warning-tinted left accent, the
+ * model-facing message, and the tool/reason/permanent metadata — so a
+ * permission denial reads as a distinct, human-readable block instead of a
+ * raw JSON blob, matching the treatment the other two structured-failure
+ * members already get.
+ */
+function PermissionDeniedDisplay({ failure }: { failure: PermissionDenied }) {
+  return (
+    <div
+      data-testid="result-permission-denied"
+      className="border-l-2 pl-2.5 py-2 mb-1 font-sans text-[10px]"
+      style={{
+        borderColor: 'color-mix(in srgb, var(--color-warning) 60%, transparent)',
+      }}
+    >
+      <div className="flex items-center gap-2 mb-1.5">
+        <Lock
+          size={13}
+          weight="fill"
+          className="shrink-0"
+          style={{ color: 'var(--color-warning)' }}
+        />
+        <span className="font-medium" style={{ color: 'var(--color-warning)' }}>
+          Permission denied
+        </span>
+      </div>
+
+      <p className="text-[var(--color-secondary)] leading-relaxed mb-1.5 break-words">
+        {failure.message}
+      </p>
+
+      <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[var(--color-muted)]">
+        <dt>Tool</dt>
+        <dd className="text-[var(--color-secondary)] break-all">{failure.tool}</dd>
+        <dt>Reason</dt>
+        <dd className="text-[var(--color-secondary)] break-words">{failure.reason}</dd>
+        <dt>Retry</dt>
+        <dd className="text-[var(--color-secondary)]">
+          {failure.permanent ? 'Not this turn' : 'May succeed later this turn'}
+        </dd>
+      </dl>
+    </div>
+  )
+}
+
 export function GenericToolCall({
   toolName,
   args,
@@ -306,6 +377,12 @@ export function GenericToolCall({
   // comment for the per-tool-class rule.
   const delegationFailure = isDelegationFailure(result) ? result : null
   const fileExistsRefusal = isFileExistsRefusal(result) ? result : null
+  // issue #618: the structured permission-denied sentinel, shared by
+  // pkg/agent's tool-policy denial path and pkg/tools' filesystem-scope
+  // denial path. Computed alongside the other two structured-failure
+  // sentinels for the same reasons (visibility gate + plainResult exclusion
+  // below both need it).
+  const permissionDenied = isPermissionDenied(result) ? result : null
 
   // Marshal-error sentinel: the backend emits `{_marshal_error: "..."}` when
   // JSON-marshaling a tool result fails during replay-frame construction —
@@ -336,7 +413,7 @@ export function GenericToolCall({
       toolName,
       args as Record<string, unknown> | undefined,
       verboseChatEnabled,
-      isError || !!delegationFailure || !!fileExistsRefusal || !!marshalErr,
+      isError || !!delegationFailure || !!fileExistsRefusal || !!permissionDenied || !!marshalErr,
     )
   ) {
     return null
@@ -381,6 +458,13 @@ export function GenericToolCall({
       indicator: statusDot('bg-[var(--color-warning)]'),
       label: 'File already exists',
     }
+  } else if (permissionDenied) {
+    // issue #618: same treatment as delegationFailure/fileExistsRefusal —
+    // a distinct collapsed-header label instead of a generic "Failed".
+    statusConfig = {
+      indicator: statusDot('bg-[var(--color-warning)]'),
+      label: 'Permission denied',
+    }
   } else if (isError) {
     statusConfig = getToolBadgeStatusConfig('error', { size: 12 })
   } else {
@@ -395,7 +479,13 @@ export function GenericToolCall({
   const clientTruncated = isClientTruncatedResult(result) ? result : null
   const toolRef = isToolResultRef(result) ? result : null
   const plainResult =
-    !truncated && !marshalErr && !clientTruncated && !toolRef && !delegationFailure && !fileExistsRefusal
+    !truncated &&
+    !marshalErr &&
+    !clientTruncated &&
+    !toolRef &&
+    !delegationFailure &&
+    !fileExistsRefusal &&
+    !permissionDenied
       ? result
       : undefined
 
@@ -545,6 +635,7 @@ export function GenericToolCall({
                   {fileExistsRefusal.reason}
                 </div>
               )}
+              {permissionDenied && <PermissionDeniedDisplay failure={permissionDenied} />}
 
               {/* Plain result: normal rendering */}
               {plainResult !== undefined && (
