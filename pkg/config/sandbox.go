@@ -287,10 +287,16 @@ type OmnipusSandboxConfig struct {
 	// owned by the console user.
 	//
 	// A leading ~ is expanded to the current user's home directory. Entries
-	// that do not exist are skipped harmlessly. Overlapping an entry with
-	// AllowedPaths is rejected at validation, because the union would be a
-	// writable AND executable directory.
-	AllowedExecPaths []string `json:"allowed_exec_paths,omitempty"`
+	// that do not exist produce a rule that simply matches nothing.
+	//
+	// An entry overlapping a WRITABLE path — allowed_paths, or the built-in
+	// $OMNIPUS_HOME / /tmp / $TMPDIR grants — is DROPPED with a warning when
+	// the policy is built, not rejected at validation: the write grant wins and
+	// the execute grant is discarded, so the union can never become a writable
+	// AND executable directory. The tag deliberately omits `omitempty`: this
+	// field is seeded non-empty, and omitting an operator's explicit empty list
+	// on save would silently re-seed the defaults on the next boot.
+	AllowedExecPaths []string `json:"allowed_exec_paths"`
 
 	// AuditLog enables the structured security audit log per SEC-17.
 	// Written to ~/.omnipus/system/audit.jsonl.

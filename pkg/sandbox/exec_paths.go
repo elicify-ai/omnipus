@@ -15,11 +15,12 @@ import (
 //
 // The access bits are hard-coded here and the function takes no access
 // argument. That is deliberate: it makes "exec paths are never writable" a
-// property of the type system rather than of a convention someone has to
-// remember while editing a shared loop. If a caller ever needs a writable
+// property of this function's signature rather than of a convention someone
+// has to remember while editing a shared loop. If a caller ever needs a writable
 // toolchain directory, they must reach for allowedPaths and be seen doing it.
 //
-// Four classes of entry are dropped, each with a warning rather than an error,
+// Empty strings are skipped silently. Four further classes are dropped, each
+// with a warning rather than an error,
 // because a bad entry in an install-time seed must never prevent the gateway
 // from booting:
 //
@@ -31,14 +32,15 @@ import (
 //     rest of the policy is carefully withholding.
 //  3. System-restricted paths (/etc, /proc, /sys, /dev, /boot, /root) — the
 //     same set AllowedPaths refuses to make writable.
-//  4. Entries that overlap allowedPaths. allowedPaths grants read+WRITE, so the
-//     union of the two lists would be a directory that is writable AND
+//  4. Entries that overlap a WRITABLE path. That includes the operator's
+//     allowed_paths and the unconditional $OMNIPUS_HOME / /tmp / $TMPDIR
+//     grants, so the union would be a directory that is writable AND
 //     executable — precisely the "drop a binary and run it" shape this design
 //     exists to avoid. The exec grant loses; the operator keeps the write
 //     access they asked for, minus the ability to execute from it.
 func buildExecPathRules(
 	allowedExecPaths []string,
-	allowedPaths []string,
+	writableRoots []string,
 	warnFn func(msg string, path string),
 ) []PathRule {
 	if len(allowedExecPaths) == 0 {
@@ -51,15 +53,10 @@ func buildExecPathRules(
 		}
 	}
 
-	writable := make([]string, 0, len(allowedPaths))
-	for _, raw := range allowedPaths {
-		if raw == "" {
-			continue
-		}
-		if clean, ok := expandExecPath(raw); ok {
-			writable = append(writable, clean)
-		}
-	}
+	// writableRoots arrive as already-expanded, cleaned rule paths, so there is
+	// no second expansion step here that could silently drop an entry and
+	// weaken the overlap check.
+	writable := writableRoots
 
 	rules := make([]PathRule, 0, len(allowedExecPaths))
 	for _, raw := range allowedExecPaths {
@@ -67,7 +64,7 @@ func buildExecPathRules(
 			continue
 		}
 
-		clean, ok := expandExecPath(raw)
+		clean, ok := expandUserPath(raw)
 		if !ok {
 			warn("Sandbox exec path is not absolute and could not be expanded; skipping.", raw)
 			continue
@@ -93,10 +90,14 @@ func buildExecPathRules(
 	return rules
 }
 
-// expandExecPath expands a leading ~ and cleans the result. It reports false
+// expandUserPath expands a leading ~ and cleans the result. It reports false
 // when the value cannot be turned into an absolute path, so the caller can skip
-// it rather than emit a rule the profile renderer will reject.
-func expandExecPath(raw string) (string, bool) {
+// it rather than emit a rule the profile renderer will reject (which on macOS
+// fails the render and aborts boot).
+//
+// Used for BOTH allowed_paths and allowed_exec_paths so the two config lists
+// cannot disagree about what "~/work" means.
+func expandUserPath(raw string) (string, bool) {
 	p := strings.TrimSpace(raw)
 	if p == "" {
 		return "", false

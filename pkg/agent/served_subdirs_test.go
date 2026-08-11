@@ -5,6 +5,7 @@
 package agent
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -326,5 +327,75 @@ func TestServedSubdirs_ReRegisterAfterExpiry_MintsNewToken(t *testing.T) {
 	}
 	if s.Lookup(second) == nil {
 		t.Error("the fresh token must resolve")
+	}
+}
+
+// TestServedSubdirs_ConcurrentRenewAndLookup is what makes the renewal path's
+// safety claim enforceable rather than aspirational.
+//
+// Register renews by REPLACING the *ServedEntry rather than mutating it,
+// because Lookup hands the pointer to callers and reads Deadline after
+// dropping the read lock. A "simplification" back to `prevEntry.Deadline =
+// deadline` passes every other test in this file — including under -race —
+// because nothing else ever exercises the two concurrently. This does.
+//
+// Run with -race for it to mean anything.
+func TestServedSubdirs_ConcurrentRenewAndLookup(t *testing.T) {
+	s := NewServedSubdirs()
+	defer s.Stop()
+
+	dir := t.TempDir()
+	token, _, err := s.Register("jim", dir, time.Hour)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// Renewers: repeatedly re-serve the same directory.
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					if _, _, regErr := s.Register("jim", dir, time.Hour); regErr != nil {
+						t.Errorf("concurrent Register: %v", regErr)
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	// Readers: read the field the renewal path writes.
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					if entry := s.Lookup(token); entry != nil {
+						_ = entry.Deadline
+						_ = entry.AbsDir
+					}
+				}
+			}
+		}()
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	if s.Lookup(token) == nil {
+		t.Error("the token must survive concurrent renewal")
 	}
 }

@@ -87,6 +87,26 @@ type SeatbeltBackend struct {
 	renderedProfile string
 }
 
+// ConfinesChildren reports that Seatbelt enforces by wrapping each spawned
+// child. It mirrors Available() so a host where sandbox-exec is missing or the
+// operator kill-switch is set does not claim kernel confinement.
+func (s *SeatbeltBackend) ConfinesChildren() bool { return s.Available() }
+
+// PolicyApplied reports whether Apply has installed a profile in this process.
+//
+// Without this, status reporting inferred enforcement from backend SELECTION,
+// so a gateway that selected Seatbelt but never applied a policy — the exact
+// bug this branch already had once — reported itself as confined.
+func (s *SeatbeltBackend) PolicyApplied() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.renderedProfile != ""
+}
+
+// Compile-time assertion that SeatbeltBackend is a kernel child confiner, so
+// the gateway's capability check cannot silently stop matching it.
+var _ KernelChildConfiner = (*SeatbeltBackend)(nil)
+
 // NewSeatbeltBackend creates a SeatbeltBackend. Construction does NOT imply
 // activation — callers must still check Available() before relying on it.
 func NewSeatbeltBackend() *SeatbeltBackend {

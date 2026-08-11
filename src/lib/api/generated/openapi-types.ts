@@ -3198,7 +3198,7 @@ export interface components {
              */
             tokens_out: number;
             /**
-             * @description Sum of tokens_in and tokens_out.
+             * @description Authoritative total tokens for this session, as reported by the provider. Once the provider's input/output split has been recorded (tokens_in and/or tokens_out non-zero from a split-aware entry), tokens_total = tokens_in + tokens_out + tokens_cache_read + tokens_cache_write — NOT just tokens_in + tokens_out, since cache tokens are an additional component, not folded into either. Legacy entries written before that split existed instead book their entire turn into tokens_out with tokens_in left at 0, so a session mixing legacy and split-aware entries can have tokens_in + tokens_out + cache fall short of (or, for a legacy entry whose cache was tracked separately, exceed) tokens_total for the legacy portion. Always read tokens_total directly rather than deriving it from the other fields.
              * @example 1650
              */
             tokens_total: number;
@@ -9298,17 +9298,17 @@ export interface components {
              */
             out?: number;
             /**
-             * @description Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+             * @description Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
              * @example 150
              */
             cache_read?: number;
             /**
-             * @description Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+             * @description Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
              * @example 25
              */
             cache_write?: number;
             /**
-             * @description Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
+             * @description Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
              * @example 1000
              */
             total: number;

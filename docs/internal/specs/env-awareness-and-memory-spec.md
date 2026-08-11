@@ -397,7 +397,7 @@ Note the deliberate asymmetry with Linux: there is no `seatbelt-abi-<N>`
 equivalent because Seatbelt exposes no versioned ABI to probe. See
 [ADR-052 Phase 3 / AC-6](../architecture/ADR-052-phase3-AC6-macos-seatbelt.md).
 
-Fully derived from existing `Status` fields in `pkg/sandbox/sandbox.go:537` — no new backend code.
+Fully derived from existing `Status` fields in `pkg/sandbox/sandbox.go::Status` — no new backend code.
 
 ### ContextBuilder env preamble rendering
 

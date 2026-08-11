@@ -85,15 +85,24 @@ type UsageBucket struct {
 	// Out is output (completion) tokens.
 	Out int
 	// CacheRead is tokens served from the provider KV cache (not re-computed).
-	// Cache tokens are a SUBSET of Out, not additive — do not add them to Total.
+	// On entries written via the provider input/output split (pkg/session/
+	// entry_stats.go's accumulateEntryStats), this is an ADDITIVE component
+	// of Total alongside In and Out — Total == In + Out + CacheRead +
+	// CacheWrite. On legacy pre-split entries Out instead carries the WHOLE
+	// turn total (cache included), so summing In+Out+CacheRead+CacheWrite
+	// for those can exceed Total. See Total's comment below — always read
+	// Total directly rather than deriving it from these components.
 	CacheRead int
 	// CacheWrite is tokens written into a new cache entry (Anthropic only).
-	// Also a subset of Out.
+	// See CacheRead's comment for its relationship to Total.
 	CacheWrite int
 	// Total is the authoritative recorded token total for this bucket
 	// (SessionStats.TokensTotal for agent/session dimensions, ModelTokens.Total
-	// for the model dimension). For agent/session dimensions Total == In + Out
-	// (cache is already counted inside Out). It is NEVER In+Out+cache.
+	// for the model dimension), accumulated independently of In/Out/CacheRead/
+	// CacheWrite and NEVER derived from them. Whether Total reconciles exactly
+	// with In+Out+CacheRead+CacheWrite depends on which write-path convention
+	// produced the underlying entry (see CacheRead's comment) — Total itself
+	// is correct either way; the components are the ones that vary.
 	Total int
 }
 
@@ -222,11 +231,15 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 	//
 	// total is the AUTHORITATIVE recorded token total (SessionStats.TokensTotal
 	// or ModelTokens.Total), accumulated independently of in/out/cache. We never
-	// recompute Total from in+out+cache: in the persisted convention cache tokens
-	// are a SUBSET of out (each assistant turn's full token count — uncached input
-	// + cache_read + cache_write + completion — is added to TokensOut, while the
-	// cache split is tracked additionally). Summing in+out+cache would therefore
-	// double-count cache. See pkg/session/daypartition.go AppendMessage.
+	// recompute Total from in+out+cache. Entries written via the provider
+	// input/output split (pkg/session/entry_stats.go's accumulateEntryStats)
+	// DO reconcile additively — total == in + out + cache_read + cache_write —
+	// but legacy pre-split entries do not: their whole turn count (uncached
+	// input + cache_read + cache_write + completion) was added to out, and the
+	// cache split was ALSO tracked additionally on top of that, so naively
+	// summing in+out+cache for a legacy entry over-counts relative to total.
+	// Reading total directly, as this aggregator does, is correct for both
+	// conventions at once. See pkg/session/entry_stats.go's accumulateEntryStats.
 	type accumEntry struct {
 		label      string
 		in         int
@@ -309,10 +322,15 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 			addToKey(agentID, label, s.TokensIn, s.TokensOut, s.TokensCacheRead, s.TokensCacheWrite, s.TokensTotal)
 
 		case UsageDimensionModel:
-			// ByModel records only CacheRead/CacheWrite/Total per model on the
-			// assistant-turn write path (In/Out stay 0 — see daypartition.go
-			// AppendMessage). We therefore key the bucket Total off mt.Total (the
-			// authoritative per-model token count), not a derived sum. Any portion
+			// ByModel now records In/Out per model too (the provider
+			// input/output split, pkg/session/entry_stats.go's
+			// accumulateEntryStats), alongside CacheRead/CacheWrite/Total —
+			// In/Out are 0 only for entries written before that split existed
+			// or for a provider that never reports one (see ModelTokens.In's
+			// doc comment). We still key the bucket Total off mt.Total (the
+			// authoritative per-model token count), never a derived sum, since
+			// that stays correct regardless of which write-path convention
+			// produced a given entry. Any portion
 			// of the session total NOT attributed to a model (input-side tokens,
 			// or assistant turns with an empty Model) is attributed to "(unknown)"
 			// so the model dimension's bucket-Total sum always reconciles exactly

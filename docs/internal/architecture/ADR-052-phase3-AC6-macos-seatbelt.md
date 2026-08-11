@@ -66,7 +66,71 @@ Landlock restricts the **current thread** and children inherit the domain, so th
 
 ## 4. Why the profile is passed inline
 
-`sandbox-exec -p <profile>` instead of `-f <file>`. A profile file is read by `sandbox-exec` *after* we write it; anyone able to replace that path in the window between write and exec chooses the sandbox policy — a total bypass. Inline passing closes the window and leaves no policy artifact on disk. The tradeoff is that the profile is visible in `ps`; it contains workspace paths and ports (no secrets), which already appear in the child's own argv. Profiles measure ~1 KB against a 1 MB `ARG_MAX`.
+`sandbox-exec -p <profile>` instead of `-f <file>`. A profile file is read by `sandbox-exec` *after* we write it; anyone able to replace that path in the window between write and exec chooses the sandbox policy — a total bypass. Inline passing closes the window and leaves no policy artifact on disk. The tradeoff is that the profile is visible in `ps`; it contains workspace paths and ports (no secrets), which already appear in the child's own argv. A minimal profile is ~1 KB — but a realistic gateway policy carrying the
+1000-port dev-server range renders to **~95 KB**, one line per port. Both are
+well under the 1 MB `ARG_MAX`, and `TestSeatbelt_ProductionScaleProfile_Spawns`
+proves a child actually starts at production scale. The ~1 KB figure alone
+makes the limit look irrelevant; it is the 95 KB number that matters if the
+port range ever grows by an order of magnitude.
+
+## 4a. Operator-configurable exec paths (`sandbox.allowed_exec_paths`)
+
+The kernel policy grants execute only on the system binary directories, and
+`allowed_paths` grants read+**write** and never execute — so before this there
+was no config key at all that could let an agent run a toolchain. On macOS that
+meant Homebrew and every version manager were unreachable, which is not a
+security posture so much as a broken product: the predictable operator response
+is `OMNIPUS_SEATBELT_DISABLE=1`, losing the whole boundary.
+
+`sandbox.allowed_exec_paths` is a separate read+execute-only list, seeded per
+platform as editable install-time data. Properties, each enforced rather than
+documented:
+
+- **Never writable.** `buildExecPathRules` hard-codes the access bits and takes
+  no access argument. Proven at the kernel level by
+  `TestSeatbelt_RealChild_ExecPathIsNotWritable`, which uses a directory the
+  test user owns — so it demonstrates Seatbelt overriding Unix ownership, which
+  is why granting exec on a user-owned Homebrew prefix is safe.
+- **Never writable AND executable.** An entry overlapping any writable grant —
+  the operator's `allowed_paths` or the unconditional `$OMNIPUS_HOME` / `/tmp` /
+  `$TMPDIR` grants — is dropped with a warning; the write grant wins.
+  `TestSeatbeltAdversarial_CannotDropBinaryIntoExecPath` executes all five
+  planting vectors (cp / mv / ln -s / ln / redirect) and each is denied.
+- **Narrow.** Homebrew is enumerated at `bin`/`lib`/`Cellar`/… rather than by
+  prefix, so `/usr/local/etc` — WireGuard keys, rustup config — stays closed.
+- **Linux is untouched.** The seed returns nil there. The same gap exists on
+  Linux and is real, but widening the Landlock posture of every existing install
+  belongs in its own change with its own review and upgrade note, not as a
+  ride-along on a macOS change. Tracked as follow-up.
+
+**Residual cost, stated plainly:** the granted toolchain trees become readable.
+That is a real, bounded confidentiality loss, mitigated by narrow enumeration
+and by never granting `$HOME` or a bare prefix. It is not zero.
+
+## 4b. Permissive mode is not available on macOS
+
+Seatbelt has no audit-only equivalent: `sandbox-exec` either applies a profile
+or it does not. Installing one under `mode=permissive` would give an operator
+running the documented "watch what breaks before enabling" step full hard
+enforcement, with no banner and no `audit_only` flag.
+
+So `permissive` on darwin does **not** install a kernel profile. It degrades to
+application-level enforcement, prints the permissive banner, sets
+`ApplyState.AuditOnly`, and says why in the operator-facing notes. Regression
+test: `TestApplySandbox_Darwin_PermissiveDoesNotInstallProfile`, with
+`TestApplySandbox_Darwin_EnforceInstallsProfile` as the positive control.
+
+## 4c. Network semantics differ from Landlock for the same policy
+
+`renderSeatbeltProfile` emits only TCP port allows under `(deny default)`. That
+denies **UDP entirely** and **all Unix-domain sockets** except the mDNSResponder
+literal in the preamble. Landlock ABI v4 restricts TCP bind/connect only, so UDP
+and Unix sockets pass through untouched there.
+
+Consequence: an identical `SandboxPolicy` is materially stricter on macOS. A
+child that talks to a local socket (`docker.sock`, a Postgres socket) or uses
+QUIC/NTP works on Linux and fails on macOS. `SandboxPolicy.ConnectPortRules` is
+therefore platform-dependent in a way the type does not express.
 
 ## 5. Architecture caveat (open)
 

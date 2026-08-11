@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -364,7 +365,8 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	// rules unconditionally and exposes no ABI version at all (abiVersion
 	// stays 0 on darwin), so gating purely on abiVersion would silently strip
 	// every dev-server port rule from the macOS profile.
-	enforcePortRules := abiVersion >= 4 || backendName == seatbeltBackendName
+	kernelConfiner, confinesChildren := backend.(sandbox.KernelChildConfiner)
+	enforcePortRules := abiVersion >= 4 || (confinesChildren && kernelConfiner.ConfinesChildren())
 
 	if enforcePortRules && opts.Cfg != nil {
 		pr := opts.Cfg.Sandbox.DevServerPortRange
@@ -427,12 +429,45 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	// LinuxBackend; see the NOTE at the linuxApplier type assertion above for
 	// why this is not an early return any more.
 	if !isLinux {
-		applier, canApply := backend.(policyApplier)
-		if canApply && backendName == seatbeltBackendName {
+		if confinesChildren && kernelConfiner.ConfinesChildren() {
+			kernelBackend := kernelConfiner
+			// PERMISSIVE IS NOT AVAILABLE HERE, AND MUST NOT SILENTLY ENFORCE.
+			//
+			// Landlock supports an audit-only mode, so on Linux `permissive`
+			// computes and logs the policy without restricting anything.
+			// Seatbelt has no equivalent: sandbox-exec either applies a
+			// profile or it does not. Applying one under `permissive` would
+			// give an operator running the documented "watch what would break
+			// before turning it on" step full hard enforcement instead —
+			// with no banner, no audit_only flag, and no way to tell.
+			//
+			// So permissive degrades to application-level enforcement and says
+			// so, matching what the mode promises rather than what the backend
+			// finds convenient.
+			if mode == sandbox.ModePermissive {
+				slog.Warn("sandbox.permissive.unsupported_by_backend",
+					"backend", backendName,
+					"requested_mode", string(mode),
+					"effect", "kernel profile NOT installed; falling back to application-level enforcement",
+					"reason", "seatbelt has no audit-only mode; applying the profile would enforce, which is not what permissive means")
+				fmt.Fprint(opts.Stderr, permissiveNagBanner)
+				result.Mode = mode
+				result.NagReason = "permissive"
+				result.ApplyState = sandbox.ApplyState{
+					Mode:      mode,
+					AuditOnly: true,
+					ExtraNotes: []string{
+						"macOS Seatbelt has no audit-only mode; permissive does NOT install a kernel profile. " +
+							"Use mode=enforce for kernel confinement, or mode=off to disable it explicitly.",
+					},
+				}
+				return result, nil
+			}
+
 			// macOS kernel sandbox (ADR-052 Phase-3 AC-6). Apply installs the
 			// rendered profile as the process-wide active policy; every
 			// hardened-exec child is then wrapped by applyPlatformHardening.
-			if err := applier.Apply(policy); err != nil {
+			if err := kernelBackend.Apply(policy); err != nil {
 				slog.Error("sandbox.apply_failed",
 					"error", err,
 					"mode", string(mode),
@@ -463,16 +498,26 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 		// enforce/permissive but the platform cannot provide it. Hard
 		// Constraint #4 (CLAUDE.md) requires we continue serving with
 		// application-level fallback rather than crashing.
+		// Report a reason the operator can act on. "kernel_too_old_or_non_linux"
+		// and "kernel does not support Landlock" are actively misleading on
+		// macOS, where the usual causes are a missing sandbox-exec or the
+		// operator's own OMNIPUS_SEATBELT_DISABLE kill-switch — neither of
+		// which has anything to do with kernel age or Landlock.
+		degradedReason := "kernel_too_old_or_non_linux"
+		degradedNote := "kernel does not support Landlock; falling back to application-level enforcement"
+		if runtime.GOOS == "darwin" {
+			degradedReason = "seatbelt_unavailable"
+			degradedNote = "macOS kernel sandbox (Seatbelt) unavailable — sandbox-exec missing or disabled via " +
+				"OMNIPUS_SEATBELT_DISABLE; falling back to application-level enforcement"
+		}
 		slog.Warn("sandbox.degraded",
-			"reason", "kernel_too_old_or_non_linux",
+			"reason", degradedReason,
 			"selected_backend", backendName,
 			"requested_mode", string(mode))
 		result.Mode = mode
 		result.ApplyState = sandbox.ApplyState{
-			Mode: mode,
-			ExtraNotes: []string{
-				"kernel does not support Landlock; falling back to application-level enforcement",
-			},
+			Mode:       mode,
+			ExtraNotes: []string{degradedNote},
 		}
 		return result, nil
 	}
@@ -551,19 +596,6 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	}
 
 	return result, nil
-}
-
-// seatbeltBackendName is the name SeatbeltBackend.Name() reports. applySandbox
-// matches on it explicitly rather than on "any backend that implements Apply",
-// because FallbackBackend implements Apply too and must keep its existing
-// degraded-path behaviour untouched.
-const seatbeltBackendName = "seatbelt"
-
-// policyApplier is the narrow interface for a backend that installs a policy
-// without the Landlock-specific ApplyWithMode/seccomp sequence. Used for the
-// macOS Seatbelt backend (ADR-052 Phase-3 AC-6).
-type policyApplier interface {
-	Apply(policy sandbox.SandboxPolicy) error
 }
 
 // linuxApplier is the internal narrow interface that applySandbox uses to

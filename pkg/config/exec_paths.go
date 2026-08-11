@@ -74,23 +74,24 @@ func DefaultAllowedExecPaths() []string {
 			"/usr/local/Frameworks",
 			"/usr/local/include",
 		)
-	case "linux":
-		// The same gap exists on Linux and is in fact wider there: Landlock
-		// handles all filesystem rights, so a path absent from the policy is
-		// not merely non-executable but unreadable. Distro-packaged tools live
-		// in /usr/bin (already granted), which is why this stayed invisible —
-		// it bites the moment anyone uses a version manager or the standard
-		// /usr/local/go install.
-		return append(common,
-			"/usr/local/bin",
-			"/usr/local/sbin",
-			"/usr/local/lib",
-			"/usr/local/go",
-			"/usr/local/share",
-			"/home/linuxbrew/.linuxbrew",
-			"/snap/bin",
-		)
 	default:
-		return common
+		// DELIBERATELY EMPTY ON LINUX AND EVERYWHERE ELSE.
+		//
+		// The same gap does exist on Linux — Landlock handles all filesystem
+		// rights, so /usr/local/go and $HOME toolchains are not merely
+		// non-executable there but unreadable. It is a real bug and worth
+		// fixing.
+		//
+		// It is not fixed HERE. Seeding it would silently widen the Landlock
+		// posture of every existing Linux install on upgrade, delivered inside
+		// a change whose subject is the macOS sandbox, on a release branch,
+		// with no Linux validation and no ADR. A security-posture change to the
+		// primary platform deserves its own change, its own review and its own
+		// upgrade note — not a ride-along. Tracked as follow-up work.
+		//
+		// Consequence: on Linux this returns nil, buildExecPathRules appends
+		// nothing, and the rendered Landlock ruleset is byte-identical to
+		// before this feature existed.
+		return nil
 	}
 }

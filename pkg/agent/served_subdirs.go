@@ -32,7 +32,16 @@ type ServedEntry struct {
 	AbsDir string
 	// Deadline is when this registration expires.
 	Deadline time.Time
+	// FirstIssued is when this TOKEN was minted. Renewals carry it forward
+	// unchanged so maxTokenLifetime bounds the token's total life, not the
+	// time since the last renewal — otherwise a re-serve loop would keep one
+	// token alive forever.
+	FirstIssued time.Time
 }
+
+// maxTokenLifetime caps how long a single preview token may be renewed for.
+// Beyond it, a re-serve mints a fresh token and the old URL stops resolving.
+const maxTokenLifetime = 24 * time.Hour
 
 // ServedSubdirs is the process-wide registry of active web_serve static-mode
 // registrations. The zero value is not usable — call NewServedSubdirs.
@@ -84,6 +93,12 @@ func (s *ServedSubdirs) SetOnEvict(fn func(tokens []string)) {
 // Register creates a new web_serve static-mode registration for agentID pointing
 // at absDir with a lifetime of duration.
 //
+// Renewal is bounded by maxTokenLifetime: without a ceiling, an agent that
+// re-serves on a loop would keep one token alive indefinitely, so a preview URL
+// that leaked would never stop working. Past the ceiling a fresh token is
+// minted and the old one dies, restoring the rotation the cap used to give for
+// free.
+//
 // Per-agent cap: an agent has at most one active registration. Re-registering
 // the SAME absDir RENEWS the existing registration and returns the SAME token,
 // so a preview URL already handed to a user keeps working across the ordinary
@@ -120,14 +135,16 @@ func (s *ServedSubdirs) Register(
 		// different spellings of the same directory and still rotates when the
 		// agent genuinely switches to serving something else.
 		if prevEntry, found := s.byToken[prev]; found &&
-			prevEntry.AbsDir == absDir && time.Now().Before(prevEntry.Deadline) {
+			prevEntry.AbsDir == absDir && time.Now().Before(prevEntry.Deadline) &&
+			time.Since(prevEntry.FirstIssued) < maxTokenLifetime {
 			// Replace the struct rather than mutating it: Lookup hands the
 			// *ServedEntry to callers and reads Deadline AFTER dropping the
 			// read lock, so an in-place write here would be a data race.
 			s.byToken[prev] = &ServedEntry{
-				AgentID:  agentID,
-				AbsDir:   absDir,
-				Deadline: deadline,
+				AgentID:     agentID,
+				AbsDir:      absDir,
+				Deadline:    deadline,
+				FirstIssued: prevEntry.FirstIssued,
 			}
 			s.mu.Unlock()
 			return prev, deadline, nil
@@ -137,9 +154,10 @@ func (s *ServedSubdirs) Register(
 	}
 
 	entry := &ServedEntry{
-		AgentID:  agentID,
-		AbsDir:   absDir,
-		Deadline: deadline,
+		AgentID:     agentID,
+		AbsDir:      absDir,
+		Deadline:    deadline,
+		FirstIssued: time.Now(),
 	}
 	s.byToken[token] = entry
 	s.byAgent[agentID] = token

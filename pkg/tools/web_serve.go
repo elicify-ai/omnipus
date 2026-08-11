@@ -386,7 +386,9 @@ func (t *WebServeTool) executeStatic(ctx context.Context, rawPath string, args m
 		return ErrorResult("web_serve: static registry not configured")
 	}
 
-	// Register (atomically replaces any previous registration for this agent).
+	// Register (renews in place with the same token when this agent is
+	// re-serving the same directory; atomically replaces the previous
+	// registration, invalidating its token, only when the directory changes).
 	token, deadline, regErr := t.served.Register(agentID, absDir, duration)
 	if regErr != nil {
 		return ErrorResult(fmt.Sprintf("web_serve: registration failed: %v", regErr))

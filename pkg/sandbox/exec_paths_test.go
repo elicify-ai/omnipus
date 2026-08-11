@@ -88,6 +88,11 @@ func TestBuildExecPathRules_RejectsUnsafeRoots(t *testing.T) {
 
 // Overlap is the one way this feature could manufacture a writable+executable
 // directory, so the exec grant must lose in both nesting directions.
+//
+// The second argument is the set of paths that ACTUALLY received a write grant
+// (derived by DefaultPolicy from the rules it built), not the operator's raw
+// config — checking only the config missed the unconditional $OMNIPUS_HOME,
+// /tmp and $TMPDIR grants.
 func TestBuildExecPathRules_DropsOverlapWithWritablePaths(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -127,23 +132,23 @@ func TestBuildExecPathRules_KeepsNonOverlappingPaths(t *testing.T) {
 // Seatbelt renderer it would be rejected as non-absolute, the policy render
 // would fail, and applySandbox fails closed — so a cosmetic omission would
 // brick boot on every macOS install carrying the seeded default.
-func TestExpandExecPath_ExpandsTilde(t *testing.T) {
+func TestExpandUserPath_ExpandsTilde(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 
-	got, ok := expandExecPath("~/.cargo/bin")
+	got, ok := expandUserPath("~/.cargo/bin")
 	require.True(t, ok)
 	assert.Equal(t, filepath.Join(home, ".cargo/bin"), got)
 	assert.True(t, filepath.IsAbs(got), "expanded path must be absolute")
 
-	bare, ok := expandExecPath("~")
+	bare, ok := expandUserPath("~")
 	require.True(t, ok)
 	assert.Equal(t, filepath.Clean(home), bare)
 }
 
-func TestExpandExecPath_RejectsNonAbsolute(t *testing.T) {
+func TestExpandUserPath_RejectsNonAbsolute(t *testing.T) {
 	for _, p := range []string{"", "  ", "tools/bin", "./tools", "../tools"} {
-		_, ok := expandExecPath(p)
+		_, ok := expandUserPath(p)
 		assert.False(t, ok, "%q must be rejected as non-absolute", p)
 	}
 }

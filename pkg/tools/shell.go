@@ -286,29 +286,110 @@ var (
 	// absolutePathPattern extracts absolute-path candidates from raw command
 	// TEXT so guardCommand can reject references outside the workspace.
 	//
-	// Two properties are load-bearing, and both were added to fix false
-	// positives that made ordinary commands unrunnable:
+	// Three properties are load-bearing:
 	//
-	//  1. The path BODY stops at shell metacharacters (; | & ( ) < >), not just
-	//     at whitespace and quotes. The previous class was `[^\s"']+`, so the
-	//     ubiquitous idiom `2>/dev/null;` extracted the candidate `/dev/null;`
-	//     — WITH the semicolon — which does not match the safePaths key
-	//     "/dev/null". The exemption silently missed and the whole command was
-	//     rejected, including every innocent fragment chained beside it.
+	//  1. The path BODY stops at shell metacharacters (; | & ( ) < > , { } [ ]
+	//     ! * ` $ ~ \), not just at whitespace and quotes. The original class
+	//     was `[^\s"']+`, so the ubiquitous idiom `2>/dev/null;` extracted the
+	//     candidate `/dev/null;` — WITH the semicolon — which does not match
+	//     the safePaths key "/dev/null". The exemption silently missed and the
+	//     whole command was rejected, including every innocent fragment
+	//     chained beside it. The set was later widened (this revision) to
+	//     also stop at brace/bracket/glob punctuation so multi-path shell
+	//     shapes like `{/etc/shadow,/etc/passwd}` or `cat[/etc/shadow]` split
+	//     into the individual candidates they textually contain instead of
+	//     gluing trailing punctuation onto (or past) the real path.
 	//
-	//  2. The match must begin at a TOKEN BOUNDARY (start of string, or after
-	//     whitespace/quote/=/:/ a metacharacter), captured in group 1. Without
-	//     the boundary the pattern matched the first `/` found ANYWHERE,
-	//     including one in the middle of a relative path: `-o build/app.min.js`
-	//     yielded the fabricated candidate `/app.min.js`, which resolves to the
-	//     filesystem root and was rejected as outside the workspace — even
-	//     though the real argument was a relative path inside it.
+	//  2. The match must begin at a TOKEN BOUNDARY, captured in group 1.
+	//     Plain single-character boundaries (whitespace, quote, = : ; , { }
+	//     [ ] ! * ` $ ~ \ and the shell metacharacters above) cover most
+	//     cases. Without this restriction the pattern matched the first `/`
+	//     found ANYWHERE, including one in the middle of a relative path:
+	//     `-o build/app.min.js` yielded the fabricated candidate
+	//     `/app.min.js`, which resolves to the filesystem root and was
+	//     rejected as outside the workspace — even though the real argument
+	//     was a relative path inside it.
 	//
-	// The boundary set and the excluded body set are deliberately the same
-	// metacharacters, so a path appearing right after an operator (`ls;/etc/x`)
-	// is still detected. Callers MUST read group 1, not the whole match, since
-	// the match also consumes the leading boundary character.
-	absolutePathPattern = regexp.MustCompile(`(?:^|[\s"'=:;|&()<>])([A-Za-z]:\\[^\\\s"';|&()<>]+|/[^\s"';|&()<>]+)`)
+	//     Two shapes need MORE than a single boundary character because no
+	//     single character sits directly before the leading `/`:
+	//
+	//       - Attached short flags: `-o/etc/passwd`, `-I/etc`, `-C/etc`. The
+	//         candidate has the exact same textual shape as the legitimate
+	//         relative path in `-o build/app.min.js` — a `/` following a
+	//         `-flag` token — so the two must be told apart by what comes
+	//         right after the flag, not by the flag itself. This pattern
+	//         additionally matches `(?:^|\s)-[A-Za-z]` immediately followed
+	//         by the candidate body, i.e. the flag itself must sit at a
+	//         token start (start of command or preceded by whitespace) AND
+	//         the very next character after the flag letter must be `/`. A
+	//         relative arg (`-o build/…`) never satisfies the second part
+	//         (there is a space, not a `/`, right after `-o`), and a
+	//         hyphenated relative path segment (`build-x/output`) never
+	//         satisfies the first part (the `-x` is not at a token start —
+	//         `d` precedes it, not whitespace) — so neither is affected.
+	//       - Variable-expansion prefixes: `$HOME/.ssh/id_rsa`,
+	//         `${HOME}/.ssh/id_rsa`. This pattern additionally matches
+	//         `(?:^|\s)\$\{?[A-Za-z_][A-Za-z0-9_]*\}?` (a token-start shell
+	//         variable reference) immediately followed by the candidate
+	//         body, so a resolved-at-runtime path prefix does not hide an
+	//         absolute suffix from this compile-time text scan.
+	//
+	//  3. The boundary set and the excluded body set are almost — but
+	//     deliberately NOT — the same metacharacters: `:` and `=` are
+	//     boundary-only, never excluded from the body. `=` bodies are
+	//     unrestricted by design (unchanged from the original version).
+	//     `:` is unrestricted so that a colon-joined path LIST (`PATH=`
+	//     assignments, `-I a:b`-style compiler/linker flags) is captured as
+	//     ONE candidate rather than split into several fragments that each
+	//     independently look like a bare absolute path outside the
+	//     workspace. guardCommand recognizes that specific shape
+	//     (colonPathListPattern) and treats it as an environment-style
+	//     value rather than a direct file reference — see guardCommand's
+	//     colon-list check for why splitting does not by itself fix the
+	//     false positive.
+	//
+	// Worked examples:
+	//   - `which node 2>/dev/null; echo done` -> candidate "/dev/null", exempt
+	//     via safePaths (rule 1).
+	//   - `curl -sL -o build/app.min.js https://…` -> no candidate at all
+	//     for `build/app.min.js` (rule 2, general case).
+	//   - `curl -o/etc/passwd https://x` -> candidate "/etc/passwd", blocked
+	//     (rule 2, attached-flag case) — contrast with the previous example,
+	//     where the space after `-o` prevents the flag alternative from
+	//     firing.
+	//   - `PATH=/usr/bin:/usr/local/bin make` -> candidate
+	//     "/usr/bin:/usr/local/bin" (ONE match, per rule 3), recognized and
+	//     skipped by guardCommand's colon-list check.
+	//
+	// Callers MUST read group 1, not the whole match, since the match also
+	// consumes the leading boundary text (which may be more than one
+	// character — see rule 2's attached-flag and variable-prefix cases).
+	absolutePathPattern = regexp.MustCompile(
+		`(?:^|[\s"'=:;,{}\[\]!*` + "`" + `$~\\|&()<>]|(?:^|\s)-[A-Za-z]|(?:^|\s)\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)` +
+			`([A-Za-z]:\\[^\\\s"';,{}\[\]!*` + "`" + `$~|&()<>]+` +
+			`|/[^\s"';,{}\[\]!*` + "`" + `$~\\|&()<>]+)`,
+	)
+
+	// colonPathListPattern recognizes a colon-joined list of two or more
+	// absolute Unix paths — e.g. "/usr/bin:/usr/local/bin" — the shape
+	// produced by `PATH=` assignments and by multi-path compiler/linker
+	// flags (`-I a:b`). absolutePathPattern's Unix body does not exclude
+	// `:` (see that pattern's rule 3), so a colon-joined list is captured
+	// as a single raw candidate rather than fragmented at each colon.
+	// guardCommand matches that raw candidate against this pattern and, on
+	// a match, treats it as an environment-variable-style value rather
+	// than a direct file reference: none of the segments is evaluated
+	// against the workspace boundary. This is deliberately narrow — every
+	// segment must independently look like an absolute path (start with
+	// `/`, contain none of the same excluded punctuation) — so it does not
+	// exempt a single path with a stray colon suffix appended to it
+	// (`/etc/passwd:evil` has a second segment that does not start with
+	// `/`, so it does not match and is still evaluated as a single,
+	// literal candidate).
+	colonPathListPattern = regexp.MustCompile(
+		`^/[^\s"';,{}\[\]!*` + "`" + `$~\\:]+` +
+			`(?::/[^\s"';,{}\[\]!*` + "`" + `$~\\:]+)+$`,
+	)
 
 	// safePaths are kernel pseudo-devices that are always safe to reference in
 	// commands, regardless of workspace restriction. They contain no user data
@@ -716,6 +797,14 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 			continue
 		}
 		raw := cmd[start:end]
+
+		// Colon-joined path list (PATH= assignments, -I a:b-style flags):
+		// treated as an environment-style value, not a direct file
+		// reference. See colonPathListPattern's doc comment for why this
+		// is narrower than "any candidate containing a colon".
+		if strings.Contains(raw, ":") && colonPathListPattern.MatchString(raw) {
+			continue
+		}
 
 		if strings.HasPrefix(raw, "//") && start > 0 {
 			before := cmd[:start]

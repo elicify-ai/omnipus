@@ -342,12 +342,12 @@ func TestSeatbelt_RealChild_ExecPathViaSymlinkChain(t *testing.T) {
 	prefix := t.TempDir()
 	realDir := filepath.Join(prefix, "Cellar", "tool", "1.0", "bin")
 	require.NoError(t, os.MkdirAll(realDir, 0o755))
-	real := execFixture(t, realDir, "SYMLINKED-TOOL-RAN")
+	realTool := execFixture(t, realDir, "SYMLINKED-TOOL-RAN")
 
 	binDir := filepath.Join(prefix, "bin")
 	require.NoError(t, os.MkdirAll(binDir, 0o755))
 	link := filepath.Join(binDir, "tool.sh")
-	require.NoError(t, os.Symlink(real, link))
+	require.NoError(t, os.Symlink(realTool, link))
 
 	policy.FilesystemRules = append(policy.FilesystemRules,
 		PathRule{Path: prefix, Access: AccessRead | AccessExecute})
@@ -355,4 +355,47 @@ func TestSeatbelt_RealChild_ExecPathViaSymlinkChain(t *testing.T) {
 	out, err := runSandboxed(t, policy, ws, "/bin/sh", link)
 	require.NoError(t, err, "a Homebrew-style symlink chain must resolve; output=%s", out)
 	assert.Contains(t, out, "SYMLINKED-TOOL-RAN")
+}
+
+// TestSeatbelt_RealChild_CanUseTMPDIR is the regression test for a failure that
+// would have made the sandbox unusable in practice while every existing test
+// stayed green.
+//
+// DefaultPolicy grants /tmp, but on macOS almost nothing writes there:
+// os.TempDir(), mktemp, npm, pip, git and `go build` all honour $TMPDIR, which
+// is a per-user directory under /var/folders. hardened_exec forwards TMPDIR to
+// the child, so before this the child was handed a temp directory the profile
+// denied — and the resulting failures ("operation not permitted" from mktemp,
+// EACCES from npm) never mention the sandbox at all.
+func TestSeatbelt_RealChild_CanUseTMPDIR(t *testing.T) {
+	home := t.TempDir()
+	policy := DefaultPolicy(home, nil, nil, nil, nil)
+
+	// mktemp is what real tooling ends up calling; use it rather than a
+	// hand-rolled path so the test exercises the same code path npm would.
+	out, err := runSandboxed(t, policy, home, "/bin/bash", "-c",
+		`f=$(mktemp) && echo ok > "$f" && cat "$f" && rm -f "$f"`)
+	require.NoError(t, err, "a child must be able to use $TMPDIR; output=%s", out)
+	assert.Contains(t, out, "ok")
+}
+
+// TestDefaultPolicy_GrantsPerUserTempDir pins the rule itself, so the grant
+// cannot be dropped by a future edit without a platform-independent failure.
+func TestDefaultPolicy_GrantsPerUserTempDir(t *testing.T) {
+	policy := DefaultPolicy(t.TempDir(), nil, nil, nil, nil)
+
+	want := filepath.Clean(os.TempDir())
+	if want == "/tmp" {
+		t.Skip("$TMPDIR is /tmp on this host; the separate rule is unnecessary")
+	}
+
+	var found bool
+	for _, r := range policy.FilesystemRules {
+		if r.Path == want {
+			found = true
+			assert.NotZero(t, r.Access&AccessWrite, "$TMPDIR must be writable")
+			assert.NotZero(t, r.Access&AccessRead, "$TMPDIR must be readable")
+		}
+	}
+	assert.True(t, found, "policy must grant the per-user temp dir %q", want)
 }

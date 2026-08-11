@@ -25,23 +25,27 @@ properties:
     type: integer
     minimum: 0
     description: >
-      Cache-read tokens (served from KV cache) for this model. A SUBSET of total,
-      not additive to it.
+      Cache-read tokens (served from KV cache) for this model. Additive to
+      total alongside in and out, matching the provider's own usage
+      accounting (total = in + out + cache_read + cache_write) — NOT a
+      subset of total.
     example: 150
   cache_write:
     type: integer
     minimum: 0
     description: >
-      Cache-write tokens (written into a new cache entry) for this model. A SUBSET
-      of total, not additive to it.
+      Cache-write tokens (written into a new cache entry) for this model.
+      Additive to total alongside in and out — see cache_read's description.
     example: 25
   total:
     type: integer
     minimum: 0
     description: >
-      Authoritative total tokens recorded for this model. cache_read/cache_write
-      are a subset of total, NOT additive — do not reconstruct total as
-      in + out + cache_read + cache_write. Always prefer total over summing the
-      components: entries predating the provider input/output split carry 0 in
-      both in and out while total is correct.
+      Authoritative total tokens recorded for this model, as reported by the
+      provider. Additive: total = in + out + cache_read + cache_write once
+      the provider's input/output split has been recorded on an entry (a
+      non-zero in and/or out). Entries predating that split carry 0 in both
+      in and out while total still reflects the full turn (out was not yet
+      split from cache/completion), so always read total directly rather
+      than reconstructing it from the other fields.
     example: 1000

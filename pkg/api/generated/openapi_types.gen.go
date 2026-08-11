@@ -6362,10 +6362,10 @@ type AgentTokenEntry struct {
 
 	// ByModel Per-model breakdown for this agent. Absent when no model data is available.
 	ByModel *map[string]struct {
-		// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
 
-		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
 		CacheWrite *int `json:"cache_write,omitempty"`
 
 		// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
@@ -6374,7 +6374,7 @@ type AgentTokenEntry struct {
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
-		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
+		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 
@@ -9037,10 +9037,10 @@ type ModelCapabilitiesModalities string
 
 // ModelTokens Per-model token breakdown within a session or usage summary.
 type ModelTokens struct {
-	// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+	// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 	CacheRead *int `json:"cache_read,omitempty"`
 
-	// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+	// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
 	CacheWrite *int `json:"cache_write,omitempty"`
 
 	// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
@@ -9049,7 +9049,7 @@ type ModelTokens struct {
 	// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 	Out *int `json:"out,omitempty"`
 
-	// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
+	// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 	Total int `json:"total"`
 }
 
@@ -10906,10 +10906,10 @@ type Session struct {
 	Stats struct {
 		// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 		ByModel *map[string]struct {
-			// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+			// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 			CacheRead *int `json:"cache_read,omitempty"`
 
-			// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+			// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
 			CacheWrite *int `json:"cache_write,omitempty"`
 
 			// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
@@ -10918,7 +10918,7 @@ type Session struct {
 			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
 
-			// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
+			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
 
@@ -10940,7 +10940,7 @@ type Session struct {
 		// TokensOut Total output tokens generated across all messages in this session.
 		TokensOut int `json:"tokens_out"`
 
-		// TokensTotal Sum of tokens_in and tokens_out.
+		// TokensTotal Authoritative total tokens for this session, as reported by the provider. Once the provider's input/output split has been recorded (tokens_in and/or tokens_out non-zero from a split-aware entry), tokens_total = tokens_in + tokens_out + tokens_cache_read + tokens_cache_write — NOT just tokens_in + tokens_out, since cache tokens are an additional component, not folded into either. Legacy entries written before that split existed instead book their entire turn into tokens_out with tokens_in left at 0, so a session mixing legacy and split-aware entries can have tokens_in + tokens_out + cache fall short of (or, for a legacy entry whose cache was tracked separately, exceed) tokens_total for the legacy portion. Always read tokens_total directly rather than deriving it from the other fields.
 		TokensTotal int `json:"tokens_total"`
 
 		// ToolCalls Total number of tool calls made in this session.
@@ -11179,10 +11179,10 @@ type SessionDetail struct {
 		Stats struct {
 			// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 			ByModel *map[string]struct {
-				// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+				// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 				CacheRead *int `json:"cache_read,omitempty"`
 
-				// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+				// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
 				CacheWrite *int `json:"cache_write,omitempty"`
 
 				// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
@@ -11191,7 +11191,7 @@ type SessionDetail struct {
 				// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 				Out *int `json:"out,omitempty"`
 
-				// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
+				// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 				Total int `json:"total"`
 			} `json:"by_model,omitempty"`
 
@@ -11213,7 +11213,7 @@ type SessionDetail struct {
 			// TokensOut Total output tokens generated across all messages in this session.
 			TokensOut int `json:"tokens_out"`
 
-			// TokensTotal Sum of tokens_in and tokens_out.
+			// TokensTotal Authoritative total tokens for this session, as reported by the provider. Once the provider's input/output split has been recorded (tokens_in and/or tokens_out non-zero from a split-aware entry), tokens_total = tokens_in + tokens_out + tokens_cache_read + tokens_cache_write — NOT just tokens_in + tokens_out, since cache tokens are an additional component, not folded into either. Legacy entries written before that split existed instead book their entire turn into tokens_out with tokens_in left at 0, so a session mixing legacy and split-aware entries can have tokens_in + tokens_out + cache fall short of (or, for a legacy entry whose cache was tracked separately, exceed) tokens_total for the legacy portion. Always read tokens_total directly rather than deriving it from the other fields.
 			TokensTotal int `json:"tokens_total"`
 
 			// ToolCalls Total number of tool calls made in this session.
@@ -11822,10 +11822,10 @@ type SessionScopeUpdateResponse struct {
 type SessionStats struct {
 	// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 	ByModel *map[string]struct {
-		// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
 
-		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
 		CacheWrite *int `json:"cache_write,omitempty"`
 
 		// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
@@ -11834,7 +11834,7 @@ type SessionStats struct {
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
-		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
+		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 
@@ -11856,7 +11856,7 @@ type SessionStats struct {
 	// TokensOut Total output tokens generated across all messages in this session.
 	TokensOut int `json:"tokens_out"`
 
-	// TokensTotal Sum of tokens_in and tokens_out.
+	// TokensTotal Authoritative total tokens for this session, as reported by the provider. Once the provider's input/output split has been recorded (tokens_in and/or tokens_out non-zero from a split-aware entry), tokens_total = tokens_in + tokens_out + tokens_cache_read + tokens_cache_write — NOT just tokens_in + tokens_out, since cache tokens are an additional component, not folded into either. Legacy entries written before that split existed instead book their entire turn into tokens_out with tokens_in left at 0, so a session mixing legacy and split-aware entries can have tokens_in + tokens_out + cache fall short of (or, for a legacy entry whose cache was tracked separately, exceed) tokens_total for the legacy portion. Always read tokens_total directly rather than deriving it from the other fields.
 	TokensTotal int `json:"tokens_total"`
 
 	// ToolCalls Total number of tool calls made in this session.
@@ -12885,10 +12885,10 @@ type TokenUsageSummary struct {
 
 		// ByModel Per-model breakdown for this agent. Absent when no model data is available.
 		ByModel *map[string]struct {
-			// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+			// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 			CacheRead *int `json:"cache_read,omitempty"`
 
-			// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+			// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
 			CacheWrite *int `json:"cache_write,omitempty"`
 
 			// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
@@ -12897,7 +12897,7 @@ type TokenUsageSummary struct {
 			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
 
-			// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
+			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
 
@@ -12913,10 +12913,10 @@ type TokenUsageSummary struct {
 
 	// ByModel Cross-agent per-model breakdown for the period. Keys are model name strings. Absent when no model data is available.
 	ByModel *map[string]struct {
-		// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
 
-		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
 		CacheWrite *int `json:"cache_write,omitempty"`
 
 		// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
@@ -12925,7 +12925,7 @@ type TokenUsageSummary struct {
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
-		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write. Always prefer total over summing the components: entries predating the provider input/output split carry 0 in both in and out while total is correct.
+		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 

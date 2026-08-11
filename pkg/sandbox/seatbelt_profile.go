@@ -33,8 +33,11 @@ import (
 //
 // Measured on macOS 26.5.2 (Darwin 25.5.0), x86_64, by starting from the
 // policy-only profile and adding the minimum needed to make a real child run.
-// Re-derive with pkg/sandbox/testdata/seatbelt-probe if Apple changes the
-// platform. The non-obvious findings, each of which cost a debugging cycle:
+// To re-derive after an OS change: start from a profile containing only the
+// policy rules, run a real child under `sandbox-exec -p`, and add the minimum
+// needed to make it start — the method that produced the findings below.
+//
+// The non-obvious findings, each of which cost a debugging cycle:
 //
 //  1. (allow file-read* (literal "/")) is MANDATORY. A child needs to stat the
 //     root directory itself, and no (subpath "/usr/lib")-style allow covers
@@ -42,8 +45,8 @@ import (
 //     EMPTY stderr — dyld is killed before it can report anything. This single
 //     missing line is indistinguishable from "Seatbelt is broken".
 //
-//  2. The dyld shared cache needs NO explicit rule — it is mapped by the
-//     kernel, not read through the filesystem. Do NOT add a rule for
+//  2. The dyld shared cache needs no rule BEYOND the /System read allow already
+//     present below. Do NOT add a rule for
 //     /System/Library/dyld: that path DOES NOT EXIST on macOS 13+. The cache
 //     lives under /System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/.
 //     The original draft comment named the stale path; it was never needed.
@@ -96,8 +99,9 @@ const seatbeltSystemPreamble = `;; --- macOS system preamble (empirically derive
 //   - FilesystemRules with AccessRead    → (allow file-read*  (subpath "..."))
 //   - FilesystemRules with AccessWrite   → (allow file-write* (subpath "..."))
 //   - FilesystemRules with AccessExecute → (allow process-exec (subpath "..."))
-//     plus an implicit file-read* allow (a process cannot execute a file it
-//     cannot read — Seatbelt, like every MAC system, requires read to mmap).
+//     plus an implicit file-read* allow (Seatbelt requires read access to mmap
+//     a binary; note this is NOT universal — Landlock treats execute and read
+//     as independent rights).
 //   - BindPortRules    → (allow network-bind    (local  tcp "*:<port>"))
 //   - ConnectPortRules → (allow network-outbound (remote tcp "*:<port>"))
 //
@@ -175,21 +179,19 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 		}
 
 		sub := fmt.Sprintf("(subpath %q)", target)
-		switch {
-		case rule.Access&AccessExecute != 0:
-			// Execute implies read (must mmap the binary). Emit exec + read.
+		// Three independent emissions rather than a switch: the write line is
+		// identical in both arms, and duplicating it invites the two copies to
+		// drift. Output is byte-identical for all seven non-zero access
+		// combinations (Access == 0 is rejected above).
+		if rule.Access&AccessExecute != 0 {
 			b.WriteString("(allow process-exec " + sub + ")\n")
+		}
+		if rule.Access&(AccessRead|AccessExecute) != 0 {
+			// Execute implies read: a binary cannot be mmap'd unreadable.
 			b.WriteString("(allow file-read* " + sub + ")\n")
-			if rule.Access&AccessWrite != 0 {
-				b.WriteString("(allow file-write* " + sub + ")\n")
-			}
-		default:
-			if rule.Access&AccessRead != 0 {
-				b.WriteString("(allow file-read* " + sub + ")\n")
-			}
-			if rule.Access&AccessWrite != 0 {
-				b.WriteString("(allow file-write* " + sub + ")\n")
-			}
+		}
+		if rule.Access&AccessWrite != 0 {
+			b.WriteString("(allow file-write* " + sub + ")\n")
 		}
 	}
 
@@ -232,15 +234,38 @@ func resolveSeatbeltPath(p string) (target string, traversal []string) {
 	clean := filepath.Clean(p)
 
 	resolved, err := filepath.EvalSymlinks(clean)
-	if err != nil || resolved == clean {
-		// Missing path, or nothing to resolve. Either way the declared path is
-		// what we emit, and there is no ancestor to grant traversal on.
+	if err != nil {
+		// The path does not exist yet (a workspace created lazily, an operator
+		// entry for a directory not made yet). Emitting the declared path
+		// verbatim would be the ORIGINAL BUG in miniature: under a symlinked
+		// ancestor such as macOS's /tmp, /etc or /var, `(subpath "/tmp/x")`
+		// matches nothing, so the profile reads as granting the path while the
+		// child is denied it, silently.
+		//
+		// Resolve the deepest ancestor that DOES exist and re-attach the
+		// remainder, which is correct for the not-yet-created case.
+		if base, rest, ok := deepestExistingAncestor(clean); ok {
+			resolved = filepath.Join(base, rest)
+			if resolved != clean {
+				return resolved, symlinkedAncestors(clean)
+			}
+		}
+		return clean, symlinkedAncestors(clean)
+	}
+	if resolved == clean {
+		// Nothing to resolve; no ancestor needs a traversal allow.
 		return clean, nil
 	}
 
-	// Collect the ancestors of the DECLARED path that are themselves symlinks.
-	// Walking the declared path (not the resolved one) is the point: those are
-	// the components the child will actually walk through.
+	return resolved, symlinkedAncestors(clean)
+}
+
+// symlinkedAncestors returns the ancestors of the DECLARED path that are
+// themselves symlinks and therefore need a read allow for the child to traverse
+// them. Walking the declared path (not the resolved one) is the point: those
+// are the components the child will actually walk through.
+func symlinkedAncestors(clean string) []string {
+	var traversal []string
 	for _, anc := range ancestorPaths(clean) {
 		fi, lerr := os.Lstat(anc)
 		if lerr != nil {
@@ -250,13 +275,34 @@ func resolveSeatbeltPath(p string) (target string, traversal []string) {
 			traversal = append(traversal, anc)
 		}
 	}
-
-	return resolved, traversal
+	return traversal
 }
 
-// ancestorPaths returns every proper ancestor of p from the shallowest down to
-// p itself, e.g. "/tmp/a/b" → ["/tmp", "/tmp/a", "/tmp/a/b"]. The root "/" is
-// excluded because the preamble already grants it unconditionally.
+// deepestExistingAncestor splits p into the deepest existing prefix (with
+// symlinks resolved) and the not-yet-created remainder.
+func deepestExistingAncestor(p string) (base, rest string, ok bool) {
+	ancestors := ancestorPaths(p)
+	for i := len(ancestors) - 1; i >= 0; i-- {
+		resolved, err := filepath.EvalSymlinks(ancestors[i])
+		if err != nil {
+			continue
+		}
+		rel, relErr := filepath.Rel(ancestors[i], p)
+		if relErr != nil {
+			return "", "", false
+		}
+		if rel == "." {
+			return resolved, "", true
+		}
+		return resolved, rel, true
+	}
+	return "", "", false
+}
+
+// ancestorPaths returns every path prefix of p, shallowest first, INCLUDING p
+// itself: "/tmp/a/b" → ["/tmp", "/tmp/a", "/tmp/a/b"]. Including p is
+// load-bearing — it is how a symlinked leaf such as /tmp gets its own traversal
+// allow. The root "/" is excluded because the preamble grants it already.
 func ancestorPaths(p string) []string {
 	p = filepath.Clean(p)
 	if p == string(filepath.Separator) || p == "." {

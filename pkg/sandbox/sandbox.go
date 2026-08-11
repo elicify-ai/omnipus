@@ -328,6 +328,21 @@ func DefaultPolicy(
 		Access: AccessRead | AccessWrite | AccessExecute,
 	})
 
+	// The PER-USER temp directory, which on macOS is NOT /tmp.
+	//
+	// os.TempDir() honours $TMPDIR, and on macOS that is a per-user directory
+	// under /var/folders/<x>/<y>/T/. hardened_exec forwards TMPDIR to every
+	// child (allowedChildEnvKeys), so without this rule a child is handed a
+	// temp directory the policy denies: mktemp, npm, pip, git and `go build`
+	// all fail with a bare "operation not permitted" that never mentions the
+	// sandbox. Granting /tmp alone looks correct and fixes none of it.
+	if tmpDir := filepath.Clean(os.TempDir()); tmpDir != "" && tmpDir != "/tmp" && filepath.IsAbs(tmpDir) {
+		rules = append(rules, PathRule{
+			Path:   tmpDir,
+			Access: AccessRead | AccessWrite | AccessExecute,
+		})
+	}
+
 	// Read-only system dependencies required by the gateway at runtime.
 	// Missing paths (e.g. /lib64 on ARM64) are silently skipped by
 	// Apply() with a warning log; the remaining rules still succeed.
@@ -372,7 +387,19 @@ func DefaultPolicy(
 		if raw == "" {
 			continue
 		}
-		clean := filepath.Clean(raw)
+		// Expand ~ before anything else. The REST validator accepts "~/work"
+		// and persists it, but this loop used to only Clean() it — leaving a
+		// relative path in the policy. Landlock skipped it with a warning;
+		// the Seatbelt renderer rejects a relative path outright, which fails
+		// the render, fails Apply, and aborts boot with exit 78. An operator
+		// whose config the product itself validated could not start.
+		clean, expanded := expandUserPath(raw)
+		if !expanded {
+			if warnFn != nil {
+				warnFn("Sandbox allowed path is not absolute and could not be expanded; skipping.", raw)
+			}
+			continue
+		}
 		if isSystemRestricted(clean) {
 			// Strip Write bit — user intent (read) is preserved, but
 			// write access to /etc, /proc, /sys, /dev, /boot, /root and
@@ -397,8 +424,10 @@ func DefaultPolicy(
 
 	// Execute-capable toolchain paths (config: sandbox.allowed_exec_paths).
 	//
-	// These are the ONLY rules in this function that pair read with execute and
-	// deliberately withhold write. Without them an agent cannot run anything
+	// These pair read with execute and deliberately withhold write. (The
+	// readOnlySystem loop above also grants read+exec; what is unique here is
+	// that these paths are operator-configurable.) Without them an agent
+	// cannot run anything
 	// installed outside the system binary directories — Homebrew, fnm/nvm,
 	// cargo, pyenv — which on a developer machine is nearly every tool it needs.
 	//
@@ -407,7 +436,19 @@ func DefaultPolicy(
 	// agent cannot drop a binary into one and execute it. buildExecPathRule
 	// hard-codes the access bits so a future edit cannot widen them by
 	// extending a shared loop.
-	rules = append(rules, buildExecPathRules(allowedExecPaths, allowedPaths, warnFn)...)
+	//
+	// The writable set is derived from the rules ACTUALLY granted above, not
+	// from allowedPaths alone. $OMNIPUS_HOME, /tmp and $TMPDIR are granted RWX
+	// unconditionally, so checking only the operator's list let an exec grant
+	// on (say) /tmp/toolchain through — producing exactly the writable AND
+	// executable directory this guard exists to prevent.
+	writableRoots := make([]string, 0, len(rules))
+	for _, r := range rules {
+		if r.Access&AccessWrite != 0 {
+			writableRoots = append(writableRoots, r.Path)
+		}
+	}
+	rules = append(rules, buildExecPathRules(allowedExecPaths, writableRoots, warnFn)...)
 
 	var bindRules []NetPortRule
 	if len(bindPorts) > 0 {
@@ -875,8 +916,27 @@ func DescribeBackendWithState(backend SandboxBackend, state ApplyState) Status {
 
 	rep, ok := backend.(abiReporter)
 	if !ok {
-		// Non-kernel backend (e.g. FallbackBackend). KernelLevel stays false.
-		// Preserve any gateway-level notes (e.g. "kernel too old").
+		// No Landlock ABI to report. That is NOT the same as "no kernel
+		// enforcement": the macOS Seatbelt backend confines every child in the
+		// kernel and simply has no versioned ABI to expose. Reporting it here
+		// as a non-kernel backend told operators `kernel_level: false,
+		// policy_applied: false` while their children were in fact confined —
+		// the inverse of the truth, and exactly as misleading as the opposite
+		// error would be.
+		if confiner, isConfiner := backend.(KernelChildConfiner); isConfiner && confiner.ConfinesChildren() {
+			status.KernelLevel = true
+			status.PolicyApplied = confiner.PolicyApplied()
+			// ABIVersion stays 0 and LandlockFeatures/BlockedSyscalls stay
+			// empty: those are Landlock-specific and have no Seatbelt analogue.
+			// A consumer must not read ABIVersion == 0 as "not kernel-level".
+			if len(state.ExtraNotes) > 0 {
+				status.Notes = append(status.Notes, state.ExtraNotes...)
+			}
+			return status
+		}
+
+		// Genuinely non-kernel backend (e.g. FallbackBackend). KernelLevel
+		// stays false. Preserve any gateway-level notes (e.g. "kernel too old").
 		if len(state.ExtraNotes) > 0 {
 			status.Notes = append(status.Notes, state.ExtraNotes...)
 		}
