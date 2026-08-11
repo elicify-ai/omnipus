@@ -70,6 +70,8 @@ if [[ ! -d "$SRC_DIR" ]]; then
   exit 2
 fi
 
+set +e   # capture the sub-pass exit code instead of letting `set -e` abort
+         # the script before it can be classified.
 python3 - "$SRC_DIR" <<'PYEOF'
 import os
 import re
@@ -79,7 +81,13 @@ src_dir = sys.argv[1]
 
 # See this script's header comment for the exact shape this matches/excludes.
 PATTERN = re.compile(
-    r"^\s*(?!//)"
+    # NOTE the anchor placement: `^(?!\s*//)` not `^\s*(?!//)`. In the latter,
+    # `\s*` backtracks to zero width, so the lookahead is evaluated at column 0
+    # and only a column-0 `//` is excluded — an INDENTED comment was flagged.
+    # That is actively harmful here: this repo documents this exact anti-pattern
+    # in prose in ~10 files, and the job has no opt-out annotation, so the only
+    # way to clear the red gate was to delete the explanation.
+    r"^(?!\s*(?://|\*|/\*))"
     r".*\bisError\s*[:=]{1,2}\s*\(?\s*\{?\s*\(?"
     r"[A-Za-z_][A-Za-z0-9_.?]*\.type\s*===\s*['\"]incomplete['\"]"
     r"\s*\)?\s*(?!\|\|)[},;]?\s*(//.*)?$"
@@ -124,3 +132,14 @@ if findings:
 print("check-no-tool-error-from-status: OK — no forbidden isError-from-status patterns found.")
 sys.exit(0)
 PYEOF
+
+PY_EXIT=$?
+set -e
+# 0 = clean, 1 = findings printed by the sub-pass itself. Anything else means
+# the checker crashed — say so, rather than exiting silently with a code the
+# CI log cannot distinguish from a real finding.
+if [[ $PY_EXIT -gt 1 ]]; then
+  echo "check-no-tool-error-from-status: ERROR — Python sub-pass exited ${PY_EXIT} (the checker itself failed; this is NOT a lint finding)" >&2
+  exit 2
+fi
+exit $PY_EXIT

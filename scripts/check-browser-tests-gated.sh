@@ -49,6 +49,9 @@ if [[ ! -d "$BROWSER_DIR" ]]; then
   exit 2
 fi
 
+set +e   # $(...) under `set -e` aborts before $? is readable — a crashed
+         # sub-pass would exit non-zero with ZERO output, indistinguishable
+         # from a real finding.
 FINDINGS=$(python3 - "$BROWSER_DIR" <<'PYEOF'
 import glob
 import os
@@ -108,6 +111,12 @@ for f in findings:
     print(f)
 PYEOF
 )
+PY_EXIT=$?
+set -e
+if [[ $PY_EXIT -ne 0 ]]; then
+  echo "check-browser-tests-gated: ERROR — Python sub-pass exited ${PY_EXIT} (the checker itself failed; this is NOT a lint finding)" >&2
+  exit 2
+fi
 
 if [[ -z "$FINDINGS" ]]; then
   echo "check-browser-tests-gated: OK (every real-Chrome test in pkg/tools/browser is gated by skipIfNoBrowser)"

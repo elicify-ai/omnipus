@@ -525,6 +525,9 @@ emit() {
 #     {body, req, request, response}), emit a finding
 #   - Suggest a generated type if schema fields match
 
+set +e   # a $(...) assignment under `set -e` aborts BEFORE $? can be read,
+         # which made the handler below dead code: a crashed sub-pass exited
+         # non-zero with ZERO output, indistinguishable from a real finding.
 GO_OFFENDERS=$(python3 - "$REPO_ROOT" <<'PYEOF'
 import re
 import os
@@ -766,6 +769,7 @@ PYEOF
 
 # Capture Python exit status explicitly; abort on unexpected failure.
 _PY_EXIT=$?
+set -e   # re-arm; the assignment above is the only place we tolerate a non-zero exit
 if [[ $_PY_EXIT -ne 0 ]]; then
   echo "check-no-handwritten-wire-types: ERROR — Go Python sub-pass exited ${_PY_EXIT}" >&2
   exit 2
@@ -799,6 +803,9 @@ fi
 # Flags `const _fooSchema = z.object/union/discriminatedUnion/intersection/lazy(…`
 # in all src/lib/*.ts files (excluding generated dir and test files).
 
+set +e   # a $(...) assignment under `set -e` aborts BEFORE $? can be read,
+         # which made the handler below dead code: a crashed sub-pass exited
+         # non-zero with ZERO output, indistinguishable from a real finding.
 TS_OFFENDERS=$(python3 - "$REPO_ROOT" <<'PYEOF'
 import re
 import os
@@ -905,6 +912,7 @@ PYEOF
 
 # Capture Python exit status explicitly; abort on unexpected failure.
 _PY_EXIT=$?
+set -e   # re-arm; the assignment above is the only place we tolerate a non-zero exit
 if [[ $_PY_EXIT -ne 0 ]]; then
   echo "check-no-handwritten-wire-types: ERROR — TS Python sub-pass exited ${_PY_EXIT}" >&2
   exit 2
@@ -929,6 +937,9 @@ fi
 # match the capture at all and is silently ignored — it is ad hoc prose, not
 # a discriminator.
 
+set +e   # a $(...) assignment under `set -e` aborts BEFORE $? can be read,
+         # which made the handler below dead code: a crashed sub-pass exited
+         # non-zero with ZERO output, indistinguishable from a real finding.
 GO_DISCRIMINATOR_OFFENDERS=$(python3 - "$REPO_ROOT" <<'PYEOF'
 import re
 import os
@@ -1031,6 +1042,7 @@ PYEOF
 )
 
 _PY_EXIT=$?
+set -e   # re-arm; the assignment above is the only place we tolerate a non-zero exit
 if [[ $_PY_EXIT -ne 0 ]]; then
   echo "check-no-handwritten-wire-types: ERROR — Go discriminator-literal Python sub-pass exited ${_PY_EXIT}" >&2
   exit 2
