@@ -109,6 +109,24 @@ func TestBoundedCallContext_PropagatesCallerCancellation(t *testing.T) {
 
 // --- runFirstAttach (manager.go) -------------------------------------------
 
+// runFirstAttachTimeoutTestBound is THIS test's own ceiling — deliberately
+// NOT the shared runFirstAttachPromptBound (200ms non-race / 2s race; see
+// coldstart_bound_race_test.go / coldstart_bound_norace_test.go). Reusing
+// the 2s race bound here made the assertion vacuous: `slow` sleeps a FIXED
+// 500ms, so even a broken runFirstAttach that blocked for fn's entire
+// duration instead of honoring the 20ms timeout would elapse ~500ms — comfortably
+// under the 2s race bound, so the assertion could never fire and the "returns
+// promptly, does not wait for fn" property went unverified under -race
+// (found in the #615/#617/#618 hardening review, F8). 250ms sits well above
+// realistic scheduling/race-instrumentation overhead for a 20ms-timeout
+// round-trip, yet well below `slow`'s 500ms sleep, so the buggy-wait case
+// (~500ms) still trips it in both race and non-race builds — restoring the
+// property without touching the shared bound, which
+// TestRunFirstAttach_ReturnsUnderlyingErrorWithoutWaitingForTimeout still
+// needs at its full 2s (that test's regression elapses 60s, so its own
+// discriminating power is unaffected either way).
+const runFirstAttachTimeoutTestBound = 250 * time.Millisecond
+
 // TestRunFirstAttach_TimesOutWithoutHanging proves runFirstAttach returns
 // promptly with a timeout error when fn takes longer than the bound, instead
 // of hanging for fn's full (potentially unbounded) duration. This is the
@@ -132,8 +150,8 @@ func TestRunFirstAttach_TimesOutWithoutHanging(t *testing.T) {
 	if !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("expected a timeout error message, got: %v", err)
 	}
-	if elapsed > runFirstAttachPromptBound {
-		t.Fatalf("runFirstAttach did not return promptly on timeout: took %s (fn takes 500ms, bound %s)", elapsed, runFirstAttachPromptBound)
+	if elapsed > runFirstAttachTimeoutTestBound {
+		t.Fatalf("runFirstAttach did not return promptly on timeout: took %s (fn takes 500ms, bound %s)", elapsed, runFirstAttachTimeoutTestBound)
 	}
 }
 

@@ -159,6 +159,17 @@ func TestPackageChromeRoot_EmptySlot1Skipped_FindsSlot2(t *testing.T) {
 	require.GreaterOrEqual(t, len(candidates), 2,
 		"every non-windows platform must expose at least two package-root candidates")
 	slot1, slot2 := candidates[0], candidates[1]
+	// F9 (#615/#617/#618 hardening review): both derived slots MUST stay
+	// inside t.TempDir(). Without this, a future candidate-layout change
+	// (e.g. widening a platform's "levels up from exeDir" walk) could make
+	// slot1/slot2 resolve outside base and into the real filesystem — the
+	// MkdirAll below would then create directories on the host running the
+	// test rather than in a throwaway temp dir. The exe-nesting depth
+	// comment above already reasons about this; this assertion makes the
+	// invariant it depends on self-enforcing instead of relying on a human
+	// re-deriving it by hand on every future candidate-list change.
+	require.True(t, strings.HasPrefix(slot1, base), "slot1 %q must resolve inside t.TempDir() %q", slot1, base)
+	require.True(t, strings.HasPrefix(slot2, base), "slot2 %q must resolve inside t.TempDir() %q", slot2, base)
 	require.NoError(t, os.MkdirAll(slot1, 0o755))
 	seedPackageChrome(t, slot2, true)
 

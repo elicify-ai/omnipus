@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -41,11 +42,27 @@ const submittedHTML = `<!DOCTYPE html>
 </body>
 </html>`
 
+// macOSChromeAppPaths lists the standard install locations for Chrome/
+// Chromium's .app bundle executable on macOS (Homebrew cask, manual
+// download). Unlike Linux, these are essentially never on $PATH — a plain
+// `exec.LookPath("google-chrome")` always misses them — so they need their
+// own direct probe rather than relying on the PATH-name loop below (#615/
+// #617/#618 hardening review, F1: the original candidate list had "no macOS
+// .app entry").
+var macOSChromeAppPaths = []string{
+	"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+	"/Applications/Chromium.app/Contents/MacOS/Chromium",
+}
+
 func skipIfNoBrowser(t *testing.T) {
 	t.Helper()
 	// CI environments often have Chrome installed but the sandbox fails in
 	// containers (Zygote initialization crash). Skip in CI unless the operator
-	// explicitly opts in via OMNIPUS_BROWSER_E2E=1.
+	// explicitly opts in via OMNIPUS_BROWSER_E2E=1 — the gateway's own
+	// --no-sandbox default (chromeHardeningBaseFlags, exec_resolver.go)
+	// mitigates the crash for the managed launch path, so this opt-in exists
+	// to keep an operator's explicit consent for spending CI minutes on a
+	// real Chrome launch, not because the crash is still expected.
 	if os.Getenv("CI") != "" && os.Getenv("OMNIPUS_BROWSER_E2E") == "" {
 		t.Skip("skipping browser E2E test in CI — set OMNIPUS_BROWSER_E2E=1 to enable")
 	}
@@ -64,7 +81,34 @@ func skipIfNoBrowser(t *testing.T) {
 			return // real browser found
 		}
 	}
-	t.Skip("skipping browser E2E test: no working Chromium/Chrome binary found in PATH")
+	// macOS: probe the .app bundle locations directly (never reached via
+	// LookPath above).
+	if runtime.GOOS == "darwin" {
+		for _, path := range macOSChromeAppPaths {
+			probe := exec.Command(path, "--version")
+			if probe.Run() == nil {
+				return
+			}
+		}
+	}
+	// Nothing usable on PATH (or, on macOS, in the standard .app locations).
+	// Fall back to the same managed-install/download resolution the
+	// coordinator tests already use (resolveTestBinary, coordinator_test.go):
+	// it prefers an already-installed ~/.omnipus/browser/chromium before
+	// ever touching the network, and its result is cached (sync.Once) for
+	// the whole test binary run, so this costs nothing extra when another
+	// test in the same run has already resolved (or downloaded) a binary.
+	//
+	// This closes the local-developer regression #615 introduced: before
+	// this fallback, a developer with a working MANAGED Chrome install (no
+	// PATH entry at all — the common case, since `omnipus` never adds one)
+	// was silently skipped by the PATH-only probe above, even though the
+	// exact same binary was already one call away. resolveTestBinary itself
+	// calls t.Skipf (via this t) when even the managed/download path comes
+	// up empty, so this call either returns having found something, or ends
+	// the test here with a clear skip reason — there is no path back into
+	// this function afterward.
+	resolveTestBinary(t)
 }
 
 func startTestServer(t *testing.T) *httptest.Server {

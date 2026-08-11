@@ -79,6 +79,56 @@ jobs:
       - name: Verify pkg/tools/browser real-Chrome tests are skipIfNoBrowser-gated
         run: bash scripts/check-browser-tests-gated.sh
 
+  browser-e2e:
+    name: "#615: real-Chrome browser tests"
+    # Restores the real-Chrome coverage that #615's skipIfNoBrowser conversion
+    # silently removed. Before that conversion these 16 tests were gated by
+    # testing.Short(), which no gate here sets, so they ran and passed in the
+    # plain "Tests" job (`ok .../pkg/tools/browser 48.108s`). Converting them to
+    # skipIfNoBrowser was correct — it removed an undeclared ~100MB in-test
+    # Chrome-for-Testing download from every gate — but skipIfNoBrowser's CI
+    # branch fires on every GitHub runner (GitHub always sets CI=true), so
+    # without this job the coverage would be zero while every gate stayed green.
+    #
+    # This is a SEPARATE job rather than OMNIPUS_BROWSER_E2E=1 on the "Tests"
+    # job for two reasons: (a) the whole point is that Chrome is a DECLARED
+    # dependency installed by an action, which we want on exactly one job
+    # rather than slowing the main suite; (b) a Chrome/driver provisioning
+    # failure then reads as "browser-e2e red" instead of failing the entire
+    # test matrix for a reason unrelated to the code under review — the
+    # missing-browser false-RED trap documented in deploy/ci-worker/CLAUDE.md.
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+      # Opts past skipIfNoBrowser's CI branch. Set ONLY here.
+      OMNIPUS_BROWSER_E2E: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install Chrome (declared dependency, not an in-test download)
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+
+      - name: Verify Chrome resolves on PATH
+        # skipIfNoBrowser probes these names via exec.LookPath and runs
+        # `--version`. If this step fails the job fails loudly, rather than
+        # every test silently skipping and reporting green — which is the
+        # exact failure mode this job exists to close.
+        run: |
+          set -euo pipefail
+          command -v google-chrome || command -v chrome || command -v chromium
+          (google-chrome --version || chrome --version || chromium --version)
+
+      - name: Run pkg/tools/browser real-Chrome tests
+        run: go test -tags goolm,stdjson -count=1 -timeout 900s ./pkg/tools/browser/...
+
   typecheck:
     name: TypeScript Type Check
     # Runs `tsc -b --noEmit` (project-references build mode) against the repo

@@ -34,11 +34,23 @@ func resolveTestBinary(t *testing.T) string {
 	t.Helper()
 	sharedTestBinOnce.Do(func() {
 		// Prefer the gateway's real managed install (~/.omnipus/browser/chromium).
+		//
+		// platform is derived from cftPlatform() (installer.go), NOT
+		// hardcoded to "linux64" — the hardcoded value silently made this
+		// resolver Linux-only: on macOS a real managed install lives under
+		// mac-arm64/mac-x64, so findInstalledBinary("linux64") always missed
+		// it and every darwin run fell through to a fresh ~130 MB download
+		// (#615/#617/#618 hardening review, F1). A cftPlatform() error means
+		// an unsupported platform; fall through to the download attempt
+		// below, which will itself fail with a clear message for
+		// resolveTestBinary's t.Skipf to surface.
 		if home, err := os.UserHomeDir(); err == nil {
-			installRoot := filepath.Join(home, ".omnipus", "browser", "chromium")
-			if bin := findInstalledBinary(installRoot, "linux64"); bin != "" {
-				sharedTestBin = bin
-				return
+			if platform, perr := cftPlatform(); perr == nil {
+				installRoot := filepath.Join(home, ".omnipus", "browser", "chromium")
+				if bin := findInstalledBinary(installRoot, platform); bin != "" {
+					sharedTestBin = bin
+					return
+				}
 			}
 		}
 		// Else download once into a STABLE shared dir. Deliberately NOT
@@ -92,11 +104,17 @@ var (
 func resolveTestBinaryHeadlessShell(t *testing.T) string {
 	t.Helper()
 	sharedTestBinHeadlessShellOnce.Do(func() {
+		// See resolveTestBinary's matching comment: platform comes from
+		// cftPlatform(), not a hardcoded "linux64" (F1, #615/#617/#618
+		// hardening review) — otherwise this resolver never finds a real
+		// managed install on macOS.
 		if home, err := os.UserHomeDir(); err == nil {
-			installRoot := filepath.Join(home, ".omnipus", "browser", "chromium")
-			if bin := findInstalledBuild(installRoot, "linux64", headlessShellBuild()); bin != "" {
-				sharedTestBinHeadlessShell = bin
-				return
+			if platform, perr := cftPlatform(); perr == nil {
+				installRoot := filepath.Join(home, ".omnipus", "browser", "chromium")
+				if bin := findInstalledBuild(installRoot, platform, headlessShellBuild()); bin != "" {
+					sharedTestBinHeadlessShell = bin
+					return
+				}
 			}
 		}
 		sharedTestBinHeadlessShell, errSharedTestBinHeadlessShell = EnsureChromiumBuild(
