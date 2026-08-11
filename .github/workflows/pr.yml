@@ -55,37 +55,26 @@ jobs:
           fi
           echo "OK: no removed CLI verbs in infra."
 
-  race-lockstep:
-    name: "#615 CI Guards: race lockstep + browser test gating"
-    # #615 regression guards, both structural/grep-based checks (no Go build
-    # needed, so this job stays fast):
+  browser-tests-gated:
+    name: "#615 CI Guard: browser real-Chrome test gating"
+    # #615 regression guard (structural/grep-based check, no Go build needed,
+    # so this job stays fast): every pkg/tools/browser test that can launch a
+    # real Chrome (or trigger the ~100MB Chrome-for-Testing download that
+    # precedes it) must call the package's own skipIfNoBrowser(t) convention.
+    # #615 found 17 tests that didn't — 15 gated only by the wrong/no-op
+    # testing.Short(), and 2 with no gate at all. See
+    # scripts/check-browser-tests-gated.sh.
     #
-    # 1. The `-race` package list must be identical (as a set) between this
-    #    workflow's own "Run go test -race" step and
-    #    deploy/ci-worker/runci.sh's run_gorace — a worker gate that measures
-    #    something GitHub does not (or vice versa) is exactly how a green
-    #    local verdict stops predicting the real one. #615 found the two
-    #    files had already drifted in their surrounding rationale comments
-    #    while the package lists themselves stayed accidentally in sync;
-    #    this makes the invariant mechanical instead of relying on manual
-    #    review to catch it. See scripts/check-race-package-lockstep.sh for
-    #    the extraction/compare logic and deploy/ci-worker/CLAUDE.md for the
-    #    runci.sh redeploy step required whenever a fix here touches
-    #    deploy/ci-worker/runci.sh.
-    #
-    # 2. Every pkg/tools/browser test that can launch a real Chrome (or
-    #    trigger the ~100MB Chrome-for-Testing download that precedes it)
-    #    must call the package's own skipIfNoBrowser(t) convention. #615
-    #    found 17 tests that didn't — 15 gated only by the wrong/no-op
-    #    testing.Short(), and 2 with no gate at all. See
-    #    scripts/check-browser-tests-gated.sh.
+    # The SECOND #615 guard this job used to also run — a checker that
+    # diffed this workflow's "-race package list" against
+    # deploy/ci-worker/runci.sh's copy — is gone. scripts/race-packages.sh is
+    # now the single source both files consume (see that script's header for
+    # why a comparator was the wrong fix): there is no longer a second copy
+    # for a lockstep checker to compare against.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
-      - name: Verify -race package lists match
-        run: bash scripts/check-race-package-lockstep.sh
 
       - name: Verify pkg/tools/browser real-Chrome tests are skipIfNoBrowser-gated
         run: bash scripts/check-browser-tests-gated.sh
@@ -502,6 +491,13 @@ jobs:
           exit $rc
 
       - name: Run go test -race (concurrency-sensitive packages)
+        # The PACKAGE LIST itself lives in scripts/race-packages.sh (F5,
+        # #615/#617/#618 hardening review) — that is the single source both
+        # this step and deploy/ci-worker/runci.sh's run_gorace consume, so
+        # they can no longer drift. The comments below explain WHY each
+        # package earned its place; edit scripts/race-packages.sh, not this
+        # comment block, to add or remove one.
+        #
         # pkg/agent is now INCLUDED. It was excluded for "2 pre-existing races in
         # unrelated tests"; a full `go test -race -count=1 -p 1 ./pkg/agent/` run
         # on 2026-07-26 reported ZERO data races (ok, 124.6s), so the exclusion
@@ -540,11 +536,15 @@ jobs:
         # under Lock, on the path of every log call in the binary — reverting
         # the fix would have kept CI green forever without this line, since the
         # package's only other coverage is the plain (non-race) `go test` job
-        # above, which cannot detect a race by construction. Timeout left at
-        # 600s: verified locally, the package's whole race suite (a single
-        # 300ms-deadline goroutine-hammer test plus the ordinary unit tests)
-        # completes in ~1.3s under -race — negligible next to the headroom the
-        # 240s→600s raise already bought pkg/agent/pkg/gateway/tests/integration.
+        # above, which cannot detect a race by construction. The package's
+        # whole race suite (a single 300ms-deadline goroutine-hammer test plus
+        # the ordinary unit tests) completes in ~1.3s under -race — negligible
+        # next to the headroom the 240s→600s raise already bought
+        # pkg/agent/pkg/gateway/tests/integration. (Timeout was raised again,
+        # 600s→900s, when pkg/task/pkg/plan/pkg/tools/pkg/providers joined
+        # below — see that entry for why. The 900s figure in the invocation
+        # further down covers BOTH raises; there is no "600s" left anywhere
+        # in this step by design.)
         #
         # pkg/task, pkg/plan, pkg/tools and pkg/providers were added 2026-08-10,
         # and they earned it on the first run: `go test -race ./pkg/tools/...`
@@ -555,7 +555,10 @@ jobs:
         # test. Neither was reachable by any gate that existed before: this
         # list is the only race surface in the project, and it omitted the
         # packages holding the tool registry, the delegation tool, the task
-        # store and every LLM provider.
+        # store and every LLM provider. Timeout raised 600s → 900s here to
+        # accommodate the four added packages (pkg/tools in particular pulls
+        # in pkg/tools/browser — see that entry below for the further cost
+        # that package added on top).
         #
         # pkg/tools/browser joined the recursive glob on 2026-08-11 (#615).
         # It was originally left off `./pkg/tools/...` on the theory that the
@@ -575,13 +578,28 @@ jobs:
         # two tight wall-clock assertions in coldstart_bound_test.go were
         # exactly the shape pkg/task hit in the entry above (race
         # instrumentation blowing a <200ms bound). Both are fixed: every
-        # real-Chrome test now uses skipIfNoBrowser (which also removed an
-        # undeclared ~100MB Chrome-for-Testing network download from every CI
-        # gate that reached these tests), and the two wall-clock assertions
-        # now use a //go:build race / !race split bound
+        # real-Chrome test now uses skipIfNoBrowser, and the two wall-clock
+        # assertions now use a //go:build race / !race split bound
         # (runFirstAttachPromptBound) exactly like pkg/task's livenessBound.
         # `go test -race ./pkg/tools/...` is verified race-clean before this
         # change lands.
+        #
+        # CORRECTION (found in the #615/#617/#618 hardening review, F1): the
+        # line that used to sit here framed skipIfNoBrowser's CI check as
+        # having "also removed an undeclared ~100MB Chrome-for-Testing
+        # network download from every CI gate" — true, but stated as a pure
+        # benefit. It was not: skipIfNoBrowser's own CI branch (`CI != "" &&
+        # OMNIPUS_BROWSER_E2E == ""` → skip) fires unconditionally on every
+        # GitHub-hosted runner (GitHub always sets `CI=true`), and
+        # `OMNIPUS_BROWSER_E2E` was set NOWHERE in .github/, deploy/,
+        # Makefile, or scripts/ — so this step's real-Chrome coverage for
+        # pkg/tools/browser went from 16 tests actually running (verified:
+        # `ok .../pkg/tools/browser 48.108s` above) to ZERO, silently, with
+        # every gate still green. The "browser-e2e" job further down in this
+        # workflow restores that coverage with Chrome as a declared
+        # dependency (not the undeclared in-test download #615 removed) —
+        # see that job's own comment for why it is a separate job rather
+        # than just setting OMNIPUS_BROWSER_E2E=1 here.
         #
         # DATA RACE carve-out (never routed through the flake filter): a race
         # that manifests under the default parallel `-p` (NumCPU) run but
@@ -598,7 +616,9 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           set +e
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 900s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... ./pkg/logger/... ./pkg/task/... ./pkg/plan/... ./pkg/tools/... ./pkg/providers/... ./tests/integration/... 2>&1)
+          # shellcheck disable=SC2046 — intentional word-splitting: race-packages.sh
+          # prints one package path per line with no globs/spaces to mis-split.
+          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 900s $(scripts/race-packages.sh) 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a

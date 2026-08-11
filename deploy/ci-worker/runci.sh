@@ -118,18 +118,21 @@ run_lint() {
       | sh -s -- -b /cache/go/bin "$GOLANGCI_VERSION" || return 1
   fi
   CGO_ENABLED=0 golangci-lint run --build-tags="$TAGS" || return 1
-  # #615 regression guards (both check the same thing on their respective CI
-  # surfaces — see the matching job in .github/workflows/pr.yml):
-  #   - the -race package list must stay identical (as a set) between this
-  #     file's own run_gorace and pr.yml's "Run go test -race" step, or a
-  #     green worker verdict stops predicting the real GitHub one.
-  #   - every pkg/tools/browser real-Chrome test must be gated by the
-  #     package's own skipIfNoBrowser(t) convention.
-  bash scripts/check-race-package-lockstep.sh || return 1
+  # #615 regression guard: every pkg/tools/browser real-Chrome test must be
+  # gated by the package's own skipIfNoBrowser(t) convention.
+  #
+  # There is deliberately NO -race package-list lockstep check here any more.
+  # That invariant used to be enforced by comparing this file against
+  # .github/workflows/pr.yml with a regex scraper, which could not see the
+  # drift class most likely to produce a false verdict: this file is executed
+  # from /cache/runci.sh on the worker, while the checker read the repo copy.
+  # Both surfaces now consume scripts/race-packages.sh — which the worker gets
+  # from the checkout — so the lists cannot diverge at all. See run_gorace.
   bash scripts/check-browser-tests-gated.sh || return 1
-  # #617 regression guard, same lockstep reasoning: pr.yml runs this in its own
-  # tool-error-status-lint job, so omitting it here lets the worker report a
-  # green lint while GitHub's is red.
+  # #618 and #617 regression guards, same reasoning: pr.yml runs each in its
+  # own job, so omitting either here lets the worker report a green lint while
+  # GitHub's is red.
+  bash scripts/check-no-handwritten-wire-types.sh || return 1
   bash scripts/check-no-tool-error-from-status.sh
 }
 # Full suite with a flake filter: a package that fails the contended full run but passes when
@@ -156,8 +159,11 @@ run_lint() {
 # repo's own standard CI surface structurally incapable of catching the defect
 # class it most needed to catch.
 #
-# The package list, timeout, CGO_ENABLED=1 and the DATA RACE carve-out are
-# COPIED FROM .github/workflows/pr.yml's "Run go test -race" step deliberately.
+# The package list is NO LONGER copied from .github/workflows/pr.yml — both
+# surfaces now consume scripts/race-packages.sh, the single source of truth,
+# on the scripts/e2e-shards.sh precedent. Edit that file, not this one. The
+# timeout, CGO_ENABLED=1 and the DATA RACE carve-out are still deliberately
+# mirrored from pr.yml's "Run go test -race" step; keep those in step by hand.
 #
 # pkg/task, pkg/plan, pkg/tools and pkg/providers joined the list on
 # 2026-08-10 (both files together, as the rule below demands) after a manual
@@ -184,20 +190,18 @@ run_lint() {
 # a //go:build race / !race split bound (runFirstAttachPromptBound), exactly
 # like pkg/task's livenessBound above.
 #
-# Do not "improve" one file without the other: a worker gate that measures something
-# GitHub does not (or vice versa) is exactly how a green local verdict stops
-# predicting the real one. -race forces cgo, which is why CGO_ENABLED=1 here
-# does not weaken the pure-Go guarantee — that is proved by the CGO_ENABLED=0
-# build/test gates, not by this one.
+# A worker gate that measures something GitHub does not (or vice versa) is
+# exactly how a green local verdict stops predicting the real one — which is
+# why the package list is now shared rather than duplicated. -race forces cgo,
+# which is why CGO_ENABLED=1 here does not weaken the pure-Go guarantee — that
+# is proved by the CGO_ENABLED=0 build/test gates, not by this one.
 run_gorace() {
   ensure_spa_stub
   local out
+  # shellcheck disable=SC2046 — intentional word-splitting: race-packages.sh
+  # emits a space-separated package list that must expand to separate args.
   out=$(CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s \
-    ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... \
-    ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... \
-    ./pkg/logger/... ./pkg/task/... ./pkg/plan/... ./pkg/tools/... \
-    ./pkg/providers/... \
-    ./tests/integration/... 2>&1)
+    $(scripts/race-packages.sh) 2>&1)
   local code=$?
   echo "$out"
   # Checked BEFORE the exit-code short-circuit, for the same reason pr.yml and

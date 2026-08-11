@@ -20,12 +20,15 @@ as if it were a full pass):
    isolated re-run is itself grepped for `DATA RACE` (checking only its exit code would
    let a race reported in the second run be stamped `FLAKE (passed isolated)` — the
    carve-out's own rationale is that a race can be reported without flipping the exit
-   code). Both files are kept in lockstep by `scripts/check-race-package-lockstep.sh` (wired
-   into the `lint` gate here and the `race-lockstep` job — "#615 CI Guards: race lockstep +
-   browser test gating" — in pr.yml) — it fails loudly if the two package lists ever diverge
-   again. The same job/gate also runs `scripts/check-browser-tests-gated.sh`, which fails if
-   any pkg/tools/browser test launches real Chrome without going through the package's own
-   `skipIfNoBrowser(t)` convention.
+   code). The two package lists can no longer diverge, because there is only one: both
+   surfaces consume `scripts/race-packages.sh` (the `scripts/e2e-shards.sh` precedent —
+   one file, both consumers). Edit that script, never the invocations. This replaced an
+   earlier `check-race-package-lockstep.sh` comparator, which could not see the drift class
+   that matters most here: it read the repo copy of `runci.sh`, while the worker executes
+   `/cache/runci.sh`. The `lint` gate here and pr.yml's guard job still run
+   `scripts/check-browser-tests-gated.sh`, which fails if any pkg/tools/browser test
+   launches real Chrome without going through the package's own `skipIfNoBrowser(t)`
+   convention.
    `pkg/tools`/`pkg/providers` joined the list 2026-08-10, and `pkg/tools/browser` (previously
    excluded — see the `go-race` package-list comment in this file's `run_gorace` for the full
    #615 history: the "launches real Chrome, hits missing dbus" exclusion rationale was wrong,
