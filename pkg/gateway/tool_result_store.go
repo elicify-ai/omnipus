@@ -301,12 +301,19 @@ func maybeOffloadResult(
 // A discriminator that is not in this set is left as prose and forwarded
 // unchanged, which is why an unrelated `{"error":"timeout"}` from some other
 // tool is not mistaken for one of these.
-var structuredFailureDiscriminators = map[string]struct{}{
-	tools.DelegationDeniedCode:      {},
-	tools.FileExistsRefusalCode:     {},
-	tools.PermissionDeniedCode:      {},
-	tools.ToolAssemblyDuplicateCode: {},
-}
+// DERIVED, deliberately, from tools.AllStructuredFailureCodes() rather than
+// re-typing the same literals in a second package. Re-typing them is what let
+// issue #618 ship: a discriminator existed in pkg/tools with a real, reachable
+// producer while this hand-maintained list simply never learned about it, and
+// nothing anywhere compared the two. A new member added to the pkg/tools
+// enumeration now lands here automatically.
+var structuredFailureDiscriminators = func() map[string]struct{} {
+	m := make(map[string]struct{}, len(tools.AllStructuredFailureCodes()))
+	for _, code := range tools.AllStructuredFailureCodes() {
+		m[code] = struct{}{}
+	}
+	return m
+}()
 
 // unparseableFailureWarns counts how many unparseable structured payloads we
 // have seen, so the warning below can be logged sparsely.

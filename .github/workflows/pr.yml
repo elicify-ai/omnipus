@@ -116,18 +116,55 @@ jobs:
         with:
           chrome-version: stable
 
-      - name: Verify Chrome resolves on PATH
-        # skipIfNoBrowser probes these names via exec.LookPath and runs
-        # `--version`. If this step fails the job fails loudly, rather than
-        # every test silently skipping and reporting green — which is the
-        # exact failure mode this job exists to close.
+      - name: Verify Chrome resolves under a name skipIfNoBrowser probes
+        # skipIfNoBrowser (pkg/tools/browser/browser_e2e_test.go) probes
+        # EXACTLY these four names via exec.LookPath. Bare `chrome` is NOT
+        # among them, and setup-chrome can install the executable under that
+        # name — so checking for "some chrome binary" would pass while every
+        # test still skipped. Check the names the code actually looks for.
         run: |
           set -euo pipefail
-          command -v google-chrome || command -v chrome || command -v chromium
-          (google-chrome --version || chrome --version || chromium --version)
+          for n in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$n" >/dev/null 2>&1; then
+              echo "found $n: $("$n" --version)"; exit 0
+            fi
+          done
+          echo "::error::No Chrome binary under a name skipIfNoBrowser probes" >&2
+          echo "PATH candidates present: $(command -v chrome || true)" >&2
+          exit 1
 
       - name: Run pkg/tools/browser real-Chrome tests
-        run: go test -tags goolm,stdjson -count=1 -timeout 900s ./pkg/tools/browser/...
+        # Assert the tests RAN — do not just assert the process exited 0.
+        # `go test` exits 0 when every test skips, which is exactly how #615's
+        # real-Chrome coverage went to zero while all gates stayed green.
+        #
+        # Two deliberate choices here:
+        #  * NON-recursive ./pkg/tools/browser. Every skipIfNoBrowser call site
+        #    is in the top-level package; the subpackages carry unrelated skips
+        #    (webrtc/inputdc_backpressure_test.go ends in an UNCONDITIONAL
+        #    t.Skip), so a recursive skip-ban would fail this job on every run
+        #    for reasons that have nothing to do with Chrome.
+        #  * Assert on skipIfNoBrowser's OWN skip reasons plus a floor on the
+        #    pass count, rather than banning every SKIP. Platform-gated skips
+        #    are legitimate; a browser skip is the failure this job exists to
+        #    catch. The floor catches the case where the suite runs but the
+        #    gated tests silently vanish.
+        run: |
+          set -euo pipefail
+          go test -v -tags goolm,stdjson -count=1 -timeout 900s ./pkg/tools/browser 2>&1 | tee /tmp/browser-e2e.log
+
+          if grep -qE 'skipping browser E2E test|no managed Chrome for' /tmp/browser-e2e.log; then
+            echo "::error::skipIfNoBrowser skipped — real-Chrome coverage is NOT running despite OMNIPUS_BROWSER_E2E=1" >&2
+            grep -E 'skipping browser E2E test|no managed Chrome for' /tmp/browser-e2e.log >&2
+            exit 1
+          fi
+
+          passes=$(grep -c -- '--- PASS' /tmp/browser-e2e.log || true)
+          echo "pkg/tools/browser passing tests: $passes"
+          if [ "$passes" -lt 40 ]; then
+            echo "::error::Only $passes tests passed; expected >=40 real-Chrome-capable tests. Coverage has silently shrunk." >&2
+            exit 1
+          fi
 
   typecheck:
     name: TypeScript Type Check

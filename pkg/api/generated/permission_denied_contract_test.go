@@ -14,7 +14,10 @@ import "testing"
 // fmt.Sprintf's %q verb — Go-string quoting, not JSON quoting — which breaks
 // on invalid UTF-8 or a control byte outside \n\t\r, and neither had a
 // contract schema, an allow-list entry, or a length budget at all. A payload
-// that violates this schema is dropped at the SPA edge (or fails
+// that violates this schema is NOT dropped at the SPA edge — the frame's
+// `result` generates as z.unknown()/any, so the oneOf/anyOf union is
+// documentary in both artifacts today (ADR-060 W1). It instead fails the
+// hand-written detector and renders as a raw JSON blob (or fails
 // json.Unmarshal downstream entirely), which leaves the caller with NOTHING —
 // strictly worse than the prose the discriminator replaced. The minLength:1
 // constraints below are not decoration.

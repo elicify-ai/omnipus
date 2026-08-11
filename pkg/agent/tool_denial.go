@@ -305,7 +305,11 @@ func denialPayloadJSON(tool, reason string, cls DenialClass) string {
 		// Fully static fallback — no caller-supplied content interpolated —
 		// so a marshal failure (should not happen for this plain-string
 		// payload) can never itself reintroduce the escaping bug this
-		// function exists to close.
+		// function exists to close. Reported rather than swallowed: this
+		// branch replaces the caller's real reason and tool with fixed text,
+		// which is exactly the kind of substitution that should never happen
+		// invisibly.
+		tools.ReportStructuredFailureMarshalError("pkg/agent.denialPayloadJSON", tool, tools.PermissionDeniedCode, err)
 		return `{"error":"permission_denied","message":"An internal error occurred while building the denial payload. Do not retry; stop and report the blocker.","tool":"unknown","reason":"internal_error","permanent":true}`
 	}
 	return string(encoded)

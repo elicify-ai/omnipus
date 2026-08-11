@@ -7,7 +7,9 @@ import "testing"
 //
 // The producer is pkg/tools.FileExistsRefusalResult, whose whole job is to make
 // a write refusal machine-distinguishable from an I/O failure. A payload that
-// violates the schema is dropped at the SPA edge, which leaves the caller with
+// violates the schema is NOT dropped at the SPA edge — the union is documentary
+// in both generated artifacts (ADR-060 W1); it renders as a raw JSON blob,
+// which leaves the caller with
 // NOTHING — strictly worse than the prose the discriminator replaced. So the
 // four minLength:1 constraints are not decoration; they are the difference
 // between the fix working and the fix silently un-doing the thing it fixed.

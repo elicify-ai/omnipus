@@ -8107,7 +8107,9 @@ turnLoop:
 			} else {
 				// Fully static fallback — no interpolated content — so a
 				// marshal failure can never itself reintroduce the escaping
-				// bug this fix exists to close.
+				// bug this fix exists to close. Reported rather than
+				// swallowed: this branch discards dedupErr's real text.
+				tools.ReportStructuredFailureMarshalError("pkg/agent.checkToolDedupInvariant", "", tools.ToolAssemblyDuplicateCode, encErr)
 				denyMsg = `{"error":"tool_assembly_duplicate","message":"An internal error occurred while building the duplicate tool-assembly payload."}`
 			}
 			syntheticDenyMsg := providers.Message{Role: "system", Content: denyMsg}

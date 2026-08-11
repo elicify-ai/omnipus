@@ -302,8 +302,30 @@ function InlineThinkingIndicator() {
 }
 
 // Fallback tool UI for tools without a registered makeAssistantToolUI component.
-// ToolCallMessagePartProps passes: toolCallId, toolName, args, result, status
-function FallbackToolUI(props: { toolCallId: string; toolName: string; args: unknown; result: unknown; status: import('@assistant-ui/react').MessagePartStatus }) {
+// ToolCallMessagePartProps passes: toolCallId, toolName, args, result, status,
+// isError.
+//
+// issue #617: this is the LIVE path for every tool with no registered UI —
+// all system.*, every MCP tool, skills — so it is the widest single surface
+// the bug touched, and it was the last one still broken. It must pass isError
+// explicitly. Without it GenericToolCall falls back to
+// `status.type === 'incomplete' || !!error`, and BOTH halves are false for an
+// ordinary failure: the part carries a result so its status is 'complete',
+// and pkg/gateway/websocket.go deliberately leaves the frame's `error` unset
+// when Result still holds the plain text ("setting Error would ship the
+// identical text twice in one frame"). The result rendered a green "Done".
+//
+// Sourced from the store's status rather than the part's isError prop for the
+// same reason the replay branch is: the store record is the one signal that is
+// populated on every path, live and reloaded alike.
+function FallbackToolUI(props: {
+  toolCallId: string
+  toolName: string
+  args: unknown
+  result: unknown
+  status: import('@assistant-ui/react').MessagePartStatus
+  isError?: boolean
+}) {
   const storeToolCalls = useChatStore((s) => s.toolCalls)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const liveCall = storeToolCalls[props.toolCallId]
@@ -313,6 +335,7 @@ function FallbackToolUI(props: { toolCallId: string; toolName: string; args: unk
       args={props.args}
       result={liveCall?.result ?? props.result}
       status={props.status}
+      isError={props.isError ?? liveCall?.status === 'error'}
       error={liveCall?.error}
       durationMs={liveCall?.duration_ms}
       sessionId={activeSessionId ?? ''}

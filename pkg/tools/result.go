@@ -253,6 +253,16 @@ var structuredFailureMarshalFailureTotal atomic.Int64
 // warnStructuredFailureMarshalError logs a marshal-failure fallback with
 // enough context to diagnose it (producer, tool, discriminator, error) and
 // bumps structuredFailureMarshalFailureTotal.
+// ReportStructuredFailureMarshalError is the exported entry point for
+// producers OUTSIDE this package (pkg/agent's denialPayloadJSON and the
+// tool-assembly-duplicate guard in loop.go) whose fallback also substitutes a
+// static payload for real caller-supplied content. They were built with the
+// same static-fallback design as the producers here but had no observability
+// at all, which is the silent-failure shape this whole family exists to close.
+func ReportStructuredFailureMarshalError(producer, tool, discriminator string, err error) {
+	warnStructuredFailureMarshalError(producer, tool, discriminator, err)
+}
+
 func warnStructuredFailureMarshalError(producer, tool, discriminator string, err error) {
 	structuredFailureMarshalFailureTotal.Add(1)
 	slog.Warn("tools: structured failure payload marshal failed; using fallback",
