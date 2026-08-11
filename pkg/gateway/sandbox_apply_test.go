@@ -325,16 +325,23 @@ func TestApplySandbox_FallbackBackendNoSeccompInstall(t *testing.T) {
 	if result.ApplyState.SeccompEnforced {
 		t.Error("FallbackBackend must not report SeccompEnforced=true")
 	}
-	// The extra notes must mention graceful degradation so operators
-	// know why the requested enforce mode didn't actually install.
+	// The extra notes must mention graceful degradation so operators know why
+	// the requested enforce mode didn't actually install.
+	//
+	// The wording is platform-specific by design: "kernel does not support
+	// Landlock" is accurate on Linux and actively misleading on macOS, where
+	// the causes are a missing sandbox-exec or the operator's own
+	// OMNIPUS_SEATBELT_DISABLE kill-switch. Assert the PROPERTY (the operator
+	// is told enforcement degraded to application level) rather than one
+	// platform's phrasing.
 	found := false
 	for _, note := range result.ApplyState.ExtraNotes {
-		if strings.Contains(note, "kernel does not support Landlock") {
+		if strings.Contains(note, "application-level enforcement") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected degradation note in ExtraNotes; got %v", result.ApplyState.ExtraNotes)
+		t.Errorf("expected a degradation note naming the application-level fallback; got %v", result.ApplyState.ExtraNotes)
 	}
 }
