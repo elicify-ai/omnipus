@@ -22,6 +22,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"log/slog"
 	"os/exec"
 	"syscall"
@@ -34,17 +35,43 @@ import (
 // can surface the warning to operators in the tool result.
 const memoryLimitSupported = false
 
-// applyPlatformHardening configures the child's SysProcAttr. Darwin does
-// not expose Pdeathsig at the syscall layer; the closest analogue is
-// Setpgid so the parent can SIGTERM the whole tree on shutdown.
+// applyPlatformHardening configures the child's SysProcAttr and, when a
+// Seatbelt policy is installed, wraps the child so it starts inside that
+// profile.
 //
-// Returns nil so build_static / web_serve dev mode can run on darwin (Tier 2
-// is cross-platform, Tier 3 is gated separately at the tool layer).
+// This is darwin's analogue of Linux's restrictCurrentThreadIfNeeded: it is
+// the single seam where a hardened-exec child acquires kernel-level
+// confinement. On Linux the spawning THREAD enters the Landlock domain and the
+// child inherits it; on macOS the child must be launched under sandbox-exec
+// instead, because Seatbelt cannot confine an already-running process without
+// CGo (hard constraint #2). See backend_darwin_seatbelt.go's header.
+//
+// Setpgid is retained regardless: darwin does not expose Pdeathsig, so the
+// process group is how the parent SIGTERMs the whole tree on shutdown.
+//
+// Failure to apply an installed policy returns an error, which aborts the
+// spawn. Falling through to an UNCONFINED child would silently downgrade the
+// security boundary — the same fail-closed contract Linux uses when
+// landlock_restrict_self fails.
 func applyPlatformHardening(cmd *exec.Cmd, _ Limits) error {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.Setpgid = true
+
+	// No policy installed (e.g. sandbox mode off, or the fallback backend was
+	// selected) means no wrapping — children run exactly as they did before
+	// this backend existed.
+	sb := CurrentSeatbeltBackend()
+	if sb == nil {
+		return nil
+	}
+
+	// Pass an empty policy so ApplyToCmd reuses the profile Apply already
+	// rendered and validated, rather than re-deriving it per spawn.
+	if err := sb.ApplyToCmd(cmd, SandboxPolicy{}); err != nil {
+		return fmt.Errorf("hardened_exec/darwin: apply seatbelt profile to child: %w", err)
+	}
 	return nil
 }
 

@@ -311,24 +311,15 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	// anything and the sandbox degrades gracefully. FR-J-014 gates seccomp
 	// strictly on LinuxBackend selection — no seccomp-alone.
 	linuxBE, isLinux := backend.(linuxApplier)
-	if !isLinux {
-		// Graceful degradation path. Not an error; operator asked for
-		// enforce/permissive but the kernel cannot provide it. Hard
-		// Constraint #4 (CLAUDE.md) requires we continue serving with
-		// application-level fallback rather than crashing.
-		slog.Warn("sandbox.degraded",
-			"reason", "kernel_too_old_or_non_linux",
-			"selected_backend", backendName,
-			"requested_mode", string(mode))
-		result.Mode = mode
-		result.ApplyState = sandbox.ApplyState{
-			Mode: mode,
-			ExtraNotes: []string{
-				"kernel does not support Landlock; falling back to application-level enforcement",
-			},
-		}
-		return result, nil
-	}
+
+	// NOTE — non-Linux backends are handled AFTER the policy is computed, in
+	// the "non-Linux apply" block below. This function used to return right
+	// here for every non-Linux backend, which was correct while darwin's only
+	// option was FallbackBackend (nothing to apply). Once ADR-052 Phase-3 AC-6
+	// gave macOS a real Seatbelt backend, that early return became a silent
+	// hole: SelectBackend reported "seatbelt", the boot log named it, and
+	// backend.Apply() was NEVER called — so no profile was ever installed and
+	// every child ran completely unconfined. Do not restore the early return.
 
 	// Step 5 — Compute the workspace policy. $OMNIPUS_HOME gets RWX;
 	// system libs get R; user AllowedPaths gets R or RW with the
@@ -367,7 +358,15 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	if rep, ok := backend.(interface{ ABIVersion() int }); ok {
 		abiVersion = rep.ABIVersion()
 	}
-	if abiVersion >= 4 && opts.Cfg != nil {
+
+	// Port rules are only worth computing when the selected backend actually
+	// enforces them. Landlock needs ABI v4+; Seatbelt enforces bind/connect
+	// rules unconditionally and exposes no ABI version at all (abiVersion
+	// stays 0 on darwin), so gating purely on abiVersion would silently strip
+	// every dev-server port rule from the macOS profile.
+	enforcePortRules := abiVersion >= 4 || backendName == seatbeltBackendName
+
+	if enforcePortRules && opts.Cfg != nil {
 		pr := opts.Cfg.Sandbox.DevServerPortRange
 		if !pr.IsZero() {
 			for p := pr.Min(); p <= pr.Max(); p++ {
@@ -392,7 +391,7 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	// the kernel intercepting at connect(2). Done after DefaultPolicy
 	// returns so we don't have to thread an additional parameter through
 	// DefaultPolicy's call sites (the redteam test, agent loop, etc.).
-	if abiVersion >= 4 && opts.Cfg != nil {
+	if enforcePortRules && opts.Cfg != nil {
 		pr := opts.Cfg.Sandbox.DevServerPortRange
 		if !pr.IsZero() {
 			extra := make([]sandbox.NetPortRule, 0, pr.Max()-pr.Min()+1)
@@ -414,6 +413,60 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 		// there is no loopback connect(2) to allow-list for it anymore.
 	}
 	result.Policy = policy
+
+	// Step 5.4 — non-Linux apply. Reached for every backend that is not the
+	// LinuxBackend; see the NOTE at the linuxApplier type assertion above for
+	// why this is not an early return any more.
+	if !isLinux {
+		applier, canApply := backend.(policyApplier)
+		if canApply && backendName == seatbeltBackendName {
+			// macOS kernel sandbox (ADR-052 Phase-3 AC-6). Apply installs the
+			// rendered profile as the process-wide active policy; every
+			// hardened-exec child is then wrapped by applyPlatformHardening.
+			if err := applier.Apply(policy); err != nil {
+				slog.Error("sandbox.apply_failed",
+					"error", err,
+					"mode", string(mode),
+					"backend", backendName)
+				// Fail closed, matching the Linux contract: if the operator
+				// asked for enforcement and the backend cannot deliver it,
+				// booting unconfined would silently downgrade the boundary.
+				return result, fmt.Errorf("sandbox: Seatbelt Apply failed: %w", err)
+			}
+			result.Mode = mode
+			result.ApplyState = sandbox.ApplyState{
+				Mode: mode,
+				ExtraNotes: []string{
+					"macOS Seatbelt: hardened-exec children are confined via sandbox-exec; " +
+						"the gateway process itself is not (no-CGo limitation, see ADR-052 Phase-3 AC-6)",
+				},
+			}
+			slog.Info("sandbox.applied",
+				"backend", backendName,
+				"mode", string(mode),
+				"filesystem_rules", len(policy.FilesystemRules),
+				"connect_ports", len(policy.ConnectPortRules),
+				"bind_ports", len(policy.BindPortRules))
+			return result, nil
+		}
+
+		// Graceful degradation path. Not an error; operator asked for
+		// enforce/permissive but the platform cannot provide it. Hard
+		// Constraint #4 (CLAUDE.md) requires we continue serving with
+		// application-level fallback rather than crashing.
+		slog.Warn("sandbox.degraded",
+			"reason", "kernel_too_old_or_non_linux",
+			"selected_backend", backendName,
+			"requested_mode", string(mode))
+		result.Mode = mode
+		result.ApplyState = sandbox.ApplyState{
+			Mode: mode,
+			ExtraNotes: []string{
+				"kernel does not support Landlock; falling back to application-level enforcement",
+			},
+		}
+		return result, nil
+	}
 
 	// Step 5.5 — process-level self-hardening (PR_SET_DUMPABLE=0). Closes
 	// C6 from the insider-pentest report: same-uid children can read
@@ -489,6 +542,19 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	}
 
 	return result, nil
+}
+
+// seatbeltBackendName is the name SeatbeltBackend.Name() reports. applySandbox
+// matches on it explicitly rather than on "any backend that implements Apply",
+// because FallbackBackend implements Apply too and must keep its existing
+// degraded-path behaviour untouched.
+const seatbeltBackendName = "seatbelt"
+
+// policyApplier is the narrow interface for a backend that installs a policy
+// without the Landlock-specific ApplyWithMode/seccomp sequence. Used for the
+// macOS Seatbelt backend (ADR-052 Phase-3 AC-6).
+type policyApplier interface {
+	Apply(policy sandbox.SandboxPolicy) error
 }
 
 // linuxApplier is the internal narrow interface that applySandbox uses to

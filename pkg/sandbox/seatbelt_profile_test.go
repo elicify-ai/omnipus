@@ -5,6 +5,8 @@
 package sandbox
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,23 +14,51 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// policyBlock returns only the policy-derived portion of a rendered profile —
+// everything from the filesystem-allows marker onward.
+//
+// Assertions of the form "a read-only rule must not emit file-write" are about
+// the rules the POLICY produced, not about the whole file. The macOS system
+// preamble legitimately contains file-read*, process-exec and a
+// network-outbound allow for the resolver socket, so asserting NotContains
+// over the entire profile would fail for reasons that have nothing to do with
+// the property under test. Scoping to the policy block keeps those assertions
+// meaningful instead of forcing them to be watered down.
+func policyBlock(t *testing.T, profile string) string {
+	t.Helper()
+	const marker = ";; --- Filesystem allows"
+	idx := strings.Index(profile, marker)
+	require.NotEqual(t, -1, idx, "rendered profile must contain the filesystem-allows marker")
+	return profile[idx:]
+}
+
 // TestRenderSeatbeltProfile is the table-driven driver covering directive
 // presence, network default-deny, chrome/OMNIPUS_HOME allows, and path
-// validation. It runs on Linux because renderSeatbeltProfile is pure string
-// generation with no platform dependency.
+// validation.
+//
+// It runs on any platform, but note that renderSeatbeltProfile is NOT pure
+// string generation any more: it resolves symlinks against the real
+// filesystem, because Seatbelt matches resolved paths and emitting a declared
+// path verbatim would produce filters that silently match nothing on macOS
+// (see resolveSeatbeltPath). To stay deterministic across Linux and macOS,
+// these cases use paths that do not exist on either — EvalSymlinks then fails
+// and the declared path is emitted unchanged. Symlink resolution itself is
+// covered separately by TestRenderSeatbeltProfile_ResolvesSymlinkedPaths,
+// which builds real symlinks under t.TempDir().
 func TestRenderSeatbeltProfile(t *testing.T) {
-	// A representative workspace policy: $OMNIPUS_HOME RWX, /tmp RWX, the
-	// bundled-Chrome path (R-only; lives under /opt on Linux and
-	// /Applications on macOS — the renderer is path-agnostic), plus the
-	// default connect ports (DNS/HTTP/HTTPS).
-	omnipusHome := "/Users/op/.omnipus"
-	chromePath := "/Applications/Chromium.app/Contents/MacOS/Chromium"
+	// A representative workspace policy: $OMNIPUS_HOME RWX, a scratch dir RWX,
+	// the bundled-Chrome path (R-only), plus the default connect ports
+	// (DNS/HTTP/HTTPS). None of these paths exist on a test host, which is
+	// what makes the expected output identical on Linux and macOS.
+	omnipusHome := "/omnipus-test/op/.omnipus"
+	scratchDir := "/omnipus-test/scratch"
+	chromePath := "/omnipus-test/Chromium.app/Contents/MacOS/Chromium"
 
 	t.Run("full workspace policy emits expected directives", func(t *testing.T) {
 		policy := SandboxPolicy{
 			FilesystemRules: []PathRule{
 				{Path: omnipusHome, Access: AccessRead | AccessWrite | AccessExecute},
-				{Path: "/tmp", Access: AccessRead | AccessWrite | AccessExecute},
+				{Path: scratchDir, Access: AccessRead | AccessWrite | AccessExecute},
 				{Path: chromePath, Access: AccessRead},
 			},
 			ConnectPortRules: []NetPortRule{{Port: 53}, {Port: 80}, {Port: 443}},
@@ -47,8 +77,8 @@ func TestRenderSeatbeltProfile(t *testing.T) {
 		assert.Contains(t, out, `(allow file-read* (subpath "`+omnipusHome+`"))`)
 		assert.Contains(t, out, `(allow file-write* (subpath "`+omnipusHome+`"))`)
 
-		// /tmp RWX.
-		assert.Contains(t, out, `(allow process-exec (subpath "/tmp"))`)
+		// Scratch dir RWX.
+		assert.Contains(t, out, `(allow process-exec (subpath "`+scratchDir+`"))`)
 
 		// Chrome path R-only: read present, no write/exec.
 		assert.Contains(t, out, `(allow file-read* (subpath "`+chromePath+`"))`)
@@ -65,21 +95,22 @@ func TestRenderSeatbeltProfile(t *testing.T) {
 
 	t.Run("read-only rule emits only file-read", func(t *testing.T) {
 		out, err := renderSeatbeltProfile(SandboxPolicy{
-			FilesystemRules: []PathRule{{Path: "/etc/ssl", Access: AccessRead}},
+			FilesystemRules: []PathRule{{Path: "/omnipus-test/ssl", Access: AccessRead}},
 		})
 		require.NoError(t, err)
-		assert.Contains(t, out, `(allow file-read* (subpath "/etc/ssl"))`)
-		assert.NotContains(t, out, "file-write")
-		assert.NotContains(t, out, "process-exec")
+		assert.Contains(t, out, `(allow file-read* (subpath "/omnipus-test/ssl"))`)
+		policy := policyBlock(t, out)
+		assert.NotContains(t, policy, "file-write")
+		assert.NotContains(t, policy, "process-exec")
 	})
 
 	t.Run("write-only rule emits only file-write", func(t *testing.T) {
 		out, err := renderSeatbeltProfile(SandboxPolicy{
-			FilesystemRules: []PathRule{{Path: "/var/log/omnipus", Access: AccessWrite}},
+			FilesystemRules: []PathRule{{Path: "/omnipus-test/log", Access: AccessWrite}},
 		})
 		require.NoError(t, err)
-		assert.Contains(t, out, `(allow file-write* (subpath "/var/log/omnipus"))`)
-		assert.NotContains(t, out, "file-read")
+		assert.Contains(t, out, `(allow file-write* (subpath "/omnipus-test/log"))`)
+		assert.NotContains(t, policyBlock(t, out), "file-read")
 	})
 
 	t.Run("execute implies read (cannot mmap without read)", func(t *testing.T) {
@@ -103,17 +134,26 @@ func TestRenderSeatbeltProfile(t *testing.T) {
 
 	t.Run("denies network by default when no port rules", func(t *testing.T) {
 		out, err := renderSeatbeltProfile(SandboxPolicy{
-			FilesystemRules: []PathRule{{Path: "/tmp", Access: AccessRead}},
+			FilesystemRules: []PathRule{{Path: "/omnipus-test/scratch", Access: AccessRead}},
 		})
 		require.NoError(t, err)
 		assert.Contains(t, out, "(deny network*)")
-		assert.NotContains(t, out, "network-outbound")
-		assert.NotContains(t, out, "network-bind")
+
+		// Scoped to everything AFTER the deny: the preamble above it carries a
+		// network-outbound allow for the mDNSResponder socket, without which no
+		// name resolution works at all on macOS. The property under test is that
+		// an empty port policy adds no PORT allows, not that the profile is
+		// free of the word "network-outbound".
+		idx := strings.Index(out, "(deny network*)")
+		require.NotEqual(t, -1, idx)
+		afterDeny := out[idx:]
+		assert.NotContains(t, afterDeny, "network-outbound")
+		assert.NotContains(t, afterDeny, "network-bind")
 	})
 
 	t.Run("bind and connect ports both expand", func(t *testing.T) {
 		out, err := renderSeatbeltProfile(SandboxPolicy{
-			FilesystemRules:  []PathRule{{Path: "/tmp", Access: AccessRead}},
+			FilesystemRules:  []PathRule{{Path: "/omnipus-test/scratch", Access: AccessRead}},
 			BindPortRules:    []NetPortRule{{Port: 8080}, {Port: 8081}},
 			ConnectPortRules: []NetPortRule{{Port: 443}},
 		})
@@ -227,4 +267,78 @@ func TestRenderSeatbeltProfile_ProfileShape(t *testing.T) {
 	require.Greater(t, denyIdx, verIdx, "(deny default) must come after (version 1)")
 	require.Greater(t, fsIdx, denyIdx, "filesystem block must come after default-deny")
 	require.Greater(t, netIdx, fsIdx, "network block must come after filesystem")
+}
+
+// TestRenderSeatbeltProfile_ResolvesSymlinkedPaths is the regression guard for
+// the macOS defect class this renderer exists to avoid.
+//
+// Seatbelt matches on the RESOLVED path. On macOS /tmp, /etc and /var are
+// symlinks into /private, so a policy granting RWX on /tmp rendered verbatim
+// produces `(subpath "/tmp")` — a filter that matches nothing. The profile
+// looks correct, the gateway logs a clean apply, and every write the policy
+// explicitly permits is denied at runtime. Nothing fails loudly.
+//
+// Real symlinks under t.TempDir() reproduce that on Linux and macOS alike.
+func TestRenderSeatbeltProfile_ResolvesSymlinkedPaths(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real-workspace")
+	require.NoError(t, os.Mkdir(realDir, 0o755))
+
+	linkDir := filepath.Join(root, "linked-workspace")
+	require.NoError(t, os.Symlink(realDir, linkDir))
+
+	out, err := renderSeatbeltProfile(SandboxPolicy{
+		FilesystemRules: []PathRule{{Path: linkDir, Access: AccessRead | AccessWrite}},
+	})
+	require.NoError(t, err)
+
+	// EvalSymlinks also resolves the ancestors of t.TempDir() itself (on macOS
+	// it lives under /var/folders, and /var is a symlink), so compare against
+	// the fully resolved target rather than a hand-built string.
+	resolved, err := filepath.EvalSymlinks(linkDir)
+	require.NoError(t, err)
+
+	assert.Contains(t, out, `(allow file-read* (subpath "`+resolved+`"))`,
+		"the allow must name the RESOLVED path or Seatbelt matches nothing")
+	assert.Contains(t, out, `(allow file-write* (subpath "`+resolved+`"))`)
+
+	// The declared symlink itself must remain readable, or the child cannot
+	// traverse the path the policy actually named.
+	assert.Contains(t, out, `(allow file-read* (literal "`+linkDir+`"))`,
+		"the symlink must get a traversal read allow")
+
+	// The unresolved path must never be emitted as the access-granting filter.
+	assert.NotContains(t, out, `(allow file-write* (subpath "`+linkDir+`"))`,
+		"emitting the unresolved path would grant nothing on macOS")
+}
+
+// TestSeatbeltSystemPreamble_MandatoryRootRead guards the single most
+// load-bearing line in the preamble.
+//
+// Without `(allow file-read* (literal "/"))` every child dies on SIGABRT with
+// completely empty stderr — dyld is killed before it can report anything. The
+// symptom is indistinguishable from "Seatbelt is fundamentally broken", so a
+// well-meaning cleanup that drops this line as redundant would be extremely
+// expensive to diagnose. No subpath allow covers "/" itself.
+func TestSeatbeltSystemPreamble_MandatoryRootRead(t *testing.T) {
+	assert.Contains(t, seatbeltSystemPreamble, `(allow file-read* (literal "/"))`,
+		"removing the root-directory read makes every sandboxed child abort with no diagnostic")
+
+	// DNS on macOS goes through mDNSResponder over a UNIX socket, not UDP/53.
+	// Drop either line and every port-scoped network allow silently resolves
+	// nothing, which reads like a broken port filter rather than missing DNS.
+	assert.Contains(t, seatbeltSystemPreamble, `(allow mach-lookup (global-name "com.apple.mDNSResponder"))`)
+	assert.Contains(t, seatbeltSystemPreamble, `(allow network-outbound (literal "/private/var/run/mDNSResponder"))`)
+
+	// The preamble must never grant write access beyond /dev/null, or it would
+	// silently widen every policy rendered on top of it.
+	for _, line := range strings.Split(seatbeltSystemPreamble, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), ";;") {
+			continue
+		}
+		if strings.Contains(line, "file-write") {
+			assert.Contains(t, line, "/dev/null",
+				"preamble grants write outside /dev/null: %s", line)
+		}
+	}
 }

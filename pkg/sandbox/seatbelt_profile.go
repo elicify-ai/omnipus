@@ -6,6 +6,7 @@ package sandbox
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -17,18 +18,78 @@ import (
 //
 // Seatbelt is the macOS mandatory access-control subsystem (the XNU sandbox).
 // The no-CGo path to apply it is to emit a Seatbelt profile (the `.sb`
-// Scheme-like dialect) and launch the child under `/usr/bin/sandbox-exec -f`.
+// Scheme-like dialect) and launch the child under `/usr/bin/sandbox-exec`.
 // This renderer maps an Omnipus SandboxPolicy onto that dialect.
 //
-// DRAFT (ADR-052 Phase-3 / AC-6): the renderer is complete and unit-tested,
-// but the SeatbeltBackend that invokes sandbox-exec is gated behind
-// OMNIPUS_SANDBELT_ENABLE=1 and is NOT wired into backend selection. macOS
-// stays on FallbackBackend until a macOS integration test + adversarial review
-// land. See backend_darwin_seatbelt.go.
+// ADR-052 Phase-3 AC-6: the renderer is no longer a draft. The system preamble
+// below was derived empirically on macOS (see seatbeltSystemPreamble) and the
+// backend is wired into darwin backend selection by sandbox_darwin.go.
+
+// seatbeltSystemPreamble is the macOS bootstrap block prepended to every
+// rendered profile. Without it a policy-only profile does not merely restrict
+// a child — it makes the child impossible to start at all.
+//
+// # Provenance — every line here was MEASURED, not read from documentation
+//
+// Measured on macOS 26.5.2 (Darwin 25.5.0), x86_64, by starting from the
+// policy-only profile and adding the minimum needed to make a real child run.
+// Re-derive with pkg/sandbox/testdata/seatbelt-probe if Apple changes the
+// platform. The non-obvious findings, each of which cost a debugging cycle:
+//
+//  1. (allow file-read* (literal "/")) is MANDATORY. A child needs to stat the
+//     root directory itself, and no (subpath "/usr/lib")-style allow covers
+//     "/" . Without it EVERY child dies on SIGABRT (exit 134) with completely
+//     EMPTY stderr — dyld is killed before it can report anything. This single
+//     missing line is indistinguishable from "Seatbelt is broken".
+//
+//  2. The dyld shared cache needs NO explicit rule — it is mapped by the
+//     kernel, not read through the filesystem. Do NOT add a rule for
+//     /System/Library/dyld: that path DOES NOT EXIST on macOS 13+. The cache
+//     lives under /System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/.
+//     The original draft comment named the stale path; it was never needed.
+//
+//  3. /private/var/select is required by /bin/sh (the shell selector symlink).
+//     Without it sh fails with "Error opening /private/var/select/sh".
+//
+//  4. DNS. macOS resolves names via mDNSResponder over a UNIX-domain socket,
+//     NOT via UDP/53 to a nameserver. A profile that allow-lists ports but not
+//     that socket resolves NOTHING, so every port-scoped network allow appears
+//     broken while an unscoped (allow network*) works — which reads exactly
+//     like "the port filter syntax is wrong" and sends you chasing the wrong
+//     bug. Both the mach-lookup and the network-outbound literal are required.
+//
+// Everything here is read-only or a well-known sink. The preamble grants no
+// write access outside /dev/null and no execute outside the system binary
+// directories, so it cannot widen a policy's reach over user data.
+const seatbeltSystemPreamble = `;; --- macOS system preamble (empirically derived; see seatbeltSystemPreamble) ---
+;; Root directory stat. MANDATORY: without this every child aborts with no diagnostic.
+(allow file-read* (literal "/"))
+;; Firmlink/symlink traversal for the /tmp, /etc, /var compatibility symlinks.
+(allow file-read* (literal "/tmp") (literal "/etc") (literal "/var"))
+;; System binaries and libraries: read + execute only, never write.
+(allow process-exec (subpath "/bin") (subpath "/sbin") (subpath "/usr/bin") (subpath "/usr/sbin") (subpath "/usr/lib") (subpath "/System"))
+(allow file-read* (subpath "/bin") (subpath "/sbin") (subpath "/usr/bin") (subpath "/usr/sbin") (subpath "/usr/lib") (subpath "/System"))
+;; /bin/sh resolves through the shell selector.
+(allow file-read* (subpath "/private/var/select"))
+;; TLS trust store and resolver configuration (macOS equivalent of /etc/ssl + /etc/resolv.conf).
+(allow file-read* (subpath "/private/etc"))
+;; Well-known device sinks/sources. /dev/null is the only writable path here.
+(allow file-read* file-write-data (literal "/dev/null"))
+(allow file-read* (literal "/dev/urandom") (literal "/dev/random") (literal "/dev/zero"))
+;; Process lifecycle: fork children, signal self. No signalling of other processes.
+(allow process-fork)
+(allow signal (target self))
+;; Hardware/OS introspection used by libc and language runtimes at startup.
+(allow sysctl-read)
+;; DNS via mDNSResponder. Required for ANY name resolution; see finding 4 above.
+(allow mach-lookup (global-name "com.apple.mDNSResponder"))
+(allow network-outbound (literal "/private/var/run/mDNSResponder"))
+`
 
 // renderSeatbeltProfile translates a SandboxPolicy into a Seatbelt `.sb`
 // profile string. The posture mirrors the LinuxBackend (Landlock): default-
-// deny with explicit allows derived from the policy.
+// deny with explicit allows derived from the policy, on top of the system
+// preamble that makes a child startable at all.
 //
 // Field → directive mapping:
 //
@@ -40,6 +101,17 @@ import (
 //   - BindPortRules    → (allow network-bind    (local  tcp "*:<port>"))
 //   - ConnectPortRules → (allow network-outbound (remote tcp "*:<port>"))
 //
+// # Symlink resolution (macOS correctness requirement, not a nicety)
+//
+// Seatbelt matches on the RESOLVED path. On macOS /tmp, /etc and /var are
+// symlinks into /private, so an (subpath "/tmp") filter matches NOTHING — a
+// child denied every write under /tmp while the profile plainly appears to
+// grant it. DefaultPolicy grants RWX on /tmp, so rendering policy paths
+// verbatim would produce a profile that looks correct and enforces a policy
+// nobody wrote. Each rule path is therefore resolved with filepath.EvalSymlinks
+// before it is emitted, and every symlinked ANCESTOR of the original path also
+// gets a read allow so the child can traverse it.
+//
 // Network posture is strictly more conservative than Landlock's back-compat
 // behavior: under (deny default) ALL network is denied, and only the ports
 // enumerated in ConnectPortRules / BindPortRules are re-allowed. Landlock
@@ -48,15 +120,6 @@ import (
 // obligation, so empty port lists mean "no network". Callers that need
 // outbound HTTPS must populate ConnectPortRules (DefaultPolicy seeds
 // DefaultConnectPorts: 53/80/443 + the dev-server range).
-//
-// What this renderer deliberately does NOT add: the system-level allows a
-// real macOS child needs to even start (dyld shared cache, /usr/lib,
-// /dev/urandom, /Library/Preferences, process-fork, signal-self, etc.).
-// Those are platform constants that must be validated empirically on macOS
-// during the integration step; hardcoding them here from documentation would
-// be guessing at a security boundary. The macOS reviewer appends a system
-// preamble to the rendered workspace block. This keeps the renderer a faithful
-// policy→profile mapper that is fully unit-testable on Linux.
 func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	if len(policy.FilesystemRules) == 0 && len(policy.BindPortRules) == 0 && len(policy.ConnectPortRules) == 0 {
 		return "", fmt.Errorf(
@@ -65,24 +128,54 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	}
 
 	var b strings.Builder
-	b.WriteString(";; Omnipus Seatbelt profile — DRAFT, generated by renderSeatbeltProfile.\n")
+	b.WriteString(";; Omnipus Seatbelt profile — generated by renderSeatbeltProfile.\n")
 	b.WriteString(";; Posture: default-deny with explicit allows (mirrors Landlock).\n")
-	b.WriteString(";; NOTE: a macOS system-library preamble (dyld, /usr/lib, /dev/urandom, …)\n")
-	b.WriteString(";;       must be prepended at integration time for the child to start.\n")
 	b.WriteString("(version 1)\n")
-	b.WriteString("(deny default)\n")
+	b.WriteString("(deny default)\n\n")
+	b.WriteString(seatbeltSystemPreamble)
 
 	// --- Filesystem allows (policy order preserved; duplicates are the
 	// caller's responsibility, same contract as Landlock). ---
 	b.WriteString("\n;; --- Filesystem allows (from SandboxPolicy.FilesystemRules) ---\n")
+
+	// seenTraversal dedupes the symlink-ancestor read allows across rules so a
+	// policy with many paths under one symlinked root emits each ancestor once.
+	// Emission stays in policy order, so the output remains deterministic.
+	seenTraversal := make(map[string]struct{})
+
 	for _, rule := range policy.FilesystemRules {
 		if err := validateSeatbeltPath(rule.Path); err != nil {
 			return "", fmt.Errorf("seatbelt: filesystem rule path %q: %w", rule.Path, err)
 		}
-		sub := fmt.Sprintf("(subpath %q)", filepath.Clean(rule.Path))
-		switch {
-		case rule.Access == 0:
+		if rule.Access == 0 {
 			return "", fmt.Errorf("seatbelt: filesystem rule for %q has no access flags", rule.Path)
+		}
+
+		target, traversal := resolveSeatbeltPath(rule.Path)
+
+		// A resolved path must survive the same injection validation as the
+		// declared one — EvalSymlinks reads the filesystem, so its result is
+		// not automatically trusted just because the input was clean.
+		if err := validateSeatbeltPath(target); err != nil {
+			return "", fmt.Errorf("seatbelt: filesystem rule path %q resolved to %q: %w", rule.Path, target, err)
+		}
+
+		// Read allows for any symlinked ancestor, so the child can traverse
+		// the declared path even though the allow is on the resolved one.
+		for _, anc := range traversal {
+			if _, dup := seenTraversal[anc]; dup {
+				continue
+			}
+			if err := validateSeatbeltPath(anc); err != nil {
+				return "", fmt.Errorf("seatbelt: symlink ancestor %q of %q: %w", anc, rule.Path, err)
+			}
+			seenTraversal[anc] = struct{}{}
+			b.WriteString(fmt.Sprintf(";; traversal for symlinked ancestor of %s\n", rule.Path))
+			b.WriteString(fmt.Sprintf("(allow file-read* (literal %q))\n", anc))
+		}
+
+		sub := fmt.Sprintf("(subpath %q)", target)
+		switch {
 		case rule.Access&AccessExecute != 0:
 			// Execute implies read (must mmap the binary). Emit exec + read.
 			b.WriteString("(allow process-exec " + sub + ")\n")
@@ -103,7 +196,14 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	// --- Network. Under (deny default) all network is already denied; the
 	// explicit (deny network*) is emitted for auditor clarity and to make the
 	// posture assertable in tests. Port allow-lists re-enable only what the
-	// policy enumerates. ---
+	// policy enumerates.
+	//
+	// Ordering was verified empirically rather than assumed: with this
+	// (deny network*) sitting BETWEEN the preamble's resolver allow and the
+	// port allows below, name resolution and an allowed-port HTTPS request
+	// both still succeed, and a non-allow-listed port is still refused. The
+	// deny does not revoke the earlier resolver allow, so it is deliberately
+	// NOT re-emitted here.
 	b.WriteString("\n;; --- Network (default-deny; explicit port allow-list) ---\n")
 	b.WriteString("(deny network*)\n")
 	for _, r := range policy.BindPortRules {
@@ -116,11 +216,71 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	return b.String(), nil
 }
 
+// resolveSeatbeltPath returns the path a Seatbelt filter must name in order to
+// actually match p, plus the symlinked ancestors of p that need a read allow
+// so the child can traverse the declared path.
+//
+// Seatbelt matches resolved paths. On macOS /tmp -> private/tmp, /etc ->
+// private/etc and /var -> private/var, so emitting the declared path verbatim
+// yields a filter that matches nothing (see renderSeatbeltProfile).
+//
+// If the path does not exist yet, EvalSymlinks fails and the cleaned declared
+// path is returned unchanged. That mirrors Landlock's contract, where Apply()
+// skips missing paths with a warning rather than failing the whole policy: a
+// workspace directory that has not been created yet must not brick the render.
+func resolveSeatbeltPath(p string) (target string, traversal []string) {
+	clean := filepath.Clean(p)
+
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err != nil || resolved == clean {
+		// Missing path, or nothing to resolve. Either way the declared path is
+		// what we emit, and there is no ancestor to grant traversal on.
+		return clean, nil
+	}
+
+	// Collect the ancestors of the DECLARED path that are themselves symlinks.
+	// Walking the declared path (not the resolved one) is the point: those are
+	// the components the child will actually walk through.
+	for _, anc := range ancestorPaths(clean) {
+		fi, lerr := os.Lstat(anc)
+		if lerr != nil {
+			continue
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			traversal = append(traversal, anc)
+		}
+	}
+
+	return resolved, traversal
+}
+
+// ancestorPaths returns every proper ancestor of p from the shallowest down to
+// p itself, e.g. "/tmp/a/b" → ["/tmp", "/tmp/a", "/tmp/a/b"]. The root "/" is
+// excluded because the preamble already grants it unconditionally.
+func ancestorPaths(p string) []string {
+	p = filepath.Clean(p)
+	if p == string(filepath.Separator) || p == "." {
+		return nil
+	}
+
+	parts := strings.Split(strings.TrimPrefix(p, string(filepath.Separator)), string(filepath.Separator))
+	out := make([]string, 0, len(parts))
+	cur := ""
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		cur = cur + string(filepath.Separator) + part
+		out = append(out, cur)
+	}
+	return out
+}
+
 // validateSeatbeltPath enforces that a path is safe to embed in a Seatbelt
 // (subpath ...) filter. This is the belt-and-suspenders validator; the PRIMARY
 // injection defense is at the render site (renderSeatbeltProfile), which emits
-// the path via fmt.Sprintf("%q", filepath.Clean(path)) — i.e. strconv.Quote,
-// which escapes every special byte and wraps the value in double quotes so no
+// the path via fmt.Sprintf("%q", ...) — i.e. strconv.Quote, which escapes
+// every special byte and wraps the value in double quotes so no
 // attacker-controlled path can break out of the (subpath "...") filter. This
 // validator exists so a path is rejected (with a precise error) BEFORE the
 // renderer is reached, and so the safety of the rendered profile does not

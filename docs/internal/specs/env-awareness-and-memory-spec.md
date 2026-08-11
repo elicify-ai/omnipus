@@ -200,7 +200,7 @@ Every agent's `BuildSystemPrompt()` output begins with a `## Environment` sectio
 2. Custom agent with SOUL.md receives env preamble ABOVE SOUL.md.
 3. Env preamble rendered ≤ 2000 runes total (hard cap; over-budget → truncate with ellipsis marker).
 4. Platform info reflects `runtime.GOOS` + `runtime.GOARCH` + kernel release (Linux only, via `/proc/version`; darwin/windows report OS version).
-5. Sandbox mode: one of `off | fallback | landlock-abi-<N> | unknown`. Derived from existing `sandbox.DescribeBackend(backend) Status` via `envcontext.renderSandboxMode(Status)` helper (CRIT-003 — no interface change).
+5. Sandbox mode: one of `off | fallback | landlock-abi-<N> | seatbelt | unknown`. Derived from existing `sandbox.DescribeBackend(backend) Status` via `envcontext.renderSandboxMode(Status)` helper (CRIT-003 — no interface change). (`seatbelt` added by ADR-052 Phase-3 AC-6.)
 6. Network policy: `outbound-allowed | outbound-denied`. Derived from `cfg.Sandbox.AllowNetworkOutbound` alone. (Allow-list branch removed in v7 — CRIT-001 — since `AllowedHosts` field doesn't exist yet.)
 7. Workspace path: absolute path from `agent.Workspace`.
 8. OMNIPUS_HOME: absolute path from `config.OmnipusHomeDir()`.
@@ -382,8 +382,20 @@ Status{Backend:"none", Available:false}                              → "off"
 Status{Backend:"linux",  KernelLevel:true,  ABIVersion:n, n>0}       → fmt.Sprintf("landlock-abi-%d", n)
 Status{Backend:"linux",  KernelLevel:false}                          → "fallback"
 Status{Backend:"fallback"}                                           → "fallback"
+Status{Backend:"seatbelt"}                                           → "seatbelt"
 all other states                                                     → "unknown"
 ```
+
+**`seatbelt` added by ADR-052 Phase-3 AC-6** (macOS kernel sandbox). Before that
+row existed, darwin always selected the fallback backend, so `Backend` could
+never be `"seatbelt"`. Once `selectBackendPlatform` began returning it, this
+mapping fell through to `"unknown"` and every macOS agent was told its sandbox
+mode was unknown while it was in fact kernel-confined. The row is not cosmetic:
+it is what the agent reads to reason about its own confinement.
+
+Note the deliberate asymmetry with Linux: there is no `seatbelt-abi-<N>`
+equivalent because Seatbelt exposes no versioned ABI to probe. See
+[ADR-052 Phase 3 / AC-6](../architecture/ADR-052-phase3-AC6-macos-seatbelt.md).
 
 Fully derived from existing `Status` fields in `pkg/sandbox/sandbox.go:537` — no new backend code.
 
