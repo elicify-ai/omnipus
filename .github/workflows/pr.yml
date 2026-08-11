@@ -249,6 +249,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Run wire-types lint self-tests
+        # F8 (round-2 review): the script's --self-test mode (35+ synthetic
+        # pattern assertions covering every rule, including the F8 additions
+        # ST-23/ST-24) previously ran nowhere in CI — a regression in the
+        # lint's own regex logic could ship silently since nothing exercised
+        # it. Run BEFORE the real scan below so a broken pattern is caught
+        # before it either false-negatives on a real finding or false-
+        # positives across the whole tree.
+        run: bash scripts/check-no-handwritten-wire-types.sh --self-test
+
       - name: Run wire-types lint
         # No language runtimes needed beyond bash + python3 (both present on
         # ubuntu-latest). The script exits 1 if any hand-written wire-format
@@ -630,8 +640,22 @@ jobs:
         # pkg/agent/pkg/gateway/tests/integration. (Timeout was raised again,
         # 600s→900s, when pkg/task/pkg/plan/pkg/tools/pkg/providers joined
         # below — see that entry for why. The 900s figure in the invocation
-        # further down covers BOTH raises; there is no "600s" left anywhere
-        # in this step by design.)
+        # further down covers the FIRST (parallel) `go test` call.
+        #
+        # CORRECTION (round-2 review, F7): this comment used to claim "there
+        # is no 600s left anywhere in this step by design" — false on its own
+        # terms, since the flake-filter's per-package isolated re-run further
+        # down in this same step passed `-timeout 600s`. Beyond the false
+        # claim, that asymmetry was backwards: the isolated `-p 1` re-run
+        # forces serial execution of whatever it was given, which is SLOWER
+        # per-package than the parallel run's shared CPU budget, yet it was
+        # given LESS time. With pkg/tools/... now in the glob (see below), a
+        # merely-slow package that trips the flake filter for an unrelated
+        # reason (a transient parallel-run hiccup, not a real failure) could
+        # time out again in isolation and get stamped "REAL FAILURE (failed
+        # twice)" — a false RED read as a code defect, not an infra timing
+        # issue. Fixed by raising the isolated re-run's timeout to 900s too,
+        # matching the parallel run instead of undercutting it.)
         #
         # pkg/task, pkg/plan, pkg/tools and pkg/providers were added 2026-08-10,
         # and they earned it on the first run: `go test -race ./pkg/tools/...`
@@ -743,7 +767,7 @@ jobs:
           echo "=== FLAKE FILTER (-race): re-running failed packages isolated (-p 1): $failed ==="
           rc=0
           for p in $failed; do
-            if go test -race -tags goolm,stdjson -count=1 -timeout 600s -p 1 "$p" >/tmp/rr_race.log 2>&1; then
+            if go test -race -tags goolm,stdjson -count=1 -timeout 900s -p 1 "$p" >/tmp/rr_race.log 2>&1; then
               echo "FLAKE (passed isolated): $p"
             else
               echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL|DATA RACE' /tmp/rr_race.log | head; rc=1
