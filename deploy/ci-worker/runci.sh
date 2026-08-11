@@ -245,7 +245,14 @@ run_gorace() {
     # in the SECOND run be stamped "FLAKE (passed isolated)" and excused,
     # which is precisely what the carve-out forbids. pr.yml has the same
     # hole; fix both together or the gates diverge.
-    if CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 600s -p 1 "$p" >"/tmp/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
+    #
+    # Timeout is 900s, matching BOTH the contended run above and pr.yml's
+    # isolated re-run. It was 600s, which had the asymmetry backwards: the
+    # isolated -p 1 re-run is SLOWER than the contended one (no parallelism),
+    # yet got less time. With ./pkg/tools/... now in the glob, a slow package
+    # that trips the flake filter could time out at 600s and be stamped
+    # "REAL FAILURE (failed twice)" — a false RED that reads as a code defect.
+    if CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s -p 1 "$p" >"/tmp/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
        && ! grep -aq "DATA RACE" "/tmp/rr_race_$(echo "$p" | tr '/' '_').log"; then
       echo "FLAKE (passed isolated): $p"
       echo "  contended-run failures (each is a REAL BUG that has not been diagnosed yet):"
