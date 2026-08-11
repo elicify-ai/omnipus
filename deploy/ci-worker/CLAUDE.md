@@ -36,8 +36,20 @@ as if it were a full pass):
    convention plus two tight wall-clock assertions) joined 2026-08-11, so `./pkg/tools/...` is
    now fully recursive in both files — nothing under `pkg/tools` or `pkg/providers` is excluded
    from either race surface any more.
-   **One limit remains:** `go-test` and `go-race` are separate gates, so running
-   `go-test` alone still carries zero race signal — use `all` or run `go-race` explicitly.
+   **Two limits remain:**
+   (a) `go-test` and `go-race` are separate gates, so running `go-test` alone still carries
+   zero race signal — use `all` or run `go-race` explicitly.
+   (b) **This worker runs NO real-Chrome tests, in any gate.** Both `run_gotest` and
+   `run_gorace` set `CI=true`, which makes `pkg/tools/browser`'s `skipIfNoBrowser(t)` skip
+   every test that would launch a browser. That is deliberate and it is what GitHub does —
+   GitHub always sets `CI`, so its `Tests` and `-race` steps skip them too. Their coverage
+   lives in GitHub's dedicated **`browser-e2e`** job (`.github/workflows/pr.yml`), which sets
+   `OMNIPUS_BROWSER_E2E=1`, provisions Chrome via an action, runs WITHOUT `-race`, and fails
+   loudly if the tests skip. **There is no `browser-e2e` equivalent here**, so an `all`-green
+   verdict on this worker carries zero real-Chrome signal — read GitHub for that. Forcing
+   them on here is not the answer: this box has no dbus and a slow shared Chrome, so they
+   fail on the environment (`page load failed: context deadline exceeded`) rather than on
+   the code, which is precisely how a false RED trains people to ignore a gate.
 2. **`run_gotest` excuses flakes.** A package that fails the parallel run but passes the
    isolated `-p 1` re-run prints `FLAKE (passed isolated)` and the gate still returns 0.
    That is intentional for timing-sensitive integration tests — but it means a green

@@ -290,7 +290,23 @@ run_gorace() {
 
 run_gotest() {
   ensure_spa_stub
-  local out; out=$(GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 2 ./... 2>&1)
+  # CI=true for the same reason run_gorace sets it: this gate exists to predict
+  # GitHub's "Tests" job, and GitHub always sets CI. After #615 converted
+  # pkg/tools/browser's real-Chrome tests to the package's own skipIfNoBrowser(t)
+  # convention, those tests SKIP in GitHub's Tests job — their coverage moved to
+  # the dedicated browser-e2e job, which provisions Chrome as a declared
+  # dependency and runs without -race.
+  #
+  # This worker is a plain SSH shell with no CI set, so without this line it runs
+  # ~58 real-Chrome e2e tests that GitHub's Tests job no longer runs at all. This
+  # box has no dbus and a slow shared Chrome, so they fail on the environment
+  # rather than on the code: the observed failure was
+  #   "post-redirect SSRF error must mention redirect/blocked/SSRF/169.254;
+  #    got: browser_navigate: page load failed: context deadline exceeded"
+  # — a navigation timeout, not a broken SSRF guard. The flake filter correctly
+  # refused to excuse it (it failed both runs), which is exactly why the gate
+  # must not measure something GitHub does not.
+  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 2 ./... 2>&1)
   local code=$?
   echo "$out"
   # DATA RACE carve-out — checked BEFORE the exit-code short-circuit, because a
@@ -320,7 +336,10 @@ run_gotest() {
     # summary line; simpler and good enough: collect all contended failures once
     # and intersect per package below (a test name is unique enough in practice).
     local run1; run1=$(echo "$out" | grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' | awk '{print $3}' | sort -u)
-    if CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 1 "$p" >/tmp/rr.log 2>&1; then
+    # CI=true here too: the isolated re-run must measure the same thing as the
+    # contended run, or a package that only failed because it launched a real
+    # Chrome would be re-run without one and stamped a flake (or vice versa).
+    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 1 "$p" >/tmp/rr.log 2>&1; then
       echo "FLAKE (passed isolated): $p"
       echo "  contended-run failures (each one is a REAL BUG that has not been diagnosed yet):"
       echo "$run1" | sed 's/^/    /'
