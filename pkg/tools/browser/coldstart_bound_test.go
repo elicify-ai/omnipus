@@ -132,8 +132,8 @@ func TestRunFirstAttach_TimesOutWithoutHanging(t *testing.T) {
 	if !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("expected a timeout error message, got: %v", err)
 	}
-	if elapsed > 200*time.Millisecond {
-		t.Fatalf("runFirstAttach did not return promptly on timeout: took %s (fn takes 500ms)", elapsed)
+	if elapsed > runFirstAttachPromptBound {
+		t.Fatalf("runFirstAttach did not return promptly on timeout: took %s (fn takes 500ms, bound %s)", elapsed, runFirstAttachPromptBound)
 	}
 }
 
@@ -151,8 +151,8 @@ func TestRunFirstAttach_ReturnsUnderlyingErrorWithoutWaitingForTimeout(t *testin
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected %v, got %v", wantErr, err)
 	}
-	if elapsed > 200*time.Millisecond {
-		t.Fatalf("runFirstAttach took %s to return an already-ready error", elapsed)
+	if elapsed > runFirstAttachPromptBound {
+		t.Fatalf("runFirstAttach took %s to return an already-ready error (bound %s)", elapsed, runFirstAttachPromptBound)
 	}
 }
 
@@ -186,9 +186,7 @@ func TestRunFirstAttach_SuccessWithinTimeout(t *testing.T) {
 // the ctx is now load-bearing, which was impossible before this fix (the old
 // code would have SUCCEEDED here, using rootCtx instead).
 func TestCoordinator_LoadExtension_HonorsCallerContext(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping real-Chrome integration test in -short mode")
-	}
+	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
 	cfg.ExtensionDir = filepath.Join(t.TempDir(), "does-not-need-to-exist-for-this-assertion")
 	// A directory need not actually contain a valid manifest for THIS test:
@@ -244,9 +242,7 @@ func TestCoordinator_LoadExtension_HonorsCallerContext(t *testing.T) {
 // forcing the timeout branch deterministically without needing to fabricate
 // an artificially wedged CDP transport.
 func TestCreateFirstTab_BoundedAttach_DoesNotHangOnStuckAttach(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping real-Chrome integration test in -short mode")
-	}
+	skipIfNoBrowser(t)
 	cfg, _ := newCoordinatorTestConfig(t)
 	mgr := newTestManager(t, cfg)
 	t.Cleanup(mgr.Shutdown)
@@ -280,9 +276,7 @@ func TestCreateFirstTab_BoundedAttach_DoesNotHangOnStuckAttach(t *testing.T) {
 // succeeds end-to-end against a real unpacked extension directory, proving
 // the bound-wiring fix didn't break the working case.
 func TestCoordinator_LoadExtension_SucceedsWithGenerousContext(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping real-Chrome integration test in -short mode")
-	}
+	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
 	extDir := t.TempDir()
 	writeMinimalUnpackedExtension(t, extDir)

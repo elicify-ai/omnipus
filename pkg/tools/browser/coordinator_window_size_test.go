@@ -13,17 +13,19 @@ package browser
 // agent got depended only on "which agent/session happened to create its
 // window first" — no visible trigger from the user's perspective.
 //
-// Two tests cover this:
+// Two tests cover this, and BOTH launch a real Chrome (#615 finding: the
+// first test's doc comment previously claimed otherwise — see its own
+// updated comment below):
 //
 //   - TestCoordinator_Register_CreateTargetParams_PinsWindowSize
 //     is the REVERT-PROOF unit test: it uses the createTargetParamsForTest
 //     seam (coordinator.go) to capture the actual outgoing
-//     target.CreateTargetParams and assert Width/Height are set, with no
-//     live Chrome involved. This is necessary (not just convenient): on
-//     the Chrome build this fix shipped from, headless new-window sizing
-//     already happens to DEFAULT to 1280x720 with no Width/Height set at
-//     all, so a live-Chrome window-bounds assertion cannot by itself
-//     distinguish fixed from unfixed code — see the sibling test below.
+//     target.CreateTargetParams and assert Width/Height are set. This is
+//     necessary (not just convenient): on the Chrome build this fix shipped
+//     from, headless new-window sizing already happens to DEFAULT to
+//     1280x720 with no Width/Height set at all, so a live-Chrome
+//     window-bounds assertion cannot by itself distinguish fixed from
+//     unfixed code — see the sibling test below.
 //   - TestCoordinator_Register_NewAgentWindow_MatchesAgentWindowSize is a
 //     live-Chrome smoke test (needs a real Chrome, forces two separate
 //     agent windows) verifying the ACTUAL resulting behavior via the real
@@ -45,12 +47,21 @@ import (
 // TestCoordinator_Register_CreateTargetParams_PinsWindowSize is
 // the REVERT-PROOF test for D17. It hooks createTargetParamsForTest
 // (coordinator.go) to capture the target.CreateTargetParams Register
-// builds for the per-agent window, before it is sent over CDP — no live
-// Chrome, no network, fully hermetic. Pre-fix, CreateTarget's Width/Height
-// fields are simply never set (zero value), so this assertion fails
-// deterministically regardless of what any particular Chrome
-// build/platform happens to default an unset size to.
+// builds for the per-agent window, before it is sent over CDP. Pre-fix,
+// CreateTarget's Width/Height fields are simply never set (zero value), so
+// this assertion fails deterministically regardless of what any particular
+// Chrome build/platform happens to default an unset size to.
+//
+// #615 correction: despite this doc comment previously claiming "no live
+// Chrome, no network, fully hermetic", it is NOT hermetic — coord.Register
+// (coordinator.go) unconditionally calls c.ensureLaunched(ctx) (a real
+// Chrome launch) before ever reaching the createTargetParamsForTest hook,
+// and this test asserts Register returns no error. It was found running
+// completely UNGATED (no testing.Short(), no skipIfNoBrowser) — unlike every
+// other real-Chrome test in this package — meaning it could trigger an
+// undeclared Chrome-for-Testing download in any CI gate that reached it.
 func TestCoordinator_Register_CreateTargetParams_PinsWindowSize(t *testing.T) {
+	skipIfNoBrowser(t)
 	var captured []*target.CreateTargetParams
 	prev := createTargetParamsForTest
 	createTargetParamsForTest = func(p *target.CreateTargetParams) {
@@ -134,9 +145,7 @@ func windowBoundsForSession(t *testing.T, tabCtx context.Context) *browser.Bound
 // the fix (see file doc comment) — it is real evidence of correct
 // end-to-end behavior, not the revert-proof (that is the unit test above).
 func TestCoordinator_Register_NewAgentWindow_MatchesAgentWindowSize(t *testing.T) {
-	if testing.Short() {
-		t.Skip("needs a real Chrome")
-	}
+	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
 	coord := NewBrowserCoordinator(home, cfg, 30)
 	t.Cleanup(coord.Shutdown)

@@ -29,9 +29,7 @@ import (
 )
 
 func TestD2Spike_BrowserContextIsolation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("spike needs a real Chrome")
-	}
+	skipIfNoBrowser(t)
 	// chrome-headless-shell specifically, NOT resolveTestBinary's
 	// "detect-either, prefer full chrome" resolution — this spike drives
 	// chromedp's classic TCP-debug-port ExecAllocator directly (not this

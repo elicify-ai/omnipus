@@ -213,9 +213,7 @@ func countTopLevelChromeProcesses(execPath string) int {
 }
 
 func TestFiveAgents_ConcurrentStress(t *testing.T) {
-	if testing.Short() {
-		t.Skip("stress test needs a real Chrome")
-	}
+	skipIfNoBrowser(t)
 	const numAgents = 5
 
 	pages := make([]*httptest.Server, numAgents)
