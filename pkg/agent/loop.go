@@ -8101,7 +8101,7 @@ turnLoop:
 			// escaping (valid on invalid UTF-8 and C0/C1 control bytes alike),
 			// a 1900-rune encoded budget via marshalWithinBudget, and a real
 			// contract schema wired into the structured-failure allow-list.
-			denyMsg := ""
+			var denyMsg string
 			if encoded, encErr := tools.ToolAssemblyDuplicatePayload(dedupErr.Error()); encErr == nil {
 				denyMsg = string(encoded)
 			} else {

@@ -145,13 +145,13 @@ func (coverageYAMLLoader) Load(rawURL string) (any, error) {
 // walk that also normalizes int keys defensively.
 func normalizeYAMLDoc(v any) any {
 	switch val := v.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		out := make(map[string]any, len(val))
 		for k, vv := range val {
 			out[k] = normalizeYAMLDoc(vv)
 		}
 		return out
-	case []interface{}:
+	case []any:
 		out := make([]any, len(val))
 		for i, vv := range val {
 			out[i] = normalizeYAMLDoc(vv)
