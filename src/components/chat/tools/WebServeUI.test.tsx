@@ -319,6 +319,79 @@ describe('WebServeUI — malformed result block (B1.3e)', () => {
   })
 })
 
+// ── Issue #617: real isError, not hasResult-as-error-proxy ──────────────────
+//
+// Before this fix, PreviewToolHeader was handed `hasResult={typedResult !==
+// null}` as a stand-in for "did the call fail" — an accidental proxy for a
+// different question ("did the result parse against the WebServeResult
+// schema"). These tests pin the real signal: a well-formed result from a
+// call the store recorded as errored must still show "Failed", and a
+// well-formed result with no error signal must show "Done" regardless of
+// what `hasResult` would have said.
+
+describe('WebServeUI — real isError signal (issue #617)', () => {
+  it('a well-formed result with isError=true renders "Failed", not "Done"', () => {
+    // Regression: under the old hasResult-derived logic this exact input
+    // (a parseable WebServeResult) always forced hasResult=true → "Done",
+    // no matter what the tool call's real outcome was.
+    render(
+      <WebServeBlock
+        args={{ path: 'elicify-hello' }}
+        result={{
+          kind: 'static',
+          url: 'http://localhost:5000/preview/jim/tok/',
+          path: 'elicify-hello',
+          expires_at: '2099-01-01T00:00:00Z',
+        }}
+        isRunning={false}
+        isError={true}
+        toolName="web_serve"
+      />
+    )
+
+    expect(screen.getByText('Failed')).toBeInTheDocument()
+    expect(screen.queryByText('Done')).toBeNull()
+  })
+
+  it('a well-formed result with isError=false renders "Done"', () => {
+    render(
+      <WebServeBlock
+        args={{ path: 'elicify-hello' }}
+        result={{
+          kind: 'static',
+          url: 'http://localhost:5000/preview/jim/tok/',
+          path: 'elicify-hello',
+          expires_at: '2099-01-01T00:00:00Z',
+        }}
+        isRunning={false}
+        isError={false}
+        toolName="web_serve"
+      />
+    )
+
+    expect(screen.getByText('Done')).toBeInTheDocument()
+    expect(screen.queryByText('Failed')).toBeNull()
+  })
+
+  it('omitting isError defaults to a non-error render (backward-compatible default)', () => {
+    render(
+      <WebServeBlock
+        args={{ path: 'elicify-hello' }}
+        result={{
+          kind: 'static',
+          url: 'http://localhost:5000/preview/jim/tok/',
+          path: 'elicify-hello',
+          expires_at: '2099-01-01T00:00:00Z',
+        }}
+        isRunning={false}
+        toolName="web_serve"
+      />
+    )
+
+    expect(screen.getByText('Done')).toBeInTheDocument()
+  })
+})
+
 // ── flat text-line status dot (ticket "Tool components in chat", P2) ────────
 // WebServeUI itself consumes PreviewToolHeader for the normal header —
 // PreviewToolHeader was restyled separately (commit 48325168); the only

@@ -165,15 +165,121 @@ describe('parseResult — result parsing helper', () => {
 })
 
 // --- Component smoke test ---
+//
+// Issue #617: prior to this file's fix, BrowserNavigate had ZERO error
+// coverage of the actual WIRING between makeAssistantToolUI's render props
+// and BrowserNavigateBlock — BrowserNavigateBlock itself was tested directly
+// with a hand-passed `isError` prop (see "flat text-line status dot" below),
+// but nothing proved that BrowserNavigateUI's `render` callback actually
+// threads the real `isError` render prop through, rather than re-deriving it
+// from `status.type === 'incomplete'` (which can never be true for a
+// finished call carrying a result — see omnipus-runtime.ts). The capture
+// setup below (same pattern as BashOutput.edge.test.tsx / FileTools.edge.test.tsx
+// / WebFetchAndSearch.edge.test.tsx) closes that gap for both the canonical
+// `browser.navigate` registration and its `browser_navigate` underscore alias.
+
+import { vi } from 'vitest'
+import { render } from '@testing-library/react'
+
+type NavigateRenderFn = (props: {
+  args: unknown
+  result: unknown
+  status: { type: string; reason?: string }
+  isError?: boolean
+}) => React.ReactNode
+
+const capturedNavigate = vi.hoisted(() => ({
+  dot: null as NavigateRenderFn | null,
+  underscore: null as NavigateRenderFn | null,
+}))
+
+vi.mock('@assistant-ui/react', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@assistant-ui/react')>()
+  return {
+    ...original,
+    makeAssistantToolUI: (config: Record<string, unknown>) => {
+      if (config.toolName === 'browser.navigate') capturedNavigate.dot = config.render as NavigateRenderFn
+      if (config.toolName === 'browser_navigate') capturedNavigate.underscore = config.render as NavigateRenderFn
+      return config
+    },
+  }
+})
 
 // Import the BrowserNavigateUI component to verify it renders without throwing.
 // This also exercises the displayUrl helper via the rendered URL display.
-import { BrowserNavigateUI, BrowserNavigateBlock } from './BrowserNavigate'
+import { BrowserNavigateUI, BrowserNavigateUnderscoreUI, BrowserNavigateBlock } from './BrowserNavigate'
 
 describe('BrowserNavigate component — smoke tests', () => {
   it('exports BrowserNavigateUI', () => {
     // Traces to: vivid-roaming-planet.md line 173
     expect(BrowserNavigateUI).toBeDefined()
+  })
+
+  it('exports BrowserNavigateUnderscoreUI', () => {
+    expect(BrowserNavigateUnderscoreUI).toBeDefined()
+  })
+})
+
+describe('BrowserNavigateUI / BrowserNavigateUnderscoreUI wiring — issue #617', () => {
+  it('a genuine error outcome (isError=true from the real render prop) renders the error dot and "Failed" label', () => {
+    expect(capturedNavigate.dot).toBeDefined()
+    const { container, getByText } = render(
+      capturedNavigate.dot!({
+        args: { url: 'https://example.com' },
+        result: { url: 'https://example.com', error: 'navigation timeout' },
+        status: { type: 'complete' },
+        isError: true,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+    expect(getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('a finished call with a result but isError=false renders the success dot, not error', () => {
+    expect(capturedNavigate.dot).toBeDefined()
+    const { container, getByText } = render(
+      capturedNavigate.dot!({
+        args: { url: 'https://example.com' },
+        result: { url: 'https://example.com', title: 'Example' },
+        status: { type: 'complete' },
+        isError: false,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(getByText('Done')).toBeInTheDocument()
+  })
+
+  it('the underscore alias (browser_navigate) wires isError through identically', () => {
+    expect(capturedNavigate.underscore).toBeDefined()
+    const { container, getByText } = render(
+      capturedNavigate.underscore!({
+        args: { url: 'https://example.com' },
+        result: { url: 'https://example.com', error: 'navigation timeout' },
+        status: { type: 'complete' },
+        isError: true,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+    expect(getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('cancellation still renders correctly through the real wiring (isCancelledStatus, unaffected by the isError-prop change)', () => {
+    expect(capturedNavigate.dot).toBeDefined()
+    const { container, getByText } = render(
+      capturedNavigate.dot!({
+        args: { url: 'https://example.com' },
+        result: undefined,
+        status: { type: 'incomplete', reason: 'cancelled' },
+        isError: false,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-error)]')
+    expect(getByText('Cancelled')).toBeInTheDocument()
   })
 })
 
@@ -186,7 +292,7 @@ describe('BrowserNavigate component — smoke tests', () => {
 // completed, since navigate is the near-universal first browser action and
 // the browser session persists after the call finishes.
 
-import { render, screen, fireEvent } from '@testing-library/react'
+import { screen, fireEvent } from '@testing-library/react'
 import { beforeEach, afterEach } from 'vitest'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'

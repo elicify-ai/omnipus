@@ -134,15 +134,19 @@ function WebFetchBlock({
   )
 }
 
+// Issue #617: isError comes from the tool-call part's own `isError` field
+// (set in omnipus-runtime.ts from the store's resolved ToolCall.status), not
+// from `status.type === 'incomplete'` — that can never be true for a
+// finished call carrying a result.
 // New canonical name (post §7 rename: web_fetch → fetch_url)
 export const WebFetchPreviewUI = makeAssistantToolUI<WebFetchArgs, unknown>({
   toolName: 'fetch_url',
-  render: ({ args, result, status }) => (
+  render: ({ args, result, status, isError }) => (
     <WebFetchBlock
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
-      isError={status.type === 'incomplete'}
+      isError={isError}
       isCancelled={isCancelledStatus(status)}
     />
   ),
@@ -151,12 +155,12 @@ export const WebFetchPreviewUI = makeAssistantToolUI<WebFetchArgs, unknown>({
 // Legacy alias kept for backward compat with old session transcripts.
 export const WebFetchLegacyUI = makeAssistantToolUI<WebFetchArgs, unknown>({
   toolName: 'web_fetch',
-  render: ({ args, result, status }) => (
+  render: ({ args, result, status, isError }) => (
     <WebFetchBlock
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
-      isError={status.type === 'incomplete'}
+      isError={isError}
       isCancelled={isCancelledStatus(status)}
     />
   ),

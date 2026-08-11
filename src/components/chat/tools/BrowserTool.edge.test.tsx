@@ -328,18 +328,40 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
     expect(indicator?.getAttribute('class')).toContain('rounded-full')
   })
 
-  it('incomplete: indicator is an 8px error-colored dot', () => {
+  it('isError=true: indicator is an 8px error-colored dot', () => {
+    // Issue #617: BrowserToolBlock no longer derives isError from
+    // `status.type === 'incomplete'` internally — that status can never be
+    // true for a finished call carrying a result. Callers (the live
+    // makeAssistantToolUI render prop, or the replay path via
+    // BrowserToolReplayBlock) now pass the real outcome as an explicit
+    // `isError` prop.
     const { container } = render(
       <BrowserToolBlock
         toolName="browser.click"
         args={{}}
-        result={null}
-        status={{ type: 'incomplete' }}
+        result={{ error: 'element not found' }}
+        status={{ type: 'complete' }}
+        isError
         summary="#btn"
       />
     )
     const indicator = getIndicatorEl(container)
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+  })
+
+  it('a finished call with a result but isError=false renders the success dot, not error (producible pairing)', () => {
+    const { container } = render(
+      <BrowserToolBlock
+        toolName="browser.click"
+        args={{}}
+        result={{ ok: true }}
+        status={{ type: 'complete' }}
+        isError={false}
+        summary="#btn"
+      />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
   })
 
   it('there is no per-tool identity icon prop at all — the `icon` field was fully removed (dead plumbing)', () => {

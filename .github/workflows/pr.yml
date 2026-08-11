@@ -144,6 +144,33 @@ jobs:
         # types are found; exit 0 means clean.
         run: bash scripts/check-no-handwritten-wire-types.sh
 
+  tool-error-status-lint:
+    name: Tool-Error-From-Status Lint
+    # Regression guard for issue #617: an SPA tool-call component must never
+    # derive its ERROR state from AssistantUI's `status.type === 'incomplete'`
+    # — a finished tool call always carries a truthy result, so that status
+    # can never be true for a real failure (see this job's script for the
+    # full mechanism). This exact anti-pattern was independently introduced
+    # across several component families before being fixed; this job stops a
+    # third recurrence rather than relying on review alone.
+    #
+    # Developer note: this check has no opt-out comment (unlike the wire-
+    # types lint) — the two legitimate exceptions (isCancelledStatus's own
+    # reason-qualified check, and GenericToolCall's `|| !!error`-disjuncted
+    # form) are structurally excluded by the script itself, not via a
+    # per-line annotation. If this fires, read the real outcome instead — see
+    # the script's header comment for the correct pattern.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run tool-error-from-status lint
+        # python3-based (not `grep -P`) so it behaves identically on
+        # contributors' local macOS/BSD-grep machines and on this
+        # ubuntu-latest runner — see the script's header comment.
+        run: bash scripts/check-no-tool-error-from-status.sh
+
   verify-contracts:
     name: Verify Contracts
     # Ensure generated wire-format types (TS + Go) match the spec files.

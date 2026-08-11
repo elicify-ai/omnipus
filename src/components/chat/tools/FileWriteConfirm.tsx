@@ -169,7 +169,15 @@ function FileOpRow({
   const isRefusal = isFileExistsRefusal(storeCall?.result) || isFileExistsRefusal(result)
   const isRunning = status.type === 'running' || storeCall?.status === 'running'
   const isCancelled = isCancelledStatus(status) || storeCall?.status === 'cancelled'
-  const isError = !isCancelled && (status.type === 'incomplete' || storeCall?.status === 'error')
+  // Issue #617: the `status.type === 'incomplete'` disjunct is dropped — it
+  // can never be true for a finished tool call carrying a result (see this
+  // file's FileOpRow doc comment above), so it never contributed a real
+  // signal here; `storeCall?.status === 'error'` was always doing the actual
+  // work. The store hook stays (rather than switching to the render-prop
+  // `isError` field omnipus-runtime.ts now also sets): FileOpRow still needs
+  // the hook for `reason` (storeCall?.error), which has no equivalent on
+  // that boolean, so there is no simplification to gain by reading both.
+  const isError = !isCancelled && storeCall?.status === 'error'
   return (
     <FileOpBlock
       label={label}

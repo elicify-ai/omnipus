@@ -161,14 +161,18 @@ function WebSearchBlock({
   )
 }
 
+// Issue #617: isError comes from the tool-call part's own `isError` field
+// (set in omnipus-runtime.ts from the store's resolved ToolCall.status), not
+// from `status.type === 'incomplete'` — that can never be true for a
+// finished call carrying a result.
 export const WebSearchResultUI = makeAssistantToolUI<WebSearchArgs, unknown>({
   toolName: 'web_search',
-  render: ({ args, result, status }) => (
+  render: ({ args, result, status, isError }) => (
     <WebSearchBlock
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
-      isError={status.type === 'incomplete'}
+      isError={isError}
       isCancelled={isCancelledStatus(status)}
     />
   ),

@@ -139,11 +139,23 @@ export function WebServeBlock({
   args,
   result,
   isRunning,
+  isError,
   toolName,
 }: {
   args: WebServeArgs
   result: unknown
   isRunning: boolean
+  /**
+   * Issue #617: the tool call's real error outcome. Previously
+   * PreviewToolHeader was handed `hasResult={typedResult !== null}` as a
+   * stand-in for "did it fail" — an accidental proxy for a genuinely
+   * different question ("did the result parse against the WebServeResult
+   * schema"). A malformed-but-successful payload showed "Failed"; a real
+   * failure that happened to return a well-formed payload showed "Done".
+   * `isError` now carries the actual outcome from the tool-call part /
+   * store ToolCall.status, independent of whether `result` parses.
+   */
+  isError?: boolean
   toolName: string
 }) {
   // B1.3e: when the type guard rejects the result and the tool is no longer
@@ -223,7 +235,7 @@ export function WebServeBlock({
         // status icon here was a duplicate/triplicate status render.
         trailing={isDevMode ? portChip : undefined}
         isRunning={isRunning}
-        hasResult={typedResult !== null}
+        isError={!!isError}
       />
 
       {isDevMode ? (
@@ -251,11 +263,12 @@ export function WebServeBlock({
 export function makeWebServeUI(toolName: string) {
   return makeAssistantToolUI<WebServeArgs, unknown>({
     toolName,
-    render: ({ args, result, status }) => (
+    render: ({ args, result, status, isError }) => (
       <WebServeBlock
         args={args ?? {}}
         result={result}
         isRunning={status.type === 'running'}
+        isError={isError}
         toolName={toolName}
       />
     ),

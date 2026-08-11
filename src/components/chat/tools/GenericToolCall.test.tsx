@@ -159,11 +159,22 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
       target_agent_id: 'scout-01',
     }
 
+    // Issue #617: a finished tool call ALWAYS carries a truthy `result`, so
+    // AssistantUI's part status is 'complete' in production, never
+    // 'incomplete' (toMessagePartStatus short-circuits to COMPLETE_STATUS
+    // the moment `result` is truthy — see message-runtime.ts). The real
+    // production path to isError for a denied delegation is the `error`
+    // string GenericToolCall reads from the store (ChatScreen.tsx's
+    // `error={tc.error}`) — set from the same tool_call_result frame that
+    // carries the denial sentinel (store/chat.ts: `tc.error = frame.error`).
+    // {result: truthy, status: incomplete} is not a pair GenericToolCall
+    // ever actually receives; this producible pairing is.
     render(
       <GenericToolCall
         toolName="delegate"
         result={delegationDenied}
-        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+        status={COMPLETE_STATUS}
+        error={delegationDenied.reason}
       />
     )
 
@@ -192,11 +203,14 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
       tool: 'delegate',
     }
 
+    // Issue #617: producible pairing (result + status:complete + error) —
+    // see the previous test's comment for the full rationale.
     render(
       <GenericToolCall
         toolName="delegate"
         result={delegationDenied}
-        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+        status={COMPLETE_STATUS}
+        error={delegationDenied.reason}
       />
     )
 
@@ -217,11 +231,14 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
       target_agent_id: 'scout-01',
     }
 
+    // Issue #617: producible pairing — see the first test in this describe
+    // block for the full rationale.
     render(
       <GenericToolCall
         toolName="delegate"
         result={delegationDenied}
-        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+        status={COMPLETE_STATUS}
+        error={delegationDenied.reason}
       />
     )
 
@@ -253,6 +270,8 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
     // First: with verbose forced back OFF, the row must be hidden — the
     // failure is left for the delegating agent's own response text and the
     // ActivityPanel to surface, not a thread chip.
+    // Issue #617: producible pairing (result + status:complete + error) —
+    // see the first test in this describe block for the full rationale.
     act(() => {
       useChatPreferencesStore.setState({ verboseChatEnabled: false })
     })
@@ -260,7 +279,8 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
       <GenericToolCall
         toolName="delegate"
         result={delegationDenied}
-        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+        status={COMPLETE_STATUS}
+        error={delegationDenied.reason}
       />
     )
     expect(screen.queryByTestId('tool-call-badge')).toBeNull()
@@ -276,7 +296,8 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
         toolName="delegate"
         // No `args` prop at all — the default/common shape.
         result={delegationDenied}
-        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+        status={COMPLETE_STATUS}
+        error={delegationDenied.reason}
       />
     )
 
@@ -416,11 +437,15 @@ describe('GenericToolCall — flat text-line status dot', () => {
       // Verbose is forced on by this describe's beforeEach so this purely
       // tests the indicator's OWN color, not the (separately-tested)
       // visibility gate.
+      // Issue #617: producible pairing (result + status:complete + error) —
+      // see "GenericToolCall — delegation-denied result sentinel" above for
+      // the full rationale.
       const { container } = render(
         <GenericToolCall
           toolName="delegate"
           result={{ error: 'delegation_denied', reason: 'nope', policy: 'mode', tool: 'delegate' }}
-          status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+          status={COMPLETE_STATUS}
+          error="nope"
         />
       )
       const indicator = getIndicatorEl(container)
@@ -432,7 +457,8 @@ describe('GenericToolCall — flat text-line status dot', () => {
         <GenericToolCall
           toolName="delegate"
           result={{ error: 'delegation_denied', reason: 'nope', policy: 'mode', tool: 'delegate' }}
-          status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+          status={COMPLETE_STATUS}
+          error="nope"
         />
       )
       fireEvent.click(screen.getByRole('button'))
@@ -747,12 +773,20 @@ describe('GenericToolCall — file-exists refusal sentinel (ADR-059 W5)', () => 
     path: '/w/a.svg',
   }
 
+  // Issue #617: a finished tool call always carries a truthy `result`, so
+  // AssistantUI's part status is 'complete' in production (see the
+  // delegation-denied describe block above for the full mechanism). All four
+  // tests below now pair a truthy result with `status:complete` + a real
+  // `error` string — the same producible shape ChatScreen.tsx's replay path
+  // (`error={tc.error}`) actually feeds this component.
+
   it('renders the reason in a distinct block, NOT as raw JSON', () => {
     render(
       <GenericToolCall
         toolName="write_file"
         result={refusal}
-        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+        status={COMPLETE_STATUS}
+        error={refusal.reason}
       />
     )
     fireEvent.click(screen.getByRole('button'))
@@ -772,7 +806,8 @@ describe('GenericToolCall — file-exists refusal sentinel (ADR-059 W5)', () => 
       <GenericToolCall
         toolName="write_file"
         result={refusal}
-        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+        status={COMPLETE_STATUS}
+        error={refusal.reason}
       />
     )
     expect(screen.getByText('File already exists')).toBeInTheDocument()
@@ -784,7 +819,8 @@ describe('GenericToolCall — file-exists refusal sentinel (ADR-059 W5)', () => 
       <GenericToolCall
         toolName="write_file"
         result={refusal}
-        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+        status={COMPLETE_STATUS}
+        error={refusal.reason}
       />
     )
     fireEvent.click(screen.getByRole('button'))
@@ -798,7 +834,8 @@ describe('GenericToolCall — file-exists refusal sentinel (ADR-059 W5)', () => 
       <GenericToolCall
         toolName="write_file"
         result={{ error: 'timeout', reason: 'took too long' }}
-        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+        status={COMPLETE_STATUS}
+        error="took too long"
       />
     )
     expect(screen.queryByTestId('result-file-exists')).not.toBeInTheDocument()

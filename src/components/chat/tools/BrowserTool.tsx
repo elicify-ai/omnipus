@@ -66,6 +66,15 @@ interface BrowserToolBlockProps {
   args: Record<string, unknown>
   result: unknown
   status: { type: string; reason?: string }
+  /**
+   * Issue #617: the tool call's real error outcome, sourced from the store's
+   * resolved ToolCall.status (threaded through by the live path's render
+   * props and the replay path's caller — see BrowserToolReplayBlock and
+   * ChatScreen.tsx). `status` above is still used for isRunning/isCancelled
+   * — only the error derivation moved off `status.type === 'incomplete'`,
+   * which can never be true for a finished call carrying a result.
+   */
+  isError?: boolean
   summary: string
 }
 
@@ -82,12 +91,12 @@ export function BrowserToolBlock({
   args,
   result,
   status,
+  isError,
   summary,
 }: BrowserToolBlockProps) {
   const [expanded, setExpanded] = useState(false)
 
   const isRunning = status.type === 'running'
-  const isError = status.type === 'incomplete'
   const isCancelled = isCancelledStatus(status)
   const hasResult = result != null
   const hasDetail = !isRunning && hasResult
@@ -290,7 +299,12 @@ interface BrowserToolSpec<TArgs> {
 function createBrowserToolUI<TArgs extends object>(
   spec: BrowserToolSpec<TArgs>
 ): { dotUI: ReturnType<typeof makeAssistantToolUI>; underscoreUI: ReturnType<typeof makeAssistantToolUI> } {
-  function renderBlock(toolArgs: TArgs | undefined, result: unknown, status: { type: string; reason?: string }) {
+  function renderBlock(
+    toolArgs: TArgs | undefined,
+    result: unknown,
+    status: { type: string; reason?: string },
+    isError: boolean | undefined,
+  ) {
     const args = toolArgs ?? ({} as TArgs)
     return (
       <BrowserToolBlock
@@ -298,19 +312,23 @@ function createBrowserToolUI<TArgs extends object>(
         args={args as Record<string, unknown>}
         result={result}
         status={status}
+        isError={isError}
         summary={spec.summary(args)}
       />
     )
   }
 
+  // Issue #617: isError comes from the tool-call part's own `isError` field
+  // (set in omnipus-runtime.ts from the store's resolved ToolCall.status),
+  // not from `status.type === 'incomplete'`.
   const dotUI = makeAssistantToolUI<TArgs, unknown>({
     toolName: spec.dotTool,
-    render: ({ args, result, status }) => renderBlock(args, result, status),
+    render: ({ args, result, status, isError }) => renderBlock(args, result, status, isError),
   })
 
   const underscoreUI = makeAssistantToolUI<TArgs, unknown>({
     toolName: spec.underscoreTool,
-    render: ({ args, result, status }) => renderBlock(args, result, status),
+    render: ({ args, result, status, isError }) => renderBlock(args, result, status, isError),
   })
 
   return { dotUI, underscoreUI }
@@ -427,11 +445,17 @@ export function BrowserToolReplayBlock({
   args,
   result,
   status,
+  isError,
 }: {
   toolName: string
   args: unknown
   result: unknown
   status: { type: string; reason?: string }
+  /** Issue #617: the tool call's real error outcome (tc.status === 'error'
+   *  at the ChatScreen.tsx call site) — replaces the old `status.type ===
+   *  'incomplete'` derivation, which is never true for a finished replayed
+   *  call (ChatScreen always passes `status={{type:'complete'}}`). */
+  isError?: boolean
 }) {
   const spec = BROWSER_TOOL_SPECS[toolName]
   if (!spec) return null
@@ -442,6 +466,7 @@ export function BrowserToolReplayBlock({
       args={resolvedArgs}
       result={result}
       status={status}
+      isError={isError}
       summary={spec.summary(resolvedArgs)}
     />
   )

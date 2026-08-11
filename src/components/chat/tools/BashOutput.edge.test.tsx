@@ -20,7 +20,14 @@ import { act } from 'react'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import type { ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
 
-type RenderFn = (props: { args: unknown; result: unknown; status: { type: string; reason?: string } }) => React.ReactNode
+// Issue #617: `isError` is now a real field on the render-prop object (set
+// by omnipus-runtime.ts from the store's resolved ToolCall.status, then
+// threaded through by AssistantUI's message-part state — see
+// BashOutput.tsx's makeBashUI). It is NOT derivable from `status.type ===
+// 'incomplete'` — that can never be true for a finished call carrying a
+// result. Tests that need an error render must now pass `isError: true`
+// explicitly, the same way the real pipeline would.
+type RenderFn = (props: { args: unknown; result: unknown; status: { type: string; reason?: string }; isError?: boolean }) => React.ReactNode
 
 // vi.hoisted runs before vi.mock factory and before all imports.
 const captured = vi.hoisted(() => ({
@@ -114,16 +121,26 @@ describe('bash — flat text-line status dot', () => {
     expect(indicator?.getAttribute('class')).toContain('rounded-full')
   })
 
-  it('incomplete (error): indicator is an 8px error-colored dot', () => {
+  it('errored (isError=true): indicator is an 8px error-colored dot', () => {
     if (!captured.bashRender) {
       expect(BashOutputUI).toBeDefined()
       return
     }
+    // Issue #617: a finished bash call always carries a truthy `result`, so
+    // AssistantUI's part status is 'complete' in production — never
+    // 'incomplete' (that status can only arise for a RESULTLESS part; see
+    // 'cancelled' below for the one legitimate resultless case this file
+    // still covers). The real signal for a genuine failure is `isError`,
+    // sourced from the store's resolved ToolCall.status by
+    // omnipus-runtime.ts. {result: truthy, status: incomplete} — the old
+    // shape this test used — is a pair BashOutputBlock never actually
+    // receives; {result: truthy, status: complete, isError: true} is.
     const { container } = render(
       captured.bashRender({
         args: { command: 'false' },
         result: 'exit 1',
-        status: { type: 'incomplete' },
+        status: { type: 'complete' },
+        isError: true,
       }) as React.ReactElement
     )
     const indicator = getIndicatorEl(container)
@@ -260,30 +277,29 @@ describe('bash — flat text-line status dot', () => {
 // ── bash (canonical) result edge cases ────────────────────────────────────────
 
 describe.each([
-  ['null result (running)', null, true, false],
-  ['null result (done)', null, false, false],
-  ['empty string result', '', false, false],
-  ['single line output', 'hello world', false, false],
-  ['multiline output', 'line1\nline2\nline3', false, false],
-  ['very long output', 'x'.repeat(100_000), false, false],
-  ['unicode output', '\u{1F680}\u{1F480}⚡\u{1F389}', false, false],
-  ['ANSI escape codes in output', '\x1b[31mred text\x1b[0m', false, false],
-  ['null bytes in output', 'before\x00after', false, false],
-  ['output with XSS content', '<script>alert(1)</script>', false, false],
-  ['number result (coerced to string)', 42, false, false],
-  ['object result (coerced to string)', { exit_code: 0 }, false, false],
-  ['array result (coerced to string)', [1, 2, 3], false, false],
-  ['boolean result (coerced to string)', false, false, false],
-  ['error state output', 'error: command not found', false, true],
-] as Array<[string, unknown, boolean, boolean]>)(
+  ['null result (running)', null, true],
+  ['null result (done)', null, false],
+  ['empty string result', '', false],
+  ['single line output', 'hello world', false],
+  ['multiline output', 'line1\nline2\nline3', false],
+  ['very long output', 'x'.repeat(100_000), false],
+  ['unicode output', '\u{1F680}\u{1F480}⚡\u{1F389}', false],
+  ['ANSI escape codes in output', '\x1b[31mred text\x1b[0m', false],
+  ['null bytes in output', 'before\x00after', false],
+  ['output with XSS content', '<script>alert(1)</script>', false],
+  ['number result (coerced to string)', 42, false],
+  ['object result (coerced to string)', { exit_code: 0 }, false],
+  ['array result (coerced to string)', [1, 2, 3], false],
+  ['boolean result (coerced to string)', false, false],
+] as Array<[string, unknown, boolean]>)(
   'bash renders result "%s" without throwing',
-  (_label, result, isRunning, isError) => {
+  (_label, result, isRunning) => {
     it('renders', () => {
       if (!captured.bashRender) {
         expect(BashOutputUI).toBeDefined()
         return
       }
-      const status = isRunning ? { type: 'running' } : isError ? { type: 'incomplete' } : { type: 'complete' }
+      const status = isRunning ? { type: 'running' } : { type: 'complete' }
       expect(() => {
         const element = captured.bashRender!({ args: { command: 'echo hi' }, result, status })
         render(element as React.ReactElement)
@@ -291,6 +307,31 @@ describe.each([
     })
   }
 )
+
+// Issue #617: this used to be the last row of the table above
+// (`['error state output', ..., isError:true]`, forcing `status:'incomplete'`
+// — a pairing BashOutputBlock never actually receives for a finished call —
+// and asserting only `.not.toThrow()`, which would have passed even if the
+// error dot silently rendered as success). Pulled out into its own test with
+// the producible shape (truthy result + status:complete + isError:true) and
+// a real assertion on the rendered outcome, not just "didn't crash".
+it('a genuine error outcome (isError=true) renders the error-colored dot and "Failed" label, not silently as success', () => {
+  if (!captured.bashRender) {
+    expect(BashOutputUI).toBeDefined()
+    return
+  }
+  const { container, getByText } = render(
+    captured.bashRender!({
+      args: { command: 'echo hi' },
+      result: 'error: command not found',
+      status: { type: 'complete' },
+      isError: true,
+    }) as React.ReactElement
+  )
+  const indicator = container.querySelector('button')?.children[0] as HTMLElement | undefined
+  expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+  expect(getByText('Failed')).toBeInTheDocument()
+})
 
 // ── bash (canonical) args edge cases — ADR-036 §3.1 schema ───────────────────
 
@@ -608,17 +649,24 @@ describe('bash — verbose chat gate', () => {
   // the calling agent's own response text, and the raw output stays
   // inspectable in the ActivityPanel. Only verboseChatEnabled brings this
   // row back into the thread now (see the next test).
-  it('a background bash run with an error status (incomplete) stays HIDDEN — no isError exception for background bash', () => {
+  it('a background bash run with a genuine error outcome (isError=true) stays HIDDEN — no isError exception for background bash', () => {
     // (item 8f, 2026-07-16 fix wave): hard-fail if the render fn was never
     // captured, instead of soft-guarding into a vacuous pass — this is a
     // NEW regression test added by the visibility-policy fix, so silently
     // no-op'ing here would mean the test could report green while asserting
     // nothing at all about the fix it exists to pin.
+    //
+    // Issue #617: a finished call always carries a truthy `result`, so
+    // `status.type === 'incomplete'` (the old shape here) is never the real
+    // signal for a failed background bash run — `isError` is (see the type
+    // comment at the top of this file). The producible pairing is
+    // result:truthy + status:complete + isError:true.
     expect(captured.bashRender).toBeDefined()
     const element = captured.bashRender!({
       args: { command: 'tail -f log', run_in_background: true },
       result: 'command not found',
-      status: { type: 'incomplete' },
+      status: { type: 'complete' },
+      isError: true,
     })
     const { container } = render(element as React.ReactElement)
     expect(container).toBeEmptyDOMElement()
@@ -633,7 +681,8 @@ describe('bash — verbose chat gate', () => {
     const element = captured.bashRender!({
       args: { command: 'tail -f log', run_in_background: true },
       result: 'command not found',
-      status: { type: 'incomplete' },
+      status: { type: 'complete' },
+      isError: true,
     })
     const { container } = render(element as React.ReactElement)
     expect(container).not.toBeEmptyDOMElement()

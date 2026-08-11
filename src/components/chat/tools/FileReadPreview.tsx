@@ -101,14 +101,18 @@ function FileReadBlock({
   )
 }
 
+// Issue #617: isError comes from the tool-call part's own `isError` field
+// (set in omnipus-runtime.ts from the store's resolved ToolCall.status), not
+// from `status.type === 'incomplete'` — that can never be true for a
+// finished call carrying a result.
 export const FileReadPreviewUI = makeAssistantToolUI<ReadFileArgs, unknown>({
   toolName: 'read_file',
-  render: ({ args, result, status }) => (
+  render: ({ args, result, status, isError }) => (
     <FileReadBlock
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
-      isError={status.type === 'incomplete'}
+      isError={isError}
       isCancelled={isCancelledStatus(status)}
     />
   ),
@@ -117,12 +121,12 @@ export const FileReadPreviewUI = makeAssistantToolUI<ReadFileArgs, unknown>({
 // BRD C.6.1.4 tool name (dot-notation). Backend uses Omnipus convention (read_file); both registered.
 export const FileReadAliasDotUI = makeAssistantToolUI<ReadFileArgs, unknown>({
   toolName: 'file.read',
-  render: ({ args, result, status }) => (
+  render: ({ args, result, status, isError }) => (
     <FileReadBlock
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
-      isError={status.type === 'incomplete'}
+      isError={isError}
       isCancelled={isCancelledStatus(status)}
     />
   ),

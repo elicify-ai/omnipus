@@ -958,6 +958,11 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   args={(tc.params ?? {}) as { path?: string; command?: string; port?: number; duration_seconds?: number }}
                   result={tc.result ?? null}
                   isRunning={false}
+                  // Issue #617: replay must reflect the tool call's real
+                  // outcome, mirroring GenericToolCall's `error={tc.error}`
+                  // below — previously this row always rendered "Done"
+                  // regardless of whether the call actually failed.
+                  isError={tc.status === 'error'}
                   toolName={tc.tool}
                 />
               )
@@ -968,6 +973,12 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             // screenshot/text/error card instead of showing raw JSON. Route
             // replay through the same block for live/replay parity — see
             // BrowserToolReplayBlock's doc comment for the full story.
+            //
+            // Issue #617: `status` used to be hardcoded to `{type:'complete'}`
+            // with no error signal threaded at all, so every replayed browser
+            // tool call rendered "OK" unconditionally — mirror the
+            // GenericToolCall branch below (`error={tc.error}`) by passing the
+            // store's real outcome as `isError`.
             if (isReplayBrowserToolName(tc.tool)) {
               return (
                 <BrowserToolReplayBlock
@@ -976,6 +987,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   args={tc.params}
                   result={tc.result}
                   status={{ type: 'complete' }}
+                  isError={tc.status === 'error'}
                 />
               )
             }

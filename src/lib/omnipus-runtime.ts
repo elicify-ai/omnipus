@@ -76,6 +76,16 @@ function pushHistoryParts(
         toolName: tc.tool,
         args: tc.params,
         result: resolved.result,
+        // Issue #617: derive isError from the store's own resolved status
+        // (written from the WS tool_call_result frame — chat.ts:4222) rather
+        // than letting the renderer infer it from AssistantUI's part status.
+        // toMessagePartStatus (message-runtime.ts) returns 'incomplete' only
+        // for a RESULTLESS part inheriting the enclosing message's status —
+        // it never reflects whether THIS tool call actually failed. A
+        // cancelled call has status:'cancelled' here (never 'error'), so
+        // isCancelledStatus's message-level derivation (unchanged) still
+        // renders cancellation correctly downstream.
+        isError: resolved.status === "error",
       });
     }
     if (prevTextEnd < text.length) {
@@ -95,6 +105,9 @@ function pushHistoryParts(
       toolName: tc.tool,
       args: tc.params,
       result: resolved.result,
+      // Issue #617 — see the sibling construction site above for the full
+      // rationale; same derivation, same cancellation-preservation guarantee.
+      isError: resolved.status === "error",
     });
   }
 }
@@ -154,6 +167,8 @@ function buildContentParts(
         toolName: tc.tool,
         args: tc.params,
         result: tc.result,
+        // Issue #617 — same derivation as pushHistoryParts above.
+        isError: tc.status === "error",
       });
     }
 
