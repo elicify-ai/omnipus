@@ -111,6 +111,38 @@ func rejectRetiredRepositoryField(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// mountsNotWritableHereMsg is returned (400) whenever a caller's raw request
+// body carries a "mounts" field on POST/PUT /api/v1/workspaces.
+// WorkspaceMount.yaml/Workspace.yaml's own schema comment is explicit that
+// mounts are "created and removed via the dedicated mounts lifecycle, not
+// via this record's own create/update requests" — gen.WorkspaceCreateRequest
+// and gen.WorkspaceUpdateRequest carry no "mounts" field at all, so without
+// this raw-body sniff a client sending one would have it silently dropped by
+// Go's default JSON decode rather than getting a loud 400 (same rationale as
+// rejectRetiredRepositoryField above, mirroring the sandbox_profile /
+// delegation_policy / repository precedents).
+const mountsNotWritableHereMsg = "mounts cannot be created, changed, or removed via POST/PUT /api/v1/workspaces — use the dedicated mounts lifecycle"
+
+// rejectMountsWriteField is rejectRetiredRepositoryField's sibling for the
+// "mounts" field. Kept as a separate function (rather than folding into
+// rejectRetiredRepositoryField) so each retired/reserved field gets its own
+// named message and its own call site is self-documenting about which field
+// it guards; both are cheap raw-body substring sniffs on the same buffered
+// body.
+func rejectMountsWriteField(w http.ResponseWriter, r *http.Request) bool {
+	rawBody, readErr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if readErr != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(rawBody))
+	if bytes.Contains(rawBody, []byte(`"mounts"`)) {
+		jsonErr(w, http.StatusBadRequest, mountsNotWritableHereMsg)
+		return false
+	}
+	return true
+}
+
 // readWorkspaceFile reads and parses ~/.omnipus/workspaces/{id}.json.
 // Greenfield: no legacy agent_ids→core_team migration (FR-1.10).
 func readWorkspaceFile(home, id string) (storedWorkspace, error) {
@@ -245,6 +277,43 @@ func writeWorkspaceFile(home string, w storedWorkspace) error {
 	})
 }
 
+// wireMount is a type ALIAS (not a new named type — the "=" form) for the
+// exact anonymous struct shape oapi-codegen generated for gen.Workspace's
+// Mounts field. Even though contracts/components/schemas/Workspace.yaml
+// references WorkspaceMount.yaml via $ref, oapi-codegen inlined it as an
+// anonymous struct rather than emitting a named gen.WorkspaceMount type (no
+// such type exists in pkg/api/generated) — so this alias, copied field-for-
+// field and tag-for-tag from openapi_types.gen.go, is the only way to
+// construct a value assignable to gen.Workspace.Mounts (*[]struct{...})
+// without hand-rolling a parallel, possibly-drifting wire struct. This is
+// NOT a new hand-written wire type under Constraint #8 — it is an alias of
+// the generated one; a `go vet`/lint mismatch here (wrong field/tag) would
+// fail to compile against gen.Workspace.Mounts, not silently drift.
+type wireMount = struct {
+	HostPath string                     `json:"host_path"`
+	Name     string                     `json:"name"`
+	Status   *gen.WorkspaceMountsStatus `json:"status,omitempty"`
+}
+
+// mountsToWire converts workspace.Mount records to the wire shape, computing
+// each entry's live status (workspace.MountStatus, FR-8.2/FR-8.5) at
+// response-build time — mirrors task_count's own "computed at read time,
+// never stored" convention (gen.Workspace's own doc comment). Returns nil
+// for an empty/nil input so a workspace with no mounts omits the field
+// entirely (json:"mounts,omitempty"), matching WorkspaceMount.yaml's "Absent
+// when no mount exists" contract.
+func mountsToWire(mounts []workspace.Mount) *[]wireMount {
+	if len(mounts) == 0 {
+		return nil
+	}
+	out := make([]wireMount, len(mounts))
+	for i, m := range mounts {
+		status := gen.WorkspaceMountsStatus(workspace.MountStatus(m))
+		out[i] = wireMount{HostPath: m.HostPath, Name: m.Name, Status: &status}
+	}
+	return &out
+}
+
 // workspaceToWire converts a storedWorkspace to the generated gen.Workspace wire type.
 // taskCount is passed in (computed by the caller).
 func workspaceToWire(w storedWorkspace, taskCount int) gen.Workspace {
@@ -316,6 +385,9 @@ func workspaceToWire(w storedWorkspace, taskCount int) gen.Workspace {
 		}
 		wire.MemberConfigs = &wireMC
 	}
+	// FR-5/FR-8.2: mounts, with each entry's status computed live (never
+	// stored — see mountsToWire's doc comment).
+	wire.Mounts = mountsToWire(w.Mounts)
 	return wire
 }
 
@@ -673,6 +745,11 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	if !rejectRetiredRepositoryField(w, r) {
 		return
 	}
+	// FR-5: mounts have their own dedicated lifecycle (workspace.CreateMount/
+	// DeleteMount) — see mountsNotWritableHereMsg's doc comment.
+	if !rejectMountsWriteField(w, r) {
+		return
+	}
 
 	var req gen.WorkspaceCreateRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
@@ -846,6 +923,11 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	// this raw-body sniff a client still sending it would have it silently
 	// dropped by Go's default JSON decode rather than getting a loud 400.
 	if !rejectRetiredRepositoryField(w, r) {
+		return
+	}
+	// FR-5: mounts have their own dedicated lifecycle (workspace.CreateMount/
+	// DeleteMount) — see mountsNotWritableHereMsg's doc comment.
+	if !rejectMountsWriteField(w, r) {
 		return
 	}
 

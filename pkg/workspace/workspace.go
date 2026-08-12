@@ -14,8 +14,8 @@ package workspace
 // JSON tag rules (must stay stable — the files are the long-term store):
 //
 //	id, name, description, status, pinned, pin_order, core_team,
-//	owner, is_default, setup_pending, delegation, member_configs, created_at,
-//	updated_at
+//	owner, is_default, setup_pending, delegation, member_configs, mounts,
+//	created_at, updated_at
 //
 // repository was deleted with no back-compat (FR-9.1, ADR-061 D7, matching
 // the ADR-035/037 precedent) — do not reintroduce it. Git linkage is now a
@@ -71,6 +71,16 @@ type Workspace struct { // not-wire-format: internal disk-cache struct, mapped t
 	// CoreTeam shrinks (FR-022). omitempty so fresh workspaces serialize
 	// without the field.
 	MemberConfigs map[string]MemberConfig `json:"member_configs,omitempty"`
+
+	// Mounts are this workspace's named write-grants on real local folders
+	// (FR-5, ADR-061 D4). Each renders as a symlink work/<name> -> HostPath
+	// (FR-5.4) and, on the app/kernel layers, an AllowedRoots write grant
+	// (FR-6.1 — see AllowedMountRoots in mount.go). Mutated exclusively via
+	// CreateMount/DeleteMount (mount.go), never via a direct field write,
+	// so the symlink and the record can never drift apart. Status is NOT
+	// stored here — it is always computed live from the filesystem
+	// (MountStatus, FR-8.2/FR-8.5), never persisted, never stale.
+	Mounts []Mount `json:"mounts,omitempty"`
 
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
