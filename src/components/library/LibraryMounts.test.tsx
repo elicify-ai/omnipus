@@ -41,7 +41,7 @@ const broadMount = entry({
   mount: { name: 'home', host_path: '/Users/dana', broad: true },
 } as Partial<LibraryEntry>)
 
-function renderRow(e: LibraryEntry, over: Record<string, unknown> = {}) {
+function renderRow(e: LibraryEntry, over: Partial<Record<string, unknown>> = {}) {
   const props = {
     workspaceId: 'ws-1',
     entry: e,
@@ -55,7 +55,7 @@ function renderRow(e: LibraryEntry, over: Record<string, unknown> = {}) {
     onUnmount: vi.fn(),
     ...over,
   }
-  render(<LibraryEntryRow {...(props as never)} />)
+  render(<LibraryEntryRow {...props} />)
   return props
 }
 
