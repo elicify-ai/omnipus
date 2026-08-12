@@ -164,6 +164,13 @@ const PING_BEACON_INTERVAL_MS = 15000;
 let expectedCaptureDims = null;
 // deviceScaleFactor of the captured tab — see the recapture control handler. 1 = CSS.
 let captureScale = 1;
+// Tab id of the CURRENTLY captured tab — recorded at capture time so the
+// shutdown handler can tab-mute it. Tab-level mute (chrome.tabs.update
+// muted:true) only touches LOCAL speaker output; it is applied strictly
+// while NO capture exists (capture is torn down in the same shutdown), so it
+// can never repeat the --mute-audio incident, where a browser-level flag
+// silenced what tabCapture itself received (rmsMean 0.30258 -> 0).
+let capturedTabId = null;
 
 // lastPinnedCapDims records what captureActiveTabStream actually pinned the
 // running stream to, and selfHealBudget bounds the post-connect
@@ -676,6 +683,10 @@ async function captureActiveTabStream() {
   // Self-consume: no processing constraints needed — tabCapture's defaults
   // are clean (AGC/EC/NS default OFF), unlike getDisplayMedia. See
   // wv1-spike-results.md Q2.
+  capturedTabId = tabId;
+  // Undo any shutdown-time local mute from a previous session of this tab:
+  // while captured, local audibility is governed by the panel, not the tab.
+  try { chrome.tabs.update(tabId, { muted: false }); } catch (e) { /* best-effort */ }
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } },
     video: {
@@ -915,6 +926,15 @@ async function handleControlFrame(msg) {
     stopWatchdog();
     stopPingBeacon();
     teardownCapture();
+    // Phantom-audio fix (live report, macOS 2026-08-13): the human closed
+    // the panel, every viewer detached, the grace timer stopped the capture
+    // — and the captured tab KEPT PLAYING, audibly, from a browser with no
+    // visible window. Shutdown now tab-mutes the captured tab (local output
+    // only; there is no capture left to affect). The next capture start
+    // unmutes it symmetrically.
+    if (capturedTabId != null) {
+      try { chrome.tabs.update(capturedTabId, { muted: true }); record('shutdown: tab-muted ' + capturedTabId); } catch (e) { warn('shutdown tab-mute failed', e); }
+    }
     try {
       ws.close();
     } catch (e) {
