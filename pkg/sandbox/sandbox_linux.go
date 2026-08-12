@@ -279,8 +279,16 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 	}
 	defer unix.Close(int(rulesetFd))
 
+	// forChild=false: this restricts the GATEWAY, which must retain access to
+	// its own vault and config. Children get the excluded set in
+	// RestrictCurrentThread.
+	gatewayRules, err := lb.linuxFilesystemRules(policy, false)
+	if err != nil {
+		return fmt.Errorf("landlock: building filesystem rules: %w", err)
+	}
+
 	var ruleErrors []error
-	for _, rule := range policy.FilesystemRules {
+	for _, rule := range gatewayRules {
 		rights := lb.accessToLandlockRights(rule.Access)
 		if err := addLandlockPathRule(int(rulesetFd), rule.Path, rights); err != nil {
 			// ENOENT for system paths (e.g. /lib64 on ARM64) is expected —
@@ -639,7 +647,34 @@ func (lb *LinuxBackend) RestrictCurrentThread() error {
 	// 3. Re-add the saved filesystem and net port rules. We tolerate ENOENT
 	//    (path missing on this arch) and EINVAL/ENOENT for net rules on
 	//    older ABIs, matching ApplyWithMode's behavior.
-	for _, rule := range lb.savedPolicy.FilesystemRules {
+	// ADR-060 §4.2 / spec FR-4.5: exclude the secret set from what the CHILD
+	// can reach. Landlock has no deny primitive, so "exclude" means "grant the
+	// siblings and never the secret" — ExpandRulesExcluding does that walk.
+	//
+	// It happens HERE, per spawn, rather than once at boot for two reasons.
+	//
+	// First, correctness of the gateway itself: this function restricts only the
+	// thread that is about to fork, so a narrower rule set applied here confines
+	// the child WITHOUT touching the gateway's own access. The gateway must keep
+	// reading master.key and writing config.json; on macOS that separation is
+	// free, because sandbox-exec confines only children, but on Linux the
+	// gateway restricts itself and this thread seam is the only place the two
+	// can legitimately diverge.
+	//
+	// Second, freshness: the ruleset is rebuilt on every spawn anyway (see the
+	// step 2 comment above), so enumerating here costs a handful of directory
+	// listings per process start and removes staleness entirely. A directory an
+	// agent creates after boot is reachable by the next child it spawns.
+	//
+	// An enumeration failure aborts the spawn. RestrictCurrentThread's contract
+	// already requires callers to abort rather than fall through to an
+	// unrestricted exec, so the error is honoured; granting the parent instead
+	// would leave the key readable with nothing in the logs to say so.
+	childRules, err := lb.linuxFilesystemRules(lb.savedPolicy, true)
+	if err != nil {
+		return fmt.Errorf("landlock: per-spawn secret-set exclusion failed: %w", err)
+	}
+	for _, rule := range childRules {
 		rights := lb.accessToLandlockRights(rule.Access)
 		if err := addLandlockPathRule(int(rulesetFd), rule.Path, rights); err != nil {
 			if errors.Is(err, unix.ENOENT) {
@@ -705,4 +740,45 @@ func selectBackendPlatform() (SandboxBackend, string) {
 		"backend", "fallback", "kernel_version", kernelVersion)
 	fb := NewFallbackBackend()
 	return fb, fb.Name()
+}
+
+// linuxFilesystemRules turns a SandboxPolicy into the path rules to install on
+// Landlock, resolving the ADR-060 filesystem model into grants.
+//
+// # Why the open model needs a rule at all
+//
+// Seatbelt can say "(allow file-read*)" and be done. Landlock cannot: it is
+// grant-only and has no unfiltered allow, so "reads are open" has to be
+// expressed as a grant on "/" — the one tree that contains everything. The two
+// backends are rendering the same intent, not disagreeing about it.
+//
+// # Why forChild exists, and why it is not symmetric
+//
+// The GATEWAY needs to read master.key to unlock the vault and write
+// config.json when an operator changes a setting; a CHILD must be able to do
+// neither. On macOS that separation is free, because sandbox-exec confines only
+// children and the gateway is never in the profile at all. On Linux the gateway
+// restricts ITSELF, so boot (forChild=false) installs the rules unexcluded and
+// the per-spawn re-restriction (forChild=true) installs the narrowed set.
+// Applying the exclusion at boot would lock the gateway out of its own vault —
+// a failure that looks like a corrupt install rather than a policy mistake.
+func (lb *LinuxBackend) linuxFilesystemRules(policy SandboxPolicy, forChild bool) ([]PathRule, error) {
+	rules := policy.FilesystemRules
+	if policy.ReadsOpen || policy.ExecOpen {
+		var access uint64
+		if policy.ReadsOpen {
+			access |= AccessRead
+		}
+		if policy.ExecOpen {
+			access |= AccessExecute
+		}
+		// Prepended, never appended: Landlock takes the union of rights per
+		// path, so order carries no meaning here, but keeping the broad grant
+		// first makes the rule list read the way the policy does.
+		rules = append([]PathRule{{Path: "/", Access: access}}, rules...)
+	}
+	if !forChild {
+		return rules, nil
+	}
+	return ExpandRulesExcluding(rules, policy.DeniedPaths)
 }
