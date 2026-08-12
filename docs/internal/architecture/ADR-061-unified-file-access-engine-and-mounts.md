@@ -106,6 +106,20 @@ This is deliberately the ADR-060 pattern ("one principle, two renderings")
 applied one level up. ADR-060 unified the *secret set* across two backends; this
 unifies the *whole ruleset* across the app and kernel layers.
 
+**It is also not a new direction: this is ADR-046's P3, accepted and never
+built.** `pkg/fspolicy`'s package doc already names EffectiveFSPolicy as "the
+one function of record consumed by both the app-layer path resolver (ResolvePath,
+P1/P2) and the future per-child Landlock ruleset builder (P3) — so the two
+enforcement backends can never drift apart". The divergence documented in §1.1 is
+what happened in the gap where P3 was specified but absent. This ADR therefore
+decides far less than its length suggests: it completes an accepted design, adds
+mounts on top, and corrects the read/write split ADR-060 exposed.
+
+**Consequence that constrains everything below:** `pkg/fspolicy` is deliberately
+a stdlib-only leaf, because `pkg/tools` already imports `pkg/sandbox` and P3
+wires `pkg/sandbox → pkg/fspolicy`. The secret set must therefore live in the
+leaf and be consumed by the kernel package, not the other way around.
+
 ### D2 — Access decisions become operation-aware
 
 `ResolvePath` stops discarding `op`:
