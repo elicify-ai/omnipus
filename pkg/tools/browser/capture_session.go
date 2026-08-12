@@ -37,6 +37,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 
@@ -718,7 +719,19 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) bool {
 		runCtx, cancel := context.WithTimeout(tabCtx, bringToFrontTimeout)
 		defer cancel()
 		if runErr := chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
-			return page.BringToFront().Do(c)
+			if err := page.BringToFront().Do(c); err != nil {
+				return err
+			}
+			// Throttle-cap fix (measured 2026-08-13): with the tab merely
+			// brought to front, the headless compositor still treated it as
+			// unfocused/occluded and clamped frame production to a metronomic
+			// 2fps - measured as exactly 1 frame per 500ms over 40 samples
+			// under a full-viewport 60fps animation, which is why video-heavy
+			// pages (YouTube) "stuck" while static pages felt fine (they never
+			// need more than 2fps). Focus emulation makes the renderer treat
+			// itself as foreground: rAF runs at full rate and the compositor
+			// produces real frames for tabCapture to consume.
+			return emulation.SetFocusEmulationEnabled(true).Do(c)
 		})); runErr != nil {
 			cs.logf(
 				"capture[%s]: bring agent tab to front failed (capture may fall back to first-tab resolution): %v",

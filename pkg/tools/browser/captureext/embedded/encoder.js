@@ -355,12 +355,26 @@ function applyVideoSenderConstraints(pc, opts) {
     // rescale correctly, not because input correctness depends on it.
     // Paired with the raised bitrate ceiling below (6 Mbps) to give VP8
     // headroom before it needs to degrade at all.
-    params.degradationPreference = 'maintain-resolution';
+    // 'balanced', reversing the 2026-07-31 'maintain-resolution' pin. That
+    // pin predated physical-resolution (2x) capture, and the calculus flips
+    // with it: measured 2026-08-13 on a 4-core mobile Intel i7 (native x64,
+    // no Rosetta), software VP8 at 1122x1416 under sustained full-motion
+    // content (testufo.com) delivered 4-10fps with 3-second dead stalls,
+    // because maintain-resolution makes a CPU-bound encoder pay entirely in
+    // FRAMERATE. 'balanced' lets it downscale DURING motion - where
+    // sharpness is imperceptible anyway - and restore the full 2x when the
+    // page is static, which is when text is actually read. Sharp-when-still,
+    // fluid-when-moving is the correct trade for a remote-control surface on
+    // hardware that cannot have both at once.
+    params.degradationPreference = 'balanced';
     // Belt-and-braces against any lingering per-encoding down-scale --
     // degradationPreference governs the encoder's *runtime* trade-off, but
     // scaleResolutionDownBy is a separate, persistent per-encoding factor;
     // pin it to 1 so nothing above this layer is quietly resizing the
     // output out from under the resolution guarantee just established.
+    // scaleResolutionDownBy stays pinned to 1: it is the STATIC per-encoding
+    // factor; the RUNTIME downscale under load is degradationPreference's
+    // job, and pinning the static factor keeps the steady-state at full 2x.
     params.encodings[0].scaleResolutionDownBy = 1;
     sender
       .setParameters(params)
@@ -701,6 +715,17 @@ async function captureActiveTabStream() {
         minHeight: Math.round(capH * captureScale),
         maxWidth: Math.round(capW * captureScale),
         maxHeight: Math.round(capH * captureScale),
+        // Frame-production floor (measured 2026-08-13): without an explicit
+        // minFrameRate the headless compositor treated the captured tab as
+        // occluded and delivered only its refresh heartbeat - a metronomic
+        // 2fps (exactly 1 frame per 500ms over 40 samples) under a
+        // full-viewport 60fps animation, which is why video-heavy pages
+        // "stuck" while static pages felt fine. min_frame_rate is the knob
+        // Chromium's tab capturer uses to actively request compositor
+        // frames for occluded surfaces. Page.bringToFront and focus
+        // emulation were both tried first and did NOT lift the cap.
+        minFrameRate: 15,
+        maxFrameRate: 30,
       },
     },
   });
@@ -827,6 +852,32 @@ async function runCaptureAndOfferOnce() {
   const pc = newPeerConnection();
   currentPC = pc;
   stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+  // Prefer H.264 over VP8 (measured 2026-08-13): software VP8 at the 2x
+  // capture size (1122x1416) tops out at 4-12fps on a 4-core mobile Intel -
+  // the encoder, not bitrate or transport, is the ceiling (proven by
+  // testufo.com runs: 'balanced' degradation removed the 3s stalls but avg
+  // fps stayed ~7). H.264 engages VideoToolbox HARDWARE encode on macOS,
+  // taking the encode off the CPU entirely. Best-effort: if H.264 is absent
+  // from capabilities (or setCodecPreferences unsupported) the negotiation
+  // falls back to the previous VP8 path untouched. The Pion relay registers
+  // default codecs incl. H264, and it forwards RTP without transcoding, so
+  // the preference must be expressed HERE, on the sending leg.
+  try {
+    const caps = RTCRtpSender.getCapabilities && RTCRtpSender.getCapabilities('video');
+    if (caps && caps.codecs && caps.codecs.length) {
+      const h264 = caps.codecs.filter((c) => /h264/i.test(c.mimeType));
+      if (h264.length) {
+        const rest = caps.codecs.filter((c) => !/h264/i.test(c.mimeType));
+        const tr = pc.getTransceivers().find((x) => x.sender && x.sender.track && x.sender.track.kind === 'video');
+        if (tr && tr.setCodecPreferences) {
+          tr.setCodecPreferences(h264.concat(rest));
+          record('codec preference: H264 first (' + h264.length + ' profiles)');
+        }
+      }
+    }
+  } catch (e) {
+    warn('setCodecPreferences failed; keeping default codec order', e);
+  }
 
   // Fix-wave finding 4: cap bitrate + set encoding hints on the video
   // sender now that addTrack has created it. Video-only (audio/Opus has no
