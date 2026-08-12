@@ -324,3 +324,87 @@ or networked mounts (local folders only).
 4. Does the per-turn authored policy get computed once per turn and reused for
    every spawn within it, or recomputed per spawn? (Affects whether a mount
    added mid-turn is visible to a child spawned later in that same turn.)
+
+---
+
+## 6. Accepted residuals — the enforcement boundary is not total
+
+Added after the second review pass. Every item here was DEMONSTRATED against real
+sandboxed children, not inferred, and each previously existed only as a Go
+comment. That is why this section exists at all: a reviewer greps the decision
+records, finds nothing, and marks the area closed. **An accepted security
+residual that lives in no decision record is not an accepted residual — it is an
+undocumented hole with a note beside it.**
+
+### R-1. The kernel permits LISTING the directories above a turn's own work dir
+
+The app layer refuses; the kernel allows. Measured to be exactly the ancestors of
+the work dir and nothing else — every path below agrees in both directions, so a
+child still cannot read or write another agent's files.
+
+Not closed because doing so on macOS means emitting an allow AFTER the deny
+block, and "nothing follows the deny block" is the single invariant that stops a
+stray filtered allow re-opening every secret
+(`TestSeatbelt_DenyPrecedenceIsMeasuredNotAssumed`). Trading that to hide a list
+of directory NAMES is a bad exchange. Linux does not have this residual: its
+grant-based walk never grants the ancestor node.
+
+Pinned by `TestKernelDeniedPaths_MatchIsCarveOutPathForPath`, which fails if the
+divergence ever reaches a non-ancestor path or flips direction.
+
+### R-2. Path identity cannot answer for a file that does not exist
+
+`os.SameFile` needs an inode. For a not-yet-created secret the comparison falls
+back to strings — case-folded on the deny side, byte-exact on the grant side
+(asymmetric on purpose: over-matching only ever denies, while a true answer on
+the grant side RE-ADMITS).
+
+Two demonstrated consequences:
+
+- On a normalization-insensitive volume with a non-ASCII `$OMNIPUS_HOME`
+  component, an NFC/NFD variant of an ABSENT secret is not matched. Requires a
+  mount whose root prefix-matches; without one, write-confinement refuses it
+  anyway.
+- Backup-prefix coverage was discovered by LISTING at policy-build time, so a
+  `config.json.bak-*` that does not exist yet was not matched — plain ASCII, no
+  Unicode needed. This one is a defect rather than a residual and is being fixed
+  by matching the prefix instead of enumerating.
+
+Closing R-2 fully would mean carrying a Unicode normalization table into
+`pkg/fspolicy`, which must stay a stdlib-only leaf to avoid the
+`pkg/tools` ↔ `pkg/sandbox` import cycle — and normalization alone would still
+miss locale case rules.
+
+### R-3. MCP servers are unconfined on macOS
+
+Corrected from an earlier, wrong framing of "unsandboxed by design, matching
+Claude Code". The accurate statement is **platform-dependent**: on Linux an MCP
+child inherits the gateway's boot Landlock domain; on macOS
+`restrictCurrentThreadIfNeeded` is a no-op and `applyPlatformHardening` is never
+reached, so the child is entirely unconfined and can read `master.key`,
+`credentials.json`, `auth.json` and every agent's home.
+
+Three doc comments in `pkg/mcp/manager.go` claim Landlock inheritance
+unconditionally. They are wrong on macOS and must be corrected whether or not
+the confinement changes.
+
+The control is that an agent cannot ADD an MCP server — matching Claude Code,
+whose sandboxing doc says a command able to edit its config could "add a hook or
+MCP server that Claude Code runs outside the sandbox", and whose defence is that
+`.mcp.json` is unwritable by a sandboxed command. **That control is currently
+SINGLE-LAYER**: the `add_mcp_server: deny` seed is the only thing holding,
+because the `tools.mcp` blocklist entry that was believed to back it is
+bypassable by writing the parent key `tools`.
+
+### What this section is really recording
+
+Ten agents worked this branch in parallel and produced ten local truths. The
+recurring signature across both review passes was not a coding error — it was a
+doc comment written from a verification that was true inside its own file and
+false one layer out. A function describing a rendering that had no caller; a
+store describing an exploit it did not close; a manager describing Linux
+inheritance on macOS.
+
+Prose that runs ahead of enforcement is exactly what a reviewer greps and marks
+closed. When in doubt, the rule this branch earned is: **before believing a
+comment, check that something calls the thing it describes.**
