@@ -86,7 +86,11 @@ Manual key file: `openssl rand -hex 32 > master.key && chmod 600 master.key && e
 
 ## Architecture Patterns
 
-**Sandboxing:** `SandboxBackend` interface — Linux (Landlock+seccomp), Windows (Job Objects+Restricted Tokens+DACL), Fallback (app-level). Policy + audit are cross-platform; only the enforcement backend varies.
+**Sandboxing:** `SandboxBackend` interface — Linux (Landlock+seccomp), macOS (Seatbelt via `sandbox-exec`), Fallback (app-level). Policy + audit are cross-platform; only the enforcement backend varies.
+
+⚠️ **There is NO Windows sandbox backend.** This line previously claimed "Windows (Job Objects+Restricted Tokens+DACL)". That was wrong in the way that matters most — it describes a protection an operator could reasonably rely on, and none of it exists. `selectBackendPlatform` (`pkg/sandbox/sandbox_other.go`) returns `FallbackBackend` on Windows, i.e. application-level enforcement only. Job Objects ARE used (`pkg/sandbox/hardened_exec_windows.go`) but purely for a memory cap and kill-on-parent-death; that file's own header states "DACL, Restricted Token, and AppContainer are out of scope (not implemented)". A real backend (Low integrity token + deny ACEs, no admin rights required) is designed but deliberately deferred to its own ADR — see ADR-060 §4.3.
+
+**Platform posture, accurately:** macOS confines only CHILDREN (Seatbelt cannot push an already-running process into a profile without CGo, so the gateway itself is not confined); Linux confines the gateway AND its children (Landlock is per-thread and inherited); Windows confines neither.
 
 **Channel model:** All channels implement `Channel` (`pkg/channels/base.go:47-56`) plus opt-in capability interfaces (`TypingCapable`, `MessageEditor`, `MessageDeleter`, `ReactionCapable`, `PlaceholderCapable`, `StreamingCapable`, `CommandRegistrarCapable` — `pkg/channels/interfaces.go:13-70`). Each registers a factory at compile time via `channels.RegisterFactory(name, factory)` in a `func init()`; activation is a hardcoded if-ladder in `Manager.initChannels()` (`pkg/channels/manager.go:582-708`). Channels talk to the agent loop only via the in-process `MessageBus` (`pkg/bus/bus.go`). There is **no** `BridgeAdapter`, **no** stdio bridge protocol, **no** Channel SDK (issue #151 tracks the planned unified plugin system).
 
