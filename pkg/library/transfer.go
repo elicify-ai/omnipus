@@ -197,11 +197,26 @@ func CopyInto(fromRoot, toRoot *Root, fromRel, toRel string) (os.FileInfo, error
 	if fromRel == "" || toRel == "" {
 		return nil, ErrInvalidPath
 	}
-	srcInfo, err := fromRoot.root.Stat(fromRel)
+	// Resolve BOTH sides through their own Root: either may sit inside a mount,
+	// in which case the real source/destination is that mount's os.Root rather
+	// than the work tree's. Copying is expressible across roots (unlike rename),
+	// so no cross-root refusal belongs here.
+	srcRt, srcSub := fromRoot.resolve(fromRel)
+	dstRt, dstSub := toRoot.resolve(toRel)
+
+	// Copying ONTO a mount's own entry would write through into the operator's
+	// real folder under a name they never chose; copying FROM it means copying
+	// the whole mounted tree, which is a duplication of their real data that no
+	// caller asked for by naming a folder.
+	if fromRoot.isMountRootEntry(fromRel) || toRoot.isMountRootEntry(toRel) {
+		return nil, ErrIsMountRoot
+	}
+
+	srcInfo, err := srcRt.Stat(srcSub)
 	if err != nil {
 		return nil, translateErr(err)
 	}
-	if _, statErr := toRoot.root.Stat(toRel); statErr == nil {
+	if _, statErr := dstRt.Stat(dstSub); statErr == nil {
 		return nil, ErrAlreadyExists
 	} else if !os.IsNotExist(statErr) {
 		return nil, translateErr(statErr)
@@ -224,15 +239,15 @@ func CopyInto(fromRoot, toRoot *Root, fromRel, toRel string) (os.FileInfo, error
 	}
 
 	if srcInfo.IsDir() {
-		if copyErr := copyDirRecursive(fromRoot.root, toRoot.root, fromRel, toRel); copyErr != nil {
+		if copyErr := copyDirRecursive(srcRt, dstRt, srcSub, dstSub); copyErr != nil {
 			return nil, copyErr
 		}
 	} else {
-		if copyErr := copyFile(fromRoot.root, toRoot.root, fromRel, toRel, srcInfo.Mode()); copyErr != nil {
+		if copyErr := copyFile(srcRt, dstRt, srcSub, dstSub, srcInfo.Mode()); copyErr != nil {
 			return nil, copyErr
 		}
 	}
-	fi, err := toRoot.root.Stat(toRel)
+	fi, err := dstRt.Stat(dstSub)
 	if err != nil {
 		return nil, fmt.Errorf("library: stat copy destination: %w", err)
 	}
@@ -262,7 +277,14 @@ var errSourceCleanupFailed = errors.New("library: move succeeded but removing th
 // not fully complete, and an operator should know a duplicate was left
 // behind rather than have it silently reported as a clean success.
 func MoveInto(fromRoot, toRoot *Root, fromRel, toRel string) (os.FileInfo, error) {
-	if fromRoot == toRoot {
+	// Pointer equality alone is no longer enough to mean "one atomic rename will
+	// do". A single *Root now holds several os.Roots (the work tree plus one per
+	// mount), so the same workspace can still be a CROSS-root move — work tree
+	// into a mounted folder is exactly the case the Transfer dialog exists for.
+	// Ask whether the two paths land in the same os.Root, not whether they came
+	// from the same wrapper; otherwise this delegates to Rename, which correctly
+	// refuses cross-root, and a legitimate move fails.
+	if fromRoot == toRoot && fromRoot.sameRoot(fromRel, toRel) {
 		return fromRoot.Rename(fromRel, toRel)
 	}
 	fi, err := CopyInto(fromRoot, toRoot, fromRel, toRel)

@@ -236,3 +236,89 @@ func TestMissingMountTarget_DoesNotBreakTheWorkspace(t *testing.T) {
 	var outside *os.PathError
 	_ = errors.As(listErr, &outside)
 }
+
+// TestMoveInto_CrossesTheMountBoundary is the Transfer dialog's core case:
+// dragging a workspace file into a mounted folder writes it to the operator's
+// real disk, and dragging one out brings it back into the workspace.
+//
+// Rename cannot express this (see TestRename_RefusesCrossRootAndMountRoot) —
+// MoveInto detects the cross-root case and does copy-then-delete. The bug this
+// guards against is subtle: MoveInto used to decide "same root?" by comparing
+// the two *Root POINTERS, which is true for any same-workspace transfer. Once
+// one Root holds several os.Roots that test says "same" for a move that is
+// genuinely cross-root, so it delegated to Rename and a legitimate move failed.
+func TestMoveInto_CrossesTheMountBoundary(t *testing.T) {
+	r, workDir, target := buildMountedRoot(t)
+
+	// work tree -> mount: lands on the operator's real disk.
+	fi, err := MoveInto(r, r, "drafts/note.md", "repo/moved.md")
+	require.NoError(t, err, "moving a workspace file into a mounted folder must work")
+	assert.Equal(t, "moved.md", fi.Name())
+
+	onDisk, readErr := os.ReadFile(filepath.Join(target, "moved.md"))
+	require.NoError(t, readErr, "the file must exist in the operator's real folder")
+	assert.Equal(t, "workspace file", string(onDisk))
+
+	_, statErr := os.Stat(filepath.Join(workDir, "drafts", "note.md"))
+	assert.True(t, os.IsNotExist(statErr), "a move must remove the source, not duplicate it")
+
+	// mount -> work tree: the return journey.
+	_, err = MoveInto(r, r, "repo/moved.md", "drafts/back.md")
+	require.NoError(t, err)
+	_, statErr = os.Stat(filepath.Join(workDir, "drafts", "back.md"))
+	assert.NoError(t, statErr)
+	_, statErr = os.Stat(filepath.Join(target, "moved.md"))
+	assert.True(t, os.IsNotExist(statErr), "the operator's copy must be gone after moving it out")
+}
+
+// TestCopyInto_CrossesTheMountBoundary is the same boundary for copy, where the
+// source must SURVIVE — the distinction from move that a shared code path makes
+// easy to get wrong.
+func TestCopyInto_CrossesTheMountBoundary(t *testing.T) {
+	r, workDir, target := buildMountedRoot(t)
+
+	_, err := CopyInto(r, r, "drafts/note.md", "repo/copied.md")
+	require.NoError(t, err)
+
+	onDisk, readErr := os.ReadFile(filepath.Join(target, "copied.md"))
+	require.NoError(t, readErr)
+	assert.Equal(t, "workspace file", string(onDisk))
+
+	_, statErr := os.Stat(filepath.Join(workDir, "drafts", "note.md"))
+	assert.NoError(t, statErr, "a copy must leave the source in place")
+}
+
+// TestCopyInto_RefusesTheMountsOwnEntry keeps the data-loss guard consistent
+// across every verb that can write. Copying ONTO a mount's entry would write
+// through into the operator's folder under a name they never chose.
+func TestCopyInto_RefusesTheMountsOwnEntry(t *testing.T) {
+	r, _, _ := buildMountedRoot(t)
+
+	_, err := CopyInto(r, r, "drafts/note.md", "repo")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrIsMountRoot)
+
+	_, err = CopyInto(r, r, "repo", "drafts/whole-mount")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrIsMountRoot)
+}
+
+// TestMoveInto_DirectoryCrossesTheBoundary covers the recursive path, which
+// takes a different branch (copyDirRecursive) from the single-file case above.
+func TestMoveInto_DirectoryCrossesTheBoundary(t *testing.T) {
+	r, workDir, target := buildMountedRoot(t)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(workDir, "bundle", "nested"), 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workDir, "bundle", "nested", "deep.txt"), []byte("deep"), 0o600))
+
+	_, err := MoveInto(r, r, "bundle", "repo/bundle")
+	require.NoError(t, err, "moving a directory into a mount must copy the whole tree")
+
+	got, readErr := os.ReadFile(filepath.Join(target, "bundle", "nested", "deep.txt"))
+	require.NoError(t, readErr, "nested contents must arrive on the operator's real disk")
+	assert.Equal(t, "deep", string(got))
+
+	_, statErr := os.Stat(filepath.Join(workDir, "bundle"))
+	assert.True(t, os.IsNotExist(statErr), "the source tree must be removed after a move")
+}
