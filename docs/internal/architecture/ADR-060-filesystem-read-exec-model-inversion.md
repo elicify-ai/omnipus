@@ -74,55 +74,61 @@ So: reads-open accepts a real, non-hypothetical exfiltration channel for anythin
 
 **Required compensating control (normative):** known secret material MUST be scrubbed from tool output before it enters context or the transcript. `RegisterSensitiveValues` already exists in the credential boot contract (ADR-004) and is the correct hook. This is the only layer that addresses paths 1 and 2, and it is a condition of this ADR, not a follow-up.
 
-## 4. Per-platform mechanism
+## 4. Mechanism — one principle, two renderings
 
-### 4.1 macOS — open, with a kernel-enforced credential deny-list
+**The principle: the secret set is never reachable by a child, on any platform.**
 
-**[VERIFIED]** Seatbelt is last-match-wins, so a broad allow followed by narrow denies works:
+The first draft used a different approach per platform and a reviewer broke the macOS one. The principle is now stated once and each backend renders it in its own idiom, so there is a single thing to reason about and a single thing to test.
+
+### 4.0 The secret set, and why it is one level deep
+
+`$OMNIPUS_HOME` contains both agent working data and the material that defines the sandbox. **[VERIFIED]** on a real install, the split is clean:
+
+| Must stay agent-accessible | Must be unreachable |
+|---|---|
+| `agents/` (agent **workspaces**) | `master.key`, `credentials.json` |
+| `sessions/`, `skills/`, `projects/`, `workspaces/` | `config.json` (holds `sandbox.mode`) |
+| `logs/`, `browser/`, `system/` | `cli.token` (live gateway credential) |
+| | `entities/` (per-agent **tool policy**) |
+
+Note `agents/` and `entities/` are different things — workspaces versus policy — so excluding policy does not touch an agent's own working directory.
+
+The excluded set is **five entries at one level**. That matters for §4.2: the enumeration is small and shallow, not a filesystem walk.
+
+This is the "split" half of the decision and is worth doing on its own merits: it closes the pre-existing hole in §11 where an agent rewrites its own sandbox configuration.
+
+### 4.1 macOS — global allow, explicit deny on the secret set
+
+**[VERIFIED]** Seatbelt is last-match-wins, so:
 
 ```
-(allow file-read*)                          → /etc/hosts readable
-(deny  file-read* (subpath "<secret>"))     → Operation not permitted
+(allow file-read*)                                   ← reads open
+…policy allows…
+(deny file-read* file-write* (subpath "<secret>"))   ← emitted LAST
 ```
 
-**Normative ordering — the deny block MUST be emitted LAST.** Last-match-wins cuts both ways. A review demonstrated the defeat:
+**The deny MUST cover `file-write*`, not only `file-read*`.** A read-only deny was **[VERIFIED]** defeated in two syscalls: `rename(2)` is not a read, so a child moves `master.key` out of the denied path and reads it normally; `truncate` destroys the vault with no read at all. Denying writes removes both, because rename and truncate both require write on the source.
 
-```
-(allow file-read*) (deny file-read* (subpath S)) (allow file-read* (subpath S))
-→ S is readable again, silently
-```
+Ordering is normative: the deny block comes after every policy-derived allow. **[VERIFIED]** with the order flipped, the same rules leak every secret silently.
 
-`renderSeatbeltProfile` walks `policy.FilesystemRules` in policy order and emits `(allow file-read* (subpath …))` for every rule carrying read or execute — and `DefaultPolicy` puts `$OMNIPUS_HOME` **first**. So a deny block placed in the preamble would be re-opened by the workspace allow, and `master.key` would be readable through a profile that appears to deny it. That is the §1.1 "renders correctly, matches nothing" failure again.
+### 4.2 Linux — grant siblings, never grant the secret **[INFERRED]**
 
-Requirements:
-1. The deny block is emitted after all policy-derived allows. No `(allow file-read* …)` may follow it.
-2. Deny paths MUST be symlink-resolved with the same treatment allows get (`resolveSeatbeltPath`), or `~/.ssh` on a symlinked home and `/var` → `/private/var` will not match.
-3. A deny for a path that does not exist yet (`~/.aws` created next week) MUST still be emitted. `deepestExistingAncestor` was written for allows and needs review for denies.
-4. A test MUST assert that a policy granting `$OMNIPUS_HOME` still denies `master.key`.
+Landlock has no deny primitive, so exclusion means **never granting**. Walk from `/` down to each secret; at every level grant read on the siblings and skip the entry on the path.
 
-### 4.2 Linux — open, with no kernel exception **[INFERRED]**
+Two properties make this cheap rather than a filesystem walk:
 
-Landlock is **grant-only**. Rights accumulate along the ancestry; a deeper rule with fewer rights subtracts nothing, and stacked layers only intersect. There is no deny primitive, and "enumerate everything except the secrets" is the §2 defect in inverted form — a directory created after boot would be unreadable.
+- Only the directories **on the path to a secret** are enumerated — about three levels. Everything else is granted whole at the top, so a new toolchain under `/opt` or `/usr/local` is covered automatically. That is the difference between this and the enumeration §2 condemns.
+- **[VERIFIED]** `RestrictCurrentThread` already builds *"a fresh ruleset matching the saved policy"* on **every child spawn**, not once at boot. Computing the enumeration per spawn therefore costs a few directory listings and some tens of extra syscalls per process start — negligible against `fork`/`exec` — and means **there is no staleness**: a directory created seconds ago is included.
 
-**Mount namespaces were rejected for the right reason.** They are reachable from pure Go (`CLONE_NEWUSER|CLONE_NEWNS` via `syscall.SysProcAttr`) with no new dependency, so hard constraint #1 does not forbid them. They are rejected because unprivileged user namespaces are disabled by default on Debian, restricted by AppArmor on Ubuntu 24.04, and blocked by Docker's default seccomp profile — availability would degrade unpredictably, in exactly the way §2 condemns.
+**Normative:** if a directory listing fails, the spawn MUST fail. Falling back to granting the parent would expose the secret silently, which is the exact failure shape this ADR was written to eliminate.
 
-**Implementation constraints (getting this wrong bricks boot):**
+### 4.3 Windows — out of scope, tracked separately
 
-- Opening reads means removing `landlockAccessFSReadFile | landlockAccessFSReadDir` from `handledAccessFS` (currently `lb.allRights`, `sandbox_linux.go::computeRights`).
-- `accessToLandlockRights` adds read bits unconditionally. `landlock_add_rule` returns **EINVAL** when `allowed_access` is not a subset of `handled_access_fs`, and `ApplyWithMode` hard-errors on EINVAL (only ENOENT is soft-skipped) → **gateway boot aborts, exit 78**.
-- Therefore: every rule's rights MUST be masked against `handledAccessFS`, and any rule whose masked rights are **zero** MUST be dropped, not passed (zero `allowed_access` is also EINVAL). Read-only rules like `/dev/urandom` and `/etc/hosts` become zero-rights and must disappear.
+**[VERIFIED]** there is no Windows sandbox backend: `sandbox_other.go` is `//go:build !linux && !darwin` → `FallbackBackend`, whose `CheckPath` has zero non-test callers. `hardened_exec_windows.go` does job objects only.
 
-**Scope limitation.** `ApplyToCmd` is a no-op on Linux; enforcement comes from `StartLocked` re-applying the saved policy to the launching thread. There is **one Landlock domain shared by the gateway and every child**, so opening reads opens them for the gateway process too. This cannot be scoped to children until the per-thread work in #156 lands — at which point Linux could return to confined reads for children while leaving the gateway unconstrained. That is a real future rollback path.
+A viable design exists — a Low integrity-level token (a process may lower its own integrity with **no admin rights**), spawning children with it, plus deny ACEs on the secret set. Windows permissions support real deny rules, so the principle in §4 maps directly. `golang.org/x/sys/windows` is already a dependency and exposes the needed APIs, so it stays pure Go.
 
-macOS is the opposite: `SeatbeltBackend.ApplyToCmd` renders a per-child profile, so a per-child posture is expressible there today.
-
-### 4.3 Windows — no change, because there is no sandbox **[VERIFIED]**
-
-`pkg/sandbox/sandbox_other.go` carries `//go:build !linux && !darwin`, so Windows selects `FallbackBackend`. `hardened_exec_windows.go` does job objects and kill-on-close only — no DACL, no restricted token, no filesystem policy. `FallbackBackend.CheckPath`/`CheckPathAccess` have **zero non-test callers**, so even the app-level check is unwired.
-
-CLAUDE.md's "Windows (Job Objects+Restricted Tokens+DACL)" describes an intention, not shipped code. **Correcting that statement is in scope for this ADR**, because anyone reasoning about the boundary from the docs is currently misled.
-
-Windows reads and execute are already open. This ADR does not make Windows worse.
+It is **deliberately not in this ADR**: bundling a second platform's sandbox into a change about the read model would repeat the mistake round 1 caught. What IS in scope is correcting CLAUDE.md, which currently claims a Windows backend that does not exist — anyone reasoning about the boundary from the docs is misled today.
 
 ## 5. What stays default-deny
 
@@ -137,24 +143,15 @@ Windows reads and execute are already open. This ADR does not make Windows worse
 
 ## 7. Security consequences that must be stated, not implied
 
-### 7.1 Pentest findings C1/C2 are REVERSED on Linux and Windows
+### 7.1 Pentest findings C1/C2 — preserved on macOS and Linux, reversed on Windows
 
-`SecretFilesRelative` (`master.key`, `credentials.json`) exists to close pentest items C1 and C2 (v0.2 #155 item 8). Under reads-open on Linux and Windows, **Omnipus's own root of trust becomes readable by any agent shell.** The master key decrypts every stored provider key and channel token.
+An earlier draft concluded that reads-open reverses pentest items C1/C2 (`master.key`, `credentials.json` readable) on Linux and Windows. The §4 principle changes that:
 
-The named fallbacks are weak: `pkg/tools/shell.go`'s guard is a literal-token deny on `master.key`, defeated by `cat ~/.omnipus/mast*.key` or any interpreter. The `resolvepath.go` carve-out is real but governs Omnipus's own file tools, not `bash`.
+- **macOS** — the secret set is denied for read *and* write (§4.1). C1/C2 hold, and the rename/truncate attacks are closed too, which they were not before.
+- **Linux** — the secret set is never granted (§4.2). C1/C2 hold. **[INFERRED]** — unverified until run on a Linux host.
+- **Windows** — no sandbox exists, so C1/C2 do not hold and did not hold before this ADR. Unchanged, not reversed.
 
-**This is the single largest cost of this ADR and it must not be discovered later.** Options, to be decided in the spec:
-
-- keep the master key in gateway memory only after boot, so there is no readable file;
-- give it a different uid;
-- accept it in writing for the `open` model and require `confined` for any deployment where it matters.
-
-**macOS is NOT unaffected.** An earlier draft said the deny-list covers it. Adversarial testing on this host disproved that:
-
-- The deny is `file-read*` only. `rename(2)` is not a read. `$OMNIPUS_HOME` is granted RWX (FR-2.3), the deny sits *inside* that write grant, so a child renames `master.key` to a name outside the deny and reads it in two syscalls. **[VERIFIED]** — `mv` appears to fail only because it `stat()`s first; raw `rename` succeeds. `truncate` also succeeds, destroying the vault irreversibly without reading anything.
-- Credential paths in **non-writable** locations (`~/.ssh`, `~/.aws`, `~/.gnupg`) are genuinely protected: symlink, hardlink-creation, case variance, `../` traversal, `openat`/`fchdir`/`dd`/`tar` were all **[VERIFIED]** to fail against them.
-
-So the deny-list works exactly where the parent directory is not writable, and fails where it is. Any deny path inside a write grant MUST also deny `file-write*` (covering rename, unlink, truncate, chmod), or the secret must be moved out of the writable subtree. This is a spec requirement, not a note.
+The two red-team tests keep their meaning on macOS and Linux and should be extended to cover rename and truncate, not only read.
 
 ### 7.2 Multi-tenant deployment is incompatible with `open`
 

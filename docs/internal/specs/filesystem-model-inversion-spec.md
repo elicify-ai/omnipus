@@ -36,7 +36,9 @@ Adds `sandbox.filesystem_model`. In `open`: reads and execute are unrestricted, 
 
 - **FR-2.1** Omit `readOnlySystem` entirely (both bits — §6 of the ADR: removing read while keeping execute stops every child starting).
 - **FR-2.2** Omit `allowedExecPaths` rules.
-- **FR-2.3** Retain, unchanged: `$OMNIPUS_HOME` RWX, `/tmp` RWX, `$TMPDIR` RWX, `allowed_paths` (write grants), `/dev/null`, `/dev/shm`.
+- **FR-2.3** Retain: `/tmp` RWX, `$TMPDIR` RWX, `allowed_paths` (write grants), `/dev/null`, `/dev/shm`.
+- **FR-2.3a** `$OMNIPUS_HOME` is granted RWX **minus the secret set**: `master.key`, `credentials.json`, `config.json`, `cli.token`, `entities/`. **[VERIFIED]** on a real install these are five entries at one level, and `agents/` (workspaces, must stay writable) is distinct from `entities/` (per-agent tool policy, must not be). Excluding policy therefore does not touch any agent's own working directory.
+- **FR-2.3b** The secret set is defined once, in one place, and consumed by both backends. Two lists would drift.
 - **FR-2.4** Emit `SandboxPolicy.ReadsOpen = true` and `ExecOpen = true` so backends need no config access.
 - **FR-2.5** In `confined`, produce a policy **byte-identical** to today's.
 
@@ -51,7 +53,7 @@ Adds `sandbox.filesystem_model`. In `open`: reads and execute are unrestricted, 
 - **FR-3.5** Deny paths are `~`-expanded through `expandUserPath`.
 - **FR-3.6** In `confined`, the rendered profile is byte-identical to today's.
 
-**Deny-list (macOS, `open` only):** `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker/config.json`, `~/.netrc`, `~/.git-credentials`, `~/.npmrc`, `~/Library/Keychains`, and, from `$OMNIPUS_HOME`: `master.key`, `credentials.json` (via `SecretFilesRelative`), **`cli.token`** (a live gateway bearer token), **`config.json`** and **`agents/`** (both define the sandbox's own policy — see FR-9).
+**Deny set (macOS) — the same set FR-2.3a excludes, rendered as denies:** `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker/config.json`, `~/.netrc`, `~/.git-credentials`, `~/.npmrc`, `~/Library/Keychains`, and, from `$OMNIPUS_HOME`: `master.key`, `credentials.json` (via `SecretFilesRelative`), **`cli.token`** (a live gateway bearer token), **`config.json`** and **`agents/`** (both define the sandbox's own policy — see FR-9).
 
 `~/Library/Keychains` is listed but its protection is **partial**: **[VERIFIED]** effective for the legacy file-based keychain, ineffective for the modern data-protection keychain, which `securityd` reads on the client's behalf (see FR-10).
 
@@ -59,10 +61,15 @@ Adds `sandbox.filesystem_model`. In `open`: reads and execute are unrestricted, 
 
 ### FR-4 — Linux backend
 
-- **FR-4.1** When `ReadsOpen`, remove `landlockAccessFSReadFile|landlockAccessFSReadDir` from `handledAccessFS`. When `ExecOpen`, also remove `landlockAccessFSExecute`.
+- **FR-4.1** When `ReadsOpen`, remove `landlockAccessFSReadFile|landlockAccessFSReadDir` from `handledAccessFS`; when `ExecOpen`, also remove `landlockAccessFSExecute` — **except** that the secret set must remain unreachable, so reads stay HANDLED and the openness is achieved by granting, not by unhandling. See FR-4.5.
 - **FR-4.2** Mask every rule's rights against `handledAccessFS` before `landlock_add_rule`. **Unmasked rights cause EINVAL, which `ApplyWithMode` treats as fatal → boot aborts (exit 78).**
-- **FR-4.3** Drop any rule whose masked rights are **zero** (also EINVAL). `/dev/urandom`, `/etc/hosts`, `/etc/resolv.conf` become zero-rights in `open` and must disappear, not be passed.
-- **FR-4.4** Log once at boot, at WARN, that credential files are not kernel-protected, naming `master.key`.
+- **FR-4.3** Drop any rule whose masked rights are **zero** (also EINVAL).
+- **FR-4.4** Log once at boot, at WARN, naming the secret set as protected-by-non-grant so an operator can tell the mechanism from the macOS one.
+- **FR-4.5** **Sibling granting.** For each secret, walk `/` → secret. At each level, grant read (and execute) on every sibling **except** the entry on the path. Grant everything else whole at the top level.
+  - **FR-4.5a** Enumerate at **spawn**, not boot. **[VERIFIED]** `RestrictCurrentThread` already builds "a fresh ruleset matching the saved policy" per child spawn, so per-spawn enumeration adds a few directory listings and tens of syscalls per process start and removes staleness entirely.
+  - **FR-4.5b** Only directories **on the path to a secret** are enumerated — about three levels. A filesystem walk is forbidden: it would be slow and would reintroduce the §2 defect class.
+  - **FR-4.5c** **If any listing fails, the spawn MUST fail.** Falling back to granting the parent exposes the secret silently — the exact failure shape this work exists to eliminate.
+  - **FR-4.5d** A test MUST assert that a directory created AFTER the gateway started is readable by a child spawned after it (proves FR-4.5a), and that the secret set is not (proves FR-4.5).
 
 ### FR-5 — Windows
 
@@ -78,7 +85,8 @@ This is not caused by this change — it is true in shipped code — but this sp
 
 - **FR-9.1** `config.json`, `agents/`, `cli.token`, `master.key`, `credentials.json` MUST be denied **write** to sandboxed children under BOTH models.
 - **FR-9.2** A test MUST spawn a real child and assert each is unwritable, on macOS and Linux.
-- **FR-9.3** If FR-9.1 cannot be achieved by policy (Linux has no deny primitive), the files MUST be relocated outside the write-granted subtree. Tracked separately; **this spec is blocked on a decision, not on the implementation.**
+- **FR-9.3** RESOLVED by FR-2.3a and FR-4.5: on macOS the set is denied read+write; on Linux it is never granted. No relocation outside `$OMNIPUS_HOME` is required, so the single-directory install story survives.
+- **FR-9.4** This applies under **both** models. In `confined` the set must also be excluded — the hole is pre-existing and must not survive behind the safety net.
 
 ### FR-10 — The IPC default-deny is part of the credential protection
 
@@ -225,6 +233,11 @@ Given filesystem_model is "open"
 | 23 | `open`, deny path non-existent AND under a symlinked ancestor | denied once created | FR-3.3 × FR-3.4 intersection — where the silent no-op lives |
 | 24 | rendered `open` profile contains `(allow mach-lookup` beyond mDNSResponder | test fails | FR-10.1 |
 | 25 | `filesystem_model` changed via PUT /api/v1/security/sandbox-config | rejected or restart-required, stated explicitly | no hot-reload for sandbox policy |
+| 26 | dir created after gateway start, read by a later child (Linux) | allowed | FR-4.5a — proves per-spawn enumeration |
+| 27 | `entities/jim.json` written by a child | denied | FR-9 — agent must not edit its own tool policy |
+| 28 | `agents/jim/` written by a child | allowed | workspaces stay writable; policy does not |
+| 29 | a listing on the path to a secret fails | spawn fails | FR-4.5c — never fail open |
+| 30 | secret set under `confined` | also excluded | FR-9.4 |
 
 ---
 
