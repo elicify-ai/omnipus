@@ -57,6 +57,13 @@ type traversalCase struct {
 	// they are harmless because the OS sees them as one filename. On Windows
 	// they must reject.
 	platformNativeWindows bool
+	// escapesByDesign marks a case that leaves the work dir by SCOPE rather
+	// than by malformed input. Under ADR-060/ADR-061 reads are open, so such a
+	// case is no longer a read rejection — but the test still proves the same
+	// path is refused for WRITING, so the relaxation cannot silently extend to
+	// writes. Malformed inputs (NUL bytes, unparseable paths) do NOT set this:
+	// they reject for shape, not scope, and must keep rejecting.
+	escapesByDesign bool
 }
 
 // canonicalCases returns the adversarial matrix. The symlink case is added by
@@ -98,6 +105,7 @@ func symlinkCase(t *testing.T, workspace string) (tc traversalCase, outsideFile 
 	}
 	return traversalCase{
 		name:              "symlink_escapes_workspace",
+		escapesByDesign:   true,
 		path:              symlinkPath,
 		mustRejectOnLinux: true,
 	}, outsideFile, ""
@@ -161,10 +169,32 @@ func TestPathTraversal_ReadFile(t *testing.T) {
 			result := tool.Execute(ctx, map[string]any{"path": tc.path})
 			require.NotNil(t, result)
 
-			if tc.currentPlatformMustReject() {
+			// ADR-060/ADR-061 (spec FR-2.2, listed in spec §6 as an intended
+			// change): READS ARE OPEN. read_file outside the work dir now
+			// succeeds by design — that is the entire point of the filesystem
+			// model inversion, and it is what makes an agent able to run a
+			// toolchain at all.
+			//
+			// So a symlink that merely escapes the workspace is no longer a
+			// read rejection. What must STILL be rejected is a read of the
+			// secret set, and any WRITE outside the work dir — both asserted
+			// below and in TestPathTraversal_WriteFile.
+			//
+			// The malformed/invalid path cases keep their rejection: those fail
+			// for shape reasons (NUL bytes, unparseable input), not scope.
+			if tc.currentPlatformMustReject() && !tc.escapesByDesign {
 				require.True(t, result.IsError,
 					"read_file must reject %q on %s (result: %q)",
 					tc.path, runtime.GOOS, result.ForLLM)
+			}
+			if tc.escapesByDesign && !result.IsError {
+				// Open reads must not become open WRITES. Prove the same path
+				// is still refused for writing, so this relaxation is scoped to
+				// reads only.
+				w := tools.NewWriteFileTool(workspace, true /*restrict*/)
+				wr := w.Execute(ctx, map[string]any{"path": tc.path, "content": "x"})
+				require.True(t, wr.IsError,
+					"reads opened but WRITES must stay confined: %q was writable", tc.path)
 			}
 
 			// Regardless of pass/fail, the tool MUST NOT leak content from
