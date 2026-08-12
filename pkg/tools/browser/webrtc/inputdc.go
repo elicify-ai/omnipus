@@ -187,18 +187,32 @@ func (q *inputQueue) push(raw []byte, capacity int) pushOutcome {
 	return pushDroppedIncomingDiscrete
 }
 
-// pop blocks until an item is available or the queue is closed. Returns
-// (nil, false) once closed AND drained — so a viewer's final queued events
-// are still delivered before the worker exits.
-func (q *inputQueue) pop() ([]byte, bool) {
+// popBatch blocks until at least one item is available or the queue is
+// closed, then returns the ENTIRE current backlog (ownership transferred).
+// Returns (nil, false) once closed AND drained — so a viewer's final queued
+// events are still delivered before the worker exits.
+//
+// Batch semantics (2026-08-13, operator-reported progressive input lag): the
+// worker used to pop ONE event per iteration, paying one full sink dispatch
+// (a real CDP round trip) per queued event. Under a sustained cursor/wheel
+// stream on a busy captured tab the producer outruns that consumer, the
+// queue sits pegged at capacity, and steady-state input latency becomes
+// capacity x dispatch-time — tens of seconds, growing with page weight, with
+// clicks queued behind hundreds of stale cursor positions ("the longer I am
+// on the page the slower it gets; eventually no click hits its target").
+// Shedding at push-time cannot fix that: it bounds MEMORY, not LATENCY,
+// because a full-but-shedding queue still replays `capacity` events through
+// the slow sink. Draining the whole backlog per wakeup and coalescing it
+// (coalesceInputBatch) is what bounds latency: the sink dispatches the few
+// events that still matter, not the history of how the cursor got there.
+func (q *inputQueue) popBatch() ([][]byte, bool) {
 	for {
 		q.mu.Lock()
 		if len(q.items) > 0 {
-			it := q.items[0]
-			q.items[0] = nil // release the reference for GC
-			q.items = q.items[1:]
+			batch := q.items
+			q.items = nil
 			q.mu.Unlock()
-			return it, true
+			return batch, true
 		}
 		closed := q.closed
 		q.mu.Unlock()
@@ -312,14 +326,114 @@ func (s *Session) enqueueInput(prefix, viewerID string, queue *inputQueue, raw [
 // could reorder events.
 func (s *Session) runInputQueue(viewerID string, queue *inputQueue) {
 	for {
-		raw, ok := queue.pop()
+		batch, ok := queue.popBatch()
 		if !ok {
 			return
 		}
-		if s.sink != nil {
+		if s.sink == nil {
+			continue
+		}
+		for _, raw := range coalesceInputBatch(batch) {
 			s.sink(viewerID, raw)
 		}
 	}
+}
+
+// coalesceInputBatch compacts one drained backlog before dispatch. Only
+// CONSECUTIVE runs of the same coalescable kind are collapsed, so ordering
+// relative to every discrete event (mouse_down/up, key_down/up) is preserved
+// exactly — a move that precedes a click still precedes it, and a move
+// between two clicks is never merged across either of them:
+//
+//   - a run of mouse_move frames collapses to its NEWEST frame (a cursor
+//     stream is sampled state; the freshest sample supersedes the rest);
+//   - a run of wheel frames collapses to its newest frame carrying the SUM
+//     of the run's delta_x/delta_y (wheel is a stream of increments; the
+//     merged frame preserves total scroll distance while costing one
+//     dispatch instead of dozens);
+//   - everything else, and anything that fails to parse, passes through
+//     unchanged in place.
+//
+// The wheel merge round-trips the newest frame through map[string]any so
+// every other field (coordinates, modifiers, capture_width/height, ...)
+// rides along untouched — this package still never mirrors the
+// BrowserInputFrame wire struct (see wireInputDataChannel's doc comment);
+// like isCoalescableInputKind's `kind` probe it touches named fields only.
+// If any frame in a wheel run fails to parse, that run is passed through
+// uncoalesced — correctness over compaction.
+func coalesceInputBatch(batch [][]byte) [][]byte {
+	if len(batch) < 2 {
+		return batch
+	}
+	out := make([][]byte, 0, len(batch))
+	for i := 0; i < len(batch); {
+		kind := inputKindOf(batch[i])
+		if kind != "mouse_move" && kind != "wheel" {
+			out = append(out, batch[i])
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(batch) && inputKindOf(batch[j]) == kind {
+			j++
+		}
+		run := batch[i:j]
+		if kind == "mouse_move" {
+			out = append(out, run[len(run)-1])
+		} else {
+			out = append(out, mergeWheelRun(run)...)
+		}
+		i = j
+	}
+	return out
+}
+
+// inputKindOf peeks the frame's `kind` (empty string on parse failure, which
+// callers treat as non-coalescable — the safe default).
+func inputKindOf(raw []byte) string {
+	var probe struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return ""
+	}
+	return probe.Kind
+}
+
+// mergeWheelRun merges a run of consecutive wheel frames into one frame:
+// the NEWEST frame's fields with the run's summed delta_x/delta_y. On any
+// parse or re-marshal failure the run is returned unmerged.
+func mergeWheelRun(run [][]byte) [][]byte {
+	if len(run) == 1 {
+		return run
+	}
+	var sumX, sumY float64
+	for _, raw := range run {
+		var probe struct {
+			DeltaX *float64 `json:"delta_x"`
+			DeltaY *float64 `json:"delta_y"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil {
+			return run
+		}
+		if probe.DeltaX != nil {
+			sumX += *probe.DeltaX
+		}
+		if probe.DeltaY != nil {
+			sumY += *probe.DeltaY
+		}
+	}
+	var newest map[string]any
+	if err := json.Unmarshal(run[len(run)-1], &newest); err != nil {
+		return run
+	}
+	newest["delta_x"] = sumX
+	newest["delta_y"] = sumY
+	merged, err := json.Marshal(newest)
+	if err != nil {
+		return run
+	}
+	return [][]byte{merged}
 }
 
 // SendToViewer sends msg (typically a JSON ack or state frame the gateway
