@@ -114,6 +114,17 @@ func loadWorkspaceRecord(home, id string) (Workspace, error) {
 // $home/workspaces/<w.ID>.json — the same temp-file+rename+flock pattern
 // pkg/gateway's writeWorkspaceFile uses, so a mount write is exactly as
 // crash-safe as any other workspace write.
+// SaveRecord atomically writes w to $OMNIPUS_HOME/workspaces/<id>.json under
+// the same advisory lock every other reader/writer of that file takes.
+//
+// Exported because pkg/gateway had a byte-for-byte duplicate of this
+// (writeWorkspaceFile) — same path, same marshalling, same flock, same atomic
+// write. Two implementations of one persistence rule is how the two file-access
+// layers drifted in the first place, so gateway now delegates here. The type is
+// already canonical (gateway's storedWorkspace is a type ALIAS for
+// workspace.Workspace), so this converges the write path to match.
+func SaveRecord(home string, w Workspace) error { return saveWorkspaceRecord(home, w) }
+
 func saveWorkspaceRecord(home string, w Workspace) error {
 	dir := dirFor(home)
 	if err := os.MkdirAll(dir, 0o700); err != nil {

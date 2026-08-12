@@ -41,6 +41,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // FSOp classifies the filesystem operation a ResolvePath caller is about to
@@ -520,10 +521,39 @@ func isWithinAnyRoot(candidate string, roots []string) bool {
 // 9 hand-duplicated call sites (filesystem.go x3, edit.go x2, send_file.go,
 // web_serve.go x2, browser/tools.go) — each a chance for the shape to drift.
 func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool) (fspolicy.FSPolicy, error) {
-	return fspolicy.EffectiveFSPolicy(
+	home := config.OmnipusHomeDir()
+	workspaceID := ToolWorkspaceID(ctx)
+
+	policy, err := fspolicy.EffectiveFSPolicy(
 		ctx, agentHome, TurnWorkspaceDir(ctx), restrict,
-		config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
+		home, ToolAgentID(ctx), workspaceID,
 	)
+	if err != nil {
+		return policy, err
+	}
+
+	// ADR-061 FR-6.1: the workspace's mounts become the turn's additional
+	// WRITE roots. Reads need no grant post-FR-2, so a mount grants write and
+	// nothing else — see ADR-061 D4.
+	//
+	// This is the one place it can be done. Every path-taking tool routes
+	// through this function (9 call sites), so populating AllowedRoots here
+	// reaches all of them at once; doing it per tool is exactly the
+	// hand-duplication this function was created to remove.
+	//
+	// It CANNOT reopen a secret. IsCarveOut and DeniedPathsFor take no
+	// AllowedRoots parameter at all, and ResolvePath consults the carve-out
+	// before it ever looks at a mount — so mounting even $HOME yields "write to
+	// $HOME minus the secret set". That independence is asserted structurally
+	// in pkg/fspolicy/mount_secret_independence_test.go rather than by example,
+	// because it is what makes the operator's warn-and-allow decision safe.
+	//
+	// A workspace with no mounts yields nil, which is the pre-mount behaviour
+	// exactly.
+	if workspaceID != "" {
+		policy.AllowedRoots = workspace.AllowedMountRoots(home, workspaceID)
+	}
+	return policy, nil
 }
 
 // ResolvePathAllowingPatterns bridges the operator-configured AllowRead/

@@ -26,7 +26,6 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -262,19 +261,14 @@ func countTasksForWorkspace(home, workspaceID string) int {
 }
 
 // writeWorkspaceFile atomically writes w to ~/.omnipus/workspaces/{id}.json.
+//
+// Delegates to workspace.SaveRecord. This function used to be a byte-for-byte
+// duplicate of it — same path, marshalling, flock and atomic write — which is
+// the shape that lets two writers of one file drift apart. Kept as a named
+// function because the call sites read better with it and it documents where
+// the gateway's workspace writes go.
 func writeWorkspaceFile(home string, w storedWorkspace) error {
-	dir := filepath.Join(home, "workspaces")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("mkdir workspaces: %w", err)
-	}
-	data, err := json.MarshalIndent(w, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal workspace: %w", err)
-	}
-	path := filepath.Join(dir, w.ID+".json")
-	return fileutil.WithFlock(path, func() error {
-		return fileutil.WriteFileAtomic(path, data, 0o600)
-	})
+	return workspace.SaveRecord(home, w)
 }
 
 // wireMount is a type ALIAS (not a new named type — the "=" form) for the
