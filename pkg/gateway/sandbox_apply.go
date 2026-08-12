@@ -394,7 +394,24 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	if opts.Cfg != nil {
 		allowedExecPaths = opts.Cfg.Sandbox.AllowedExecPaths
 	}
-	policy := sandbox.DefaultPolicy(opts.HomePath, allowedPaths, allowedExecPaths, warnFn, bindPorts)
+	// ADR-060 filesystem model. Like allowedExecPaths this is seeded non-empty
+	// and so is deliberately NOT folded into configTouched.
+	//
+	// A malformed value ABORTS boot rather than falling back to a default. The
+	// value decides whether reads are enumerated or open, and resolving a typo
+	// to either one silently gives the operator a posture they did not choose —
+	// the same silent-wrong-answer shape the whole ADR exists to remove.
+	filesystemModel := sandbox.FilesystemModelConfined
+	if opts.Cfg != nil {
+		parsed, err := sandbox.ParseFilesystemModel(
+			opts.Cfg.Sandbox.FilesystemModel, sandbox.FilesystemModelConfined)
+		if err != nil {
+			return nil, fmt.Errorf("sandbox config: %w", err)
+		}
+		filesystemModel = parsed
+	}
+	policy := sandbox.DefaultPolicyForModel(
+		filesystemModel, opts.HomePath, allowedPaths, allowedExecPaths, warnFn, bindPorts)
 
 	// Extend the connect-port allow-list (v0.2 #155 item 4). DefaultPolicy
 	// pre-seeds {53, 80, 443}; we append every port in DevServerPortRange so

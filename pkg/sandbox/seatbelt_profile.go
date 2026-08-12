@@ -138,6 +138,27 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	b.WriteString("(deny default)\n\n")
 	b.WriteString(seatbeltSystemPreamble)
 
+	// --- ADR-060 open model: blanket read and execute. ---
+	//
+	// These are emitted HERE, before the policy rules and before the deny block.
+	// See the deny block below for the measured precedence rule that makes the
+	// ordering matter; it is asserted by test rather than left to reviewer
+	// vigilance, because the profile reads as correct either way.
+	//
+	// Both are emitted together. Opening execute while leaving read enumerated
+	// stops every child starting, since Seatbelt requires read access to mmap a
+	// binary — the failure looks like a broken sandbox rather than a policy
+	// choice, with no diagnostic pointing at the cause.
+	if policy.ReadsOpen || policy.ExecOpen {
+		b.WriteString("\n;; --- Filesystem model: open (ADR-060) ---\n")
+		if policy.ReadsOpen {
+			b.WriteString("(allow file-read*)\n")
+		}
+		if policy.ExecOpen {
+			b.WriteString("(allow process-exec)\n")
+		}
+	}
+
 	// --- Filesystem allows (policy order preserved; duplicates are the
 	// caller's responsibility, same contract as Landlock). ---
 	b.WriteString("\n;; --- Filesystem allows (from SandboxPolicy.FilesystemRules) ---\n")
@@ -230,6 +251,70 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 		// This remains far stricter than Linux — UDP is confined to the
 		// allow-list rather than unrestricted.
 		b.WriteString(fmt.Sprintf("(allow network-outbound (remote udp \"*:%d\"))\n", r.Port))
+	}
+
+	// --- Secret set: denied LAST (ADR-060 §4.1, spec FR-3.2) ---
+	//
+	// # The precedence rule, as MEASURED rather than assumed
+	//
+	// Executed against real children on this platform (see
+	// TestSeatbelt_DenyPrecedenceIsMeasuredNotAssumed, which reproduces the
+	// whole table):
+	//
+	//	allow (subpath dir)   then deny (subpath file)  -> denied
+	//	deny  (subpath file)  then allow (subpath dir)  -> READ SUCCEEDS
+	//	allow file-read*      then deny (subpath file)  -> denied
+	//	deny  (subpath file)  then allow file-read*     -> denied
+	//
+	// So the rule is narrower than the "last match wins" shorthand: a later
+	// FILTERED allow overrides an earlier deny, while an unfiltered blanket
+	// allow does not, whichever side of the deny it sits on. It is the second
+	// row that makes this block's position load-bearing — $OMNIPUS_HOME is
+	// granted RWX above, and that grant is exactly a filtered allow over the
+	// directory these files live in. Emitted before it, every deny here would
+	// be silently overridden and the profile would read as protecting a key it
+	// does not protect.
+	//
+	// Nothing may be appended after this block. The test enforces that against
+	// blanket allows too, which the measurements show are harmless — being
+	// stricter than the platform requires costs nothing here, and it removes
+	// the need for a future reader to re-derive which allows are safe.
+	if len(policy.DeniedPaths) > 0 {
+		b.WriteString("\n;; --- Secret set: denied last so no earlier allow can re-open it ---\n")
+		emitted := make(map[string]struct{}, len(policy.DeniedPaths)*2)
+		for _, raw := range policy.DeniedPaths {
+			clean, expanded := expandUserPath(raw)
+			if !expanded {
+				return "", fmt.Errorf("seatbelt: denied path %q is not absolute and could not be expanded", raw)
+			}
+			if err := validateSeatbeltPath(clean); err != nil {
+				return "", fmt.Errorf("seatbelt: denied path %q: %w", raw, err)
+			}
+
+			// Deny the declared path AND its symlink-resolved form. Seatbelt
+			// matches resolved paths, so the resolved form is the one that
+			// actually bites; the declared form is emitted too because these
+			// paths may not exist yet, and the resolution of a path that is
+			// created later can differ from the resolution computed now.
+			target, _ := resolveSeatbeltPath(clean)
+			for _, path := range []string{clean, target} {
+				if err := validateSeatbeltPath(path); err != nil {
+					return "", fmt.Errorf("seatbelt: denied path %q resolved to %q: %w", raw, path, err)
+				}
+				if _, dup := emitted[path]; dup {
+					continue
+				}
+				emitted[path] = struct{}{}
+
+				// Read AND write. A read-only deny is defeated in two syscalls:
+				// rename(2) moves the file to a name the deny does not cover and
+				// it reads normally afterwards, and truncate destroys the vault
+				// irreversibly without reading anything at all. Both were
+				// executed against a real child before this line was written.
+				b.WriteString(fmt.Sprintf("(deny file-read* (subpath %q))\n", path))
+				b.WriteString(fmt.Sprintf("(deny file-write* (subpath %q))\n", path))
+			}
+		}
 	}
 
 	return b.String(), nil

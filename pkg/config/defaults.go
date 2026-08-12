@@ -282,6 +282,15 @@ func DefaultConfig() *Config {
 			// EXISTING installs whose config.json predates the key, and is
 			// fully replaced — including to empty — when the key is present.
 			AllowedExecPaths: DefaultAllowedExecPaths(),
+
+			// Seeded "confined" so ADR-060 lands INERT. Every existing test
+			// keeps running under today's model, which is what lets the
+			// "confined is unchanged" guarantee actually be verified; seeding
+			// "open" would run the whole suite under the new model on the first
+			// commit and there would be no baseline left to compare against.
+			// Flipping the default is a deliberate one-line change once the
+			// spec's §4 gate clears.
+			FilesystemModel: string(FilesystemModelConfined),
 			// Seeded, fully-enumerated GLOBAL CEILING for a fresh install: every
 			// static builtin tool defaults to "allow" except irreversible
 			// delete_*/remove_* actions, which ask for confirmation. This is a

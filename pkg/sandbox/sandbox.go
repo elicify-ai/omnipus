@@ -74,6 +74,72 @@ type SandboxPolicy struct {
 	BindPortRules     []NetPortRule
 	ConnectPortRules  []NetPortRule
 	InheritToChildren bool
+
+	// ReadsOpen and ExecOpen carry the FilesystemModel decision down to the
+	// backends so neither needs access to the config (spec FR-2.4). When set,
+	// reads (resp. process execution) are unrestricted EXCEPT for DeniedPaths.
+	//
+	// The two travel together in practice and are still separate fields: on
+	// Landlock read and execute are independent rights, so a backend that
+	// opened execute while leaving read handled would stop every child starting
+	// (ADR-060 §6). Keeping them distinct makes that pairing explicit at each
+	// use rather than implied by one flag.
+	ReadsOpen bool
+	ExecOpen  bool
+
+	// DeniedPaths are absolute paths a sandboxed child must never reach,
+	// populated from SecretPaths regardless of model (spec FR-9.4 — the hole
+	// they close predates the model and must not survive behind it).
+	//
+	// The two backends consume this differently, and the asymmetry is
+	// intentional rather than an omission: macOS renders each entry as an
+	// explicit deny, which Seatbelt supports; Landlock has no deny primitive at
+	// all, so on Linux the same list is honoured by NEVER GRANTING these paths
+	// while granting their siblings. Same list, same outcome, two mechanisms.
+	DeniedPaths []string
+}
+
+// FilesystemModel selects how the sandbox treats reads and program execution.
+// ADR-060. Writes are confined under both models — the model governs reading
+// and running, never writing.
+type FilesystemModel string
+
+const (
+	// FilesystemModelConfined is the historical model: reads and execution are
+	// permitted only on paths the policy enumerates.
+	//
+	// Its defect is structural rather than a matter of a missing entry: the set
+	// of paths a working toolchain reads cannot be enumerated in advance, so
+	// every new tool an operator installs is a fresh, silent breakage.
+	FilesystemModelConfined FilesystemModel = "confined"
+
+	// FilesystemModelOpen leaves reads and execution unrestricted apart from
+	// DeniedPaths, and confines writes exactly as before. This is the model
+	// Claude Code and Codex both ship.
+	FilesystemModelOpen FilesystemModel = "open"
+)
+
+// ParseFilesystemModel normalizes a config value. Unlike ParseMode it does NOT
+// accept aliases or fold case: the value is new, has no legacy spellings to
+// honour, and a typo that silently resolved to a weaker model is precisely the
+// failure this rejects (spec FR-1.1).
+//
+// Empty resolves to the caller-supplied default rather than erroring, so an
+// absent key means "seeded default" and not "invalid" (FR-1.2).
+func ParseFilesystemModel(s string, fallback FilesystemModel) (FilesystemModel, error) {
+	switch s {
+	case "":
+		return fallback, nil
+	case string(FilesystemModelConfined):
+		return FilesystemModelConfined, nil
+	case string(FilesystemModelOpen):
+		return FilesystemModelOpen, nil
+	default:
+		return "", fmt.Errorf(
+			"sandbox: unknown filesystem_model %q (valid values: %q, %q)",
+			s, FilesystemModelConfined, FilesystemModelOpen,
+		)
+	}
 }
 
 // Mode selects how the sandbox enforces policy. Sprint J / BRD SEC-01..03.
@@ -196,16 +262,16 @@ func isSystemRestricted(path string) bool {
 // is layered on top via pkg/security/SSRFChecker.
 var DefaultConnectPorts = []uint16{53, 80, 443}
 
-// SecretFilesRelative is the list of file basenames under $OMNIPUS_HOME that
-// hold cryptographic key material or other root-of-trust state. Tool-exec
-// children (and the redteam carve-out test) MUST NOT have these paths in
-// their Landlock allow-tree even when the rest of $OMNIPUS_HOME is granted.
-// Closes pentest items C1 (master.key exfil) and C2 (credentials.json
-// exfil) per v0.2 #155 item 8.
-var SecretFilesRelative = []string{
-	"master.key",
-	"credentials.json",
-}
+// SecretFilesRelative is retained as the historical name for the $OMNIPUS_HOME
+// carve-out set and now ALIASES the single definition in secret_set.go.
+//
+// It used to be its own two-entry list (master.key, credentials.json). ADR-060
+// widened the set to five entries and made drift between copies the thing to
+// prevent, so this is an alias rather than a second list — see
+// SecretEntriesRelative for what each entry is and why agents/ is not among
+// them. Closes pentest items C1/C2 per v0.2 #155 item 8, and now also the
+// config/token/policy holes ADR-060 §4.0 documents.
+var SecretFilesRelative = SecretEntriesRelative
 
 // DefaultChildPolicy is the narrowed policy DESIGN for tool-exec children.
 // It returns the same shape as DefaultPolicy but with the
@@ -336,6 +402,38 @@ func DefaultPolicy(
 	warnFn func(msg string, path string),
 	bindPorts []uint16,
 ) SandboxPolicy {
+	return DefaultPolicyForModel(FilesystemModelConfined, homePath, allowedPaths, allowedExecPaths, warnFn, bindPorts)
+}
+
+// DefaultPolicyForModel is DefaultPolicy with the ADR-060 filesystem model
+// selected explicitly. DefaultPolicy delegates here with FilesystemModelConfined,
+// so the confined output is byte-identical to the pre-ADR-060 policy BY
+// CONSTRUCTION rather than by a test that has to be remembered (spec FR-2.5).
+// That structural guarantee is the safety net the whole change rests on: if
+// confined can drift, nothing else in ADR-060 is safe to land.
+//
+// Under FilesystemModelOpen two rule groups are omitted entirely:
+//
+//   - readOnlySystem, because enumerating readable system paths is the defect
+//     being removed. Both its bits go: dropping read while keeping execute
+//     stops every child starting, since a binary cannot be mmap'd unreadable.
+//   - allowedExecPaths, because execution is open and the operator no longer
+//     has to predict where their toolchain lives. The config key stays valid
+//     and simply stops mattering, so an operator who set it is not punished
+//     for having done so.
+//
+// Everything else is unchanged: $OMNIPUS_HOME, /tmp, $TMPDIR, allowed_paths,
+// /dev/null and /dev/shm keep exactly the access they had. Writes are confined
+// under both models.
+func DefaultPolicyForModel(
+	model FilesystemModel,
+	homePath string,
+	allowedPaths []string,
+	allowedExecPaths []string,
+	warnFn func(msg string, path string),
+	bindPorts []uint16,
+) SandboxPolicy {
+	open := model == FilesystemModelOpen
 	rules := make([]PathRule, 0, 16+len(allowedPaths))
 
 	// Workspace: full RWX on $OMNIPUS_HOME. This is where agents write
@@ -391,11 +489,13 @@ func DefaultPolicy(
 		"/dev/urandom", // RNG source used by libc, OpenSSL, Chromium, etc.
 		"/dev/random",
 	}
-	for _, p := range readOnlySystem {
-		rules = append(rules, PathRule{
-			Path:   p,
-			Access: AccessRead | AccessExecute, // exec bit lets dynamic loader mmap .so files
-		})
+	if !open {
+		for _, p := range readOnlySystem {
+			rules = append(rules, PathRule{
+				Path:   p,
+				Access: AccessRead | AccessExecute, // exec bit lets dynamic loader mmap .so files
+			})
+		}
 	}
 
 	// Universally writable device files required by Chromium/headless tools
@@ -474,7 +574,9 @@ func DefaultPolicy(
 			writableRoots = append(writableRoots, r.Path)
 		}
 	}
-	rules = append(rules, buildExecPathRules(allowedExecPaths, writableRoots, warnFn)...)
+	if !open {
+		rules = append(rules, buildExecPathRules(allowedExecPaths, writableRoots, warnFn)...)
+	}
 
 	var bindRules []NetPortRule
 	if len(bindPorts) > 0 {
@@ -502,6 +604,16 @@ func DefaultPolicy(
 		BindPortRules:     bindRules,
 		ConnectPortRules:  connectRules,
 		InheritToChildren: true,
+		ReadsOpen:         open,
+		ExecOpen:          open,
+
+		// Populated under BOTH models. The exposure these close — a child
+		// reading the live bearer token, or writing config.json to turn the
+		// sandbox off on the next boot — exists in shipped code today and is
+		// not introduced by the open model. Gating the fix on the model would
+		// leave it alive behind confined, which is where an operator would
+		// least expect it (spec FR-9.4).
+		DeniedPaths: SecretPaths(homePath),
 	}
 }
 

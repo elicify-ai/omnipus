@@ -77,14 +77,37 @@ func TestDefaultChildPolicy_GrantsSubdirsRWX(t *testing.T) {
 // appear in any rule.
 func TestDefaultChildPolicy_OmitsSecretFiles(t *testing.T) {
 	home := t.TempDir()
+	// Seed every secret. The set is no longer files-only: ADR-060 added
+	// entities/, a DIRECTORY, so seeding blindly with WriteFile would create a
+	// regular file named "entities" and the carve-out would be tested against a
+	// shape that never occurs on a real install.
 	for _, name := range SecretFilesRelative {
+		if name == "entities" {
+			if err := os.MkdirAll(filepath.Join(home, name), 0o700); err != nil {
+				t.Fatalf("mkdir %s: %v", name, err)
+			}
+			continue
+		}
 		if err := os.WriteFile(filepath.Join(home, name), []byte("seed"), 0o600); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	controlPath := filepath.Join(home, "config.json")
-	if err := os.WriteFile(controlPath, []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write config.json: %v", err)
+	// The control must be a file that is genuinely NOT in the secret set.
+	// This was config.json until ADR-060 widened the set to include it — a
+	// child that can write config.json can set sandbox.mode: off and remove its
+	// own confinement on the next boot. Keeping config.json as the "must still
+	// be granted" control would have asserted the hole stays open.
+	controlPath := filepath.Join(home, "notes.txt")
+	if err := os.WriteFile(controlPath, []byte("not a secret"), 0o644); err != nil {
+		t.Fatalf("write notes.txt: %v", err)
+	}
+
+	// agents/ vs entities/ — the distinction ADR-060 §4.0 turns on. agents/
+	// holds agent WORKSPACES and must stay writable; entities/ holds their tool
+	// POLICY and must not. Naming the wrong one would break every agent's
+	// working directory while looking like hardening, so both are asserted.
+	if err := os.MkdirAll(filepath.Join(home, "agents"), 0o700); err != nil {
+		t.Fatalf("mkdir agents: %v", err)
 	}
 
 	policy := DefaultChildPolicy(home, nil, nil, nil, nil)
@@ -111,6 +134,24 @@ func TestDefaultChildPolicy_OmitsSecretFiles(t *testing.T) {
 	}
 	if !controlGranted {
 		t.Errorf("control file %q was unexpectedly stripped — only secrets should be omitted", cleanControl)
+	}
+
+	granted := func(rel string) bool {
+		want := filepath.Clean(filepath.Join(home, rel))
+		for _, r := range policy.FilesystemRules {
+			if filepath.Clean(r.Path) == want {
+				return true
+			}
+		}
+		return false
+	}
+	if !granted("agents") {
+		t.Error("agents/ MUST stay granted — it holds agent workspaces, not policy; " +
+			"stripping it makes every agent's own working directory unreachable")
+	}
+	if granted("entities") {
+		t.Error("entities/ MUST NOT be granted — it holds per-agent tool policy, " +
+			"and a child that can write it can flip its own tools to allow")
 	}
 }
 

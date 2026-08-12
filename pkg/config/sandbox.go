@@ -42,6 +42,23 @@ func (l *SkillTrustLevel) UnmarshalJSON(data []byte) error {
 	}
 }
 
+// FilesystemModel mirrors sandbox.FilesystemModel as a config-side type, the
+// same way SandboxMode mirrors sandbox.Mode. The duplication is deliberate and
+// matches the existing convention: pkg/config must not import pkg/sandbox, and
+// the wire/config vocabulary is allowed to be stated where the config is
+// defined. pkg/sandbox.ParseFilesystemModel is the single validator.
+type FilesystemModel string
+
+const (
+	// FilesystemModelConfined enumerates readable and executable paths. The
+	// behaviour of every release before ADR-060.
+	FilesystemModelConfined FilesystemModel = "confined"
+
+	// FilesystemModelOpen leaves reads and execution unrestricted apart from
+	// the secret set, and confines writes exactly as confined does.
+	FilesystemModelOpen FilesystemModel = "open"
+)
+
 // SandboxMode controls how kernel-level sandboxing enforces policy at boot.
 // Typed enum so a typo in config.json fails decoding rather than silently
 // resolving to a permissive default.
@@ -297,6 +314,33 @@ type OmnipusSandboxConfig struct {
 	// field is seeded non-empty, and omitting an operator's explicit empty list
 	// on save would silently re-seed the defaults on the next boot.
 	AllowedExecPaths []string `json:"allowed_exec_paths"`
+
+	// FilesystemModel selects how the sandbox treats READS and PROGRAM
+	// EXECUTION. Writes are confined identically under both values — this key
+	// never widens what an agent can modify. ADR-060.
+	//
+	//   "confined" — reads and execution are allowed only on enumerated paths.
+	//   "open"     — reads and execution are unrestricted, except for the
+	//                secret set (master.key, credentials.json, config.json,
+	//                cli.token, entities/), which stays unreachable.
+	//
+	// "confined" was the only behaviour before ADR-060 and it does not work in
+	// practice: the set of paths a working toolchain reads cannot be listed in
+	// advance, so every tool an operator installs breaks silently until someone
+	// diagnoses a bare "operation not permitted" and edits allowed_exec_paths.
+	// The open model removes that class of failure and is what Claude Code and
+	// Codex both ship.
+	//
+	// Platform honesty: macOS enforces the secret set with real Seatbelt denies.
+	// Linux enforces it by never granting those paths (Landlock has no deny
+	// primitive). Windows has no filesystem sandbox backend at all, so neither
+	// value changes anything there — see the boot WARN.
+	//
+	// The tag omits `omitempty` for the same reason allowed_exec_paths does:
+	// the field is seeded non-empty, and dropping it on save would silently
+	// re-seed the default on the next boot rather than persist the operator's
+	// choice.
+	FilesystemModel string `json:"filesystem_model"`
 
 	// AuditLog enables the structured security audit log per SEC-17.
 	// Written to ~/.omnipus/system/audit.jsonl.

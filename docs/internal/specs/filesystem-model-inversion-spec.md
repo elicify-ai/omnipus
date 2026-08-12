@@ -53,11 +53,15 @@ Adds `sandbox.filesystem_model`. In `open`: reads and execute are unrestricted, 
 - **FR-3.5** Deny paths are `~`-expanded through `expandUserPath`.
 - **FR-3.6** In `confined`, the rendered profile is byte-identical to today's.
 
-**Deny set (macOS) — the same set FR-2.3a excludes, rendered as denies:** `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker/config.json`, `~/.netrc`, `~/.git-credentials`, `~/.npmrc`, `~/Library/Keychains`, and, from `$OMNIPUS_HOME`: `master.key`, `credentials.json` (via `SecretFilesRelative`), **`cli.token`** (a live gateway bearer token), **`config.json`** and **`agents/`** (both define the sandbox's own policy — see FR-9).
+**Deny set (macOS) — exactly the FR-2.3a secret set, nothing else:** `master.key`, `credentials.json`, `config.json`, `cli.token`, `entities/`, all under `$OMNIPUS_HOME`.
 
-`~/Library/Keychains` is listed but its protection is **partial**: **[VERIFIED]** effective for the legacy file-based keychain, ineffective for the modern data-protection keychain, which `securityd` reads on the client's behalf (see FR-10).
+**DECIDED 2026-08-12 (operator): Omnipus protects only Omnipus's own secrets.** An earlier draft also denied `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker/config.json`, `~/.netrc`, `~/.git-credentials`, `~/.npmrc` and `~/Library/Keychains`. Those are **removed**. Rationale, in the operator's words: *"in both cases we should only protect onpus secrets we are not responsible for others"*. Three consequences follow, and all are intended:
 
-**Not covered:** `$OMNIPUS_HOME/sessions/**` holds plaintext transcripts under 90-day retention. Denying reads there would break legitimate session handling, so the exposure ADR-060 §3.2 acknowledges is not closed by the deny-list. Redaction (FR-6) is the only control that touches it.
+1. **macOS and Linux now protect the identical set**, so the two backends are testable against one list and cannot drift. The earlier draft's asymmetry (macOS denies nine extra paths, Linux cannot) was the single largest source of per-platform divergence in this spec, and divergence is where this project's recent defects have come from.
+2. **An agent can read the operator's own SSH and cloud keys.** This is the same posture Claude Code and Codex ship, and it is the posture the operator chose. It is not an oversight.
+3. **FR-3.2b's read-only-deny case disappears.** Every remaining deny path sits inside the `$OMNIPUS_HOME` write grant, so FR-3.2a's read+write deny applies to all of them uniformly — one rule shape, not two. The verified findings behind FR-3.2b are retained in the ADR as evidence, but no longer describe any shipped rule.
+
+`~/Library/Keychains` leaving the list also removes the one entry whose protection was only partial (`securityd` reads it on the client's behalf — FR-10). Nothing shipped now claims a protection it cannot deliver.
 
 ### FR-4 — Linux backend
 
@@ -83,7 +87,7 @@ Adds `sandbox.filesystem_model`. In `open`: reads and execute are unrestricted, 
 
 This is not caused by this change — it is true in shipped code — but this spec MUST NOT ship a model that depends on write-confinement while that hole is open.
 
-- **FR-9.1** `config.json`, `agents/`, `cli.token`, `master.key`, `credentials.json` MUST be denied **write** to sandboxed children under BOTH models.
+- **FR-9.1** `config.json`, `entities/`, `cli.token`, `master.key`, `credentials.json` MUST be denied **write** to sandboxed children under BOTH models. `agents/` is NOT in the set — it holds agent workspaces, which must stay writable. `entities/` holds per-agent tool policy, which must not.
 - **FR-9.2** A test MUST spawn a real child and assert each is unwritable, on macOS and Linux.
 - **FR-9.3** RESOLVED by FR-2.3a and FR-4.5: on macOS the set is denied read+write; on Linux it is never granted. No relocation outside `$OMNIPUS_HOME` is required, so the single-directory install story survives.
 - **FR-9.4** This applies under **both** models. In `confined` the set must also be excluded — the hole is pre-existing and must not survive behind the safety net.
@@ -101,7 +105,9 @@ This is not caused by this change — it is true in shipped code — but this sp
 - **FR-6.2** Redaction applies to `bash` stdout/stderr and file-read tool results.
 - **FR-6.3** Redaction failure must not fail the tool call; it logs at WARN and returns the **redacted-on-error** (empty) value rather than the raw one. Fail closed.
 
-> **Open question O-1 (blocks implementation):** does FR-6 cover the master key when an agent reads it *as bytes* on Linux? Registered values are literal strings; a base64 or hex re-encoding defeats literal matching. If FR-6 cannot cover it, ADR-060 §7.1's other options (memory-only key, separate uid) must be decided before `open` becomes the default on Linux.
+> **O-1 — RESOLVED 2026-08-12, and it no longer blocks.** The question was whether redaction could cover the master key on Linux, where there is no deny primitive. It does not need to: FR-4.5 sibling-granting means the key is **never granted** to a child on Linux, so no read reaches redaction in the first place. Redaction (FR-6) remains worth having as defence in depth against a key that leaks through some other path, but it is no longer load-bearing and no longer gates `open` as the Linux default.
+>
+> **Residual, accepted by the operator ("ship as designed, document the gap"):** on Windows and on Linux below 5.13 there is no sandbox at all, so the secret set is unprotected there. Nothing is lost relative to today — those platforms have no filesystem confinement of any kind — but FR-4.4's boot WARN must name `master.key` explicitly so the gap is visible rather than implied.
 
 ### FR-7 — Observability
 
@@ -168,12 +174,12 @@ Given the same policy
 ### S-4 — macOS deny resists symlink and hardlink
 ```gherkin
 Given filesystem_model is "open" on macOS
-  And a symlink in the workspace points at ~/.ssh/id_rsa
+  And a symlink in the workspace points at $OMNIPUS_HOME/master.key
  When an agent reads the symlink
  Then the read is denied
 ```
 ```gherkin
-Given a hardlink in the workspace points at ~/.ssh/id_rsa
+Given a hardlink in the workspace points at $OMNIPUS_HOME/master.key
  When an agent reads the hardlink
  Then the read SUCCEEDS
   And this is a documented, asserted limitation of path-based deny
@@ -209,19 +215,19 @@ Given filesystem_model is "open"
 | # | Input | Expected | Why |
 |---|---|---|---|
 | 1 | `filesystem_model: "OPEN"` | decode error | case sensitivity pinned |
-| 2 | `filesystem_model` absent | `open` | FR-1.2 |
-| 3 | `filesystem_model: ""` | `open` | empty ≠ invalid |
+| 2 | `filesystem_model` absent | the seeded default | FR-1.2 (`confined` until the §4 gate clears, then `open`) |
+| 3 | `filesystem_model: ""` | the seeded default | empty ≠ invalid |
 | 4 | `filesystem_model: "opne"` | decode error naming both values | typo caught at load |
 | 5 | config saved then reloaded | value survives | FR-1.3, no `omitempty` |
 | 6 | `open`, read `/etc/passwd` | allowed | the inversion works |
-| 7 | `open`, read `~/.ssh/id_rsa` (macOS) | **denied** | deny-list holds |
-| 8 | `open`, read `~/.ssh/id_rsa` (Linux) | **allowed** | honest: no kernel deny |
+| 7 | `open`, read `~/.ssh/id_rsa` (macOS) | **allowed** | DECIDED: Omnipus secrets only; not our keys to protect |
+| 8 | `open`, read `~/.ssh/id_rsa` (Linux) | **allowed** | same as row 7 — the platforms now agree |
 | 9 | `open`, write `/etc/hosts` | denied | writes unchanged |
 | 10 | `open`, exec `~/.cargo/bin/rg` | allowed | execute opened |
 | 11 | `open`, deny path does not exist yet, created later, then read | denied | FR-3.4 |
 | 12 | `open`, deny path via `/private` alias (macOS) | denied | FR-3.3 resolution |
 | 13 | `open`, `$OMNIPUS_HOME/master.key` (macOS) | denied | S-3 ordering |
-| 14 | `open`, `$OMNIPUS_HOME/master.key` (Linux) | **allowed** | C1/C2 reversal, asserted |
+| 14 | `open`, `$OMNIPUS_HOME/master.key` (Linux) | **denied** | FR-4.5 never grants it — this row was inverted before sibling-granting |
 | 15 | `confined`, all of the above | today's behaviour | FR-2.5 |
 | 16 | `open` + Landlock ABI 1–3 | boots, reads open, no net rules | ABI floor |
 | 17 | `open` + `mode=permissive` | policy computed, not enforced | no interaction |
@@ -263,11 +269,11 @@ Given filesystem_model is "open"
 | Linux EINVAL bricks boot | FR-4.2/4.3 + S-5 first; no Linux host here, so CI must gate it |
 | macOS deny defeated by ordering | FR-3.2 normative + S-3 |
 | `confined` drifts from today | FR-2.5 byte-identical assertion, checked before anything else |
-| Master key readable on Linux | **O-1 unresolved — blocks `open` as Linux default** |
+| Master key readable on Linux | **Resolved by FR-4.5** — never granted, so never readable. Was the spec's top blocker. |
 | Multi-tenant runs `open` unknowingly | FR-4.4 boot warning + operator docs |
 | Ten tests silently deleted | FR-8, no deletion without replacement |
 | Read-deny bypassed by rename/truncate | FR-3.2a + S-3b/S-3c — **falsified the original S-3** |
-| Agent rewrites its own sandbox policy | FR-9 — pre-existing, blocks this spec |
+| Agent rewrites its own sandbox policy | FR-9 — pre-existing; resolved by the same exclusion, under both models |
 | Operator widens mach-lookup and silently deletes keychain protection | FR-10.2 test |
 
 ## 6. Explicitly unverified
