@@ -162,6 +162,8 @@ const PING_BEACON_INTERVAL_MS = 15000;
 // polling logic below, so it is never stale across a LATER recapture that
 // omits the fields.
 let expectedCaptureDims = null;
+// deviceScaleFactor of the captured tab — see the recapture control handler. 1 = CSS.
+let captureScale = 1;
 
 // lastPinnedCapDims records what captureActiveTabStream actually pinned the
 // running stream to, and selfHealBudget bounds the post-connect
@@ -673,10 +675,14 @@ async function captureActiveTabStream() {
       mandatory: {
         chromeMediaSource: 'tab',
         chromeMediaSourceId: streamId,
-        minWidth: capW,
-        minHeight: capH,
-        maxWidth: capW,
-        maxHeight: capH,
+        // capW/capH are CSS px (chrome.tabs.get and the CDP-verified hint
+        // both speak CSS); the tab's compositor surface is CSS x captureScale
+        // physical px. Constrain to the physical size so tabCapture does not
+        // throw away the Retina pixels — see the capture_scale handler.
+        minWidth: Math.round(capW * captureScale),
+        minHeight: Math.round(capH * captureScale),
+        maxWidth: Math.round(capW * captureScale),
+        maxHeight: Math.round(capH * captureScale),
       },
     },
   });
@@ -855,6 +861,17 @@ async function handleControlFrame(msg) {
       typeof msg.expected_width === 'number' && typeof msg.expected_height === 'number'
         ? { w: msg.expected_width, h: msg.expected_height }
         : null;
+    // Physical-pixel capture (blur fix, macOS 2026-08-12): the tab renders at
+    // this deviceScaleFactor (Emulation override, driven by the controlling
+    // viewer's devicePixelRatio), so the media constraints multiply by it —
+    // otherwise tabCapture downscales the 2x compositor surface to CSS pixels
+    // and every Retina viewer gets a 1x frame stretched over 2x display
+    // pixels. Sticky across recaptures (absent means "unchanged"; the server
+    // omits it at 1). Clamped to [1,4] mirroring the contract.
+    if (typeof msg.capture_scale === 'number' && isFinite(msg.capture_scale)) {
+      captureScale = Math.min(4, Math.max(1, msg.capture_scale));
+      record('control frame: capture_scale=' + captureScale);
+    }
     // Each SERVER-initiated recapture gets one post-connect self-heal check;
     // a self-heal's own recapture deliberately does not re-arm this (no loop).
     selfHealBudget = 3;

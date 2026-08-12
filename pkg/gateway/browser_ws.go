@@ -1344,6 +1344,7 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 	// SetViewport's own read-back was invalidated).
 	if att := state.peekWebRTCAttachment(); att != nil && att.capture != nil {
 		if w, h, ok := state.mgr.Live().CSSViewport(browser.DefaultSessionID); ok {
+			att.capture.SetCaptureScale(dsf)
 			att.capture.RecaptureAt(w, h)
 		} else {
 			att.capture.Recapture()

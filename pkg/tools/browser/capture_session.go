@@ -267,13 +267,16 @@ type CaptureSession struct {
 	mu sync.Mutex
 	// startOnce/startErr collapse concurrent Start() callers into exactly one
 	// startEncoder invocation — see Start's doc comment.
-	startOnce  sync.Once
-	startErr   error
-	extVersion string
-	lastPingAt time.Time
-	tabCtx     context.Context
-	tabCancel  context.CancelFunc
-	started    bool
+	startOnce sync.Once
+	startErr  error
+	// captureScale is the controlling viewer's devicePixelRatio (see
+	// SetCaptureScale). Guarded by mu. Zero means "never set" -> treated as 1.
+	captureScale float64
+	extVersion   string
+	lastPingAt   time.Time
+	tabCtx       context.Context
+	tabCancel    context.CancelFunc
+	started      bool
 	// starting is true only for the narrow window between Start() entering
 	// its one-time startOnce.Do body and cs.startEncoder returning (success
 	// or failure) — see IsStarting's doc comment for why the gateway's
@@ -1230,6 +1233,30 @@ func (cs *CaptureSession) Recapture() {
 //
 // Safe to call with no ingest connection bound (a no-op send) or no relay
 // tracks yet (SignalRecapture is itself a no-op then, per its doc comment).
+// SetCaptureScale records the deviceScaleFactor the captured tab renders at
+// (the controlling viewer's window.devicePixelRatio, threaded through the
+// viewport frame — the same source SetViewport's Emulation override uses).
+// The gateway's ingest send closure reads it back via CaptureScale when
+// building a recapture control frame, so the encoder can size its tabCapture
+// constraints in PHYSICAL pixels. Values below 1 (including the zero value)
+// are treated as 1 by CaptureScale — capture-at-CSS-resolution, the pre-fix
+// behavior — so an SPA that never sends a scale changes nothing.
+func (cs *CaptureSession) SetCaptureScale(scale float64) {
+	cs.mu.Lock()
+	cs.captureScale = scale
+	cs.mu.Unlock()
+}
+
+// CaptureScale returns the last SetCaptureScale value, clamped to >= 1.
+func (cs *CaptureSession) CaptureScale() float64 {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.captureScale < 1 {
+		return 1
+	}
+	return cs.captureScale
+}
+
 func (cs *CaptureSession) RecaptureAt(expectedW, expectedH int) {
 	cs.requestControl("recapture", nil, expectedW, expectedH)
 	cs.relay.SignalRecapture()

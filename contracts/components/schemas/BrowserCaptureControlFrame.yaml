@@ -47,3 +47,17 @@ properties:
     minimum: 1
     maximum: 16384
     description: 'recapture only: expected CSS viewport height. See expected_width.'
+  capture_scale:
+    type: number
+    minimum: 1
+    maximum: 4
+    description: >-
+      recapture only, server → extension: the deviceScaleFactor the captured
+      tab renders at (Emulation.setDeviceMetricsOverride, driven by the
+      controlling viewer's window.devicePixelRatio). The encoder multiplies
+      its tabCapture width/height constraints by this so the captured frames
+      carry PHYSICAL pixels, not CSS pixels. Absent or 1 = capture at CSS
+      resolution. Without it a Retina (dpr=2) viewer receives a 1x capture
+      stretched over 2x display pixels — uniformly blurry video, reported
+      from live use on macOS 2026-08-12. The tabs.get convergence check
+      stays in CSS pixels; only the media constraints scale.

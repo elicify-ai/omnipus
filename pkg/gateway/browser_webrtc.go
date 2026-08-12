@@ -1205,6 +1205,16 @@ func (h *captureIngestWSHandler) serveConn(conn *websocket.Conn, remoteAddr stri
 		if expectedH > 0 {
 			frame.ExpectedHeight = &expectedH
 		}
+		// Physical-pixel capture (blur fix, macOS 2026-08-12): tell the
+		// encoder what deviceScaleFactor the tab renders at so it can size
+		// its tabCapture constraints in physical pixels. Only meaningful on
+		// a recapture that carries geometry; scale 1 is the wire default and
+		// is omitted (absent == 1 per the contract).
+		if action == "recapture" {
+			if scale := cs.CaptureScale(); scale > 1 {
+				frame.CaptureScale = &scale
+			}
+		}
 		return ic.sendJSON(frame)
 	}
 	var closeOnce sync.Once

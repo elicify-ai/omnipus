@@ -586,6 +586,7 @@ export interface BrowserCaptureControlFrame {
   reason?: string;
   expected_width?: number;
   expected_height?: number;
+  capture_scale?: number;
 }
 
 export interface GoalStatusFrame {

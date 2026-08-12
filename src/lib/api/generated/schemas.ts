@@ -10330,6 +10330,7 @@ export const BrowserCaptureControlFrame = z
     reason: z.string().max(512).optional(),
     expected_width: z.number().int().min(1).max(16384).optional(),
     expected_height: z.number().int().min(1).max(16384).optional(),
+    capture_scale: z.number().min(1).max(4).optional(),
   })
   .strict();
 
