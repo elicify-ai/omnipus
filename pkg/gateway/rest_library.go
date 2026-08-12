@@ -158,6 +158,19 @@ func mapLibraryErr(w http.ResponseWriter, op, workspaceID string, err error) {
 		jsonErr(w, http.StatusNotFound, "not found")
 	case errors.Is(err, library.ErrAlreadyExists):
 		jsonErr(w, http.StatusConflict, "an entry already exists at the destination path")
+	case errors.Is(err, library.ErrIsMountRoot):
+		// 409, not 500. The engine refuses this because performing it would act
+		// on the operator's real folder — deleting a mount's own entry would
+		// empty their actual files. Without this case the guard still HELD but
+		// reported "internal server error", which reads as a bug in Omnipus
+		// rather than as a boundary, and gives the caller nothing to do next.
+		jsonErr(w, http.StatusConflict,
+			"that is a mounted folder — remove the mount instead "+
+				"(DELETE /workspaces/{id}/mounts/{name}), which revokes access without deleting your files")
+	case errors.Is(err, library.ErrCrossRootTransfer):
+		jsonErr(w, http.StatusBadRequest,
+			"cannot rename directly between the work tree and a mounted folder — use move or copy, "+
+				"which transfer the contents rather than relinking them")
 	default:
 		logger.ErrorCF("rest", "library: "+op+" failed",
 			map[string]any{"workspace_id": workspaceID, "error": err.Error()})
