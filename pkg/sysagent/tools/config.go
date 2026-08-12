@@ -38,14 +38,21 @@ func (t *ConfigGetTool) Execute(_ context.Context, args map[string]any) *tools.T
 	if key == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "key is required", ""))
 	}
-	// Block reading sensitive keys.
-	lower := strings.ToLower(key)
-	if strings.Contains(lower, "api_key") || strings.Contains(lower, "secret") ||
-		strings.Contains(lower, "token") || strings.Contains(lower, "password") {
+	// Block reading sensitive keys by name.
+	if isSensitiveConfigName(key) {
 		return tools.ErrorResult(errorJSON("FORBIDDEN",
 			"Credentials cannot be read via config.get — they are write-only",
 			"Use list_providers to see configured providers (without keys)",
 		))
+	}
+	// Block reading the keys the policy table marks undisclosable. get_config
+	// used to have no deny list at all: every key set_config refuses was
+	// readable, so the tool handed out the account hashes (gateway.users), the
+	// auth-bypass flag and the whole enforcement configuration — the map an
+	// attacker wants BEFORE using any of the write-side findings.
+	if err := validateConfigReadKey(key); err != nil {
+		return tools.ErrorResult(errorJSON("FORBIDDEN", err.Error(),
+			"Operators inspect these in Settings → Security or config.json"))
 	}
 	value, err := dotGet(t.deps.GetCfg(), key)
 	if err != nil {
@@ -54,9 +61,11 @@ func (t *ConfigGetTool) Execute(_ context.Context, args map[string]any) *tools.T
 			"Check the key name and try again",
 		))
 	}
+	// A section read must not return what the direct read of its children
+	// refuses; blocked and credential-bearing descendants come back redacted.
 	return tools.NewToolResult(successJSON(map[string]any{
 		"key":    key,
-		"value":  value,
+		"value":  redactConfigValue(key, value),
 		"source": "config",
 	}))
 }
@@ -92,9 +101,7 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 	if !hasValue {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "value is required", ""))
 	}
-	lower := strings.ToLower(key)
-	if strings.Contains(lower, "api_key") || strings.Contains(lower, "secret") ||
-		strings.Contains(lower, "token") || strings.Contains(lower, "password") {
+	if isSensitiveConfigName(key) {
 		return tools.ErrorResult(errorJSON("FORBIDDEN",
 			"Use configure_provider to set API keys",
 			"Credentials are stored encrypted in credentials.json, not config.json",
@@ -150,13 +157,32 @@ var knownConfigPrefixes = []string{
 // still accepted).
 type blockedConfigKey struct {
 	// Key is a config key or the root of a subtree. A candidate key matches
-	// when it equals Key, or begins with Key+"." (a child) or Key+"[" (an
-	// index into an array-valued key).
+	// when it is AT, UNDER or ABOVE Key — see configKeyCovers and
+	// configKeyIsAncestorOf — compared case-insensitively.
 	Key string
 	// Reason is surfaced verbatim in the rejection so the caller — usually an
 	// LLM — is told what it hit and where the setting really lives, instead of
 	// retrying variations of the same key.
 	Reason string
+
+	// ReadReason, when non-empty, additionally makes the key unreadable via
+	// get_config, and is surfaced verbatim the way Reason is. It is a separate
+	// sentence from Reason because the two answer different questions: Reason
+	// says why WRITING widens the agent's cage; ReadReason says why the VALUE
+	// must not be disclosed.
+	//
+	// Exactly one of ReadReason / ReadOKReason must be set on every entry —
+	// pinned by TestBlockedConfigKeys_ReadPolicyIsDecidedForEveryEntry. A new
+	// entry therefore cannot be added without someone deciding, in writing,
+	// whether it is readable; the alternative (an empty field meaning
+	// "readable") would make every future addition silently fail open on the
+	// read side.
+	ReadReason string
+	// ReadOKReason, when non-empty, records why this key is deliberately
+	// READABLE even though it is not writable, and is never shown to the
+	// caller. It exists so the carve-out is justified in the table rather than
+	// inferred from the absence of a ReadReason.
+	ReadOKReason string
 }
 
 // blockedConfigKeys is the security-critical surface that set_config refuses.
@@ -174,6 +200,13 @@ type blockedConfigKey struct {
 // a replacement for it: a key must both start with a known section AND avoid
 // every entry here. Entries are matched before the allow list.
 //
+// The same table governs get_config, minus the entries that carry a
+// ReadOKReason. Reads and writes are two different threats over one overlapping
+// set of keys — writing widens the cage, reading discloses — so the policy is
+// ONE table with a per-entry read decision rather than two tables that drift.
+// Defaulting reads to the write list is what makes a future addition
+// fail-closed on both axes.
+//
 // Nothing here is a tool-policy fallback (CLAUDE.md hard constraint 6). Tool
 // policy stays explicit, seeded data; this list only decides which config keys
 // one particular tool may write. sandbox.tool_policies remains fully
@@ -189,6 +222,9 @@ var blockedConfigKeys = []blockedConfigKey{
 		Key: "agents.list",
 		Reason: "the agent roster is managed by the agent store, not generic config — " +
 			"use create_agent/update_agent/delete_agent instead",
+		ReadOKReason: "the roster is neither credential material nor an enforcement control — " +
+			"it is write-blocked because the agent store owns it, and list_agents already " +
+			"returns the same data",
 	},
 
 	// ---- the sandbox enforcement surface (entire subtree) ----
@@ -206,105 +242,144 @@ var blockedConfigKeys = []blockedConfigKey{
 			"tool_policies, shell_deny_patterns, allowed_paths, allowed_exec_paths, filesystem_model, " +
 			"egress and SSRF allow-lists, audit_log, skill_trust, prompt_injection_level) — " +
 			"change it in Settings → Security or config.json, never from an agent",
+		ReadReason: "the enforcement configuration read back in full is an evasion map — the exact " +
+			"allowed paths, the shell deny patterns, the egress and SSRF allow-lists, the " +
+			"per-tool policies and the injection-guard level; operators read it in " +
+			"Settings → Security",
 	},
 
 	// ---- gateway authentication, origin and approval controls ----
 	{
-		Key:    "gateway.dev_mode_bypass",
-		Reason: "it disables gateway authentication entirely, granting unauthenticated admin access to the whole API",
+		Key:        "gateway.dev_mode_bypass",
+		Reason:     "it disables gateway authentication entirely, granting unauthenticated admin access to the whole API",
+		ReadReason: "its value tells the caller whether the gateway's front door is currently unauthenticated",
 	},
 	{
 		Key:    "gateway.users",
 		Reason: "it is the bearer-token account list — writing it mints an API credential",
+		ReadReason: "it holds the bcrypt password and session-token hashes of every account — " +
+			"offline-cracking material, not configuration",
 	},
 	{
 		// Also caught by the credential substring filter above; listed so this
 		// predicate is correct standalone if that filter is ever narrowed.
-		Key:    "gateway.token",
-		Reason: "it is the gateway bearer token — credentials live in the encrypted store",
+		Key:        "gateway.token",
+		Reason:     "it is the gateway bearer token — credentials live in the encrypted store",
+		ReadReason: "it is the gateway bearer token in plaintext",
 	},
 	{
-		Key:    "gateway.cli_token",
-		Reason: "it is the CLI bearer token — credentials live in the encrypted store",
+		Key:        "gateway.cli_token",
+		Reason:     "it is the CLI bearer token — credentials live in the encrypted store",
+		ReadReason: "it is the CLI token entry — its hash and issuance metadata",
 	},
 	{
 		Key: "gateway.public_url",
 		Reason: "it defines the canonical origin that CSP, CORS and the WebSocket CheckOrigin " +
 			"all validate against (ADR-044 D2)",
+		ReadOKReason: "it is the origin a browser types — public by construction — and agents build " +
+			"web_serve preview links from it (ADR-044)",
 	},
 	{
 		Key: "gateway.trust_xff",
 		Reason: "it makes the client IP attacker-controlled, which is what auth rate limiting " +
 			"and audit attribution key on",
+		ReadReason: "its value tells the caller whether spoofing X-Forwarded-For defeats auth rate " +
+			"limiting and audit attribution",
 	},
 	{
-		Key:    "gateway.validate_inbound",
-		Reason: "it is the inbound contract validator (Constraint #8)",
+		Key:        "gateway.validate_inbound",
+		Reason:     "it is the inbound contract validator (Constraint #8)",
+		ReadReason: "its value tells the caller whether inbound payloads are validated at all",
 	},
 	{
-		Key:    "gateway.auth_mismatch_log_level",
-		Reason: "it controls whether failed authentication attempts are logged at all",
+		Key:        "gateway.auth_mismatch_log_level",
+		Reason:     "it controls whether failed authentication attempts are logged at all",
+		ReadReason: "its value tells the caller whether failed authentication attempts are recorded",
 	},
 	{
 		Key:    "gateway.tool_approval_timeout",
 		Reason: "it governs the human approval gate that every ask-policy tool call passes through",
+		ReadOKReason: "the timeout is user-visible in the approval prompt itself — an agent may " +
+			"legitimately say how long a pending approval lives, and knowing it widens nothing",
 	},
 	{
 		Key:    "gateway.tool_approval_max_pending",
 		Reason: "it governs the human approval gate that every ask-policy tool call passes through",
+		ReadOKReason: "a queue depth is operational, not secret, and knowing it does not let an " +
+			"agent approve anything",
 	},
 
 	// ---- tool-surface boundary controls ----
 	{
 		Key:    "tools.allow_read_paths",
 		Reason: "it is the filesystem read boundary for every file tool",
+		ReadReason: "it is the precise location of the read fence — the one thing worth knowing in " +
+			"order to route around it",
 	},
 	{
 		Key:    "tools.allow_write_paths",
 		Reason: "it is the filesystem write boundary for every file tool",
+		ReadReason: "it is the precise location of the write fence — the one thing worth knowing in " +
+			"order to route around it",
 	},
 	{
 		Key: "tools.filter_sensitive_data",
 		Reason: "it is the filter that strips API keys, tokens and secrets out of tool results " +
 			"before they reach the model",
+		ReadReason: "its value tells the caller whether tool results are scrubbed before it sees them",
 	},
 	{
 		Key: "tools.filter_min_length",
 		Reason: "it tunes that same secret-redaction filter — a large value switches redaction off " +
 			"without appearing to disable anything",
+		ReadReason: "the threshold is exactly what a caller needs in order to chunk a secret small " +
+			"enough to slip under the redactor",
 	},
 	{
 		Key: "tools.exec",
 		Reason: "it holds the exec binary allow-list, the exec approval mode and the egress proxy " +
 			"toggle for spawned processes",
+		ReadReason: "it enumerates which binaries may be run, whether approval is required and " +
+			"whether spawned processes are proxied — the evasion map for the exec surface",
 	},
 	{
 		Key: "tools.mcp",
 		Reason: "an MCP server entry names a program the gateway launches — writing it is arbitrary " +
 			"code execution, and it would bypass whatever policy governs add_mcp_server",
+		ReadReason: "a server entry carries the command line, arguments, environment and credential " +
+			"refs the gateway launches it with; list_mcp_servers is the introspection path",
 	},
 	{
 		Key: "tools.browser",
 		Reason: "exec_path and cdp_url make the gateway launch or attach to a chosen binary, " +
 			"profile_dir points the browser profile anywhere, and evaluate_enabled turns on " +
 			"arbitrary in-page JavaScript",
+		ReadReason: "exec_path, profile_dir and cdp_url disclose the host's filesystem layout and the " +
+			"debugging endpoint the browser is driven through",
 	},
 	{
-		Key:    "tools.cron.allow_command",
-		Reason: "it lets scheduled jobs run shell commands",
+		Key:        "tools.cron.allow_command",
+		Reason:     "it lets scheduled jobs run shell commands",
+		ReadReason: "its value tells the caller whether the scheduler is a usable shell",
 	},
 	{
 		Key:    "tools.web.private_host_whitelist",
 		Reason: "it is the SSRF exemption list for private/internal hosts (SEC-24)",
+		ReadReason: "it is a ready-made list of internal hosts that are reachable despite the SSRF " +
+			"guard (SEC-24)",
 	},
 	{
-		Key:    "tools.web.proxy",
-		Reason: "it routes every outbound web request through a chosen proxy",
+		Key:        "tools.web.proxy",
+		Reason:     "it routes every outbound web request through a chosen proxy",
+		ReadReason: "it names the egress path every outbound web request traverses",
 	},
 	{
 		Key: "tools.skills.marketplaces",
 		Reason: "it is the skill supply chain — a marketplace entry decides where installable " +
 			"instructions are fetched from",
+		ReadOKReason: "install_skill REQUIRES a registry name as an argument, so an agent that cannot " +
+			"see which registries exist cannot install anything; find_skills already surfaces the " +
+			"same list, and the credential-ref redaction below covers auth_token_ref/token_ref",
 	},
 
 	// ---- reserved: no such config section exists TODAY ----
@@ -321,24 +396,117 @@ var blockedConfigKeys = []blockedConfigKey{
 		Key: "security",
 		Reason: "reserved — no such config section exists today, and a security section must " +
 			"never be agent-writable by default if one is introduced",
+		ReadReason: "reserved — there is nothing to read today, and a security section must not " +
+			"become agent-readable by default the moment the field lands",
 	},
 	{
 		Key: "workspace_path",
 		Reason: "reserved — it names the workspace root that filesystem confinement is " +
 			"anchored to, and must never be agent-writable if reintroduced",
+		ReadReason: "reserved — it would name the root that filesystem confinement is anchored to",
 	},
 }
 
-// validateConfigKey returns an error if key falls under a security-critical or
-// otherwise blocked key (blockedConfigKeys), or if it does not start with a
-// known config prefix (knownConfigPrefixes). Deny is evaluated first, so an
-// entry in blockedConfigKeys always wins over its enclosing allowed section.
+// configKeySegments splits a dot-notation config key into its segments. It does
+// NOT trim: " sandbox.mode" keeps its leading space and therefore matches
+// nothing, which is the correct outcome — that key names no real field, so it
+// must be refused by the allow list rather than quietly normalised into one
+// that does.
+func configKeySegments(key string) []string { return strings.Split(key, ".") }
+
+// configSegmentMatches reports whether one key segment names the same field as
+// one blocked-key segment.
+//
+// The comparison is case-INSENSITIVE, and that is the whole point of this
+// function. The writer under this policy — dotSet, which round-trips through
+// json.Unmarshal — matches struct fields case-insensitively, so a deny list
+// that compares bytes is enforcing a different key space than the one that gets
+// written. "gateway.Dev_Mode_Bypass" missed a byte-exact deny entry, passed the
+// allow list, and landed on Gateway.DevModeBypass: unauthenticated admin access
+// to the whole API, no restart needed. A comparison must match the semantics of
+// the consumer it protects, not the spelling of the table it reads from.
+//
+// The folding is deliberately BROADER than the writer's (strings.EqualFold does
+// full Unicode simple folding; encoding/json folds ASCII). That asymmetry is
+// safe in this direction and only in this direction: over-matching here can
+// only DENY a key that would otherwise have been allowed. The allow list below
+// stays byte-exact for the mirror-image reason — under-matching there can only
+// REFUSE a key, never admit one. This is the same asymmetric-folding rule the
+// filesystem carve-out on this branch already follows.
+//
+// A trailing array index binds to the segment it indexes, so "sandbox[0]"
+// matches the blocked key "sandbox".
+func configSegmentMatches(seg, blockedSeg string) bool {
+	if strings.EqualFold(seg, blockedSeg) {
+		return true
+	}
+	if len(seg) > len(blockedSeg) && seg[len(blockedSeg)] == '[' &&
+		strings.EqualFold(seg[:len(blockedSeg)], blockedSeg) {
+		return true
+	}
+	return false
+}
+
+// configKeyCovers reports whether key is AT or UNDER blocked — the key itself,
+// a child, a grandchild, or an index into it.
+func configKeyCovers(key, blocked string) bool {
+	ks, bs := configKeySegments(key), configKeySegments(blocked)
+	if len(ks) < len(bs) {
+		return false
+	}
+	for i, b := range bs {
+		if !configSegmentMatches(ks[i], b) {
+			return false
+		}
+	}
+	return true
+}
+
+// configKeyIsAncestorOf reports whether key sits strictly ABOVE blocked — i.e.
+// writing key rewrites the blocked subtree wholesale.
+//
+// This is the granularity the deny loop used to miss entirely, and it made most
+// of the table decorative. dotSet writes a whole object at a path, and
+// json.Unmarshal MERGES that object into the live struct, so one call with
+// a bare section name and an object value reaches every blocked leaf in that
+// section at once. key="gateway" with {"dev_mode_bypass": true} is the worst
+// case and needs no second step: that flag is read per request, so gateway
+// authentication is off for the entire API immediately, with no restart. The
+// allow list even made this the documented shape — it explicitly accepts a bare
+// section name (key == "gateway").
+//
+// The fix is structural rather than three more root entries in the table —
+// adding roots by hand is how the list became inconsistent (sandbox and
+// security had them; gateway, tools and agents did not). "At, under, or above"
+// is a property of the key space, so a leaf entry added later cannot
+// reintroduce the hole.
+func configKeyIsAncestorOf(key, blocked string) bool {
+	ks, bs := configKeySegments(key), configKeySegments(blocked)
+	if len(ks) >= len(bs) {
+		return false
+	}
+	for i, k := range ks {
+		if !configSegmentMatches(k, bs[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// validateConfigKey returns an error if key falls at, under or above a
+// security-critical or otherwise blocked key (blockedConfigKeys), or if it does
+// not start with a known config prefix (knownConfigPrefixes). Deny is evaluated
+// first, so an entry in blockedConfigKeys always wins over its enclosing
+// allowed section.
 func validateConfigKey(key string) error {
 	for _, blocked := range blockedConfigKeys {
-		if key == blocked.Key ||
-			strings.HasPrefix(key, blocked.Key+".") ||
-			strings.HasPrefix(key, blocked.Key+"[") {
+		if configKeyCovers(key, blocked.Key) {
 			return fmt.Errorf("config key %q is not writable via this tool: %s", key, blocked.Reason)
+		}
+		if configKeyIsAncestorOf(key, blocked.Key) {
+			return fmt.Errorf(
+				"config key %q is not writable via this tool: writing it replaces %q, which is blocked because %s — set a specific key below %q instead",
+				key, blocked.Key, blocked.Reason, key)
 		}
 	}
 	for _, prefix := range knownConfigPrefixes {
@@ -347,6 +515,94 @@ func validateConfigKey(key string) error {
 		}
 	}
 	return fmt.Errorf("unknown config key %q — only known sections may be set via this tool", key)
+}
+
+// validateConfigReadKey returns an error if key is AT or UNDER a key the table
+// marks unreadable (ReadReason). An ANCESTOR read is not refused here — it is
+// served with the blocked subtrees redacted (redactConfigValue), because
+// refusing it outright would make whole sections unreadable over one leaf.
+func validateConfigReadKey(key string) error {
+	for _, blocked := range blockedConfigKeys {
+		if blocked.ReadReason == "" {
+			continue
+		}
+		if configKeyCovers(key, blocked.Key) {
+			return fmt.Errorf("config key %q is not readable via this tool: %s", key, blocked.ReadReason)
+		}
+	}
+	return nil
+}
+
+// configReadIsBlocked reports whether a fully-qualified config path is one
+// get_config must never disclose.
+func configReadIsBlocked(path string) bool {
+	for _, blocked := range blockedConfigKeys {
+		if blocked.ReadReason != "" && configKeyCovers(path, blocked.Key) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactedConfigValue is what a blocked or credential-bearing value is replaced
+// with in a get_config result. It matches the audit redaction marker (SEC-16)
+// so one string means one thing across the product.
+const redactedConfigValue = "[REDACTED]"
+
+// sensitiveConfigNameFragments are the field-name fragments that mark a value
+// as credential material wherever it appears. They are the same four fragments
+// get_config already refuses on a directly-requested key; applying them at every
+// depth is what stops the ancestor read (get_config "providers", "channels")
+// from returning what the direct read refuses.
+var sensitiveConfigNameFragments = []string{"api_key", "secret", "token", "password"}
+
+func isSensitiveConfigName(name string) bool {
+	lower := strings.ToLower(name)
+	for _, frag := range sensitiveConfigNameFragments {
+		if strings.Contains(lower, frag) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactConfigValue returns value with every unreadable descendant replaced by
+// redactedConfigValue. path is the fully-qualified config path value was read
+// from ("" for the config root).
+//
+// Without this, the deny list only ever protected an exact read: get_config
+// "gateway" returned the users array — bcrypt password and session-token hashes
+// — along with the bearer token and dev_mode_bypass, none of which the direct
+// reads of those same keys will hand over. Redacting rather than refusing keeps
+// section reads useful: get_config "gateway" still reports the port and the
+// host, it just cannot be used as a credential dump.
+func redactConfigValue(path string, value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for name, sub := range typed {
+			childPath := name
+			if path != "" {
+				childPath = path + "." + name
+			}
+			if isSensitiveConfigName(name) || configReadIsBlocked(childPath) {
+				out[name] = redactedConfigValue
+				continue
+			}
+			out[name] = redactConfigValue(childPath, sub)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, sub := range typed {
+			// Array elements share their parent's config path: the policy table
+			// addresses fields, not indices.
+			out[i] = redactConfigValue(path, sub)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 // isRestartRequired returns true for config keys that require a restart.
