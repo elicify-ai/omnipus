@@ -5,6 +5,7 @@
 package sandbox
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -156,5 +157,58 @@ func TestSecretPaths(t *testing.T) {
 	}
 	if SecretPaths("") != nil {
 		t.Error("SecretPaths(\"\") must be nil, not denies rooted at /")
+	}
+}
+
+// TestSecretPaths_CoversConfigBackups closes a hole found by inspecting a REAL
+// $OMNIPUS_HOME rather than reasoning about the layout.
+//
+// A live install carried config.json.bak-20260811-224607 next to config.json,
+// written when a migration rewrote the config. The backup contained the gateway
+// CLI token and the user account list — everything the original holds. Denying
+// config.json while leaving a byte-identical copy beside it readable is a deny
+// that reads as correct and protects nothing.
+func TestSecretPaths_CoversConfigBackups(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{
+		"config.json",
+		"config.json.bak-20260811-224607",
+		"credentials.json.bak-20260101-000000",
+		"master.key.old",
+		"notes.txt",        // control: an ordinary file must NOT be swept in
+		"configuration.md", // control: shares a prefix fragment, not the prefix
+		"config.json2",     // control: no dot separator, so not a backup form
+	} {
+		if err := os.WriteFile(filepath.Join(home, name), []byte("x"), 0o600); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+
+	got := SecretPaths(home)
+	has := func(name string) bool {
+		want := filepath.Join(home, name)
+		for _, p := range got {
+			if p == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, mustDeny := range []string{
+		"config.json",
+		"config.json.bak-20260811-224607",
+		"credentials.json.bak-20260101-000000",
+		"master.key.old",
+	} {
+		if !has(mustDeny) {
+			t.Errorf("%q must be in the secret set; a copy of a secret is a secret", mustDeny)
+		}
+	}
+	for _, mustAllow := range []string{"notes.txt", "configuration.md", "config.json2"} {
+		if has(mustAllow) {
+			t.Errorf("%q must NOT be swept into the secret set — over-denying breaks "+
+				"ordinary files and teaches operators to distrust the deny list", mustAllow)
+		}
 	}
 }

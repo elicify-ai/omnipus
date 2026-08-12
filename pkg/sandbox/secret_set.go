@@ -4,7 +4,11 @@
 
 package sandbox
 
-import "path/filepath"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+)
 
 // SecretEntriesRelative is THE definition of what a sandboxed child must never
 // reach inside $OMNIPUS_HOME. ADR-060 §4.0. It is deliberately the ONLY such
@@ -45,21 +49,77 @@ var SecretEntriesRelative = []string{
 	"entities",
 }
 
-// SecretPaths returns the absolute path of every SecretEntriesRelative entry
-// under homePath, in list order. Returns nil for an empty homePath so a caller
-// with no configured home does not produce denies rooted at "/".
+// secretGlobPrefixes are basename PREFIXES whose every match is a secret,
+// alongside the exact names in SecretEntriesRelative.
 //
-// Paths are returned whether or not they exist. A credential file created after
-// boot must already be covered (spec FR-3.4); returning only extant paths would
-// leave a window in which the file is created and readable.
+// This exists because protecting config.json alone was not enough. A real
+// install carries files like `config.json.bak-20260811-224607`, written when a
+// migration rewrites the config, and a backup holds exactly what the original
+// holds: VERIFIED on a live install, the backup contained both the gateway CLI
+// token and the user account list. Denying the original while leaving a
+// byte-identical copy beside it readable is a deny that looks correct and
+// protects nothing.
+//
+// Prefix matching rather than an exact list because the suffix is a timestamp:
+// the set is open-ended by construction, so enumerating it would go stale the
+// next time a migration runs — the same defect ADR-060 exists to remove.
+var secretGlobPrefixes = []string{
+	"config.json.",      // config.json.bak-<timestamp>, and any future suffix
+	"credentials.json.", // same shape, same reasoning
+	"master.key.",
+}
+
+// SecretPaths returns the absolute path of every secret under homePath: the
+// exact SecretEntriesRelative names first, then any existing file whose
+// basename starts with a secretGlobPrefixes entry. Returns nil for an empty
+// homePath so a caller with no configured home does not produce denies rooted
+// at "/".
+//
+// The exact names are returned whether or not they exist. A credential file
+// created after boot must already be covered (spec FR-3.4); returning only
+// extant paths would leave a window in which the file is created and readable.
+//
+// The prefix matches are necessarily discovered by listing, so they cover what
+// is on disk at the time of the call. On Linux that call happens per spawn, so
+// a backup written mid-session is covered by the next child. On macOS the
+// profile is rendered once at boot — a backup written afterwards is NOT denied
+// until restart, which is a real and accepted residual: config backups are
+// written by migrations, which run at boot before the profile is rendered.
 func SecretPaths(homePath string) []string {
 	if homePath == "" {
 		return nil
 	}
 	home := filepath.Clean(homePath)
-	out := make([]string, 0, len(SecretEntriesRelative))
+	out := make([]string, 0, len(SecretEntriesRelative)+4)
+	seen := make(map[string]struct{}, len(SecretEntriesRelative)+4)
 	for _, name := range SecretEntriesRelative {
-		out = append(out, filepath.Join(home, name))
+		p := filepath.Join(home, name)
+		out = append(out, p)
+		seen[p] = struct{}{}
+	}
+
+	// Listing failure is deliberately NOT fatal here: the exact names above are
+	// the load-bearing protection and are already in the slice. The Linux
+	// caller (ExpandRulesExcluding) fails the spawn on its own listing errors,
+	// so a genuinely unreadable home still fails closed there.
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		name := e.Name()
+		for _, prefix := range secretGlobPrefixes {
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			p := filepath.Join(home, name)
+			if _, dup := seen[p]; dup {
+				break
+			}
+			seen[p] = struct{}{}
+			out = append(out, p)
+			break
+		}
 	}
 	return out
 }
@@ -68,6 +128,11 @@ func SecretPaths(homePath string) []string {
 // secret set. Used by the Linux sibling-granting walk, which decides per
 // directory entry whether to grant it.
 func IsSecretEntry(name string) bool {
+	for _, prefix := range secretGlobPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
 	for _, s := range SecretEntriesRelative {
 		if s == name {
 			return true

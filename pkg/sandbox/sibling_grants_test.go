@@ -222,25 +222,36 @@ func TestExpandRulesExcluding_NoDeniedPathsIsIdentity(t *testing.T) {
 	}
 }
 
-// TestExpandRulesExcluding_TopLevelCreationIsNarrowed documents a REAL
-// behavioural narrowing that follows from sibling-granting, so it is a known
-// accepted consequence rather than something discovered later as a bug.
+// TestExpandRulesExcluding_TopLevelCreationIsNarrowed pins a narrowing that
+// follows from sibling-granting: the home DIRECTORY ITSELF is no longer
+// granted, so on Linux a child can no longer create a new entry at the top
+// level of $OMNIPUS_HOME.
 //
-// Replacing the whole-tree $OMNIPUS_HOME grant with per-entry grants means the
-// home DIRECTORY ITSELF is no longer granted. Two things follow on Linux:
+// This was first written up as a risk to watch. It is not one — it moves the
+// kernel closer to the policy the product already intends, and the intent is
+// checkable rather than a matter of opinion:
 //
-//  1. A child can no longer create a NEW entry at the top level of
-//     $OMNIPUS_HOME. Everything inside an already-granted subdirectory
-//     (agents/, sessions/, skills/) still works normally, which is where all
-//     agent writes actually go — the gateway creates the top-level layout, not
-//     its children.
-//  2. A top-level entry created AFTER a child was spawned is not reachable by
-//     that child. The next spawn re-enumerates and picks it up (see
-//     TestExpandRulesExcluding_EnumeratesAtCallTime), so the window is one
-//     process lifetime.
+//   - agents default to RestrictToWorkspace: true (pkg/config/defaults.go), so
+//     a turn is confined to its own working directory;
+//   - pkg/fspolicy/carveout.go denies agents/, workspaces/, entities/,
+//     master.key and credentials.json outright, at the application layer,
+//     regardless of scope.
 //
-// Neither applies to macOS, where the home grant stays whole and the secrets
-// are removed by explicit deny instead.
+// So writing at the top level of $OMNIPUS_HOME was never something an agent was
+// supposed to do. The kernel was simply broader than the policy above it, and
+// this closes part of that gap.
+//
+// The two lists still disagree in BOTH directions, which is worth knowing and
+// is not fixed here: the app layer denies agents/ and workspaces/ that the
+// kernel grants, and the kernel denies config.json and cli.token that the app
+// layer does not. An agent running unrestricted can still reach the gateway
+// bearer token through an in-process file tool, because the kernel sandbox
+// covers CHILD processes and those tools are not children.
+//
+// The second-order effect: a top-level entry created after a child spawned is
+// unreachable by that child until the next spawn re-enumerates (see
+// TestExpandRulesExcluding_EnumeratesAtCallTime). Neither effect applies to
+// macOS, where the home grant stays whole and secrets are removed by deny.
 func TestExpandRulesExcluding_TopLevelCreationIsNarrowed(t *testing.T) {
 	home := seedHome(t)
 	got, err := ExpandRulesExcluding(
