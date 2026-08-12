@@ -133,7 +133,9 @@ run_lint() {
   # own job, so omitting either here lets the worker report a green lint while
   # GitHub's is red.
   bash scripts/check-no-handwritten-wire-types.sh || return 1
-  bash scripts/check-no-tool-error-from-status.sh
+  bash scripts/check-no-tool-error-from-status.sh || return 1
+  # ADR-061 regression guard: the deleted JPEG screencast path must not return.
+  bash scripts/check-no-jpeg-screencast.sh
 }
 # Full suite with a flake filter: a package that fails the contended full run but passes when
 # re-run isolated (-p 1) is a timing flake → not a real failure. Fails both = real.

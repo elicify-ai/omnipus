@@ -292,6 +292,14 @@ jobs:
         # ubuntu-latest runner — see the script's header comment.
         run: bash scripts/check-no-tool-error-from-status.sh
 
+      - name: Run JPEG-screencast removal guard
+        # ADR-061: the JPEG live-browser fallback is deleted and WebRTC is the
+        # only live-video path. Long-lived branches cut before the removal
+        # still contain the whole pipeline, so a merge re-adds it as an
+        # ordinary, conflict-free addition. This is the mechanical half of
+        # CLAUDE.md's "Retired surfaces — do NOT reintroduce" rule.
+        run: bash scripts/check-no-jpeg-screencast.sh
+
   verify-contracts:
     name: Verify Contracts
     # Ensure generated wire-format types (TS + Go) match the spec files.
