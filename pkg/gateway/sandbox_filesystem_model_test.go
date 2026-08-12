@@ -61,14 +61,23 @@ func TestApplySandbox_RejectsUnknownModel(t *testing.T) {
 	}
 }
 
-// TestApplySandbox_DefaultModelIsConfined pins the inert landing. Flipping the
-// default is a deliberate, separately reviewable change; if it happens by
-// accident this fails.
-func TestApplySandbox_DefaultModelIsConfined(t *testing.T) {
+// TestApplySandbox_DefaultModelIsOpen pins the shipped posture.
+//
+// This test previously asserted "confined", which was correct while ADR-060 was
+// landing inert so the "confined is unchanged" guarantee could be measured
+// against an untouched baseline. That gate has passed and the operator decided
+// open is the default for every install, upgrading ones included.
+//
+// It is kept rather than deleted because the default is now a DECISION with a
+// posture consequence — existing installs pick it up on their next boot — and a
+// decision of that weight should not be reversible by an unnoticed edit to a
+// defaults file.
+func TestApplySandbox_DefaultModelIsOpen(t *testing.T) {
 	cfg := config.DefaultConfig()
-	if got := cfg.Sandbox.FilesystemModel; got != string(config.FilesystemModelConfined) {
-		t.Fatalf("seeded filesystem_model = %q, want %q — ADR-060 must land inert so the "+
-			"'confined is unchanged' guarantee can be measured", got, config.FilesystemModelConfined)
+	if got := cfg.Sandbox.FilesystemModel; got != string(config.FilesystemModelOpen) {
+		t.Fatalf("seeded filesystem_model = %q, want %q — this is the change that makes agents "+
+			"able to run installed toolchains; without it ADR-060 has no effect at all",
+			got, config.FilesystemModelOpen)
 	}
 }
 

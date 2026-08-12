@@ -283,14 +283,25 @@ func DefaultConfig() *Config {
 			// fully replaced — including to empty — when the key is present.
 			AllowedExecPaths: DefaultAllowedExecPaths(),
 
-			// Seeded "confined" so ADR-060 lands INERT. Every existing test
-			// keeps running under today's model, which is what lets the
-			// "confined is unchanged" guarantee actually be verified; seeding
-			// "open" would run the whole suite under the new model on the first
-			// commit and there would be no baseline left to compare against.
-			// Flipping the default is a deliberate one-line change once the
-			// spec's §4 gate clears.
-			FilesystemModel: string(FilesystemModelConfined),
+			// ADR-060: reads and program execution are OPEN by default; writes
+			// are confined exactly as before, and Omnipus's own secrets
+			// (master.key, credentials.json, config.json, cli.token, entities/)
+			// stay unreachable to sandboxed children on both macOS and Linux.
+			//
+			// This is the default for EVERY install, upgrading ones included
+			// (operator decision, 2026-08-12). loadConfig unmarshals the
+			// operator's JSON over DefaultConfig(), so a config.json with no
+			// filesystem_model key picks this up on the next boot — a real
+			// posture change on upgrade, and an intended one. The confined model
+			// does not work in practice: the set of paths a working toolchain
+			// reads cannot be enumerated in advance, so leaving existing installs
+			// on it means the bug stays unfixed for precisely the people already
+			// running the product. Ships with a release note.
+			//
+			// An operator who wants the old behaviour sets
+			// filesystem_model: "confined" explicitly, and that choice is
+			// honoured — the seed is data, never a fallback branch.
+			FilesystemModel: string(FilesystemModelOpen),
 			// Seeded, fully-enumerated GLOBAL CEILING for a fresh install: every
 			// static builtin tool defaults to "allow" except irreversible
 			// delete_*/remove_* actions, which ask for confirmation. This is a

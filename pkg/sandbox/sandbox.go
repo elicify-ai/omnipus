@@ -1077,6 +1077,16 @@ func DescribeBackendWithState(backend SandboxBackend, state ApplyState) Status {
 			// ABIVersion stays 0 and LandlockFeatures/BlockedSyscalls stay
 			// empty: those are Landlock-specific and have no Seatbelt analogue.
 			// A consumer must not read ABIVersion == 0 as "not kernel-level".
+			//
+			// The same "why isn't it applied" explanation the Landlock path
+			// gives. This branch returns early, so before it shared the helper
+			// an operator on macOS with the sandbox off saw a kernel-capable
+			// backend reporting policy_applied=false and NO reason for it —
+			// while the identical state on Linux said "operator choice". Same
+			// question, same answer, regardless of platform.
+			if !status.PolicyApplied {
+				status.Notes = append(status.Notes, notAppliedNote(state.DisabledBy))
+			}
 			if len(state.ExtraNotes) > 0 {
 				status.Notes = append(status.Notes, state.ExtraNotes...)
 			}
@@ -1140,24 +1150,7 @@ func DescribeBackendWithState(backend SandboxBackend, state ApplyState) Status {
 		// when the operator explicitly chose this state. Reserve the gap
 		// warning for the unexpected-disabled case (DisabledBy empty), which
 		// really does mean Apply failed or wasn't wired.
-		switch state.DisabledBy {
-		case "cli_flag":
-			status.Notes = append(
-				status.Notes,
-				"Sandbox disabled via --sandbox CLI flag (operator choice). Pass --sandbox=enforce or set gateway.sandbox.mode to re-enable.",
-			)
-		case "config":
-			status.Notes = append(status.Notes,
-				"Sandbox disabled via gateway.sandbox.mode=off in config.json (operator choice).")
-		default:
-			// Unexpected: capable kernel, no DisabledBy marker, but Apply
-			// didn't succeed. That's the original failure mode — keep the
-			// loud warning.
-			status.Notes = append(
-				status.Notes,
-				"sandbox backend is capable of kernel-level enforcement but Apply() has not been called on the Omnipus process; child processes are not currently restricted by Landlock or seccomp",
-			)
-		}
+		status.Notes = append(status.Notes, notAppliedNote(state.DisabledBy))
 	}
 
 	if len(state.ExtraNotes) > 0 {
@@ -1176,4 +1169,23 @@ func SelectBackend() (SandboxBackend, string) {
 // Returns 0 if unavailable. Platform-specific implementation in sandbox_linux.go.
 func ProbeLandlockABI() int {
 	return probeLandlockABIPlatform()
+}
+
+// notAppliedNote explains, in operator terms, why a kernel-CAPABLE backend is
+// not currently enforcing. Shared by the Landlock and Seatbelt paths so the two
+// cannot answer the same question differently.
+//
+// The phrasing turns on WHY. An operator who passed --sandbox=off chose this
+// state, and showing them the alarming "Apply() has not been called" implies a
+// misconfiguration they did not make. That warning is reserved for the case with
+// no DisabledBy marker, which really does mean Apply failed or was never wired.
+func notAppliedNote(disabledBy string) string {
+	switch disabledBy {
+	case "cli_flag":
+		return "Sandbox disabled via --sandbox CLI flag (operator choice). Pass --sandbox=enforce or set gateway.sandbox.mode to re-enable."
+	case "config":
+		return "Sandbox disabled via gateway.sandbox.mode=off in config.json (operator choice)."
+	default:
+		return "sandbox backend is capable of kernel-level enforcement but Apply() has not been called on the Omnipus process; child processes are not currently restricted"
+	}
 }

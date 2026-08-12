@@ -23,7 +23,20 @@ Adds `sandbox.filesystem_model`. In `open`: reads and execute are unrestricted, 
 
 `OmnipusSandboxConfig.FilesystemModel string \`json:"filesystem_model"\`` — `open` | `confined`.
 
-**Default is `confined` until every blocker in §5 clears, then flipped to `open` as the final step.** The first draft defaulted to `open`, which breaks the §4 gate: with `open` as default, every existing test runs under the new model and fails at step 2, so the "confined is byte-identical" safety net never gets a chance to prove itself. Defaulting to `confined` means the whole change lands inert, is verified, and is switched on deliberately in one reviewable commit.
+**Default is `confined` until every blocker in §5 clears, then flipped to `open` as the final step — and `open` then becomes the default for EVERY install, new and upgrading (operator decision, 2026-08-12).**
+
+That is a deliberate posture change on upgrade, not an accident of seeding: `loadConfig`
+unmarshals the operator's JSON over `DefaultConfig()`, so an existing `config.json` with
+no `filesystem_model` key picks up the new default on the next boot. It is the right
+outcome — the confined model does not work in practice and leaving existing installs on
+it means the bug stays unfixed for exactly the people already using the product — but it
+MUST ship with a release note that says plainly: reads and program execution become
+unrestricted, writes are unchanged, and Omnipus's own secrets remain protected. An
+operator who wants the old behaviour sets `filesystem_model: "confined"` explicitly.
+
+The alternative considered and rejected was defaulting `open` for fresh installs only.
+It doubles the test matrix and lets two people on the same version see different
+behaviour, which makes every support conversation start with "which install are you?". The first draft defaulted to `open`, which breaks the §4 gate: with `open` as default, every existing test runs under the new model and fails at step 2, so the "confined is byte-identical" safety net never gets a chance to prove itself. Defaulting to `confined` means the whole change lands inert, is verified, and is switched on deliberately in one reviewable commit.
 
 - **FR-1.1** Unknown value → decode error naming both valid values (mirror `SandboxMode.UnmarshalJSON`).
 - **FR-1.2** Empty/absent → the seeded default (`confined` initially, `open` after the §5 blockers clear). Must survive `loadConfig` unmarshalling operator JSON over `DefaultConfig()`.
@@ -99,15 +112,31 @@ This is not caused by this change — it is true in shipped code — but this sp
 - **FR-10.1** A rendered `open` profile MUST NOT contain any `(allow mach-lookup …)` beyond the mDNSResponder entry.
 - **FR-10.2** A test MUST assert FR-10.1 against a rendered profile, so a future "make the toolchain work" edit cannot silently delete it.
 
-### FR-6 — Secret redaction (ADR-060 §3.2, normative)
+### FR-6 — Secret redaction — **DROPPED 2026-08-12 (operator decision)**
 
-- **FR-6.1** Values registered via `RegisterSensitiveValues` MUST be scrubbed from tool output before it enters agent context or the transcript.
-- **FR-6.2** Redaction applies to `bash` stdout/stderr and file-read tool results.
-- **FR-6.3** Redaction failure must not fail the tool call; it logs at WARN and returns the **redacted-on-error** (empty) value rather than the raw one. Fail closed.
+Redaction was to scrub `RegisterSensitiveValues` entries out of tool output before it
+reached agent context or the transcript. It is **not being built**, and the reason is
+recorded here so it is not silently re-added later.
 
-> **O-1 — RESOLVED 2026-08-12, and it no longer blocks.** The question was whether redaction could cover the master key on Linux, where there is no deny primitive. It does not need to: FR-4.5 sibling-granting means the key is **never granted** to a child on Linux, so no read reaches redaction in the first place. Redaction (FR-6) remains worth having as defence in depth against a key that leaks through some other path, but it is no longer load-bearing and no longer gates `open` as the Linux default.
->
-> **Residual, accepted by the operator ("ship as designed, document the gap"):** on Windows and on Linux below 5.13 there is no sandbox at all, so the secret set is unprotected there. Nothing is lost relative to today — those platforms have no filesystem confinement of any kind — but FR-4.4's boot WARN must name `master.key` explicitly so the gap is visible rather than implied.
+It existed to cover one specific gap: Linux was believed to have no way of protecting
+the master key, so the plan was to catch the key on the way OUT instead. FR-4.5
+sibling-granting removed that premise — the key is never granted to a child on Linux,
+so nothing reaches redaction to be redacted. The layer would be code that reads as
+protective while having no demonstrated job.
+
+Two further reasons, both of which argue against building it as reassurance:
+
+1. **It cannot deliver what its name implies.** Scrubbing matches literal strings. A
+   key re-encoded as base64 or hex passes straight through. A control that stops the
+   naive case and not the deliberate one invites more trust than it earns — the
+   defect class this project keeps hitting.
+2. **The real residual exposure is elsewhere.** `$OMNIPUS_HOME/sessions/**` holds
+   plaintext transcripts under 90-day retention, and redaction never addressed that
+   either.
+
+**Reopen this only if a concrete leak path is demonstrated** — i.e. a case where a
+secret provably reaches tool output despite the kernel exclusion. Absent that, it is
+not defence in depth, it is unverified code.
 
 ### FR-7 — Observability
 

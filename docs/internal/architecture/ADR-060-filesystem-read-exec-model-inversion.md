@@ -1,6 +1,6 @@
 # ADR-060 — Reads and execute default open; writes stay confined
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-08-12) — every open question the draft carried has been decided by the operator; see §4.0 (secret set), §7.1 (residual risk accepted), and the spec's FR-1 (default) and FR-6 (redaction dropped).
 - **Date:** 2026-08-12
 - **Deciders:** founder (decided the axis), lead (mechanism)
 - **Related:** [ADR-052 Phase-3 AC-6](ADR-052-phase3-AC6-macos-seatbelt.md) (introduced `sandbox.allowed_exec_paths`, which this narrows); pentest items **C1/C2** (v0.2 #155 item 8) which this **reverses on Linux and Windows** — see §7; egress control, **not yet an ADR** — see §8.

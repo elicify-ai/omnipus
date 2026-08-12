@@ -132,6 +132,13 @@ func TestApplySandbox_Darwin_SeededExecPathsReachThePolicy(t *testing.T) {
 	const toolDir = "/omnipus-test-toolchain"
 	cfg := darwinSandboxCfg(t, "enforce")
 	cfg.Sandbox.AllowedExecPaths = []string{toolDir}
+	// allowed_exec_paths is a CONFINED-model mechanism, so this test pins it
+	// explicitly rather than inheriting the seeded default. ADR-060 made "open"
+	// the default, under which execution is unrestricted and the list is inert
+	// BY DESIGN — leaving this on the default turned a correct behaviour change
+	// into a red test that says nothing. The open-model half is asserted by the
+	// sibling test below, so both behaviours stay covered.
+	cfg.Sandbox.FilesystemModel = string(config.FilesystemModelConfined)
 
 	tmp, err := os.CreateTemp(t.TempDir(), "stderr")
 	if err != nil {
@@ -164,6 +171,53 @@ func TestApplySandbox_Darwin_SeededExecPathsReachThePolicy(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("cfg.Sandbox.AllowedExecPaths never reached the policy; rules=%v", result.Policy.FilesystemRules)
+	}
+}
+
+// TestApplySandbox_Darwin_OpenModelIgnoresExecPaths is the other half of the
+// test above, and it pins a deliberate behaviour change rather than a bug.
+//
+// Under the open model execution is unrestricted, so allowed_exec_paths has
+// nothing left to grant. The config key stays VALID and simply stops
+// contributing: an operator who carefully listed their toolchain directories is
+// not punished with an error for having done so, and does not need to unpick
+// their config to upgrade. It just stops being load-bearing.
+func TestApplySandbox_Darwin_OpenModelIgnoresExecPaths(t *testing.T) {
+	backend := sandbox.NewSeatbeltBackend()
+	if !backend.Available() {
+		t.Skip("sandbox-exec unavailable on this host")
+	}
+	const toolDir = "/omnipus-test-toolchain"
+	cfg := darwinSandboxCfg(t, "enforce")
+	cfg.Sandbox.AllowedExecPaths = []string{toolDir}
+	cfg.Sandbox.FilesystemModel = string(config.FilesystemModelOpen)
+
+	tmp, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatalf("temp stderr: %v", err)
+	}
+	defer func() { _ = tmp.Close() }()
+
+	result, err := applySandbox(SandboxApplyOptions{
+		Cfg:      cfg,
+		HomePath: t.TempDir(),
+		Backend:  backend,
+		GetEnv:   func(string) string { return "" },
+		Stderr:   tmp,
+	})
+	if err != nil {
+		t.Fatalf("applySandbox: %v", err)
+	}
+
+	for _, r := range result.Policy.FilesystemRules {
+		if r.Path == toolDir {
+			t.Errorf("open model emitted an exec-path rule for %q; execution is already "+
+				"unrestricted, so the rule is redundant and its presence means the model was not applied", toolDir)
+		}
+	}
+	if !result.Policy.ExecOpen {
+		t.Error("open model must report ExecOpen; without it agents still cannot run installed toolchains, " +
+			"which is the entire problem ADR-060 exists to fix")
 	}
 }
 
