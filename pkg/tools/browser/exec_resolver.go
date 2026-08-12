@@ -136,10 +136,6 @@ func chromeHardeningBaseFlags() []string {
 		"--safebrowsing-disable-auto-update",
 		"--password-store=basic",
 		"--use-mock-keychain",
-		// chromedp.DisableGPU: force software rendering (+ SwiftShader
-		// fallback, required on Chromium 139+).
-		"--disable-gpu",
-		"--enable-unsafe-swiftshader",
 		// omnipus additions (pre-pipe managedExecAllocatorOpts).
 		"--disable-crash-reporter",
 		"--disable-blink-features=AutomationControlled",
@@ -160,6 +156,25 @@ func chromeHardeningBaseFlags() []string {
 		// physical-pixel ceiling (maxViewportPhysicalPixels, live.go) still
 		// bounds what any single viewport may ask for.
 		"--window-size=2560,1440",
+	}
+
+	// GPU: software-only on Linux (chromedp.DisableGPU convention; the
+	// headless pods this was tuned on have no GPU, and SwiftShader is the
+	// required fallback on Chromium 139+), REAL GPU on macOS. On a Mac the
+	// GPU is always present, and --disable-gpu forces the WebRTC capture
+	// pipeline onto software encoders (OpenH264/libvpx) that saturate a
+	// laptop CPU at Retina capture sizes - measured 2026-08-13: 2x-scale
+	// capture encoded in software made scrolling lag visibly on STATIC
+	// pages (every scroll repaint is a full-frame encode at 4x the pixels).
+	// With the GPU enabled Chrome can hand H264 encode to VideoToolbox
+	// hardware. Headless-new supports real GPU rasterization on macOS.
+	// OMNIPUS_BROWSER_FORCE_SOFTWARE_GPU=1 restores the old behavior as an
+	// escape hatch (e.g. a Mac with a wedged GPU driver).
+	if runtime.GOOS != "darwin" || os.Getenv("OMNIPUS_BROWSER_FORCE_SOFTWARE_GPU") == "1" {
+		args = append(args,
+			"--disable-gpu",
+			"--enable-unsafe-swiftshader",
+		)
 	}
 
 	// Chromium's zygote sandbox depends on new user namespaces, which the
