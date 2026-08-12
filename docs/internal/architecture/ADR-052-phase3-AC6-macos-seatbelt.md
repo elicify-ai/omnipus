@@ -146,17 +146,50 @@ application-level enforcement, prints the permissive banner, sets
 test: `TestApplySandbox_Darwin_PermissiveDoesNotInstallProfile`, with
 `TestApplySandbox_Darwin_EnforceInstallsProfile` as the positive control.
 
-## 4c. Network semantics differ from Landlock for the same policy
+## 4c. Network semantics vs Landlock
 
-`renderSeatbeltProfile` emits only TCP port allows under `(deny default)`. That
-denies **UDP entirely** and **all Unix-domain sockets** except the mDNSResponder
-literal in the preamble. Landlock ABI v4 restricts TCP bind/connect only, so UDP
-and Unix sockets pass through untouched there.
+`renderSeatbeltProfile` emits TCP **and UDP** allows for every port in
+`ConnectPortRules`, under `(deny network*)`.
 
-Consequence: an identical `SandboxPolicy` is materially stricter on macOS. A
-child that talks to a local socket (`docker.sock`, a Postgres socket) or uses
-QUIC/NTP works on Linux and fails on macOS. `SandboxPolicy.ConnectPortRules` is
-therefore platform-dependent in a way the type does not express.
+UDP was originally omitted. Measured consequence: UDP was denied outright no
+matter what the policy said, which silently broke raw DNS resolvers (`dig`,
+`nslookup`, Go's pure-Go resolver) on port 53 and QUIC/HTTP3 on 443. It hid
+because the preamble's mDNSResponder allow covers ordinary name lookups — so
+DNS appeared to work right up until something bypassed the system resolver.
+Fixed; `TestSeatbelt_RealChild_UDPFollowsThePortAllowList` proves it against a
+real socket, with a non-allow-listed control port.
+
+This is still stricter than Linux, where Landlock ABI v4 restricts TCP
+bind/connect only and leaves UDP entirely unrestricted. Here UDP is confined to
+the same allow-list as TCP.
+
+**Remaining gap — Unix-domain sockets.** They are still denied except for the
+mDNSResponder socket in the preamble, whereas Landlock does not restrict them
+at all. So a child talking to `docker.sock`, a Postgres socket, or any local
+service over a Unix socket works on Linux and fails on macOS.
+
+Both mechanisms needed to close it are measured and working:
+
+| Grant | Result |
+|---|---|
+| `(allow network-outbound (literal "/path/to.sock"))` | connects |
+| `(allow network-outbound (subpath "/dir"))` | connects to sockets inside, and **not** to sockets outside |
+
+What is NOT decided is the policy: which sockets should be reachable. A blanket
+allow is unacceptable — `/var/run/docker.sock` is root-equivalent. The two
+candidate designs:
+
+1. **Explicit opt-in config** (`sandbox.allowed_socket_paths`), default empty.
+   Nothing is reachable unless an operator names it. Adds a config surface.
+2. **Derive from the filesystem policy** — allow sockets under directories the
+   policy already grants WRITE on. No new config; the reasoning is that a
+   directory the agent can already write into is inside its blast radius. But
+   the built-in `/tmp` and `$TMPDIR` grants are shared with other processes, so
+   this would implicitly expose any socket another program leaves in `/tmp`.
+
+Design (1) is the safer default and is recommended. It is deliberately left
+unimplemented here: it widens a security boundary and belongs in a change that
+goes through review on its own terms rather than riding along.
 
 ## 5. Architecture caveat (open)
 

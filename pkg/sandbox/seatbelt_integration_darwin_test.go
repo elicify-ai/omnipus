@@ -399,3 +399,45 @@ func TestDefaultPolicy_GrantsPerUserTempDir(t *testing.T) {
 	}
 	assert.True(t, found, "policy must grant the per-user temp dir %q", want)
 }
+
+// TestSeatbelt_RealChild_UDPFollowsThePortAllowList proves the UDP fix against a
+// real child and a real socket, with a control.
+//
+// Before this, the renderer emitted only TCP allows, so UDP was denied outright
+// no matter what the policy said. That silently broke raw DNS resolvers (dig,
+// nslookup, Go's pure-Go resolver) and QUIC/HTTP3. It stayed hidden because the
+// preamble's mDNSResponder allow covers ordinary name lookups, so DNS "worked"
+// right up until something bypassed the system resolver.
+func TestSeatbelt_RealChild_UDPFollowsThePortAllowList(t *testing.T) {
+	ws, policy := seatbeltTestWorkspace(t)
+
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+	go func() {
+		buf := make([]byte, 64)
+		for {
+			n, addr, readErr := conn.ReadFrom(buf)
+			if readErr != nil {
+				return
+			}
+			_, _ = conn.WriteTo([]byte("UDP-REPLY"), addr)
+			_ = n
+		}
+	}()
+
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	probe := fmt.Sprintf("echo ping | nc -u -w2 127.0.0.1 %d", port)
+
+	// Control: the port is NOT allow-listed, so UDP must be denied. Without
+	// this, the positive case below could pass simply because nothing enforces.
+	out, _ := runSandboxed(t, policy, ws, "/bin/bash", "-c", probe)
+	assert.NotContains(t, out, "UDP-REPLY", "UDP to a non-allow-listed port must be denied")
+
+	// Allow-listing the port must permit UDP, not just TCP.
+	allowed := policy
+	allowed.ConnectPortRules = []NetPortRule{{Port: uint16(port)}}
+	out, err = runSandboxed(t, allowed, ws, "/bin/bash", "-c", probe)
+	require.NoError(t, err, "UDP to an allow-listed port must succeed; output=%s", out)
+	assert.Contains(t, out, "UDP-REPLY")
+}

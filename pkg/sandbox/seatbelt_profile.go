@@ -213,6 +213,23 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	}
 	for _, r := range policy.ConnectPortRules {
 		b.WriteString(fmt.Sprintf("(allow network-outbound (remote tcp \"*:%d\"))\n", r.Port))
+		// UDP on the SAME port the operator already allow-listed.
+		//
+		// Emitting TCP alone denied UDP entirely, which is stricter than the
+		// policy says and stricter than Linux: Landlock ABI v4 restricts TCP
+		// bind/connect only, so UDP is completely unrestricted there. The
+		// operator chose a PORT; TCP-vs-UDP is a transport detail they never
+		// expressed an opinion about.
+		//
+		// What TCP-only actually broke, measured on this platform: raw DNS
+		// resolvers (dig, nslookup, Go's pure-Go resolver) on port 53, and
+		// QUIC/HTTP3 on 443. The mDNSResponder allow in the preamble covers
+		// the system resolver, which is why ordinary name lookups worked and
+		// hid this.
+		//
+		// This remains far stricter than Linux — UDP is confined to the
+		// allow-list rather than unrestricted.
+		b.WriteString(fmt.Sprintf("(allow network-outbound (remote udp \"*:%d\"))\n", r.Port))
 	}
 
 	return b.String(), nil

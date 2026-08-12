@@ -91,6 +91,11 @@ func TestRenderSeatbeltProfile(t *testing.T) {
 		assert.Contains(t, out, `(allow network-outbound (remote tcp "*:53"))`)
 		assert.Contains(t, out, `(allow network-outbound (remote tcp "*:80"))`)
 		assert.Contains(t, out, `(allow network-outbound (remote tcp "*:443"))`)
+
+		// UDP must ride along on the same allow-listed port. Emitting TCP alone
+		// denied UDP entirely — stricter than the policy says, and stricter than
+		// Linux, where Landlock does not restrict UDP at all.
+		assert.Contains(t, out, `(allow network-outbound (remote udp "*:443"))`)
 	})
 
 	t.Run("read-only rule emits only file-read", func(t *testing.T) {
