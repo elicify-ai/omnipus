@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestExtensionID_MatchesManifestKey guards against ExtensionID drifting
@@ -237,24 +238,23 @@ func TestSeed_EncoderJS_ContentGuards(t *testing.T) {
 	}
 }
 
-// TestSeed_Idempotent verifies a second Seed call to the same destRoot is a
-// no-op: it returns the same directory without error, and pre-existing
-// content is left untouched (including a deliberately "corrupted" file, to
-// prove Seed never overwrites on a repeat call).
+// TestSeed_Idempotent verifies a second Seed call over an INTACT seed is a
+// no-op: same directory, no error, no rewrite.
+//
+// CONTRACT CHANGE (2026-08-13): this test used to assert the opposite for
+// edited content — that a hand-modified manifest.json survived a reseed.
+// That "never overwrite" contract is exactly what stranded a persistent
+// install on a two-day-stale encoder.js when an embedded-asset change
+// shipped without a Version bump. The versioned seed dir is gateway-managed,
+// not operator-editable; drifted content now gets replaced (see
+// TestSeed_ReseedsOnContentDrift), and idempotence is only promised for a
+// seed that still matches the embedded assets.
 func TestSeed_Idempotent(t *testing.T) {
 	destRoot := t.TempDir()
 
 	dir1, err := Seed(destRoot)
 	if err != nil {
 		t.Fatalf("first Seed() error: %v", err)
-	}
-
-	// Simulate a user having hand-edited the seeded manifest after the
-	// first boot; a second Seed() call must NOT clobber it.
-	sentinelPath := filepath.Join(dir1, "manifest.json")
-	sentinel := []byte(`{"manifest_version":3,"version":"1.0.0","sentinel":"user-edited"}`)
-	if err = os.WriteFile(sentinelPath, sentinel, 0o644); err != nil {
-		t.Fatalf("write sentinel: %v", err)
 	}
 
 	dir2, err := Seed(destRoot)
@@ -264,14 +264,7 @@ func TestSeed_Idempotent(t *testing.T) {
 	if dir2 != dir1 {
 		t.Fatalf("second Seed() dir = %q, want %q (same as first call)", dir2, dir1)
 	}
-
-	got, err := os.ReadFile(sentinelPath)
-	if err != nil {
-		t.Fatalf("read sentinel after second Seed(): %v", err)
-	}
-	if string(got) != string(sentinel) {
-		t.Fatalf("second Seed() overwrote user-edited manifest.json; got %q, want untouched sentinel %q", got, sentinel)
-	}
+	assertSeedMatchesEmbedded(t, dir2)
 }
 
 // TestSeed_EmptyDestRoot verifies the explicit-error contract for a bad
@@ -384,4 +377,120 @@ func TestEmbeddedAssetsRequireVersionBump(t *testing.T) {
 			Version,
 		)
 	}
+}
+
+// assertSeedMatchesEmbedded fails unless every embedded file exists under
+// destDir byte-identical, and no staging/aside leftovers survive.
+func assertSeedMatchesEmbedded(t *testing.T, destDir string) {
+	t.Helper()
+	if err := fs.WalkDir(embeddedExt, embeddedRoot, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(embeddedRoot, p)
+		if err != nil {
+			return err
+		}
+		want, err := fs.ReadFile(embeddedExt, p)
+		if err != nil {
+			return err
+		}
+		got, err := os.ReadFile(filepath.Join(destDir, rel))
+		if err != nil {
+			t.Errorf("seeded file %s: %v", rel, err)
+			return nil
+		}
+		if string(got) != string(want) {
+			t.Errorf("seeded file %s differs from embedded content", rel)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk embedded FS: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(destDir))
+	if err != nil {
+		t.Fatalf("read captureext parent dir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".seed-captureext-") || strings.HasPrefix(e.Name(), ".stale-captureext-") {
+			t.Errorf("leftover staging/aside dir: %s", e.Name())
+		}
+	}
+}
+
+// TestSeed_ReseedsOnContentDrift is the runtime backstop for the 2026-08-13
+// incident: encoder.js changed without a Version bump, and the old
+// existence-only gate kept a persistent install loading the stale extension
+// forever while a fresh install got the new one. Seed must detect a seeded
+// dir whose content drifted from the embedded assets — a tampered file AND a
+// missing file — and atomically replace it with the embedded content.
+func TestSeed_ReseedsOnContentDrift(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		drift func(t *testing.T, destDir string)
+	}{
+		{"tampered file", func(t *testing.T, destDir string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(destDir, "encoder.js"), []byte("// stale pre-bump encoder\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"missing file", func(t *testing.T, destDir string) {
+			t.Helper()
+			if err := os.Remove(filepath.Join(destDir, "manifest.json")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			first, err := Seed(root)
+			if err != nil {
+				t.Fatalf("initial Seed() error: %v", err)
+			}
+			tc.drift(t, first)
+			second, err := Seed(root)
+			if err != nil {
+				t.Fatalf("Seed() after drift error: %v", err)
+			}
+			if second != first {
+				t.Fatalf("reseed changed the seed dir: %q != %q", second, first)
+			}
+			assertSeedMatchesEmbedded(t, second)
+		})
+	}
+}
+
+// TestSeed_NoRewriteWhenContentMatches proves the content-verified gate is
+// still idempotent: a second Seed over an intact seed must not rewrite any
+// file (observed via a sentinel mtime pushed into the past).
+func TestSeed_NoRewriteWhenContentMatches(t *testing.T) {
+	root := t.TempDir()
+	dir, err := Seed(root)
+	if err != nil {
+		t.Fatalf("initial Seed() error: %v", err)
+	}
+	sentinel := filepath.Join(dir, "encoder.js")
+	past := time.Now().Add(-24 * time.Hour)
+	if err = os.Chtimes(sentinel, past, past); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Seed(root)
+	if err != nil {
+		t.Fatalf("second Seed() error: %v", err)
+	}
+	if again != dir {
+		t.Fatalf("second Seed() returned %q, want %q", again, dir)
+	}
+	info, err := os.Stat(sentinel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(past) {
+		t.Errorf("encoder.js was rewritten by an idempotent Seed (mtime %v, want %v)", info.ModTime(), past)
+	}
+	assertSeedMatchesEmbedded(t, dir)
 }
