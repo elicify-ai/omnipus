@@ -42,8 +42,9 @@ var Available = true
 // for the two things that make that safe: (1) Pion rewrites SSRC/PayloadType
 // per-viewer-binding on every write, so the shared local track is decoupled
 // from whichever upstream ingest connection is currently feeding it, and (2)
-// this package additionally rewrites each packet's SEQUENCE NUMBER to a
-// session-lifetime monotonic counter per kind (videoSeq/audioSeq below) --
+// this package additionally rewrites each packet's SEQUENCE NUMBER by a
+// constant per-connection offset anchored on a session-lifetime high-water
+// mark per kind (videoLastOutSeq/audioLastOutSeq below) --
 // without that second rewrite, a fresh ingest connection's independently-
 // randomized packetizer sequence numbers cause every already-attached
 // viewer's SRTP receive window to silently discard the "replayed"/
@@ -86,15 +87,18 @@ type Session struct {
 	audioPktCount atomic.Int64
 	pliBursting   atomic.Bool
 
-	// videoSeq/audioSeq are session-lifetime, monotonically-incrementing
-	// OUTGOING sequence-number generators for the two shared local tracks,
-	// used by attachIngestTrack to rewrite each forwarded packet's sequence
-	// number before it reaches any viewer binding. See the long comment on
-	// attachIngestTrack in ingest.go for why this rewrite -- not just
-	// SSRC/PayloadType rewriting, which Pion already does per viewer binding
-	// -- is required for ingest replacement to work at all.
-	videoSeq atomic.Uint32
-	audioSeq atomic.Uint32
+	// videoLastOutSeq/audioLastOutSeq are the session-lifetime OUTGOING
+	// sequence-number high-water marks (RFC 1982 16-bit serial space, stored
+	// widened) for the two shared local tracks. attachIngestTrack anchors
+	// each new ingest connection's constant rewrite offset on them, and
+	// advances them only forward as packets are forwarded. See the long
+	// comment on attachIngestTrack in ingest.go for why a rewrite -- not
+	// just the SSRC/PayloadType rewriting Pion already does per viewer
+	// binding -- is required for ingest replacement to work at all, and the
+	// forward-loop comment there for why it must be a constant offset, never
+	// read-order renumbering (2026-08-13 corruption incident).
+	videoLastOutSeq atomic.Uint32
+	audioLastOutSeq atomic.Uint32
 
 	connSeq atomic.Int64
 
