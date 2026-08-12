@@ -21,7 +21,7 @@ package workspace
 // grant and this file is writable by a sandboxed child. See the note where the
 // field used to be, and mountstore.go.
 //
-// repository was deleted with no back-compat (FR-9.1, ADR-061 D7, matching
+// repository was deleted with no back-compat (FR-9.1, ADR-063 D7, matching
 // the ADR-035/037 precedent) — do not reintroduce it. Git linkage is now a
 // convenience on top of mounting: clone to an operator-chosen location, then
 // mount it.
@@ -82,7 +82,7 @@ type Workspace struct { // not-wire-format: internal disk-cache struct, mapped t
 	// fspolicy.DeniedPathsFor re-admits the whole `workspaces` root for any
 	// re-rooted workspace turn, so `bash` can append to its own workspace
 	// record. Storing the grant list here let a child mount "/" for itself and
-	// then write anywhere — the exact defeat of ADR-060's default-deny-writes
+	// then write anywhere — the exact defeat of ADR-062's default-deny-writes
 	// property. Re-validating on load does not close it, because host_path "/"
 	// is a legitimate operator-reachable value (FR-7.6 warn-and-allow); the
 	// list has to be unreachable. It lives in

@@ -26,7 +26,7 @@ import (
 // the real EffectiveFSPolicy + ResolvePath + PathHandle.ReadFile with the
 // default restrict=true, the lowercase spelling was denied while the uppercase
 // spelling returned the live gateway bearer token, the master key, and the
-// decrypted-credential store; with a workspace mount in play (ADR-061 D4) the
+// decrypted-credential store; with a workspace mount in play (ADR-063 D4) the
 // same trick WROTE config.json and destroyed master.key.
 //
 // The kernel is not a backstop here. Seatbelt does match case-insensitively,

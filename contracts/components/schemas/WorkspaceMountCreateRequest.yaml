@@ -1,7 +1,7 @@
 type: object
 additionalProperties: false
 description: >
-  Request body for POST /workspaces/{id}/mounts (FR-7.1, ADR-061 D4). Creates
+  Request body for POST /workspaces/{id}/mounts (FR-7.1, ADR-063 D4). Creates
   a new named write-grant on a real local folder. See WorkspaceMount.yaml for
   the exact shape rules `name` and `host_path` must satisfy.
 required:

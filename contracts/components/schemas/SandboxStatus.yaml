@@ -70,7 +70,7 @@ properties:
     type: string
     enum: [confined, open]
     description: >
-      Which ADR-060 filesystem model is active. "confined" enumerates the
+      Which ADR-062 filesystem model is active. "confined" enumerates the
       paths that may be read and executed; "open" leaves reads and execution
       unrestricted apart from the secret set, and confines writes exactly as
       "confined" does. This never affects what an agent may WRITE.

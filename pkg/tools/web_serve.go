@@ -643,7 +643,7 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 		return auditErr
 	}
 
-	// ADR-061 FR-3.5: the dev-server child carries THIS TURN's policy, derived
+	// ADR-063 FR-3.5: the dev-server child carries THIS TURN's policy, derived
 	// from the same authored FSPolicy that ResolvePath used to validate rawPath
 	// above — so the served directory and the child's kernel write grant come
 	// from one decision rather than two.
@@ -766,7 +766,7 @@ func (t *WebServeTool) proxyAddr() string {
 
 // spawnDevChild starts the dev-server background child.
 //
-// kernelPolicy is the turn's per-turn kernel policy (ADR-061 FR-3.5), or nil
+// kernelPolicy is the turn's per-turn kernel policy (ADR-063 FR-3.5), or nil
 // when no kernel policy is in force — in which case the child runs under the
 // boot profile exactly as it did before per-turn confinement was wired up.
 func (t *WebServeTool) spawnDevChild(

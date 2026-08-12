@@ -1,6 +1,6 @@
 # Spec — Filesystem model inversion (`open` / `confined`)
 
-- **Implements:** [ADR-060](../architecture/ADR-060-filesystem-read-exec-model-inversion.md)
+- **Implements:** [ADR-062](../architecture/ADR-062-filesystem-read-exec-model-inversion.md)
 - **Status:** Draft (pre-implementation)
 - **Date:** 2026-08-12
 - **Platforms:** macOS (Seatbelt), Linux (Landlock), Windows (no backend)
@@ -147,7 +147,7 @@ not defence in depth, it is unverified code.
 - **FR-7.2** `SandboxStatus` gains `filesystem_model`. Contract-first: `contracts/components/schemas/SandboxStatus.yaml` → `scripts/gen-contracts.sh` → generated diff in the same commit.
 - **FR-7.3** `renderSandboxMode` reflects the model, with the accompanying **spec v7 update** its doc comment requires.
 
-### FR-8 — Test dispositions (ADR-060 §7.3)
+### FR-8 — Test dispositions (ADR-062 §7.3)
 
 Every listed test gets an explicit disposition. **No test may be deleted without a replacement or a tracked issue.**
 
@@ -183,7 +183,7 @@ Given filesystem_model is "open" on macOS
  When an agent reads $OMNIPUS_HOME/master.key
  Then the read is denied
 ```
-*Fails if the deny block is emitted before the policy allows — the exact ordering bug ADR-060 §4.1 documents.*
+*Fails if the deny block is emitted before the policy allows — the exact ordering bug ADR-062 §4.1 documents.*
 
 ### S-3b — the read-deny is not enough (FR-3.2a)
 ```gherkin
@@ -229,7 +229,7 @@ Given filesystem_model is "open" on Linux with Landlock
 ```gherkin
 Given filesystem_model is "confined"
  When the policy is computed and rendered
- Then it is byte-identical to the pre-ADR-060 output
+ Then it is byte-identical to the pre-ADR-062 output
 ```
 
 ### S-7 — Multi-tenant guard

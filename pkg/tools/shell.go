@@ -729,7 +729,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	}
 	lim.WorkspaceDir = cwd
 
-	// ADR-061 FR-3.5: carry THIS TURN's filesystem policy to the kernel, so the
+	// ADR-063 FR-3.5: carry THIS TURN's filesystem policy to the kernel, so the
 	// child bash spawns is confined the same way the app-layer path resolver
 	// confines this same turn's read_file/write_file.
 	//
@@ -777,7 +777,7 @@ func (t *ExecTool) turnKernelPolicy(ctx context.Context) (*sandbox.SandboxPolicy
 	// restrict is t.restrictToWorkspace, not the hardcoded true that cwd
 	// resolution uses: cwd confinement is a separate, deliberately stricter
 	// decision (see resolveCWD's note 3), while this is the turn's real posture.
-	// Scope does not change the derived rules anyway — post-ADR-060 it governs
+	// Scope does not change the derived rules anyway — post-ADR-062 it governs
 	// writes through the work dir, which is identical either way (FR-2.5).
 	authored, err := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace)
 	if err != nil {

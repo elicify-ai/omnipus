@@ -12,7 +12,7 @@ import (
 
 // KernelDeniedPathsFor is DeniedPathsFor rendered at the granularity a KERNEL
 // policy needs: an explicit path list, precise enough to reproduce what
-// IsCarveOut answers per path. ADR-061 FR-3.3 ("carried across EXACTLY").
+// IsCarveOut answers per path. ADR-063 FR-3.3 ("carried across EXACTLY").
 //
 // # Why DeniedPathsFor is not enough on its own
 //

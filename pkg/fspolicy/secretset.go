@@ -10,7 +10,7 @@ import (
 )
 
 // SecretEntriesRelative is THE definition of what must never be reachable
-// inside $OMNIPUS_HOME. ADR-061 D3, spec FR-3.1/FR-3.2. It is the union of two
+// inside $OMNIPUS_HOME. ADR-063 D3, spec FR-3.1/FR-3.2. It is the union of two
 // lists that used to live apart, and each half protected something the other
 // missed:
 //

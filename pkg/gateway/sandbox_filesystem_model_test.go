@@ -63,7 +63,7 @@ func TestApplySandbox_RejectsUnknownModel(t *testing.T) {
 
 // TestApplySandbox_DefaultModelIsOpen pins the shipped posture.
 //
-// This test previously asserted "confined", which was correct while ADR-060 was
+// This test previously asserted "confined", which was correct while ADR-062 was
 // landing inert so the "confined is unchanged" guarantee could be measured
 // against an untouched baseline. That gate has passed and the operator decided
 // open is the default for every install, upgrading ones included.
@@ -76,7 +76,7 @@ func TestApplySandbox_DefaultModelIsOpen(t *testing.T) {
 	cfg := config.DefaultConfig()
 	if got := cfg.Sandbox.FilesystemModel; got != string(config.FilesystemModelOpen) {
 		t.Fatalf("seeded filesystem_model = %q, want %q — this is the change that makes agents "+
-			"able to run installed toolchains; without it ADR-060 has no effect at all",
+			"able to run installed toolchains; without it ADR-062 has no effect at all",
 			got, config.FilesystemModelOpen)
 	}
 }

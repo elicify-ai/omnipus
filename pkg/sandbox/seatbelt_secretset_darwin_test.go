@@ -19,7 +19,7 @@ import (
 
 // The app layer's carve-out check (tools.ResolvePath) stops read_file and
 // send_file. It does NOT stop `bash`, which is a spawned child — that is the
-// kernel layer's job, and under ADR-060's open-read model the ONLY thing
+// kernel layer's job, and under ADR-062's open-read model the ONLY thing
 // standing between a child and any file is the deny block.
 //
 // So the two entries review found missing from the secret set need proving

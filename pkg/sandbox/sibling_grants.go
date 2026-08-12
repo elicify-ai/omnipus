@@ -12,7 +12,7 @@ import (
 )
 
 // ExpandRulesExcluding rewrites a rule list so that none of deniedPaths falls
-// inside any granted tree, WITHOUT using a deny primitive. ADR-060 §4.2, spec
+// inside any granted tree, WITHOUT using a deny primitive. ADR-062 §4.2, spec
 // FR-4.5.
 //
 // # Why this exists
@@ -31,7 +31,7 @@ import (
 // toolchain is still covered automatically by the untouched grants around it.
 //
 // A full filesystem walk would be both slow and a reintroduction of exactly the
-// enumeration defect ADR-060 exists to remove: coverage would then depend on
+// enumeration defect ADR-062 exists to remove: coverage would then depend on
 // having listed every path in advance, which is the thing that cannot be done.
 //
 // # Failure is not an option here, and that is intentional

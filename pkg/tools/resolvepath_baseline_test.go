@@ -229,7 +229,7 @@ func TestBaseline_Confined_ReadWriteMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("outside WorkDir (unrelated dir): read now ALLOWED (ADR-061 / spec unified-file-access-and-mounts FR-2.2 — reads are open outside WorkDir, regardless of Scope)", func(t *testing.T) {
+	t.Run("outside WorkDir (unrelated dir): read now ALLOWED (ADR-063 / spec unified-file-access-and-mounts FR-2.2 — reads are open outside WorkDir, regardless of Scope)", func(t *testing.T) {
 		h, err := ResolvePath(context.Background(), policy, "baseline", "", FSOpRead, tr.outsideFile)
 		if err != nil {
 			t.Fatalf("FR-2.2: expected a Confined read outside WorkDir to succeed, got: %v", err)
@@ -334,7 +334,7 @@ func TestBaseline_Confined_ReadWriteMatrix(t *testing.T) {
 // ============================================================================
 
 // TestBaseline_Unrestricted_ReadWriteMatrix is the unrestricted-scope
-// counterpart. UPDATED for ADR-061 / spec unified-file-access-and-mounts
+// counterpart. UPDATED for ADR-063 / spec unified-file-access-and-mounts
 // FR-2.2/FR-2.5, which this file's own original comment named as the
 // expected future change: a write OUTSIDE WorkDir under Unrestricted no
 // longer succeeds like a read does — ResolvePath now dispatches on op, and
@@ -364,7 +364,7 @@ func TestBaseline_Unrestricted_ReadWriteMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("outside WorkDir, non-carve-out: write now DENIED under Unrestricted too (ADR-061 / spec unified-file-access-and-mounts FR-2.2/FR-2.5 — this test's own doc comment named this as the expected future change)", func(t *testing.T) {
+	t.Run("outside WorkDir, non-carve-out: write now DENIED under Unrestricted too (ADR-063 / spec unified-file-access-and-mounts FR-2.2/FR-2.5 — this test's own doc comment named this as the expected future change)", func(t *testing.T) {
 		target := filepath.Join(tr.outside, "written_by_agent.txt")
 		_, err := ResolvePath(context.Background(), policy, "baseline", "", FSOpWrite, target)
 		if !errors.Is(err, ErrOutsideScope) {
@@ -471,7 +471,7 @@ func TestBaseline_OwnTreeException_BothShapes_ThroughRealCallPath(t *testing.T) 
 // TestBaseline_FSOp_IsNowConsulted — was TestBaseline_FSOp_CurrentlyIgnored,
 // the direct, minimal proof of task item 4. Its own doc comment predicted
 // exactly this: "This test WILL legitimately need updating once FR-2
-// lands... that is expected, not a regression." ADR-061 / spec
+// lands... that is expected, not a regression." ADR-063 / spec
 // unified-file-access-and-mounts FR-2.1/FR-2.2 has now landed (the `_ = op`
 // line is deleted, resolvepath.go), so this test now asserts the OPPOSITE
 // of its original name: op DOES drive ResolvePath's decision for a path

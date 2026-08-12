@@ -371,7 +371,7 @@ func TestFilesystemTool_ListDir_DefaultPath(t *testing.T) {
 
 // TestFilesystemTool_ReadFile_SymlinkEscape_NowOpen — was
 // TestFilesystemTool_ReadFile_RejectsSymlinkEscape ("block paths that look
-// inside workspace but point outside via symlink"). ADR-061 / spec
+// inside workspace but point outside via symlink"). ADR-063 / spec
 // unified-file-access-and-mounts FR-2.2 retires this for READS specifically:
 // a read through a symlink escape now succeeds, exactly like an ordinary
 // outside-work-dir read — reads are open regardless of how the outside
@@ -568,7 +568,7 @@ func TestRootRW_Read_Directory(t *testing.T) {
 	assert.Error(t, err, "expected error when reading a directory as a file")
 }
 
-// TestHostRW_Write_ParentDirMissing_OutsideWorkDir_Denied — ADR-061 / spec
+// TestHostRW_Write_ParentDirMissing_OutsideWorkDir_Denied — ADR-063 / spec
 // unified-file-access-and-mounts FR-2.2/FR-2.5: writes are confined to the
 // work dir or a mount regardless of policy.Scope, so a host-mode
 // (Unrestricted) write to a location outside WorkDir — even one whose parent
@@ -620,7 +620,7 @@ func TestRootRW_Write_ParentDirMissing(t *testing.T) {
 
 // TestHostRW_Write_OutsideWorkDir_Denied — was TestHostRW_Write, asserting
 // that a host-mode (Unrestricted) write to a path outside WorkDir succeeds.
-// ADR-061 / spec unified-file-access-and-mounts FR-2.2/FR-2.5 changes this:
+// ADR-063 / spec unified-file-access-and-mounts FR-2.2/FR-2.5 changes this:
 // writes are confined to the work dir or a mount regardless of Scope, so
 // this now must be refused. This is the write half of the FR-2 headline pair
 // — see TestResolvePath_HeadlinePair_ReadSucceeds_WriteDenied_SamePath for
@@ -695,7 +695,7 @@ func TestRootRW_Write(t *testing.T) {
 }
 
 // TestWhitelistFs_AllowsMatchingPaths verifies that the AllowReadPaths
-// regex axis still grants a matching outside path. ADR-061 / spec
+// regex axis still grants a matching outside path. ADR-063 / spec
 // unified-file-access-and-mounts FR-2.2 UPDATE: the second half of this
 // test used to assert that a NON-whitelisted outside path is blocked for a
 // read — that assertion is retired by design. Reads are now open outside
@@ -738,7 +738,7 @@ func TestWhitelistFs_AllowsMatchingPaths(t *testing.T) {
 }
 
 // TestWhitelistFs_ReadSymlinkEscapeInAllowedDir_NowOpen — was
-// TestWhitelistFs_BlocksSymlinkEscapeInAllowedDir. ADR-061 / spec
+// TestWhitelistFs_BlocksSymlinkEscapeInAllowedDir. ADR-063 / spec
 // unified-file-access-and-mounts FR-2.2: a read through this symlink now
 // succeeds — reads are open outside the work dir regardless of pattern
 // match or symlink target. The WRITE-side counterpart of this exact

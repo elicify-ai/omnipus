@@ -52,7 +52,7 @@ func TestTools_RouteThroughResolvePath(t *testing.T) {
 			t.Errorf("expected file content, got: %s", ok.ForLLM)
 		}
 
-		// ADR-061 / spec unified-file-access-and-mounts FR-2.2: reads are
+		// ADR-063 / spec unified-file-access-and-mounts FR-2.2: reads are
 		// open outside the work dir (minus the secret set) — this used to
 		// assert the opposite (outside-scope read refused). The tool must
 		// still actually route through ResolvePath and perform real I/O,
@@ -143,7 +143,7 @@ func TestTools_RouteThroughResolvePath(t *testing.T) {
 // TestFilesystemScope_ReadWideWriteConfined_SamePath — was
 // TestFilesystemScope_SymmetricReadAndWrite (spec test 34 / FR-032:
 // "filesystem_scope is a single symmetric tri-state governing both read and
-// write"). ADR-061 / spec unified-file-access-and-mounts FR-2.2/FR-2.5
+// write"). ADR-063 / spec unified-file-access-and-mounts FR-2.2/FR-2.5
 // retires that symmetry ON PURPOSE — it is the single change the whole spec
 // exists to make: a read outside work/ now SUCCEEDS (minus the secret set)
 // while a write to the SAME path under the SAME Confined scope is still

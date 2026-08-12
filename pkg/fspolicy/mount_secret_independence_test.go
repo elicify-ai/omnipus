@@ -13,7 +13,7 @@ import (
 // still be unable to read cli.token or write config.json or master.key...
 // if it ever fails, FR-7.6 must revert to refusal."
 //
-// FR-7.6 (ADR-061 D6, operator decision 2026-08-12: "warn and allow applies
+// FR-7.6 (ADR-063 D6, operator decision 2026-08-12: "warn and allow applies
 // to all but the omnipus directory") allows mounting a target that CONTAINS
 // $OMNIPUS_HOME — $HOME being the common case, since $OMNIPUS_HOME defaults
 // to ~/.omnipus. That reasoning rests entirely on the secret set being

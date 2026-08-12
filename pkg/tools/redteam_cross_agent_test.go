@@ -69,7 +69,7 @@ type crossAgentSetup struct {
 func newCrossAgentSetup(t *testing.T) *crossAgentSetup {
 	t.Helper()
 	home := t.TempDir()
-	// ADR-061 / spec unified-file-access-and-mounts FR-2.2: reads (and, per
+	// ADR-063 / spec unified-file-access-and-mounts FR-2.2: reads (and, per
 	// FR-2.3/FR-2.3a, sends) are no longer confined by Scope/WorkDir alone —
 	// the within-WorkDir check this file's own doc comment describes as
 	// "the" C5-DIRECT/C5-SYMLINK control is deliberately narrowed to writes.

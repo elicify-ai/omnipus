@@ -46,7 +46,7 @@ func writeRawWorkspaceRecord(t *testing.T, home string, rec map[string]any) {
 // and — before this fix — AllowedMountRoots read that back verbatim, handed it
 // to FSPolicy.AllowedRoots, and every subsequent write went anywhere on disk:
 // ~/.ssh/authorized_keys, /usr/local/bin, anything. That is a self-service
-// write grant, and it defeats the one property ADR-060 keeps.
+// write grant, and it defeats the one property ADR-062 keeps.
 //
 // Note what this test does NOT rely on: it does not assert that the hostile
 // entry is REJECTED by validation. "/" is a perfectly legitimate mount target

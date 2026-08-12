@@ -51,7 +51,7 @@ type FilesystemModel string
 
 const (
 	// FilesystemModelConfined enumerates readable and executable paths. The
-	// behaviour of every release before ADR-060.
+	// behaviour of every release before ADR-062.
 	FilesystemModelConfined FilesystemModel = "confined"
 
 	// FilesystemModelOpen leaves reads and execution unrestricted apart from
@@ -317,14 +317,14 @@ type OmnipusSandboxConfig struct {
 
 	// FilesystemModel selects how the sandbox treats READS and PROGRAM
 	// EXECUTION. Writes are confined identically under both values — this key
-	// never widens what an agent can modify. ADR-060.
+	// never widens what an agent can modify. ADR-062.
 	//
 	//   "confined" — reads and execution are allowed only on enumerated paths.
 	//   "open"     — reads and execution are unrestricted, except for the
 	//                secret set (master.key, credentials.json, config.json,
 	//                cli.token, entities/), which stays unreachable.
 	//
-	// "confined" was the only behaviour before ADR-060 and it does not work in
+	// "confined" was the only behaviour before ADR-062 and it does not work in
 	// practice: the set of paths a working toolchain reads cannot be listed in
 	// advance, so every tool an operator installs breaks silently until someone
 	// diagnoses a bare "operation not permitted" and edits allowed_exec_paths.

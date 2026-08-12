@@ -15,7 +15,7 @@ import (
 // TestSeededPolicy_AddMCPServerDeniedByDefault is the regression for the third
 // privilege escalation: an MCP server definition names a program the gateway
 // launches, and that process is not confined by the sandbox. config.json is in
-// the ADR-060 secret set precisely so an agent cannot write an MCP server entry
+// the ADR-062 secret set precisely so an agent cannot write an MCP server entry
 // with write_file — add_mcp_server wrote the same setting through the API, and
 // was seeded "allow".
 //

@@ -991,7 +991,7 @@ func TestHandleWorkspaces_OwnerImmutableOnPut(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// repository retirement tests (FR-9.2, ADR-061 D7)
+// repository retirement tests (FR-9.2, ADR-063 D7)
 // ---------------------------------------------------------------------------
 
 // TestHandleWorkspaces_RepositoryFieldRejected_POST verifies FR-9.2: POST
@@ -999,7 +999,7 @@ func TestHandleWorkspaces_OwnerImmutableOnPut(t *testing.T) {
 // carries a "repository" field at all, regardless of its value — the field
 // is retired from the wire entirely, not merely URL-validated. A request
 // with no "repository" key at all is unaffected.
-// Traces to: FR-9.2, ADR-061 D7 (repository is deleted, not repurposed).
+// Traces to: FR-9.2, ADR-063 D7 (repository is deleted, not repurposed).
 func TestHandleWorkspaces_RepositoryFieldRejected_POST(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
@@ -1190,7 +1190,7 @@ func TestHandleWorkspacePut_FullFieldRoundTrip(t *testing.T) {
 // TestHandleWorkspaces_RepositoryFieldRejected_PUT verifies FR-9.2: PUT
 // /api/v1/workspaces/{id} 400s via raw-body sniff whenever the request body
 // carries a "repository" field at all, regardless of its value.
-// Traces to: FR-9.2, ADR-061 D7 (repository is deleted, not repurposed).
+// Traces to: FR-9.2, ADR-063 D7 (repository is deleted, not repurposed).
 func TestHandleWorkspaces_RepositoryFieldRejected_PUT(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	projID := createWorkspaceViaAPI(t, api, "RepoPUTProject", "")

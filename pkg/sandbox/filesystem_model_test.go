@@ -56,7 +56,7 @@ func TestParseFilesystemModel(t *testing.T) {
 	}
 }
 
-// TestDefaultPolicy_ConfinedIsUnchanged is the safety net the whole of ADR-060
+// TestDefaultPolicy_ConfinedIsUnchanged is the safety net the whole of ADR-062
 // rests on (spec FR-2.5). DefaultPolicy must remain exactly the confined model.
 // If this fails, nothing else in the ADR is safe to land: the baseline every
 // other assertion is measured against has moved.
@@ -135,7 +135,7 @@ func TestDefaultPolicy_DeniedPathsUnderBothModels(t *testing.T) {
 
 // TestSecretPaths pins the BOOT set — the entries that need no turn context.
 //
-// The assertions about agents/ changed under ADR-061 and the change is the
+// The assertions about agents/ changed under ADR-063 and the change is the
 // interesting part. Before, `agents` was simply not a secret. Now it is part of
 // the merged vocabulary, but it is NOT in the boot set, because excluding it
 // without a work dir to compare against locks every agent out of its own

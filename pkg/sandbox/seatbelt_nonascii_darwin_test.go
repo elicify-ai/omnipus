@@ -60,7 +60,7 @@ func nbspSecretDir(t *testing.T) (dir, secret string) {
 }
 
 // denyProfileFor builds a profile with the EXACT shape renderSeatbeltProfile
-// produces under the ADR-060 open-read model — system preamble, blanket
+// produces under the ADR-062 open-read model — system preamble, blanket
 // (allow file-read*), then the secret-set deny last — with the deny path
 // emitted verbatim as supplied.
 //

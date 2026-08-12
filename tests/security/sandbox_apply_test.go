@@ -89,7 +89,7 @@ func TestSandboxApply_StatusEndpointReflectsBackend(t *testing.T) {
 	// "seatbelt" was missing here, so this test failed on every Mac from the
 	// day the macOS backend shipped — a hardcoded list of known values going
 	// stale the moment a new one is added. That is the same defect class
-	// ADR-060 is about, in a test rather than a policy: enumerate a set that
+	// ADR-062 is about, in a test rather than a policy: enumerate a set that
 	// grows, and the omission shows up as a failure somewhere unrelated.
 	knownBackends := []string{"linux", "landlock", "seatbelt", "fallback", "windows", "none"}
 	matched := false

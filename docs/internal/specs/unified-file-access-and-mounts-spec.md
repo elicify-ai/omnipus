@@ -1,6 +1,6 @@
 # Spec — unified file-access engine and workspace mounts
 
-- **Implements:** [ADR-061](../architecture/ADR-061-unified-file-access-engine-and-mounts.md)
+- **Implements:** [ADR-063](../architecture/ADR-063-unified-file-access-engine-and-mounts.md)
 - **Requirements:** [file-access requirements 2026-08-12](file-access-requirements-2026-08-12.md)
 - **Status:** Draft (pre-implementation)
 - **Date:** 2026-08-12
@@ -36,7 +36,7 @@ the Library UI (depends on this, ships after).
 > skipped by running work in parallel is not a gate. Later waves must not start
 > until the baseline for what they touch is green.
 
-**Non-negotiable gate, inherited from ADR-060 and restated because it is the
+**Non-negotiable gate, inherited from ADR-062 and restated because it is the
 only thing standing between this change and a silent regression:** before the
 unified engine becomes the decision path, the CURRENT behaviour of both layers
 must be captured as tests that pass against today's code. The unified engine
@@ -87,7 +87,7 @@ not an improvement.
   |---|---|
   | `FSOpRead`, `FSOpList`, `FSOpSend` | allowed anywhere except the secret set |
   | `FSOpWrite` | work dir or a mount only |
-  | `FSOpExec` | per the ADR-060 model |
+  | `FSOpExec` | per the ADR-062 model |
   | `FSOpServe` | work dir or a mount only (unchanged from today — see FR-2.3b) |
 
 - **FR-2.3** **There is no path-based "publish" restriction. OPERATOR DECISION,
@@ -156,12 +156,12 @@ not an improvement.
 
   The set is data about the `$OMNIPUS_HOME` layout, so the leaf is where it
   belongs regardless. `sandbox.SecretEntriesRelative` becomes an alias for the
-  fspolicy definition (the same alias treatment ADR-060 gave the older
+  fspolicy definition (the same alias treatment ADR-062 gave the older
   `SecretFilesRelative`), so no call site churns and there is still exactly one
   list. `fspolicy.buildCarveOuts` is folded into it, not kept in sync.
 - **FR-3.2** The merged set is the UNION of both lists: `master.key`,
   `credentials.json`, `config.json`, `cli.token`, `entities/`, `agents/`,
-  `workspaces/`, plus the ADR-060 backup prefixes.
+  `workspaces/`, plus the ADR-062 backup prefixes.
 - **FR-3.3** The per-root own-tree exception is carried across EXACTLY, not
   approximated. A path is exempt from carve-out root R only when the work dir is
   a proper descendant of that same R.

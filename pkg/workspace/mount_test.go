@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 //
-// Tests for the workspace mount lifecycle (spec FR-5 through FR-8, ADR-061
+// Tests for the workspace mount lifecycle (spec FR-5 through FR-8, ADR-063
 // D4/D6). Build tags: goolm,stdjson (CGO_ENABLED=0).
 // Run: CGO_ENABLED=0 go test -tags goolm,stdjson -run 'Mount' -p 1 ./pkg/workspace/
 

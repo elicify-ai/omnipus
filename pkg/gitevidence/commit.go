@@ -67,7 +67,7 @@ type CommitResult struct {
 	// their content matched the registered sensitive-value scan (MIN-5).
 	ExcludedForSecret []string
 	// ExcludedSymlink lists write-set entries that were NOT staged because
-	// the path itself is a symlink (spec FR-5.5, ADR-061 D4): a workspace
+	// the path itself is a symlink (spec FR-5.5, ADR-063 D4): a workspace
 	// mount is materialized as a symlink work/<name> -> host_path, and a
 	// symlink must never be read-and-restaged as if it were the file/tree it
 	// points at — that would either error out reading a directory (a
@@ -196,7 +196,7 @@ func (r *Repo) Commit(boundary Boundary, meta CommitMeta, writeSet []string) (*C
 	for _, f := range toStage {
 		abs := filepath.Join(r.dir, filepath.FromSlash(f.relPath))
 
-		// Spec FR-5.5 (ADR-061 D4): a workspace mount is materialized as a
+		// Spec FR-5.5 (ADR-063 D4): a workspace mount is materialized as a
 		// symlink work/<name> -> host_path. VERIFIED (not assumed — see the
 		// package's git-status experiment this guard replaced): go-git's own
 		// wt.Status() already treats a symlink as ONE atomic, opaque entry

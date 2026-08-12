@@ -82,7 +82,7 @@ func TestDefaultChildPolicy_GrantsSubdirsRWX(t *testing.T) {
 // appear in any rule.
 func TestDefaultChildPolicy_OmitsSecretFiles(t *testing.T) {
 	home := t.TempDir()
-	// Seed every secret. The set is no longer files-only: ADR-060 added
+	// Seed every secret. The set is no longer files-only: ADR-062 added
 	// entities/, a DIRECTORY, so seeding blindly with WriteFile would create a
 	// regular file named "entities" and the carve-out would be tested against a
 	// shape that never occurs on a real install.
@@ -98,7 +98,7 @@ func TestDefaultChildPolicy_OmitsSecretFiles(t *testing.T) {
 		}
 	}
 	// The control must be a file that is genuinely NOT in the secret set.
-	// This was config.json until ADR-060 widened the set to include it — a
+	// This was config.json until ADR-062 widened the set to include it — a
 	// child that can write config.json can set sandbox.mode: off and remove its
 	// own confinement on the next boot. Keeping config.json as the "must still
 	// be granted" control would have asserted the hole stays open.
@@ -107,7 +107,7 @@ func TestDefaultChildPolicy_OmitsSecretFiles(t *testing.T) {
 		t.Fatalf("write notes.txt: %v", err)
 	}
 
-	// agents/ vs entities/ — the distinction ADR-060 §4.0 turns on. agents/
+	// agents/ vs entities/ — the distinction ADR-062 §4.0 turns on. agents/
 	// holds agent WORKSPACES and must stay writable; entities/ holds their tool
 	// POLICY and must not. Naming the wrong one would break every agent's
 	// working directory while looking like hardening, so both are asserted.

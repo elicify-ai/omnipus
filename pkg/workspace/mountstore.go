@@ -41,7 +41,7 @@ import (
 //
 // Net effect: a child appended {"name":"x","host_path":"/"} to its own
 // workspace record and every subsequent write went anywhere on the disk. That
-// defeats the one property ADR-060 keeps — writes stay default-deny.
+// defeats the one property ADR-062 keeps — writes stay default-deny.
 //
 // Re-validating on load does NOT fix it. host_path "/" is a LEGITIMATE,
 // operator-reachable value (FR-7.6 warn-and-allow), so re-running

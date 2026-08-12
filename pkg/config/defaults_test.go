@@ -43,7 +43,7 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	//
 	// add_mcp_server writes a program definition that the gateway then LAUNCHES,
 	// and the launched process is not confined by the sandbox. config.json is in
-	// the ADR-060 secret set precisely so an agent cannot write such an entry
+	// the ADR-062 secret set precisely so an agent cannot write such an entry
 	// with write_file; this tool wrote the same setting through the API, which
 	// made the file-level protection moot. It is denied at the CEILING (not just
 	// per-agent) on purpose: under most-restrictive-wins, a ceiling deny means an

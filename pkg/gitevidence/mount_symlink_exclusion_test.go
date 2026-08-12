@@ -19,7 +19,7 @@ import (
 // regression: "A test MUST assert an evidence commit taken while a mount
 // exists contains no file from inside the mount."
 //
-// A workspace mount (ADR-061 D4) materializes as a symlink work/<name> ->
+// A workspace mount (ADR-063 D4) materializes as a symlink work/<name> ->
 // host_path. This test simulates that directly (no dependency on
 // pkg/workspace — a plain os.Symlink is exactly what workspace.CreateMount
 // produces) and proves two things that were VERIFIED empirically, not

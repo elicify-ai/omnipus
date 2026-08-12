@@ -2,7 +2,7 @@
 
 - **Status:** Interview output, operator-confirmed 2026-08-12. Pre-ADR.
 - **Supersedes in intent:** the `repository` field on Workspace (to be removed).
-- **Depends on:** [ADR-060](../architecture/ADR-060-filesystem-read-exec-model-inversion.md) (reads/exec open, secret set unreachable).
+- **Depends on:** [ADR-062](../architecture/ADR-062-filesystem-read-exec-model-inversion.md) (reads/exec open, secret set unreachable).
 
 This records what was agreed in the requirements interview, in the operator's own
 terms. It is deliberately NOT a design: no file layout, no API shapes, no
@@ -58,7 +58,7 @@ default for every workspace that does not mount anything.
 intent — agents default to `RestrictToWorkspace: true`, and the app layer
 already carves out `agents/`, `workspaces/`, `entities/`, `master.key` and
 `credentials.json`. Stated here because the kernel layer was broader than this
-intent, and the ADR-060 work narrowed it toward it.
+intent, and the ADR-062 work narrowed it toward it.
 
 ## 4. Mounts
 

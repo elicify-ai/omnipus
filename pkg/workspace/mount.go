@@ -17,7 +17,7 @@ import (
 )
 
 // Mount is the canonical on-disk representation of a workspace mount — a
-// named write-grant on a real local folder (spec FR-5, ADR-061 D4). Stored in
+// named write-grant on a real local folder (spec FR-5, ADR-063 D4). Stored in
 // the mount store under $OMNIPUS_HOME/entities/mounts/<workspaceID>.json and
 // deliberately NOT on the workspace record, which a sandboxed child can write
 // — see mountstore.go's leading comment for the full chain that made storing
@@ -53,7 +53,7 @@ var (
 	ErrMountNameCollision = errors.New("workspace: mount name collision")
 
 	// ErrMountRefused is returned when the resolved target IS or lies
-	// INSIDE $OMNIPUS_HOME (FR-7.5, ADR-061 D6). This is the ONE refusal —
+	// INSIDE $OMNIPUS_HOME (FR-7.5, ADR-063 D6). This is the ONE refusal —
 	// every other target warns and proceeds (FR-7.6).
 	ErrMountRefused = errors.New("workspace: mount target refused")
 
@@ -252,8 +252,8 @@ func isBroadMountTarget(resolved string) bool {
 }
 
 // CheckMountTarget resolves rawHostPath to its realpath and classifies it
-// against omnipusHome (spec FR-7.4-FR-7.7, ADR-061 D6, operator decision
-// 2026-08-12 overruling ADR-061 D6's original wider-refusal text: "warn and
+// against omnipusHome (spec FR-7.4-FR-7.7, ADR-063 D6, operator decision
+// 2026-08-12 overruling ADR-063 D6's original wider-refusal text: "warn and
 // allow applies to all but the omnipus directory").
 //
 //   - REFUSES (FR-7.5, non-nil error wrapping ErrMountRefused) only when the
@@ -290,7 +290,7 @@ func CheckMountTarget(rawHostPath, omnipusHome string) (resolved string, warning
 			relation = "IS"
 		}
 		return "", "", fmt.Errorf(
-			"%w: %q %s the Omnipus data directory (%q) — mounting it would make config.json and master.key writable and let an agent disable its own sandbox (FR-7.5, ADR-061 D6)",
+			"%w: %q %s the Omnipus data directory (%q) — mounting it would make config.json and master.key writable and let an agent disable its own sandbox (FR-7.5, ADR-063 D6)",
 			ErrMountRefused, resolved, relation, resolvedHome,
 		)
 	}
@@ -352,11 +352,11 @@ func LoadMounts(home, id string) ([]Mount, bool) {
 
 // AllowedMountRoots returns the resolved host_path of every mount belonging
 // to workspace id, for population into fspolicy.FSPolicy.AllowedRoots
-// (FR-6.1/FR-6.3, ADR-061 D4) by whichever call site constructs a turn's
+// (FR-6.1/FR-6.3, ADR-063 D4) by whichever call site constructs a turn's
 // authored policy (pkg/tools.ResolveTurnFSPolicy, per that function's own
 // doc comment anticipating this: "the moment FR-5/FR-6 populates
 // AllowedRoots, without another edit to this file"). A mount grants WRITE
-// and nothing else — reads are already open under ADR-060 regardless of
+// and nothing else — reads are already open under ADR-062 regardless of
 // this list.
 //
 // Deliberately NOT filtered by MountStatus: a currently-broken mount still

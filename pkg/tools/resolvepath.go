@@ -21,7 +21,7 @@
 // but are NOT consulted for any decision here (Constraint #6: no invented
 // default, no early branch on a scope this package doesn't yet implement).
 //
-// ADR-061 / spec unified-file-access-and-mounts FR-2: op IS now consulted —
+// ADR-063 / spec unified-file-access-and-mounts FR-2: op IS now consulted —
 // see FSOp's own doc comment and ResolvePath's resolution-order comment
 // below for the operation-aware decision table.
 
@@ -47,7 +47,7 @@ import (
 // FSOp classifies the filesystem operation a ResolvePath caller is about to
 // perform. Originally threaded through as an inert seam for the P2 ask-flow
 // and the FR-035 audit dimension (ADR-046 P1 discarded it via `_ = op`) —
-// ADR-061 / spec unified-file-access-and-mounts FR-2 makes it load-bearing:
+// ADR-063 / spec unified-file-access-and-mounts FR-2 makes it load-bearing:
 // ResolvePath's decision for a path OUTSIDE the effective working directory
 // now depends on op:
 //
@@ -56,7 +56,7 @@ import (
 //	                              regardless of op — see ResolvePath below)
 //	FSOpWrite, FSOpServe          work dir or a mount (policy.AllowedRoots)
 //	                              only — never open, regardless of Scope
-//	FSOpExec                      per the ADR-060 kernel model — left on the
+//	FSOpExec                      per the ADR-062 kernel model — left on the
 //	                              pre-FR-2 Scope-based path unchanged
 //
 // The zero value is REFUSED, not defaulted (FR-2.4): every real call site
@@ -280,7 +280,7 @@ func (h *PathHandle) Close() error {
 // turn's single source-of-record FSPolicy (fspolicy.EffectiveFSPolicy).
 // toolName and callID are threaded through for the P2 ask-flow and the
 // FR-035 audit dimension but drive NO decision in this implementation. op
-// DOES drive a decision as of ADR-061 / spec unified-file-access-and-mounts
+// DOES drive a decision as of ADR-063 / spec unified-file-access-and-mounts
 // FR-2 — see FSOp's doc comment and step 3 below.
 //
 // Resolution order:
@@ -310,7 +310,7 @@ func (h *PathHandle) Close() error {
 //     with ErrOutsideScope otherwise, independent of policy.Scope. This
 //     is the operation-aware split from the pre-FR-2 behaviour, where
 //     Scope alone decided every op identically.
-//     - FSOpExec: unchanged from the pre-FR-2 behaviour (per the ADR-060
+//     - FSOpExec: unchanged from the pre-FR-2 behaviour (per the ADR-062
 //     kernel model) — dispatches on policy.Scope exactly as every op
 //     used to: fspolicy.FSScopeUnrestricted returns a host-fs handle;
 //     fspolicy.FSScopeConfined refuses with ErrOutsideScope;
@@ -431,7 +431,7 @@ func ResolvePath(
 				ErrOutsideScope, rawPath, realAbs, policy.WorkDir)
 
 		case FSOpExec:
-			// Unchanged from the pre-FR-2 behaviour (per the ADR-060 kernel
+			// Unchanged from the pre-FR-2 behaviour (per the ADR-062 kernel
 			// model): every op used to dispatch on Scope alone, and exec
 			// stays on that exact path.
 			switch policy.Scope {
@@ -515,7 +515,7 @@ func ResolvePath(
 // by the caller — this performs no I/O of its own.
 //
 // This is LIVE, not a placeholder: ResolveTurnFSPolicy populates
-// policy.AllowedRoots from workspace.AllowedMountRoots (ADR-061 FR-6.1), so
+// policy.AllowedRoots from workspace.AllowedMountRoots (ADR-063 FR-6.1), so
 // every write or serve inside a mounted host directory is admitted here and
 // nowhere else. The comment that used to sit here said the opposite — that
 // AllowedRoots was "always nil in P1" and this was "a no-op for every
@@ -666,9 +666,9 @@ func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool) (
 		return policy, err
 	}
 
-	// ADR-061 FR-6.1: the workspace's mounts become the turn's additional
+	// ADR-063 FR-6.1: the workspace's mounts become the turn's additional
 	// WRITE roots. Reads need no grant post-FR-2, so a mount grants write and
-	// nothing else — see ADR-061 D4.
+	// nothing else — see ADR-063 D4.
 	//
 	// This is the one place it can be done. Every path-taking tool routes
 	// through this function (9 call sites), so populating AllowedRoots here
@@ -724,7 +724,7 @@ func ResolvePathAllowingPatterns(
 			granted := policy
 			granted.Scope = fspolicy.FSScopeUnrestricted
 
-			// FR-2.2 (ADR-061): FSOpWrite/FSOpServe no longer become open by
+			// FR-2.2 (ADR-063): FSOpWrite/FSOpServe no longer become open by
 			// Scope alone (see ResolvePath's outside-WorkDir switch) — Scope
 			// forcing above only still matters for FSOpRead/List/Send/Exec,
 			// which is why it is kept, not removed. This regex allow-list

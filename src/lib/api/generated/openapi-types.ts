@@ -2716,7 +2716,7 @@ export interface paths {
         put?: never;
         /**
          * Create a workspace mount (a named write-grant on a real local folder)
-         * @description FR-7.1/FR-5, ADR-061 D4/D6. Validates the name shape and uniqueness (400 on an invalid name, a collision with an existing mount, or a collision with an existing entry in work/; 400 also when host_path does not resolve to an existing, real, on-disk directory), resolves host_path to its realpath, and refuses (403) a target that IS or lies INSIDE $OMNIPUS_HOME (FR-7.5 — checked on the realpath-resolved target, so a symlink to it is refused too) — this is a policy refusal, not malformed input. Otherwise creates the mount and materialises it as a symlink under the workspace's work/ directory. A target that is broad but not refused (the operator's own home directory, the filesystem root, or a location that CONTAINS $OMNIPUS_HOME) still succeeds (201) but returns a non-empty `warning` (FR-7.4/FR-7.6) — the secret set is subtracted from every grant regardless of where it came from, so a broad mount is allowed, but the operator must be told what it covers. Takes effect immediately for every agent on the workspace — no restart (FR-8.1).
+         * @description FR-7.1/FR-5, ADR-063 D4/D6. Validates the name shape and uniqueness (400 on an invalid name, a collision with an existing mount, or a collision with an existing entry in work/; 400 also when host_path does not resolve to an existing, real, on-disk directory), resolves host_path to its realpath, and refuses (403) a target that IS or lies INSIDE $OMNIPUS_HOME (FR-7.5 — checked on the realpath-resolved target, so a symlink to it is refused too) — this is a policy refusal, not malformed input. Otherwise creates the mount and materialises it as a symlink under the workspace's work/ directory. A target that is broad but not refused (the operator's own home directory, the filesystem root, or a location that CONTAINS $OMNIPUS_HOME) still succeeds (201) but returns a non-empty `warning` (FR-7.4/FR-7.6) — the secret set is subtracted from every grant regardless of where it came from, so a broad mount is allowed, but the operator must be told what it covers. Takes effect immediately for every agent on the workspace — no restart (FR-8.1).
          */
         post: operations["createWorkspaceMount"];
         delete?: never;
@@ -5079,7 +5079,7 @@ export interface components {
              */
             mode?: string;
             /**
-             * @description Which ADR-060 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
+             * @description Which ADR-062 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
              * @example confined
              * @enum {string}
              */
@@ -8487,7 +8487,7 @@ export interface components {
              */
             core_team?: string[];
             /**
-             * @description Named write-grants on real local folders (FR-5, ADR-061 D4). Absent when no mount exists (empty array is also acceptable on the wire). Created and removed via the dedicated mounts lifecycle, not via this record's own create/update requests.
+             * @description Named write-grants on real local folders (FR-5, ADR-063 D4). Absent when no mount exists (empty array is also acceptable on the wire). Created and removed via the dedicated mounts lifecycle, not via this record's own create/update requests.
              * @example []
              */
             mounts?: components["schemas"]["WorkspaceMount"][];
@@ -8690,7 +8690,7 @@ export interface components {
             /** @description The complete set of delegation edges for this workspace. An empty array clears all delegation. Deduplicated by (from_agent, to_agent) at write time. */
             edges: components["schemas"]["WorkspaceDelegationEdge"][];
         };
-        /** @description Request body for POST /workspaces/{id}/mounts (FR-7.1, ADR-061 D4). Creates a new named write-grant on a real local folder. See WorkspaceMount.yaml for the exact shape rules `name` and `host_path` must satisfy. */
+        /** @description Request body for POST /workspaces/{id}/mounts (FR-7.1, ADR-063 D4). Creates a new named write-grant on a real local folder. See WorkspaceMount.yaml for the exact shape rules `name` and `host_path` must satisfy. */
         WorkspaceMountCreateRequest: {
             /**
              * @description A single path segment identifying this mount inside work/ (FR-5.2). Must be non-empty, contain no path separators (/ or \), and not be ".." or contain "..". Must be unique within the workspace and must not collide with an existing entry already present in work/.
@@ -10971,7 +10971,7 @@ export interface components {
          * @enum {string}
          */
         ExternalCli: "claude-code" | "codex" | "opencode";
-        /** @description A named write-grant on a real local folder (FR-5, ADR-061 D4). Materialised as a symlink work/<name> -> host_path; enforced by realpath resolution at both the app layer (FSPolicy.AllowedRoots) and, where a kernel sandbox backend is active, the kernel layer. Reads are already open (FR-2.2) — a mount exists to grant WRITE, nothing else. */
+        /** @description A named write-grant on a real local folder (FR-5, ADR-063 D4). Materialised as a symlink work/<name> -> host_path; enforced by realpath resolution at both the app layer (FSPolicy.AllowedRoots) and, where a kernel sandbox backend is active, the kernel layer. Reads are already open (FR-2.2) — a mount exists to grant WRITE, nothing else. */
         WorkspaceMount: {
             /**
              * @description A single path segment identifying this mount inside work/ (FR-5.2). Must be non-empty, contain no path separators (/ or \), and not be ".." or contain "..". Must be unique within the workspace and must not collide with an existing entry already present in work/.

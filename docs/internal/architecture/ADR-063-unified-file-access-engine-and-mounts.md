@@ -1,8 +1,8 @@
-# ADR-061 — One file-access engine, and workspace mounts
+# ADR-063 — One file-access engine, and workspace mounts
 
 - **Status:** Proposed (2026-08-12)
 - **Implements:** [file-access requirements, 2026-08-12](../specs/file-access-requirements-2026-08-12.md)
-- **Builds on:** [ADR-060](ADR-060-filesystem-read-exec-model-inversion.md) (reads/exec open; the secret set unreachable)
+- **Builds on:** [ADR-062](ADR-062-filesystem-read-exec-model-inversion.md) (reads/exec open; the secret set unreachable)
 - **Supersedes in part:** ADR-046 P1's `FSScope` model; the `repository` field on Workspace
 
 ---
@@ -24,8 +24,8 @@ and they disagree in **both** directions (VERIFIED, 2026-08-12):
 | Path | App layer | Kernel layer |
 |---|---|---|
 | `agents/`, `workspaces/` | denied (carve-out) | granted |
-| `config.json`, `cli.token` | **allowed** | denied (ADR-060) |
-| anything outside `WorkDir`, read | denied when confined | **allowed** (ADR-060) |
+| `config.json`, `cli.token` | **allowed** | denied (ADR-062) |
+| anything outside `WorkDir`, read | denied when confined | **allowed** (ADR-062) |
 
 The practical consequences are all of the form "the answer depends on which tool
 asked", which no operator can predict:
@@ -35,7 +35,7 @@ asked", which no operator can predict:
   `read_file`, because `cli.token` is not an app-layer carve-out — while the
   same read from `bash` is denied by the kernel.
 
-ADR-060 did not create this. It made it visible and, by opening reads on one
+ADR-062 did not create this. It made it visible and, by opening reads on one
 side only, it widened the gap.
 
 ### 1.2 The competition has one rule layer, not two
@@ -73,7 +73,7 @@ Three findings materially reduce the size of this change:
    Reserved for P2's per-path allow seam", consumed by nothing. That is the
    mount seam, pre-shaped.
 3. **`RestrictCurrentThread` rebuilds the kernel ruleset per child spawn** on
-   Linux (ADR-060). A per-turn kernel policy is therefore already achievable on
+   Linux (ADR-062). A per-turn kernel policy is therefore already achievable on
    that platform without new machinery.
 
 ---
@@ -102,8 +102,8 @@ A single per-turn value describes file access. Both layers are projections:
 what it can, as a second wall. Where the kernel cannot help — Windows, pre-5.13
 Linux — the rule still holds; only the second wall is missing, and boot says so.
 
-This is deliberately the ADR-060 pattern ("one principle, two renderings")
-applied one level up. ADR-060 unified the *secret set* across two backends; this
+This is deliberately the ADR-062 pattern ("one principle, two renderings")
+applied one level up. ADR-062 unified the *secret set* across two backends; this
 unifies the *whole ruleset* across the app and kernel layers.
 
 **It is also not a new direction: this is ADR-046's P3, accepted and never
@@ -113,7 +113,7 @@ P1/P2) and the future per-child Landlock ruleset builder (P3) — so the two
 enforcement backends can never drift apart". The divergence documented in §1.1 is
 what happened in the gap where P3 was specified but absent. This ADR therefore
 decides far less than its length suggests: it completes an accepted design, adds
-mounts on top, and corrects the read/write split ADR-060 exposed.
+mounts on top, and corrects the read/write split ADR-062 exposed.
 
 **Consequence that constrains everything below:** `pkg/fspolicy` is deliberately
 a stdlib-only leaf, because `pkg/tools` already imports `pkg/sandbox` and P3
@@ -128,7 +128,7 @@ leaf and be consumed by the kernel package, not the other way around.
 |---|---|
 | read, list | allowed anywhere **except the secret set** |
 | write | allowed only under the work dir or a mount |
-| exec | governed by the kernel model (ADR-060) |
+| exec | governed by the kernel model (ADR-062) |
 | **serve** | **allowed only under the work dir or a mount — NOT open** |
 
 **`serve` is deliberately not a read, and the first draft of this ADR got that
@@ -147,12 +147,12 @@ for reads: reads are open under both.
 > **The `restrict` setting does not disappear — it becomes a WRITE setting.**
 > `RestrictToWorkspace` continues to govern where an agent may write, which is
 > what operators actually mean by it. Reads stop being part of that decision
-> because, post-ADR-060, confining them was already fiction for any agent with
+> because, post-ADR-062, confining them was already fiction for any agent with
 > shell access.
 
 ### D3 — The secret set is the one thing neither layer may reach
 
-`sandbox.SecretEntriesRelative` (ADR-060 §4.0) becomes the authority for BOTH
+`sandbox.SecretEntriesRelative` (ADR-062 §4.0) becomes the authority for BOTH
 layers, replacing `fspolicy.buildCarveOuts`'s separate list. The merged set is
 the union, because each list protects something the other misses:
 
@@ -235,7 +235,7 @@ matching the Linux contract, rather than falling back to an unconfined child.
 Risky mounts warn and proceed (the operator owns the machine). Mounting
 `$OMNIPUS_HOME`, or any path containing it, is refused: it would make
 `config.json` and `master.key` writable and let an agent switch off its own
-sandbox — the protection this ADR and ADR-060 exist to provide, handed back
+sandbox — the protection this ADR and ADR-062 exist to provide, handed back
 through the front door.
 
 ### D7 — `Workspace.repository` is deleted, not repurposed
@@ -283,7 +283,7 @@ working tree is its own product.
 ### 4.1 Accepted
 
 - **Reads become open for the in-process tools too.** An agent can read files
-  anywhere outside the secret set. This is already true via `bash` post-ADR-060;
+  anywhere outside the secret set. This is already true via `bash` post-ADR-062;
   D2 stops pretending otherwise for the file tools. The operator explicitly
   chose this posture, and it matches Claude Code and Codex.
 - **`FSScope` loses its meaning for reads.** The type stays for writes; the
@@ -301,8 +301,8 @@ working tree is its own product.
 
 | Risk | Mitigation |
 |---|---|
-| One ruleset means one place to get wrong, for every tool at once | The `confined`-equivalence gate from ADR-060 is reused: the pre-change behaviour must be reproducible and asserted before the new path is switched on |
-| macOS per-spawn rendering makes every child spawn depend on a render | Render failure aborts the spawn (never falls back to unconfined); the renderer is already covered by the ADR-060 test suite |
+| One ruleset means one place to get wrong, for every tool at once | The `confined`-equivalence gate from ADR-062 is reused: the pre-change behaviour must be reproducible and asserted before the new path is switched on |
+| macOS per-spawn rendering makes every child spawn depend on a render | Render failure aborts the spawn (never falls back to unconfined); the renderer is already covered by the ADR-062 test suite |
 | Symlink-based mounts confuse tools that compare declared vs resolved paths | Enforcement is realpath-only; the symlink is presentation. Existing `ResolvePath` already resolves before deciding |
 | Deleting `repository` breaks a client reading it | No back-compat by project convention; it is removed from the contract in the same commit as the generated artifacts |
 

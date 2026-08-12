@@ -1026,7 +1026,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// MCP server management. Jim may SEE the configured servers, but not
 			// add one: an MCP server definition is a program the gateway launches
 			// unconfined, so adding one escapes the sandbox through the front door
-			// (config.json is in the ADR-060 secret set exactly so an agent cannot
+			// (config.json is in the ADR-062 secret set exactly so an agent cannot
 			// write that entry with write_file). Denied in the global seed for the
 			// same reason — see the long rationale on "add_mcp_server" in
 			// pkg/config/defaults.go. Seeded data, not a code branch (CLAUDE.md

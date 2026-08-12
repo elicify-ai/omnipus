@@ -26,7 +26,7 @@ import (
 // omnipusHome MUST already be an absolute, realpath'd location; the caller,
 // EffectiveFSPolicy, resolves it before calling this.
 func buildCarveOuts(omnipusHome string) []string {
-	// ADR-061 D3 / spec FR-3.1: one definition, shared with the kernel layer.
+	// ADR-063 D3 / spec FR-3.1: one definition, shared with the kernel layer.
 	//
 	// This used to be its own five-entry literal. It is now SecretPaths, which
 	// is the union of this list and the kernel layer's — each half protected

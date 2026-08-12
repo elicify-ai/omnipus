@@ -114,7 +114,7 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 			},
 			// Boundary-widening operations are denied outright, not prompted:
 			// adding an MCP server runs an unconfined program, which is why
-			// config.json is in the ADR-060 secret set in the first place.
+			// config.json is in the ADR-062 secret set in the first place.
 			// Seeded data — an operator can grant it on their own install.
 			expectExplicitDenies: []string{"add_mcp_server"},
 		},

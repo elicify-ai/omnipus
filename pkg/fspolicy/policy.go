@@ -66,7 +66,7 @@ type FSPolicy struct {
 
 	// AllowedRoots are additional roots the turn may WRITE to, beyond WorkDir.
 	//
-	// ADR-061 FR-6.1: a workspace's mounts land here — populated by
+	// ADR-063 FR-6.1: a workspace's mounts land here — populated by
 	// tools.ResolveTurnFSPolicy from workspace.AllowedMountRoots, and rendered
 	// into the kernel policy as write grants by sandbox.DeriveKernelPolicy. It
 	// is nil only for a turn with no mounts.
@@ -76,7 +76,7 @@ type FSPolicy struct {
 	// permanently empty — for instance by skipping a containment check
 	// "because it can't match anything" — silently drops a real grant.)
 	//
-	// A mount grants WRITE and nothing else, because post-ADR-060 reads need
+	// A mount grants WRITE and nothing else, because post-ADR-062 reads need
 	// no grant at all. It cannot reopen a secret: IsCarveOut and DeniedPathsFor
 	// take no AllowedRoots parameter, so mounting even $HOME yields "write to
 	// $HOME minus the secret set" (asserted in mount_secret_independence_test.go).

@@ -7,7 +7,7 @@ package sandbox
 import "github.com/elicify-ai/omnipus/pkg/fspolicy"
 
 // SecretEntriesRelative and the helpers below ALIAS the single definition in
-// pkg/fspolicy. ADR-061 D3 / spec FR-3.1.
+// pkg/fspolicy. ADR-063 D3 / spec FR-3.1.
 //
 // # Why the definition is over there and not here
 //
@@ -15,7 +15,7 @@ import "github.com/elicify-ai/omnipus/pkg/fspolicy"
 // belongs on merit — but it is also the only place it CAN live. pkg/tools
 // imports pkg/sandbox, and ADR-046's P3 wires pkg/sandbox -> pkg/fspolicy, so a
 // definition here that fspolicy had to import would be an import cycle. The
-// first draft of the ADR-061 spec specified exactly that and would not have
+// first draft of the ADR-063 spec specified exactly that and would not have
 // compiled.
 //
 // The set is the UNION of what the two layers used to protect separately. Each

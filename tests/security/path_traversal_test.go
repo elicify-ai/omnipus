@@ -58,7 +58,7 @@ type traversalCase struct {
 	// they must reject.
 	platformNativeWindows bool
 	// escapesByDesign marks a case that leaves the work dir by SCOPE rather
-	// than by malformed input. Under ADR-060/ADR-061 reads are open, so such a
+	// than by malformed input. Under ADR-062/ADR-063 reads are open, so such a
 	// case is no longer a read rejection — but the test still proves the same
 	// path is refused for WRITING, so the relaxation cannot silently extend to
 	// writes. Malformed inputs (NUL bytes, unparseable paths) do NOT set this:
@@ -169,7 +169,7 @@ func TestPathTraversal_ReadFile(t *testing.T) {
 			result := tool.Execute(ctx, map[string]any{"path": tc.path})
 			require.NotNil(t, result)
 
-			// ADR-060/ADR-061 (spec FR-2.2, listed in spec §6 as an intended
+			// ADR-062/ADR-063 (spec FR-2.2, listed in spec §6 as an intended
 			// change): READS ARE OPEN. read_file outside the work dir now
 			// succeeds by design — that is the entire point of the filesystem
 			// model inversion, and it is what makes an agent able to run a

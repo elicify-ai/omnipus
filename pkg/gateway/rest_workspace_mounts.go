@@ -4,7 +4,7 @@
 //
 // REST lifecycle for workspace mounts (spec
 // docs/internal/specs/unified-file-access-and-mounts-spec.md FR-7.1/FR-7.2/
-// FR-7.3, FR-8.1; ADR-061 D4/D6). The actual mount logic — name validation,
+// FR-7.3, FR-8.1; ADR-063 D4/D6). The actual mount logic — name validation,
 // realpath resolution, the $OMNIPUS_HOME refusal/warn classification, the
 // symlink materialization, and the workspace record read-modify-write
 // (including its own per-workspace locking) — all lives in

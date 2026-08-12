@@ -139,7 +139,7 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	b.WriteString("(deny default)\n\n")
 	b.WriteString(seatbeltSystemPreamble)
 
-	// --- ADR-060 open model: blanket read and execute. ---
+	// --- ADR-062 open model: blanket read and execute. ---
 	//
 	// These are emitted HERE, before the policy rules and before the deny block.
 	// See the deny block below for the measured precedence rule that makes the
@@ -151,7 +151,7 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	// binary — the failure looks like a broken sandbox rather than a policy
 	// choice, with no diagnostic pointing at the cause.
 	if policy.ReadsOpen || policy.ExecOpen {
-		b.WriteString("\n;; --- Filesystem model: open (ADR-060) ---\n")
+		b.WriteString("\n;; --- Filesystem model: open (ADR-062) ---\n")
 		if policy.ReadsOpen {
 			b.WriteString("(allow file-read*)\n")
 		}
@@ -254,7 +254,7 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 		b.WriteString(fmt.Sprintf("(allow network-outbound (remote udp \"*:%d\"))\n", r.Port))
 	}
 
-	// --- Secret set: denied LAST (ADR-060 §4.1, spec FR-3.2) ---
+	// --- Secret set: denied LAST (ADR-062 §4.1, spec FR-3.2) ---
 	//
 	// # The precedence rule, as MEASURED rather than assumed
 	//
@@ -605,7 +605,7 @@ func ancestorPaths(p string) []string {
 //
 // One such rune anywhere in $OMNIPUS_HOME voids EVERY deny that names a path
 // under it — the whole secret set at once, read AND write, so a child could
-// also rewrite config.json. Under the ADR-060 open model the blanket
+// also rewrite config.json. Under the ADR-062 open model the blanket
 // `(allow file-read*)` is then completely unopposed. Nothing reports this:
 // sandbox-exec accepts the profile, boot succeeds, and the profile reads as
 // correct. Triggers are ordinary, not exotic: U+00A0 (a non-breaking space,
@@ -622,7 +622,7 @@ func ancestorPaths(p string) []string {
 // above) but is rejected on principle: it would make profile safety depend on a
 // hand-rolled escaper agreeing with an undocumented reader for every byte
 // sequence, and getting that wrong fails open again with no diagnostic. A
-// refusal fails CLOSED, which is the same contract as the rest of ADR-060 —
+// refusal fails CLOSED, which is the same contract as the rest of ADR-062 —
 // renderSeatbeltProfile's error propagates to SeatbeltBackend.Apply (aborting
 // boot) and to ApplyToCmd (aborting the spawn), never to an unconfined child.
 //

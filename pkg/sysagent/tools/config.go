@@ -193,7 +193,7 @@ type blockedConfigKey struct {
 // widen its own cage — turn the sandbox off, mint itself an API credential,
 // point exec/browser/MCP at an arbitrary binary, or switch off the redaction
 // that keeps secrets out of its own context. That is exactly the exposure
-// ADR-060's secret set exists to prevent for config.json on disk; this tool
+// ADR-062's secret set exists to prevent for config.json on disk; this tool
 // edits the same settings through the front door.
 //
 // This is a DENY list layered on top of the knownConfigPrefixes ALLOW list, not
@@ -309,7 +309,7 @@ var blockedConfigKeys = []blockedConfigKey{
 	{
 		Key:          "tools.allow_read_paths",
 		Reason:       "it is the filesystem read boundary for every file tool",
-		ReadOKReason: "the read fence's location. Post-ADR-060 reads are open anyway, so this discloses nothing an agent cannot already determine by reading",
+		ReadOKReason: "the read fence's location. Post-ADR-062 reads are open anyway, so this discloses nothing an agent cannot already determine by reading",
 	},
 	{
 		Key:          "tools.allow_write_paths",
@@ -345,7 +345,7 @@ var blockedConfigKeys = []blockedConfigKey{
 		Reason: "exec_path and cdp_url make the gateway launch or attach to a chosen binary, " +
 			"profile_dir points the browser profile anywhere, and evaluate_enabled turns on " +
 			"arbitrary in-page JavaScript",
-		ReadOKReason: "browser paths and endpoints. Reads are open post-ADR-060, so the filesystem layout it discloses is already visible",
+		ReadOKReason: "browser paths and endpoints. Reads are open post-ADR-062, so the filesystem layout it discloses is already visible",
 	},
 	{
 		Key:          "tools.cron.allow_command",

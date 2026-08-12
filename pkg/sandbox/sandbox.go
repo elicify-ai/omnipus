@@ -82,7 +82,7 @@ type SandboxPolicy struct {
 	// The two travel together in practice and are still separate fields: on
 	// Landlock read and execute are independent rights, so a backend that
 	// opened execute while leaving read handled would stop every child starting
-	// (ADR-060 §6). Keeping them distinct makes that pairing explicit at each
+	// (ADR-062 §6). Keeping them distinct makes that pairing explicit at each
 	// use rather than implied by one flag.
 	ReadsOpen bool
 	ExecOpen  bool
@@ -148,7 +148,7 @@ type SandboxPolicy struct {
 }
 
 // FilesystemModel selects how the sandbox treats reads and program execution.
-// ADR-060. Writes are confined under both models — the model governs reading
+// ADR-062. Writes are confined under both models — the model governs reading
 // and running, never writing.
 type FilesystemModel string
 
@@ -446,12 +446,12 @@ func DefaultPolicy(
 	return DefaultPolicyForModel(FilesystemModelConfined, homePath, allowedPaths, allowedExecPaths, warnFn, bindPorts)
 }
 
-// DefaultPolicyForModel is DefaultPolicy with the ADR-060 filesystem model
+// DefaultPolicyForModel is DefaultPolicy with the ADR-062 filesystem model
 // selected explicitly. DefaultPolicy delegates here with FilesystemModelConfined,
-// so the confined output is byte-identical to the pre-ADR-060 policy BY
+// so the confined output is byte-identical to the pre-ADR-062 policy BY
 // CONSTRUCTION rather than by a test that has to be remembered (spec FR-2.5).
 // That structural guarantee is the safety net the whole change rests on: if
-// confined can drift, nothing else in ADR-060 is safe to land.
+// confined can drift, nothing else in ADR-062 is safe to land.
 //
 // Under FilesystemModelOpen two rule groups are omitted entirely:
 //
@@ -1002,7 +1002,7 @@ type Status struct {
 	// available but not actively enforcing — see the package comment for
 	// the wiring status.
 	PolicyApplied bool `json:"policy_applied"`
-	// FilesystemModel reports which ADR-060 model is active ("confined" or
+	// FilesystemModel reports which ADR-062 model is active ("confined" or
 	// "open"). Surfaced because the two are indistinguishable from outside:
 	// a successful read tells an operator nothing about whether the model is
 	// open or the path merely happened to be on the enumerated list.
@@ -1073,7 +1073,7 @@ type ApplyState struct {
 	// backend itself (e.g. "permissive mode degraded to audit-only on
 	// kernel 6.8").
 	ExtraNotes []string
-	// FilesystemModel is the resolved ADR-060 model for this process
+	// FilesystemModel is the resolved ADR-062 model for this process
 	// lifetime. It is gateway-level state for the same reason Mode is: the
 	// backend renders the model but does not choose it.
 	FilesystemModel FilesystemModel

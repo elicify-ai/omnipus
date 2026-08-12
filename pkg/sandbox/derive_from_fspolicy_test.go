@@ -96,7 +96,7 @@ func TestDeriveKernelPolicy_IsTotal(t *testing.T) {
 	}
 }
 
-// TestDeriveKernelPolicy_WorkDirAndMountsAreWriteGrants covers ADR-061 D4: a
+// TestDeriveKernelPolicy_WorkDirAndMountsAreWriteGrants covers ADR-063 D4: a
 // mount grants write, because reads need no grant under the open model.
 func TestDeriveKernelPolicy_WorkDirAndMountsAreWriteGrants(t *testing.T) {
 	home := t.TempDir()

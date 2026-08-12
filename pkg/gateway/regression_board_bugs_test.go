@@ -362,7 +362,7 @@ func TestRegression_RestartPersistence(t *testing.T) {
 
 // TestRegression_Repository_FieldRetired verifies that POST and PUT
 // /api/v1/workspaces reject any request body carrying a "repository" field
-// outright (FR-9.2, ADR-061 D7) — the field was deleted from the wire with no
+// outright (FR-9.2, ADR-063 D7) — the field was deleted from the wire with no
 // back-compat, superseding the earlier SEC-5 URL-scheme-only validation this
 // test used to pin.
 //
@@ -373,7 +373,7 @@ func TestRegression_RestartPersistence(t *testing.T) {
 //   - POST with no repository field at all → 201 (unaffected).
 //   - PUT with repository="javascript:alert(1)" → 400 (field retired).
 //
-// Traces to: FR-9.2, ADR-061 D7.
+// Traces to: FR-9.2, ADR-063 D7.
 func TestRegression_Repository_FieldRetired(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 

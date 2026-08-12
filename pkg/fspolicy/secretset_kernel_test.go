@@ -77,7 +77,7 @@ func walkHome(t *testing.T, home string) []string {
 }
 
 // TestKernelDeniedPaths_MatchIsCarveOutPathForPath is the structural guard for
-// ADR-061 FR-3.3, and it is the test that would have caught the shipped bug.
+// ADR-063 FR-3.3, and it is the test that would have caught the shipped bug.
 //
 // The two layers answer "may this turn touch this path" by different means: the
 // app layer runs a rule per resolved path (IsCarveOut), the kernel is handed a

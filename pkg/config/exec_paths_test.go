@@ -21,7 +21,7 @@ func TestDefaultAllowedExecPaths_ShapeInvariants(t *testing.T) {
 	// The invariant below is the real one: wherever a seed exists it must be
 	// narrow. Whether one exists at all is a per-platform decision.
 	//
-	// Linux stays empty on purpose. Under ADR-060's open model execution is
+	// Linux stays empty on purpose. Under ADR-062's open model execution is
 	// unrestricted, so an exec-path seed has nothing left to fix there; under
 	// confined it keeps today's behaviour, which means upgrading a Linux install
 	// does not silently widen its Landlock posture.

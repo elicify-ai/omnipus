@@ -4,7 +4,7 @@
 //
 // Tests wiring workspace mounts (pkg/workspace/mount.go) into the REST
 // surface: the GET/list wire response (workspaceToWire's mountsToWire) and
-// the FR-9.2-style raw-body-sniff guard on POST/PUT (spec FR-5, ADR-061 D4).
+// the FR-9.2-style raw-body-sniff guard on POST/PUT (spec FR-5, ADR-063 D4).
 //
 // There is no dedicated mounts CRUD endpoint yet (see this package's
 // rest_workspaces.go doc comments and the task report this test file

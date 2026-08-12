@@ -90,7 +90,7 @@ func TestExpandRulesExcluding_GrantsSiblingsNotTheSecret(t *testing.T) {
 }
 
 // TestExpandRulesExcluding_AgentsStayWritableEntitiesDoNot pins the distinction
-// ADR-060 §4.0 turns on, on the Linux side too. Getting these two backwards
+// ADR-062 §4.0 turns on, on the Linux side too. Getting these two backwards
 // breaks every agent's working directory while looking like hardening.
 func TestExpandRulesExcluding_AgentsStayWritableEntitiesDoNot(t *testing.T) {
 	home := seedHome(t)

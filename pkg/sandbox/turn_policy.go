@@ -13,7 +13,7 @@ import (
 )
 
 // This file is the seam that makes DeriveKernelPolicy reachable from a spawn
-// site. ADR-061 D1 / spec FR-1.3, FR-3.5.
+// site. ADR-063 D1 / spec FR-1.3, FR-3.5.
 //
 // # The problem it solves
 //

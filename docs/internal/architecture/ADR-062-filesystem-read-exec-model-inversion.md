@@ -1,4 +1,4 @@
-# ADR-060 — Reads and execute default open; writes stay confined
+# ADR-062 — Reads and execute default open; writes stay confined
 
 - **Status:** Accepted (2026-08-12) — every open question the draft carried has been decided by the operator; see §4.0 (secret set), §7.1 (residual risk accepted), and the spec's FR-1 (default) and FR-6 (redaction dropped).
 - **Date:** 2026-08-12
@@ -245,7 +245,7 @@ The change is invisible unless reported:
 
 **[VERIFIED]** with real children: a sandboxed agent can read the gateway API token, rewrite its own `sandbox.mode` to `off`, flip its own tool policy from `deny` to `allow`, and truncate the master key. The sandbox's own configuration lives inside the region the sandbox makes writable, so the boundary is self-disabling — an attacker need not escape it, only edit it and wait for a restart.
 
-This predates ADR-060 and is tracked separately. It is recorded here because ADR-060 must not claim a write-confinement property the product does not have.
+This predates ADR-062 and is tracked separately. It is recorded here because ADR-062 must not claim a write-confinement property the product does not have.
 
 ## 12. Open questions
 

@@ -1,7 +1,7 @@
 type: object
 additionalProperties: false
 description: >
-  A named write-grant on a real local folder (FR-5, ADR-061 D4). Materialised
+  A named write-grant on a real local folder (FR-5, ADR-063 D4). Materialised
   as a symlink work/<name> -> host_path; enforced by realpath resolution at
   both the app layer (FSPolicy.AllowedRoots) and, where a kernel sandbox
   backend is active, the kernel layer. Reads are already open (FR-2.2) — a

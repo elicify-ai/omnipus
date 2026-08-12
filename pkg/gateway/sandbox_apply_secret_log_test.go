@@ -13,7 +13,7 @@
 //     "protected" mechanism name. These tests assert the log is now honest:
 //     UNPROTECTED whenever nothing is actually enforcing, "protected" only
 //     when the real capability + mode combination proves it.
-//   - Finding 4 (MINOR): ADR-060 §10.1 requires sandbox.applied to log the
+//   - Finding 4 (MINOR): ADR-062 §10.1 requires sandbox.applied to log the
 //     filesystem model. Neither of the two emission sites did. These tests
 //     assert both now carry "model".
 //
@@ -197,7 +197,7 @@ func TestApplySandbox_SecretSetLog_Linux_Permissive_UNPROTECTED(t *testing.T) {
 }
 
 // TestApplySandbox_SecretSetLog_ModelIncludedInBothVariants pins that the
-// "model" field (ADR-060 §10.1) is present on both the protected and the
+// "model" field (ADR-062 §10.1) is present on both the protected and the
 // UNPROTECTED shape of the secret-set log, and on both sandbox.applied
 // emission sites (finding 4).
 func TestApplySandbox_SecretSetLog_ModelIncludedInBothVariants(t *testing.T) {
@@ -255,7 +255,7 @@ func TestApplySandbox_SecretSetLog_ModelIncludedInBothVariants(t *testing.T) {
 			t.Fatal("expected sandbox.applied to be logged for a successful enforce apply")
 		}
 		if applied["model"] != "confined" {
-			t.Errorf("sandbox.applied model = %v, want %q (ADR-060 section:10.1)", applied["model"], "confined")
+			t.Errorf("sandbox.applied model = %v, want %q (ADR-062 section:10.1)", applied["model"], "confined")
 		}
 	})
 }

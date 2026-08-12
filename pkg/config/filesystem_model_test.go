@@ -7,7 +7,7 @@ package config
 import "testing"
 
 // TestLoadConfig_UpgradingInstallPicksUpOpenModel pins the mechanism that makes
-// the ADR-060 default reach EXISTING installs, which is the part with the real
+// the ADR-062 default reach EXISTING installs, which is the part with the real
 // consequence.
 //
 // loadConfig unmarshals the operator's JSON over DefaultConfig(), so a

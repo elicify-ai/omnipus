@@ -18,7 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 )
 
-// This file proves ADR-061 FR-3.3/FR-3.5 against REAL children run under
+// This file proves ADR-063 FR-3.3/FR-3.5 against REAL children run under
 // /usr/bin/sandbox-exec, through the production composition:
 //
 //	fspolicy.FSPolicy -> KernelPolicyForTurn -> Limits.KernelPolicy -> Run
@@ -152,7 +152,7 @@ func TestPerTurnPolicy_AgentTurn_CannotReachAnotherAgentsHome(t *testing.T) {
 	assert.NotEqual(t, 0, code,
 		"reading ANOTHER agent's home must be denied at the kernel layer; the app layer "+
 			"(fspolicy.IsCarveOut) already denies it, and a kernel that does not is the "+
-			"divergence ADR-061 FR-3.3 exists to remove. stderr=%s", stderr)
+			"divergence ADR-063 FR-3.3 exists to remove. stderr=%s", stderr)
 
 	code, stderr = runChild(t, writeAppend(victimSoul), lim)
 	assert.NotEqual(t, 0, code, "writing another agent's home must be denied. stderr=%s", stderr)

@@ -6852,7 +6852,7 @@ paths:
       operationId: createWorkspaceMount
       summary: Create a workspace mount (a named write-grant on a real local folder)
       description: >
-        FR-7.1/FR-5, ADR-061 D4/D6. Validates the name shape and uniqueness
+        FR-7.1/FR-5, ADR-063 D4/D6. Validates the name shape and uniqueness
         (400 on an invalid name, a collision with an existing mount, or a
         collision with an existing entry in work/; 400 also when host_path
         does not resolve to an existing, real, on-disk directory), resolves

@@ -71,7 +71,7 @@ func TestExecTool_AuditOnPathRejection(t *testing.T) {
 // Traces to: path-sandbox-and-capability-tiers-spec.md
 // ---------------------------------------------------------------------------
 
-// NOTE — ADR-061 / spec unified-file-access-and-mounts FR-2.2: reads are now
+// NOTE — ADR-063 / spec unified-file-access-and-mounts FR-2.2: reads are now
 // open outside the work dir, so a ReadFileTool no longer rejects
 // "/etc/passwd" the way this test originally exercised — that path is not
 // in the secret set, so FSOpRead now succeeds on it by design. The
@@ -320,7 +320,7 @@ func TestKillAuditFn_NilAfterNilLogger(t *testing.T) {
 // Differentiation test: two different rejected paths produce real error results.
 // ---------------------------------------------------------------------------
 
-// NOTE — ADR-061 / spec unified-file-access-and-mounts FR-2.2: reads are now
+// NOTE — ADR-063 / spec unified-file-access-and-mounts FR-2.2: reads are now
 // open outside the work dir, so a ReadFileTool no longer rejects either
 // path here. This test now drives a WriteFileTool (still confined to the
 // work dir regardless of Scope, FR-2.2/FR-2.5) to keep exercising "two

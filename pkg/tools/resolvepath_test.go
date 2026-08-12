@@ -127,7 +127,7 @@ func TestResolvePath_IOThroughOsRoot_NoTOCTOU(t *testing.T) {
 }
 
 // TestResolvePath_AbsoluteGatedByScope — spec test 4 (FR-005/FR-016), UPDATED
-// for ADR-061 / spec unified-file-access-and-mounts FR-2.2/FR-2.5: an
+// for ADR-063 / spec unified-file-access-and-mounts FR-2.2/FR-2.5: an
 // absolute FSOpRead path outside WorkDir is now permitted (minus carve-outs)
 // under BOTH Confined and Unrestricted — reads are open regardless of Scope.
 // The name is kept (it is the well-known "spec test 4" for FR-005/FR-016;
@@ -176,7 +176,7 @@ func TestResolvePath_AbsoluteGatedByScope(t *testing.T) {
 }
 
 // TestResolvePath_FSOpWrite_ConfinedToWorkDirOrMount_RegardlessOfScope —
-// ADR-061 / spec unified-file-access-and-mounts FR-2.2/FR-2.5: unlike reads,
+// ADR-063 / spec unified-file-access-and-mounts FR-2.2/FR-2.5: unlike reads,
 // an FSOpWrite to the SAME absolute outside path is refused under BOTH
 // Confined and Unrestricted scope — writes are confined to WorkDir or a
 // mount (policy.AllowedRoots) regardless of Scope, which is the new,
@@ -206,7 +206,7 @@ func TestResolvePath_FSOpWrite_ConfinedToWorkDirOrMount_RegardlessOfScope(t *tes
 }
 
 // TestResolvePath_SymlinkAnchorsOnRealpath_Write — spec test 5 (FR-006),
-// NARROWED to FSOpWrite by ADR-061 / spec unified-file-access-and-mounts
+// NARROWED to FSOpWrite by ADR-063 / spec unified-file-access-and-mounts
 // FR-2.2: a symlink INSIDE the confined WorkDir pointing OUTSIDE it is
 // refused for a WRITE — confinement still anchors on the realpath, not the
 // lexical in-workdir path, for the op that still confines at all. The
@@ -372,7 +372,7 @@ func TestResolvePath_SymlinkedWorkspaceRoot_Confined(t *testing.T) {
 // process, start ACCEPTING a WRITE that genuinely escapes the workspace —
 // neither via an absolute path to an unrelated real location, nor via a
 // lexical ".." escape expressed relative to the symlinked root. UPDATED for
-// ADR-061 / spec unified-file-access-and-mounts FR-2.2: this used FSOpRead
+// ADR-063 / spec unified-file-access-and-mounts FR-2.2: this used FSOpRead
 // originally; reads are now open outside WorkDir by design (see
 // TestResolvePath_SymlinkedWorkspaceRoot_Read_NowOpen below for that half),
 // so the negative control that still means something here — "the symlink
@@ -687,7 +687,7 @@ func TestResolvePath_EmptyPathDefaultsToWorkDir(t *testing.T) {
 }
 
 // TestResolvePath_LeadingDotDotEscape_Write — item #10 (ADR-046 P1 review),
-// NARROWED to FSOpWrite by ADR-061 / spec unified-file-access-and-mounts
+// NARROWED to FSOpWrite by ADR-063 / spec unified-file-access-and-mounts
 // FR-2.2: a rawPath that starts with ".." (escaping WorkDir from the very
 // first component) is still refused under Confined scope for a WRITE. The
 // original FSOpRead version of this assertion is now false by design — see
@@ -834,7 +834,7 @@ func TestGenericTools_PassDocumentedFSOp(t *testing.T) {
 			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)`,
 		},
 		{
-			// FR-2.3a (ADR-061 / spec unified-file-access-and-mounts):
+			// FR-2.3a (ADR-063 / spec unified-file-access-and-mounts):
 			// send_file uses FSOpSend, not FSOpRead, purely for audit —
 			// distinguishing a disclosure to a chat channel from an
 			// ordinary read. It carries no additional path restriction.
@@ -874,7 +874,7 @@ func TestGenericTools_PassDocumentedFSOp(t *testing.T) {
 }
 
 // ============================================================================
-// FR-2 (ADR-061 / spec unified-file-access-and-mounts) — operation-aware
+// FR-2 (ADR-063 / spec unified-file-access-and-mounts) — operation-aware
 // decision coverage. The table below is the "every op x location" matrix the
 // task explicitly asks for: inside the work dir, outside it (non-carve-out),
 // inside a mount (policy.AllowedRoots), and the secret set (a dedicated
@@ -1001,7 +1001,7 @@ func TestFR2_OpByLocationMatrix(t *testing.T) {
 
 // TestFR2_Exec_UnchangedScopeDispatch is FSOpExec's own coverage — per the
 // task brief and FR-2.2's table, exec is deliberately left on the pre-FR-2
-// Scope-only dispatch (the ADR-060 kernel model governs it, not this app
+// Scope-only dispatch (the ADR-062 kernel model governs it, not this app
 // layer's mount awareness), so — unlike Read/Write/Serve — its outcome still
 // varies by Scope alone and does NOT consult policy.AllowedRoots.
 func TestFR2_Exec_UnchangedScopeDispatch(t *testing.T) {

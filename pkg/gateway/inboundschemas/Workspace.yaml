@@ -55,7 +55,7 @@ properties:
   mounts:
     type: array
     description: >
-      Named write-grants on real local folders (FR-5, ADR-061 D4). Absent when
+      Named write-grants on real local folders (FR-5, ADR-063 D4). Absent when
       no mount exists (empty array is also acceptable on the wire). Created
       and removed via the dedicated mounts lifecycle, not via this record's
       own create/update requests.

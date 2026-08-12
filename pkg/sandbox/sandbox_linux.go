@@ -682,7 +682,7 @@ func (lb *LinuxBackend) RestrictCurrentThreadWithPolicy(policy *SandboxPolicy) e
 	// 3. Re-add the saved filesystem and net port rules. We tolerate ENOENT
 	//    (path missing on this arch) and EINVAL/ENOENT for net rules on
 	//    older ABIs, matching ApplyWithMode's behavior.
-	// ADR-060 §4.2 / spec FR-4.5: exclude the secret set from what the CHILD
+	// ADR-062 §4.2 / spec FR-4.5: exclude the secret set from what the CHILD
 	// can reach. Landlock has no deny primitive, so "exclude" means "grant the
 	// siblings and never the secret" — ExpandRulesExcluding does that walk.
 	//
@@ -778,7 +778,7 @@ func selectBackendPlatform() (SandboxBackend, string) {
 }
 
 // linuxFilesystemRules turns a SandboxPolicy into the path rules to install on
-// Landlock, resolving the ADR-060 filesystem model into grants.
+// Landlock, resolving the ADR-062 filesystem model into grants.
 //
 // # Why the open model needs a rule at all
 //

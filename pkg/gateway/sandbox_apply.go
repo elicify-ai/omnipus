@@ -245,7 +245,7 @@ func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err err
 		opts.Stderr = os.Stderr
 	}
 
-	// ADR-060 filesystem model, resolved BEFORE any exit path so the status
+	// ADR-062 filesystem model, resolved BEFORE any exit path so the status
 	// endpoint reports it even when the sandbox never gets applied (mode=off,
 	// a permissive downgrade, an Apply failure). An operator debugging "why can
 	// the agent read this" needs to know which model is configured, and the
@@ -525,7 +525,7 @@ func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err err
 	result.Policy = policy
 
 	// Step 5.3 — publish the BOOT HALF of a per-turn kernel policy
-	// (ADR-061 D1 / FR-1.3, FR-3.5).
+	// (ADR-063 D1 / FR-1.3, FR-3.5).
 	//
 	// sandbox.DeriveKernelPolicy needs the operator's configuration (filesystem
 	// model, allowed paths, port ranges) as well as the turn's own authored

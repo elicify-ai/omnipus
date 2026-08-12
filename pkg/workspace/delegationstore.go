@@ -70,7 +70,7 @@ import (
 //
 // That is the same protection entities/agents already relies on for the
 // Constraint #6 tool-policy map (ADR-054 §4) and entities/mounts for write
-// grants (ADR-061): a per-entity record that decides what an agent may do, kept
+// grants (ADR-063): a per-entity record that decides what an agent may do, kept
 // where the agent cannot reach it.
 //
 // # No migration, deliberately

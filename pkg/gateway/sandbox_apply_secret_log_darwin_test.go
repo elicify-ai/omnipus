@@ -107,7 +107,7 @@ func TestApplySandbox_SecretSetLog_Darwin(t *testing.T) {
 			t.Fatal("expected sandbox.applied to be logged")
 		}
 		if applied["model"] == nil || applied["model"] == "" {
-			t.Errorf("sandbox.applied (macOS emission site) is missing \"model\" (ADR-060 section:10.1); got %v", applied)
+			t.Errorf("sandbox.applied (macOS emission site) is missing \"model\" (ADR-062 section:10.1); got %v", applied)
 		}
 	})
 }

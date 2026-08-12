@@ -106,7 +106,7 @@ func TestIsCarveOut_WorkDirAtOmnipusHome_OwnTreeExceptionDoesNotApply(t *testing
 			{filepath.Join(home, "agents"), true},
 			{filepath.Join(home, "workspaces", "W", "work", "x"), true},
 			{filepath.Join(home, "workspaces"), true},
-			// config.json IS a carve-out as of ADR-061 FR-3.2. It was not
+			// config.json IS a carve-out as of ADR-063 FR-3.2. It was not
 			// before, and that was the hole: a child that can write it sets
 			// sandbox.mode: off and removes its own confinement on the next
 			// boot. The own-tree exception cannot re-admit it here either —
@@ -150,7 +150,7 @@ func TestIsCarveOut_WorkDirAtOmnipusHome_OwnTreeExceptionDoesNotApply(t *testing
 	})
 }
 
-// TestBuildCarveOuts_MergedSecretSet pins the ADR-061 FR-3.2 union.
+// TestBuildCarveOuts_MergedSecretSet pins the ADR-063 FR-3.2 union.
 //
 // This was TestBuildCarveOuts_FiveFixedRoots, asserting the app layer's own
 // five-entry list. That list is gone: buildCarveOuts now returns

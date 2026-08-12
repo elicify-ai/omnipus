@@ -19,7 +19,7 @@ import (
 
 // agentRoot + workspaceRoot model the two sibling subtrees under $OMNIPUS_HOME.
 //
-// t.Setenv(config.EnvHome, home) (ADR-061 / spec unified-file-access-and-
+// t.Setenv(config.EnvHome, home) (ADR-063 / spec unified-file-access-and-
 // mounts FR-2.2/FR-3.4): reads are no longer confined by WorkDir/Scope
 // alone, so tests that traverse OUT of the re-rooted workspace into
 // agents/agent-A now depend on fspolicy.IsCarveOut's agents/ carve-out

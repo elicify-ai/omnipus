@@ -133,7 +133,7 @@ func TestApplySandbox_Darwin_SeededExecPathsReachThePolicy(t *testing.T) {
 	cfg := darwinSandboxCfg(t, "enforce")
 	cfg.Sandbox.AllowedExecPaths = []string{toolDir}
 	// allowed_exec_paths is a CONFINED-model mechanism, so this test pins it
-	// explicitly rather than inheriting the seeded default. ADR-060 made "open"
+	// explicitly rather than inheriting the seeded default. ADR-062 made "open"
 	// the default, under which execution is unrestricted and the list is inert
 	// BY DESIGN — leaving this on the default turned a correct behaviour change
 	// into a red test that says nothing. The open-model half is asserted by the
@@ -217,7 +217,7 @@ func TestApplySandbox_Darwin_OpenModelIgnoresExecPaths(t *testing.T) {
 	}
 	if !result.Policy.ExecOpen {
 		t.Error("open model must report ExecOpen; without it agents still cannot run installed toolchains, " +
-			"which is the entire problem ADR-060 exists to fix")
+			"which is the entire problem ADR-062 exists to fix")
 	}
 }
 

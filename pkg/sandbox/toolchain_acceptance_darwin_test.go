@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-// TestRealToolchainRunsUnderOpenModel is the acceptance test for ADR-060.
+// TestRealToolchainRunsUnderOpenModel is the acceptance test for ADR-062.
 //
 // Every other test in this package asserts a property of a rendered profile or a
 // synthetic path. This one runs the ACTUAL binaries on the host under the ACTUAL

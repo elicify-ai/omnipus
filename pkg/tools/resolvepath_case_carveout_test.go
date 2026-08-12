@@ -94,7 +94,7 @@ func caseTestPolicy(t *testing.T, realHome string, withMount bool) fspolicy.FSPo
 		t.Fatal(err)
 	}
 	if withMount {
-		// ADR-061 D4: a workspace mount of $OMNIPUS_HOME grants writes anywhere
+		// ADR-063 D4: a workspace mount of $OMNIPUS_HOME grants writes anywhere
 		// under it EXCEPT the secret set — so the carve-out check is the only
 		// thing standing between the agent and config.json. This is the shape
 		// under which the case bypass produced real WRITES.
@@ -125,7 +125,7 @@ var caseSpellings = []struct {
 }
 
 // TestResolvePath_CaseVariantSecret_ReadIsDenied drives FSOpRead all the way to
-// PathHandle.ReadFile. FSOpRead is the dangerous op post-ADR-061 FR-2.2: reads
+// PathHandle.ReadFile. FSOpRead is the dangerous op post-ADR-063 FR-2.2: reads
 // are open ANYWHERE outside the secret set, so the carve-out check is the only
 // gate, and a spelling it misses is a straight disclosure.
 func TestResolvePath_CaseVariantSecret_ReadIsDenied(t *testing.T) {

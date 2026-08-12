@@ -10540,7 +10540,7 @@ type SandboxStatus struct {
 	// DisabledBy Reason the sandbox is disabled, if applicable. E.g. "config" or "kernel".
 	DisabledBy *string `json:"disabled_by,omitempty"`
 
-	// FilesystemModel Which ADR-060 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
+	// FilesystemModel Which ADR-062 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
 	FilesystemModel *SandboxStatusFilesystemModel `json:"filesystem_model,omitempty"`
 
 	// IssueRef Set when a known kernel incompatibility is flagged. Do NOT hard-code the literal issue number in the SPA.
@@ -10571,7 +10571,7 @@ type SandboxStatus struct {
 	SeccompEnforced *bool `json:"seccomp_enforced,omitempty"`
 }
 
-// SandboxStatusFilesystemModel Which ADR-060 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
+// SandboxStatusFilesystemModel Which ADR-062 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
 type SandboxStatusFilesystemModel string
 
 // Schedule A scheduled instruction for an agent (#264) — the wire projection of a cron job. When it fires, the owning agent runs the message in the chosen session mode under guardrails. Read model returned by the /schedules endpoints.
@@ -13191,7 +13191,7 @@ type Workspace struct {
 	// MemberConfigs Per-member (agentId → config) heartbeat settings for this workspace. Absent when no member has a config (empty map). Keys are agent IDs.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
 
-	// Mounts Named write-grants on real local folders (FR-5, ADR-061 D4). Absent when no mount exists (empty array is also acceptable on the wire). Created and removed via the dedicated mounts lifecycle, not via this record's own create/update requests.
+	// Mounts Named write-grants on real local folders (FR-5, ADR-063 D4). Absent when no mount exists (empty array is also acceptable on the wire). Created and removed via the dedicated mounts lifecycle, not via this record's own create/update requests.
 	Mounts *[]struct {
 		// HostPath Absolute host filesystem path to the mounted folder (FR-5.3). Resolved via realpath at creation time — the resolved (symlink-free) form is what is stored; the raw form the operator typed is not retained.
 		HostPath string `json:"host_path"`
@@ -13324,7 +13324,7 @@ type WorkspaceMemberHeartbeat struct {
 	SessionId *string `json:"session_id,omitempty"`
 }
 
-// WorkspaceMountCreateRequest Request body for POST /workspaces/{id}/mounts (FR-7.1, ADR-061 D4). Creates a new named write-grant on a real local folder. See WorkspaceMount.yaml for the exact shape rules `name` and `host_path` must satisfy.
+// WorkspaceMountCreateRequest Request body for POST /workspaces/{id}/mounts (FR-7.1, ADR-063 D4). Creates a new named write-grant on a real local folder. See WorkspaceMount.yaml for the exact shape rules `name` and `host_path` must satisfy.
 type WorkspaceMountCreateRequest struct {
 	// HostPath Absolute host filesystem path to the folder to mount (FR-5.3). Resolved via realpath at creation time; must currently exist and be a directory.
 	HostPath string `json:"host_path"`

@@ -21,7 +21,7 @@ func openPolicy(home string) SandboxPolicy {
 }
 
 // TestSeatbelt_DenyBlockIsLast is spec FR-3.2, and it is the assertion that
-// catches the ordering bug ADR-060 §4.1 documents rather than trusting a
+// catches the ordering bug ADR-062 §4.1 documents rather than trusting a
 // reviewer to notice it.
 //
 // $OMNIPUS_HOME is granted RWX — a FILTERED allow over the directory the secret

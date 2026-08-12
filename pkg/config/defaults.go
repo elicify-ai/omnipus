@@ -283,7 +283,7 @@ func DefaultConfig() *Config {
 			// fully replaced — including to empty — when the key is present.
 			AllowedExecPaths: DefaultAllowedExecPaths(),
 
-			// ADR-060: reads and program execution are OPEN by default; writes
+			// ADR-062: reads and program execution are OPEN by default; writes
 			// are confined exactly as before, and Omnipus's own secrets
 			// (master.key, credentials.json, config.json, cli.token, entities/)
 			// stay unreachable to sandboxed children on both macOS and Linux.
@@ -399,7 +399,7 @@ func DefaultConfig() *Config {
 				// server definition is a program the gateway launches, and the
 				// launched process is not confined by the sandbox. An agent that
 				// can add one has escaped the cage through the front door:
-				// config.json is in the ADR-060 secret set precisely so an agent
+				// config.json is in the ADR-062 secret set precisely so an agent
 				// cannot write an MCP server entry with write_file, and this tool
 				// wrote the same setting through the API.
 				//

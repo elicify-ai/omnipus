@@ -4,7 +4,7 @@
 //
 // Tests the mount lifecycle REST endpoints (rest_workspace_mounts.go):
 // POST /api/v1/workspaces/{id}/mounts and DELETE
-// /api/v1/workspaces/{id}/mounts/{name} (spec FR-7.1/7.2/7.3/8.1, ADR-061
+// /api/v1/workspaces/{id}/mounts/{name} (spec FR-7.1/7.2/7.3/8.1, ADR-063
 // D4/D6). rest_workspace_mounts_test.go covers the GET wire shape and the
 // POST/PUT /workspaces raw-body-sniff guard — this file covers the dedicated
 // lifecycle endpoints themselves.

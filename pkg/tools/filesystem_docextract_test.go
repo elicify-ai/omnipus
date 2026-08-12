@@ -226,7 +226,7 @@ func TestReadFile_DocumentPagination(t *testing.T) {
 }
 
 // TestReadFile_DocumentSymlinkEscape_NowExtractsOpenly — was
-// TestReadFile_DocumentSymlinkEscapeBlocked. ADR-061 / spec
+// TestReadFile_DocumentSymlinkEscapeBlocked. ADR-063 / spec
 // unified-file-access-and-mounts FR-2.2: reads (including the document-
 // extraction path, which routes through the identical ResolvePath call as a
 // plain read_file — see filesystem.go's extractDocument) are open outside

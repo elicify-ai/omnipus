@@ -24,7 +24,7 @@ type TurnPolicyInput struct {
 	// HomePath is $OMNIPUS_HOME. Required: the secret set is anchored to it.
 	HomePath string
 
-	// Model selects the ADR-060 read/exec posture.
+	// Model selects the ADR-062 read/exec posture.
 	Model FilesystemModel
 
 	// AllowedPaths and AllowedExecPaths are the operator's config lists, passed
@@ -55,7 +55,7 @@ type TurnPolicyInput struct {
 }
 
 // DeriveKernelPolicy is THE single function that turns an authored per-turn
-// policy into a kernel policy. ADR-061 D1 / spec FR-1.3.
+// policy into a kernel policy. ADR-063 D1 / spec FR-1.3.
 //
 // # Why there is exactly one of these
 //
@@ -72,8 +72,8 @@ type TurnPolicyInput struct {
 //   - WorkDir becomes a write grant, and drives the secret set's own-tree
 //     exception through fspolicy.DeniedPathsFor.
 //   - AllowedRoots (mounts) become write grants. Reads need no grant under the
-//     open model, so a mount is a write grant and nothing else — see ADR-061 D4.
-//   - Scope is NOT carried across as a read restriction. Post-ADR-060 reads are
+//     open model, so a mount is a write grant and nothing else — see ADR-063 D4.
+//   - Scope is NOT carried across as a read restriction. Post-ADR-062 reads are
 //     open, and Scope now governs writes only (spec FR-2.5). Rendering it as a
 //     read restriction here would put the kernel back out of step with the app
 //     layer in the one place this whole change exists to fix.

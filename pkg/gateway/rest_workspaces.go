@@ -82,7 +82,7 @@ func (a *restAPI) callerIdentity(r *http.Request) caller {
 
 // repositoryRetiredMsg is returned (400) whenever a caller's raw request body
 // carries a "repository" field on POST/PUT /api/v1/workspaces (FR-9.2,
-// ADR-061 D7). Workspace.repository is deleted from the wire, storage and the
+// ADR-063 D7). Workspace.repository is deleted from the wire, storage and the
 // sysagent tool with no back-compat (FR-9.1) — a caller still sending it must
 // get a loud 400, not a silent drop. Git linkage is now a convenience on top
 // of mounting (FR-9.3): clone the URL to an operator-chosen location, then
@@ -648,7 +648,7 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// /api/v1/workspaces/{id}/mounts[/{name}] — the mount lifecycle (FR-7.1/
-	// FR-7.3, ADR-061 D4). Same second-path-segment dispatch as /media above
+	// FR-7.3, ADR-063 D4). Same second-path-segment dispatch as /media above
 	// (not suffix matching — /mounts/{name} has a trailing segment).
 	if segs := strings.Split(strings.TrimPrefix(rest, "/"), "/"); len(segs) >= 2 && segs[1] == "mounts" {
 		a.HandleWorkspaceMounts(w, r)
