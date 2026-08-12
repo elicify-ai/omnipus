@@ -1311,10 +1311,28 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 		dsf = float64(*frame.DeviceScaleFactor)
 	}
 
+	// Record the viewer's deviceScaleFactor on the capture session BEFORE the
+	// CDP resize attempt. The two are independent: the encoder captures via
+	// the extension's tabs API and needs no gateway-side CDP handle, so a
+	// failed resize (e.g. "get window for target: context canceled" after a
+	// managed-Chrome relaunch under a still-attached panel — observed live
+	// 2026-08-12) must not swallow the scale. Before this ordering the blur
+	// fix's trigger sat unreachable behind exactly that failure, and Retina
+	// viewers stayed on 1x capture whenever the resize path was broken.
+	if att := state.peekWebRTCAttachment(); att != nil && att.capture != nil {
+		att.capture.SetCaptureScale(dsf)
+	}
+
 	applied, err := state.mgr.Live().SetViewport(browser.DefaultSessionID, frame.Width, frame.Height, dsf)
 	if err != nil {
 		slog.Warn("browser-ws: viewport resize failed",
 			"error", err, "viewer_id", viewerID, "width", frame.Width, "height", frame.Height)
+		// Still push a recapture so the scale (and the encoder's own
+		// tabs.get-derived size) take effect — the capture pipeline is
+		// healthy even when the CDP resize handle is not.
+		if att := state.peekWebRTCAttachment(); att != nil && att.capture != nil {
+			att.capture.Recapture()
+		}
 		wc.sendCriticalGen(
 			errorStatus("could not resize the browser viewport"),
 			dropContext(state.sessionID, viewerID, "viewport-failed"),
@@ -1344,7 +1362,7 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 	// SetViewport's own read-back was invalidated).
 	if att := state.peekWebRTCAttachment(); att != nil && att.capture != nil {
 		if w, h, ok := state.mgr.Live().CSSViewport(browser.DefaultSessionID); ok {
-			att.capture.SetCaptureScale(dsf)
+			// scale already recorded above, before the resize attempt
 			att.capture.RecaptureAt(w, h)
 		} else {
 			att.capture.Recapture()
