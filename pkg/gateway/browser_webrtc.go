@@ -940,20 +940,6 @@ func (h *BrowserWSHandler) webrtcInputSink(mgr *browser.BrowserManager, cfg *con
 			return
 		}
 		in := browserInputFrameToLiveInput(frame)
-		// Same video-pixel -> CSS divide as the WS ingress
-		// (scaleDownLiveInputCoords in browser_ws.go, see its doc comment for
-		// the incident). The sink closure is built BEFORE the CaptureSession
-		// exists (it is an argument to NewCaptureSession), so the session is
-		// resolved lazily per event - cheap next to the CDP dispatch, and it
-		// always reads the CURRENT capture after a recapture/relaunch.
-		if in.HasXY {
-			if cur := mgr.CaptureSession(); cur != nil {
-				if scale := cur.CaptureScale(); scale > 1 {
-					in.X /= scale
-					in.Y /= scale
-				}
-			}
-		}
 		if err := mgr.Live().Input(browser.DefaultSessionID, viewerID, in); err != nil {
 			if browser.IsBenignLiveInputError(err) {
 				slog.Debug("browser-webrtc: input rejected (benign)", "error", err, "viewer_id", viewerID)

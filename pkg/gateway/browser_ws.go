@@ -869,7 +869,6 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 	}
 
 	in := browserInputFrameToLiveInput(frame)
-	scaleDownLiveInputCoords(&in, state.peekWebRTCAttachment())
 
 	if err := state.mgr.Live().Input(browser.DefaultSessionID, viewerID, in); err != nil {
 		if browser.IsBenignLiveInputError(err) {
@@ -914,25 +913,6 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 // never drift — both funnel into the SAME
 // state.mgr.Live().Input(browser.DefaultSessionID, viewerID, in) call this
 // function's result feeds.
-// scaleDownLiveInputCoords converts the SPA's video-pixel X/Y back to the
-// tab's CSS pixels. Since the physical-resolution capture fix
-// (BrowserCaptureControlFrame.capture_scale) the <video> the SPA maps
-// pointer events against carries CSS x captureScale pixels, but CDP's
-// Input.dispatchMouseEvent speaks CSS - without this divide every click and
-// scroll landed at captureScale times the intended coordinates (live report,
-// macOS 2026-08-12: buttons unclickable after the blur fix). Wheel
-// DeltaX/DeltaY are intentionally untouched: the SPA sends raw viewer-side
-// wheel deltas that never pass through the video-space mapping.
-func scaleDownLiveInputCoords(in *browser.LiveInput, att *webrtcAttachment) {
-	if in == nil || !in.HasXY || att == nil || att.capture == nil {
-		return
-	}
-	if scale := att.capture.CaptureScale(); scale > 1 {
-		in.X /= scale
-		in.Y /= scale
-	}
-}
-
 func browserInputFrameToLiveInput(frame generated.BrowserInputFrame) browser.LiveInput {
 	in := browser.LiveInput{Kind: frame.Kind}
 	if frame.X != nil {
