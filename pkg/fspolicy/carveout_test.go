@@ -106,10 +106,19 @@ func TestIsCarveOut_WorkDirAtOmnipusHome_OwnTreeExceptionDoesNotApply(t *testing
 			{filepath.Join(home, "agents"), true},
 			{filepath.Join(home, "workspaces", "W", "work", "x"), true},
 			{filepath.Join(home, "workspaces"), true},
-			// A file that is a sibling of the carve-out roots (directly
-			// under $OMNIPUS_HOME but not one of the four roots itself) is
-			// correctly NOT a carve-out — only the four named roots are.
-			{filepath.Join(home, "config.json"), false},
+			// config.json IS a carve-out as of ADR-061 FR-3.2. It was not
+			// before, and that was the hole: a child that can write it sets
+			// sandbox.mode: off and removes its own confinement on the next
+			// boot. The own-tree exception cannot re-admit it here either —
+			// that exception needs WorkDir to be a PROPER DESCENDANT of the
+			// root, and WorkDir == $OMNIPUS_HOME is not a descendant of
+			// $OMNIPUS_HOME/config.json at all.
+			{filepath.Join(home, "config.json"), true},
+			{filepath.Join(home, "cli.token"), true},
+			// Still NOT a carve-out: an ordinary file that merely sits beside
+			// the roots. The set is named entries plus backup prefixes, never
+			// "everything directly under $OMNIPUS_HOME".
+			{filepath.Join(home, "notes.txt"), false},
 		}
 
 		for _, tc := range cases {
@@ -141,15 +150,30 @@ func TestIsCarveOut_WorkDirAtOmnipusHome_OwnTreeExceptionDoesNotApply(t *testing
 	})
 }
 
-func TestBuildCarveOuts_FiveFixedRoots(t *testing.T) {
+// TestBuildCarveOuts_MergedSecretSet pins the ADR-061 FR-3.2 union.
+//
+// This was TestBuildCarveOuts_FiveFixedRoots, asserting the app layer's own
+// five-entry list. That list is gone: buildCarveOuts now returns
+// SecretPaths, the single definition shared with the kernel layer. The two
+// used to be maintained separately and had drifted in BOTH directions — the
+// app layer denied agents/ and workspaces/ that the kernel granted, while the
+// kernel denied config.json and cli.token that the app layer left readable.
+//
+// The two entries this test gains are the ones that were the live hole:
+// config.json (a child rewriting it disables the sandbox) and cli.token (a
+// live gateway bearer token, previously readable through read_file by any
+// agent running unrestricted).
+func TestBuildCarveOuts_MergedSecretSet(t *testing.T) {
 	home := filepath.FromSlash("/omnh")
 	got := buildCarveOuts(home)
 	want := []string{
 		filepath.Join(home, "master.key"),
 		filepath.Join(home, "credentials.json"),
+		filepath.Join(home, "config.json"),
+		filepath.Join(home, "cli.token"),
+		filepath.Join(home, "entities"),
 		filepath.Join(home, "agents"),
 		filepath.Join(home, "workspaces"),
-		filepath.Join(home, "entities"),
 	}
 	if len(got) != len(want) {
 		t.Fatalf("buildCarveOuts(%q) = %v, want %v", home, got, want)

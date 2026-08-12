@@ -82,7 +82,7 @@ func TestDefaultChildPolicy_OmitsSecretFiles(t *testing.T) {
 	// regular file named "entities" and the carve-out would be tested against a
 	// shape that never occurs on a real install.
 	for _, name := range SecretFilesRelative {
-		if name == "entities" {
+		if name == "entities" || name == "agents" || name == "workspaces" {
 			if err := os.MkdirAll(filepath.Join(home, name), 0o700); err != nil {
 				t.Fatalf("mkdir %s: %v", name, err)
 			}
@@ -106,13 +106,21 @@ func TestDefaultChildPolicy_OmitsSecretFiles(t *testing.T) {
 	// holds agent WORKSPACES and must stay writable; entities/ holds their tool
 	// POLICY and must not. Naming the wrong one would break every agent's
 	// working directory while looking like hardening, so both are asserted.
-	if err := os.MkdirAll(filepath.Join(home, "agents"), 0o700); err != nil {
-		t.Fatalf("mkdir agents: %v", err)
-	}
+	// agents/ is seeded by the loop above now that it is part of the secret
+	// vocabulary. It must still be GRANTED here: DefaultChildPolicy carves out
+	// the boot set, and agents/ is deliberately not in that — see
+	// TestSecretPaths.
 
 	policy := DefaultChildPolicy(home, nil, nil, nil, nil)
 
-	for _, secret := range SecretFilesRelative {
+	// Iterate the BOOT set, which is what DefaultChildPolicy carves out. The
+	// combined list additionally contains the coarse agents/ and workspaces/
+	// roots, and those are granted here on purpose — their exclusion is a
+	// per-turn decision that needs a work dir (see DeniedPathsFor). Asserting
+	// against the combined list here demands a carve-out this function must not
+	// perform, and the two explicit assertions at the end of this test pin that
+	// distinction directly.
+	for _, secret := range SecretEntriesAlwaysRelative {
 		secretPath := filepath.Clean(filepath.Join(home, secret))
 		for _, r := range policy.FilesystemRules {
 			if filepath.Clean(r.Path) == secretPath {

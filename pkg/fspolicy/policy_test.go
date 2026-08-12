@@ -67,13 +67,14 @@ func TestEffectiveFSPolicy_ReturnsConsistentPolicyShape(t *testing.T) {
 				t.Errorf("Scope = %q, want %q", policy.Scope, tc.wantScope)
 			}
 
-			wantCarveOuts := []string{
-				filepath.Join(realHome, "master.key"),
-				filepath.Join(realHome, "credentials.json"),
-				filepath.Join(realHome, "agents"),
-				filepath.Join(realHome, "workspaces"),
-				filepath.Join(realHome, "entities"),
-			}
+			// Derived from the shared definition rather than restated. This
+			// test is about the POLICY SHAPE — that EffectiveFSPolicy
+			// populates CarveOuts at all, for every scope — not about which
+			// entries are in the set. Restating the list here duplicated
+			// buildCarveOuts and meant a deliberate change to the set failed
+			// in two places for one reason. The set itself is pinned once, by
+			// TestBuildCarveOuts_MergedSecretSet.
+			wantCarveOuts := buildCarveOuts(realHome)
 			if len(policy.CarveOuts) != len(wantCarveOuts) {
 				t.Fatalf("CarveOuts = %v, want %v", policy.CarveOuts, wantCarveOuts)
 			}

@@ -133,9 +133,14 @@ func TestDefaultPolicy_DeniedPathsUnderBothModels(t *testing.T) {
 	}
 }
 
-// TestSecretPaths pins the set itself. agents/ being absent is the assertion
-// that matters most: an earlier draft listed it, which would have made every
-// agent's own working directory unwritable while appearing to harden.
+// TestSecretPaths pins the BOOT set — the entries that need no turn context.
+//
+// The assertions about agents/ changed under ADR-061 and the change is the
+// interesting part. Before, `agents` was simply not a secret. Now it is part of
+// the merged vocabulary, but it is NOT in the boot set, because excluding it
+// without a work dir to compare against locks every agent out of its own
+// directory. Whether it is denied is a per-turn question, answered by
+// DeniedPathsFor and asserted in TestDeniedPathsFor_OwnTreeException.
 func TestSecretPaths(t *testing.T) {
 	got := SecretPaths("/home/x/.omnipus")
 	want := []string{
@@ -148,15 +153,81 @@ func TestSecretPaths(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("SecretPaths = %v, want %v", got, want)
 	}
-	if IsSecretEntry("agents") {
-		t.Error("agents/ must NOT be a secret entry — it holds agent workspaces, " +
-			"which must stay writable; entities/ holds the policy")
+	for _, coarse := range []string{"/home/x/.omnipus/agents", "/home/x/.omnipus/workspaces"} {
+		for _, p := range got {
+			if p == coarse {
+				t.Errorf("%q must NOT be in the BOOT set — denying it with no work dir to "+
+					"compare against locks every agent out of its own directory", coarse)
+			}
+		}
 	}
 	if !IsSecretEntry("entities") {
 		t.Error("entities/ must be a secret entry — it holds per-agent tool policy")
 	}
+	if !IsSecretEntry("agents") {
+		t.Error("agents/ must be part of the secret vocabulary — it is excluded per turn, " +
+			"not never; see DeniedPathsFor")
+	}
 	if SecretPaths("") != nil {
 		t.Error("SecretPaths(\"\") must be nil, not denies rooted at /")
+	}
+}
+
+// TestDeniedPathsFor_OwnTreeException is the per-turn half, and it is the one
+// that is easy to get backwards in either direction.
+//
+// Re-admit too eagerly and an agent reaches every other agent's home during a
+// workspace turn. Re-admit too little and an agent cannot reach its own home in
+// an agent-home-rooted turn. Both shapes are asserted because a build that got
+// one right and the other wrong would look correct from either single test.
+func TestDeniedPathsFor_OwnTreeException(t *testing.T) {
+	const home = "/home/x/.omnipus"
+	has := func(paths []string, want string) bool {
+		for _, p := range paths {
+			if p == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	agentRooted := DeniedPathsFor(home, home+"/agents/self")
+	if has(agentRooted, home+"/agents") {
+		t.Error("agent-home-rooted turn: agents/ must be re-admitted, or the agent " +
+			"cannot reach the directory it is working in")
+	}
+	if !has(agentRooted, home+"/workspaces") {
+		t.Error("agent-home-rooted turn: workspaces/ is NOT the own tree and must stay denied")
+	}
+
+	workspaceRooted := DeniedPathsFor(home, home+"/workspaces/w1/work")
+	if !has(workspaceRooted, home+"/agents") {
+		t.Error("re-rooted workspace turn: agents/ must stay denied — during a workspace " +
+			"turn an agent's own home is as unreachable as anyone else's, matching " +
+			"today's behaviour")
+	}
+	if has(workspaceRooted, home+"/workspaces") {
+		t.Error("re-rooted workspace turn: workspaces/ is the own tree and must be re-admitted")
+	}
+
+	// Equality is not descent: a work dir sitting exactly ON a coarse root must
+	// NOT earn the exception, or pointing a turn at agents/ re-admits every
+	// agent's home at once.
+	onRoot := DeniedPathsFor(home, home+"/agents")
+	if !has(onRoot, home+"/agents") {
+		t.Error("a work dir equal to the root must not earn the own-tree exception")
+	}
+
+	// No work dir re-admits nothing — the safe direction.
+	if !has(DeniedPathsFor(home, ""), home+"/agents") {
+		t.Error("an empty work dir must yield the full set, not the boot subset")
+	}
+
+	// The context-free entries are present in every shape.
+	for _, shape := range [][]string{agentRooted, workspaceRooted, onRoot} {
+		if !has(shape, home+"/master.key") || !has(shape, home+"/cli.token") {
+			t.Error("the context-free entries must be denied in every turn shape")
+		}
 	}
 }
 

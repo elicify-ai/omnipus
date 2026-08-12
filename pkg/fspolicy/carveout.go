@@ -26,13 +26,23 @@ import (
 // omnipusHome MUST already be an absolute, realpath'd location; the caller,
 // EffectiveFSPolicy, resolves it before calling this.
 func buildCarveOuts(omnipusHome string) []string {
-	return []string{
-		filepath.Join(omnipusHome, "master.key"),
-		filepath.Join(omnipusHome, "credentials.json"),
-		filepath.Join(omnipusHome, "agents"),
-		filepath.Join(omnipusHome, "workspaces"),
-		filepath.Join(omnipusHome, "entities"),
-	}
+	// ADR-061 D3 / spec FR-3.1: one definition, shared with the kernel layer.
+	//
+	// This used to be its own five-entry literal. It is now SecretPaths, which
+	// is the union of this list and the kernel layer's — each half protected
+	// something the other missed. Concretely, the app layer gains:
+	//
+	//   config.json  — a child that can write it turns its own sandbox off
+	//   cli.token    — a LIVE gateway bearer token, previously readable by any
+	//                  agent running unrestricted, through read_file
+	//   config.json.bak-*, credentials.json.*, master.key.*
+	//                — a copy of a secret is a secret; a real install carries
+	//                  a config backup holding the same token
+	//
+	// and the kernel layer gains agents/ and workspaces/ from here. Keeping two
+	// lists in step by hand is what produced that divergence, so there is now
+	// exactly one and neither layer owns it.
+	return SecretPaths(omnipusHome)
 }
 
 // IsCarveOut reports whether resolvedAbsPath falls on or under any of

@@ -262,17 +262,6 @@ func isSystemRestricted(path string) bool {
 // is layered on top via pkg/security/SSRFChecker.
 var DefaultConnectPorts = []uint16{53, 80, 443}
 
-// SecretFilesRelative is retained as the historical name for the $OMNIPUS_HOME
-// carve-out set and now ALIASES the single definition in secret_set.go.
-//
-// It used to be its own two-entry list (master.key, credentials.json). ADR-060
-// widened the set to five entries and made drift between copies the thing to
-// prevent, so this is an alias rather than a second list — see
-// SecretEntriesRelative for what each entry is and why agents/ is not among
-// them. Closes pentest items C1/C2 per v0.2 #155 item 8, and now also the
-// config/token/policy holes ADR-060 §4.0 documents.
-var SecretFilesRelative = SecretEntriesRelative
-
 // DefaultChildPolicy is the narrowed policy DESIGN for tool-exec children.
 // It returns the same shape as DefaultPolicy but with the
 // SecretFilesRelative carve-out applied to $OMNIPUS_HOME — the home root
@@ -333,8 +322,12 @@ func DefaultChildPolicy(
 		return policy
 	}
 
-	secretSet := make(map[string]struct{}, len(SecretFilesRelative))
-	for _, name := range SecretFilesRelative {
+	// The BOOT set, not the combined one. DefaultChildPolicy runs without a
+	// work dir, and the combined list includes the coarse `agents/` and
+	// `workspaces/` roots whose exclusion is only meaningful relative to one.
+	// Iterating the combined list here strips every agent's own home.
+	secretSet := make(map[string]struct{}, len(SecretEntriesAlwaysRelative))
+	for _, name := range SecretEntriesAlwaysRelative {
 		secretSet[name] = struct{}{}
 	}
 
