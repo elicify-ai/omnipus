@@ -86,27 +86,36 @@ type managedChromeCmdline struct {
 //     Extensions.loadUnpacked (see launchChrome / LoadExtension in
 //     coordinator.go) — --disable-extensions would defeat that even with
 //     --allowlisted-extension-id set.
-//   - --mute-audio IS included, and deliberately so. It was previously omitted
-//     on the theory that dropping it "keeps audio rendering intact for
-//     tabCapture". That theory is wrong in one direction and harmful in the
-//     other. Wrong: spike Q2 T1 measured capture-side RMS 0.1762 WITH
-//     --mute-audio vs 0.1775 without — muting the local OUTPUT device does not
-//     touch what the renderer produces, which is what tabCapture taps. Harmful:
-//     on a host that actually HAS an audio device (i.e. every developer's
-//     macOS/Windows machine, as opposed to the headless Linux pod this was
-//     tuned on) omitting it means the agent's browsing plays out loud through
-//     the operator's speakers. That was observed live on macOS 2026-08-12.
-//     Muting costs nothing and stops a browsing agent hijacking the audio
-//     output of the machine it runs on.
+//
+//   - --mute-audio is OMITTED, and MUST stay omitted. It silences what
+//     tabCapture receives — measured on darwin 2026-08-12 with spike Q2 T3c
+//     (the test that actually consumes a captured MediaStream), full Chrome
+//     151.0.7922.77:
+//     without --mute-audio: audioTracks=1 rmsMean=0.30258 nonzero=32/32
+//     with    --mute-audio: audioTracks=1 rmsMean=0       nonzero=0/32
+//     The track is still negotiated and still arrives, so the SPA's audio
+//     control appears and looks healthy — the samples are simply all zero.
+//     Silent-by-construction, indistinguishable from working audio until
+//     someone listens.
+//
+//     A previous revision of THIS comment added the flag, citing spike T1's
+//     "RMS 0.1762 with vs 0.1775 without" as proof capture survives it. That
+//     was a misreading: T1 measures the page's OWN AudioContext analyser
+//     inside the renderer, which --mute-audio does not affect. It says
+//     nothing about the tabCapture tap. Do not re-add the flag on the
+//     strength of T1 numbers.
+//
+//     Known consequence, accepted: on a host WITH a real audio device (any
+//     developer machine, as opposed to the headless Linux pod this was tuned
+//     on) the captured tab's audio also plays out of the local speakers. That
+//     is a real annoyance and worth fixing — but not by muting the source.
+//     See the audio-routing follow-up rather than reaching for this flag.
 //
 // cdppipe itself contributes the pipe-specific flags (--remote-debugging-pipe,
 // --no-first-run, --no-default-browser-check, --user-data-dir, about:blank),
 // so they are deliberately omitted here (cdppipe/allocator.go's buildArgs).
 func chromeHardeningBaseFlags() []string {
 	args := []string{
-		// See the --mute-audio note in this function's doc comment: this mutes
-		// the local output device only; tabCapture still receives real samples.
-		"--mute-audio",
 		"--disable-background-networking",
 		"--enable-features=NetworkService,NetworkServiceInProcess",
 		"--disable-background-timer-throttling",
