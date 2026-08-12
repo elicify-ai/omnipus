@@ -715,15 +715,15 @@ async function captureActiveTabStream() {
         minHeight: Math.round(capH * captureScale),
         maxWidth: Math.round(capW * captureScale),
         maxHeight: Math.round(capH * captureScale),
-        // Frame-production floor (measured 2026-08-13): without an explicit
-        // minFrameRate the headless compositor treated the captured tab as
-        // occluded and delivered only its refresh heartbeat - a metronomic
-        // 2fps (exactly 1 frame per 500ms over 40 samples) under a
-        // full-viewport 60fps animation, which is why video-heavy pages
-        // "stuck" while static pages felt fine. min_frame_rate is the knob
-        // Chromium's tab capturer uses to actively request compositor
-        // frames for occluded surfaces. Page.bringToFront and focus
-        // emulation were both tried first and did NOT lift the cap.
+        // Frame-rate floor/ceiling. Added 2026-08-13 while chasing a
+        // metronomic 2fps that turned out to be the SSRF guard silently
+        // blocking the local test page (what got measured was the static
+        // start page's refresh heartbeat), so this floor is NOT the fix
+        // for that episode and is not load-bearing. Kept as standard
+        // practice for occluded-surface capture: min_frame_rate is the
+        // knob Chromium's tab capturer uses to actively request
+        // compositor frames for occluded surfaces, and a headless
+        // captured tab is permanently occluded.
         minFrameRate: 15,
         maxFrameRate: 30,
       },
