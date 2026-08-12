@@ -46,7 +46,6 @@ export type WsFrameType =
   | "browser_input"
   | "browser_control"
   | "browser_detach"
-  | "browser_screencast"
   | "browser_status"
   | "browser_tab_action"
   | "browser_tabs"
@@ -504,19 +503,6 @@ export interface BrowserDetachFrame {
   session_id?: string;
 }
 
-export interface BrowserScreencastFrame {
-  type: "browser_screencast";
-  session_id: string;
-  seq: number;
-  data: string;
-  width: number;
-  height: number;
-  page_scale?: number;
-  offset_top?: number;
-  scroll_offset_x?: number;
-  scroll_offset_y?: number;
-}
-
 export interface BrowserStatusFrame {
   type: "browser_status";
   state: "attached" | "idle" | "controlling" | "released" | "detached" | "error";
@@ -704,7 +690,6 @@ export type WsFrame =
   | BrowserInputFrame
   | BrowserControlFrame
   | BrowserDetachFrame
-  | BrowserScreencastFrame
   | BrowserStatusFrame
   | BrowserViewportFrame
   | BrowserTabActionFrame
@@ -773,7 +758,6 @@ export type ServerFrame =
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
   | NotificationFrame
-  | BrowserScreencastFrame
   | BrowserStatusFrame
   | BrowserViewportFrame
   | BrowserTabActionFrame

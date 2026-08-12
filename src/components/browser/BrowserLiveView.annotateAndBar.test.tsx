@@ -57,17 +57,27 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 
 import { BrowserLiveView } from './BrowserLiveView'
 
+/** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. Every render
+ * call in this file supplies it via the `mediaStream` test/override seam
+ * (see BrowserLiveView.webrtcSink.test.tsx) — the JPEG screencast sink is
+ * gone (ADR-047), WebRTC video is the only path. */
+function fakeMediaStream(id = 'stream-1'): MediaStream {
+  return { id } as unknown as MediaStream
+}
+
+/** Connects the WS and simulates the <video> sink decoding its first real
+ * frame — the direct replacement for the old JPEG-era `onScreencast`
+ * emission. Requires the component to be rendered with `mediaStream` so the
+ * <video> element exists to fire `loadedmetadata` on. */
 function connectAndFrame() {
   act(() => {
     callbacksRef.current?.onConnected?.()
-    callbacksRef.current?.onScreencast?.({
-      type: 'browser_screencast',
-      session_id: 's1',
-      seq: 1,
-      data: 'AAAA',
-      width: 1280,
-      height: 720,
-    })
+  })
+  const video = screen.getByTestId('browser-live-video') as HTMLVideoElement
+  act(() => {
+    Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
+    Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
+    fireEvent.loadedMetadata(video)
   })
 }
 
@@ -85,20 +95,20 @@ beforeEach(() => {
 
 describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visible)', () => {
   it('renders the address bar even while not controlling (D5: always visible)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     expect(screen.getByRole('textbox', { name: /address bar/i })).toBeInTheDocument()
   })
 
   it('renders the address bar once the viewer takes control too', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     takeControl()
     expect(screen.getByRole('textbox', { name: /address bar/i })).toBeInTheDocument()
   })
 
   it('normalizes a bare hostname and sends a navigate input frame on submit', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     takeControl()
 
@@ -110,7 +120,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
   })
 
   it('does not send when the address bar is empty (no Go button — Enter submits)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     takeControl()
 
@@ -120,7 +130,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
   })
 
   it('leaves an explicit https:// URL untouched', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     takeControl()
 
@@ -136,7 +146,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
   // tested directly in browserLiveUrl.test.ts; this proves the component
   // actually wires it in (not `normalizeNavigateUrl`).
   it('routes a search-like phrase to a Google search navigate', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     takeControl()
 
@@ -155,7 +165,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
   // only screencast frames, never a browser_status, so nothing cleared it) —
   // handleOmniboxSubmit clears it optimistically on every new submit.
   it('clears a stale error banner when a new navigate is submitted', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     takeControl()
 
@@ -179,7 +189,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
   // ADR-040 D5 "must-handle": submitting while NOT currently driving takes
   // the wheel first (sendControl('take')) before dispatching the navigate.
   it('takes the wheel before navigating when submitted while not driving', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
 
     const input = screen.getByRole('textbox', { name: /address bar/i })
@@ -191,7 +201,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
   })
 
   it('does not send control:take again when submitted while already driving', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     takeControl()
     mockSendControl.mockClear()
@@ -211,7 +221,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
   // which already covers the click path — this is defense-in-depth for the
   // handler itself, exercised via a direct form submit).
   it('does not take the wheel nor navigate when controlled_by_other is true (direct submit, bypassing the disabled Go button)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'attached', controlled_by_other: true })
@@ -232,7 +242,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
   // routing the omnibox through the same driveMode as everything else
   // ("annotate excludes driving" applies here too now).
   it('does not take the wheel nor navigate while annotate mode is active', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
 
@@ -253,7 +263,7 @@ describe('BrowserLiveView — Annotate mode ⟷ driving mutual exclusion (ADR-03
   // `annotateMode` BEFORE ever consulting the driving state, so a click on
   // the frame while annotating must never implicitly take the wheel.
   it('a click on the frame does not implicitly take the wheel while annotate mode is active', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
 
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
@@ -264,7 +274,7 @@ describe('BrowserLiveView — Annotate mode ⟷ driving mutual exclusion (ADR-03
   })
 
   it('releases control automatically when entering annotate mode while driving', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
     takeControl()
 
@@ -284,7 +294,7 @@ describe('BrowserLiveView — Annotate mode ⟷ driving mutual exclusion (ADR-03
   // branching on annotateMode first), so annotate mode must actually engage
   // here, well before any browser_status('released') round-trip.
   it('actually enters annotate mode on the first click while driving, despite the async release gap', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
     takeControl()
 
@@ -298,7 +308,7 @@ describe('BrowserLiveView — Annotate mode ⟷ driving mutual exclusion (ADR-03
   })
 
   it('exiting annotate mode re-allows a pointer click to implicitly take the wheel', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
 
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
@@ -315,7 +325,7 @@ describe('BrowserLiveView — Annotate mode ⟷ driving mutual exclusion (ADR-03
   })
 
   it('sets a crosshair cursor over the frame while annotating', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
 
@@ -323,7 +333,7 @@ describe('BrowserLiveView — Annotate mode ⟷ driving mutual exclusion (ADR-03
   })
 
   it('a drag inside the frame does NOT forward any control input while annotating', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
 
@@ -336,7 +346,7 @@ describe('BrowserLiveView — Annotate mode ⟷ driving mutual exclusion (ADR-03
   })
 
   it('renders a live selection-box overlay while dragging in annotate mode', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
 
@@ -356,7 +366,7 @@ describe('BrowserLiveView — Annotate mode ⟷ driving mutual exclusion (ADR-03
   // browserLiveCoords.test.ts's computeCropRect/mapClientToFramePixels and
   // browserAnnotate.test.ts's post-crop orchestration).
   it('a completed drag attempts the crop and surfaces a graceful failure toast when capture is unavailable', async () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
 
@@ -377,7 +387,7 @@ describe('BrowserLiveView — Annotate mode ⟷ driving mutual exclusion (ADR-03
   // though the user is actively mid-annotation. `visualState` gives
   // annotating display priority over every other derived state.
   it('shows a "You\'re annotating" status chip instead of the driving-derived label', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
 
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
@@ -397,19 +407,19 @@ describe('BrowserLiveView — Annotate mode ⟷ driving mutual exclusion (ADR-03
 // annotate to chat; the pop-out route deliberately omits the prop.
 describe('BrowserLiveView — Annotate visibility gate (ADR-039 D-B1/B2, UAT FE-4)', () => {
   it('does not render the Annotate button when canAnnotate is not provided (e.g. the pop-out window)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     expect(screen.queryByRole('button', { name: /annotate a region/i })).not.toBeInTheDocument()
   })
 
   it('does not render the Annotate button when canAnnotate is explicitly false', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate={false} />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate={false} />)
     connectAndFrame()
     expect(screen.queryByRole('button', { name: /annotate a region/i })).not.toBeInTheDocument()
   })
 
   it('renders the Annotate button when canAnnotate is true (e.g. the docked panel)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
     expect(screen.getByRole('button', { name: /annotate a region/i })).toBeInTheDocument()
   })
@@ -427,7 +437,7 @@ describe('BrowserLiveView — controlled_by_other (ADR-038, UAT FE-6, carried in
   // disabled the real human's mouse and keyboard. Control is shared now: the
   // chip is informational only, and the click must still act.
   it('still lets the local user act when another viewer is also present', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'attached', controlled_by_other: true })
@@ -448,7 +458,7 @@ describe('BrowserLiveView — controlled_by_other (ADR-038, UAT FE-6, carried in
   })
 
   it('shows "Click to drive" and allows click-to-drive when controlled_by_other is false/absent', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'attached' })
@@ -471,7 +481,7 @@ describe('BrowserLiveView — controlled_by_other (ADR-038, UAT FE-6, carried in
 // language; anything unrecognized passes through unchanged.
 describe('BrowserLiveView — friendly error messages (UAT FE-7)', () => {
   it('maps an SSRF-blocked navigate error to plain language', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({
@@ -486,7 +496,7 @@ describe('BrowserLiveView — friendly error messages (UAT FE-7)', () => {
   })
 
   it('maps a URL-parse failure to plain language', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({
@@ -500,7 +510,7 @@ describe('BrowserLiveView — friendly error messages (UAT FE-7)', () => {
   })
 
   it('passes an unrecognized error message through unchanged', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({
@@ -528,7 +538,7 @@ describe('BrowserLiveView — friendly error messages (UAT FE-7)', () => {
     ['browser input failed: browser live: navigate blocked: SSRF: too many redirects'],
     ['browser input failed: browser live: navigate blocked: SSRF: cannot extract host from URL "not-a-url"'],
   ])('maps an unreachable/DNS-failure navigate error to plain "couldn\'t be reached" language: %s', (message) => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'error', message })
@@ -543,7 +553,7 @@ describe('BrowserLiveView — friendly error messages (UAT FE-7)', () => {
   // for a malformed host) must map to the invalid-URL message, not the
   // security-block one — the invalid-URL branch must run FIRST.
   it('maps a message containing both "navigate blocked" and an invalid-character host to the invalid-URL message (order matters)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({
@@ -561,7 +571,7 @@ describe('BrowserLiveView — friendly error messages (UAT FE-7)', () => {
     ['browser input failed: browser live: navigate blocked: SSRF: blocked private IP range 10.0.0.5 (10.0.0.0/8)'],
     ['browser input failed: browser live: navigate blocked: SSRF: blocked private IPv6 range fd00:: (fd00::/8)'],
   ])('maps an actual SSRF policy block to the "blocked for security" message: %s', (message) => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'error', message })

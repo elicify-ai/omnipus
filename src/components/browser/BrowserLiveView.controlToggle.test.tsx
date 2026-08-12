@@ -7,6 +7,13 @@
 // "Driving" is simulated the same way BrowserLiveView.mouseMoveThrottle.test.tsx
 // does — by emitting a browser_status{state:'controlling'} frame directly —
 // since there is no longer an explicit button to click to acquire the lock.
+//
+// The JPEG screencast sink is gone (ADR-047 — WebRTC is the only live-video
+// path). Where a test needs the interactive container/video to exist, it
+// renders with the `mediaStream` test/override seam (see
+// BrowserLiveView.webrtcSink.test.tsx) and drives `onLoadedMetadata` to
+// simulate the video decoding its first real frame — the direct replacement
+// for the old `onScreencast` call.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -51,6 +58,11 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 
 import { BrowserLiveView } from './BrowserLiveView'
 
+/** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. */
+function fakeMediaStream(id = 'stream-1'): MediaStream {
+  return { id } as unknown as MediaStream
+}
+
 /** Stubs the frame container's layout rect to a clean 1:1 box so
  * mapClientToDevice never short-circuits to null (jsdom reports all-zero
  * rects by default) — same technique as the mouseMoveThrottle test suite. */
@@ -63,17 +75,19 @@ function stubFrameRect() {
   return container
 }
 
+/** Connects the WS AND simulates the <video> sink decoding its first real
+ * frame (requires the component to be rendered with a `mediaStream` prop so
+ * the <video> element exists to fire `loadedmetadata` on) — the direct
+ * replacement for the old JPEG-era `onScreencast` emission. */
 function connectAndFrame() {
   act(() => {
     callbacksRef.current?.onConnected?.()
-    callbacksRef.current?.onScreencast?.({
-      type: 'browser_screencast',
-      session_id: 's1',
-      seq: 1,
-      data: 'AAAA',
-      width: 1280,
-      height: 720,
-    })
+  })
+  const video = screen.getByTestId('browser-live-video') as HTMLVideoElement
+  act(() => {
+    Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
+    Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
+    fireEvent.loadedMetadata(video)
   })
 }
 
@@ -97,7 +111,7 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
   })
 
   it('reflects a browser_status "controlling" frame as "You\'re driving"', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
@@ -106,7 +120,7 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
   })
 
   it('reverts to "Click to drive" once status moves back to released', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
@@ -130,8 +144,8 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
   // so a terminal browser_status{state:'error', message:...} — already-controlled,
   // take-control-disabled, no-manager-for-agent, live-view-disabled, malformed
   // control — left the user stuck on the "Connecting…" spinner forever, with no
-  // frame ever going to arrive to break out of the `!frame` branch.
-  it('surfaces a browser_status error message before any frame arrives, stopping the connecting spinner', () => {
+  // video ever going to attach to break out of the `!attached` branch.
+  it('surfaces a browser_status error message before any video attaches, stopping the connecting spinner', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     act(() => {
       callbacksRef.current?.onConnected?.()
@@ -148,8 +162,8 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
     expect(screen.queryByText('Waiting for the first frame…')).not.toBeInTheDocument()
   })
 
-  it('surfaces a browser_status error message in the persistent strip once a frame has already arrived', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+  it('surfaces a browser_status error message in the persistent strip once the video is attached and ready', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({
@@ -168,7 +182,7 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
   // claiming "You're driving" and pointer/keyboard handlers kept attempting
   // sendInput (silently dropped by the transport) for the whole reconnect window.
   it('reverts control state and stops accepting input when the socket disconnects mid-control', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
@@ -206,7 +220,7 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
   // the server never actually released control. A per-request error must
   // surface without dropping the "You're driving" state.
   it('keeps "You\'re driving" and shows the error when a browser_status error frame arrives while controlling', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
@@ -239,7 +253,7 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
   // status frame used to WIPE a real, still-valid error banner shown on
   // this viewer.
   it('does not clear a pre-set error banner when a control_only frame arrives', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({
@@ -269,7 +283,7 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
   // resetting it to false via `?? false` wrongly re-enabled click-to-drive
   // while another viewer was still actually driving.
   it('does not reset a pre-set controlledByOther when an error frame omits the field', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'attached', controlled_by_other: true })
@@ -323,7 +337,7 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
   // ADR-040 D1: the old explicit Take control / Release control toggle and
   // the Hand-to-agent button are both gone entirely.
   it('never renders a Take control / Release control / Hand to agent button', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })

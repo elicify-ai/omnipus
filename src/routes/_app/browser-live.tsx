@@ -3,9 +3,9 @@
 // from BrowserLivePanel.tsx's "Pop out" button. Renders the same shared
 // BrowserLiveView core used by the Sheet overlay, filling the AppShell
 // content area (no separate chrome of its own beyond BrowserLiveView's
-// header) — frames are pixels (JPEG), not an embedded copy of the target
-// site, so this stays a main-origin route with no isolated preview origin
-// needed (see ADR-038 "Security" under D6).
+// header) — the frame is a live WebRTC video stream (ADR-047), not an
+// embedded copy of the target site, so this stays a main-origin route with
+// no isolated preview origin needed (see ADR-038 "Security" under D6).
 //
 // Nested under `/_app` so it reuses the existing onboarding/auth guard
 // (`_app.tsx`'s beforeLoad). The browser WS handshake authenticates via the

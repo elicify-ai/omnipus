@@ -58,17 +58,27 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 
 import { BrowserLiveView } from './BrowserLiveView'
 
+/** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. Every render
+ * call below supplies it via the `mediaStream` test/override seam (see
+ * BrowserLiveView.webrtcSink.test.tsx) — the JPEG screencast sink is gone
+ * (ADR-047), WebRTC video is the only path. */
+function fakeMediaStream(id = 'stream-1'): MediaStream {
+  return { id } as unknown as MediaStream
+}
+
+/** Connects the WS and simulates the <video> sink decoding its first real
+ * frame — the direct replacement for the old JPEG-era `onScreencast`
+ * emission. Requires the component to be rendered with `mediaStream` so the
+ * <video> element exists to fire `loadedmetadata` on. */
 function connectAndFrame() {
   act(() => {
     callbacksRef.current?.onConnected?.()
-    callbacksRef.current?.onScreencast?.({
-      type: 'browser_screencast',
-      session_id: 's1',
-      seq: 1,
-      data: 'AAAA',
-      width: 1280,
-      height: 720,
-    })
+  })
+  const video = screen.getByTestId('browser-live-video') as HTMLVideoElement
+  act(() => {
+    Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
+    Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
+    fireEvent.loadedMetadata(video)
   })
 }
 
@@ -152,7 +162,7 @@ afterEach(() => {
 
 describe('BrowserLiveView — click-to-drive (ADR-040 D2, agent idle)', () => {
   it('acquires the lock then dispatches the same pointerdown as input', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
 
@@ -168,7 +178,7 @@ describe('BrowserLiveView — click-to-drive (ADR-040 D2, agent idle)', () => {
   })
 
   it('does not send a second control:take for pointermove/pointerup in the same gesture', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
 
@@ -181,7 +191,7 @@ describe('BrowserLiveView — click-to-drive (ADR-040 D2, agent idle)', () => {
   })
 
   it('does not double-fire control:take on a rapid second pointerdown before the ack lands', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
 
@@ -203,7 +213,7 @@ describe('BrowserLiveView — click-to-drive (ADR-040 D2, agent idle)', () => {
   })
 
   it('sends control:take again for a NEW click after the previous take was acknowledged and released', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
 
@@ -219,7 +229,7 @@ describe('BrowserLiveView — click-to-drive (ADR-040 D2, agent idle)', () => {
   })
 
   it('shows a "pointer" cursor over the frame while idle (click-to-drive affordance)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     expect(screen.getByTestId('browser-live-frame')).toHaveStyle({ cursor: 'pointer' })
   })
@@ -232,7 +242,7 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
   // know about the separate "Take over" button. It now takes the wheel in
   // ONE action, exactly like the omnibox/Take-over/tab-chip paths.
   it('a frame click while the agent is working pauses the agent, acquires the lock, and dispatches the SAME pointerdown as input (ONE click)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
     const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
@@ -251,7 +261,7 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
   })
 
   it('continues dispatching pointerup for the SAME gesture that took the wheel from agent-working', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
     vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
@@ -269,7 +279,7 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
   })
 
   it('a plain keyboard press (no prior click/take) is still blocked while watch-only — keyboard alone never implicitly acquires the wheel', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
     const container = screen.getByTestId('browser-live-frame')
@@ -286,7 +296,7 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
   // set (the exact ordering bug the driveMode refactor fixed: the cursor
   // ternary used to check isControlling before agentWorking).
   it('blocks wheel input while watch-only, even with a stale "controlling" status mid-release', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
     act(() => {
@@ -301,7 +311,7 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
   })
 
   it('shows the "Take over" button and a not-allowed cursor', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
 
@@ -310,7 +320,7 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
   })
 
   it('releases the lock if the user was already driving when the agent starts working', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
@@ -323,7 +333,7 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
   })
 
   it('does NOT show the Take over button, nor block input, for a DIFFERENT session\'s isStreaming', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     // A different session (e.g. the globally-active chat session) streaming
     // must not affect THIS panel's pinned (s1, a1) — see the component's own
@@ -344,7 +354,7 @@ describe('BrowserLiveView — "Take over" (ADR-040 D2)', () => {
   // session isn't the globally-active one. Take-over must always pass
   // THIS panel's own pinned sessionId ("s1" here), never rely on the default.
   it('calls the chat store\'s cancelStream WITH this panel\'s pinned sessionId, then acquires the lock', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
     const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
@@ -378,7 +388,7 @@ describe('BrowserLiveView — "Take over" (ADR-040 D2)', () => {
   })
 
   it('is disabled while disconnected', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     setAgentWorking('s1', true)
     // Never connected in this test — the button still renders (agent-working
     // is independent of the live-view transport) but must be disabled.
@@ -386,7 +396,7 @@ describe('BrowserLiveView — "Take over" (ADR-040 D2)', () => {
   })
 
   it('does not render while the agent is idle', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     expect(screen.queryByRole('button', { name: /take over/i })).not.toBeInTheDocument()
   })
@@ -400,7 +410,7 @@ describe('BrowserLiveView — "Take over" (ADR-040 D2)', () => {
   // still renders (and input still can't be dispatched) rather than
   // incorrectly showing the driving chip/controls for that one tick.
   it('still shows Take over even if the user already held the lock, transiently, before the auto-release ack lands', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
@@ -423,7 +433,7 @@ describe('BrowserLiveView — "Take over" (ADR-040 D2)', () => {
 // effectiveAgentWorking) makes ONE click land regardless.
 describe('BrowserLiveView — UAT fix: one-click take-over while isStreaming is still stale-true (real cancelStream timing)', () => {
   it('"Take over" shows the driving chip immediately in ONE click, without waiting for isStreaming to catch up', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
     vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
@@ -437,7 +447,7 @@ describe('BrowserLiveView — UAT fix: one-click take-over while isStreaming is 
   })
 
   it('does NOT auto-release the lock once the take ack lands, even while isStreaming is still stale-true (the "instant revert" bug)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
     vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
@@ -456,7 +466,7 @@ describe('BrowserLiveView — UAT fix: one-click take-over while isStreaming is 
   })
 
   it('unlocks real input dispatch once the take ack lands, even while isStreaming is still stale-true', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
     vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
@@ -474,7 +484,7 @@ describe('BrowserLiveView — UAT fix: one-click take-over while isStreaming is 
   })
 
   it('a tab-chip click shows the driving chip and switches tabs in ONE click, without waiting for isStreaming to catch up', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
       { index: 0, title: 'Tab A', url: 'https://a.example.com' },
@@ -492,7 +502,7 @@ describe('BrowserLiveView — UAT fix: one-click take-over while isStreaming is 
   })
 
   it('does NOT auto-release a lock acquired via a tab-chip click while isStreaming is still stale-true', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Only tab', url: 'https://example.com' }])
     setAgentWorking('s1', true)
@@ -513,7 +523,7 @@ describe('BrowserLiveView — UAT fix: one-click take-over while isStreaming is 
   // driving must still trigger the pre-existing auto-release protection —
   // agentPausedByUser is consumed, not stuck true forever.
   it('a LATER spontaneous agent turn (after the override has been consumed) still triggers auto-release normally', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
     vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
@@ -537,7 +547,7 @@ describe('BrowserLiveView — UAT fix: one-click take-over while isStreaming is 
 
 describe('BrowserLiveView — auto-release resilience (ADR-040 D2, reviewer finding)', () => {
   it('surfaces a toast and clears the local lock if the auto-release send fails while agent-working', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
@@ -560,7 +570,7 @@ describe('BrowserLiveView — auto-release resilience (ADR-040 D2, reviewer find
   })
 
   it('does not surface a failure toast when the release send succeeds', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
@@ -578,7 +588,7 @@ describe('BrowserLiveView — auto-release resilience (ADR-040 D2, reviewer find
   // while real control never transferred, and blocking every later take via
   // the pendingTakeRef.current in-flight guard.
   it('click-to-drive: clears the optimistic pendingTake and toasts if sendControl("take") fails', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
     mockSendControl.mockReturnValueOnce(false)
@@ -592,7 +602,7 @@ describe('BrowserLiveView — auto-release resilience (ADR-040 D2, reviewer find
   })
 
   it('click-to-drive: a NEW gesture can retry control:take after a failed take was cleared', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
     mockSendControl.mockReturnValueOnce(false)
@@ -608,7 +618,7 @@ describe('BrowserLiveView — auto-release resilience (ADR-040 D2, reviewer find
   })
 
   it('"Take over": clears the optimistic pendingTake and toasts if sendControl("take") fails', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
     vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
@@ -622,7 +632,7 @@ describe('BrowserLiveView — auto-release resilience (ADR-040 D2, reviewer find
   })
 
   it('does not surface a take-failure toast when the take send succeeds', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
 
@@ -638,7 +648,7 @@ describe('BrowserLiveView — annotate mid-gesture resets take/implicit refs (AD
   // that lands LATE, after annotate mode is already active, must not resume
   // driving out from under it.
   it('a delayed take-ack after switching to annotate mode does not resume driving', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" canAnnotate />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
     const container = stubFrameRect()
 
@@ -670,7 +680,7 @@ describe('BrowserLiveView — annotate mid-gesture resets take/implicit refs (AD
 
 describe('BrowserLiveView — D6 driving-state chip + glow border', () => {
   it('shows "{agent} is browsing…" using the resolved agent display name when the agent is working', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
     // No agents query cache populated — falls back to the generic 'Agent' name.
@@ -678,14 +688,14 @@ describe('BrowserLiveView — D6 driving-state chip + glow border', () => {
   })
 
   it('reflects agent-working in the glow border data-visual-state', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
     expect(screen.getByTestId('browser-live-glow')).toHaveAttribute('data-visual-state', 'agent-working')
   })
 
   it('reflects you-driving in the glow border data-visual-state', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
@@ -694,13 +704,13 @@ describe('BrowserLiveView — D6 driving-state chip + glow border', () => {
   })
 
   it('reflects idle in the glow border data-visual-state by default', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     expect(screen.getByTestId('browser-live-glow')).toHaveAttribute('data-visual-state', 'idle')
   })
 
   it('is aria-hidden (decorative) and never intercepts pointer events', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const glow = screen.getByTestId('browser-live-glow')
     expect(glow).toHaveAttribute('aria-hidden', 'true')
@@ -717,14 +727,14 @@ describe('BrowserLiveView — D6 driving-state chip + glow border', () => {
   // trains the user to ignore the signal). agent-working/you-driving must NOT
   // pulse.
   it('does NOT pulse the border while agent-working (pulse is error-only)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
     expect(screen.getByTestId('browser-live-glow').className).not.toContain('motion-safe:animate-pulse')
   })
 
   it('does NOT pulse the border while you-driving (pulse is error-only)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
@@ -733,7 +743,7 @@ describe('BrowserLiveView — D6 driving-state chip + glow border', () => {
   })
 
   it('the glow overlay is borderless (frame removed) but tracks visual state', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'error', message: 'boom' })
@@ -746,13 +756,13 @@ describe('BrowserLiveView — D6 driving-state chip + glow border', () => {
   })
 
   it('does NOT apply motion-safe:animate-pulse to the glow border while idle', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     expect(screen.getByTestId('browser-live-glow').className).not.toContain('motion-safe:animate-pulse')
   })
 
   it('applies motion-safe:animate-pulse to the header chip\'s "live" dot while you-driving', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
@@ -764,7 +774,7 @@ describe('BrowserLiveView — D6 driving-state chip + glow border', () => {
   })
 
   it('does NOT apply motion-safe:animate-pulse to the header chip\'s dot while idle', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const chip = screen.getByTestId('browser-live-status-chip')
     const dot = chip.querySelector('[aria-hidden="true"]')
@@ -780,7 +790,7 @@ describe('BrowserLiveView — A8 optimistic driving chip (UAT polish)', () => {
   // back on for that gap and dropped straight to 'idle' ("Click to drive"),
   // even though the user just explicitly took the wheel.
   it('shows the driving-state chip immediately after Take-over is clicked, once the agent stops working, before the take ack lands', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
     vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
@@ -796,7 +806,7 @@ describe('BrowserLiveView — A8 optimistic driving chip (UAT polish)', () => {
   })
 
   it('also shows the driving-state chip immediately for click-to-drive (idle + first pointerdown), before the take ack lands', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
 
@@ -806,7 +816,7 @@ describe('BrowserLiveView — A8 optimistic driving chip (UAT polish)', () => {
   })
 
   it('falls back off the optimistic driving chip if the take is rejected/abandoned (any status frame clears it, isControlling never lands)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
     vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
@@ -845,7 +855,7 @@ describe('BrowserLiveView — Escape releases the wheel (WCAG 2.1.2 No Keyboard 
   }
 
   it('pressing Escape while you-driving releases control via the same sendControl("release") path other exits use, instead of forwarding Escape to the remote page', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = driveIt(stubFrameRect())
     mockSendInput.mockClear()
@@ -860,7 +870,7 @@ describe('BrowserLiveView — Escape releases the wheel (WCAG 2.1.2 No Keyboard 
   })
 
   it('moves focus to the address bar after Escape releases the wheel', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = driveIt(stubFrameRect())
 
@@ -870,7 +880,7 @@ describe('BrowserLiveView — Escape releases the wheel (WCAG 2.1.2 No Keyboard 
   })
 
   it('surfaces a toast and forces the local status back to released if the Escape release send fails', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = driveIt(stubFrameRect())
     mockSendControl.mockReturnValueOnce(false)
@@ -884,7 +894,7 @@ describe('BrowserLiveView — Escape releases the wheel (WCAG 2.1.2 No Keyboard 
   })
 
   it('still forwards every OTHER key while you-driving — Escape is the one exception, not a reason to stop forwarding input', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = driveIt(stubFrameRect())
     mockSendInput.mockClear()
@@ -896,7 +906,7 @@ describe('BrowserLiveView — Escape releases the wheel (WCAG 2.1.2 No Keyboard 
   })
 
   it('Escape keyup does not forward a key_up either', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = driveIt(stubFrameRect())
     mockSendInput.mockClear()
@@ -916,7 +926,7 @@ describe('BrowserLiveView — Escape releases the wheel (WCAG 2.1.2 No Keyboard 
 // the resize loop the moment someone "fixed" the test.
 describe('BrowserLiveView — hand-back discoverability hint (UAT polish)', () => {
   it('shows a hand-back hint using the resolved agent name only while you-driving', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     // Present (so the layout never shifts) but hidden while idle.
     const idleHint = screen.getByTestId('browser-live-handback-hint')
@@ -942,7 +952,7 @@ describe('BrowserLiveView — hand-back discoverability hint (UAT polish)', () =
   // just functional — this is the advertisement half of the CRITICAL fix
   // covered above.
   it('advertises the Escape exit alongside the hand-back hint', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
 
     act(() => {
@@ -956,7 +966,7 @@ describe('BrowserLiveView — hand-back discoverability hint (UAT polish)', () =
   })
 
   it('does not render the hand-back hint while the agent is working', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
 
@@ -966,7 +976,7 @@ describe('BrowserLiveView — hand-back discoverability hint (UAT polish)', () =
   })
 
   it('hides the hand-back hint again once control is released', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
@@ -999,7 +1009,7 @@ describe('BrowserLiveView — hand-back discoverability hint (UAT polish)', () =
 // remove nodes above the frame.
 describe('BrowserLiveView — layout stability across drive-state changes', () => {
   it('keeps the hand-back hint mounted so the frame never resizes', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
 
     const hintCount = () => screen.queryAllByTestId('browser-live-handback-hint').length
@@ -1021,7 +1031,7 @@ describe('BrowserLiveView — layout stability across drive-state changes', () =
   })
 
   it('does not push a new viewport when only the drive state changes', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
 
     mockSendViewport.mockClear()

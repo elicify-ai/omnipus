@@ -15,7 +15,47 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { BrowserWebRTCSession } from './browserWebRTC'
+import { BrowserWebRTCSession, translateWebRTCFallbackReason } from './browserWebRTC'
+
+// Operator directive (JPEG-fallback removal) — WebRTC is the only live-video
+// path now, so every onFallback reason must translate to an honest,
+// user-facing message (BrowserLiveView.tsx's `displayError`), never silence.
+describe('translateWebRTCFallbackReason', () => {
+  it('maps the three capability-gate reasons to a specific, non-retry-inviting explanation', () => {
+    expect(translateWebRTCFallbackReason('disabled')).toMatch(/turned off for this installation/i)
+    expect(translateWebRTCFallbackReason('not_capable')).toMatch(/isn't supported on this server/i)
+    expect(translateWebRTCFallbackReason('lite_build')).toMatch(/lite build/i)
+  })
+
+  it('maps "error" to a generic-but-honest message inviting a retry', () => {
+    expect(translateWebRTCFallbackReason('error')).toMatch(/reported an error/i)
+  })
+
+  it('maps every other known runtime reason to a generic connection-failed message that names the raw reason', () => {
+    for (const reason of [
+      'ice-failed',
+      'ice-disconnected-timeout',
+      'answer-timeout',
+      'offer-send-failed',
+      'set-remote-description-failed',
+      'pc-create-failed',
+      'offer-setup-failed',
+      'no-local-description',
+      'stream-stopped',
+      'unavailable',
+    ]) {
+      const message = translateWebRTCFallbackReason(reason)
+      expect(message).toMatch(/connection failed/i)
+      expect(message).toContain(reason)
+    }
+  })
+
+  it('never returns an empty string, and never silently swallows an unrecognized future reason', () => {
+    const message = translateWebRTCFallbackReason('some-future-reason-not-yet-enumerated')
+    expect(message.length).toBeGreaterThan(0)
+    expect(message).toContain('some-future-reason-not-yet-enumerated')
+  })
+})
 
 // jsdom has no `MediaStream` global at all — stub a minimal one (just
 // enough for the ontrack-assembly branch's `new MediaStream([track])` /

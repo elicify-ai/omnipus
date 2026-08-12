@@ -50,17 +50,18 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 
 import { BrowserLiveView } from './BrowserLiveView'
 
+/** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. Every render
+ * call in this file supplies it (the `mediaStream` test/override seam — see
+ * BrowserLiveView.webrtcSink.test.tsx) so the interactive container/video
+ * exists for the structural/tab-strip assertions below; the JPEG screencast
+ * sink itself is gone (ADR-047). */
+function fakeMediaStream(id = 'stream-1'): MediaStream {
+  return { id } as unknown as MediaStream
+}
+
 function connectAndFrame() {
   act(() => {
     callbacksRef.current?.onConnected?.()
-    callbacksRef.current?.onScreencast?.({
-      type: 'browser_screencast',
-      session_id: 's1',
-      seq: 1,
-      data: 'AAAA',
-      width: 1280,
-      height: 720,
-    })
   })
 }
 
@@ -82,13 +83,13 @@ beforeEach(() => {
 
 describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
   it('renders nothing before any browser_tabs frame has arrived', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     expect(screen.queryByTestId('browser-tab-strip')).not.toBeInTheDocument()
   })
 
   it('renders a strip entry per tab, even for a single tab', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Only tab', url: 'https://example.com', active: true }])
 
@@ -97,7 +98,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
   })
 
   it('highlights the active tab (aria-pressed) and not the inactive ones', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(1, [
       { index: 0, title: 'First', url: 'https://example.com' },
@@ -109,7 +110,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
   })
 
   it('falls back to the URL hostname when title is absent', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, url: 'https://sub.example.com/path?x=1', active: true }])
 
@@ -117,7 +118,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
   })
 
   it('falls back to "New tab" when both title and url are absent', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, active: true }])
 
@@ -125,7 +126,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
   })
 
   it('clicking a tab calls sendTabAction("switch", index)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
       { index: 0, title: 'First', active: true },
@@ -137,7 +138,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
   })
 
   it('clicking a tab\'s close ✕ calls sendTabAction("close", index) without also switching to it', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
       { index: 0, title: 'First', active: true },
@@ -150,7 +151,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
   })
 
   it('clicking the ＋ new-tab button calls sendTabAction("open") with no index', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Only tab', active: true }])
 
@@ -159,7 +160,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
   })
 
   it('reconciles the strip to a fresh browser_tabs frame (e.g. after a switch/close/open)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
       { index: 0, title: 'First', active: true },
@@ -179,7 +180,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
   })
 
   it('reflects a tab closing (fewer tabs in the next frame) and never shows zero tabs', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
       { index: 0, title: 'First', active: true },
@@ -197,7 +198,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
   })
 
   it('disables the tab chip, tab-close, and new-tab buttons while disconnected', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Only tab', active: true }])
 
@@ -220,7 +221,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
   // dispatch click at all (verified — see the sanity check this mirrors),
   // so there's no separate Enter/Space path left to test.
   it('disables the tab chip button (native disabled, not aria-disabled) and blocks clicks while disconnected', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
       { index: 0, title: 'First', active: true },
@@ -241,7 +242,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
   })
 
   it('leaves the tab chip enabled and clickable once connected', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
       { index: 0, title: 'First', active: true },
@@ -260,7 +261,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
     // A11y audit fix, same precedent as CalendarToolbar.tsx's view switcher:
     // no roving-tabindex/aria-controls is implemented, so the ARIA tab
     // pattern must not be promised via role="tablist"/role="tab".
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Only tab', active: true }])
 
@@ -273,7 +274,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
     // a Close button NESTED inside a role="tab" element had its own
     // role/name stripped for assistive tech. Now that the chip is a plain
     // sibling button, Close must be reachable as its own named button.
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Only tab', active: true }])
 
@@ -293,7 +294,7 @@ describe('BrowserLiveView — tab strip actions take the wheel (ADR-041 D4 / F1)
   // handler must call takeWheelIfNeeded() (send control:take) BEFORE
   // sendTabAction, exactly like the omnibox does before navigating.
   it('switching a tab while idle sends control:take before browser_tab_action', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
       { index: 0, title: 'First', active: true },
@@ -310,7 +311,7 @@ describe('BrowserLiveView — tab strip actions take the wheel (ADR-041 D4 / F1)
   })
 
   it('closing a tab sends control:take before browser_tab_action', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
       { index: 0, title: 'First', active: true },
@@ -327,7 +328,7 @@ describe('BrowserLiveView — tab strip actions take the wheel (ADR-041 D4 / F1)
   })
 
   it('opening a new tab sends control:take before browser_tab_action', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Only tab', active: true }])
 
@@ -346,7 +347,7 @@ describe('BrowserLiveView — tab strip actions take the wheel (ADR-041 D4 / F1)
   it('surfaces a toast when sendTabAction fails', async () => {
     const { useUiStore } = await import('@/store/ui')
     useUiStore.setState({ toasts: [] })
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
       { index: 0, title: 'First', active: true },
@@ -377,7 +378,7 @@ describe('BrowserLiveView — address bar follows the active tab', () => {
   const addressBar = () => screen.getByLabelText('Address bar') as HTMLInputElement
 
   it('shows the active tab url without the user typing anything', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Example Domain', url: 'https://example.com/', active: true }])
 
@@ -385,7 +386,7 @@ describe('BrowserLiveView — address bar follows the active tab', () => {
   })
 
   it('updates when navigation happens without the omnibox — the Back/Refresh case', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Octopus', url: 'https://en.wikipedia.org/wiki/Octopus', active: true }])
     expect(addressBar().value).toBe('https://en.wikipedia.org/wiki/Octopus')
@@ -396,7 +397,7 @@ describe('BrowserLiveView — address bar follows the active tab', () => {
   })
 
   it('follows the active tab when the user switches tabs', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const tabs = [
       { index: 0, title: 'Example Domain', url: 'https://example.com/' },
@@ -412,7 +413,7 @@ describe('BrowserLiveView — address bar follows the active tab', () => {
   // The guard that keeps this fix from becoming the FIRST bug reported in this
   // series ("the URL bar clears itself while I type").
   it('never overwrites a url the user is midway through typing', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Example Domain', url: 'https://example.com/', active: true }])
 
@@ -428,7 +429,7 @@ describe('BrowserLiveView — address bar follows the active tab', () => {
   })
 
   it('resumes following the active tab once the user leaves the bar', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const bar = addressBar()
     fireEvent.focus(bar)
@@ -442,7 +443,7 @@ describe('BrowserLiveView — address bar follows the active tab', () => {
   // about:blank is what a not-yet-navigated tab reports; showing it to a user
   // looking at the Omnipus start page is noise.
   it('does not display the blank-tab placeholder', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Omnipus Browser', url: 'about:blank', active: true }])
 
@@ -458,7 +459,7 @@ describe('BrowserLiveView — consolidated two-row header', () => {
   // that row inherited the tab strip's `tabs.length > 0` guard, an empty tab
   // list would take the only way to close the panel with it.
   it('keeps Close and Pop-out reachable when the tab list is empty', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" onClose={() => {}} onPopOut={() => {}} />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} onClose={() => {}} onPopOut={() => {}} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'One', url: 'https://example.com' }])
     expect(screen.getByTestId('browser-tab-strip')).toBeInTheDocument()
@@ -476,7 +477,7 @@ describe('BrowserLiveView — consolidated two-row header', () => {
   // the measured regression that made the handback hint always-mounted. Folding
   // that hint onto the toolbar keeps it horizontal for exactly this reason.
   it('never changes header row count or height when the drive state changes', () => {
-    const { container } = render(<BrowserLiveView sessionId="s1" agentId="a1" onClose={() => {}} />)
+    const { container } = render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} onClose={() => {}} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'One', url: 'https://example.com' }])
 
@@ -498,7 +499,7 @@ describe('BrowserLiveView — consolidated two-row header', () => {
 
   // The consolidation itself: chrome above the frame is two rows, not four.
   it('renders exactly two chrome rows above the live frame', () => {
-    const { container } = render(<BrowserLiveView sessionId="s1" agentId="a1" onClose={() => {}} />)
+    const { container } = render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} onClose={() => {}} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'One', url: 'https://example.com' }])
 
@@ -522,7 +523,7 @@ describe('BrowserLiveView — consolidated two-row header', () => {
 describe('BrowserLiveView — the address bar cannot be squeezed out', () => {
   it('gives the address field a min-width floor and keeps the hint off the toolbar', () => {
     const { container } = render(
-      <BrowserLiveView sessionId="s1" agentId="a1" onClose={() => {}} onPopOut={() => {}} canAnnotate />,
+      <BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} onClose={() => {}} onPopOut={() => {}} canAnnotate />,
     )
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'One', url: 'https://example.com' }])

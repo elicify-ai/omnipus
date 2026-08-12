@@ -1,18 +1,23 @@
 // BrowserLiveView.firstFrameTimeout.test.tsx — regression coverage for the
 // silent "waiting forever" failure measured live on UAT (2026-08-03).
 //
-// The panel can be fully connected — WS open, video track readyState:"live",
-// muted:false, ZERO console errors — while no frame ever arrives, because the
-// capture bound to a tab that is no longer the one being shown. Before this
-// fix the panel showed "Waiting for the first frame…" indefinitely and then
-// fell to indistinguishable black, with nothing anywhere telling the user it
-// had failed. The silence WAS the bug: that state was visually identical to
+// The panel can be fully connected — WS open, WebRTC stream attached, ZERO
+// console errors — while no real frame ever decodes, because the capture
+// bound to a tab that is no longer the one being shown. Before this fix the
+// panel showed "Waiting for the first frame…" indefinitely and then fell to
+// indistinguishable black, with nothing anywhere telling the user it had
+// failed. The silence WAS the bug: that state was visually identical to
 // "still loading".
 //
-// Mocks BrowserLiveWsConnection entirely, matching the sibling suites.
+// Mocks BrowserLiveWsConnection entirely, matching the sibling suites. Video
+// attachment is driven via the `mediaStream` test/override seam (see
+// BrowserLiveView.webrtcSink.test.tsx) — the video "decoding a real frame"
+// signal is `onLoadedMetadata`, fired manually here after stubbing
+// videoWidth/videoHeight, mirroring how a real browser reports intrinsic
+// size once metadata loads.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 
@@ -46,16 +51,22 @@ import { BrowserLiveView } from './BrowserLiveView'
 /** Matches FIRST_FRAME_TIMEOUT_MS in BrowserLiveView.tsx. */
 const FIRST_FRAME_TIMEOUT_MS = 15_000
 
-function emitFrame(seq = 1) {
+/** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. */
+function fakeMediaStream(id = 'stream-1'): MediaStream {
+  return { id } as unknown as MediaStream
+}
+
+/** Simulates the <video> sink decoding its first real frame — the direct
+ * replacement for the old JPEG-era `emitFrame` (which delivered a
+ * `browser_screencast` frame over WS). Requires the component to already be
+ * `attached` (rendered with a non-null `mediaStream`), since the <video>
+ * element only mounts then. */
+function decodeFirstFrame() {
+  const video = screen.getByTestId('browser-live-video') as HTMLVideoElement
   act(() => {
-    callbacksRef.current?.onScreencast?.({
-      type: 'browser_screencast',
-      session_id: 's1',
-      seq,
-      data: 'AAAA',
-      width: 1280,
-      height: 720,
-    })
+    Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
+    Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
+    fireEvent.loadedMetadata(video)
   })
 }
 
@@ -70,8 +81,8 @@ afterEach(() => {
 })
 
 describe('BrowserLiveView — first-frame timeout', () => {
-  it('surfaces an actionable error when connected but no frame ever arrives', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+  it('surfaces an actionable error when connected and attached but no frame ever decodes', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     act(() => {
       callbacksRef.current?.onConnected?.()
     })
@@ -84,14 +95,16 @@ describe('BrowserLiveView — first-frame timeout', () => {
     })
 
     expect(screen.queryByText('Waiting for the first frame…')).not.toBeInTheDocument()
-    expect(screen.getByText(/No video received from the browser/i)).toBeInTheDocument()
+    expect(screen.getByText(/No video received from the live browser/i)).toBeInTheDocument()
     // The message must point somewhere useful, not just say "error".
     expect(screen.getByText(/tab that is no longer active/i)).toBeInTheDocument()
+    // And it must offer a way forward, not just describe the failure.
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
   })
 
   it('does not fire while still connecting — a slow connect is not a first-frame failure', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
-    // Never call onConnected: the panel is still dialing.
+    // Never call onConnected, never attach a stream: the panel is still dialing.
     act(() => {
       vi.advanceTimersByTime(FIRST_FRAME_TIMEOUT_MS * 3)
     })
@@ -100,15 +113,15 @@ describe('BrowserLiveView — first-frame timeout', () => {
     expect(screen.queryByText(/No video received/i)).not.toBeInTheDocument()
   })
 
-  it('never fires when a frame arrives before the deadline', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+  it('never fires when a frame decodes before the deadline', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     act(() => {
       callbacksRef.current?.onConnected?.()
     })
     act(() => {
       vi.advanceTimersByTime(FIRST_FRAME_TIMEOUT_MS - 1_000)
     })
-    emitFrame()
+    decodeFirstFrame()
 
     act(() => {
       vi.advanceTimersByTime(FIRST_FRAME_TIMEOUT_MS * 3)
@@ -118,7 +131,7 @@ describe('BrowserLiveView — first-frame timeout', () => {
   })
 
   it('clears the timeout error when a later frame recovers the stream', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     act(() => {
       callbacksRef.current?.onConnected?.()
     })
@@ -130,13 +143,13 @@ describe('BrowserLiveView — first-frame timeout', () => {
     // A recapture (e.g. the tab-activation fix landing a rebind) delivers a
     // frame after all — the panel must recover rather than stay stuck on a
     // stale error.
-    emitFrame(2)
+    decodeFirstFrame()
 
     expect(screen.queryByText(/No video received/i)).not.toBeInTheDocument()
   })
 
   it('lets a real transport error win over the generic timeout message', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     act(() => {
       callbacksRef.current?.onConnected?.()
       callbacksRef.current?.onError?.('session not found')
@@ -151,7 +164,7 @@ describe('BrowserLiveView — first-frame timeout', () => {
   })
 
   it('lets a browser_status error win over the generic timeout message', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     act(() => {
       callbacksRef.current?.onConnected?.()
       callbacksRef.current?.onStatus?.({

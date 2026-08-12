@@ -52,6 +52,24 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 
 import { BrowserLiveView } from './BrowserLiveView'
 
+/** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. Passed via
+ * the `mediaStream` test/override seam (see BrowserLiveView.webrtcSink.test.tsx)
+ * — the JPEG screencast sink is gone (ADR-047), WebRTC video is the only path. */
+function fakeMediaStream(id = 'stream-1'): MediaStream {
+  return { id } as unknown as MediaStream
+}
+
+/** Stubs the <video> sink's intrinsic dimensions and fires `loadedmetadata`
+ * — the direct replacement for the old JPEG-era screencast frame's declared
+ * width/height, which is what `activeFrameDims`/coordinate mapping now reads
+ * instead. */
+function decodeFirstFrame() {
+  const video = screen.getByTestId('browser-live-video') as HTMLVideoElement
+  Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
+  Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
+  fireEvent.loadedMetadata(video)
+}
+
 const initialChatState = useChatStore.getState()
 
 beforeEach(() => {
@@ -95,21 +113,17 @@ function setAgentWorking(sessionId: string, isStreaming: boolean) {
   useChatStore.setState((state) => ({ sessionsById: { ...state.sessionsById, [sessionId]: bucket } }))
 }
 
-/** Mounts, connects, delivers a screencast frame, takes control, and stubs the
- * frame container's layout rect to a clean 1:1 box so mapClientToDevice never
- * short-circuits to null (jsdom reports all-zero rects by default). */
+/** Mounts (attached via the mediaStream seam), connects, decodes a first
+ * frame, takes control, and stubs the frame container's layout rect to a
+ * clean 1:1 box so mapClientToDevice never short-circuits to null (jsdom
+ * reports all-zero rects by default). */
 function mountControllingWithFrame() {
-  render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+  render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
   act(() => {
     callbacksRef.current?.onConnected?.()
-    callbacksRef.current?.onScreencast?.({
-      type: 'browser_screencast',
-      session_id: 's1',
-      seq: 1,
-      data: 'AAAA',
-      width: 1280,
-      height: 720,
-    })
+  })
+  act(() => {
+    decodeFirstFrame()
     callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
   })
   const container = screen.getByTestId('browser-live-frame')
@@ -129,21 +143,16 @@ function mountControllingWithFrame() {
   return container
 }
 
-/** Mounts, connects, and delivers a screencast frame WITHOUT taking control —
- * for exercising the click-to-drive implicit-take path, mirrors
+/** Mounts, connects, and decodes a first frame WITHOUT taking control — for
+ * exercising the click-to-drive implicit-take path, mirrors
  * mountControllingWithFrame minus the 'controlling' status frame. */
 function mountIdleWithFrame() {
-  render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+  render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
   act(() => {
     callbacksRef.current?.onConnected?.()
-    callbacksRef.current?.onScreencast?.({
-      type: 'browser_screencast',
-      session_id: 's1',
-      seq: 1,
-      data: 'AAAA',
-      width: 1280,
-      height: 720,
-    })
+  })
+  act(() => {
+    decodeFirstFrame()
   })
   const container = screen.getByTestId('browser-live-frame')
   vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({

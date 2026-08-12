@@ -16,19 +16,15 @@
 // offer is not sent until `RTCPeerConnection.iceGatheringState` reaches
 // 'complete', so there is no `onicecandidate`/trickle handling here at all.
 //
-// Fallback contract (wave-plan W2-B): the JPEG screencast remains AVAILABLE
-// underneath — but note it is no longer literally always-on. The server pauses
-// the CDP screencast while every JPEG-attached viewer is also covered by a
-// live WebRTC stream, and resumes it as soon as that stops being true
-// (CaptureSession.ReconcileScreencast, plus the relay's own eviction
-// notification for a mid-session WebRTC failure). So "keeps running" is a
-// dynamic per-viewer-coverage guarantee, not an unconditional one; an earlier
-// version of this comment claimed the latter and was wrong once the pause was
-// introduced. Either way it is owned entirely by browserLiveWs.ts/
-// BrowserLiveView, outside this class — this class's only job on fallback is
-// to clean up its own PC/data-channel state and tell the caller via
-// `onFallback(reason)` so the caller can drop back to the `<img>` sink.
-// Triggers:
+// Fallback contract (operator directive — JPEG-fallback removal): there is
+// NO second sink to drop back to any more. This class's only job on
+// fallback is to clean up its own PC/data-channel state and tell the caller
+// via `onFallback(reason)`; BrowserLiveView.tsx (the sole caller) turns that
+// into a persistent, honest, user-visible failure state — never a silent
+// degrade — since a fallback here now means live video simply stopped
+// working, full stop. (What the backend capture pipeline does independently
+// of this — pause, stop, keep running — is out of this class's and this
+// file's scope; it observes only the WebRTC signaling surface.) Triggers:
 //   - a `browser_webrtc_state{available:false}` frame while offering/connected
 //   - no answer within the current answer timeout of sending the offer (see
 //     `hasConnectedOnce`/`firstAnswerTimeoutMs` below — it is NOT always
@@ -42,15 +38,15 @@
 // The counter RESETS on every successful connect, so only a sustained
 // inability to connect exhausts it; once exhausted the caller must call
 // `start()` again (a fresh re-attach) to re-arm. `start()` always resets the
-// budget. This replaced a one-shot boolean that stranded the panel in the
-// JPEG sink permanently after a single failed re-offer.
+// budget. This replaced a one-shot boolean that stranded the panel in a
+// failed state permanently after a single failed re-offer.
 //
 // Answer-timeout duration (fix-wave, MED — reviewer finding 4): the gateway's
 // legitimate COLD START (capture start ~20s + bringToFront ~5s + tracks wait)
 // can run past 25s worst case, well past the regular `answerTimeoutMs`
 // (default 5s) — a plain 5s timeout on a cold start is a FALSE fallback that
-// then connects fine on its own retry, degrading the panel to JPEG and
-// showing a spurious warning for no reason. `hasConnectedOnce` (a public,
+// then connects fine on its own retry, needlessly surfacing the panel's
+// error state and a spurious warning. `hasConnectedOnce` (a public,
 // read-only, lifetime flag — never reset once true, not per-attempt) is what
 // decides which timeout governs any given negotiation: false (this instance
 // has never once reached 'connected') uses the generous `firstAnswerTimeoutMs`
@@ -64,7 +60,8 @@
  * 'fallback' as a *reason string* passed to `onFallback` rather than a
  * separate public state — from the caller's point of view "ICE failed" and
  * "gateway reported unavailable" both mean exactly one thing: stop trying to
- * render WebRTC video and let the JPEG sink carry on. */
+ * render WebRTC video and tell the caller why (there is no second sink to
+ * carry on with any more — see `onFallback`'s doc comment above). */
 export type BrowserWebRTCState = 'idle' | 'offering' | 'connected' | 'fallback'
 
 export interface BrowserWebRTCSessionOptions { // not-wire-format: local constructor options for the client-side PC state machine (timer durations + injected RTCPeerConnection factory for tests); never serialized, never crosses the gateway/SPA boundary
@@ -155,6 +152,49 @@ const DEFAULT_ICE_GATHERING_TIMEOUT_MS = 3000
 
 function defaultPcFactory(): RTCPeerConnection {
   return new RTCPeerConnection({ iceServers: [{ urls: DEFAULT_STUN_SERVER }] })
+}
+
+/**
+ * Operator directive (JPEG-fallback removal) — turns a raw `onFallback`
+ * reason string into the honest, actionable message BrowserLiveView.tsx
+ * shows as the panel's PRIMARY content once WebRTC fails, not a toast:
+ * WebRTC is the only live-video path left, so every one of these reasons —
+ * including the three "capability gate" reasons that used to be swallowed
+ * silently because the JPEG sink kept working underneath — now means the
+ * user is looking at a broken panel and deserves to know why.
+ *
+ * Grouped by what the user can actually do about it:
+ *   - `disabled`/`not_capable`/`lite_build`: this install/build genuinely
+ *     doesn't offer live video here — retrying changes nothing; the copy
+ *     says so plainly rather than inviting a doomed retry.
+ *   - everything else (ice-failed, ice-disconnected-timeout, answer-timeout,
+ *     offer-send-failed, set-remote-description-failed, pc-create-failed,
+ *     offer-setup-failed, no-local-description, stream-stopped, `error`, the
+ *     `unavailable` default, or any future reason string not in this list
+ *     yet): a genuine connection/negotiation failure that a fresh attempt
+ *     can plausibly recover from — the caller's Retry button is meaningful.
+ *
+ * Deliberately a plain switch over known strings with a generic fallback
+ * (not an exhaustive union) — `reason` is intentionally widened to `string`
+ * (see `BrowserWebRTCStateSignal`'s own doc comment) so a future gateway
+ * build can introduce a new wire reason without this function needing to
+ * enumerate it first; the fallback branch keeps the raw reason visible
+ * (never swallows it) so a support engineer can still search logs/console
+ * for the exact string even when the copy above it is generic.
+ */
+export function translateWebRTCFallbackReason(reason: string): string {
+  switch (reason) {
+    case 'disabled':
+      return 'Live video is turned off for this installation. Ask your operator to enable it in Settings.'
+    case 'not_capable':
+      return "Live video isn't supported on this server (WebRTC capture isn't available on this platform or build)."
+    case 'lite_build':
+      return "Live video isn't available in this lite build."
+    case 'error':
+      return 'The live browser reported an error starting video. Retry, or reload the page if it keeps failing.'
+    default:
+      return `Live video connection failed (${reason}). Retry, or reload the page if it keeps failing.`
+  }
 }
 
 export class BrowserWebRTCSession {
@@ -506,7 +546,7 @@ export class BrowserWebRTCSession {
         // attempts rather than inheriting exhaustion from an earlier,
         // already-recovered one. Without this reset the counter would be a
         // session-lifetime cap and a long session on a flaky link would
-        // still end up permanently stranded in the JPEG sink.
+        // still end up permanently stranded in the panel's failure state.
         this.retryCount = 0
       } else if (iceState === 'failed') {
         this._fallback('ice-failed')

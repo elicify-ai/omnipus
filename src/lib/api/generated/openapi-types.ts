@@ -2951,7 +2951,7 @@ export interface components {
         };
         /**
          * BrowserInspectRequest
-         * @description Resolve the DOM element at a point in the live browser so the SPA can attach the element's text/HTML as context when a user annotates a spot. Coordinates are device (CSS) pixels of the screencast frame. Best-effort — see ADR-039.
+         * @description Resolve the DOM element at a point in the live browser so the SPA can attach the element's text/HTML as context when a user annotates a spot. Coordinates are device (CSS) pixels of the WebRTC video frame. Best-effort — see ADR-039.
          */
         BrowserInspectRequest: {
             /** @description Browser session id (context/correlation; the live tab is the agent's default). */

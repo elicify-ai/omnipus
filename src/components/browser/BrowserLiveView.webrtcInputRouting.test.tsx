@@ -86,7 +86,14 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
   }
 })
 
-vi.mock('@/lib/browserWebRTC', () => ({
+// importOriginal so the real translateWebRTCFallbackReason (used by
+// BrowserLiveView to turn a fallback reason into the honest, actionable
+// message it displays) stays live under this mock — only BrowserWebRTCSession
+// itself is replaced.
+vi.mock('@/lib/browserWebRTC', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/browserWebRTC')>()
+  return {
+  ...actual,
   BrowserWebRTCSession: vi.fn().mockImplementation(function () {
     return {
       start: mockMachineStart,
@@ -118,7 +125,8 @@ vi.mock('@/lib/browserWebRTC', () => ({
       },
     }
   }),
-}))
+  }
+})
 
 import { BrowserLiveView } from './BrowserLiveView'
 
@@ -131,14 +139,6 @@ function fakeMediaStream(id = 'stream-1'): MediaStream {
 function connectAndFrame() {
   act(() => {
     wsCallbacksRef.current?.onConnected?.()
-    wsCallbacksRef.current?.onScreencast?.({
-      type: 'browser_screencast',
-      session_id: 's1',
-      seq: 1,
-      data: 'AAAA',
-      width: 1280,
-      height: 720,
-    })
   })
 }
 
@@ -183,19 +183,7 @@ function ackDriving(container: HTMLElement) {
 }
 
 describe('BrowserLiveView — input routing: data channel vs WS (WebRTC build W2-B)', () => {
-  it('JPEG mode (no mediaStream): pointer input always goes over WS, even if the DC happens to report open', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
-    connectAndFrame()
-    act(() => machineCallbacksRef.current.onInputChannelOpen?.())
-    const container = stubFrameRect()
-
-    fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
-
-    expect(mockMachineSendInput).not.toHaveBeenCalled()
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
-  })
-
-  it('video mode, DC not open: pointer input falls back to WS', () => {
+  it('DC not open: pointer input falls back to WS', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     // Never fire onInputChannelOpen — the DC never reports open.
@@ -354,10 +342,9 @@ describe('BrowserLiveView — control/navigate/tab-action always ride WS, even i
 // pixel space once the encoder downscales under load (measured 319x158 vs
 // ~1280 page) — coordinate-carrying input frames must report the capture
 // geometry they were mapped into so the server can rescale instead of
-// assuming videoWidth == page pixels. JPEG mode is unaffected (its page_scale
-// handling already produces CSS pixels) and must omit both fields.
+// assuming videoWidth == page pixels.
 describe('BrowserLiveView — capture_width/capture_height on coordinate-carrying input (Fault 3 fix)', () => {
-  it('video mode: mouse_down carries capture_width/capture_height equal to the mocked video sink intrinsic size', () => {
+  it('mouse_down carries capture_width/capture_height equal to the mocked video sink intrinsic size', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
@@ -375,18 +362,16 @@ describe('BrowserLiveView — capture_width/capture_height on coordinate-carryin
     )
   })
 
-  it('JPEG mode (no mediaStream): mouse_down omits capture_width/capture_height entirely', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+  it('mouse_down never dispatches at all before the video reports real dimensions (no fallback sink to carry the click)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
+    // Deliberately do not call stubVideoDims() — videoWidth/videoHeight stay 0.
 
     fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
 
-    expect(mockSendInput).toHaveBeenCalledTimes(1)
-    const payload = (mockSendInput.mock.calls[0] as unknown[])[0] as Record<string, unknown>
-    expect(payload.kind).toBe('mouse_down')
-    expect(payload).not.toHaveProperty('capture_width')
-    expect(payload).not.toHaveProperty('capture_height')
+    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(mockMachineSendInput).not.toHaveBeenCalled()
   })
 
   // Wheel is COALESCED onto the shared input pacer (deltas accumulated,
@@ -576,15 +561,20 @@ describe('BrowserLiveView — WebRTC signaling wiring (WebRTC build W2-B)', () =
   it('renders the <video> sink once the machine reports a stream via onStream (no mediaStream prop override)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
-    expect(screen.getByTestId('browser-live-img')).toBeInTheDocument()
+    // Not attached yet — no second sink to fall back to while waiting.
+    expect(screen.queryByTestId('browser-live-video')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('browser-live-frame')).not.toBeInTheDocument()
 
     act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream()))
 
     expect(screen.getByTestId('browser-live-video')).toBeInTheDocument()
-    expect(screen.queryByTestId('browser-live-img')).not.toBeInTheDocument()
   })
 
-  it('on fallback, drops back to the JPEG sink and stops routing input over the DC', () => {
+  // Operator directive (JPEG-fallback removal) — WebRTC is the ONLY live-video
+  // path now. A fallback no longer swaps to a second sink; it tears the
+  // interactive surface down ENTIRELY (no silent degrade, no blank panel) and
+  // the panel's empty state shows the honest error instead.
+  it('on fallback, unmounts the interactive surface entirely and stops routing input over the DC (nothing left to click)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream()))
@@ -593,16 +583,16 @@ describe('BrowserLiveView — WebRTC signaling wiring (WebRTC build W2-B)', () =
 
     act(() => machineCallbacksRef.current.onFallback?.('ice-failed'))
 
-    expect(screen.getByTestId('browser-live-img')).toBeInTheDocument()
     expect(screen.queryByTestId('browser-live-video')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('browser-live-frame')).not.toBeInTheDocument()
+    // The honest failure reason is what's shown instead.
+    expect(screen.getByText(/live video connection failed \(ice-failed\)/i)).toBeInTheDocument()
 
-    const container = stubFrameRect()
-    fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
     expect(mockMachineSendInput).not.toHaveBeenCalled()
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
+    expect(mockSendInput).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })
 
-  it('on WS disconnect, stops the machine and drops back to JPEG', () => {
+  it('on WS disconnect, stops the machine and unmounts the interactive surface', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream()))
@@ -611,13 +601,18 @@ describe('BrowserLiveView — WebRTC signaling wiring (WebRTC build W2-B)', () =
     act(() => wsCallbacksRef.current?.onDisconnected?.())
 
     expect(mockMachineStop).toHaveBeenCalledTimes(1)
-    expect(screen.getByTestId('browser-live-img')).toBeInTheDocument()
+    expect(screen.queryByTestId('browser-live-video')).not.toBeInTheDocument()
   })
 })
 
-describe('BrowserLiveView — surfacing WebRTC fallback reasons (fix-wave B, HIGH)', () => {
+// Operator directive (JPEG-fallback removal) — every `onFallback` reason,
+// including the three that used to be silently suppressed as "capability
+// gates" (JPEG carried on underneath, so there was nothing to tell the user),
+// now surfaces as a persistent, honest, actionable error in the panel body —
+// never a toast (which can auto-dismiss unnoticed), and never silence.
+describe('BrowserLiveView — surfacing WebRTC fallback reasons (honest failure, no silent degrade)', () => {
   it.each(['ice-failed', 'ice-disconnected-timeout', 'offer-send-failed', 'stream-stopped', 'error', 'unavailable'])(
-    'logs console.warn and shows a transient warning toast for the RUNTIME reason "%s"',
+    'logs console.warn and shows a persistent, actionable error for the reason "%s"',
     (reason) => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
       render(<BrowserLiveView sessionId="s1" agentId="a1" />)
@@ -625,52 +620,17 @@ describe('BrowserLiveView — surfacing WebRTC fallback reasons (fix-wave B, HIG
 
       act(() => machineCallbacksRef.current.onFallback?.(reason))
 
-      expect(warnSpy).toHaveBeenCalledWith('[browser-live] WebRTC fell back to JPEG:', reason)
-      const toasts = useUiStore.getState().toasts
-      expect(toasts).toHaveLength(1)
-      expect(toasts[0]).toEqual(
-        expect.objectContaining({ variant: 'warning', message: expect.stringContaining('Live video degraded') }),
-      )
+      expect(warnSpy).toHaveBeenCalledWith('[browser-live] WebRTC failed:', reason)
+      // No toast — the failure is the panel's PRIMARY content, not an
+      // ephemeral notification that could go unnoticed.
+      expect(useUiStore.getState().toasts).toHaveLength(0)
+      expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
       warnSpy.mockRestore()
     },
   )
-
-  // fix-wave (MED, reviewer 4 finding 4): 'answer-timeout' is special-cased —
-  // it splits on whether the machine has EVER connected in this panel
-  // session (machine.hasConnectedOnce, browserWebRTC.ts), unlike every other
-  // runtime reason above which always toasts.
-  it('logs console.warn but SUPPRESSES the toast for "answer-timeout" on a cold start (machine never reached connected) — a false-positive degradation signal, not a real one', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    // machineHasConnectedOnceRef defaults to false in beforeEach — a cold start.
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
-    connectAndFrame()
-
-    act(() => machineCallbacksRef.current.onFallback?.('answer-timeout'))
-
-    expect(warnSpy).toHaveBeenCalledWith('[browser-live] WebRTC fell back to JPEG:', 'answer-timeout')
-    expect(useUiStore.getState().toasts).toHaveLength(0)
-    warnSpy.mockRestore()
-  })
-
-  it('logs console.warn AND shows the toast for "answer-timeout" once the machine had already connected once before falling back — a genuine degradation, not a cold start', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    machineHasConnectedOnceRef.current = true
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
-    connectAndFrame()
-
-    act(() => machineCallbacksRef.current.onFallback?.('answer-timeout'))
-
-    expect(warnSpy).toHaveBeenCalledWith('[browser-live] WebRTC fell back to JPEG:', 'answer-timeout')
-    const toasts = useUiStore.getState().toasts
-    expect(toasts).toHaveLength(1)
-    expect(toasts[0]).toEqual(
-      expect.objectContaining({ variant: 'warning', message: expect.stringContaining('Live video degraded') }),
-    )
-    warnSpy.mockRestore()
-  })
 
   it.each(['disabled', 'not_capable', 'lite_build'])(
-    'stays silent — no console.warn, no toast — for the CAPABILITY-GATE reason "%s" (this mode simply is not available; not a degradation)',
+    'surfaces a specific, non-retry-inviting explanation for the CAPABILITY-GATE reason "%s" (this mode genuinely is not available here)',
     (reason) => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
       render(<BrowserLiveView sessionId="s1" agentId="a1" />)
@@ -678,13 +638,15 @@ describe('BrowserLiveView — surfacing WebRTC fallback reasons (fix-wave B, HIG
 
       act(() => machineCallbacksRef.current.onFallback?.(reason))
 
-      expect(warnSpy).not.toHaveBeenCalled()
-      expect(useUiStore.getState().toasts).toHaveLength(0)
+      // Still logged and still visible — the old "stay silent, JPEG carries
+      // on" behavior is gone; there is no second sink left to carry on with.
+      expect(warnSpy).toHaveBeenCalledWith('[browser-live] WebRTC failed:', reason)
+      expect(screen.queryByTestId('browser-live-video')).not.toBeInTheDocument()
       warnSpy.mockRestore()
     },
   )
 
-  it('still drops back to the JPEG sink for a capability-gate reason, even though it stays silent', () => {
+  it('unmounts the video sink for a capability-gate reason exactly like any other fallback reason', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream()))
@@ -692,7 +654,27 @@ describe('BrowserLiveView — surfacing WebRTC fallback reasons (fix-wave B, HIG
 
     act(() => machineCallbacksRef.current.onFallback?.('lite_build'))
 
-    expect(screen.getByTestId('browser-live-img')).toBeInTheDocument()
-    expect(useUiStore.getState().toasts).toHaveLength(0)
+    expect(screen.queryByTestId('browser-live-video')).not.toBeInTheDocument()
+    expect(screen.getByText(/lite build/i)).toBeInTheDocument()
+  })
+
+  it('maps each known reason to its own distinct, honest message', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+
+    act(() => machineCallbacksRef.current.onFallback?.('disabled'))
+    expect(screen.getByText(/turned off for this installation/i)).toBeInTheDocument()
+  })
+
+  it('clears the error and re-attempts signaling when the Retry button is clicked', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => machineCallbacksRef.current.onFallback?.('ice-failed'))
+    expect(screen.getByText(/live video connection failed/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+
+    expect(mockMachineStart).toHaveBeenCalled()
+    expect(screen.queryByText(/live video connection failed/i)).not.toBeInTheDocument()
   })
 })
