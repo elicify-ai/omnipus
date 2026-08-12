@@ -295,7 +295,28 @@ working tree is its own product.
 - **The Library's Transfer dialog gains reach.** Once mounts exist, a copy/move
   in the file browser can move files on the real disk. Mounted folders must be
   visually distinct there — a UI requirement created by this ADR, not optional
-  polish.
+  polish. **Delivered 2026-08-13**: mounts carry a `mount` object on
+  `LibraryEntry`, are drawn with their own icon/colour and their real path in
+  the row, and a transfer whose destination is inside a mount names the
+  absolute host path before it is confirmed.
+- **The Library had to learn about more than one root (D8, added 2026-08-13).**
+  Building the UI surfaced a defect that made all of it unreachable: the Library
+  browses via an `os.Root` at `work/`, which refuses at the syscall level to
+  follow anything resolving outside it. A mount IS a symlink pointing outside,
+  so a mounted folder appeared in the listing and failed on click with "path
+  escapes the workspace work tree" — visible and unopenable. Resolved by opening
+  one `os.Root` per mount rather than by relaxing the single root: browsing
+  inside a mount is contained to that folder exactly as `work/` is contained to
+  itself. This is the same shape the enforcement engine already uses
+  (`fspolicy.FSPolicy.AllowedRoots`), which is the point of this ADR.
+- **Two verbs had to be separated (D9, added 2026-08-13).** Multi-root creates a
+  data-loss path that did not previously exist: a mount's own entry resolves to
+  its root at `"."`, so an unguarded delete calls `RemoveAll(".")` and
+  recursively empties the operator's real folder. DELETE and UNMOUNT are
+  therefore distinct operations with distinct wording — the row menu offers
+  "Unmount · files stay" and does not offer Delete at all — and the engine
+  refuses a delete, rename, or copy aimed at a mount's own entry regardless of
+  what any client sends.
 
 ### 4.2 Risks
 

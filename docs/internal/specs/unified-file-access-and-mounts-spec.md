@@ -487,6 +487,28 @@ proceeds (FR-7.6), because the secret set is subtracted from every grant
 independently of mounts — so mounting `$HOME` cannot expose it. FR-7.7 asserts
 that rather than trusting it.
 
-**O-2.** Does an agent's mount REQUEST (FR-7.2) surface as a chat approval, a
-notification, or a Library prompt? Affects no engine behaviour; blocks the UI
-work only.
+**O-2 — RESOLVED 2026-08-13 by the operator: "ask in chat, with the same
+mechanism as tool access — the modal we already use."** A mount request is an
+ordinary tool call (`request_mount`, `pkg/tools/request_mount.go`), so it rides
+the existing tool-approval modal: focus on Deny, Escape denies, nothing
+auto-approves, request expires. No second consent path.
+
+One change was required to reuse it safely. **"Always Allow" is withheld for
+this tool.** Approval grants are keyed on (session, agent, TOOL NAME) — the
+arguments are not part of the key — so the shortcut would mean "this agent may
+mount ANY folder for the rest of the session, without asking": a blanket grant
+over the whole disk from one click, with no path shown. It is also
+unnecessary, since approving once creates a mount that persists until revoked.
+Implemented as a named set in `ToolApprovalModal.tsx` and mutation-verified;
+Approve and Deny are untouched.
+
+**O-3 — RESOLVED 2026-08-13, same session: the Library browses a SET of roots.**
+Discovered while building the UI: the Library could not open a mount at all. It
+browses through an `os.Root` at `work/`, which refuses at the syscall level to
+follow anything resolving outside it — and a mount IS a symlink pointing
+outside. A mounted folder appeared in the listing and failed on click. Resolved
+by opening one `os.Root` per mount (`pkg/library/root.go`), so browsing inside a
+mount is contained to that folder exactly as `work/` is contained to itself.
+Nothing is relaxed; the containment learns a workspace legitimately has more
+than one root, which is what the engine already models via
+`fspolicy.FSPolicy.AllowedRoots`.
