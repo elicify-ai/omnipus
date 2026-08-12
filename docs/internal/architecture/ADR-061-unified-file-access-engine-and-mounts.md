@@ -375,26 +375,32 @@ Closing R-2 fully would mean carrying a Unicode normalization table into
 `pkg/tools` ↔ `pkg/sandbox` import cycle — and normalization alone would still
 miss locale case rules.
 
-### R-3. MCP servers are unconfined on macOS
+### R-3. MCP servers are not a sandbox concern — operator decision
 
-Corrected from an earlier, wrong framing of "unsandboxed by design, matching
-Claude Code". The accurate statement is **platform-dependent**: on Linux an MCP
-child inherits the gateway's boot Landlock domain; on macOS
+**Operator decision, 2026-08-12: "if someone gives the agent the tool to add an
+MCP, or adds an MCP on their own, it is their decision — let's not
+overcomplicate it."**
+
+So: MCP server processes are NOT confined, and `add_mcp_server`'s seeded policy
+is left as shipped. Granting an agent a tool that runs programs is the
+operator's call, and the seed is data they can edit on their own installation.
+This matches Claude Code, whose sandboxing doc states a command able to edit its
+config could "add a hook or MCP server that Claude Code runs outside the
+sandbox".
+
+Two earlier positions are superseded and recorded so they are not re-litigated:
+first that this was purely a tool-policy question (too narrow — it ignored that
+the two spawn paths differ), then that MCP processes should be confined like
+`bash` (over-corrected — it diverges from the competition, risks breaking
+legitimate servers, and addresses a threat the operator has explicitly accepted).
+
+One factual correction stands regardless of the policy: three doc comments in
+`pkg/mcp/manager.go` assert that the child "inherits the gateway's Landlock
+domain" UNCONDITIONALLY. That is true on Linux and false on macOS, where
 `restrictCurrentThreadIfNeeded` is a no-op and `applyPlatformHardening` is never
-reached, so the child is entirely unconfined and can read `master.key`,
-`credentials.json`, `auth.json` and every agent's home.
-
-Three doc comments in `pkg/mcp/manager.go` claim Landlock inheritance
-unconditionally. They are wrong on macOS and must be corrected whether or not
-the confinement changes.
-
-The control is that an agent cannot ADD an MCP server — matching Claude Code,
-whose sandboxing doc says a command able to edit its config could "add a hook or
-MCP server that Claude Code runs outside the sandbox", and whose defence is that
-`.mcp.json` is unwritable by a sandboxed command. **That control is currently
-SINGLE-LAYER**: the `add_mcp_server: deny` seed is the only thing holding,
-because the `tools.mcp` blocklist entry that was believed to back it is
-bypassable by writing the parent key `tools`.
+reached. The comments must say so. The confinement is a decision; the comment
+describing behaviour that does not occur is simply wrong, and is the exact
+defect class this section closes with.
 
 ### What this section is really recording
 
