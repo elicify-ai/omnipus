@@ -617,6 +617,10 @@ components:
       $ref: ./components/schemas/WorkspaceDelegation.yaml
     WorkspaceDelegationUpdateRequest:
       $ref: ./components/schemas/WorkspaceDelegationUpdateRequest.yaml
+    WorkspaceMountCreateRequest:
+      $ref: ./components/schemas/WorkspaceMountCreateRequest.yaml
+    WorkspaceMountCreateResponse:
+      $ref: ./components/schemas/WorkspaceMountCreateResponse.yaml
     Plan:
       $ref: ./components/schemas/Plan.yaml
     PlanCreateRequest:
@@ -6841,6 +6845,100 @@ paths:
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /workspaces/{id}/mounts:
+    post:
+      operationId: createWorkspaceMount
+      summary: Create a workspace mount (a named write-grant on a real local folder)
+      description: >
+        FR-7.1/FR-5, ADR-061 D4/D6. Validates the name shape and uniqueness
+        (400 on an invalid name, a collision with an existing mount, or a
+        collision with an existing entry in work/; 400 also when host_path
+        does not resolve to an existing, real, on-disk directory), resolves
+        host_path to its realpath, and refuses (403) a target that IS or lies
+        INSIDE $OMNIPUS_HOME (FR-7.5 — checked on the realpath-resolved
+        target, so a symlink to it is refused too) — this is a policy
+        refusal, not malformed input. Otherwise creates the mount and
+        materialises it as a symlink under the workspace's work/ directory. A
+        target that is broad but not refused (the operator's own home
+        directory, the filesystem root, or a location that CONTAINS
+        $OMNIPUS_HOME) still succeeds (201) but returns a non-empty `warning`
+        (FR-7.4/FR-7.6) — the secret set is subtracted from every grant
+        regardless of where it came from, so a broad mount is allowed, but the
+        operator must be told what it covers. Takes effect immediately for
+        every agent on the workspace — no restart (FR-8.1).
+      tags:
+      - Workspaces
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceMountCreateRequest'
+      responses:
+        '201':
+          description: The created mount, with a warning field when the target was broad but not refused.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceMountCreateResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /workspaces/{id}/mounts/{name}:
+    delete:
+      operationId: deleteWorkspaceMount
+      summary: Delete a workspace mount (revoke a write-grant)
+      description: >
+        FR-7.3/FR-8.6. Removes the mount's symlink under work/ and its record
+        from the workspace. The operator's real folder at the mount's
+        host_path, and everything inside it, is never touched — only the
+        symlink and the mount record are removed. Returns 404 both when id
+        does not name a known workspace and when name does not name any
+        mount on it. Takes effect immediately for every agent on the
+        workspace — no restart (FR-8.1).
+      tags:
+      - Workspaces
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The mount's name.
+      responses:
+        '204':
+          description: Deleted.
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Unknown workspace ID, or name does not name any mount on this workspace.
           $ref: '#/components/responses/404NotFound'
 
   /workspaces/{id}/instructions:

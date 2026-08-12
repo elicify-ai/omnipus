@@ -2705,6 +2705,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{id}/mounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a workspace mount (a named write-grant on a real local folder)
+         * @description FR-7.1/FR-5, ADR-061 D4/D6. Validates the name shape and uniqueness (400 on an invalid name, a collision with an existing mount, or a collision with an existing entry in work/; 400 also when host_path does not resolve to an existing, real, on-disk directory), resolves host_path to its realpath, and refuses (403) a target that IS or lies INSIDE $OMNIPUS_HOME (FR-7.5 — checked on the realpath-resolved target, so a symlink to it is refused too) — this is a policy refusal, not malformed input. Otherwise creates the mount and materialises it as a symlink under the workspace's work/ directory. A target that is broad but not refused (the operator's own home directory, the filesystem root, or a location that CONTAINS $OMNIPUS_HOME) still succeeds (201) but returns a non-empty `warning` (FR-7.4/FR-7.6) — the secret set is subtracted from every grant regardless of where it came from, so a broad mount is allowed, but the operator must be told what it covers. Takes effect immediately for every agent on the workspace — no restart (FR-8.1).
+         */
+        post: operations["createWorkspaceMount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mounts/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a workspace mount (revoke a write-grant)
+         * @description FR-7.3/FR-8.6. Removes the mount's symlink under work/ and its record from the workspace. The operator's real folder at the mount's host_path, and everything inside it, is never touched — only the symlink and the mount record are removed. Returns 404 both when id does not name a known workspace and when name does not name any mount on it. Takes effect immediately for every agent on the workspace — no restart (FR-8.1).
+         */
+        delete: operations["deleteWorkspaceMount"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{id}/instructions": {
         parameters: {
             query?: never;
@@ -8649,6 +8689,46 @@ export interface components {
         WorkspaceDelegationUpdateRequest: {
             /** @description The complete set of delegation edges for this workspace. An empty array clears all delegation. Deduplicated by (from_agent, to_agent) at write time. */
             edges: components["schemas"]["WorkspaceDelegationEdge"][];
+        };
+        /** @description Request body for POST /workspaces/{id}/mounts (FR-7.1, ADR-061 D4). Creates a new named write-grant on a real local folder. See WorkspaceMount.yaml for the exact shape rules `name` and `host_path` must satisfy. */
+        WorkspaceMountCreateRequest: {
+            /**
+             * @description A single path segment identifying this mount inside work/ (FR-5.2). Must be non-empty, contain no path separators (/ or \), and not be ".." or contain "..". Must be unique within the workspace and must not collide with an existing entry already present in work/.
+             * @example client-repo
+             */
+            name: string;
+            /**
+             * @description Absolute host filesystem path to the folder to mount (FR-5.3). Resolved via realpath at creation time; must currently exist and be a directory.
+             * @example /Users/operator/code/client-repo
+             */
+            host_path: string;
+        };
+        /**
+         * @description Response body for POST /workspaces/{id}/mounts. Fields mirror WorkspaceMount.yaml verbatim (duplicated rather than composed via allOf — matches the ADR-034 precedent of keeping operation-facing schemas flat, one file per schema) plus an operator-facing `warning` string.
+         *     FR-7.4/FR-7.6: a target that is broad but not refused (the operator's own home directory, the filesystem root, or a location that CONTAINS $OMNIPUS_HOME) still succeeds (201) but MUST warn — the warning has to cross the wire so the operator who made the call actually sees it, not just a server log. `warning` is absent (never an empty string) when the target warranted none.
+         */
+        WorkspaceMountCreateResponse: {
+            /**
+             * @description The mount's name, as created (see WorkspaceMountCreateRequest.name).
+             * @example client-repo
+             */
+            name: string;
+            /**
+             * @description The realpath-resolved host path this mount grants write access to (FR-5.3).
+             * @example /Users/operator/code/client-repo
+             */
+            host_path: string;
+            /**
+             * @description Server-computed liveness of the mount target at creation time (FR-8.2). Always "ok" immediately after a successful create — included for shape symmetry with WorkspaceMount.yaml.
+             * @example ok
+             * @enum {string}
+             */
+            status: "ok" | "broken";
+            /**
+             * @description Present only when the resolved target is broad but not refused (FR-7.4/ FR-7.6) — e.g. the operator's home directory, the filesystem root, or a folder that CONTAINS $OMNIPUS_HOME. Names exactly what the grant covers. Absent (not an empty string) when the target warranted no warning.
+             * @example mounting "/Users/operator" contains this Omnipus installation's own data directory (/Users/operator/.omnipus) — the installation's own secrets remain protected independently of this mount, but every OTHER file under /Users/operator becomes writable by any agent on this workspace
+             */
+            warning?: string;
         };
         /**
          * Plan
@@ -16523,6 +16603,64 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
+    createWorkspaceMount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceMountCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description The created mount, with a warning field when the target was broad but not refused. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceMountCreateResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteWorkspaceMount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+                /** @description The mount's name. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            /** @description Unknown workspace ID, or name does not name any mount on this workspace. */
+            404: components["responses"]["404NotFound"];
+        };
+    };
     getWorkspaceInstructions: {
         parameters: {
             query?: never;
@@ -17092,6 +17230,8 @@ export type WorkspaceUpdateRequest = components["schemas"]["WorkspaceUpdateReque
 export type WorkspaceDelegationEdge = components["schemas"]["WorkspaceDelegationEdge"];
 export type WorkspaceDelegation = components["schemas"]["WorkspaceDelegation"];
 export type WorkspaceDelegationUpdateRequest = components["schemas"]["WorkspaceDelegationUpdateRequest"];
+export type WorkspaceMountCreateRequest = components["schemas"]["WorkspaceMountCreateRequest"];
+export type WorkspaceMountCreateResponse = components["schemas"]["WorkspaceMountCreateResponse"];
 export type Plan = components["schemas"]["Plan"];
 export type PlanCreateRequest = components["schemas"]["PlanCreateRequest"];
 export type PlanUpdateRequest = components["schemas"]["PlanUpdateRequest"];

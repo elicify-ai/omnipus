@@ -639,6 +639,14 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /api/v1/workspaces/{id}/mounts[/{name}] — the mount lifecycle (FR-7.1/
+	// FR-7.3, ADR-061 D4). Same second-path-segment dispatch as /media above
+	// (not suffix matching — /mounts/{name} has a trailing segment).
+	if segs := strings.Split(strings.TrimPrefix(rest, "/"), "/"); len(segs) >= 2 && segs[1] == "mounts" {
+		a.HandleWorkspaceMounts(w, r)
+		return
+	}
+
 	// /api/v1/workspaces/{id}
 	if len(rest) > 1 {
 		id := strings.TrimPrefix(rest, "/")

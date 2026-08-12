@@ -5507,6 +5507,24 @@ func (e WorkspaceDelegationUpdateRequestEdgesModes) Valid() bool {
 	}
 }
 
+// Defines values for WorkspaceMountCreateResponseStatus.
+const (
+	Broken WorkspaceMountCreateResponseStatus = "broken"
+	Ok     WorkspaceMountCreateResponseStatus = "ok"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceMountCreateResponseStatus enum.
+func (e WorkspaceMountCreateResponseStatus) Valid() bool {
+	switch e {
+	case Broken:
+		return true
+	case Ok:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkspaceUpdateRequestStatus.
 const (
 	WorkspaceUpdateRequestStatusActive   WorkspaceUpdateRequestStatus = "active"
@@ -13306,6 +13324,34 @@ type WorkspaceMemberHeartbeat struct {
 	SessionId *string `json:"session_id,omitempty"`
 }
 
+// WorkspaceMountCreateRequest Request body for POST /workspaces/{id}/mounts (FR-7.1, ADR-061 D4). Creates a new named write-grant on a real local folder. See WorkspaceMount.yaml for the exact shape rules `name` and `host_path` must satisfy.
+type WorkspaceMountCreateRequest struct {
+	// HostPath Absolute host filesystem path to the folder to mount (FR-5.3). Resolved via realpath at creation time; must currently exist and be a directory.
+	HostPath string `json:"host_path"`
+
+	// Name A single path segment identifying this mount inside work/ (FR-5.2). Must be non-empty, contain no path separators (/ or \), and not be ".." or contain "..". Must be unique within the workspace and must not collide with an existing entry already present in work/.
+	Name string `json:"name"`
+}
+
+// WorkspaceMountCreateResponse Response body for POST /workspaces/{id}/mounts. Fields mirror WorkspaceMount.yaml verbatim (duplicated rather than composed via allOf — matches the ADR-034 precedent of keeping operation-facing schemas flat, one file per schema) plus an operator-facing `warning` string.
+// FR-7.4/FR-7.6: a target that is broad but not refused (the operator's own home directory, the filesystem root, or a location that CONTAINS $OMNIPUS_HOME) still succeeds (201) but MUST warn — the warning has to cross the wire so the operator who made the call actually sees it, not just a server log. `warning` is absent (never an empty string) when the target warranted none.
+type WorkspaceMountCreateResponse struct {
+	// HostPath The realpath-resolved host path this mount grants write access to (FR-5.3).
+	HostPath string `json:"host_path"`
+
+	// Name The mount's name, as created (see WorkspaceMountCreateRequest.name).
+	Name string `json:"name"`
+
+	// Status Server-computed liveness of the mount target at creation time (FR-8.2). Always "ok" immediately after a successful create — included for shape symmetry with WorkspaceMount.yaml.
+	Status WorkspaceMountCreateResponseStatus `json:"status"`
+
+	// Warning Present only when the resolved target is broad but not refused (FR-7.4/ FR-7.6) — e.g. the operator's home directory, the filesystem root, or a folder that CONTAINS $OMNIPUS_HOME. Names exactly what the grant covers. Absent (not an empty string) when the target warranted no warning.
+	Warning *string `json:"warning,omitempty"`
+}
+
+// WorkspaceMountCreateResponseStatus Server-computed liveness of the mount target at creation time (FR-8.2). Always "ok" immediately after a successful create — included for shape symmetry with WorkspaceMount.yaml.
+type WorkspaceMountCreateResponseStatus string
+
 // WorkspaceUpdateRequest Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged.
 type WorkspaceUpdateRequest struct {
 	CoreTeam    *[]string `json:"core_team,omitempty"`
@@ -13743,6 +13789,9 @@ type PutWorkspaceInstructionsJSONRequestBody = WorkspaceInstructionsRequest
 
 // CreateWorkspaceMediaAttachmentJSONRequestBody defines body for CreateWorkspaceMediaAttachment for application/json ContentType.
 type CreateWorkspaceMediaAttachmentJSONRequestBody = MediaAttachmentRequest
+
+// CreateWorkspaceMountJSONRequestBody defines body for CreateWorkspaceMount for application/json ContentType.
+type CreateWorkspaceMountJSONRequestBody = WorkspaceMountCreateRequest
 
 // CreateWorkspacePlanJSONRequestBody defines body for CreateWorkspacePlan for application/json ContentType.
 type CreateWorkspacePlanJSONRequestBody = PlanCreateRequest

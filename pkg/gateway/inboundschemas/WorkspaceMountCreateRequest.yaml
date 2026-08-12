@@ -1,0 +1,26 @@
+type: object
+additionalProperties: false
+description: >
+  Request body for POST /workspaces/{id}/mounts (FR-7.1, ADR-061 D4). Creates
+  a new named write-grant on a real local folder. See WorkspaceMount.yaml for
+  the exact shape rules `name` and `host_path` must satisfy.
+required:
+  - name
+  - host_path
+properties:
+  name:
+    type: string
+    minLength: 1
+    description: >
+      A single path segment identifying this mount inside work/ (FR-5.2).
+      Must be non-empty, contain no path separators (/ or \), and not be
+      ".." or contain "..". Must be unique within the workspace and must not
+      collide with an existing entry already present in work/.
+    example: "client-repo"
+  host_path:
+    type: string
+    minLength: 1
+    description: >
+      Absolute host filesystem path to the folder to mount (FR-5.3). Resolved
+      via realpath at creation time; must currently exist and be a directory.
+    example: "/Users/operator/code/client-repo"
