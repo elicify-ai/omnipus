@@ -148,7 +148,18 @@ const DEFAULT_RETRY_DELAY_MS = 15000
 // successful connection, so only a sustained inability to connect
 // (5 consecutive failures, ~15s/30s/60s/120s/240s apart) gives up for good.
 const DEFAULT_MAX_RETRIES = 5
-const DEFAULT_ICE_GATHERING_TIMEOUT_MS = 3000
+// 3000 was a hair-trigger that macOS loses. Measured on darwin 2026-08-12 in a
+// real browser on this machine: gathering completes at ~3224ms and yields
+// exactly ONE candidate, an mDNS `<uuid>.local` host candidate. Chrome
+// registers that name with the system mDNS responder before it will emit the
+// candidate, and on macOS that registration is what costs the ~3s.
+//
+// Losing this race is not a degraded connection, it is a guaranteed dead one:
+// signaling here is NON-TRICKLE, so candidates that arrive after the offer is
+// sent are never delivered at all. The old value shipped an offer with ZERO
+// candidates, Pion had nothing to pair against, and ICE failed 30s later with
+// no indication why. Every live-browser session on macOS hit this.
+const DEFAULT_ICE_GATHERING_TIMEOUT_MS = 12000
 
 function defaultPcFactory(): RTCPeerConnection {
   return new RTCPeerConnection({ iceServers: [{ urls: DEFAULT_STUN_SERVER }] })
@@ -495,14 +506,32 @@ export class BrowserWebRTCSession {
       // reaches 'complete' (a stuck STUN round trip, a flaky network) used to
       // wedge this Promise forever, leaving the machine stuck in 'offering'
       // with no offer ever sent and no fallback ever triggered. Non-trickle
-      // still works fine with whatever candidates gathered in the timeout
-      // window (worst case: fewer candidate types, not zero), so proceeding
-      // with a partial set beats never proceeding at all. The caller
+      // still works with whatever candidates gathered in the timeout window,
+      // so proceeding with a PARTIAL set beats never proceeding at all. NOTE:
+      // an earlier revision of this comment claimed the worst case was 'fewer
+      // candidate types, not zero'. That is false on macOS, where the sole
+      // candidate is an mDNS name whose registration can outlast the deadline
+      // — measured 3224ms against a 3000ms timeout — leaving exactly zero. The caller
       // (`_beginOffer`) re-checks `this.pc !== pc` right after this resolves,
       // so a timeout firing after the session was superseded/stopped is
       // harmless.
       const timer = setTimeout(() => {
         pc.onicegatheringstatechange = null
+        // Proceeding with a PARTIAL candidate set is fine. Proceeding with an
+        // EMPTY one never is: non-trickle means an offer carrying no
+        // candidates can only ever fail, 30s later, with ICE 'failed' and
+        // nothing pointing at the cause. Surface it here instead.
+        const gathered = (pc.localDescription?.sdp ?? '')
+          .split('\n')
+          .filter((l) => l.trim().startsWith('a=candidate:')).length
+        if (gathered === 0) {
+          console.warn(
+            `[browserWebRTC] ICE gathering timed out after ${this.iceGatheringTimeoutMs}ms with ZERO ` +
+              'candidates. The offer is undeliverable — signaling is non-trickle, so candidates ' +
+              'gathered after this point are never sent. Expect ICE to fail ~30s from now. On macOS ' +
+              'this is usually slow or blocked mDNS (.local) candidate registration.',
+          )
+        }
         resolve()
       }, this.iceGatheringTimeoutMs)
       pc.onicegatheringstatechange = () => {
