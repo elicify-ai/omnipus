@@ -565,7 +565,24 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 	// finding) — every other CDP call site in this file uses the same
 	// injectable seam; see its doc comment.
 	if err := lv.runCDP(tabCtx, viewportSetTimeout, actions...); err != nil {
-		return false, fmt.Errorf("browser live: resize viewport: %w", err)
+		// One retry, and ONLY for a deadline timeout (2026-08-13 UAT:
+		// "could not resize the browser viewport" toast mid-session). A
+		// GetWindowForTarget that cannot answer within viewportSetTimeout
+		// means the browser process is momentarily starved (encode burst +
+		// input backlog), not that the resize is invalid -- by the second
+		// attempt the stall has typically cleared. Any other error is a
+		// real failure and still surfaces immediately.
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return false, fmt.Errorf("browser live: resize viewport: %w", err)
+		}
+		logger.WarnCF(
+			"browser",
+			"live view: set viewport timed out; retrying once (browser process momentarily starved)",
+			map[string]any{"session_id": sessionID},
+		)
+		if err := lv.runCDP(tabCtx, viewportSetTimeout, actions...); err != nil {
+			return false, fmt.Errorf("browser live: resize viewport (after retry): %w", err)
+		}
 	}
 
 	// Step 3: read back what ACTUALLY happened — see the mechanism section
