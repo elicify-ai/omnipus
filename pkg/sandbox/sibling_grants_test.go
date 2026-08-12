@@ -127,8 +127,8 @@ func TestExpandRulesExcluding_EnumeratesAtCallTime(t *testing.T) {
 		t.Fatal("precondition: the directory must not exist yet")
 	}
 
-	if err := os.MkdirAll(late, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
+	if mkErr := os.MkdirAll(late, 0o700); mkErr != nil {
+		t.Fatalf("mkdir: %v", mkErr)
 	}
 	after, err := ExpandRulesExcluding(
 		[]PathRule{{Path: home, Access: AccessRead | AccessWrite}}, denied)
@@ -219,5 +219,58 @@ func TestExpandRulesExcluding_NoDeniedPathsIsIdentity(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Path != "/tmp" {
 		t.Errorf("expected identity, got %v", got)
+	}
+}
+
+// TestExpandRulesExcluding_TopLevelCreationIsNarrowed documents a REAL
+// behavioural narrowing that follows from sibling-granting, so it is a known
+// accepted consequence rather than something discovered later as a bug.
+//
+// Replacing the whole-tree $OMNIPUS_HOME grant with per-entry grants means the
+// home DIRECTORY ITSELF is no longer granted. Two things follow on Linux:
+//
+//  1. A child can no longer create a NEW entry at the top level of
+//     $OMNIPUS_HOME. Everything inside an already-granted subdirectory
+//     (agents/, sessions/, skills/) still works normally, which is where all
+//     agent writes actually go — the gateway creates the top-level layout, not
+//     its children.
+//  2. A top-level entry created AFTER a child was spawned is not reachable by
+//     that child. The next spawn re-enumerates and picks it up (see
+//     TestExpandRulesExcluding_EnumeratesAtCallTime), so the window is one
+//     process lifetime.
+//
+// Neither applies to macOS, where the home grant stays whole and the secrets
+// are removed by explicit deny instead.
+func TestExpandRulesExcluding_TopLevelCreationIsNarrowed(t *testing.T) {
+	home := seedHome(t)
+	got, err := ExpandRulesExcluding(
+		[]PathRule{{Path: home, Access: AccessRead | AccessWrite | AccessExecute}},
+		SecretPaths(home))
+	if err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+	paths := grantedPaths(t, got)
+
+	if contains(paths, home) {
+		t.Fatal("home root granted whole — the exclusion is not in effect")
+	}
+	// The case that actually matters: writes INSIDE a granted subdirectory are
+	// untouched. If this ever fails, agents cannot write to their own
+	// workspaces and the exclusion has broken the product rather than hardened
+	// it.
+	for _, sub := range []string{"agents", "sessions", "skills"} {
+		want := filepath.Join(home, sub)
+		var found bool
+		for _, r := range got {
+			if r.Path == want {
+				found = true
+				if r.Access&AccessWrite == 0 {
+					t.Errorf("%q must remain writable; agents write their work here", want)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%q must still be granted", want)
+		}
 	}
 }
