@@ -42,7 +42,7 @@ func TestDefaultChildPolicy_OmitsHomeRoot(t *testing.T) {
 // can still read/write within workspace/, sessions/, memory/, etc.
 func TestDefaultChildPolicy_GrantsSubdirsRWX(t *testing.T) {
 	home := t.TempDir()
-	for _, sub := range []string{"workspace", "sessions", "memory", "skills", "logs", "system"} {
+	for _, sub := range []string{"workspace", "sessions", "memory", "skills", "logs"} {
 		if err := os.MkdirAll(filepath.Join(home, sub), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", sub, err)
 		}
@@ -50,7 +50,12 @@ func TestDefaultChildPolicy_GrantsSubdirsRWX(t *testing.T) {
 
 	policy := DefaultChildPolicy(home, nil, nil, nil, nil)
 
-	wantPaths := []string{"workspace", "sessions", "memory", "skills", "logs", "system"}
+	// "system" was in this list until the audit log joined the secret set: it
+	// holds audit.jsonl and its HMAC chain anchor, and a child that can truncate
+	// or delete it erases the record of what it did. The HMAC chain detects
+	// modification; it does not survive rm. So system/ must now be carved out
+	// like any other secret rather than granted as an ordinary subdirectory.
+	wantPaths := []string{"workspace", "sessions", "memory", "skills", "logs"}
 	for _, want := range wantPaths {
 		fullPath := filepath.Join(home, want)
 		var found bool

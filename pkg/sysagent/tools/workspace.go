@@ -789,7 +789,19 @@ func (t *WorkspaceDeleteTool) Execute(_ context.Context, args map[string]any) *t
 	// best-effort cascade cleanup that does not touch workspaces/{id}.json.
 	unlock()
 
-	// Step 3: best-effort cascade of per-workspace directory (AGENT.md / memory room).
+	// Step 3: best-effort cascade of the mount store. Mounts live in
+	// entities/mounts/<id>.json (out of a sandboxed child's reach — see
+	// pkg/workspace/mountstore.go), NOT under the workspace directory, so the
+	// RemoveAll below does not reach them. Removing the record removes only the
+	// record of the grants; the operator's real folders are never touched
+	// (FR-8.6). Runs after unlock — DeleteMountStore takes LockID itself, and
+	// this pool is not reentrant.
+	if err := workspacepkg.DeleteMountStore(t.deps.Home, id); err != nil {
+		slog.Warn("sysagent: workspace cascade delete: failed to remove mount store",
+			"workspace_id", id, "error", err)
+	}
+
+	// Step 4: best-effort cascade of per-workspace directory (AGENT.md / memory room).
 	// The JSON removal above is the authoritative delete; a stale directory is not fatal.
 	wsDir := workspacepkg.WorkspaceDir(t.deps.Home, id)
 	if err := os.RemoveAll(wsDir); err != nil {

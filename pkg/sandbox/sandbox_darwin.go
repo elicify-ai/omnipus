@@ -41,7 +41,12 @@ func probeLandlockABIPlatform() int {
 // therefore happens in applyPlatformHardening, which rewrites the child's argv
 // to run under sandbox-exec. Returning nil here is correct, not a gap — see
 // backend_darwin_seatbelt.go's header for the posture consequences.
-func restrictCurrentThreadIfNeeded() error { return nil }
+//
+// The per-turn policy parameter is ignored for the same reason, and ignoring it
+// here loses nothing: macOS carries the per-turn policy through
+// applyPlatformHardening -> SeatbeltBackend.ApplyToCmd, which is the only place
+// on this platform where a child can be confined at all.
+func restrictCurrentThreadIfNeeded(_ *SandboxPolicy) error { return nil }
 
 // MarkStartLockedCalled is a no-op on macOS: there is no Landlock domain whose
 // inheritance needs tracking. See the linux implementation in sandbox_linux.go.

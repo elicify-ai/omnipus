@@ -48,16 +48,37 @@ func TestRenderSandboxMode(t *testing.T) {
 			want:   "fallback",
 		},
 		{
-			name:   "seatbelt backend reports seatbelt, not unknown",
-			status: sandbox.Status{Backend: "seatbelt", Available: true},
+			name: "seatbelt backend with a profile actually applied reports seatbelt, not unknown",
+			// KernelLevel alone (mirrored from Available()) is not enough —
+			// PolicyApplied must also be true, or this is the exact
+			// review-finding-1 bug: permissive/off states with the backend
+			// merely SELECTED would be reported as confined.
+			status: sandbox.Status{Backend: "seatbelt", Available: true, KernelLevel: true, PolicyApplied: true},
 			want:   "seatbelt",
 		},
 		{
 			name: "seatbelt reports seatbelt even though it has no ABI version",
 			// Seatbelt exposes no versioned ABI, so ABIVersion stays 0. That
-			// must not push it down into the unknown branch.
-			status: sandbox.Status{Backend: "seatbelt", Available: true, KernelLevel: true, ABIVersion: 0},
+			// must not push it down into the unknown branch, as long as the
+			// profile was actually applied.
+			status: sandbox.Status{Backend: "seatbelt", Available: true, KernelLevel: true, ABIVersion: 0, PolicyApplied: true},
 			want:   "seatbelt",
+		},
+		{
+			name: "seatbelt SELECTED but NOT applied (permissive/off) degrades to fallback, not seatbelt",
+			// Review finding 1 (MAJOR): pkg/gateway/sandbox_apply.go refuses to
+			// install a Seatbelt profile under mode=permissive (Seatbelt has no
+			// audit-only mode), so children run completely unwrapped. Before
+			// this fix, Backend=="seatbelt" alone was enough to report
+			// "seatbelt" to the agent — telling it children were kernel-confined
+			// when NO profile had ever been installed.
+			status: sandbox.Status{Backend: "seatbelt", Available: true, KernelLevel: true, PolicyApplied: false},
+			want:   "fallback",
+		},
+		{
+			name:   "seatbelt with kernel_level unset and not applied also degrades to fallback",
+			status: sandbox.Status{Backend: "seatbelt", Available: true, KernelLevel: false, PolicyApplied: false},
+			want:   "fallback",
 		},
 		{
 			name:   "an unrecognised backend is reported as unknown",

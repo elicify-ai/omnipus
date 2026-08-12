@@ -172,6 +172,15 @@ func TestBuildCarveOuts_MergedSecretSet(t *testing.T) {
 		filepath.Join(home, "config.json"),
 		filepath.Join(home, "cli.token"),
 		filepath.Join(home, "entities"),
+		// Added after the set was re-derived against a live install rather
+		// than carried over from the two old lists. auth.json is plaintext
+		// OAuth access + refresh tokens (pkg/auth/store.go); backups/*.tar.gz
+		// is an archive of the ENTIRE vault (createTarGz excludes only logs/
+		// and backups/); system/ holds the audit log and its HMAC chain
+		// anchor, which a child could truncate without ever reading.
+		filepath.Join(home, "auth.json"),
+		filepath.Join(home, "backups"),
+		filepath.Join(home, "system"),
 		filepath.Join(home, "agents"),
 		filepath.Join(home, "workspaces"),
 	}

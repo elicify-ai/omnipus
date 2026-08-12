@@ -183,7 +183,7 @@
   },
   {
     "name": "remove_skill",
-    "description": "Remove an installed skill. Parameters: name (required), confirm (bool, must be true).",
+    "description": "Remove an installed skill. Parameters: name (required, the skill id as reported by list_skills — no path separators), confirm (bool, must be true).",
     "scope": "core",
     "category": "skills",
     "source": "builtin"

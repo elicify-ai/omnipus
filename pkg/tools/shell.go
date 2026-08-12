@@ -206,7 +206,11 @@ var (
 	// verbatim from the pre-consolidation `exec` tool (FR-B4). Applies
 	// UNCONDITIONALLY — no policy verdict or operator configuration disables
 	// this list.
-	defaultDenyPatterns = []*regexp.Regexp{
+	//
+	// The secrets-subtree literal guards (v0.2 #155 item 8) are appended below
+	// via secretGuardPatterns rather than hand-copied here — see that var's doc
+	// comment for why hand-copying is exactly the bug this replaces.
+	defaultDenyPatterns = append([]*regexp.Regexp{
 		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
 		regexp.MustCompile(`\bdel\s+/[fq]\b`),
 		regexp.MustCompile(`\brmdir\s+/s\b`),
@@ -277,11 +281,54 @@ var (
 		regexp.MustCompile(`\bsource\s+.*\.sh\b`),
 		regexp.MustCompile(`<\([^)]*\)`),
 		regexp.MustCompile(`>\([^)]*\)`),
-		// v0.2 #155 item 8 — secrets-subtree path-guard (option B backstop).
-		regexp.MustCompile(`\bmaster\.key\b`),
-		regexp.MustCompile(`\bcredentials\.json\b`),
-	}
+	}, secretGuardPatterns...)
 
+	// secretGuardPatterns is the v0.2 #155 item 8 secrets-subtree literal-text
+	// backstop (option B), generated FROM fspolicy.SecretEntriesAlways rather
+	// than hand-copied.
+	//
+	// It used to be two hardcoded lines here — `\bmaster\.key\b` and
+	// `\bcredentials\.json\b` — written when the secret set had exactly those
+	// two entries. The set has since grown to five (config.json, cli.token,
+	// entities joined master.key and credentials.json; see
+	// fspolicy.SecretEntriesAlways), and grew again since (auth.json, backups).
+	// The hand-copied pair never gained any of them: this guard is a backstop
+	// over a boundary the kernel sandbox already enforces, so its silent
+	// drift was invisible in every test that exercises the kernel deny
+	// instead. A backstop that covers 2 of N entries and looks like it covers
+	// all of them is worse than no backstop, because a reviewer reads
+	// "secrets-subtree path-guard" and stops checking.
+	//
+	// Generating the list closes that class of drift structurally — there is
+	// no second copy to fall behind. TestSecretGuardPatterns_CoverEverySecretEntryAlways
+	// (shell_secret_guard_test.go) is the regression: it fails the moment
+	// SecretEntriesAlways gains an entry this can't already reach, which is
+	// possible only if this generation is ever replaced with a literal list
+	// again.
+	//
+	// Scoped to SecretEntriesAlways, not the combined SecretEntriesRelative:
+	// the per-turn half (agents/, workspaces/) is made of ordinary English
+	// words an agent legitimately types constantly ("list the workspaces",
+	// "check the agents dir"), and the own-tree exception that makes reaching
+	// them sometimes correct (fspolicy.DeniedPathsFor) is inherently
+	// contextual — a static text guard has no turn to evaluate that against.
+	// The five ALWAYS names are never legitimate in ANY turn, which is what
+	// makes a context-free literal match safe for them and not for the rest.
+	secretGuardPatterns = buildSecretGuardPatterns()
+)
+
+// buildSecretGuardPatterns compiles one case-insensitive-by-construction
+// (applyDenyPatterns lowercases the command before matching) word-boundary
+// regex per fspolicy.SecretEntriesAlways entry.
+func buildSecretGuardPatterns() []*regexp.Regexp {
+	out := make([]*regexp.Regexp, 0, len(fspolicy.SecretEntriesAlways))
+	for _, name := range fspolicy.SecretEntriesAlways {
+		out = append(out, regexp.MustCompile(`\b`+regexp.QuoteMeta(strings.ToLower(name))+`\b`))
+	}
+	return out
+}
+
+var (
 	// absolutePathPattern matches absolute file paths in commands (Unix and Windows).
 	// absolutePathPattern extracts absolute-path candidates from raw command
 	// TEXT so guardCommand can reject references outside the workspace.
@@ -682,11 +729,61 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	}
 	lim.WorkspaceDir = cwd
 
+	// ADR-061 FR-3.5: carry THIS TURN's filesystem policy to the kernel, so the
+	// child bash spawns is confined the same way the app-layer path resolver
+	// confines this same turn's read_file/write_file.
+	//
+	// Without this the child inherited the BOOT profile, which grants
+	// $OMNIPUS_HOME as one tree — so `bash` from any agent could read and write
+	// every other agent's home and every workspace record, while the app layer
+	// denied exactly those paths. That divergence was demonstrated against real
+	// children, not inferred.
+	//
+	// God mode is excluded deliberately: it is an explicit operator opt-out of
+	// confinement, and runForeground routes it to runUnconstrained anyway.
+	if !t.godMode {
+		kernelPolicy, kpErr := t.turnKernelPolicy(ctx)
+		if kpErr != nil {
+			t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
+			return ErrorResult(fmt.Sprintf("sandbox policy error: %v", kpErr))
+		}
+		lim.KernelPolicy = kernelPolicy
+	}
+
 	if runInBackground {
 		ownerSessionID := ToolTranscriptSessionID(ctx)
 		return t.runBackground(ctx, command, cwd, timeoutSeconds, lim, ownerSessionID, cb)
 	}
 	return t.runForeground(ctx, command, lim, timeoutSeconds)
+}
+
+// turnKernelPolicy derives the per-turn kernel policy for this bash call from
+// the SAME authored fspolicy.FSPolicy that every path-taking tool resolves
+// (ResolveTurnFSPolicy), so the kernel and the app layer are answering "what
+// may this turn touch" from one input rather than two.
+//
+// Returns (nil, nil) when no kernel policy is in force — sandbox off, or a
+// platform that degraded to application-level enforcement. The spawn then uses
+// whatever the boot profile is, exactly as before.
+//
+// Returns an error, rather than a nil policy, when a policy IS in force but
+// could not be derived. Falling back on failure would hand the child the boot
+// profile, which is the WIDER of the two — a derivation bug would then quietly
+// restore the very cross-agent reach this exists to remove.
+func (t *ExecTool) turnKernelPolicy(ctx context.Context) (*sandbox.SandboxPolicy, error) {
+	if !sandbox.TurnPolicyBaseInstalled() {
+		return nil, nil
+	}
+	// restrict is t.restrictToWorkspace, not the hardcoded true that cwd
+	// resolution uses: cwd confinement is a separate, deliberately stricter
+	// decision (see resolveCWD's note 3), while this is the turn's real posture.
+	// Scope does not change the derived rules anyway — post-ADR-060 it governs
+	// writes through the work dir, which is identical either way (FR-2.5).
+	authored, err := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace)
+	if err != nil {
+		return nil, fmt.Errorf("resolve turn filesystem policy: %w", err)
+	}
+	return sandbox.KernelPolicyForTurn(authored)
 }
 
 // --- cwd resolution (FR-B2/FR-B13) -----------------------------------------

@@ -289,15 +289,21 @@ type wireMount = struct {
 	Status   *gen.WorkspaceMountsStatus `json:"status,omitempty"`
 }
 
-// mountsToWire converts workspace.Mount records to the wire shape, computing
-// each entry's live status (workspace.MountStatus, FR-8.2/FR-8.5) at
-// response-build time — mirrors task_count's own "computed at read time,
-// never stored" convention (gen.Workspace's own doc comment). Returns nil
-// for an empty/nil input so a workspace with no mounts omits the field
-// entirely (json:"mounts,omitempty"), matching WorkspaceMount.yaml's "Absent
-// when no mount exists" contract.
-func mountsToWire(mounts []workspace.Mount) *[]wireMount {
-	if len(mounts) == 0 {
+// mountsToWire loads workspace id's mounts from the MOUNT STORE and converts
+// them to the wire shape, computing each entry's live status
+// (workspace.MountStatus, FR-8.2/FR-8.5) at response-build time — mirrors
+// task_count's own "computed at read time, never stored" convention
+// (gen.Workspace's own doc comment). Returns nil when there are no mounts so
+// the field is omitted entirely (json:"mounts,omitempty"), matching
+// WorkspaceMount.yaml's "Absent when no mount exists" contract.
+//
+// The source is workspace.LoadMounts, NOT a field on the workspace record —
+// mounts are write grants and were moved out of that (child-writable) record;
+// see pkg/workspace/mountstore.go. Mounts stay on the wire unchanged: only
+// where the server reads them from changed, so contracts/ is untouched.
+func mountsToWire(home, id string) *[]wireMount {
+	mounts, ok := workspace.LoadMounts(home, id)
+	if !ok || len(mounts) == 0 {
 		return nil
 	}
 	out := make([]wireMount, len(mounts))
@@ -309,8 +315,10 @@ func mountsToWire(mounts []workspace.Mount) *[]wireMount {
 }
 
 // workspaceToWire converts a storedWorkspace to the generated gen.Workspace wire type.
-// taskCount is passed in (computed by the caller).
-func workspaceToWire(w storedWorkspace, taskCount int) gen.Workspace {
+// taskCount is passed in (computed by the caller); home is $OMNIPUS_HOME, needed
+// because mounts no longer live on the record and are loaded from their own
+// store (see mountsToWire).
+func workspaceToWire(home string, w storedWorkspace, taskCount int) gen.Workspace {
 	createdAt, err := time.Parse(time.RFC3339, w.CreatedAt)
 	if err != nil {
 		slog.Warn("rest: workspace: invalid created_at timestamp", "id", w.ID, "raw", w.CreatedAt)
@@ -381,7 +389,7 @@ func workspaceToWire(w storedWorkspace, taskCount int) gen.Workspace {
 	}
 	// FR-5/FR-8.2: mounts, with each entry's status computed live (never
 	// stored — see mountsToWire's doc comment).
-	wire.Mounts = mountsToWire(w.Mounts)
+	wire.Mounts = mountsToWire(home, w.ID)
 	return wire
 }
 
@@ -711,7 +719,7 @@ func (a *restAPI) handleWorkspaceList(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// Owner is attribution only (FR-1.9) — no access gate applied here.
-		result = append(result, workspaceToWire(ws, taskCounts[ws.ID]))
+		result = append(result, workspaceToWire(a.homePath, ws, taskCounts[ws.ID]))
 	}
 	if result == nil {
 		result = []gen.Workspace{}
@@ -853,7 +861,7 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	wire := workspaceToWire(ws, 0)
+	wire := workspaceToWire(a.homePath, ws, 0)
 	if a.auditor != nil {
 		if err := a.auditor.Log(
 			&audit.Entry{
@@ -878,7 +886,7 @@ func (a *restAPI) handleWorkspaceGet(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	// FR-1.9: owner is attribution only — no access gate.
-	jsonOK(w, workspaceToWire(ws, countTasksForWorkspace(a.homePath, id)))
+	jsonOK(w, workspaceToWire(a.homePath, ws, countTasksForWorkspace(a.homePath, id)))
 }
 
 // workspaceMemberConfigsFromWire translates the generated member_configs map
@@ -1292,7 +1300,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 
 	// No-op: nothing changed — return current state without writing.
 	if !changed {
-		jsonOK(w, workspaceToWire(ws, countTasksForWorkspace(a.homePath, id)))
+		jsonOK(w, workspaceToWire(a.homePath, ws, countTasksForWorkspace(a.homePath, id)))
 		return
 	}
 
@@ -1325,7 +1333,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 			slog.Warn("audit write failed", "event", "workspace.update", "id", id, "error", err)
 		}
 	}
-	jsonOK(w, workspaceToWire(ws, countTasksForWorkspace(a.homePath, id)))
+	jsonOK(w, workspaceToWire(a.homePath, ws, countTasksForWorkspace(a.homePath, id)))
 }
 
 func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, id string) {
@@ -1428,6 +1436,17 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// bound to this workspace. Best-effort (logged on failure, never aborts
 	// the delete) — see removeMailboxesForWorkspace's doc comment.
 	removeMailboxesForWorkspace(a, id)
+
+	// Remove the workspace's mount record. Mounts live in
+	// entities/mounts/<id>.json (out of a sandboxed child's reach — see
+	// pkg/workspace/mountstore.go), NOT under the workspace directory, so the
+	// RemoveAll below does not reach them. This removes only the record of the
+	// grants; the operator's real folders are never touched (FR-8.6).
+	// Best-effort, and it runs AFTER unlock() above because DeleteMountStore
+	// takes LockID itself and that pool is not reentrant.
+	if err := workspace.DeleteMountStore(a.homePath, id); err != nil {
+		slog.Warn("rest: delete workspace: cascade mount store", "id", id, "error", err)
+	}
 
 	// Best-effort: remove the per-workspace directory. This now holds more than
 	// AGENT.md and the shared memory room: its work/ subdirectory is also the

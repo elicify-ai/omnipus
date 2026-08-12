@@ -5,6 +5,7 @@
 package sandbox
 
 import (
+	"log/slog"
 	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
@@ -33,6 +34,20 @@ type TurnPolicyInput struct {
 
 	// BindPorts is the dev-server range expanded by the caller.
 	BindPorts []uint16
+
+	// ConnectPorts are outbound ports to allow ON TOP of DefaultConnectPorts
+	// (53/80/443), which DefaultPolicyForModel already seeds. The gateway puts
+	// the dev-server range here so a child can dial a gateway-owned dev server
+	// and the egress proxy.
+	//
+	// It exists because the boot policy does not stop at DefaultPolicyForModel
+	// — pkg/gateway/sandbox_apply.go appends the same range to the returned
+	// policy afterwards. Without carrying it here, a per-turn policy would be
+	// silently NARROWER than the boot profile on exactly one axis, and the
+	// symptom would be a dev server that becomes unreachable the moment
+	// per-turn confinement is switched on. Carrying it keeps the two policies
+	// differing only where they are MEANT to differ: the filesystem.
+	ConnectPorts []uint16
 
 	// WarnFn receives one message per rule the policy computation strips or
 	// skips. May be nil.
@@ -97,12 +112,66 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 	policy := DefaultPolicyForModel(
 		in.Model, in.HomePath, allowed, in.AllowedExecPaths, in.WarnFn, in.BindPorts)
 
+	// Extra connect ports, deduplicated against the DefaultConnectPorts seed.
+	// A duplicate rule is harmless to both backends but is noise in a rendered
+	// Seatbelt profile that a reader then has to discount.
+	if len(in.ConnectPorts) > 0 {
+		seenPort := make(map[uint16]struct{}, len(policy.ConnectPortRules)+len(in.ConnectPorts))
+		for _, r := range policy.ConnectPortRules {
+			seenPort[r.Port] = struct{}{}
+		}
+		for _, p := range in.ConnectPorts {
+			if _, dup := seenPort[p]; dup {
+				continue
+			}
+			seenPort[p] = struct{}{}
+			policy.ConnectPortRules = append(policy.ConnectPortRules, NetPortRule{Port: p})
+		}
+	}
+
 	// The per-turn secret set, which is where the own-tree exception lands.
 	// DefaultPolicyForModel populates the BOOT set; replacing it here is what
 	// makes agents/ and workspaces/ enforceable at the kernel layer at all,
 	// since they can only be excluded once a work dir exists to compare
 	// against.
-	policy.DeniedPaths = fspolicy.DeniedPathsFor(in.HomePath, authored.WorkDir)
+	//
+	// KernelDeniedPathsFor, not DeniedPathsFor: the latter re-admits a whole
+	// per-turn root once the work dir is inside it, which is exact for a
+	// workspace-rooted turn and WIDE OPEN for an agent-home-rooted one. It
+	// re-admits `agents` entirely, so every other agent's home became reachable
+	// at the kernel layer while the app layer denied it by path. That gap was
+	// executed against real children, not reasoned about: `cat` and `echo >` on
+	// another agent's SOUL.md both succeeded from `bash`. KernelDeniedPathsFor
+	// enumerates the siblings so the kernel list reproduces IsCarveOut's
+	// per-path answer (FR-3.3, "carried across EXACTLY").
+	denied, err := fspolicy.KernelDeniedPathsFor(in.HomePath, authored.WorkDir)
+	if err != nil {
+		// FAIL CLOSED. Without the listing there is no way to tell the caller's
+		// own tree from anyone else's, so fall back to the set with NO own-tree
+		// exception at all: agents/ and workspaces/ denied wholesale.
+		//
+		// That locks the agent out of its own working directory, which is
+		// severe — and it is the correct direction. The alternative,
+		// DeniedPathsFor's re-admission, is the WIDER answer: it would hand the
+		// child every agent's home precisely when we have just discovered we
+		// cannot reason about the layout. A loud, obvious breakage beats a
+		// silent widening, and the WarnFn below names the cause.
+		if in.WarnFn != nil {
+			in.WarnFn(
+				"kernel policy: could not enumerate $OMNIPUS_HOME to separate this turn's own tree "+
+					"from other agents'/workspaces'; denying agents/ and workspaces/ wholesale for this "+
+					"turn (the agent will be unable to reach its own home): "+err.Error(),
+				in.HomePath,
+			)
+		}
+		slog.Error("sandbox: per-turn deny set could not be enumerated; falling back to the strictest set",
+			"home", in.HomePath,
+			"work_dir", authored.WorkDir,
+			"error", err,
+			"effect", "agents/ and workspaces/ denied wholesale for this turn")
+		denied = fspolicy.SecretPaths(in.HomePath)
+	}
+	policy.DeniedPaths = denied
 
 	return policy
 }

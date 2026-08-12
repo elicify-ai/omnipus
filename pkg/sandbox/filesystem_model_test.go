@@ -149,6 +149,14 @@ func TestSecretPaths(t *testing.T) {
 		"/home/x/.omnipus/config.json",
 		"/home/x/.omnipus/cli.token",
 		"/home/x/.omnipus/entities",
+		// Found by review, not by the merge of the two old lists. Each is a
+		// live disclosure reachable in ONE tool call once FR-2.2 opened reads:
+		// auth.json is plaintext OAuth access + refresh tokens (pkg/auth), and
+		// backups/*.tar.gz is an archive of the ENTIRE vault (createTarGz
+		// excludes only logs/ and backups/). See fspolicy.SecretEntriesAlways.
+		"/home/x/.omnipus/auth.json",
+		"/home/x/.omnipus/backups",
+		"/home/x/.omnipus/system",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("SecretPaths = %v, want %v", got, want)
@@ -161,10 +169,16 @@ func TestSecretPaths(t *testing.T) {
 			}
 		}
 	}
-	if !IsSecretEntry("entities") {
+	// IsSecretEntry/fspolicy.IsSecretName (a name-based membership predicate)
+	// were removed as dead code (review finding 5): the actual enforcement
+	// path, ExpandRulesExcluding (sandbox_linux.go), compares full PATHS
+	// against policy.DeniedPaths, never entry names — so a name-based
+	// predicate was never on the sibling-granting walk it claimed to serve.
+	// Assert the same vocabulary directly against SecretEntriesRelative.
+	if !secretEntryNamed("entities") {
 		t.Error("entities/ must be a secret entry — it holds per-agent tool policy")
 	}
-	if !IsSecretEntry("agents") {
+	if !secretEntryNamed("agents") {
 		t.Error("agents/ must be part of the secret vocabulary — it is excluded per turn, " +
 			"not never; see DeniedPathsFor")
 	}
@@ -282,4 +296,21 @@ func TestSecretPaths_CoversConfigBackups(t *testing.T) {
 				"ordinary files and teaches operators to distrust the deny list", mustAllow)
 		}
 	}
+}
+
+// secretEntryNamed is a test-only exact-match helper over SecretEntriesRelative,
+// standing in for the removed IsSecretEntry/fspolicy.IsSecretName (review
+// finding 5). Those functions had zero production callers and a doc comment
+// claiming they were "used by the Linux sibling-granting walk" — untrue: that
+// walk is ExpandRulesExcluding (sandbox_linux.go), which compares full paths
+// against policy.DeniedPaths, never entry names. Kept local to the test file
+// rather than restored as production code, since nothing outside tests needs
+// a name-based membership check.
+func secretEntryNamed(name string) bool {
+	for _, s := range SecretEntriesRelative {
+		if s == name {
+			return true
+		}
+	}
+	return false
 }

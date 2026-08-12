@@ -37,6 +37,38 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		"remove_skill":             true,
 	}
 
+	// operatorOnly is a SECOND, distinct exception to the allow-by-default
+	// ceiling, and it is not about destruction — it is about an agent widening
+	// its own boundary.
+	//
+	// add_mcp_server writes a program definition that the gateway then LAUNCHES,
+	// and the launched process is not confined by the sandbox. config.json is in
+	// the ADR-060 secret set precisely so an agent cannot write such an entry
+	// with write_file; this tool wrote the same setting through the API, which
+	// made the file-level protection moot. It is denied at the CEILING (not just
+	// per-agent) on purpose: under most-restrictive-wins, a ceiling deny means an
+	// operator has to make two deliberate edits — raise the ceiling AND grant the
+	// agent — before any agent can install an MCP server. That is the intended
+	// cost for a control whose whole job is to not happen by accident.
+	//
+	// This is seeded DATA an operator can edit on their own install (Settings ->
+	// Security -> Tool Policies, or config.json), never a code branch — CLAUDE.md
+	// hard constraint 6.
+	operatorOnly := map[string]string{
+		"add_mcp_server": "deny",
+	}
+
+	for name, want := range operatorOnly {
+		got, ok := cfg.Sandbox.ToolPolicies[name]
+		if !ok {
+			t.Errorf("expected sandbox.tool_policies to seed an entry for %q, found none", name)
+			continue
+		}
+		if got != want {
+			t.Errorf("expected seeded policy %q for operator-only tool %q, got %q", want, name, got)
+		}
+	}
+
 	for name := range destructive {
 		got, ok := cfg.Sandbox.ToolPolicies[name]
 		if !ok {
@@ -177,6 +209,9 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// real gating done per-agent.
 	for name, policy := range cfg.Sandbox.ToolPolicies {
 		if destructive[name] {
+			continue
+		}
+		if _, isOperatorOnly := operatorOnly[name]; isOperatorOnly {
 			continue
 		}
 		if policy != "allow" {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -425,14 +426,62 @@ func ancestorPaths(p string) []string {
 }
 
 // validateSeatbeltPath enforces that a path is safe to embed in a Seatbelt
-// (subpath ...) filter. This is the belt-and-suspenders validator; the PRIMARY
-// injection defense is at the render site (renderSeatbeltProfile), which emits
-// the path via fmt.Sprintf("%q", ...) — i.e. strconv.Quote, which escapes
-// every special byte and wraps the value in double quotes so no
-// attacker-controlled path can break out of the (subpath "...") filter. This
-// validator exists so a path is rejected (with a precise error) BEFORE the
-// renderer is reached, and so the safety of the rendered profile does not
-// depend solely on the render-site quoting staying correct.
+// (subpath ...) filter, AND that emitting it via fmt.Sprintf("%q", ...) will
+// reproduce the path byte-for-byte inside the quotes.
+//
+// # Go's %q is not SBPL's escape vocabulary — and the mismatch fails OPEN
+//
+// The render site emits every path with %q (strconv.Quote). That is a correct
+// INJECTION defense: strconv.Quote never emits a bare `"`, so no path can
+// terminate the filter and append its own directive. It is NOT a correct
+// ENCODING, and an earlier version of this comment claiming it "escapes every
+// special byte" was the reason the gap below survived review.
+//
+// strconv.Quote escapes any rune that is not unicode.IsPrint, using Go's OWN
+// backslash vocabulary: a U+00A0 becomes the six characters backslash-u-0-0-a-0,
+// and an invalid byte becomes backslash-x-f-f. SBPL's reader does not know those
+// escapes. Rather than erroring, it DROPS the unrecognised backslash and keeps
+// the following characters literally, so that escape decays to the five ASCII
+// characters u00a0. The rendered filter then names a path that does not exist,
+// and matches NOTHING.
+//
+// MEASURED against a real child on macOS 26.5.2, with a directory whose name
+// contains U+00A0 (written <NBSP> below -- the real byte is deliberately NOT
+// present in this source file, since an invisible rune in a comment about
+// invisible runes is exactly the trap this whole check exists to close):
+//
+//	emitted:  (deny file-read* (subpath ".../home\u00a0x/master.key"))
+//	  sandbox-exec -f p.sb /bin/cat ".../home<NBSP>x/master.key"
+//	  -> printed the file contents, exit 0            (DENY VOIDED)
+//	control, the same deny carrying the raw UTF-8 bytes c2 a0:
+//	  -> "Operation not permitted", exit 1            (deny enforced)
+//
+// One such rune anywhere in $OMNIPUS_HOME voids EVERY deny that names a path
+// under it — the whole secret set at once, read AND write, so a child could
+// also rewrite config.json. Under the ADR-060 open model the blanket
+// `(allow file-read*)` is then completely unopposed. Nothing reports this:
+// sandbox-exec accepts the profile, boot succeeds, and the profile reads as
+// correct. Triggers are ordinary, not exotic: U+00A0 (a non-breaking space,
+// which is what a path pasted from a web page carries), U+200D (present in
+// every multi-person emoji), U+3000 (ordinary in CJK paths), and any invalid
+// UTF-8 byte.
+//
+// # The rule, and why it is a refusal rather than a re-encoding
+//
+// A path is accepted only when strconv.Quote(p) == `"` + p + `"` — i.e. %q
+// changed nothing but the surrounding quotes. Anything else is refused.
+//
+// The alternative, emitting raw UTF-8 bytes, was measured to work (the control
+// above) but is rejected on principle: it would make profile safety depend on a
+// hand-rolled escaper agreeing with an undocumented reader for every byte
+// sequence, and getting that wrong fails open again with no diagnostic. A
+// refusal fails CLOSED, which is the same contract as the rest of ADR-060 —
+// renderSeatbeltProfile's error propagates to SeatbeltBackend.Apply (aborting
+// boot) and to ApplyToCmd (aborting the spawn), never to an unconfined child.
+//
+// The byte scan below runs FIRST so the ASCII injection characters keep their
+// precise "forbidden character" diagnostic; the round-trip check is what
+// catches everything above 0x7f that the scan cannot see.
 //
 // Relative paths are rejected because (subpath "...") is interpreted relative
 // to the sandbox-exec CWD, which would make the allow non-deterministic.
@@ -451,6 +500,15 @@ func validateSeatbeltPath(p string) error {
 				c, i,
 			)
 		}
+	}
+	if quoted := strconv.Quote(p); quoted != `"`+p+`"` {
+		return fmt.Errorf(
+			"path is not representable in a Seatbelt filter: Go quoting rewrites it to %s, and SBPL drops the backslash escapes rather than decoding them, "+
+				"so the emitted filter would match nothing and silently enforce no policy at all "+
+				"(non-printable or non-UTF-8 runes such as U+00A0, U+200D, U+3000 or an invalid byte); "+
+				"rename the path to printable ASCII-or-UTF-8 characters",
+			quoted,
+		)
 	}
 	return nil
 }

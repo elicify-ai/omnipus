@@ -960,7 +960,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 	case IDJim:
 		// Jim — the Planner & Orchestrator. LEAST-PRIVILEGE: deny-by-default,
 		// allow only the tools his role needs (plan, delegate, manage tasks +
-		// workspaces, run shell/browser, manage MCP servers). This replaces
+		// workspaces, run shell/browser). This replaces
 		// the old allow-by-default + "system.*" deny rail, which the §7 tool
 		// rename silently broke — renamed management tools (create_workspace,
 		// set_config, …) no longer match the "system.*" glob, so every
@@ -1023,9 +1023,17 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"find_skills":   allow,
 			"list_skills":   allow,
 			"install_skill": allow,
-			// MCP server management.
+			// MCP server management. Jim may SEE the configured servers, but not
+			// add one: an MCP server definition is a program the gateway launches
+			// unconfined, so adding one escapes the sandbox through the front door
+			// (config.json is in the ADR-060 secret set exactly so an agent cannot
+			// write that entry with write_file). Denied in the global seed for the
+			// same reason — see the long rationale on "add_mcp_server" in
+			// pkg/config/defaults.go. Seeded data, not a code branch (CLAUDE.md
+			// constraint 6): an operator who wants Jim installing MCP servers
+			// changes this entry on their own install.
 			"list_mcp_servers": allow,
-			"add_mcp_server":   allow,
+			"add_mcp_server":   config.ToolPolicyDeny,
 			// Browser automation (interactive/visual work in the sandboxed browser).
 			// browser_evaluate (arbitrary JS) is operator-approved for Jim and stays
 			// runtime-gated by sandbox.browser_evaluate_enabled regardless of policy.
@@ -2316,7 +2324,7 @@ NEVER deflect a simple request to a specialist — if someone asks "what's the c
 
 You own the task and workspace lifecycle. Use create_task / update_task / list_tasks for the current workspace, and create_task_in_workspace / update_task_in_workspace / list_tasks_in_workspace for cross-workspace work. Deletion is consent-gated — delete_task, delete_task_in_workspace, and delete_workspace always require explicit confirmation before you call them.
 
-You can also manage workspaces directly: get_workspace / list_workspaces / update_workspace / create_workspace. Installing MCP servers is in scope: list_mcp_servers / add_mcp_server (remove_mcp_server is consent-gated).
+You can also manage workspaces directly: get_workspace / list_workspaces / update_workspace / create_workspace. You can SEE the configured MCP servers with list_mcp_servers, but installing one is an operator action, not yours — adding an MCP server runs a program outside the sandbox, so add_mcp_server is denied by default. Ask the operator to add it in Settings. (remove_mcp_server is consent-gated.)
 
 ## Browser automation
 

@@ -98,8 +98,11 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 				"get_workspace", "list_workspaces", "update_workspace", "create_workspace",
 				// Skill discovery + install.
 				"find_skills", "list_skills", "install_skill",
-				// MCP.
-				"list_mcp_servers", "add_mcp_server",
+				// MCP — read-only only. add_mcp_server is an explicit DENY
+				// (see expectExplicitDenies below): an MCP server definition is
+				// a program the gateway launches unconfined, so granting an
+				// agent the ability to add one escapes the sandbox.
+				"list_mcp_servers",
 				// Browser.
 				"browser_navigate", "browser_click", "browser_type",
 				"browser_wait", "browser_get_text", "browser_screenshot",
@@ -109,6 +112,11 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 				"delete_task", "delete_task_in_workspace",
 				"delete_workspace", "remove_mcp_server",
 			},
+			// Boundary-widening operations are denied outright, not prompted:
+			// adding an MCP server runs an unconfined program, which is why
+			// config.json is in the ADR-060 secret set in the first place.
+			// Seeded data — an operator can grant it on their own install.
+			expectExplicitDenies: []string{"add_mcp_server"},
 		},
 	}
 

@@ -1033,6 +1033,67 @@ func TestFR2_Exec_UnchangedScopeDispatch(t *testing.T) {
 	}
 }
 
+// TestFR2_MountWrite_AncestorSymlinkSwap_TOCTOU is the mount-write analogue of
+// TestResolvePath_IOThroughOsRoot_NoTOCTOU (spec test 3, FR-006), for the
+// adversarial-review finding that a mount write's I/O-time re-check
+// (recheckUnrestrictedCarveOut, before this fix) verified only the secret
+// set, never containment in policy.AllowedRoots — so a host-fs (root==nil)
+// handle carrying a bare resolved-abs string could be walked out from under
+// itself.
+//
+// The write resolves successfully to a target inside a granted mount; then,
+// BEFORE the actual I/O runs, an ANCESTOR directory under the mount — fully
+// owned by whoever the mount points at, which can be the SAME turn doing the
+// write, since it is their own repository — is swapped from a real directory
+// to a symlink pointing entirely outside every granted root (neither WorkDir
+// nor the mount). The write must be refused at I/O time, not silently
+// redirected to wherever the swapped symlink now resolves.
+func TestFR2_MountWrite_AncestorSymlinkSwap_TOCTOU(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink races are POSIX-specific")
+	}
+	tr := newFR2Tree(t)
+	policy := fr2Policy(t, tr, fspolicy.FSScopeConfined)
+
+	// The ancestor directory under the mount that gets swapped — modeling the
+	// finding's "002/sub" shape: a subdirectory the mount owner (here, the
+	// same turn) already created inside their own mounted repo.
+	subDir := filepath.Join(tr.mountRoot, "sub")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("seed sub: %v", err)
+	}
+	target := filepath.Join(subDir, "victim.txt")
+
+	handle, err := ResolvePath(context.Background(), policy, "write_file", "", FSOpWrite, target)
+	if err != nil {
+		t.Fatalf("initial resolve (still inside the mount) should succeed: %v", err)
+	}
+	defer handle.Close()
+
+	// escapeDir is outside BOTH WorkDir and the mount — the destination the
+	// swap tries to redirect the write to.
+	escapeDir := t.TempDir()
+
+	// Swap "sub" from a real directory to a symlink pointing at escapeDir.
+	// This needs no privilege beyond what a normal write-capable turn already
+	// has over its own mounted directory.
+	if err := os.RemoveAll(subDir); err != nil {
+		t.Fatalf("remove sub: %v", err)
+	}
+	if err := os.Symlink(escapeDir, subDir); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+
+	writeErr := handle.WriteFile([]byte("BREACH: wrote outside every granted root via ancestor symlink swap"))
+
+	if _, statErr := os.Stat(filepath.Join(escapeDir, "victim.txt")); statErr == nil {
+		t.Fatalf("BREACH: wrote outside every granted root via ancestor symlink swap (WriteFile err=%v)", writeErr)
+	}
+	if writeErr == nil {
+		t.Fatalf("expected the ancestor-swap write to be refused, but WriteFile reported success")
+	}
+}
+
 // TestFR2_SecretSet_DeniedForEveryOp is dataset rows 3/4 generalized across
 // every op: the secret set (master.key here) is refused for every FSOp, not
 // just reads — fspolicy.IsCarveOut runs unconditionally before ResolvePath

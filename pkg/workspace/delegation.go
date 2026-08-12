@@ -279,3 +279,44 @@ func ReadDelegation(home, workspaceID string) ([]DelegationEdge, error) {
 	}
 	return rec.Delegation, nil
 }
+
+// ValidateShape checks the invariants of a single edge that hold with NO
+// workspace context — non-empty endpoints, no self-edge, known modes, and a
+// non-negative depth.
+//
+// It exists because the delegation STORE (delegationstore.go) validates edges
+// at load and save time, where the team roster and the depth ceiling are not
+// available: the roster lives on the workspace record and the ceiling in
+// config, and reading either from inside the store would make a security-
+// critical loader depend on two more mutable inputs.
+//
+// It is deliberately a SUBSET of Validate, never a replacement. Validate still
+// runs where the roster is known and is the one that enforces "both endpoints
+// are on this team" — the check that actually stops an agent delegating to
+// someone outside the workspace. Shape validation only stops a corrupt or
+// hand-edited store injecting a structurally impossible edge; it is a
+// data-integrity guard, not the authorization boundary.
+//
+// The depth CEILING is intentionally not checked here for the same reason: an
+// edge whose depth exceeds a ceiling that has since been lowered is stale
+// configuration to be re-evaluated against the live ceiling by Validate, not
+// corrupt data to be silently dropped at load.
+func (e DelegationEdge) ValidateShape() error {
+	from := strings.TrimSpace(e.FromAgent)
+	to := strings.TrimSpace(e.ToAgent)
+	if from == "" || to == "" {
+		return errors.New("delegation edge from_agent and to_agent must not be empty")
+	}
+	if from == to {
+		return fmt.Errorf("delegation edge cannot be a self-edge (from_agent == to_agent: %s)", from)
+	}
+	for _, m := range e.Modes {
+		if !m.Valid() {
+			return fmt.Errorf("delegation edge mode %s is invalid (valid: direct, task)", m)
+		}
+	}
+	if e.Depth != nil && *e.Depth < 0 {
+		return errors.New("delegation edge depth must be >= 0")
+	}
+	return nil
+}

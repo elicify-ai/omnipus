@@ -64,8 +64,22 @@ type FSPolicy struct {
 	// agents/ subtree, and the whole workspaces/ subtree (FR-017).
 	CarveOuts []string
 
-	// AllowedRoots is always nil in P1. Reserved for P2's per-path allow
-	// seam (approved "ask" grants, additional allow-listed roots).
+	// AllowedRoots are additional roots the turn may WRITE to, beyond WorkDir.
+	//
+	// ADR-061 FR-6.1: a workspace's mounts land here — populated by
+	// tools.ResolveTurnFSPolicy from workspace.AllowedMountRoots, and rendered
+	// into the kernel policy as write grants by sandbox.DeriveKernelPolicy. It
+	// is nil only for a turn with no mounts.
+	//
+	// (This field was nil for every caller before mounts existed, and the
+	// comment here said so. It is now load-bearing: code that treats it as
+	// permanently empty — for instance by skipping a containment check
+	// "because it can't match anything" — silently drops a real grant.)
+	//
+	// A mount grants WRITE and nothing else, because post-ADR-060 reads need
+	// no grant at all. It cannot reopen a secret: IsCarveOut and DeniedPathsFor
+	// take no AllowedRoots parameter, so mounting even $HOME yields "write to
+	// $HOME minus the secret set" (asserted in mount_secret_independence_test.go).
 	AllowedRoots []string
 }
 
@@ -108,10 +122,16 @@ func (p FSPolicy) Validate() error {
 		return fmt.Errorf("fspolicy: WorkDir %q is not absolute", p.WorkDir)
 	}
 
+	// CoversForDeny, not a byte comparison: this check REFUSES a policy, so
+	// its fail-safe direction is to match more, and a WorkDir spelled
+	// "$OMNIPUS_HOME" in a different case than the carve-out roots is the same
+	// directory on a case-insensitive volume (pathidentity.go's header).
+	// Byte-comparing here would let exactly the malformed shape this guard
+	// exists to reject slip through under an alternate spelling.
 	cleanWorkDir := filepath.Clean(p.WorkDir)
 	for _, root := range p.CarveOuts {
 		cleanRoot := filepath.Clean(root)
-		if isWithinOrEqual(cleanRoot, cleanWorkDir) {
+		if CoversForDeny(cleanWorkDir, cleanRoot) {
 			return fmt.Errorf(
 				"fspolicy: WorkDir %q is at or above the carve-out root %q — this would defeat FR-017's carve-out protection",
 				p.WorkDir,
@@ -136,7 +156,14 @@ func (p FSPolicy) Validate() error {
 // of agentHome. Scope maps from restrict (true -> FSScopeConfined, false ->
 // FSScopeUnrestricted); P1 never produces FSScopeAsk or FSScopeAllow.
 // CarveOuts are always the four omnipusHome-anchored roots built by
-// buildCarveOuts. AllowedRoots is always nil in P1.
+// buildCarveOuts.
+//
+// AllowedRoots is left nil HERE and populated by the caller: this package is a
+// stdlib-only leaf (see the package comment) and cannot import pkg/workspace to
+// read a workspace's mounts. tools.ResolveTurnFSPolicy fills it in immediately
+// afterwards, and that is the shape every production caller sees — so a nil
+// AllowedRoots on a returned policy means "this turn has no mounts", not "this
+// field is unused".
 //
 // agentID and workspaceID are accepted but UNUSED in P1's computation — they
 // keep the signature stable for the P2 per-agent/per-workspace scope seam

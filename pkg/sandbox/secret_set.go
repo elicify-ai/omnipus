@@ -26,6 +26,8 @@ import "github.com/elicify-ai/omnipus/pkg/fspolicy"
 //	entities                      both         per-agent tool policy
 //	agents, workspaces            app only     cross-agent isolation
 //	config.json.bak-* etc.        kernel only  a copy of a secret is a secret
+//	auth.json, backups            NEITHER      plaintext OAuth tokens; a tarball
+//	                                           of the entire vault
 //
 // These aliases exist so no call site in this package churns. There is still
 // exactly one list.
@@ -57,8 +59,3 @@ func SecretPaths(homePath string) []string { return fspolicy.SecretPathsAlways(h
 func DeniedPathsFor(home, workDir string) []string {
 	return fspolicy.DeniedPathsFor(home, workDir)
 }
-
-// IsSecretEntry reports whether a $OMNIPUS_HOME-relative entry name is in the
-// secret set (either half, plus backup prefixes). Used by the Linux
-// sibling-granting walk.
-func IsSecretEntry(name string) bool { return fspolicy.IsSecretName(name) }

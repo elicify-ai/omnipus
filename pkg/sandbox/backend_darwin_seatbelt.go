@@ -240,42 +240,77 @@ func (s *SeatbeltBackend) ApplyToCmd(cmd *exec.Cmd, policy SandboxPolicy) error 
 		return fmt.Errorf("seatbelt ApplyToCmd: cmd.Path is empty (nothing to wrap)")
 	}
 
-	// Re-render (via the process-wide cache — spec FR-4.1) when the caller
-	// supplies a policy, so a child tracks the latest rules even if Apply was
-	// never called on this backend, and so a mutated policy is re-validated
-	// rather than trusted. Fall back to the cached BOOT profile only when the
-	// caller passed an empty policy — that is the FR-4.0 seam: a per-turn
-	// policy (hardened_exec_darwin.go's applyPlatformHardening, driven by
-	// Limits.KernelPolicy) is what actually confines the child; the boot
-	// profile installed by Apply() is only the fallback for callers that have
-	// not supplied one.
+	// A SUPPLIED policy is always rendered. There is deliberately no
+	// "the policy looks empty, use the boot profile instead" branch here.
+	//
+	// There used to be one, and it was a silent downgrade. It decided "the
+	// caller supplied nothing" by inspecting three of SandboxPolicy's six
+	// fields (FilesystemRules, BindPortRules, ConnectPortRules), so a policy
+	// that genuinely WAS supplied but happened to carry only DeniedPaths, or
+	// only ReadsOpen/ExecOpen, was swapped for the wider boot profile with
+	// nothing but a Debug log to say so. "Caller supplied no policy" and
+	// "caller supplied a policy that turned out to be empty" are different
+	// facts with opposite correct handling, and only one of them is knowable
+	// from the policy VALUE — which is why the distinction now lives where it
+	// is actually available: applyPlatformHardening holds a *SandboxPolicy and
+	// can see the nil. It calls ApplyBootProfileToCmd for the nil case and this
+	// method otherwise.
+	//
+	// A supplied policy with no allows at all therefore reaches
+	// renderSeatbeltProfile, which refuses it ("would brick any child") and
+	// aborts the spawn. That is the fail-closed outcome: a caller who computed
+	// a policy and got nothing has a bug, and inheriting the boot profile would
+	// hide it behind a child that runs with MORE reach than intended.
 	//
 	// seatbeltCache is keyed by the policy's semantic content (see
 	// seatbeltPolicyCacheKey), not by anything about this backend instance,
 	// so it is deliberately package-level and shared across every
 	// SeatbeltBackend — two turns with byte-identical grants render once
 	// regardless of which backend instance served which spawn.
-	var profile string
-	if len(policy.FilesystemRules) > 0 || len(policy.BindPortRules) > 0 || len(policy.ConnectPortRules) > 0 {
-		rendered, err := seatbeltCache.getOrRender(policy)
-		if err != nil {
-			// FR-4.2 fail-closed: a render/cache-fill failure aborts the
-			// spawn. There is no fallback to an unconfined child — matching
-			// the Linux RestrictCurrentThread contract ("Returns an error if
-			// the kernel rejects the ruleset; callers must abort the spawn
-			// rather than fall through to an unrestricted exec.").
-			return fmt.Errorf("seatbelt ApplyToCmd: %w", err)
-		}
-		profile = rendered
-	} else {
-		s.mu.RLock()
-		profile = s.renderedProfile
-		s.mu.RUnlock()
+	profile, err := seatbeltCache.getOrRender(policy)
+	if err != nil {
+		// FR-4.2 fail-closed: a render/cache-fill failure aborts the
+		// spawn. There is no fallback to an unconfined child — matching
+		// the Linux RestrictCurrentThread contract ("Returns an error if
+		// the kernel rejects the ruleset; callers must abort the spawn
+		// rather than fall through to an unrestricted exec.").
+		return fmt.Errorf("seatbelt ApplyToCmd: %w", err)
 	}
-	if profile == "" {
-		return fmt.Errorf("seatbelt ApplyToCmd: no profile available (Apply was not called and policy is empty)")
+	return s.wrapUnderSandboxExec(cmd, profile)
+}
+
+// ApplyBootProfileToCmd wraps cmd in the profile Apply() rendered at boot.
+//
+// This is the EXPLICIT "no per-turn policy was supplied" path — the fallback
+// documented on Limits.KernelPolicy. It is a separate method rather than a
+// sentinel value passed to ApplyToCmd so that a caller has to say which of the
+// two it means, and so the two cannot be confused by inspecting a policy value
+// that cannot distinguish them (see ApplyToCmd's comment).
+//
+// Errors when Apply has not run, rather than starting an unwrapped child.
+func (s *SeatbeltBackend) ApplyBootProfileToCmd(cmd *exec.Cmd) error {
+	if cmd == nil {
+		return fmt.Errorf("seatbelt ApplyBootProfileToCmd: nil cmd")
+	}
+	if cmd.Path == "" {
+		return fmt.Errorf("seatbelt ApplyBootProfileToCmd: cmd.Path is empty (nothing to wrap)")
 	}
 
+	s.mu.RLock()
+	profile := s.renderedProfile
+	s.mu.RUnlock()
+	if profile == "" {
+		return fmt.Errorf(
+			"seatbelt ApplyBootProfileToCmd: no boot profile available (Apply was never called on this backend)")
+	}
+	return s.wrapUnderSandboxExec(cmd, profile)
+}
+
+// wrapUnderSandboxExec rewrites cmd's argv so starting it runs the original
+// command under /usr/bin/sandbox-exec with profile. Shared by both entry points
+// so the wrapping — including the double-wrap guard — cannot drift between the
+// per-turn and boot paths.
+func (s *SeatbeltBackend) wrapUnderSandboxExec(cmd *exec.Cmd, profile string) error {
 	// Guard against double-wrapping. Without this, a caller that runs a cmd
 	// through ApplyToCmd twice would nest sandbox-exec inside sandbox-exec;
 	// the inner profile would apply to the outer sandbox-exec binary itself

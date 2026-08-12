@@ -59,7 +59,18 @@ func buildCarveOuts(omnipusHome string) []string {
 //
 // resolvedAbsPath MUST already be realpath'd and filepath.Clean'd by the
 // caller (typically the ResolvePath resolver) — this function performs no
-// I/O and no further symlink resolution of its own.
+// further symlink resolution of its own.
+//
+// It DOES stat, as of the APFS case-insensitivity fix: containment is judged
+// by filesystem identity (device+inode) rather than by comparing path strings,
+// because filepath.EvalSymlinks does not canonicalise case and
+// $OMNIPUS_HOME/CLI.TOKEN and $OMNIPUS_HOME/cli.token are one file to the
+// kernel and two strings to a byte comparison. See pathidentity.go's header
+// for the measured leak, why case folding alone was not enough, and what
+// residual remains. Both callers (ResolvePath and its I/O-time re-check)
+// already do path I/O immediately either side of this call, so this adds no
+// new class of failure — and an unanswerable stat degrades to a case-folded
+// comparison here, never to "allow".
 //
 // Own-tree exception: a path that is also within policy.WorkDir is never
 // treated as a carve-out, even when it falls under a coarse carve-out root
@@ -84,16 +95,29 @@ func buildCarveOuts(omnipusHome string) []string {
 // shaped that way, but IsCarveOut stays correct here too, in depth, since
 // callers besides ResolvePath may invoke it directly.
 //
-// Prefix checks use a trailing-separator guard (matching isCrossAgentPath's
-// existing precedent) so e.g. "/a/bc" is never mistaken for a descendant of
-// "/a/b".
+// Prefix checks (only ever reached as a fallback, when the filesystem cannot
+// answer by identity) use a trailing-separator guard (matching
+// isCrossAgentPath's existing precedent) so e.g. "/a/bc" is never mistaken for
+// a descendant of "/a/b".
+//
+// The deny leg and the own-tree exception legs use DIFFERENT fallbacks, and the
+// difference is load-bearing (pathidentity.go's header has the full rationale):
+// the deny leg folds case, because over-matching only denies; the exception
+// legs stay byte-exact, because a folded exception would re-admit agents/MIA
+// when the caller's own home is agents/mia — two different agents on a
+// case-sensitive volume. A single "fold everywhere" helper would have been
+// wrong in the second direction.
 func IsCarveOut(resolvedAbsPath string, policy FSPolicy) bool {
 	cleanPath := filepath.Clean(resolvedAbsPath)
 	cleanWorkDir := filepath.Clean(policy.WorkDir)
 
+	// Stat the candidate's ancestry ONCE and reuse it for every carve-out
+	// root, rather than re-walking it per root.
+	pathChain, pathChainOK := ancestorChain(cleanPath)
+
 	for _, root := range policy.CarveOuts {
 		cleanRoot := filepath.Clean(root)
-		if !isWithinOrEqual(cleanPath, cleanRoot) {
+		if !coversForDenyChain(cleanRoot, cleanPath, pathChain, pathChainOK) {
 			continue
 		}
 
@@ -102,9 +126,9 @@ func IsCarveOut(resolvedAbsPath string, policy FSPolicy) bool {
 		// THIS SAME root (never when WorkDir is at or above it) AND
 		// cleanPath itself falls within that WorkDir.
 		if policy.WorkDir != "" &&
-			cleanWorkDir != cleanRoot &&
-			isWithinOrEqual(cleanWorkDir, cleanRoot) &&
-			isWithinOrEqual(cleanPath, cleanWorkDir) {
+			!SameLocationForDeny(cleanWorkDir, cleanRoot) &&
+			CoversForGrant(cleanRoot, cleanWorkDir) &&
+			coversForGrantChain(cleanWorkDir, cleanPath, pathChain, pathChainOK) {
 			return false
 		}
 
@@ -117,6 +141,12 @@ func IsCarveOut(resolvedAbsPath string, policy FSPolicy) bool {
 // isWithinOrEqual reports whether candidate is root itself or lives strictly
 // under it, guarded by a trailing separator so "/a/bc" does not match root
 // "/a/b".
+//
+// BYTE-EXACT, and therefore NOT safe to use directly for a deny decision on a
+// case-insensitive volume — that is the defect pathidentity.go exists to fix.
+// It survives as the STRICT fallback CoversForGrant falls back to, where
+// byte-exactness is the conservative direction. New deny-side call sites must
+// use CoversForDeny (or PathCoversFold) instead.
 func isWithinOrEqual(candidate, root string) bool {
 	if candidate == root {
 		return true

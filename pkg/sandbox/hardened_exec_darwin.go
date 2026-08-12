@@ -59,11 +59,17 @@ const memoryLimitSupported = false
 // turns get genuinely different confinement rather than both silently
 // inheriting the one profile captured at gateway startup.
 //
-// When lim.KernelPolicy is nil, an empty SandboxPolicy is passed to
-// ApplyToCmd, which is its signal to reuse the profile Apply() already
-// rendered and validated at boot, exactly as before this field existed. This
-// is the deliberate, documented fallback for callers not yet migrated to
-// compute a per-turn policy — see Limits.KernelPolicy's doc comment.
+// When lim.KernelPolicy is nil this calls ApplyBootProfileToCmd instead, which
+// reuses the profile Apply() already rendered and validated at boot, exactly as
+// before this field existed. This is the deliberate, documented fallback for
+// spawn paths that have no turn — see Limits.KernelPolicy's doc comment.
+//
+// The two cases go to two different methods on purpose. Passing an empty
+// SandboxPolicy as a stand-in for "nothing supplied" used to be the mechanism,
+// and it meant a genuinely-supplied policy that happened to carry no
+// filesystem or port rules was silently swapped for the WIDER boot profile.
+// The nil check lives here because here is the only place the distinction
+// actually exists.
 //
 // Failure to apply a policy — whether the per-turn one or the boot fallback —
 // returns an error, which aborts the spawn. Falling through to an UNCONFINED
@@ -87,17 +93,16 @@ func applyPlatformHardening(cmd *exec.Cmd, lim Limits) error {
 	}
 
 	// Per-turn policy (FR-4.0), when supplied, takes over from the boot
-	// profile entirely. An empty SandboxPolicy is ApplyToCmd's own signal to
-	// fall back to the cached boot profile — see its doc comment — so
-	// leaving policy at its zero value here IS the "no per-turn policy"
-	// fallback, not a separate branch.
-	var policy SandboxPolicy
+	// profile entirely.
 	if lim.KernelPolicy != nil {
-		policy = *lim.KernelPolicy
+		if err := sb.ApplyToCmd(cmd, *lim.KernelPolicy); err != nil {
+			return fmt.Errorf("hardened_exec/darwin: apply per-turn seatbelt profile to child: %w", err)
+		}
+		return nil
 	}
 
-	if err := sb.ApplyToCmd(cmd, policy); err != nil {
-		return fmt.Errorf("hardened_exec/darwin: apply seatbelt profile to child: %w", err)
+	if err := sb.ApplyBootProfileToCmd(cmd); err != nil {
+		return fmt.Errorf("hardened_exec/darwin: apply boot seatbelt profile to child: %w", err)
 	}
 	return nil
 }

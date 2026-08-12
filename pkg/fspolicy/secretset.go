@@ -20,6 +20,10 @@ import (
 //	                                cli.token is a LIVE gateway bearer token
 //	entities                      — both; per-agent tool policy
 //	agents, workspaces            — app layer only; cross-agent isolation
+//	auth.json, backups            — NEITHER list had these. Both are live
+//	                                credential disclosures, and both were found
+//	                                by review rather than by the merge; see
+//	                                SecretEntriesAlways for the detail.
 //
 // # Why this lives in pkg/fspolicy and not pkg/sandbox
 //
@@ -46,12 +50,61 @@ var SecretEntriesRelative = append(append([]string{}, SecretEntriesAlways...), S
 //
 // This is the subset the KERNEL BOOT policy can use directly, because at boot
 // there is no work dir to compare against.
+//
+// # backups and auth.json — added after the set was re-derived against a live
+// install rather than carried over from the two old lists
+//
+// Two separate reviewers each found a different entry missing here, which is
+// the signature of a list that was merged rather than re-checked. Both misses
+// were live credential disclosures reachable in ONE tool call, because
+// post-FR-2.2 reads are open and send_file (FSOpSend) carries no path
+// restriction by operator decision — the carve-out check in
+// tools.ResolvePath is the ONLY thing standing between an agent and the file.
+//
+//	backups    $OMNIPUS_HOME/backups/*.tar.gz. gateway's createTarGz
+//	           (pkg/gateway/rest_settings.go) archives ALL of $OMNIPUS_HOME
+//	           excluding only logs/ and backups/ — so every archive contains
+//	           master.key, credentials.json, config.json, cli.token, auth.json,
+//	           entities/, agents/ and workspaces/. Denying the originals while a
+//	           tarball of all of them sits readable beside them is a deny that
+//	           reads as correct and protects nothing. Before this branch,
+//	           FSScopeConfined refused it for a reason unrelated to secrecy;
+//	           opening reads removed that accidental protection.
+//	auth.json  pkg/auth's AuthStore (pkg/auth/store.go::authFilePath). Holds
+//	           per-provider OAuth AccessToken and RefreshToken as PLAINTEXT
+//	           JSON — it is not routed through the encrypted credential store.
+//	           No case trick and no race needed: a plain read_file.
+//
+// Neither has any legitimate agent-facing reader: backups are produced and
+// consumed by the gateway's own settings endpoints, and auth.json is read only
+// by pkg/auth itself inside the gateway process, which is not sandbox-confined.
+// So both belong in the ALWAYS half — there is no turn shape in which reaching
+// them is correct, and no own-tree exception that could apply.
 var SecretEntriesAlways = []string{
 	"master.key",
 	"credentials.json",
 	"config.json",
 	"cli.token",
 	"entities",
+	"auth.json",
+	"backups",
+
+	// system — $OMNIPUS_HOME/system/, which holds audit.jsonl, its rotated
+	// audit-YYYY-MM-DD.jsonl siblings, audit-chain-checkpoint.json (the HMAC
+	// chain's tamper-evidence anchor), token_budget.json, and state.json. The
+	// v0.2 HMAC chain (pkg/audit/hmac.go) detects a sandboxed child MODIFYING
+	// an entry; it does nothing to stop `rm system/audit.jsonl` or `: >
+	// system/audit.jsonl` — an unlink or truncate needs no read and produces
+	// no entry to verify. Demonstrated against a real sandboxed child before
+	// this line existed. Denied as a whole directory, not just audit.jsonl:
+	// every file in system/ is gateway-internal bookkeeping with no
+	// legitimate agent-tool reader (run_doctor's own os.Stat on this
+	// directory runs in-process in the gateway, unsandboxed, so it is
+	// unaffected), and a per-filename list is exactly the kind of hand-copied
+	// enumeration that fell behind twice already (see backups/auth.json
+	// above) — a future rotated-file naming tweak or a new file dropped in
+	// system/ must not need a second edit here to stay covered.
+	"system",
 }
 
 // SecretEntriesPerTurn is the part that is only meaningful WITH a work dir,
@@ -184,9 +237,25 @@ func DeniedPathsFor(home, workDir string) []string {
 // is NOT a descendant: a work dir sitting exactly ON a carve-out root does not
 // earn the exception, or pointing a turn at `agents/` itself would re-admit
 // every agent's home at once.
+//
+// GRANT-side (a true answer RE-ADMITS a root that would otherwise be denied),
+// so it resolves by filesystem identity where it can and falls back to a
+// BYTE-EXACT comparison where it cannot — never a case-folded one. Folding here
+// would be a widening: on a case-sensitive volume agents/MIA and agents/mia are
+// two different agents' homes, and a folded "own tree" test would re-admit the
+// `agents` root for a work dir that is not actually inside it. See
+// pathidentity.go's header for why the deny and grant directions get different
+// fallbacks.
+//
+// The identity leg also makes the equality guard real rather than textual: a
+// work dir spelled AGENTS that IS the agents root on a case-insensitive volume
+// is now recognised as equal, and correctly earns no exception.
 func isProperDescendant(child, parent string) bool {
-	if child == parent {
+	if SameLocationForDeny(child, parent) {
 		return false
+	}
+	if CoversForGrant(parent, child) {
+		return true
 	}
 	return strings.HasPrefix(child, parent+string(filepath.Separator))
 }
@@ -194,14 +263,27 @@ func isProperDescendant(child, parent string) bool {
 // IsSecretName reports whether a $OMNIPUS_HOME-relative entry name is a secret,
 // by exact match or backup prefix. Used by the Linux sibling-granting walk,
 // which decides per directory entry whether to grant it.
+//
+// DENY-side (a true answer WITHHOLDS a grant), and it compares NAMES rather
+// than paths, so there is no inode to ask: the comparison folds case
+// unconditionally. On a case-insensitive volume that is required for
+// correctness — an entry listed as `Config.json` IS config.json. On a
+// case-sensitive volume it merely withholds a grant from a distinctly-named
+// sibling under $OMNIPUS_HOME, which is the safe direction and has no
+// legitimate claimant (the layout is Omnipus-owned).
+//
+// The Unicode residual that pathidentity.go documents for path folding does not
+// bite here: every name in the set is pure ASCII, and the argument is a real
+// directory entry, so no NFC/NFD or sharp-s variant can collide with one.
 func IsSecretName(name string) bool {
+	folded := strings.ToLower(name)
 	for _, prefix := range secretGlobPrefixes {
-		if strings.HasPrefix(name, prefix) {
+		if strings.HasPrefix(folded, strings.ToLower(prefix)) {
 			return true
 		}
 	}
 	for _, s := range SecretEntriesRelative {
-		if s == name {
+		if strings.EqualFold(s, name) {
 			return true
 		}
 	}

@@ -11,15 +11,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // Mount is the canonical on-disk representation of a workspace mount — a
-// named write-grant on a real local folder (spec FR-5, ADR-061 D4). Stored
-// inside Workspace.Mounts. HostPath is realpath-resolved at CREATE time
+// named write-grant on a real local folder (spec FR-5, ADR-061 D4). Stored in
+// the mount store under $OMNIPUS_HOME/entities/mounts/<workspaceID>.json and
+// deliberately NOT on the workspace record, which a sandboxed child can write
+// — see mountstore.go's leading comment for the full chain that made storing
+// it there a self-service write grant. HostPath is realpath-resolved at CREATE time
 // (FR-5.3) and is NEVER re-resolved afterward: the resolved form is what is
 // persisted, and it never changes once written. Liveness ("does this still
 // exist on THIS machine") is a separate, always-live computation
@@ -66,28 +68,18 @@ var (
 	ErrMountNotFound = errors.New("workspace: mount not found")
 )
 
-// mountFileRecord is the minimal subset of the on-disk workspace JSON this
-// file reads for boot-time diagnostics (mirrors teamRecord/titleRecord's
-// per-reader-minimal-struct convention in find_for_agent.go). Mount
-// create/delete/status computation itself needs the FULL record (to do a
-// safe read-modify-write without dropping unrelated fields), so those use
-// loadWorkspaceRecord/saveWorkspaceRecord below instead — this narrower
-// struct exists only for read-only enumeration.
-type mountFileRecord struct {
-	ID     string  `json:"id"`
-	Mounts []Mount `json:"mounts,omitempty"`
-}
-
 // loadWorkspaceRecord reads the FULL workspace record for id. This package's
 // doc comment (default.go) states that pkg/gateway owns the authoritative
 // CRUD + wire mapping; mount lifecycle is the one exception, matching the
 // precedent pkg/sysagent/tools/workspace.go already set (its own
 // readWorkspaceFromDisk/write helpers, duplicated rather than shared, atop
-// the same workspace.Workspace struct) — every read-modify-write site in
-// this codebase owns its own I/O glue against the single shared struct type,
-// and mounts need a genuine read-modify-write (append/remove one Mount
-// without disturbing delegation, core_team, member_configs, etc.), not a
-// read-only field subset.
+// the same workspace.Workspace struct).
+//
+// The mount lifecycle uses this for ONE thing only: to establish that the
+// workspace exists (so an unknown id surfaces as os.ErrNotExist and the REST
+// layer can map it to 404). It reads NO security-relevant field from the
+// record and no longer writes it at all — the mount list itself lives in the
+// mount store, out of a sandboxed child's reach (mountstore.go).
 func loadWorkspaceRecord(home, id string) (Workspace, error) {
 	if !safeID(id) {
 		return Workspace{}, fmt.Errorf("%w: %q", ErrInvalidWorkspaceID, id)
@@ -163,11 +155,11 @@ func ValidateMountName(name string) error {
 }
 
 // checkMountNameAvailable enforces the two collision rules FR-5.2 names:
-// name must be unique among ws's existing mounts, and must not already
-// exist as some other entry under work/ (a real file/dir/symlink an agent
-// or the operator put there before the mount was requested).
-func checkMountNameAvailable(ws Workspace, workDir, name string) error {
-	for _, m := range ws.Mounts {
+// name must be unique among the workspace's existing mounts, and must not
+// already exist as some other entry under work/ (a real file/dir/symlink an
+// agent or the operator put there before the mount was requested).
+func checkMountNameAvailable(existing []Mount, workDir, name string) error {
+	for _, m := range existing {
 		if m.Name == name {
 			return fmt.Errorf("%w: %q already names a mount on this workspace", ErrMountNameCollision, name)
 		}
@@ -342,24 +334,20 @@ func MountStatus(m Mount) string {
 	return "ok"
 }
 
-// LoadMounts returns the mounts recorded for workspace id, or (nil, false)
-// when id is unsafe or the workspace record cannot be read/parsed. Read-only
-// — mirrors the FindForAgent/LoadTitle convention of a minimal per-reader
-// struct (mountFileRecord) rather than the full Workspace type, since this
-// path never needs to write anything back.
+// LoadMounts returns the mounts recorded for workspace id.
+//
+// The source is the mount store ($OMNIPUS_HOME/entities/mounts/<id>.json),
+// NEVER the workspace record — a `mounts` array left in an old workspace
+// record, or planted in one by a sandboxed child, is not read by anything and
+// grants nothing (mountstore.go's leading comment explains why that
+// distinction is the whole point of this store).
+//
+// ok is false only when the record exists but cannot be trusted (unsafe id,
+// unreadable file, malformed JSON, id mismatch); a workspace that simply has
+// no mounts returns (nil, true). Individual entries failing Mount.Validate are
+// dropped with a WARN rather than trusted — see loadMountStore.
 func LoadMounts(home, id string) ([]Mount, bool) {
-	if !safeID(id) {
-		return nil, false
-	}
-	data, err := os.ReadFile(filepath.Join(dirFor(home), id+".json"))
-	if err != nil {
-		return nil, false
-	}
-	var rec mountFileRecord
-	if json.Unmarshal(data, &rec) != nil {
-		return nil, false
-	}
-	return rec.Mounts, true
+	return loadMountStore(home, id)
 }
 
 // AllowedMountRoots returns the resolved host_path of every mount belonging
@@ -380,6 +368,11 @@ func LoadMounts(home, id string) ([]Mount, bool) {
 // Returns nil (not an empty, non-nil slice) for a workspace with no mounts,
 // an unreadable record, or an invalid id, matching FSPolicy.AllowedRoots'
 // existing "nil means no grants" contract.
+//
+// SECURITY: this is a write-grant computation, so its input must be a source
+// the granted principal cannot write. That source is the mount store, not the
+// workspace record — see LoadMounts and mountstore.go's leading comment.
+// Every entry it returns has passed Mount.Validate.
 func AllowedMountRoots(home, id string) []string {
 	mounts, ok := LoadMounts(home, id)
 	if !ok || len(mounts) == 0 {
@@ -387,7 +380,15 @@ func AllowedMountRoots(home, id string) []string {
 	}
 	roots := make([]string, 0, len(mounts))
 	for _, m := range mounts {
-		if m.HostPath == "" {
+		if err := m.Validate(); err != nil {
+			// Unreachable via loadMountStore, which already drops these.
+			// Repeated here because this is the function whose OUTPUT
+			// becomes a kernel and app-layer write grant: a future second
+			// reader wired in above must not be able to bypass validation
+			// by feeding this loop.
+			logger.WarnCF("workspace", "mount store: refusing to grant from an invalid mount entry", map[string]any{
+				"workspace_id": id, "name": m.Name, "host_path": m.HostPath, "error": err.Error(),
+			})
 			continue
 		}
 		roots = append(roots, m.HostPath)
@@ -407,10 +408,11 @@ func AllowedMountRoots(home, id string) []string {
 // Ordering matters for FR-8.5's "never silently re-bound" guarantee and for
 // leaving no partial state behind on any error path:
 //  1. Validate name shape (no I/O).
-//  2. Acquire the per-workspace lock and load the current record (so a
+//  2. Acquire the per-workspace lock and load the current mount store (so a
 //     concurrent create against the same workspace can never race past the
 //     collision checks below — mirrors the LockID contract every other
-//     load-modify-write site in this codebase follows).
+//     load-modify-write site in this codebase follows). The workspace record
+//     is read too, but only to establish that the workspace exists.
 //  3. Check name collisions (existing mounts, existing work/ entries).
 //  4. Resolve and classify the target (CheckMountTarget) — refuses before
 //     anything is materialized.
@@ -428,16 +430,24 @@ func CreateMount(home, id, name, rawHostPath string) (Mount, string, error) {
 	unlock := LockID(id)
 	defer unlock()
 
-	ws, err := loadWorkspaceRecord(home, id)
-	if err != nil {
+	// Existence check only — no field of this record feeds any decision below.
+	if _, err := loadWorkspaceRecord(home, id); err != nil {
 		return Mount{}, "", fmt.Errorf("workspace: create mount: load workspace %s: %w", id, err)
+	}
+
+	existing, ok := loadMountStore(home, id)
+	if !ok {
+		// The store exists but could not be parsed. Appending to it would
+		// silently discard whatever the operator had recorded, so refuse
+		// rather than write over an unreadable grant list.
+		return Mount{}, "", fmt.Errorf("workspace: create mount: mount store for %s is unreadable or malformed", id)
 	}
 
 	workDir, err := SafeWorkDir(home, id)
 	if err != nil {
 		return Mount{}, "", fmt.Errorf("workspace: create mount: %w", err)
 	}
-	if err := checkMountNameAvailable(ws, workDir, name); err != nil {
+	if err := checkMountNameAvailable(existing, workDir, name); err != nil {
 		return Mount{}, "", err
 	}
 
@@ -455,9 +465,18 @@ func CreateMount(home, id, name, rawHostPath string) (Mount, string, error) {
 	}
 
 	m := Mount{Name: name, HostPath: resolved}
-	ws.Mounts = append(ws.Mounts, m)
-	ws.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	if err := saveWorkspaceRecord(home, ws); err != nil {
+	// Defence in depth: the record about to be persisted must satisfy the same
+	// invariant LoadMounts enforces on the way back in, so a create can never
+	// write an entry its own reader would have to drop.
+	if err := m.Validate(); err != nil {
+		if rmErr := os.Remove(linkPath); rmErr != nil {
+			logger.WarnCF("workspace", "create mount: failed to roll back symlink after refusing to persist an invalid record", map[string]any{
+				"workspace_id": id, "name": name, "link": linkPath, "rollback_error": rmErr.Error(),
+			})
+		}
+		return Mount{}, "", fmt.Errorf("workspace: create mount: refusing to persist an invalid record: %w", err)
+	}
+	if err := saveMountStore(home, id, append(append([]Mount{}, existing...), m)); err != nil {
 		if rmErr := os.Remove(linkPath); rmErr != nil {
 			logger.WarnCF("workspace", "create mount: failed to roll back symlink after a persist failure — a mount now exists on disk with no record of it", map[string]any{
 				"workspace_id": id, "name": name, "link": linkPath, "persist_error": err.Error(), "rollback_error": rmErr.Error(),
@@ -488,13 +507,20 @@ func DeleteMount(home, id, name string) error {
 	unlock := LockID(id)
 	defer unlock()
 
-	ws, err := loadWorkspaceRecord(home, id)
-	if err != nil {
+	// Existence check only — kept so an unknown workspace id still surfaces as
+	// os.ErrNotExist for the REST layer's 404 mapping, rather than collapsing
+	// into the "no such mount" case.
+	if _, err := loadWorkspaceRecord(home, id); err != nil {
 		return fmt.Errorf("workspace: delete mount: load workspace %s: %w", id, err)
 	}
 
+	mounts, ok := loadMountStore(home, id)
+	if !ok {
+		return fmt.Errorf("workspace: delete mount: mount store for %s is unreadable or malformed", id)
+	}
+
 	idx := -1
-	for i, m := range ws.Mounts {
+	for i, m := range mounts {
 		if m.Name == name {
 			idx = i
 			break
@@ -520,9 +546,8 @@ func DeleteMount(home, id, name string) error {
 		return fmt.Errorf("workspace: delete mount: stat symlink %s: %w", linkPath, statErr)
 	}
 
-	ws.Mounts = append(ws.Mounts[:idx], ws.Mounts[idx+1:]...)
-	ws.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	if err := saveWorkspaceRecord(home, ws); err != nil {
+	remaining := append(append([]Mount{}, mounts[:idx]...), mounts[idx+1:]...)
+	if err := saveMountStore(home, id, remaining); err != nil {
 		return fmt.Errorf("workspace: delete mount: persist: %w", err)
 	}
 	return nil

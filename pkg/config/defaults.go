@@ -381,22 +381,56 @@ func DefaultConfig() *Config {
 				"browser_open_tab":   "allow",
 
 				// --- Sysagent management tools ---
-				"navigate":                 "allow",
-				"create_workspace":         "allow",
-				"update_workspace":         "allow",
-				"delete_workspace":         "ask", // irreversible delete
-				"list_workspaces":          "allow",
-				"get_workspace":            "allow",
-				"read_agent_metadata":      "allow",
-				"write_agent_metadata":     "allow",
-				"configure_provider":       "allow",
-				"list_providers":           "allow",
-				"test_provider":            "allow",
-				"list_models":              "allow",
-				"run_doctor":               "allow",
-				"get_usage":                "allow",
-				"add_mcp_server":           "allow",
-				"remove_mcp_server":        "ask", // irreversible delete
+				"navigate":             "allow",
+				"create_workspace":     "allow",
+				"update_workspace":     "allow",
+				"delete_workspace":     "ask", // irreversible delete
+				"list_workspaces":      "allow",
+				"get_workspace":        "allow",
+				"read_agent_metadata":  "allow",
+				"write_agent_metadata": "allow",
+				"configure_provider":   "allow",
+				"list_providers":       "allow",
+				"test_provider":        "allow",
+				"list_models":          "allow",
+				"run_doctor":           "allow",
+				"get_usage":            "allow",
+				// add_mcp_server is DENIED in the seeded default because an MCP
+				// server definition is a program the gateway launches, and the
+				// launched process is not confined by the sandbox. An agent that
+				// can add one has escaped the cage through the front door:
+				// config.json is in the ADR-060 secret set precisely so an agent
+				// cannot write an MCP server entry with write_file, and this tool
+				// wrote the same setting through the API.
+				//
+				// This matches the competitor threat model — Claude Code does not
+				// sandbox MCP server processes either, and defends the boundary by
+				// making .mcp.json unwritable by the agent. The control is "an
+				// agent must not be able to ADD a server", not "a server must be
+				// caged".
+				//
+				// "deny" rather than "ask": the approval modal does render the full
+				// argument JSON, so the command is visible — but it is a generic,
+				// scrollable dump with no dedicated command preview (that special
+				// case exists only for `bash`), and the decision is turn-scoped
+				// while the effect is permanent and applies at every subsequent
+				// boot. An operator who has just asked for an MCP server set up
+				// cannot tell that request apart from one injected by a page the
+				// agent read.
+				//
+				// This is seeded DATA, not a code branch (CLAUDE.md constraint 6):
+				// an operator who wants an agent to install MCP servers changes
+				// this entry to "ask" or "allow" on their own install, in Settings
+				// or config.json, and keeps that power.
+				"add_mcp_server": "deny",
+				// remove_mcp_server stays "ask", deliberately asymmetric: removing
+				// a server narrows capability rather than widening it, destroys no
+				// data, and is recoverable by re-adding the entry. The server name
+				// the modal shows IS the whole decision surface for a removal,
+				// unlike an add, where the decision surface is a command line.
+				"remove_mcp_server": "ask",
+				// list_mcp_servers is read-only and reports name/transport/enabled/
+				// command/url only — never args or env — so it leaks no credential.
 				"list_mcp_servers":         "allow",
 				"create_skill":             "allow",
 				"edit_skill":               "allow",

@@ -594,30 +594,65 @@ func CurrentLinuxBackend() *LinuxBackend {
 	return currentLinuxBackend
 }
 
-// restrictCurrentThreadIfNeeded re-applies the saved enforce-mode policy to
-// the calling OS thread. No-op when the gateway is not in enforce mode. The
-// caller must hold runtime.LockOSThread before calling. See the linux
-// implementation's RestrictCurrentThread for the contract.
-func restrictCurrentThreadIfNeeded() error {
+// restrictCurrentThreadIfNeeded re-applies a policy to the calling OS thread.
+// No-op when the gateway is not in enforce mode. The caller must hold
+// runtime.LockOSThread before calling. See the linux implementation's
+// RestrictCurrentThread for the contract.
+//
+// kernelPolicy is the PER-TURN policy for the child about to be forked
+// (Limits.KernelPolicy). When nil, the boot policy saved by ApplyWithMode is
+// used instead — the documented fallback for spawn paths that have no turn.
+// This is Linux's half of the FR-3.5 wiring: macOS carries the per-turn policy
+// by rendering it into the child's Seatbelt profile, Linux carries it by
+// building the Landlock ruleset for THIS spawn thread out of it.
+func restrictCurrentThreadIfNeeded(kernelPolicy *SandboxPolicy) error {
 	lb := CurrentLinuxBackend()
 	if lb == nil {
 		return nil
 	}
-	return lb.RestrictCurrentThread()
+	return lb.RestrictCurrentThreadWithPolicy(kernelPolicy)
 }
 
-// RestrictCurrentThread applies the saved enforce-mode policy to the calling
-// OS thread. The caller MUST runtime.LockOSThread() before invoking this and
-// MUST NOT runtime.UnlockOSThread afterwards — the OS thread is permanently
-// restricted and Go must dispose of it (by exiting the goroutine that owns
-// the lock) rather than recycling it for unrelated work.
+// RestrictCurrentThread applies the SAVED BOOT policy to the calling OS thread.
+// Equivalent to RestrictCurrentThreadWithPolicy(nil); retained as the name the
+// rest of the codebase and its documentation already use for the boot case.
+func (lb *LinuxBackend) RestrictCurrentThread() error {
+	return lb.RestrictCurrentThreadWithPolicy(nil)
+}
+
+// RestrictCurrentThreadWithPolicy applies policy to the calling OS thread. The
+// caller MUST runtime.LockOSThread() before invoking this and MUST NOT
+// runtime.UnlockOSThread afterwards — the OS thread is permanently restricted
+// and Go must dispose of it (by exiting the goroutine that owns the lock)
+// rather than recycling it for unrelated work.
+//
+// policy is the per-turn kernel policy for the child about to be forked. A nil
+// policy means "no per-turn policy supplied" and falls back to the boot policy
+// saved by ApplyWithMode, which is what every caller did unconditionally before
+// per-turn confinement was wired up.
+//
+// The fallback is deliberately not an error: not every spawn belongs to an
+// agent turn. It is, however, the WIDER of the two policies — the boot policy
+// grants $OMNIPUS_HOME as one tree, so a child under it can reach every agent's
+// home and every workspace record. Supplying a per-turn policy is what narrows
+// that to the turn's own tree, which is why the tool-layer spawn sites always
+// do.
 //
 // Returns nil (no-op) if the saved mode was anything other than ModeEnforce.
 // Returns an error if the kernel rejects the ruleset; callers must abort the
 // spawn rather than fall through to an unrestricted exec.
-func (lb *LinuxBackend) RestrictCurrentThread() error {
+func (lb *LinuxBackend) RestrictCurrentThreadWithPolicy(policy *SandboxPolicy) error {
 	if lb == nil || lb.savedMode != ModeEnforce {
 		return nil
+	}
+
+	// Resolve which policy this thread's ruleset is built from, ONCE, so every
+	// step below reads the same value. Mixing per-turn filesystem rules with
+	// boot port rules (or vice versa) would produce a domain that matches
+	// neither policy and belongs to no reviewable decision.
+	effective := lb.savedPolicy
+	if policy != nil {
+		effective = *policy
 	}
 
 	// 1. PR_SET_NO_NEW_PRIVS is per-thread on Linux; new Go worker threads
@@ -670,7 +705,7 @@ func (lb *LinuxBackend) RestrictCurrentThread() error {
 	// already requires callers to abort rather than fall through to an
 	// unrestricted exec, so the error is honoured; granting the parent instead
 	// would leave the key readable with nothing in the logs to say so.
-	childRules, err := lb.linuxFilesystemRules(lb.savedPolicy, true)
+	childRules, err := lb.linuxFilesystemRules(effective, true)
 	if err != nil {
 		return fmt.Errorf("landlock: per-spawn secret-set exclusion failed: %w", err)
 	}
@@ -684,7 +719,7 @@ func (lb *LinuxBackend) RestrictCurrentThread() error {
 		}
 	}
 	if lb.abiVersion >= 4 {
-		for _, rule := range lb.savedPolicy.BindPortRules {
+		for _, rule := range effective.BindPortRules {
 			if err := addLandlockNetPortRule(int(rulesetFd), rule.Port, landlockAccessNetBindTcp); err != nil {
 				// B1.4-c: same hard-error contract as in ApplyWithMode. On ABI >=4
 				// the kernel explicitly supports net rules; EINVAL/ENOENT here is a
@@ -703,7 +738,7 @@ func (lb *LinuxBackend) RestrictCurrentThread() error {
 		// would silently drop connect enforcement on hardened-exec spawns
 		// even though the gateway thread itself was correctly restricted —
 		// the same drift the bind-rule re-add path guards against.
-		for _, rule := range lb.savedPolicy.ConnectPortRules {
+		for _, rule := range effective.ConnectPortRules {
 			if err := addLandlockNetPortRule(int(rulesetFd), rule.Port, landlockAccessNetConnectTcp); err != nil {
 				if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOENT) {
 					return fmt.Errorf("landlock: kernel (ABI v%d) rejected net connect rule for port %d"+

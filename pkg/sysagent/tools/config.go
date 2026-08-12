@@ -140,29 +140,205 @@ var knownConfigPrefixes = []string{
 	"heartbeat.", "devices.", "providers", "workspace_path",
 }
 
-// blockedConfigKeyPrefixes are keys within an otherwise-known section that
-// must still be rejected by system.config.set. ADR-054 §11 checklist item 6:
-// agents.list (the retired agent-roster entity blob) must be rejected
-// specifically — NOT by removing the "agents." prefix from
-// knownConfigPrefixes, which gates the whole agents.* namespace and would
-// also break agents.defaults.* (including agents.defaults.default_agent_id,
-// D6.4). Agent CRUD now goes exclusively through the agent store / dedicated
-// create_agent, update_agent, delete_agent tools and the /api/v1/agents REST
-// endpoints, never through generic config mutation.
-var blockedConfigKeyPrefixes = []string{
-	"agents.list",
+// blockedConfigKey names one config key — or one subtree root — that generic
+// config mutation must never write, together with the reason it is off limits.
+//
+// It is a table rather than a run of `if` statements so the policy is data:
+// one place to read, one place to extend, and directly enumerable by a test
+// (see TestValidateConfigKey_BlockedKeys, which asserts every entry here is
+// refused and that a representative legitimate key in the same section is
+// still accepted).
+type blockedConfigKey struct {
+	// Key is a config key or the root of a subtree. A candidate key matches
+	// when it equals Key, or begins with Key+"." (a child) or Key+"[" (an
+	// index into an array-valued key).
+	Key string
+	// Reason is surfaced verbatim in the rejection so the caller — usually an
+	// LLM — is told what it hit and where the setting really lives, instead of
+	// retrying variations of the same key.
+	Reason string
 }
 
-// validateConfigKey returns an error if key does not start with a known config
-// prefix, or if it falls under a key that is explicitly blocked even within a
-// known section (see blockedConfigKeyPrefixes).
+// blockedConfigKeys is the security-critical surface that set_config refuses.
+//
+// The threat this closes: set_config takes no path argument and therefore
+// bypasses the filesystem chokepoint entirely, yet the keys below are the very
+// controls that define an agent's boundary. An agent able to write them can
+// widen its own cage — turn the sandbox off, mint itself an API credential,
+// point exec/browser/MCP at an arbitrary binary, or switch off the redaction
+// that keeps secrets out of its own context. That is exactly the exposure
+// ADR-060's secret set exists to prevent for config.json on disk; this tool
+// edits the same settings through the front door.
+//
+// This is a DENY list layered on top of the knownConfigPrefixes ALLOW list, not
+// a replacement for it: a key must both start with a known section AND avoid
+// every entry here. Entries are matched before the allow list.
+//
+// Nothing here is a tool-policy fallback (CLAUDE.md hard constraint 6). Tool
+// policy stays explicit, seeded data; this list only decides which config keys
+// one particular tool may write. sandbox.tool_policies remains fully
+// operator-editable — via Settings, the REST API, or config.json — it just is
+// not editable by the agent whose policies it governs.
+var blockedConfigKeys = []blockedConfigKey{
+	// ADR-054 §11 checklist item 6: agents.list (the retired agent-roster
+	// entity blob) must be rejected specifically — NOT by removing the
+	// "agents." prefix from knownConfigPrefixes, which gates the whole agents.*
+	// namespace and would also break agents.defaults.* (including
+	// agents.defaults.default_agent_id, D6.4).
+	{
+		Key: "agents.list",
+		Reason: "the agent roster is managed by the agent store, not generic config — " +
+			"use create_agent/update_agent/delete_agent instead",
+	},
+
+	// ---- the sandbox enforcement surface (entire subtree) ----
+	//
+	// Every field under sandbox.* is a security control: mode, god_mode,
+	// god_mode_allowed, tool_policies, shell_deny_patterns, allowed_paths,
+	// allowed_exec_paths, filesystem_model, egress_allow_list,
+	// egress_allow_cidrs, allow_network_outbound, ssrf.*, audit_log,
+	// skill_trust, prompt_injection_level, browser_evaluate_enabled. There is
+	// no non-security key in the namespace worth carving an exception for, and
+	// a subtree block is the only form that stays correct when a field is added.
+	{
+		Key: "sandbox",
+		Reason: "the whole sandbox namespace is the enforcement boundary itself (mode, god_mode, " +
+			"tool_policies, shell_deny_patterns, allowed_paths, allowed_exec_paths, filesystem_model, " +
+			"egress and SSRF allow-lists, audit_log, skill_trust, prompt_injection_level) — " +
+			"change it in Settings → Security or config.json, never from an agent",
+	},
+
+	// ---- gateway authentication, origin and approval controls ----
+	{
+		Key:    "gateway.dev_mode_bypass",
+		Reason: "it disables gateway authentication entirely, granting unauthenticated admin access to the whole API",
+	},
+	{
+		Key:    "gateway.users",
+		Reason: "it is the bearer-token account list — writing it mints an API credential",
+	},
+	{
+		// Also caught by the credential substring filter above; listed so this
+		// predicate is correct standalone if that filter is ever narrowed.
+		Key:    "gateway.token",
+		Reason: "it is the gateway bearer token — credentials live in the encrypted store",
+	},
+	{
+		Key:    "gateway.cli_token",
+		Reason: "it is the CLI bearer token — credentials live in the encrypted store",
+	},
+	{
+		Key: "gateway.public_url",
+		Reason: "it defines the canonical origin that CSP, CORS and the WebSocket CheckOrigin " +
+			"all validate against (ADR-044 D2)",
+	},
+	{
+		Key: "gateway.trust_xff",
+		Reason: "it makes the client IP attacker-controlled, which is what auth rate limiting " +
+			"and audit attribution key on",
+	},
+	{
+		Key:    "gateway.validate_inbound",
+		Reason: "it is the inbound contract validator (Constraint #8)",
+	},
+	{
+		Key:    "gateway.auth_mismatch_log_level",
+		Reason: "it controls whether failed authentication attempts are logged at all",
+	},
+	{
+		Key:    "gateway.tool_approval_timeout",
+		Reason: "it governs the human approval gate that every ask-policy tool call passes through",
+	},
+	{
+		Key:    "gateway.tool_approval_max_pending",
+		Reason: "it governs the human approval gate that every ask-policy tool call passes through",
+	},
+
+	// ---- tool-surface boundary controls ----
+	{
+		Key:    "tools.allow_read_paths",
+		Reason: "it is the filesystem read boundary for every file tool",
+	},
+	{
+		Key:    "tools.allow_write_paths",
+		Reason: "it is the filesystem write boundary for every file tool",
+	},
+	{
+		Key: "tools.filter_sensitive_data",
+		Reason: "it is the filter that strips API keys, tokens and secrets out of tool results " +
+			"before they reach the model",
+	},
+	{
+		Key: "tools.filter_min_length",
+		Reason: "it tunes that same secret-redaction filter — a large value switches redaction off " +
+			"without appearing to disable anything",
+	},
+	{
+		Key: "tools.exec",
+		Reason: "it holds the exec binary allow-list, the exec approval mode and the egress proxy " +
+			"toggle for spawned processes",
+	},
+	{
+		Key: "tools.mcp",
+		Reason: "an MCP server entry names a program the gateway launches — writing it is arbitrary " +
+			"code execution, and it would bypass whatever policy governs add_mcp_server",
+	},
+	{
+		Key: "tools.browser",
+		Reason: "exec_path and cdp_url make the gateway launch or attach to a chosen binary, " +
+			"profile_dir points the browser profile anywhere, and evaluate_enabled turns on " +
+			"arbitrary in-page JavaScript",
+	},
+	{
+		Key:    "tools.cron.allow_command",
+		Reason: "it lets scheduled jobs run shell commands",
+	},
+	{
+		Key:    "tools.web.private_host_whitelist",
+		Reason: "it is the SSRF exemption list for private/internal hosts (SEC-24)",
+	},
+	{
+		Key:    "tools.web.proxy",
+		Reason: "it routes every outbound web request through a chosen proxy",
+	},
+	{
+		Key: "tools.skills.marketplaces",
+		Reason: "it is the skill supply chain — a marketplace entry decides where installable " +
+			"instructions are fetched from",
+	},
+
+	// ---- reserved: no such config section exists TODAY ----
+	//
+	// "security" and "workspace_path" are listed in knownConfigPrefixes but
+	// there is no matching field on config.Config, so a write under them is
+	// currently a silent no-op that reports success (dotSet creates the key in
+	// the generic map; the unmarshal back into *config.Config drops it).
+	// Blocking them is behaviour-neutral today and fail-closed tomorrow: if a
+	// `security` section is ever introduced, or `workspace_path` — the anchor
+	// the filesystem confinement is computed from — is reintroduced, it does
+	// not silently become agent-writable the moment the field lands.
+	{
+		Key: "security",
+		Reason: "reserved — no such config section exists today, and a security section must " +
+			"never be agent-writable by default if one is introduced",
+	},
+	{
+		Key: "workspace_path",
+		Reason: "reserved — it names the workspace root that filesystem confinement is " +
+			"anchored to, and must never be agent-writable if reintroduced",
+	},
+}
+
+// validateConfigKey returns an error if key falls under a security-critical or
+// otherwise blocked key (blockedConfigKeys), or if it does not start with a
+// known config prefix (knownConfigPrefixes). Deny is evaluated first, so an
+// entry in blockedConfigKeys always wins over its enclosing allowed section.
 func validateConfigKey(key string) error {
-	for _, blocked := range blockedConfigKeyPrefixes {
-		if key == blocked || strings.HasPrefix(key, blocked+".") || strings.HasPrefix(key, blocked+"[") {
-			return fmt.Errorf(
-				"config key %q is managed by the agent store, not generic config — use create_agent/update_agent/delete_agent instead",
-				key,
-			)
+	for _, blocked := range blockedConfigKeys {
+		if key == blocked.Key ||
+			strings.HasPrefix(key, blocked.Key+".") ||
+			strings.HasPrefix(key, blocked.Key+"[") {
+			return fmt.Errorf("config key %q is not writable via this tool: %s", key, blocked.Reason)
 		}
 	}
 	for _, prefix := range knownConfigPrefixes {
