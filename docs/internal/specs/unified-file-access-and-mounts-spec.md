@@ -16,6 +16,26 @@ mounts.
 **Out of scope:** Windows kernel enforcement; egress; remote/networked mounts;
 the Library UI (depends on this, ships after).
 
+> **The gate was violated on its first day, and this is the record of that.**
+> FR-3.1/FR-3.2 (the merged secret set, commit `6e7aece0`) landed BEFORE any
+> baseline existed, because the baseline work and the foundation work were
+> dispatched in parallel — which is precisely what "nothing else starts until
+> this is green" forbids. It was caught by the agent writing the baseline, who
+> could not record "today's behaviour" because today had already moved.
+>
+> **Retroactively verified rather than argued away.** The baseline tests were
+> run against the pre-FR-3 commit in a separate worktree. Every delta between
+> the two commits involves EXACTLY two paths — `config.json` and `cli.token`,
+> both moving from reachable to denied. Nothing else changed: the whole
+> confined/unrestricted matrix, the own-tree exception in both shapes, and the
+> app-vs-kernel divergence table are identical either side. Those two paths are
+> exactly what §6 lists as approved, so the violation produced no undetected
+> regression.
+>
+> The lesson is about sequencing, not about this change: a gate that can be
+> skipped by running work in parallel is not a gate. Later waves must not start
+> until the baseline for what they touch is green.
+
 **Non-negotiable gate, inherited from ADR-060 and restated because it is the
 only thing standing between this change and a silent regression:** before the
 unified engine becomes the decision path, the CURRENT behaviour of both layers
