@@ -141,6 +141,103 @@ var secretGlobPrefixes = []string{
 	"master.key.",
 }
 
+// hasSecretBackupPrefix reports whether a basename is a BACKUP COPY of a
+// secret — `config.json.bak-<ts>`, `credentials.json.<anything>`,
+// `master.key.<anything>`.
+//
+// DENY-side, so it folds case unconditionally, for the same reason
+// IsSecretName does: on a case-insensitive volume `CONFIG.JSON.bak-1` IS the
+// backup, and over-matching a distinctly-named sibling under $OMNIPUS_HOME
+// merely withholds access to a file with no legitimate agent-facing claimant.
+func hasSecretBackupPrefix(name string) bool {
+	folded := strings.ToLower(name)
+	for _, prefix := range secretGlobPrefixes {
+		if strings.HasPrefix(folded, strings.ToLower(prefix)) {
+			return true
+		}
+	}
+	return false
+}
+
+// CoversSecretBackup reports whether candidate is a backup copy of a secret
+// sitting directly beside the carve-out roots — i.e. directly in
+// $OMNIPUS_HOME — WITHOUT requiring the file to exist.
+//
+// # Why this exists as a rule rather than as more entries in the list
+//
+// secretBackupPaths discovers backups by LISTING $OMNIPUS_HOME at the moment
+// the policy is built. That is the wrong tool for a set that must cover files
+// which do not exist yet, and it left two plain-ASCII holes — no Unicode, no
+// case trick, no race window narrower than a turn:
+//
+//	write   IsCarveOut($OMNIPUS_HOME/config.json.bak-9999) was FALSE for a
+//	        file not on disk, so a write landed there. Harmless on its own;
+//	        it is the read half that matters.
+//	read    A backup the GATEWAY writes during a turn (a migration rewriting
+//	        config.json does exactly this) is absent from that turn's carve-out
+//	        list and stays readable by it for the rest of the turn. A real
+//	        install's config.json.bak carries the gateway CLI token and the
+//	        user account list — verified on a live install, which is why the
+//	        prefixes are in the secret set at all.
+//
+// The exact names in SecretEntriesAlways are returned whether or not they
+// exist, precisely so a credential file created a moment later is already
+// covered. The prefix set needs the same treatment, and a prefix rule gives it
+// by construction. secretBackupPaths survives for the two consumers that
+// genuinely need a finite path LIST (the kernel deny list and the Linux
+// sibling-granting walk); it is no longer the only way a backup is recognised.
+//
+// The parent-directory test is identity-based (SameLocationForDeny), so it is
+// immune to the case and normalization spellings pathidentity.go documents,
+// and it anchors on the carve-out roots themselves rather than on a separately
+// passed home path — there is no second copy of "where is $OMNIPUS_HOME" to
+// drift out of step with the first.
+func CoversSecretBackup(candidate string, carveOuts []string) bool {
+	clean := filepath.Clean(candidate)
+	if !hasSecretBackupPrefix(filepath.Base(clean)) {
+		return false
+	}
+	dir := filepath.Dir(clean)
+	for _, root := range carveOuts {
+		if SameLocationForDeny(dir, filepath.Dir(filepath.Clean(root))) {
+			return true
+		}
+	}
+	return false
+}
+
+// SecretBackupPathPrefixes returns the absolute path PREFIXES under home whose
+// every match is a secret backup: `<home>/config.json.`,
+// `<home>/credentials.json.`, `<home>/master.key.`.
+//
+// It is the kernel-layer counterpart to CoversSecretBackup, and it exists for
+// the same reason: a backup the gateway writes DURING a turn is absent from any
+// list enumerated before that turn started. Measured against a real child under
+// /usr/bin/sandbox-exec, with the whole enumerated deny list in place:
+//
+//	cat <home>/config.json              -> Operation not permitted
+//	cat <home>/config.json.bak-<ts>     -> TOKEN-IN-BACKUP   (created mid-turn)
+//
+// macOS renders each prefix as an anchored regex deny, which is the only
+// Seatbelt filter that can cover a path that does not exist yet: subpath and
+// literal both name a specific path, and `config.json.bak-1` is not "under"
+// `config.json` in the subpath sense. Linux needs nothing — the grant-based
+// walk never grants $OMNIPUS_HOME itself, only its existing children, so an
+// entry created later carries no grant at all.
+//
+// Returns nil for an empty home, matching SecretPaths.
+func SecretBackupPathPrefixes(home string) []string {
+	if home == "" {
+		return nil
+	}
+	clean := filepath.Clean(home)
+	out := make([]string, 0, len(secretGlobPrefixes))
+	for _, prefix := range secretGlobPrefixes {
+		out = append(out, filepath.Join(clean, prefix))
+	}
+	return out
+}
+
 // SecretPaths returns the absolute path of every secret under home: the exact
 // SecretEntriesRelative names, then any existing entry whose basename starts
 // with a secretGlobPrefixes entry.

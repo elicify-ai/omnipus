@@ -296,3 +296,193 @@ func TestPerTurnPolicy_EmptyWorkDirIsRefused(t *testing.T) {
 	require.Error(t, err, "an unusable authored policy must abort the spawn, not downgrade it")
 	assert.Nil(t, kp)
 }
+
+// --- The directory-node rename bypass (finding: "a wall computed correctly and
+// never connected") ---
+//
+// fspolicy.KernelDeniedNodesFor was written to stop this and had ZERO callers:
+// DeriveKernelPolicy consumed KernelDeniedPathsFor (subtrees) and never the
+// node list. Everything above this line passed while the attack below worked.
+//
+// Reproduced against real children before the wiring existed:
+//
+//	agent-home turn:
+//	  cat  <home>/agents/victim/SOUL.md      -> Operation not permitted
+//	  mv   <home>/agents <home>/agents-old   -> SUCCEEDED
+//	  cat  <home>/agents-old/victim/SOUL.md  -> VICTIM-SOUL-SECRET
+//
+//	workspace turn:
+//	  mv   <home>/workspaces <home>/ws-old   -> SUCCEEDED
+//	  read AND write of every workspace record, own and foreign, then rename
+//	  back so the gateway reads the TAMPERED record as if nothing happened.
+//
+// The workspace half is the worse one: workspaces/<id>.json carries the
+// delegation trust_set (pkg/workspace.ReadDelegation, the live gate consulted
+// from the agent loop) and core_team, which drives per-turn filesystem
+// re-rooting. Rewriting it re-opens delegation for the NEXT turn.
+
+// renameNode returns the argv that attempts to rename a directory node.
+func renameNode(from, to string) []string {
+	return []string{"/bin/bash", "-c", "mv " + from + " " + to}
+}
+
+// TestPerTurnPolicy_AgentTurn_CannotRenameTheAgentsRootNode is the attack, end
+// to end: rename the node, then read through the relocated path.
+func TestPerTurnPolicy_AgentTurn_CannotRenameTheAgentsRootNode(t *testing.T) {
+	home := crossAgentHome(t)
+	installCrossAgentTurn(t, home)
+	self := filepath.Join(home, "agents", "self")
+	lim := turnLimits(t, home, self)
+
+	agents := filepath.Join(home, "agents")
+	relocated := filepath.Join(home, "agents-old")
+
+	code, stderr := runChild(t, renameNode(agents, relocated), lim)
+	assert.NotEqual(t, 0, code,
+		"renaming the agents/ node must be denied: it relocates EVERY agent's home to a path "+
+			"no deny in the policy covers, which defeats the entire per-sibling deny list in "+
+			"one syscall. stderr=%s", stderr)
+	assert.NoDirExists(t, relocated,
+		"the node must still be where it was — a non-zero exit with the directory moved would "+
+			"mean the rename landed and something else failed")
+	assert.DirExists(t, agents)
+
+	// The whole attack chain in one child, so a partial fix (rename blocked in
+	// isolation but reachable via some other spelling) still fails here.
+	code, stderr = runChild(t, []string{"/bin/bash", "-c",
+		"mv " + agents + " " + relocated + " && cat " + filepath.Join(relocated, "victim", "SOUL.md")}, lim)
+	assert.NotEqual(t, 0, code, "the rename-then-read chain must not succeed. stderr=%s", stderr)
+	assert.True(t, fileContains(t, filepath.Join(agents, "victim", "SOUL.md"), "victim soul"),
+		"the victim's file must still be at its original path and unchanged")
+}
+
+// TestPerTurnPolicy_AgentTurn_OwnTreeSurvivesTheNodeDeny is the control that
+// makes the test above meaningful. A node deny rendered as a SUBPATH rather
+// than a LITERAL would block the rename and also lock the agent out of its own
+// home — which passes every assertion above and ships a broken product.
+func TestPerTurnPolicy_AgentTurn_OwnTreeSurvivesTheNodeDeny(t *testing.T) {
+	home := crossAgentHome(t)
+	installCrossAgentTurn(t, home)
+	self := filepath.Join(home, "agents", "self")
+	lim := turnLimits(t, home, self)
+
+	code, stderr := runChild(t, readScript(filepath.Join(self, "OWN.md")), lim)
+	assert.Equal(t, 0, code, "own home must stay readable under the node deny. stderr=%s", stderr)
+
+	code, stderr = runChild(t, writeAppend(filepath.Join(self, "OWN.md")), lim)
+	assert.Equal(t, 0, code, "own home must stay writable under the node deny. stderr=%s", stderr)
+
+	created := filepath.Join(self, "sub", "deep.txt")
+	code, stderr = runChild(t, []string{"/bin/bash", "-c",
+		"mkdir -p " + filepath.Dir(created) + " && echo hi > " + created}, lim)
+	assert.Equal(t, 0, code, "creating directories inside the own tree must stay possible. stderr=%s", stderr)
+	assert.FileExists(t, created)
+}
+
+// TestPerTurnPolicy_WorkspaceTurn_CannotRenameEitherNodeOnTheChain covers the
+// two-node shape: <home>/workspaces AND <home>/workspaces/w1 are both on the
+// chain to the work dir, and either rename relocates the workspace records.
+func TestPerTurnPolicy_WorkspaceTurn_CannotRenameEitherNodeOnTheChain(t *testing.T) {
+	home := crossAgentHome(t)
+	installCrossAgentTurn(t, home)
+	work := filepath.Join(home, "workspaces", "w1", "work")
+	lim := turnLimits(t, home, work)
+
+	for _, node := range []string{
+		filepath.Join(home, "workspaces"),
+		filepath.Join(home, "workspaces", "w1"),
+	} {
+		relocated := node + "-old"
+		code, stderr := runChild(t, renameNode(node, relocated), lim)
+		assert.NotEqual(t, 0, code,
+			"renaming %s must be denied; it relocates the workspace records (delegation trust_set, "+
+				"core_team) to a path no deny covers. stderr=%s", node, stderr)
+		assert.NoDirExists(t, relocated)
+		assert.DirExists(t, node)
+	}
+
+	// Control: the work dir underneath both nodes stays fully usable.
+	created := filepath.Join(work, "built.txt")
+	code, stderr := runChild(t, writeAppend(created), lim)
+	assert.Equal(t, 0, code, "the work dir must stay writable. stderr=%s", stderr)
+	assert.FileExists(t, created)
+
+	// And the record the rename was after is still denied by path, as before.
+	assert.True(t, fileContains(t, filepath.Join(home, "workspaces", "w1", "mounts.json"), `{"mounts":[]}`))
+}
+
+// TestPerTurnPolicy_RenamedBackIsNotAnEscape closes the variant that makes the
+// workspace attack silent: move the node aside, tamper, move it back. If the
+// rename is denied both ways there is no window in which the gateway reads a
+// record the child rewrote.
+func TestPerTurnPolicy_RenamedBackIsNotAnEscape(t *testing.T) {
+	home := crossAgentHome(t)
+	installCrossAgentTurn(t, home)
+	work := filepath.Join(home, "workspaces", "w1", "work")
+	lim := turnLimits(t, home, work)
+
+	ws := filepath.Join(home, "workspaces")
+	record := filepath.Join(home, "workspaces", "w1", "mounts.json")
+
+	code, stderr := runChild(t, []string{"/bin/bash", "-c",
+		"mv " + ws + " " + ws + "-old && " +
+			"echo '{\"mounts\":[\"/\"]}' > " + ws + "-old/w1/mounts.json && " +
+			"mv " + ws + "-old " + ws}, lim)
+	assert.NotEqual(t, 0, code, "the move-tamper-move-back chain must fail at the first step. stderr=%s", stderr)
+	assert.True(t, fileContains(t, record, `{"mounts":[]}`),
+		"the workspace record must be byte-identical: this is the file the delegation trust gate "+
+			"and the per-turn re-rooting both read")
+}
+
+// --- Backups written AFTER the child starts ---
+//
+// The secret set discovers `config.json.bak-<ts>` by LISTING $OMNIPUS_HOME when
+// the policy is built. A Seatbelt profile is fixed at exec, so a backup the
+// GATEWAY writes mid-turn — which is exactly what a config migration does — is
+// covered by no entry in that list. A real install's config backup carries the
+// gateway CLI token and the user account list.
+//
+// Measured before SandboxPolicy.DeniedPathPrefixes existed, with the whole
+// enumerated deny list in place:
+//
+//	cat <home>/config.json           -> Operation not permitted
+//	cat <home>/config.json.bak-<ts>  -> TOKEN-IN-BACKUP
+
+// TestPerTurnPolicy_BackupWrittenAfterSpawnIsStillDenied runs the child AFTER
+// creating the backup, but derives the policy BEFORE — which is the real
+// ordering, since the policy is derived once per spawn and the gateway keeps
+// writing for the rest of the turn.
+func TestPerTurnPolicy_BackupWrittenAfterSpawnIsStillDenied(t *testing.T) {
+	home := crossAgentHome(t)
+	installCrossAgentTurn(t, home)
+	lim := turnLimits(t, home, filepath.Join(home, "agents", "self"))
+
+	// Only now does the gateway write the backup — after the policy above was
+	// derived and after any listing it performed.
+	for _, name := range []string{
+		"config.json.bak-1755000000",
+		"credentials.json.old",
+		"master.key.2",
+	} {
+		p := filepath.Join(home, name)
+		require.NoError(t, os.WriteFile(p, []byte("LIVE-TOKEN-AND-ACCOUNTS"), 0o600))
+
+		code, stderr := runChild(t, readScript(p), lim)
+		assert.NotEqual(t, 0, code,
+			"%s was created after the policy was derived; an enumerated deny list cannot cover it, "+
+				"which is why the profile carries an anchored regex prefix deny. stderr=%s", name, stderr)
+
+		code, stderr = runChild(t, writeAppend(p), lim)
+		assert.NotEqual(t, 0, code, "%s must be unwritable too. stderr=%s", name, stderr)
+		assert.True(t, fileContains(t, p, "LIVE-TOKEN-AND-ACCOUNTS"), "%s must be unchanged", name)
+	}
+
+	// A path that merely LOOKS similar must stay reachable — an over-broad
+	// regex is a different defect, not a fix.
+	ordinary := filepath.Join(home, "config.jsonl")
+	require.NoError(t, os.WriteFile(ordinary, []byte("not a secret"), 0o600))
+	code, stderr := runChild(t, readScript(ordinary), lim)
+	assert.Equal(t, 0, code,
+		"config.jsonl is not a backup of config.json; the prefix includes the dot for exactly "+
+			"this reason. stderr=%s", stderr)
+}

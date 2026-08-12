@@ -247,15 +247,21 @@ func TestCarveOut_NonASCIISpelling_IsDenied(t *testing.T) {
 	}
 }
 
-// TestCarveOut_ResidualIsDocumented pins the ONE gap that remains, so it is a
-// known, tested property rather than a surprise later.
+// TestCarveOut_ResidualIsDocumented pins the residual documented in
+// pathidentity.go's header, in BOTH directions.
 //
-// Identity cannot answer for a secret that does not exist yet, and the secret
-// set deliberately covers not-yet-created files. The fallback is a case fold,
-// which catches every ASCII variant (all secret names are ASCII) but NOT a
-// non-ASCII normalization variant. The window is narrow by construction: it
-// requires the secret itself to be absent, at which point there is nothing to
-// read or overwrite in place, and it closes the instant the file is created.
+// It used to t.Log whichever branch it took and assert nothing about the
+// residual itself, so it could not fail whatever IsCarveOut did — a residual
+// "documented" by a test that cannot fail is not documented. It now asserts the
+// actual boundary:
+//
+//	secret ABSENT  + non-ASCII variant spelling -> NOT matched (the residual)
+//	secret PRESENT + the same spelling          -> matched (identity closes it)
+//
+// Both halves have to bite. Without the first, a future change that quietly
+// widened the deny side (denying by basename alone, say) would go unnoticed
+// here and the header would describe a residual that no longer exists. Without
+// the second, the residual could silently grow to cover existing files too.
 func TestCarveOut_ResidualIsDocumented(t *testing.T) {
 	base := t.TempDir()
 	probe := probeVolume(t, base)
@@ -279,11 +285,15 @@ func TestCarveOut_ResidualIsDocumented(t *testing.T) {
 	nfc := filepath.Join(base, "caf\u00e9.omnipus", "master.key") // NFC spelling
 
 	// master.key does NOT exist yet: identity cannot answer, the fold fallback
-	// does not bridge NFD/NFC, so this spelling is NOT recognised.
+	// does not bridge NFD/NFC, so this spelling is NOT recognised. Asserted,
+	// not logged — if this ever starts passing, the residual has narrowed and
+	// pathidentity.go's header is now WRONG and must be updated in the same
+	// change that narrowed it.
 	if IsCarveOut(nfc, policy) {
-		t.Log("residual has narrowed: the non-existent non-ASCII variant is now caught")
-	} else {
-		t.Log("KNOWN RESIDUAL: non-existent secret + non-ASCII normalization variant is not matched by the fold fallback")
+		t.Fatalf("IsCarveOut(%q) = true for a NON-EXISTENT secret in a non-ASCII variant spelling. "+
+			"That is stricter than pathidentity.go's documented residual #1 claims. This is not a "+
+			"failure of the product — it is a failure of the DOCUMENTATION: update the header's "+
+			"residual list (and this test) to describe what the code now does.", nfc)
 	}
 
 	// The moment the secret exists, identity answers and the same spelling is

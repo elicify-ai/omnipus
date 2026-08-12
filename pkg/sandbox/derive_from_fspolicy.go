@@ -173,5 +173,30 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 	}
 	policy.DeniedPaths = denied
 
+	// The directory NODES on the chain down to the work dir. Separate from the
+	// list above because they must stay REACHABLE (the work dir is underneath
+	// them) while the entry itself must not be writable.
+	//
+	// Without this, `mv $OMNIPUS_HOME/agents $OMNIPUS_HOME/agents-old` succeeds
+	// and every per-sibling deny computed above is bypassed in one syscall: the
+	// denies name paths that no longer exist, and the relocated tree is covered
+	// by nothing. Measured against a real child, with the correct deny list in
+	// place, before this line existed — a wall that is computed and never
+	// connected protects nothing, which is why KernelDeniedNodesFor is
+	// consumed HERE rather than left as a helper nobody calls.
+	//
+	// No error leg: unlike KernelDeniedPathsFor this needs no directory
+	// listing, so there is nothing that can fail. It is derived from the
+	// work-dir path alone, which means it is also correct in the fail-closed
+	// branch above (where `denied` fell back to the full set) — a node deny on
+	// a root that is already denied wholesale is redundant, never wrong.
+	policy.DeniedNodes = fspolicy.KernelDeniedNodesFor(in.HomePath, authored.WorkDir)
+
+	// DeniedPathPrefixes is NOT set here. It is turn-independent — a backup
+	// copy of a secret is a secret in every turn shape — so DefaultPolicyForModel
+	// above populates it once, for the boot profile and every per-turn policy
+	// alike. Naming it again here would be a second source of truth for a value
+	// that has only one.
+
 	return policy
 }

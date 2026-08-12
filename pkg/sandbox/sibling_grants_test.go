@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 )
 
 // seedHome builds a realistic $OMNIPUS_HOME: the five secret entries plus the
@@ -54,7 +56,7 @@ func TestExpandRulesExcluding_GrantsSiblingsNotTheSecret(t *testing.T) {
 	home := seedHome(t)
 	rules := []PathRule{{Path: home, Access: AccessRead | AccessWrite | AccessExecute}}
 
-	got, err := ExpandRulesExcluding(rules, SecretPaths(home))
+	got, err := ExpandRulesExcluding(rules, SecretPaths(home), nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -94,7 +96,7 @@ func TestExpandRulesExcluding_AgentsStayWritableEntitiesDoNot(t *testing.T) {
 	home := seedHome(t)
 	got, err := ExpandRulesExcluding(
 		[]PathRule{{Path: home, Access: AccessRead | AccessWrite | AccessExecute}},
-		SecretPaths(home))
+		SecretPaths(home), nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -118,7 +120,7 @@ func TestExpandRulesExcluding_EnumeratesAtCallTime(t *testing.T) {
 	denied := SecretPaths(home)
 
 	before, err := ExpandRulesExcluding(
-		[]PathRule{{Path: home, Access: AccessRead | AccessWrite}}, denied)
+		[]PathRule{{Path: home, Access: AccessRead | AccessWrite}}, denied, nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -131,7 +133,7 @@ func TestExpandRulesExcluding_EnumeratesAtCallTime(t *testing.T) {
 		t.Fatalf("mkdir: %v", mkErr)
 	}
 	after, err := ExpandRulesExcluding(
-		[]PathRule{{Path: home, Access: AccessRead | AccessWrite}}, denied)
+		[]PathRule{{Path: home, Access: AccessRead | AccessWrite}}, denied, nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -162,7 +164,7 @@ func TestExpandRulesExcluding_UnreadableDirectoryFailsClosed(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(home, 0o700) })
 
 	_, err := ExpandRulesExcluding(
-		[]PathRule{{Path: home, Access: AccessRead}}, SecretPaths(home))
+		[]PathRule{{Path: home, Access: AccessRead}}, SecretPaths(home), nil)
 	if err == nil {
 		t.Fatal("an unreadable directory MUST fail the expansion; " +
 			"falling back to granting the parent exposes the secret set silently")
@@ -179,7 +181,7 @@ func TestExpandRulesExcluding_UnrelatedRulesUntouched(t *testing.T) {
 		{Path: "/usr/lib", Access: AccessRead},
 		{Path: home, Access: AccessRead},
 	}
-	got, err := ExpandRulesExcluding(rules, SecretPaths(home))
+	got, err := ExpandRulesExcluding(rules, SecretPaths(home), nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -200,7 +202,7 @@ func TestExpandRulesExcluding_DropsRulesInsideASecret(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	got, err := ExpandRulesExcluding(
-		[]PathRule{{Path: inside, Access: AccessRead | AccessWrite}}, SecretPaths(home))
+		[]PathRule{{Path: inside, Access: AccessRead | AccessWrite}}, SecretPaths(home), nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -213,7 +215,7 @@ func TestExpandRulesExcluding_DropsRulesInsideASecret(t *testing.T) {
 // of surprises when no exclusion applies.
 func TestExpandRulesExcluding_NoDeniedPathsIsIdentity(t *testing.T) {
 	rules := []PathRule{{Path: "/tmp", Access: AccessRead}}
-	got, err := ExpandRulesExcluding(rules, nil)
+	got, err := ExpandRulesExcluding(rules, nil, nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -256,7 +258,7 @@ func TestExpandRulesExcluding_TopLevelCreationIsNarrowed(t *testing.T) {
 	home := seedHome(t)
 	got, err := ExpandRulesExcluding(
 		[]PathRule{{Path: home, Access: AccessRead | AccessWrite | AccessExecute}},
-		SecretPaths(home))
+		SecretPaths(home), nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -283,5 +285,88 @@ func TestExpandRulesExcluding_TopLevelCreationIsNarrowed(t *testing.T) {
 		if !found {
 			t.Errorf("%q must still be granted", want)
 		}
+	}
+}
+
+// TestExpandRulesExcluding_NeverGrantsADeniedNode is the LINUX half of the
+// directory-node fix, and the reason the Linux backend needs no new rule.
+//
+// macOS closes the rename bypass with an explicit
+// (deny file-write* (literal $OMNIPUS_HOME/agents)). Landlock has no deny
+// primitive, so the equivalent claim there is structural: the grant-based walk
+// must never hand the node a write right in the first place. That is asserted
+// here rather than asserted in prose, because "Linux needs nothing" is exactly
+// the kind of claim that is true when written and quietly false after an edit
+// to siblingGrants.
+//
+// The mechanism: siblingGrants puts every directory on the path to a denied
+// entry into `traverse`, enumerates it, and SKIPS any child that is itself
+// traversed — so <home>/agents is enumerated (to grant <home>/agents/self) and
+// is never itself emitted as a rule. A future change that granted the
+// traversed directory wholesale would reintroduce the rename bypass on Linux
+// while every macOS test stayed green.
+func TestExpandRulesExcluding_NeverGrantsADeniedNode(t *testing.T) {
+	home := seedHome(t)
+	for _, d := range []string{
+		filepath.Join("agents", "self"),
+		filepath.Join("agents", "victim"),
+		filepath.Join("workspaces", "w1", "work"),
+		filepath.Join("workspaces", "w2", "work"),
+	} {
+		if err := os.MkdirAll(filepath.Join(home, d), 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	for _, shape := range []struct {
+		name    string
+		workDir string
+	}{
+		{"agent-home-rooted", filepath.Join(home, "agents", "self")},
+		{"re-rooted workspace turn", filepath.Join(home, "workspaces", "w1", "work")},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			policy := DeriveKernelPolicy(
+				fspolicy.FSPolicy{WorkDir: shape.workDir, Scope: fspolicy.FSScopeConfined},
+				TurnPolicyInput{HomePath: home, Model: FilesystemModelOpen},
+			)
+			if len(policy.DeniedNodes) == 0 {
+				t.Fatalf("DeriveKernelPolicy produced no DeniedNodes for %s; the node list is "+
+					"unwired again and the macOS rename bypass is back", shape.workDir)
+			}
+
+			expanded, err := ExpandRulesExcluding(policy.FilesystemRules, policy.DeniedPaths, policy.DeniedNodes)
+			if err != nil {
+				t.Fatalf("expand: %v", err)
+			}
+
+			for _, node := range policy.DeniedNodes {
+				for _, r := range expanded {
+					if r.Access&AccessWrite == 0 {
+						continue
+					}
+					if pathIsUnder(node, r.Path) {
+						t.Errorf("Landlock would grant WRITE covering the denied node %q via rule %q "+
+							"(access=%d). A write right on the node is a rename right on it, which "+
+							"relocates every other agent's/workspace's tree out from under the deny list.",
+							node, r.Path, r.Access)
+					}
+				}
+			}
+
+			// Control: the work dir itself must still be granted for write, or
+			// the assertion above is satisfied by a policy that grants nothing.
+			var workGranted bool
+			for _, r := range expanded {
+				if r.Access&AccessWrite != 0 && pathIsUnder(shape.workDir, r.Path) {
+					workGranted = true
+					break
+				}
+			}
+			if !workGranted {
+				t.Errorf("the work dir %q carries no write grant; the node exclusion must not cost "+
+					"the agent its own tree", shape.workDir)
+			}
+		})
 	}
 }

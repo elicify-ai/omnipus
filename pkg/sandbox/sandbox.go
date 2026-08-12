@@ -97,6 +97,54 @@ type SandboxPolicy struct {
 	// all, so on Linux the same list is honoured by NEVER GRANTING these paths
 	// while granting their siblings. Same list, same outcome, two mechanisms.
 	DeniedPaths []string
+
+	// DeniedNodes are absolute DIRECTORY paths a sandboxed child must not
+	// WRITE TO AS ENTRIES, while everything beneath them stays reachable.
+	// Populated per turn from fspolicy.KernelDeniedNodesFor.
+	//
+	// This is a different question from DeniedPaths, and conflating the two is
+	// what left the hole it closes. DeniedPaths names SUBTREES that must be
+	// unreachable; these nodes must stay reachable, because the caller's own
+	// work dir lives underneath them ($OMNIPUS_HOME/agents for an
+	// agent-home-rooted turn). What must not be permitted is operating on the
+	// directory ENTRY itself — above all rename(2):
+	//
+	//	mv $OMNIPUS_HOME/agents $OMNIPUS_HOME/agents-old
+	//
+	// moves every agent's home to a path no DeniedPaths entry covers, and the
+	// child then reads all of them. That was executed against a real child
+	// under /usr/bin/sandbox-exec and SUCCEEDED, with the whole per-sibling
+	// deny list in place — the list was correct and the rename walked around
+	// it.
+	//
+	// Consumed asymmetrically, exactly as DeniedPaths is: macOS emits
+	// (deny file-write* (literal ...)) per node, which covers the entry and
+	// nothing below it. Linux needs no rule — ExpandRulesExcluding never grants
+	// a directory that contains a denied descendant, only its children, so the
+	// node carries no write right there to begin with (asserted by
+	// TestExpandRulesExcluding_NeverGrantsADeniedNode).
+	DeniedNodes []string
+
+	// DeniedPathPrefixes are absolute path PREFIXES a sandboxed child must
+	// never reach, matching every path that starts with them. Populated from
+	// fspolicy.SecretBackupPathPrefixes.
+	//
+	// DeniedPaths cannot express this. It is a list of paths, discovered by
+	// listing $OMNIPUS_HOME when the policy is built, and the files it must
+	// cover — `config.json.bak-<timestamp>` and friends — are written by the
+	// GATEWAY, mid-turn, after the child is already running under a fixed
+	// profile. A real install's config backup carries the gateway CLI token and
+	// the user account list, verified on a live install. Measured: with the
+	// full enumerated deny list in place, a real child read a backup created
+	// after it started.
+	//
+	// macOS renders each prefix as an anchored (regex #"^…") deny — the only
+	// Seatbelt filter that matches a path which does not exist yet, since both
+	// subpath and literal name a specific path and `config.json.bak-1` is not
+	// under `config.json` in the subpath sense. Linux needs no rule:
+	// ExpandRulesExcluding never grants $OMNIPUS_HOME itself, only its existing
+	// children, so an entry created later carries no grant at all.
+	DeniedPathPrefixes []string
 }
 
 // FilesystemModel selects how the sandbox treats reads and program execution.
@@ -614,6 +662,14 @@ func DefaultPolicyForModel(
 		// leave it alive behind confined, which is where an operator would
 		// least expect it (spec FR-9.4).
 		DeniedPaths: SecretPaths(homePath),
+
+		// Backup copies, as PREFIXES. Set HERE rather than only in
+		// DeriveKernelPolicy so the BOOT profile carries it too: a child that
+		// runs without a registered per-turn policy falls back to this one, and
+		// the gateway writes config.json.bak-<ts> whenever a migration rewrites
+		// the config — which is a boot-time event as much as a turn-time one.
+		// SecretPaths above can only name the backups that already exist.
+		DeniedPathPrefixes: SecretBackupPathPrefixes(homePath),
 	}
 }
 

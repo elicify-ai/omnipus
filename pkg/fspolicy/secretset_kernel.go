@@ -108,9 +108,10 @@ func KernelDeniedPathsFor(home, workDir string) ([]string, error) {
 	return denied, nil
 }
 
-// KernelDeniedNodesFor returns the DIRECTORY NODES a turn must not operate on,
-// even though their children are reachable: every directory on the chain from a
-// re-admitted per-turn root down to (but excluding) the work dir.
+// KernelDeniedNodesFor returns the DIRECTORY NODES a turn must not WRITE to,
+// even though their children stay fully readable and writable: every directory
+// on the chain from a re-admitted per-turn root down to (but excluding) the
+// work dir.
 //
 // For work dir <home>/agents/self that is [<home>/agents]; for
 // <home>/workspaces/w1/work it is [<home>/workspaces, <home>/workspaces/w1].
@@ -120,32 +121,71 @@ func KernelDeniedPathsFor(home, workDir string) ([]string, error) {
 // KernelDeniedPathsFor denies SUBTREES, and it cannot deny these: denying the
 // <home>/agents subtree would deny the agent its own home, which is the whole
 // reason the root is re-admitted. But the node itself still has to be off
-// limits, and the app layer already treats it that way — IsCarveOut(<home>/agents)
-// is true for an agent-home-rooted turn, because the own-tree exception requires
-// the path to be inside the work dir and the parent directory is not.
+// limits for WRITES, and the app layer already treats it that way —
+// IsCarveOut(<home>/agents) is true for an agent-home-rooted turn, because the
+// own-tree exception requires the path to be inside the work dir and the parent
+// directory is not.
 //
-// Three operations act on the node rather than on its children, and the first
-// is a complete bypass of everything above:
+// The operation that matters is rename(2) ON THE NODE, and it is a complete
+// bypass of every deny above it:
 //
-//	mv  <home>/agents <home>/agents-old   relocates every agent's home to a
-//	                                      path that no deny covers, after which
-//	                                      the child reads all of them
-//	mkdir <home>/agents/fake              fabricates an agent home
-//	ls  <home>/agents                     enumerates every agent by name
+//	mv <home>/agents <home>/agents-old
 //
-// The rename was executed against a real child and SUCCEEDED before this
-// existed. It is the same shape as the "a read-only deny is defeated by
-// rename(2)" note in the Seatbelt renderer, one level up the tree.
+// relocates every agent's home to a path no deny covers, after which the child
+// reads all of them. Measured against a real child under /usr/bin/sandbox-exec,
+// through the production profile shape (RWX on $OMNIPUS_HOME plus per-sibling
+// denies), BEFORE this list was consumed by anything:
+//
+//	cat  <home>/agents/victim/SOUL.md                 -> Operation not permitted
+//	mv   <home>/agents <home>/agents-old              -> SUCCEEDED
+//	cat  <home>/agents-old/victim/SOUL.md             -> VICTIM-SOUL-SECRET
+//
+// It is the same shape as the "a read-only deny is defeated by rename(2)" note
+// in the Seatbelt renderer, one level up the tree.
 //
 // # Platform consumption
 //
-// macOS renders these as LITERAL denies — measured to block ls/mkdir/rename on
-// the node while leaving children fully readable and writable, which is exactly
-// the shape required. Linux needs nothing: ExpandRulesExcluding enumerates a
-// directory that contains a denied descendant and grants its children
-// individually, never the directory itself, so the node is already ungranted
-// there. Same outcome, two mechanisms — the asymmetry SandboxPolicy.DeniedPaths
+// macOS renders each node as (deny file-write* (literal ...)) — a LITERAL, not
+// a subpath, so it covers the directory entry itself and nothing beneath it.
+// Measured on Darwin 25.5.0 with the same real children:
+//
+//	mv    <home>/agents <home>/agents-old   -> denied  (this is the fix)
+//	cat   <home>/agents/self/OWN.md         -> allowed (own tree, unaffected)
+//	echo >> <home>/agents/self/OWN.md       -> allowed (own tree, unaffected)
+//	touch <home>/agents/self/new            -> allowed (own tree, unaffected)
+//
+// Linux needs nothing: ExpandRulesExcluding enumerates a directory that
+// contains a denied descendant and grants its children individually, never the
+// directory itself, so the node is already ungranted there — and Landlock's
+// REFER right is required to rename ACROSS directories, which the policy never
+// grants. Same outcome, two mechanisms — the asymmetry SandboxPolicy.DeniedPaths
 // already documents for the subtree list.
+//
+// # What this does NOT do — measured, not assumed
+//
+// A literal write-deny on the node leaves two operations open, and both were
+// re-measured on Darwin 25.5.0 rather than inferred:
+//
+//	ls    <home>/agents        -> ALLOWED. Deliberate. Seatbelt checks a read
+//	                             against the directory the child is listing, so
+//	                             denying it needs (deny file-read* (literal ...))
+//	                             — and a child must be able to traverse this
+//	                             node to reach its own work dir underneath it.
+//	                             The residual is a list of agent/workspace NAMES,
+//	                             already documented as the one accepted
+//	                             divergence in
+//	                             TestKernelDeniedPaths_MatchIsCarveOutPathForPath.
+//	mkdir <home>/agents/fake   -> ALLOWED. Seatbelt checks a create against the
+//	                             CHILD path, which is not the literal. Closing
+//	                             it needs a subtree deny with a require-not
+//	                             exemption for the caller's own branch, which is
+//	                             a different rendering shape than this node list.
+//	                             Linux does NOT have this residual: MAKE_DIR on
+//	                             <home>/agents is never granted there.
+//
+// An earlier version of this comment claimed the literal deny was "measured to
+// block ls/mkdir/rename". Only rename is true. The claim was written before the
+// list was consumed by anything, so nothing contradicted it.
 //
 // Pure: unlike KernelDeniedPathsFor this needs no listing, because the chain is
 // derivable from the work-dir path alone.

@@ -815,5 +815,5 @@ func (lb *LinuxBackend) linuxFilesystemRules(policy SandboxPolicy, forChild bool
 	if !forChild {
 		return rules, nil
 	}
-	return ExpandRulesExcluding(rules, policy.DeniedPaths)
+	return ExpandRulesExcluding(rules, policy.DeniedPaths, policy.DeniedNodes)
 }

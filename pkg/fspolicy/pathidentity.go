@@ -56,10 +56,33 @@ import (
 // So the primitive is filesystem IDENTITY: os.SameFile, which compares device
 // and inode. It is immune to case, to Unicode normalization, to locale-specific
 // case rules, and to symlink spelling, because it asks the kernel which file a
-// name denotes instead of guessing from the bytes. It also closes a bypass no
-// string comparison of any kind could: a HARD LINK to credentials.json planted
-// inside the agent's own working directory has a completely unrelated path and
-// the same inode, so it is now denied.
+// name denotes instead of guessing from the bytes.
+//
+// # Identity closes the hard-link bypass for FILE-shaped secrets ONLY
+//
+// A HARD LINK to credentials.json planted inside the agent's own working
+// directory has a completely unrelated path and the same inode, so it is
+// denied. That much was claimed here, and it is true.
+//
+// What was ALSO claimed, by omission, and is false: that this covered hard
+// links generally. It does not, and the shape of identityRelation is why. It
+// asks "is any ANCESTOR of the candidate the same FILE as the container". When
+// the container is a DIRECTORY — backups/, system/, entities/, agents/,
+// workspaces/ — a hard link's inode is a file inode and can never equal it, and
+// every ancestor of the alias is inside the work dir. So the answer came back
+// relOutside, confidently, and the file was served. Measured through the real
+// ResolvePath chain:
+//
+//	credentials.json         (file secret)  -> DENIED   (identity, as claimed)
+//	master.key               (file secret)  -> DENIED   (identity, as claimed)
+//	backups/full.tar.gz      (WHOLE VAULT)  -> LEAKED, read and send
+//	system/audit.jsonl                      -> LEAKED
+//	entities/agents/mia.json                -> LEAKED
+//
+// That gap is closed by hardlink.go's aliasesSecretDirectory, which asks the
+// complementary question — is the candidate the same file as anything INSIDE a
+// directory-shaped container — rather than by widening identityRelation, whose
+// ancestor formulation is correct for what it is for.
 //
 // # The residual, and why the fallback direction is asymmetric
 //
@@ -88,12 +111,36 @@ import (
 // fail safe the same way. Identity resolves both correctly whenever it can
 // answer; the asymmetric fallback keeps both safe when it cannot.
 //
-// Residual, stated plainly and covered by TestCarveOut_ResidualIsDocumented:
-// when BOTH the secret and the candidate are absent from disk AND the payload
-// is a non-ASCII case/normalization variant, the fold fallback misses it. That
-// window requires the secret itself not to exist, at which point there is
-// nothing to leak or overwrite in place; the file becomes covered by identity
-// the instant it is created.
+// # Residuals, stated in full
+//
+// The previous version of this section named ONE residual and described it as
+// the residual. It was not, and a wrong residual claim is worse than none — it
+// is what a future auditor trusts instead of re-deriving. The complete list, as
+// of the directory-hard-link and backup-prefix fixes:
+//
+//  1. Non-existent secret + non-ASCII case/normalization variant. When BOTH the
+//     secret and the candidate are absent from disk AND the payload is a
+//     non-ASCII variant spelling, the fold fallback misses it. Narrow by
+//     construction: it requires the secret itself not to exist, at which point
+//     there is nothing to leak or overwrite in place, and identity covers the
+//     file the instant it is created. Asserted by
+//     TestCarveOut_ResidualIsDocumented, which now FAILS if the boundary moves
+//     in either direction rather than logging whichever branch it took.
+//
+//  2. Hard links on non-unix platforms. hardlink.go's scan is gated on a link
+//     count, which os.FileInfo.Sys() cannot supply outside unix, so on Windows
+//     a hard link into a directory-shaped secret is not detected by the app
+//     layer. See linkcount_other.go and aliasesSecretDirectory for why scanning
+//     unconditionally there was rejected rather than overlooked.
+//
+//  3. Hard-link scan budget. A scan that exhausts hardlinkScanBudget DENIES,
+//     so this is an availability residual, not a disclosure one: on a very
+//     large install a legitimately hard-linked file can be refused.
+//
+// Residuals belonging to the kernel layer rather than to this primitive are
+// documented where they are enforced: the listable-but-not-readable coarse
+// root node in KernelDeniedNodesFor, and the not-yet-created entry under a
+// per-turn root in KernelDeniedPathsFor's freshness section.
 
 // pathRelation is the outcome of an identity-based containment question.
 // relUnknown means the filesystem could not answer — the caller must fall back

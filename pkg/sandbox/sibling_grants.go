@@ -44,22 +44,39 @@ import (
 // Rules that ARE a denied path, or sit underneath one, are dropped outright.
 // Access rights are carried over from the original rule unchanged: this
 // function decides reachability, never permission.
-func ExpandRulesExcluding(rules []PathRule, deniedPaths []string) ([]PathRule, error) {
-	if len(deniedPaths) == 0 {
+//
+// # deniedNodes — reachable directories that must never carry a right of their own
+//
+// deniedNodes (SandboxPolicy.DeniedNodes, from fspolicy.KernelDeniedNodesFor)
+// are the directories on the chain down to the work dir: $OMNIPUS_HOME/agents
+// for an agent-home-rooted turn, $OMNIPUS_HOME/workspaces and
+// $OMNIPUS_HOME/workspaces/<id> for a workspace turn. They must stay REACHABLE
+// — the work dir is underneath them — while never being granted THEMSELVES,
+// because a write right on a directory is a rename right on it, and renaming
+// the node relocates every sibling tree out from under the deny list in one
+// syscall.
+//
+// This was believed to need no code: the walk enumerates any directory that
+// contains a denied descendant and grants its children individually, so the
+// node is usually skipped as a side effect. "Usually" is the defect. The
+// side effect only fires when the node HAS a denied descendant. A workspace
+// directory whose mounts.json has not been written yet, or an install with a
+// single agent, gives the node no denied descendant at all — and then the walk
+// grants the node WHOLESALE with the parent's rights. Measured by
+// TestExpandRulesExcluding_NeverGrantsADeniedNode, which failed on the
+// workspace shape the first time it was run. Passing them explicitly makes the
+// property hold by construction instead of by coincidence of layout.
+func ExpandRulesExcluding(rules []PathRule, deniedPaths, deniedNodes []string) ([]PathRule, error) {
+	if len(deniedPaths) == 0 && len(deniedNodes) == 0 {
 		return rules, nil
 	}
-	denied := make([]string, 0, len(deniedPaths))
-	for _, d := range deniedPaths {
-		if d == "" {
-			continue
-		}
-		denied = append(denied, filepath.Clean(d))
-	}
-	if len(denied) == 0 {
+	denied := cleanNonEmpty(deniedPaths)
+	nodes := cleanNonEmpty(deniedNodes)
+	if len(denied) == 0 && len(nodes) == 0 {
 		return rules, nil
 	}
 
-	out := make([]PathRule, 0, len(rules)+len(denied)*4)
+	out := make([]PathRule, 0, len(rules)+(len(denied)+len(nodes))*4)
 	for _, rule := range rules {
 		path := filepath.Clean(rule.Path)
 
@@ -69,12 +86,20 @@ func ExpandRulesExcluding(rules []PathRule, deniedPaths []string) ([]PathRule, e
 		}
 
 		inside := deniedStrictlyUnder(path, denied)
-		if len(inside) == 0 {
+		nodesInside := deniedStrictlyUnder(path, nodes)
+
+		// A rule whose path IS a node must not be emitted verbatim either: it
+		// would hand the node the very right this exists to withhold. Expanding
+		// it grants its children instead, which is the same treatment the node
+		// gets when it is reached from an ancestor rule.
+		ruleIsNode := containsPath(nodes, path)
+
+		if len(inside) == 0 && len(nodesInside) == 0 && !ruleIsNode {
 			out = append(out, rule)
 			continue
 		}
 
-		expanded, err := siblingGrants(PathRule{Path: path, Access: rule.Access}, inside)
+		expanded, err := siblingGrants(PathRule{Path: path, Access: rule.Access}, inside, nodesInside)
 		if err != nil {
 			return nil, err
 		}
@@ -83,9 +108,37 @@ func ExpandRulesExcluding(rules []PathRule, deniedPaths []string) ([]PathRule, e
 	return out, nil
 }
 
+// cleanNonEmpty Cleans every non-empty entry of paths.
+func cleanNonEmpty(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		out = append(out, filepath.Clean(p))
+	}
+	return out
+}
+
+// containsPath reports whether paths contains an entry equal to want.
+func containsPath(paths []string, want string) bool {
+	for _, p := range paths {
+		if p == want {
+			return true
+		}
+	}
+	return false
+}
+
 // siblingGrants replaces one grant with grants on everything it contains except
-// the paths leading to blocked. blocked must be strictly under rule.Path.
-func siblingGrants(rule PathRule, blocked []string) ([]PathRule, error) {
+// the paths leading to blocked. blocked and nodes must be strictly under
+// rule.Path.
+//
+// nodes are directories that must be enumerated (so their children keep their
+// grants) but never granted themselves — see ExpandRulesExcluding's contract.
+// A traversed directory is skipped when it comes up as a child entry, so
+// putting a node in `traverse` is exactly what withholds its rule.
+func siblingGrants(rule PathRule, blocked, nodes []string) ([]PathRule, error) {
 	// traverse: directories to enumerate, i.e. the root plus every ancestor of
 	// a blocked path below it. denySet: the blocked paths themselves.
 	traverse := map[string]struct{}{rule.Path: {}}
@@ -93,6 +146,12 @@ func siblingGrants(rule PathRule, blocked []string) ([]PathRule, error) {
 	for _, b := range blocked {
 		denySet[b] = struct{}{}
 		for parent := filepath.Dir(b); len(parent) > len(rule.Path); parent = filepath.Dir(parent) {
+			traverse[parent] = struct{}{}
+		}
+	}
+	for _, n := range nodes {
+		traverse[n] = struct{}{}
+		for parent := filepath.Dir(n); len(parent) > len(rule.Path); parent = filepath.Dir(parent) {
 			traverse[parent] = struct{}{}
 		}
 	}

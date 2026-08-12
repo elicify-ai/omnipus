@@ -3,6 +3,7 @@
 package fspolicy
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -33,12 +34,41 @@ import (
 // policy.AllowedRoots for a write — see resolvepath.go's own resolution-order
 // comment) — this test verifies the piece of that order this package alone
 // is responsible for.
+//
+// # The layout is REAL on disk, deliberately
+//
+// This test used a fictional path (/home/operator/.omnipus) that exists on no
+// machine. Every stat inside IsCarveOut therefore failed, every decision fell
+// through to the string fallback, and the identity leg — the whole primitive
+// pathidentity.go exists to install, and the only leg a case or normalization
+// payload has to defeat — was never executed once. The test passed while
+// exercising the fallback and nothing else. Creating the directories makes the
+// identity leg the one under test, which is what FR-7.7 actually depends on.
 func TestIsCarveOut_IgnoresAllowedRoots(t *testing.T) {
-	home := filepath.FromSlash("/home/operator/.omnipus")
+	base := t.TempDir()
+	realBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		t.Fatalf("resolve temp dir: %v", err)
+	}
 	// $HOME, mounted per FR-7.6 — it CONTAINS $OMNIPUS_HOME, which is exactly
 	// the shape the operator's decision explicitly allows.
-	mountedHome := filepath.FromSlash("/home/operator")
+	mountedHome := filepath.Join(realBase, "operator")
+	home := filepath.Join(mountedHome, ".omnipus")
 	workDir := filepath.Join(home, "workspaces", "w1", "work")
+
+	for _, d := range []string{workDir, filepath.Join(home, "entities", "agents")} {
+		if mkErr := os.MkdirAll(d, 0o750); mkErr != nil {
+			t.Fatalf("mkdir %s: %v", d, mkErr)
+		}
+	}
+	for _, f := range []string{"cli.token", "config.json", "master.key", "credentials.json"} {
+		if wErr := os.WriteFile(filepath.Join(home, f), []byte("secret"), 0o600); wErr != nil {
+			t.Fatalf("write %s: %v", f, wErr)
+		}
+	}
+	if wErr := os.WriteFile(filepath.Join(home, "entities", "agents", "mia.json"), []byte("{}"), 0o600); wErr != nil {
+		t.Fatalf("write entity: %v", wErr)
+	}
 
 	policyWithoutMount := FSPolicy{
 		WorkDir:      workDir,

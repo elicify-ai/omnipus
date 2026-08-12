@@ -126,19 +126,33 @@ func TestKernelDeniedPaths_MatchIsCarveOutPathForPath(t *testing.T) {
 				// by both, and every other agent's or workspace's subtree is
 				// denied by both.
 				//
-				// Practical effect: a child can list the directory and learn
-				// the NAMES of other agents/workspaces. It cannot read or write
-				// anything inside them. The app layer refuses even the listing.
+				// Practical effect, and it is now READ-ONLY: a child can list
+				// the directory and learn the NAMES of other agents/workspaces.
+				// It cannot read or write anything inside them, and — since
+				// KernelDeniedNodesFor was wired into the rendering — it can no
+				// longer WRITE to the node either. That half was not a residual
+				// at all, it was a hole: `mv <home>/agents <home>/agents-old`
+				// succeeded against a real child and relocated every agent's
+				// home to a path no entry in this list covers. It is closed by
+				// SandboxPolicy.DeniedNodes, which this helper deliberately
+				// does not model — kernelDenies answers only for the SUBTREE
+				// list, which is what FR-3.3 is about.
 				//
-				// Why it is not closed: on macOS the kernel deny list would
-				// have to deny the root and then re-allow the caller's own
-				// subtree AFTER it — and "nothing is emitted after the deny
-				// block" is the single invariant that stops a stray filtered
-				// allow re-opening every secret (see
-				// TestSeatbelt_DenyPrecedenceIsMeasuredNotAssumed). Trading
-				// that invariant to hide a list of directory names is a bad
-				// exchange. On Linux the grant-based walk never grants the root
-				// node, so Linux does not have this residual at all.
+				// Why the READ half is not closed: on macOS the kernel deny
+				// list would have to deny the root for reads and then re-allow
+				// the caller's own subtree AFTER it — and "nothing is emitted
+				// after the deny block" is the single invariant that stops a
+				// stray filtered allow re-opening every secret (see
+				// TestSeatbelt_DenyPrecedenceIsMeasuredNotAssumed). A child
+				// must also be able to traverse this node to reach its own work
+				// dir. Trading that invariant to hide a list of directory names
+				// is a bad exchange. The WRITE half needed no such trade,
+				// because a (literal) deny covers the entry without covering
+				// anything beneath it. On Linux the grant-based walk never
+				// grants the node — enforced by
+				// TestExpandRulesExcluding_NeverGrantsADeniedNode, which found
+				// that the property held only by coincidence of layout until
+				// the node list was passed to it explicitly.
 				//
 				// This is asserted narrowly ON PURPOSE: only the root node, only
 				// in the kernel-wider direction. If the disagreement ever spreads

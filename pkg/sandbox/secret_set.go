@@ -59,3 +59,10 @@ func SecretPaths(homePath string) []string { return fspolicy.SecretPathsAlways(h
 func DeniedPathsFor(home, workDir string) []string {
 	return fspolicy.DeniedPathsFor(home, workDir)
 }
+
+// SecretBackupPathPrefixes is the path-PREFIX form of the secret set: every
+// path starting with one of these is a backup copy of a secret. See
+// fspolicy.SecretBackupPathPrefixes for why a prefix and not a path list.
+func SecretBackupPathPrefixes(home string) []string {
+	return fspolicy.SecretBackupPathPrefixes(home)
+}

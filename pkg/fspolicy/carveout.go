@@ -111,6 +111,30 @@ func IsCarveOut(resolvedAbsPath string, policy FSPolicy) bool {
 	cleanPath := filepath.Clean(resolvedAbsPath)
 	cleanWorkDir := filepath.Clean(policy.WorkDir)
 
+	// Backup copies of a secret, matched by PREFIX rather than found by
+	// listing. Checked first and with no own-tree exception: these live
+	// directly in $OMNIPUS_HOME, which is never inside a work dir (FSPolicy.
+	// Validate refuses a policy shaped that way), so there is no legitimate
+	// shape in which one is the caller's own file. See CoversSecretBackup for
+	// the two plain-ASCII holes the enumerate-at-build-time approach left.
+	if CoversSecretBackup(cleanPath, policy.CarveOuts) {
+		return true
+	}
+
+	// A hard link whose other end lies inside a DIRECTORY-shaped carve-out.
+	//
+	// Checked here, ahead of the per-root loop, because the loop cannot answer
+	// it: the alias is a real file at a real path inside the work dir, so the
+	// deny leg matches on the coarse root and the own-tree exception then
+	// un-matches it. Only the CONTENT belongs to someone else, and content is
+	// what identity is for. See aliasesSecretDirectory for the measured leak
+	// (backups/, system/, entities/ all served through the real tool chain)
+	// and for the cost gates that keep this to a single stat for an ordinary
+	// file.
+	if aliasesSecretDirectory(cleanPath, policy) {
+		return true
+	}
+
 	// Stat the candidate's ancestry ONCE and reuse it for every carve-out
 	// root, rather than re-walking it per root.
 	pathChain, pathChainOK := ancestorChain(cleanPath)

@@ -280,8 +280,10 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	// blanket allows too, which the measurements show are harmless — being
 	// stricter than the platform requires costs nothing here, and it removes
 	// the need for a future reader to re-derive which allows are safe.
-	if len(policy.DeniedPaths) > 0 {
+	if len(policy.DeniedPaths) > 0 || len(policy.DeniedNodes) > 0 || len(policy.DeniedPathPrefixes) > 0 {
 		b.WriteString("\n;; --- Secret set: denied last so no earlier allow can re-open it ---\n")
+	}
+	if len(policy.DeniedPaths) > 0 {
 		emitted := make(map[string]struct{}, len(policy.DeniedPaths)*2)
 		for _, raw := range policy.DeniedPaths {
 			clean, expanded := expandUserPath(raw)
@@ -318,7 +320,152 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 		}
 	}
 
+	// --- Denied NODES: the directory entries on the chain down to the work
+	// dir (SandboxPolicy.DeniedNodes, fspolicy.KernelDeniedNodesFor). ---
+	//
+	// LITERAL, not subpath, and file-write* only. Both halves are load-bearing
+	// and both were measured against real children on Darwin 25.5.0 rather
+	// than reasoned about:
+	//
+	//	literal vs subpath  A subpath deny on $OMNIPUS_HOME/agents would deny
+	//	                    the agent its OWN home, which is the whole reason
+	//	                    the root is re-admitted. A literal covers the
+	//	                    directory entry and nothing beneath it, so
+	//	                    read/write/create inside the caller's own tree are
+	//	                    all unaffected.
+	//	write vs read       Denying reads here would deny TRAVERSAL of a
+	//	                    directory the child must walk through to reach its
+	//	                    own work dir. The residual — a child can `ls` the
+	//	                    node and learn other agents'/workspaces' NAMES — is
+	//	                    the one accepted divergence already pinned by
+	//	                    TestKernelDeniedPaths_MatchIsCarveOutPathForPath.
+	//
+	// What it closes: `mv $OMNIPUS_HOME/agents $OMNIPUS_HOME/agents-old`, which
+	// succeeded against a real child with the whole per-sibling deny list above
+	// already in place, relocating every agent's home to a path no deny covers.
+	//
+	// Emitted inside this final block, after the subpath denies, so the
+	// "nothing is appended after the deny block" invariant still holds: a
+	// filtered allow after a deny re-opens it (see the measured precedence
+	// table above), and these denies must be reachable by nothing.
+	if len(policy.DeniedNodes) > 0 {
+		emittedNodes := make(map[string]struct{}, len(policy.DeniedNodes)*2)
+		for _, raw := range policy.DeniedNodes {
+			clean, expanded := expandUserPath(raw)
+			if !expanded {
+				return "", fmt.Errorf("seatbelt: denied node %q is not absolute and could not be expanded", raw)
+			}
+			if err := validateSeatbeltPath(clean); err != nil {
+				return "", fmt.Errorf("seatbelt: denied node %q: %w", raw, err)
+			}
+			// Declared AND symlink-resolved form, for the same reason the
+			// subpath block emits both: Seatbelt matches resolved paths, and
+			// on macOS a $OMNIPUS_HOME under /tmp or /var resolves elsewhere.
+			target, _ := resolveSeatbeltPath(clean)
+			for _, path := range []string{clean, target} {
+				if err := validateSeatbeltPath(path); err != nil {
+					return "", fmt.Errorf("seatbelt: denied node %q resolved to %q: %w", raw, path, err)
+				}
+				if _, dup := emittedNodes[path]; dup {
+					continue
+				}
+				emittedNodes[path] = struct{}{}
+				b.WriteString(fmt.Sprintf("(deny file-write* (literal %q))\n", path))
+			}
+		}
+	}
+
+	// --- Denied path PREFIXES (SandboxPolicy.DeniedPathPrefixes). ---
+	//
+	// An anchored regex is the only Seatbelt filter that covers a path which
+	// does not exist yet. `subpath` and `literal` both name a specific path,
+	// and $OMNIPUS_HOME/config.json.bak-1 is NOT under
+	// $OMNIPUS_HOME/config.json in the subpath sense — it is a sibling with a
+	// longer name. Measured: with the enumerated deny list in place, a real
+	// child read a config backup the gateway wrote after the child started.
+	//
+	// The `^` anchor plus a fully escaped prefix is what keeps this tight: it
+	// matches exactly "this absolute prefix, then anything", never a path that
+	// merely contains the prefix somewhere.
+	if len(policy.DeniedPathPrefixes) > 0 {
+		emittedPrefixes := make(map[string]struct{}, len(policy.DeniedPathPrefixes)*2)
+		for _, raw := range policy.DeniedPathPrefixes {
+			clean, expanded := expandUserPath(raw)
+			if !expanded {
+				return "", fmt.Errorf("seatbelt: denied path prefix %q is not absolute and could not be expanded", raw)
+			}
+			if err := validateSeatbeltPath(clean); err != nil {
+				return "", fmt.Errorf("seatbelt: denied path prefix %q: %w", raw, err)
+			}
+			// A prefix names no existing file, so it goes through the SAME
+			// resolver the subpath denies use rather than a private
+			// EvalSymlinks: resolveSeatbeltPath falls back to the deepest
+			// EXISTING ancestor and re-attaches the remainder, which is the
+			// case that matters here and the case a hand-rolled version got
+			// wrong (a bare EvalSymlinks on the parent fails too when the
+			// parent does not exist either, emitting an unresolved /tmp/… form
+			// that matches nothing on macOS while reading as protection —
+			// caught by TestSeatbeltProfile_PrefixDenyIsSingleEscapedAndAnchored).
+			//
+			// The traversal allows resolveSeatbeltPath also returns are
+			// deliberately dropped: nothing may be emitted after the deny
+			// block, and the subpath deny loop above drops them for the same
+			// reason.
+			target, _ := resolveSeatbeltPath(clean)
+			for _, form := range []string{clean, target} {
+				if err := validateSeatbeltPath(form); err != nil {
+					return "", fmt.Errorf("seatbelt: denied path prefix %q resolved to %q: %w", raw, form, err)
+				}
+				if _, dup := emittedPrefixes[form]; dup {
+					continue
+				}
+				emittedPrefixes[form] = struct{}{}
+				// NOT %q. Go quoting would escape the backslashes this
+				// escaper just inserted, emitting `\\.` where SBPL needs `\.`
+				// — measured: the doubled form matches nothing and the backup
+				// stays readable, with a profile that reads as protecting it.
+				// Safe because validateSeatbeltPath has already rejected any
+				// double quote or backslash in the input.
+				pattern := "^" + escapeSeatbeltRegex(form)
+				b.WriteString(fmt.Sprintf("(deny file-read* (regex #\"%s\"))\n", pattern))
+				b.WriteString(fmt.Sprintf("(deny file-write* (regex #\"%s\"))\n", pattern))
+			}
+		}
+	}
+
 	return b.String(), nil
+}
+
+// escapeSeatbeltRegex renders a literal string as a Seatbelt regex fragment.
+//
+// Allow-list, not deny-list: every byte outside [A-Za-z0-9/_-] is backslash
+// escaped. A deny-list of "the metacharacters I could think of" is how an
+// unescaped `.` or `+` in a user's home path turns an anchored deny into a
+// looser pattern, and the failure is silent — the profile still renders, still
+// looks like protection, and matches the wrong set.
+//
+// Callers must have passed the input through validateSeatbeltPath first, which
+// already rejects the two bytes that could break OUT of the quoted string
+// (a double quote and a backslash) as well as control and non-printable runes.
+// This function is about regex semantics, not about string quoting.
+func escapeSeatbeltRegex(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) * 2)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		// Bytes >= 0x80 are the continuation/lead bytes of a multi-byte UTF-8
+		// rune. A backslash in front of one is not an escape, it is a new and
+		// undefined two-byte sequence, so they are passed through verbatim —
+		// none of them is a regex metacharacter, which are all ASCII.
+		isSafe := c >= 0x80 ||
+			(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '/' || c == '_' || c == '-'
+		if !isSafe {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // resolveSeatbeltPath returns the path a Seatbelt filter must name in order to
