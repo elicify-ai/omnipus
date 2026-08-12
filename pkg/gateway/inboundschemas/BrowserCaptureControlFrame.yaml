@@ -3,8 +3,9 @@ description: >
   Bidirectional control frame on the /api/v1/browser/capture-ingest
   channel. Server (gateway) → client (extension) for `recapture` (the
   agent's active tab changed — chrome.tabs.query({active:true}) must be
-  re-bound, the onTabsChanged/rebindScreencast analog for the WebRTC path,
-  ADR-047 D2) and `shutdown` (the capture session is ending — last viewer
+  re-bound; triggered by the same live.go onTabsChanged/rebindWatch
+  tab-follow logic that also drives the live-view session/control-lock
+  bookkeeping, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer
   detached past the grace period, or the gateway is stopping the stream);
   client (extension) → server (gateway) for `ping`, the encoder page's
   periodic health beacon / reconnect-watchdog signal. `reason` is an

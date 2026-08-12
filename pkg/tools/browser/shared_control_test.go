@@ -90,7 +90,7 @@ func TestSharedControl_NoViewerHoldsControl(t *testing.T) {
 // remove the abuse guard. The rate limit is self-correcting (slow down and the
 // next event lands), unlike the lock, which never self-corrected.
 func TestSharedControl_RateLimitStillApplies(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{})}
 
 	var lastErr error
 	for i := 0; i < maxCoalescibleInputEventsPerSecond+5; i++ {
@@ -138,7 +138,7 @@ func TestSharedControl_ControllerRemainsPresentational(t *testing.T) {
 func TestDispatchInput_TransientViewportMiss_StaysBenign(t *testing.T) {
 	lv := &LiveView{
 		sessionID: "s1",
-		viewers:   make(map[string]FrameSink),
+		viewers:   make(map[string]struct{}),
 		tabCtx:    context.Background(),
 		runCDP: func(context.Context, time.Duration, ...chromedp.Action) error {
 			return errors.New("simulated one-off CDP hiccup")
@@ -157,7 +157,7 @@ func TestDispatchInput_TransientViewportMiss_StaysBenign(t *testing.T) {
 func TestDispatchInput_SustainedViewportFailure_EscalatesToRealError(t *testing.T) {
 	lv := &LiveView{
 		sessionID: "s1",
-		viewers:   make(map[string]FrameSink),
+		viewers:   make(map[string]struct{}),
 		tabCtx:    context.Background(),
 		runCDP: func(context.Context, time.Duration, ...chromedp.Action) error {
 			return errors.New("simulated wedged CDP transport")
@@ -188,7 +188,7 @@ func TestDispatchInput_ViewportRecovery_ResetsTheFailureStreak(t *testing.T) {
 	fail.Store(true)
 	lv := &LiveView{
 		sessionID: "s1",
-		viewers:   make(map[string]FrameSink),
+		viewers:   make(map[string]struct{}),
 		tabCtx:    context.Background(),
 		runCDP: func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
 			if fail.Load() {

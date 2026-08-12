@@ -26,10 +26,13 @@ import (
 // That silence is why these tests assert on the ACTIVATION CALL itself rather
 // than on any error signal: there was none to observe.
 //
-// The JPEG screencast path never had this bug because it calls
-// page.BringToFront() itself before every StartScreencast (live.go's attach /
-// rebindScreencastOnce). These tests pin the equivalent guarantee for the
-// switch path so the asymmetry cannot silently return.
+// activateTabInChrome (manager.go's SwitchTab) is the ONLY BringToFront call
+// left on the tab-switch path (ADR-061: the JPEG screencast path, which used
+// to call page.BringToFront() itself before every StartScreencast, is gone —
+// video is carried exclusively by WebRTC now). These tests pin the guarantee
+// that SwitchTab still tells Chrome itself which tab is active, so the
+// WebRTC capture's chrome.tabs.query({active:true}) resolution can't desync
+// from it.
 
 // recordingActivator is a test double for the activateTabFn seam that records
 // every context it was asked to activate, in order.

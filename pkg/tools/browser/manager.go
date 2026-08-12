@@ -1578,11 +1578,11 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 // active, via CDP Page.bringToFront.
 //
 // Why this is load-bearing (root-caused live on UAT, 2026-08-03): switching
-// tabs used to update ONLY this manager's se.activeIdx. The JPEG screencast
-// path happened to survive that because it calls page.BringToFront() itself
-// before every StartScreencast (live.go's attach/rebindScreencastOnce), but
-// the WebRTC path does not: its encoder picks a capture target with
-// chrome.tabs.query({active: true, lastFocusedWindow: true})
+// tabs used to update ONLY this manager's se.activeIdx. At the time this was
+// root-caused, the (since-removed, ADR-061) JPEG screencast path happened to
+// survive that because it called page.BringToFront() itself before every
+// StartScreencast, but the WebRTC path does not: its encoder picks a capture
+// target with chrome.tabs.query({active: true, lastFocusedWindow: true})
 // (captureext/embedded/encoder.js findActiveTargetTab). With Chrome never told
 // about the switch, that query kept returning the OLD tab, so every recapture
 // re-bound chrome.tabCapture to the tab the user had just switched AWAY from —
@@ -1591,10 +1591,10 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 //
 // Best-effort by design: a failure here is logged, never fatal. The switch has
 // already been recorded in se.activeIdx, so every server-side consumer
-// (Session(), tool calls, the JPEG path) still follows the new tab correctly;
-// only the WebRTC capture's own tab resolution degrades to its previous
-// behavior. Runs with NO BrowserManager lock held — the same ADR-038 rule
-// every other CDP call in this file follows.
+// (Session(), tool calls) still follows the new tab correctly; only the
+// WebRTC capture's own tab resolution degrades to its previous behavior.
+// Runs with NO BrowserManager lock held — the same ADR-038 rule every other
+// CDP call in this file follows.
 func (m *BrowserManager) activateTabInChrome(tabCtx context.Context, sessionID string, index int) {
 	if tabCtx == nil || tabCtx.Err() != nil {
 		return

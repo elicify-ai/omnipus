@@ -39,7 +39,7 @@ type AuthFrame struct {
 	Type  string `json:"type"`
 }
 
-// BrowserAttachFrame — Client → server. Binds this browser-live WebSocket connection to a session's browser and starts the screencast. Per ADR-043 agents browse concurrently in isolated per-agent browser contexts within one shared Chrome; agent_id is the binding key (selects which agent's BrowserManager + browser context the live view attaches to), and session_id is correlation-only (the server binds to the active tab in that agent's context).
+// BrowserAttachFrame — Client → server. Binds this browser-live WebSocket connection to a session's browser and starts watching it for control-lock and tab-strip bookkeeping (video is carried exclusively by WebRTC — see BrowserWebRTCStateFrame, ADR-061). Per ADR-043 agents browse concurrently in isolated per-agent browser contexts within one shared Chrome; agent_id is the binding key (selects which agent's BrowserManager + browser context the live view attaches to), and session_id is correlation-only (the server binds to the active tab in that agent's context).
 type BrowserAttachFrame struct {
 	AgentId   string `json:"agent_id"`
 	SessionId string `json:"session_id"`
@@ -53,7 +53,7 @@ type BrowserCaptureAnswerFrame struct {
 	Type string `json:"type"`
 }
 
-// BrowserCaptureControlFrame — Bidirectional control frame on the /api/v1/browser/capture-ingest channel. Server (gateway) → client (extension) for `recapture` (the agent's active tab changed — chrome.tabs.query({active:true}) must be re-bound, the onTabsChanged/rebindScreencast analog for the WebRTC path, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer detached past the grace period, or the gateway is stopping the stream); client (extension) → server (gateway) for `ping`, the encoder page's periodic health beacon / reconnect-watchdog signal. `reason` is an optional human-readable note (e.g. why shutdown was requested).
+// BrowserCaptureControlFrame — Bidirectional control frame on the /api/v1/browser/capture-ingest channel. Server (gateway) → client (extension) for `recapture` (the agent's active tab changed — chrome.tabs.query({active:true}) must be re-bound; triggered by the same live.go onTabsChanged/rebindWatch tab-follow logic that also drives the live-view session/control-lock bookkeeping, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer detached past the grace period, or the gateway is stopping the stream); client (extension) → server (gateway) for `ping`, the encoder page's periodic health beacon / reconnect-watchdog signal. `reason` is an optional human-readable note (e.g. why shutdown was requested).
 type BrowserCaptureControlFrame struct {
 	Action string `json:"action"`
 	// recapture only: expected CSS viewport height. See expected_width.
@@ -87,13 +87,13 @@ type BrowserControlFrame struct {
 	Type   string `json:"type"`
 }
 
-// BrowserDetachFrame — Client → server. Detach this viewer from the live browser; the server stops the screencast when the last viewer detaches. Sent when the panel closes.
+// BrowserDetachFrame — Client → server. Detach this viewer from the live browser; the server stops watching the session when the last viewer detaches. Sent when the panel closes.
 type BrowserDetachFrame struct {
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
 }
 
-// BrowserInputFrame — Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the screencast frame, UNLESS capture_width/capture_height are present — then x/y are in that capture-frame pixel space and the server rescales them into the tab's real CSS viewport before dispatch (root cause 2026-07-31, fault 3).
+// BrowserInputFrame — Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the WebRTC video frame, UNLESS capture_width/capture_height are present — then x/y are in that capture-frame pixel space and the server rescales them into the tab's real CSS viewport before dispatch (root cause 2026-07-31, fault 3).
 type BrowserInputFrame struct {
 	Button *string `json:"button,omitempty"`
 	// Intrinsic pixel height of the capture frame the client mapped x/y into. See capture_width.
@@ -113,21 +113,6 @@ type BrowserInputFrame struct {
 	Url       *string  `json:"url,omitempty"`
 	X         *float64 `json:"x,omitempty"`
 	Y         *float64 `json:"y,omitempty"`
-}
-
-// BrowserScreencastFrame — Server → client. One CDP screencast frame (a JPEG snapshot of the live browser tab) plus the metadata needed to map viewer input coordinates back to the page. Screencast is repaint-driven, not fixed-FPS.
-type BrowserScreencastFrame struct {
-	// Base64-encoded JPEG image (no data URI prefix).
-	Data          string   `json:"data"`
-	Height        int      `json:"height"`
-	OffsetTop     *float64 `json:"offset_top,omitempty"`
-	PageScale     *float64 `json:"page_scale,omitempty"`
-	ScrollOffsetX *float64 `json:"scroll_offset_x,omitempty"`
-	ScrollOffsetY *float64 `json:"scroll_offset_y,omitempty"`
-	Seq           int      `json:"seq"`
-	SessionId     string   `json:"session_id"`
-	Type          string   `json:"type"`
-	Width         int      `json:"width"`
 }
 
 // BrowserStatusFrame — Server → client. Lifecycle / control status for the live browser connection. state=controlling means this viewer holds interactive control; released means control was dropped; error carries a human-readable message.
@@ -153,9 +138,9 @@ type BrowserTabActionFrame struct {
 	Type      string  `json:"type"`
 }
 
-// BrowserTabsFrame — Server → client. The current set of open tabs for a live-browser session and which one is active, broadcast whenever a tab is opened (e.g. a target=_blank click or window.open the agent/user followed), closed, switched, or its title/url changes. The SPA renders this as the panel's tab strip; the live screencast always reflects the active tab. See ADR-041.
+// BrowserTabsFrame — Server → client. The current set of open tabs for a live-browser session and which one is active, broadcast whenever a tab is opened (e.g. a target=_blank click or window.open the agent/user followed), closed, switched, or its title/url changes. The SPA renders this as the panel's tab strip; the WebRTC capture always follows the active tab. See ADR-041.
 type BrowserTabsFrame struct {
-	// Index into tabs of the currently-active (screencasted) tab.
+	// Index into tabs of the currently-active (WebRTC-captured) tab.
 	ActiveIndex int     `json:"active_index"`
 	SessionId   *string `json:"session_id,omitempty"`
 	Tabs        []struct {
@@ -200,11 +185,11 @@ type BrowserWebRTCOfferFrame struct {
 	Type      string `json:"type"`
 }
 
-// BrowserWebRTCStateFrame — Server → client. Availability / lifecycle state for the WebRTC media path on a live-browser connection, distinct from the general lifecycle carried by browser_status. `available` tells the SPA whether it may attempt a browser_webrtc_offer at all (feature flag off, platform/build not capable, or a runtime error takes it out of service); `active` tells the SPA whether a WebRTC session is currently flowing media for this connection. Per ADR-047 D3, the JPEG browser_screencast path keeps running unconditionally as the automatic fallback tier — the SPA falls back to it whenever available=false or active drops to false after being true (e.g. ICE failure), with no separate error frame needed. See ADR-047 D1/D3/D7 (lite builds compile WebRTC out entirely).
+// BrowserWebRTCStateFrame — Server → client. Availability / lifecycle state for the WebRTC media path on a live-browser connection, distinct from the general lifecycle carried by browser_status. `available` tells the SPA whether it may attempt a browser_webrtc_offer at all (feature flag off, platform/build not capable, or a runtime error takes it out of service); `active` tells the SPA whether a WebRTC session is currently flowing media for this connection. Per ADR-061, WebRTC is the ONLY live-browser video path — there is no screencast fallback to degrade to. available=false or active dropping to false after being true (e.g. ICE failure) means the panel genuinely has no video right now, and the SPA must show that honestly rather than silently substituting another stream. See ADR-047 D1/D7 (lite builds compile WebRTC out entirely), ADR-061.
 type BrowserWebRTCStateFrame struct {
-	// True while a WebRTC PeerConnection for this viewer is currently connected and flowing media. False (or absent) means the viewer is on the JPEG fallback tier, whether by choice, by availability, or after an ICE/connection failure.
+	// True while a WebRTC PeerConnection for this viewer is currently connected and flowing media. False (or absent) means this viewer currently has no video — WebRTC not yet offered, not yet negotiated, or lost after an ICE/connection failure (ADR-061 — there is no fallback tier to degrade to).
 	Active *bool `json:"active,omitempty"`
-	// True if the gateway currently offers WebRTC for this connection (the webrtc_enabled config flag is on, the platform/build supports it, and no runtime error has taken it out of service). False means the SPA must not send browser_webrtc_offer and should rely on the JPEG browser_screencast path only.
+	// True if the gateway currently offers WebRTC for this connection (the webrtc_enabled config flag is on, the platform/build supports it, and no runtime error has taken it out of service). False means the SPA must not send browser_webrtc_offer — there is no video for this connection until it becomes true.
 	Available bool `json:"available"`
 	// True if the active (or about-to-be-offered) media includes an audio track from the captured tab. Absent/false when audio is unavailable or not yet known.
 	HasAudio *bool `json:"has_audio,omitempty"`
@@ -795,7 +780,6 @@ const (
 	WsFrameTypeBrowserInput             WsFrameType = "browser_input"
 	WsFrameTypeBrowserControl           WsFrameType = "browser_control"
 	WsFrameTypeBrowserDetach            WsFrameType = "browser_detach"
-	WsFrameTypeBrowserScreencast        WsFrameType = "browser_screencast"
 	WsFrameTypeBrowserStatus            WsFrameType = "browser_status"
 	WsFrameTypeBrowserTabAction         WsFrameType = "browser_tab_action"
 	WsFrameTypeBrowserTabs              WsFrameType = "browser_tabs"

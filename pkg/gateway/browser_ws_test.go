@@ -10,11 +10,13 @@
 // The take-control tests call BrowserWSHandler.handleControl directly
 // (white-box, same package) instead of driving a full attach → control round
 // trip over the wire: a REAL browser_control{take} success requires
-// handleAttach to have already succeeded, which in turn requires a live CDP
-// screencast (mgr.Live().Attach → chromedp.Run(StartScreencast)) — that full
-// attach+screencast round trip is reserved for the Playwright UAT pass
-// (issue tracked separately), not a unit test. handleControl's own logic
-// (the TakeControlEnabled gate, the control-lock allow/deny outcome, and the
+// handleAttach to have already succeeded, which in turn requires a real,
+// running Chromium tab (mgr.Live().Attach resolves the session's tab via
+// BrowserManager.Session, launching Chrome if needed — see live.go's attach;
+// video for the panel is carried exclusively by WebRTC, ADR-061) — that full
+// attach round trip is reserved for the Playwright UAT pass (issue tracked
+// separately), not a unit test. handleControl's own logic (the
+// TakeControlEnabled gate, the control-lock allow/deny outcome, and the
 // audit emission) is pure LiveViewRegistry state — no chromedp call — so
 // driving it directly still exercises the real, unmodified method.
 //
@@ -58,8 +60,8 @@ import (
 // binary with --version rather than trusting exec.LookPath alone, since
 // Ubuntu ships a snap stub at /usr/bin/chromium-browser that exits 1 on
 // launch. Used by the handful of tests in this file that need a REAL
-// attach()→CDP screencast round trip (everything else in this file
-// deliberately avoids that — see the file's header comment) — those tests
+// attach() round trip against a running Chromium (everything else in this
+// file deliberately avoids that — see the file's header comment) — those tests
 // SKIP here (this devpod has no working Chromium binary) but run for real
 // wherever a working browser is available.
 func browserWSSkipIfNoBrowser(t *testing.T) {
@@ -169,12 +171,11 @@ func readBrowserFrame(t *testing.T, conn *websocket.Conn, timeout time.Duration)
 
 // readBrowserStatusFrame reads frames off conn, skipping any non-
 // browser_status frame, until a browser_status frame arrives or timeout
-// elapses. Needed once a real CDP screencast is running (the
-// browserWSSkipIfNoBrowser-gated full-round-trip tests below): screencast
-// delivery is repaint-driven and asynchronous to control/status delivery
-// (ADR-038 D3), so a browser_screencast frame interleaving ahead of the
-// browser_status frame a test is actually asserting on is a normal, expected
-// race — not a bug — and a naive single readBrowserFrame call would flake.
+// elapses. Needed for the browserWSSkipIfNoBrowser-gated full-round-trip
+// tests below: a browser_tabs frame (and, once the SPA's own WebRTC offer
+// lands, browser_webrtc_* frames) can legitimately interleave ahead of the
+// browser_status frame a test is actually asserting on, so a naive single
+// readBrowserFrame call would flake.
 func readBrowserStatusFrame(t *testing.T, conn *websocket.Conn, timeout time.Duration) browserFrameDecoder {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -1214,9 +1215,9 @@ func TestBrowserWS_HandleInput_Navigate_AlwaysBypassesThrottle(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip is a real,
-// end-to-end (real headless Chromium, real WS socket, real attach + real CDP
-// screencast) regression guard for ADR-039 D-A2's live-WS navigate SSRF
-// gate: attach to a real agent's browser manager, take control, then send
+// end-to-end (real headless Chromium, real WS socket, real attach)
+// regression guard for ADR-039 D-A2's live-WS navigate SSRF gate: attach to
+// a real agent's browser manager, take control, then send
 // browser_input{kind:"navigate", url:"http://127.0.0.1/"} over the wire, and
 // confirm a browser_status(error) naming the block comes back — proving
 // handleInput's wire-to-engine URL translation (`if frame.Url != nil {
@@ -1227,8 +1228,8 @@ func TestBrowserWS_HandleInput_Navigate_AlwaysBypassesThrottle(t *testing.T) {
 //
 // Unlike every other test in this file (see the file's header comment), this
 // one genuinely needs handleAttach's mgr.Live().Attach() to succeed, which
-// starts a real CDP screencast (page.StartScreencast) against a real tab —
-// so it is gated by browserWSSkipIfNoBrowser exactly like
+// resolves a real Chromium tab (BrowserManager.Session) — so it is gated by
+// browserWSSkipIfNoBrowser exactly like
 // pkg/tools/browser's own skipIfNoBrowser-gated E2E suite: SKIP (never a
 // false pass, never a hang) wherever no working Chromium/Chrome binary is
 // available (e.g. this devpod's Ubuntu snap-stub chromium-browser), REAL
@@ -1275,11 +1276,11 @@ func TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, attachData))
 
-	// Use the skip-until-found reader: browser_tabs/browser_screencast frames
-	// legitimately interleave ahead of browser_status on a REAL browser (they are
-	// repaint-driven and asynchronous to the attach response) — see
-	// readBrowserWebRTCStateFrame's doc comment. A naive readBrowserFrame here
-	// asserted an ordering the protocol does not guarantee.
+	// Use the skip-until-found reader: browser_tabs (and, once WebRTC
+	// negotiates, browser_webrtc_* frames) can legitimately interleave ahead
+	// of browser_status on a REAL browser — see readBrowserStatusFrame's doc
+	// comment. A naive readBrowserFrame here asserted an ordering the
+	// protocol does not guarantee.
 	attachResp := readBrowserStatusFrame(t, conn, 20*time.Second)
 	require.Equal(t, "browser_status", attachResp.Type)
 	require.Equal(t, "attached", attachResp.State,
@@ -1325,7 +1326,7 @@ func TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip(t *testing.T) {
 // a second live WS connection end to end — same rationale as the sibling
 // navigate-SSRF full-round-trip test above.
 //
-// Gated exactly like that sibling test: needs a real CDP screencast
+// Gated exactly like that sibling test: needs a real Chromium tab
 // (handleAttach's mgr.Live().Attach() call), so it SKIPs wherever no working
 // Chromium/Chrome binary is available and runs for real everywhere one is.
 // BDD: Given connection A and connection B both attached to the same
@@ -1462,10 +1463,9 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 
 // readBrowserWebRTCStateFrame mirrors readBrowserStatusFrame's skip-until-
 // found convention (see its doc comment) for a browser_webrtc_state frame:
-// browser_screencast/browser_tabs frames may legitimately interleave ahead
-// of it (repaint-driven, asynchronous to the attach response), so a single
-// bare ReadMessage call would flake exactly like a naive readBrowserFrame
-// call would for browser_status.
+// browser_tabs frames may legitimately interleave ahead of it (asynchronous
+// to the attach response), so a single bare ReadMessage call would flake
+// exactly like a naive readBrowserFrame call would for browser_status.
 func readBrowserWebRTCStateFrame(t *testing.T, conn *websocket.Conn, timeout time.Duration) webrtcStateFrameDecoder {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

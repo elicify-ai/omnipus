@@ -27,8 +27,7 @@ import (
 )
 
 // browser_webrtc.go implements ADR-047 / wave-plan W2-A: the WebRTC media
-// path layered over the existing JPEG live-browser view (browser_ws.go).
-// Two pieces:
+// path for the live-browser view (browser_ws.go). Two pieces:
 //
 //  1. Viewer signaling on the EXISTING /api/v1/browser/ws socket:
 //     handleWebRTCOffer, dispatched from browser_ws.go's readLoop on a
@@ -38,14 +37,17 @@ import (
 //     (captureIngestWSHandler): the gateway-owned encoder page's ingest leg
 //     (ADR-047 D6: token-authorized, never a URL param).
 //
-// Per ADR-047 D3, EVERY failure path here degrades to a browser_webrtc_state
-// frame (available/active=false + a reason) — it NEVER breaks the JPEG
-// browser_screencast path, which resumes whenever any viewer still needs it
-// regardless of WebRTC's fate (CaptureSession.ReconcileScreencast pauses the
-// JPEG screencast only while EVERY attached JPEG viewer is also covered by
-// an active WebRTC stream, and resumes it the instant that stops being
-// true — see capture_session.go — so "keeps running" is a dynamic, per-
-// viewer-coverage guarantee, not a literal "always on" one).
+// ADR-047 D3 ("WebRTC failing must never take the JPEG fallback down with
+// it") is VOID as of ADR-061: the JPEG CDP screencast this once protected —
+// and the CaptureSession.ReconcileScreencast pause/resume coordination that
+// used to run alongside every failure path here — were removed entirely.
+// WebRTC is now the ONLY live-browser video path. EVERY failure path here
+// still degrades to a browser_webrtc_state frame (available/active=false +
+// a reason) — that discipline survives unchanged — but there is no fallback
+// tier left for it to protect: a WebRTC failure now means the panel
+// genuinely has no video until the next successful offer, and the SPA is
+// expected to show that state honestly rather than silently substituting
+// another stream. See ADR-061 for the removal rationale.
 //
 // Fix-wave amendments (ADR-048 default-context capture): a failed capture
 // Start() now tears the session down (fix 1) instead of leaving a sticky
@@ -198,10 +200,10 @@ type webrtcViewerConn struct {
 // CDP call underneath — running it inline (as before this fix) meant no Pong
 // could ever be processed while it ran, so the 60s deadline elapsed
 // unconditionally regardless of how many Pongs the peer answered, and
-// readLoop's own cleanup defer tore down BOTH this WebRTC attempt AND the
-// independent JPEG browser_screencast fallback with it — directly violating
-// ADR-047 D3 ("WebRTC failing must never take the JPEG fallback down with
-// it").
+// readLoop's own cleanup defer tore down this WebRTC attempt right along
+// with the connection's OWN session-tracking attachment (at the time this
+// fix landed, that meant the separate JPEG browser_screencast path too —
+// ADR-047 D3, since void per ADR-061's removal of that path entirely).
 //
 // state.beginWebRTCOffer() is called HERE, synchronously, still on
 // readLoop's own goroutine, BEFORE the goroutine below is spawned — see that
@@ -239,8 +241,9 @@ func (h *BrowserWSHandler) dispatchWebRTCOffer(
 // the ADR-048 condition-2 multi-agent capture fence (only when about to
 // start a BRAND NEW session) -> ensure+start the agent's capture session ->
 // HandleViewerOffer. Every rejection sends a browser_webrtc_state frame with
-// available=false and a reason; the JPEG screencast (handleAttach, already
-// running independently) is never touched by any branch here.
+// available=false and a reason; the connection's session/control-lock
+// attachment (handleAttach, already established independently) is never
+// touched by any branch here.
 //
 // Runs on its own goroutine in production (dispatchWebRTCOffer, above), never
 // on readLoop's own goroutine — epoch is the value state.beginWebRTCOffer()
@@ -534,8 +537,9 @@ func webrtcUnavailableReason(cfg *config.Config, mgr *browser.BrowserManager) st
 // viewer PeerConnection, decrements the capture session's viewer count
 // (RemoveViewer arms the grace-stop timer once it reaches zero, wave-plan
 // W2-A item 4), and unregisters the viewer from h.viewerConns (fix 3/7's
-// cross-goroutine registry). Independent of the JPEG screencast attachment's
-// own detach(), since both can be active on the same connection.
+// cross-goroutine registry). Independent of the connection's own
+// session/control-lock detach() (browser_ws.go's handleDetach), since both
+// can be active on the same connection.
 //
 // ALWAYS bumps state's webrtc epoch (invalidateWebRTCOffer, FIX WAVE A
 // finding 1), even when takeWebRTCAttachment finds nothing yet committed —
@@ -570,10 +574,9 @@ func webrtcUnavailableReason(cfg *config.Config, mgr *browser.BrowserManager) st
 // mechanism (ViewerAttachHandle's gen + the relay's own
 // CloseViewerIfCurrent/RemoveViewerIfCurrent) the offer path already relies
 // on: a no-op if att.handle's registration has since been superseded, and a
-// full, real teardown (closes the PeerConnection, arms the grace-stop timer,
-// resumes the JPEG screencast via ReconcileScreencast) when it is still
-// current — which is always true for the ordinary case of a legitimate
-// detach with no second offer in flight, so a normal detach's viewer is
+// full, real teardown (closes the PeerConnection, arms the grace-stop timer)
+// when it is still current — which is always true for the ordinary case of
+// a legitimate detach with no second offer in flight, so a normal detach's viewer is
 // still fully removed exactly as before.
 func (h *BrowserWSHandler) detachWebRTCViewer(state *browserConnState, viewerID string) {
 	att := state.takeWebRTCAttachment()
@@ -626,8 +629,8 @@ func (h *BrowserWSHandler) notifyViewersStreamStopped(viewerIDs []string) {
 // and again on any availability change"). The SPA's state machine only sends
 // its browser_webrtc_offer after receiving available:true, and
 // handleWebRTCOffer only replies with a state frame — so without this
-// announcement neither side ever moves and the panel silently stays on JPEG
-// forever (W3 e2e finding). This is an announcement, not an authorization:
+// announcement neither side ever moves and the panel silently never offers
+// WebRTC at all (W3 e2e finding). This is an announcement, not an authorization:
 // the offer-side gate ladder in handleWebRTCOffer re-validates every gate
 // when the offer actually arrives.
 func (h *BrowserWSHandler) announceWebRTCAvailability(

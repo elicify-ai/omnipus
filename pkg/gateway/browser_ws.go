@@ -28,17 +28,16 @@ import (
 )
 
 // ADR-038 D1 — /api/v1/browser/ws is a DEDICATED WebSocket, deliberately
-// separate from /api/v1/chat/ws. Screencast is a high-volume,
-// independently-lifecycled stream; keeping it off the chat socket avoids
-// interfering with chat's backpressure/replay logic (websocket.go's
-// sendRawFrameBytes / replay divert). This file intentionally does not reuse
-// wsConn/WSHandler's replay machinery — browser-live has no replay concept
-// (a live view is either attached now or it isn't) and screencast frames are
-// inherently lossy (D3: "repaint-driven, not fixed-FPS" — dropping a stale
-// frame is correct, the next repaint supersedes it).
+// separate from /api/v1/chat/ws. It carries an independently-lifecycled
+// stream of session/control/tab-strip lifecycle frames and WebRTC signaling;
+// keeping it off the chat socket avoids interfering with chat's
+// backpressure/replay logic (websocket.go's sendRawFrameBytes / replay
+// divert). This file intentionally does not reuse wsConn/WSHandler's replay
+// machinery — browser-live has no replay concept (a live view is either
+// attached now or it isn't).
 
-// browserWSSendCap is the outbound buffer depth for one connection.
-// Screencast frames dominate traffic; deep enough to absorb a repaint burst
+// browserWSSendCap is the outbound buffer depth for one connection. Deep
+// enough to absorb a burst of tab-strip/status/WebRTC-signaling frames
 // without immediately dropping frames on a client that's briefly slow to
 // drain the socket.
 const browserWSSendCap = 64
@@ -63,33 +62,11 @@ func (c *browserWSConn) close() {
 	c.closeOnce.Do(func() { close(c.doneCh) })
 }
 
-// sendFrame enqueues a screencast frame, dropping it immediately (never
-// blocking) if the channel is backed up. Correct for a repaint-driven, lossy
-// stream (ADR-038 D3): a dropped frame is superseded by the next repaint, so
-// blocking the CDP event-ack goroutine to avoid a drop would be strictly
-// worse (it would stall frame delivery to every other attached session).
-func (c *browserWSConn) sendFrame(data []byte) {
-	select {
-	case c.sendCh <- data:
-	case <-c.doneCh:
-	default:
-	}
-}
-
-// sendFrameGen marshals and enqueues a screencast frame via sendFrame.
-func (c *browserWSConn) sendFrameGen(frame any) {
-	data, err := json.Marshal(frame)
-	if err != nil {
-		slog.Error("browser-ws: marshal screencast frame failed", "error", err)
-		return
-	}
-	c.sendFrame(data)
-}
-
-// sendCritical enqueues a low-frequency, must-not-drop frame (browser_status,
-// error) — these carry state transitions the SPA needs to see, unlike the
-// high-volume screencast stream. Blocks briefly rather than silently
-// dropping; gives up after 2s so a wedged connection can't hang the caller.
+// sendCritical enqueues a must-not-drop frame (browser_status, browser_tabs,
+// browser_webrtc_*, error) — every frame this socket carries is a state
+// transition the SPA needs to see (ADR-061: there is no separate high-volume
+// lossy stream on this connection any more). Blocks briefly rather than
+// silently dropping; gives up after 2s so a wedged connection can't hang the caller.
 // dropCtx is a short, caller-supplied identifier (see dropContext) logged
 // ONLY if the frame is actually dropped (B6, 7-reviewer finding): before
 // this the drop-warning below carried nothing identifying, making a dropped
@@ -124,10 +101,10 @@ func dropContext(sessionID, viewerID, label string) string {
 }
 
 // browserConnState tracks the single live-browser attachment this connection
-// currently holds. Mutated only from readLoop's goroutine — the screencast
-// FrameSink/StatusSink callbacks (a different goroutine, driven by chromedp's
-// CDP event dispatch) never touch it, only wc.sendFrame(Gen)/wc.sendCritical(Gen),
-// which are channel-safe.
+// currently holds. Mutated only from readLoop's goroutine — the StatusSink/
+// ControlSink/TabsSink callbacks (a different goroutine, driven by
+// LiveView's own fan-out) never touch it, only wc.sendCriticalGen, which is
+// channel-safe.
 type browserConnState struct { // not-wire-format: internal connection bookkeeping, never marshaled.
 	mgr *browser.BrowserManager
 	// sessionID is the CLIENT-supplied (chat) session id from the attach
@@ -176,10 +153,10 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// go through the methods below, never the bare fields.
 	webrtcMu sync.Mutex
 	// webrtc tracks this connection's attached WebRTC viewer (ADR-047 D4,
-	// wave-plan W2-A) — separate from the JPEG screencast attachment above
-	// (sessionID/mgr), since both paths can be active simultaneously on the
-	// SAME connection per ADR-047 D3 (JPEG keeps running as the automatic
-	// fallback tier while WebRTC streams). A single nullable pointer rather
+	// wave-plan W2-A) — separate from the session/control-lock attachment
+	// above (sessionID/mgr), since both are established independently on the
+	// SAME connection (handleAttach binds sessionID/mgr; a subsequent
+	// browser_webrtc_offer is what populates this field). A single nullable pointer rather
 	// than a (webrtcAgentID string, webrtcCapture *browser.CaptureSession)
 	// field pair (fix-wave simplification): the two were always set and
 	// cleared together, so the pair could represent an illegal
@@ -283,9 +260,10 @@ const minInputErrorInterval = 2 * time.Second
 const minViewportInterval = 300 * time.Millisecond
 
 // BrowserWSHandler implements the /api/v1/browser/ws endpoint (ADR-038):
-// screencast-out + input-injection-in for the live interactive browser
-// panel. One connection == one viewer == at most one attached (agent,
-// session) live view at a time.
+// session/control/tab-strip lifecycle out, input-injection in, and WebRTC
+// signaling (ADR-047) for the live interactive browser panel. One connection
+// == one viewer == at most one attached (agent, session) live view at a
+// time.
 type BrowserWSHandler struct {
 	agentLoop     *agent.AgentLoop
 	allowedOrigin string
@@ -534,7 +512,7 @@ func (h *BrowserWSHandler) writePump(wc *browserWSConn) {
 	// defer close (2026-07-31, found by the sibling instance's reviewers and
 	// verified here): every exit path below is a bare `return`. Without this,
 	// a write failure left the connection WRITE-dead but READ-alive — doneCh
-	// was never closed, so sendFrame/sendCritical kept selecting on a channel
+	// was never closed, so sendCritical kept selecting on a channel
 	// nobody would ever close, and readLoop kept refreshing its deadline from
 	// whatever the client was still sending. The socket was then only reaped
 	// by the CLIENT's own missed-ping self-heal ~60s later. close() is
@@ -558,9 +536,10 @@ func (h *BrowserWSHandler) writePump(wc *browserWSConn) {
 			// keepalive pings. The peer then hits its own read timeout and
 			// tears the connection down, which is what surfaces as the
 			// abnormal `close 1006` the operator has been seeing (33 of them
-			// in one session's log). This socket is the one carrying the
-			// high-volume JPEG screencast stream, so it is by far the most
-			// likely of the two to fill a window in the first place.
+			// in one session's log). At the time this fix landed, this socket
+			// was the one carrying the high-volume JPEG screencast stream
+			// (since removed, ADR-061), so it was by far the most likely of
+			// the two to fill a window in the first place.
 			//
 			// With the deadline, a stalled write fails fast and this pump
 			// exits cleanly, letting the normal reconnect path run instead of
@@ -706,8 +685,9 @@ func (h *BrowserWSHandler) readLoop(
 			// ReadMessage loop, since gorilla only services the PongHandler
 			// (which refreshes the 60s read deadline set below) from inside a
 			// ReadMessage call. A synchronous call here previously starved
-			// every Pong, killing the JPEG screencast fallback along with the
-			// stalled WebRTC attempt — see dispatchWebRTCOffer's doc comment.
+			// every Pong, killing the connection's own session attachment
+			// along with the stalled WebRTC attempt — see dispatchWebRTCOffer's
+			// doc comment.
 			h.dispatchWebRTCOffer(wc, &state, viewerID, userID, data, cfg)
 		default:
 			wc.sendCriticalGen(generated.ErrorFrame{
@@ -719,10 +699,13 @@ func (h *BrowserWSHandler) readLoop(
 }
 
 // handleAttach binds this connection to the target agent's live browser
-// (ADR-038 D3): resolves the agent's BrowserManager, starts (or joins) its
-// screencast, and streams browser_screencast frames back until detach. A
-// second browser_attach on an already-attached connection first detaches the
-// previous attachment — one connection, one live view at a time.
+// (ADR-038 D3, video path retired per ADR-061): resolves the agent's
+// BrowserManager and starts (or joins) watching its session for control-lock
+// and tab-strip bookkeeping until detach. Video for the panel is carried
+// exclusively by WebRTC (announceWebRTCAvailability below) — there is no
+// screencast frame stream on this path any more. A second browser_attach on
+// an already-attached connection first detaches the previous attachment —
+// one connection, one live view at a time.
 //
 // ADR-038 finding #1: the live view ALWAYS binds to browser.DefaultSessionID
 // — the one Chromium tab the target agent's browser_* tools actually drive —
@@ -774,21 +757,7 @@ func (h *BrowserWSHandler) handleAttach(
 	}
 
 	chatSessionID := frame.SessionId // context/logging + wire echo ONLY — see doc comment above.
-	controlledByOther, err := mgr.Live().Attach(browser.DefaultSessionID, viewerID, func(lf browser.LiveFrame) {
-		pageScale, offsetTop, scrollX, scrollY := lf.PageScale, lf.OffsetTop, lf.ScrollOffsetX, lf.ScrollOffsetY
-		wc.sendFrameGen(generated.BrowserScreencastFrame{
-			Type:          string(generated.WsFrameTypeBrowserScreencast),
-			SessionId:     chatSessionID,
-			Seq:           lf.Seq,
-			Data:          lf.Data,
-			Width:         lf.Width,
-			Height:        lf.Height,
-			PageScale:     &pageScale,
-			OffsetTop:     &offsetTop,
-			ScrollOffsetX: &scrollX,
-			ScrollOffsetY: &scrollY,
-		})
-	}, func(message string) {
+	controlledByOther, err := mgr.Live().Attach(browser.DefaultSessionID, viewerID, func(message string) {
 		// ADR-038 finding #2's split-brain fix: the LiveView's underlying tab
 		// context died without an explicit browser_detach — e.g. this
 		// connection is still holding a reference to a BrowserManager that
@@ -860,20 +829,10 @@ func (h *BrowserWSHandler) handleAttach(
 		ControlledByOther: &cbo,
 	}, dropContext(chatSessionID, viewerID, "attach-ok"))
 
-	// ADR-047 fix-wave finding 3: this new JPEG viewer may be the one that
-	// forces the screencast to resume if WebRTC was paused covering only
-	// the PREVIOUS viewer set (the mixed-viewer case: a fresh browser_attach
-	// with no accompanying WebRTC offer yet, or one whose ICE never
-	// establishes, needs real JPEG frames). A no-op if this agent has no
-	// active WebRTC capture session at all.
-	if cs := mgr.CaptureSession(); cs != nil {
-		cs.ReconcileScreencast()
-	}
-
 	// ADR-047: announce WebRTC availability for this fresh attach — the SPA
 	// only sends its offer after an available:true state frame (see
 	// announceWebRTCAvailability's doc for why omitting this deadlocks the
-	// upgrade handshake and strands the panel on JPEG).
+	// upgrade handshake).
 	h.announceWebRTCAvailability(wc, mgr, chatSessionID, viewerID, cfg)
 }
 
@@ -1223,26 +1182,18 @@ func (h *BrowserWSHandler) handleDetach(wc *browserWSConn, state *browserConnSta
 	}, dropContext(chatSessionID, viewerID, "detach-ok"))
 }
 
-// detach releases viewerID from the live view (stopping the screencast if it
-// was the last viewer) and audits a control release if this viewer was the
-// controller — used both by explicit browser_detach and by readLoop's
-// disconnect cleanup, so a dropped connection is indistinguishable from a
-// clean detach for audit and resource-cleanup purposes. chatSessionID is
-// used only for the audit entry / log context; the live-view call always
+// detach releases viewerID from the live view (stopping the death watch on
+// its tab if it was the last viewer) and audits a control release if this
+// viewer was the controller — used both by explicit browser_detach and by
+// readLoop's disconnect cleanup, so a dropped connection is indistinguishable
+// from a clean detach for audit and resource-cleanup purposes. chatSessionID
+// is used only for the audit entry / log context; the live-view call always
 // targets browser.DefaultSessionID (ADR-038 finding #1).
 func (h *BrowserWSHandler) detach(mgr *browser.BrowserManager, chatSessionID, viewerID, userID string) {
 	wasController := mgr.Live().Controller(browser.DefaultSessionID) == viewerID
 	mgr.Live().Detach(browser.DefaultSessionID, viewerID)
 	if wasController {
 		h.auditRelease(userID, chatSessionID, viewerID)
-	}
-	// ADR-047 fix-wave finding 3: this departing JPEG viewer may have been
-	// the last JPEG-only one, allowing the screencast to pause now that
-	// WebRTC covers every remaining viewer. A no-op if this agent has no
-	// active WebRTC capture session. Covers both explicit browser_detach and
-	// readLoop's disconnect cleanup, since both funnel through here.
-	if cs := mgr.CaptureSession(); cs != nil {
-		cs.ReconcileScreencast()
 	}
 }
 

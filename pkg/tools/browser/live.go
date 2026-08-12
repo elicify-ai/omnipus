@@ -16,20 +16,9 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
-// ADR-038 D3 — screencast tuning. Spike-proven on chrome-headless-shell
-// (2026-07-11): JPEG quality 60 at 1280x720, every frame, keeps bandwidth
-// reasonable for a browser-rendered <img>/canvas while staying legible.
-const (
-	screencastQuality       = 60
-	screencastMaxWidth      = 1280
-	screencastMaxHeight     = 720
-	screencastEveryNthFrame = 1
-)
-
 // agentWindowWidth/Height size each agent's Chrome window (coordinator.go's
-// CreateTarget). Deliberately SEPARATE from the screencast caps above, which
-// tune JPEG bandwidth: a window must be large enough to satisfy the largest
-// CSS viewport a panel may request AT ITS deviceScaleFactor, and in headless
+// CreateTarget). A window must be large enough to satisfy the largest CSS
+// viewport a panel may request AT ITS deviceScaleFactor, and in headless
 // Chrome a window can never exceed the virtual screen (--window-size,
 // exec_resolver.go).
 //
@@ -75,13 +64,6 @@ const (
 	// human produces anywhere near this; it exists purely to cap automation.
 	maxDiscreteInputEventsPerSecond = 100
 )
-
-// screencastAckTimeout bounds each Page.screencastFrameAck CDP round trip
-// issued by runAckWorker. Acks are lightweight, so this is deliberately much
-// shorter than BrowserManager.PageTimeout() — if a single ack call hangs
-// (wedged/overloaded transport), the worker recovers in bounded time and
-// moves on to the next (coalesced, latest) frame instead of getting stuck.
-const screencastAckTimeout = 5 * time.Second
 
 // viewportSetTimeout bounds the Emulation.setDeviceMetricsOverride round trip
 // in SetViewport. Kept short: a resize arrives on the UI's debounce and a slow
@@ -140,22 +122,6 @@ const (
 	maxViewportPhysicalPixels = 33_200_000.0
 )
 
-// LiveFrame is one CDP screencast frame plus the metadata a viewer needs to
-// map its own rendered coordinates back to CSS pixels on the page. Field set
-// mirrors generated.BrowserScreencastFrame minus session_id/seq/type, which
-// the gateway attaches per-connection (seq is engine-assigned, monotonic per
-// LiveView, and returned here so the gateway doesn't need its own counter).
-type LiveFrame struct {
-	Seq           int
-	Data          string // base64 JPEG, no data-URI prefix (cdp gives us this directly)
-	Width         int
-	Height        int
-	PageScale     float64
-	OffsetTop     float64
-	ScrollOffsetX float64
-	ScrollOffsetY float64
-}
-
 // LiveInput is the engine-level input event the gateway decodes from a
 // generated.BrowserInputFrame before calling LiveViewRegistry.Input. Kind
 // mirrors the AsyncAPI BrowserInputFrame `kind` enum exactly: mouse_move,
@@ -211,26 +177,21 @@ type LiveInput struct {
 	CaptureWidth, CaptureHeight float64
 }
 
-// FrameSink receives screencast frames for one attached viewer. Implementations
-// must not block: the LiveView invokes every registered sink synchronously,
-// under its own lock released, from the CDP event-dispatch path. A slow
-// consumer should hand off to its own buffered channel (the gateway's
-// per-connection sendCh already does this).
-type FrameSink func(LiveFrame)
-
 // StatusSink receives a live-view lifecycle notification for one attached
 // viewer (ADR-038 finding #2's split-brain fix). Today the only event it
-// carries is "the screencast died unexpectedly" — the underlying chromedp
-// tab context was canceled out from under an attached viewer WITHOUT going
+// carries is "the session died unexpectedly" — the underlying chromedp tab
+// context was canceled out from under an attached viewer WITHOUT going
 // through Detach first. The prototypical cause: pkg/agent/loop.go's
 // registerSharedTools now calls Shutdown() on an agent's PRIOR
 // BrowserManager before installing a fresh one on hot-reload
 // (ReloadProviderAndConfig) — Shutdown() cancels every session context,
 // including one a viewer's WS connection is still attached to. Without this
-// sink, that connection would keep streaming nothing forever and never learn
-// why; the message is meant to be surfaced as a browser_status(error) frame
-// so the client re-attaches (which resolves the CURRENT manager). Same
-// non-blocking contract as FrameSink.
+// sink, that connection would never learn why; the message is meant to be
+// surfaced as a browser_status(error) frame so the client re-attaches (which
+// resolves the CURRENT manager). Implementations must not block: the
+// LiveView invokes every registered sink synchronously with no lock held. A
+// slow consumer should hand off to its own buffered channel (the gateway's
+// per-connection sendCh already does this).
 type StatusSink func(message string)
 
 // TabsSink receives a tab-set snapshot for one attached viewer (ADR-041 D4).
@@ -239,9 +200,9 @@ type StatusSink func(message string)
 // a session with a single tab may never emit one during this viewer's whole
 // attachment) and again on every subsequent tab-set change
 // (open/close/switch/adopt/title-url-update). Same non-blocking contract as
-// FrameSink/StatusSink/ControlSink: the LiveView invokes every registered
-// sink synchronously with no lock held, so a slow consumer must hand off to
-// its own buffered channel exactly like the gateway's per-connection sendCh
+// StatusSink/ControlSink: the LiveView invokes every registered sink
+// synchronously with no lock held, so a slow consumer must hand off to its
+// own buffered channel exactly like the gateway's per-connection sendCh
 // already does.
 type TabsSink func(tabs []Tab, activeIdx int)
 
@@ -258,10 +219,10 @@ type TabsSink func(tabs []Tab, activeIdx int)
 // never sent a ControlSink notification for its own take/release — it
 // already gets an authoritative browser_status frame as the direct response
 // to its own browser_control request (handleControl, browser_ws.go). Same
-// non-blocking contract as FrameSink: the LiveView invokes every registered
+// non-blocking contract as StatusSink: the LiveView invokes every registered
 // sink synchronously with no lock held (see takeControl/releaseControl), so
 // a slow consumer must hand off to its own buffered channel exactly like the
-// gateway's per-connection sendCh already does for frames/status.
+// gateway's per-connection sendCh already does for status frames.
 type ControlSink func(controlledByOther bool)
 
 // LiveViewRegistry manages one LiveView per browser session for a single
@@ -334,7 +295,8 @@ func resolveSessionID(sessionID string) string {
 }
 
 // view returns (creating if necessary) the LiveView for sessionID. Creating
-// an entry does NOT start a screencast — that only happens on Attach.
+// an entry does NOT start watching the session's tab — that only happens on
+// Attach.
 func (r *LiveViewRegistry) view(sessionID string) *LiveView {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -343,11 +305,10 @@ func (r *LiveViewRegistry) view(sessionID string) *LiveView {
 		lv = &LiveView{
 			mgr:          r.mgr,
 			sessionID:    sessionID,
-			viewers:      make(map[string]FrameSink),
+			viewers:      make(map[string]struct{}),
 			statusSinks:  make(map[string]StatusSink),
 			controlSinks: make(map[string]ControlSink),
 			tabsSinks:    make(map[string]TabsSink),
-			ackCh:        make(chan int64, 1),
 			runCDP:       runCDPWithTimeout,
 		}
 		r.views[sessionID] = lv
@@ -366,11 +327,14 @@ func (r *LiveViewRegistry) lookup(sessionID string) (*LiveView, bool) {
 	return lv, ok
 }
 
-// Attach binds viewerID to sessionID's live view, starting the CDP
-// screencast if this is the first viewer of that session (ref-counted, D3).
-// onFrame is invoked for every screencast frame until Detach(sessionID,
-// viewerID); onStatus (ADR-038 finding #2, may be nil) is invoked if the
-// underlying tab context dies unexpectedly before that Detach happens;
+// Attach binds viewerID to sessionID's live view, starting to watch the
+// session's active tab for unexpected death if this is the first viewer of
+// that session (ref-counted). Video for the panel is carried exclusively by
+// WebRTC (ADR-061) — this registry's job is session/tab/control-lock
+// bookkeeping only, no frame delivery.
+//
+// onStatus (ADR-038 finding #2, may be nil) is invoked if the underlying tab
+// context dies unexpectedly before Detach(sessionID, viewerID) is called;
 // onControl (ADR-039 UAT BE-1, may be nil) is invoked whenever some OTHER
 // viewer takes or releases control after this call returns. onTabs
 // (ADR-041 D4, may be nil) is invoked once immediately with the CURRENT tab
@@ -385,7 +349,6 @@ func (r *LiveViewRegistry) lookup(sessionID string) (*LiveView, bool) {
 // instead of only learning about it on the NEXT take/release broadcast.
 func (r *LiveViewRegistry) Attach(
 	sessionID, viewerID string,
-	onFrame FrameSink,
 	onStatus StatusSink,
 	onControl ControlSink,
 	onTabs TabsSink,
@@ -398,7 +361,7 @@ func (r *LiveViewRegistry) Attach(
 	if err != nil {
 		return false, fmt.Errorf("browser live: cannot resolve session %q: %w", sessionID, err)
 	}
-	controlledByOther, err := r.view(sessionID).attach(tabCtx, viewerID, onFrame, onStatus, onControl, onTabs)
+	controlledByOther, err := r.view(sessionID).attach(tabCtx, viewerID, onStatus, onControl, onTabs)
 	if err != nil {
 		return false, err
 	}
@@ -406,10 +369,8 @@ func (r *LiveViewRegistry) Attach(
 	r.mgr.ViewerAttached(sessionID)
 
 	// ADR-041 D4: give the newly-attached viewer the CURRENT tab strip
-	// immediately, mirroring lastFrame's "don't make a piggybacking/fresh
-	// viewer wait for the next change" rationale — a session with only one
-	// tab may never emit another tabs-changed event during this viewer's
-	// whole attachment.
+	// immediately — a session with only one tab may never emit another
+	// tabs-changed event during this viewer's whole attachment.
 	if onTabs != nil {
 		if tabs, activeIdx, terr := r.mgr.ListTabs(sessionID); terr == nil && len(tabs) > 0 {
 			onTabs(tabs, activeIdx)
@@ -419,9 +380,9 @@ func (r *LiveViewRegistry) Attach(
 }
 
 // Detach unbinds viewerID from sessionID's live view. When this was the last
-// viewer, the CDP screencast is stopped (D3). Also releases control if
-// viewerID currently holds it, so a departing viewer never leaves the lock
-// dangling for everyone else.
+// viewer, the death watch on the session's tab is stopped. Also releases
+// control if viewerID currently holds it, so a departing viewer never
+// leaves the lock dangling for everyone else.
 func (r *LiveViewRegistry) Detach(sessionID, viewerID string) {
 	sessionID = resolveSessionID(sessionID)
 	lv, ok := r.lookup(sessionID)
@@ -434,16 +395,6 @@ func (r *LiveViewRegistry) Detach(sessionID, viewerID string) {
 	// ViewerDetached / ReapIdleSessions.
 	r.mgr.ViewerDetached(sessionID)
 }
-
-// PauseScreencast stops the underlying CDP screencast for sessionID WITHOUT
-// touching any attached viewer's registration or the cached lastFrame
-// (ADR-047 fix-wave finding 3: WebRTC media covering every attached viewer
-// makes the JPEG screencast pure wasted pod CPU — the UAT symptom "inputs
-// feel dead / choppy under heavy video" traced to pod CPU saturation). A
-// no-op (returns false) if no live view exists for sessionID, the
-// screencast isn't currently active, or it is already paused. The caller
-// (pkg/tools/browser's CaptureSession.ReconcileScreencast) decides WHEN
-// pausing is appropriate; this method only performs the mechanical stop.
 
 // SetViewport resizes the captured tab to width x height CSS pixels and
 // renders it at deviceScaleFactor, so the capture's shape and resolution
@@ -894,50 +845,6 @@ func (lv *LiveView) invalidateCSSViewportCache() {
 	lv.mu.Unlock()
 }
 
-func (r *LiveViewRegistry) PauseScreencast(sessionID string) bool {
-	sessionID = resolveSessionID(sessionID)
-	lv, ok := r.lookup(sessionID)
-	if !ok {
-		return false
-	}
-	return lv.pauseScreencast()
-}
-
-// ResumeScreencast restarts the CDP screencast for sessionID if it was
-// paused by PauseScreencast and at least one viewer is still attached to
-// resume it for (ADR-047 fix-wave finding 3). A no-op (returns false) if no
-// live view exists for sessionID, the screencast wasn't paused, or nobody
-// is attached — the next Attach will start a fresh screencast normally in
-// that case.
-func (r *LiveViewRegistry) ResumeScreencast(sessionID string) bool {
-	sessionID = resolveSessionID(sessionID)
-	lv, ok := r.lookup(sessionID)
-	if !ok {
-		return false
-	}
-	return lv.resumeScreencast()
-}
-
-// AttachedViewerIDs returns a snapshot of the viewer IDs currently attached
-// to sessionID's JPEG live view (ADR-047 fix-wave finding 3) — used by
-// CaptureSession.ReconcileScreencast to check whether EVERY JPEG-attached
-// viewer also has a WebRTC attachment before pausing the screencast. Empty
-// (not an error) if no live view exists for sessionID.
-func (r *LiveViewRegistry) AttachedViewerIDs(sessionID string) []string {
-	sessionID = resolveSessionID(sessionID)
-	lv, ok := r.lookup(sessionID)
-	if !ok {
-		return nil
-	}
-	lv.mu.Lock()
-	defer lv.mu.Unlock()
-	out := make([]string, 0, len(lv.viewers))
-	for id := range lv.viewers {
-		out = append(out, id)
-	}
-	return out
-}
-
 // CSSViewport returns sessionID's cached CSS layout viewport — SetViewport's
 // Page.getLayoutMetrics read-back (including its at-most-one chrome-delta
 // compensation re-read), the CDP-verified truth of the tab's actual size
@@ -988,7 +895,7 @@ func (r *LiveViewRegistry) Input(sessionID, viewerID string, in LiveInput) error
 // live view. Returns false if another viewer already holds control — v1 is
 // cooperative, first-come, no preemption (ADR-038 D6). Creates the LiveView
 // entry if one doesn't exist yet (control can be requested before/without an
-// attached screencast, though the SPA flow always attaches first).
+// attached viewer, though the SPA flow always attaches first).
 func (r *LiveViewRegistry) TakeControl(sessionID, viewerID string) bool {
 	sessionID = resolveSessionID(sessionID)
 	if viewerID == "" {
@@ -1065,31 +972,33 @@ func (r *LiveViewRegistry) IsControlled(sessionID string) bool {
 	return r.Controller(sessionID) != ""
 }
 
-// LiveView is a screencast + input-injection engine bound to one browser
-// session (one Chromium tab). Reference-counted by attached viewers: the CDP
-// screencast starts on the first Attach and stops on the last Detach. Safe
-// for concurrent use — all state is guarded by mu.
+// LiveView is a session-tracking + input-injection engine bound to one
+// browser session (one Chromium tab). Video is carried exclusively by
+// WebRTC (ADR-061); this type owns viewer/control-lock bookkeeping and a
+// death watch on the session's tab. Reference-counted by attached viewers:
+// the death watch starts on the first Attach and stops on the last Detach.
+// Safe for concurrent use — all state is guarded by mu.
 type LiveView struct {
 	mgr       *BrowserManager
 	sessionID string
 
 	mu         sync.Mutex
 	tabCtx     context.Context
-	listenCtx  context.Context // child of tabCtx; canceling it detaches the chromedp.ListenTarget subscription without touching the tab
+	listenCtx  context.Context // child of tabCtx; canceling it stops the death watch without touching the tab
 	stopListen context.CancelFunc
 	// lastKnownActiveCtx (ADR-047, wave-plan W2-A item 5) tracks the most
-	// recently observed active-tab context INDEPENDENTLY of tabCtx —
-	// tabCtx only reflects the JPEG screencast's own current binding and
-	// stays nil until a JPEG epoch is ever installed (isActiveLocked/
-	// hasEpochLocked gate on it), so a WebRTC-only session (no JPEG viewer
-	// ever attached) would otherwise never have a reliable "did the active
-	// tab actually change" signal for recapture. Set unconditionally at the
-	// end of every onTabsChanged call; nil only before the first call.
+	// recently observed active-tab context INDEPENDENTLY of tabCtx — tabCtx
+	// only reflects the current watch's binding and stays nil until a watch
+	// is ever installed (isActiveLocked/hasEpochLocked gate on it), so a
+	// session with no viewer ever attached would otherwise never have a
+	// reliable "did the active tab actually change" signal for WebRTC
+	// recapture. Set unconditionally at the end of every onTabsChanged call;
+	// nil only before the first call.
 	lastKnownActiveCtx context.Context
-	viewers            map[string]FrameSink
+	viewers            map[string]struct{}
 	// statusSinks parallels viewers (ADR-038 finding #2): one optional
 	// StatusSink per attached viewerID, notified only on an unexpected
-	// screencast death (watchForUnexpectedDeath), never on a clean Detach.
+	// session death (watchForUnexpectedDeath), never on a clean Detach.
 	statusSinks map[string]StatusSink
 	// controlSinks parallels viewers (ADR-039 UAT BE-1): one optional
 	// ControlSink per attached viewerID, notified whenever some OTHER
@@ -1098,13 +1007,7 @@ type LiveView struct {
 	// tabsSinks parallels viewers (ADR-041 D4): one optional TabsSink per
 	// attached viewerID, notified once on attach with the current tab set
 	// and again on every subsequent tab-set change (see onTabsChanged).
-	tabsSinks map[string]TabsSink
-	seq       int
-	// lastFrame caches the most recently delivered screencast frame so a viewer
-	// that attaches to an already-running screencast (a second panel, a pop-out)
-	// sees the current state immediately instead of waiting for the next repaint
-	// (which never comes on an idle page). Guarded by mu.
-	lastFrame  *LiveFrame
+	tabsSinks  map[string]TabsSink
 	controller string // viewerID holding control; "" = uncontrolled
 
 	// cssViewportW/cssViewportH cache the tab's actual CSS layout viewport
@@ -1145,34 +1048,12 @@ type LiveView struct {
 	// genuinely dead tab still reaches the user.
 	viewportFetchFailures int
 
-	// pausedForWebRTC (ADR-047 fix-wave finding 3, pod-CPU-saturation UAT:
-	// "inputs feel dead / choppy under heavy video") is true when the CDP
-	// screencast was deliberately stopped by PauseScreencast because WebRTC
-	// media already covers every currently-attached viewer, rather than
-	// through the normal ref-counted detach() path. attach() treats this
-	// the SAME as the piggyback (already-active) case -- register the new
-	// viewer and replay lastFrame immediately, but do NOT restart the CDP
-	// screencast -- so a late-attaching viewer's frame!=null gate is
-	// satisfied without undoing the pause. It is the CALLER's job (the
-	// browser package's CaptureSession.ReconcileScreencast, invoked
-	// whenever either viewer set changes) to call ResumeScreencast if that
-	// new viewer turns out to be JPEG-only.
-	pausedForWebRTC bool
-
 	// Rate limiting: input can only ever come from the single controller at a
 	// time, so one shared counter per LiveView is sufficient — no per-viewer
 	// bookkeeping needed.
 	inputWindowStart time.Time
 	inputCount       int // coalescible kinds (mouse_move, wheel)
 	discreteCount    int // button/key transitions
-
-	// ackCh is the mailbox runAckWorker consumes from: handleScreencastEvent
-	// hands off each frame's session ID here (coalescing to the latest via
-	// queueAck) instead of spawning a chromedp.Run goroutine per frame. Never
-	// nil for a LiveView constructed via LiveViewRegistry.view (the only
-	// production constructor); tests that build a LiveView by hand must set
-	// it explicitly before calling queueAck/handleScreencastEvent.
-	ackCh chan int64
 
 	// runCDP executes a bounded chromedp CDP round trip. See
 	// runCDPWithTimeout's doc comment for why this is a field instead of a
@@ -1181,88 +1062,73 @@ type LiveView struct {
 	runCDP func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error
 }
 
-// isActiveLocked reports whether the screencast is currently subscribed
-// (must be called with mu held). Checking listenCtx.Err() rather than a
-// separate bool means a tab whose context died out-of-band (session
-// recreated, crash) is detected and cleanly re-armed on the next attach,
-// instead of leaving the registry believing a screencast is running when
-// chromedp silently dropped the listener along with the canceled context.
+// isActiveLocked reports whether this LiveView is currently watching its
+// tab for unexpected death (must be called with mu held). Checking
+// listenCtx.Err() rather than a separate bool means a tab whose context died
+// out-of-band (session recreated, crash) is detected and cleanly re-armed on
+// the next attach, instead of leaving the registry believing the watch is
+// still live when chromedp silently dropped the target along with the
+// canceled context.
 func (lv *LiveView) isActiveLocked() bool {
 	return lv.listenCtx != nil && lv.listenCtx.Err() == nil
 }
 
-// hasEpochLocked reports whether a screencast epoch is currently installed
-// on this LiveView (lv.listenCtx != nil) — regardless of whether its
-// underlying context has already died (lv.listenCtx.Err() != nil). Must be
-// called with mu held.
+// hasEpochLocked reports whether a watch epoch is currently installed on
+// this LiveView (lv.listenCtx != nil) — regardless of whether its underlying
+// context has already died (lv.listenCtx.Err() != nil). Must be called with
+// mu held.
 //
 // Deliberately WEAKER than isActiveLocked, which additionally requires
 // Err() == nil — the right check for attach()'s piggyback decision and
 // detach()'s teardown decision, where an already-dead epoch correctly means
-// "not a live, running screencast to preserve/piggyback on". onTabsChanged
-// and rebindScreencastOnce need this weaker check instead (live-UAT fix,
-// 2026-07-12 — "closing the ACTIVE tab shows a false 'session ended'
-// banner and leaves the screencast frozen on stale content"):
-// BrowserManager.CloseTab cancels the closed tab's own chromedp context
-// BEFORE it calls notifyTabsChanged — and since lv.listenCtx is a CHILD of
-// the active tab's context, that cancellation SYNCHRONOUSLY kills
-// lv.listenCtx too, before onTabsChanged/rebindScreencastOnce ever run. By
-// the time either of them runs, the just-closed epoch therefore already
-// looks "dead" by isActiveLocked's definition even though nothing has
-// cleaned it up yet and the browsing context itself (plus every sibling
-// tab) is perfectly alive — closing any one tab, including the active one,
-// never tears down the browser (ADR-041's browserCtx fix). Gating the
-// rebind decision on isActiveLocked() (== alive) therefore deterministically
-// skipped the rebind in exactly this case. Gating on "an epoch is installed
-// at all" instead correctly recognizes there is still a (now-defunct) epoch
-// owed a replacement, whether or not its underlying context happened to
-// have already died by the time this runs. See watchForUnexpectedDeath's
-// doc comment for the matching false "session ended" broadcast half of this
-// fix.
+// "not a live watch to preserve/piggyback on". onTabsChanged and
+// rebindWatch need this weaker check instead (live-UAT fix, 2026-07-12 —
+// "closing the ACTIVE tab shows a false 'session ended' banner and leaves
+// the live view stuck on the old tab"): BrowserManager.CloseTab cancels the
+// closed tab's own chromedp context BEFORE it calls notifyTabsChanged — and
+// since lv.listenCtx is a CHILD of the active tab's context, that
+// cancellation SYNCHRONOUSLY kills lv.listenCtx too, before
+// onTabsChanged/rebindWatch ever run. By the time either of them runs, the
+// just-closed epoch therefore already looks "dead" by isActiveLocked's
+// definition even though nothing has cleaned it up yet and the browsing
+// context itself (plus every sibling tab) is perfectly alive — closing any
+// one tab, including the active one, never tears down the browser (ADR-041's
+// browserCtx fix). Gating the rebind decision on isActiveLocked() (== alive)
+// therefore deterministically skipped the rebind in exactly this case.
+// Gating on "an epoch is installed at all" instead correctly recognizes
+// there is still a (now-defunct) epoch owed a replacement, whether or not
+// its underlying context happened to have already died by the time this
+// runs. See watchForUnexpectedDeath's doc comment for the matching false
+// "session ended" broadcast half of this fix.
 func (lv *LiveView) hasEpochLocked() bool {
 	return lv.listenCtx != nil
 }
 
-// attach registers viewerID's sinks and starts the CDP screencast if no
-// screencast is currently active for this session. onStatus may be nil.
+// attach registers viewerID's sinks and, if no watch is currently active for
+// this session, starts watching its tab for unexpected death (ADR-038
+// finding #2). onStatus may be nil.
 //
-// ADR-038 DEADLOCK POSTMORTEM: this method used to hold lv.mu (via
-// defer lv.mu.Unlock()) across the blocking page.StartScreencast()
-// chromedp.Run call below, which also ran on the bare tabCtx with no
-// timeout of its own. Under a heavy page and/or the (separately fixed)
-// unbounded ack-goroutine pile-up in handleScreencastEvent, that CDP round
-// trip could hang indefinitely — and because it hung while lv.mu was held,
-// lv.mu never unlocked. Every browser tool's controlledResult() check
-// (browser_navigate/click/type/evaluate — tools.go) calls
-// LiveViewRegistry.IsControlled → ... → lv.getController(), which takes
-// lv.mu with a bare, non-context-aware sync.Mutex.Lock(). Once lv.mu was
-// stuck, EVERY subsequent call to those tools blocked forever: no timeout
-// (Lock() has none), no error, no log line, and "Stop" (which only cancels
-// the agent turn's context) had no effect on a plain mutex wait. This is
-// exactly the reported symptom: a single browser_screenshot timeout was
-// followed by every later browser_navigate call hanging indefinitely.
-//
-// The fix has two parts, both required: (1) lv.mu is released before the
-// CDP call, so a concurrent getController()/dispatchInput()/takeControl()
-// is never blocked by it; (2) the CDP call itself now runs through
-// lv.runCDP, which bounds it with mgr.PageTimeout() so even a wedged
-// transport fails this one attach() attempt in bounded time instead of
-// hanging the calling goroutine forever.
+// ADR-061: this used to also start (or piggyback on) a CDP JPEG screencast
+// here, which required releasing lv.mu before a blocking chromedp.Run call
+// (see the ADR-038 deadlock postmortem this file's other CDP call sites
+// still document — runCDPWithTimeout's doc comment). Attaching a viewer is
+// now pure in-memory bookkeeping with no CDP round trip at all, so that
+// unlock/relock dance is gone: this method runs start-to-finish under one
+// lv.mu acquisition and cannot fail.
 //
 // Returns controlledByOther (ADR-039 UAT BE-1): true when sessionID is
 // already controlled by a viewer other than viewerID at the moment of this
-// attach — computed and returned under lv.mu before any CDP call, so it is
-// available even on the fast piggyback path below.
+// attach.
 func (lv *LiveView) attach(
 	tabCtx context.Context,
 	viewerID string,
-	onFrame FrameSink,
 	onStatus StatusSink,
 	onControl ControlSink,
 	onTabs TabsSink,
 ) (bool, error) {
 	lv.mu.Lock()
-	lv.viewers[viewerID] = onFrame
+	defer lv.mu.Unlock()
+	lv.viewers[viewerID] = struct{}{}
 	if onStatus != nil {
 		lv.statusSinks[viewerID] = onStatus
 	}
@@ -1274,23 +1140,8 @@ func (lv *LiveView) attach(
 	}
 	controlledByOther := lv.controller != "" && lv.controller != viewerID
 
-	if lv.isActiveLocked() || lv.pausedForWebRTC {
-		// Screencast already running — this viewer piggybacks on it. Replay the
-		// last delivered frame so it renders the current page immediately rather
-		// than waiting for the next repaint (which may never come on an idle
-		// page — the "Waiting for the first frame…" hang a pop-out / second
-		// panel would otherwise show).
-		//
-		// ADR-047 fix-wave finding 3: pausedForWebRTC takes the SAME branch
-		// even though isActiveLocked() is false while paused (PauseScreencast
-		// nils listenCtx exactly like a real stop) — a late-attaching viewer
-		// gets the cached frame immediately without undoing the pause; see
-		// pausedForWebRTC's doc comment for who is responsible for resuming.
-		cached := lv.lastFrame
-		lv.mu.Unlock()
-		if cached != nil {
-			onFrame(*cached)
-		}
+	if lv.isActiveLocked() {
+		// Already watching this session — this viewer piggybacks on it.
 		return controlledByOther, nil
 	}
 
@@ -1298,72 +1149,14 @@ func (lv *LiveView) attach(
 	listenCtx, cancel := context.WithCancel(tabCtx)
 	lv.listenCtx = listenCtx
 	lv.stopListen = cancel
-	lv.mu.Unlock()
 
-	// Capture tabCtx by value for the ack worker/callback below — reading
-	// lv.tabCtx from inside the callback would race the next
-	// attach()/detach() cycle.
-	ackCtx := tabCtx
-	chromedp.ListenTarget(listenCtx, func(ev any) {
-		lv.handleScreencastEvent(ackCtx, ev)
-	})
-
-	// Single dedicated ack worker for this screencast epoch (see
-	// handleScreencastEvent/runAckWorker) instead of one chromedp.Run
-	// goroutine per frame. Scoped to listenCtx so it exits when this epoch
-	// ends, whether via a clean detach() or watchForUnexpectedDeath.
-	go lv.runAckWorker(ackCtx, listenCtx)
-
-	// No lock held here — see the deadlock postmortem above.
-	//
-	// Page.bringToFront BEFORE StartScreencast (W3 e2e finding): in FULL
-	// Chrome --headless=new (the WebRTC-capable build ADR-047 D2 switched
-	// managed launches to), Page.startScreencast succeeds but delivers ZERO
-	// EventScreencastFrame for a target the compositor considers hidden —
-	// and CDP-created targets start hidden there. chrome-headless-shell (the
-	// pre-WebRTC managed build this path was spike-proven on, see the tuning
-	// consts' doc) rendered every target regardless, which is why this was
-	// never needed before. Measured on real Chrome 150: 0 frames in 4s on an
-	// animating page without bringToFront; ~60fps with it.
-	err := lv.runCDP(
-		tabCtx, lv.mgr.PageTimeout(),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			return page.BringToFront().Do(ctx)
-		}),
-		page.StartScreencast().
-			WithFormat(page.ScreencastFormatJpeg).
-			WithQuality(screencastQuality).
-			WithMaxWidth(screencastMaxWidth).
-			WithMaxHeight(screencastMaxHeight).
-			WithEveryNthFrame(screencastEveryNthFrame),
-	)
-
-	lv.mu.Lock()
-	if err != nil {
-		delete(lv.viewers, viewerID)
-		delete(lv.statusSinks, viewerID)
-		delete(lv.controlSinks, viewerID)
-		delete(lv.tabsSinks, viewerID)
-		// Only tear down the shared listen/ack state if nothing else (a
-		// concurrent attach() that piggybacked while this call was in
-		// flight, or a concurrent detach()) has since superseded it.
-		if lv.listenCtx == listenCtx {
-			cancel()
-			lv.listenCtx = nil
-			lv.stopListen = nil
-		}
-		lv.mu.Unlock()
-		return false, fmt.Errorf("browser live: failed to start screencast: %w", err)
-	}
-	lv.mu.Unlock()
-
-	// ADR-038 finding #2: watch for this screencast's tab context dying
-	// WITHOUT going through detach() first — e.g. BrowserManager.Shutdown()
-	// canceling every session context out from under an attached viewer
-	// during a hot-reload manager replacement (pkg/agent/loop.go's
-	// registerSharedTools). One watcher per screencast "epoch" (i.e. per
-	// listenCtx); it self-identifies as stale once a clean detach or a fresh
-	// attach cycle has moved lv.listenCtx on.
+	// ADR-038 finding #2: watch for this tab context dying WITHOUT going
+	// through detach() first — e.g. BrowserManager.Shutdown() canceling
+	// every session context out from under an attached viewer during a
+	// hot-reload manager replacement (pkg/agent/loop.go's
+	// registerSharedTools). One watcher per watch "epoch" (i.e. per
+	// listenCtx); it self-identifies as stale once a clean detach or a
+	// fresh attach cycle has moved lv.listenCtx on.
 	go lv.watchForUnexpectedDeath(listenCtx)
 
 	return controlledByOther, nil
@@ -1373,8 +1166,8 @@ func (lv *LiveView) attach(
 // ← BrowserManager.tabsChanged) whenever this session's tab set changes.
 // Broadcasts a snapshot to every attached viewer's TabsSink and, if the
 // active tab moved to a different underlying chromedp target, rebinds the
-// live screencast to follow it. Never tears down the browsing context — only
-// the screencast subscription moves.
+// death watch to follow it. Never tears down the browsing context — only
+// the watch's target moves.
 func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 	lv.mu.Lock()
 	sinks := make([]TabsSink, 0, len(lv.tabsSinks))
@@ -1404,12 +1197,12 @@ func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 	// child of that tab's own context) by the time this runs, so gating on
 	// "alive" would deterministically skip the rebind this close owes.
 	needsRebind := lv.hasEpochLocked() && lv.tabCtx != newCtx
-	// activeTabChanged (ADR-047, wave-plan W2-A item 5): a JPEG-independent
-	// "did the active tab actually change" signal for the WebRTC recapture
-	// hook below — see lastKnownActiveCtx's doc comment for why this can't
-	// reuse needsRebind/tabCtx. Guarded on lastKnownActiveCtx != nil so the
-	// very first onTabsChanged call (which only establishes the baseline)
-	// never counts as a "change".
+	// activeTabChanged (ADR-047, wave-plan W2-A item 5): "did the active tab
+	// actually change" signal for the WebRTC recapture hook below — see
+	// lastKnownActiveCtx's doc comment for why this can't reuse
+	// needsRebind/tabCtx. Guarded on lastKnownActiveCtx != nil so the very
+	// first onTabsChanged call (which only establishes the baseline) never
+	// counts as a "change".
 	activeTabChanged := lv.lastKnownActiveCtx != nil && lv.lastKnownActiveCtx != newCtx
 	lv.lastKnownActiveCtx = newCtx
 	lv.mu.Unlock()
@@ -1427,237 +1220,52 @@ func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 	}
 
 	if needsRebind {
-		lv.rebindScreencast(newCtx)
+		lv.rebindWatch(newCtx)
 	}
 }
 
-// rebindScreencast re-targets an ALREADY-ACTIVE screencast to newCtx
-// (ADR-041 D4 — the trickiest piece of the tab-strip switch): stops the CDP
-// screencast + event listener on the previous active tab's context and
-// starts it fresh on newCtx, without touching the browsing context (a
+// rebindWatch re-targets an ALREADY-ACTIVE death watch to newCtx (ADR-041
+// D4 — the tab-strip switch), without touching the browsing context (a
 // chromedp target's lifetime is independent of this) and without dropping
-// any attached viewer's registration — only the underlying CDP subscription
-// moves, so every viewer keeps watching the SAME logical live session, now
-// following the new active tab. A no-op if the screencast isn't currently
-// active (e.g. no viewers attached — the next Attach simply resolves the
-// by-then-current active tab via mgr.Session, so there's nothing to rebind
-// yet).
+// any attached viewer's registration — only the watched target moves, so
+// every viewer keeps watching the SAME logical live session, now following
+// the new active tab. A no-op if no watch is currently installed (e.g. no
+// viewers attached — the next Attach simply resolves the by-then-current
+// active tab via mgr.Session, so there's nothing to rebind yet).
 //
-// Deadlock-safe per ADR-038: mirrors attach()'s discipline exactly — no
-// LiveView lock held across any CDP call.
-//
-// F1 ordering fix (7-reviewer BLOCKER, ADR-041 fix wave): the previous
-// version captured oldListenCtx under lock but left lv.listenCtx POINTING AT
-// IT all the way through oldStopListen()'s cancellation and the blocking
-// StopScreencast CDP call below — exactly the window watchForUnexpectedDeath
-// treats as "my watched listenCtx died while still installed as
-// lv.listenCtx", i.e. a genuine external death. On every tab switch the
-// watcher (started by the earlier attach()/rebind for the OLD epoch) would
-// race in — woken by oldStopListen()'s cancellation — see its watched ctx
-// STILL installed, fire a FALSE "session ended unexpectedly" broadcast to
-// every viewer, and nil out lv.listenCtx itself. This method would then
-// re-lock below, see lv.listenCtx no longer matched the oldListenCtx it
-// captured, and bail out without ever starting the new screencast — the
-// live view sat dead until a manual re-attach. The fix mirrors detach()'s
-// discipline exactly (see the len(lv.viewers)==0 branch there): nil
-// lv.listenCtx/lv.stopListen under lv.mu BEFORE releasing the lock and
-// calling oldStopListen(). This establishes a genuine happens-before
-// relationship (the nil write happens-before the unlock, which
-// happens-before oldStopListen()'s cancellation, which happens-before the
-// watcher's <-watchedListenCtx.Done() wakes it, which happens-before its own
-// lv.mu.Lock()) — so the watcher's "still installed" check is GUARANTEED to
-// see the nil, not a race that merely makes the false broadcast unlikely.
-// The re-lock guard below changes correspondingly: since the old epoch's
-// identity was already cleared (not merely captured), "did anything else
-// claim the slot while I was tearing down the old screencast" is now
-// expressed as "is lv.listenCtx still nil" rather than a pointer comparison
-// against the (now-erased) old value.
-//
-// Second fix wave (7-reviewer findings A/B, ADR-041, 2026-07-12):
-//
-// Finding A — orphaned screencast + leaked ack-worker when the LAST viewer
-// detaches during the rebind's unlocked teardown window. Interleaving: the
-// F1 fix above nils lv.listenCtx and unlocks BEFORE calling oldStopListen();
-// if the last attached viewer's detach() lands in that exact window, its
-// `len(lv.viewers)==0 && lv.isActiveLocked()` guard reads isActiveLocked()
-// as false (listenCtx is transiently nil) and removes the viewer WITHOUT
-// stopping the screencast itself — reasonably so, since this very rebind is
-// already mid-teardown of that same epoch. The bug was in what happened
-// next: rebindScreencastOnce would re-lock, see nobody had reclaimed the
-// listenCtx slot, and go ahead and install a BRAND NEW screencast + ack
-// worker for a session that now has ZERO registered viewers — an orphaned
-// CDP screencast and a leaked goroutine that nothing will ever detach or
-// stop. Fixed by re-checking len(lv.viewers)==0 under the SAME re-acquired
-// lock the "did someone else reclaim the slot" check already uses,
-// immediately before installing the new epoch: if nobody is watching
-// anymore, leave the screencast torn down rather than starting one nobody
-// will ever tear down.
-//
-// Finding B — a second, concurrent rebindScreencast call silently drops its
-// target. Two goroutines can call onTabsChanged -> rebindScreencast for the
-// same session concurrently (e.g. a human browser_switch_tab racing the
-// agent's own async adopt-and-switch); whichever reaches
-// rebindScreencastOnce's very first "if !lv.isActiveLocked() { return }"
-// guard SECOND observes lv.listenCtx already nilled by the first caller's
-// teardown and bails out immediately, discarding its own -- possibly more
-// current -- target tab with no further effect. The manager's tab-set
-// state (activeIdx, browser_tabs) is correct throughout; only the
-// screencast binding lags. Rather than trying to serialize the two callers
-// (which would mean holding lv.mu across a CDP call -- exactly the ADR-038
-// deadlock this file exists to avoid), rebindScreencast now self-corrects:
-// after EVERY successful rebindScreencastOnce install, it re-reads the
-// manager's actual current active tab via lv.mgr.Session -- the SAME
-// authoritative call onTabsChanged itself already trusts, independent of
-// which racing goroutine's local newCtx parameter would otherwise have
-// won. If the tab that's now actually active differs from what was just
-// bound, it loops and rebinds again to the fresh target, so the live view
-// always converges on the LAST real switch instead of getting stuck on
-// whichever concurrent caller happened to finish its install first. This
-// cannot busy-spin: it only loops when Session() reports an actual,
-// different active tab, and each iteration performs a real bounded CDP
-// round trip (via lv.runCDP) -- there is no lock held across any of it,
-// and no lock is held across the Session() call itself either.
-func (lv *LiveView) rebindScreencast(newCtx context.Context) {
-	for {
-		boundCtx, installed := lv.rebindScreencastOnce(newCtx)
-		if !installed {
-			return
-		}
-		currentCtx, err := lv.mgr.Session(lv.sessionID)
-		if err != nil || currentCtx == boundCtx {
-			return
-		}
-		// Finding B: the active tab moved again while we were rebinding —
-		// chase it instead of leaving the screencast bound to a tab the tab
-		// strip no longer shows as active. Reassigning newCtx to the fresh,
-		// INDEPENDENT Session() context re-targets the next loop iteration; it
-		// is a deliberate target-swap, not a nested/growing context chain, so
-		// fatcontext's warning here is a false positive.
-		newCtx = currentCtx //nolint:fatcontext // intentional per-iteration target swap, not a wrapped/growing context
-	}
-}
-
-// rebindScreencastOnce performs a single stop-old/start-new rebind pass
-// targeting newCtx, on behalf of rebindScreencast's self-correcting loop
-// (see its doc comment for the Finding A/B context). Returns (newCtx, true)
-// if it actually installed a new screencast epoch bound to newCtx; returns
-// (nil, false) if it declined to — the screencast wasn't active to begin
-// with, a concurrent attach()/rebind already reclaimed the slot, no viewers
-// were left to serve (Finding A), or the new screencast failed to start
-// (logged/notified at that site, same as before). Deadlock-safe per
-// ADR-038: mirrors attach()'s discipline exactly — no LiveView lock held
-// across any CDP call.
-func (lv *LiveView) rebindScreencastOnce(newCtx context.Context) (context.Context, bool) {
+// ADR-061: this used to stop a CDP screencast on the old tab and start a
+// fresh one on the new tab, which — because both were real CDP round trips
+// — could not be done under a single lock held throughout (ADR-038's no-
+// lock-across-a-CDP-call discipline), and needed a self-correcting loop plus
+// two documented races (F1 ordering, Findings A/B) to stay correct across
+// concurrent attach/detach/rebind. Retargeting a death watch has no CDP call
+// at all: canceling the old watch and installing the new one is pure
+// in-memory bookkeeping, so the whole operation now runs under one lv.mu
+// acquisition with no unlock in between — the interleaving windows those
+// fixes existed to close no longer exist, and the fixes (along with the
+// self-correcting retry loop) are gone with them.
+func (lv *LiveView) rebindWatch(newCtx context.Context) {
 	lv.mu.Lock()
-	// hasEpochLocked, not isActiveLocked (live-UAT fix, 2026-07-12 — see its
-	// doc comment): the OLD epoch installed here may already be dead (its
-	// tab was just closed) by the time this runs, and that is exactly the
-	// case this function must still handle — tearing down a dead epoch and
-	// installing a fresh one on newCtx (the surviving tab). Only a truly
-	// UNINSTALLED epoch (lv.listenCtx == nil — nobody has ever attached, or
-	// a clean detach already cleared it) is a genuine no-op here.
-	if !lv.hasEpochLocked() {
+	if !lv.hasEpochLocked() || lv.tabCtx == newCtx {
 		lv.mu.Unlock()
-		return nil, false
+		return
 	}
-	oldTabCtx := lv.tabCtx
 	oldStopListen := lv.stopListen
-	// Nil the shared listen state now, under the same lock — see the F1 doc
-	// comment above for why this ordering is load-bearing.
-	lv.listenCtx = nil
-	lv.stopListen = nil
-	lv.mu.Unlock()
-
-	// Stop the old screencast + unsubscribe, bounded — mirrors detach()'s
-	// teardown sequence (unsubscribe first, then ask CDP to stop) exactly.
-	// Best-effort: oldTabCtx may already be canceled (the opener tab was
-	// closed via browser_close_tab right after the switch, say), in which
-	// case this simply fails harmlessly — there's nothing left to stop.
-	oldStopListen()
-	if err := lv.runCDP(oldTabCtx, lv.mgr.PageTimeout(), page.StopScreencast()); err != nil {
-		logger.WarnCF("browser", "live view: rebind — stop old screencast failed (old tab may already be closed)",
-			map[string]any{"error": err.Error(), "session_id": lv.sessionID})
-	}
-
-	lv.mu.Lock()
-	if lv.listenCtx != nil {
-		// A concurrent attach()/rebind already reclaimed the slot while we
-		// were tearing down the old screencast (e.g. a fresh viewer
-		// attached mid-rebind, or a second onTabsChanged fired a
-		// concurrent rebind that won the race) — back off rather than
-		// clobber whatever it installed.
-		lv.mu.Unlock()
-		return nil, false
-	}
-	if len(lv.viewers) == 0 {
-		// Finding A: the last attached viewer detached while we were
-		// tearing down the old screencast above — its detach() saw
-		// isActiveLocked()==false (listenCtx was already nilled) and so
-		// correctly left the screencast teardown to us, trusting this
-		// rebind to leave things consistent. With nobody left to watch,
-		// don't install a new screencast + ack worker that nothing will
-		// ever detach or stop.
-		lv.mu.Unlock()
-		return nil, false
-	}
 	lv.tabCtx = newCtx
 	listenCtx, cancel := context.WithCancel(newCtx)
 	lv.listenCtx = listenCtx
 	lv.stopListen = cancel
 	lv.mu.Unlock()
 
-	ackCtx := newCtx
-	chromedp.ListenTarget(listenCtx, func(ev any) {
-		lv.handleScreencastEvent(ackCtx, ev)
-	})
-	go lv.runAckWorker(ackCtx, listenCtx)
-
-	// No lock held here — see the deadlock postmortem above attach().
-	// Page.bringToFront before StartScreencast: same full-Chrome
-	// --headless=new requirement as attach() — a newly-activated tab is
-	// hidden to the compositor until brought to front, and a hidden target
-	// produces zero screencast frames (see attach()'s comment).
-	err := lv.runCDP(
-		newCtx, lv.mgr.PageTimeout(),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			return page.BringToFront().Do(ctx)
-		}),
-		page.StartScreencast().
-			WithFormat(page.ScreencastFormatJpeg).
-			WithQuality(screencastQuality).
-			WithMaxWidth(screencastMaxWidth).
-			WithMaxHeight(screencastMaxHeight).
-			WithEveryNthFrame(screencastEveryNthFrame),
-	)
-	if err != nil {
-		logger.WarnCF("browser", "live view: rebind — start screencast on new active tab failed",
-			map[string]any{"error": err.Error(), "session_id": lv.sessionID})
-		lv.mu.Lock()
-		var sinks []StatusSink
-		if lv.listenCtx == listenCtx {
-			cancel()
-			lv.listenCtx = nil
-			lv.stopListen = nil
-			// F2 fix (7-reviewer HIGH, ADR-041 fix wave): without this, no
-			// StatusSink ever fires for this failure —
-			// watchForUnexpectedDeath is only armed AFTER a successful
-			// StartScreencast (see the "go lv.watchForUnexpectedDeath(...)"
-			// call below, never reached on this branch) — so every attached
-			// viewer keeps rendering the stale OLD tab's cached lastFrame
-			// under a tab strip that already says a DIFFERENT tab is
-			// active, with no error banner explaining why. Reuse the same
-			// fan-out mechanism watchForUnexpectedDeath uses.
-			sinks = lv.snapshotStatusSinksLocked()
-		}
-		lv.mu.Unlock()
-		for _, s := range sinks {
-			s("couldn't switch the live view to the new tab — re-attach to resume watching")
-		}
-		return nil, false
+	// Cancel the OLD watch after installing the new one, under no lock — the
+	// old watcher's own "am I still the installed epoch" check
+	// (watchForUnexpectedDeath) already sees lv.listenCtx pointing at the
+	// NEW epoch by the time it wakes, so it correctly treats this as
+	// superseded, not a genuine death.
+	if oldStopListen != nil {
+		oldStopListen()
 	}
-
 	go lv.watchForUnexpectedDeath(listenCtx)
-	return newCtx, true
 }
 
 // watchForUnexpectedDeath blocks until watchedListenCtx is Done, then decides
@@ -1672,7 +1280,7 @@ func (lv *LiveView) rebindScreencastOnce(newCtx context.Context) (context.Contex
 // epoch was bound to while the browser and its sibling tabs stayed alive.
 //
 // Live-UAT fix (2026-07-12, "closing the ACTIVE tab shows a false 'session
-// ended unexpectedly' banner and leaves the screencast frozen on the closed
+// ended unexpectedly' banner and leaves the live view stuck on the closed
 // tab's stale content"): before this fix, this function could not tell (a)
 // from (b) — any dead watchedListenCtx was always treated as a genuine
 // death. Since the ADR-041 browserCtx fix, the browser (and every OTHER tab)
@@ -1692,11 +1300,10 @@ func (lv *LiveView) rebindScreencastOnce(newCtx context.Context) (context.Contex
 //     dead or alive" gate (see its doc comment) rather than this now
 //     intentionally-untouched dead epoch being mistaken for "nothing to
 //     rebind". Leaving the watcher a no-op here — rather than having it ALSO
-//     attempt its own rebind — avoids a second, independent teardown/install
-//     racing onTabsChanged's; rebindScreencastOnce's own "did someone else
-//     already reclaim the slot" checks (F1/Finding A/B) are what make
-//     onTabsChanged's path safe to run unconditionally, exactly as they
-//     already do for the pre-existing SwitchTab case.
+//     attempt its own rebind — avoids a second, independent
+//     teardown/install racing onTabsChanged's; rebindWatch installs the new
+//     epoch and only THEN cancels the old watch (see its doc comment), so
+//     onTabsChanged's path is safe to run unconditionally.
 //   - Browsing context genuinely gone (case a): the pre-fix behavior,
 //     preserved — clear the epoch and broadcast "session ended" so attached
 //     viewers know to re-attach.
@@ -1750,122 +1357,8 @@ func (lv *LiveView) watchForUnexpectedDeath(watchedListenCtx context.Context) {
 	}
 }
 
-// handleScreencastEvent is the chromedp.ListenTarget callback. Per chromedp's
-// contract this runs synchronously on the CDP event-dispatch goroutine and
-// must never block — the frame ack is handed off to the single ack worker
-// via queueAck (never blocks, see its doc comment) rather than acked inline
-// or from a per-frame goroutine.
-//
-// ADR-038 DEADLOCK POSTMORTEM: the previous implementation spawned one
-// `go func() { chromedp.Run(tabCtx, page.ScreencastFrameAck(...)) }()` per
-// frame. Under a heavy page (full frame rate, no throttling) those
-// goroutines could pile up faster than their CDP round trips completed —
-// every chromedp.Run for this browser process funnels through one
-// fixed-capacity command queue drained by one goroutine
-// (chromedp@v0.15.1 browser.go: cmdQueue is buffered 32, Browser.run is
-// the sole writer/reader loop) — saturating it and stalling every other
-// command on this browser (any session, any tool) behind the backlog. This
-// is a plausible contributor to the reported "single browser_screenshot
-// timeout wedges everything" symptom even independent of the lv.mu bug
-// fixed in attach(): reducing frame/ack volume here removes the pressure
-// that made the wedged CDP call in attach() likely in the first place.
-func (lv *LiveView) handleScreencastEvent(tabCtx context.Context, ev any) {
-	frame, ok := ev.(*page.EventScreencastFrame)
-	if !ok {
-		return
-	}
-
-	lv.queueAck(frame.SessionID)
-	lv.deliver(frame)
-}
-
-// queueAck hands sessionID off to runAckWorker, coalescing to the newest
-// frame instead of piling up: if the worker hasn't drained the previous
-// pending ack yet, it is overwritten rather than queued behind. This keeps
-// queueAck O(1) and non-blocking regardless of frame rate or how slow the
-// worker currently is — see handleScreencastEvent's contract (must never
-// block, it runs on chromedp's own CDP event-dispatch goroutine) and the
-// ADR-038 deadlock postmortem above. Losing an ack for a stale frame is
-// harmless: acking the newest frame is what unblocks Chrome's screencast
-// pipeline to keep sending further frames.
-func (lv *LiveView) queueAck(sessionID int64) {
-	for {
-		select {
-		case lv.ackCh <- sessionID:
-			return
-		default:
-			select {
-			case <-lv.ackCh:
-			default:
-			}
-		}
-	}
-}
-
-// runAckWorker is the single goroutine that acks screencast frames for one
-// screencast epoch (bounded by workerCtx, which is that epoch's listenCtx —
-// it exits when the screencast stops, cleanly or unexpectedly). Reading from
-// lv.ackCh here instead of handleScreencastEvent spawning a goroutine per
-// frame means acks can never pile up: queueAck always coalesces to the
-// latest frame, so this worker is always working the newest frame available,
-// never a backlog, and a slow/stuck ack (bounded by screencastAckTimeout)
-// only delays the NEXT ack, it never blocks the CDP event-dispatch path.
-func (lv *LiveView) runAckWorker(tabCtx, workerCtx context.Context) {
-	for {
-		select {
-		case <-workerCtx.Done():
-			return
-		case sessionID := <-lv.ackCh:
-			if err := lv.runCDP(tabCtx, screencastAckTimeout, page.ScreencastFrameAck(sessionID)); err != nil {
-				logger.WarnCF("browser", "live view: frame ack failed", map[string]any{
-					"error":      err.Error(),
-					"session_id": lv.sessionID,
-				})
-			}
-		}
-	}
-}
-
-// deliver fans a decoded screencast frame out to every currently-attached
-// viewer sink.
-func (lv *LiveView) deliver(frame *page.EventScreencastFrame) {
-	lf := LiveFrame{Data: frame.Data}
-	if frame.Metadata != nil {
-		lf.Width = int(frame.Metadata.DeviceWidth)
-		lf.Height = int(frame.Metadata.DeviceHeight)
-		lf.PageScale = frame.Metadata.PageScaleFactor
-		lf.OffsetTop = frame.Metadata.OffsetTop
-		lf.ScrollOffsetX = frame.Metadata.ScrollOffsetX
-		lf.ScrollOffsetY = frame.Metadata.ScrollOffsetY
-	}
-	// generated.BrowserScreencastFrame requires width/height >= 1; CDP
-	// metadata is normally populated, but fall back to the configured max
-	// dimensions rather than emit a schema-invalid 0 (Constraint #8).
-	if lf.Width <= 0 {
-		lf.Width = screencastMaxWidth
-	}
-	if lf.Height <= 0 {
-		lf.Height = screencastMaxHeight
-	}
-
-	lv.mu.Lock()
-	lv.seq++
-	lf.Seq = lv.seq
-	cached := lf
-	lv.lastFrame = &cached // replayed to viewers that attach mid-screencast
-	sinks := make([]FrameSink, 0, len(lv.viewers))
-	for _, sink := range lv.viewers {
-		sinks = append(sinks, sink)
-	}
-	lv.mu.Unlock()
-
-	for _, sink := range sinks {
-		sink(lf)
-	}
-}
-
-// detach removes viewerID and, if it was the last viewer, stops the CDP
-// screencast and unsubscribes the event listener.
+// detach removes viewerID and, if it was the last viewer, stops watching
+// the session's tab for unexpected death.
 func (lv *LiveView) detach(viewerID string) {
 	lv.mu.Lock()
 	delete(lv.viewers, viewerID)
@@ -1885,171 +1378,26 @@ func (lv *LiveView) detach(viewerID string) {
 		otherSinks = lv.snapshotControlSinksExceptLocked(viewerID)
 	}
 
-	var (
-		stopListen context.CancelFunc
-		tabCtx     context.Context
-		wasActive  bool
-	)
+	var stopListen context.CancelFunc
 	if len(lv.viewers) == 0 && lv.isActiveLocked() {
-		wasActive = true
 		stopListen = lv.stopListen
-		tabCtx = lv.tabCtx
 		lv.listenCtx = nil
 		lv.stopListen = nil
 	}
 	lv.mu.Unlock()
 
-	// No lock held here — see the deliver()/takeControl() convention this
-	// mirrors. Fired unconditionally (independent of wasActive/the
-	// screencast-teardown path below) so a departing controller's implicit
-	// release is broadcast even when other viewers remain attached and the
-	// screencast keeps running — the common case for the two-viewer scenario
-	// this fixes. Dispatched via broadcastControl (B2) so a slow OTHER
-	// viewer's sink can never stall this connection's own detach/disconnect
-	// cleanup path — see broadcastControl's doc comment.
+	// No lock held here — see the takeControl() convention this mirrors.
+	// Fired unconditionally (independent of whether this was the last
+	// viewer) so a departing controller's implicit release is broadcast even
+	// when other viewers remain attached. Dispatched via broadcastControl
+	// (B2) so a slow OTHER viewer's sink can never stall this connection's
+	// own detach/disconnect cleanup path — see broadcastControl's doc
+	// comment.
 	broadcastControl(otherSinks, false)
 
-	if !wasActive {
-		return
+	if stopListen != nil {
+		stopListen()
 	}
-	// Unsubscribe first so no further events reach handleScreencastEvent
-	// while we tear down, then ask CDP to actually stop generating frames.
-	// No lock held here (already released above) — bounded via lv.runCDP so
-	// a wedged transport can't hang the caller (e.g. the gateway's WS
-	// cleanup path) forever.
-	stopListen()
-	if err := lv.runCDP(tabCtx, lv.mgr.PageTimeout(), page.StopScreencast()); err != nil {
-		logger.WarnCF("browser", "live view: stop screencast failed", map[string]any{
-			"error":      err.Error(),
-			"session_id": lv.sessionID,
-		})
-	}
-}
-
-// pauseScreencast is PauseScreencast's LiveView-level implementation
-// (ADR-047 fix-wave finding 3). Mirrors detach()'s teardown sequence exactly
-// (nil the shared listen state under lock, then unsubscribe, then ask CDP to
-// stop — bounded via lv.runCDP, no LiveView lock held across the CDP call,
-// per the ADR-038 deadlock discipline every CDP call site in this file
-// observes) but deliberately leaves lv.viewers/statusSinks/controlSinks/
-// tabsSinks/lastFrame untouched and sets pausedForWebRTC instead of clearing
-// viewer registrations — a paused screencast still has viewers, it just
-// isn't capturing frames for them right now.
-func (lv *LiveView) pauseScreencast() bool {
-	lv.mu.Lock()
-	if lv.pausedForWebRTC || !lv.isActiveLocked() {
-		lv.mu.Unlock()
-		return false
-	}
-	stopListen := lv.stopListen
-	tabCtx := lv.tabCtx
-	lv.listenCtx = nil
-	lv.stopListen = nil
-	lv.pausedForWebRTC = true
-	lv.mu.Unlock()
-
-	stopListen()
-	if err := lv.runCDP(tabCtx, lv.mgr.PageTimeout(), page.StopScreencast()); err != nil {
-		logger.WarnCF(
-			"browser",
-			"live view: pause screencast (WebRTC covering every viewer) — stop failed",
-			map[string]any{
-				"error":      err.Error(),
-				"session_id": lv.sessionID,
-			},
-		)
-	}
-	return true
-}
-
-// resumeScreencast is ResumeScreencast's LiveView-level implementation
-// (ADR-047 fix-wave finding 3). Mirrors attach()'s screencast-start sequence
-// exactly (no LiveView lock held across any CDP call, BringToFront before
-// StartScreencast — see attach()'s doc comment for the full-Chrome
-// hidden-target rationale). A no-op if this LiveView was never paused, or if
-// the last viewer detached before this could run (in which case
-// pausedForWebRTC is simply cleared so a future Attach starts a normal fresh
-// screencast rather than silently staying "paused" forever with nobody
-// watching).
-func (lv *LiveView) resumeScreencast() bool {
-	lv.mu.Lock()
-	if !lv.pausedForWebRTC {
-		lv.mu.Unlock()
-		return false
-	}
-	if len(lv.viewers) == 0 {
-		lv.pausedForWebRTC = false
-		lv.mu.Unlock()
-		return false
-	}
-	lv.pausedForWebRTC = false
-	lv.mu.Unlock()
-
-	tabCtx, err := lv.mgr.Session(lv.sessionID)
-	if err != nil {
-		// Nothing to resume onto — e.g. the browsing context is mid-recreation
-		// after a crash. watchForUnexpectedDeath (armed the last time the
-		// screencast was genuinely active) already handles notifying attached
-		// viewers if the tab context died out from under them; there is
-		// nothing further to do here since pausedForWebRTC is already cleared
-		// above (not re-armed — a future Attach or another ReconcileScreencast
-		// call will retry the resume normally).
-		logger.WarnCF("browser", "live view: resume screencast — cannot resolve session", map[string]any{
-			"error":      err.Error(),
-			"session_id": lv.sessionID,
-		})
-		return false
-	}
-
-	lv.mu.Lock()
-	if lv.isActiveLocked() || len(lv.viewers) == 0 {
-		// Superseded by a concurrent Attach/rebind that already installed a
-		// fresh epoch, or the last viewer left while Session() above was
-		// resolving — nothing left for this call to do.
-		lv.mu.Unlock()
-		return false
-	}
-	lv.tabCtx = tabCtx
-	listenCtx, cancel := context.WithCancel(tabCtx)
-	lv.listenCtx = listenCtx
-	lv.stopListen = cancel
-	lv.mu.Unlock()
-
-	ackCtx := tabCtx
-	chromedp.ListenTarget(listenCtx, func(ev any) {
-		lv.handleScreencastEvent(ackCtx, ev)
-	})
-	go lv.runAckWorker(ackCtx, listenCtx)
-
-	err = lv.runCDP(
-		tabCtx, lv.mgr.PageTimeout(),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			return page.BringToFront().Do(ctx)
-		}),
-		page.StartScreencast().
-			WithFormat(page.ScreencastFormatJpeg).
-			WithQuality(screencastQuality).
-			WithMaxWidth(screencastMaxWidth).
-			WithMaxHeight(screencastMaxHeight).
-			WithEveryNthFrame(screencastEveryNthFrame),
-	)
-	if err != nil {
-		logger.WarnCF("browser", "live view: resume screencast — start failed", map[string]any{
-			"error":      err.Error(),
-			"session_id": lv.sessionID,
-		})
-		lv.mu.Lock()
-		if lv.listenCtx == listenCtx {
-			cancel()
-			lv.listenCtx = nil
-			lv.stopListen = nil
-		}
-		lv.mu.Unlock()
-		return false
-	}
-
-	go lv.watchForUnexpectedDeath(listenCtx)
-	return true
 }
 
 // LiveInputErrorKind classifies a LiveViewRegistry.Input / dispatchInput
@@ -2378,8 +1726,7 @@ func (lv *LiveView) allowInputLocked(kind string) bool {
 // UAT BE-1: "two viewers disagree about who's driving") — the server has
 // always single-controller-locked here, this is what makes every OTHER
 // connection's display agree with that lock instead of continuing to show
-// stale state. The sinks are dispatched via broadcastControl (no lock held),
-// mirroring deliver().
+// stale state. The sinks are dispatched via broadcastControl (no lock held).
 // ensureControlForInput is EnsureControlForInput's per-view half — see that
 // method's doc comment for the model and the two failures it closes.
 func (lv *LiveView) ensureControlForInput(viewerID string) bool {
@@ -2451,7 +1798,7 @@ func (lv *LiveView) releaseControl(viewerID string) {
 // own take/release/detach has nothing to do with how fast anyone else is
 // draining their socket. Firing each sink on its own goroutine bounds the
 // caller's wait to O(1) regardless of N or how slow any individual sink is —
-// the same "never let a slow consumer stall the actor" contract FrameSink/
+// the same "never let a slow consumer stall the actor" contract
 // StatusSink/ControlSink's doc comments already require, just not previously
 // honored at THIS fan-out site. Callers must still invoke this with no
 // LiveView lock held (sinks may themselves call back into LiveView methods
@@ -2469,11 +1816,9 @@ func (lv *LiveView) getController() string {
 	return lv.controller
 }
 
-// snapshotStatusSinksLocked returns every registered StatusSink (F2 fix,
-// ADR-041 fix wave: reused by rebindScreencast's start-new-screencast
-// failure branch, alongside watchForUnexpectedDeath's existing use). Must be
-// called with mu held; the returned sinks must be invoked with no lock held
-// (mirrors deliver()'s convention).
+// snapshotStatusSinksLocked returns every registered StatusSink — used by
+// watchForUnexpectedDeath's "session ended" broadcast. Must be called with
+// mu held; the returned sinks must be invoked with no lock held.
 func (lv *LiveView) snapshotStatusSinksLocked() []StatusSink {
 	sinks := make([]StatusSink, 0, len(lv.statusSinks))
 	for _, s := range lv.statusSinks {
@@ -2486,7 +1831,7 @@ func (lv *LiveView) snapshotStatusSinksLocked() []StatusSink {
 // except excludeViewerID's own (ADR-039 UAT BE-1: the acting viewer gets its
 // outcome via its own direct browser_status response, not a broadcast — see
 // ControlSink's doc comment). Must be called with mu held; the returned
-// sinks must be invoked with no lock held (mirrors deliver()'s convention).
+// sinks must be invoked with no lock held (mirrors broadcastControl's callers).
 func (lv *LiveView) snapshotControlSinksExceptLocked(excludeViewerID string) []ControlSink {
 	sinks := make([]ControlSink, 0, len(lv.controlSinks))
 	for id, sink := range lv.controlSinks {

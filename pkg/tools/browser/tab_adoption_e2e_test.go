@@ -298,17 +298,18 @@ func TestSwitchTab_RealChromium_SessionFollowsActiveTab(t *testing.T) {
 
 // TestCloseTab_RealChromium_ActiveTabClose_LiveViewFollowsSurvivorNoFalseDeath
 // is the real-Chromium regression guard for the live-UAT fix ("closing the
-// ACTIVE tab fires a false 'session ended' banner and leaves the screencast
-// frozen on stale content", confirmed 2/2 by two independent live testers
+// ACTIVE tab fires a false 'session ended' banner and leaves the live view
+// stuck on stale content", confirmed 2/2 by two independent live testers
 // WITH A VIEWER ATTACHED). It attaches the real ADR-038 live-view engine
 // (mgr.Live().Attach — the same path pkg/gateway/browser_ws.go drives) to
-// the active tab, closes it, and proves against a REAL CDP screencast that
-// (a) no false "session ended" status ever reaches the viewer, and (b) the
-// screencast is genuinely re-bound to the surviving tab — proven by
-// navigating the survivor and observing a FRESH frame arrive, which is only
-// possible if a real, working screencast is bound to that live tab (the
-// pre-fix code left the live view with no active epoch at all after the
-// false-death broadcast, so no further frame would ever arrive).
+// the active tab, closes it, and proves against REAL Chromium tab-context
+// resolution that (a) no false "session ended" status ever reaches the
+// viewer, and (b) the live view's tabCtx is genuinely re-bound to the
+// surviving tab's REAL chromedp context (ADR-061: video is carried
+// exclusively by WebRTC now, so there is no screencast frame left to prove
+// this via — the live view's own tabCtx/listenCtx bookkeeping, compared
+// against mgr.Session()'s real post-close resolution, is the mechanism that
+// actually needs to be right).
 func TestCloseTab_RealChromium_ActiveTabClose_LiveViewFollowsSurvivorNoFalseDeath(t *testing.T) {
 	skipIfNoBrowser(t)
 
@@ -332,35 +333,19 @@ func TestCloseTab_RealChromium_ActiveTabClose_LiveViewFollowsSurvivorNoFalseDeat
 		statusMsgs = append(statusMsgs, msg)
 		statusMu.Unlock()
 	}
-	frameCh := make(chan struct{}, 1)
-	onFrame := func(LiveFrame) {
-		select {
-		case frameCh <- struct{}{}:
-		default:
-		}
-	}
 
-	controlledByOther, err := mgr.Live().Attach(defaultSessionID, "viewer1", onFrame, onStatus, nil, nil)
+	controlledByOther, err := mgr.Live().Attach(defaultSessionID, "viewer1", onStatus, nil, nil)
 	require.NoError(t, err)
 	require.False(t, controlledByOther)
 	t.Cleanup(func() { mgr.Live().Detach(defaultSessionID, "viewer1") })
 
-	// Wait for a real screencast frame so we know the live view is genuinely
-	// bound and streaming from tab 1 (the active tab) before closing it.
-	select {
-	case <-frameCh:
-	case <-time.After(10 * time.Second):
-		t.Fatal("never received an initial screencast frame from the active tab")
-	}
-	// Drain any further already-queued frames so the post-close check below
-	// only observes a frame that arrives AFTER the close.
-	for drained := true; drained; {
-		select {
-		case <-frameCh:
-		default:
-			drained = false
-		}
-	}
+	tab1Ctx, err := mgr.Session(defaultSessionID)
+	require.NoError(t, err)
+	lv := mgr.Live().view(defaultSessionID)
+	lv.mu.Lock()
+	require.True(t, sameChromedpContext(tab1Ctx, lv.tabCtx),
+		"sanity: the live view must be bound to tab 1 (the active tab) before the close")
+	lv.mu.Unlock()
 
 	// Close the ACTIVE tab (index 1) — the exact live-UAT repro. Tab 0
 	// survives and becomes active.
@@ -369,22 +354,18 @@ func TestCloseTab_RealChromium_ActiveTabClose_LiveViewFollowsSurvivorNoFalseDeat
 	require.Len(t, closedTabs, 1)
 	require.Equal(t, 0, activeIdx)
 
-	// Navigate the surviving tab — this can only produce a delivered
-	// screencast frame if the live view's screencast is genuinely re-bound
-	// to it (a real, working CDP subscription on a live, open target). Under
-	// the pre-fix bug, the false-death broadcast left the live view with no
-	// active epoch at all, so no frame would ever arrive here.
 	survivorCtx, err := mgr.Session(defaultSessionID)
 	require.NoError(t, err)
-	require.NoError(t, chromedp.Run(survivorCtx, chromedp.Navigate(srv.URL+"/booked")))
 
-	select {
-	case <-frameCh:
-	case <-time.After(10 * time.Second):
-		t.Fatal("live view did not deliver a frame for the survivor's post-close navigation — the " +
-			"screencast is not genuinely bound to the surviving tab (stuck on stale/closed-tab content, " +
-			"or torn down entirely by a false death broadcast)")
-	}
+	// The live view must rebind to the REAL surviving tab context — not stay
+	// stuck on the closed tab, and not go dead (nil listenCtx).
+	require.Eventually(t, func() bool {
+		lv.mu.Lock()
+		defer lv.mu.Unlock()
+		return lv.listenCtx != nil && sameChromedpContext(survivorCtx, lv.tabCtx)
+	}, 5*time.Second, 10*time.Millisecond,
+		"the live view must rebind to the surviving tab's real chromedp context after the active tab "+
+			"closes — it must not stay bound to the closed tab or go dead")
 
 	statusMu.Lock()
 	got := append([]string(nil), statusMsgs...)

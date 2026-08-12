@@ -50,7 +50,7 @@ func TestNotControllerInputError_IsDistinguishable(t *testing.T) {
 // viewer genuinely holds it.
 func TestEnsureControlForInput_UserDrivesByDefault(t *testing.T) {
 	t.Run("grants when uncontrolled", func(t *testing.T) {
-		lv := &LiveView{viewers: map[string]FrameSink{}}
+		lv := &LiveView{viewers: map[string]struct{}{}}
 		if !lv.ensureControlForInput("v1") {
 			t.Fatal("input from a viewer must acquire a free lock — the user drives by default")
 		}
@@ -60,7 +60,7 @@ func TestEnsureControlForInput_UserDrivesByDefault(t *testing.T) {
 	})
 
 	t.Run("idempotent for the existing holder", func(t *testing.T) {
-		lv := &LiveView{viewers: map[string]FrameSink{}, controller: "v1"}
+		lv := &LiveView{viewers: map[string]struct{}{}, controller: "v1"}
 		if !lv.ensureControlForInput("v1") {
 			t.Fatal("the current holder must keep control")
 		}
@@ -70,7 +70,7 @@ func TestEnsureControlForInput_UserDrivesByDefault(t *testing.T) {
 		// The 2026-07-30 failure: a viewer that vanished without a clean
 		// close still owns the lock (detach never ran), so every later
 		// connection was locked out of a browser nobody was driving.
-		lv := &LiveView{viewers: map[string]FrameSink{}, controller: "ghost"}
+		lv := &LiveView{viewers: map[string]struct{}{}, controller: "ghost"}
 		if !lv.ensureControlForInput("v2") {
 			t.Fatal("a lock held by a no-longer-attached viewer must be stealable, else it wedges forever")
 		}
@@ -81,7 +81,7 @@ func TestEnsureControlForInput_UserDrivesByDefault(t *testing.T) {
 
 	t.Run("refuses when another LIVE viewer holds it", func(t *testing.T) {
 		lv := &LiveView{
-			viewers:    map[string]FrameSink{"other": func(LiveFrame) {}},
+			viewers:    map[string]struct{}{"other": {}},
 			controller: "other",
 		}
 		if lv.ensureControlForInput("v2") {

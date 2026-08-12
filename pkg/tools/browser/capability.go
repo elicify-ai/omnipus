@@ -173,8 +173,9 @@ func ClassifyVideoCapability(installRoot string) VideoCapability {
 // probing) — this function does no additional validation of its own.
 // Misclassifying a genuinely non-capable custom binary as capable is not
 // fatal to the product: the capture session simply fails to start and the
-// panel stays on the JPEG fallback tier (ADR-047 D3), exactly like any other
-// capture-path failure.
+// panel reports browser_webrtc_state{available:false}, exactly like any
+// other capture-path failure — there is no fallback tier to degrade to
+// (ADR-061).
 //
 // ADR-052 Phase 3: the per-OS gate now consults videoCapableOS — darwin
 // passes only when the AC-1 audio spike (darwinAudioVerified) proves audio;
