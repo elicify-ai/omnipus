@@ -43,6 +43,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
@@ -68,6 +69,20 @@ type crossAgentSetup struct {
 func newCrossAgentSetup(t *testing.T) *crossAgentSetup {
 	t.Helper()
 	home := t.TempDir()
+	// ADR-061 / spec unified-file-access-and-mounts FR-2.2: reads (and, per
+	// FR-2.3/FR-2.3a, sends) are no longer confined by Scope/WorkDir alone —
+	// the within-WorkDir check this file's own doc comment describes as
+	// "the" C5-DIRECT/C5-SYMLINK control is deliberately narrowed to writes.
+	// The REAL production defense against a cross-agent read/send is now
+	// fspolicy.IsCarveOut's unconditional agents/ carve-out (FR-3), which is
+	// anchored on config.OmnipusHomeDir() — production always reaches it via
+	// ResolveTurnFSPolicy. Without this env var, config.OmnipusHomeDir()
+	// silently fell back to the real machine's $HOME/.omnipus, so the
+	// carve-out roots never matched anything under this test's own tempdir
+	// and this whole fixture was — even before FR-2 — accidentally relying
+	// SOLELY on the (now-narrowed-to-writes) WorkDir check to pass. Setting
+	// this makes the fixture exercise the actual production control.
+	t.Setenv(config.EnvHome, home)
 	agents := filepath.Join(home, "agents")
 	wsA := filepath.Join(agents, "agent-A")
 	wsB := filepath.Join(agents, "agent-B")

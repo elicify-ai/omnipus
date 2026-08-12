@@ -52,9 +52,18 @@ func TestTools_RouteThroughResolvePath(t *testing.T) {
 			t.Errorf("expected file content, got: %s", ok.ForLLM)
 		}
 
-		denied := tool.Execute(ctx, map[string]any{"path": outsideFile})
-		if !denied.IsError {
-			t.Fatalf("outside-scope read must be refused, got: %s", denied.ForLLM)
+		// ADR-061 / spec unified-file-access-and-mounts FR-2.2: reads are
+		// open outside the work dir (minus the secret set) — this used to
+		// assert the opposite (outside-scope read refused). The tool must
+		// still actually route through ResolvePath and perform real I/O,
+		// which this now proves by checking the real outside content comes
+		// back, rather than by checking for a denial.
+		allowed := tool.Execute(ctx, map[string]any{"path": outsideFile})
+		if allowed.IsError {
+			t.Fatalf("FR-2.2: outside-scope read must now succeed, got error: %s", allowed.ForLLM)
+		}
+		if !strings.Contains(allowed.ForLLM, "out-of-scope") {
+			t.Errorf("expected real outside-of-scope content, got: %s", allowed.ForLLM)
 		}
 	})
 
@@ -131,11 +140,18 @@ func TestTools_RouteThroughResolvePath(t *testing.T) {
 	})
 }
 
-// TestFilesystemScope_SymmetricReadAndWrite — spec test 34 (FR-032):
-// filesystem_scope is a single symmetric tri-state governing both read and
-// write — a write outside work/ under a Confined scope must be refused
-// identically to a read.
-func TestFilesystemScope_SymmetricReadAndWrite(t *testing.T) {
+// TestFilesystemScope_ReadWideWriteConfined_SamePath — was
+// TestFilesystemScope_SymmetricReadAndWrite (spec test 34 / FR-032:
+// "filesystem_scope is a single symmetric tri-state governing both read and
+// write"). ADR-061 / spec unified-file-access-and-mounts FR-2.2/FR-2.5
+// retires that symmetry ON PURPOSE — it is the single change the whole spec
+// exists to make: a read outside work/ now SUCCEEDS (minus the secret set)
+// while a write to the SAME path under the SAME Confined scope is still
+// refused. This is the tool-level (not bare-ResolvePath-level) instance of
+// that headline pair — see also
+// TestFR2_HeadlinePair_ReadSucceedsWriteDenied_SamePath in
+// resolvepath_test.go for the ResolvePath-level version.
+func TestFilesystemScope_ReadWideWriteConfined_SamePath(t *testing.T) {
 	ctx := context.Background()
 	ws := t.TempDir()
 	outside := t.TempDir()
@@ -146,8 +162,11 @@ func TestFilesystemScope_SymmetricReadAndWrite(t *testing.T) {
 
 	readTool := NewReadFileTool(ws, true, MaxReadFileSize)
 	readResult := readTool.Execute(ctx, map[string]any{"path": outsideFile})
-	if !readResult.IsError {
-		t.Fatalf("read outside work/ under Confined must be refused, got: %s", readResult.ForLLM)
+	if readResult.IsError {
+		t.Fatalf("FR-2.2: read outside work/ under Confined must now succeed, got error: %s", readResult.ForLLM)
+	}
+	if !strings.Contains(readResult.ForLLM, "existing") {
+		t.Errorf("expected real outside content, got: %s", readResult.ForLLM)
 	}
 
 	writeTool := NewWriteFileTool(ws, true)
@@ -155,10 +174,10 @@ func TestFilesystemScope_SymmetricReadAndWrite(t *testing.T) {
 		"path": outsideFile, "content": "tampered", "overwrite": true,
 	})
 	if !writeResult.IsError {
-		t.Fatalf("write outside work/ under Confined must be refused identically to read, got: %s", writeResult.ForLLM)
+		t.Fatalf("FR-2.2: write outside work/ under Confined must still be refused, got: %s", writeResult.ForLLM)
 	}
 
-	// Neither call actually touched the target file.
+	// The write attempt did not touch the target file.
 	data, err := os.ReadFile(outsideFile)
 	if err != nil || string(data) != "existing" {
 		t.Fatalf("outside file must be untouched: data=%q err=%v", data, err)

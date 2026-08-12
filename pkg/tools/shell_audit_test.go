@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // ---------------------------------------------------------------------------
@@ -70,8 +71,27 @@ func TestExecTool_AuditOnPathRejection(t *testing.T) {
 // Traces to: path-sandbox-and-capability-tiers-spec.md
 // ---------------------------------------------------------------------------
 
+// NOTE — ADR-061 / spec unified-file-access-and-mounts FR-2.2: reads are now
+// open outside the work dir, so a ReadFileTool no longer rejects
+// "/etc/passwd" the way this test originally exercised — that path is not
+// in the secret set, so FSOpRead now succeeds on it by design. The
+// audit-on-rejection code path (emitPathAccessDenied, filesystem.go's
+// ReadFileTool.Execute) is still real and still needed for the one class of
+// path a read is STILL denied on: the secret set (fspolicy.IsCarveOut,
+// unconditional regardless of op — FR-017/FR-3). This test now targets
+// master.key under a properly-wired $OMNIPUS_HOME instead of an arbitrary
+// host path, which is genuinely denied under FR-2 too.
 func TestReadFileTool_AuditOnPathRejection_AccessDeniedEmitted(t *testing.T) {
-	workspace := t.TempDir()
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	workspace := filepath.Join(home, "agents", "self")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	masterKey := filepath.Join(home, "master.key")
+	if err := os.WriteFile(masterKey, []byte("key-material"), 0o600); err != nil {
+		t.Fatalf("seed master.key: %v", err)
+	}
 	auditDir := t.TempDir()
 
 	auditLogger, err := audit.NewLogger(audit.LoggerConfig{
@@ -85,11 +105,11 @@ func TestReadFileTool_AuditOnPathRejection_AccessDeniedEmitted(t *testing.T) {
 
 	ctx := WithToolContext(context.Background(), "test-agent", "")
 
-	result := tool.Execute(ctx, map[string]any{"path": "/etc/passwd"})
+	result := tool.Execute(ctx, map[string]any{"path": masterKey})
 
-	// Tool must reject.
+	// Tool must reject — FR-017/FR-3: the secret set is denied for every op.
 	require.True(t, result.IsError,
-		"ReadFileTool must reject /etc/passwd with IsError=true")
+		"ReadFileTool must reject master.key with IsError=true")
 	assert.NotEmpty(t, result.ForLLM, "ForLLM must be non-empty on path rejection")
 
 	// Audit file must be written.
@@ -300,13 +320,18 @@ func TestKillAuditFn_NilAfterNilLogger(t *testing.T) {
 // Differentiation test: two different rejected paths produce real error results.
 // ---------------------------------------------------------------------------
 
+// NOTE — ADR-061 / spec unified-file-access-and-mounts FR-2.2: reads are now
+// open outside the work dir, so a ReadFileTool no longer rejects either
+// path here. This test now drives a WriteFileTool (still confined to the
+// work dir regardless of Scope, FR-2.2/FR-2.5) to keep exercising "two
+// different rejected paths are both denied".
 func TestReadFileTool_DifferentRejectedPaths_BothDenied(t *testing.T) {
 	workspace := t.TempDir()
-	tool := NewReadFileTool(workspace, true, 0)
+	tool := NewWriteFileTool(workspace, true)
 	ctx := WithToolContext(context.Background(), "test-agent", "")
 
-	result1 := tool.Execute(ctx, map[string]any{"path": "/etc/passwd"})
-	result2 := tool.Execute(ctx, map[string]any{"path": "/etc/shadow"})
+	result1 := tool.Execute(ctx, map[string]any{"path": "/etc/passwd", "content": "x", "overwrite": true})
+	result2 := tool.Execute(ctx, map[string]any{"path": "/etc/shadow", "content": "x", "overwrite": true})
 
 	// Both must be errors.
 	require.True(t, result1.IsError, "/etc/passwd: must be rejected")

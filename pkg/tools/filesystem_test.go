@@ -369,8 +369,17 @@ func TestFilesystemTool_ListDir_DefaultPath(t *testing.T) {
 	}
 }
 
-// Block paths that look inside workspace but point outside via symlink.
-func TestFilesystemTool_ReadFile_RejectsSymlinkEscape(t *testing.T) {
+// TestFilesystemTool_ReadFile_SymlinkEscape_NowOpen — was
+// TestFilesystemTool_ReadFile_RejectsSymlinkEscape ("block paths that look
+// inside workspace but point outside via symlink"). ADR-061 / spec
+// unified-file-access-and-mounts FR-2.2 retires this for READS specifically:
+// a read through a symlink escape now succeeds, exactly like an ordinary
+// outside-work-dir read — reads are open regardless of how the outside
+// target was reached, minus the secret set (fspolicy.IsCarveOut, unaffected
+// here since "secret.txt" is an ordinary tempdir file, not
+// $OMNIPUS_HOME-anchored). See TestWhitelistFs_WriteSymlinkEscapeInAllowedDir
+// for the write-side symlink-escape guard, which still holds.
+func TestFilesystemTool_ReadFile_SymlinkEscape_NowOpen(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
@@ -392,15 +401,11 @@ func TestFilesystemTool_ReadFile_RejectsSymlinkEscape(t *testing.T) {
 		"path": link,
 	})
 
-	if !result.IsError {
-		t.Fatalf("expected symlink escape to be blocked")
+	if result.IsError {
+		t.Fatalf("FR-2.2: expected a read through a symlink escape to succeed, got error: %s", result.ForLLM)
 	}
-	// os.Root might return different errors depending on platform/implementation
-	// but it definitely should error.
-	// Our wrapper returns "access denied or file not found"
-	if !strings.Contains(result.ForLLM, "access denied") && !strings.Contains(result.ForLLM, "file not found") &&
-		!strings.Contains(result.ForLLM, "no such file") {
-		t.Fatalf("expected symlink escape error, got: %s", result.ForLLM)
+	if !strings.Contains(result.ForLLM, "top secret") {
+		t.Fatalf("expected the real symlink-target content, got: %s", result.ForLLM)
 	}
 }
 
@@ -563,14 +568,22 @@ func TestRootRW_Read_Directory(t *testing.T) {
 	assert.Error(t, err, "expected error when reading a directory as a file")
 }
 
-// TestHostRW_Write_ParentDirMissing verifies that the host-mode PathHandle
-// creates parent dirs automatically.
-func TestHostRW_Write_ParentDirMissing(t *testing.T) {
+// TestHostRW_Write_ParentDirMissing_OutsideWorkDir_Denied — ADR-061 / spec
+// unified-file-access-and-mounts FR-2.2/FR-2.5: writes are confined to the
+// work dir or a mount regardless of policy.Scope, so a host-mode
+// (Unrestricted) write to a location outside WorkDir — even one whose parent
+// dirs don't exist yet — is now refused with ErrOutsideScope rather than
+// auto-creating the missing parents on the host filesystem. This test used
+// to be named TestHostRW_Write_ParentDirMissing and asserted the opposite
+// (success); see TestRootRW_Write_ParentDirMissing below for the
+// still-current in-WorkDir parent-creation behavior this file's other half
+// exercises.
+func TestHostRW_Write_ParentDirMissing_OutsideWorkDir_Denied(t *testing.T) {
 	workDir := t.TempDir()
 	tmpDir := t.TempDir()
 	target := filepath.Join(tmpDir, "a", "b", "c", "file.txt")
 
-	handle, err := ResolvePath(
+	_, err := ResolvePath(
 		context.Background(),
 		unrestrictedPolicy(t, workDir),
 		"write_file",
@@ -578,15 +591,12 @@ func TestHostRW_Write_ParentDirMissing(t *testing.T) {
 		FSOpWrite,
 		target,
 	)
-	assert.NoError(t, err)
-	defer handle.Close()
+	assert.Error(t, err, "FR-2.2: a write outside WorkDir and outside any mount must be denied, even under Unrestricted scope")
+	assert.ErrorIs(t, err, ErrOutsideScope)
 
-	err = handle.WriteFile([]byte("hello"))
-	assert.NoError(t, err)
-
-	data, err := os.ReadFile(target)
-	assert.NoError(t, err)
-	assert.Equal(t, "hello", string(data))
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("target must not have been created: stat err=%v", statErr)
+	}
 }
 
 // TestRootRW_Write_ParentDirMissing verifies that the confined
@@ -608,14 +618,19 @@ func TestRootRW_Write_ParentDirMissing(t *testing.T) {
 	assert.Equal(t, "nested", string(data))
 }
 
-// TestHostRW_Write verifies the host-mode PathHandle.WriteFile helper.
-func TestHostRW_Write(t *testing.T) {
+// TestHostRW_Write_OutsideWorkDir_Denied — was TestHostRW_Write, asserting
+// that a host-mode (Unrestricted) write to a path outside WorkDir succeeds.
+// ADR-061 / spec unified-file-access-and-mounts FR-2.2/FR-2.5 changes this:
+// writes are confined to the work dir or a mount regardless of Scope, so
+// this now must be refused. This is the write half of the FR-2 headline pair
+// — see TestResolvePath_HeadlinePair_ReadSucceeds_WriteDenied_SamePath for
+// the same property asserted directly against a read of the identical path.
+func TestHostRW_Write_OutsideWorkDir_Denied(t *testing.T) {
 	workDir := t.TempDir()
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "atomic_test.txt")
-	testData := []byte("atomic test content")
 
-	handle, err := ResolvePath(
+	_, err := ResolvePath(
 		context.Background(),
 		unrestrictedPolicy(t, workDir),
 		"write_file",
@@ -623,24 +638,19 @@ func TestHostRW_Write(t *testing.T) {
 		FSOpWrite,
 		testFile,
 	)
-	assert.NoError(t, err)
-	defer handle.Close()
+	assert.Error(t, err, "FR-2.2: writes outside WorkDir and outside any mount are denied, even under Unrestricted scope")
+	assert.ErrorIs(t, err, ErrOutsideScope)
 
-	err = handle.WriteFile(testData)
-	assert.NoError(t, err)
+	if _, statErr := os.Stat(testFile); !os.IsNotExist(statErr) {
+		t.Fatalf("target must not have been created: stat err=%v", statErr)
+	}
 
-	content, err := os.ReadFile(testFile)
-	assert.NoError(t, err)
-	assert.Equal(t, testData, content)
-
-	// Verify it overwrites correctly
-	newData := []byte("new atomic content")
-	err = handle.WriteFile(newData)
-	assert.NoError(t, err)
-
-	content, err = os.ReadFile(testFile)
-	assert.NoError(t, err)
-	assert.Equal(t, newData, content)
+	// The SAME path is still readable — the read/write split is the point.
+	handle, err := ResolvePath(context.Background(), unrestrictedPolicy(t, workDir), "read_file", "", FSOpRead, testFile)
+	if err != nil {
+		t.Fatalf("expected the same outside-WorkDir path to remain readable, got: %v", err)
+	}
+	handle.Close()
 }
 
 // TestRootRW_Write verifies the confined (os.Root-backed)
@@ -684,8 +694,14 @@ func TestRootRW_Write(t *testing.T) {
 	assert.Equal(t, newData, content)
 }
 
-// TestWhitelistFs_AllowsMatchingPaths verifies that whitelistFs allows access to
-// paths matching the whitelist patterns while blocking non-matching paths.
+// TestWhitelistFs_AllowsMatchingPaths verifies that the AllowReadPaths
+// regex axis still grants a matching outside path. ADR-061 / spec
+// unified-file-access-and-mounts FR-2.2 UPDATE: the second half of this
+// test used to assert that a NON-whitelisted outside path is blocked for a
+// read — that assertion is retired by design. Reads are now open outside
+// the work dir regardless of any AllowReadPaths configuration (a read
+// whitelist is a strict SUBSET of what reads already permit post-FR-2), so
+// both the matching and the non-matching outside path now succeed.
 func TestWhitelistFs_AllowsMatchingPaths(t *testing.T) {
 	workspace := t.TempDir()
 	outsideDir := t.TempDir()
@@ -706,18 +722,31 @@ func TestWhitelistFs_AllowsMatchingPaths(t *testing.T) {
 		t.Errorf("expected file content, got: %s", result.ForLLM)
 	}
 
-	// Read from non-whitelisted path outside workspace should fail.
+	// FR-2.2: a read from a NON-whitelisted path outside the workspace now
+	// ALSO succeeds — reads are open regardless of the whitelist.
 	otherDir := t.TempDir()
 	otherFile := filepath.Join(otherDir, "blocked.txt")
-	os.WriteFile(otherFile, []byte("blocked"), 0o644)
+	os.WriteFile(otherFile, []byte("not-actually-blocked"), 0o644)
 
 	result = tool.Execute(context.Background(), map[string]any{"path": otherFile})
-	if !result.IsError {
-		t.Errorf("expected non-whitelisted path to be blocked, got: %s", result.ForLLM)
+	if result.IsError {
+		t.Errorf("FR-2.2: expected a non-whitelisted outside read to succeed too, got error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "not-actually-blocked") {
+		t.Errorf("expected real content, got: %s", result.ForLLM)
 	}
 }
 
-func TestWhitelistFs_BlocksSymlinkEscapeInAllowedDir(t *testing.T) {
+// TestWhitelistFs_ReadSymlinkEscapeInAllowedDir_NowOpen — was
+// TestWhitelistFs_BlocksSymlinkEscapeInAllowedDir. ADR-061 / spec
+// unified-file-access-and-mounts FR-2.2: a read through this symlink now
+// succeeds — reads are open outside the work dir regardless of pattern
+// match or symlink target. The WRITE-side counterpart of this exact
+// fixture (symlink inside an AllowWritePaths-granted dir, escaping to a
+// secret dir) still correctly denies — see
+// TestWhitelistFs_WriteSymlinkEscapeInAllowedDir_StillBlocked immediately
+// below, which is the meaningful security property this test used to name.
+func TestWhitelistFs_ReadSymlinkEscapeInAllowedDir_NowOpen(t *testing.T) {
 	workspace := t.TempDir()
 	allowedDir := t.TempDir()
 	secretDir := t.TempDir()
@@ -735,8 +764,49 @@ func TestWhitelistFs_BlocksSymlinkEscapeInAllowedDir(t *testing.T) {
 	tool := NewReadFileTool(workspace, true, MaxReadFileSize, patterns)
 
 	result := tool.Execute(context.Background(), map[string]any{"path": filepath.Join(linkPath, "secret.txt")})
+	if result.IsError {
+		t.Fatalf("FR-2.2: expected the read through the symlink escape to succeed, got error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "top secret") {
+		t.Fatalf("expected the real symlink-target content, got: %s", result.ForLLM)
+	}
+}
+
+// TestWhitelistFs_WriteSymlinkEscapeInAllowedDir_StillBlocked is the write
+// half of the fixture above, preserving the meaningful security property:
+// a symlink inside an AllowWritePaths-granted directory that resolves
+// OUTSIDE it must still be refused for a WRITE — writes remain confined to
+// the work dir or a mount regardless of any pattern match (FR-2.2/FR-2.5),
+// and ResolvePathAllowingPatterns's AllowedRoots grant (this file's
+// production fix for keeping the whitelist axis working under FR-2) only
+// ever grants the SPECIFIC resolved path isAllowedPath already vetted —
+// isAllowedPath itself re-checks the pattern against the fully
+// symlink-resolved path (matchesAllowedPath via
+// resolvePathAgainstExistingAncestor), so a resolved target outside
+// allowedDir never matches the pattern in the first place and never gets a
+// grant.
+func TestWhitelistFs_WriteSymlinkEscapeInAllowedDir_StillBlocked(t *testing.T) {
+	workspace := t.TempDir()
+	allowedDir := t.TempDir()
+	secretDir := t.TempDir()
+
+	linkPath := filepath.Join(allowedDir, "link_out")
+	if err := os.Symlink(secretDir, linkPath); err != nil {
+		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+
+	patterns := []*regexp.Regexp{regexp.MustCompile(`^` + regexp.QuoteMeta(allowedDir))}
+	tool := NewWriteFileTool(workspace, true, patterns)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":    filepath.Join(linkPath, "evil.txt"),
+		"content": "agent tried to escape via symlink",
+	})
 	if !result.IsError {
-		t.Fatalf("expected symlink escape from allowed dir to be blocked, got: %s", result.ForLLM)
+		t.Fatalf("expected a write through the symlink escape to still be blocked, got: %s", result.ForLLM)
+	}
+	if _, statErr := os.Stat(filepath.Join(secretDir, "evil.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("write must not have landed in secretDir: stat err=%v", statErr)
 	}
 }
 

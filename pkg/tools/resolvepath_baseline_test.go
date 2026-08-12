@@ -229,10 +229,15 @@ func TestBaseline_Confined_ReadWriteMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("outside WorkDir (unrelated dir): read denied ErrOutsideScope", func(t *testing.T) {
-		_, err := ResolvePath(context.Background(), policy, "baseline", "", FSOpRead, tr.outsideFile)
-		if !errors.Is(err, ErrOutsideScope) {
-			t.Errorf("err = %v, want ErrOutsideScope", err)
+	t.Run("outside WorkDir (unrelated dir): read now ALLOWED (ADR-061 / spec unified-file-access-and-mounts FR-2.2 — reads are open outside WorkDir, regardless of Scope)", func(t *testing.T) {
+		h, err := ResolvePath(context.Background(), policy, "baseline", "", FSOpRead, tr.outsideFile)
+		if err != nil {
+			t.Fatalf("FR-2.2: expected a Confined read outside WorkDir to succeed, got: %v", err)
+		}
+		defer h.Close()
+		data, err := h.ReadFile()
+		if err != nil || string(data) != "outside content" {
+			t.Fatalf("ReadFile: data=%q err=%v", data, err)
 		}
 	})
 
@@ -261,11 +266,12 @@ func TestBaseline_Confined_ReadWriteMatrix(t *testing.T) {
 		t.Fatalf("filepath.Rel: %v", err)
 	}
 
-	t.Run("leading .. escape (to a genuinely unrelated dir, not a carve-out): read denied ErrOutsideScope", func(t *testing.T) {
-		_, err := ResolvePath(context.Background(), policy, "baseline", "", FSOpRead, relEscapeToOutside)
-		if !errors.Is(err, ErrOutsideScope) {
-			t.Errorf("err = %v, want ErrOutsideScope", err)
+	t.Run("leading .. escape (to a genuinely unrelated dir, not a carve-out): read now ALLOWED (FR-2.2)", func(t *testing.T) {
+		h, err := ResolvePath(context.Background(), policy, "baseline", "", FSOpRead, relEscapeToOutside)
+		if err != nil {
+			t.Fatalf("FR-2.2: expected a Confined '..' escape read to succeed, got: %v", err)
 		}
+		h.Close()
 	})
 
 	t.Run("leading .. escape (to a genuinely unrelated dir, not a carve-out): write denied ErrOutsideScope", func(t *testing.T) {
@@ -275,15 +281,16 @@ func TestBaseline_Confined_ReadWriteMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("symlink inside WorkDir pointing outside: read denied ErrOutsideScope", func(t *testing.T) {
+	t.Run("symlink inside WorkDir pointing outside: read now ALLOWED (FR-2.2)", func(t *testing.T) {
 		link := filepath.Join(tr.agentSelf, "escape_link")
 		if err := os.Symlink(tr.outsideFile, link); err != nil {
 			t.Skipf("symlinks not supported: %v", err)
 		}
-		_, err := ResolvePath(context.Background(), policy, "baseline", "", FSOpRead, "escape_link")
-		if !errors.Is(err, ErrOutsideScope) {
-			t.Errorf("err = %v, want ErrOutsideScope", err)
+		h, err := ResolvePath(context.Background(), policy, "baseline", "", FSOpRead, "escape_link")
+		if err != nil {
+			t.Fatalf("FR-2.2: expected a Confined symlink-escape read to succeed, got: %v", err)
 		}
+		h.Close()
 	})
 
 	t.Run("symlink inside WorkDir pointing outside: write denied ErrOutsideScope", func(t *testing.T) {
@@ -327,12 +334,14 @@ func TestBaseline_Confined_ReadWriteMatrix(t *testing.T) {
 // ============================================================================
 
 // TestBaseline_Unrestricted_ReadWriteMatrix is the unrestricted-scope
-// counterpart. The headline finding here (task item 2, item 4): under
-// Unrestricted, a write OUTSIDE WorkDir succeeds exactly like a read does
-// today — ResolvePath does not yet look at op at all (FSOpWrite is
-// discarded, resolvepath.go's own doc comment: "P1 does not branch on it").
-// FR-2.5 changes this later (writes become work-dir-or-mount-only); this
-// test is the regression net for that exact change.
+// counterpart. UPDATED for ADR-061 / spec unified-file-access-and-mounts
+// FR-2.2/FR-2.5, which this file's own original comment named as the
+// expected future change: a write OUTSIDE WorkDir under Unrestricted no
+// longer succeeds like a read does — ResolvePath now dispatches on op, and
+// FSOpWrite is confined to WorkDir/a mount regardless of Scope. This test
+// is the regression net that PROVES that change landed, not (as originally
+// written) the baseline photograph of the pre-change behaviour it still
+// documents in its sub-test names.
 func TestBaseline_Unrestricted_ReadWriteMatrix(t *testing.T) {
 	tr := newBaselineTree(t)
 	policy := policyFor(t, tr, tr.agentSelf, false)
@@ -355,19 +364,14 @@ func TestBaseline_Unrestricted_ReadWriteMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("outside WorkDir, non-carve-out: write ALSO succeeds today — writes are NOT yet confined under Unrestricted (spec FR-2.5, narrower, will change this)", func(t *testing.T) {
+	t.Run("outside WorkDir, non-carve-out: write now DENIED under Unrestricted too (ADR-061 / spec unified-file-access-and-mounts FR-2.2/FR-2.5 — this test's own doc comment named this as the expected future change)", func(t *testing.T) {
 		target := filepath.Join(tr.outside, "written_by_agent.txt")
-		h, err := ResolvePath(context.Background(), policy, "baseline", "", FSOpWrite, target)
-		if err != nil {
-			t.Fatalf("ResolvePath: %v", err)
+		_, err := ResolvePath(context.Background(), policy, "baseline", "", FSOpWrite, target)
+		if !errors.Is(err, ErrOutsideScope) {
+			t.Errorf("err = %v, want ErrOutsideScope — FR-2.2: writes are confined to WorkDir/a mount regardless of Scope", err)
 		}
-		defer h.Close()
-		if err := h.WriteFile([]byte("agent wrote this")); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
-		data, rerr := os.ReadFile(target)
-		if rerr != nil || string(data) != "agent wrote this" {
-			t.Fatalf("write did not persist: data=%q err=%v", data, rerr)
+		if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+			t.Fatalf("target must not have been created: stat err=%v", statErr)
 		}
 	})
 
@@ -464,26 +468,33 @@ func TestBaseline_OwnTreeException_BothShapes_ThroughRealCallPath(t *testing.T) 
 // Section D — op is (still) ignored (task item 4)
 // ============================================================================
 
-// TestBaseline_FSOp_CurrentlyIgnored is the direct, minimal proof of task
-// item 4: ResolvePath's own doc comment says op drives no P1 decision
-// (resolvepath.go: "P1 does not branch on it ... `_ = op`"). This test WILL
-// legitimately need updating once FR-2 lands (FSOpWrite must then be refused
-// in the cases where FSOpRead is allowed) — that is expected, not a
-// regression, and is exactly why this row names FR-2 explicitly rather than
-// leaving a bare assertion for a future reader to puzzle over.
-func TestBaseline_FSOp_CurrentlyIgnored(t *testing.T) {
+// TestBaseline_FSOp_IsNowConsulted — was TestBaseline_FSOp_CurrentlyIgnored,
+// the direct, minimal proof of task item 4. Its own doc comment predicted
+// exactly this: "This test WILL legitimately need updating once FR-2
+// lands... that is expected, not a regression." ADR-061 / spec
+// unified-file-access-and-mounts FR-2.1/FR-2.2 has now landed (the `_ = op`
+// line is deleted, resolvepath.go), so this test now asserts the OPPOSITE
+// of its original name: op DOES drive ResolvePath's decision for a path
+// outside WorkDir. Read and write no longer get identical treatment under
+// either Scope.
+func TestBaseline_FSOp_IsNowConsulted(t *testing.T) {
 	tr := newBaselineTree(t)
 
-	t.Run("confined, outside WorkDir non-carve-out path: read and write get the IDENTICAL denial", func(t *testing.T) {
+	t.Run("confined, outside WorkDir non-carve-out path: read now succeeds, write is still refused — op splits the outcome", func(t *testing.T) {
 		policy := policyFor(t, tr, tr.agentSelf, true)
-		_, readErr := ResolvePath(context.Background(), policy, "baseline", "", FSOpRead, tr.outsideFile)
+		readHandle, readErr := ResolvePath(context.Background(), policy, "baseline", "", FSOpRead, tr.outsideFile)
+		if readErr != nil {
+			t.Fatalf("FR-2.2: expected the read to succeed, got: %v", readErr)
+		}
+		readHandle.Close()
+
 		_, writeErr := ResolvePath(context.Background(), policy, "baseline", "", FSOpWrite, tr.outsideFile)
-		if !errors.Is(readErr, ErrOutsideScope) || !errors.Is(writeErr, ErrOutsideScope) {
-			t.Fatalf("expected both ops to be refused with ErrOutsideScope: read=%v write=%v", readErr, writeErr)
+		if !errors.Is(writeErr, ErrOutsideScope) {
+			t.Fatalf("expected the write to still be refused with ErrOutsideScope, got: %v", writeErr)
 		}
 	})
 
-	t.Run("unrestricted, outside WorkDir non-carve-out path: read and write BOTH succeed — FR-2.2/FR-2.5 will split this", func(t *testing.T) {
+	t.Run("unrestricted, outside WorkDir non-carve-out path: read succeeds, write is now DENIED — op splits the outcome regardless of Scope", func(t *testing.T) {
 		policy := policyFor(t, tr, tr.agentSelf, false)
 		readHandle, readErr := ResolvePath(context.Background(), policy, "baseline", "", FSOpRead, tr.outsideFile)
 		if readErr != nil {
@@ -492,14 +503,12 @@ func TestBaseline_FSOp_CurrentlyIgnored(t *testing.T) {
 		readHandle.Close()
 
 		writeTarget := filepath.Join(tr.outside, "op_ignored_write.txt")
-		writeHandle, writeErr := ResolvePath(context.Background(), policy, "baseline", "", FSOpWrite, writeTarget)
-		if writeErr != nil {
-			t.Fatalf("write: %v — TODAY this must succeed identically to read; spec FR-2.2 confines writes to work dir/mounts only, which is the intended future change, named here so this test's eventual failure is expected, not alarming",
-				writeErr)
+		_, writeErr := ResolvePath(context.Background(), policy, "baseline", "", FSOpWrite, writeTarget)
+		if !errors.Is(writeErr, ErrOutsideScope) {
+			t.Fatalf("FR-2.2/FR-2.5: expected the write to now be denied even under Unrestricted, got: %v", writeErr)
 		}
-		defer writeHandle.Close()
-		if err := writeHandle.WriteFile([]byte("op ignored")); err != nil {
-			t.Fatalf("WriteFile: %v", err)
+		if _, statErr := os.Stat(writeTarget); !os.IsNotExist(statErr) {
+			t.Fatalf("target must not have been created: stat err=%v", statErr)
 		}
 	})
 }

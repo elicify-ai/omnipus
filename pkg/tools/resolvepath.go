@@ -16,11 +16,14 @@
 //
 // P1 scope: this file implements confined-vs-unrestricted resolution only
 // (fspolicy.FSScopeConfined / fspolicy.FSScopeUnrestricted). The ask/allow
-// tri-state (fspolicy.FSScopeAsk / FSScopeAllow) is P2 — toolName/callID/op
-// are threaded through the signature for that future ask-flow + audit
-// dimension but are NOT consulted for any decision here (Constraint #6: no
-// invented default, no early branch on a scope this package doesn't yet
-// implement).
+// tri-state (fspolicy.FSScopeAsk / FSScopeAllow) is P2 — toolName/callID are
+// threaded through the signature for that future ask-flow + audit dimension
+// but are NOT consulted for any decision here (Constraint #6: no invented
+// default, no early branch on a scope this package doesn't yet implement).
+//
+// ADR-061 / spec unified-file-access-and-mounts FR-2: op IS now consulted —
+// see FSOp's own doc comment and ResolvePath's resolution-order comment
+// below for the operation-aware decision table.
 
 package tools
 
@@ -41,10 +44,25 @@ import (
 )
 
 // FSOp classifies the filesystem operation a ResolvePath caller is about to
-// perform. P1 does not branch on it (no read/write policy split — FR-032
-// requires a single symmetric tri-state); it is threaded through so the P2
-// ask-flow and the FR-035 audit dimension can key off it later without a
-// signature change.
+// perform. Originally threaded through as an inert seam for the P2 ask-flow
+// and the FR-035 audit dimension (ADR-046 P1 discarded it via `_ = op`) —
+// ADR-061 / spec unified-file-access-and-mounts FR-2 makes it load-bearing:
+// ResolvePath's decision for a path OUTSIDE the effective working directory
+// now depends on op:
+//
+//	FSOpRead, FSOpList, FSOpSend  allowed anywhere except the secret set
+//	                              (fspolicy.IsCarveOut, checked unconditionally
+//	                              regardless of op — see ResolvePath below)
+//	FSOpWrite, FSOpServe          work dir or a mount (policy.AllowedRoots)
+//	                              only — never open, regardless of Scope
+//	FSOpExec                      per the ADR-060 kernel model — left on the
+//	                              pre-FR-2 Scope-based path unchanged
+//
+// The zero value is REFUSED, not defaulted (FR-2.4): every real call site
+// already passes one of the named constants below, so an empty FSOp
+// reaching ResolvePath is a caller bug, and ResolvePath fails loudly on it
+// rather than silently taking whichever branch a switch's default case
+// would otherwise fall into.
 type FSOp string
 
 const (
@@ -53,6 +71,16 @@ const (
 	FSOpList  FSOp = "list"
 	FSOpExec  FSOp = "exec"
 	FSOpServe FSOp = "serve"
+
+	// FSOpSend distinguishes a disclosure to a chat channel (send_file) from
+	// an ordinary read, purely for audit and any future ask-flow (FR-2.3a).
+	// It carries NO additional path restriction beyond the open-read rule —
+	// the operator explicitly rejected a path-based "publish" gate for
+	// send_file (spec FR-2.3): it would have been bypassable in one extra
+	// step (read_file the path, paste the contents into the chat message),
+	// so the real gate is tool policy (Constraint #6), which already exists,
+	// is explicit per agent, and is hard-validated with no defaults.
+	FSOpSend FSOp = "send"
 )
 
 // PathHandle is the sanctioned I/O handle ResolvePath returns. root is nil
@@ -249,29 +277,46 @@ func (h *PathHandle) Close() error {
 // ResolvePath is the single, mandatory path-resolution chokepoint (FR-003).
 // rawPath is the caller-supplied (LLM/tool-argument) path; policy is the
 // turn's single source-of-record FSPolicy (fspolicy.EffectiveFSPolicy).
-// toolName, callID, and op are threaded through for the P2 ask-flow and the
-// FR-035 audit dimension but drive NO decision in this P1 implementation.
+// toolName and callID are threaded through for the P2 ask-flow and the
+// FR-035 audit dimension but drive NO decision in this implementation. op
+// DOES drive a decision as of ADR-061 / spec unified-file-access-and-mounts
+// FR-2 — see FSOp's doc comment and step 3 below.
 //
 // Resolution order:
-//  0. Validate policy's own structural invariants (BLOCK #1, ADR-046 P1
+//  0. Reject a zero-value or otherwise unrecognized op with ErrPathInvalid,
+//     before any other check (FR-2.4) — every real call site already passes
+//     one of the named FSOp constants, so an empty op reaching here is a
+//     caller bug and must fail loudly rather than silently taking whichever
+//     branch a switch's default case happens to reach.
+//     0a. Validate policy's own structural invariants (BLOCK #1, ADR-046 P1
 //     review) — a zero-value or otherwise malformed FSPolicy (e.g. an empty
 //     WorkDir, or a WorkDir sitting at/above one of its own CarveOuts) is
 //     refused with ErrPathInvalid before any access decision is made.
 //  1. Reject an embedded NUL byte or any hard (non-"not exist") resolution
 //     failure with ErrPathInvalid — before any policy decision.
 //  2. Check fspolicy.IsCarveOut on the resolved realpath, UNCONDITIONALLY —
-//     even under fspolicy.FSScopeUnrestricted an agent must never reach
+//     regardless of op or scope, an agent must never reach
 //     master.key/credentials.json/another agent's home/another workspace
 //     (FR-017).
 //  3. If the resolved realpath falls outside policy.WorkDir (a leading ".."
 //     escape, a mid-string ".." reentry, an absolute path elsewhere, or a
-//     symlink that resolves outside), dispatch on the effective scope: under
-//     fspolicy.FSScopeUnrestricted a legacy host-fs PathHandle (root==nil) is
-//     returned; under fspolicy.FSScopeConfined it is refused with
-//     ErrOutsideScope; fspolicy.FSScopeAsk/FSScopeAllow are P2 seams this
-//     package does not implement yet, so they are refused with
-//     ErrPathInvalid rather than silently falling through to some invented
-//     default (Constraint #6).
+//     symlink that resolves outside), dispatch on op (FR-2.2):
+//     - FSOpRead, FSOpList, FSOpSend: allowed anywhere except the secret
+//     set already refused at step 2 — a legacy host-fs PathHandle
+//     (root==nil) is returned, independent of policy.Scope.
+//     - FSOpWrite, FSOpServe: allowed only when the realpath also falls
+//     within one of policy.AllowedRoots (a workspace mount) — refused
+//     with ErrOutsideScope otherwise, independent of policy.Scope. This
+//     is the operation-aware split from the pre-FR-2 behaviour, where
+//     Scope alone decided every op identically.
+//     - FSOpExec: unchanged from the pre-FR-2 behaviour (per the ADR-060
+//     kernel model) — dispatches on policy.Scope exactly as every op
+//     used to: fspolicy.FSScopeUnrestricted returns a host-fs handle;
+//     fspolicy.FSScopeConfined refuses with ErrOutsideScope;
+//     fspolicy.FSScopeAsk/FSScopeAllow are P2 seams this package does
+//     not implement yet, so they are refused with ErrPathInvalid rather
+//     than silently falling through to some invented default
+//     (Constraint #6).
 //  4. Otherwise (the realpath falls within policy.WorkDir — including an
 //     absolute path that simply happens to resolve inside it, matching the
 //     pre-ADR-046 sandboxFs/getSafeRelPath contract every existing
@@ -286,12 +331,22 @@ func ResolvePath(
 	rawPath string,
 ) (*PathHandle, error) {
 	// P2 seam: the ask-flow and audit dimension will consult ctx/toolName/
-	// callID/op once filesystem_scope=ask lands. Referenced here only to
-	// make the current no-op deliberate rather than silently unused.
+	// callID once filesystem_scope=ask lands. Referenced here only to make
+	// the current no-op deliberate rather than silently unused.
 	_ = ctx
 	_ = toolName
 	_ = callID
-	_ = op
+
+	switch op {
+	case FSOpRead, FSOpList, FSOpSend, FSOpWrite, FSOpExec, FSOpServe:
+		// known, explicit op — proceed.
+	default:
+		// FR-2.4: the zero value (and any unrecognized string) is refused
+		// loudly rather than defaulted. Every production call site already
+		// passes one of the named constants above.
+		return nil, fmt.Errorf("%w: FSOp %q is invalid — ResolvePath requires an explicit, known FSOp (the zero value is refused, not defaulted)",
+			ErrPathInvalid, op)
+	}
 
 	if err := policy.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrPathInvalid, err)
@@ -330,17 +385,54 @@ func ResolvePath(
 	}
 
 	if !isWithinWorkspace(realAbs, realWorkDir) {
-		switch policy.Scope {
-		case fspolicy.FSScopeConfined:
-			return nil, fmt.Errorf("%w: %q resolves to %q, outside the effective working directory %q",
-				ErrOutsideScope, rawPath, realAbs, policy.WorkDir)
-		case fspolicy.FSScopeUnrestricted:
+		// FR-2.2: the decision now depends on op, not solely on
+		// policy.Scope. fspolicy.IsCarveOut has already refused the secret
+		// set unconditionally above (step 2), before op is ever consulted.
+		switch op {
+		case FSOpRead, FSOpList, FSOpSend:
+			// Reads (and sends — FR-2.3/FR-2.3a: send_file follows the open-
+			// read rule, governed by tool policy rather than a path
+			// restriction) are allowed anywhere outside the secret set,
+			// independent of policy.Scope.
 			return &PathHandle{abs: realAbs, policy: policy}, nil
-		case fspolicy.FSScopeAsk, fspolicy.FSScopeAllow:
-			return nil, fmt.Errorf("%w: filesystem_scope %q is not yet supported by ResolvePath (P2)",
-				ErrPathInvalid, policy.Scope)
+
+		case FSOpWrite, FSOpServe:
+			// Writes, and web_serve (FR-2.3b: preserved exactly, not a new
+			// rule — web_serve already hardcodes restrict=true/
+			// FSScopeConfined at every call site, so this produces the same
+			// outcome today; it also now honors a workspace mount, which
+			// Scope-based dispatch never could), are confined to the work
+			// dir or an explicitly granted mount — never open, regardless of
+			// policy.Scope.
+			if isWithinAnyRoot(realAbs, policy.AllowedRoots) {
+				return &PathHandle{abs: realAbs, policy: policy}, nil
+			}
+			return nil, fmt.Errorf("%w: %q resolves to %q, outside the effective working directory %q and no mount covers it",
+				ErrOutsideScope, rawPath, realAbs, policy.WorkDir)
+
+		case FSOpExec:
+			// Unchanged from the pre-FR-2 behaviour (per the ADR-060 kernel
+			// model): every op used to dispatch on Scope alone, and exec
+			// stays on that exact path.
+			switch policy.Scope {
+			case fspolicy.FSScopeConfined:
+				return nil, fmt.Errorf("%w: %q resolves to %q, outside the effective working directory %q",
+					ErrOutsideScope, rawPath, realAbs, policy.WorkDir)
+			case fspolicy.FSScopeUnrestricted:
+				return &PathHandle{abs: realAbs, policy: policy}, nil
+			case fspolicy.FSScopeAsk, fspolicy.FSScopeAllow:
+				return nil, fmt.Errorf("%w: filesystem_scope %q is not yet supported by ResolvePath (P2)",
+					ErrPathInvalid, policy.Scope)
+			default:
+				return nil, fmt.Errorf("resolvepath: internal error: unknown filesystem scope %q", policy.Scope)
+			}
+
 		default:
-			return nil, fmt.Errorf("resolvepath: internal error: unknown filesystem scope %q", policy.Scope)
+			// Unreachable: op was already validated to be one of the six
+			// known constants above. Kept as defense-in-depth so a future
+			// FSOp addition that forgets to extend this switch fails loudly
+			// instead of silently taking an unintended branch.
+			return nil, fmt.Errorf("%w: FSOp %q has no ResolvePath decision rule", ErrPathInvalid, op)
 		}
 	}
 
@@ -397,6 +489,27 @@ func ResolvePath(
 	return &PathHandle{root: root, rel: rel, abs: realAbs, policy: policy}, nil
 }
 
+// isWithinAnyRoot reports whether candidate falls on or under any of roots
+// (FR-2.2/FR-6.1: a workspace mount grants write access to its host_path).
+// candidate MUST already be realpath-resolved by the caller — this performs
+// no I/O of its own. policy.AllowedRoots is always nil in P1/pre-mounts
+// (fspolicy.FSPolicy's own doc comment), so this is currently a no-op for
+// every production caller; it exists so ResolvePath's FSOpWrite/FSOpServe
+// decision already honors a mount the moment FR-5/FR-6 populates
+// AllowedRoots, without another edit to this file.
+//
+// Reuses isWithinWorkspace (filesystem.go) — the exact same containment test
+// ResolvePath already applies to policy.WorkDir itself — for each candidate
+// root, rather than a second, possibly-drifting implementation.
+func isWithinAnyRoot(candidate string, roots []string) bool {
+	for _, root := range roots {
+		if isWithinWorkspace(candidate, root) {
+			return true
+		}
+	}
+	return false
+}
+
 // ResolveTurnFSPolicy resolves the single, authoritative FSPolicy for a turn
 // (FR-036), using the exact parameter shape every generic path-taking tool's
 // Execute method previously assembled by hand (MEDIUM #7, ADR-046 P1
@@ -444,9 +557,32 @@ func ResolvePathAllowingPatterns(
 		}
 		lexicalAbs = filepath.Clean(lexicalAbs)
 		if isAllowedPath(lexicalAbs, patterns) {
-			unrestricted := policy
-			unrestricted.Scope = fspolicy.FSScopeUnrestricted
-			return ResolvePath(ctx, unrestricted, toolName, callID, op, rawPath)
+			granted := policy
+			granted.Scope = fspolicy.FSScopeUnrestricted
+
+			// FR-2.2 (ADR-061): FSOpWrite/FSOpServe no longer become open by
+			// Scope alone (see ResolvePath's outside-WorkDir switch) — Scope
+			// forcing above only still matters for FSOpRead/List/Send/Exec,
+			// which is why it is kept, not removed. This regex allow-list
+			// axis predates FR-2 and is orthogonal to filesystem_scope (see
+			// this function's own doc comment above); to keep granting a
+			// write/serve the operator already vetted via an AllowWritePaths
+			// pattern, resolve rawPath the SAME way ResolvePath itself is
+			// about to (resolveRealpathUnderWorkDir, the identical function,
+			// same inputs -> identical output) and add that ONE resolved
+			// location to a call-scoped copy of AllowedRoots. This grants
+			// exactly the path already vetted by isAllowedPath above — never
+			// a wider Unrestricted-for-writes reopening, which would defeat
+			// FR-2.2/FR-2.5's headline change for every OTHER outside-WorkDir
+			// write.
+			if resolvedGrant, resolveErr := resolveRealpathUnderWorkDir(rawPath, policy.WorkDir); resolveErr == nil {
+				grantedRoots := make([]string, 0, len(policy.AllowedRoots)+1)
+				grantedRoots = append(grantedRoots, policy.AllowedRoots...)
+				grantedRoots = append(grantedRoots, resolvedGrant)
+				granted.AllowedRoots = grantedRoots
+			}
+
+			return ResolvePath(ctx, granted, toolName, callID, op, rawPath)
 		}
 	}
 	return ResolvePath(ctx, policy, toolName, callID, op, rawPath)

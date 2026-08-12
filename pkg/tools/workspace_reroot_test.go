@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // These tests cover per-turn workspace re-rooting at the tool layer: when a
@@ -16,9 +18,20 @@ import (
 // dir is present, the tools behave byte-for-byte as before.
 
 // agentRoot + workspaceRoot model the two sibling subtrees under $OMNIPUS_HOME.
+//
+// t.Setenv(config.EnvHome, home) (ADR-061 / spec unified-file-access-and-
+// mounts FR-2.2/FR-3.4): reads are no longer confined by WorkDir/Scope
+// alone, so tests that traverse OUT of the re-rooted workspace into
+// agents/agent-A now depend on fspolicy.IsCarveOut's agents/ carve-out
+// actually engaging — which requires config.OmnipusHomeDir() to resolve to
+// THIS fixture's home, not whatever the real machine's $HOME/.omnipus
+// happens to be. Without this, the carve-out silently never matched
+// anything under home, and these tests were — even before FR-2 — relying
+// solely on the (now write-only) WorkDir confinement to pass.
 func rerootDirs(t *testing.T) (home, agentDir, wsDir string) {
 	t.Helper()
 	home = t.TempDir()
+	t.Setenv(config.EnvHome, home)
 	agentDir = filepath.Join(home, "agents", "agent-A")
 	wsDir = filepath.Join(home, "workspaces", "ws-1")
 	if err := os.MkdirAll(agentDir, 0o755); err != nil {
