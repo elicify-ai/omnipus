@@ -165,7 +165,7 @@ func TestNoAgentConfigWorkspaceIdentifier(t *testing.T) {
 //     ToStandardConfig() writes the REAL config.AgentConfig/AgentDefaults —
 //     which correctly uses .Home (openclaw_config.go:911,938 — NOT
 //     allowlisted, and must never be added here).
-//   - pkg/sandbox/sandbox.go:439 is a comment heading ("// Workspace: full
+//   - (retired) pkg/sandbox/sandbox.go's comment heading ("// Workspace: full
 //     RWX ...", a prose label), not a struct field or composite literal.
 //
 // Adding a new entry is a deliberate, reviewed exception: confirm which type
@@ -206,8 +206,6 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	"pkg/migrate/sources/openclaw/openclaw_config_test.go:248": true,
 	"pkg/migrate/sources/openclaw/openclaw_config_test.go:249": true,
 	"pkg/migrate/sources/openclaw/openclaw_config_test.go:616": true,
-
-	"pkg/sandbox/sandbox.go:439": true,
 }
 
 // repoRootForRenameGuard resolves the repository root from this test file's

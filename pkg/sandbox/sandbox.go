@@ -429,8 +429,15 @@ func DefaultPolicyForModel(
 	open := model == FilesystemModelOpen
 	rules := make([]PathRule, 0, 16+len(allowedPaths))
 
-	// Workspace: full RWX on $OMNIPUS_HOME. This is where agents write
+	// Agent home: full RWX on $OMNIPUS_HOME. This is where agents write
 	// sessions, credentials, config, skills, and state.
+	//
+	// Worded "Agent home" rather than the older heading so it no longer trips
+	// pkg/config's rename guard, which flags the retired agent-config
+	// identifier that ADR renamed to .Home. That guard is keyed by file:line,
+	// so the alternative was an allow-list entry going stale every time a line
+	// above this one moves — it broke twice on this branch alone. Removing the
+	// trigger is durable; maintaining a line number is not.
 	if homePath != "" {
 		rules = append(rules, PathRule{
 			Path:   filepath.Clean(homePath),
