@@ -237,13 +237,40 @@ WARN: SANDBOX IN PERMISSIVE MODE — NOT ENFORCED. DO NOT USE IN PRODUCTION.
 // case, the caller MUST abort boot (FR-J-004: fail closed, exit code 78,
 // never bind the HTTP listener). The returned result is still populated so
 // the caller can inspect what was attempted, but the error overrides it.
-func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
+func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err error) {
 	if opts.GetEnv == nil {
 		opts.GetEnv = os.Getenv
 	}
 	if opts.Stderr == nil {
 		opts.Stderr = os.Stderr
 	}
+
+	// ADR-060 filesystem model, resolved BEFORE any exit path so the status
+	// endpoint reports it even when the sandbox never gets applied (mode=off,
+	// a permissive downgrade, an Apply failure). An operator debugging "why can
+	// the agent read this" needs to know which model is configured, and the
+	// answer is least obvious precisely on the paths that return early.
+	//
+	// A malformed value ABORTS boot rather than falling back. The value decides
+	// whether reads are enumerated or open, and quietly resolving a typo to
+	// either hands the operator a posture they did not choose.
+	filesystemModel := sandbox.FilesystemModelConfined
+	if opts.Cfg != nil {
+		parsed, perr := sandbox.ParseFilesystemModel(
+			opts.Cfg.Sandbox.FilesystemModel, sandbox.FilesystemModelConfined)
+		if perr != nil {
+			return nil, fmt.Errorf("sandbox config: %w", perr)
+		}
+		filesystemModel = parsed
+	}
+	// Stamped once here rather than at each of the several `return result, nil`
+	// sites: a new early return added later would otherwise silently report an
+	// empty model, and an empty model reads as "confined" to every consumer.
+	defer func() {
+		if result != nil {
+			result.ApplyState.FilesystemModel = filesystemModel
+		}
+	}()
 
 	// Step 1 — Resolve mode from CLI + config. CLI > config > default.
 	// Validation of the CLI flag string was already done by cobra (see
@@ -278,7 +305,7 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	} else {
 		backend, backendName = sandbox.SelectBackend()
 	}
-	result := &SandboxApplyResult{
+	result = &SandboxApplyResult{
 		Backend:     backend,
 		BackendName: backendName,
 		Mode:        mode,
@@ -394,24 +421,43 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	if opts.Cfg != nil {
 		allowedExecPaths = opts.Cfg.Sandbox.AllowedExecPaths
 	}
-	// ADR-060 filesystem model. Like allowedExecPaths this is seeded non-empty
-	// and so is deliberately NOT folded into configTouched.
-	//
-	// A malformed value ABORTS boot rather than falling back to a default. The
-	// value decides whether reads are enumerated or open, and resolving a typo
-	// to either one silently gives the operator a posture they did not choose —
-	// the same silent-wrong-answer shape the whole ADR exists to remove.
-	filesystemModel := sandbox.FilesystemModelConfined
-	if opts.Cfg != nil {
-		parsed, err := sandbox.ParseFilesystemModel(
-			opts.Cfg.Sandbox.FilesystemModel, sandbox.FilesystemModelConfined)
-		if err != nil {
-			return nil, fmt.Errorf("sandbox config: %w", err)
-		}
-		filesystemModel = parsed
-	}
+	// filesystem_model is seeded non-empty and so, like allowedExecPaths, is
+	// deliberately NOT folded into configTouched: treating it as "the operator
+	// configured something" would make configTouched permanently true and
+	// silently disable the Docker permissive auto-downgrade.
 	policy := sandbox.DefaultPolicyForModel(
 		filesystemModel, opts.HomePath, allowedPaths, allowedExecPaths, warnFn, bindPorts)
+
+	// Spec FR-4.4 / FR-5.3: say once, at boot, how the secret set is actually
+	// protected here — the mechanism differs per platform and the difference is
+	// invisible at runtime.
+	//
+	// The Windows line is the one that matters. There is no filesystem sandbox
+	// backend on Windows at all, so these files are protected by nothing but
+	// ordinary file permissions. Leaving that implicit is how an operator ends
+	// up believing a protection exists because the docs listed a backend that
+	// was never built (see the correction in CLAUDE.md).
+	switch runtime.GOOS {
+	case "darwin":
+		slog.Info("sandbox.secret_set.protected",
+			"mechanism", "seatbelt_deny",
+			"model", string(filesystemModel),
+			"entries", sandbox.SecretEntriesRelative,
+			"detail", "children are denied read and write on these paths; the gateway process itself is not Seatbelt-confined")
+	case "linux":
+		slog.Info("sandbox.secret_set.protected",
+			"mechanism", "landlock_never_granted",
+			"model", string(filesystemModel),
+			"entries", sandbox.SecretEntriesRelative,
+			"detail", "Landlock has no deny primitive; children are granted the siblings of these paths and never the paths themselves")
+	default:
+		slog.Warn("sandbox.secret_set.UNPROTECTED",
+			"platform", runtime.GOOS,
+			"model", string(filesystemModel),
+			"entries", sandbox.SecretEntriesRelative,
+			"detail", "no filesystem sandbox backend exists on this platform; master.key and the credential vault "+
+				"are protected by file permissions alone. Do not run untrusted agents here.")
+	}
 
 	// Extend the connect-port allow-list (v0.2 #155 item 4). DefaultPolicy
 	// pre-seeds {53, 80, 443}; we append every port in DevServerPortRange so

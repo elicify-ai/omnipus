@@ -946,6 +946,11 @@ type Status struct {
 	// available but not actively enforcing — see the package comment for
 	// the wiring status.
 	PolicyApplied bool `json:"policy_applied"`
+	// FilesystemModel reports which ADR-060 model is active ("confined" or
+	// "open"). Surfaced because the two are indistinguishable from outside:
+	// a successful read tells an operator nothing about whether the model is
+	// open or the path merely happened to be on the enumerated list.
+	FilesystemModel FilesystemModel `json:"filesystem_model,omitempty"`
 	// Mode is the effective sandbox mode ("enforce", "permissive", "off").
 	// Empty string means the caller has not set the mode (e.g. describe was
 	// called before Apply wiring was done).
@@ -1012,6 +1017,10 @@ type ApplyState struct {
 	// backend itself (e.g. "permissive mode degraded to audit-only on
 	// kernel 6.8").
 	ExtraNotes []string
+	// FilesystemModel is the resolved ADR-060 model for this process
+	// lifetime. It is gateway-level state for the same reason Mode is: the
+	// backend renders the model but does not choose it.
+	FilesystemModel FilesystemModel
 }
 
 // DescribeBackend returns the operator-facing status of the given backend.
@@ -1045,11 +1054,12 @@ func DescribeBackendWithState(backend SandboxBackend, state ApplyState) Status {
 		return Status{Backend: "none", Available: false}
 	}
 	status := Status{
-		Backend:    backend.Name(),
-		Available:  backend.Available(),
-		Mode:       state.Mode,
-		DisabledBy: state.DisabledBy,
-		AuditOnly:  state.AuditOnly,
+		Backend:         backend.Name(),
+		Available:       backend.Available(),
+		Mode:            state.Mode,
+		DisabledBy:      state.DisabledBy,
+		AuditOnly:       state.AuditOnly,
+		FilesystemModel: state.FilesystemModel,
 	}
 
 	rep, ok := backend.(abiReporter)

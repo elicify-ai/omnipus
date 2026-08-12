@@ -2293,6 +2293,7 @@ export const SandboxStatus = z
     landlock_features: z.array(z.string()).optional(),
     notes: z.array(z.string()).optional(),
     mode: z.string().optional(),
+    filesystem_model: z.enum(["confined", "open"]).optional(),
     disabled_by: z.string().optional(),
     landlock_enforced: z.boolean().optional(),
     seccomp_enforced: z.boolean().optional(),

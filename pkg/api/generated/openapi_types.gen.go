@@ -3308,6 +3308,24 @@ func (e SandboxConfigUpdateMode) Valid() bool {
 	}
 }
 
+// Defines values for SandboxStatusFilesystemModel.
+const (
+	Confined SandboxStatusFilesystemModel = "confined"
+	Open     SandboxStatusFilesystemModel = "open"
+)
+
+// Valid indicates whether the value is a known member of the SandboxStatusFilesystemModel enum.
+func (e SandboxStatusFilesystemModel) Valid() bool {
+	switch e {
+	case Confined:
+		return true
+	case Open:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ScheduleRunsStatus.
 const (
 	ScheduleRunsStatusError   ScheduleRunsStatus = "error"
@@ -10486,6 +10504,9 @@ type SandboxStatus struct {
 	// DisabledBy Reason the sandbox is disabled, if applicable. E.g. "config" or "kernel".
 	DisabledBy *string `json:"disabled_by,omitempty"`
 
+	// FilesystemModel Which ADR-060 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
+	FilesystemModel *SandboxStatusFilesystemModel `json:"filesystem_model,omitempty"`
+
 	// IssueRef Set when a known kernel incompatibility is flagged. Do NOT hard-code the literal issue number in the SPA.
 	IssueRef *string `json:"issue_ref,omitempty"`
 
@@ -10513,6 +10534,9 @@ type SandboxStatus struct {
 	// SeccompEnforced Whether seccomp syscall filtering is enforced.
 	SeccompEnforced *bool `json:"seccomp_enforced,omitempty"`
 }
+
+// SandboxStatusFilesystemModel Which ADR-060 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
+type SandboxStatusFilesystemModel string
 
 // Schedule A scheduled instruction for an agent (#264) — the wire projection of a cron job. When it fires, the owning agent runs the message in the chosen session mode under guardrails. Read model returned by the /schedules endpoints.
 type Schedule struct {

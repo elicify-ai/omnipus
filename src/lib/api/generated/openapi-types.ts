@@ -5038,6 +5038,12 @@ export interface components {
              * @example enforce
              */
             mode?: string;
+            /**
+             * @description Which ADR-060 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
+             * @example confined
+             * @enum {string}
+             */
+            filesystem_model?: "confined" | "open";
             /** @description Reason the sandbox is disabled, if applicable. E.g. "config" or "kernel". */
             disabled_by?: string;
             /** @description Whether Landlock file-system access rules are enforced. */
