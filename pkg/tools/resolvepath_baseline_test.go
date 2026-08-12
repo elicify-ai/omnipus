@@ -220,8 +220,8 @@ func TestBaseline_Confined_ReadWriteMatrix(t *testing.T) {
 			t.Fatalf("ResolvePath: %v", err)
 		}
 		defer h.Close()
-		if err := h.WriteFile([]byte("new content")); err != nil {
-			t.Fatalf("WriteFile: %v", err)
+		if writeErr := h.WriteFile([]byte("new content")); writeErr != nil {
+			t.Fatalf("WriteFile: %v", writeErr)
 		}
 		data, err := os.ReadFile(filepath.Join(tr.agentSelf, "written.txt"))
 		if err != nil || string(data) != "new content" {

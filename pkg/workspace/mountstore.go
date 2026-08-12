@@ -226,8 +226,8 @@ func saveMountStore(home, id string, mounts []Mount) error {
 		return nil
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("workspace: mount store: mkdir %s: %w", dir, err)
+	if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
+		return fmt.Errorf("workspace: mount store: mkdir %s: %w", dir, mkErr)
 	}
 	data, err := json.MarshalIndent(mountStoreRecord{WorkspaceID: id, Mounts: mounts}, "", "  ")
 	if err != nil {

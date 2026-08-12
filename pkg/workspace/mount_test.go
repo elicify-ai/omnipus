@@ -530,10 +530,10 @@ func TestMountBoundary_RealpathResolutionDistinguishesEscapes(t *testing.T) {
 		{
 			name: "symlink chain that stays inside the mount",
 			makeTarget: func(t *testing.T) string {
-				real := filepath.Join(mountRoot, "real-target")
-				require.NoError(t, os.Mkdir(real, 0o700))
+				realDir := filepath.Join(mountRoot, "real-target")
+				require.NoError(t, os.Mkdir(realDir, 0o700))
 				link1 := filepath.Join(mountRoot, "link1")
-				require.NoError(t, os.Symlink(real, link1))
+				require.NoError(t, os.Symlink(realDir, link1))
 				link2 := filepath.Join(mountRoot, "link2")
 				require.NoError(t, os.Symlink(link1, link2))
 				return link2

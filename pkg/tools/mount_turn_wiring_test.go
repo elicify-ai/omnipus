@@ -49,8 +49,8 @@ func TestResolveTurnFSPolicy_MountsBecomeWriteRoots(t *testing.T) {
 
 	// A folder outside the workspace entirely — the case mounts exist for.
 	target := t.TempDir()
-	if err := os.WriteFile(filepath.Join(target, "existing.txt"), []byte("x"), 0o600); err != nil {
-		t.Fatalf("seed target: %v", err)
+	if seedErr := os.WriteFile(filepath.Join(target, "existing.txt"), []byte("x"), 0o600); seedErr != nil {
+		t.Fatalf("seed target: %v", seedErr)
 	}
 
 	ctx := WithWorkspaceID(context.Background(), wsID)
@@ -64,13 +64,13 @@ func TestResolveTurnFSPolicy_MountsBecomeWriteRoots(t *testing.T) {
 	if len(before.AllowedRoots) != 0 {
 		t.Fatalf("no mounts configured, want no AllowedRoots, got %v", before.AllowedRoots)
 	}
-	if _, err := ResolvePath(ctx, before, "test", "", FSOpWrite, filepath.Join(target, "new.txt")); err == nil {
+	if _, resolveErr := ResolvePath(ctx, before, "test", "", FSOpWrite, filepath.Join(target, "new.txt")); resolveErr == nil {
 		t.Fatal("write outside the work dir must be denied before a mount exists")
 	}
 
 	// Create the mount.
-	if _, warn, err := workspace.CreateMount(home, wsID, "repo", target); err != nil {
-		t.Fatalf("create mount: %v", err)
+	if _, warn, mountErr := workspace.CreateMount(home, wsID, "repo", target); mountErr != nil {
+		t.Fatalf("create mount: %v", mountErr)
 	} else if warn != "" {
 		t.Logf("mount warning (expected empty for an ordinary folder): %s", warn)
 	}
@@ -118,8 +118,8 @@ func TestResolveTurnFSPolicy_MountCannotReopenTheSecretSet(t *testing.T) {
 	}
 	// Mount the PARENT — the folder that contains $OMNIPUS_HOME. Allowed by
 	// FR-7.6 with a warning; only $OMNIPUS_HOME itself is refused.
-	if _, warn, err := workspace.CreateMount(home, wsID, "everything", parent); err != nil {
-		t.Fatalf("create mount: %v", err)
+	if _, warn, mountErr := workspace.CreateMount(home, wsID, "everything", parent); mountErr != nil {
+		t.Fatalf("create mount: %v", mountErr)
 	} else if warn == "" {
 		t.Error("mounting a folder that CONTAINS $OMNIPUS_HOME must warn (FR-7.4/7.6); " +
 			"silently allowing it gives the operator no signal about what they just granted")

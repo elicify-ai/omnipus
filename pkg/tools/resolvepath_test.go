@@ -986,8 +986,8 @@ func TestFR2_OpByLocationMatrix(t *testing.T) {
 						t.Fatalf("FR-2.2: expected %s to be allowed at %s under %s scope, got: %v", op, loc.name, scope, err)
 					}
 					defer handle.Close()
-					if err := handle.WriteFile([]byte("written:" + string(op))); err != nil {
-						t.Fatalf("WriteFile: %v", err)
+					if writeErr := handle.WriteFile([]byte("written:" + string(op))); writeErr != nil {
+						t.Fatalf("WriteFile: %v", writeErr)
 					}
 					data, err := os.ReadFile(target)
 					if err != nil || string(data) != "written:"+string(op) {

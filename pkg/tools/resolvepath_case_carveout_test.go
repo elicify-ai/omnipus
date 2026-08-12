@@ -52,8 +52,8 @@ func caseTestHome(t *testing.T) (realHome string, caseInsensitive bool) {
 		filepath.Join("agents", "other"),
 		filepath.Join("entities", "agents"),
 	} {
-		if err := os.MkdirAll(filepath.Join(home, d), 0o755); err != nil {
-			t.Fatal(err)
+		if mkErr := os.MkdirAll(filepath.Join(home, d), 0o755); mkErr != nil {
+			t.Fatal(mkErr)
 		}
 	}
 	for rel, content := range map[string]string{
@@ -64,8 +64,8 @@ func caseTestHome(t *testing.T) (realHome string, caseInsensitive bool) {
 		filepath.Join("entities", "agents", "mia.json"): `{"locked":true}`,
 		filepath.Join("agents", "other", "SOUL.md"):     "other agent soul",
 	} {
-		if err := os.WriteFile(filepath.Join(home, rel), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
+		if writeErr := os.WriteFile(filepath.Join(home, rel), []byte(content), 0o600); writeErr != nil {
+			t.Fatal(writeErr)
 		}
 	}
 
@@ -203,7 +203,7 @@ func TestResolvePath_CaseVariantSecret_WriteIsDenied(t *testing.T) {
 			}
 
 			target := filepath.Join(realHome, tc.rel)
-			if _, err := os.Stat(target); err != nil && !caseInsensitive {
+			if _, statErr := os.Stat(target); statErr != nil && !caseInsensitive {
 				t.Skipf("case-sensitive volume: %q names a different file", tc.rel)
 			}
 
@@ -248,9 +248,9 @@ func TestResolvePath_OwnTree_StillWorksAfterCaseFix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write to the agent's own home was refused: %v", err)
 	}
-	if err := handle.WriteFile([]byte("my own notes")); err != nil {
+	if writeErr := handle.WriteFile([]byte("my own notes")); writeErr != nil {
 		handle.Close()
-		t.Fatalf("write to the agent's own home failed: %v", err)
+		t.Fatalf("write to the agent's own home failed: %v", writeErr)
 	}
 	handle.Close()
 

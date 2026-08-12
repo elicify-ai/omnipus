@@ -114,8 +114,8 @@ func TestMountStorePathIsInTheDeniedSet(t *testing.T) {
 	// really /private/var/..., so both sides are resolved here — otherwise
 	// this would compare two spellings of the same directory and report a
 	// bypass that does not exist.
-	if err := os.MkdirAll(workDir, 0o700); err != nil {
-		t.Fatalf("mkdir work: %v", err)
+	if mkErr := os.MkdirAll(workDir, 0o700); mkErr != nil {
+		t.Fatalf("mkdir work: %v", mkErr)
 	}
 	realHome, err := filepath.EvalSymlinks(home)
 	if err != nil {
@@ -169,16 +169,16 @@ func TestMountStore_HostileWorkspaceRecordGrantsNothingOnALiveTurn(t *testing.T)
 		t.Fatalf("read workspace record: %v", err)
 	}
 	var rec map[string]any
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		t.Fatalf("parse workspace record: %v", err)
+	if jsonErr := json.Unmarshal(raw, &rec); jsonErr != nil {
+		t.Fatalf("parse workspace record: %v", jsonErr)
 	}
 	rec["mounts"] = []map[string]any{{"name": "pwn", "host_path": victim}}
 	tampered, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal tampered record: %v", err)
 	}
-	if err := os.WriteFile(recordPath, tampered, 0o600); err != nil {
-		t.Fatalf("write tampered record: %v", err)
+	if writeErr := os.WriteFile(recordPath, tampered, 0o600); writeErr != nil {
+		t.Fatalf("write tampered record: %v", writeErr)
 	}
 
 	ctx := WithWorkspaceID(context.Background(), wsID)
@@ -191,7 +191,7 @@ func TestMountStore_HostileWorkspaceRecordGrantsNothingOnALiveTurn(t *testing.T)
 	if len(policy.AllowedRoots) != 0 {
 		t.Fatalf("a mount planted in the child-writable workspace record became a write grant: AllowedRoots=%v", policy.AllowedRoots)
 	}
-	if _, err := ResolvePath(ctx, policy, "write_file", "", FSOpWrite, filepath.Join(victim, "owned.txt")); err == nil {
+	if _, resolveErr := ResolvePath(ctx, policy, "write_file", "", FSOpWrite, filepath.Join(victim, "owned.txt")); resolveErr == nil {
 		t.Fatal("a write outside the work dir succeeded via a mount the agent granted itself — " +
 			"this is the self-service write grant the mount store exists to close")
 	}
@@ -200,8 +200,8 @@ func TestMountStore_HostileWorkspaceRecordGrantsNothingOnALiveTurn(t *testing.T)
 	// test above is proving the source is distrusted, not that mounts are
 	// broken outright.
 	legit := t.TempDir()
-	if _, _, err := workspace.CreateMount(home, wsID, "legit", legit); err != nil {
-		t.Fatalf("create mount: %v", err)
+	if _, _, mountErr := workspace.CreateMount(home, wsID, "legit", legit); mountErr != nil {
+		t.Fatalf("create mount: %v", mountErr)
 	}
 	policy, err = ResolveTurnFSPolicy(ctx, work, true)
 	if err != nil {

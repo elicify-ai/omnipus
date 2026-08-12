@@ -12,6 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// seatbeltTestHome is a path that does not exist on either platform, which is
+// deliberate: it exercises resolveSeatbeltPath's deepest-existing-ancestor leg,
+// the same leg a not-yet-created workspace directory takes in production.
+const seatbeltTestHome = "/tmp/omnipus-home"
+
 // TestEscapeSeatbeltRegex_EscapesEveryMetacharacter is the guard on the one
 // thing that can turn an anchored deny into a looser pattern SILENTLY.
 //
@@ -40,15 +45,25 @@ func TestEscapeSeatbeltRegex_EscapesEveryMetacharacter(t *testing.T) {
 // backslashes (`\\.` where SBPL needs `\.`), and the resulting filter matched
 // nothing. A real child read the backup while the profile looked correct.
 func TestSeatbeltProfile_PrefixDenyIsSingleEscapedAndAnchored(t *testing.T) {
+	// The expected prefix is DERIVED from the renderer's own resolver rather
+	// than written out, because the resolution is platform-dependent: macOS
+	// firmlinks /tmp to /private/tmp, Linux does not. An earlier version of
+	// this test hardcoded the macOS answer and could therefore never pass on
+	// the Linux CI worker — it asserted a platform, not the property. What is
+	// actually under test (anchored, symlink-resolved, SINGLE escaped) holds
+	// on both, so derive the one part that varies and keep asserting the rest.
+	home, _ := resolveSeatbeltPath(seatbeltTestHome)
+	escapedHome := escapeSeatbeltRegex(home)
+
 	profile, err := renderSeatbeltProfile(SandboxPolicy{
-		FilesystemRules:    []PathRule{{Path: "/tmp/omnipus-home", Access: AccessRead | AccessWrite}},
-		DeniedPathPrefixes: []string{"/tmp/omnipus-home/config.json."},
+		FilesystemRules:    []PathRule{{Path: seatbeltTestHome, Access: AccessRead | AccessWrite}},
+		DeniedPathPrefixes: []string{seatbeltTestHome + "/config.json."},
 	})
 	require.NoError(t, err)
 
-	assert.Contains(t, profile, `(regex #"^/private/tmp/omnipus-home/config\.json\.")`,
-		"the pattern must be anchored, symlink-resolved (/tmp -> /private/tmp on macOS) and "+
-			"SINGLE escaped")
+	wantPattern := `(regex #"^` + escapedHome + `/config\.json\.")`
+	assert.Contains(t, profile, wantPattern,
+		"the pattern must be anchored, symlink-resolved and SINGLE escaped")
 	assert.NotContains(t, profile, `\\.`,
 		"a double-escaped pattern matches nothing; the profile would read as protecting the "+
 			"backup and protect nothing")
@@ -56,8 +71,8 @@ func TestSeatbeltProfile_PrefixDenyIsSingleEscapedAndAnchored(t *testing.T) {
 	// Read AND write. A read-only deny on a secret is defeated by truncate,
 	// which destroys the file without reading it — the same reasoning the
 	// subpath deny block already applies.
-	assert.Equal(t, 1, strings.Count(profile, `(deny file-read* (regex #"^/private/tmp/omnipus-home/config\.json\.")`))
-	assert.Equal(t, 1, strings.Count(profile, `(deny file-write* (regex #"^/private/tmp/omnipus-home/config\.json\.")`))
+	assert.Equal(t, 1, strings.Count(profile, `(deny file-read* `+wantPattern))
+	assert.Equal(t, 1, strings.Count(profile, `(deny file-write* `+wantPattern))
 }
 
 // TestSeatbeltProfile_NodeDenyIsLiteralNotSubpath pins the other half of the
@@ -65,16 +80,20 @@ func TestSeatbeltProfile_PrefixDenyIsSingleEscapedAndAnchored(t *testing.T) {
 // would block the rename and also lock the agent out of its own home; a literal
 // covers the directory entry and nothing beneath it.
 func TestSeatbeltProfile_NodeDenyIsLiteralNotSubpath(t *testing.T) {
+	// Derived, not hardcoded — see the note in the prefix-deny test above.
+	home, _ := resolveSeatbeltPath(seatbeltTestHome)
+	node := home + "/agents"
+
 	profile, err := renderSeatbeltProfile(SandboxPolicy{
-		FilesystemRules: []PathRule{{Path: "/tmp/omnipus-home", Access: AccessRead | AccessWrite}},
-		DeniedNodes:     []string{"/tmp/omnipus-home/agents"},
+		FilesystemRules: []PathRule{{Path: seatbeltTestHome, Access: AccessRead | AccessWrite}},
+		DeniedNodes:     []string{seatbeltTestHome + "/agents"},
 	})
 	require.NoError(t, err)
 
-	assert.Contains(t, profile, `(deny file-write* (literal "/private/tmp/omnipus-home/agents"))`)
-	assert.NotContains(t, profile, `(deny file-write* (subpath "/private/tmp/omnipus-home/agents"))`,
+	assert.Contains(t, profile, `(deny file-write* (literal "`+node+`"))`)
+	assert.NotContains(t, profile, `(deny file-write* (subpath "`+node+`"))`,
 		"a subpath deny here would deny the agent its own home — the very tree the per-turn root "+
 			"is re-admitted for")
-	assert.NotContains(t, profile, `(deny file-read* (literal "/private/tmp/omnipus-home/agents"))`,
+	assert.NotContains(t, profile, `(deny file-read* (literal "`+node+`"))`,
 		"reads on the node must stay allowed: the child has to traverse it to reach its work dir")
 }

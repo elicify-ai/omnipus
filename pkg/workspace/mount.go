@@ -447,8 +447,8 @@ func CreateMount(home, id, name, rawHostPath string) (Mount, string, error) {
 	if err != nil {
 		return Mount{}, "", fmt.Errorf("workspace: create mount: %w", err)
 	}
-	if err := checkMountNameAvailable(existing, workDir, name); err != nil {
-		return Mount{}, "", err
+	if nameErr := checkMountNameAvailable(existing, workDir, name); nameErr != nil {
+		return Mount{}, "", nameErr
 	}
 
 	resolved, warning, err := CheckMountTarget(rawHostPath, home)

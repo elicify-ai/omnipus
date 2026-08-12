@@ -242,8 +242,8 @@ func SaveDelegation(home, id string, edges []DelegationEdge) error {
 		return nil
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("workspace: delegation store: mkdir %s: %w", dir, err)
+	if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
+		return fmt.Errorf("workspace: delegation store: mkdir %s: %w", dir, mkErr)
 	}
 	data, err := json.MarshalIndent(delegationStoreRecord{WorkspaceID: id, Delegation: edges}, "", "  ")
 	if err != nil {

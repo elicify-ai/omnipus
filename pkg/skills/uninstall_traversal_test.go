@@ -11,29 +11,42 @@ import (
 	"testing"
 )
 
-// newTraversalFixture builds a workspace that looks like a live install: an
-// operator data file at the workspace root, a skills/ directory, and one real
-// installed skill inside it. The returned paths are what a successful traversal
-// would destroy.
-func newTraversalFixture(t *testing.T) (workspace, operatorFile, skillsDir, installedSkill string) {
-	t.Helper()
-	workspace = t.TempDir()
+// traversalFixture is a workspace that looks like a live install. The fields
+// are the paths a successful traversal would destroy, which is what each test
+// asserts still exists afterwards.
+//
+// A struct rather than four return values: most callers want a subset, and the
+// four-value form made the one that wants only the workspace read
+// `workspace, _, _, _ :=` — three blanks that say nothing about which paths
+// were deliberately ignored.
+type traversalFixture struct {
+	workspace      string
+	operatorFile   string
+	skillsDir      string
+	installedSkill string
+}
 
-	operatorFile = filepath.Join(workspace, "operator-data.txt")
-	if err := os.WriteFile(operatorFile, []byte("the operator's workspace"), 0o600); err != nil {
+// newTraversalFixture builds a workspace with an operator data file at its
+// root, a skills/ directory, and one real installed skill inside it.
+func newTraversalFixture(t *testing.T) traversalFixture {
+	t.Helper()
+	f := traversalFixture{workspace: t.TempDir()}
+
+	f.operatorFile = filepath.Join(f.workspace, "operator-data.txt")
+	if err := os.WriteFile(f.operatorFile, []byte("the operator's workspace"), 0o600); err != nil {
 		t.Fatalf("seed operator file: %v", err)
 	}
 
-	skillsDir = filepath.Join(workspace, "skills")
-	installedSkill = filepath.Join(skillsDir, "keep-me")
-	if err := os.MkdirAll(installedSkill, 0o755); err != nil {
+	f.skillsDir = filepath.Join(f.workspace, "skills")
+	f.installedSkill = filepath.Join(f.skillsDir, "keep-me")
+	if err := os.MkdirAll(f.installedSkill, 0o755); err != nil {
 		t.Fatalf("seed skill dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(installedSkill, "SKILL.md"),
+	if err := os.WriteFile(filepath.Join(f.installedSkill, "SKILL.md"),
 		[]byte("# keep-me\n\nA skill that must survive.\n"), 0o644); err != nil {
 		t.Fatalf("seed SKILL.md: %v", err)
 	}
-	return workspace, operatorFile, skillsDir, installedSkill
+	return f
 }
 
 func mustExist(t *testing.T, path, what string) {
@@ -54,23 +67,23 @@ func TestUninstall_RefusesPathTraversal(t *testing.T) {
 		name   string
 		effect string
 	}{
-		{"..", "deletes the operator's entire workspace"},
+		{"..", "deletes the operator's entire fx.workspace"},
 		{".", "deletes every installed skill"},
-		{"../..", "deletes the operator's entire workspace (the split takes the last \"..\")"},
-		{"foo/../..", "deletes the operator's entire workspace (the split takes the last \"..\")"},
-		{"skills/..", "deletes the operator's entire workspace"},
+		{"../..", "deletes the operator's entire fx.workspace (the split takes the last \"..\")"},
+		{"foo/../..", "deletes the operator's entire fx.workspace (the split takes the last \"..\")"},
+		{"skills/..", "deletes the operator's entire fx.workspace"},
 		{"/", "deletes every installed skill (the split yields no segment)"},
 		{"/etc/passwd", "escapes the skills directory via an absolute path"},
 		{"..\\..", "escapes via Windows-style separators"},
-		{"keep-me/..", "deletes the operator's entire workspace"},
+		{"keep-me/..", "deletes the operator's entire fx.workspace"},
 		{"", "has no resolvable target"},
 		{"   ", "has no resolvable target"},
 	}
 
 	for _, m := range malicious {
 		t.Run(m.name, func(t *testing.T) {
-			workspace, operatorFile, skillsDir, installedSkill := newTraversalFixture(t)
-			installer, err := NewSkillInstaller(workspace, "", "")
+			fx := newTraversalFixture(t)
+			installer, err := NewSkillInstaller(fx.workspace, "", "")
 			if err != nil {
 				t.Fatalf("NewSkillInstaller: %v", err)
 			}
@@ -88,10 +101,10 @@ func TestUninstall_RefusesPathTraversal(t *testing.T) {
 					m.name, err.Error())
 			}
 
-			mustExist(t, workspace, "the operator workspace")
-			mustExist(t, operatorFile, "the operator's data file")
-			mustExist(t, skillsDir, "the skills directory")
-			mustExist(t, installedSkill, "the installed skill")
+			mustExist(t, fx.workspace, "the operator fx.workspace")
+			mustExist(t, fx.operatorFile, "the operator's data file")
+			mustExist(t, fx.skillsDir, "the skills directory")
+			mustExist(t, fx.installedSkill, "the installed skill")
 		})
 	}
 }
@@ -101,20 +114,20 @@ func TestUninstall_RefusesPathTraversal(t *testing.T) {
 // be a broken tool, not a fixed one.
 func TestUninstall_LegitimateRemovalStillWorks(t *testing.T) {
 	t.Run("bare skill id", func(t *testing.T) {
-		workspace, operatorFile, skillsDir, installedSkill := newTraversalFixture(t)
-		installer, err := NewSkillInstaller(workspace, "", "")
+		fx := newTraversalFixture(t)
+		installer, err := NewSkillInstaller(fx.workspace, "", "")
 		if err != nil {
 			t.Fatalf("NewSkillInstaller: %v", err)
 		}
 		if err := installer.Uninstall("keep-me"); err != nil {
 			t.Fatalf("Uninstall(keep-me) = %v, want nil", err)
 		}
-		if _, err := os.Stat(installedSkill); !os.IsNotExist(err) {
+		if _, err := os.Stat(fx.installedSkill); !os.IsNotExist(err) {
 			t.Errorf("skill directory still exists after a legitimate uninstall")
 		}
-		mustExist(t, workspace, "the operator workspace")
-		mustExist(t, operatorFile, "the operator's data file")
-		mustExist(t, skillsDir, "the skills directory")
+		mustExist(t, fx.workspace, "the operator fx.workspace")
+		mustExist(t, fx.operatorFile, "the operator's data file")
+		mustExist(t, fx.skillsDir, "the skills directory")
 	})
 
 	// The namespaced forms the installer has always accepted must keep working:
@@ -122,15 +135,15 @@ func TestUninstall_LegitimateRemovalStillWorks(t *testing.T) {
 	// "owner/repo/skill" spelling.
 	for _, name := range []string{"owner/repo/keep-me", "keep-me/", "owner/keep-me"} {
 		t.Run(name, func(t *testing.T) {
-			workspace, _, _, installedSkill := newTraversalFixture(t)
-			installer, err := NewSkillInstaller(workspace, "", "")
+			fx := newTraversalFixture(t)
+			installer, err := NewSkillInstaller(fx.workspace, "", "")
 			if err != nil {
 				t.Fatalf("NewSkillInstaller: %v", err)
 			}
 			if err := installer.Uninstall(name); err != nil {
 				t.Fatalf("Uninstall(%q) = %v, want nil", name, err)
 			}
-			if _, err := os.Stat(installedSkill); !os.IsNotExist(err) {
+			if _, err := os.Stat(fx.installedSkill); !os.IsNotExist(err) {
 				t.Errorf("skill directory still exists after Uninstall(%q)", name)
 			}
 		})
@@ -142,8 +155,8 @@ func TestUninstall_LegitimateRemovalStillWorks(t *testing.T) {
 // produce a "not found" error, so remove_skill returns NOT_FOUND and the REST
 // handler returns 404.
 func TestUninstall_MissingSkillStillReportsNotFound(t *testing.T) {
-	workspace, _, _, _ := newTraversalFixture(t)
-	installer, err := NewSkillInstaller(workspace, "", "")
+	fx := newTraversalFixture(t)
+	installer, err := NewSkillInstaller(fx.workspace, "", "")
 	if err != nil {
 		t.Fatalf("NewSkillInstaller: %v", err)
 	}

@@ -24,5 +24,10 @@ func linkCount(info os.FileInfo) (uint64, bool) {
 	if !ok {
 		return 0, false
 	}
+	// The conversion is REQUIRED even though it reads as redundant: Stat_t.Nlink
+	// is uint16 on darwin and uint64 on linux/amd64. golangci-lint only ever
+	// sees the linux definition, so unconvert flags a cast that the macOS build
+	// cannot compile without.
+	//nolint:unconvert // platform-dependent width; see above.
 	return uint64(st.Nlink), true
 }
