@@ -2901,6 +2901,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/system/folders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List directories on the operator's machine, for the mount folder picker
+         * @description Returns the directories directly inside `path`, each with a verdict on whether it may be mounted into a workspace.
+         *     It exists because a web page cannot open the native folder picker and learn a real filesystem path — the browser withholds it — so without a server-side listing the only way to add a mount is to type an absolute path from memory.
+         *     It exposes nothing new: post-ADR-062 reading is open, so an agent can already read anywhere on this machine. This gives the OPERATOR the same view. Admin-authenticated, read-only, and deliberately not reachable from any agent tool — an agent that wants a folder asks for it and the operator approves, rather than browsing for one itself.
+         */
+        get: operations["listHostFolders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/system/cli-detect": {
         parameters: {
             query?: never;
@@ -3596,6 +3618,57 @@ export interface components {
              * @example 12
              */
             entry_count: number;
+        };
+        /**
+         * HostFolderListing
+         * @description One directory on the operator's own machine, listed so they can pick a folder to mount into a workspace (ADR-063 FR-7.1).
+         *     This exists because a web page CANNOT open the native folder picker and learn a real filesystem path — the browser deliberately withholds it. Without a server-side listing the only way to add a mount is to type an absolute path from memory, which is both unpleasant and error-prone in a control whose whole job is to be deliberate.
+         *     It exposes nothing new. Post-ADR-062 reading is open, so any agent can already read anywhere on this machine; this gives the OPERATOR the same view their own agents have. It is admin-authenticated and is deliberately NOT reachable from an agent tool — an agent that wants a folder asks for it and the operator approves, rather than browsing for one itself.
+         */
+        HostFolderListing: {
+            /**
+             * @description The absolute, symlink-resolved path this listing describes.
+             * @example /Users/dana/Documents
+             */
+            path: string;
+            /**
+             * @description The parent directory's absolute path, for an "up" control. Absent at the filesystem root, which is what tells the client there is nowhere further up to go.
+             * @example /Users/dana
+             */
+            parent?: string;
+            /** @description The directories directly inside `path`, sorted by name. Only directories are returned: a mount target is always a folder, and listing files would show the operator thousands of rows none of which they can pick. */
+            entries: components["schemas"]["HostFolderEntry"][];
+        };
+        /**
+         * HostFolderEntry
+         * @description One directory inside a HostFolderListing, with the verdict on whether it may be mounted. The verdict travels WITH the row so the client can disable the choice at the point of selection, rather than letting the operator pick a folder and only then be told no.
+         */
+        HostFolderEntry: {
+            /**
+             * @description The directory's own name (final path segment).
+             * @example projects
+             */
+            name: string;
+            /**
+             * @description The directory's absolute path.
+             * @example /Users/dana/Documents/projects
+             */
+            path: string;
+            /**
+             * @description False when mounting this directory would be REFUSED — that is, when it is or lies inside the Omnipus data directory (FR-7.5), the one hard boundary, because mounting it would make config.json and master.key writable and let an agent disable its own sandbox.
+             * @example true
+             */
+            mountable: boolean;
+            /**
+             * @description True when this directory is one of the deliberately wide locations (the home directory, the filesystem root, a top-level system directory). Mounting it is ALLOWED — the operator's call — but must be visibly flagged before they choose it, never silently accepted.
+             * @example false
+             */
+            broad?: boolean;
+            /**
+             * @description A short human-readable explanation, present only when `mountable` is false or `broad` is true. Written for the operator, naming what the grant would cover or why it is refused.
+             * @example Inside the Omnipus data directory — mounting it would expose your keys.
+             */
+            reason?: string;
         };
         /**
          * LibraryEntry
@@ -17006,6 +17079,56 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
         };
     };
+    listHostFolders: {
+        parameters: {
+            query?: {
+                /** @description Absolute path to list. Defaults to the operator's home directory, which is where a folder picker should sensibly open. */
+                path?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The directory listing. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostFolderListing"];
+                };
+            };
+            /** @description The path was relative, malformed, or not a directory. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The path does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     getHostCliDetect: {
         parameters: {
             query?: never;
@@ -17082,6 +17205,8 @@ export type Attachment = components["schemas"]["Attachment"];
 export type MediaLibraryEntry = components["schemas"]["MediaLibraryEntry"];
 export type MediaAttachmentRequest = components["schemas"]["MediaAttachmentRequest"];
 export type LibraryWorkspaceNode = components["schemas"]["LibraryWorkspaceNode"];
+export type HostFolderListing = components["schemas"]["HostFolderListing"];
+export type HostFolderEntry = components["schemas"]["HostFolderEntry"];
 export type LibraryEntry = components["schemas"]["LibraryEntry"];
 export type LibraryEntryMount = components["schemas"]["LibraryEntryMount"];
 export type LibraryContentResponse = components["schemas"]["LibraryContentResponse"];

@@ -152,6 +152,18 @@ type SessionPage = {
   next_cursor?: string | undefined;
   partial_errors?: Array<string> | undefined;
 };
+type HostFolderListing = {
+  path: string;
+  parent?: string | undefined;
+  entries: Array<HostFolderEntry>;
+};
+type HostFolderEntry = {
+  name: string;
+  path: string;
+  mountable: boolean;
+  broad?: boolean | undefined;
+  reason?: string | undefined;
+};
 type LibraryEntry = {
   name: string;
   path: string;
@@ -3335,6 +3347,18 @@ export const TokenUsageSummary: z.ZodType<TokenUsageSummary> = z
     partial_error_count: z.number().int().gte(0).optional(),
   })
   .passthrough();
+export const HostFolderEntry: z.ZodType<HostFolderEntry> = z.object({
+  name: z.string().min(1),
+  path: z.string().min(1),
+  mountable: z.boolean(),
+  broad: z.boolean().optional(),
+  reason: z.string().optional(),
+});
+export const HostFolderListing: z.ZodType<HostFolderListing> = z.object({
+  path: z.string().min(1),
+  parent: z.string().optional(),
+  entries: z.array(HostFolderEntry),
+});
 export const CliDetectEntry: z.ZodType<CliDetectEntry> = z.object({
   installed: z.boolean(),
   path: z.string().nullish(),
@@ -8185,6 +8209,41 @@ Polled by the SPA StatusBar every 15 seconds.
       {
         status: 429,
         description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/system/folders",
+    alias: "listHostFolders",
+    description: `Returns the directories directly inside &#x60;path&#x60;, each with a verdict on whether it may be mounted into a workspace.
+It exists because a web page cannot open the native folder picker and learn a real filesystem path — the browser withholds it — so without a server-side listing the only way to add a mount is to type an absolute path from memory.
+It exposes nothing new: post-ADR-062 reading is open, so an agent can already read anywhere on this machine. This gives the OPERATOR the same view. Admin-authenticated, read-only, and deliberately not reachable from any agent tool — an agent that wants a folder asks for it and the operator approves, rather than browsing for one itself.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+    ],
+    response: HostFolderListing,
+    errors: [
+      {
+        status: 400,
+        description: `The path was relative, malformed, or not a directory.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Missing or invalid bearer token.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `The path does not exist.`,
         schema: ErrorResponse,
       },
     ],

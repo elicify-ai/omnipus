@@ -5161,6 +5161,8 @@ func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
 func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/state", a.withOptionalAuth(a.HandleState))
 	cm.RegisterHTTPHandler("/api/v1/system/cli-detect", a.withAuth(a.HandleSystemCliDetect))
+	// withAuth, never withOptionalAuth: this lists the operator's own disk.
+	cm.RegisterHTTPHandler("/api/v1/system/folders", a.withAuth(a.HandleSystemFolders))
 	// POST /api/v1/system/cli-validate — spawns a caller-supplied path
 	// (<cli> --version), so it is hardened as a privileged diagnostic (ADR-030
 	// §11 F-01). CREATE-PARITY auth: plain withAuth, exactly like createAgent /
