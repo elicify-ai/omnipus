@@ -714,6 +714,24 @@ export function BrowserLiveView({
   // `mediaStream`/`hasAudio`.
   const mediaStream = mediaStreamProp ?? webrtcStream
   const hasAudio = mediaStreamProp !== null ? hasAudioProp : webrtcHasAudio
+
+  // Sync `muted` to the DOM PROPERTY, imperatively.
+  //
+  // React writes `muted` on a <video> as an ATTRIBUTE. The browser reads that
+  // attribute once, at mount, to seed the property — and then ignores it. So
+  // `muted={videoMuted}` in the JSX below correctly mutes the element on first
+  // render and NEVER unmutes it: the toolbar button flipped the icon, flipped
+  // aria-pressed, and changed nothing audible. Reported from live use on
+  // macOS 2026-08-12 ("the mute unmute icon does not have an effect").
+  //
+  // This is a long-standing React quirk (facebook/react#10389), not a bug in
+  // this component's logic, which is why it survives a reading of the state
+  // flow. The only reliable fix is to assign the property directly.
+  useEffect(() => {
+    const el = videoRef.current
+    if (el) el.muted = videoMuted
+  }, [videoMuted, mediaStream])
+
   // "Is a live WebRTC session actually attached" — the direct replacement
   // for the old JPEG-era `frame !== null` gate (see attachedRef's own doc
   // comment). Gates whether the interactive container/video sink mounts at
