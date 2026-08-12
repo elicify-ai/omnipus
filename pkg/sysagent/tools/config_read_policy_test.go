@@ -39,32 +39,32 @@ func seedSecrets(cfg *config.Config) {
 	}}
 }
 
-// TestConfigGet_UndisclosableKeysRefused is the end-to-end proof for the read
-// finding. get_config had no deny list at all: its only filter was a substring
-// check on the KEY NAME, so every key set_config refuses was readable —
-// including the account hashes, the auth-bypass flag and the entire enforcement
-// configuration. That is the reconnaissance an attacker wants BEFORE using any
-// write-side finding.
+// TestConfigGet_UndisclosableKeysRefused pins the read boundary, which is
+// CREDENTIALS ONLY.
+//
+// OPERATOR DECISION, 2026-08-12. An earlier version of this test asserted that
+// the whole enforcement configuration was unreadable — sandbox, tool_policies,
+// the exec allow-list, the path fences. That was the wrong boundary and it
+// fought the architecture: config.json is blocked at the FILESYSTEM layer
+// precisely so that every read and write goes through this tool, which
+// validates. Granting an agent the config tool and then refusing to let it read
+// configuration makes the tool half-useless, and it removes the one way an agent
+// can explain WHY it cannot do something instead of failing opaquely.
+//
+// What stays refused is the material that is a credential rather than a
+// setting: account password and session hashes, the gateway bearer token, and
+// the CLI token. Those live in config.json by accident of storage, not because
+// they are configuration — the same reason credentials.json is blocked outright.
+//
+// Writes are unaffected: every key here and every enforcement key remains
+// write-blocked. Reading the cage is diagnosis; opening it is escape.
 func TestConfigGet_UndisclosableKeysRefused(t *testing.T) {
 	for _, key := range []string{
 		"gateway.users",
-		"gateway.dev_mode_bypass",
-		"gateway.trust_xff",
-		"gateway.validate_inbound",
-		"GATEWAY.USERS",           // the same case bypass, on the read side
-		"gateway.Dev_Mode_Bypass", //
-		"sandbox",
-		"sandbox.tool_policies",
-		"sandbox.shell_deny_patterns",
-		"sandbox.allowed_paths",
-		"Sandbox.Mode",
-		"tools.exec",
-		"tools.exec.allowed_binaries",
-		"tools.mcp",
-		"tools.allow_read_paths",
-		"tools.allow_write_paths",
-		"tools.filter_min_length",
-		"tools.web.private_host_whitelist",
+		"GATEWAY.USERS", // the same case bypass, on the read side
+		"gateway.token",
+		"gateway.cli_token",
+		"Gateway.CLI_Token", // case variant of a credential
 	} {
 		t.Run(key, func(t *testing.T) {
 			deps, cfg := newTestDeps()
@@ -116,8 +116,13 @@ func TestConfigGet_SectionReadIsRedacted(t *testing.T) {
 	if value["users"] != "[REDACTED]" {
 		t.Errorf("gateway.users = %v, want \"[REDACTED]\"", value["users"])
 	}
-	if value["dev_mode_bypass"] != "[REDACTED]" {
-		t.Errorf("gateway.dev_mode_bypass = %v, want \"[REDACTED]\"", value["dev_mode_bypass"])
+	// OPERATOR DECISION 2026-08-12: enforcement configuration is READABLE by an
+	// agent the operator granted the config tool — that is what the tool is for,
+	// and it is how an agent explains why it cannot do something instead of
+	// failing opaquely. Only credentials stay hidden. So dev_mode_bypass now
+	// comes back with its real value while users/token/cli_token do not.
+	if value["dev_mode_bypass"] == "[REDACTED]" {
+		t.Error("gateway.dev_mode_bypass must be readable — it is enforcement configuration, not a credential")
 	}
 	// Positive half of the same read: the section is still worth reading.
 	if value["port"] == nil {

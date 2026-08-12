@@ -262,9 +262,20 @@ func TestRedactConfigValue_BlockedDescendantsAndSecretsRemoved(t *testing.T) {
 	if !ok {
 		t.Fatalf("redactConfigValue returned %T, want map[string]any", got)
 	}
-	for _, blocked := range []string{"dev_mode_bypass", "trust_xff", "token", "users"} {
+	// Credentials only. dev_mode_bypass and trust_xff used to be redacted here;
+	// the operator decided enforcement configuration is readable by an agent
+	// granted the config tool, so they now come back with their real values
+	// while the credential fields do not.
+	for _, blocked := range []string{"token", "users"} {
 		if got[blocked] != redactedConfigValue {
 			t.Errorf("gateway.%s = %v, want %q", blocked, got[blocked], redactedConfigValue)
+		}
+	}
+	for _, readable := range []string{"dev_mode_bypass", "trust_xff"} {
+		if got[readable] == redactedConfigValue {
+			t.Errorf("gateway.%s was redacted — it is enforcement configuration, not a "+
+				"credential, and an agent that can see it can explain a refusal instead "+
+				"of failing opaquely", readable)
 		}
 	}
 	if got["port"] != float64(5000) || got["host"] != "127.0.0.1" {

@@ -242,17 +242,14 @@ var blockedConfigKeys = []blockedConfigKey{
 			"tool_policies, shell_deny_patterns, allowed_paths, allowed_exec_paths, filesystem_model, " +
 			"egress and SSRF allow-lists, audit_log, skill_trust, prompt_injection_level) — " +
 			"change it in Settings → Security or config.json, never from an agent",
-		ReadReason: "the enforcement configuration read back in full is an evasion map — the exact " +
-			"allowed paths, the shell deny patterns, the egress and SSRF allow-lists, the " +
-			"per-tool policies and the injection-guard level; operators read it in " +
-			"Settings → Security",
+		ReadOKReason: "the agent's own enforcement configuration. OPERATOR DECISION 2026-08-12: an agent granted the config tool may READ its settings — that is what the tool is for, and it is how an agent can explain WHY it cannot do something instead of just failing. Writing this namespace stays blocked: reading the cage is diagnosis, opening it is escape",
 	},
 
 	// ---- gateway authentication, origin and approval controls ----
 	{
-		Key:        "gateway.dev_mode_bypass",
-		Reason:     "it disables gateway authentication entirely, granting unauthenticated admin access to the whole API",
-		ReadReason: "its value tells the caller whether the gateway's front door is currently unauthenticated",
+		Key:          "gateway.dev_mode_bypass",
+		Reason:       "it disables gateway authentication entirely, granting unauthenticated admin access to the whole API",
+		ReadOKReason: "an agent that can see the front door is unauthenticated can say so; it still cannot change it",
 	},
 	{
 		Key:    "gateway.users",
@@ -283,18 +280,17 @@ var blockedConfigKeys = []blockedConfigKey{
 		Key: "gateway.trust_xff",
 		Reason: "it makes the client IP attacker-controlled, which is what auth rate limiting " +
 			"and audit attribution key on",
-		ReadReason: "its value tells the caller whether spoofing X-Forwarded-For defeats auth rate " +
-			"limiting and audit attribution",
+		ReadOKReason: "enforcement configuration, readable for the same reason as sandbox; the write stays blocked",
 	},
 	{
-		Key:        "gateway.validate_inbound",
-		Reason:     "it is the inbound contract validator (Constraint #8)",
-		ReadReason: "its value tells the caller whether inbound payloads are validated at all",
+		Key:          "gateway.validate_inbound",
+		Reason:       "it is the inbound contract validator (Constraint #8)",
+		ReadOKReason: "enforcement configuration, readable; the write stays blocked",
 	},
 	{
-		Key:        "gateway.auth_mismatch_log_level",
-		Reason:     "it controls whether failed authentication attempts are logged at all",
-		ReadReason: "its value tells the caller whether failed authentication attempts are recorded",
+		Key:          "gateway.auth_mismatch_log_level",
+		Reason:       "it controls whether failed authentication attempts are logged at all",
+		ReadOKReason: "a log level. Knowing what is recorded is not an advantage worth withholding from a tool the operator granted",
 	},
 	{
 		Key:    "gateway.tool_approval_timeout",
@@ -311,67 +307,60 @@ var blockedConfigKeys = []blockedConfigKey{
 
 	// ---- tool-surface boundary controls ----
 	{
-		Key:    "tools.allow_read_paths",
-		Reason: "it is the filesystem read boundary for every file tool",
-		ReadReason: "it is the precise location of the read fence — the one thing worth knowing in " +
-			"order to route around it",
+		Key:          "tools.allow_read_paths",
+		Reason:       "it is the filesystem read boundary for every file tool",
+		ReadOKReason: "the read fence's location. Post-ADR-060 reads are open anyway, so this discloses nothing an agent cannot already determine by reading",
 	},
 	{
-		Key:    "tools.allow_write_paths",
-		Reason: "it is the filesystem write boundary for every file tool",
-		ReadReason: "it is the precise location of the write fence — the one thing worth knowing in " +
-			"order to route around it",
+		Key:          "tools.allow_write_paths",
+		Reason:       "it is the filesystem write boundary for every file tool",
+		ReadOKReason: "the write fence's location — precisely what an agent needs in order to explain a refused write rather than retrying blindly",
 	},
 	{
 		Key: "tools.filter_sensitive_data",
 		Reason: "it is the filter that strips API keys, tokens and secrets out of tool results " +
 			"before they reach the model",
-		ReadReason: "its value tells the caller whether tool results are scrubbed before it sees them",
+		ReadOKReason: "whether results are scrubbed. Readable; the write stays blocked",
 	},
 	{
 		Key: "tools.filter_min_length",
 		Reason: "it tunes that same secret-redaction filter — a large value switches redaction off " +
 			"without appearing to disable anything",
-		ReadReason: "the threshold is exactly what a caller needs in order to chunk a secret small " +
-			"enough to slip under the redactor",
+		ReadOKReason: "readable with the write blocked. The chunk-a-secret concern it was denied for is not addressed by hiding a threshold that can be measured in a few calls",
 	},
 	{
 		Key: "tools.exec",
 		Reason: "it holds the exec binary allow-list, the exec approval mode and the egress proxy " +
 			"toggle for spawned processes",
-		ReadReason: "it enumerates which binaries may be run, whether approval is required and " +
-			"whether spawned processes are proxied — the evasion map for the exec surface",
+		ReadOKReason: "which binaries may be run and whether approval is required — the answer to 'why was my command refused'",
 	},
 	{
 		Key: "tools.mcp",
 		Reason: "an MCP server entry names a program the gateway launches — writing it is arbitrary " +
 			"code execution, and it would bypass whatever policy governs add_mcp_server",
-		ReadReason: "a server entry carries the command line, arguments, environment and credential " +
-			"refs the gateway launches it with; list_mcp_servers is the introspection path",
+		ReadOKReason: "the configured servers. Embedded credentials are caught by redactConfigValue's field-name redaction at any depth, so the list is readable while its secrets are not",
 	},
 	{
 		Key: "tools.browser",
 		Reason: "exec_path and cdp_url make the gateway launch or attach to a chosen binary, " +
 			"profile_dir points the browser profile anywhere, and evaluate_enabled turns on " +
 			"arbitrary in-page JavaScript",
-		ReadReason: "exec_path, profile_dir and cdp_url disclose the host's filesystem layout and the " +
-			"debugging endpoint the browser is driven through",
+		ReadOKReason: "browser paths and endpoints. Reads are open post-ADR-060, so the filesystem layout it discloses is already visible",
 	},
 	{
-		Key:        "tools.cron.allow_command",
-		Reason:     "it lets scheduled jobs run shell commands",
-		ReadReason: "its value tells the caller whether the scheduler is a usable shell",
+		Key:          "tools.cron.allow_command",
+		Reason:       "it lets scheduled jobs run shell commands",
+		ReadOKReason: "readable; the write stays blocked",
 	},
 	{
-		Key:    "tools.web.private_host_whitelist",
-		Reason: "it is the SSRF exemption list for private/internal hosts (SEC-24)",
-		ReadReason: "it is a ready-made list of internal hosts that are reachable despite the SSRF " +
-			"guard (SEC-24)",
+		Key:          "tools.web.private_host_whitelist",
+		Reason:       "it is the SSRF exemption list for private/internal hosts (SEC-24)",
+		ReadOKReason: "the SSRF exemption list. Readable so an agent can explain a refused fetch; the write stays blocked",
 	},
 	{
-		Key:        "tools.web.proxy",
-		Reason:     "it routes every outbound web request through a chosen proxy",
-		ReadReason: "it names the egress path every outbound web request traverses",
+		Key:          "tools.web.proxy",
+		Reason:       "it routes every outbound web request through a chosen proxy",
+		ReadOKReason: "the egress path. Readable; the write stays blocked",
 	},
 	{
 		Key: "tools.skills.marketplaces",
@@ -396,14 +385,13 @@ var blockedConfigKeys = []blockedConfigKey{
 		Key: "security",
 		Reason: "reserved — no such config section exists today, and a security section must " +
 			"never be agent-writable by default if one is introduced",
-		ReadReason: "reserved — there is nothing to read today, and a security section must not " +
-			"become agent-readable by default the moment the field lands",
+		ReadOKReason: "reserved and empty. Nothing to disclose; the write stays blocked",
 	},
 	{
 		Key: "workspace_path",
 		Reason: "reserved — it names the workspace root that filesystem confinement is " +
 			"anchored to, and must never be agent-writable if reintroduced",
-		ReadReason: "reserved — it would name the root that filesystem confinement is anchored to",
+		ReadOKReason: "the confinement root, which an agent already knows — it is its own working directory",
 	},
 }
 
