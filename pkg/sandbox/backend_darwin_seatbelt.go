@@ -73,6 +73,40 @@ func CurrentSeatbeltBackend() *SeatbeltBackend {
 	return currentSeatbeltBackend.Load()
 }
 
+// seatbeltProfileCacheCap bounds the number of distinct rendered profiles
+// seatbeltCache holds at once. Spec unified-file-access-and-mounts FR-4.1/
+// FR-4.4.
+//
+// Sizing: the cache is keyed by the AUTHORED policy, which varies per turn
+// (per agent, per workspace re-root — see DeriveKernelPolicy), not per
+// spawn — many spawns within the same turn share one key and hit the cache
+// repeatedly. 32 is sized for "several dozen concurrently active turns",
+// which comfortably covers a single-operator gateway's realistic concurrency
+// (a handful of agents, occasionally a few delegated sub-turns each) with
+// headroom. At the measured worst case of ~150 KB per rendered profile
+// (spec FR-4.3's 142 KB plus slack), 32 entries is ~4.8 MB — a fraction of
+// the <10 MB total security-feature RAM budget (CLAUDE.md hard constraint
+// #3) shared across every backend in this package, not just this cache.
+// Bounded rather than unbounded because an unbounded map keyed by policy
+// content grows for the life of the process with every distinct turn shape
+// the gateway ever sees (every workspace re-root, every mount add/remove
+// produces a new key) — that is an unbounded-memory leak dressed up as a
+// cache.
+const seatbeltProfileCacheCap = 32
+
+// seatbeltCache is the process-wide render cache used by every
+// SeatbeltBackend instance (see ApplyToCmd). It is package-level rather than
+// a field on SeatbeltBackend because the cache is keyed by the policy's
+// CONTENT (seatbeltPolicyCacheKey), not by anything backend-instance-
+// specific — two turns with byte-identical grants should render once
+// regardless of which SeatbeltBackend value happens to be
+// CurrentSeatbeltBackend() at the time, and a per-instance cache would only
+// fragment hit rate for no benefit (every production process has exactly one
+// backend installed by Apply() anyway; tests that construct several via
+// NewSeatbeltBackend still share this one cache, which is correct since the
+// same policy content always renders to the same profile).
+var seatbeltCache = newSeatbeltProfileCache(seatbeltProfileCacheCap)
+
 // SeatbeltBackend applies a SandboxPolicy on macOS by rendering a Seatbelt
 // profile and launching each hardened-exec child under /usr/bin/sandbox-exec.
 type SeatbeltBackend struct {
@@ -206,14 +240,30 @@ func (s *SeatbeltBackend) ApplyToCmd(cmd *exec.Cmd, policy SandboxPolicy) error 
 		return fmt.Errorf("seatbelt ApplyToCmd: cmd.Path is empty (nothing to wrap)")
 	}
 
-	// Re-render when the caller supplies a policy, so a child tracks the
-	// latest rules even if Apply was never called on this backend, and so a
-	// mutated policy is re-validated rather than trusted. Fall back to the
-	// cached profile only when the caller passed an empty policy.
+	// Re-render (via the process-wide cache — spec FR-4.1) when the caller
+	// supplies a policy, so a child tracks the latest rules even if Apply was
+	// never called on this backend, and so a mutated policy is re-validated
+	// rather than trusted. Fall back to the cached BOOT profile only when the
+	// caller passed an empty policy — that is the FR-4.0 seam: a per-turn
+	// policy (hardened_exec_darwin.go's applyPlatformHardening, driven by
+	// Limits.KernelPolicy) is what actually confines the child; the boot
+	// profile installed by Apply() is only the fallback for callers that have
+	// not supplied one.
+	//
+	// seatbeltCache is keyed by the policy's semantic content (see
+	// seatbeltPolicyCacheKey), not by anything about this backend instance,
+	// so it is deliberately package-level and shared across every
+	// SeatbeltBackend — two turns with byte-identical grants render once
+	// regardless of which backend instance served which spawn.
 	var profile string
 	if len(policy.FilesystemRules) > 0 || len(policy.BindPortRules) > 0 || len(policy.ConnectPortRules) > 0 {
-		rendered, err := renderSeatbeltProfile(policy)
+		rendered, err := seatbeltCache.getOrRender(policy)
 		if err != nil {
+			// FR-4.2 fail-closed: a render/cache-fill failure aborts the
+			// spawn. There is no fallback to an unconfined child — matching
+			// the Linux RestrictCurrentThread contract ("Returns an error if
+			// the kernel rejects the ruleset; callers must abort the spawn
+			// rather than fall through to an unrestricted exec.").
 			return fmt.Errorf("seatbelt ApplyToCmd: %w", err)
 		}
 		profile = rendered

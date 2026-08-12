@@ -497,6 +497,26 @@ type Limits struct {
 	// acknowledgement: this is HTTP/HTTPS only. Raw TCP connect
 	// is NOT covered. Documented as a trusted-prompt-feature limitation.
 	EgressProxyAddr string
+
+	// KernelPolicy is the PER-TURN kernel-enforcement policy for this child,
+	// typically produced by sandbox.DeriveKernelPolicy from the turn's
+	// authored fspolicy.FSPolicy (spec unified-file-access-and-mounts FR-4.0).
+	//
+	// nil is the explicit "no per-turn policy supplied" value, and it is NOT
+	// the same as "run unconfined": every platform's applyPlatformHardening
+	// falls back to its existing boot-global behaviour when this is nil, so
+	// callers that have not yet been migrated to compute a per-turn policy
+	// see no change. A non-nil pointer is what actually confines the child on
+	// platforms that support per-child kernel policy (currently macOS/
+	// Seatbelt; Linux enforces via the per-thread Landlock domain instead —
+	// see RestrictCurrentThread — and does not consume this field).
+	//
+	// The pointer (not a value) is deliberate: SandboxPolicy is not small
+	// (FilesystemRules/BindPortRules/ConnectPortRules can each run into the
+	// thousands for a production dev-server port range), and a nil pointer is
+	// the only way to distinguish "no policy" from "the zero-value policy"
+	// without adding a second bool field that could drift from it.
+	KernelPolicy *SandboxPolicy
 }
 
 // Result captures the outcome of a hardened child execution.

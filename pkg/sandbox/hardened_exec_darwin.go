@@ -49,11 +49,30 @@ const memoryLimitSupported = false
 // Setpgid is retained regardless: darwin does not expose Pdeathsig, so the
 // process group is how the parent SIGTERMs the whole tree on shutdown.
 //
-// Failure to apply an installed policy returns an error, which aborts the
-// spawn. Falling through to an UNCONFINED child would silently downgrade the
-// security boundary — the same fail-closed contract Linux uses when
-// landlock_restrict_self fails.
-func applyPlatformHardening(cmd *exec.Cmd, _ Limits) error {
+// # Per-turn policy (spec unified-file-access-and-mounts FR-4.0)
+//
+// lim.KernelPolicy is the seam a caller uses to supply the PER-TURN policy
+// that should actually confine this specific child, as opposed to the
+// process-global profile Apply() installed once at boot. When it is set, its
+// value (not the boot profile) is what ApplyToCmd renders/caches and wraps
+// the child in — this is what makes two children spawned for two different
+// turns get genuinely different confinement rather than both silently
+// inheriting the one profile captured at gateway startup.
+//
+// When lim.KernelPolicy is nil, an empty SandboxPolicy is passed to
+// ApplyToCmd, which is its signal to reuse the profile Apply() already
+// rendered and validated at boot, exactly as before this field existed. This
+// is the deliberate, documented fallback for callers not yet migrated to
+// compute a per-turn policy — see Limits.KernelPolicy's doc comment.
+//
+// Failure to apply a policy — whether the per-turn one or the boot fallback —
+// returns an error, which aborts the spawn. Falling through to an UNCONFINED
+// child would silently downgrade the security boundary. This is the same
+// fail-closed contract Linux's RestrictCurrentThread documents: "Returns an
+// error if the kernel rejects the ruleset; callers must abort the spawn
+// rather than fall through to an unrestricted exec." The two platforms read
+// as one rule by design.
+func applyPlatformHardening(cmd *exec.Cmd, lim Limits) error {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
@@ -67,9 +86,17 @@ func applyPlatformHardening(cmd *exec.Cmd, _ Limits) error {
 		return nil
 	}
 
-	// Pass an empty policy so ApplyToCmd reuses the profile Apply already
-	// rendered and validated, rather than re-deriving it per spawn.
-	if err := sb.ApplyToCmd(cmd, SandboxPolicy{}); err != nil {
+	// Per-turn policy (FR-4.0), when supplied, takes over from the boot
+	// profile entirely. An empty SandboxPolicy is ApplyToCmd's own signal to
+	// fall back to the cached boot profile — see its doc comment — so
+	// leaving policy at its zero value here IS the "no per-turn policy"
+	// fallback, not a separate branch.
+	var policy SandboxPolicy
+	if lim.KernelPolicy != nil {
+		policy = *lim.KernelPolicy
+	}
+
+	if err := sb.ApplyToCmd(cmd, policy); err != nil {
 		return fmt.Errorf("hardened_exec/darwin: apply seatbelt profile to child: %w", err)
 	}
 	return nil
