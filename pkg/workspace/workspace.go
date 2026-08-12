@@ -13,9 +13,14 @@ package workspace
 //
 // JSON tag rules (must stay stable — the files are the long-term store):
 //
-//	id, name, description, status, pinned, pin_order, core_team, repository,
+//	id, name, description, status, pinned, pin_order, core_team,
 //	owner, is_default, setup_pending, delegation, member_configs, created_at,
 //	updated_at
+//
+// repository was deleted with no back-compat (FR-9.1, ADR-061 D7, matching
+// the ADR-035/037 precedent) — do not reintroduce it. Git linkage is now a
+// convenience on top of mounting: clone to an operator-chosen location, then
+// mount it.
 //
 // Delegation is the typed form shared with delegation.go's DelegationEdge.
 // Adding a new field here requires a matching JSON tag and must be
@@ -30,9 +35,6 @@ type Workspace struct { // not-wire-format: internal disk-cache struct, mapped t
 
 	// CoreTeam is the list of agent IDs associated with this workspace.
 	CoreTeam []string `json:"core_team,omitempty"`
-
-	// Repository is an optional https:// URL for the associated git repo (SEC-5).
-	Repository string `json:"repository,omitempty"`
 
 	// Owner is the username of the user who created this workspace.
 	// Attribution only — not an access gate (FR-1.9).

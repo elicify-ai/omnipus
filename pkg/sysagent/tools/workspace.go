@@ -130,7 +130,7 @@ func NewWorkspaceCreateTool(d *Deps) *WorkspaceCreateTool { return &WorkspaceCre
 func (t *WorkspaceCreateTool) Name() string               { return "create_workspace" }
 func (t *WorkspaceCreateTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceCreateTool) Description() string {
-	return "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id to create_task_in_workspace when creating tasks for the workspace.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace), repository (optional, git URL)."
+	return "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id to create_task_in_workspace when creating tasks for the workspace.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace)."
 }
 
 func (t *WorkspaceCreateTool) Parameters() map[string]any {
@@ -144,7 +144,6 @@ func (t *WorkspaceCreateTool) Parameters() map[string]any {
 				"items":       map[string]any{"type": "string"},
 				"description": "Optional list of agent IDs associated with this workspace",
 			},
-			"repository": map[string]any{"type": "string", "description": "Optional git repository URL"},
 		},
 		"required": []string{"name"},
 	}
@@ -184,19 +183,13 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 		}
 		w.CoreTeam = team
 	}
-	if v, ok := args["repository"].(string); ok {
-		if len(v) > 500 {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", "repository exceeds 500 characters", ""))
-		}
-		w.Repository = v
-	}
 	if err := writeEntity(workspacesDir(t.deps.Home), w.ID, w); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
 	return tools.NewToolResult(successJSON(map[string]any{
 		"id": w.ID, "name": w.Name, "description": w.Description,
 		"status": w.Status, "pinned": w.Pinned, "pin_order": w.PinOrder,
-		"core_team": w.CoreTeam, "repository": w.Repository,
+		"core_team":  w.CoreTeam,
 		"task_count": 0, "created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
 	}))
 }
@@ -209,7 +202,7 @@ func NewWorkspaceUpdateTool(d *Deps) *WorkspaceUpdateTool { return &WorkspaceUpd
 func (t *WorkspaceUpdateTool) Name() string               { return "update_workspace" }
 func (t *WorkspaceUpdateTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceUpdateTool) Description() string {
-	return "Update an existing workspace's name, description, status, pin state, core team, or repository. Call this when the user wants to rename, archive, pin, or reconfigure a workspace. Use list_workspaces first to find the workspace id.\nParameters: id (required, from list_workspaces), name, description, status (active/archived), pinned (bool), pin_order (int), core_team (list of agent IDs), repository (git URL). Only provided fields are updated."
+	return "Update an existing workspace's name, description, status, pin state, or core team. Call this when the user wants to rename, archive, pin, or reconfigure a workspace. Use list_workspaces first to find the workspace id.\nParameters: id (required, from list_workspaces), name, description, status (active/archived), pinned (bool), pin_order (int), core_team (list of agent IDs). Only provided fields are updated."
 }
 
 func (t *WorkspaceUpdateTool) Parameters() map[string]any {
@@ -231,7 +224,6 @@ func (t *WorkspaceUpdateTool) Parameters() map[string]any {
 				"items":       map[string]any{"type": "string"},
 				"description": "List of agent IDs associated with this workspace",
 			},
-			"repository": map[string]any{"type": "string", "description": "Git repository URL"},
 		},
 		"required": []string{"id"},
 	}
@@ -297,12 +289,6 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 		}
 		w.CoreTeam = team
 		coreTeamChanged = true
-	}
-	if v, ok := args["repository"].(string); ok {
-		if len(v) > 500 {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", "repository exceeds 500 characters", ""))
-		}
-		w.Repository = v
 	}
 
 	// Auto-seed default delegation edges for newly added core_team members
@@ -403,7 +389,7 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 	resp := map[string]any{
 		"id": w.ID, "name": w.Name, "description": w.Description,
 		"status": w.Status, "pinned": w.Pinned, "pin_order": w.PinOrder,
-		"core_team": w.CoreTeam, "repository": w.Repository,
+		"core_team":  w.CoreTeam,
 		"task_count": tc, "created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
 	}
 	if delegationSeedNote != "" {
@@ -908,7 +894,6 @@ func (t *WorkspaceListTool) Execute(_ context.Context, args map[string]any) *too
 		PinOrder    int      `json:"pin_order"`
 		IsDefault   bool     `json:"is_default"`
 		CoreTeam    []string `json:"core_team,omitempty"`
-		Repository  string   `json:"repository,omitempty"`
 		TaskCount   int      `json:"task_count"`
 		CreatedAt   string   `json:"created_at"`
 		UpdatedAt   string   `json:"updated_at"`
@@ -924,7 +909,6 @@ func (t *WorkspaceListTool) Execute(_ context.Context, args map[string]any) *too
 			PinOrder:    w.PinOrder,
 			IsDefault:   w.IsDefault,
 			CoreTeam:    w.CoreTeam,
-			Repository:  w.Repository,
 			TaskCount:   counts[w.ID],
 			CreatedAt:   w.CreatedAt,
 			UpdatedAt:   w.UpdatedAt,
@@ -968,7 +952,7 @@ func (t *WorkspaceGetTool) Execute(_ context.Context, args map[string]any) *tool
 	return tools.NewToolResult(successJSON(map[string]any{
 		"id": w.ID, "name": w.Name, "description": w.Description,
 		"status": w.Status, "pinned": w.Pinned, "pin_order": w.PinOrder,
-		"is_default": w.IsDefault, "core_team": w.CoreTeam, "repository": w.Repository,
+		"is_default": w.IsDefault, "core_team": w.CoreTeam,
 		"task_count": tc, "created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
 	}))
 }

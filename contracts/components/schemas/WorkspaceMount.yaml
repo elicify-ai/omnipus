@@ -1,0 +1,40 @@
+type: object
+additionalProperties: false
+description: >
+  A named write-grant on a real local folder (FR-5, ADR-061 D4). Materialised
+  as a symlink work/<name> -> host_path; enforced by realpath resolution at
+  both the app layer (FSPolicy.AllowedRoots) and, where a kernel sandbox
+  backend is active, the kernel layer. Reads are already open (FR-2.2) — a
+  mount exists to grant WRITE, nothing else.
+required:
+  - name
+  - host_path
+properties:
+  name:
+    type: string
+    minLength: 1
+    description: >
+      A single path segment identifying this mount inside work/ (FR-5.2).
+      Must be non-empty, contain no path separators (/ or \), and not be
+      ".." or contain "..". Must be unique within the workspace and must not
+      collide with an existing entry already present in work/.
+    example: "client-repo"
+  host_path:
+    type: string
+    minLength: 1
+    description: >
+      Absolute host filesystem path to the mounted folder (FR-5.3). Resolved
+      via realpath at creation time — the resolved (symlink-free) form is what
+      is stored; the raw form the operator typed is not retained.
+    example: "/Users/operator/code/client-repo"
+  status:
+    type: string
+    readOnly: true
+    enum: [ok, broken]
+    description: >
+      Server-computed liveness of the mount target (FR-8.2). "broken" means
+      the resolved host_path no longer exists or no longer resolves — the
+      mount is never silently recreated as an empty directory (FR-8.3) and is
+      never silently re-bound to a different same-named path (FR-8.5).
+      Read-only from the client's perspective; ignored on input.
+    example: "ok"

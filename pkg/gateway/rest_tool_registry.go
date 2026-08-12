@@ -497,7 +497,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, gen.ToolApprovalResponse{
 		ApprovalId: approvalID,
 		Action:     gen.ToolApprovalResponseAction(body.Action),
-		Status:     gen.Ok,
+		Status:     gen.ToolApprovalResponseStatusOk,
 	})
 }
 

@@ -2362,7 +2362,6 @@ func FixtureWorkspace_Populated() Workspace {
 		Pinned:      true,
 		PinOrder:    1,
 		CoreTeam:    &[]string{"mia", "jim"},
-		Repository:  strPtr("https://github.com/org/repo"),
 		TaskCount:   3,
 		IsDefault:   boolPtr(false),
 		Owner:       strPtr("alice"),

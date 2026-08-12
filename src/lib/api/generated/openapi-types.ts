@@ -8447,10 +8447,10 @@ export interface components {
              */
             core_team?: string[];
             /**
-             * @description Optional git repository URL. Stored as-is, not validated for reachability. Frontend opens in new tab.
-             * @example https://github.com/org/repo
+             * @description Named write-grants on real local folders (FR-5, ADR-061 D4). Absent when no mount exists (empty array is also acceptable on the wire). Created and removed via the dedicated mounts lifecycle, not via this record's own create/update requests.
+             * @example []
              */
-            repository?: string;
+            mounts?: components["schemas"]["WorkspaceMount"][];
             /**
              * @description Number of GTD board tasks with this workspace_id. Computed at read time from ~/.omnipus/tasks/. Never stored in the workspace JSON file.
              * @example 3
@@ -8575,8 +8575,6 @@ export interface components {
             description?: string;
             /** @description Optional default agent roster. Deduplicated at write time. */
             core_team?: string[];
-            /** @description Optional git repository URL. */
-            repository?: string;
         };
         /** @description Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged. */
         WorkspaceUpdateRequest: {
@@ -8590,7 +8588,6 @@ export interface components {
             pinned?: boolean;
             pin_order?: number;
             core_team?: string[];
-            repository?: string;
             /** @description Per-member (agentId → config) heartbeat settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. session_id is server-managed (set at heartbeat-enable time) and ignored on input. */
             member_configs?: {
                 [key: string]: components["schemas"]["WorkspaceMemberConfig"];
@@ -10894,6 +10891,25 @@ export interface components {
          * @enum {string}
          */
         ExternalCli: "claude-code" | "codex" | "opencode";
+        /** @description A named write-grant on a real local folder (FR-5, ADR-061 D4). Materialised as a symlink work/<name> -> host_path; enforced by realpath resolution at both the app layer (FSPolicy.AllowedRoots) and, where a kernel sandbox backend is active, the kernel layer. Reads are already open (FR-2.2) — a mount exists to grant WRITE, nothing else. */
+        WorkspaceMount: {
+            /**
+             * @description A single path segment identifying this mount inside work/ (FR-5.2). Must be non-empty, contain no path separators (/ or \), and not be ".." or contain "..". Must be unique within the workspace and must not collide with an existing entry already present in work/.
+             * @example client-repo
+             */
+            name: string;
+            /**
+             * @description Absolute host filesystem path to the mounted folder (FR-5.3). Resolved via realpath at creation time — the resolved (symlink-free) form is what is stored; the raw form the operator typed is not retained.
+             * @example /Users/operator/code/client-repo
+             */
+            host_path: string;
+            /**
+             * @description Server-computed liveness of the mount target (FR-8.2). "broken" means the resolved host_path no longer exists or no longer resolves — the mount is never silently recreated as an empty directory (FR-8.3) and is never silently re-bound to a different same-named path (FR-8.5). Read-only from the client's perspective; ignored on input.
+             * @example ok
+             * @enum {string}
+             */
+            readonly status?: "ok" | "broken";
+        };
     };
     responses: {
         /** @description Bad request — missing or invalid field. */

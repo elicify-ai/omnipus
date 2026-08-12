@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { PencilSimple, Check, X, Link } from '@phosphor-icons/react'
+import { PencilSimple, Check, X } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { updateWorkspace, workspacesQueryKeys, getErrorMessage } from '@/lib/api'
@@ -102,40 +102,13 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
         )}
       </div>
 
-      {/* Description + repo */}
+      {/* Description */}
       <div className="flex items-center gap-4 flex-wrap mb-2">
         {workspace.description && (
           <p className="text-xs text-[var(--color-muted)] flex-shrink-0 max-w-xl">
             {workspace.description}
           </p>
         )}
-        {workspace.repository && (() => {
-          // SEC-5: Only render an anchor when the URL has a safe http/https protocol.
-          // javascript: and data: URIs would execute arbitrary code as the user.
-          let isSafeUrl = false
-          try {
-            const proto = new URL(workspace.repository).protocol
-            isSafeUrl = proto === 'http:' || proto === 'https:'
-          } catch {
-            // Unparseable URL — fall through to plain text.
-          }
-          return isSafeUrl ? (
-            <a tabIndex={0}
-              href={workspace.repository}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:underline flex-shrink-0"
-            >
-              <Link size={12} />
-              Repository
-            </a>
-          ) : (
-            <span className="flex items-center gap-1 text-xs text-[var(--color-muted)] flex-shrink-0">
-              <Link size={12} />
-              {workspace.repository}
-            </span>
-          )
-        })()}
         <span className={cn(
           'text-xs text-[var(--color-muted)] flex-shrink-0',
           workspace.task_count === 0 && 'hidden',

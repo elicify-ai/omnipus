@@ -5311,13 +5311,13 @@ func (e ToolApprovalResponseAction) Valid() bool {
 
 // Defines values for ToolApprovalResponseStatus.
 const (
-	Ok ToolApprovalResponseStatus = "ok"
+	ToolApprovalResponseStatusOk ToolApprovalResponseStatus = "ok"
 )
 
 // Valid indicates whether the value is a known member of the ToolApprovalResponseStatus enum.
 func (e ToolApprovalResponseStatus) Valid() bool {
 	switch e {
-	case Ok:
+	case ToolApprovalResponseStatusOk:
 		return true
 	default:
 		return false
@@ -5411,6 +5411,24 @@ func (e ToolRegistryEntrySource) Valid() bool {
 	case ToolRegistryEntrySourceBuiltin:
 		return true
 	case ToolRegistryEntrySourceMcp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkspaceMountsStatus.
+const (
+	WorkspaceMountsStatusBroken WorkspaceMountsStatus = "broken"
+	WorkspaceMountsStatusOk     WorkspaceMountsStatus = "ok"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceMountsStatus enum.
+func (e WorkspaceMountsStatus) Valid() bool {
+	switch e {
+	case WorkspaceMountsStatusBroken:
+		return true
+	case WorkspaceMountsStatusOk:
 		return true
 	default:
 		return false
@@ -13155,6 +13173,18 @@ type Workspace struct {
 	// MemberConfigs Per-member (agentId → config) heartbeat settings for this workspace. Absent when no member has a config (empty map). Keys are agent IDs.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
 
+	// Mounts Named write-grants on real local folders (FR-5, ADR-061 D4). Absent when no mount exists (empty array is also acceptable on the wire). Created and removed via the dedicated mounts lifecycle, not via this record's own create/update requests.
+	Mounts *[]struct {
+		// HostPath Absolute host filesystem path to the mounted folder (FR-5.3). Resolved via realpath at creation time — the resolved (symlink-free) form is what is stored; the raw form the operator typed is not retained.
+		HostPath string `json:"host_path"`
+
+		// Name A single path segment identifying this mount inside work/ (FR-5.2). Must be non-empty, contain no path separators (/ or \), and not be ".." or contain "..". Must be unique within the workspace and must not collide with an existing entry already present in work/.
+		Name string `json:"name"`
+
+		// Status Server-computed liveness of the mount target (FR-8.2). "broken" means the resolved host_path no longer exists or no longer resolves — the mount is never silently recreated as an empty directory (FR-8.3) and is never silently re-bound to a different same-named path (FR-8.5). Read-only from the client's perspective; ignored on input.
+		Status *WorkspaceMountsStatus `json:"status,omitempty"`
+	} `json:"mounts,omitempty"`
+
 	// Name Human-readable workspace name. Not unique.
 	Name string `json:"name"`
 
@@ -13166,9 +13196,6 @@ type Workspace struct {
 
 	// Pinned Whether this workspace is pinned to the top of the sidebar.
 	Pinned bool `json:"pinned"`
-
-	// Repository Optional git repository URL. Stored as-is, not validated for reachability. Frontend opens in new tab.
-	Repository *string `json:"repository,omitempty"`
 
 	// SetupPending True while this workspace's initial team-setup interview has not yet run. Set server-side at creation when the default (Ava-only) roster was auto-seeded; cleared server-side when the setup kickoff turn is accepted. Absent/false otherwise. Server-set; ignored on input (readOnly).
 	SetupPending *bool `json:"setup_pending,omitempty"`
@@ -13183,6 +13210,9 @@ type Workspace struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// WorkspaceMountsStatus Server-computed liveness of the mount target (FR-8.2). "broken" means the resolved host_path no longer exists or no longer resolves — the mount is never silently recreated as an empty directory (FR-8.3) and is never silently re-bound to a different same-named path (FR-8.5). Read-only from the client's perspective; ignored on input.
+type WorkspaceMountsStatus string
+
 // WorkspaceStatus Workspace visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
 type WorkspaceStatus string
 
@@ -13196,9 +13226,6 @@ type WorkspaceCreateRequest struct {
 
 	// Name Workspace name. Required. Not unique.
 	Name string `json:"name"`
-
-	// Repository Optional git repository URL.
-	Repository *string `json:"repository,omitempty"`
 }
 
 // WorkspaceDelegation The per-workspace delegation graph (M5). This is the editable source of truth surfaced in the workspace Team tab and the Agents-area "Workspace Teams" view — always workspace-scoped, never global. Nodes are the workspace team's agents (core_team ∪ every agent named by an edge); edges are the directed delegation authorizations. This graph is the sole delegation-enforcement mechanism — there is no separate global per-agent delegation policy; the graph is both what the UI edits and what the runtime enforces.
@@ -13289,7 +13316,6 @@ type WorkspaceUpdateRequest struct {
 	Name          *string                           `json:"name,omitempty"`
 	PinOrder      *int                              `json:"pin_order,omitempty"`
 	Pinned        *bool                             `json:"pinned,omitempty"`
-	Repository    *string                           `json:"repository,omitempty"`
 
 	// Status Archive or restore a workspace.
 	Status *WorkspaceUpdateRequestStatus `json:"status,omitempty"`

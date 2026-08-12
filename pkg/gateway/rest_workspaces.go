@@ -5,12 +5,13 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -80,18 +81,34 @@ func (a *restAPI) callerIdentity(r *http.Request) caller {
 	return c
 }
 
-// validateRepositoryURL returns an error when the repository field is non-empty but
-// does not use an http:// or https:// scheme. Empty repository is always accepted
-// (the field is optional). (SEC-5)
-func validateRepositoryURL(repository string) error {
-	if repository == "" {
-		return nil
+// repositoryRetiredMsg is returned (400) whenever a caller's raw request body
+// carries a "repository" field on POST/PUT /api/v1/workspaces (FR-9.2,
+// ADR-061 D7). Workspace.repository is deleted from the wire, storage and the
+// sysagent tool with no back-compat (FR-9.1) — a caller still sending it must
+// get a loud 400, not a silent drop. Git linkage is now a convenience on top
+// of mounting (FR-9.3): clone the URL to an operator-chosen location, then
+// mount that folder into the workspace.
+const repositoryRetiredMsg = "repository is retired — clone the git URL to a location of your choosing, then mount that folder into the workspace"
+
+// rejectRetiredRepositoryField reads the full request body, 400s when it
+// contains a "repository" field (FR-9.2), and — on success — restores r.Body
+// so the caller's normal decode is unaffected. Returns false (and has already
+// written the error response) when the body could not be read or carried the
+// retired field; true means the caller may proceed with decoding.
+// Mirrors the sandbox_profile/delegation_policy raw-body-sniff precedent in
+// pkg/gateway/rest.go's updateAgent (ADR-035 §7 / ADR-037).
+func rejectRetiredRepositoryField(w http.ResponseWriter, r *http.Request) bool {
+	rawBody, readErr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if readErr != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
+		return false
 	}
-	u, err := url.Parse(repository)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return fmt.Errorf("repository must be an http:// or https:// URL")
+	r.Body = io.NopCloser(bytes.NewReader(rawBody))
+	if bytes.Contains(rawBody, []byte(`"repository"`)) {
+		jsonErr(w, http.StatusBadRequest, repositoryRetiredMsg)
+		return false
 	}
-	return nil
+	return true
 }
 
 // readWorkspaceFile reads and parses ~/.omnipus/workspaces/{id}.json.
@@ -262,9 +279,6 @@ func workspaceToWire(w storedWorkspace, taskCount int) gen.Workspace {
 	}
 	if w.Description != "" {
 		wire.Description = &w.Description
-	}
-	if w.Repository != "" {
-		wire.Repository = &w.Repository
 	}
 	if len(w.CoreTeam) > 0 {
 		team := make([]string, len(w.CoreTeam))
@@ -652,6 +666,14 @@ func (a *restAPI) handleWorkspaceList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
+	// FR-9.2: repository is retired from the wire entirely (no back-compat).
+	// gen.WorkspaceCreateRequest no longer has the field at all, so without
+	// this raw-body sniff a client still sending it would have it silently
+	// dropped by Go's default JSON decode rather than getting a loud 400.
+	if !rejectRetiredRepositoryField(w, r) {
+		return
+	}
+
 	var req gen.WorkspaceCreateRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "WorkspaceCreateRequest", &req, validateEnabled) {
@@ -672,17 +694,6 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	if req.Description != nil && len(*req.Description) > 2000 {
 		jsonErr(w, http.StatusBadRequest, "description exceeds 2000 characters")
 		return
-	}
-	if req.Repository != nil && len(*req.Repository) > 500 {
-		jsonErr(w, http.StatusBadRequest, "repository exceeds 500 characters")
-		return
-	}
-	// SEC-5: reject non-http/https repository URLs.
-	if req.Repository != nil {
-		if err := validateRepositoryURL(*req.Repository); err != nil {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
 	}
 	if req.CoreTeam != nil && len(*req.CoreTeam) > 20 {
 		jsonErr(w, http.StatusBadRequest, "core_team may have at most 20 entries")
@@ -713,9 +724,6 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Description != nil {
 		ws.Description = *req.Description
-	}
-	if req.Repository != nil {
-		ws.Repository = *req.Repository
 	}
 	cfg := a.agentLoop.GetConfig()
 	if req.CoreTeam != nil && len(*req.CoreTeam) > 0 {
@@ -833,6 +841,14 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
+	// FR-9.2: repository is retired from the wire entirely (no back-compat).
+	// gen.WorkspaceUpdateRequest no longer has the field at all, so without
+	// this raw-body sniff a client still sending it would have it silently
+	// dropped by Go's default JSON decode rather than getting a loud 400.
+	if !rejectRetiredRepositoryField(w, r) {
+		return
+	}
+
 	var req gen.WorkspaceUpdateRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "WorkspaceUpdateRequest", &req, validateEnabled) {
@@ -862,17 +878,6 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	if req.Description != nil && len(*req.Description) > 2000 {
 		jsonErr(w, http.StatusBadRequest, "description exceeds 2000 characters")
 		return
-	}
-	if req.Repository != nil && len(*req.Repository) > 500 {
-		jsonErr(w, http.StatusBadRequest, "repository exceeds 500 characters")
-		return
-	}
-	// SEC-5: reject non-http/https repository URLs.
-	if req.Repository != nil {
-		if err := validateRepositoryURL(*req.Repository); err != nil {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
 	}
 	if req.CoreTeam != nil && len(*req.CoreTeam) > 20 {
 		jsonErr(w, http.StatusBadRequest, "core_team may have at most 20 entries")
@@ -1117,10 +1122,6 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	}
 	if req.Description != nil && *req.Description != ws.Description {
 		ws.Description = *req.Description
-		changed = true
-	}
-	if req.Repository != nil && *req.Repository != ws.Repository {
-		ws.Repository = *req.Repository
 		changed = true
 	}
 	if req.CoreTeam != nil {

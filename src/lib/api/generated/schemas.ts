@@ -848,7 +848,13 @@ type Workspace = {
   pinned: boolean;
   pin_order: number;
   core_team?: Array<string> | undefined;
-  repository?: string | undefined;
+  mounts?:
+    | Array<{
+        name: string;
+        host_path: string;
+        status?: ("ok" | "broken") | undefined;
+      }>
+    | undefined;
   task_count: number;
   is_default?: boolean | undefined;
   setup_pending?: boolean | undefined;
@@ -883,7 +889,6 @@ type WorkspaceUpdateRequest = Partial<{
   pinned: boolean;
   pin_order: number;
   core_team: Array<string>;
-  repository: string;
   member_configs: {};
 }>;
 type WorkspaceDelegation = {
@@ -3052,7 +3057,15 @@ export const Workspace: z.ZodType<Workspace> = z
     pinned: z.boolean(),
     pin_order: z.number().int(),
     core_team: z.array(z.string()).max(20).optional(),
-    repository: z.string().optional(),
+    mounts: z
+      .array(
+        z.object({
+          name: z.string().min(1),
+          host_path: z.string().min(1),
+          status: z.enum(["ok", "broken"]).optional(),
+        })
+      )
+      .optional(),
     task_count: z.number().int(),
     is_default: z.boolean().optional(),
     setup_pending: z.boolean().optional(),
@@ -3067,7 +3080,6 @@ export const WorkspaceCreateRequest = z
     name: z.string().min(1).max(200),
     description: z.string().max(2000).optional(),
     core_team: z.array(z.string()).max(20).optional(),
-    repository: z.string().optional(),
   })
   .passthrough();
 export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> = z
@@ -3078,7 +3090,6 @@ export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> = z
     pinned: z.boolean(),
     pin_order: z.number().int(),
     core_team: z.array(z.string()).max(20),
-    repository: z.string(),
     member_configs: z.record(WorkspaceMemberConfig),
   })
   .partial()
