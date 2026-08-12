@@ -63,50 +63,59 @@ not an improvement.
 - **FR-2.1** `ResolvePath` stops discarding `op`. The `_ = op` line is deleted.
 - **FR-2.2** Decisions by operation:
 
-  | `FSOp` | Class | Decision |
-  |---|---|---|
-  | `FSOpRead`, `FSOpList` | read into agent context | allowed anywhere except the secret set |
-  | `FSOpWrite` | mutate | work dir or a mount only |
-  | `FSOpExec` | run | per the ADR-060 model |
-  | `FSOpServe` | **publish** | work dir or a mount only |
-  | `FSOpSend` *(new)* | **publish** | work dir or a mount only |
+  | `FSOp` | Decision |
+  |---|---|
+  | `FSOpRead`, `FSOpList`, `FSOpSend` | allowed anywhere except the secret set |
+  | `FSOpWrite` | work dir or a mount only |
+  | `FSOpExec` | per the ADR-060 model |
+  | `FSOpServe` | work dir or a mount only (unchanged from today — see FR-2.3b) |
 
-- **FR-2.3** **There is a PUBLISH class, and it does not follow open reads.**
-  Reading a file into the agent's own context and emitting it to somewhere
-  other people can see it are different acts with different blast radii. The
-  first is the agent doing its job; the second is disclosure.
+- **FR-2.3** **There is no path-based "publish" restriction. OPERATOR DECISION,
+  2026-08-12, overruling an earlier draft of this spec.**
 
-- **FR-2.3a** `web_serve` (`FSOpServe`) publishes on an HTTP listener reachable
-  by anyone holding the preview token. **VERIFIED it is already confined**
-  today: `web_serve` calls `ResolveTurnFSPolicy(ctx, agentHome, true)` with
-  `restrict` HARDCODED true, ignoring the agent's own setting. So this
-  requirement PRESERVES existing behaviour rather than adding a restriction —
-  and the existing code already made this exact judgement, independently.
+  That draft introduced a publish class — `send_file` and `web_serve` confined to
+  the work dir even though reads are open — on the reasoning that reading a file
+  into context and disclosing it to other people are different acts. The
+  operator rejected it: *"agents that have the send tools can send and that must
+  not be guarded; if we want to prevent that we set the tool permissions
+  accordingly."*
 
-- **FR-2.3b** **`send_file` must move from the read class to the publish class,
-  and this is a real gap the first draft of this spec missed.** It resolves with
-  `FSOpRead` and then emits the file "to the user on the current chat channel
-  via the MediaStore pipeline" — Telegram, Slack, Discord, possibly a group.
-  Unlike `web_serve` it uses the agent's own `restrict` setting, so under open
-  reads it would become able to send ANY readable file on the machine to a
-  third-party chat service. That is a wider and easier disclosure channel than
-  the one FR-2.3a protects.
+  **They are right, and the argument defeats the mechanism, not just the
+  policy.** Under open reads, path-confining a publish operation is bypassable
+  in one extra step:
 
-  A new `FSOpSend` is introduced rather than reusing `FSOpServe`, so audit
-  records and any future ask-flow can tell "published on a listener" from "sent
-  to a chat".
+  - `send_file` confined → `read_file` the path, paste the contents into the
+    chat message.
+  - `web_serve` confined → `read_file` the path, `write_file` a copy inside the
+    work dir, serve the copy.
 
-- **FR-2.3c** A test MUST assert, for BOTH publish ops, that a path outside the
-  work dir and outside every mount is refused **while `read_file` on the same
-  path succeeds**. Asserting the refusal alone would pass against a build where
-  reads never opened at all.
+  So the restriction would not have stopped a determined agent; it would only
+  have made ordinary use awkward while reading as protection in the spec. That
+  is the "mechanism, not property" defect this project keeps having to correct,
+  and it was in my own draft.
 
-- **FR-2.3d** `workspace_read` (`pkg/gateway/rest_workspace.go`, the third
-  `FSOpRead` site) is an OPERATOR-facing REST read, not an agent tool. It stays
-  in the read class: the operator reading their own files through their own
-  authenticated API is not agent disclosure. Called out because it is the one
-  remaining `FSOpRead` site and a reader would otherwise have to re-derive
-  whether it was missed.
+  **The real gate is tool policy**, which already exists, is explicit per agent,
+  and is hard-validated with no defaults (Constraint #6). An operator who does
+  not want an agent disclosing files denies it `send_file`. That is one gate
+  that actually holds, rather than two that each half-hold.
+
+- **FR-2.3a** `FSOpSend` is still introduced as a distinct operation, but purely
+  for AUDIT: a disclosure to a chat channel should be distinguishable from an
+  ordinary read in the audit log and in any future ask-flow. It carries no
+  additional path restriction.
+
+- **FR-2.3b** `web_serve` (`FSOpServe`) stays confined to the work dir and
+  mounts, and this is PRESERVATION, not a boundary claim. **VERIFIED:** it
+  already hardcodes `ResolveTurnFSPolicy(ctx, agentHome, true)`, ignoring the
+  agent's own restrict setting. Opening it would be a deliberate widening of
+  shipped behaviour, which is out of scope here. This spec explicitly does NOT
+  claim it prevents disclosure — the copy-then-serve bypass above applies.
+
+- **FR-2.3c** `workspace_read` (`pkg/gateway/rest_workspace.go`) is an
+  OPERATOR-facing REST read, not an agent tool, and stays in the read class.
+  Called out because it is the third `FSOpRead` site and a reader would
+  otherwise have to re-derive whether it was missed.
+
 - **FR-2.4** Every existing `ResolvePath` call site already passes a correct
   `op`. A test MUST assert that no call site passes a zero-value `FSOp`, since
   an empty op after FR-2.1 would take the default branch rather than fail
@@ -208,17 +217,32 @@ not an improvement.
   per-session.
 - **FR-7.4** Risky targets (home directory, filesystem root, system directories)
   WARN with a message naming what the grant covers, then proceed.
-- **FR-7.5** `$OMNIPUS_HOME`, or any path containing it, is REFUSED. Checked on
-  the realpath-resolved value, so a symlink to it is refused too. A test MUST
-  cover the symlink form; the direct form is the one an attacker would not use.
-- **FR-7.6** Refusal in FR-7.5 also applies to a mount whose target CONTAINS
-  `$OMNIPUS_HOME` (e.g. the home directory). Warning is not sufficient there,
-  because the result is the same: `master.key` becomes writable.
+- **FR-7.5** A mount whose target IS `$OMNIPUS_HOME`, or lies INSIDE it, is
+  REFUSED. Checked on the realpath-resolved target, so a symlink to it is
+  refused too. A test MUST cover the symlink form; the direct form is not the
+  one anyone would reach for.
 
-  > This is a deliberate narrowing of FR-7.4 and the operator's "warn, never
-  > refuse" answer. It is reported to them as an open item in §7 rather than
-  > decided silently: mounting `$HOME` is a legitimate-if-broad thing to want,
-  > and it currently collides with FR-7.5.
+- **FR-7.6** A mount whose target CONTAINS `$OMNIPUS_HOME` — the home directory,
+  the filesystem root — is **WARNED AND ALLOWED**. *(Operator decision,
+  2026-08-12: "warn and allow applies to all but the omnipus directory".)*
+
+  An earlier draft of this spec refused these too, on the grounds that mounting
+  `$HOME` makes `master.key` writable. **That reasoning was wrong, because it
+  treated the mount as the only thing standing between an agent and the secret
+  set.** It is not. The secret set is denied (macOS) or never granted (Linux)
+  independently of any mount, by FR-3 — a mount grants write to a tree, and the
+  secret set is subtracted from every grant regardless of where the grant came
+  from. So mounting `$HOME` yields exactly "write to `$HOME` minus the secret
+  set", which is what the operator asked for and what the existing machinery
+  already computes on both platforms.
+
+  Refusing would have taken away something legitimate to protect against a
+  danger the design already handles.
+
+- **FR-7.7** A test MUST prove FR-7.6 rather than assume it: with `$HOME`
+  mounted, a child MUST still be unable to read `cli.token` or write
+  `config.json` or `master.key`. This is the assertion that turns the reasoning
+  above into a fact — and if it ever fails, FR-7.6 must revert to refusal.
 
 ### FR-8 — Lifecycle
 
@@ -278,15 +302,18 @@ Given the agent can READ /Users/me/private/report.pdf
 ```
 *The one place open reads must not propagate — serving publishes on a listener.*
 
-### S-3b — Sending is not reading either
+### S-3b — Sending is governed by tool policy, not by path
 ```gherkin
-Given the agent can READ /Users/me/private/report.pdf
- When it calls send_file on that path
- Then the call is refused
+Given the agent is granted the send_file tool
+ When it sends /Users/me/report.pdf
+ Then the send succeeds
+
+Given the agent is DENIED the send_file tool
+ When it attempts to send any file
+ Then the tool is unavailable
 ```
-*The wider of the two publish channels: send_file reaches a third-party chat
-service, and unlike web_serve it honours the agent's own restrict setting, so
-open reads would have silently unconfined it.*
+*The path is not the gate. Confining it would have been bypassable by reading
+the file and pasting its contents into the message.*
 
 ### S-4 — A mount makes exactly one folder writable
 ```gherkin
@@ -324,6 +351,20 @@ Given a symlink /tmp/sneaky -> $OMNIPUS_HOME
  Then the mount is refused
 ```
 
+### S-7b — but mounting a folder that CONTAINS it is fine, and still safe
+```gherkin
+Given the operator mounts $HOME, accepting the warning
+ When an agent writes $HOME/notes.txt
+ Then the write succeeds
+ When the same agent reads $OMNIPUS_HOME/cli.token
+ Then the read is denied
+ When the same agent writes $OMNIPUS_HOME/config.json
+ Then the write is denied
+```
+*The secret set is subtracted from every grant regardless of its source, so a
+broad mount cannot re-expose it. Refusing the mount would have taken away
+something legitimate to guard against a danger already handled.*
+
 ### S-8 — A broken mount is inert, not invented
 ```gherkin
 Given a mount whose target has been deleted
@@ -351,18 +392,21 @@ Given a workspace mounting /Users/me/projects/foo
 | 3 | `read_file` on `master.key` | denied | secret set, both layers |
 | 4 | `read_file` on `cli.token` | denied | app layer gains this |
 | 5 | `bash cat` on another agent's dir | denied | kernel gains this (FR-3.5) |
-| 6 | `web_serve` outside work dir | denied | FR-2.3a (already true today) |
-| 6a | `send_file` outside work dir | denied | FR-2.3b — the gap the grill found |
-| 6b | `send_file` outside work dir, `read_file` same path | denied / allowed | FR-2.3c — proves reads really opened |
-| 6c | `workspace_read` (operator REST) outside work dir | allowed | FR-2.3d — operator, not agent |
+| 6 | `web_serve` outside work dir | denied | FR-2.3b — preserves today's behaviour |
+| 6a | `send_file` outside work dir | **allowed** | FR-2.3 — tool policy is the gate, not the path |
+| 6b | agent denied `send_file` by tool policy | tool unavailable | FR-2.3 — the gate that actually holds |
+| 6c | `workspace_read` (operator REST) outside work dir | allowed | FR-2.3c — operator, not agent |
 | 7 | mount name `../escape` | rejected | FR-5.2 |
 | 8 | mount name colliding with existing `work/` entry | rejected | FR-5.2 |
 | 9 | two mounts, same name | rejected | FR-5.2 |
 | 10 | two workspaces, same target | allowed | FR-8.4 |
 | 11 | mount target `$OMNIPUS_HOME` | refused | FR-7.5 |
+| 11a | mount target inside `$OMNIPUS_HOME` (`entities/`) | refused | FR-7.5 |
+| 11b | `$HOME` mounted, then read `cli.token` | denied | FR-7.7 — the proof FR-7.6 rests on |
+| 11c | `$HOME` mounted, then write `master.key` | denied | FR-7.7 |
 | 12 | mount target symlinked to `$OMNIPUS_HOME` | refused | FR-7.5, the form that matters |
-| 13 | mount target `$HOME` (contains `$OMNIPUS_HOME`) | **open — see §7** | FR-7.6 conflict |
-| 14 | mount target `/` | refused or warned per §7 | FR-7.4 vs FR-7.6 |
+| 13 | mount target `$HOME` (contains `$OMNIPUS_HOME`) | warned, allowed | FR-7.6 |
+| 14 | mount target `/` | warned, allowed | FR-7.6 |
 | 15 | write through symlink escaping the mount | denied | FR-6.4 |
 | 16 | read through that same symlink | allowed | FR-6.4 |
 | 17 | write through a hardlink escaping the mount | **allowed — documented gap** | FR-6.5 |
@@ -386,10 +430,9 @@ Given a workspace mounting /Users/me/projects/foo
    before any of the kernel-rendering work has anywhere to land.
 2. FR-1 authored policy + derivation, with FR-1.4's totality test.
 3. FR-3 merged secret set, including the per-root exception (FR-3.3/3.4).
-4. FR-2 operation-aware decisions, **the publish class first** (`FSOpServe`,
-   `FSOpSend`) — those are where a mistake discloses files rather than merely
-   denying them, and `send_file` in particular regresses from confined to open
-   the moment reads open, if nothing is done.
+4. FR-2 operation-aware decisions. `FSOpWrite` first — it is the only class
+   where a mistake grants real damage, since reads and sends are open by
+   decision and `serve` merely keeps what it already had.
 5. FR-4 kernel rendering + cache.
 6. FR-5/6 mounts: storage, contract, symlink, grants, boundary.
 7. FR-7 creation/approval/refusal.
@@ -407,7 +450,7 @@ Anything not on this list must not change.
 |---|---|---|
 | `read_file`/`list` work outside the work dir | wider | agents stop failing on ordinary reads |
 | `web_serve` unchanged (stays confined) | none | — |
-| `send_file` stays confined instead of following open reads | none vs today | — (without FR-2.3b it would have silently widened) |
+| `send_file` follows open reads | wider | agents can send any readable file; governed by tool policy |
 | `bash` can no longer reach `agents/`, `workspaces/` | narrower | cross-agent snooping via shell stops working |
 | `read_file` can no longer reach `config.json`, `cli.token` | narrower | closes a live token read |
 | `RestrictToWorkspace` governs writes only | narrower in meaning | needs a release note |
@@ -417,28 +460,12 @@ Anything not on this list must not change.
 
 ## 7. Open — needs an operator decision before FR-7 is built
 
-**O-1. FR-7.6 collides with the operator's "warn, never refuse" answer.** They
-decided risky mounts warn rather than refuse, with `$OMNIPUS_HOME` as the single
-exception. But mounting `$HOME` — a legitimate if broad thing to want — CONTAINS
-`$OMNIPUS_HOME`, so warning is not enough: `master.key` becomes writable and the
-sandbox can be switched off, which is exactly what the single exception exists
-to prevent.
-
-Three ways out, none obviously right:
-
-1. Refuse any mount containing `$OMNIPUS_HOME` (so `$HOME` cannot be mounted).
-   Simple, and takes away something reasonable.
-2. Allow it, but keep the secret set denied INSIDE the mount — the mount grants
-   write to `$HOME` minus `$OMNIPUS_HOME`. Most precise; it makes the secret set
-   a hole punched in a grant, which is exactly what the macOS deny already does
-   and what Linux sibling-granting already computes. Costs the mount rendering a
-   subtraction step.
-3. Move `$OMNIPUS_HOME` out of `$HOME` so the case cannot arise. Rejected on
-   sight — it breaks every existing install for a UI edge case.
-
-Option 2 looks right and is the one I would recommend, because the machinery
-already exists on both platforms. It is NOT assumed here: FR-7.6 is written as
-the conservative refusal until this is answered.
+**O-1 — RESOLVED 2026-08-12 by the operator: "warn and allow applies to all but
+the omnipus directory".** Only a mount that IS or is INSIDE `$OMNIPUS_HOME` is
+refused (FR-7.5). Everything else, including `$HOME` and `/`, warns and
+proceeds (FR-7.6), because the secret set is subtracted from every grant
+independently of mounts — so mounting `$HOME` cannot expose it. FR-7.7 asserts
+that rather than trusting it.
 
 **O-2.** Does an agent's mount REQUEST (FR-7.2) surface as a chat approval, a
 notification, or a Library prompt? Affects no engine behaviour; blocks the UI
