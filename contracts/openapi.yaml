@@ -172,6 +172,8 @@ components:
       $ref: ./components/schemas/LibraryWorkspaceNode.yaml
     LibraryEntry:
       $ref: ./components/schemas/LibraryEntry.yaml
+    LibraryEntryMount:
+      $ref: ./components/schemas/LibraryEntryMount.yaml
     LibraryContentResponse:
       $ref: ./components/schemas/LibraryContentResponse.yaml
     LibraryContentRequest:

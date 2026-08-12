@@ -3639,11 +3639,34 @@ export interface components {
              * @example text/markdown
              */
             mime?: string;
+            mount?: components["schemas"]["LibraryEntryMount"];
             /**
              * @description Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
              * @example true
              */
             is_text_editable: boolean;
+        };
+        /**
+         * LibraryEntryMount
+         * @description Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
+         *     It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
+         */
+        LibraryEntryMount: {
+            /**
+             * @description The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
+             * @example omnipus-repo
+             */
+            name: string;
+            /**
+             * @description The realpath-resolved absolute path on the operator's machine that this mount grants write access to. Shown in the UI rather than hidden behind a tooltip: it is the whole reason the entry is treated differently, and a grant the operator cannot see is a grant they cannot review.
+             * @example /Users/dana/Documents/projects/api
+             */
+            host_path: string;
+            /**
+             * @description True when the target is one of the deliberately wide locations — the home directory, the filesystem root, or a top-level system directory. Such a mount is ALLOWED (operator decision, FR-7.4/FR-7.6) but must never be silent: the client is expected to mark it distinctly from an ordinary mount. Recomputed from the path on every read rather than stored, so it cannot go stale against the definition.
+             * @example false
+             */
+            broad: boolean;
         };
         /**
          * LibraryContentResponse
@@ -17060,6 +17083,7 @@ export type MediaLibraryEntry = components["schemas"]["MediaLibraryEntry"];
 export type MediaAttachmentRequest = components["schemas"]["MediaAttachmentRequest"];
 export type LibraryWorkspaceNode = components["schemas"]["LibraryWorkspaceNode"];
 export type LibraryEntry = components["schemas"]["LibraryEntry"];
+export type LibraryEntryMount = components["schemas"]["LibraryEntryMount"];
 export type LibraryContentResponse = components["schemas"]["LibraryContentResponse"];
 export type LibraryContentRequest = components["schemas"]["LibraryContentRequest"];
 export type LibraryRenameRequest = components["schemas"]["LibraryRenameRequest"];

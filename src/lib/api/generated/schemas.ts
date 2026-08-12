@@ -152,9 +152,6 @@ type SessionPage = {
   next_cursor?: string | undefined;
   partial_errors?: Array<string> | undefined;
 };
-type LibraryUploadResponse = {
-  entries: Array<LibraryEntry>;
-};
 type LibraryEntry = {
   name: string;
   path: string;
@@ -163,7 +160,16 @@ type LibraryEntry = {
   size: number;
   modified_at: string;
   mime?: string | undefined;
+  mount?: LibraryEntryMount | undefined;
   is_text_editable: boolean;
+};
+type LibraryEntryMount = {
+  name: string;
+  host_path: string;
+  broad: boolean;
+};
+type LibraryUploadResponse = {
+  entries: Array<LibraryEntry>;
 };
 type Agent = {
   id: string;
@@ -3121,6 +3127,11 @@ export const LibraryTransferRequest = z.object({
   to_workspace_id: z.string(),
   to_path: z.string().min(1),
 });
+export const LibraryEntryMount: z.ZodType<LibraryEntryMount> = z.object({
+  name: z.string().min(1),
+  host_path: z.string().min(1),
+  broad: z.boolean(),
+});
 export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   name: z.string().min(1),
   path: z.string().min(1),
@@ -3129,6 +3140,7 @@ export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   size: z.number().int().gte(0),
   modified_at: z.string().datetime({ offset: true }),
   mime: z.string().optional(),
+  mount: LibraryEntryMount.optional(),
   is_text_editable: z.boolean(),
 });
 export const LibraryContentResponse = z.object({

@@ -322,3 +322,97 @@ func TestMoveInto_DirectoryCrossesTheBoundary(t *testing.T) {
 	_, statErr := os.Stat(filepath.Join(workDir, "bundle"))
 	assert.True(t, os.IsNotExist(statErr), "the source tree must be removed after a move")
 }
+
+// TestList_MarksMountsAndCorrectsTheirShape covers what the UI depends on to
+// draw a mount differently from a folder, and one correction that is easy to
+// miss.
+//
+// A mount is a SYMLINK, so ReadDir reports it with the symlink's own mode —
+// IsDir false. Unannotated it would reach the client as a zero-byte FILE, and
+// clicking it would try to read it rather than open it. It is a directory from
+// every angle the user has.
+func TestList_MarksMountsAndCorrectsTheirShape(t *testing.T) {
+	r, _, target := buildMountedRoot(t)
+
+	entries, err := r.List("", false)
+	require.NoError(t, err)
+
+	var mount, ordinary *struct {
+		isDir bool
+		size  int64
+		mount bool
+		host  string
+		broad bool
+	}
+	for i := range entries {
+		e := entries[i]
+		got := &struct {
+			isDir bool
+			size  int64
+			mount bool
+			host  string
+			broad bool
+		}{isDir: e.IsDir, size: e.Size, mount: e.Mount != nil}
+		if e.Mount != nil {
+			got.host = e.Mount.HostPath
+			got.broad = e.Mount.Broad
+		}
+		switch e.Name {
+		case "repo":
+			mount = got
+		case "drafts":
+			ordinary = got
+		}
+	}
+
+	require.NotNil(t, mount, "the mount must appear in the work-tree listing")
+	assert.True(t, mount.mount, "a mount must carry mount metadata so the UI can distinguish it")
+	assert.True(t, mount.isDir, "a mount must be reported as a directory, not as the symlink it is made of")
+	assert.Zero(t, mount.size, "a symlink's own byte length is meaningless beside a folder")
+	assert.Equal(t, target, mount.host, "the real destination must be on the wire, not hidden")
+	assert.False(t, mount.broad)
+
+	require.NotNil(t, ordinary, "the ordinary folder must still be listed")
+	assert.False(t, ordinary.mount, "an ordinary folder must NOT be marked as a mount")
+	assert.True(t, ordinary.isDir)
+}
+
+// TestList_InsideAMount_EntriesAreNotMarked guards the other direction: only
+// the mount's own entry is special. A file inside a mounted folder is an
+// ordinary file, and marking it would make the UI draw a "mounted" badge on
+// every row beneath the mount.
+func TestList_InsideAMount_EntriesAreNotMarked(t *testing.T) {
+	r, _, _ := buildMountedRoot(t)
+
+	entries, err := r.List("repo", false)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+
+	for _, e := range entries {
+		assert.Nil(t, e.Mount,
+			"entry %q is INSIDE a mount, not a mount itself — it must not be marked", e.Name)
+	}
+}
+
+// TestList_BroadMountIsFlagged proves the warning survives to the wire for an
+// ALREADY-STORED mount. Breadth is recomputed rather than persisted, so without
+// this the badge would appear only in the create response — once, in the moment
+// the operator is least likely to revisit it.
+func TestList_BroadMountIsFlagged(t *testing.T) {
+	r, _, target := buildMountedRoot(t)
+	// Re-point the mount at a deliberately broad location.
+	r.mounts["repo"].broad = true
+	r.mounts["repo"].target = target
+
+	entries, err := r.List("", false)
+	require.NoError(t, err)
+
+	for _, e := range entries {
+		if e.Name == "repo" {
+			require.NotNil(t, e.Mount)
+			assert.True(t, e.Mount.Broad, "a broad grant must be flagged on every read, not only at creation")
+			return
+		}
+	}
+	t.Fatal("the mount was not listed")
+}

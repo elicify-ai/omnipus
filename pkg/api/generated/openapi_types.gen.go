@@ -8339,6 +8339,19 @@ type LibraryEntry struct {
 	// ModifiedAt RFC3339 UTC last-modified timestamp of the underlying file or directory.
 	ModifiedAt time.Time `json:"modified_at"`
 
+	// Mount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
+	// It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
+	Mount *struct {
+		// Broad True when the target is one of the deliberately wide locations — the home directory, the filesystem root, or a top-level system directory. Such a mount is ALLOWED (operator decision, FR-7.4/FR-7.6) but must never be silent: the client is expected to mark it distinctly from an ordinary mount. Recomputed from the path on every read rather than stored, so it cannot go stale against the definition.
+		Broad bool `json:"broad"`
+
+		// HostPath The realpath-resolved absolute path on the operator's machine that this mount grants write access to. Shown in the UI rather than hidden behind a tooltip: it is the whole reason the entry is treated differently, and a grant the operator cannot see is a grant they cannot review.
+		HostPath string `json:"host_path"`
+
+		// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
+		Name string `json:"name"`
+	} `json:"mount,omitempty"`
+
 	// Name Base filename or directory name (final path segment).
 	Name string `json:"name"`
 
@@ -8347,6 +8360,19 @@ type LibraryEntry struct {
 
 	// Size File size in bytes. Always 0 for directories.
 	Size int64 `json:"size"`
+}
+
+// LibraryEntryMount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
+// It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
+type LibraryEntryMount struct {
+	// Broad True when the target is one of the deliberately wide locations — the home directory, the filesystem root, or a top-level system directory. Such a mount is ALLOWED (operator decision, FR-7.4/FR-7.6) but must never be silent: the client is expected to mark it distinctly from an ordinary mount. Recomputed from the path on every read rather than stored, so it cannot go stale against the definition.
+	Broad bool `json:"broad"`
+
+	// HostPath The realpath-resolved absolute path on the operator's machine that this mount grants write access to. Shown in the UI rather than hidden behind a tooltip: it is the whole reason the entry is treated differently, and a grant the operator cannot see is a grant they cannot review.
+	HostPath string `json:"host_path"`
+
+	// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
+	Name string `json:"name"`
 }
 
 // LibraryMkdirRequest Request body for POST /api/v1/library/{workspace_id}/mkdir. Creates a directory at path within the workspace's work tree, creating any missing intermediate directories along the way (mkdir -p semantics) — the sole directory-creation primitive the Library API exposes. Added to close a UAT gap: without it, there was no way to create a folder at all, and a clean, non-malicious nested Move/Copy destination whose parent didn't exist yet (e.g. "subfolder/test.txt") had no path to success — see POST /api/v1/library/move and POST /api/v1/library/copy, which deliberately still require the destination's immediate parent directory to already exist rather than auto-creating it (matching `mv`/`cp` semantics — this endpoint is the explicit, deliberate way to create that folder first). Idempotent: if a directory already exists at path, the request succeeds (200) rather than erroring; rejected 409 if a regular FILE already exists there.
@@ -8398,6 +8424,19 @@ type LibraryUploadResponse struct {
 
 		// ModifiedAt RFC3339 UTC last-modified timestamp of the underlying file or directory.
 		ModifiedAt time.Time `json:"modified_at"`
+
+		// Mount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
+		// It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
+		Mount *struct {
+			// Broad True when the target is one of the deliberately wide locations — the home directory, the filesystem root, or a top-level system directory. Such a mount is ALLOWED (operator decision, FR-7.4/FR-7.6) but must never be silent: the client is expected to mark it distinctly from an ordinary mount. Recomputed from the path on every read rather than stored, so it cannot go stale against the definition.
+			Broad bool `json:"broad"`
+
+			// HostPath The realpath-resolved absolute path on the operator's machine that this mount grants write access to. Shown in the UI rather than hidden behind a tooltip: it is the whole reason the entry is treated differently, and a grant the operator cannot see is a grant they cannot review.
+			HostPath string `json:"host_path"`
+
+			// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
+			Name string `json:"name"`
+		} `json:"mount,omitempty"`
 
 		// Name Base filename or directory name (final path segment).
 		Name string `json:"name"`

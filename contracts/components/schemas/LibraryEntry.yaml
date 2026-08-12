@@ -67,6 +67,8 @@ properties:
       Best-effort MIME type sniffed from the file extension/content. Absent
       for directories and for files where sniffing was inconclusive.
     example: "text/markdown"
+  mount:
+    $ref: "./LibraryEntryMount.yaml"
   is_text_editable:
     type: boolean
     description: >

@@ -53,7 +53,9 @@ func (r *Root) List(rel string, includeHidden bool) ([]gen.LibraryEntry, error) 
 		if rel != "" {
 			childRel = rel + "/" + de.Name()
 		}
-		out = append(out, entryFromParts(childRel, de.Name(), info, hidden))
+		entry := entryFromParts(childRel, de.Name(), info, hidden)
+		r.annotateMount(&entry, childRel)
+		out = append(out, entry)
 	}
 
 	sort.Slice(out, func(i, j int) bool {
@@ -63,6 +65,38 @@ func (r *Root) List(rel string, includeHidden bool) ([]gen.LibraryEntry, error) 
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
 	return out, nil
+}
+
+// annotateMount marks entry as a mounted folder when rel names one, and
+// corrects its shape.
+//
+// The correction is not cosmetic. A mount is materialised as a SYMLINK inside
+// work/, so fs.ReadDir reports it with the symlink's own mode — IsDir false —
+// and it would arrive at the client as a zero-byte FILE. Clicking it would then
+// try to read it as a file rather than open it as a folder. It is a directory
+// from every angle the user has, so it is reported as one.
+//
+// Size is zeroed for the same reason a directory's is: a symlink's own size is
+// the byte length of its target path, which is a meaningless number to show
+// beside a folder.
+func (r *Root) annotateMount(entry *gen.LibraryEntry, rel string) {
+	m := r.mountFor(rel)
+	if m == nil || rel != m.name {
+		// Either not in a mount at all, or somewhere INSIDE one — a file inside
+		// a mounted folder is an ordinary file and must not be marked.
+		return
+	}
+	entry.IsDir = true
+	entry.Size = 0
+	entry.Mount = &struct {
+		Broad    bool   `json:"broad"`
+		HostPath string `json:"host_path"`
+		Name     string `json:"name"`
+	}{
+		Broad:    m.broad,
+		HostPath: m.target,
+		Name:     m.name,
+	}
 }
 
 // EntryFromInfo builds the wire gen.LibraryEntry for rel from an
