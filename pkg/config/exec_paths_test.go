@@ -5,6 +5,7 @@
 package config
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -13,8 +14,20 @@ import (
 // mistakes that would make it dangerous rather than useful.
 func TestDefaultAllowedExecPaths_ShapeInvariants(t *testing.T) {
 	seed := DefaultAllowedExecPaths()
-	if len(seed) == 0 {
-		t.Fatal("seed must not be empty; agents would be unable to run any installed toolchain")
+
+	// The seed is macOS-only BY DESIGN, and this test used to assert
+	// non-emptiness unconditionally — so it passed on the machine it was written
+	// on and failed on Linux, where the implementation deliberately returns nil.
+	// The invariant below is the real one: wherever a seed exists it must be
+	// narrow. Whether one exists at all is a per-platform decision.
+	//
+	// Linux stays empty on purpose. Under ADR-060's open model execution is
+	// unrestricted, so an exec-path seed has nothing left to fix there; under
+	// confined it keeps today's behaviour, which means upgrading a Linux install
+	// does not silently widen its Landlock posture.
+	if runtime.GOOS == "darwin" && len(seed) == 0 {
+		t.Fatal("macOS seed must not be empty; without it agents cannot run any " +
+			"Homebrew- or version-manager-installed toolchain under the confined model")
 	}
 
 	for _, p := range seed {
@@ -52,7 +65,17 @@ func TestLoadConfig_SeededExecPathsSurviveExistingConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
-	if len(cfg.Sandbox.AllowedExecPaths) == 0 {
+
+	// filesystem_model is seeded non-empty on EVERY platform, so it probes the
+	// survival mechanism itself rather than a value that happens to exist on
+	// the machine running the test. Asserting only on allowed_exec_paths made
+	// this test silently platform-specific: it proved the mechanism on macOS
+	// and merely failed on Linux, where the seed is intentionally empty.
+	if cfg.Sandbox.FilesystemModel == "" {
+		t.Error("a seeded key must survive a config.json that predates it; " +
+			"if this breaks, every upgrading install silently loses its seeded defaults")
+	}
+	if runtime.GOOS == "darwin" && len(cfg.Sandbox.AllowedExecPaths) == 0 {
 		t.Error("seeded exec paths must survive a config.json that predates the key")
 	}
 }
