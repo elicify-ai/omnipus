@@ -156,12 +156,12 @@ func TestSeatbelt_GatewayItselfStaysUnconfined(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gateway-equivalent append-open must succeed: %v", err)
 	}
-	if _, err := f.WriteString(`{"event":"tool_call","decision":"allow"}` + "\n"); err != nil {
+	if _, writeErr := f.WriteString(`{"event":"tool_call","decision":"allow"}` + "\n"); writeErr != nil {
 		f.Close()
-		t.Fatalf("gateway-equivalent write must succeed: %v", err)
+		t.Fatalf("gateway-equivalent write must succeed: %v", writeErr)
 	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("close: %v", err)
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatalf("close: %v", closeErr)
 	}
 
 	data, err := os.ReadFile(auditPath)

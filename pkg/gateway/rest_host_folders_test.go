@@ -115,18 +115,18 @@ func TestHostFolders_RejectsRelativeAndMissingPaths(t *testing.T) {
 // string. On macOS /tmp is a symlink to /private/tmp, and skipping resolution is
 // exactly how those two end up disagreeing.
 func TestHostFolders_ResolvesSymlinks(t *testing.T) {
-	real := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(real, "inner"), 0o700))
+	realDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(realDir, "inner"), 0o700))
 
 	linkDir := t.TempDir()
 	link := filepath.Join(linkDir, "link-to-real")
-	require.NoError(t, os.Symlink(real, link))
+	require.NoError(t, os.Symlink(realDir, link))
 
 	a := &restAPI{homePath: t.TempDir()}
 	rec, out := getFolders(t, a, link)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	resolvedReal, err := filepath.EvalSymlinks(real)
+	resolvedReal, err := filepath.EvalSymlinks(realDir)
 	require.NoError(t, err)
 	assert.Equal(t, resolvedReal, out.Path,
 		"the listing must report where the path really goes, not the name used to reach it")

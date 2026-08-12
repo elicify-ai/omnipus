@@ -72,7 +72,7 @@ func TestMountedFolder_IsBrowsable(t *testing.T) {
 
 	got, err := r.ReadContent("repo/real.txt")
 	require.NoError(t, err)
-	assert.Contains(t, string(got.Content), "the operator's real file")
+	assert.Contains(t, got.Content, "the operator's real file")
 }
 
 // TestMountedFolder_ContainmentStillHolds is the other half, and the one that
@@ -192,6 +192,8 @@ func TestHostPath_NamesTheRealDestination(t *testing.T) {
 	assert.Equal(t, target, tgt)
 	assert.False(t, broad)
 
+	//nolint:dogsled // only the ok flag is under test here: a work-tree path
+	// belongs to no mount, so the other three returns have nothing to assert.
 	_, _, _, ok = r.MountAt("drafts/note.md")
 	assert.False(t, ok, "a work-tree path is not in any mount")
 }
@@ -209,9 +211,10 @@ func TestResolve_OnlyTheFirstSegmentSelectsAMount(t *testing.T) {
 
 	got, err := r.ReadContent("drafts/repo/inner.txt")
 	require.NoError(t, err)
-	assert.Contains(t, string(got.Content), "work tree, not the mount",
+	assert.Contains(t, got.Content, "work tree, not the mount",
 		"a same-named directory deeper in the tree must stay in the work root")
 
+	//nolint:dogsled // as above — only the ok flag carries the assertion.
 	_, _, _, ok := r.MountAt("drafts/repo")
 	assert.False(t, ok)
 }
