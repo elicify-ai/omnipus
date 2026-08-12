@@ -303,8 +303,15 @@ function applyVideoSenderConstraints(pc, opts) {
   const videoTrack = sender.track;
 
   const cfg = window.__omnipusCapture || {};
-  const maxBitrate =
+  const baseBitrate =
     typeof cfg.maxVideoBitrate === 'number' && cfg.maxVideoBitrate > 0 ? cfg.maxVideoBitrate : DEFAULT_MAX_VIDEO_BITRATE_BPS;
+  // The cap was tuned for 1x (CSS-resolution) capture. Physical-resolution
+  // capture at scale s carries s^2 the pixels; a fixed cap starves VP8, and
+  // with degradationPreference 'maintain-resolution' the encoder pays for it
+  // in FRAMERATE - observed live (macOS 2026-08-12) as visibly laggy video
+  // playback after the blur fix. Scale the cap with the pixel count, bounded
+  // at 4x base (= scale 2) so a scale-3/4 tab cannot demand unbounded rate.
+  const maxBitrate = Math.min(baseBitrate * 4, Math.round(baseBitrate * captureScale * captureScale));
 
   try {
     const params = sender.getParameters();
