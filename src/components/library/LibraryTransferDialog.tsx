@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Warning } from '@phosphor-icons/react'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -43,6 +44,13 @@ interface LibraryTransferDialogProps {
   workspaces: LibraryWorkspaceNode[]
   onSubmit: (body: LibraryTransferRequest) => void
   isPending: boolean
+  /**
+   * The mounted folders in the DESTINATION workspace, so this dialog can name
+   * the real disk path before a write lands there. A destination inside a mount
+   * writes to the operator's actual files, and a confirmation that does not say
+   * so is a confirmation for a different operation than the one happening.
+   */
+  destMounts?: { name: string; host_path: string; broad?: boolean }[]
   /** Set by the parent when the server rejects a move/copy attempt (e.g. a
    * 404 destination-workspace, a 409 collision the client-side check
    * couldn't anticipate). Rendered as a persistent banner — same pattern as
@@ -61,6 +69,7 @@ export function LibraryTransferDialog({
   workspaces,
   onSubmit,
   isPending,
+  destMounts,
   error,
 }: LibraryTransferDialogProps) {
   const [destWorkspaceId, setDestWorkspaceId] = useState(sourceWorkspaceId)
@@ -99,6 +108,14 @@ export function LibraryTransferDialog({
   }
 
   const verb = mode === 'move' ? 'Move' : 'Copy'
+
+  // Only the FIRST path segment can name a mount — a folder deeper in the tree
+  // that happens to share a mount's name is ordinary workspace storage, and
+  // warning about it would be a false alarm that teaches people to ignore the
+  // real one.
+  const [firstSegment, ...restSegments] = trimmedPath.split('/').filter(Boolean)
+  const destMount = destMounts?.find((m) => m.name === firstSegment)
+  const restOfPath = restSegments.join('/')
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -161,6 +178,23 @@ export function LibraryTransferDialog({
               </p>
             )}
           </div>
+          {destMount && (
+            <p
+              className="flex items-start gap-2 text-sm text-[var(--color-warning)]"
+              data-testid="library-transfer-mount-warning"
+            >
+              <Warning size={16} className="mt-0.5 shrink-0" />
+              <span>
+                This destination is inside a mounted folder. {verb === 'Move' ? 'Moving' : 'Copying'}{' '}
+                writes to{' '}
+                <span className="font-mono">
+                  {destMount.host_path}
+                  {restOfPath ? `/${restOfPath}` : ''}
+                </span>{' '}
+                on your real disk.
+              </span>
+            </p>
+          )}
           {error && (
             <LibraryErrorBanner message={error} testId="library-transfer-error" />
           )}

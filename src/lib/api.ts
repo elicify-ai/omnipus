@@ -183,6 +183,8 @@ import {
   // the existing convention — see the comment above ExecutorCommandPreviewResponse).
   LibraryWorkspaceNode as LibraryWorkspaceNodeSchema,
   LibraryEntry as LibraryEntrySchema,
+  HostFolderListing as HostFolderListingSchema,
+  WorkspaceMountCreateResponse as WorkspaceMountCreateResponseSchema,
   LibraryContentResponse as LibraryContentResponseSchema,
   LibraryUploadResponse as LibraryUploadResponseSchema,
 } from '@/lib/api/generated/schemas'
@@ -449,6 +451,10 @@ import type {
   // library-spec.md — Library file explorer over workspace work/ trees (contract-first #8):
   LibraryWorkspaceNode,
   LibraryEntry,
+  HostFolderListing,
+  LibraryEntryMount,
+  WorkspaceMountCreateRequest,
+  WorkspaceMountCreateResponse,
   LibraryContentResponse,
   LibraryContentRequest,
   LibraryMkdirRequest,
@@ -618,6 +624,10 @@ export type {
   // library-spec.md — Library file explorer over workspace work/ trees (contract-first #8):
   LibraryWorkspaceNode,
   LibraryEntry,
+  HostFolderListing,
+  LibraryEntryMount,
+  WorkspaceMountCreateRequest,
+  WorkspaceMountCreateResponse,
   LibraryContentResponse,
   LibraryContentRequest,
   LibraryMkdirRequest,
@@ -4088,6 +4098,56 @@ export function fetchLibraryEntries(
     `/library/${encodeURIComponent(workspaceId)}/entries${qs ? `?${qs}` : ''}`,
     undefined,
     z.array(LibraryEntrySchema) as ZodType<LibraryEntry[]>,
+  )
+}
+
+/**
+ * List the directories inside `path` on the operator's own machine, for the
+ * mount folder picker.
+ *
+ * A web page cannot open the native folder picker and learn a real filesystem
+ * path, so the gateway lists folders instead. Omit `path` to start in the
+ * operator's home directory. Each entry carries its own `mountable`/`broad`
+ * verdict so the picker can disable a choice at the point of selection rather
+ * than accepting it and refusing afterwards.
+ */
+export function fetchHostFolders(path?: string): Promise<HostFolderListing> {
+  const qs = path ? `?path=${encodeURIComponent(path)}` : ''
+  return request<HostFolderListing>(
+    `/system/folders${qs}`,
+    undefined,
+    HostFolderListingSchema as ZodType<HostFolderListing>,
+  )
+}
+
+/**
+ * Mount a real local folder into a workspace, making it writable there.
+ *
+ * Resolves with a `warning` when the target was broad but allowed (the home
+ * directory, the filesystem root, a top-level system directory) — the caller
+ * MUST surface it. Rejects (400) when the target is or lies inside the Omnipus
+ * data directory, the one hard boundary.
+ */
+export function createWorkspaceMount(
+  workspaceId: string,
+  body: WorkspaceMountCreateRequest,
+): Promise<WorkspaceMountCreateResponse> {
+  return request<WorkspaceMountCreateResponse>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/mounts`,
+    { method: 'POST', body: JSON.stringify(body) },
+    WorkspaceMountCreateResponseSchema as ZodType<WorkspaceMountCreateResponse>,
+  )
+}
+
+/**
+ * Revoke a mount. This removes the workspace's ACCESS to the folder and
+ * deletes nothing on the operator's disk — the distinction the UI must state
+ * outright, since the control sits where "delete" normally lives.
+ */
+export function deleteWorkspaceMount(workspaceId: string, name: string): Promise<void> {
+  return request<void>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/mounts/${encodeURIComponent(name)}`,
+    { method: 'DELETE' },
   )
 }
 

@@ -29,6 +29,7 @@ import {
   CaretRight,
   UploadSimple,
   FolderPlus,
+  FolderSimpleDashed,
   X,
   ArrowSquareOut,
   Tray,
@@ -60,11 +61,15 @@ import {
   mkdirLibraryEntry,
   libraryDownloadUrl,
   libraryQueryKeys,
+  createWorkspaceMount,
+  deleteWorkspaceMount,
 } from '@/lib/api'
 import type { LibraryEntry, LibraryTransferRequest, LibraryWorkspaceNode } from '@/lib/api'
 import { LibraryEntryRow } from './LibraryEntryRow'
 import { LibraryRenameDialog } from './LibraryRenameDialog'
 import { LibraryTransferDialog } from './LibraryTransferDialog'
+import { LibraryAddMountDialog } from './LibraryAddMountDialog'
+import { mountNameFromPath } from './libraryMountName'
 import { LibraryNewFolderDialog } from './LibraryNewFolderDialog'
 import { LibraryPreviewPane } from './LibraryPreviewPane'
 import { LibraryErrorBanner } from './LibraryErrorBanner'
@@ -131,6 +136,9 @@ export function LibraryExplorer({
   const [renameTarget, setRenameTarget] = useState<LibraryEntry | null>(null)
   const [renameError, setRenameError] = useState<string>()
   const [deleteTarget, setDeleteTarget] = useState<LibraryEntry | null>(null)
+  const [unmountTarget, setUnmountTarget] = useState<LibraryEntry | null>(null)
+  const [addMountOpen, setAddMountOpen] = useState(false)
+  const [addMountError, setAddMountError] = useState<string>()
   const [transferTarget, setTransferTarget] = useState<{ entry: LibraryEntry; mode: 'move' | 'copy' } | null>(null)
   const [transferError, setTransferError] = useState<string>()
   const [uploadError, setUploadError] = useState<string>()
@@ -167,6 +175,21 @@ export function LibraryExplorer({
   )
   const sortedEntries = useMemo(() => sortEntries(entriesQuery.data ?? []), [entriesQuery.data])
 
+  // The mounts visible at the CURRENT level. Only a first-segment name can
+  // identify a mount, and the transfer destination is expressed relative to the
+  // work-tree root, so this is the set the dialog needs to recognise one.
+  const mountsInView = useMemo(
+    () =>
+      sortedEntries
+        .filter((e) => e.mount)
+        .map((e) => ({
+          name: e.mount!.name,
+          host_path: e.mount!.host_path,
+          broad: e.mount!.broad,
+        })),
+    [sortedEntries],
+  )
+
   const currentWorkspaceName =
     sortedWorkspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId ?? ''
 
@@ -176,6 +199,59 @@ export function LibraryExplorer({
   function invalidateWorkspaces() {
     void queryClient.invalidateQueries({ queryKey: libraryQueryKeys.workspaces() })
   }
+
+  // Adding a mount grants write access to a real folder on this machine, so a
+  // failure here is surfaced verbatim in the dialog rather than as a toast that
+  // scrolls away — the operator needs to read WHY a grant was refused.
+  const addMountMutation = useMutation({
+    mutationFn: (hostPath: string) => {
+      if (!workspaceId) throw new Error('No workspace selected.')
+      // The mount's name inside work/ is derived from the folder's own name,
+      // so the operator is not asked to invent a second one for something they
+      // just pointed at. The server owns uniqueness and rejects a collision —
+      // deriving it here does not make it the client's rule.
+      const name = mountNameFromPath(hostPath)
+      if (!name) throw new Error('That path has no folder name to use.')
+      return createWorkspaceMount(workspaceId, { host_path: hostPath, name })
+    },
+    onMutate: () => setAddMountError(undefined),
+    onSuccess: (res) => {
+      if (workspaceId) invalidateEntries(workspaceId)
+      invalidateWorkspaces()
+      setAddMountOpen(false)
+      // A broad grant is allowed but must never be silent — the backend
+      // computes the warning and this is the only place it can be seen.
+      addToast({
+        message: res.warning ?? `Mounted "${res.name}".`,
+        variant: res.warning ? 'warning' : 'success',
+      })
+    },
+    onError: (err) => {
+      setAddMountError(
+        err instanceof Error ? err.message : 'Could not mount that folder.',
+      )
+    },
+  })
+
+  const unmountMutation = useMutation({
+    mutationFn: (name: string) => {
+      if (!workspaceId) throw new Error('No workspace selected.')
+      return deleteWorkspaceMount(workspaceId, name)
+    },
+    onSuccess: (_data, name) => {
+      if (workspaceId) invalidateEntries(workspaceId)
+      invalidateWorkspaces()
+      setUnmountTarget(null)
+      addToast({ message: `Unmounted "${name}". Your files were not touched.`, variant: 'success' })
+    },
+    onError: (err) => {
+      setUnmountTarget(null)
+      addToast({
+        message: err instanceof Error ? err.message : 'Could not unmount that folder.',
+        variant: 'error',
+      })
+    },
+  })
 
   const deleteMutation = useMutation({
     mutationFn: ({ wsId, entryPath }: { wsId: string; entryPath: string }) => deleteLibraryEntry(wsId, entryPath),
@@ -475,6 +551,20 @@ export function LibraryExplorer({
               >
                 <FolderPlus size={16} />
               </button>
+              {/* Adding a mount sits AMONG New folder and Upload, not above
+                  them: it is the rarer action, and nothing in this toolbar is
+                  filled or accented. */}
+              <button
+                type="button"
+                tabIndex={0}
+                onClick={() => setAddMountOpen(true)}
+                aria-label="Add a folder from your Mac"
+                title="Add a folder from your Mac"
+                data-testid="library-add-mount-button"
+                className="rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-info)] transition-colors"
+              >
+                <FolderSimpleDashed size={16} />
+              </button>
               <input
                 tabIndex={0}
                 ref={fileInputRef}
@@ -624,6 +714,7 @@ export function LibraryExplorer({
                   onRename={openRenameDialog}
                   onTransfer={openTransferDialog}
                   onDelete={setDeleteTarget}
+                  onUnmount={setUnmountTarget}
                 />
               ))}
           </>
@@ -697,6 +788,7 @@ export function LibraryExplorer({
         entry={transferTarget?.entry ?? null}
         sourceWorkspaceId={workspaceId ?? ''}
         workspaces={sortedWorkspaces}
+        destMounts={mountsInView}
         isPending={transferMutation.isPending}
         error={transferError}
         onSubmit={(body) => {
@@ -706,6 +798,50 @@ export function LibraryExplorer({
       />
 
       {/* ── Delete confirm (destructive action — hard confirm, no silent data loss) ── */}
+      <LibraryAddMountDialog
+        open={addMountOpen}
+        onOpenChange={(open) => {
+          setAddMountOpen(open)
+          if (!open) setAddMountError(undefined)
+        }}
+        onConfirm={(hostPath) => addMountMutation.mutate(hostPath)}
+        isPending={addMountMutation.isPending}
+        error={addMountError}
+      />
+
+      {/* Unmount is deliberately NOT the delete dialog with different words.
+          The whole risk is that the two read alike, so this one states what
+          survives, in the affirmative, before the confirm button. */}
+      <AlertDialog
+        open={unmountTarget !== null}
+        onOpenChange={(open) => !open && setUnmountTarget(null)}
+      >
+        <AlertDialogContent data-testid="library-unmount-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unmount &ldquo;{unmountTarget?.name}&rdquo;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the workspace&rsquo;s access to the folder.{' '}
+              <strong>Every file stays exactly where it is</strong>, at{' '}
+              <span className="font-mono">{unmountTarget?.mount?.host_path}</span>. Nothing is
+              deleted from your disk. You can mount it again at any time.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={unmountMutation.isPending}
+              data-testid="library-unmount-confirm"
+              onClick={() => {
+                const name = unmountTarget?.mount?.name
+                if (name) unmountMutation.mutate(name)
+              }}
+            >
+              Unmount
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
