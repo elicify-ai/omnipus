@@ -601,3 +601,52 @@ describe.each(edgeCases)(
     })
   },
 )
+
+// ── "Always Allow" suppression (ADR-063 FR-7.2) ─────────────────────────────
+//
+// Grants are keyed on (session, agent, TOOL NAME) — the ARGUMENTS are not part
+// of the key. For most tools that is fine. For request_mount it would mean
+// "this agent may mount ANY folder for the rest of the session, without
+// asking": a blanket grant over the whole disk from one click, with no path
+// ever shown. Approving once already creates a mount that persists until
+// revoked, so the shortcut buys nothing and costs the boundary.
+
+const MOUNT_APPROVAL = {
+  approvalId: 'appr-mount',
+  toolCallId: 'call-mount',
+  toolName: 'request_mount',
+  args: { host_path: '/Users/dana/Documents/projects/api', reason: 'to run the build' },
+  agentId: 'agent-main',
+  sessionId: 'sess-001',
+  turnId: 'turn-001',
+  expiresAt: Date.now() + 300_000,
+}
+
+describe('ToolApprovalModal — Always Allow suppression', () => {
+  it('offers Always Allow for an ordinary tool', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
+  })
+
+  it('withholds Always Allow for request_mount', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.queryByTestId('always-allow-toggle')).toBeNull()
+  })
+
+  it('still offers Approve and Deny for request_mount', () => {
+    // Only the SHORTCUT is withheld. Removing the decision itself would leave
+    // the agent hanging with no way for the operator to answer.
+    act(() => {
+      useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Deny/i })).toBeInTheDocument()
+  })
+})

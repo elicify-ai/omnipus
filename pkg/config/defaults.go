@@ -330,14 +330,16 @@ func DefaultConfig() *Config {
 			// loudly at boot by the same coverage validator, not silently ignored.
 			ToolPolicies: map[string]string{
 				// --- General builtin tools ---
-				"bash":                "allow",
-				"read_file":           "allow",
-				"write_file":          "allow",
-				"list_directory":      "allow",
-				"edit_file":           "allow",
-				"append_file":         "allow",
-				"library_list":        "allow",
-				"library_read":        "allow",
+				"bash":           "allow",
+				"read_file":      "allow",
+				"write_file":     "allow",
+				"list_directory": "allow",
+				"edit_file":      "allow",
+				"append_file":    "allow",
+				"library_list":   "allow",
+				"library_read":   "allow",
+				// The operator approves each grant; see ADR-063 FR-7.2.
+				"request_mount":       "ask",
 				"search_web":          "allow",
 				"fetch_url":           "allow",
 				"send_message":        "allow",

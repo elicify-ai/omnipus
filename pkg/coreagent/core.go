@@ -355,6 +355,9 @@ var allStaticToolNames = []string{
 	// workspace's own .library/ dual-write directory (D-1) — see
 	// pkg/agent.LibraryDirName / pkg/tools/library_tool.go.
 	"library_list", "library_read",
+	// request_mount (ADR-063 FR-7.2): seeded "ask" everywhere — the whole
+	// point is that the operator approves each folder.
+	"request_mount",
 	"search_web", "fetch_url",
 	"send_message", "hand_off", "return_to_default", "send_file",
 	"find_skills", "install_skill",
@@ -718,6 +721,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// library-spec) — matches the read_file/list_directory allowance above.
 			overrides["library_list"] = allow
 			overrides["library_read"] = allow
+			overrides["request_mount"] = ask
 			overrides["create_task"] = allow
 			overrides["update_task"] = allow
 			overrides["list_tasks"] = allow
@@ -737,6 +741,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// library-spec) — matches the read_file/list_directory allowance above.
 			overrides["library_list"] = allow
 			overrides["library_read"] = allow
+			overrides["request_mount"] = ask
 			overrides["remember"] = allow
 			overrides["recall_memory"] = allow
 			overrides["run_retrospective"] = allow
@@ -761,6 +766,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// library-spec) — Researcher gets read access only (matches his
 			// read_file-only allowance; he has no list_directory either).
 			overrides["library_read"] = allow
+			overrides["request_mount"] = ask
 			overrides["remember"] = allow
 			overrides["recall_memory"] = allow
 			overrides["run_retrospective"] = allow
@@ -918,8 +924,9 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// Chat-uploaded files land in this workspace's library (D3,
 			// library-spec) — Ray needs to find and read them, matching his
 			// read_file/list_directory allowance above.
-			"library_list": allow,
-			"library_read": allow,
+			"library_list":  allow,
+			"library_read":  allow,
+			"request_mount": ask,
 			// Persistent memory (carries research context across sessions).
 			"remember":            allow,
 			"recall_memory":       allow,
@@ -976,8 +983,9 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// Chat-uploaded files land in this workspace's library (D3,
 			// library-spec) — Jim needs to find and read them, matching his
 			// read_file/list_directory allowance above.
-			"library_list": allow,
-			"library_read": allow,
+			"library_list":  allow,
+			"library_read":  allow,
+			"request_mount": ask,
 			// External lookups.
 			"search_web": allow,
 			"fetch_url":  allow,
@@ -2027,6 +2035,7 @@ func toolPolicyMapsEqual(a, b map[string]config.ToolPolicy) bool {
 // policy entries).
 func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 	allow := config.ToolPolicyAllow
+	ask := config.ToolPolicyAsk
 	return &config.AgentToolsCfg{
 		Builtin: config.AgentBuiltinToolsCfg{
 			Policies: denyAllThenOverride(map[string]config.ToolPolicy{
@@ -2041,6 +2050,7 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				// whatever the operator uploaded to this workspace's chat.
 				"library_list":  allow,
 				"library_read":  allow,
+				"request_mount": ask,
 				"remember":      allow,
 				"recall_memory": allow,
 			}),

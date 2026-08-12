@@ -69,6 +69,14 @@ import { submitToolApproval, isApiError } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { forceLogout } from '@/lib/authLogout'
 
+/**
+ * Tools for which the "Always Allow" shortcut is withheld — see the
+ * alwaysAllowSuppressed note in ToolApprovalCard for the reasoning. A Set so
+ * adding a tool here is a one-line change rather than a growing boolean
+ * expression at the call site.
+ */
+const ALWAYS_ALLOW_SUPPRESSED_TOOLS = new Set(['request_mount'])
+
 function useCountdown(expiresAt: number): { remainingMs: number; progressPct: number; totalMs: number } {
   const [remainingMs, setRemainingMs] = useState(() => Math.max(0, expiresAt - Date.now()))
   // Capture the total duration once so the progress bar doesn't jump
@@ -219,6 +227,20 @@ function ToolApprovalCard({
   const argsJson = JSON.stringify(args, null, 2)
   const titleId = `tool-approval-title-${approvalId}`
   const descId = `tool-approval-desc-${approvalId}`
+
+  // Tools where "Always Allow" would mean something far larger than the call
+  // being approved, so it is not offered at all.
+  //
+  // Grants are keyed on (session, agent, TOOL NAME) — the ARGUMENTS are not part
+  // of the key. For most tools that is fine. For `request_mount` it would mean
+  // "this agent may mount ANY folder for the rest of the session, without
+  // asking": a blanket grant over the whole disk from one click, with no path
+  // ever shown. It is also unnecessary — approving once creates a mount that
+  // persists until revoked, so the durable thing is the mount record, not a
+  // standing permission to create more.
+  //
+  // Deny and Approve are unaffected; only the shortcut is withheld.
+  const alwaysAllowSuppressed = ALWAYS_ALLOW_SUPPRESSED_TOOLS.has(toolName)
 
   // Ported from the retired ExecApprovalBlock (see the ADR-036 note atop this
   // file) — a readable command preview for `bash` calls, additive to (not a
@@ -374,17 +396,19 @@ function ToolApprovalCard({
               <XCircle size={14} weight="bold" aria-hidden="true" />
               Deny
             </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              data-testid="always-allow-toggle"
-              onClick={() => handleAction('always')}
-              disabled={submitting}
-              className="h-8 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] flex-1 sm:flex-none"
-            >
-              <Lock size={14} aria-hidden="true" />
-              Always Allow
-            </Button>
+            {!alwaysAllowSuppressed && (
+              <Button
+                size="sm"
+                variant="ghost"
+                data-testid="always-allow-toggle"
+                onClick={() => handleAction('always')}
+                disabled={submitting}
+                className="h-8 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] flex-1 sm:flex-none"
+              >
+                <Lock size={14} aria-hidden="true" />
+                Always Allow
+              </Button>
+            )}
             <Button
               size="sm"
               variant="ghost"

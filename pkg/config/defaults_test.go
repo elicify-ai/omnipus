@@ -56,6 +56,15 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// hard constraint 6.
 	operatorOnly := map[string]string{
 		"add_mcp_server": "deny",
+		// request_mount (ADR-063 FR-7.2) belongs to the same class as
+		// add_mcp_server — an agent widening its OWN boundary — but is seeded
+		// "ask" rather than "deny" because the widening is exactly what the
+		// operator is being asked to approve, and the approval modal is where
+		// they do it. "allow" would be wrong for the obvious reason (an agent
+		// silently granting itself write access to any folder it names); "deny"
+		// would be wrong because it makes the tool inert and pushes the request
+		// back into prose the operator has to act on manually.
+		"request_mount": "ask",
 	}
 
 	for name, want := range operatorOnly {
