@@ -192,7 +192,24 @@ func TestPackageChromeRoot_NoCandidatePresent_ReturnsEmpty(t *testing.T) {
 		t.Skip("Phase 1 deferral: packageChromeRoot returns empty on Windows")
 	}
 	base := t.TempDir()
-	exe := filepath.Join(base, "bin", "omnipus")
+	// Four levels below base, for the same reason as the sibling test above —
+	// and this one is the reason that rule exists. On darwin the SECOND
+	// candidate is three levels up from exeDir, so from a shallow
+	// <base>/bin/omnipus it resolves to <system temp>/chromium: OUTSIDE
+	// t.TempDir(), in the shared per-user temp root.
+	//
+	// That made this test read state it does not own. A real
+	// /var/folders/.../T/chromium (a seeded 151.0.7922.138 + chrome.sha256,
+	// left behind by an EARLIER run of the sibling test back when it also used
+	// a shallow exe and seeded its slot 2 out there) made this assertion fail
+	// with "Should be empty, but was /var/folders/.../T/chromium" — a genuine
+	// failure of a genuinely correct probe, caused entirely by test pollution
+	// that outlived the run that created it.
+	//
+	// Keeping every candidate inside t.TempDir() makes the "no candidate
+	// present" premise actually true, and makes it impossible for this test to
+	// be poisoned by, or to poison, anything else on the machine.
+	exe := filepath.Join(base, "opt", "omnipus", "bin", "omnipus")
 	require.NoError(t, os.MkdirAll(filepath.Dir(exe), 0o755))
 	require.NoError(t, os.WriteFile(exe, []byte("binary"), 0o755))
 	previousExecutable := osExecutable
@@ -201,6 +218,15 @@ func TestPackageChromeRoot_NoCandidatePresent_ReturnsEmpty(t *testing.T) {
 	previousRoot := packageChromeRootForTest
 	packageChromeRootForTest = ""
 	t.Cleanup(func() { packageChromeRootForTest = previousRoot })
+
+	// Precondition, asserted rather than assumed: every candidate this probe
+	// will consult must live under base. If a future layout change moves one
+	// outside again, this fails HERE with a clear reason instead of failing
+	// mysteriously later depending on what happens to be in the system temp.
+	for _, cand := range packageChromeRootCandidates() {
+		require.True(t, strings.HasPrefix(cand, base),
+			"candidate %q escapes t.TempDir() %q — it would read (or create) shared system temp state", cand, base)
+	}
 
 	gotRoot, gotStatus := packageChromeRootProbe()
 	assert.Empty(t, gotRoot)
