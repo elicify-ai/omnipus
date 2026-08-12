@@ -86,21 +86,27 @@ type managedChromeCmdline struct {
 //     Extensions.loadUnpacked (see launchChrome / LoadExtension in
 //     coordinator.go) — --disable-extensions would defeat that even with
 //     --allowlisted-extension-id set.
-//   - --mute-audio is OMITTED from the headless flags this file adds (see
-//     managedExecAllocatorOpts). chromedp.Headless (also folded into
-//     DefaultExecAllocatorOptions) sets --mute-audio alongside --headless
-//     and --hide-scrollbars, so it WAS also in the prior effective set —
-//     implicitly, not via an explicit chromedp.Flag call, which is why a
-//     grep-level read of the pre-pipe code can miss it. It is dropped here
-//     to keep audio rendering intact for tabCapture (wave-plan key decision
-//     6 / spike Q2: capture is proven to work whether or not --mute-audio is
-//     present, so this is a safe, deliberate choice, not a regression risk).
+//   - --mute-audio IS included, and deliberately so. It was previously omitted
+//     on the theory that dropping it "keeps audio rendering intact for
+//     tabCapture". That theory is wrong in one direction and harmful in the
+//     other. Wrong: spike Q2 T1 measured capture-side RMS 0.1762 WITH
+//     --mute-audio vs 0.1775 without — muting the local OUTPUT device does not
+//     touch what the renderer produces, which is what tabCapture taps. Harmful:
+//     on a host that actually HAS an audio device (i.e. every developer's
+//     macOS/Windows machine, as opposed to the headless Linux pod this was
+//     tuned on) omitting it means the agent's browsing plays out loud through
+//     the operator's speakers. That was observed live on macOS 2026-08-12.
+//     Muting costs nothing and stops a browsing agent hijacking the audio
+//     output of the machine it runs on.
 //
 // cdppipe itself contributes the pipe-specific flags (--remote-debugging-pipe,
 // --no-first-run, --no-default-browser-check, --user-data-dir, about:blank),
 // so they are deliberately omitted here (cdppipe/allocator.go's buildArgs).
 func chromeHardeningBaseFlags() []string {
 	args := []string{
+		// See the --mute-audio note in this function's doc comment: this mutes
+		// the local output device only; tabCapture still receives real samples.
+		"--mute-audio",
 		"--disable-background-networking",
 		"--enable-features=NetworkService,NetworkServiceInProcess",
 		"--disable-background-timer-throttling",

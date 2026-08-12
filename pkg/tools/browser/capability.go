@@ -61,7 +61,36 @@ var goosForCapability = runtime.GOOS
 // advertise Capable; until then, darwin stays not-capable with a clear
 // operator Reason. HC #6: this explicit, documented default (false) is the
 // reason darwin is not-capable by default — there is no silent fallback.
-var darwinAudioVerified = false
+// VERIFIED 2026-08-12 on darwin/amd64, macOS, managed full Chrome 151.0.7922.77
+// (chrome-mac-x64). The AC-1 spike (spikes/wv1-webrtc/q2-capture) was re-run
+// unmodified against the macOS binary — only the hardcoded Linux Chrome path and
+// scratch dir were parameterised (SPIKE_CHROME / SPIKE_SCRATCH) — and both gates
+// passed with numbers matching the original in-pod Linux run:
+//
+//	T1 audio baseline (does headless render audio at all, with no audio device):
+//	  noflags                selfRms 0.1775   ctxTime +3.01s   state=running
+//	  --disable-audio-output selfRms 0.1762   ctxTime +3.00s   state=running
+//	  --mute-audio           selfRms 0.1762   ctxTime +3.00s   state=running
+//	  (linux measured 0.1770 against 0.1768 theoretical — darwin is identical)
+//
+//	T3c tabCapture via the SANCTIONED post-137 recipe (--remote-debugging-pipe +
+//	Extensions.loadUnpacked + --allowlisted-extension-id), i.e. exactly what
+//	coordinator.go's launchChrome/LoadExtension does in production:
+//	  videoTracks=1  audioTracks=1  frames=80  fps=26.7
+//	  rmsMean=0.30258  rmsMax=0.32193  nonzero=32/32
+//
+// 32/32 non-zero RMS probes is real tab audio, not silence dressed up as a
+// track. The operator independently confirmed it audibly during the run.
+//
+// Why this was false for so long is worth stating plainly: nobody had ever run
+// the spike on darwin. It was never a known macOS limitation — the gate is
+// fail-closed by policy ("the per-OS gate relaxes only after per-OS audio
+// verification"), and the verification simply had not happened. The practical
+// consequence was that EVERY live-browser session on macOS silently used the
+// JPEG screencast fallback, which is why the panel felt sluggish on macOS in a
+// way that was identical locally and remotely: the cost was per-frame CPU, not
+// network.
+var darwinAudioVerified = true
 
 // videoCapableOS reports whether a GOOS may advertise video+audio capture
 // capability. linux is video-capable unconditionally (the only platform the
