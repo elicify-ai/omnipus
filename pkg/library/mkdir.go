@@ -28,7 +28,8 @@ func (r *Root) Mkdir(rel string) (fi os.FileInfo, created bool, err error) {
 	if rel == "" {
 		return nil, false, ErrInvalidPath
 	}
-	if existing, statErr := r.root.Stat(rel); statErr == nil {
+	rt, sub := r.resolve(rel)
+	if existing, statErr := rt.Stat(sub); statErr == nil {
 		if !existing.IsDir() {
 			return nil, false, ErrAlreadyExists
 		}
@@ -53,7 +54,8 @@ func (r *Root) Mkdir(rel string) (fi os.FileInfo, created bool, err error) {
 		if parent != "" {
 			matchedRel = parent + "/" + match
 		}
-		existing, statErr := r.root.Stat(matchedRel)
+		rtM, subM := r.resolve(matchedRel)
+		existing, statErr := rtM.Stat(subM)
 		if statErr != nil {
 			return nil, false, translateErr(statErr)
 		}
@@ -63,10 +65,10 @@ func (r *Root) Mkdir(rel string) (fi os.FileInfo, created bool, err error) {
 		return existing, false, nil
 	}
 
-	if mkErr := r.root.MkdirAll(rel, 0o700); mkErr != nil {
+	if mkErr := rt.MkdirAll(sub, 0o700); mkErr != nil {
 		return nil, false, translateErr(mkErr)
 	}
-	fi, err = r.root.Stat(rel)
+	fi, err = rt.Stat(sub)
 	if err != nil {
 		return nil, false, fmt.Errorf("library: stat created directory: %w", err)
 	}

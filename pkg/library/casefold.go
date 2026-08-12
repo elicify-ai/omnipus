@@ -39,7 +39,8 @@ func (r *Root) caseInsensitiveMatch(dir, baseName string) (match string, found b
 	if name == "" {
 		name = "."
 	}
-	entries, readErr := fs.ReadDir(r.root.FS(), name)
+	rt, sub := r.resolve(name)
+	entries, readErr := fs.ReadDir(rt.FS(), sub)
 	if readErr != nil {
 		if os.IsNotExist(readErr) {
 			return "", false, nil

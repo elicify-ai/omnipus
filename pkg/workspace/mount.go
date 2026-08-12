@@ -237,6 +237,18 @@ func isWithinOrEqualPath(candidate, root string) bool {
 // $HOME does not contain (e.g. OMNIPUS_HOME on a separate volume) — FR-7.4's
 // "home directory, filesystem root" risk is about the TARGET's own breadth,
 // not merely about incidentally containing this installation.
+// IsBroadMountTarget is the exported form, for callers that must answer "is
+// this grant broad?" about an ALREADY-STORED mount rather than about one being
+// created.
+//
+// Breadth is deliberately NOT persisted on Mount: it is a property of the path,
+// and recomputing it keeps one definition of "broad" instead of a stored copy
+// that goes stale the moment this list changes. The Library needs it to mark
+// an existing mount as a broad grant — without this, the warning would appear
+// only in the create response, i.e. exactly once, in the moment the operator is
+// least likely to revisit it.
+func IsBroadMountTarget(resolved string) bool { return isBroadMountTarget(resolved) }
+
 func isBroadMountTarget(resolved string) bool {
 	if resolved == string(filepath.Separator) {
 		return true

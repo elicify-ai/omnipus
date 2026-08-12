@@ -30,7 +30,8 @@ func (r *Root) List(rel string, includeHidden bool) ([]gen.LibraryEntry, error) 
 	if name == "" {
 		name = "."
 	}
-	dirEntries, err := fs.ReadDir(r.root.FS(), name)
+	rt, sub := r.resolve(name)
+	dirEntries, err := fs.ReadDir(rt.FS(), sub)
 	if err != nil {
 		return nil, translateErr(err)
 	}
