@@ -69,6 +69,7 @@ import { LibraryEntryRow } from './LibraryEntryRow'
 import { LibraryRenameDialog } from './LibraryRenameDialog'
 import { LibraryTransferDialog } from './LibraryTransferDialog'
 import { LibraryAddMountDialog } from './LibraryAddMountDialog'
+import { LibraryMountsDialog } from './LibraryMountsDialog'
 import { mountNameFromPath } from './libraryMountName'
 import { LibraryNewFolderDialog } from './LibraryNewFolderDialog'
 import { LibraryPreviewPane } from './LibraryPreviewPane'
@@ -138,6 +139,7 @@ export function LibraryExplorer({
   const [deleteTarget, setDeleteTarget] = useState<LibraryEntry | null>(null)
   const [unmountTarget, setUnmountTarget] = useState<LibraryEntry | null>(null)
   const [addMountOpen, setAddMountOpen] = useState(false)
+  const [mountsOpen, setMountsOpen] = useState(false)
   const [addMountError, setAddMountError] = useState<string>()
   const [transferTarget, setTransferTarget] = useState<{ entry: LibraryEntry; mode: 'move' | 'copy' } | null>(null)
   const [transferError, setTransferError] = useState<string>()
@@ -178,6 +180,21 @@ export function LibraryExplorer({
   // The mounts visible at the CURRENT level. Only a first-segment name can
   // identify a mount, and the transfer destination is expressed relative to the
   // work-tree root, so this is the set the dialog needs to recognise one.
+  // Mounts live at the work-tree ROOT, so the count must come from there rather
+  // than from whatever folder is currently open — otherwise it silently reads
+  // zero the moment you navigate into a subfolder, which is exactly when you
+  // are least able to notice it is wrong. Same query key as the root listing,
+  // so it is free while browsing the root.
+  const rootEntriesQuery = useQuery({
+    queryKey: libraryQueryKeys.entries(workspaceId ?? '', '', false),
+    queryFn: () => fetchLibraryEntries(workspaceId as string, '', false),
+    enabled: !!workspaceId,
+  })
+  const workspaceMounts = useMemo(
+    () => (rootEntriesQuery.data ?? []).filter((e) => e.mount),
+    [rootEntriesQuery.data],
+  )
+
   const mountsInView = useMemo(
     () =>
       sortedEntries
@@ -551,6 +568,26 @@ export function LibraryExplorer({
               >
                 <FolderPlus size={16} />
               </button>
+              {workspaceMounts.length > 0 && (
+                <button
+                  type="button"
+                  tabIndex={0}
+                  onClick={() => setMountsOpen(true)}
+                  title="Review and revoke mounted folders"
+                  aria-label={`Manage ${workspaceMounts.length} mounted folders`}
+                  data-testid="library-mounts-count"
+                  className="flex items-center gap-1.5 rounded px-1.5 py-1 text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-info)] transition-colors"
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      workspaceMounts.some((e) => e.mount?.broad)
+                        ? 'bg-[var(--color-warning)]'
+                        : 'bg-[var(--color-info)]'
+                    }`}
+                  />
+                  {workspaceMounts.length} mounted
+                </button>
+              )}
               {/* Adding a mount sits AMONG New folder and Upload, not above
                   them: it is the rarer action, and nothing in this toolbar is
                   filled or accented. */}
@@ -798,6 +835,20 @@ export function LibraryExplorer({
       />
 
       {/* ── Delete confirm (destructive action — hard confirm, no silent data loss) ── */}
+      <LibraryMountsDialog
+        open={mountsOpen}
+        onOpenChange={setMountsOpen}
+        mounts={workspaceMounts}
+        workspaceName={
+          sortedWorkspaces.find((w) => w.id === workspaceId)?.name ?? 'this workspace'
+        }
+        onUnmount={(entry) => {
+          setMountsOpen(false)
+          setUnmountTarget(entry)
+        }}
+        isPending={unmountMutation.isPending}
+      />
+
       <LibraryAddMountDialog
         open={addMountOpen}
         onOpenChange={(open) => {

@@ -152,3 +152,70 @@ describe('mountNameFromPath', () => {
     expect(mountNameFromPath('')).toBe('')
   })
 })
+
+// ── The durable register (ADR-063) ──────────────────────────────────────────
+//
+// Approving a grant happens once, in a modal, in a moment. Revoking happens
+// months later, by someone who has forgotten it exists. Only the second needs a
+// permanent home, and this is it.
+
+import { LibraryMountsDialog } from './LibraryMountsDialog'
+
+describe('the mounted-folders register', () => {
+  const mounts = [
+    mounted,
+    entry({
+      name: 'home',
+      path: 'home',
+      mount: { name: 'home', host_path: '/Users/dana', broad: true },
+    } as Partial<LibraryEntry>),
+  ]
+
+  function renderDialog(over: Record<string, unknown> = {}) {
+    const props = {
+      open: true,
+      onOpenChange: vi.fn(),
+      mounts,
+      workspaceName: 'Client Project',
+      onUnmount: vi.fn(),
+      isPending: false,
+      ...over,
+    }
+    render(<LibraryMountsDialog {...props} />)
+    return props
+  }
+
+  it('lists every grant with its real path, not just its name', () => {
+    renderDialog()
+    // The name alone does not tell you what you granted.
+    expect(screen.getByTestId('library-mounts-row-omnipus-repo')).toHaveTextContent(
+      '/Users/dana/Documents/projects/api',
+    )
+    expect(screen.getByTestId('library-mounts-row-home')).toHaveTextContent('/Users/dana')
+  })
+
+  it('flags a broad grant so it cannot hide in the list', () => {
+    renderDialog()
+    expect(screen.getByTestId('library-mounts-row-home')).toHaveTextContent(/broad grant/i)
+    expect(screen.getByTestId('library-mounts-row-omnipus-repo')).not.toHaveTextContent(
+      /broad grant/i,
+    )
+  })
+
+  it('states that files survive, because the control sits where delete normally lives', () => {
+    renderDialog()
+    expect(screen.getByText(/files stay exactly where they are/i)).toBeInTheDocument()
+  })
+
+  it('hands the revoke back to the caller rather than acting on its own', async () => {
+    const user = userEvent.setup()
+    const props = renderDialog()
+    await user.click(screen.getByTestId('library-mounts-unmount-home'))
+    expect(props.onUnmount).toHaveBeenCalledWith(mounts[1])
+  })
+
+  it('says so plainly when nothing is granted', () => {
+    renderDialog({ mounts: [] })
+    expect(screen.getByText(/no folders are mounted/i)).toBeInTheDocument()
+  })
+})
