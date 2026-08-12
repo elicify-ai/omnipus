@@ -546,6 +546,33 @@ export class BrowserWebRTCSession {
 
   private _wirePeerConnectionEvents(pc: RTCPeerConnection): void {
     pc.ontrack = (event: RTCTrackEvent) => {
+      // Remote-CONTROL latency fix (live report, macOS 2026-08-13: "scrolling
+      // is terrible... like the inputs are queued and reach the browser with
+      // a lot of delay"). Chrome's receiver runs an ADAPTIVE jitter buffer
+      // sized for smooth playback of media streams; our capture has an
+      // irregular, content-driven frame cadence (a static page emits almost
+      // nothing, a scroll emits a burst), which that adaptivity reads as
+      // network jitter and answers with hundreds of ms of buffering. Every
+      // rendered frame — i.e. ALL visual feedback for the user's own input —
+      // then runs that far behind their hand, so a direction change keeps
+      // showing old-direction motion until the buffer drains: exactly the
+      // reported stickiness, with no queue anywhere in the input path (the
+      // server DROPS over-limit input, it never queues).
+      //
+      // Remote-desktop apps disable this buffering; so do we.
+      // jitterBufferTarget (spec'd, ms) with playoutDelayHint (older Chrome)
+      // as fallback — both best-effort, feature-detected, harmless where
+      // unsupported.
+      try {
+        const receiver = event.receiver as RTCRtpReceiver & {
+          jitterBufferTarget?: number | null
+          playoutDelayHint?: number | null
+        }
+        if (receiver && 'jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 0
+        if (receiver && 'playoutDelayHint' in receiver) receiver.playoutDelayHint = 0
+      } catch {
+        // Hint-setting must never break track wiring.
+      }
       const incoming = event.streams[0]
       if (incoming) {
         this.remoteStream = incoming
