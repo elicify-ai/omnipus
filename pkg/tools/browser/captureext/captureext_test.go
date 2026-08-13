@@ -574,8 +574,8 @@ func TestSeed_RecoversFromUnreadableSeededFile(t *testing.T) {
 	}
 
 	victim := filepath.Join(first, "encoder.js")
-	if err := os.Chmod(victim, 0o000); err != nil {
-		t.Fatalf("chmod 0000 %q: %v", victim, err)
+	if chmodErr := os.Chmod(victim, 0o000); chmodErr != nil {
+		t.Fatalf("chmod 0000 %q: %v", victim, chmodErr)
 	}
 	t.Cleanup(func() {
 		_ = os.Chmod(victim, 0o644) // restore so t.TempDir() cleanup can remove the tree

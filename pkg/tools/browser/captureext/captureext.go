@@ -257,7 +257,10 @@ func seededContentMatches(destDir string) (bool, error) {
 			// not_capable, while the replace that would have fixed it was
 			// never reached.
 			match = false
-			return nil
+			// nilerr: returning nil here is the POINT — an unreadable seeded
+			// file is drift to be REPLACED, not an error to propagate. See
+			// the comment above.
+			return nil //nolint:nilerr // unreadable seed == drift, handled by the replace path
 		}
 		if !bytes.Equal(want, got) {
 			match = false
