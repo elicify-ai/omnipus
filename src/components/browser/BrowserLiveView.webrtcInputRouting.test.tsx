@@ -29,6 +29,7 @@ const {
   mockMachineStop,
   machineCallbacksRef,
   machineHasConnectedOnceRef,
+  machineStateRef,
 } = vi.hoisted(() => ({
   mockSendInput: vi.fn(() => true),
   mockSendControl: vi.fn(() => true),
@@ -56,6 +57,15 @@ const {
   // (cold start) — individual tests flip it true to exercise the
   // already-connected path. Reset in beforeEach below.
   machineHasConnectedOnceRef: { current: false },
+  // F1 fix coverage (external review, 2026-08-13): backs the mocked
+  // machine's `state` getter — BrowserLiveView.tsx's `onWebRTCState` handler
+  // now reads this directly to cover the gap `applyState` deliberately
+  // leaves uncovered (a capability-gate `available:false` arriving while the
+  // real machine is still `idle`, before `start()` has ever run). Defaults
+  // to 'idle', matching a freshly-constructed real BrowserWebRTCSession.
+  // Individual tests override it to exercise the offering/connected/fallback
+  // branches. Reset in beforeEach below.
+  machineStateRef: { current: 'idle' as 'idle' | 'offering' | 'connected' | 'fallback' },
 }))
 
 // D5: importOriginal so the real translateBrowserErrorMessage (now imported
@@ -103,6 +113,9 @@ vi.mock('@/lib/browserWebRTC', async (importOriginal) => {
       sendInput: mockMachineSendInput,
       get hasConnectedOnce() {
         return machineHasConnectedOnceRef.current
+      },
+      get state() {
+        return machineStateRef.current
       },
       // Cold-start toast suppression now also requires this to be 0 (i.e.
       // the FIRST attempt). Suppressing every retry meant a total WebRTC
@@ -163,6 +176,7 @@ beforeEach(() => {
   wsCallbacksRef.current = null
   machineCallbacksRef.current = { onStream: null, onInputChannelOpen: null, onInputChannelClose: null, onFallback: null }
   machineHasConnectedOnceRef.current = false
+  machineStateRef.current = 'idle'
   useUiStore.setState({ toasts: [] })
 })
 
@@ -547,6 +561,45 @@ describe('BrowserLiveView — WebRTC signaling wiring (WebRTC build W2-B)', () =
     expect(mockMachineStart).not.toHaveBeenCalled()
   })
 
+  // Bugfix (HIGH, external review F1, 2026-08-13): `applyState` (mocked
+  // above) is documented to react ONLY while the real machine is
+  // offering/connected — a capability-gate `available:false` arriving at
+  // ATTACH time, before `start()` has ever run, left the machine `idle` and
+  // the whole handler a no-op: no error ever surfaced, and the panel
+  // silently sat on "Connecting…" until an unrelated timeout eventually fired
+  // a wrong "stale tab" message. See BrowserLiveView.tsx's `onWebRTCState`
+  // doc comment for the full trace.
+  it('surfaces the real reason immediately when available:false arrives while the machine is still idle (never started)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    machineStateRef.current = 'idle' // never started — the exact gap applyState leaves uncovered
+
+    act(() => {
+      wsCallbacksRef.current?.onWebRTCState?.({ type: 'browser_webrtc_state', available: false, reason: 'disabled' })
+    })
+
+    expect(warnSpy).toHaveBeenCalledWith('[browser-live] WebRTC failed:', 'disabled')
+    expect(screen.getByText(/turned off for this installation/i)).toBeInTheDocument()
+    warnSpy.mockRestore()
+  })
+
+  it("does NOT double-report when the machine is already offering/connected — applyState's own fallback already covers that case", () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    machineStateRef.current = 'connected'
+
+    act(() => {
+      wsCallbacksRef.current?.onWebRTCState?.({ type: 'browser_webrtc_state', available: false, reason: 'error' })
+    })
+
+    // applyState (mocked here, so it does not itself call onFallback) is the
+    // sole responsible party while offering/connected; this proves the new
+    // idle-covering branch does not ALSO fire and duplicate/race whatever
+    // applyState's real onFallback would independently report.
+    expect(screen.queryByText(/reported an error starting video/i)).not.toBeInTheDocument()
+  })
+
   it('forwards browser_webrtc_answer.sdp to machine.applyAnswer', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
@@ -674,7 +727,52 @@ describe('BrowserLiveView — surfacing WebRTC fallback reasons (honest failure,
 
     fireEvent.click(screen.getByRole('button', { name: /retry/i }))
 
+    // F7 fix (external review, 2026-08-13): a genuine retry must tear the
+    // stale session down FIRST — `start()` alone silently no-ops once the
+    // machine is already past 'idle' (see the dedicated firstFrameTimedOut
+    // coverage below for the case this actually mattered for in practice).
+    expect(mockMachineStop).toHaveBeenCalled()
     expect(mockMachineStart).toHaveBeenCalled()
     expect(screen.queryByText(/live video connection failed/i)).not.toBeInTheDocument()
+  })
+})
+
+// F7 fix (external review, 2026-08-13): the Retry button rendered for a
+// `firstFrameTimedOut` failure (connected, stream attached, no frame ever
+// decoded) used to be inert. `machine.start()` — the old retry body — is a
+// documented no-op once the machine is already 'offering'/'connected', which
+// is EXACTLY the state that failure leaves it in, so the click did nothing
+// observable: no fresh negotiation attempt, and neither `firstFrameTimedOut`
+// nor `webrtcError` was ever cleared.
+describe('BrowserLiveView — Retry must actually retry for a firstFrameTimedOut failure, not just no-op (external review F7)', () => {
+  it('stops the stale session before restarting, and clears the "No video received" message', () => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+      connectAndFrame()
+      act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream()))
+      // Deliberately never fire `loadedmetadata` — this is the
+      // firstFrameTimedOut path (the machine reports a live stream via
+      // onStream, i.e. NOT an onFallback reason), not a machine-level
+      // failure.
+      act(() => {
+        vi.advanceTimersByTime(120_000)
+      })
+      expect(screen.getByText(/No video received/i)).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+
+      // A genuine retry tears down the stale (already-connected-but-dead)
+      // session before asking for a fresh one.
+      expect(mockMachineStop).toHaveBeenCalled()
+      expect(mockMachineStart).toHaveBeenCalled()
+      const stopOrder = mockMachineStop.mock.invocationCallOrder[0]
+      const startOrder = mockMachineStart.mock.invocationCallOrder[mockMachineStart.mock.invocationCallOrder.length - 1]
+      expect(stopOrder).toBeLessThan(startOrder)
+      expect(screen.queryByText(/No video received/i)).not.toBeInTheDocument()
+      expect(screen.getByText('Waiting for the first frame…')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

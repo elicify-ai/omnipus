@@ -347,6 +347,65 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
   })
 })
 
+// Bugfix (MED, external review F5, 2026-08-13): the interactive container
+// (and its pointerdown handler) mounts the instant a WebRTC stream ATTACHES,
+// well before its first real frame ever decodes — the black "Waiting for the
+// first frame…" overlay covering it is pointer-events-none specifically so a
+// click still reaches the handler once real pixels ARE showing. Before this
+// fix, clicking that still-black box while the agent was mid-turn called
+// takeWheelIfNeeded unconditionally, which pauses the agent (cancelStream)
+// and grabs the control lock for a click that could never have landed on the
+// page at all.
+describe('BrowserLiveView — waiting-overlay click before the first frame decodes (external review F5)', () => {
+  it('does NOT pause the agent or take the lock for a click before the video has decoded a real frame (agent working)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    // Deliberately NOT calling connectAndFrame()'s loadedmetadata step:
+    // `attached` is true (mediaStream set, so the container/overlay mount)
+    // but `videoReady` stays false — exactly the "Waiting for the first
+    // frame…" window this finding is about.
+    act(() => {
+      callbacksRef.current?.onConnected?.()
+    })
+    setAgentWorking('s1', true)
+    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    const container = screen.getByTestId('browser-live-frame')
+    expect(screen.getByTestId('browser-live-waiting-overlay')).toBeInTheDocument()
+
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+
+    expect(cancelSpy).not.toHaveBeenCalled()
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
+    expect(mockSendInput).not.toHaveBeenCalled()
+  })
+
+  it('does NOT implicitly acquire the lock for a click before the video has decoded a real frame (agent idle)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    act(() => {
+      callbacksRef.current?.onConnected?.()
+    })
+    const container = screen.getByTestId('browser-live-frame')
+
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+
+    expect(mockSendControl).not.toHaveBeenCalled()
+    expect(mockSendInput).not.toHaveBeenCalled()
+  })
+
+  it('still pauses the agent, takes the lock, and dispatches input in ONE click once the frame HAS decoded (no regression)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectAndFrame()
+    setAgentWorking('s1', true)
+    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    const container = stubFrameRect()
+
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+
+    expect(cancelSpy).toHaveBeenCalledWith('s1')
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 20, y: 20 }))
+  })
+})
+
 describe('BrowserLiveView — "Take over" (ADR-040 D2)', () => {
   // CRITICAL reviewer finding: cancelStream now takes an explicit session id
   // (defaulting to whichever session is ACTIVE in chat when omitted) — an

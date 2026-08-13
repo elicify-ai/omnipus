@@ -221,12 +221,16 @@ export const selectAgent = async (page: Page, name: string | RegExp = /Jim/i) =>
 //     rendered when a live MediaStream is actually attached (mediaStream
 //     truthy) — its presence is the one honest signal that this session is
 //     really running the WebRTC video/audio path, not the JPEG fallback.
-//   - data-testid="browser-live-img" — the JPEG-screencast <img> sink,
-//     rendered instead whenever no WebRTC stream is attached (capability
-//     gate, negotiation failure, or a genuine regression). A test that wants
-//     to prove "video is live" MUST see browser-live-video, never treat
-//     browser-live-img as an acceptable substitute — see
-//     browser-live-video.spec.ts's honesty gate for the full rationale.
+//   - data-testid="browser-live-img" — the JPEG-screencast <img> sink. ADR-061
+//     (JPEG-fallback removal, "Retired surfaces" in the root CLAUDE.md)
+//     deleted this OUTRIGHT from BrowserLiveView.tsx — it no longer exists
+//     anywhere in `src/`, and reintroducing it is a regression, not a
+//     legitimate merge-conflict resolution. WebRTC is the only live-video
+//     path now: a failure surfaces as a persistent, honest error + Retry
+//     button (data-testid="browser-live-retry" / "browser-live-retry-overlay"),
+//     never a silent degrade to a second sink. `waitForLiveSink` below still
+//     polls for this selector as a CANARY for that exact regression (it
+//     should never match), not because the element is expected to appear.
 
 /** The "Watch live" launcher rendered on a browser tool-call row in chat. */
 export const watchLiveButton = (page: Page) =>
@@ -244,38 +248,68 @@ export const browserLiveFrame = (page: Page) =>
 export const browserLiveVideo = (page: Page) =>
   page.locator('[data-testid="browser-live-video"]');
 
-/** The JPEG-screencast `<img>` fallback sink — presence WITHOUT `browserLiveVideo` means WebRTC never attached. */
+/**
+ * The JPEG-screencast `<img>` fallback sink locator. ADR-061 deleted the
+ * element this targets outright (see the ground-truth comment above) — this
+ * locator can never match anything in the current codebase. Kept ONLY as the
+ * canary `waitForLiveSink` polls for below; do not use it to assert "video is
+ * live" (browserLiveVideo is the honest signal for that).
+ */
 export const browserLiveImgFallback = (page: Page) =>
   page.locator('[data-testid="browser-live-img"]');
 
 /**
+ * The "Retry" affordance BrowserLiveView.tsx renders the instant it has a
+ * real, honest WebRTC failure to report — either data-testid="browser-live-retry"
+ * (shown before the stream ever attaches) or "browser-live-retry-overlay"
+ * (shown after attach, while still waiting for the first decoded frame).
+ * Both only render when `displayError` is non-null (ADR-061 — every WebRTC
+ * failure surfaces with a real reason, never silently) — so either becoming
+ * visible is proof the outcome for THIS attempt is already known.
+ */
+const browserLiveRetryAny = (page: Page) =>
+  page.locator('[data-testid="browser-live-retry"], [data-testid="browser-live-retry-overlay"]');
+
+/**
  * Poll until the live view settles on the WebRTC `<video>` sink, or the
  * deadline expires — then report what it actually settled on: `"video"`,
- * `"img"` (JPEG fallback only), or `null` (neither ever appeared, i.e. a
- * capture-path failure rather than a WebRTC-specific one).
+ * `"img"` (JPEG fallback — see below, effectively unreachable now), or
+ * `null` (neither ever appeared, i.e. a capture-path failure rather than a
+ * WebRTC-specific one).
  *
- * CRITICAL — it must NOT return on the first `img` sighting. JPEG is
- * architecturally guaranteed to paint FIRST on every healthy cold start, so
- * returning early on it would false-red essentially every run, including on a
- * fast machine:
+ * FIX (SMALL-2, external review 2026-08-13): ADR-061 deleted the JPEG `<img>`
+ * fallback sink outright (see `browserLiveImgFallback`'s own doc comment) —
+ * `data-testid="browser-live-img"` no longer exists anywhere in `src/`, so
+ * the `'img'` verdict below was unreachable dead code, and every WebRTC
+ * failure fell through to the bare `null` verdict ("capture-path failure")
+ * ONLY after riding out the FULL `timeoutMs` (default 90s) budget — even
+ * though BrowserLiveView.tsx had already reported the real, specific reason
+ * (`disabled` / `lite_build` / `ice-failed` / `answer-timeout` / ...) within
+ * seconds, via its Retry-button error state. That misdiagnosed a WebRTC
+ * failure as an unrelated capture-path stall, and did so as slowly as
+ * possible. Polling for that same Retry-button error state now lets this
+ * FAIL FAST — in seconds, not 90s — with the real reason in the thrown
+ * error, the moment BrowserLiveView itself has already concluded this
+ * attempt is dead. Retained the `img`-polling below (rather than deleting
+ * it) as a CANARY: reintroducing the JPEG sink is a documented regression
+ * (see CLAUDE.md's "Retired surfaces"), not a legitimate merge resolution,
+ * and this is what would catch it coming back.
  *
- *   - `BrowserLiveView.tsx` renders `mediaStream ? <video> : <img>`, and
- *     `mediaStream` is non-null only once WebRTC negotiation COMPLETES.
- *   - The JPEG frame arrives over a separate, always-on CDP screencast with
- *     `screencastEveryNthFrame = 1` (pkg/tools/browser/live.go) — sub-second
- *     first paint.
+ * CRITICAL — it must NOT return on the first `img` sighting (were it ever to
+ * reappear). JPEG used to be architecturally guaranteed to paint FIRST on
+ * every healthy cold start, so returning early on it would false-red
+ * essentially every run:
+ *
+ *   - `BrowserLiveView.tsx` renders `mediaStream ? <video> : <img>` in the
+ *     pre-ADR-061 world, and `mediaStream` is non-null only once WebRTC
+ *     negotiation COMPLETES.
  *   - WebRTC negotiation legitimately takes seconds to tens of seconds:
  *     `waitForTracksTimeout` is 15s and the SPA's cold-start
  *     `firstAnswerTimeoutMs` is 30s.
  *
- * So the honest question is never "which appeared first" — it is "did video
- * EVER arrive within the budget". Seeing `img` is the expected intermediate
- * state, not a verdict. We keep polling past it and only conclude `"img"`
- * when the whole budget elapsed with the video sink never showing up.
- *
- * Deliberately NOT a `Promise.race` of two `waitFor` calls: both timeouts
- * would still be in flight when the first resolves, and racing two
- * "resolve to null after timeoutMs" promises cannot tell you which sink was
+ * Deliberately NOT a `Promise.race` of separate `waitFor` calls: both
+ * timeouts would still be in flight when the first resolves, and racing two
+ * "resolve to null after timeoutMs" promises cannot tell you which signal was
  * actually visible. A manual poll gives an unambiguous answer.
  */
 export async function waitForLiveSink(
@@ -284,19 +318,41 @@ export async function waitForLiveSink(
 ): Promise<'video' | 'img' | null> {
   const video = browserLiveVideo(page);
   const img = browserLiveImgFallback(page);
+  const retry = browserLiveRetryAny(page);
   const deadline = Date.now() + timeoutMs;
   let sawImg = false;
   while (Date.now() < deadline) {
     // Video wins the moment it appears, whenever that happens — including
-    // long after the JPEG sink has been showing.
+    // long after any interim state has been showing.
     if (await video.isVisible().catch(() => false)) return 'video';
+    // FAIL FAST: BrowserLiveView has already concluded this attempt failed
+    // (its Retry button + `displayError` text are up) — no point riding out
+    // the rest of the budget for an outcome that's already known. Throwing
+    // (rather than returning a value) lets the real, specific reason reach
+    // the test failure message directly, instead of being flattened into
+    // the generic `null` "capture-path failure" verdict below.
+    if (await retry.first().isVisible().catch(() => false)) {
+      const reported = await retry
+        .first()
+        .locator('..')
+        .textContent()
+        .catch(() => null);
+      throw new Error(
+        'WebRTC live view reported a real, specific failure before the video sink ever ' +
+          `appeared: "${reported?.trim() ?? '(error text unavailable)'}" — see ` +
+          'translateWebRTCFallbackReason (src/lib/browserWebRTC.ts) for the reason catalogue. ' +
+          'This is a WebRTC-specific failure, not a capture-path stall — do not treat it as ' +
+          'the generic "neither sink appeared" case.',
+      );
+    }
     if (!sawImg && (await img.isVisible().catch(() => false))) {
       sawImg = true;
     }
     await page.waitForTimeout(500);
   }
-  // Budget exhausted. Distinguish "picture mode worked but video never came"
-  // (a WebRTC-path failure) from "nothing rendered at all" (a capture-path
-  // failure) — the two need very different investigations.
+  // Budget exhausted with NEITHER a video sink NOR a reported error ever
+  // appearing — a genuine capture-path stall (browser_attach/browser_status
+  // round trip never completed), or the ADR-061 regression the `img` canary
+  // above exists to catch.
   return sawImg ? 'img' : null;
 }

@@ -20,6 +20,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
+import { DEFAULT_FIRST_ANSWER_TIMEOUT_MS } from '@/lib/browserWebRTC'
 
 const { callbacksRef } = vi.hoisted(() => ({
   callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
@@ -48,8 +49,15 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 
 import { BrowserLiveView } from './BrowserLiveView'
 
-/** Matches FIRST_FRAME_TIMEOUT_MS in BrowserLiveView.tsx. */
-const FIRST_FRAME_TIMEOUT_MS = 15_000
+/** Matches FIRST_FRAME_TIMEOUT_MS in BrowserLiveView.tsx.
+ *
+ * Bugfix (MED, external review F6, 2026-08-13): this used to be a bare
+ * hardcoded 15_000 with no relationship to the real constant, which is
+ * exactly how the real one was allowed to drift shorter than
+ * browserWebRTC.ts's own cold-start answer budget without any test catching
+ * it. Deriving this mirror from the SAME imported constant BrowserLiveView.tsx
+ * now uses keeps this file honest about what it's actually asserting against. */
+const FIRST_FRAME_TIMEOUT_MS = DEFAULT_FIRST_ANSWER_TIMEOUT_MS + 15_000
 
 /** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. */
 function fakeMediaStream(id = 'stream-1'): MediaStream {
@@ -81,6 +89,30 @@ afterEach(() => {
 })
 
 describe('BrowserLiveView — first-frame timeout', () => {
+  // Bugfix (MED, external review F6, 2026-08-13): FIRST_FRAME_TIMEOUT_MS
+  // used to be a fixed 15_000, shorter than browserWebRTC.ts's own
+  // DEFAULT_FIRST_ANSWER_TIMEOUT_MS (30_000) cold-start budget — which this
+  // timer sits strictly DOWNSTREAM of (a decoded frame can only happen after
+  // the answer round trip completes). A healthy cold start could still be
+  // legitimately negotiating its first answer at the 30s mark; the panel
+  // must not have already declared failure by then.
+  it('does not fire before the WebRTC cold-start answer budget elapses (must never be shorter than DEFAULT_FIRST_ANSWER_TIMEOUT_MS)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    act(() => {
+      callbacksRef.current?.onConnected?.()
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(DEFAULT_FIRST_ANSWER_TIMEOUT_MS - 1)
+    })
+
+    // A cold start can legitimately still be waiting on its FIRST answer at
+    // this point — the panel must still be honestly "waiting", never already
+    // claiming failure.
+    expect(screen.getByText('Waiting for the first frame…')).toBeInTheDocument()
+    expect(screen.queryByText(/No video received/i)).not.toBeInTheDocument()
+  })
+
   it('surfaces an actionable error when connected and attached but no frame ever decodes', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     act(() => {

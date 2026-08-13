@@ -124,7 +124,15 @@ interface BrowserWebRTCStateSignal { // not-wire-format: locally widened view of
 
 const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
 const DEFAULT_ANSWER_TIMEOUT_MS = 5000
-const DEFAULT_FIRST_ANSWER_TIMEOUT_MS = 30000
+// Exported (external review F6, 2026-08-13): BrowserLiveView.tsx's own
+// FIRST_FRAME_TIMEOUT_MS — how long it waits for a decoded VIDEO FRAME,
+// which can only happen AFTER this session's own cold-start answer round
+// trip completes — used to be a hardcoded 15_000, independent of this
+// constant (30_000) and silently drifted shorter than it. A healthy cold
+// start showed a false "No video received" error and then connected seconds
+// later anyway. Exporting this is what lets the two stay derived from one
+// source instead of drifting apart again.
+export const DEFAULT_FIRST_ANSWER_TIMEOUT_MS = 30000
 // DEFAULT_DISCONNECTED_GRACE_MS (2026-07-30 UAT, Batam→Fly over VPN on iPad
 // Safari): was 5000. A 5s grace is far too tight for a high-latency mobile /
 // VPN path, where ICE 'disconnected' is a routine, self-recovering blip. The
@@ -520,17 +528,35 @@ export class BrowserWebRTCSession {
         // Proceeding with a PARTIAL candidate set is fine. Proceeding with an
         // EMPTY one never is: non-trickle means an offer carrying no
         // candidates can only ever fail, 30s later, with ICE 'failed' and
-        // nothing pointing at the cause. Surface it here instead.
+        // nothing pointing at the cause.
+        //
+        // Bugfix (SMALL-1, external review 2026-08-13): an earlier revision
+        // (277cf7b7) titled itself "refuse to ship an empty offer" but only
+        // ever logged the console.warn below and then called `resolve()`
+        // regardless — the offer shipped anyway, exactly as before. The
+        // commit message overclaimed what the code did. This now genuinely
+        // refuses: `_fallback` reports a real, visible reason immediately
+        // (ADR-061 — no silent failures) instead of shipping a doomed offer
+        // and burning the full answer timeout waiting on a reply that could
+        // never arrive. `_fallback` tears down `this.pc` itself, so
+        // `_beginOffer`'s own `if (this.pc !== pc) return` guard — the same
+        // "superseded" check it already uses for a stop()/retry mid-flight —
+        // is what actually stops the offer from going out; the `resolve()`
+        // below only unblocks that check, it does not mean "proceed".
         const gathered = (pc.localDescription?.sdp ?? '')
           .split('\n')
           .filter((l) => l.trim().startsWith('a=candidate:')).length
         if (gathered === 0) {
           console.warn(
             `[browserWebRTC] ICE gathering timed out after ${this.iceGatheringTimeoutMs}ms with ZERO ` +
-              'candidates. The offer is undeliverable — signaling is non-trickle, so candidates ' +
-              'gathered after this point are never sent. Expect ICE to fail ~30s from now. On macOS ' +
-              'this is usually slow or blocked mDNS (.local) candidate registration.',
+              'candidates. Refusing to ship an undeliverable offer — signaling is non-trickle, so ' +
+              'candidates gathered after this point would never be sent anyway. Falling back now ' +
+              'instead of waiting 30s for an answer that could never come. On macOS this is usually ' +
+              'slow or blocked mDNS (.local) candidate registration.',
           )
+          this._fallback('ice-gathering-empty')
+          resolve()
+          return
         }
         resolve()
       }, this.iceGatheringTimeoutMs)

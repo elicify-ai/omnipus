@@ -59,7 +59,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { BrowserLiveWsConnection, translateBrowserErrorMessage } from '@/lib/browserLiveWs'
-import { BrowserWebRTCSession, translateWebRTCFallbackReason } from '@/lib/browserWebRTC'
+import { BrowserWebRTCSession, translateWebRTCFallbackReason, DEFAULT_FIRST_ANSWER_TIMEOUT_MS } from '@/lib/browserWebRTC'
 import {
   computeCropRect,
   computeModifiers,
@@ -287,7 +287,22 @@ type LiveStatus = BrowserStatusFrame['state'] | 'connecting' | 'disconnected'
 // and a premature error on a session that was about to work is worse than a few
 // extra seconds of spinner. What is NOT acceptable is waiting forever — see
 // firstFrameTimedOut for the silent-failure this bounds.
-const FIRST_FRAME_TIMEOUT_MS = 15_000
+//
+// Bugfix (MED, external review F6, 2026-08-13): this used to be a fixed
+// 15_000, defined with no relationship to browserWebRTC.ts's own cold-start
+// answer budget (DEFAULT_FIRST_ANSWER_TIMEOUT_MS, 30s — the gateway's
+// capture-start + bringToFront + tracks-wait sequence can legitimately run
+// past 25s worst case, per that file's own header doc). This timer is armed
+// against `videoReady` — a DECODED FRAME, which can only happen AFTER that
+// answer round trip completes, AND ICE connects, AND the first video RTP
+// packets arrive — so it must never be shorter than the answer budget it
+// sits downstream of, or a perfectly healthy cold start shows the red "No
+// video received…" error and then connects seconds later anyway (exactly
+// what was reported live). Derived from the SAME constant the machine uses
+// for its own cold-start timeout, plus a margin for the post-answer
+// ICE-connect + first-frame-decode gap, so the two can never silently drift
+// apart again the way they just did.
+const FIRST_FRAME_TIMEOUT_MS = DEFAULT_FIRST_ANSWER_TIMEOUT_MS + 15_000
 
 // VIEWPORT_SETTLE_MS is how long a new panel size must hold still before it is
 // committed to the server. Each commit REBUILDS the capture stream (tabCapture
@@ -762,6 +777,17 @@ export function BrowserLiveView({
   // Only armed once `connected` is true — before that the honest message is
   // "Connecting…", and a slow connect is not a first-frame failure.
   const [firstFrameTimedOut, setFirstFrameTimedOut] = useState(false)
+  // Bumped by `retryWebRTC` (F7 fix, external review 2026-08-13) to re-arm a
+  // FRESH FIRST_FRAME_TIMEOUT_MS deadline for a fresh negotiation attempt.
+  // Without this, clicking Retry after a `firstFrameTimedOut` failure clears
+  // the flag once via `setFirstFrameTimedOut(false)` but never re-runs this
+  // effect (neither `videoReady` nor `connected` changes on retry — only the
+  // WebRTC PC/DC gets torn down and rebuilt, not the WS `connected` state),
+  // so no new timer is ever scheduled: a fresh attempt that ALSO never
+  // decodes a frame would leave the panel stuck on "Waiting for the first
+  // frame…" forever, silently, instead of re-reporting the same honest
+  // failure after another full deadline.
+  const [firstFrameDeadlineNonce, setFirstFrameDeadlineNonce] = useState(0)
   useEffect(() => {
     if (videoReady) {
       // A frame decoded (possibly after a previous timeout — a recapture can
@@ -775,7 +801,7 @@ export function BrowserLiveView({
     }
     const timer = setTimeout(() => setFirstFrameTimedOut(true), FIRST_FRAME_TIMEOUT_MS)
     return () => clearTimeout(timer)
-  }, [videoReady, connected])
+  }, [videoReady, connected, firstFrameDeadlineNonce])
 
   const displayError =
     connError ??
@@ -1079,14 +1105,18 @@ export function BrowserLiveView({
     // keeps retrying automatically in the background (exponential backoff,
     // up to its own retry budget — browserWebRTC.ts); the error UI's Retry
     // button is for after that budget is exhausted, or for a manual nudge.
-    machine.onFallback((reason) => {
+    // Factored out (fix-wave, external review F1, 2026-08-13) so the SAME
+    // reset-and-report logic can also run from `onWebRTCState` below for the
+    // gap that callback covers on its own — see that handler's doc comment.
+    const applyWebrtcFailure = (reason: string) => {
       console.warn('[browser-live] WebRTC failed:', reason)
       setWebrtcStream(null)
       setWebrtcHasAudio(false)
       setVideoReady(false)
       setWebrtcError(reason)
       inputChannelOpenRef.current = false
-    })
+    }
+    machine.onFallback(applyWebrtcFailure)
 
     const conn = new BrowserLiveWsConnection(sessionId, agentId, {
       // ADR-041 D4 — tab list + active index, broadcast on any
@@ -1168,6 +1198,29 @@ export function BrowserLiveView({
           // burning the full 5s answer timeout waiting for an answer that was
           // never going to arrive because the offer itself never left.
           machine.start((sdp) => wsRef.current?.sendWebRTCOffer(sdp) ?? false)
+          return
+        }
+        // Bugfix (HIGH, external review F1, 2026-08-13): `applyState` above
+        // (browserWebRTC.ts) deliberately only reacts to `available:false`
+        // while the machine is `offering`/`connected` — its own doc comment
+        // says deciding whether/when to react to an unavailable signal
+        // BEFORE `start()` has ever been called is THIS caller's job, not
+        // applyState's. But a capability-gate refusal (`disabled`/
+        // `lite_build`/`not_capable`) arrives at ATTACH time, before
+        // `start()` has EVER run — the machine is still `idle`, so
+        // `applyState` no-ops, and (since `f.available` is false) the
+        // `machine.start()` branch above is skipped too. NOTHING reacted:
+        // the panel sat on "Connecting…" for the full FIRST_FRAME_TIMEOUT_MS
+        // and then showed an unrelated "stale tab" message instead of the
+        // real, honest capability-gate reason — exactly the silent-degrade
+        // ADR-061 exists to eliminate. Cover the complement of applyState's
+        // own condition: whenever the machine is NOT actively
+        // offering/connected (idle, or already reporting a fallback),
+        // nothing else is going to surface this, so surface it here. Reuses
+        // the exact same reset-and-report logic `onFallback` uses above, so
+        // this can never drift into different copy for the identical signal.
+        if (machine.state !== 'offering' && machine.state !== 'connected') {
+          applyWebrtcFailure(f.reason ?? 'unavailable')
         }
       },
       onError: (message) => setConnError(message),
@@ -2081,6 +2134,31 @@ export function BrowserLiveView({
       setSelectionCurrent(point)
       return
     }
+    // Bugfix (MED, external review F5, 2026-08-13): the interactive
+    // container mounts the instant a WebRTC stream ATTACHES (`attached`),
+    // independently of whether it has decoded a real first frame yet — the
+    // "Waiting for the first frame…" overlay covering it is deliberately
+    // `pointer-events-none` so a click reaches THIS handler once a frame IS
+    // actually showing (see the overlay's own doc comment). Before this fix,
+    // the mode branch below ran regardless: for a click during that gap
+    // while the agent was mid-turn, `takeWheelIfNeeded` (further down)
+    // paused the agent via `cancelStream` and grabbed the control lock for a
+    // click that could never have landed on the page at all —
+    // `mapPointerToDeviceCoords` (via `activeFrameDims`) would have returned
+    // null anyway, but only AFTER the turn was already aborted. That window
+    // is the entire WebRTC cold start (seconds to tens of seconds), and the
+    // black box gives no visual reason not to click it. Bail out before any
+    // take/dispatch decision — not just before dispatch — so a click here is
+    // a true no-op, matching how it already LOOKS (nothing to click on yet).
+    // Reuses `activeFrameDims()` — the SAME "is there a real decoded frame to
+    // map coordinates against" check `mapPointerToDeviceCoords` already runs
+    // further down — rather than the `videoReady` React state directly: the
+    // two are meant to always agree in production (both driven by the same
+    // `onLoadedMetadata` event), but `activeFrameDims()` is what the rest of
+    // this file already treats as the canonical "ready" signal, so gating on
+    // it here keeps a single source of truth instead of introducing a
+    // second, parallel one.
+    if (!attachedRef.current || !activeFrameDims() || !containerRef.current) return
     // ADR-040 D2, UAT fix (two-click take-over bug): a click on the frame
     // while the agent is working now takes the wheel in ONE action, exactly
     // like the omnibox submit handler (which has always allowed
@@ -2126,7 +2204,9 @@ export function BrowserLiveView({
       takeWheelIfNeeded()
       implicitDriveRef.current = true
     }
-    if (!attachedRef.current || !containerRef.current) return
+    // attachedRef/containerRef are already guarded by the readiness check at
+    // the top of this handler (which also requires a real activeFrameDims())
+    // — no need to re-check either here.
     focusAndCapturePointer(e)
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
@@ -2165,6 +2245,7 @@ export function BrowserLiveView({
     )
   }, [
     annotateMode,
+    activeFrameDims,
     focusAndCapturePointer,
     takeWheelIfNeeded,
     mapPointerToDeviceCoords,
@@ -2406,8 +2487,27 @@ export function BrowserLiveView({
   // The machine's own automatic retry (exponential backoff, its own budget
   // — browserWebRTC.ts) runs independently of this; this button is for
   // after that budget is exhausted, or a manual nudge.
+  //
+  // Bugfix (MED, external review F7, 2026-08-13): `machine.start()` alone
+  // (the old body) is a documented no-op once the machine is already
+  // 'offering' or 'connected' (browserWebRTC.ts's own doc comment) — exactly
+  // the state a `firstFrameTimedOut` failure leaves it in (ICE connected,
+  // stream attached, just no decoded pixels), so clicking Retry for THAT
+  // failure did nothing observable: no new offer went out, and neither
+  // `firstFrameTimedOut` nor `webrtcError` was cleared, so the identical
+  // message just sat there looking clicked-and-ignored. `stop()` first
+  // forces a clean teardown (closes the stale PC/DC, cancels any pending
+  // auto-retry, resets the machine to 'idle') so the following `start()`
+  // always begins a genuinely fresh negotiation attempt, regardless of what
+  // state the machine was previously stuck in — and `firstFrameTimedOut` is
+  // now cleared here too, alongside `webrtcError`, since it is the OTHER
+  // source `displayError` can come from (see `displayError`'s own doc
+  // comment) and a real retry attempt must reset both, not just one.
   const retryWebRTC = () => {
     setWebrtcError(null)
+    setFirstFrameTimedOut(false)
+    setFirstFrameDeadlineNonce((n) => n + 1)
+    webrtcRef.current?.stop()
     webrtcRef.current?.start((sdp) => wsRef.current?.sendWebRTCOffer(sdp) ?? false)
   }
 
