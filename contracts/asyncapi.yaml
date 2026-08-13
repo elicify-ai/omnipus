@@ -1943,6 +1943,12 @@ components:
             validates it end-to-end; pkg/gateway/structured_failure_discriminator_coverage_test.go validates each
             producer''s output standalone and asserts a malformed member is rejected.
 
+            F13 follow-up hardening: the object catch-all''s `error` exclusion below now keys on `error` being a
+            STRING, not merely present — see that branch''s own description for why (settleAskToolCallTranscript /
+            spawnSubTurn persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the
+            four `error`-keyed $refs and must still match the catch-all). Regression fixture:
+            pkg/api/generated/tool_call_result_error_key_contract_test.go.
+
             Still documentary in the generated artifacts (ADR-060 D6): the asyncapi->Go converter
             (scripts/gen-asyncapi-go) and the TS/Zod generator both key off "is this schema a oneOf/anyOf with no
             top-level type", which is unchanged by this edit — TS still emits `result: z.unknown()`, Go still emits
@@ -1972,8 +1978,28 @@ components:
                 - _ref
               - required:
                 - error
-            description: Catch-all for an ordinary object tool result carrying none of the seven $refs' reserved
+                properties:
+                  error:
+                    type: string
+            description: 'Catch-all for an ordinary object tool result carrying none of the seven $refs'' reserved
               discriminator keys (_truncated, _marshal_error, _ref, error) below.
+
+
+              The `error` exclusion is keyed on `error` being a STRING (F13 hardening) — matching the
+              const-string discriminator every one of the four `error`-keyed $refs below actually uses
+              (DelegationFailure, FileExistsRefusal, PermissionDenied, ToolAssemblyDuplicate) — not merely on
+              `error` being present. `error` is not a reserved key in practice: pkg/agent/approval_transcript.go''s
+              settleAskToolCallTranscript and pkg/agent/subturn.go''s spawnSubTurn both persist plain
+              map[string]any results carrying a BOOLEAN `"error": true` flag (alongside `text`/`reason`/`permanent`),
+              which is a legitimate ordinary object, not an attempted use of any of the four typed discriminator
+              shapes. Excluding on bare presence of `error` made every such object match NO branch of this oneOf
+              (excluded from the catch-all, but not shaped like any $ref), so a replayed denied-approval or
+              failed-delegation frame was unconditionally schema-invalid. Keying the exclusion on `error` being a
+              string lets a boolean-error object fall through to this catch-all (valid, matches only this branch)
+              while a string-`error` object still gets checked against the four typed $refs as before (matches
+              this branch only if it also fails every $ref, which is correctly rejected as malformed).
+
+              '
           - $ref: '#/components/schemas/TruncatedResult'
           - $ref: '#/components/schemas/MarshalErrorResult'
           - $ref: '#/components/schemas/ToolResultRef'

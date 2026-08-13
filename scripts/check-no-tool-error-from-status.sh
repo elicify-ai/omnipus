@@ -29,7 +29,15 @@
 # and outside `//` comments) where an identifier named `isError` is assigned
 # or passed as a prop directly from `<something>.type === 'incomplete'`
 # (optionally wrapped in parens), with nothing else combined into the
-# expression via `||`.
+# expression via `||`. This covers both the `const isError = ...` assignment
+# form AND the JSX prop form (`<Foo isError={status.type === 'incomplete'}
+# />`) — the pattern is NOT end-of-line-anchored, so trailing JSX like ` />`
+# or `>` after the closing `}` does not hide a match (F14 fix: an earlier
+# end-anchored version matched `const isError = status.type ===
+# 'incomplete'` but missed `<Foo isError={status.type === 'incomplete'}
+# />` on one line, which is how the whole SPA actually passes this prop —
+# see ChatScreen.tsx/FileWriteConfirm.tsx/BrowserNavigate.tsx for the
+# legitimate `isError={<real signal>}` shape this must NOT flag).
 #
 # What this script deliberately does NOT flag (both are legitimate,
 # pre-existing patterns — see the issue's investigation notes):
@@ -87,10 +95,26 @@ PATTERN = re.compile(
     # That is actively harmful here: this repo documents this exact anti-pattern
     # in prose in ~10 files, and the job has no opt-out annotation, so the only
     # way to clear the red gate was to delete the explanation.
+    #
+    # F14 fix: deliberately NOT end-of-line-anchored. An earlier revision
+    # ended with `[},;]?\s*(//.*)?$`, requiring nothing but whitespace/a
+    # single closing char/a trailing comment after the match — which passed
+    # `const isError = status.type === 'incomplete'` (nothing trails) but
+    # missed `<Foo isError={status.type === 'incomplete'} />` (the JSX
+    # self-close ` />` trails the `}`), even though the JSX-prop form is how
+    # the whole SPA actually threads this flag (ChatScreen.tsx,
+    # FileWriteConfirm.tsx, BrowserNavigate.tsx, ...). The safety property
+    # this project actually needs — "nothing else was OR'd into the
+    # expression" — is already fully enforced by the `(?!\s*\|\|)` negative
+    # lookahead immediately below, which is checked at the exact position
+    # right after the comparison regardless of what appears further down the
+    # line (e.g. `... || !!error` still correctly fails the lookahead and is
+    # never flagged). The end anchor added no coverage the lookahead didn't
+    # already provide, and it was the reason the JSX form slipped through.
     r"^(?!\s*(?://|\*|/\*))"
     r".*\bisError\s*[:=]{1,2}\s*\(?\s*\{?\s*\(?"
     r"[A-Za-z_][A-Za-z0-9_.?]*\.type\s*===\s*['\"]incomplete['\"]"
-    r"\s*\)?\s*(?!\|\|)[},;]?\s*(//.*)?$"
+    r"\s*\)?\s*(?!\s*\|\|)"
 )
 
 findings = []
