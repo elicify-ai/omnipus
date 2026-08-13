@@ -423,14 +423,32 @@ type BrowserManager struct {
 	// default, in which case createTab runs its normal chromedp body.
 	createTabFn func(allocCtx context.Context, targetID target.ID) (*tabEntry, error)
 
-	// activateTabFn is the test seam for activateTabInChrome's single CDP
-	// call (Page.bringToFront), mirroring createTabFn's rationale exactly:
-	// the fake tab contexts unit tests build (tabs_test.go's fakeTabFactory)
-	// are chromedp contexts with no CDP connection behind them, so a real
+	// tabFocusFn is the test seam for the CDP round trips that move Chrome's
+	// foreground between this session's tabs — activateTabInChrome's
+	// foregroundTabActions and releaseTabFocusInChrome's
+	// backgroundTabActions. It mirrors createTabFn's rationale exactly: the
+	// fake tab contexts unit tests build (tabs_test.go's fakeTabFactory) are
+	// chromedp contexts with no CDP connection behind them, so a real
 	// chromedp.Run against one would block until PageTimeout rather than
-	// doing anything observable. nil by default, in which case
-	// activateTabInChrome runs its normal chromedp body.
-	activateTabFn func(tabCtx context.Context) error
+	// doing anything observable. nil by default, in which case both
+	// functions run their normal chromedp body.
+	//
+	// The actions are passed THROUGH rather than hidden behind the seam
+	// (review finding F9, 2026-08-13) so a test can see WHICH treatment a tab
+	// got, not merely that some CDP call happened — the defect it closes was
+	// precisely a path that did half the treatment.
+	tabFocusFn func(tabCtx context.Context, actions ...chromedp.Action) error
+
+	// abandonCDPFn is the test seam for the two recovery CDP round trips
+	// abandonTabAfterFailedLoad makes (tools.go): the diagnostic location read
+	// and the security-critical about:blank navigation. Each is handed an
+	// ALREADY-BOUNDED context (one independent tabAbandonTimeout budget per
+	// call), so a stand-in can reproduce "this step burned its entire budget"
+	// — the wedged-renderer case the whole helper exists for — deterministically
+	// and observe what context the NEXT step then received. Same rationale as
+	// tabFocusFn/LiveView.runCDP (see runCDPWithTimeout's doc comment); nil
+	// in production, where the calls go to chromedp.Run.
+	abandonCDPFn func(ctx context.Context, actions ...chromedp.Action) error
 
 	// nowFn overrides the clock for idle/TTL logic (ReapIdleSessions), so
 	// tests can age a session deterministically instead of sleeping. nil in
@@ -438,7 +456,7 @@ type BrowserManager struct {
 	nowFn func() time.Time
 
 	// navigateFn is the test seam for navigateNewTabToStartPage's single CDP
-	// navigation, same rationale as createTabFn/activateTabFn: unit tests hold
+	// navigation, same rationale as createTabFn/tabFocusFn: unit tests hold
 	// chromedp contexts with no CDP connection behind them, where a real
 	// chromedp.Run would block until PageTimeout. nil in production.
 	navigateFn func(tabCtx context.Context, url string) error
@@ -1583,6 +1601,14 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 		m.mu.Unlock()
 		return Tab{}, err
 	}
+	// The tab being left. Captured BEFORE activeIdx moves, under the same
+	// lock, so its focus emulation can be cleared below (review finding F9 —
+	// see releaseTabFocusInChrome for the measured background-compositing
+	// cost of leaving it set).
+	var prevCtx context.Context
+	if se.activeIdx != index && se.activeIdx >= 0 && se.activeIdx < len(se.tabs) {
+		prevCtx = se.tabs[se.activeIdx].ctx
+	}
 	se.activeIdx = index
 	// Switching TO a tab is activity on it — a human/agent flipping to a tab
 	// via browser_switch_tab is unambiguously "using" it, so it must not read
@@ -1602,6 +1628,9 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 	// which tab is active by the time that fires, or the recapture re-binds to
 	// the old tab and the stream never moves.
 	m.activateTabInChrome(tabCtx, sessionID, index)
+	// After, not before: the new tab takes over the foreground first, so
+	// there is never a moment with no focused tab.
+	m.releaseTabFocusInChrome(prevCtx, sessionID)
 
 	m.notifyTabsChanged(sessionID, tabs, index)
 	return tabs[index], nil
@@ -1629,32 +1658,95 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 // Runs with NO BrowserManager lock held — the same ADR-038 rule every other
 // CDP call in this file follows.
 func (m *BrowserManager) activateTabInChrome(tabCtx context.Context, sessionID string, index int) {
-	if tabCtx == nil || tabCtx.Err() != nil {
-		return
-	}
-
-	m.mu.Lock()
-	fn := m.activateTabFn
-	m.mu.Unlock()
-
-	var err error
-	if fn != nil {
-		// Test seam — see activateTabFn's doc comment.
-		err = fn(tabCtx)
-	} else {
-		runCtx, cancel := context.WithTimeout(tabCtx, m.PageTimeout())
-		defer cancel()
-		err = chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
-			return page.BringToFront().Do(c)
-		}))
-	}
-	if err != nil {
+	if err := m.runTabFocusCDP(tabCtx, foregroundTabActions()...); err != nil {
 		logger.WarnCF(
 			"browser",
 			"switch tab: bring new active tab to front failed (WebRTC capture may keep streaming the previous tab)",
 			map[string]any{"error": err.Error(), "session_id": sessionID, "index": index},
 		)
 	}
+}
+
+// releaseTabFocusInChrome is activateTabInChrome's counterpart for the tab
+// being left behind: it clears the focus emulation that made that tab render
+// as if it were foreground.
+//
+// Why (review finding F9, 2026-08-13): focus emulation is sticky per target.
+// Without this, every tab the agent ever visited stays convinced it is
+// foreground forever. Measured on this project's own Chrome (headless,
+// 4 paired trials, rAF ticks under a full-viewport animation): a tab the user
+// had switched AWAY from kept rendering at 25–35 fps while still emulated, and
+// dropped to 0 fps the moment the emulation was cleared. That is pure waste —
+// nothing captures or displays a background tab — and it scales with every tab
+// the agent opens.
+//
+// Best-effort and non-fatal, exactly like activateTabInChrome: failing to
+// un-emulate a tab costs CPU, never correctness.
+func (m *BrowserManager) releaseTabFocusInChrome(tabCtx context.Context, sessionID string) {
+	if err := m.runTabFocusCDP(tabCtx, backgroundTabActions()...); err != nil {
+		logger.WarnCF(
+			"browser",
+			"switch tab: could not clear focus emulation on the previous tab (it will keep compositing in the background)",
+			map[string]any{"error": err.Error(), "session_id": sessionID},
+		)
+	}
+}
+
+// foregroundTabActions is THE treatment a tab gets when it becomes the one
+// Chrome should be compositing for: told to come to front, AND told to render
+// as focused.
+//
+// Both halves, always, on every path (review finding F9, 2026-08-13). Focus
+// emulation used to be applied ONLY by the capture-start path
+// (CaptureSession.bringAgentTabToFront), while the tab-switch path did
+// Page.bringToFront alone — so one browser_switch_tab silently downgraded the
+// captured tab to a different rendering regime than the one capture start had
+// established. Splitting a treatment across two call sites is how that
+// happened; keeping the sequence in one place is what stops it recurring.
+//
+// Honest scope of the second half: bringToFront alone was NOT measurably
+// slower here (headless, brought-to-front tab, 6/6 trials at 60 rAF/s with and
+// without emulation), so this is not a claimed framerate win on the
+// switched-TO tab — it is identical treatment on every path, which is what
+// makes the tab the encoder re-binds to indistinguishable from the tab capture
+// started on. The measured win is on the other side: see
+// releaseTabFocusInChrome.
+func foregroundTabActions() []chromedp.Action {
+	return []chromedp.Action{
+		page.BringToFront(),
+		emulation.SetFocusEmulationEnabled(true),
+	}
+}
+
+// backgroundTabActions is the exact inverse of foregroundTabActions' focus
+// half — see releaseTabFocusInChrome. There is deliberately no
+// "send to back" counterpart to Page.bringToFront: Chrome has no such call,
+// and bringing the NEW tab to front is what backgrounds the old one.
+func backgroundTabActions() []chromedp.Action {
+	return []chromedp.Action{
+		emulation.SetFocusEmulationEnabled(false),
+	}
+}
+
+// runTabFocusCDP executes one tab-focus round trip against tabCtx, bounded by
+// PageTimeout, with NO BrowserManager lock held (the ADR-038 rule every CDP
+// call in this file follows). A dead or nil tab context is skipped rather than
+// dispatched: in production that is a guaranteed PageTimeout stall for a tab
+// that cannot be focused anyway.
+func (m *BrowserManager) runTabFocusCDP(tabCtx context.Context, actions ...chromedp.Action) error {
+	if tabCtx == nil || tabCtx.Err() != nil {
+		return nil
+	}
+	m.mu.Lock()
+	fn := m.tabFocusFn
+	m.mu.Unlock()
+	if fn != nil {
+		// Test seam — see tabFocusFn's doc comment.
+		return fn(tabCtx, actions...)
+	}
+	runCtx, cancel := context.WithTimeout(tabCtx, m.PageTimeout())
+	defer cancel()
+	return chromedp.Run(runCtx, actions...)
 }
 
 // CloseTab closes tab `index` in sessionID's browsing context (cancels its
@@ -1835,12 +1927,28 @@ func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
 	// browser_open_tab reserved a global slot before calling us — record that
 	// THIS tab owns it, so exactly one close/reap hands it back.
 	newTab.holdsGlobalReservation = true
+	// The tab being left, captured before activeIdx moves — same rationale as
+	// SwitchTab's (review finding F9).
+	var prevCtx context.Context
+	if se.activeIdx >= 0 && se.activeIdx < len(se.tabs) {
+		prevCtx = se.tabs[se.activeIdx].ctx
+	}
 	se.tabs = append(se.tabs, newTab)
 	se.activeIdx = len(se.tabs) - 1
 	m.installTargetListenerLocked(sessionID, se) // no-op: tab 0 is unchanged by an append
 	tabs := snapshotTabsLocked(se)
 	activeIdx := se.activeIdx
+	newCtx := newTab.ctx
 	m.mu.Unlock()
+
+	// Opening a tab moves the active tab just as switching does, and the
+	// tabs-changed callback below drives the SAME WebRTC recapture — so the
+	// new tab needs the SAME treatment, or a browser_open_tab lands the
+	// encoder on a tab that was never told it is foreground (review finding
+	// F9; before this, OpenTab told Chrome nothing at all). Before
+	// notifyTabsChanged for the ordering reason SwitchTab documents.
+	m.activateTabInChrome(newCtx, sessionID, activeIdx)
+	m.releaseTabFocusInChrome(prevCtx, sessionID)
 
 	m.notifyTabsChanged(sessionID, tabs, activeIdx)
 	return tabs[activeIdx], nil

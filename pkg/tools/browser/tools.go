@@ -82,6 +82,10 @@ func (t *NavigateTool) Parameters() map[string]any {
 // caller is on an error path, so a recovery that itself hangs must not extend
 // the tool call -- but long enough for a Location read and an about:blank
 // navigation on a busy browser.
+//
+// EACH call gets its OWN budget of this size, never a shared one -- see
+// abandonTabAfterFailedLoad's "independent budgets" note for the SSRF window
+// a shared budget left open.
 const tabAbandonTimeout = 5 * time.Second
 
 func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
@@ -901,11 +905,31 @@ var _ = logger.WarnCF
 // caller's tabCtx -- the usual cause of getting here is tabCtx's own deadline,
 // and a dead context cannot navigate anything away.
 //
+// INDEPENDENT BUDGETS (review finding F8, 2026-08-13): the two recovery steps
+// get one tabAbandonTimeout budget EACH, never a shared one. They shared a
+// single recoveryCtx when this helper was first written, which meant the
+// DIAGNOSTIC location read could consume the entire budget and leave nothing
+// for the SECURITY-CRITICAL about:blank navigation -- so the tab stayed parked
+// on the internal target in exactly the scenario this helper was written for
+// (a wedged renderer that answers nothing inside the deadline). Neither
+// original regression test caught it because the stalling fixture commits a
+// partial document, so Location answers immediately there. The abandon
+// navigation must run regardless of what the read before it did.
+//
+// The read still goes FIRST (it is what names a blocked redirect target, and
+// about:blank would overwrite the answer), which costs the abandon up to
+// tabAbandonTimeout of delay on a wedged tab -- bounded, and no tool call of
+// this session's can read the tab in the meantime because this one is still
+// in flight.
+//
 // Best-effort by design: the returned string is always an error message for
 // the caller, and the tab is steered to about:blank whether or not the
 // stranded-location read succeeds. When that read DOES succeed and the
 // location is a URL the SSRF checker rejects, the message says so precisely
-// instead of leaving the operator with a generic timeout.
+// instead of leaving the operator with a generic timeout. If the abandon
+// navigation ITSELF fails the message says so too: at that point the tab may
+// genuinely still hold the target's content, and the caller is the only one
+// left who can decide not to read it.
 func abandonTabAfterFailedLoad(
 	ctx context.Context,
 	mgr *BrowserManager,
@@ -915,27 +939,47 @@ func abandonTabAfterFailedLoad(
 	hops *redirectHopRecorder,
 	loadErr error,
 ) string {
-	recoveryCtx, cancel := context.WithTimeout(sessionCtx, tabAbandonTimeout)
-	defer cancel()
-
+	// Budget 1 of 2 -- diagnostic only. Scoped and released here so that a
+	// read which burns its whole budget cannot touch budget 2.
+	readCtx, cancelRead := context.WithTimeout(sessionCtx, tabAbandonTimeout)
 	var stranded string
-	if err := chromedp.Run(recoveryCtx, chromedp.Location(&stranded)); err != nil {
+	readErr := mgr.runAbandonCDP(readCtx, chromedp.Location(&stranded))
+	cancelRead()
+	if readErr != nil {
 		logger.WarnCF("browser", "could not read the stranded location after a failed load", map[string]any{
 			"tool":          toolName,
 			"requested_url": rawURL,
-			"error":         err.Error(),
+			"error":         readErr.Error(),
 		})
 	}
+
+	// Budget 2 of 2 -- the security-critical step, on its own fresh deadline.
 	// Unconditional: even when the location is unreadable (or reads as the
 	// pre-validated rawURL), a half-loaded page must not remain addressable
 	// by the next tool call.
-	if err := chromedp.Run(recoveryCtx, chromedp.Navigate("about:blank")); err != nil {
-		logger.WarnCF("browser", "could not steer the tab to about:blank after a failed load", map[string]any{
+	navCtx, cancelNav := context.WithTimeout(sessionCtx, tabAbandonTimeout)
+	defer cancelNav()
+	abandonErr := mgr.runAbandonCDP(navCtx, chromedp.Navigate("about:blank"))
+	if abandonErr != nil {
+		// ERROR, not WARN: this is the one outcome in which the SSRF window
+		// this whole helper closes is still open.
+		logger.ErrorCF("browser", "could not steer the tab to about:blank after a failed load", map[string]any{
 			"tool":          toolName,
 			"requested_url": rawURL,
 			"stranded_url":  stranded,
-			"error":         err.Error(),
+			"error":         abandonErr.Error(),
 		})
+	}
+
+	// Appended to every message below when the abandon navigation did not
+	// land, so the failure is visible to the agent reading the result and not
+	// only in the operator's log.
+	var stillParked string
+	if abandonErr != nil {
+		stillParked = fmt.Sprintf(
+			" (WARNING: the tab could NOT be steered away from the page and may still hold its content: %s)",
+			abandonErr,
+		)
 	}
 
 	// Prefer the OBSERVED redirect chain over the stranded location. When a
@@ -949,20 +993,41 @@ func abandonTabAfterFailedLoad(
 		}
 		if verr := mgr.ValidateURL(ctx, hop); verr != nil {
 			return fmt.Sprintf(
-				"%s: redirect from %s landed on blocked URL: %s (the page also failed to load: %s)",
-				toolName, rawURL, verr, loadErr,
+				"%s: redirect from %s landed on blocked URL: %s (the page also failed to load: %s)%s",
+				toolName, rawURL, verr, loadErr, stillParked,
 			)
 		}
 	}
 	if stranded != "" && stranded != rawURL && stranded != "about:blank" {
 		if verr := mgr.ValidateURL(ctx, stranded); verr != nil {
 			return fmt.Sprintf(
-				"%s: redirect from %s landed on blocked URL: %s (the page also failed to load: %s)",
-				toolName, rawURL, verr, loadErr,
+				"%s: redirect from %s landed on blocked URL: %s (the page also failed to load: %s)%s",
+				toolName, rawURL, verr, loadErr, stillParked,
 			)
 		}
 	}
-	return fmt.Sprintf("%s: page load failed: %s", toolName, loadErr)
+	return fmt.Sprintf("%s: page load failed: %s%s", toolName, loadErr, stillParked)
+}
+
+// runAbandonCDP executes one of abandonTabAfterFailedLoad's recovery round
+// trips against ctx, which the caller has ALREADY bounded with that step's own
+// budget (see abandonTabAfterFailedLoad's "independent budgets" note -- the
+// bounding deliberately lives at the call site, one context per step, so no
+// two steps can share a deadline).
+//
+// Routed through m.abandonCDPFn when set, purely so tests can drive the
+// wedged-renderer case deterministically; see that field's doc comment.
+func (m *BrowserManager) runAbandonCDP(ctx context.Context, actions ...chromedp.Action) error {
+	if m == nil {
+		return chromedp.Run(ctx, actions...)
+	}
+	m.mu.Lock()
+	fn := m.abandonCDPFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, actions...)
+	}
+	return chromedp.Run(ctx, actions...)
 }
 
 // redirectHopRecorder collects the URLs a navigation actually requested,
