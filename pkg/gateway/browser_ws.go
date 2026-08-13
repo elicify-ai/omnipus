@@ -179,6 +179,26 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// attempt tears down what it built instead of silently attaching a
 	// viewer state this connection no longer wants.
 	webrtcEpoch uint64
+
+	// pendingCaptureScale remembers the device_scale_factor the most recent
+	// browser_viewport frame carried, even when no WebRTC attachment yet
+	// exists to receive it directly (F2, external review 2026-08-13, see
+	// commitWebRTCAttachment's caller in browser_webrtc.go): a viewport
+	// frame routinely arrives before a slow-negotiating browser_webrtc_offer
+	// commits — cs.Start's own doc comment says that can take up to
+	// captureStartTimeout (20s) — and the SPA's lastSentViewportRef dedup
+	// means that first frame is often the ONLY one a cold-opened panel ever
+	// sends. Without remembering it here, handleViewport's SetCaptureScale
+	// call (gated on peekWebRTCAttachment() != nil) silently no-ops and the
+	// Retina-blur fix stays inert until the user manually resizes the panel.
+	// 0 is the sentinel for "nothing remembered yet", distinct from a
+	// legitimately-sent 1 (see rememberViewportScale/pendingViewportScale).
+	// Guarded by webrtcMu (not a new mutex) since it is written from
+	// readLoop's goroutine (handleViewport) and read from a background offer
+	// goroutine (handleWebRTCOffer's cold-start recapture) — the same
+	// cross-goroutine timing webrtc/webrtcEpoch above already have to
+	// account for.
+	pendingCaptureScale float64
 }
 
 // beginWebRTCOffer bumps this connection's webrtcEpoch and returns the new
@@ -247,6 +267,28 @@ func (s *browserConnState) peekWebRTCAttachment() *webrtcAttachment {
 	return s.webrtc
 }
 
+// rememberViewportScale records dsf as this connection's pendingCaptureScale
+// (F2 fix) — called unconditionally from handleViewport on every accepted
+// browser_viewport frame, regardless of whether a WebRTC attachment exists
+// yet to apply it to directly. See pendingCaptureScale's doc comment for why
+// this exists and pendingViewportScale for the read side.
+func (s *browserConnState) rememberViewportScale(dsf float64) {
+	s.webrtcMu.Lock()
+	s.pendingCaptureScale = dsf
+	s.webrtcMu.Unlock()
+}
+
+// pendingViewportScale returns the last device_scale_factor remembered via
+// rememberViewportScale, or 0 if no browser_viewport frame has arrived on
+// this connection yet. Consulted by handleWebRTCOffer's cold-start recapture
+// (browser_webrtc.go) the moment a WebRTC attachment actually commits, so a
+// scale that arrived too early to apply directly is not lost.
+func (s *browserConnState) pendingViewportScale() float64 {
+	s.webrtcMu.Lock()
+	defer s.webrtcMu.Unlock()
+	return s.pendingCaptureScale
+}
+
 // minInputErrorInterval is the minimum gap between two IDENTICAL real-input-
 // error browser_status(error) frames sent to the same connection (ADR-038
 // finding #4). A different error message bypasses the cooldown entirely —
@@ -258,6 +300,24 @@ const minInputErrorInterval = 2 * time.Second
 // 400ms debounce so normal resizing is never throttled, while bounding what a
 // hostile or buggy client can force. See browserConnState.lastViewportAt.
 const minViewportInterval = 300 * time.Millisecond
+
+// maxDeviceScaleFactor is the range-check ceiling handleViewport applies to
+// an inbound device_scale_factor BEFORE recording it anywhere (F10 fix,
+// external review 2026-08-13). It mirrors two independent values that must
+// stay in lockstep: BrowserViewportFrame.device_scale_factor's contract
+// maximum (contracts/components/schemas/BrowserViewportFrame.yaml) and
+// pkg/tools/browser/live.go's unexported maxViewportScaleFactor, which
+// SetViewport uses for its OWN range check. Both exist already — this const
+// does not relax or duplicate either, it just makes the same bound apply
+// BEFORE the value reaches CaptureSession.SetCaptureScale, which today has
+// no upper clamp of its own (CaptureScale() only floors values below 1).
+// gateway.validate_inbound defaults to false, so on a default install this
+// local check is the ONLY thing enforcing the schema maximum: without it, a
+// malformed client sending device_scale_factor:50 could persist an
+// out-of-contract value on the capture session, which the
+// browser_capture_control frame's capture_scale field (max 4) would then
+// ship downstream in violation of its own contract.
+const maxDeviceScaleFactor = 3.0
 
 // BrowserWSHandler implements the /api/v1/browser/ws endpoint (ADR-038):
 // session/control/tab-strip lifecycle out, input-injection in, and WebRTC
@@ -1310,6 +1370,16 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 	if frame.DeviceScaleFactor != nil {
 		dsf = float64(*frame.DeviceScaleFactor)
 	}
+	// F10 fix: clamp to the contract range BEFORE dsf is used for ANYTHING
+	// below — recorded on the capture session, remembered on the connection,
+	// or handed to SetViewport. See maxDeviceScaleFactor's doc comment for
+	// why this has to live here rather than relying on SetViewport's own
+	// (later, CDP-call-shaped) range check alone.
+	if dsf < 1 {
+		dsf = 1
+	} else if dsf > maxDeviceScaleFactor {
+		dsf = maxDeviceScaleFactor
+	}
 
 	// Record the viewer's deviceScaleFactor on the capture session BEFORE the
 	// CDP resize attempt. The two are independent: the encoder captures via
@@ -1319,6 +1389,14 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 	// 2026-08-12) must not swallow the scale. Before this ordering the blur
 	// fix's trigger sat unreachable behind exactly that failure, and Retina
 	// viewers stayed on 1x capture whenever the resize path was broken.
+	//
+	// F2 fix: remembered on the connection UNCONDITIONALLY, not only when an
+	// attachment already exists — a cold-opened panel's first (and often
+	// only) viewport frame routinely arrives before browser_webrtc_offer has
+	// finished negotiating, so peekWebRTCAttachment() is nil here and the
+	// direct SetCaptureScale call below would otherwise be the only chance
+	// this scale ever gets applied. See pendingCaptureScale's doc comment.
+	state.rememberViewportScale(dsf)
 	if att := state.peekWebRTCAttachment(); att != nil && att.capture != nil {
 		att.capture.SetCaptureScale(dsf)
 	}

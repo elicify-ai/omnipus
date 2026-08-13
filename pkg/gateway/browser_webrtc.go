@@ -481,21 +481,10 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	}
 	h.registerWebRTCViewerConn(viewerID, wc, sessID)
 
-	// Cold-start ordering fix (live UAT 2026-07-31): the panel's viewport
-	// frame routinely applies BEFORE this attachment exists — handleViewport's
-	// recapture is gated on peekWebRTCAttachment and silently skips — so the
-	// capture spins up at launch geometry and nothing ever corrects it (the
-	// SPA won't re-send an unchanged size). If a CDP-verified viewport is
-	// already cached for the live tab, issue the corrective recapture NOW,
-	// with those dims, so the stream the viewer is about to receive is built
-	// at the panel's real shape. Warm path cost: one extra rebuild during
-	// attach churn when the capture was already correct — accepted; the
-	// encoder converges on the expected dims either way.
-	if state.mgr != nil {
-		if w, hgt, ok := state.mgr.Live().CSSViewport(browser.DefaultSessionID); ok {
-			cs.RecaptureAt(w, hgt)
-		}
-	}
+	// Cold-start ordering fix (live UAT 2026-07-31, extended by F2, external
+	// review 2026-08-13): see applyColdStartRecapture's doc comment for the
+	// full mechanism — geometry AND scale.
+	h.applyColdStartRecapture(state, cs)
 
 	stats := cs.Stats()
 	wc.sendCriticalGen(generated.BrowserWebRTCAnswerFrame{
@@ -504,6 +493,50 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		SessionId: &sessID,
 	}, dropContext(sessID, viewerID, "webrtc-answer"))
 	h.sendWebRTCState(wc, sessID, viewerID, true, true, stats.HasAudio, "")
+}
+
+// applyColdStartRecapture corrects a just-committed WebRTC attachment's
+// capture geometry AND scale against whatever a browser_viewport frame
+// already told this connection, for whichever of the two (or both) arrived
+// before there was an attachment to receive them directly.
+//
+// Geometry (live UAT 2026-07-31): the panel's viewport frame routinely
+// applies BEFORE this attachment exists — handleViewport's recapture is
+// gated on peekWebRTCAttachment and silently skips — so the capture spins up
+// at launch geometry and nothing ever corrects it (the SPA won't re-send an
+// unchanged size). If a CDP-verified viewport is already cached for the live
+// tab, issue the corrective recapture with those dims, so the stream the
+// viewer is about to receive is built at the panel's real shape. Warm path
+// cost: one extra rebuild during attach churn when the capture was already
+// correct — accepted; the encoder converges on the expected dims either way.
+//
+// Scale (F2 fix, external review 2026-08-13): the SAME timing gap drops
+// device_scale_factor, not just geometry — handleViewport's direct
+// att.capture.SetCaptureScale call is gated on the identical
+// peekWebRTCAttachment() check, so a cold panel's first viewport frame
+// (often the ONLY one it ever sends, per the SPA's lastSentViewportRef
+// dedup) left the Retina-blur fix permanently inert until a manual resize.
+// pendingViewportScale() carries whatever handleViewport remembered
+// regardless of attachment timing (browser_ws.go); applied here the instant
+// an attachment exists to receive it. Deliberately independent of the
+// geometry branch below — a scale-only correction (no CDP-verified viewport
+// cached yet) still forces a recapture so the encoder picks up the new
+// capture_scale, mirroring handleViewport's own "push a recapture so the
+// scale takes effect even when the CDP resize handle is not" fallback
+// (browser_ws.go's SetViewport-failure branch).
+func (h *BrowserWSHandler) applyColdStartRecapture(state *browserConnState, cs *browser.CaptureSession) {
+	scale := state.pendingViewportScale()
+	if scale > 0 {
+		cs.SetCaptureScale(scale)
+	}
+	if state.mgr == nil {
+		return
+	}
+	if w, hgt, ok := state.mgr.Live().CSSViewport(browser.DefaultSessionID); ok {
+		cs.RecaptureAt(w, hgt)
+	} else if scale > 0 {
+		cs.Recapture()
+	}
 }
 
 // webrtcUnavailableReason evaluates the ADR-047 D3 / ADR-048 condition-3
@@ -1207,13 +1240,25 @@ func (h *captureIngestWSHandler) serveConn(conn *websocket.Conn, remoteAddr stri
 		}
 		// Physical-pixel capture (blur fix, macOS 2026-08-12): tell the
 		// encoder what deviceScaleFactor the tab renders at so it can size
-		// its tabCapture constraints in physical pixels. Only meaningful on
-		// a recapture that carries geometry; scale 1 is the wire default and
-		// is omitted (absent == 1 per the contract).
+		// its tabCapture constraints in physical pixels.
+		//
+		// F3 fix (external review 2026-08-13): sent UNCONDITIONALLY on every
+		// recapture, including scale == 1. The old `scale > 1` gate meant a
+		// viewer dropping from DPR 2 back to DPR 1 (moving to a
+		// non-Retina monitor, or a second viewer joining a shared
+		// per-agent CaptureSession) never got a capture_scale frame at all —
+		// and per this field's own contract doc, "absent" is supposed to
+		// mean the same thing as 1, but the encoder side of this fix
+		// (owned separately, not in this file) currently treats absent as
+		// "leave whatever scale is already running unchanged" — sticky at
+		// the old, higher value. CaptureScale() is bounded to
+		// [1, maxDeviceScaleFactor] by handleViewport's own range check
+		// (browser_ws.go, F10 fix) before it ever reaches SetCaptureScale, so
+		// unconditionally sending it here can never exceed this field's own
+		// contract maximum of 4.
 		if action == "recapture" {
-			if scale := cs.CaptureScale(); scale > 1 {
-				frame.CaptureScale = &scale
-			}
+			scale := cs.CaptureScale()
+			frame.CaptureScale = &scale
 		}
 		return ic.sendJSON(frame)
 	}
