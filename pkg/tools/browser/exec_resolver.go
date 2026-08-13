@@ -715,7 +715,11 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 	// this step, so a broken managed binary must surface as a clear,
 	// actionable error rather than being handed to chromedp to fail later
 	// with an opaque exec error.
-	if ok, reason := probeChromiumBinary(ctx, managedPath); !ok {
+	// managedChromiumProbeTimeout, not the short PATH-candidate budget: this
+	// is the single, no-fallback managed binary, and on macOS its first
+	// execution after download pays Gatekeeper's whole-bundle signature
+	// verification (see that constant's doc comment).
+	if ok, reason := probeChromiumBinaryWithTimeout(ctx, managedPath, managedChromiumProbeTimeout); !ok {
 		probeErr := fmt.Errorf(
 			"managed chromium binary %s did not execute successfully (--version probe failed: %s); the install may be corrupt — remove %s and retry",
 			managedPath,

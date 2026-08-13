@@ -881,6 +881,28 @@ const execPathNegativeCacheTTL = 60 * time.Second
 // a second).
 const chromiumProbeTimeout = 5 * time.Second
 
+// managedChromiumProbeTimeout bounds the MANAGED binary's `--version` probe,
+// which is a fundamentally different situation from a PATH candidate and
+// needs a far longer budget (macOS, measured 2026-08-13).
+//
+// The short chromiumProbeTimeout above is sized for "is this one of four
+// unknown PATH candidates a real browser, or a hung stub?" — where being
+// wrong is cheap and the loop's total cost is what matters. The managed
+// binary is the opposite: exactly ONE candidate, one we downloaded and
+// extracted ourselves, with NO fallback after it. A slow answer there means
+// "still starting", not "wrong candidate".
+//
+// And on macOS the FIRST execution of a freshly-downloaded ~200MB app bundle
+// is genuinely slow: Gatekeeper verifies the bundle's code signature before
+// letting it run, and that verification is cached only afterwards. Observed
+// on a 4-core Intel MacBook Pro: the first `--version` on a just-extracted
+// Chrome for Testing exceeded 5s and the probe declared the install corrupt
+// with "remove and retry" — while the very same binary answered in under a
+// second immediately after, verification now cached. A fresh macOS install
+// could therefore fail its first browser call with a wrong, alarming
+// diagnosis and no way for the operator to tell it was a false alarm.
+const managedChromiumProbeTimeout = 90 * time.Second
+
 // probeChromiumBinary reports whether path is a real, runnable
 // Chromium/Chrome binary by actually executing it (`--version`), not merely
 // checking that it exists and is executable — which exec.LookPath, the only
@@ -900,7 +922,18 @@ const chromiumProbeTimeout = 5 * time.Second
 // different operational problems with different fixes — collapsing them
 // into one message hides which one actually applies.
 func probeChromiumBinary(ctx context.Context, path string) (ok bool, reason string) {
-	probeCtx, cancel := context.WithTimeout(ctx, chromiumProbeTimeout)
+	return probeChromiumBinaryWithTimeout(ctx, path, chromiumProbeTimeout)
+}
+
+// probeChromiumBinaryWithTimeout is probeChromiumBinary with an explicit
+// budget — see managedChromiumProbeTimeout for why the managed binary needs
+// a different one from a PATH candidate.
+func probeChromiumBinaryWithTimeout(
+	ctx context.Context,
+	path string,
+	timeout time.Duration,
+) (ok bool, reason string) {
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	err := exec.CommandContext(probeCtx, path, "--version").Run()
 	if err == nil {
@@ -908,7 +941,7 @@ func probeChromiumBinary(ctx context.Context, path string) (ok bool, reason stri
 	}
 	switch {
 	case errors.Is(probeCtx.Err(), context.DeadlineExceeded):
-		return false, fmt.Sprintf("probe timed out after %s (binary may be hung)", chromiumProbeTimeout)
+		return false, fmt.Sprintf("probe timed out after %s (binary may be hung)", timeout)
 	case errors.Is(probeCtx.Err(), context.Canceled):
 		return false, "probe was canceled"
 	case errors.Is(err, os.ErrPermission):
