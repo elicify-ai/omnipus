@@ -159,6 +159,17 @@ func NewAgentInstance(
 	toolsRegistry.Register(tools.NewEditFileTool(workspace, restrict, allowWritePaths))
 	toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict, allowWritePaths))
 
+	// request_mount (ADR-063 FR-7.2): the agent asks the operator for write
+	// access to a real folder. Registered unconditionally like every sibling
+	// above — its protection is its tool POLICY (seeded "ask", so every call
+	// goes through the approval modal), never conditional registration.
+	//
+	// It was previously present ONLY in the metadata catalog, so it appeared
+	// in /api/v1/tools and in Settings while being absent from every agent's
+	// execution registry: no agent could call it, and it could not be granted
+	// or revoked per agent, because GET /agents/{id}/tools lists this registry.
+	toolsRegistry.Register(tools.NewRequestMountTool(config.OmnipusHomeDir()))
+
 	// Resolve agentID early so the session store can tag sessions with the correct owner.
 	agentID := routing.DefaultAgentID
 	agentName := ""

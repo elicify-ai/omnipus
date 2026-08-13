@@ -47,9 +47,9 @@ func newMountFixture(t *testing.T) (home, wsID, target string) {
 // exists to ASK for access must never be the way around it.
 func TestRequestMount_RefusesTheOmnipusDataDirectory(t *testing.T) {
 	home, wsID, _ := newMountFixture(t)
-	tool := NewRequestMountTool(home, wsID)
+	tool := NewRequestMountTool(home)
 
-	res := tool.Execute(context.Background(), map[string]any{
+	res := tool.Execute(WithWorkspaceID(context.Background(), wsID), map[string]any{
 		"host_path": home,
 		"reason":    "I would like my own keys, please",
 	})
@@ -58,7 +58,7 @@ func TestRequestMount_RefusesTheOmnipusDataDirectory(t *testing.T) {
 
 	// And a path INSIDE it, not just the directory itself.
 	inside := filepath.Join(home, "workspaces")
-	res = tool.Execute(context.Background(), map[string]any{
+	res = tool.Execute(WithWorkspaceID(context.Background(), wsID), map[string]any{
 		"host_path": inside,
 		"reason":    "just a subfolder",
 	})
@@ -73,8 +73,8 @@ func TestRequestMount_RefusesTheSameTargetViaSymlink(t *testing.T) {
 	link := filepath.Join(t.TempDir(), "looks-innocent")
 	require.NoError(t, os.Symlink(home, link))
 
-	tool := NewRequestMountTool(home, wsID)
-	res := tool.Execute(context.Background(), map[string]any{
+	tool := NewRequestMountTool(home)
+	res := tool.Execute(WithWorkspaceID(context.Background(), wsID), map[string]any{
 		"host_path": link,
 		"reason":    "a perfectly ordinary folder",
 	})
@@ -86,9 +86,9 @@ func TestRequestMount_RefusesTheSameTargetViaSymlink(t *testing.T) {
 // approved — a refusal-only tool would be a control that never does its job.
 func TestRequestMount_GrantsAnOrdinaryFolder(t *testing.T) {
 	home, wsID, target := newMountFixture(t)
-	tool := NewRequestMountTool(home, wsID)
+	tool := NewRequestMountTool(home)
 
-	res := tool.Execute(context.Background(), map[string]any{
+	res := tool.Execute(WithWorkspaceID(context.Background(), wsID), map[string]any{
 		"host_path": target,
 		"reason":    "to run the build",
 	})
@@ -110,12 +110,12 @@ func TestRequestMount_GrantsAnOrdinaryFolder(t *testing.T) {
 // location neither the agent nor the operator is thinking about.
 func TestRequestMount_RejectsRelativeAndMissingInput(t *testing.T) {
 	home, wsID, _ := newMountFixture(t)
-	tool := NewRequestMountTool(home, wsID)
+	tool := NewRequestMountTool(home)
 
-	res := tool.Execute(context.Background(), map[string]any{"reason": "no path given"})
+	res := tool.Execute(WithWorkspaceID(context.Background(), wsID), map[string]any{"reason": "no path given"})
 	assert.True(t, res.IsError)
 
-	res = tool.Execute(context.Background(), map[string]any{
+	res = tool.Execute(WithWorkspaceID(context.Background(), wsID), map[string]any{
 		"host_path": "relative/path",
 		"reason":    "relative",
 	})
@@ -128,8 +128,11 @@ func TestRequestMount_RejectsRelativeAndMissingInput(t *testing.T) {
 // operator never looked.
 func TestRequestMount_NoWorkspaceSaysSoRatherThanGuessing(t *testing.T) {
 	home, _, target := newMountFixture(t)
-	tool := NewRequestMountTool(home, "")
+	tool := NewRequestMountTool(home)
 
+	// A bare context is the real "no workspace" turn: the tool now resolves
+	// its target from the turn, so absence lives on the context, not on a
+	// constructor argument.
 	res := tool.Execute(context.Background(), map[string]any{
 		"host_path": target,
 		"reason":    "anywhere will do",
@@ -153,8 +156,8 @@ func TestRequestMount_BroadTargetWarnsInsteadOfRefusing(t *testing.T) {
 		t.Skip("home directory unreadable on this host")
 	}
 
-	tool := NewRequestMountTool(home, wsID)
-	res := tool.Execute(context.Background(), map[string]any{
+	tool := NewRequestMountTool(home)
+	res := tool.Execute(WithWorkspaceID(context.Background(), wsID), map[string]any{
 		"host_path": userHome,
 		"reason":    "everything",
 	})

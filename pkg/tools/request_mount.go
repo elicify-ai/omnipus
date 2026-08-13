@@ -51,14 +51,22 @@ type RequestMountTool struct {
 	BaseTool
 	// homePath is $OMNIPUS_HOME, needed to enforce the one hard boundary.
 	homePath string
-	// workspaceID is the workspace the grant would land on. Empty means the
-	// tool cannot act and says so rather than guessing a target.
-	workspaceID string
 }
 
-// NewRequestMountTool builds the tool for one agent's turn.
-func NewRequestMountTool(homePath, workspaceID string) *RequestMountTool {
-	return &RequestMountTool{homePath: homePath, workspaceID: workspaceID}
+// NewRequestMountTool builds the tool. It is registered ONCE per agent, like
+// every other filesystem tool, and resolves the target workspace from the turn
+// context at execution time.
+//
+// It deliberately does NOT take a workspace: an agent can belong to several
+// workspaces, so a workspace captured at registration would be wrong for every
+// turn on a different one. An earlier version took it as a constructor
+// argument, which made the tool impossible to register at instance
+// construction — so it never was, and no agent could call it at all despite it
+// appearing in the catalog and in Settings. Resolving from the turn context is
+// the same pattern the email tools use (see registerEmailToolsForAgent), and
+// it is what makes unconditional registration possible.
+func NewRequestMountTool(homePath string) *RequestMountTool {
+	return &RequestMountTool{homePath: homePath}
 }
 
 func (t *RequestMountTool) Name() string { return "request_mount" }
@@ -111,7 +119,10 @@ func (t *RequestMountTool) Execute(ctx context.Context, args map[string]any) *To
 	if !filepath.IsAbs(hostPath) {
 		return ErrorResult("request_mount: host_path must be an absolute path")
 	}
-	if t.workspaceID == "" {
+	// Resolved from the turn, never from a model-supplied parameter, so the
+	// model cannot aim a grant at another workspace.
+	workspaceID := ToolWorkspaceID(ctx)
+	if workspaceID == "" {
 		return ErrorResult("request_mount: this turn has no workspace to mount into")
 	}
 
@@ -128,7 +139,7 @@ func (t *RequestMountTool) Execute(ctx context.Context, args map[string]any) *To
 		return ErrorResult("request_mount: that path has no folder name to mount it under")
 	}
 
-	mount, _, err := workspace.CreateMount(t.homePath, t.workspaceID, name, resolved)
+	mount, _, err := workspace.CreateMount(t.homePath, workspaceID, name, resolved)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("request_mount: %v", err))
 	}
