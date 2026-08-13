@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -484,4 +485,139 @@ func TestExecute_OpenTab_SSRFBlockedURL_NoTabConsumed(t *testing.T) {
 	tabs, _, err := mgr.ListTabs(defaultSessionID)
 	require.NoError(t, err)
 	assert.Empty(t, tabs, "a blocked url must not consume a tab — no browsing context should exist yet")
+}
+
+// realChromePageTargetIDs queries Chrome DIRECTLY via CDP's Target.getTargets
+// (chromedp.Targets, the same primitive ReconcileTabs uses in manager.go) and
+// returns the TargetIDs of every "page"-type target the browser ACTUALLY has
+// open right now — ground truth, independent of this package's own se.tabs
+// bookkeeping. ctx may be any live tab's chromedp context; Targets queries the
+// whole browser the context is attached to, not just that one tab (see
+// chromedp.Targets' doc comment: "lists all the targets in the browser
+// attached to the given context").
+func realChromePageTargetIDs(t *testing.T, ctx context.Context) map[target.ID]bool {
+	t.Helper()
+	infos, err := chromedp.Targets(ctx)
+	require.NoError(t, err, "querying Chrome's real target list via CDP must succeed")
+	ids := make(map[target.ID]bool, len(infos))
+	for _, info := range infos {
+		if info == nil || info.Type != "page" {
+			continue
+		}
+		ids[info.TargetID] = true
+	}
+	return ids
+}
+
+// chromeTargetIDOf extracts the real CDP TargetID a chromedp tab context is
+// bound to — the same identifier Chrome itself uses in Target.getTargets —
+// so a test can assert on Chrome's OWN notion of "which target is this",
+// rather than only on this package's tabEntry.targetID bookkeeping.
+func chromeTargetIDOf(t *testing.T, ctx context.Context) target.ID {
+	t.Helper()
+	cc := chromedp.FromContext(ctx)
+	require.NotNil(t, cc, "chromedp context must carry a *chromedp.Context")
+	require.NotNil(t, cc.Target, "tab context must already be attached to a CDP target")
+	require.NotEmpty(t, cc.Target.TargetID, "attached target must have a non-empty TargetID")
+	return cc.Target.TargetID
+}
+
+// TestCloseTab_RealChromium_TargetGenuinelyClosedInChrome answers, WITH
+// EVIDENCE rather than by reading chromedp's source, the exact question the
+// operator raised: does BrowserManager.CloseTab's `closing.cancel()` actually
+// tell CHROME to close the target (Target.closeTarget over CDP), or does it
+// merely detach our own chromedp client and leave the page resident in the
+// browser?
+//
+// This project has been burned before by assuming a mechanism instead of
+// measuring it (ADR-061's JPEG screencast, the focus-emulation episode) — an
+// `<img>` swapped fast enough looks like video, and a chromedp context that
+// stops responding to OUR calls looks exactly like a closed tab from inside
+// this package's own bookkeeping (se.tabs), whether or not Chrome's process
+// still has the page open. The only way to tell the difference is to ask
+// Chrome directly, which is what this test does: after every CloseTab call it
+// enumerates Chrome's REAL "page" targets via Target.getTargets (the same CDP
+// call ReconcileTabs uses) and asserts the closed tab's TargetID is actually
+// gone — not merely absent from mgr.ListTabs.
+//
+// Exercises BOTH CloseTab code paths that call closing.cancel():
+//  1. Closing one of SEVERAL open tabs (the len(se.tabs) > 1 branch).
+//  2. Closing the LAST remaining tab, which is replaced via createFirstTab
+//     reusing the same browserCtx (ADR-041 D3 "never leaves zero tabs") — this
+//     additionally proves the replacement is a genuinely NEW real Chrome
+//     target, and that the real target COUNT stays at exactly 1 (no leaked
+//     ghost target sitting alongside the replacement, no zero-tab gap).
+func TestCloseTab_RealChromium_TargetGenuinelyClosedInChrome(t *testing.T) {
+	skipIfNoBrowser(t)
+
+	srv := targetBlankServer(t)
+	cfg := testBrowserCfg(t)
+	_, mgr := newPermissiveRegistry(t, cfg)
+
+	// --- Set up two real tabs and record Chrome's OWN target IDs for both. ---
+	tab0Ctx, err := mgr.Session(defaultSessionID)
+	require.NoError(t, err)
+	require.NoError(t, chromedp.Run(tab0Ctx, chromedp.Navigate(srv.URL)))
+	tab0ID := chromeTargetIDOf(t, tab0Ctx)
+
+	_, err = mgr.OpenTab(defaultSessionID)
+	require.NoError(t, err)
+	tab1Ctx, err := mgr.Session(defaultSessionID)
+	require.NoError(t, err)
+	require.NoError(t, chromedp.Run(tab1Ctx, chromedp.Navigate(srv.URL+"/booked")))
+	tab1ID := chromeTargetIDOf(t, tab1Ctx)
+	require.NotEqual(t, tab0ID, tab1ID, "sanity: two distinct tabs must have two distinct real CDP TargetIDs")
+
+	// Sanity against ground truth BEFORE closing anything: Chrome must
+	// already show both real targets, and only those two.
+	before := realChromePageTargetIDs(t, tab1Ctx)
+	require.True(t, before[tab0ID], "sanity: Chrome must show tab0's real target before any close")
+	require.True(t, before[tab1ID], "sanity: Chrome must show tab1's real target before any close")
+	// NOTE: no assertion on the TOTAL target count. chromedp.Targets lists
+	// every page target in the whole browser, and in ADR-043 shared-Chrome
+	// mode that includes other browsing contexts (other agents' sessions, a
+	// concurrently-running test's tabs). Measured here: 4 targets present
+	// where this test had created 2. The question this test exists to answer
+	// is about IDENTITY -- is THIS closed tab's target gone from Chrome --
+	// so every assertion below is keyed on the specific TargetIDs this test
+	// created, never on how many targets the shared browser happens to hold.
+
+	// --- Case 1: close tab 0 out of 2 (the len(se.tabs) > 1 branch). ---
+	closedTabs, activeIdx, err := mgr.CloseTab(defaultSessionID, 0)
+	require.NoError(t, err)
+	require.Len(t, closedTabs, 1, "one tab remains after closing tab 0 out of 2")
+	require.Equal(t, 0, activeIdx)
+
+	survivorCtx, err := mgr.Session(defaultSessionID)
+	require.NoError(t, err)
+	survivorID := chromeTargetIDOf(t, survivorCtx)
+	assert.Equal(t, tab1ID, survivorID, "the surviving tab must still be Chrome's original tab1 target")
+
+	afterFirstClose := realChromePageTargetIDs(t, survivorCtx)
+	assert.False(t, afterFirstClose[tab0ID],
+		"MEASURED: tab0's real CDP target (%s) must be GONE from Chrome's own target list after CloseTab — "+
+			"if this is still present, CloseTab only detached our client and leaked the tab in Chrome", tab0ID)
+	assert.True(t, afterFirstClose[tab1ID], "the surviving tab's real target must still be present")
+	assert.NotEqual(t, len(before), len(afterFirstClose),
+		"Chrome's real target count must DROP by the close — an unchanged count means nothing was closed")
+
+	// --- Case 2: close the LAST remaining tab (createFirstTab replacement). ---
+	closedTabs2, activeIdx2, err := mgr.CloseTab(defaultSessionID, 0)
+	require.NoError(t, err, "closing the last tab must succeed and produce a replacement (ADR-041 D3)")
+	require.Len(t, closedTabs2, 1, "ADR-041 D3: closing the last tab must never leave zero tabs")
+	require.Equal(t, 0, activeIdx2)
+
+	replacementCtx, err := mgr.Session(defaultSessionID)
+	require.NoError(t, err)
+	replacementID := chromeTargetIDOf(t, replacementCtx)
+	assert.NotEqual(t, tab1ID, replacementID,
+		"the last-tab replacement must be a genuinely NEW real Chrome target, not a relabeled survivor")
+
+	afterSecondClose := realChromePageTargetIDs(t, replacementCtx)
+	assert.False(t, afterSecondClose[tab1ID],
+		"MEASURED: tab1's real CDP target (%s) must be GONE from Chrome's own target list after closing the "+
+			"last tab — if still present, the last-tab-replacement path leaked it", tab1ID)
+	assert.True(t, afterSecondClose[replacementID], "the replacement tab's real target must be present")
+	assert.False(t, afterSecondClose[tab0ID],
+		"tab0's target must still be gone after the second close — it must not reappear")
 }
