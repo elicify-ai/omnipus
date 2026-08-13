@@ -76,33 +76,6 @@ export function LibraryTransferDialog({
     }
   }, [open, entry, sourceWorkspaceId])
 
-  if (!entry) return null
-
-  // NEVER silently rewrite what the user typed (a silent-failure class in
-  // its own right — a user who typed "/etc/foo" and got "etc/foo" sent
-  // instead has no way to know that happened until the server 404s on a path
-  // they didn't ask for). A leading "/" and ".." are both rejected outright,
-  // client-side, with a message explaining why — same treatment as the
-  // no-op case below — rather than silently normalized.
-  const trimmedPath = destPath.trim()
-  const hasLeadingSlash = trimmedPath.startsWith('/')
-  const hasTraversal = trimmedPath.includes('..')
-  const isNoOp = trimmedPath === entry.path && destWorkspaceId === sourceWorkspaceId
-  const invalid = trimmedPath.length === 0 || hasLeadingSlash || hasTraversal || isNoOp
-
-  function handleSubmit() {
-    if (invalid || !entry) return
-    const body: LibraryTransferRequest = {
-      from_workspace_id: sourceWorkspaceId,
-      from_path: entry.path,
-      to_workspace_id: destWorkspaceId,
-      to_path: trimmedPath,
-    }
-    onSubmit(body)
-  }
-
-  const verb = mode === 'move' ? 'Move' : 'Copy'
-
   // The destination workspace's mounts, fetched HERE rather than passed in.
   //
   // They were previously supplied by the parent from the entries of whichever
@@ -133,6 +106,37 @@ export function LibraryTransferDialog({
         })),
     [destRootQuery.data],
   )
+
+  // Every hook above this line: React requires an unconditional call order, and
+  // an early return placed between them and the ones before it is exactly the
+  // "Rendered more hooks than during the previous render" crash.
+  if (!entry) return null
+
+  // NEVER silently rewrite what the user typed (a silent-failure class in
+  // its own right — a user who typed "/etc/foo" and got "etc/foo" sent
+  // instead has no way to know that happened until the server 404s on a path
+  // they didn't ask for). A leading "/" and ".." are both rejected outright,
+  // client-side, with a message explaining why — same treatment as the
+  // no-op case below — rather than silently normalized.
+  const trimmedPath = destPath.trim()
+  const hasLeadingSlash = trimmedPath.startsWith('/')
+  const hasTraversal = trimmedPath.includes('..')
+  const isNoOp = trimmedPath === entry.path && destWorkspaceId === sourceWorkspaceId
+  const invalid = trimmedPath.length === 0 || hasLeadingSlash || hasTraversal || isNoOp
+
+  function handleSubmit() {
+    if (invalid || !entry) return
+    const body: LibraryTransferRequest = {
+      from_workspace_id: sourceWorkspaceId,
+      from_path: entry.path,
+      to_workspace_id: destWorkspaceId,
+      to_path: trimmedPath,
+    }
+    onSubmit(body)
+  }
+
+  const verb = mode === 'move' ? 'Move' : 'Copy'
+
 
   // Only the FIRST path segment can name a mount — a folder deeper in the tree
   // that happens to share a mount's name is ordinary workspace storage, and
