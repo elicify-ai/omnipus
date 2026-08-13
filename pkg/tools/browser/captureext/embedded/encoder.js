@@ -431,10 +431,10 @@ function applyVideoSenderConstraints(pc, opts) {
   }
 }
 
-// mungeVideoStartBitrate appends libwebrtc's VP8 bitrate-hint fmtp
-// parameters (x-google-start-bitrate/min-bitrate/max-bitrate, kbps) to the
-// video m-section's VP8 fmtp line of a freshly-created offer, BEFORE it is
-// handed to setLocalDescription.
+// mungeVideoStartBitrate appends libwebrtc's bitrate-hint fmtp parameters
+// (x-google-start-bitrate/min-bitrate/max-bitrate, kbps) to whichever video
+// codec is ACTUALLY negotiated/preferred in a freshly-created offer, BEFORE
+// it is handed to setLocalDescription.
 //
 // Live evidence (UAT v24, 2026-07-31,
 // docs/internal/browser-viewport-input-rootcause-2026-07-31.md fault 2,
@@ -446,14 +446,40 @@ function applyVideoSenderConstraints(pc, opts) {
 // addresses. This encoder's PeerConnection talks to the gateway's pion
 // ingest over LOOPBACK -- there is no real, lossy network path to probe
 // caution against, so spending 60+ seconds ramping up is pure waste on this
-// deployment topology. x-google-start-bitrate tells libwebrtc's VP8 encoder
-// to skip the slow-start climb and begin at the given rate; the paired
+// deployment topology. x-google-start-bitrate tells libwebrtc's encoder to
+// skip the slow-start climb and begin at the given rate; the paired
 // min/max hints bound the adaptive range it can move within afterward --
 // the RTCRtpSender.maxBitrate set in applyVideoSenderConstraints remains
 // the authoritative hard ceiling regardless.
 //
+// FIX-WAVE F4 (external review, 2026-08-13): this function used to locate
+// its target payload type with a VP8-only regex
+// (/^a=rtpmap:(\d+) VP8\/90000/i) and leave the SDP untouched on any other
+// codec. runCaptureAndOfferOnce's H264-preference block (landed the same
+// fix-wave that raised DEFAULT_MAX_VIDEO_BITRATE_BPS, see its own comment)
+// calls setCodecPreferences to put H264 first on every VideoToolbox host --
+// but setCodecPreferences REORDERS the codec list inside the m=video line,
+// it does not remove the non-preferred codecs' rtpmap/fmtp lines from the
+// SDP. So the VP8-only regex kept matching VP8's rtpmap line even once VP8
+// was demoted to a non-preferred fallback, and "succeeded" silently: the
+// bitrate hint landed on a payload type Chrome was never going to encode
+// with, while H264 -- the codec actually negotiated -- got no hint at all
+// and paid the full 60s conservative ramp on the path this fix-wave makes
+// primary, with nothing logging the mismatch.
+//
+// Fix: identify the preferred payload type from the m=video line's OWN
+// ordering (SDP semantics -- the first payload type listed after the proto
+// token is the most-preferred one, exactly what setCodecPreferences
+// reorders), then find THAT payload type's rtpmap/fmtp regardless of codec
+// name. This covers H264, VP8, or any future preferred codec with one code
+// path instead of a per-codec regex. A genuine miss (m=video line
+// unparseable, or no rtpmap found for the preferred payload type) sets
+// window.__omnipusState.lastError in addition to warn()ing, so the failure
+// is observable on the debug surface CDP verification reads, not
+// console-only.
+//
 // These are libwebrtc-specific SDP fmtp hints (Chrome's own dialect) --
-// harmless everywhere else, since a non-libwebrtc VP8 implementation on the
+// harmless everywhere else, since a non-libwebrtc implementation on the
 // other end simply ignores fmtp parameters it doesn't recognize rather than
 // rejecting them.
 function mungeVideoStartBitrate(sdp) {
@@ -466,7 +492,7 @@ function mungeVideoStartBitrate(sdp) {
 
   // Payload type numbers are only unique WITHIN an m-section, not across
   // the whole SDP, so the video m-section's boundaries must be located
-  // first -- otherwise a VP8 payload type that happens to collide with an
+  // first -- otherwise a payload type that happens to collide with an
   // unrelated audio payload type number could get the wrong line munged.
   let videoStart = -1;
   let videoEnd = lines.length;
@@ -485,27 +511,43 @@ function mungeVideoStartBitrate(sdp) {
     return sdp;
   }
 
-  // Find the VP8 payload type via its rtpmap line within the video section
-  // only.
-  const rtpmapRe = /^a=rtpmap:(\d+) VP8\/90000/i;
-  let vp8Pt = null;
+  // m=video line shape: "m=video <port> <proto> <fmt> [<fmt> ...]" -- the
+  // FIRST <fmt> token (index 3 after splitting on spaces) is the
+  // most-preferred payload type per SDP semantics, and it is exactly what
+  // setCodecPreferences reorders. Using it directly (rather than a
+  // hardcoded codec name) is what makes this function codec-agnostic.
+  const mLineParts = lines[videoStart].split(' ');
+  const preferredPt = mLineParts.length > 3 ? mLineParts[3] : null;
+  if (!preferredPt) {
+    const msg = 'mungeVideoStartBitrate: could not parse a preferred payload type from the m=video line, leaving SDP untouched';
+    warn(msg);
+    window.__omnipusState.lastError = msg;
+    return sdp;
+  }
+
+  // Find the preferred payload type's rtpmap line within the video section
+  // only, whatever codec it names.
+  const rtpmapRe = new RegExp('^a=rtpmap:' + preferredPt + ' ([A-Za-z0-9-]+)/');
   let rtpmapIdx = -1;
+  let codecName = null;
   for (let i = videoStart; i < videoEnd; i++) {
     const m = lines[i].match(rtpmapRe);
     if (m) {
-      vp8Pt = m[1];
       rtpmapIdx = i;
+      codecName = m[1];
       break;
     }
   }
-  if (!vp8Pt) {
-    warn('mungeVideoStartBitrate: no VP8 payload type found in offer, leaving SDP untouched');
+  if (rtpmapIdx === -1) {
+    const msg = 'mungeVideoStartBitrate: no rtpmap found for preferred payload type ' + preferredPt + ', leaving SDP untouched';
+    warn(msg);
+    window.__omnipusState.lastError = msg;
     return sdp;
   }
 
   // Append to an existing a=fmtp line for this payload type if present,
   // otherwise insert a fresh one directly after the rtpmap line.
-  const fmtpPrefix = 'a=fmtp:' + vp8Pt + ' ';
+  const fmtpPrefix = 'a=fmtp:' + preferredPt + ' ';
   let fmtpIdx = -1;
   for (let i = videoStart; i < videoEnd; i++) {
     if (lines[i].indexOf(fmtpPrefix) === 0) {
@@ -520,6 +562,7 @@ function mungeVideoStartBitrate(sdp) {
     lines.splice(rtpmapIdx + 1, 0, fmtpPrefix + HINTS);
   }
 
+  record('mungeVideoStartBitrate: applied start-bitrate hint to preferred codec ' + codecName + ' (pt=' + preferredPt + ')');
   return lines.join('\r\n');
 }
 
@@ -700,7 +743,23 @@ async function captureActiveTabStream() {
   capturedTabId = tabId;
   // Undo any shutdown-time local mute from a previous session of this tab:
   // while captured, local audibility is governed by the panel, not the tab.
-  try { chrome.tabs.update(tabId, { muted: false }); } catch (e) { /* best-effort */ }
+  //
+  // AWAITED (fix-wave F12, external review 2026-08-13): this call used to be
+  // fire-and-forget -- chrome.tabs.update() invoked without await, inside a
+  // SYNCHRONOUS try/catch that can never observe a promise rejection (MV3's
+  // chrome.tabs.update returns a Promise). If the tab's mute flag was still
+  // applied when getUserMedia below created the capture, the tabCapture
+  // stream started SILENT -- the same rmsMean 0.30258 -> 0 failure class the
+  // --mute-audio incident (see capturedTabId's own doc comment above) says
+  // must never repeat, just triggered from the opposite direction
+  // (unmute-not-yet-applied instead of a browser-level mute flag). Awaiting
+  // means getUserMedia never starts until Chrome has actually processed the
+  // unmute.
+  try {
+    await chrome.tabs.update(tabId, { muted: false });
+  } catch (e) {
+    warn('captureActiveTabStream: tab unmute failed (tab may already be closed)', e);
+  }
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } },
     video: {
@@ -935,12 +994,24 @@ async function handleControlFrame(msg) {
     // viewer's devicePixelRatio), so the media constraints multiply by it —
     // otherwise tabCapture downscales the 2x compositor surface to CSS pixels
     // and every Retina viewer gets a 1x frame stretched over 2x display
-    // pixels. Sticky across recaptures (absent means "unchanged"; the server
-    // omits it at 1). Clamped to [1,4] mirroring the contract.
-    if (typeof msg.capture_scale === 'number' && isFinite(msg.capture_scale)) {
-      captureScale = Math.min(4, Math.max(1, msg.capture_scale));
-      record('control frame: capture_scale=' + captureScale);
-    }
+    // pixels. Clamped to [1,4] mirroring the contract.
+    //
+    // ABSENT MEANS 1, NOT "unchanged" (fix-wave F3, external review
+    // 2026-08-13 -- reverses this field's prior "sticky across recaptures"
+    // contract). A CaptureSession is shared per AGENT, so a viewer dragging
+    // the panel from a Retina (DPR 2) monitor to a non-Retina one -- or a
+    // SECOND viewer on the same session at DPR 1 -- triggers a recapture
+    // whose capture_scale field the server sends only when scale > 1.
+    // Treating "field absent" as "leave captureScale wherever it last was"
+    // pinned the encoder at 2x forever in that case: 4x the pixels against
+    // applyVideoSenderConstraints' scale^2 bitrate ceiling, on a tab now
+    // rendering at 1x -- exactly the CPU-encode load this file's other
+    // fixes exist to reduce. The server is being made to send this field
+    // unconditionally too, but this side must be correct on its own
+    // regardless of what the server does.
+    captureScale =
+      typeof msg.capture_scale === 'number' && isFinite(msg.capture_scale) ? Math.min(4, Math.max(1, msg.capture_scale)) : 1;
+    record('control frame: capture_scale=' + captureScale);
     // Each SERVER-initiated recapture gets one post-connect self-heal check;
     // a self-heal's own recapture deliberately does not re-arm this (no loop).
     selfHealBudget = 3;
@@ -984,7 +1055,20 @@ async function handleControlFrame(msg) {
     // only; there is no capture left to affect). The next capture start
     // unmutes it symmetrically.
     if (capturedTabId != null) {
-      try { chrome.tabs.update(capturedTabId, { muted: true }); record('shutdown: tab-muted ' + capturedTabId); } catch (e) { warn('shutdown tab-mute failed', e); }
+      // AWAITED (fix-wave F12, external review 2026-08-13): chrome.tabs.update
+      // returns a Promise in MV3, so the previous synchronous try/catch never
+      // caught anything -- a closed tab produced an UNHANDLED promise
+      // rejection while this line's record() unconditionally logged
+      // "shutdown: tab-muted" regardless of whether the mute actually
+      // applied. Awaiting makes the rejection real and catchable, so success
+      // and failure are both logged honestly.
+      try {
+        await chrome.tabs.update(capturedTabId, { muted: true });
+        record('shutdown: tab-muted ' + capturedTabId);
+      } catch (e) {
+        warn('shutdown tab-mute failed', e);
+        record('shutdown: tab-mute FAILED for ' + capturedTabId + ': ' + e);
+      }
     }
     try {
       ws.close();

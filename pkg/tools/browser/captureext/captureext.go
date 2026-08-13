@@ -60,7 +60,7 @@ const ExtensionID = "nibcmjlmohchocjndnbajhmlhkeldobo"
 // UAT 2026-07-31 and none of them ran, while every layer reported success.
 // TestEmbeddedAssetsRequireVersionBump pins the embedded content hash to
 // this constant so that omission is now a test failure, not a silent no-op.
-const Version = "1.0.6"
+const Version = "1.0.7"
 
 // manifestKeyDoc is the minimal shape needed to read the "key" field back
 // out of the embedded manifest.json for ID verification. It is not a wire
@@ -242,11 +242,22 @@ func seededContentMatches(destDir string) (bool, error) {
 		}
 		got, diskErr := os.ReadFile(filepath.Join(destDir, rel))
 		if diskErr != nil {
-			if os.IsNotExist(diskErr) {
-				match = false
-				return nil
-			}
-			return diskErr
+			// F11 (external review, 2026-08-13): ANY failure reading a
+			// seeded file — missing (os.IsNotExist) OR unreadable for any
+			// other reason (mode bits changed under it, a permission error,
+			// a transient I/O hiccup) — means the seed no longer matches the
+			// embedded content, i.e. DRIFT, which Seed's replace path exists
+			// to fix. Before this fix only os.IsNotExist was treated as
+			// drift; every other read error propagated up through
+			// fs.WalkDir as a hard `err`, which Seed's caller turned into a
+			// PERMANENT failure (see Seed's matchErr handling) instead of
+			// falling through to the rename-based replace that would
+			// actually recover it. Verified: chmod 000 on one seeded file
+			// made Seed fail on every subsequent call forever, reporting
+			// not_capable, while the replace that would have fixed it was
+			// never reached.
+			match = false
+			return nil
 		}
 		if !bytes.Equal(want, got) {
 			match = false

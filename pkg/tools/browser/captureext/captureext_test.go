@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -236,6 +237,87 @@ func TestSeed_EncoderJS_ContentGuards(t *testing.T) {
 			"encoder.js: __omnipusMeasureAudioRMS scaffolding must stay removed (was diagnostic-only, already stripped)",
 		)
 	}
+
+	// (d) F3 (external review, 2026-08-13): capture_scale must define an
+	// ABSENT field as 1, not leave captureScale sticky at whatever it was
+	// last set to. A shared per-agent CaptureSession can serve a viewer that
+	// drops from DPR 2 to DPR 1 (monitor change, or a second viewer joining
+	// at 1x); the server sends capture_scale only when scale > 1, so
+	// "absent means unchanged" pinned the encoder at 2x forever — 4x the
+	// pixels against a tab now rendering at 1x. Pinned as an exact string:
+	// the assignment must be unconditional (a ternary with an explicit `: 1`
+	// fallback), not an `if (...) { captureScale = ... }` with no else,
+	// which is exactly the sticky shape this guards against reintroducing.
+	if !strings.Contains(
+		content,
+		"captureScale =\n      typeof msg.capture_scale === 'number' && isFinite(msg.capture_scale) ? Math.min(4, Math.max(1, msg.capture_scale)) : 1;",
+	) {
+		t.Error(
+			"encoder.js: capture_scale handling must unconditionally assign captureScale with an explicit `: 1` " +
+				"fallback for an absent/invalid field (F3) — a bare `if (...) { captureScale = ... }` with no else " +
+				"reintroduces the sticky-across-recaptures bug",
+		)
+	}
+
+	// (e) and (f): extract mungeVideoStartBitrate's function body in
+	// isolation (bounded by the next top-level function declaration) so the
+	// F4 guards below can't accidentally match an unrelated occurrence of
+	// the same substrings elsewhere in the file.
+	mungeFn := regexp.MustCompile(`(?s)function mungeVideoStartBitrate\(sdp\) \{.*?\nfunction teardownCapture`).FindString(content)
+	if mungeFn == "" {
+		t.Fatal("encoder.js: could not locate mungeVideoStartBitrate's function body (needed for F4 content guards)")
+	}
+
+	// (e) F4 (external review, 2026-08-13): the start-bitrate SDP hint must
+	// target whichever payload type the m=video line lists FIRST (the
+	// negotiated/preferred codec once setCodecPreferences reorders it), not
+	// a hardcoded VP8-only rtpmap regex. setCodecPreferences REORDERS the
+	// codec list but does not remove non-preferred codecs' rtpmap lines, so
+	// a VP8-only match kept "succeeding" silently against VP8's
+	// now-non-preferred payload type once H264 became primary — while H264,
+	// the codec actually negotiated, got no hint at all and paid libwebrtc's
+	// full ~60s conservative bandwidth-ramp on every connection.
+	if strings.Contains(mungeFn, "VP8\\/90000") {
+		t.Error(
+			"encoder.js: mungeVideoStartBitrate must not hardcode a VP8-only rtpmap regex (F4) — it must target " +
+				"the m=video line's preferred payload type regardless of which codec that is",
+		)
+	}
+	if !strings.Contains(mungeFn, "mLineParts.length > 3 ? mLineParts[3] : null") {
+		t.Error(
+			"encoder.js: mungeVideoStartBitrate must derive the preferred payload type from the m=video line's " +
+				"own field ordering (F4), not a codec-name regex",
+		)
+	}
+	// A genuine miss (unparseable m=video line, or no rtpmap for the
+	// preferred payload type) must be observable on the debug state surface,
+	// not console-only — both miss branches must set lastError.
+	if strings.Count(mungeFn, "window.__omnipusState.lastError = msg;") < 2 {
+		t.Error(
+			"encoder.js: mungeVideoStartBitrate must set window.__omnipusState.lastError on every miss path " +
+				"(unparseable m-line AND no matching rtpmap) so a codec-target miss is observable, not silent (F4)",
+		)
+	}
+
+	// (f) F12 (external review, 2026-08-13): both the pre-capture unmute and
+	// the shutdown-time mute call chrome.tabs.update, which returns a
+	// Promise in MV3 — a synchronous try/catch around a non-awaited call can
+	// never observe a rejection, and a non-awaited unmute lets getUserMedia
+	// start capturing before Chrome has actually applied it (silent-capture
+	// risk, the same failure class as the --mute-audio incident this file
+	// documents elsewhere, from the opposite direction).
+	if !regexp.MustCompile(`await chrome\.tabs\.update\(tabId,\s*\{\s*muted:\s*false\s*\}\)`).MatchString(content) {
+		t.Error("encoder.js: the pre-capture tab unmute must be awaited before getUserMedia starts (F12)")
+	}
+	if regexp.MustCompile(`try \{ chrome\.tabs\.update\(tabId, \{ muted: false \}\); \} catch`).MatchString(content) {
+		t.Error("encoder.js: the fire-and-forget (non-awaited) pre-capture tab unmute must not reappear (F12)")
+	}
+	if !regexp.MustCompile(`await chrome\.tabs\.update\(capturedTabId,\s*\{\s*muted:\s*true\s*\}\)`).MatchString(content) {
+		t.Error("encoder.js: the shutdown tab-mute must be awaited so a rejection (e.g. a closed tab) is actually caught (F12)")
+	}
+	if regexp.MustCompile(`try \{ chrome\.tabs\.update\(capturedTabId, \{ muted: true \}\); record\(`).MatchString(content) {
+		t.Error("encoder.js: the shutdown tab-mute must not unconditionally record success before the update settles (F12)")
+	}
 }
 
 // TestSeed_Idempotent verifies a second Seed call over an INTACT seed is a
@@ -310,6 +392,7 @@ var versionContentHashes = map[string]string{
 	"1.0.4": "b4452db3f20ccb56f733ea645f0d56f8142b6707fa5182df0298bc9f0b144575",
 	"1.0.5": "ee383d255869ec8765da37e1dc2f7ca1971679d03d4868a0f72be578e7f60334",
 	"1.0.6": "27002761ba1ae644d9c86ffa85d7dfed0bb09a33a879a0dfd531ee8d644a31f0",
+	"1.0.7": "3d3421dcd59363f8ce3c0fe6c6463082c16125577fbeed01b5ed499accfd4b56",
 }
 
 func embeddedContentHash(t *testing.T) string {
@@ -462,6 +545,50 @@ func TestSeed_ReseedsOnContentDrift(t *testing.T) {
 			assertSeedMatchesEmbedded(t, second)
 		})
 	}
+}
+
+// TestSeed_RecoversFromUnreadableSeededFile is the regression test for F11
+// (external review, 2026-08-13): seededContentMatches used to treat any
+// disk-read failure OTHER than os.IsNotExist (e.g. a seeded file whose mode
+// bits changed under it) as a hard error, which Seed propagated as a
+// PERMANENT failure — never reaching the rename-based replace path that
+// would actually recover it. Verified live: chmod 000 on one seeded file
+// made Seed fail forever on every subsequent call (the caller reports
+// not_capable) while the fix (any non-ENOENT read failure means "drift,
+// replace" not "abort") lets Seed self-heal. Skipped on Windows (no POSIX
+// mode bits) and when running as root (root ignores mode bits, so chmod 000
+// would not actually block the read and the test would pass for the wrong
+// reason).
+func TestSeed_RecoversFromUnreadableSeededFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file mode bits do not apply on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: file mode bits do not block reads")
+	}
+
+	root := t.TempDir()
+	first, err := Seed(root)
+	if err != nil {
+		t.Fatalf("initial Seed() error: %v", err)
+	}
+
+	victim := filepath.Join(first, "encoder.js")
+	if err := os.Chmod(victim, 0o000); err != nil {
+		t.Fatalf("chmod 0000 %q: %v", victim, err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(victim, 0o644) // restore so t.TempDir() cleanup can remove the tree
+	})
+
+	second, err := Seed(root)
+	if err != nil {
+		t.Fatalf("Seed() must recover from an unreadable seeded file via the replace path, got a hard error instead: %v", err)
+	}
+	if second != first {
+		t.Fatalf("reseed changed the seed dir: %q != %q", second, first)
+	}
+	assertSeedMatchesEmbedded(t, second)
 }
 
 // TestSeed_NoRewriteWhenContentMatches proves the content-verified gate is
