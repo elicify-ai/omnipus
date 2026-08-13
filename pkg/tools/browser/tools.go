@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -75,6 +77,13 @@ func (t *NavigateTool) Parameters() map[string]any {
 	}
 }
 
+// tabAbandonTimeout bounds each recovery CDP call in
+// abandonTabAfterFailedLoad. Short: the tab is already in a bad state and the
+// caller is on an error path, so a recovery that itself hangs must not extend
+// the tool call -- but long enough for a Location read and an about:blank
+// navigation on a busy browser.
+const tabAbandonTimeout = 5 * time.Second
+
 func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	rawURL, _ := args["url"].(string)
 	if rawURL == "" {
@@ -88,13 +97,15 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 		return tools.ErrorResult(err.Error())
 	}
 
-	tabCtx, err := t.mgr.Session(defaultSessionID)
+	sessionCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_navigate: %s", err))
 	}
 
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(sessionCtx, t.mgr.PageTimeout())
 	defer timeoutCancel()
+
+	hops := watchRedirectHops(tabCtx)
 
 	var title string
 	err = chromedp.Run(
@@ -103,7 +114,11 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 		chromedp.Title(&title),
 	)
 	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_navigate: page load failed: %s", err))
+		// SECURITY (2026-08-13): a failed load must not leave the tab
+		// PARKED on the target -- see abandonTabAfterFailedLoad.
+		return tools.ErrorResult(abandonTabAfterFailedLoad(
+			ctx, t.mgr, sessionCtx, "browser_navigate", rawURL, hops, err,
+		))
 	}
 
 	var finalURL string
@@ -863,3 +878,134 @@ var (
 
 // Ensure logger import is used
 var _ = logger.WarnCF
+
+// abandonTabAfterFailedLoad handles the security-critical error path shared by
+// browser_navigate and browser_open_tab: a navigation that fails to COMPLETE
+// must not leave the tab sitting on the target URL.
+//
+// The gap it closes (found 2026-08-13 by running the browser suite on macOS,
+// where TestExecute_Navigate_PostRedirectSSRF reported "page load failed:
+// context deadline exceeded" instead of a blocked-redirect error): both tools
+// returned the load error immediately and navigated away ONLY on the
+// post-redirect SSRF branch, which is reached only when the load SUCCEEDS. So
+// a public URL that redirects to an internal address which merely responds
+// SLOWLY produced: page-load timeout -> early error return -> tab still
+// pointed at the internal page, with Chrome free to finish loading it after
+// our deadline. The next browser_get_text/browser_screenshot on that tab then
+// read the internal content -- an SSRF bypass triggered by timing alone, with
+// the tool having reported an error. macOS surfaced it because link-local
+// (169.254.0.0/16) connections hang there rather than failing fast, but the
+// window is platform-independent: any slow-responding internal host does it.
+//
+// Recovery runs on a FRESH bounded context derived from sessionCtx, never the
+// caller's tabCtx -- the usual cause of getting here is tabCtx's own deadline,
+// and a dead context cannot navigate anything away.
+//
+// Best-effort by design: the returned string is always an error message for
+// the caller, and the tab is steered to about:blank whether or not the
+// stranded-location read succeeds. When that read DOES succeed and the
+// location is a URL the SSRF checker rejects, the message says so precisely
+// instead of leaving the operator with a generic timeout.
+func abandonTabAfterFailedLoad(
+	ctx context.Context,
+	mgr *BrowserManager,
+	sessionCtx context.Context,
+	toolName string,
+	rawURL string,
+	hops *redirectHopRecorder,
+	loadErr error,
+) string {
+	recoveryCtx, cancel := context.WithTimeout(sessionCtx, tabAbandonTimeout)
+	defer cancel()
+
+	var stranded string
+	if err := chromedp.Run(recoveryCtx, chromedp.Location(&stranded)); err != nil {
+		logger.WarnCF("browser", "could not read the stranded location after a failed load", map[string]any{
+			"tool":          toolName,
+			"requested_url": rawURL,
+			"error":         err.Error(),
+		})
+	}
+	// Unconditional: even when the location is unreadable (or reads as the
+	// pre-validated rawURL), a half-loaded page must not remain addressable
+	// by the next tool call.
+	if err := chromedp.Run(recoveryCtx, chromedp.Navigate("about:blank")); err != nil {
+		logger.WarnCF("browser", "could not steer the tab to about:blank after a failed load", map[string]any{
+			"tool":          toolName,
+			"requested_url": rawURL,
+			"stranded_url":  stranded,
+			"error":         err.Error(),
+		})
+	}
+
+	// Prefer the OBSERVED redirect chain over the stranded location. When a
+	// redirect target merely HANGS, Chrome never commits the document, so
+	// Location still reports the previous page and cannot name the target at
+	// all -- exactly the macOS link-local case that exposed this path. The
+	// hop recorder saw the URL when the request was issued.
+	for _, hop := range hops.urls() {
+		if hop == rawURL {
+			continue
+		}
+		if verr := mgr.ValidateURL(ctx, hop); verr != nil {
+			return fmt.Sprintf(
+				"%s: redirect from %s landed on blocked URL: %s (the page also failed to load: %s)",
+				toolName, rawURL, verr, loadErr,
+			)
+		}
+	}
+	if stranded != "" && stranded != rawURL && stranded != "about:blank" {
+		if verr := mgr.ValidateURL(ctx, stranded); verr != nil {
+			return fmt.Sprintf(
+				"%s: redirect from %s landed on blocked URL: %s (the page also failed to load: %s)",
+				toolName, rawURL, verr, loadErr,
+			)
+		}
+	}
+	return fmt.Sprintf("%s: page load failed: %s", toolName, loadErr)
+}
+
+// redirectHopRecorder collects the URLs a navigation actually requested,
+// including every redirect hop, as reported by the Network domain.
+//
+// Why it exists (2026-08-13): the post-redirect SSRF check reads
+// chromedp.Location() AFTER the load, which only names the target when Chrome
+// COMMITS a document there. A target that hangs (macOS treats link-local
+// 169.254.0.0/16 that way, and any slow internal host does it everywhere)
+// never commits, so the operator got "page load failed: context deadline
+// exceeded" with no hint that an SSRF-relevant redirect was involved. The
+// request-time record survives that.
+//
+// Safe to use even when the Network domain was never enabled: the listener
+// simply never fires and urls() returns nil, leaving the pre-existing
+// Location-based check as the only signal (the behaviour before this type).
+type redirectHopRecorder struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+// watchRedirectHops registers a hop recorder for the lifetime of tabCtx.
+// chromedp.ListenTarget's registration is scoped to the context it is given,
+// so a per-navigation context (as both callers use) unregisters on its own.
+func watchRedirectHops(tabCtx context.Context) *redirectHopRecorder {
+	r := &redirectHopRecorder{}
+	chromedp.ListenTarget(tabCtx, func(ev any) {
+		e, ok := ev.(*network.EventRequestWillBeSent)
+		if !ok || e.Type != network.ResourceTypeDocument {
+			return
+		}
+		r.mu.Lock()
+		r.seen = append(r.seen, e.Request.URL)
+		r.mu.Unlock()
+	})
+	return r
+}
+
+func (r *redirectHopRecorder) urls() []string {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.seen...)
+}

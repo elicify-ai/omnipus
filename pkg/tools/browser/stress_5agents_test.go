@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -153,7 +154,8 @@ func isExecPathInvocation(cmd, execPath string) bool {
 // itself one of them (G8). One coordinator launch = exactly ONE such
 // top-level process (its renderer/GPU/zygote children are all descendants,
 // so they don't count). Two leaked coordinators launched from the SAME
-// execPath would make this 2. Linux-only; returns 0 elsewhere.
+// execPath would make this 2. Reads /proc on Linux and delegates to
+// countTopLevelChromeProcessesPS everywhere else.
 //
 // Matching must be scoped to the coordinator's OWN resolved execPath, not a
 // generic "looks like chrome" name/path heuristic: this devpod (and
@@ -176,8 +178,17 @@ func isExecPathInvocation(cmd, execPath string) bool {
 // binaries chrome-for-testing ships in the SAME directory
 // (chrome_crashpad_handler, chrome-wrapper) — see its own doc comment.
 func countTopLevelChromeProcesses(execPath string) int {
-	if runtime.GOOS != "linux" || execPath == "" {
+	if execPath == "" {
 		return 0
+	}
+	// /proc is Linux-only; every other POSIX host answers the same question
+	// through ps. Before this split the function returned 0 on macOS while
+	// the caller still asserted "== 1", so the whole one-shared-Chrome
+	// acceptance FAILED on any non-Linux dev machine (found 2026-08-13
+	// running this suite on macOS) -- a test-mechanism gap masquerading as a
+	// product regression.
+	if runtime.GOOS != "linux" {
+		return countTopLevelChromeProcessesPS(execPath)
 	}
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -206,6 +217,47 @@ func countTopLevelChromeProcesses(execPath string) int {
 		// A top-level chrome process: its parent is either absent or NOT a
 		// chrome process itself (e.g. the test binary / init).
 		if !ok || !parent.isChrome {
+			n++
+		}
+	}
+	return n
+}
+
+// countTopLevelChromeProcessesPS is the ps-based sibling of
+// countTopLevelChromeProcesses for hosts without /proc (macOS, BSD). Same
+// definition of "top level": a process whose command line is an invocation of
+// execPath and whose PARENT is not itself such a process. Returns 0 if ps is
+// unavailable or unparseable -- the caller's assertion then fails loudly,
+// which is the correct outcome for "could not measure" (never a silent pass).
+func countTopLevelChromeProcessesPS(execPath string) int {
+	out, err := exec.Command("ps", "-axo", "pid=,ppid=,command=").Output()
+	if err != nil {
+		return 0
+	}
+	type procInfo struct {
+		ppid     int
+		isChrome bool
+	}
+	procs := map[int]procInfo{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		pid, perr := strconv.Atoi(fields[0])
+		ppid, pperr := strconv.Atoi(fields[1])
+		if perr != nil || pperr != nil {
+			continue
+		}
+		cmd := strings.Join(fields[2:], " ")
+		procs[pid] = procInfo{ppid: ppid, isChrome: isExecPathInvocation(cmd, execPath)}
+	}
+	n := 0
+	for _, p := range procs {
+		if !p.isChrome {
+			continue
+		}
+		if parent, ok := procs[p.ppid]; !ok || !parent.isChrome {
 			n++
 		}
 	}
