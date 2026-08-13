@@ -167,3 +167,42 @@ func TestReleaseTabFocusInChrome_SkipsDeadContexts(t *testing.T) {
 	assert.Len(t, rec.blurCalls(), before,
 		"a canceled or nil tab context must be skipped, not dispatched to CDP")
 }
+
+// TestCloseTab_ActivatesTheTabThatBecomesActive closes the third path that
+// moved activeIdx without telling Chrome (review F9 follow-up, 2026-08-13).
+// SwitchTab and OpenTab both activate; CloseTab settled activeIdx and fired
+// notifyTabsChanged — which triggers the WebRTC recapture — leaving the
+// encoder's chrome.tabs.query({active:true}) target to whatever Chrome
+// happened to pick when the target closed. That is the same silent
+// capture-follows-the-wrong-tab failure activateTabInChrome exists to
+// prevent (see its doc comment, root-caused live 2026-08-03).
+func TestCloseTab_ActivatesTheTabThatBecomesActive(t *testing.T) {
+	m, rec := newManagerWithRecordedActivation(t, 5)
+
+	_, err := m.Session(DefaultSessionID)
+	require.NoError(t, err)
+	_, err = m.OpenTab(DefaultSessionID)
+	require.NoError(t, err)
+	_, err = m.OpenTab(DefaultSessionID)
+	require.NoError(t, err)
+
+	// Close the ACTIVE tab (index 2, opened last): index 1 becomes active.
+	m.mu.Lock()
+	require.Len(t, m.sessions[DefaultSessionID].tabs, 3)
+	require.Equal(t, 2, m.sessions[DefaultSessionID].activeIdx)
+	wantCtx := m.sessions[DefaultSessionID].tabs[1].ctx
+	m.mu.Unlock()
+
+	before := len(rec.calls())
+	_, activeIdx, err := m.CloseTab(DefaultSessionID, 2)
+	require.NoError(t, err)
+	require.Equal(t, 1, activeIdx)
+
+	calls := rec.calls()
+	require.Len(t, calls, before+1,
+		"closing the active tab must tell Chrome which tab is active NOW — otherwise the "+
+			"recapture that notifyTabsChanged fires resolves its capture target from Chrome's "+
+			"own post-close guess, which nothing here ever verified agrees with activeIdx")
+	assert.Same(t, wantCtx, calls[len(calls)-1],
+		"the activation must land on the tab that BECAME active, not the closed one")
+}

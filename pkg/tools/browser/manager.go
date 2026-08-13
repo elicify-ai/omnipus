@@ -1821,9 +1821,32 @@ func (m *BrowserManager) CloseTab(sessionID string, index int) (tabs []Tab, acti
 	m.installTargetListenerLocked(sessionID, se)
 	tabs = snapshotTabsLocked(se)
 	activeIdx = se.activeIdx
+	// Captured under the SAME lock that just settled activeIdx, for the same
+	// reason SwitchTab captures it there: the tab this call made active must
+	// be the one told to come forward, even if a concurrent switch/close
+	// lands right after the unlock.
+	var newActiveCtx context.Context
+	if activeIdx >= 0 && activeIdx < len(se.tabs) {
+		newActiveCtx = se.tabs[activeIdx].ctx
+	}
 	m.mu.Unlock()
 
 	closing.cancel()
+	// Tell Chrome which tab is active now — the third path that needed this
+	// and did not have it (review F9 follow-up, 2026-08-13). SwitchTab and
+	// OpenTab both activate; CloseTab moved activeIdx and then fired
+	// notifyTabsChanged (-> WebRTC recapture) without ever telling Chrome,
+	// leaving the encoder's chrome.tabs.query({active:true}) resolution to
+	// whatever Chrome happened to pick on target close. That is exactly the
+	// silent capture-follows-the-wrong-tab failure activateTabInChrome was
+	// written for on 2026-08-03 -- see its doc comment. Whether Chrome's own
+	// choice agrees with this manager's ("the tab that slid into this index")
+	// is not something to leave to chance in the one path that never states
+	// its intent. Best-effort, like every other call site; no lock held.
+	//
+	// No corresponding releaseTabFocusInChrome: the tab that was left is the
+	// one just closed, and its context is already cancelled.
+	m.activateTabInChrome(newActiveCtx, sessionID, activeIdx)
 	m.notifyTabsChanged(sessionID, tabs, activeIdx)
 	return tabs, activeIdx, nil
 }
