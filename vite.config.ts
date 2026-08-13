@@ -50,7 +50,15 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
-    include: ['src/**/*.test.{ts,tsx}'],
+    // 'tests/**' covers unit tests for the E2E FIXTURES (helpers in
+    // tests/e2e/fixtures/), not the Playwright specs themselves — those are
+    // *.spec.ts and are deliberately not matched by this *.test.ts pattern.
+    // Added 2026-08-13: tests/e2e/fixtures/selectors.test.ts was written,
+    // passed locally, and then ran NOWHERE — the include was src-only, so
+    // `npx vitest run <that path>` reported "No test files found" and CI
+    // never executed it. A test that cannot run is worse than no test: it
+    // reads as coverage while proving nothing.
+    include: ['src/**/*.test.{ts,tsx}', 'tests/**/*.test.{ts,tsx}'],
     css: false,
     pool: 'forks',
     // Cap forks at half the LOGICAL cores, i.e. roughly one per physical core.
