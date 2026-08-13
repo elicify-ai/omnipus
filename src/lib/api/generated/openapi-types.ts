@@ -5067,6 +5067,13 @@ export interface components {
              */
             mode?: "off" | "permissive" | "enforce";
             /**
+             * @description The ADR-062 filesystem model this installation is configured for. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set. It never changes what an agent may WRITE — writes are confined to the workspace and its mounts under both models.
+             *     Reported here, and settable via SandboxConfigUpdate, because the two postures are indistinguishable from outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because that path happened to be on the enumerated list. Without a control, the only way to change it was to hand-edit config.json.
+             * @example open
+             * @enum {string}
+             */
+            filesystem_model?: "confined" | "open";
+            /**
              * @description The mode the gateway is currently enforcing. Differs from `mode` when the operator saved a change but has not restarted yet.
              * @example permissive
              */
@@ -6060,6 +6067,13 @@ export interface components {
              * @enum {string}
              */
             mode?: "off" | "permissive" | "enforce";
+            /**
+             * @description Switch the ADR-062 filesystem model. "confined" restricts reads and execution to enumerated paths; "open" leaves both unrestricted apart from the secret set. Neither model changes what may be WRITTEN.
+             *     Restart-gated, like `mode`: the running kernel profile was installed at boot and is not rebuilt in place, so the change is persisted and takes effect on the next start. Omit the field to leave the model unchanged.
+             * @example confined
+             * @enum {string}
+             */
+            filesystem_model?: "confined" | "open";
             /**
              * @description Allow agent tool calls to make outbound network connections.
              * @example true

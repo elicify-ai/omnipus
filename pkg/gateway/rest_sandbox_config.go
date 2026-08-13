@@ -12,6 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
+	sandboxpkg "github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // SandboxConfigUpdate request body is defined in
@@ -20,6 +21,11 @@ import (
 
 // SandboxConfigUpdate.Ssrf (nested) is inlined in the generated type;
 // see contracts/components/schemas/SandboxConfigUpdate.yaml.
+
+// validFilesystemModels is the canonical set accepted for filesystem_model.
+// ADR-062 defines exactly two; anything else is a caller error, not a value to
+// coerce into a default.
+var validFilesystemModels = map[string]bool{"confined": true, "open": true}
 
 // validSandboxModes is the canonical set accepted by putSandboxConfig.
 var validSandboxModes = map[string]bool{
@@ -95,8 +101,17 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	// The flat fields are the canonical wire format; the nested ssrf block is
 	// included for backward-compatible clients. Both are safe to include — JSON
 	// consumers pick what they need.
+	// Report the CONFIGURED model, resolved through the same parser the boot
+	// path uses (ParseFilesystemModel with the confined default), so the value
+	// shown is the one that would take effect — not a raw string that may be
+	// empty or misspelled in config.json.
+	fsModel, _ := sandboxpkg.ParseFilesystemModel(
+		cfg.Sandbox.FilesystemModel, sandboxpkg.FilesystemModelConfined)
+	resolvedFsModel := gen.SandboxConfigFilesystemModel(fsModel)
+
 	jsonOK(w, gen.SandboxConfig{
 		Mode:                 &resolvedMode,
+		FilesystemModel:      &resolvedFsModel,
 		AllowNetworkOutbound: &allowNetOut,
 		AllowedPaths:         &allowedPaths,
 		SsrfEnabled:          &ssrfEnabled,
@@ -155,13 +170,15 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	changedAllowInternal := resolvedAllowInternal != nil
 	changedShellDenyPatterns := body.ShellDenyPatterns != nil
+	changedFilesystemModel := body.FilesystemModel != nil
 
 	if !changedMode && !changedAllowNetworkOutbound && !changedAllowedPaths &&
-		!changedSSRFEnabled && !changedAllowInternal && !changedShellDenyPatterns {
+		!changedSSRFEnabled && !changedAllowInternal && !changedShellDenyPatterns &&
+		!changedFilesystemModel {
 		jsonErr(
 			w,
 			http.StatusBadRequest,
-			"at least one field required — expected mode, allowed_paths, ssrf.allow_internal, or shell_deny_patterns",
+			"at least one field required — expected mode, filesystem_model, allowed_paths, ssrf.allow_internal, or shell_deny_patterns",
 		)
 		return
 	}
@@ -170,6 +187,14 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	if changedMode {
 		if !validSandboxModes[string(*body.Mode)] {
 			jsonErr(w, http.StatusBadRequest, `invalid sandbox mode — must be one of "off", "permissive", "enforce"`)
+			return
+		}
+	}
+
+	if changedFilesystemModel {
+		if !validFilesystemModels[string(*body.FilesystemModel)] {
+			jsonErr(w, http.StatusBadRequest,
+				`invalid filesystem_model — must be "confined" or "open"`)
 			return
 		}
 	}
@@ -220,6 +245,13 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 			// Strip any stale legacy "enabled" bool from older configs so
 			// the on-disk shape matches the current schema.
 			delete(sandbox, "enabled")
+		}
+		if changedFilesystemModel {
+			// Restart-gated for the same reason as mode: the kernel profile was
+			// built from this value at boot and is not rebuilt in place, so
+			// applying it live would leave config and enforcement disagreeing —
+			// the precise condition the restart gate exists to prevent.
+			sandbox["filesystem_model"] = string(*body.FilesystemModel)
 		}
 		if changedAllowNetworkOutbound {
 			sandbox["allow_network_outbound"] = *body.AllowNetworkOutbound

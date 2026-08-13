@@ -311,7 +311,12 @@ export function SandboxSection(): React.ReactElement {
 
   // ── Mode state ─────────────────────────────────────────────────────────────
   const [currentMode, setCurrentMode] = useState<'enforce' | 'permissive' | 'off' | undefined>()
+  // ADR-062 filesystem model. Separate from `mode`: mode decides whether the
+  // kernel enforces at all, the model decides WHAT it enforces for reads and
+  // execution. Both are restart-gated, and neither changes what may be written.
+  const [currentFsModel, setCurrentFsModel] = useState<'confined' | 'open' | undefined>()
   const savedMode = configData?.mode as 'enforce' | 'permissive' | 'off' | undefined
+  const savedFsModel = configData?.filesystem_model as 'confined' | 'open' | undefined
 
   const restartPending = !!(
     configData &&
@@ -381,6 +386,7 @@ export function SandboxSection(): React.ReactElement {
 
     // Sync mode
     setCurrentMode(configData.mode as 'enforce' | 'permissive' | 'off' | undefined)
+    setCurrentFsModel(configData.filesystem_model as 'confined' | 'open' | undefined)
   }, [configData])
 
   // ── Mode save mutation ────────────────────────────────────────────────────
@@ -414,6 +420,30 @@ export function SandboxSection(): React.ReactElement {
       addToast({ message: msg, variant: 'error' })
       // Revert to server mode
       setCurrentMode(savedMode)
+    },
+  })
+
+  // ── Filesystem-model save mutation ────────────────────────────────────────
+  const { mutate: doSaveFsModel } = useMutation({
+    mutationFn: (body: Parameters<typeof updateSandboxConfig>[0]) =>
+      runGatedSandbox((token) => updateSandboxConfig(body, token)),
+    onMutate: () => setSaveState('saving'),
+    onSuccess: (saved) => {
+      setSaveState('saved')
+      queryClient.setQueryData(['sandbox-config'], saved)
+      void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
+    },
+    onError: (err: Error) => {
+      if (isReAuthCancelled(err)) {
+        setSaveState('idle')
+        setCurrentFsModel(savedFsModel)
+        return
+      }
+      setSaveState('error')
+      const msg = getErrorMessage(err, 'Save failed')
+      setErrorMessage(msg)
+      addToast({ message: msg, variant: 'error' })
+      setCurrentFsModel(savedFsModel)
     },
   })
 
@@ -589,6 +619,16 @@ export function SandboxSection(): React.ReactElement {
   }
 
   // ── Mode change handler ────────────────────────────────────────────────────
+  function handleFilesystemModelChange(model: 'confined' | 'open') {
+    if (model === currentFsModel) return
+    // Optimistic, then reverted by doSaveFsModel's onError — same contract as
+    // handleModeChange. Without the revert the radio would sit on an unsaved
+    // value with no error indicator, and re-clicking it would not refire
+    // onChange because of the equality guard above.
+    setCurrentFsModel(model)
+    doSaveFsModel({ filesystem_model: model })
+  }
+
   function handleModeChange(mode: 'enforce' | 'permissive' | 'off') {
     if (mode === currentMode) return
 
@@ -653,7 +693,26 @@ export function SandboxSection(): React.ReactElement {
       statusData.seccomp_enabled)
   )
 
-  const SANDBOX_MODES: Array<{ value: 'enforce' | 'permissive' | 'off'; label: string; desc: string }> = [
+  
+/**
+ * The two ADR-062 filesystem models, described by CONSEQUENCE rather than by
+ * mechanism — an operator choosing between them cares what an agent can reach,
+ * not how the profile is rendered.
+ */
+const FILESYSTEM_MODELS: { value: 'confined' | 'open'; label: string; desc: string }[] = [
+  {
+    value: 'confined',
+    label: 'Confined',
+    desc: 'Agents can only read and run things in places you have listed. Safest, and the most likely to break a tool that needs a file you did not anticipate.',
+  },
+  {
+    value: 'open',
+    label: 'Open',
+    desc: 'Agents can read and run anything on this machine except Omnipus\u2019s own secrets. Tools work without a list to maintain; anything readable by you is readable by them.',
+  },
+]
+
+const SANDBOX_MODES: Array<{ value: 'enforce' | 'permissive' | 'off'; label: string; desc: string }> = [
     { value: 'enforce', label: 'Enforce', desc: 'Kernel-level Landlock + seccomp denies violating syscalls.' },
     { value: 'permissive', label: 'Permissive', desc: 'Policy computed and logged; violations not blocked (audit-only).' },
     { value: 'off', label: 'Off', desc: 'Sandbox disabled. Development only; production banner will fire.' },
@@ -835,6 +894,56 @@ export function SandboxSection(): React.ReactElement {
                     </div>
                   </label>
                 ))}
+              </fieldset>
+            )}
+
+            {/* ── ADR-062 filesystem model ──
+                Separate control from mode because they answer different
+                questions: mode is WHETHER the kernel enforces, the model is
+                WHAT it enforces for reads and execution. Surfaced because the
+                two postures are indistinguishable from behaviour — an operator
+                cannot tell whether a read succeeded because the model is open
+                or because that path happened to be enumerated. Before this the
+                only way to change it was to hand-edit config.json. */}
+            {!configLoading && (
+              <fieldset className="space-y-2 mt-4 border-t border-[var(--color-border)] pt-4">
+                <legend className="sr-only">Filesystem model</legend>
+                <p className="text-xs font-semibold text-[var(--color-secondary)]">
+                  Filesystem model
+                </p>
+                <p className="text-xs text-[var(--color-muted)] leading-snug">
+                  What an agent may READ and RUN. Neither option changes what it may WRITE —
+                  writes stay inside the workspace and any folders you have mounted.
+                </p>
+                {FILESYSTEM_MODELS.map((m) => (
+                  <label
+                    key={m.value}
+                    className={`flex items-start gap-2 p-2 rounded-md border cursor-pointer transition-colors ${
+                      currentFsModel === m.value
+                        ? 'border-[var(--color-accent)]/50 bg-[var(--color-accent)]/5'
+                        : 'border-[var(--color-border)] hover:bg-[var(--color-surface-2)]'
+                    }`}
+                  >
+                    <input
+                      tabIndex={0}
+                      type="radio"
+                      name="filesystem-model"
+                      value={m.value}
+                      checked={currentFsModel === m.value}
+                      onChange={() => handleFilesystemModelChange(m.value)}
+                      className="mt-0.5 accent-[var(--color-accent)]"
+                      aria-label={`Filesystem model: ${m.label}`}
+                      data-testid={`sandbox-fs-model-${m.value}`}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-[var(--color-secondary)]">{m.label}</p>
+                      <p className="text-xs text-[var(--color-muted)] leading-snug">{m.desc}</p>
+                    </div>
+                  </label>
+                ))}
+                <p className="text-xs text-[var(--color-muted)]">
+                  Takes effect after a restart — the kernel profile is built once at startup.
+                </p>
               </fieldset>
             )}
           </div>

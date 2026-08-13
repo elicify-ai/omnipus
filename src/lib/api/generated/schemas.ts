@@ -2271,6 +2271,7 @@ export const RateLimitsUpdateResponse = z
 export const SandboxConfig = z
   .object({
     mode: z.enum(["off", "permissive", "enforce"]),
+    filesystem_model: z.enum(["confined", "open"]),
     applied_mode: z.string(),
     allow_network_outbound: z.boolean(),
     allowed_paths: z.array(z.string()),
@@ -2291,6 +2292,7 @@ export const SandboxConfig = z
 export const SandboxConfigUpdate = z
   .object({
     mode: z.enum(["off", "permissive", "enforce"]),
+    filesystem_model: z.enum(["confined", "open"]),
     allow_network_outbound: z.boolean(),
     allowed_paths: z.array(z.string()),
     ssrf_enabled: z.boolean(),

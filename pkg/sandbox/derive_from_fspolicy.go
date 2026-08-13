@@ -112,6 +112,28 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 	policy := DefaultPolicyForModel(
 		in.Model, in.HomePath, allowed, in.AllowedExecPaths, in.WarnFn, in.BindPorts)
 
+	// Narrow the blanket /tmp WRITE grant for this turn. Reads and exec stay.
+	//
+	// DefaultPolicyForModel grants /tmp read+write+execute as a scratch space.
+	// That is defensible for the BOOT profile, which has no turn to be measured
+	// against — but for a per-turn policy it is the exact two-layer divergence
+	// this ADR exists to remove. The authored policy confines writes to the work
+	// dir and mounts; the kernel granting all of /tmp on top means `bash` can
+	// write where `write_file` refuses, from the same turn, with the same
+	// intent. Found in UAT, not by a test: write_file("/tmp/x") was denied while
+	// `echo > /tmp/x` succeeded.
+	//
+	// Narrowed rather than removed, and only here. /tmp stays READABLE (things
+	// legitimately read from it) and EXECUTABLE, and the per-user $TMPDIR keeps
+	// its own write grant — that is the directory os.TempDir() returns and
+	// hardened_exec forwards to every child, so mktemp/npm/pip/git/go build are
+	// unaffected. What breaks is a tool writing to the SHARED /tmp specifically,
+	// which is precisely the write the authored policy says a turn may not make.
+	//
+	// The boot profile is deliberately left alone: this fixes the divergence
+	// where a divergence can exist, without changing gateway startup.
+	policy.FilesystemRules = narrowSharedTmpWrite(policy.FilesystemRules)
+
 	// Extra connect ports, deduplicated against the DefaultConnectPorts seed.
 	// A duplicate rule is harmless to both backends but is noise in a rendered
 	// Seatbelt profile that a reader then has to discount.
@@ -199,4 +221,45 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 	// that has only one.
 
 	return policy
+}
+
+// narrowSharedTmpWrite strips AccessWrite from a rule covering the SHARED /tmp,
+// leaving read and execute intact and every other rule untouched.
+//
+// It matches "/tmp" and its symlink-resolved form ("/private/tmp" on macOS,
+// where /tmp is a firmlink) because the policy is authored in declared paths
+// while the kernel matches resolved ones — a check against only one spelling
+// would silently do nothing on the platform that needs it.
+//
+// It deliberately does NOT match a path merely UNDER /tmp. A work dir or a
+// mount target can legitimately live there (an operator running from a temp
+// location, or a test), and those grants come from the authored policy. Only
+// the blanket grant on the directory itself is narrowed.
+func narrowSharedTmpWrite(rules []PathRule) []PathRule {
+	if len(rules) == 0 {
+		return rules
+	}
+	out := make([]PathRule, 0, len(rules))
+	for _, r := range rules {
+		if isSharedTmpPath(r.Path) {
+			r.Access &^= AccessWrite
+			// A rule with no access left would be noise in the rendered
+			// profile; drop it rather than emit an empty allow.
+			if r.Access == 0 {
+				continue
+			}
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// isSharedTmpPath reports whether p IS the shared temp directory itself (not
+// something inside it), in either its declared or symlink-resolved spelling.
+func isSharedTmpPath(p string) bool {
+	switch filepath.Clean(p) {
+	case "/tmp", "/private/tmp":
+		return true
+	}
+	return false
 }

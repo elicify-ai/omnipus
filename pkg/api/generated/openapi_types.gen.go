@@ -3266,6 +3266,24 @@ func (e RunnerTestResponseReason) Valid() bool {
 	}
 }
 
+// Defines values for SandboxConfigFilesystemModel.
+const (
+	SandboxConfigFilesystemModelConfined SandboxConfigFilesystemModel = "confined"
+	SandboxConfigFilesystemModelOpen     SandboxConfigFilesystemModel = "open"
+)
+
+// Valid indicates whether the value is a known member of the SandboxConfigFilesystemModel enum.
+func (e SandboxConfigFilesystemModel) Valid() bool {
+	switch e {
+	case SandboxConfigFilesystemModelConfined:
+		return true
+	case SandboxConfigFilesystemModelOpen:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SandboxConfigMode.
 const (
 	SandboxConfigModeEnforce    SandboxConfigMode = "enforce"
@@ -3281,6 +3299,24 @@ func (e SandboxConfigMode) Valid() bool {
 	case SandboxConfigModeOff:
 		return true
 	case SandboxConfigModePermissive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SandboxConfigUpdateFilesystemModel.
+const (
+	SandboxConfigUpdateFilesystemModelConfined SandboxConfigUpdateFilesystemModel = "confined"
+	SandboxConfigUpdateFilesystemModelOpen     SandboxConfigUpdateFilesystemModel = "open"
+)
+
+// Valid indicates whether the value is a known member of the SandboxConfigUpdateFilesystemModel enum.
+func (e SandboxConfigUpdateFilesystemModel) Valid() bool {
+	switch e {
+	case SandboxConfigUpdateFilesystemModelConfined:
+		return true
+	case SandboxConfigUpdateFilesystemModelOpen:
 		return true
 	default:
 		return false
@@ -10539,6 +10575,10 @@ type SandboxConfig struct {
 	// AppliedMode The mode the gateway is currently enforcing. Differs from `mode` when the operator saved a change but has not restarted yet.
 	AppliedMode *string `json:"applied_mode,omitempty"`
 
+	// FilesystemModel The ADR-062 filesystem model this installation is configured for. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set. It never changes what an agent may WRITE — writes are confined to the workspace and its mounts under both models.
+	// Reported here, and settable via SandboxConfigUpdate, because the two postures are indistinguishable from outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because that path happened to be on the enumerated list. Without a control, the only way to change it was to hand-edit config.json.
+	FilesystemModel *SandboxConfigFilesystemModel `json:"filesystem_model,omitempty"`
+
 	// GodMode O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
 	GodMode *bool `json:"god_mode,omitempty"`
 
@@ -10570,6 +10610,10 @@ type SandboxConfig struct {
 	SsrfEnabled *bool `json:"ssrf_enabled,omitempty"`
 }
 
+// SandboxConfigFilesystemModel The ADR-062 filesystem model this installation is configured for. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set. It never changes what an agent may WRITE — writes are confined to the workspace and its mounts under both models.
+// Reported here, and settable via SandboxConfigUpdate, because the two postures are indistinguishable from outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because that path happened to be on the enumerated list. Without a control, the only way to change it was to hand-edit config.json.
+type SandboxConfigFilesystemModel string
+
 // SandboxConfigMode Configured sandbox enforcement mode.
 type SandboxConfigMode string
 
@@ -10580,6 +10624,10 @@ type SandboxConfigUpdate struct {
 
 	// AllowedPaths List of host filesystem paths the agent is allowed to read/write. Restart-gated. Must be absolute paths; empty list clears all exceptions.
 	AllowedPaths *[]string `json:"allowed_paths,omitempty"`
+
+	// FilesystemModel Switch the ADR-062 filesystem model. "confined" restricts reads and execution to enumerated paths; "open" leaves both unrestricted apart from the secret set. Neither model changes what may be WRITTEN.
+	// Restart-gated, like `mode`: the running kernel profile was installed at boot and is not rebuilt in place, so the change is persisted and takes effect on the next start. Omit the field to leave the model unchanged.
+	FilesystemModel *SandboxConfigUpdateFilesystemModel `json:"filesystem_model,omitempty"`
 
 	// Mode Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
 	Mode *SandboxConfigUpdateMode `json:"mode,omitempty"`
@@ -10599,6 +10647,10 @@ type SandboxConfigUpdate struct {
 	// SsrfEnabled Enable SSRF (server-side request forgery) protection for HTTP tool calls.
 	SsrfEnabled *bool `json:"ssrf_enabled,omitempty"`
 }
+
+// SandboxConfigUpdateFilesystemModel Switch the ADR-062 filesystem model. "confined" restricts reads and execution to enumerated paths; "open" leaves both unrestricted apart from the secret set. Neither model changes what may be WRITTEN.
+// Restart-gated, like `mode`: the running kernel profile was installed at boot and is not rebuilt in place, so the change is persisted and takes effect on the next start. Omit the field to leave the model unchanged.
+type SandboxConfigUpdateFilesystemModel string
 
 // SandboxConfigUpdateMode Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
 type SandboxConfigUpdateMode string
