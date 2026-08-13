@@ -38,3 +38,19 @@ func linkCount(info os.FileInfo) (uint64, bool) {
 	//nolint:unconvert // required on darwin (uint16 Nlink); see above
 	return uint64(st.Nlink), true
 }
+
+// deviceID returns the filesystem device an entry lives on.
+//
+// A hard link CANNOT cross filesystems — that is a property of the link(2)
+// syscall, not a convention — so a carve-out root on a different device can
+// never hold an alias of the candidate and does not need to be walked at all.
+// ok=false means the platform cannot answer, and the caller must fall back to
+// scanning rather than assuming.
+func deviceID(info os.FileInfo) (uint64, bool) {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	//nolint:unconvert // Dev is int32 on darwin, uint64 on linux — see linkCount.
+	return uint64(st.Dev), true
+}

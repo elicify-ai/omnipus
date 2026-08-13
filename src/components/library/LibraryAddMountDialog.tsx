@@ -29,7 +29,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { fetchHostFolders, type HostFolderListing } from '@/lib/api'
+import { fetchHostFolders, type HostFolderListing, type HostFolderEntry } from '@/lib/api'
 
 interface LibraryAddMountDialogProps {
   open: boolean
@@ -51,6 +51,16 @@ export function LibraryAddMountDialog({
   const [path, setPath] = useState('')
   const [browsing, setBrowsing] = useState(false)
   const [listing, setListing] = useState<HostFolderListing | null>(null)
+  // The verdict for the CURRENTLY TYPED/SELECTED path, captured when a row is
+  // clicked.
+  //
+  // It cannot be re-derived from `listing`: clicking a mountable row both sets
+  // the path AND navigates into it, so by the next render `listing` holds that
+  // folder's CHILDREN — which never contain the selected path itself. The
+  // lookup therefore returned undefined and the "broad grant" / "scoped to this
+  // folder" banner never appeared for a browsed selection. Only the refusal
+  // banner survived, and only because a refused row does not navigate.
+  const [selectedVerdict, setSelectedVerdict] = useState<HostFolderEntry | null>(null)
   const [listError, setListError] = useState<string>()
   const [loading, setLoading] = useState(false)
 
@@ -63,6 +73,7 @@ export function LibraryAddMountDialog({
       setBrowsing(false)
       setListing(null)
       setListError(undefined)
+      setSelectedVerdict(null)
     }
   }, [open])
 
@@ -86,7 +97,10 @@ export function LibraryAddMountDialog({
   }
 
   // The selected row's verdict, when the current path is one we have listed.
-  const selected = listing?.entries.find((e) => e.path === path)
+  // Prefer the remembered verdict; fall back to the listing for the case where
+  // the path matches a row that is still on screen (a refused row, which does
+  // not navigate).
+  const selected = selectedVerdict ?? listing?.entries.find((e) => e.path === path)
   const trimmed = path.trim()
   const canSubmit = trimmed.length > 0 && !isPending && selected?.mountable !== false
 
@@ -108,7 +122,10 @@ export function LibraryAddMountDialog({
           <Input
             id="mount-path"
             value={path}
-            onChange={(e) => setPath(e.target.value)}
+            onChange={(e) => {
+              setPath(e.target.value)
+              setSelectedVerdict(null)
+            }}
             placeholder="/Users/you/Documents/projects/my-repo"
             className="font-mono text-sm"
             data-testid="library-add-mount-path"
@@ -179,6 +196,7 @@ export function LibraryAddMountDialog({
                     tabIndex={0}
                     onClick={() => {
                       setPath(entry.path)
+                      setSelectedVerdict(entry)
                       if (entry.mountable) void load(entry.path)
                     }}
                     data-testid={`library-add-mount-row-${entry.name}`}

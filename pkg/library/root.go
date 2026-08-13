@@ -212,7 +212,23 @@ func openMountRoots(home, workspaceID string) map[string]*mountRoot {
 		}
 		mr, err := os.OpenRoot(m.HostPath)
 		if err != nil {
-			// Target missing or unreadable — see the doc comment above.
+			// Target missing, renamed, or on a detached volume. RECORD it with a
+			// nil root rather than skipping it.
+			//
+			// Skipping made the doc comment above false: with no entry in the
+			// map, mountFor and annotateMount saw an ordinary directory, so the
+			// row lost its badge, its host path and its Unmount action, the
+			// header count and the mounts dialog omitted it (both filter on
+			// entry.mount), and isMountRootEntry stopped refusing Delete and
+			// Rename on it. A BROKEN mount — the one an operator most wants to
+			// revoke — became the one they could not revoke, and could delete
+			// through by accident.
+			out[m.Name] = &mountRoot{
+				root:   nil,
+				name:   m.Name,
+				target: m.HostPath,
+				broad:  workspace.IsBroadMountTarget(m.HostPath),
+			}
 			continue
 		}
 		out[m.Name] = &mountRoot{
@@ -247,7 +263,12 @@ func (r *Root) resolve(rel string) (*os.Root, string) {
 	}
 	name, rest, _ := strings.Cut(rel, "/")
 	m, ok := r.mounts[name]
-	if !ok {
+	if !ok || m.root == nil {
+		// A mount whose target could not be opened has no root to resolve into.
+		// Falling back to the work root is correct: there the entry is the
+		// dangling symlink, and os.Root refuses to follow it — so the caller
+		// gets the containment error that describes reality ("this does not
+		// resolve") instead of a nil-pointer panic.
 		return r.root, rel
 	}
 	if rest == "" {

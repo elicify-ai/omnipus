@@ -127,12 +127,25 @@ func aliasesSecretDirectory(candidate string, policy FSPolicy) bool {
 
 	cleanWorkDir := filepath.Clean(policy.WorkDir)
 	budget := hardlinkScanBudget
+	// A hard link cannot cross filesystems, so a root on a different device can
+	// never alias this file. Knowing the candidate's device lets whole roots be
+	// skipped before a single directory entry is read — which is the difference
+	// between walking an external volume's carve-out and not touching it.
+	candidateDev, haveDev := deviceID(info)
 
 	for _, root := range policy.CarveOuts {
 		cleanRoot := filepath.Clean(root)
 		rootInfo, statErr := os.Stat(cleanRoot)
 		if statErr != nil || !rootInfo.IsDir() {
 			// Absent, or file-shaped and therefore already exact by identity.
+			continue
+		}
+
+		// Cross-device roots cannot hold a hard link to the candidate. Skipping
+		// them is exact, not an optimisation that trades away detection: link(2)
+		// fails with EXDEV across filesystems, so no alias can exist there.
+		// Falls through to scanning whenever either device is unknown.
+		if rootDev, haveRootDev := deviceID(rootInfo); haveDev && haveRootDev && rootDev != candidateDev {
 			continue
 		}
 

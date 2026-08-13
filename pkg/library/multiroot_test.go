@@ -419,3 +419,90 @@ func TestList_BroadMountIsFlagged(t *testing.T) {
 	}
 	t.Fatal("the mount was not listed")
 }
+
+// TestBrokenMount_StaysVisibleAndRevocable is the regression for a defect where
+// the worst case was the one the UI dropped.
+//
+// openMountRoots used to SKIP a mount whose target it could not open — a folder
+// the operator moved, or one on a volume that is not attached. With no entry in
+// the map, the row lost its badge, its host path and its Unmount action; the
+// header count and the mounts dialog omitted it entirely (both filter on
+// entry.mount); and isMountRootEntry stopped refusing Delete and Rename on it.
+//
+// So a BROKEN mount — precisely the one an operator wants to revoke — became the
+// only one they could not revoke, and could delete through by accident. It also
+// contradicted openMountRoots' own doc comment, which promised the mount "stays
+// listed (the caller still sees it, and can revoke it)".
+func TestBrokenMount_StaysVisibleAndRevocable(t *testing.T) {
+	workDir := t.TempDir()
+	gone := filepath.Join(t.TempDir(), "detached-volume")
+
+	// The symlink exists in work/, the target does not — exactly what an
+	// unplugged disk or a renamed folder leaves behind.
+	require.NoError(t, os.Symlink(gone, filepath.Join(workDir, "archive")))
+
+	wr, err := os.OpenRoot(workDir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = wr.Close() })
+
+	r := &Root{
+		dir:  workDir,
+		root: wr,
+		mounts: map[string]*mountRoot{
+			// What openMountRoots now records for an unopenable target.
+			"archive": {root: nil, name: "archive", target: gone},
+		},
+	}
+
+	// It is still identifiable as a mount, so the UI can badge it, show where it
+	// pointed, and offer Unmount.
+	name, target, _, ok := r.MountAt("archive")
+	require.True(t, ok, "a broken mount must still be recognised as a mount")
+	assert.Equal(t, "archive", name)
+	assert.Equal(t, gone, target, "the operator needs to see WHERE it pointed to judge it")
+
+	// The data-loss guards still apply — this is the case where an accidental
+	// delete is most likely, because the entry looks broken.
+	assert.ErrorIs(t, r.Delete("archive"), ErrIsMountRoot)
+	_, renameErr := r.Rename("archive", "renamed")
+	assert.ErrorIs(t, renameErr, ErrIsMountRoot)
+
+	// Entering it fails with a real error rather than panicking on the nil root.
+	_, statErr := r.StatDir("archive")
+	assert.Error(t, statErr, "a broken mount cannot be entered, but must fail cleanly")
+}
+
+// TestBrokenMount_IsMarkedInTheListing covers the surface the operator actually
+// sees: the row must still carry mount metadata so it is drawn as a mount and
+// counted by the header, not silently demoted to an ordinary entry.
+func TestBrokenMount_IsMarkedInTheListing(t *testing.T) {
+	workDir := t.TempDir()
+	gone := filepath.Join(t.TempDir(), "detached-volume")
+	require.NoError(t, os.Symlink(gone, filepath.Join(workDir, "archive")))
+
+	wr, err := os.OpenRoot(workDir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = wr.Close() })
+
+	r := &Root{
+		dir:    workDir,
+		root:   wr,
+		mounts: map[string]*mountRoot{"archive": {root: nil, name: "archive", target: gone}},
+	}
+
+	entries, err := r.List("", false)
+	require.NoError(t, err, "one broken mount must not break the whole listing")
+
+	var found bool
+	for _, e := range entries {
+		if e.Name != "archive" {
+			continue
+		}
+		found = true
+		require.NotNil(t, e.Mount,
+			"a broken mount must still be MARKED — without this it renders as a zero-byte "+
+				"file with no Unmount action, and the mounts dialog omits it")
+		assert.Equal(t, gone, e.Mount.HostPath)
+	}
+	require.True(t, found, "the broken mount must still appear in the listing")
+}

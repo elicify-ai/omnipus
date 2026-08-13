@@ -141,9 +141,20 @@ type SandboxPolicy struct {
 	// macOS renders each prefix as an anchored (regex #"^…") deny — the only
 	// Seatbelt filter that matches a path which does not exist yet, since both
 	// subpath and literal name a specific path and `config.json.bak-1` is not
-	// under `config.json` in the subpath sense. Linux needs no rule:
-	// ExpandRulesExcluding never grants $OMNIPUS_HOME itself, only its existing
-	// children, so an entry created later carries no grant at all.
+	// under `config.json` in the subpath sense.
+	//
+	// Linux DOES need a rule, and this field is it. ExpandRulesExcluding grants
+	// $OMNIPUS_HOME's existing children individually, and that enumeration runs
+	// at SPAWN — later than the policy build that captured the exact deny list.
+	// A backup created in between is by then an existing child that no exact
+	// path matches, so it was granted the parent's access. The walk now applies
+	// these prefixes per entry, which is what makes the field mean the same
+	// thing on both platforms.
+	//
+	// The earlier text here claimed Linux needed no rule because the home itself
+	// is never granted. True, and not sufficient: the gap was never the parent
+	// grant, it was the per-entry grant handed to a child that appeared after
+	// the snapshot.
 	DeniedPathPrefixes []string
 }
 

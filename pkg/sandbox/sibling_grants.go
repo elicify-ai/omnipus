@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // ExpandRulesExcluding rewrites a rule list so that none of deniedPaths falls
@@ -66,7 +67,7 @@ import (
 // TestExpandRulesExcluding_NeverGrantsADeniedNode, which failed on the
 // workspace shape the first time it was run. Passing them explicitly makes the
 // property hold by construction instead of by coincidence of layout.
-func ExpandRulesExcluding(rules []PathRule, deniedPaths, deniedNodes []string) ([]PathRule, error) {
+func ExpandRulesExcluding(rules []PathRule, deniedPaths, deniedNodes, deniedPrefixes []string) ([]PathRule, error) {
 	if len(deniedPaths) == 0 && len(deniedNodes) == 0 {
 		return rules, nil
 	}
@@ -75,6 +76,8 @@ func ExpandRulesExcluding(rules []PathRule, deniedPaths, deniedNodes []string) (
 	if len(denied) == 0 && len(nodes) == 0 {
 		return rules, nil
 	}
+
+	prefixes := cleanPrefixes(deniedPrefixes)
 
 	out := make([]PathRule, 0, len(rules)+(len(denied)+len(nodes))*4)
 	for _, rule := range rules {
@@ -99,7 +102,7 @@ func ExpandRulesExcluding(rules []PathRule, deniedPaths, deniedNodes []string) (
 			continue
 		}
 
-		expanded, err := siblingGrants(PathRule{Path: path, Access: rule.Access}, inside, nodesInside)
+		expanded, err := siblingGrants(PathRule{Path: path, Access: rule.Access}, inside, nodesInside, prefixes)
 		if err != nil {
 			return nil, err
 		}
@@ -138,7 +141,7 @@ func containsPath(paths []string, want string) bool {
 // grants) but never granted themselves — see ExpandRulesExcluding's contract.
 // A traversed directory is skipped when it comes up as a child entry, so
 // putting a node in `traverse` is exactly what withholds its rule.
-func siblingGrants(rule PathRule, blocked, nodes []string) ([]PathRule, error) {
+func siblingGrants(rule PathRule, blocked, nodes, prefixes []string) ([]PathRule, error) {
 	// traverse: directories to enumerate, i.e. the root plus every ancestor of
 	// a blocked path below it. denySet: the blocked paths themselves.
 	traverse := map[string]struct{}{rule.Path: {}}
@@ -184,6 +187,22 @@ func siblingGrants(rule PathRule, blocked, nodes []string) ([]PathRule, error) {
 				// would re-include the very entry we are excluding.
 				continue
 			}
+			// PREFIX denies, evaluated per entry at ENUMERATION time.
+			//
+			// denySet holds the exact paths that existed when the policy was
+			// BUILT. This walk runs later, at spawn. A backup created in between
+			// — `config.json.bak`, which pkg/migrate writes — is by then an
+			// existing child, is absent from denySet, and was therefore granted
+			// the parent's full access.
+			//
+			// macOS never had this gap: renderSeatbeltProfile emits
+			// DeniedPathPrefixes as anchored regex denies, which match whenever
+			// the file appears. Linux enumerates instead, so the same field has
+			// to be applied here or it is enforced on one platform only — while
+			// two doc comments claimed both were covered.
+			if matchesDeniedPrefix(full, prefixes) {
+				continue
+			}
 			out = append(out, PathRule{Path: full, Access: rule.Access})
 		}
 	}
@@ -209,6 +228,44 @@ func isAtOrUnderAny(path string, denied []string) bool {
 		// kind of near-duplicate that drifts on the trailing-separator and
 		// prefix-segment cases its own tests already cover.
 		if pathIsUnder(path, d) {
+			return true
+		}
+	}
+	return false
+}
+
+// cleanPrefixes normalises the denied-prefix list once, so the per-entry check
+// below is a plain comparison rather than repeated allocation inside the walk.
+//
+// Folded to lower case because this is a DENY-side test: on a case-insensitive
+// volume `Config.json.bak` IS the backup, and on a case-sensitive one folding
+// merely withholds a grant from a distinctly-named sibling under a directory
+// Omnipus owns — the safe direction, with no legitimate claimant.
+func cleanPrefixes(prefixes []string) []string {
+	if len(prefixes) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(prefixes))
+	for _, p := range prefixes {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, strings.ToLower(p))
+		}
+	}
+	return out
+}
+
+// matchesDeniedPrefix reports whether full begins with any denied prefix.
+//
+// Prefix rather than exact match by design: the entries these guard are backups
+// and rotations whose full names are not knowable in advance
+// (`config.json.bak`, `master.key.2026-08-13`, `credentials.json.1`).
+func matchesDeniedPrefix(full string, prefixes []string) bool {
+	if len(prefixes) == 0 {
+		return false
+	}
+	folded := strings.ToLower(full)
+	for _, p := range prefixes {
+		if strings.HasPrefix(folded, p) {
 			return true
 		}
 	}

@@ -417,8 +417,18 @@ var (
 	// Callers MUST read group 1, not the whole match, since the match also
 	// consumes the leading boundary text (which may be more than one
 	// character — see rule 2's attached-flag and variable-prefix cases).
+	//
+	// The attached-flag alternative is `-[A-Za-z]+`, not `-[A-Za-z]`. With
+	// exactly one letter, `-o/etc/passwd` was caught but a COMBINED short flag
+	// with an attached path was not: in `tar -cf/etc/passwd` the character
+	// before `/` is `f`, which is neither a single flag letter after `-` nor a
+	// boundary character, so no candidate was extracted at all and the
+	// workspace-boundary check never ran on that path. Same for `cc -Wl/etc/x`.
+	// Defence-in-depth rather than the primary control — the kernel sandbox is
+	// that — but a guard that misses the combined form misses the form people
+	// actually type.
 	absolutePathPattern = regexp.MustCompile(
-		`(?:^|[\s"'=:;,{}\[\]!*` + "`" + `$~\\|&()<>]|(?:^|\s)-[A-Za-z]|(?:^|\s)\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)` +
+		`(?:^|[\s"'=:;,{}\[\]!*` + "`" + `$~\\|&()<>]|(?:^|\s)-[A-Za-z]+|(?:^|\s)\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)` +
 			`([A-Za-z]:\\[^\\\s"';,{}\[\]!*` + "`" + `$~|&()<>]+` +
 			`|/[^\s"';,{}\[\]!*` + "`" + `$~\\|&()<>]+)`,
 	)

@@ -195,18 +195,6 @@ export function LibraryExplorer({
     [rootEntriesQuery.data],
   )
 
-  const mountsInView = useMemo(
-    () =>
-      sortedEntries
-        .filter((e) => e.mount)
-        .map((e) => ({
-          name: e.mount!.name,
-          host_path: e.mount!.host_path,
-          broad: e.mount!.broad,
-        })),
-    [sortedEntries],
-  )
-
   const currentWorkspaceName =
     sortedWorkspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId ?? ''
 
@@ -825,7 +813,6 @@ export function LibraryExplorer({
         entry={transferTarget?.entry ?? null}
         sourceWorkspaceId={workspaceId ?? ''}
         workspaces={sortedWorkspaces}
-        destMounts={mountsInView}
         isPending={transferMutation.isPending}
         error={transferError}
         onSubmit={(body) => {

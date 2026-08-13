@@ -13,7 +13,7 @@
 // server does return is surfaced to the user as a real, visible error (never
 // swallowed) rather than silently retried or ignored.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -24,6 +24,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Warning } from '@phosphor-icons/react'
+import { useQuery } from '@tanstack/react-query'
+import { fetchLibraryEntries, libraryQueryKeys } from '@/lib/api'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -44,13 +46,6 @@ interface LibraryTransferDialogProps {
   workspaces: LibraryWorkspaceNode[]
   onSubmit: (body: LibraryTransferRequest) => void
   isPending: boolean
-  /**
-   * The mounted folders in the DESTINATION workspace, so this dialog can name
-   * the real disk path before a write lands there. A destination inside a mount
-   * writes to the operator's actual files, and a confirmation that does not say
-   * so is a confirmation for a different operation than the one happening.
-   */
-  destMounts?: { name: string; host_path: string; broad?: boolean }[]
   /** Set by the parent when the server rejects a move/copy attempt (e.g. a
    * 404 destination-workspace, a 409 collision the client-side check
    * couldn't anticipate). Rendered as a persistent banner — same pattern as
@@ -69,7 +64,6 @@ export function LibraryTransferDialog({
   workspaces,
   onSubmit,
   isPending,
-  destMounts,
   error,
 }: LibraryTransferDialogProps) {
   const [destWorkspaceId, setDestWorkspaceId] = useState(sourceWorkspaceId)
@@ -109,12 +103,43 @@ export function LibraryTransferDialog({
 
   const verb = mode === 'move' ? 'Move' : 'Copy'
 
+  // The destination workspace's mounts, fetched HERE rather than passed in.
+  //
+  // They were previously supplied by the parent from the entries of whichever
+  // folder the SOURCE explorer happened to have open, which was wrong twice
+  // over: mounts only exist at the work-tree ROOT, so the list was empty the
+  // moment you navigated into a subfolder (no warning at all before a write to
+  // real disk), and changing the destination workspace in the Select above left
+  // the warning computed against a different workspace's mounts entirely —
+  // either a false alarm or, worse, silence.
+  //
+  // Owning the query here makes it correct by construction: the dialog is the
+  // thing that knows the destination. Same query key as the explorer's root
+  // listing, so it is a cache hit whenever that workspace's root has been
+  // viewed.
+  const destRootQuery = useQuery({
+    queryKey: libraryQueryKeys.entries(destWorkspaceId, '', false),
+    queryFn: () => fetchLibraryEntries(destWorkspaceId, '', false),
+    enabled: open && !!destWorkspaceId,
+  })
+  const destMountsResolved = useMemo(
+    () =>
+      (destRootQuery.data ?? [])
+        .filter((e) => e.mount)
+        .map((e) => ({
+          name: e.mount!.name,
+          host_path: e.mount!.host_path,
+          broad: e.mount!.broad,
+        })),
+    [destRootQuery.data],
+  )
+
   // Only the FIRST path segment can name a mount — a folder deeper in the tree
   // that happens to share a mount's name is ordinary workspace storage, and
   // warning about it would be a false alarm that teaches people to ignore the
   // real one.
   const [firstSegment, ...restSegments] = trimmedPath.split('/').filter(Boolean)
-  const destMount = destMounts?.find((m) => m.name === firstSegment)
+  const destMount = destMountsResolved.find((m) => m.name === firstSegment)
   const restOfPath = restSegments.join('/')
 
   return (

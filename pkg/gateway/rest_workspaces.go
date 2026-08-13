@@ -89,6 +89,16 @@ func (a *restAPI) callerIdentity(r *http.Request) caller {
 // mount that folder into the workspace.
 const repositoryRetiredMsg = "repository is retired — clone the git URL to a location of your choosing, then mount that folder into the workspace"
 
+// maxWorkspaceBodyBytes caps the buffered body these guards read.
+//
+// The previous code truncated at this size and then REPLACED r.Body with the
+// truncated copy, so a body over the limit silently became malformed JSON and
+// the caller reported a parse error for a request that was merely large. The
+// limit is kept — an unbounded read here is a trivial memory amplifier — but a
+// body that hits it is now reported as too large, by its own message, rather
+// than corrupted into a different error.
+const maxWorkspaceBodyBytes = 1 << 20 // 1 MiB
+
 // rejectRetiredRepositoryField reads the full request body, 400s when it
 // contains a "repository" field (FR-9.2), and — on success — restores r.Body
 // so the caller's normal decode is unaffected. Returns false (and has already
@@ -97,17 +107,7 @@ const repositoryRetiredMsg = "repository is retired — clone the git URL to a l
 // Mirrors the sandbox_profile/delegation_policy raw-body-sniff precedent in
 // pkg/gateway/rest.go's updateAgent (ADR-035 §7 / ADR-037).
 func rejectRetiredRepositoryField(w http.ResponseWriter, r *http.Request) bool {
-	rawBody, readErr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if readErr != nil {
-		jsonErr(w, http.StatusBadRequest, "could not read request body")
-		return false
-	}
-	r.Body = io.NopCloser(bytes.NewReader(rawBody))
-	if bytes.Contains(rawBody, []byte(`"repository"`)) {
-		jsonErr(w, http.StatusBadRequest, repositoryRetiredMsg)
-		return false
-	}
-	return true
+	return rejectTopLevelField(w, r, "repository", repositoryRetiredMsg)
 }
 
 // mountsNotWritableHereMsg is returned (400) whenever a caller's raw request
@@ -129,14 +129,43 @@ const mountsNotWritableHereMsg = "mounts cannot be created, changed, or removed 
 // it guards; both are cheap raw-body substring sniffs on the same buffered
 // body.
 func rejectMountsWriteField(w http.ResponseWriter, r *http.Request) bool {
-	rawBody, readErr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	return rejectTopLevelField(w, r, "mounts", mountsNotWritableHereMsg)
+}
+
+// rejectTopLevelField 400s when the request body carries `field` as a TOP-LEVEL
+// KEY, and restores r.Body either way so the caller's normal decode is
+// unaffected.
+//
+// It decodes into map[string]json.RawMessage rather than sniffing the raw bytes
+// for `"field"`. A substring match cannot tell a key from a VALUE, so
+// POST /workspaces {"name":"repository"} — a perfectly reasonable workspace name
+// — was rejected with "repository is retired; clone the git URL…", which is
+// nonsense for the request actually made. The same held for a description or a
+// core_team entry equal to either word.
+//
+// A body that is not a JSON object at all is passed through untouched: rejecting
+// it here would pre-empt the caller's own decode, which produces a better error
+// for that case than this guard can.
+func rejectTopLevelField(w http.ResponseWriter, r *http.Request, field, msg string) bool {
+	// +1 so a body EXACTLY at the cap is distinguishable from one over it.
+	rawBody, readErr := io.ReadAll(io.LimitReader(r.Body, maxWorkspaceBodyBytes+1))
 	if readErr != nil {
 		jsonErr(w, http.StatusBadRequest, "could not read request body")
 		return false
 	}
+	if len(rawBody) > maxWorkspaceBodyBytes {
+		jsonErr(w, http.StatusRequestEntityTooLarge, "request body too large")
+		return false
+	}
 	r.Body = io.NopCloser(bytes.NewReader(rawBody))
-	if bytes.Contains(rawBody, []byte(`"mounts"`)) {
-		jsonErr(w, http.StatusBadRequest, mountsNotWritableHereMsg)
+
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(rawBody, &top); err != nil {
+		// Not an object (or malformed) — let the caller's decode report it.
+		return true
+	}
+	if _, present := top[field]; present {
+		jsonErr(w, http.StatusBadRequest, msg)
 		return false
 	}
 	return true

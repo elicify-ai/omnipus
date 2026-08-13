@@ -56,7 +56,7 @@ func TestExpandRulesExcluding_GrantsSiblingsNotTheSecret(t *testing.T) {
 	home := seedHome(t)
 	rules := []PathRule{{Path: home, Access: AccessRead | AccessWrite | AccessExecute}}
 
-	got, err := ExpandRulesExcluding(rules, SecretPaths(home), nil)
+	got, err := ExpandRulesExcluding(rules, SecretPaths(home), nil, nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestExpandRulesExcluding_AgentsStayWritableEntitiesDoNot(t *testing.T) {
 	home := seedHome(t)
 	got, err := ExpandRulesExcluding(
 		[]PathRule{{Path: home, Access: AccessRead | AccessWrite | AccessExecute}},
-		SecretPaths(home), nil)
+		SecretPaths(home), nil, nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestExpandRulesExcluding_EnumeratesAtCallTime(t *testing.T) {
 	denied := SecretPaths(home)
 
 	before, err := ExpandRulesExcluding(
-		[]PathRule{{Path: home, Access: AccessRead | AccessWrite}}, denied, nil)
+		[]PathRule{{Path: home, Access: AccessRead | AccessWrite}}, denied, nil, nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestExpandRulesExcluding_EnumeratesAtCallTime(t *testing.T) {
 		t.Fatalf("mkdir: %v", mkErr)
 	}
 	after, err := ExpandRulesExcluding(
-		[]PathRule{{Path: home, Access: AccessRead | AccessWrite}}, denied, nil)
+		[]PathRule{{Path: home, Access: AccessRead | AccessWrite}}, denied, nil, nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestExpandRulesExcluding_UnreadableDirectoryFailsClosed(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(home, 0o700) })
 
 	_, err := ExpandRulesExcluding(
-		[]PathRule{{Path: home, Access: AccessRead}}, SecretPaths(home), nil)
+		[]PathRule{{Path: home, Access: AccessRead}}, SecretPaths(home), nil, nil)
 	if err == nil {
 		t.Fatal("an unreadable directory MUST fail the expansion; " +
 			"falling back to granting the parent exposes the secret set silently")
@@ -181,7 +181,7 @@ func TestExpandRulesExcluding_UnrelatedRulesUntouched(t *testing.T) {
 		{Path: "/usr/lib", Access: AccessRead},
 		{Path: home, Access: AccessRead},
 	}
-	got, err := ExpandRulesExcluding(rules, SecretPaths(home), nil)
+	got, err := ExpandRulesExcluding(rules, SecretPaths(home), nil, nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestExpandRulesExcluding_DropsRulesInsideASecret(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	got, err := ExpandRulesExcluding(
-		[]PathRule{{Path: inside, Access: AccessRead | AccessWrite}}, SecretPaths(home), nil)
+		[]PathRule{{Path: inside, Access: AccessRead | AccessWrite}}, SecretPaths(home), nil, nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestExpandRulesExcluding_DropsRulesInsideASecret(t *testing.T) {
 // of surprises when no exclusion applies.
 func TestExpandRulesExcluding_NoDeniedPathsIsIdentity(t *testing.T) {
 	rules := []PathRule{{Path: "/tmp", Access: AccessRead}}
-	got, err := ExpandRulesExcluding(rules, nil, nil)
+	got, err := ExpandRulesExcluding(rules, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestExpandRulesExcluding_TopLevelCreationIsNarrowed(t *testing.T) {
 	home := seedHome(t)
 	got, err := ExpandRulesExcluding(
 		[]PathRule{{Path: home, Access: AccessRead | AccessWrite | AccessExecute}},
-		SecretPaths(home), nil)
+		SecretPaths(home), nil, nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestExpandRulesExcluding_NeverGrantsADeniedNode(t *testing.T) {
 					"unwired again and the macOS rename bypass is back", shape.workDir)
 			}
 
-			expanded, err := ExpandRulesExcluding(policy.FilesystemRules, policy.DeniedPaths, policy.DeniedNodes)
+			expanded, err := ExpandRulesExcluding(policy.FilesystemRules, policy.DeniedPaths, policy.DeniedNodes, policy.DeniedPathPrefixes)
 			if err != nil {
 				t.Fatalf("expand: %v", err)
 			}
