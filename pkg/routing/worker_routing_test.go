@@ -56,8 +56,10 @@ func TestResolveRoute_WorkerSortsFirstButSkipped(t *testing.T) {
 }
 
 // TestResolveRoute_AllWorkersFallsBackToBuiltin verifies the last-resort path:
-// when EVERY agent is a worker (degenerate config), routing returns the built-in
-// default sentinel rather than a worker.
+// when EVERY agent is a worker (degenerate config), routing has no chat-target
+// agent to pick and no sentinel left to invent one — it resolves to "" (WARN
+// logged) rather than a worker or a hardcoded name. Traces to
+// route.go::resolveDefaultAgentID's "No chat-target agent found" branch.
 func TestResolveRoute_AllWorkersFallsBackToBuiltin(t *testing.T) {
 	agents := []config.AgentConfig{
 		{ID: "w1", Type: config.AgentTypeWorker},
@@ -70,8 +72,8 @@ func TestResolveRoute_AllWorkersFallsBackToBuiltin(t *testing.T) {
 	if route.AgentID == "w1" || route.AgentID == "w2" {
 		t.Fatalf("routing resolved to a worker (%q) when all agents are workers", route.AgentID)
 	}
-	if route.AgentID != DefaultAgentID {
-		t.Errorf("AgentID = %q, want built-in default %q", route.AgentID, DefaultAgentID)
+	if route.AgentID != "" {
+		t.Errorf("AgentID = %q, want empty string (no chat-target agent exists; no sentinel to fall back to)", route.AgentID)
 	}
 }
 

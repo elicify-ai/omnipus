@@ -154,14 +154,18 @@ func TestApplyMemoryCommandPrompt_Precedence(t *testing.T) {
 	}
 }
 
-// TestApplyMemoryCommandPrompt_MainAgentDegradesGracefully documents the
-// known nuance that agentID "main" never receives the remember /
-// recall_memory / run_retrospective tools (pkg/agent/instance.go registers
-// them only for agentID != "main"). The rewrite hook itself is agent-agnostic
-// — it operates purely on command text — so it still fires and produces a
-// steering prompt even when called in a context that would resolve to the
-// main agent; the model is left to report the missing capability rather than
-// the turn erroring.
+// TestApplyMemoryCommandPrompt_MainAgentDegradesGracefully documents that
+// the rewrite hook is agent-agnostic — it operates purely on command text,
+// with no agent-identity branch of its own — so it fires and produces a
+// steering prompt the same way regardless of which agent resolves the turn.
+// (Historical note: this used to matter because agentID "main" was excluded
+// from the remember/recall_memory/run_retrospective registration by a
+// hardcoded `agentID != "main"` check in instance.go. That gate is gone —
+// TestMemoryTools_RegisteredRegardlessOfAgentID in
+// recall_conversation_registration_test.go pins its removal directly. This
+// test's name survives for historical continuity; what it actually proves
+// now is narrower: the prompt-rewrite hook itself never needed an
+// agent-identity branch, degrade or otherwise.)
 func TestApplyMemoryCommandPrompt_MainAgentDegradesGracefully(t *testing.T) {
 	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()

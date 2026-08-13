@@ -1747,7 +1747,18 @@ func registerSharedTools(
 			if currentCfg.Agents.Defaults.DefaultAgentID != "" {
 				return currentCfg.Agents.Defaults.DefaultAgentID
 			}
-			return DefaultAgentID
+			// No configured override — fall through to the registry's own
+			// resolution ladder (lexicographically-first non-worker agent)
+			// rather than a hardcoded name; ReturnToDefaultTool.Execute
+			// already handles an empty result as "no default agent
+			// configured" rather than silently switching to a name that
+			// doesn't exist.
+			if registry := al.GetRegistry(); registry != nil {
+				if def := registry.GetDefaultAgent(); def != nil {
+					return def.ID
+				}
+			}
+			return ""
 		}
 		// sharedStore is the shared session store; tools handle a nil store by
 		// skipping transcript ops (nil only occurs in tests without a store).
@@ -2437,15 +2448,19 @@ func registerSharedTools(
 		// al.recallSpans). The routing session key is read from ctx at
 		// Execute time (tools.ToolSessionKey) — no per-agent construction
 		// needed beyond binding the correct archive reader here.
-		// Excluded for the "main" gateway agent (no memory tools there either).
-		if agentID != "main" {
-			if agent.Sessions != nil {
-				agent.Tools.Register(NewRecallConversationTool(agent.Sessions, al))
-			} else {
-				logger.WarnCF("agent",
-					"recall_conversation not registered — agent.Sessions is nil",
-					map[string]any{"agent_id": agentID})
-			}
+		// Registered for every agent (mirrors instance.go's remember/
+		// recall_memory/run_retrospective registration): this used to be
+		// gated on `agentID != "main"`, excluding the retired sentinel. That
+		// was a hardcoded identity check, not a capability one — the gate
+		// went with the sentinel, same as the other memory tools. Whether an
+		// agent may recall its own conversation history is its tool policy,
+		// like every other tool.
+		if agent.Sessions != nil {
+			agent.Tools.Register(NewRecallConversationTool(agent.Sessions, al))
+		} else {
+			logger.WarnCF("agent",
+				"recall_conversation not registered — agent.Sessions is nil",
+				map[string]any{"agent_id": agentID})
 		}
 
 		// Register the unified `load_tool` infra tool (search + load paths).
@@ -5160,8 +5175,8 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 // tools.InspectSessionStore interface (GetMeta/ReadTranscript keyed purely
 // on session ID — see that interface's own doc comment: "the store resolves
 // the owning agent internally"). ResolveSessionStore already implements
-// exactly that resolution (shared store fast path, DefaultAgentID legacy
-// fast path, then a scan across every per-agent store, cancel.go) — reused
+// exactly that resolution (shared store fast path, then a scan across every
+// per-agent store, cancel.go) — reused
 // here rather than re-implemented, so inspect_session and RequestCancel
 // agree on where any given session id actually lives.
 type agentLoopInspectSessionStore struct {
@@ -5532,24 +5547,12 @@ func (al *AgentLoop) ResolveSessionStore(sessionID string) *session.UnifiedStore
 			return al.sharedSessionStore
 		}
 	}
-	// Legacy fast path: main agent owns most old sessions.
-	if store := al.GetAgentStore(DefaultAgentID); store != nil {
-		if _, err := store.GetMeta(sessionID); err == nil {
-			return store
-		} else if !errors.Is(err, os.ErrNotExist) {
-			logger.WarnCF(
-				"agent",
-				"ResolveSessionStore: session meta unreadable (not a missing-session case); returning owning store despite read failure",
-				map[string]any{"session_id": sessionID, "store": store.BaseDir(), "error": err.Error()},
-			)
-			return store
-		}
-	}
-	// Slow path: scan all per-agent stores.
+	// Slow path: scan all per-agent stores. The former "legacy fast path"
+	// here special-cased the retired "main" sentinel agent (which used to own
+	// most old sessions); with the sentinel removed there is no reserved
+	// agent ID to fast-path or skip, so every registered agent is scanned
+	// uniformly.
 	for _, id := range al.GetRegistry().ListAgentIDs() {
-		if id == DefaultAgentID {
-			continue
-		}
 		store := al.GetAgentStore(id)
 		if store == nil {
 			continue
@@ -12118,11 +12121,14 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 // mirroring how applyExplicitSkillCommand rewrites opts.UserMessage for
 // one-shot skill activation above.
 //
-// Known nuance: agentID "main" (the gateway/router agent) is never given the
-// remember / recall_memory / run_retrospective tools — pkg/agent/instance.go
-// registers them only for agentID != "main". The steering prompt still
-// degrades gracefully there: the model simply reports it doesn't have that
-// capability instead of the turn erroring.
+// Every agent is given the remember / recall_memory / recall_conversation /
+// run_retrospective tools now (pkg/agent/instance.go and this package's
+// agent.Tools.Register calls register them unconditionally — the retired
+// "main" sentinel used to be excluded by a hardcoded identity check, which
+// went away with the sentinel). Whether an agent can actually use one is
+// governed by its own tool policy like any other tool; the steering prompt
+// still degrades gracefully if a policy denies it — the model simply reports
+// it doesn't have that capability instead of the turn erroring.
 func (al *AgentLoop) applyMemoryCommandPrompt(
 	raw string,
 	opts *processOptions,

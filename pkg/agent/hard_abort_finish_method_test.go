@@ -76,6 +76,10 @@ func (p *hardAbortToolCallProvider) GetDefaultModel() string {
 
 func TestRunTurn_HardAbortViaInterruptSessionHard_RecordsCancelMethodHard(t *testing.T) {
 	tmpDir := t.TempDir()
+	// No "main" sentinel to fall back to anymore (it was deleted along with
+	// registry.go's implicit registration) — this test needs a REAL agent in
+	// cfg.Agents.List so GetDefaultAgent() has something to resolve to.
+	const testAgentID = "mia"
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
@@ -84,6 +88,7 @@ func TestRunTurn_HardAbortViaInterruptSessionHard_RecordsCancelMethodHard(t *tes
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: testAgentID, Name: "Mia"}},
 		},
 	}
 
@@ -105,7 +110,7 @@ func TestRunTurn_HardAbortViaInterruptSessionHard_RecordsCancelMethodHard(t *tes
 	store := al.GetSessionStore()
 	require.NotNil(t, store, "shared session store must be non-nil")
 
-	meta, err := store.NewSession(session.SessionTypeChat, "test-hard-abort", DefaultAgentID)
+	meta, err := store.NewSession(session.SessionTypeChat, "test-hard-abort", testAgentID)
 	require.NoError(t, err)
 	sessionID := meta.ID
 
@@ -117,7 +122,7 @@ func TestRunTurn_HardAbortViaInterruptSessionHard_RecordsCancelMethodHard(t *tes
 	go func() {
 		resp, runErr := al.ProcessScheduled(
 			context.Background(),
-			DefaultAgentID,
+			testAgentID,
 			sessionID,
 			"please help with something",
 			"test-hard-abort",

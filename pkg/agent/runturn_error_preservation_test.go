@@ -307,7 +307,8 @@ func TestRunTurn_ProviderError_WritesErrorEntryToTranscript(t *testing.T) {
 		provider = provider.WithError(providerErr)
 	}
 
-	// Use the default agent ("main") so we don't fight rate-limit semantics.
+	// Use the (explicitly registered) default agent so we don't fight
+	// rate-limit semantics. No "main" sentinel to rely on anymore.
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
@@ -316,6 +317,7 @@ func TestRunTurn_ProviderError_WritesErrorEntryToTranscript(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 

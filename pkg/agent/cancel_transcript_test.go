@@ -68,6 +68,7 @@ func TestCancel_TranscriptTurnCancelledEntry(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 

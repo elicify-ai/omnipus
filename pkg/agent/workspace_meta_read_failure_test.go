@@ -128,6 +128,7 @@ func TestResolveWorkspaceIDForContinuation_NoSession_ReturnsEmpty(t *testing.T) 
 				Home:      t.TempDir(),
 				ModelName: "scripted-model",
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), testutil.NewScenario())
@@ -153,6 +154,7 @@ func TestResolveWorkspaceIDForContinuation_SessionWithWorkspace_ReturnsIt(t *tes
 				Home:      t.TempDir(),
 				ModelName: "scripted-model",
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), testutil.NewScenario())
@@ -163,7 +165,7 @@ func TestResolveWorkspaceIDForContinuation_SessionWithWorkspace_ReturnsIt(t *tes
 		t.Fatal("expected a shared session store on a freshly constructed AgentLoop")
 	}
 
-	meta, err := store.NewChannelSession("telegram", "888", DefaultAgentID, "test session")
+	meta, err := store.NewChannelSession("telegram", "888", "mia", "test session")
 	if err != nil {
 		t.Fatalf("NewChannelSession: %v", err)
 	}
@@ -214,6 +216,7 @@ func TestResolveSessionStore_CorruptMeta_ReturnsStoreNotNil(t *testing.T) {
 				Home:      t.TempDir(),
 				ModelName: "scripted-model",
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), testutil.NewScenario())
@@ -291,6 +294,7 @@ func TestResolveSessionStore_MissingSession_StaysSilent(t *testing.T) {
 				Home:      t.TempDir(),
 				ModelName: "scripted-model",
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), testutil.NewScenario())
@@ -342,6 +346,7 @@ func TestResolveWorkspaceIDForContinuation_CorruptMeta_WarnsDownstream(t *testin
 				Home:      t.TempDir(),
 				ModelName: "scripted-model",
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), testutil.NewScenario())

@@ -7,7 +7,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/routing"
 )
 
 type mockRegistryProvider struct{}
@@ -40,21 +40,28 @@ func testCfg(agents []config.AgentConfig) *config.Config {
 	}
 }
 
-func TestNewAgentRegistry_ImplicitMain(t *testing.T) {
+// TestNewAgentRegistry_EmptyList_NoImplicitAgent pins the removal of the
+// "main" sentinel: NewAgentRegistry used to register an implicit "main"
+// fallback agent regardless of cfg. That is gone — the retired sentinel was
+// a shadow entity (no schema anywhere, absent from cfg.Agents.List, a 404
+// from GET /api/v1/agents/main) yet it was registered at runtime and
+// stamped as owner on real user data. An empty cfg.Agents.List now produces
+// a registry with ZERO agents; there is nothing implicit to fall back to.
+func TestNewAgentRegistry_EmptyList_NoImplicitAgent(t *testing.T) {
 	cfg := testCfg(nil)
 	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
 
 	ids := registry.ListAgentIDs()
-	if len(ids) != 1 || ids[0] != "main" {
-		t.Errorf("expected implicit main agent, got %v", ids)
+	if len(ids) != 0 {
+		t.Errorf("expected zero agents for an empty cfg.Agents.List, got %v", ids)
 	}
 
-	agent, ok := registry.GetAgent("main")
-	if !ok || agent == nil {
-		t.Fatal("expected to find 'main' agent")
+	if agent, ok := registry.GetAgent("main"); ok || agent != nil {
+		t.Fatalf("expected 'main' to be absent (no implicit sentinel), got %+v", agent)
 	}
-	if agent.ID != "main" {
-		t.Errorf("agent.ID = %q, want 'main'", agent.ID)
+
+	if def := registry.GetDefaultAgent(); def != nil {
+		t.Fatalf("GetDefaultAgent must return nil on an empty registry, got %+v", def)
 	}
 }
 
@@ -66,15 +73,13 @@ func TestNewAgentRegistry_ExplicitAgents(t *testing.T) {
 	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
 
 	ids := registry.ListAgentIDs()
-	// The registry always registers "main" plus all valid custom agents,
-	// so we expect 3: "main", "sales", "support".
-	if len(ids) != 3 {
-		t.Fatalf("expected 3 agents (main + 2 custom), got %d: %v", len(ids), ids)
+	// No "main" sentinel added anymore — exactly the 2 configured agents.
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 agents (sales + support, no implicit sentinel), got %d: %v", len(ids), ids)
 	}
 
-	_, hasMain := registry.GetAgent("main")
-	if !hasMain {
-		t.Error("expected 'main' agent to be present")
+	if _, hasMain := registry.GetAgent("main"); hasMain {
+		t.Error("expected 'main' to be absent — there is no implicit sentinel agent anymore")
 	}
 
 	sales, ok := registry.GetAgent("sales")
@@ -150,14 +155,16 @@ func TestAgentRegistry_GetAgent_Normalize(t *testing.T) {
 // TestAgentRegistry_GetDefaultAgent_EntityDefaultFlagIsInert is the ADR-054
 // D6.4 regression guard: AgentConfig.Default=true alone (no
 // SetDefaultAgentOverride, i.e. no config.Agents.Defaults.DefaultAgentID)
-// must NOT select "mia" — resolution falls through to the "main" sentinel
-// instead. The per-entity Default field was demoted from the resolution
-// ladder precisely because splitting agents into independent per-entity
-// files means two concurrent writes could each set it true with no shared
-// lock to serialize them; only the settings singleton
-// (SetDefaultAgentOverride / config.Agents.Defaults.DefaultAgentID) is
-// consulted now. See TestAgentRegistry_GetDefaultAgent_DefaultAgentIDOverride
-// for the positive case.
+// must NOT select "mia" — resolution falls through to the lexicographically-
+// first non-worker registered agent instead (there is no "main" sentinel to
+// fall back to anymore — see GetDefaultAgent's Priority 2). The per-entity
+// Default field was demoted from the resolution ladder precisely because
+// splitting agents into independent per-entity files means two concurrent
+// writes could each set it true with no shared lock to serialize them; only
+// the settings singleton (SetDefaultAgentOverride /
+// config.Agents.Defaults.DefaultAgentID) is consulted now. See
+// TestAgentRegistry_GetDefaultAgent_DefaultAgentIDOverride for the positive
+// case.
 func TestAgentRegistry_GetDefaultAgent_EntityDefaultFlagIsInert(t *testing.T) {
 	cfg := testCfg([]config.AgentConfig{
 		{ID: "alpha"},
@@ -169,15 +176,18 @@ func TestAgentRegistry_GetDefaultAgent_EntityDefaultFlagIsInert(t *testing.T) {
 	if agent == nil {
 		t.Fatal("expected a default agent")
 	}
-	if agent.ID != "main" {
-		t.Errorf("GetDefaultAgent = %q, want %q (AgentConfig.Default must be inert without SetDefaultAgentOverride)", agent.ID, "main")
+	// "alpha" < "mia" lexicographically — Priority 2's deterministic fallback.
+	if agent.ID != "alpha" {
+		t.Errorf("GetDefaultAgent = %q, want %q (AgentConfig.Default must be inert without SetDefaultAgentOverride)", agent.ID, "alpha")
 	}
 }
 
-// TestAgentRegistry_GetDefaultAgent_FallsBackToMain verifies that when no
-// agent is marked Default=true, GetDefaultAgent falls back to "main" (F3
-// fallback path).
-func TestAgentRegistry_GetDefaultAgent_FallsBackToMain(t *testing.T) {
+// TestAgentRegistry_GetDefaultAgent_FallsBackToLexicographicallyFirst
+// verifies that when no agent is marked Default=true and no override is
+// configured, GetDefaultAgent falls back to the lexicographically-first
+// non-worker registered agent (Priority 2). There is no "main" sentinel to
+// fall back to anymore.
+func TestAgentRegistry_GetDefaultAgent_FallsBackToLexicographicallyFirst(t *testing.T) {
 	cfg := testCfg([]config.AgentConfig{
 		{ID: "alpha"},
 		{ID: "beta"},
@@ -188,9 +198,9 @@ func TestAgentRegistry_GetDefaultAgent_FallsBackToMain(t *testing.T) {
 	if agent == nil {
 		t.Fatal("expected a default agent")
 	}
-	if agent.ID != "main" {
-		t.Errorf("GetDefaultAgent fallback = %q, want %q (must fall back to main when no Default=true)",
-			agent.ID, "main")
+	if agent.ID != "alpha" {
+		t.Errorf("GetDefaultAgent fallback = %q, want %q (must fall back to the lexicographically-first non-worker agent)",
+			agent.ID, "alpha")
 	}
 }
 
@@ -381,16 +391,20 @@ func TestAgentRegistry_UpsertAgent_ReplacesExisting(t *testing.T) {
 	if got.Name != "New Name" {
 		t.Errorf("got.Name = %q, want %q (UpsertAgent must replace, not duplicate)", got.Name, "New Name")
 	}
-	if len(registry.ListAgentIDs()) != 2 { // main + alpha
-		t.Errorf("ListAgentIDs = %v, want exactly 2 (main + alpha, no duplicate)", registry.ListAgentIDs())
+	// No "main" sentinel added anymore — just the one "alpha" entry.
+	if len(registry.ListAgentIDs()) != 1 {
+		t.Errorf("ListAgentIDs = %v, want exactly 1 (alpha, no duplicate)", registry.ListAgentIDs())
 	}
 }
 
 // TestAgentRegistry_RemoveAgent verifies a removed agent disappears from
-// GetAgent/ListAgentIDs, and that the reserved "main" sentinel can never be
-// removed through this path.
+// GetAgent/ListAgentIDs, including an agent literally named "main" — the
+// reserved-ID protection that used to block removing the "main" sentinel is
+// gone along with the sentinel itself (registry.go's reserved-ID map and the
+// RemoveAgent guard were both deleted). "main" is an ordinary agent id now,
+// with no special casing anywhere in this path.
 func TestAgentRegistry_RemoveAgent(t *testing.T) {
-	cfg := testCfg([]config.AgentConfig{{ID: "alpha"}})
+	cfg := testCfg([]config.AgentConfig{{ID: "alpha"}, {ID: "main"}})
 	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
 
 	if ok := registry.RemoveAgent("alpha"); !ok {
@@ -404,11 +418,11 @@ func TestAgentRegistry_RemoveAgent(t *testing.T) {
 		t.Error("expected a second RemoveAgent(alpha) to report false (already gone)")
 	}
 
-	if ok := registry.RemoveAgent("main"); ok {
-		t.Error("expected RemoveAgent(main) to refuse removing the reserved sentinel")
+	if ok := registry.RemoveAgent("main"); !ok {
+		t.Error("expected RemoveAgent(main) to succeed — 'main' is not reserved anymore, it is an ordinary agent id")
 	}
-	if _, ok := registry.GetAgent("main"); !ok {
-		t.Fatal("main sentinel must survive an attempted RemoveAgent(main)")
+	if _, ok := registry.GetAgent("main"); ok {
+		t.Fatal("'main' must be gone after RemoveAgent — no special protection survives it")
 	}
 }
 
@@ -529,11 +543,12 @@ func TestAgentRegistry_ConcurrentSetDefaultAgentOverride_NoSplitBrain(t *testing
 	}
 	wg.Wait()
 
-	// Exactly one of alpha/beta (or the transient default before any write
-	// landed) may have been observed — never more than the known candidate
-	// set, and never a corrupted/empty ID.
+	// Exactly one of alpha/beta may have been observed — never more than the
+	// known candidate set, and never a corrupted/empty ID. No "main"
+	// sentinel to allow for anymore — the registry only ever holds alpha and
+	// beta.
 	for id := range seen {
-		if id != "alpha" && id != "beta" && id != "main" {
+		if id != "alpha" && id != "beta" {
 			t.Errorf("GetDefaultAgent returned unexpected id %q during concurrent writes", id)
 		}
 	}
@@ -545,66 +560,31 @@ func TestAgentRegistry_ConcurrentSetDefaultAgentOverride_NoSplitBrain(t *testing
 	}
 }
 
-// TestNewAgentRegistry_MainSentinelDeniesHighImpactToolsByDefault is the
-// regression guard for the "main" sentinel tool-policy hole a security review
-// found: the sentinel used to be constructed with a nil Tools field, which
-// resolves to an empty per-agent policy map (agentToolsCfgToPolicy's a==""
-// branch), which in turn falls through to whatever the GLOBAL
-// sandbox.tool_policies floor says (pkg/tools/compositor.go's
-// resolveEffectivePolicyWith: g!="" && a=="" -> return g). Because the real
-// seeded global floor (pkg/config/defaults.go) allows several high-impact
-// tools (bash, write_file, edit_file, delegate, send_email), the sentinel
-// silently inherited "allow" for all of them with zero explicit policy entry
-// of its own — and "main" is never a member of cfg.Agents.List, so
-// config.ValidateToolPolicyCoverage's boot/write-time coverage gate (Hard
-// Constraint #6) never validated it either.
-//
-// This test reproduces that exact global floor (mirroring defaults.go's
-// seeded values for these five tools) and asserts the sentinel now resolves
-// DENY for every one of them, proving it carries its own explicit,
-// wildcard-free per-agent policy (coreagent.NewCustomAgentToolsCfg()) rather
-// than falling through to the permissive global ceiling.
-func TestNewAgentRegistry_MainSentinelDeniesHighImpactToolsByDefault(t *testing.T) {
-	cfg := testCfg(nil)
-	// Mirror the real seeded global floor (pkg/config/defaults.go) for the
-	// exact tools the security review flagged — these are ScopeGeneral tools,
-	// so the scope gate never blocks them; only the global x agent merge
-	// decides the verdict.
-	cfg.Sandbox.ToolPolicies = map[string]string{
-		"bash":       "allow",
-		"write_file": "allow",
-		"edit_file":  "allow",
-		"delegate":   "allow",
-		"send_email": "allow",
+// TestNormalizeAgentID_EmptyReturnsEmpty pins the removal-adjacent change to
+// routing.NormalizeAgentID: it used to be paired with the "main" sentinel
+// (an empty agent id would eventually resolve to "main" somewhere downstream
+// in the old routing/registry code). Now NormalizeAgentID("") returns "" —
+// no hardcoded agent name is ever synthesized from an absent id. Downstream,
+// AgentRegistry.GetAgent("") normalizes to "" and correctly misses (there is
+// no agent keyed under the empty string), which is what
+// TestAgentRegistry_GetAgent_EmptyIDMisses below exercises end-to-end.
+func TestNormalizeAgentID_EmptyReturnsEmpty(t *testing.T) {
+	if got := routing.NormalizeAgentID(""); got != "" {
+		t.Errorf("routing.NormalizeAgentID(\"\") = %q, want \"\" (must not synthesize any hardcoded agent id)", got)
 	}
+	if got := routing.NormalizeAgentID("   "); got != "" {
+		t.Errorf("routing.NormalizeAgentID(\"   \") = %q, want \"\" (whitespace-only input)", got)
+	}
+}
 
+// TestAgentRegistry_GetAgent_EmptyIDMisses proves the empty-id case actually
+// misses in the registry rather than accidentally resolving to some default
+// agent — the practical consequence of NormalizeAgentID("") returning "".
+func TestAgentRegistry_GetAgent_EmptyIDMisses(t *testing.T) {
+	cfg := testCfg([]config.AgentConfig{{ID: "alpha"}})
 	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
-	main, ok := registry.GetAgent(DefaultAgentID)
-	if !ok || main == nil {
-		t.Fatal("expected to find the 'main' sentinel agent")
-	}
 
-	policy := main.LoadToolPolicy()
-	if policy == nil {
-		t.Fatal("expected 'main' to carry a non-nil tool-policy snapshot")
-	}
-
-	for _, toolName := range []string{"bash", "write_file", "edit_file", "delegate", "send_email"} {
-		got := tools.EffectiveToolPolicy(policy, tools.ScopeGeneral, main.AgentType, toolName)
-		if got != string(config.ToolPolicyDeny) {
-			t.Errorf("EffectiveToolPolicy(%q) = %q, want %q (sentinel must not inherit the permissive global floor)",
-				toolName, got, config.ToolPolicyDeny)
-		}
-	}
-
-	// Sanity check: the conservative allow-list NewCustomAgentToolsCfg grants
-	// still resolves allow, proving the sentinel isn't accidentally deny-all
-	// either — it has its own genuine, narrow allow-list.
-	for _, toolName := range []string{"read_file", "list_directory", "remember", "recall_memory"} {
-		got := tools.EffectiveToolPolicy(policy, tools.ScopeGeneral, main.AgentType, toolName)
-		if got != string(config.ToolPolicyAllow) {
-			t.Errorf("EffectiveToolPolicy(%q) = %q, want %q (sentinel's own conservative allow-list)",
-				toolName, got, config.ToolPolicyAllow)
-		}
+	if agent, ok := registry.GetAgent(""); ok || agent != nil {
+		t.Fatalf("GetAgent(\"\") = (%+v, %v), want (nil, false) — an empty id must never resolve to any agent", agent, ok)
 	}
 }

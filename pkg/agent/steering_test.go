@@ -281,6 +281,7 @@ func TestAgentLoop_SteeringMode_ConfiguredFromConfig(t *testing.T) {
 				MaxToolIterations: 10,
 				SteeringMode:      "all",
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -340,6 +341,10 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			// No "main" sentinel to fall back to anymore — this test drives
+			// a real turn through ProcessDirectWithChannel/Continue, which
+			// needs a REAL registered agent to route to.
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -387,6 +392,7 @@ func TestSessionWorker_DifferentScopesGetIndependentWorkers(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Session: config.SessionConfig{
 			DMScope: "per-peer",
@@ -674,6 +680,10 @@ func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			// No "main" sentinel to fall back to anymore — this test drives
+			// a real turn through ProcessDirectWithChannel/Continue, which
+			// needs a REAL registered agent to route to.
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -798,6 +808,10 @@ func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			// No "main" sentinel to fall back to anymore — this test drives
+			// a real turn through ProcessDirectWithChannel/Continue, which
+			// needs a REAL registered agent to route to.
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -878,6 +892,10 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			// No "main" sentinel to fall back to anymore — this test drives
+			// a real turn through ProcessDirectWithChannel/Continue, which
+			// needs a REAL registered agent to route to.
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -1021,10 +1039,14 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			// No "main" sentinel to fall back to anymore — this test drives
+			// a real turn through ProcessDirectWithChannel/Continue, which
+			// needs a REAL registered agent to route to.
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
-	sessionKey := routing.BuildAgentMainSessionKey(routing.DefaultAgentID)
+	sessionKey := routing.BuildAgentMainSessionKey("mia")
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	provider := &blockingDirectProvider{
@@ -1116,6 +1138,10 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			// No "main" sentinel to fall back to anymore — this test drives
+			// a real turn through ProcessDirectWithChannel/Continue, which
+			// needs a REAL registered agent to route to.
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -1156,7 +1182,7 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 		},
 	}
 
-	sessionKey := routing.BuildAgentMainSessionKey(routing.DefaultAgentID)
+	sessionKey := routing.BuildAgentMainSessionKey("mia")
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	al.SetMediaStore(store)
@@ -1236,6 +1262,10 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			// No "main" sentinel to fall back to anymore — this test drives
+			// a real turn through ProcessDirectWithChannel/Continue, which
+			// needs a REAL registered agent to route to.
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -1273,7 +1303,7 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
-	sessionKey := routing.BuildAgentMainSessionKey(routing.DefaultAgentID)
+	sessionKey := routing.BuildAgentMainSessionKey("mia")
 	defaultAgent := al.registry.GetDefaultAgent()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
@@ -1423,6 +1453,10 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			// No "main" sentinel to fall back to anymore — this test drives
+			// a real turn through ProcessDirectWithChannel/Continue, which
+			// needs a REAL registered agent to route to.
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -1446,7 +1480,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	started := make(chan struct{})
 	al.RegisterTool(&interruptibleTool{name: "cancel_tool", started: started})
-	sessionKey := routing.BuildAgentMainSessionKey(routing.DefaultAgentID)
+	sessionKey := routing.BuildAgentMainSessionKey("mia")
 
 	defaultAgent := al.registry.GetDefaultAgent()
 	if defaultAgent == nil {
@@ -1597,6 +1631,10 @@ func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			// No "main" sentinel to fall back to anymore — this test drives
+			// a real turn through ProcessDirectWithChannel/Continue, which
+			// needs a REAL registered agent to route to.
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 

@@ -255,14 +255,19 @@ func seedTestWorkspaceMembershipForIDs(t *testing.T, ids []string) {
 }
 
 // testHarnessAgentIDs returns the set of agent IDs mustAgentLoop's caller's
-// cfg will register with NewAgentRegistry: agent.DefaultAgentID ("main",
-// always registered as the synthetic default/fallback agent regardless of
-// cfg) plus every explicit, non-reserved ID in cfg.Agents.List — NORMALIZED
-// exactly the way NewAgentRegistry itself keys the registry.
+// cfg will register with NewAgentRegistry: every explicit, non-reserved ID in
+// cfg.Agents.List — NORMALIZED exactly the way NewAgentRegistry itself keys
+// the registry. There is no synthetic default/fallback agent registered
+// implicitly any more — the retired "main" sentinel (previously always
+// included here) had no schema anywhere and was removed with no
+// back-compat (see pkg/agent/registry.go::NewAgentRegistry's doc comment).
+// A cfg with an empty (or nil) Agents.List now legitimately registers NO
+// agents at all — this returns an empty slice in that case, not a
+// fabricated ID.
 //
 // pkg/agent/registry.go's NewAgentRegistry never registers an agent under its
 // raw cfg.Agents.List[i].ID: every entry is keyed under
-// routing.NormalizeAgentID(ac.ID) (registry.go:109 — lower-cased, sanitized
+// routing.NormalizeAgentID(ac.ID) (registry.go — lower-cased, sanitized
 // to [a-z0-9][a-z0-9_-]*), and pkg/agent/instance.go's NewAgentInstance
 // independently normalizes the SAME way when it sets AgentInstance.ID. A
 // real turn's ADR-046 P1 gate (resolveTurnWorkDirOrRefuse) is then called
@@ -283,11 +288,11 @@ func seedTestWorkspaceMembershipForIDs(t *testing.T, ids []string) {
 // normalization step, which that file's version does not have either (same
 // latent bug, out of this package's fix scope; see report).
 func testHarnessAgentIDs(cfg *config.Config) []string {
-	ids := []string{agent.DefaultAgentID}
+	var ids []string
 	if cfg == nil {
 		return ids
 	}
-	seen := map[string]bool{agent.DefaultAgentID: true}
+	seen := map[string]bool{}
 	for _, a := range cfg.Agents.List {
 		if a.ID == "" {
 			continue

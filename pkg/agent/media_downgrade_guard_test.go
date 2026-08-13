@@ -51,6 +51,7 @@ func TestSynthesizeImageRejection_PriorPDFDowngrade_DoesNotBlockFriendlySynthesi
 				MaxTokens:         4096,
 				MaxToolIterations: 3,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 

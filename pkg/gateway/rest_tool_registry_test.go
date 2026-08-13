@@ -120,10 +120,13 @@ func TestREST_GetTools_MethodNotAllowed(t *testing.T) {
 // {name, configured_policy, effective_policy, manifest_tier}.
 // Traces to: tool-registry-redesign-spec.md FR-028, FR-086; Gap 3 manifest_tier.
 func TestREST_GetAgentTools_FilteredView(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
+	// newTestRestAPIWithHome seeds no agents (the retired "main" sentinel used
+	// to be registered implicitly regardless of cfg); use the
+	// newTestRestAPIWithHomeAndAgent variant (rest_tasks_occurrences_test.go)
+	// which seeds a real chat-target agent ("mia") instead.
+	api := newTestRestAPIWithHomeAndAgent(t)
 
-	// Use the default agent ID — always registered by NewAgentLoop.
-	agentID := "main"
+	agentID := "mia"
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+agentID+"/tools", nil)
 	r = withAdminRole(r)
 	w := httptest.NewRecorder()
@@ -166,9 +169,9 @@ func TestREST_GetAgentTools_FilteredView(t *testing.T) {
 // if load_tool is present it has "infra".
 // Traces to: tool-manifest-optimization-2026-06.md Gap 3.
 func TestREST_GetAgentTools_ManifestTierValues(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
+	api := newTestRestAPIWithHomeAndAgent(t)
 
-	agentID := "main"
+	agentID := "mia"
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+agentID+"/tools", nil)
 	r = withAdminRole(r)
 	w := httptest.NewRecorder()

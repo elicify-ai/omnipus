@@ -384,6 +384,7 @@ func TestAgentLoop_ImageRejection_FriendlyMessage(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 3,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -467,6 +468,7 @@ func TestAgentLoop_NonImageError_PropagatesAsError(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 3,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 

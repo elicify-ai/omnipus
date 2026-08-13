@@ -59,7 +59,10 @@ import (
 // single turn a caller happens to be holding a reference to.
 func TestSessionTurnsStillAlive_ReturnsOnlyAliveMatchingTurns(t *testing.T) {
 	cfg := &config.Config{
-		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{Provider: "mock"}},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Provider: "mock"},
+			List:     []config.AgentConfig{{ID: "mia"}},
+		},
 	}
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
@@ -150,6 +153,7 @@ func TestRequestCancel_OrphanedBackgroundDelegate_HardAbortedAfterParentGraceful
 				ModelName: "orphan-delegate-test-model",
 				MaxTokens: 4096,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

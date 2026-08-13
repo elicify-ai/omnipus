@@ -17,7 +17,44 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
+
+// newTestWSHandlerWithAgent is newTestWSHandler (websocket_test.go) plus one
+// real, chat-target agent seeded into cfg.Agents.List BEFORE the AgentLoop is
+// constructed. newTestWSHandler itself seeds NO agents — the retired "main"
+// sentinel used to be registered implicitly regardless of cfg
+// (pkg/agent/registry.go's old always-on fallback), which is what let
+// al.GetAgentStore("main") resolve with no seeding at all. That sentinel is
+// gone with no back-compat, so a test that needs a real per-agent session
+// store (GetAgentStore requires al.GetRegistry().GetAgent(agentID) to
+// succeed) must seed one from construction. Not shared into
+// newTestWSHandler itself since 16 other test files depend on that helper's
+// exact zero-agent shape.
+func newTestWSHandlerWithAgent(t *testing.T, agentID string) (*WSHandler, *bus.MessageBus, *agent.AgentLoop) {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:      tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{{ID: agentID}},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	handler := newWSHandler(msgBus, al, "")
+	return handler, msgBus, al
+}
 
 // readFrameOfType drains incoming frames until it receives one with the
 // expected Type field, or until the deadline elapses. It returns the first
@@ -263,11 +300,15 @@ func TestWS_AttachSession_NoLazyCAS_WhenSameSession(t *testing.T) {
 //
 // Reproduce:
 //
-//  1. Boot a gateway with a non-default agent (here we use "main", whose
-//     per-agent store is the legacy fast-path that ResolveSessionStore
-//     consults). A custom agent like Hans would land in the slow-path scan
+//  1. Boot a gateway with a real, chat-target custom agent (here we use "mia",
+//     whose per-agent store is the legacy fast-path that ResolveSessionStore
+//     consults). Any custom agent like Hans would land in the slow-path scan
 //     but the resolution outcome is the same: the session is found via the
-//     per-agent store, not via sharedSessionStore.
+//     per-agent store, not via sharedSessionStore. (The retired "main"
+//     sentinel used to be registered implicitly regardless of cfg, which is
+//     what let this test skip seeding an agent at all; it is gone with no
+//     back-compat, so this test now uses newTestWSHandlerWithAgent to seed a
+//     real one — see that helper's doc comment.)
 //  2. Create a session directly on the per-agent store — mimicking what the
 //     task runner does when scheduling work to a custom agent.
 //  3. Send a {type:"message", session_id, agent_id} frame from the client.
@@ -279,18 +320,18 @@ func TestWS_AttachSession_NoLazyCAS_WhenSameSession(t *testing.T) {
 // Before the fix this test would fail with an "error" frame in step 4 and no
 // bus delivery in step 5.
 func TestWS_Message_FindsSession_InPerAgentStore(t *testing.T) {
-	handler, msgBus, al := newTestWSHandler(t)
+	const agentID = "mia"
+	handler, msgBus, al := newTestWSHandlerWithAgent(t, agentID)
 	t.Cleanup(handler.Wait)
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	// Pre-create a session in the "main" agent's per-agent store. Using "main"
-	// guarantees this exercises the per-agent path (it's a legacy store the
-	// shared store does not own). The same code path covers custom agents
-	// since ResolveSessionStore's slow path scans all per-agent stores.
-	const agentID = "main"
+	// Pre-create a session in mia's per-agent store — exercises the per-agent
+	// path (it's a legacy store the shared store does not own). The same code
+	// path covers custom agents since ResolveSessionStore's slow path scans
+	// all per-agent stores.
 	perAgentStore := al.GetAgentStore(agentID)
-	require.NotNil(t, perAgentStore, "main per-agent store must exist")
+	require.NotNil(t, perAgentStore, "mia per-agent store must exist")
 	meta, err := perAgentStore.NewSession("chat", "webchat", agentID)
 	require.NoError(t, err, "create per-agent session")
 	t.Cleanup(func() { _ = perAgentStore.DeleteSession(meta.ID) })

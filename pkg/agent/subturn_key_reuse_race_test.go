@@ -79,6 +79,7 @@ func TestSubTurnKeyReuseRace_CancelStillReachesSurvivingGeneration(t *testing.T)
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -228,6 +229,7 @@ func TestSubTurnKeyReuseRace_SpawnSubTurnSideCompareAndDelete(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 

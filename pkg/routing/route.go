@@ -403,12 +403,16 @@ func (r *RouteResolver) isSkippedAgentID(id string) bool {
 // two are independent resolvers over different data and are NOT guaranteed
 // to produce the same agent ID:
 //   - This function's Priority 2 fallback returns the FIRST chat-target
-//     agent in cfg.Agents.List's SLICE ORDER (not sorted), and only falls
-//     through to the literal DefaultAgentID ("main") constant when the list
-//     has no chat-target agent at all.
-//   - GetDefaultAgent's registry-map equivalent always has the implicit
-//     "main" sentinel available as its own Priority 2, ahead of a
-//     lexicographically-sorted last resort.
+//     agent in cfg.Agents.List's SLICE ORDER (not sorted), and returns EMPTY
+//     when the list has no chat-target agent at all.
+//   - GetDefaultAgent's registry-map equivalent falls back to the
+//     lexicographically-first non-worker, and returns nil when the registry
+//     is empty.
+//
+// Both ladders lost their "main" sentinel rung when that agent was removed.
+// They still differ in their last resort (slice order here, sorted order
+// there), so they are only guaranteed to agree via the configured override —
+// which is why the override being unset was a release blocker in July 2026.
 //
 // Concretely: with no override configured and at least one chat-target
 // custom/core agent in cfg.Agents.List, this function resolves to that agent
@@ -419,7 +423,13 @@ func (r *RouteResolver) isSkippedAgentID(id string) bool {
 func (r *RouteResolver) resolveDefaultAgentID() string {
 	agents := r.cfg.Agents.List
 	if len(agents) == 0 {
-		return DefaultAgentID
+		// No agents at all. There is no sentinel to fall back on any more, so
+		// say so instead of naming an agent that does not exist. Callers treat
+		// an empty id as "no route" and drop the message loudly, which is the
+		// honest outcome for a config with nobody in it.
+		logger.WarnCF("routing", "No agents are configured; inbound message has no route",
+			map[string]any{})
+		return ""
 	}
 	// Priority 1: the configured override, when it names a chat-target agent
 	// that is actually registered. R3 (ADR-054 §0): if the override names an
@@ -453,8 +463,10 @@ func (r *RouteResolver) resolveDefaultAgentID() string {
 			return normalized
 		}
 	}
-	// No chat-target agents with valid IDs — last resort is the DefaultAgentID constant.
-	logger.WarnCF("routing", "No available agent found; routing falls back to built-in default",
+	// No chat-target agents with valid IDs. The "main" sentinel used to be the
+	// last resort here; it is gone, and inventing a name for an agent that does
+	// not exist only moves the failure somewhere harder to read.
+	logger.WarnCF("routing", "No chat-target agent found; inbound message has no route",
 		map[string]any{"custom_agent_count": len(agents)})
-	return DefaultAgentID
+	return ""
 }

@@ -190,6 +190,7 @@ func TestRetryOnStreamingReset_SingleCandidateTurnSucceeds(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -246,6 +247,7 @@ func TestRetryOnStreamingReset_GoAwayTurnSucceeds(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -304,6 +306,7 @@ func TestRetryOnStreamingReset_ExhaustsMaxRetries(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -356,6 +359,7 @@ func TestRetryOnStreamingReset_AuthErrorNotRetried(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -408,6 +412,7 @@ func TestRetryOnStreamingReset_ScenarioProviderVariant(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -488,6 +493,7 @@ func TestRetryOnStreamingReset_NothingToTrimStillRetries(t *testing.T) {
 				MaxTokens:             4096,
 				MaxToolIterations:     10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -608,6 +614,7 @@ func TestRetryOnStreamingReset_RecallSpanDropAloneStillRetries(t *testing.T) {
 				MaxTokens:             2000,
 				MaxToolIterations:     10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 

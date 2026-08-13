@@ -38,6 +38,7 @@ func newCompressedCfg(t *testing.T) *config.Config {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	cfg.Tools.Manifest.Compressed = true

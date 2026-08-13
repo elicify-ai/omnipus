@@ -300,12 +300,12 @@ func TestTaskRunsEndpoint(t *testing.T) {
 func TestTaskRunNow_LiveExecutor_ViaRealServer(t *testing.T) {
 	api := newTestRestAPIAlignedStoresWithProvider(t, &taskRunNowSuccessProvider{})
 	wsID := ensureTestWorkspace(t, api)
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 	tsk := createTaskViaAPI(t, api, "RunNowLiveServerTask", wsID)
-	wAssign := patchTask(t, api, tsk.Id, `{"agent_id":"main"}`)
+	wAssign := patchTask(t, api, tsk.Id, `{"agent_id":"mia"}`)
 	require.Equal(t, http.StatusOK, wAssign.Code,
-		"assigning agent_id=main must succeed; body=%s", wAssign.Body.String())
+		"assigning agent_id=mia must succeed; body=%s", wAssign.Body.String())
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/tasks/", api.HandleTasks)

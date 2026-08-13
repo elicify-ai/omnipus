@@ -52,13 +52,13 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 		return fmt.Errorf("agent: HydrateAgentHistoryFromTranscript: registry not available")
 	}
 
-	// Resolve the session's owning agent from metadata. Used as the fallback
-	// owner for entries whose AgentID is empty — most importantly assistant
-	// text entries written by the wsStreamer before the GetStreamer fallback
-	// landed, which left their AgentID blank for un-handed-off sessions.
-	// Without this fallback, the agent's LLM-fed history loses every line
-	// of assistant reasoning and the next turn looks like a fresh start.
-	sessionOwner := "main"
+	// The session's owning agent, used for entries that carry no AgentID of
+	// their own. This general fallback stays: it is how a session whose
+	// original agent is gone still hydrates. What was removed with the "main"
+	// sentinel is the agent-of-last-resort behind it — naming a specific
+	// agent when metadata resolves nothing would reattribute one agent's
+	// history to another.
+	sessionOwner := ""
 	if meta, err := store.GetMeta(sessionID); err == nil && meta != nil {
 		if meta.ActiveAgentID != "" {
 			sessionOwner = meta.ActiveAgentID
@@ -75,7 +75,9 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 	// agents that have not yet produced a turn (e.g. Ray after Mia
 	// handed off to him in the previous turn).
 	knownAgents := make(map[string]struct{})
-	knownAgents[sessionOwner] = struct{}{}
+	if sessionOwner != "" {
+		knownAgents[sessionOwner] = struct{}{}
+	}
 	for i := range entries {
 		if id := entries[i].AgentID; id != "" {
 			knownAgents[id] = struct{}{}
@@ -87,6 +89,11 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 		owner := e.AgentID
 		if owner == "" {
 			owner = sessionOwner
+		}
+		// Neither the entry nor the session names an owner. Skip it rather
+		// than inventing one.
+		if owner == "" {
+			continue
 		}
 		// Handoff audit entries are written by HandoffTool with Type=System
 		// and Content="Handoff: <from> → <to>. Context: <brief>". Broadcast

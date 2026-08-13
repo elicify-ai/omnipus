@@ -60,6 +60,7 @@ func TestWireJobRoster_SubagentActionable_ReflectsDelegateSessionIndex(t *testin
 				Home:      filepath.Join(home, "agents"),
 				ModelName: "test-model",
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -76,9 +77,9 @@ func TestWireJobRoster_SubagentActionable_ReflectsDelegateSessionIndex(t *testin
 	inbox := session.NewMessageInboxStore(filepath.Join(home, "inbox"))
 	al.SetSessionMessagingStores(inbox, lifecycle)
 
-	inst, ok := al.GetRegistry().GetAgent("main")
+	inst, ok := al.GetRegistry().GetAgent("mia")
 	if !ok {
-		t.Fatal("test setup: default agent 'main' not registered")
+		t.Fatal("test setup: default agent 'mia' not registered")
 	}
 	rawDelegate, ok := inst.Tools.Get("delegate")
 	if !ok {
@@ -100,7 +101,7 @@ func TestWireJobRoster_SubagentActionable_ReflectsDelegateSessionIndex(t *testin
 		delegateTool.WaitForAsyncTasks()
 	})
 
-	runCtx := tools.WithAgentID(context.Background(), "main")
+	runCtx := tools.WithAgentID(context.Background(), "mia")
 	runResult := delegateTool.Execute(runCtx, map[string]any{"task": "a long running review", "async": true})
 	if runResult.IsError {
 		t.Fatalf("delegate run failed: %s", runResult.ForLLM)
@@ -158,6 +159,7 @@ func TestWireJobRoster_SubagentActionable_FalseForUnknownSession(t *testing.T) {
 				Home:      filepath.Join(home, "agents"),
 				ModelName: "test-model",
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -173,18 +175,18 @@ func TestWireJobRoster_SubagentActionable_FalseForUnknownSession(t *testing.T) {
 	// process restart while the in-memory sessionIndex did not.
 	if err := lifecycle.Persist(&session.LifecycleRecord{
 		SessionID: "orphaned-after-restart", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentAgentID: "main",
+		OwnerScopeKind: session.OwnerScopeHuman, ParentAgentID: "mia",
 		ParentDurableKey: "some-parent-transcript", AgentID: "worker",
 		LaunchProfile: session.LaunchProfileUtility,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
 
-	inst, ok := al.GetRegistry().GetAgent("main")
+	inst, ok := al.GetRegistry().GetAgent("mia")
 	if !ok {
-		t.Fatal("test setup: default agent 'main' not registered")
+		t.Fatal("test setup: default agent 'mia' not registered")
 	}
-	runCtx := tools.WithAgentID(context.Background(), "main")
+	runCtx := tools.WithAgentID(context.Background(), "mia")
 	res := inst.Tools.Execute(runCtx, "list_jobs", map[string]any{"kind": "subagent"})
 	if res == nil || res.IsError {
 		t.Fatalf("list_jobs failed: %+v", res)

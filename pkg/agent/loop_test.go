@@ -113,6 +113,15 @@ func (r *recordingProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
+// testDefaultAgentID is the ordinary, explicitly-registered agent id
+// newTestAgentLoop seeds into cfg.Agents.List so callers have a real default
+// agent to resolve. There is no "main" sentinel to fall back to anymore
+// (registry.go's NewAgentRegistry no longer registers an implicit fallback
+// agent regardless of cfg) — deliberately NOT named "main" here, so a
+// reader can tell at a glance that this is an ordinary test fixture, not a
+// quiet resurrection of the retired sentinel identity.
+const testDefaultAgentID = "mia"
+
 func newTestAgentLoop(
 	t *testing.T,
 ) (al *AgentLoop, cfg *config.Config, msgBus *bus.MessageBus, provider *mockProvider, cleanup func()) {
@@ -129,6 +138,7 @@ func newTestAgentLoop(
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: testDefaultAgentID}},
 		},
 	}
 	msgBus = bus.NewMessageBus()
@@ -161,6 +171,7 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -259,6 +270,7 @@ func TestProcessMessage_WebRenderingNoteWiring(t *testing.T) {
 					MaxTokens:         4096,
 					MaxToolIterations: 10,
 				},
+				List: []config.AgentConfig{{ID: "mia"}},
 			},
 		}
 		provider := &recordingProvider{}
@@ -360,6 +372,7 @@ func TestProcessMessage_SkillCommandLoadsRequestedSkill(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -411,6 +424,7 @@ func TestHandleCommand_UseTokenIsNormalMessage(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -458,6 +472,7 @@ func TestProcessMessage_SkillTokenAloneRunsSkill(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -624,6 +639,7 @@ func TestNewAgentLoop_StateInitialized(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -669,6 +685,7 @@ func TestToolRegistry_ToolRegistration(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -735,6 +752,7 @@ func TestToolRegistry_GetDefinitions(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -767,6 +785,7 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -871,6 +890,7 @@ func TestProcessMessage_HandledToolProcessesQueuedSteeringBeforeReturning(t *tes
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -1086,6 +1106,7 @@ func TestAgentLoop_Stop(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -1631,6 +1652,7 @@ func TestProcessMessage_UsesRouteSessionKey(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -1698,6 +1720,7 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Session: config.SessionConfig{
 			DMScope: "per-channel-peer",
@@ -1822,6 +1845,7 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Providers: []*config.ModelConfig{
 			{
@@ -1906,6 +1930,7 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Providers: []*config.ModelConfig{
 			{
@@ -1999,6 +2024,7 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Providers: []*config.ModelConfig{
 			{
@@ -2149,6 +2175,7 @@ func TestProcessMessage_ModelRoutingUsesLightProvider(t *testing.T) {
 					Threshold:  0.99,
 				},
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Providers: []*config.ModelConfig{
 			{
@@ -2222,6 +2249,7 @@ func TestToolResult_SilentToolDoesNotSendUserMessage(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -2275,6 +2303,7 @@ func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -2357,6 +2386,7 @@ func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -2446,6 +2476,7 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 3,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -2494,6 +2525,7 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 1,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -2567,6 +2599,7 @@ func TestAgentLoop_SuccessfulTurnDoesNotSetTurnFailed(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -2619,6 +2652,7 @@ func TestProcessDirectWithChannel_TriggersMCPInitialization(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
@@ -2680,6 +2714,7 @@ func TestTargetReasoningChannelID_AllChannels(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -2757,6 +2792,7 @@ func TestHandleReasoning(t *testing.T) {
 					MaxTokens:         4096,
 					MaxToolIterations: 10,
 				},
+				List: []config.AgentConfig{{ID: "mia"}},
 			},
 		}
 		msgBus := bus.NewMessageBus()
@@ -2923,6 +2959,7 @@ func TestProcessMessage_PublishesReasoningContentToReasoningChannel(t *testing.T
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -2990,6 +3027,7 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 					MaxArgsLength: 300,
 				},
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Tools: config.ToolsConfig{
 			ReadFile: config.ReadFileToolConfig{

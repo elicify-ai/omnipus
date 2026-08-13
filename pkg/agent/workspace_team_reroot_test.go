@@ -47,9 +47,11 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 	agentWorkspaceDir := filepath.Join(tmpHome, "agents", "main")
 	require.NoError(t, os.MkdirAll(agentWorkspaceDir, 0o755))
 
-	// Persist a real workspace record whose core_team includes "main" (the
-	// default agent ID — routing.DefaultAgentID — assigned when cfg.Agents.List
-	// carries no explicit entries).
+	// Persist a real workspace record whose core_team includes "main" — an
+	// ordinary, explicitly-registered agent (below, cfg.Agents.List) with no
+	// special meaning anymore. There is no implicit "main" sentinel to rely
+	// on; this test names its own real agent "main" purely so it lines up
+	// with the pre-existing agentWorkspaceDir/workspace fixture paths above.
 	workspacesDir := filepath.Join(tmpHome, "workspaces")
 	require.NoError(t, os.MkdirAll(workspacesDir, 0o755))
 	wsJSON := `{"id":"team-ws","core_team":["main"]}`
@@ -71,6 +73,7 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 				// (fixed or re-rooted) instead of the process CWD.
 				RestrictToWorkspace: true,
 			},
+			List: []config.AgentConfig{{ID: "main"}},
 		},
 	}
 
@@ -154,6 +157,7 @@ func TestRunTurn_WorkspacelessAgentRefused(t *testing.T) {
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
 			},
+			List: []config.AgentConfig{{ID: "main"}},
 		},
 	}
 
@@ -226,6 +230,7 @@ func TestRunTurn_WorkspacelessAgentRefused_ViaProcessMessage(t *testing.T) {
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
 			},
+			List: []config.AgentConfig{{ID: "main"}},
 		},
 	}
 
@@ -303,6 +308,7 @@ func TestRunTurn_MemberGetsWorkspaceWorkDir(t *testing.T) {
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
 			},
+			List: []config.AgentConfig{{ID: "main"}},
 		},
 	}
 
@@ -375,6 +381,7 @@ func TestRunTurn_CoreTeamMember_CannotEscapeWorkToWorkspaceRoot(t *testing.T) {
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
 			},
+			List: []config.AgentConfig{{ID: "main"}},
 		},
 	}
 

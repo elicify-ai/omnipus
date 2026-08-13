@@ -77,6 +77,7 @@ func TestRunTurn_MultiMembership_AdvertisementMatchesEnforcement(t *testing.T) {
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 

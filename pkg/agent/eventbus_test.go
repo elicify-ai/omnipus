@@ -318,6 +318,7 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -452,6 +453,7 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -619,6 +621,7 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 				// estimate undershoots reality.
 				ContextWindow: 32768,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -721,6 +724,7 @@ func TestAgentLoop_EmitsSessionSummarizeEvent(t *testing.T) {
 				SummarizeMessageThreshold: 2,
 				SummarizeTokenPercent:     75,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -815,6 +819,7 @@ func TestAgentLoop_EmitsSessionSummarizeEvent_DegradedOnSummarizationFailure(t *
 				SummarizeMessageThreshold: 2,
 				SummarizeTokenPercent:     75,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -916,6 +921,7 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 

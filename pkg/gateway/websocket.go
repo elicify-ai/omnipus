@@ -1317,6 +1317,23 @@ func (h *WSHandler) handleChatMessage(
 		return
 	}
 
+	// No caller-supplied agent_id AND neither fallback resolved one (no
+	// seeded default agent, no chat-target agent in the roster at all): reject
+	// explicitly rather than letting an empty targetAgentID flow into
+	// store.NewSession/transcript writes below. The retired "main" sentinel
+	// used to silently absorb this case; there is no substitute default to
+	// fall back to now — an empty owner on a persisted session is exactly the
+	// unpoliced-shadow-agent bug removing the sentinel was meant to close.
+	if targetAgentID == "" {
+		slog.Warn("ws: rejecting chat frame — no agent_id supplied and no default agent could be resolved",
+			"chat_id", chatID, "workspace_id", workspaceID)
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "no agent available to handle this message: no default agent is configured",
+		})
+		return
+	}
+
 	// Validate the raw client-supplied agent_id format HERE, before any of the
 	// workspace-kickoff consume/mint/audit work below. The previous placement
 	// of this check (immediately before the bus publish, at the very end of

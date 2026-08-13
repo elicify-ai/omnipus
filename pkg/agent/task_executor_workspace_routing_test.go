@@ -53,7 +53,9 @@ func TestExecuteTask_NativeDispatch_RootsAtTaskWorkspaceID_WhenAgentBelongsToMul
 	agentHomeDir := filepath.Join(tmpHome, "agents", "main")
 	require.NoError(t, os.MkdirAll(agentHomeDir, 0o755))
 
-	// "main" (the default agent ID) belongs to TWO workspaces' core_team.
+	// "main" — an ordinary, explicitly-registered agent (below,
+	// cfg.Agents.List; no implicit sentinel anymore) — belongs to TWO
+	// workspaces' core_team.
 	// "ws-aaa" sorts before "ws-zzz" — workspace.FindForAgent's own
 	// sorted-first tie-break would pick "ws-aaa" if this dispatch ever fell
 	// through to it. The task below names "ws-zzz" as its own WorkspaceID, so
@@ -78,6 +80,7 @@ func TestExecuteTask_NativeDispatch_RootsAtTaskWorkspaceID_WhenAgentBelongsToMul
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
 			},
+			List: []config.AgentConfig{{ID: "main"}},
 		},
 	}
 

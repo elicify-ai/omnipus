@@ -171,7 +171,10 @@ func NewAgentInstance(
 	toolsRegistry.Register(tools.NewRequestMountTool(config.OmnipusHomeDir()))
 
 	// Resolve agentID early so the session store can tag sessions with the correct owner.
-	agentID := routing.DefaultAgentID
+	// Empty until an agentCfg supplies one: the "main" sentinel used to stand in
+	// here, which is how it ended up stamped on sessions, transcripts, tasks and
+	// plans as an owner that no agent record ever matched.
+	agentID := ""
 	agentName := ""
 	var subagents *config.SubagentsConfig
 	var skillsFilter []string
@@ -207,19 +210,22 @@ func NewAgentInstance(
 		contextBuilder.WithMemoryEnabled(agentCfg.MemoryEnabledEffective())
 	}
 
-	// Memory tools (FR-016, FR-017): register remember, recall_memory, and
-	// run_retrospective for all agents except the main gateway agent.
+	// Memory tools (FR-016, FR-017): register remember, recall_memory and
+	// run_retrospective for EVERY agent.
 	// recall_conversation is registered separately (loop.go) as it is session-scoped.
 	// Subagents DO receive these tools — they are not in the ExcludedDelegate/
 	// ExcludedHandoff lists so CloneExcept leaves them intact.
-	// Note: there is no "omnipus-system" runtime agent (CLAUDE.md). The check
-	// below is intentionally main-only.
-	if agentID != "main" {
-		memAdapter := NewMemoryStoreAdapter(contextBuilder.Memory())
-		toolsRegistry.Register(tools.NewRememberTool(memAdapter, nil))
-		toolsRegistry.Register(tools.NewRecallMemoryTool(memAdapter))
-		toolsRegistry.Register(tools.NewRetrospectiveTool(memAdapter, nil))
-	}
+	//
+	// This used to be gated on `agentID != "main"`, excluding the sentinel. That
+	// was a hardcoded identity check, not a capability one: it left the default
+	// agent on un-starred installs unable to remember anything, with no operator
+	// control to change it, because the per-agent permissions screen lists the
+	// execution registry. The gate went with the sentinel — whether an agent may
+	// remember is its tool policy, like every other tool.
+	memAdapter := NewMemoryStoreAdapter(contextBuilder.Memory())
+	toolsRegistry.Register(tools.NewRememberTool(memAdapter, nil))
+	toolsRegistry.Register(tools.NewRecallMemoryTool(memAdapter))
+	toolsRegistry.Register(tools.NewRetrospectiveTool(memAdapter, nil))
 
 	// Per-turn tool-round cap: per-agent override wins, then the global
 	// default, then 200. The per-agent field was persisted+displayed but never
@@ -837,12 +843,13 @@ func resolveAgentHome(agentCfg *config.AgentConfig, defaults *config.AgentDefaul
 		return expandHome(strings.TrimSpace(agentCfg.Home))
 	}
 	// Use the configured default workspace (respects OMNIPUS_HOME) for the
-	// legacy "main" agent identity. The agentCfg.Default flag means "this agent
-	// is the routing default for inbound messages" — it does NOT mean "share the
-	// workspace". A routing-default agent (e.g. Mia with Default=true) must still
-	// get its own per-agent workspace (FUNC-11). Only the literal "main" sentinel
-	// identity falls back to the shared default workspace.
-	if agentCfg == nil || agentCfg.ID == "" || routing.NormalizeAgentID(agentCfg.ID) == routing.DefaultAgentID {
+	// unidentified agent. The agentCfg.Default flag means "this agent is the
+	// routing default for inbound messages" — it does NOT mean "share the
+	// workspace". A routing-default agent (e.g. Mia with Default=true) must
+	// still get its own per-agent workspace (FUNC-11). Only a caller with no
+	// agent identity at all falls back to the shared default workspace; the
+	// "main" sentinel that used to land here has been removed.
+	if agentCfg == nil || agentCfg.ID == "" {
 		return expandHome(defaults.Home)
 	}
 	// Per-agent isolated workspace (FUNC-11). Each custom agent gets its own
@@ -854,9 +861,14 @@ func resolveAgentHome(agentCfg *config.AgentConfig, defaults *config.AgentDefaul
 	// Strip any path separators or ".." from the agent ID.
 	sanitizedID := filepath.Base(filepath.Clean(agentCfg.ID))
 	if sanitizedID == "." || sanitizedID == ".." || sanitizedID == "" {
-		// The agent ID sanitized to an unusable value. Use a UUID-based directory
-		// name to avoid colliding with the reserved "main" workspace that
-		// routing.NormalizeAgentID would return for empty/dot inputs.
+		// The agent ID sanitized to an unusable value. Use a UUID-based
+		// directory name so this degenerate case still gets a unique,
+		// collision-free workspace. (routing.NormalizeAgentID used to return
+		// the "main" sentinel for empty/dot inputs, which made a collision
+		// with the sentinel's own workspace a real risk here; with the
+		// sentinel retired, NormalizeAgentID("") returns empty string and
+		// there is no reserved name left to collide with — the UUID fallback
+		// remains simply for uniqueness.)
 		fallbackID := "agent-" + uuid.New().String()
 		logger.WarnCF("agent", "Suspicious agent ID after sanitization; using UUID fallback workspace",
 			map[string]any{"original_id": agentCfg.ID, "sanitized": sanitizedID, "fallback_id": fallbackID})

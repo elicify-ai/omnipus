@@ -36,6 +36,18 @@ func newTestWSHandlerForModelName(t *testing.T, msgBus *bus.MessageBus) (*WSHand
 				ModelName: "test-default-model",
 				MaxTokens: 4096,
 			},
+			// A real, chat-target agent ("mia") so the default-agent
+			// resolution most callers of this helper rely on (they pass
+			// agentID="" to handleChatMessage) has something to resolve to.
+			// The retired "main" sentinel used to be registered implicitly
+			// regardless of cfg (pkg/agent/registry.go's old always-on
+			// fallback); with it gone, pkg/gateway/websocket.go's
+			// handleChatMessage now rejects rather than silently persisting
+			// an empty owner when no agent_id is supplied and no default can
+			// be resolved. Every one of this helper's 13+ call sites across 5
+			// files passes agentID="", so this is seeded here rather than in
+			// each caller individually.
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})

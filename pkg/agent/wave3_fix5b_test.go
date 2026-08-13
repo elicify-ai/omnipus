@@ -50,6 +50,7 @@ func newWave5bTestAgentLoop(t *testing.T, provider providers.LLMProvider) *Agent
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	return mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)

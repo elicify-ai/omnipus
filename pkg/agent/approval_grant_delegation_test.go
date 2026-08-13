@@ -141,6 +141,17 @@ func newGrantChainAgentLoop(t *testing.T) *AgentLoop {
 				ModelName: "test-model",
 			},
 			List: []config.AgentConfig{
+				// The delegating PARENT: an ordinary, explicitly-registered
+				// non-worker agent. No "main" sentinel to fall back to
+				// anymore — GetDefaultAgent's Priority 2 skips workers, and
+				// without this entry the only registered agents are BOTH
+				// workers, so the degenerate all-workers fallback would
+				// return "child-agent" itself as "the default agent",
+				// collapsing this test's parent/child distinction.
+				{
+					ID:   "grant-chain-parent",
+					Type: config.AgentTypeCore,
+				},
 				{
 					ID:    "child-agent",
 					Type:  config.AgentTypeWorker,

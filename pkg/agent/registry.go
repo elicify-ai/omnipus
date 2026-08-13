@@ -18,11 +18,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// DefaultAgentID is the registry key for the default agent. It is the internal
-// identifier for the generic default agent instance used when no specific agent
-// is targeted (e.g., unrouted channel messages).
-const DefaultAgentID = "main"
-
 // AgentRegistry manages multiple agent instances and routes messages to them.
 type AgentRegistry struct {
 	agents               map[string]*AgentInstance
@@ -39,7 +34,8 @@ type AgentRegistry struct {
 }
 
 // SetDefaultAgentOverride sets the agent ID to use as the default agent.
-// When set, GetDefaultAgent returns this agent instead of the "main" agent.
+// When set, GetDefaultAgent returns this agent instead of falling through to
+// its lexicographically-first-non-worker fallback (Priority 2 below).
 func (r *AgentRegistry) SetDefaultAgentOverride(agentID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -56,65 +52,23 @@ func NewAgentRegistry(
 		resolver: routing.NewRouteResolver(cfg),
 	}
 
-	// Always register the default/system agent. This handles messages that
-	// don't target a specific custom agent (e.g., system agent in webchat,
-	// unrouted channel messages). Uses the default workspace.
-	// Note: Default is intentionally false here — AgentConfig.Default is no
-	// longer consulted anywhere in GetDefaultAgent's resolution ladder at all
-	// (ADR-054 D6.4 withdrew the old "per-agent Default=true flag" priority
-	// entirely; see GetDefaultAgent's own doc comment for the current
-	// 3-priority ladder). The field survives on the struct only as a
-	// display-derived reflection of cfg.Agents.Defaults.DefaultAgentID
-	// (computed at the REST read boundary), so leaving it false here has no
-	// resolution-time effect either way — it is simply the honest value for a
-	// synthetic sentinel that was never "set" by anyone.
-	//
-	// Tools is deliberately non-nil: an AgentConfig with a nil Tools field
-	// resolves every tool policy through agentToolsCfgToPolicy's a=="" branch,
-	// which falls through to whatever the GLOBAL sandbox.tool_policies floor
-	// says (pkg/tools/compositor.go's resolveEffectivePolicyWith, case
-	// g=="" /* never true here */ ... case a=="": return g). Since the seeded
-	// global floor allows several high-impact tools (bash, write_file,
-	// edit_file, delegate, send_email — pkg/config/defaults.go), an
-	// unpoliced "main" sentinel silently inherited "allow" for all of them —
-	// worse, "main" is never a member of cfg.Agents.List, so
-	// config.ValidateToolPolicyCoverage's boot/write-time coverage gate
-	// (Hard Constraint #6) has never validated it. coreagent.
-	// NewCustomAgentToolsCfg() is the same conservative, fully-enumerated,
-	// wildcard-free deny-by-default seed AgentCreateTool gives every brand
-	// new custom agent (read_file/list_directory/remember/recall_memory
-	// allow, everything else explicit deny) — reusing it here means the
-	// sentinel is governed like any other agent instead of the permissive
-	// floor, with no new policy vocabulary introduced.
-	defaultAgent := &config.AgentConfig{
-		ID:      DefaultAgentID,
-		Default: false,
-		Tools:   coreagent.NewCustomAgentToolsCfg(),
-	}
-	defaultInstance := NewAgentInstance(defaultAgent, &cfg.Agents.Defaults, cfg, provider)
-	// The default "main" agent is a core agent (it runs system.* tools seeded by the registry).
-	defaultInstance.SetAgentType("core")
-	registry.agents[DefaultAgentID] = defaultInstance
-	logger.InfoCF("agent", "Registered default agent (main)", map[string]any{
-		"workspace": defaultInstance.Home,
-		"model":     defaultInstance.Model,
-	})
-
 	// Register agents from config (core agents seeded by coreagent.SeedConfig are
 	// stored in cfg.Agents.List alongside custom agents).
-	// Protect the DefaultAgentID ("main") — a custom/core agent using that ID would
-	// silently overwrite the generic default agent instance.
-	reservedIDs := map[string]bool{
-		DefaultAgentID: true,
-	}
+	//
+	// There is no implicit default/sentinel agent registered here anymore.
+	// The retired "main" sentinel was a shadow entity: it had no schema
+	// anywhere (not in contracts/, not in cfg.Agents.List, not in the entity
+	// store — GET /api/v1/agents/main was always a 404), so
+	// config.ValidateToolPolicyCoverage's boot/write-time tool-policy
+	// coverage gate (Hard Constraint #6) never validated it, yet it was
+	// registered at runtime and stamped as owner on real user data. The only
+	// legitimate default agent now is the seeded default
+	// (config.Agents.Defaults.DefaultAgentID, seeded to Mia on fresh
+	// install) — see GetDefaultAgent's resolution ladder below for how a
+	// caller with no explicit target resolves one.
 	for i := range cfg.Agents.List {
 		ac := &cfg.Agents.List[i]
 		id := routing.NormalizeAgentID(ac.ID)
-		if reservedIDs[id] {
-			logger.ErrorCF("agent", "Custom agent uses reserved ID; skipping registration",
-				map[string]any{"agent_id": id, "name": ac.Name})
-			continue
-		}
 		instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider)
 		// Upgrade agent type for runtime-seeded core agents whose config may not
 		// have Type field set (e.g., agents seeded before the Type field was introduced).
@@ -282,33 +236,35 @@ func (r *AgentRegistry) Close() {
 	r.agents = make(map[string]*AgentInstance)
 }
 
-// GetDefaultAgent returns the default agent instance.
+// GetDefaultAgent returns the default agent instance, or nil when the
+// registry holds no agents at all (e.g. immediately after Close(), or a
+// degenerate config with an empty cfg.Agents.List — both reachable now that
+// there is no implicit sentinel guaranteeing at least one entry). Every
+// caller must nil-check the result; there is no longer a synthetic fallback
+// agent that makes the map non-empty by construction.
 //
 // Resolution order — the authority for THIS registry's own in-memory agent
 // map only. pkg/routing.RouteResolver.resolveDefaultAgentID follows the same
-// 3-tier shape (override → built-in fallback → deterministic last resort) for
-// the channel-binding-cascade's own "default" match, but the two are
-// independent resolvers over different data, not one delegating to the
-// other, and they are NOT guaranteed to agree in every case:
-//   - This method walks r.agents (the constructed registry map, which always
-//     contains the implicit DefaultAgentID/"main" sentinel) and tests
-//     candidates with AgentInstance.IsWorker(); its Priority 3 fallback sorts
-//     candidate IDs lexicographically.
-//   - resolveDefaultAgentID walks cfg.Agents.List (the raw config slice,
-//     which never contains an implicit "main" entry) and tests candidates
-//     with AgentConfig.IsChatTarget(); its own fallback returns the first
-//     chat-target agent in LIST ORDER, not sorted, and only reaches the
-//     literal "main" constant when cfg.Agents.List has no chat-target agent
-//     at all.
+// 2-tier shape (override → deterministic last resort) for the
+// channel-binding-cascade's own "default" match, but the two are independent
+// resolvers over different data, not one delegating to the other, and they
+// are NOT guaranteed to agree in every case:
+//   - This method walks r.agents (the constructed registry map — every entry
+//     comes from cfg.Agents.List, there is no implicit member anymore) and
+//     tests candidates with AgentInstance.IsWorker(); its Priority 2 fallback
+//     sorts candidate IDs lexicographically.
+//   - resolveDefaultAgentID walks cfg.Agents.List directly (the raw config
+//     slice) and tests candidates with AgentConfig.IsChatTarget(); its own
+//     fallback returns the first chat-target agent in LIST ORDER, not
+//     sorted.
 //
-// Concretely: with no override configured and at least one chat-target
-// custom/core agent present in cfg.Agents.List, resolveDefaultAgentID
-// resolves to that agent (e.g. Mia) while this method still resolves to the
-// generic "main" sentinel (Priority 2) — the two are consulted in different
-// contexts (this method for registry-level lookups with no routing input at
-// all; the resolver for the channel binding cascade's final "default" tier)
-// so the divergence has not been a live bug, but callers must not assume the
-// two names always match.
+// Concretely: with no override configured, resolveDefaultAgentID resolves to
+// the first chat-target agent in cfg.Agents.List order while this method
+// resolves to the lexicographically-first non-worker agent in the registry
+// map — the two are consulted in different contexts (this method for
+// registry-level lookups with no routing input at all; the resolver for the
+// channel binding cascade's final "default" tier) so the divergence has not
+// been a live bug, but callers must not assume the two always agree.
 //
 // ADR-054 D6.4 removed the old Priority 1 ("an agent whose AgentConfig.Default
 // field is true"): splitting agents into independent per-entity files means two
@@ -323,38 +279,41 @@ func (r *AgentRegistry) Close() {
 //     (settings, not an entity field), when the named agent exists in the
 //     registry and is not a worker. R3: if the named agent does NOT exist here
 //     — because it was never configured, OR because its entity record failed
-//     to load (skipped at boot) — resolution falls through to priority 2/3
+//     to load (skipped at boot) — resolution falls through to priority 2
 //     rather than black-holing traffic; callers that also have the `skipped`
 //     set from agentstore.Store.List should call EvaluateDefaultAgentHealth so
 //     this case is surfaced as degraded rather than silently swallowed.
-//  2. The built-in "main" sentinel agent, when it is not a worker.
-//  3. The lexicographically first registered non-worker agent (deterministic
-//     fallback, M10). Workers are never chat targets, so every priority skips them.
+//  2. The lexicographically first registered non-worker agent (deterministic
+//     fallback, M10). Workers are never chat targets, so this priority skips
+//     them. There is no built-in sentinel agent to fall back to anymore — the
+//     retired "main" sentinel used to sit here; it was never a modelled agent
+//     (no schema, no entity record, absent from cfg.Agents.List, 404 from
+//     GET /api/v1/agents/main) yet it silently resolved as the live default
+//     on any install where nobody had set one. The seeded default agent
+//     (Priority 1) is the only intentional default now — Priority 2 is a
+//     last-resort fallback for a registry with agents but no configured
+//     default, not a stand-in identity of its own.
 func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	// Priority 1: explicit override from config.Agents.Defaults.DefaultAgentID.
 	// A worker is never a chat target, so a hand-edited override pointing at one
-	// is skipped (defense in depth; consistent with the Priority-3 hardening).
+	// is skipped (defense in depth; consistent with the Priority-2 hardening).
 	if r.defaultAgentOverride != "" {
 		if agent, ok := r.agents[r.defaultAgentOverride]; ok && !agent.IsWorker() {
 			return agent
 		}
 	}
 
-	// Priority 2: the "main" built-in sentinel — unless it is somehow a worker
-	// (degenerate/tampered config), in which case fall through to Priority 3.
-	if agent, ok := r.agents[DefaultAgentID]; ok && !agent.IsWorker() {
-		return agent
-	}
-
-	// Priority 3: lexicographically first registered agent (M10) — but never a
+	// Priority 2: lexicographically first registered agent (M10) — but never a
 	// worker. Workers are not chat targets and must not be resolved as the
 	// default even in the last-resort fallback. Prefer the first non-worker; only
 	// if EVERY registered agent is a worker do we fall back to the first overall
 	// (degenerate config — better to return something than nil so callers that
-	// require a default don't panic).
+	// require a default don't panic). If the registry holds no agents at all,
+	// there is nothing to fall back to and this returns nil — callers must
+	// handle that case explicitly.
 	ids := make([]string, 0, len(r.agents))
 	for id := range r.agents {
 		ids = append(ids, id)
@@ -446,8 +405,8 @@ const maxFastUpsertAttempts = 50
 // unsynchronized struct-field write on a shared tool object (e.g.
 // tools.DelegateTool.SetSteeringSink via wireSessionMessagingForAgent) —
 // two concurrent UpsertAgentFast calls (e.g. Ava creating several team
-// members in parallel) each re-wiring the SAME pre-existing "main"/other
-// agent's delegate tool at the same time is a genuine data race, verified
+// members in parallel) each re-wiring the SAME pre-existing agent's delegate
+// tool at the same time is a genuine data race, verified
 // under `go test -race` on TestUpsertAgentFast_ConcurrentDifferentAgents_
 // NoLostUpdate before this mutex was added (2 goroutines writing
 // DelegateTool.steering with no synchronization between them).
@@ -642,9 +601,6 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 	if id == "" {
 		return nil, fmt.Errorf("upsert agent fast: agent id is empty")
 	}
-	if id == DefaultAgentID {
-		return nil, fmt.Errorf("upsert agent fast: agent id %q is reserved", DefaultAgentID)
-	}
 	var ac *config.AgentConfig
 	for i := range cfg.Agents.List {
 		if routing.NormalizeAgentID(cfg.Agents.List[i].ID) == id {
@@ -836,9 +792,8 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 
 // RemoveAgent deletes a single agent instance from the registry (post
 // entity-delete, ADR-054 D6 rule 5). Reports whether an instance was present.
-// The DefaultAgentID ("main") sentinel is never removable through this path —
-// mirrors the reserved-ID protection NewAgentRegistry already applies to
-// custom/core agent registration.
+// There is no reserved sentinel ID to protect anymore — every registered
+// agent is a real, config-backed entity and is removable through this path.
 //
 // HONEST STATUS as of this commit: no production code calls this — see
 // UpsertAgent's doc comment immediately above for the full explanation
@@ -848,9 +803,6 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 // counterpart of UpsertAgent for a future narrower-than-full-reload caller.
 func (r *AgentRegistry) RemoveAgent(id string) bool {
 	normalized := routing.NormalizeAgentID(id)
-	if normalized == DefaultAgentID {
-		return false
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.agents[normalized]; !ok {

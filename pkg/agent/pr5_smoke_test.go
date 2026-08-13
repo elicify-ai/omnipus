@@ -73,6 +73,7 @@ func TestBash_JimSeedPolicyAppliedInLoop(t *testing.T) {
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 

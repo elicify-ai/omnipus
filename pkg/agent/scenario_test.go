@@ -42,6 +42,7 @@ func newScenarioCfg(t *testing.T) (*config.Config, string) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	coreagent.SeedConfig(cfg)
@@ -137,6 +138,7 @@ func TestScenario5RateLimitFiresOnThirdCall(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			RateLimits: config.OmnipusRateLimitsConfig{

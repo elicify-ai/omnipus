@@ -56,6 +56,7 @@ func makeLoopWithSharedStore(t *testing.T) (*AgentLoop, *session.UnifiedStore) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})

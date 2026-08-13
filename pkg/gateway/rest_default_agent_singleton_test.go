@@ -77,9 +77,23 @@ func TestUpdateAgent_DefaultToggle_RegistryAndRoutingAgree(t *testing.T) {
 				// agent, and (pre-fix) coreagent.SeedConfig never wrote this
 				// either, so it is empty on every affected install.
 			},
+			// List order is deliberately "agent-b" THEN "agent-a" — the
+			// opposite of lexicographic order. The retired "main" sentinel
+			// used to be GetDefaultAgent's own Priority-2 fallback (disagreeing
+			// with resolveDefaultAgentID's first-in-list-order fallback on
+			// EVERY install, regardless of naming); with the sentinel gone,
+			// GetDefaultAgent's Priority 2 is now "lexicographically first
+			// registered non-worker agent" while resolveDefaultAgentID's is
+			// still "first chat-target agent in cfg.Agents.List order" (see
+			// both doc comments — pkg/agent/registry.go::GetDefaultAgent and
+			// pkg/routing/route.go::resolveDefaultAgentID). The two orderings
+			// only disagree when list order isn't already lexicographic, so
+			// this fixture orders the list backwards on purpose to keep
+			// reproducing the "the two ladders can disagree with no configured
+			// override" precondition this test exists to guard.
 			List: []config.AgentConfig{
-				{ID: "agent-a", Name: "Agent A"},
 				{ID: "agent-b", Name: "Agent B"},
+				{ID: "agent-a", Name: "Agent A"},
 			},
 		},
 	}
@@ -104,8 +118,10 @@ func TestUpdateAgent_DefaultToggle_RegistryAndRoutingAgree(t *testing.T) {
 	preRegistry.Close()
 	require.NotEqual(t, preDefault.ID, preResolved.AgentID,
 		"precondition check: with no configured default, GetDefaultAgent (falls back to the "+
-			"\"main\" sentinel) and ResolveRoute (falls back to the first chat-target agent) "+
-			"must actually disagree — otherwise this test no longer reproduces the release blocker")
+			"lexicographically-first non-worker agent, \"agent-a\") and ResolveRoute (falls back "+
+			"to the first chat-target agent in cfg.Agents.List ORDER, \"agent-b\" per this "+
+			"fixture's deliberately-reversed list) must actually disagree — otherwise this test "+
+			"no longer reproduces the release blocker")
 
 	// The ★ toggle: PUT /api/v1/agents/agent-b {"default": true}.
 	body := `{"default": true}`

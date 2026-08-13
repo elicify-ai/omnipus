@@ -31,6 +31,7 @@ func TestRepro_SyncDelegateCancel_RequestCancel(t *testing.T) {
 			// which both leaks real session dirs into the repo tree across runs
 			// and makes spawnSubTurn's child registration flaky under load.
 			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
+			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

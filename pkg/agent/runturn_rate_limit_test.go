@@ -15,11 +15,15 @@
 // The audit found "pkg/agent/loop.go:735 emits turn.rate_limit events but no test
 // drives the loop over budget". This test closes that gap.
 //
-// Implementation note: ProcessDirect routes to the default agent ("main") which is
-// always AgentType="core" and exempt from rate limits via IsPrivilegedAgent. To
-// actually trigger rate limiting we must route through a custom agent
-// (AgentType="custom"). We use runAgentLoop directly (package-internal) to pass the
-// custom agent instance. This is the same pattern used internally by processMessage.
+// Implementation note: ProcessDirect routes to whichever agent resolves as
+// the default (there is no "main" sentinel anymore — the default is whatever
+// cfg.Agents.Defaults.DefaultAgentID names, or the lexicographically-first
+// non-worker registered agent). Core-roster agents are always AgentType="core"
+// and exempt from rate limits via IsPrivilegedAgent, so to actually trigger
+// rate limiting we must route through a custom agent (AgentType="custom") —
+// not rely on whatever happens to resolve as default. We use runAgentLoop
+// directly (package-internal) to pass the custom agent instance. This is the
+// same pattern used internally by processMessage.
 //
 // Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 3 (Rank-9)
 
@@ -79,8 +83,9 @@ func TestRunTurn_RateLimit_LLMCallsPerHour(t *testing.T) {
 		WithText("second response — should never be reached")
 
 	// The custom agent ID must NOT be a core agent ID (as checked by
-	// coreagent.IsCoreAgent) and must NOT be DefaultAgentID ("main").
-	// "rate-test-agent" is safe: it is not a reserved or core agent name.
+	// coreagent.IsCoreAgent). "rate-test-agent" is safe: it is not a core
+	// agent name (there is no other reserved name to avoid anymore — the
+	// "main" sentinel is gone).
 	const customAgentID = "rate-test-agent"
 
 	cfg := &config.Config{

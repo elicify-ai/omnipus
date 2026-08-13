@@ -56,6 +56,7 @@ func TestSpawnSubTurn_ParentHardAbort_RecordsInterruptedStatus(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
+			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -193,6 +194,7 @@ func TestSpawnSubTurn_ExplicitCancelViaRequestCancel_RecordsCancelledAndReason(t
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
+			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

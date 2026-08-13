@@ -118,6 +118,7 @@ func newProgressWiringTestLoop(t *testing.T, provider providers.LLMProvider) (*A
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

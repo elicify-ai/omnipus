@@ -129,6 +129,7 @@ func newBashAsyncTestLoop(t *testing.T, provider *testutil.ScenarioProvider) (
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 

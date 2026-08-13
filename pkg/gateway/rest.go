@@ -4307,10 +4307,10 @@ func ensureMap(m map[string]any, keys ...string) map[string]any {
 // populateAgentsListFromStore is the ADR-054 D3/§5 "read through an
 // in-memory cache" bridge for the config-reload path — see
 // populateAgentsListFromEntityStoreStrict's doc comment (gateway.go) for the
-// full rationale, including the verified privilege-escalation chain a
-// silently-empty roster opens (an unrestricted "main" sentinel falls through
-// to the permissive global tool-policy floor, and the coverage gate vacuously
-// passes zero agents).
+// full rationale. The 2026-07-26 privilege-escalation chain documented there
+// ran through the "main" sentinel, which no longer exists; the remaining half
+// still stands on its own — a silently-empty roster makes the tool-policy
+// coverage gate pass vacuously, over zero agents.
 //
 // SECURITY FIX (RELEASE BLOCKER, F3 follow-up): this used to call the LENIENT
 // populateAgentsListFromEntityStore (log-and-continue on failure, silently

@@ -50,21 +50,22 @@ func wirePlanStore(t *testing.T, api *restAPI) *plan.Store {
 }
 
 // makeTestPlan creates and persists a plan in the given state, owned by
-// "main" (the always-registered default agent sentinel this test file's
-// harness assigns tasks to) on workspaceID.
+// "mia" (newTestRestAPIAlignedStoresWithProvider's one explicitly seeded
+// chat-target agent — the retired "main" sentinel used to be registered
+// implicitly regardless of cfg) on workspaceID.
 func makeTestPlan(t *testing.T, planStore *plan.Store, workspaceID string, state plan.State) *plan.Plan {
 	t.Helper()
 	p := &plan.Plan{
 		Title:        "plan gate REST test plan",
 		WorkspaceID:  workspaceID,
-		OwnerAgentID: "main",
+		OwnerAgentID: "mia",
 		State:        state,
 	}
 	require.NoError(t, planStore.Create(p), "create plan (state=%s)", state)
 	return p
 }
 
-// assignPlanMemberTask creates a `next` task, assigns agent_id="main", and
+// assignPlanMemberTask creates a `next` task, assigns agent_id="mia", and
 // attaches it to planID via PATCH plan_id — the same sequence a real Kanban
 // board / task-detail panel drives through the REST API.
 func assignPlanMemberTask(t *testing.T, api *restAPI, title, workspaceID, planID string) gen.Task {
@@ -72,8 +73,8 @@ func assignPlanMemberTask(t *testing.T, api *restAPI, title, workspaceID, planID
 	tsk := createTaskViaAPI(t, api, title, workspaceID)
 	advanceTaskToNext(t, api, tsk.Id)
 
-	wAssign := patchTask(t, api, tsk.Id, `{"agent_id":"main"}`)
-	require.Equal(t, 200, wAssign.Code, "assign agent_id=main must return 200; body=%s", wAssign.Body.String())
+	wAssign := patchTask(t, api, tsk.Id, `{"agent_id":"mia"}`)
+	require.Equal(t, 200, wAssign.Code, "assign agent_id=mia must return 200; body=%s", wAssign.Body.String())
 
 	wPlan := patchTask(t, api, tsk.Id, fmt.Sprintf(`{"plan_id":%q}`, planID))
 	require.Equal(t, 200, wPlan.Code, "assign plan_id must return 200; body=%s", wPlan.Body.String())
@@ -90,7 +91,7 @@ func assignPlanMemberTask(t *testing.T, api *restAPI, title, workspaceID, planID
 func TestHandleTaskPatch_InProgress_DraftPlanMember_DoesNotLaunch(t *testing.T) {
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 	planStore := wirePlanStore(t, api)
 
 	p := makeTestPlan(t, planStore, wsID, plan.StateDraft)
@@ -127,7 +128,7 @@ func TestHandleTaskPatch_InProgress_DraftPlanMember_DoesNotLaunch(t *testing.T) 
 func TestHandleTaskPatch_InProgress_StoppedPlanMember_DoesNotLaunch(t *testing.T) {
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 	planStore := wirePlanStore(t, api)
 
 	// Attach the member while the plan is still draft, THEN drive it to
@@ -160,7 +161,7 @@ func TestHandleTaskPatch_InProgress_StoppedPlanMember_DoesNotLaunch(t *testing.T
 func TestHandleTaskPatch_InProgress_PausedRunningPlanMember_DoesNotLaunch(t *testing.T) {
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 	planStore := wirePlanStore(t, api)
 
 	p := makeTestPlan(t, planStore, wsID, plan.StateRunning)
@@ -185,7 +186,7 @@ func TestHandleTaskPatch_InProgress_PausedRunningPlanMember_DoesNotLaunch(t *tes
 func TestHandleTaskPatch_InProgress_ApprovedPlanMember_StillLaunches(t *testing.T) {
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 	planStore := wirePlanStore(t, api)
 
 	p := makeTestPlan(t, planStore, wsID, plan.StateApproved)

@@ -171,16 +171,23 @@ func TestIntegration_RetroSweep180Split(t *testing.T) {
 		"default RetentionMemoryRetrosDays must be 180 when MemoryRetrosDays is unset")
 
 	// ── Act: executeRetroSweep path (end-to-end agent iteration) ─────────────
-	// Build a minimal AgentLoop with one agent wired to our MemoryStore.
-	// This exercises executeRetroSweep → registry.ListAgentIDs() → SweepRetros.
+	// Build a minimal AgentLoop with one real, chat-target agent ("mia") wired
+	// to our MemoryStore. This exercises executeRetroSweep →
+	// registry.ListAgentIDs() → SweepRetros.
 	//
 	// We do this by:
-	//  1. Building the loop (it auto-registers the default "main" agent).
+	//  1. Building the loop with "mia" seeded into cfg.Agents.List. The retired
+	//     "main" sentinel used to auto-register regardless of cfg and share
+	//     AgentDefaults.Home directly (the "unidentified agent" case in
+	//     pkg/agent/instance.go's resolveAgentHome); it is gone with no
+	//     back-compat, and a REAL named agent like "mia" gets its own
+	//     per-agent workspace under $OMNIPUS_HOME/agents/mia/ instead — so the
+	//     backdated retro below is planted under mia's ACTUAL resolved Home,
+	//     not the AgentDefaults.Home value.
 	//  2. Patching retentionRetroSweepFn to call executeRetroSweep with our loop.
-	//  3. Asserting executeRetroSweep returns 0 (the "main" agent workspace has
-	//     no retros; this verifies the iteration path runs without panic and
-	//     honors a retentionDays boundary for each registered agent).
-
+	//  3. Asserting executeRetroSweep deletes the planted stale retro; this
+	//     verifies the iteration path runs without panic and honors a
+	//     retentionDays boundary for each registered agent.
 	tmpHome := t.TempDir()
 	loopCfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -189,17 +196,22 @@ func TestIntegration_RetroSweep180Split(t *testing.T) {
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, loopCfg, msgBus, &restMockProvider{})
 
-	// Plant a backdated retro under the "main" agent's workspace so the sweep
-	// actually has work to do.  The "main" agent workspace is tmpHome itself
-	// (AgentDefaults.Home is used when no per-agent workspace is set).
-	mainPrivate := filepath.Join(tmpHome, ".omnipus", "retros")
+	// Resolve mia's REAL workspace (not tmpHome — see the comment above) before
+	// planting the backdated retro so the sweep actually has work to do.
+	registry := al.GetRegistry()
+	miaInst, ok := registry.GetAgent("mia")
+	require.True(t, ok, "AgentLoop must have 'mia' agent registered")
+	require.NotNil(t, miaInst.ContextBuilder, "'mia' agent must have a ContextBuilder")
+
+	miaPrivate := filepath.Join(miaInst.Home, ".omnipus", "retros")
 	staleDate := now.AddDate(0, 0, -200).UTC().Format("2006-01-02")
-	staleDir := filepath.Join(mainPrivate, staleDate)
+	staleDir := filepath.Join(miaPrivate, staleDate)
 	require.NoError(t, os.MkdirAll(staleDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(staleDir, "sess-integration_retro.md"),
@@ -209,14 +221,10 @@ func TestIntegration_RetroSweep180Split(t *testing.T) {
 		0o600,
 	))
 
-	// Inject a clock into the main agent's MemoryStore.
-	registry := al.GetRegistry()
-	mainInst, ok := registry.GetAgent("main")
-	require.True(t, ok, "AgentLoop must have 'main' agent registered")
-	require.NotNil(t, mainInst.ContextBuilder, "'main' agent must have a ContextBuilder")
-	mainMemory := mainInst.ContextBuilder.Memory()
-	require.NotNil(t, mainMemory, "'main' agent's ContextBuilder.Memory() must not be nil")
-	mainMemory.SetClock(func() time.Time { return now })
+	// Inject a clock into mia's MemoryStore.
+	miaMemory := miaInst.ContextBuilder.Memory()
+	require.NotNil(t, miaMemory, "'mia' agent's ContextBuilder.Memory() must not be nil")
+	miaMemory.SetClock(func() time.Time { return now })
 
 	// executeRetroSweep is in the same package (gateway); call it directly.
 	totalDeleted := executeRetroSweep(al, 180)

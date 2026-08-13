@@ -82,6 +82,7 @@ func TestAgentLoopClose_TearsDownMemoryScorchGoroutines(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -158,6 +159,7 @@ func TestAgentLoopClose_BoundedWhenRecapDrainWedged(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})

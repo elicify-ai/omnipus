@@ -359,12 +359,19 @@ func seedDistinctTestWorkspacesForIDs(t *testing.T, ids []string) {
 }
 
 // testHarnessAgentIDs returns the set of agent IDs mustNewAgentLoop's caller's
-// cfg will register with NewAgentRegistry: DefaultAgentID ("main", always
-// registered as the synthetic default/fallback agent regardless of cfg — see
-// NewAgentRegistry in registry.go) plus every explicit, non-reserved ID in
+// cfg will register with NewAgentRegistry: every explicit ID in
 // cfg.Agents.List — INCLUDING an agent configured with an external-CLI
 // executor (Subagents.Executor.Kind == config.ExecutorKindExternalCLI) —
 // NORMALIZED exactly the way NewAgentRegistry itself keys the registry.
+//
+// There is no synthetic "main" sentinel added anymore. The retired "main"
+// sentinel was never a modelled agent (no schema, no entity record, absent
+// from cfg.Agents.List) yet NewAgentRegistry used to register it
+// unconditionally regardless of cfg. That is gone: a cfg with an empty
+// Agents.List now produces a registry with ZERO agents, and any test that
+// needs a real turn to route somewhere must add its own explicit entry to
+// cfg.Agents.List (e.g. {ID: "mia", Name: "Mia"}) rather than relying on an
+// implicit fallback identity.
 //
 // registry.go's NewAgentRegistry never registers an agent under its raw
 // cfg.Agents.List[i].ID: every entry is keyed under
@@ -411,11 +418,11 @@ func seedDistinctTestWorkspacesForIDs(t *testing.T, ids []string) {
 // ADR-046 P1 retired; see TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools,
 // updated to assert workspace-relative resolution instead.
 func testHarnessAgentIDs(cfg *config.Config) []string {
-	ids := []string{DefaultAgentID}
+	var ids []string
 	if cfg == nil {
 		return ids
 	}
-	seen := map[string]bool{DefaultAgentID: true}
+	seen := map[string]bool{}
 	for _, a := range cfg.Agents.List {
 		if a.ID == "" {
 			continue

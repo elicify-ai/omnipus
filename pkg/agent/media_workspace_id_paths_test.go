@@ -62,6 +62,7 @@ func newMediaWorkspaceIDTestLoop(
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 
@@ -324,6 +325,7 @@ func TestBuildContinuationTarget_ResolvesWorkspaceID_FromChannelBinding(t *testi
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Channels: map[string]config.ChannelInstanceConfig{
 			"telegram.sales": {
