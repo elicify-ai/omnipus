@@ -31,6 +31,21 @@ type AgentRegistry struct {
 	// ladder — purely a health-surface signal.
 	degraded       bool
 	degradedReason string
+
+	// provider is the LLM provider this registry was built with.
+	//
+	// It exists because the registry must be able to hand out a provider even
+	// when it holds NO agents — which became reachable when the "main"
+	// sentinel was removed (ADR-064). The sentinel was always registered, so
+	// extractProvider could always reach a provider THROUGH it; with the
+	// sentinel gone an empty registry had none, UpsertAgentFast failed, and
+	// its callers fell back to a full config reload — the restartServices
+	// cascade that issue #571 exists to keep off the agent create/update path.
+	//
+	// A provider is a loop-level resource agents borrow, not something an
+	// agent owns. Holding it here says that directly instead of depending on
+	// some agent happening to exist.
+	provider providers.LLMProvider
 }
 
 // SetDefaultAgentOverride sets the agent ID to use as the default agent.
@@ -50,6 +65,7 @@ func NewAgentRegistry(
 	registry := &AgentRegistry{
 		agents:   make(map[string]*AgentInstance),
 		resolver: routing.NewRouteResolver(cfg),
+		provider: provider,
 	}
 
 	// Register agents from config (core agents seeded by coreagent.SeedConfig are

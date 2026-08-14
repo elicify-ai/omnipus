@@ -12352,12 +12352,29 @@ func extractProvider(registry *AgentRegistry) (providers.LLMProvider, bool) {
 	if registry == nil {
 		return nil, false
 	}
-	// Get any agent to access the provider
-	defaultAgent := registry.GetDefaultAgent()
-	if defaultAgent == nil {
-		return nil, false
+	// Any agent's provider will do — they all borrow the same one. Ask the
+	// default first because it is the cheapest lookup, then any registered
+	// agent, then the registry's own.
+	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil && defaultAgent.Provider != nil {
+		return defaultAgent.Provider, true
 	}
-	return defaultAgent.Provider, true
+	for _, id := range registry.ListAgentIDs() {
+		if ag, ok := registry.GetAgent(id); ok && ag != nil && ag.Provider != nil {
+			return ag.Provider, true
+		}
+	}
+	// No agents at all. Before ADR-064 this was unreachable: the "main"
+	// sentinel was always registered, so a provider was always reachable
+	// through it. Removing the sentinel made an empty registry real, and
+	// UpsertAgentFast started failing here on first-agent creation — its
+	// callers then fell back to a full config reload, the restartServices
+	// cascade issue #571 exists to keep off this path.
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	if registry.provider != nil {
+		return registry.provider, true
+	}
+	return nil, false
 }
 
 // llmRate holds approximate per-1K-token pricing for a model family.
