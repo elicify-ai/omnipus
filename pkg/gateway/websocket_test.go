@@ -33,6 +33,12 @@ func newTestWSHandler(t *testing.T) (*WSHandler, *bus.MessageBus, *agent.AgentLo
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
+			// An explicitly registered agent. handleChatMessage REFUSES a chat
+			// frame it cannot resolve an agent for rather than publishing a
+			// message owned by nobody, and there is no implicit "main" sentinel
+			// to resolve to any more (ADR-064) — with an empty roster nothing
+			// reaches the bus and these tests wait out their timeout.
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
