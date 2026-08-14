@@ -5,7 +5,7 @@
 - **Deciders:** founder (decided removal, and that there is no back-compat); lead (mechanism)
 - **Related:** [ADR-054 D6.4](ADR-054-entities-separate-from-config.md) (made `config.Agents.Defaults.DefaultAgentID` the single source for default-agent resolution); [ADR-037](ADR-037-remove-delegation-graph.md) (the precedent this follows — a control that looked functional and had no effect); `pkg/config/legacy_agents_list.go` (the precedent for an agent-identity cutover with no migration).
 - **Evidence level:** claims marked **[VERIFIED]** were read from code or executed on this host at commit `f52f1988` (pre-removal) and `36bc3689` (post-removal). Nothing here is inferred from documentation alone — the review that produced it corrected its own first pass twice.
-- **Implemented by:** commit `36bc3689` on `feat/remove-main-sentinel-agent`.
+- **Implemented by:** commits `36bc3689` (removal), `a5c24a73` (registry provider), `64f43e7c` (ladder agreement) on `feat/remove-main-sentinel-agent`.
 
 ---
 
@@ -103,15 +103,38 @@ defensively in anticipation. **[VERIFIED]**
 no default resolves, returning an error frame rather than creating a session with an empty
 owner. An empty owner is the same defect wearing a disguise, and harder to grep for.
 
-## 7. What this does NOT fix
+## 7. The divergence underneath — since CLOSED
 
-The two default-agent ladders **still disagree in their last resort** — `GetDefaultAgent` falls
-back to the lexicographically-first non-worker, `resolveDefaultAgentID` to the first chat-target
-in `cfg.Agents.List` slice order. They are only guaranteed to agree via the configured override.
-That disagreement, not the sentinel, is the underlying defect; it caused a release blocker in
-July 2026 and is unchanged here. Removing the sentinel removed a rung, not the divergence.
+This ADR originally recorded that the two default-agent ladders **still
+disagreed** in their last resort, and that removing the sentinel took a rung
+off each without fixing it. That is no longer true; it was closed in the same
+branch and is recorded here rather than in a separate ADR because it is the
+same defect.
 
-Recorded so the next person does not mistake this ADR for having closed it.
+They differed in **two** independent ways:
+
+- **Eligibility.** `resolveDefaultAgentID` skipped System Agents
+  (`IsChatTarget`); `GetDefaultAgent` accepted any non-worker. So the registry
+  could resolve a **System Agent** as the chat default — an agent that must
+  never receive user messages. The more serious half, and entirely invisible.
+- **Ordering.** Routing took the first chat target in `cfg.Agents.List` slice
+  order — whatever order the config file happened to list agents in — while the
+  registry sorted.
+
+`AgentInstance` now mirrors `config.AgentConfig`'s `IsSystem`/`IsChatTarget`,
+both ladders apply that same predicate, and both sort. `GetDefaultAgent`
+returns nil rather than falling back to a worker or System Agent when no
+legitimate chat target exists.
+
+A cross-package test pins the agreement, using a config that lists agents out
+of sorted order and contains a System Agent sorting before every real one. It
+was verified to fail against the old rule.
+
+**One thing this exposed:** `TestResolveRoute_MiaIsDefault` had been passing
+for the wrong reason. It sets `Default: true` on mia and asserts that is why
+mia wins — but the per-entity flag is consulted by **neither** resolver
+(ADR-054 D6.4). Mia won only by being listed first. The test now sets the
+singleton, which is what actually decides.
 
 ## 8. Verification
 
