@@ -143,39 +143,15 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 		}
 	}
 
-	channel := job.Payload.Channel
-	chatID := job.Payload.To
+	// The deliver=true path -- publish straight to a channel with NO agent turn
+	// -- was removed with the rest of the retired Schedules UI plumbing
+	// (ADR-065 spec FR-8). Nothing in the product ever set it; it was reachable
+	// only by calling the API directly, and it was an egress path no ownership
+	// rule could govern because no agent was involved in it at all.
+	//
+	// Scheduled work is tasks and heartbeats. Both wake the owning agent.
 
-	// deliver=true: send the message straight to the channel (no agent turn).
-	if job.Payload.Deliver {
-		if channel == "" {
-			err := fmt.Errorf("deliver=true schedule has no channel configured")
-			r.onFailure(job, "", err)
-			return "", err
-		}
-		// M2: validate the target channel is actually registered/active before
-		// publishing. PublishOutbound buffers onto the bus and returns nil even
-		// when no channel is subscribed, so without this check a delivery to a
-		// dead channel would be recorded as a silent success.
-		if !r.channelIsActive(channel) {
-			err := fmt.Errorf("deliver=true schedule target channel %q is not registered/active", channel)
-			r.onFailure(job, "", err)
-			return "", err
-		}
-		pubCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := r.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-			Channel: channel,
-			ChatID:  chatID,
-			Content: job.Payload.Message,
-		}); err != nil {
-			r.onFailure(job, "", err)
-			return "", fmt.Errorf("deliver failed: %w", err)
-		}
-		return "", nil
-	}
-
-	// deliver=false: wake the owning agent in the chosen session mode.
+	// Wake the owning agent in the chosen session mode.
 	sessionID, err := r.pickSession(job, owner)
 	if err != nil {
 		r.onFailure(job, "", err)
@@ -228,9 +204,9 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 	runDone := make(chan struct{})
 	go r.watchDeadline(ctx2, runDone, sessionID, owner)
 
-	reply, runErr := r.exec.ProcessScheduled(ctx2, owner, sessionID, job.Payload.Message, channel, chatID)
+	reply, runErr := r.exec.ProcessScheduled(ctx2, owner, sessionID, job.Payload.Message, "", "")
 	close(runDone)
-	// M6: for deliver=false, ProcessScheduled runs the turn with SendResponse:false,
+	// M6: ProcessScheduled runs the turn with SendResponse:false,
 	// so the agent's final text reply is NOT auto-published to any channel. If the
 	// agent wants to message a user, it does so via the message tool during its
 	// turn. We intentionally discard the returned reply here.
@@ -672,35 +648,16 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 // resolvable workspace. "" is returned deliberately in that case — never
 // fabricated — and stampScheduledSessionWorkspace treats "" as "nothing to
 // stamp", leaving the session's existing (possibly still-empty) tag alone.
-func resolveScheduleWorkspaceID(cfg *config.Config, job cron.CronJob) string {
-	if wsID := workspaceIDFromHeartbeatJobName(job); wsID != "" {
-		return wsID
-	}
-	channel := strings.ToLower(strings.TrimSpace(job.Payload.Channel))
-	if channel == "" || cfg == nil {
-		return ""
-	}
-	inst, ok := cfg.Channels[channel]
-	if !ok {
-		// FIX 3: the schedule names a channel instance that no longer exists
-		// in config at all — the operator deleted or renamed it after the
-		// schedule was created. That is a REGRESSION from a previously
-		// working binding, and left unlogged it is byte-identical to "this
-		// schedule never had a channel context", which is the normal,
-		// silent, zero-signal case just above (channel == ""). Do NOT
-		// fabricate a workspace id in its place; just make the regression
-		// visible. (An instance that DOES still exist but simply carries no
-		// WorkspaceID — the common case for a channel never bound to a
-		// workspace — is not logged: that is not a regression, it is the
-		// ordinary "unbound" state, returned via inst.WorkspaceID below.)
-		logger.WarnCF(
-			"gateway",
-			"scheduled run: schedule's bound channel instance no longer exists in config; workspace unresolved",
-			map[string]any{"job_id": job.ID, "job_name": job.Name, "channel": channel},
-		)
-		return ""
-	}
-	return inst.WorkspaceID
+func resolveScheduleWorkspaceID(_ *config.Config, job cron.CronJob) string {
+	// A workspace-scoped heartbeat encodes its workspace in the job name, and
+	// that is now the only signal available: the schedule itself no longer
+	// carries a channel to look one up from (ADR-065 spec FR-8 removed that
+	// plumbing along with the rest of the retired Schedules UI).
+	//
+	// Everything else resolves to "" — deliberately, never fabricated.
+	// stampScheduledSessionWorkspace treats "" as "nothing to stamp", leaving
+	// the session's existing tag alone rather than guessing one.
+	return workspaceIDFromHeartbeatJobName(job)
 }
 
 // workspaceIDFromHeartbeatJobName extracts the workspace id encoded in a
@@ -903,9 +860,11 @@ func (r *scheduledRunner) resolveRecipients(job *cron.CronJob, cfg *config.Confi
 // channel-wildcard binding for the owner; if the schedule itself carries a
 // channel, that wins (it is the run's outbound context).
 func (r *scheduledRunner) publishChannelAlert(job *cron.CronJob, cfg *config.Config, body string) {
-	channel := job.Payload.Channel
-	chatID := job.Payload.To
-	if channel == "" && cfg != nil {
+	// The schedule no longer carries its own channel, so the owner's default
+	// channel is the only target. That is the correct one for a failure alert:
+	// it reaches the agent that owns the schedule.
+	var channel, chatID string
+	if cfg != nil {
 		channel, chatID = resolveAgentDefaultChannel(cfg, job.AgentID)
 	}
 	if channel == "" {
@@ -990,9 +949,6 @@ func toSchedule(job cron.CronJob) gen.Schedule {
 		OwnerAgentId:   job.AgentID,
 		CreatedBy:      strPtr(job.CreatedBy),
 		Message:        job.Payload.Message,
-		Deliver:        job.Payload.Deliver,
-		Channel:        strPtr(job.Payload.Channel),
-		ChatId:         strPtr(job.Payload.To),
 		SessionMode:    gen.ScheduleSessionMode(mode),
 		SessionId:      strPtr(job.SessionID),
 		TimeoutSeconds: job.TimeoutSeconds,
@@ -1195,14 +1151,10 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 	// M3: persist the COMPLETE job (owner, mode, timeout, created-by) in one
 	// atomic write via AddJobFull. The previous AddJob+UpdateJob pair briefly
 	// persisted an owner-less job that could fire and die between the two writes.
-	deliver := derefBool(req.Deliver, false)
 	job, err := a.cronSvc().AddJobFull(cron.JobSpec{
 		Name:           req.Name,
 		Schedule:       schedule,
 		Message:        req.Message,
-		Deliver:        deliver,
-		Channel:        derefStr(req.Channel),
-		To:             derefStr(req.ChatId),
 		AgentID:        req.OwnerAgentId,
 		SessionMode:    sessionMode,
 		TimeoutSeconds: timeout,
@@ -1274,15 +1226,6 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, i
 	}
 	if req.Message != nil {
 		job.Payload.Message = *req.Message
-	}
-	if req.Deliver != nil {
-		job.Payload.Deliver = *req.Deliver
-	}
-	if req.Channel != nil {
-		job.Payload.Channel = *req.Channel
-	}
-	if req.ChatId != nil {
-		job.Payload.To = *req.ChatId
 	}
 	if req.SessionMode != nil {
 		// M5b: reject an unknown session mode before persisting it (a bad value

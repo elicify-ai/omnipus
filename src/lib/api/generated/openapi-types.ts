@@ -8426,10 +8426,8 @@ export interface components {
             /** @description Username that created the schedule (for notification routing). */
             created_by?: string;
             trigger: components["schemas"]["ScheduleTrigger"];
-            /** @description The instruction delivered to the agent (deliver=false) or sent to the channel (deliver=true). */
+            /** @description The instruction the owning agent processes on each run. */
             message: string;
-            /** @description true = send the message straight to the channel (no agent turn); false = the owning agent processes it (autonomy). */
-            deliver: boolean;
             /**
              * @description isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
              * @enum {string}
@@ -8439,10 +8437,6 @@ export interface components {
             timeout_seconds: number;
             /** @description For continue/main modes, the persistent session id this schedule runs in. */
             session_id?: string;
-            /** @description Channel for deliver=true sends and the run's outbound context. */
-            channel?: string;
-            /** @description Chat/peer id within the channel for deliver=true sends. */
-            chat_id?: string;
             state: components["schemas"]["ScheduleState"];
             /** @description The most recent runs (newest first), capped at 20. */
             runs?: components["schemas"]["ScheduleRunRecord"][];
@@ -8460,8 +8454,6 @@ export interface components {
             owner_agent_id: string;
             trigger: components["schemas"]["ScheduleTrigger"];
             message: string;
-            /** @description Default false (agent processes it). */
-            deliver?: boolean;
             /**
              * @description Default isolated.
              * @enum {string}
@@ -8471,8 +8463,6 @@ export interface components {
             timeout_seconds?: number;
             /** @description Default true. */
             enabled?: boolean;
-            channel?: string;
-            chat_id?: string;
         };
         /**
          * ScheduleUpdate
@@ -8483,13 +8473,10 @@ export interface components {
             owner_agent_id?: string;
             trigger?: components["schemas"]["ScheduleTrigger"];
             message?: string;
-            deliver?: boolean;
             /** @enum {string} */
             session_mode?: "isolated" | "continue" | "main";
             timeout_seconds?: number;
             enabled?: boolean;
-            channel?: string;
-            chat_id?: string;
         };
         /**
          * ScheduleList

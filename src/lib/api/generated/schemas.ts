@@ -782,12 +782,9 @@ type Schedule = {
   created_by?: string | undefined;
   trigger: ScheduleTrigger;
   message: string;
-  deliver: boolean;
   session_mode: "isolated" | "continue" | "main";
   timeout_seconds: number;
   session_id?: string | undefined;
-  channel?: string | undefined;
-  chat_id?: string | undefined;
   state: ScheduleState;
   runs?: Array<ScheduleRunRecord> | undefined;
   created_at_ms: number;
@@ -819,24 +816,18 @@ type ScheduleCreate = {
   owner_agent_id: string;
   trigger: ScheduleTrigger;
   message: string;
-  deliver?: boolean | undefined;
   session_mode?: ("isolated" | "continue" | "main") | undefined;
   timeout_seconds?: number | undefined;
   enabled?: boolean | undefined;
-  channel?: string | undefined;
-  chat_id?: string | undefined;
 };
 type ScheduleUpdate = Partial<{
   name: string;
   owner_agent_id: string;
   trigger: ScheduleTrigger;
   message: string;
-  deliver: boolean;
   session_mode: "isolated" | "continue" | "main";
   timeout_seconds: number;
   enabled: boolean;
-  channel: string;
-  chat_id: string;
 }>;
 type ScheduleList = {
   schedules: Array<Schedule>;
@@ -2994,12 +2985,9 @@ export const Schedule: z.ZodType<Schedule> = z.object({
   created_by: z.string().optional(),
   trigger: ScheduleTrigger,
   message: z.string().min(1),
-  deliver: z.boolean(),
   session_mode: z.enum(["isolated", "continue", "main"]),
   timeout_seconds: z.number().int(),
   session_id: z.string().optional(),
-  channel: z.string().optional(),
-  chat_id: z.string().optional(),
   state: ScheduleState,
   runs: z.array(ScheduleRunRecord).optional(),
   created_at_ms: z.number().int(),
@@ -3013,12 +3001,9 @@ export const ScheduleCreate: z.ZodType<ScheduleCreate> = z.object({
   owner_agent_id: z.string().min(1),
   trigger: ScheduleTrigger,
   message: z.string().min(1),
-  deliver: z.boolean().optional(),
   session_mode: z.enum(["isolated", "continue", "main"]).optional(),
   timeout_seconds: z.number().int().gte(0).optional(),
   enabled: z.boolean().optional(),
-  channel: z.string().optional(),
-  chat_id: z.string().optional(),
 });
 export const ScheduleUpdate: z.ZodType<ScheduleUpdate> = z
   .object({
@@ -3026,12 +3011,9 @@ export const ScheduleUpdate: z.ZodType<ScheduleUpdate> = z
     owner_agent_id: z.string().min(1),
     trigger: ScheduleTrigger,
     message: z.string().min(1),
-    deliver: z.boolean(),
     session_mode: z.enum(["isolated", "continue", "main"]),
     timeout_seconds: z.number().int().gte(0),
     enabled: z.boolean(),
-    channel: z.string(),
-    chat_id: z.string(),
   })
   .partial();
 export const ScheduleRunResult = z.object({

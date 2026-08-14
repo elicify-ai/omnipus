@@ -155,27 +155,6 @@ func TestRunner_MissingOwner_NoFallback(t *testing.T) {
 	assert.Empty(t, exec.calls, "executor must not run for a missing owner")
 }
 
-// TestRunner_DeliverTrue_DirectSend asserts deliver=true sends straight to the
-// channel with no agent turn (FR-014).
-func TestRunner_DeliverTrue_DirectSend(t *testing.T) {
-	cfg := baseConfig()
-	r, exec, mb, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
-
-	job := &cron.CronJob{
-		ID: "j2", Name: "ping", AgentID: "mia",
-		Payload: cron.CronPayload{Message: "hello", Deliver: true, Channel: "telegram", To: "chat-1"},
-	}
-	sid, err := r.RunScheduled(context.Background(), job)
-	require.NoError(t, err)
-	assert.Empty(t, sid)
-	assert.Empty(t, exec.calls, "deliver=true must not run an agent turn")
-
-	m := drainOutbound(t, mb)
-	assert.Equal(t, "telegram", m.Channel)
-	assert.Equal(t, "chat-1", m.ChatID)
-	assert.Equal(t, "hello", m.Content)
-}
-
 // TestRunner_SessionMode_Isolated mints a fresh scheduled session each run.
 func TestRunner_SessionMode_Isolated(t *testing.T) {
 	cfg := baseConfig()
@@ -471,65 +450,6 @@ func TestRunner_Failure_PushesEvenWhenCreateFails(t *testing.T) {
 type fakeChannelChecker struct{ registered map[string]bool }
 
 func (c fakeChannelChecker) ChannelRegistered(name string) bool { return c.registered[name] }
-
-// TestRunner_DeliverTrue_UnregisteredChannel_Fails asserts M2: a deliver=true
-// run whose target channel is not registered/active is recorded as a failure
-// (and never publishes), instead of a silent success.
-func TestRunner_DeliverTrue_UnregisteredChannel_Fails(t *testing.T) {
-	cfg := baseConfig()
-	r, exec, mb, notifs := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
-	// Channel registry reports "telegram" as NOT registered.
-	r.setChannelChecker(func() channelChecker {
-		return fakeChannelChecker{registered: map[string]bool{}}
-	})
-
-	job := &cron.CronJob{
-		ID: "jdu", Name: "ping", AgentID: "mia", CreatedBy: "alice",
-		Payload: cron.CronPayload{Message: "hi", Deliver: true, Channel: "telegram", To: "c1"},
-	}
-	sid, err := r.RunScheduled(context.Background(), job)
-	require.Error(t, err, "delivery to an unregistered channel must be a failure")
-	assert.Empty(t, sid)
-	assert.Empty(t, exec.calls, "deliver=true must not run an agent turn")
-	assert.Contains(t, err.Error(), "not registered")
-
-	// The bus is buffered, so by the time RunScheduled returns any outbound is
-	// already enqueued. Drain it non-blockingly: the original delivery payload
-	// "hi" must NOT appear (only the failure ALERT may, which onFailure sends to
-	// the owner's default channel).
-	for {
-		select {
-		case m := <-mb.OutboundChan():
-			assert.NotEqual(t, "hi", m.Content, "the original delivery payload must NOT be published to a dead channel")
-			continue
-		default:
-		}
-		break
-	}
-
-	// The failure raised a notification for the creator.
-	aliceList, _ := notifs.ListForUser("alice")
-	assert.Len(t, aliceList, 1, "an unregistered-channel delivery failure must raise a notification")
-}
-
-// TestRunner_DeliverTrue_RegisteredChannel_Succeeds asserts the M2 check passes
-// through when the target channel IS registered.
-func TestRunner_DeliverTrue_RegisteredChannel_Succeeds(t *testing.T) {
-	cfg := baseConfig()
-	r, _, mb, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
-	r.setChannelChecker(func() channelChecker {
-		return fakeChannelChecker{registered: map[string]bool{"telegram": true}}
-	})
-
-	job := &cron.CronJob{
-		ID: "jdr", Name: "ping", AgentID: "mia",
-		Payload: cron.CronPayload{Message: "hi", Deliver: true, Channel: "telegram", To: "c1"},
-	}
-	_, err := r.RunScheduled(context.Background(), job)
-	require.NoError(t, err)
-	m := drainOutbound(t, mb)
-	assert.Equal(t, "telegram", m.Channel)
-}
 
 // TestRunner_Timeout_ForceCancels asserts that a run exceeding its deadline is
 // force-aborted via RequestCancel(CancelScope{SessionID}) and that the returned

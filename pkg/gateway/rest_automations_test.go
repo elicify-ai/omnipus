@@ -31,11 +31,7 @@ func TestAutomations_CronTrigger_HumanizedAndActionShown(t *testing.T) {
 	job, err := cs.AddJob(
 		"weekly",
 		cron.CronSchedule{Kind: "cron", Expr: "0 9 * * 1"}, // every Monday 09:00
-		"summarize the week",
-		false, // deliver=false → run agent
-		"",
-		"",
-	)
+		"summarize the week")
 	require.NoError(t, err)
 	job.AgentID = "mia"
 	require.NoError(t, cs.UpdateJob(job))
@@ -55,16 +51,12 @@ func TestAutomations_CronTrigger_HumanizedAndActionShown(t *testing.T) {
 	assert.Equal(t, "mia", item.AgentName)
 }
 
-func TestAutomations_EveryTrigger_DeliverAction(t *testing.T) {
+func TestAutomations_EveryTrigger_RunsOwningAgent(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
 	job, err := cs.AddJob(
 		"frequent",
 		cron.CronSchedule{Kind: "every", EveryMS: i64p(5 * 60 * 1000)}, // 5m
-		"ping",
-		true, // deliver=true → send to channel
-		"telegram",
-		"c1",
-	)
+		"ping")
 	require.NoError(t, err)
 	job.AgentID = "mia"
 	require.NoError(t, cs.UpdateJob(job))
@@ -80,7 +72,9 @@ func TestAutomations_EveryTrigger_DeliverAction(t *testing.T) {
 	require.Len(t, resp.Automations, 1)
 	item := resp.Automations[0]
 	assert.Equal(t, "Every 5m", item.TriggerDisplay)
-	assert.Equal(t, "Send to telegram", item.ActionDisplay, "deliver=true sends to the channel")
+	assert.Equal(t, "Run agent: "+item.AgentName, item.ActionDisplay,
+		"every schedule wakes its owning agent now — the deliver=true 'Send to <channel>' "+
+			"action went with the retired Schedules UI plumbing (ADR-065 spec FR-8)")
 }
 
 func TestAutomations_AtTrigger_OneShot(t *testing.T) {
@@ -89,11 +83,7 @@ func TestAutomations_AtTrigger_OneShot(t *testing.T) {
 	job, err := cs.AddJob(
 		"once",
 		cron.CronSchedule{Kind: "at", AtMS: &atMS},
-		"go",
-		false,
-		"",
-		"",
-	)
+		"go")
 	require.NoError(t, err)
 	job.AgentID = "mia"
 	require.NoError(t, cs.UpdateJob(job))
@@ -117,12 +107,12 @@ func TestAutomations_AtTrigger_OneShot(t *testing.T) {
 // HandleAutomations / handleListSchedules).
 func TestAutomations_ReturnsAllSchedulesRegardlessOfAgentOwner(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
-	j1, err := cs.AddJob("a", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "x", false, "", "")
+	j1, err := cs.AddJob("a", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "x")
 	require.NoError(t, err)
 	j1.AgentID = "mia"
 	require.NoError(t, cs.UpdateJob(j1))
 
-	j2, err := cs.AddJob("b", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "y", false, "", "")
+	j2, err := cs.AddJob("b", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "y")
 	require.NoError(t, err)
 	j2.AgentID = "max"
 	require.NoError(t, cs.UpdateJob(j2))

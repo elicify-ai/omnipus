@@ -10714,18 +10714,10 @@ type SandboxStatusFilesystemModel string
 
 // Schedule A scheduled instruction for an agent (#264) — the wire projection of a cron job. When it fires, the owning agent runs the message in the chosen session mode under guardrails. Read model returned by the /schedules endpoints.
 type Schedule struct {
-	// Channel Channel for deliver=true sends and the run's outbound context.
-	Channel *string `json:"channel,omitempty"`
-
-	// ChatId Chat/peer id within the channel for deliver=true sends.
-	ChatId      *string `json:"chat_id,omitempty"`
-	CreatedAtMs int64   `json:"created_at_ms"`
+	CreatedAtMs int64 `json:"created_at_ms"`
 
 	// CreatedBy Username that created the schedule (for notification routing).
 	CreatedBy *string `json:"created_by,omitempty"`
-
-	// Deliver true = send the message straight to the channel (no agent turn); false = the owning agent processes it (autonomy).
-	Deliver bool `json:"deliver"`
 
 	// Enabled When false, the scheduler does not fire it (paused).
 	Enabled bool `json:"enabled"`
@@ -10733,7 +10725,7 @@ type Schedule struct {
 	// Id Stable schedule id (the underlying cron job id).
 	Id string `json:"id"`
 
-	// Message The instruction delivered to the agent (deliver=false) or sent to the channel (deliver=true).
+	// Message The instruction the owning agent processes on each run.
 	Message string `json:"message"`
 	Name    string `json:"name"`
 
@@ -10814,12 +10806,6 @@ type ScheduleTriggerKind string
 
 // ScheduleCreate Request body to create a schedule (#264). owner_agent_id must reference an existing, non-worker-restricted agent (single-user model — no per-caller ownership check). Omitted optional fields take their documented defaults.
 type ScheduleCreate struct {
-	Channel *string `json:"channel,omitempty"`
-	ChatId  *string `json:"chat_id,omitempty"`
-
-	// Deliver Default false (agent processes it).
-	Deliver *bool `json:"deliver,omitempty"`
-
 	// Enabled Default true.
 	Enabled      *bool  `json:"enabled,omitempty"`
 	Message      string `json:"message"`
@@ -10855,18 +10841,10 @@ type ScheduleCreateTriggerKind string
 // ScheduleList List of schedules (#264).
 type ScheduleList struct {
 	Schedules []struct {
-		// Channel Channel for deliver=true sends and the run's outbound context.
-		Channel *string `json:"channel,omitempty"`
-
-		// ChatId Chat/peer id within the channel for deliver=true sends.
-		ChatId      *string `json:"chat_id,omitempty"`
-		CreatedAtMs int64   `json:"created_at_ms"`
+		CreatedAtMs int64 `json:"created_at_ms"`
 
 		// CreatedBy Username that created the schedule (for notification routing).
 		CreatedBy *string `json:"created_by,omitempty"`
-
-		// Deliver true = send the message straight to the channel (no agent turn); false = the owning agent processes it (autonomy).
-		Deliver bool `json:"deliver"`
 
 		// Enabled When false, the scheduler does not fire it (paused).
 		Enabled bool `json:"enabled"`
@@ -10874,7 +10852,7 @@ type ScheduleList struct {
 		// Id Stable schedule id (the underlying cron job id).
 		Id string `json:"id"`
 
-		// Message The instruction delivered to the agent (deliver=false) or sent to the channel (deliver=true).
+		// Message The instruction the owning agent processes on each run.
 		Message string `json:"message"`
 		Name    string `json:"name"`
 
@@ -11026,9 +11004,6 @@ type ScheduleTrigger struct {
 
 // ScheduleUpdate Request body to update a schedule (#264). All fields optional; only provided fields are changed. Changing owner_agent_id is re-authorized.
 type ScheduleUpdate struct {
-	Channel        *string                    `json:"channel,omitempty"`
-	ChatId         *string                    `json:"chat_id,omitempty"`
-	Deliver        *bool                      `json:"deliver,omitempty"`
 	Enabled        *bool                      `json:"enabled,omitempty"`
 	Message        *string                    `json:"message,omitempty"`
 	Name           *string                    `json:"name,omitempty"`
