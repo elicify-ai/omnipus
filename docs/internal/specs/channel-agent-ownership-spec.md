@@ -1,302 +1,248 @@
-# Spec — Channel ownership per (workspace, agent), enforced on destination selection
+# Spec — A channel belongs to one (workspace, agent) pair
 
-- **Status:** Draft, revision 1 (2026-08-14). Implements [ADR-065](../architecture/ADR-065-channel-ownership-per-agent-workspace.md).
-- **Round-1 review:** [channel-agent-ownership-spec-review.md](channel-agent-ownership-spec-review.md) — verdict BLOCK, 31 findings. This revision resolves all four CRITICALs and the eight MAJORs; §8 records what remains open.
-- **Scope:** the OUTBOUND half. Inbound is ADR-029's and is only regression-pinned here.
-- **Model followed:** the M11 email tools. Where a rule has an email equivalent, it is named.
+- **Status:** Draft, revision 3 (2026-08-14). Implements [ADR-065](../architecture/ADR-065-channel-ownership-per-agent-workspace.md).
+- **Reviews:** [round 1](channel-agent-ownership-spec-review.md) (BLOCK, 31) · [round 2](channel-agent-ownership-spec-review-round2.md) (BLOCK, 20). Revision 3 additionally applies three operator decisions that overturned parts of revision 2 — see §7.
+- **Scope:** OUTBOUND. Inbound is ADR-029's and is only regression-pinned here.
+- **Model followed:** the M11 email tools, with one deliberate divergence (§2.1).
 
 ---
 
-## 1. The rule, and the one distinction that makes it work
+## 1. The rule
 
-A channel instance is owned by one **(workspace, agent)** pair — already stored as
-`ChannelInstanceConfig.WorkspaceID` + `Identity{kind:"agent", id:…}`, already selected in the
-Configure panel. No new storage, no new UI, no schema change.
+**A channel instance is owned by one (workspace, agent) pair. A message leaves through a channel
+the ACTING AGENT owns in the turn's workspace. There are no exemptions.**
 
-**Ownership governs DESTINATION SELECTION. It does not govern the turn's own conversation.**
+Ownership is already stored as `ChannelInstanceConfig.WorkspaceID` + `Identity{kind:"agent", id}`
+and already set in the Configure panel. No new storage, no new UI, no schema change.
 
-That sentence is the whole revision. Round 1 established that the codebase has at least three
-routine ways an agent legitimately transacts on a conversation it does not own, and a rule that
-ignored them would have muted delegation and hand-off across every workspace-bound channel:
+### 1.1 Session, turn, acting agent
 
-- **Replying where the turn already is** is always allowed. The conversation was established by
-  the inbound path, which ADR-029 and the hand-off pin have already adjudicated. Re-deciding it
-  at send time would override those decisions from the wrong end.
-- **Choosing a destination when the turn has none** — proactive sends, heartbeats, scheduled
-  jobs — is where ownership binds. Nothing has adjudicated anything yet, and this is the only
-  path on which an agent could reach a channel that was never part of its turn.
+- A **session** is the ongoing conversation. It sits on a channel instance.
+- A **turn** is one unit of work in it. Its only role here is to say **which agent is acting**.
+- **Ownership never consults the turn's conversation.** Revisions 0 and 1 made "the turn's own
+  conversation" an exemption. That was wrong twice over: it put the turn inside the ownership
+  rule, and its justification — "the inbound path already adjudicated this conversation" — is
+  false for several turn types. A scheduled run's channel and chat come straight from
+  `job.Payload` with **no validation at schedule-create: not ownership, not bindings, not even
+  existence** (`pkg/gateway/schedules.go::scheduledRunner.run`). Nothing adjudicated anything.
 
-`send_message` losing its `channel`/`chat_id` parameters (FR-1) is what makes the distinction
-enforceable rather than advisory: with no way to name a destination, an agent can only reach the
-conversation it is in, or the one ownership resolves for it.
+### 1.2 Sending is first-class
+
+An agent **initiates**; it is not only a receiver. One rule covers replies and proactive sends
+alike. There is no primary path and no exceptional one.
+
+### 1.3 Mechanics — [VERIFIED] at `b3e802e7`
+
+Neither case revision 1 built exemptions for actually needs one.
+
+**Hand-off produces a NEW TURN in the SAME SESSION.** `hand_off` stores the target under
+`"session:"+sessionID` and `"chat:"+channel+":"+chatID` (`pkg/agent/loop.go`, the
+`sessionActiveAgent` store block), and the pin routes the **next inbound message**. The handed-to
+agent is not sending inside someone else's turn — it is the acting agent of its own turn.
+Ownership is checked against it, which is the right question.
+
+**A delegated sub-turn does not send.** `pkg/agent/subturn.go` contains **zero** outbound
+publishes; the delegate's text returns to its parent and the parent sends. A delegate sends only
+when it explicitly calls `send_message` — an ordinary send, checked like any other.
 
 ---
 
 ## 2. Functional requirements — the destination
 
-### FR-1 — `send_message` takes no destination
+### FR-1 — `send_message` keeps its destination parameters, restricted to what the agent owns
 
-`tools.MessageTool.Parameters` MUST expose **only** `content`. `channel` and `chat_id` are removed.
+`send_message` addresses **every** channel type through one tool, so naming the target is
+inherent to its design, not a flaw. The agent must be able to choose — only it knows, in context,
+whether something belongs on Slack or on Telegram.
 
-> **Given** any agent turn
-> **When** the model calls `send_message` with a `channel` or `chat_id` argument
-> **Then** no such parameter exists in the schema, and any supplied value is ignored
-> **And** the destination comes solely from the turn or from FR-3.
+**Given** acting agent `A`, turn workspace `W` = `tools.ToolWorkspaceID(ctx)`
+**When** `send_message` is called with a `channel`
+**Then** the send proceeds only if that channel is owned by `(W, A)`
+**And** otherwise it is refused, naming the channels `A` does own in `W`.
 
-*Email equivalent: the five email tools expose no mailbox parameter; `EmailTransports.resolve`
-reads `ToolWorkspaceID(ctx)`.*
+### 2.1 Why this differs from the email model, and what it costs
 
-This single FR is the load-bearing one. Everything below either follows from it or covers a path
-it cannot reach.
+The email tools expose **no** target parameter at all, so a wrong target is unrepresentable.
+This spec cannot do that: one tool serves every channel, and an agent holding two must pick.
 
-### FR-2 — A turn always replies where it is
+So the safety property moves from **unrepresentable** to **validated** — strictly the weaker
+mechanism. It holds only while every path that turns a `send_message` call into an outbound
+message passes through the same check. **This is the load-bearing sentence of the spec:** if a
+future change adds a second route to the bus that skips validation, the guarantee is gone with no
+test failing. FR-6 exists to make that visible; do not remove the check as "redundant" without
+reading this paragraph.
 
-**Given** a turn with `ToolChannel(ctx)` and `ToolChatID(ctx)` set
-**When** `send_message` executes
-**Then** it sends to exactly that channel and chat
-**And** ownership is NOT consulted.
+### FR-2 — Unspecified destination resolves to the agent's own
 
-Ownership is not consulted here **by design**, and this holds even when the sending agent does
-not own the instance. Three cases reach this deliberately:
+**Given** `send_message` called with no `channel`
+**When** the turn has a conversation
+**Then** it replies there, provided that conversation's instance is owned by `(W, A)` — see FR-3
+**And when** the turn has no conversation
+**Then** the target is `A`'s instance in `W`; if `A` owns exactly one, it is used
+**And** if `A` owns several, the call is refused, naming them, so the agent chooses explicitly
+**And** if `A` owns none, or `W` is empty, the call is refused naming that fact.
 
-- **Hand-off.** `hand_off` pins another agent to a live conversation. The pin is consulted
-  *before* `ResolveRoute` and returns early (`pkg/agent/loop.go`, the `sessionActiveAgent` lookup
-  keyed `"chat:"+channel+":"+chatID`), so it bypasses ADR-029's Priority-0 path. A user on Mia's
-  bound instance asking for Ava gets Ava — and Ava must be able to answer.
-- **Delegation.** See FR-2a.
-- **A workspace-bound instance whose owning agent changed** after the conversation started.
+*Refusing rather than guessing between several is the email precedent
+(`EmailTransports.resolve`), and matches the operator's ruling that the agent picks.*
 
-### FR-2a — A delegated sub-turn sends into the parent's conversation, as itself
+### FR-3 — The acting agent is the turn's agent
 
-**Given** a sub-turn spawned by `spawnSubTurn`, which inherits `Channel`, `ChatID` and
-`WorkspaceID` from the parent while running under the delegate's own agent identity
-**When** the delegate calls `send_message`
-**Then** the message goes to the parent's conversation
-**And** it is attributed to the delegate (`ToolAgentID(ctx)`), not to the parent
-**And** ownership is not consulted (FR-2).
+**Given** a turn whose acting agent is `A` — including one created by a hand-off pin, and
+including a delegated sub-turn
+**When** resolution runs
+**Then** `A` is `tools.ToolAgentID(ctx)`, never the session's original agent and never a parent.
 
-Without this, every delegated worker on a workspace-bound channel is silently mute. `delegate` is
-in the always-visible manifest (`pkg/tools/manifest.go`, `fullManifestToolNames`) — this is a
-high-traffic path, not an edge case.
+**Operator decision (Q1):** after a hand-off, replies leave through the **new** acting agent's
+channel. If that agent owns none in the workspace, the session goes quiet and the refusal says
+why. The hand-off itself is **not** blocked — accepting it and then failing audibly was chosen
+over refusing it up front.
 
-### FR-3 — A proactive send resolves the agent's OWN instance for the turn's workspace
-
-For a turn with no inbound conversation — heartbeat, scheduled job, background work:
-
-**Given** an agent `A` and a turn whose workspace is `W`, where `W` is
-`tools.ToolWorkspaceID(ctx)` — the same signal the email tools use, and the only one threaded
-through every turn type
-**When** `send_message` executes with no turn channel/chat
-**Then** the target is the instance owned by exactly `(W, A)`
-**And** if `A` owns no instance in `W`, the call fails naming that fact
-**And** if `W` is empty, the call fails naming that fact — it does NOT fall back to a
-single instance, because a turn with no workspace has not established which workspace's channel
-it is entitled to
-**And** if `A` owns more than one instance in `W`, see FR-3a.
-
-*Email equivalent: `EmailTransports.resolve` errors naming the candidates rather than choosing.
-It differs on the empty case — email falls back to the single mailbox when there is exactly one.
-Channels deliberately do not, because a mailbox is addressed to a person while a channel reaches
-a room.*
-
-### FR-3a — Multiple owned instances: deterministic, logged, overridable
-
-**Given** `A` owns two or more instances in `W`
-**When** a proactive send resolves
-**Then** the instance whose key sorts lowest is chosen
-**And** a WARN names every candidate and the one chosen.
-
-Refusing outright (round-1's proposal) leaves a two-channel agent with no proactive voice at all
-and no way for an operator to fix it, since the config permits the ambiguity permanently. A
-deterministic pick with a loud log is recoverable; silence is not. **See §8 Q2** — the operator
-may prefer an explicit primary flag instead.
-
-### FR-3b — A delegated proactive send resolves against the delegate
-
-**Given** a sub-turn with no inherited conversation
-**When** the delegate sends proactively
-**Then** resolution uses the **delegate's** own ownership, not the root parent's.
-
-Chosen because the delegate is the acting identity (`ToolAgentID(ctx)`) and FR-6 attributes the
-message to it; resolving against a different agent than the one attributed would make the audit
-trail lie. **See §8 Q3** — the alternative (resolve against the root parent, on the grounds that
-the work is the parent's) is defensible and unchosen.
-
-### FR-4 — An agent cannot select an instance it does not own
+### FR-4 — An agent cannot reach a channel it does not own
 
 **Given** instance `I` owned by `(W1, agentA)`
-**When** `agentB` — including an agent on `W1`'s own team — attempts to make `I` the destination
-of a proactive send
-**Then** the send does not occur, and the refusal names ownership.
+**When** any other agent acts — including one on `W1`'s own team, a handed-to agent, or a delegate
+**Then** `I` is never its destination.
 
-This is the core requirement, and it is now precisely bounded: it governs **selection**, so it
-never fires on FR-2's inbound path. Team membership on the same workspace does not confer use of
-another agent's channel, exactly as it does not confer use of another agent's inbox.
+Team membership does not confer use of another agent's channel, exactly as it does not confer use
+of another agent's inbox.
 
-### FR-5 — Cross-workspace egress is impossible through this path
+### FR-5 — The ownership record must not be agent-writable
 
-**Given** agent `A` in workspace `W1`, and instance `I2` owned by `(W2, agentB)`
-**When** `A` sends
-**Then** the message can only leave through the turn's own conversation (FR-2) or `A`'s own
-instance in `W1` (FR-3)
-**And** `I2`'s credentials are never used.
+`set_config` is `allow` in the global ceiling, `channels.` is a permitted prefix, and no
+blocked-key rule covers it — so an agent with shipped-default permissions can rewrite
+`channels.<id>.identity.id` and `channels.<id>.workspace_id`. **[VERIFIED, round 2]**
+
+Both MUST be added to the blocked-key table for agent-initiated config writes. A constraint the
+constrained party can edit is not a constraint.
 
 ---
 
-## 3. Functional requirements — attribution and audit
+## 3. Functional requirements — attribution and enforcement
 
-### FR-6 — Agent-originated outbound messages carry their origin
+### FR-6 — Agent-originated messages carry their origin, and dispatch re-checks them
 
-`bus.OutboundMessage` MUST carry `AgentID` and `WorkspaceID`, populated for every
-**agent-originated** send.
+`bus.OutboundMessage` MUST carry `AgentID` and `WorkspaceID` for agent-originated sends.
+`InstanceID` is NOT added: `Channel` already **is** the instance key
+(`channels.Manager.dispatchLoop` looks up `m.channels[msg.Channel]`). The existing
+declared-but-never-set `InstanceID` should be removed or documented as unused.
 
-`InstanceID` is NOT added: `Channel` already **is** the instance key — `channels.Manager` keys
-`m.channels` by instance id, and `dispatchLoop` looks up `m.channels[msg.Channel]` directly. A
-second field holding the same value is a divergence waiting to happen. The existing declared-but-
-never-set `InstanceID` field should be removed or documented as unused.
+**Scope of the check:** messages with a non-empty `AgentID`.
 
-### FR-6a — Attribution is observable
+**Given** such a message
+**When** dispatch resolves its instance
+**Then** it is refused with a WARN if `(AgentID, WorkspaceID)` does not own that instance.
 
-A successful agent-originated send MUST emit an audit event carrying agent, workspace, instance
-and whether the destination came from the turn (FR-2) or from resolution (FR-3). A refusal under
-FR-3/FR-4 MUST increment a counter distinguishable from a transport failure.
+This is the second half of §2.1: because validation replaced impossibility, one check at the tool
+layer is a single point of failure. This one sits at the last common point before the wire.
 
-Without this, FR-6's origin fields are recorded and never read, and FR-7's WARN is the only
-signal that anything was refused.
+**Exempt by enumeration:** the ~19 system producers — streamed replies, `notifyDrop` backpressure,
+schedule delivery, device notifications — carry no `AgentID`, are not model-addressable, and pass
+unchecked.
 
-### FR-7 — Dispatch verifies agent-originated messages only
+A successful send MUST emit an audit event carrying agent, workspace and instance. A refusal MUST
+increment a counter distinguishable from a transport failure.
 
-**Scope, stated explicitly rather than left to emerge from empty fields:** FR-7 applies to
-messages with a non-empty `AgentID`.
+### FR-7 — Streaming is out of scope, explicitly
 
-**Given** a message with a non-empty `AgentID`
-**When** `channels.Manager.dispatchLoop` resolves its instance
-**Then** the message is refused, with a WARN naming agent, workspace and instance, if
-`(AgentID, WorkspaceID)` does not own that instance.
+Streamed token delivery constructs no `OutboundMessage` and bypasses the bus, so FR-6's audit
+trail does **not** cover the majority of delivered bytes. Accepted: streaming carries the
+session's own conversation and is not model-addressable. Recorded so nobody reads FR-6 as a
+complete ledger.
 
-**Exempt, by enumeration:** the ~19 non-agent producers — the agent's own streamed reply,
-`notifyDrop` backpressure notices, schedule delivery, device notifications, and the rest. These
-are system-originated, are not model-addressable, and carry no `AgentID`. They pass unchecked.
+### FR-8 — Remove the dormant scheduled-delivery plumbing
 
-Defence in depth only: FR-1 should make this unreachable. If it fires, something upstream
-regressed, and the WARN says which.
+**Operator decision (Q3):** this is legacy to be deleted, in the same manner as the `main`
+sentinel — not migrated, not validated, removed.
 
-### FR-7a — Streaming is out of scope, and the spec says so
+The retired Schedules UI left a whole delivery mode behind. `pkg/cron/service.go::CronPayload`
+still carries `Channel`, `To` and `Deliver`, where **`Deliver: true` means "send straight to the
+channel with no agent turn at all"**. `contracts/components/schemas/Schedule.yaml` and
+`ScheduleCreate.yaml` expose `channel` and `chat_id`, so the server still accepts them; nothing in
+the product sends them.
 
-The highest-volume egress path does **not** construct an `OutboundMessage` at all — streamed
-token delivery bypasses the bus. FR-6's audit trail therefore does **not** cover the majority of
-delivered bytes, and FR-7 cannot see them.
+This is worse than an unused field: a path that emits to a channel **with no agent involved** is
+one no ownership rule can ever govern. Scheduled work is tasks and heartbeats, and those carry no
+channel.
 
-This is accepted, not overlooked: streaming carries the turn's own conversation (FR-2 territory,
-where ownership is not consulted anyway) and is not model-addressable. Recorded so nobody reads
-FR-6 as a complete egress ledger.
+Removal MUST follow the contract-first process — schema first, regenerate, commit atomically —
+and MUST include an audit of any persisted job carrying these fields.
 
-### FR-8 — Unbound instances keep today's behaviour
+### FR-9 — Unbound instances keep today's behaviour
 
-**Given** an instance with no `WorkspaceID`
-**When** an agent sends through it
-**Then** behaviour is unchanged.
+An instance with no `WorkspaceID` behaves as it does now. "No workspace (global default routing)"
+remains a valid operator choice.
 
-"No workspace (global default routing)" remains a valid operator choice. This spec does not force
-binding; it makes binding mean something outbound as well as inbound.
+### FR-10 — webchat is protected by validation, not by ownership
 
-### FR-9 — webchat is protected by FR-1, not by ownership
-
-`webchat` has **no ownership pair to check**: it is registered synthetically, is absent from
-`knownChannelTypes`, and has no `ChannelInstanceConfig`. An ownership rule there has nothing to
-read, and FR-8 would exempt it in any case.
-
-What protects it is FR-1: with no `chat_id` parameter, a turn can only reach its own session.
-`webchatChannel.Send` resolving a recipient from `msg.ChatID` alone is safe once no model can
-supply one.
+`webchat` has no ownership pair to check: registered synthetically, absent from
+`knownChannelTypes`, no `ChannelInstanceConfig`. Since FR-1 keeps the `chat_id` parameter, webchat
+is protected by FR-1's validation and FR-6's re-check, **not** by an ownership record it does not
+have. `webchatChannel.Send` resolving a recipient from `msg.ChatID` alone is safe only while those
+checks hold — which is why §2.1 matters here most.
 
 ---
 
 ## 4. Test plan
 
-Every row is a behaviour with a pass/fail outcome. Level is Unit (U), Integration (I) or
-End-to-end (E).
-
 | # | Lvl | Setup | Action | Expected | Traces |
 |---|-----|-------|--------|----------|--------|
-| 1 | I | `A` owns `tg.acme` in `W1`; inbound chat on it | reply | delivered to that chat | FR-2 |
-| 2 | I | `tg.acme` owned by `(W1, Mia)`; `hand_off` pins Ava to the chat | Ava replies | delivered; ownership not consulted | FR-2, C1 |
-| 3 | I | Mia's turn on `tg.acme` delegates to Ava | Ava sends | delivered to parent's chat, attributed to Ava | FR-2a, C2 |
-| 4 | I | `A` owns `tg.acme` in `W1`; heartbeat, no inbound | proactive send | delivered via `tg.acme` | FR-3 |
-| 5 | U | `A` owns nothing in `W1`; heartbeat | proactive send | refused; message names the absence | FR-3 |
-| 6 | U | turn has empty `ToolWorkspaceID` | proactive send | refused; names the missing workspace | FR-3 |
-| 7 | U | `A` owns `tg.acme` + `slack.acme` in `W1` | proactive send | lowest key chosen; WARN lists both | FR-3a |
-| 8 | U | sub-turn, no inherited conversation, delegate owns an instance | proactive send | resolves against the delegate | FR-3b |
-| 9 | U | `B` on `W1`'s team owns nothing; `A` owns `tg.acme` | `B` proactive send | refused on ownership | FR-4 |
-| 10 | U | — | inspect `send_message` schema | no `channel`, no `chat_id` property | FR-1, FR-5 |
-| 11 | I | instance unbound | any send | unchanged | FR-8 |
-| 12 | I | webchat turn | send | reaches only the turn's own session | FR-9 |
-| 13 | U | agent-originated send | inspect bus message | carries agent + workspace; no `InstanceID` field | FR-6, M4 |
-| 14 | U | **populated but mismatched** `(AgentID, WorkspaceID)` vs instance | dispatch | refused + WARN | FR-7 |
-| 15 | U | `notifyDrop` / schedule / device notification (empty `AgentID`) | dispatch | passes unchecked | FR-7 exemption |
-| 16 | U | successful send | inspect audit | event carries origin and FR-2-vs-FR-3 provenance | FR-6a |
-
-Row 14 replaces round-1's row 10, which could not fail: an empty-field message is exempt under
-FR-7's stated scope, so the old row tested nothing.
+| 1 | I | `A` owns `tg.acme` in `W1`; inbound chat | reply, no channel named | leaves via `tg.acme` | FR-2 |
+| 2 | I | same, heartbeat, no inbound | proactive send | leaves via `tg.acme` — same path | FR-2, §1.2 |
+| 3 | U | `A` owns `tg.acme` + `slack.acme` in `W1` | send naming `slack.acme` | delivered via `slack.acme` | FR-1 (agent picks) |
+| 4 | U | as 3 | send naming no channel | refused, names both | FR-2 |
+| 5 | U | `A` owns `tg.acme` only | send naming `tg.beta` (another agent's) | refused, names what `A` owns | FR-1, FR-4 |
+| 6 | I | `tg.acme` owned by `(W1,Mia)`; hand-off pins Ava; Ava owns `slack.acme` | Ava replies | leaves via **Ava's** channel | FR-3 |
+| 7 | I | as 6, Ava owns nothing in `W1` | Ava replies | refused; session goes quiet with a reason | FR-3, Q1 |
+| 8 | I | Mia's turn delegates to Ava | delegate returns text | parent sends via Mia's channel; no delegate send | §1.3 |
+| 9 | U | delegate calls `send_message`, owns nothing in `W` | send | refused on ownership | FR-4 |
+| 10 | U | empty `ToolWorkspaceID` | any send | refused, names the missing workspace | FR-2 |
+| 11 | U | agent attempts `set_config channels.<id>.identity.id` | write | rejected as a blocked key | FR-5 |
+| 12 | U | populated but mismatched `(AgentID, WorkspaceID)` vs instance | dispatch | refused + WARN | FR-6 |
+| 13 | U | `notifyDrop` / device notification (empty `AgentID`) | dispatch | passes unchecked | FR-6 exemption |
+| 14 | U | agent-originated send | inspect bus message | carries agent + workspace; no `InstanceID` | FR-6 |
+| 15 | U | schedule create carrying `channel`/`chat_id` | request | rejected — field no longer exists | FR-8 |
+| 16 | U | persisted job with `Deliver: true` | load | audited and removed; no agentless emission path remains | FR-8 |
+| 17 | I | instance unbound | any send | unchanged | FR-9 |
+| 18 | I | webchat turn | send | reaches only the turn's own session | FR-10 |
+| 19 | I | **inbound routing regression pin** | inbound on bound instance | ADR-029 behaviour unchanged | regression |
 
 ---
 
-## 5. Regression impact — behaviours that change
+## 5. Regression impact
 
-Round 1 was right that this was understated. Enumerated:
+**Losses.** An agent naming a channel it does not own is now refused where it previously
+succeeded. An agent owning several must name one rather than having one chosen. Scheduled
+delivery to a channel is removed outright (FR-8), including the agentless `Deliver: true` path.
+Cross-workspace announcement through this route ends.
 
-1. **`send_message` loses two parameters.** Any prompt, skill or scheduled-job payload passing
-   `channel`/`chat_id` stops steering the destination. Deliberate; it is the fix.
-2. **Scheduled jobs naming a channel in their payload** no longer control delivery by that means;
-   they resolve under FR-3 like any other proactive send. This needs an audit of existing job
-   payloads before implementation.
-3. **A proactive send from an agent owning nothing in the workspace now fails** where it
-   previously went somewhere. Louder, and intended, but it is a behaviour change.
-4. **Cross-workspace announcement through this path stops working.** If wanted, it becomes a
-   separate capability with its own tool and its own policy entry — never an emergent property of
-   an unchecked argument.
+**Gains.** FR-2 gives heartbeats, `/loop` runs and delegated sub-turns a *defined* destination
+they do not have today. This is a widening as well as a tightening, and the widening is
+deliberate: an agent that owns a channel should be able to speak on it.
 
-Unchanged and regression-pinned: inbound routing (ADR-029), hand-off, delegation, `send_file`,
-the email tools, streaming.
+**Unchanged and pinned:** inbound routing (ADR-029, row 19), the hand-off pin mechanism,
+`send_file`, the email tools, streaming.
 
 ---
 
 ## 6. Non-goals
 
-- **Not** changing whether an agent may send. That stays governed solely by tool policy, per the
-  operator's standing ruling. This spec changes only *where* a permitted send may go.
-- **Not** changing inbound. ADR-029 stands.
-- **Not** per-workspace tool policy. Policy remains per-agent.
-- **Not** cross-workspace announcement.
-- **Not** touching `send_file`, which already resolves from turn state and is the reference
-  implementation here.
-- **Not** covering streamed bytes (FR-7a).
+Not changing **whether** an agent may send — that stays tool policy, per the operator's standing
+ruling; this spec changes only **where**. Not changing inbound. Not per-workspace tool policy. Not
+cross-workspace announcement. Not touching `send_file`. Not covering streamed bytes (FR-7).
 
 ---
 
-## 7. Migration
+## 7. Operator decisions applied in revision 3
 
-No stored data changes. The ownership pair is already persisted and already set through the UI.
-The breakage is behavioural and enumerated in §5, consistent with the project's no-back-compat
-posture.
+**Q1 — hand-off to an agent owning no channel:** accept the hand-off, then fail audibly on the
+reply (FR-3). Refusing the hand-off up front was rejected.
 
----
+**Q2 — an agent owning two channels:** **the agent picks.** This overturned revision 2, which
+removed the destination parameter entirely and had the system choose. `send_message` serves all
+channels, so the parameter is inherent and the agent has to ground its choice properly. See §2.1
+for what this costs in enforcement strength.
 
-## 8. Open questions for the operator
+**Q3 — scheduled runs naming a channel:** the plumbing is dormant legacy and is **removed**
+(FR-8), not migrated and not validated.
 
-**Q1 — A scheduled job whose agent owns no channel in the workspace.** FR-3 refuses and says so.
-The alternative is falling back to any conversation the agent has open, which is how today's
-unchecked behaviour resolves it. Refusing is proposed because a background job silently choosing a
-recipient is how a message reaches someone nobody intended — but a misconfigured heartbeat then
-goes quiet rather than talking.
-
-**Q2 — Two owned instances in one workspace.** FR-3a picks the lowest key and logs loudly. The
-alternatives are an explicit `primary: true` on the instance (clean, but contradicts "no schema
-change") or refusing outright (leaves a two-channel agent with no proactive voice). If you expect
-agents to hold two channels routinely, the primary flag is the better answer and the schema cost
-is worth paying.
-
-**Q3 — Proactive resolution inside a delegated turn.** FR-3b resolves against the delegate. The
-alternative — resolve against the root parent, since the work is the parent's — is equally
-defensible. FR-3b was chosen so that the agent attributed in the audit trail is the agent whose
-ownership was checked.
+No open questions remain.

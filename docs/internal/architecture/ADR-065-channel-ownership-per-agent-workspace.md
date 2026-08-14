@@ -22,9 +22,16 @@ That pair is the sole authority in **both** directions:
   that workspace. **Another agent may not use it, including an agent on the same workspace's
   team.** *(Not true today.)*
 
-This is the email model applied to channels. An agent's mailbox is keyed `(agent, workspace)`;
-the email tools take **no target parameter at all**, so the model cannot address another
-agent's or another workspace's inbox. Channels get the same property.
+This is the email model applied to channels, with **one deliberate divergence**. An agent's
+mailbox is keyed `(agent, workspace)` and the email tools take **no target parameter at all**, so
+a wrong target is unrepresentable. `send_message` cannot do that: **one tool addresses every
+channel type**, so naming the target is inherent to its design and an agent holding two channels
+must choose between them — only it knows, in context, which one fits.
+
+So channels get the same ownership property by **validation** rather than by impossibility: the
+parameter stays, and a value outside what the acting agent owns is refused. That is strictly the
+weaker mechanism, and the spec's §2.1 records what it costs and what must never be "simplified"
+away.
 
 ## 2. Context — the binding is enforced in one direction only
 
@@ -117,10 +124,17 @@ as `send_file` and the email tools already behave.
 
 ## 6. Alternatives rejected
 
-**Validate the model's `channel`/`chat_id` against the agent's owned instances.** Keeps the
-parameters and checks them. Rejected: it leaves the model naming destinations, so every future
-call site must remember to validate, and a missed one is silent. Removing the parameter removes
-the class. This is the reasoning the email tools already recorded.
+**Remove `channel`/`chat_id` from `send_message` entirely, as the email tools do.** ~~Chosen~~ —
+**rejected by the operator, correctly.** `send_message` is the single tool for every channel
+type, so removing the target does not make it safer, it makes it unable to do its job: an agent
+that owns both a Telegram and a Slack channel has no way to say which it means. The first two
+drafts of this ADR treated the parameter as a defect to delete; it is a requirement of the
+design.
+
+What survives from that reasoning is the warning, not the remedy: with validation, every path
+from a `send_message` call to the bus must pass the same check, and a missed one is silent. That
+is why the decision carries a second check at dispatch (spec FR-6) rather than trusting a single
+site.
 
 **Carry `AgentID`/`WorkspaceID` on `OutboundMessage` and check at dispatch.** Useful for audit
 and probably worth doing anyway, but insufficient alone: it validates late, after the message
