@@ -270,6 +270,10 @@ func newBrowserInspectTestAPIWithMutate(t *testing.T, mutate func(cfg *config.Co
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
+			// This test resolves the default agent (browser capture is keyed to
+			// it). There is no implicit "main" sentinel to be that agent any
+			// more (ADR-064).
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	cfg.Tools.Browser.LiveViewEnabled = true

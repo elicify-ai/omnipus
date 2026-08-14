@@ -58,6 +58,10 @@ func newFixWaveHandlerWithAudit(
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
+			// This test resolves the default agent (browser capture is keyed to
+			// it). There is no implicit "main" sentinel to be that agent any
+			// more (ADR-064).
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			Mode:     config.SandboxModeOff,
