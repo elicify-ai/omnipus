@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -451,17 +452,30 @@ func (r *RouteResolver) resolveDefaultAgentID() string {
 	// inbound messages are never silently dropped. Workers are skipped —
 	// they must never be resolved as the default. Log a warning so operators can
 	// detect misconfigured setups.
+	// Last resort: the lexicographically-FIRST chat-target agent.
+	//
+	// This used to take the first chat target in cfg.Agents.List's slice order
+	// — whatever order the config file happened to list agents in — while
+	// AgentRegistry.GetDefaultAgent sorted. Two ladders answering the same
+	// question by different rules agree only by luck, and they were only ever
+	// guaranteed to agree via the configured override, which is why the
+	// override being unset was a release blocker in July 2026 (ADR-064 §7).
+	// Sorting here makes the answer independent of file layout and identical
+	// to the registry's.
+	candidates := make([]string, 0, len(agents))
 	for _, a := range agents {
-		if a.IsChatTarget() {
-			id := strings.TrimSpace(a.ID)
-			if id == "" {
-				continue
-			}
-			normalized := NormalizeAgentID(id)
-			logger.WarnCF("routing", "No default agent override resolved; falling back to first available agent",
-				map[string]any{"fallback_agent_id": normalized, "custom_agent_count": len(agents)})
-			return normalized
+		if !a.IsChatTarget() {
+			continue
 		}
+		if id := strings.TrimSpace(a.ID); id != "" {
+			candidates = append(candidates, NormalizeAgentID(id))
+		}
+	}
+	if len(candidates) > 0 {
+		sort.Strings(candidates)
+		logger.WarnCF("routing", "No default agent override resolved; falling back to first available agent",
+			map[string]any{"fallback_agent_id": candidates[0], "custom_agent_count": len(agents)})
+		return candidates[0]
 	}
 	// No chat-target agents with valid IDs. The "main" sentinel used to be the
 	// last resort here; it is gone, and inventing a name for an agent that does
@@ -469,4 +483,17 @@ func (r *RouteResolver) resolveDefaultAgentID() string {
 	logger.WarnCF("routing", "No chat-target agent found; inbound message has no route",
 		map[string]any{"custom_agent_count": len(agents)})
 	return ""
+}
+
+// DefaultAgentIDForTest exposes resolveDefaultAgentID across the package
+// boundary so pkg/agent can assert that ITS default-agent ladder and this one
+// return the same answer for the same config.
+//
+// The two resolvers are the reason this seam exists: they answer the same
+// question from different data (registry map vs cfg.Agents.List), and their
+// last-resort rungs silently disagreed until ADR-064 §7 was closed. A
+// cross-package equality test is the only thing that can catch them drifting
+// apart again, and it cannot be written without reaching this function.
+func (r *RouteResolver) DefaultAgentIDForTest() string {
+	return r.resolveDefaultAgentID()
 }

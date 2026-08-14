@@ -255,6 +255,12 @@ func TestAuthenticateWS_LogsInvalidSessionCookie(t *testing.T) {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			// An explicitly registered agent. There is no implicit "main"
+			// sentinel to fall back on (ADR-064), and handleChatMessage now
+			// REFUSES a chat frame it cannot resolve an agent for rather than
+			// publishing a message owned by nobody — so with an empty roster
+			// nothing ever reaches the bus and this test waits out its 30s.
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

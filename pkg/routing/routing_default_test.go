@@ -27,6 +27,12 @@ func TestResolveRoute_MiaIsDefault(t *testing.T) {
 		{ID: "ava"},
 	}
 	cfg := testConfig(agents, nil)
+	// The per-entity Default flag is NOT consulted by either default-agent
+	// resolver (ADR-054 D6.4) — the singleton is. This test passed before only
+	// because "mia" happened to be FIRST in slice order, which the last-resort
+	// rung used to honour; it now sorts, so "ava" would win. Setting the
+	// singleton makes the test assert the rule it always claimed to.
+	cfg.Agents.Defaults.DefaultAgentID = "mia"
 	r := NewRouteResolver(cfg)
 
 	route := r.ResolveRoute(RouteInput{Channel: "telegram"})
@@ -60,6 +66,10 @@ func TestResolveRoute_ChannelBindingOverridesDefault(t *testing.T) {
 		},
 	}
 	cfg := testConfig(agents, bindings)
+	// Same as the sibling default tests: the per-entity Default flag does not
+	// drive resolution (ADR-054 D6.4) — the singleton does. Without it "jim"
+	// would win on the sorted last-resort rung.
+	cfg.Agents.Defaults.DefaultAgentID = "mia"
 	r := NewRouteResolver(cfg)
 
 	route := r.ResolveRoute(RouteInput{
@@ -167,6 +177,10 @@ func TestResolveRoute_NonExistentAgentInBindingFallsToDefault(t *testing.T) {
 		},
 	}
 	cfg := testConfig(agents, bindings)
+	// The per-entity Default flag does not drive resolution (ADR-054 D6.4)
+	// — the singleton does. Without it "jim" would win on the sorted
+	// last-resort rung, which is what this test used to rely on.
+	cfg.Agents.Defaults.DefaultAgentID = "mia"
 	r := NewRouteResolver(cfg)
 
 	route := r.ResolveRoute(RouteInput{
@@ -228,10 +242,14 @@ func TestResolveDefaultAgentID_Differentiation(t *testing.T) {
 		t.Fatalf("resolveDefaultAgentID() = %q, want 'beta' (configured override)", gotA)
 	}
 
+	// No override: the last resort is the lexicographically-FIRST chat target,
+	// so "delta" wins over "gamma" despite being listed second. Sorting (rather
+	// than slice order) is what makes this resolver agree with
+	// agent.AgentRegistry.GetDefaultAgent — see ADR-064 §7.
 	cfgB := testConfig([]config.AgentConfig{{ID: "gamma"}, {ID: "delta"}}, nil)
 	gotB := NewRouteResolver(cfgB).resolveDefaultAgentID()
-	if gotB != "gamma" {
-		t.Fatalf("resolveDefaultAgentID() = %q, want 'gamma' (first chat-target, no override)", gotB)
+	if gotB != "delta" {
+		t.Fatalf("resolveDefaultAgentID() = %q, want 'delta' (lexicographically first chat-target, no override)", gotB)
 	}
 
 	if gotA == gotB {

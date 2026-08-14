@@ -330,6 +330,23 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	// require a default don't panic). If the registry holds no agents at all,
 	// there is nothing to fall back to and this returns nil — callers must
 	// handle that case explicitly.
+	// Last resort: the lexicographically-first CHAT-TARGET agent.
+	//
+	// Both halves of that matter, and both used to differ from
+	// pkg/routing.RouteResolver.resolveDefaultAgentID, which is the other
+	// ladder resolving the same question:
+	//
+	//   - ELIGIBILITY: this used to accept any non-worker, so a System Agent
+	//     could be chosen here while routing skipped it. Both now use
+	//     IsChatTarget (not a worker, not a System Agent).
+	//   - ORDERING: routing used to take the first chat-target in
+	//     cfg.Agents.List's SLICE order — i.e. whatever order the config file
+	//     happened to list agents in. Both now sort, so the answer does not
+	//     depend on file layout.
+	//
+	// The two ladders were only ever guaranteed to agree via the configured
+	// override, which is why the override being unset was a release blocker in
+	// July 2026 (see ADR-064 §7). They now agree without it too.
 	ids := make([]string, 0, len(r.agents))
 	for id := range r.agents {
 		ids = append(ids, id)
@@ -339,11 +356,14 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		if ag := r.agents[id]; ag != nil && !ag.IsWorker() {
+		if ag := r.agents[id]; ag != nil && ag.IsChatTarget() {
 			return ag
 		}
 	}
-	return r.agents[ids[0]]
+	// Every registered agent is a worker or a System Agent. There is no
+	// legitimate chat target, and naming one anyway would route real user
+	// messages at an agent that must never receive them.
+	return nil
 }
 
 // UpsertAgent inserts or replaces a single agent instance in the registry

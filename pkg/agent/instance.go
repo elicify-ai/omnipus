@@ -810,6 +810,22 @@ func (a *AgentInstance) IsWorker() bool {
 	return a.AgentType == string(config.AgentTypeWorker)
 }
 
+// IsSystem reports whether this is a System Agent.
+//
+// IsChatTarget mirrors config.AgentConfig.IsChatTarget so the registry and
+// pkg/routing can apply the SAME eligibility rule when resolving a default
+// agent. They used to differ: routing excluded system agents and the registry
+// did not, so on a config containing one the two could name different agents
+// for the same install — a disagreement neither side could see.
+func (a *AgentInstance) IsSystem() bool {
+	return a.AgentType == string(config.AgentTypeSystem)
+}
+
+// IsChatTarget reports whether this agent may be resolved as a chat target.
+func (a *AgentInstance) IsChatTarget() bool {
+	return !a.IsWorker() && !a.IsSystem()
+}
+
 // ResolveAgentHome exports resolveAgentHome (below) for cross-
 // package use, mirroring the "exported wrapper for cross-package test/tooling
 // use" pattern already established in pkg/agent/runner/buildargs_crosspkg.go
