@@ -11555,7 +11555,26 @@ func (al *AgentLoop) GetStartupInfo() map[string]any {
 	info := make(map[string]any)
 
 	registry := al.GetRegistry()
+	// Tools and skills are install-wide facts that every agent sees the same
+	// way — skills in particular load from ONE global directory
+	// ($OMNIPUS_HOME/skills; see globalSkillsDir). Reading them "through the
+	// default agent" was only ever a convenient handle, and it silently became
+	// a dependency on a default EXISTING once the "main" sentinel was removed
+	// (ADR-064): with no default, this returned an empty map, which made
+	// restAPI.installedSkillIDs empty, which made validateSkillIDs skip
+	// validation entirely and ACCEPT unknown skill ids. A fail-open reached
+	// through three layers of indirection.
+	//
+	// Any agent answers these questions identically, so ask any.
 	agent := registry.GetDefaultAgent()
+	if agent == nil {
+		for _, id := range registry.ListAgentIDs() {
+			if ag, ok := registry.GetAgent(id); ok && ag != nil {
+				agent = ag
+				break
+			}
+		}
+	}
 	if agent == nil {
 		return info
 	}

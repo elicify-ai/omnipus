@@ -4671,12 +4671,18 @@ func isSystemSkill(name string) bool {
 // skills are installed, which lets the validation below produce a proper 400
 // ("unknown skill id") rather than silently accepting any string.
 func (a *restAPI) installedSkillIDs() map[string]struct{} {
-	info := a.agentLoop.GetStartupInfo()
-	skillsInfo, ok := info["skills"].(map[string]any)
-	if !ok {
-		return map[string]struct{}{}
+	// Read the skills directories directly. This used to go through
+	// GetStartupInfo, which sourced them from the DEFAULT AGENT's context
+	// builder — so when no default agent existed the set came back empty, and
+	// validateSkillIDs is documented to skip validation entirely on an empty
+	// set. Unknown skill ids were then accepted, through three layers of
+	// indirection, with nothing logged. Skills are install-wide; no agent is
+	// needed to enumerate them.
+	workspace := a.homePath
+	if cfg := a.agentLoop.GetConfig(); cfg != nil && strings.TrimSpace(cfg.Agents.Defaults.Home) != "" {
+		workspace = cfg.Agents.Defaults.Home
 	}
-	names, _ := skillsInfo["names"].([]string)
+	names := agent.InstalledSkillIDs(workspace)
 	result := make(map[string]struct{}, len(names))
 	for _, n := range names {
 		result[n] = struct{}{}

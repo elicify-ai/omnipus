@@ -257,6 +257,41 @@ func globalSkillsDir() string {
 	return filepath.Join(getGlobalConfigDir(), "skills")
 }
 
+// BuiltinSkillsDir resolves the builtin-skills directory: the configured
+// override, else skills/ under the working directory.
+//
+// Exported because the installed-skill set is a property of the INSTALLATION,
+// not of any agent, and callers that need it must not have to reach through an
+// agent to get it. Doing exactly that produced a fail-open: with no default
+// agent, the gateway's installed-skill set came back empty, and
+// validateSkillIDs is documented to skip validation on an empty set — so
+// unknown skill ids were accepted (ADR-064 fallout).
+func BuiltinSkillsDir() string {
+	dir := strings.TrimSpace(os.Getenv(config.EnvBuiltinSkills))
+	if dir != "" {
+		return dir
+	}
+	wd, wdErr := os.Getwd()
+	if wdErr != nil {
+		logger.WarnCF("agent", "os.Getwd failed; builtin skills dir unavailable",
+			map[string]any{"error": wdErr.Error()})
+		wd = filepath.Join(os.TempDir(), pkg.DefaultOmnipusHome)
+	}
+	return filepath.Join(wd, "skills")
+}
+
+// InstalledSkillIDs lists every installed skill id, read straight from the
+// skills directories with no agent involved.
+func InstalledSkillIDs(workspace string) []string {
+	loader := skills.NewSkillsLoader(workspace, globalSkillsDir(), BuiltinSkillsDir())
+	all := loader.ListSkills()
+	ids := make([]string, 0, len(all))
+	for _, sk := range all {
+		ids = append(ids, sk.ID)
+	}
+	return ids
+}
+
 func NewContextBuilder(workspace string) *ContextBuilder {
 	// builtin skills: skills directory in current project
 	// Use the skills/ directory under the current working directory
