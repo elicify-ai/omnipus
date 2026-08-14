@@ -28,13 +28,21 @@ agent's or another workspace's inbox. Channels get the same property.
 
 ## 2. Context — the binding is enforced in one direction only
 
-**Inbound is strict. [VERIFIED]** `ChannelInstanceConfig.WorkspaceID` + `Identity{kind:"agent"}`
+**Inbound is strict on the ADR-029 path — with one documented bypass. [VERIFIED]** `ChannelInstanceConfig.WorkspaceID` + `Identity{kind:"agent"}`
 form the pair; `ChannelInstanceConfig.IsWorkspaceBound` is the predicate;
 `routing.ResolveRoute` treats a bound instance at **Priority 0**, overriding the whole binding
 cascade. Its drift guard **drops** a message (`MatchedBy: "bound.drift.drop"`) rather than let a
 bound instance fall through to the global default. The instance id is stamped at a single choke
 point (`channels.BaseChannel.HandleMessage`) and explicitly never sourced from message content —
 a STRIDE spoofing guard.
+
+**The bypass:** `hand_off` pins another agent to a live conversation, and that pin is consulted
+*before* `ResolveRoute` and returns early (`pkg/agent/loop.go`, the `sessionActiveAgent` lookup
+keyed `"chat:"+channel+":"+chatID`). A handed-off agent therefore answers on an instance it does
+not own, without the Priority-0 path running at all. This is correct behaviour — a user asking
+for a different agent should get one — but it means "inbound is strict" is true of the routing
+cascade, not of the system. The spec's FR-2 makes the rule explicit rather than leaving it to be
+rediscovered.
 
 **Outbound has no counterpart at all. [VERIFIED]**
 
@@ -66,14 +74,20 @@ made.
 ## 3. Exploitability — stated honestly
 
 Reaching another workspace's chat needs the instance key **and** a valid `chat_id`. There is no
-chat-listing tool. **[VERIFIED]** The one config-reading oracle (`get_config`) is **denied to
-all four base agents** on a live instance — checked against the running gateway, not inferred.
-**[VERIFIED]**
+chat-listing tool. **[VERIFIED]**
 
-So this is not self-serving today: an ordinary agent needs the identifiers from the operator, a
-user, or its own prior activity in that chat. It is a **boundary that is not enforced**, rather
-than an open door. That is the correct reason to fix it, and it is why this is design work and
-not a hotfix.
+The config-reading oracle (`get_config`) is **denied to all four base agents** — checked against
+a running gateway, not inferred. **[VERIFIED]** But the **global tool-policy ceiling for it is
+`allow`**, so an operator-created agent gets it unless denied explicitly, and
+`get_config "channels"` redacts secrets while leaving instance keys, `workspace_id` and
+`identity.id` in the clear. **[VERIFIED — corrected in round-1 review; the first draft of this
+section stated only the base-agent half and read as narrower than the truth.]**
+
+So: not self-serving for the shipped roster, self-serving for a custom agent with default
+permissions. It remains a **boundary that is not enforced** rather than an open door — an
+attacker still needs a valid `chat_id`, and the fix is a design change rather than a hotfix — but
+the severity is higher than the first draft implied, and it strengthens rather than weakens the
+case.
 
 ## 4. Relationship to the operator's standing ruling on send tools
 
