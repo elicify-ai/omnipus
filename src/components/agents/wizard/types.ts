@@ -47,6 +47,31 @@ export interface StepProps {
    * Provided by the parent (CreateAgentModal) so the step stays query-client-free.
    */
   globalPolicies?: import('@/components/shared/ToolPolicyEditor').ToolPolicyValue
+  /**
+   * True while the parent's `providers` query is still in flight (no data
+   * yet). Step 1's model picker must render a distinct "loading" state
+   * here — collapsing this into the empty-catalogue "connect a provider"
+   * copy is exactly the bug this field exists to fix: CI observed the
+   * providers fetch still in flight (and, separately, failing outright —
+   * `Get "https://openrouter.ai/api/v1/models": context canceled` × 9,
+   * zero successes) while the picker told the user no provider was
+   * connected, which was false in both cases.
+   */
+  providersLoading?: boolean
+  /**
+   * Human-readable message when the parent's `providers` query itself
+   * failed (network error, aborted request, 5xx) — as opposed to a
+   * provider being connected but its model catalogue coming back empty
+   * (that case is derived from each `Provider.warning`, not this field).
+   * Undefined when the query is loading or has succeeded.
+   */
+  providersError?: string
+  /**
+   * Retries the parent's `providers` query. Wired to `providersQuery.refetch()`
+   * in `CreateAgentModal`; forwarded through the wizard so Step 1 can offer
+   * a working Retry action on the error state instead of a dead end.
+   */
+  onRetryProviders?: () => void
 }
 
 // ── Advanced disclosure payload ────────────────────────────────────────────

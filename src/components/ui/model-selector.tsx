@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { CaretUpDown, Check, Keyboard, WarningCircle } from '@phosphor-icons/react'
+import { CaretUpDown, Check, CircleNotch, Keyboard, WarningCircle } from '@phosphor-icons/react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
@@ -108,6 +108,21 @@ interface ModelSelectorProps {
    */
   emptyCatalogHint?: string
   /**
+   * Distinguishes "the catalogue is empty" from "we don't know yet" /
+   * "the fetch failed" — collapsing those into one state is the bug this
+   * prop exists to fix (CI observed a healthy /providers endpoint whose
+   * upstream model fetch failed 9x with `context canceled`; the picker
+   * told the user no provider was connected, which was false — see
+   * `Step1Identity.tsx`'s `catalogStatus` derivation for the full incident
+   * note). Defaults to `'ready'` so every existing call site — which has
+   * no loading/error concept of its own — renders exactly as before.
+   */
+  catalogStatus?: 'loading' | 'error' | 'ready'
+  /** Message shown in the `catalogStatus === 'error'` state. Falls back to a generic message. */
+  catalogErrorMessage?: string
+  /** Retry action for the `catalogStatus === 'error'` state. Omit to render the error with no retry control. */
+  onRetryCatalog?: () => void
+  /**
    * Visual style of the trigger button.
    * - `'default'` (the default) — bordered form-field look: solid border, filled
    *   background, h-10, full-width. Preserves the existing appearance for all
@@ -126,7 +141,7 @@ interface ModelSelectorProps {
   onOpenChange?: (open: boolean) => void
 }
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange }: ModelSelectorProps) {
+export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, catalogStatus = 'ready', catalogErrorMessage, onRetryCatalog, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange }: ModelSelectorProps) {
   const [internalOpen, setInternalOpen] = React.useState(false)
   const isControlled = controlledOpen !== undefined
   const open = isControlled ? controlledOpen : internalOpen
@@ -142,6 +157,84 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // points at. useId() guarantees uniqueness even if multiple
   // ModelSelectors are mounted on the same page.
   const descriptionId = React.useId()
+
+  // Loading / error catalogue states pre-empt every other render path below.
+  // A providers fetch that is still in flight, or has failed outright, must
+  // never render as "no models available" — that copy reads as user error
+  // ("you haven't connected a provider") when the real cause is transient:
+  // CI observed exactly this, the gateway's upstream fetch to openrouter.ai
+  // failing 9 times in a row with `context canceled` (zero successes) while
+  // the /providers endpoint itself was healthy (a direct curl from the same
+  // worker returned 200 in 0.46s) — and the picker still told the user no
+  // provider was connected. `catalogStatus` defaults to `'ready'`, so a
+  // caller that never sets it (every existing call site) is unaffected.
+  if (catalogStatus === 'loading') {
+    const isGhost = variant === 'ghost'
+    return (
+      <div
+        data-testid={triggerTestId}
+        aria-busy="true"
+        role="status"
+        className={
+          isGhost
+            ? 'flex items-center gap-1.5 h-7 rounded-md px-1.5 text-xs'
+            : 'flex w-full items-center gap-2 h-10 rounded-md border px-3 py-2 text-sm'
+        }
+        style={
+          isGhost
+            ? { color: 'var(--color-muted)' }
+            : {
+                borderColor: 'var(--color-border)',
+                backgroundColor: 'var(--color-surface-1)',
+                color: 'var(--color-muted)',
+              }
+        }
+      >
+        <CircleNotch size={12} className="animate-spin shrink-0" aria-hidden="true" />
+        <span className="truncate text-xs">Loading models…</span>
+      </div>
+    )
+  }
+
+  if (catalogStatus === 'error') {
+    const isGhost = variant === 'ghost'
+    return (
+      <div
+        data-testid={triggerTestId}
+        role="alert"
+        className={
+          isGhost
+            ? 'flex items-center gap-1.5 h-7 rounded-md px-1.5 text-xs'
+            : 'flex w-full items-center gap-2 h-10 rounded-md border px-3 py-2 text-sm'
+        }
+        style={
+          isGhost
+            ? { color: 'var(--color-warning)' }
+            : {
+                borderColor: 'var(--color-warning)',
+                backgroundColor: 'var(--color-surface-1)',
+                color: 'var(--color-warning)',
+              }
+        }
+      >
+        <WarningCircle size={12} weight="fill" className="shrink-0" aria-hidden="true" />
+        <span className="truncate text-xs flex-1">
+          {catalogErrorMessage ?? 'Failed to load providers'}
+        </span>
+        {onRetryCatalog && (
+          <button
+            type="button"
+            onClick={onRetryCatalog}
+            data-testid={triggerTestId ? `${triggerTestId}-retry` : undefined}
+            className="shrink-0 text-xs font-medium underline underline-offset-2 hover:opacity-80"
+            style={{ color: 'var(--color-accent)' }}
+          >
+            Retry
+          </button>
+        )}
+      </div>
+    )
+  }
 
   const catalogEmpty =
     models.length === 0 && (!providerGroups || providerGroups.every((g) => g.models.length === 0))
@@ -356,7 +449,16 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
         </p>
         {/* shouldFilter=false: we handle filtering ourselves so search targets model name only */}
         <Command shouldFilter={false}>
+          {/* data-no-focus-ring: the sanctioned opt-out for a composite widget
+              whose focus is shown by its parent surface (globals.css, "Central
+              focus ring"). This input is auto-focused the instant the popover
+              opens and is the only focusable thing in it, so the gold ring
+              fires immediately on every open and boxes a field the bordered
+              popover already frames — noise, not a focus cue. Same rationale
+              as the chat textarea inside the composer card. Operator-requested
+              2026-08-13. */}
           <CommandInput
+            data-no-focus-ring
             placeholder="Search models..."
             value={query}
             onValueChange={setQuery}

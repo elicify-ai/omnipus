@@ -134,6 +134,16 @@ interface WizardProps {
   skills?: ReadonlyArray<Skill>
   /** Global (Settings → Security) tool policy — locks contradicting Step 3 controls. */
   globalPolicies?: import('@/components/shared/ToolPolicyEditor').ToolPolicyValue
+  /**
+   * providers-query loading/error state, forwarded to Step 1 so the model
+   * picker can tell "still fetching" and "fetch failed" apart from
+   * "genuinely no provider connected" instead of collapsing all three into
+   * the same false "connect a provider" message. See `StepProps` in
+   * `./wizard/types.ts` for the incident this fixes.
+   */
+  providersLoading?: boolean
+  providersError?: string
+  onRetryProviders?: () => void
 }
 
 const TYPE_CHIP_LABEL: Record<WizardType, string> = {
@@ -212,6 +222,9 @@ export function CreateAgentWizard({
   registryTools = [],
   skills = [],
   globalPolicies,
+  providersLoading = false,
+  providersError,
+  onRetryProviders,
 }: WizardProps) {
   const closeCreateAgentModal = useUiStore((s) => s.closeCreateAgentModal)
   // Resolve close handler: tests pass `onClose`; production falls back to
@@ -364,6 +377,9 @@ export function CreateAgentWizard({
     registryTools,
     skills,
     globalPolicies,
+    providersLoading,
+    providersError,
+    onRetryProviders,
   }
 
   return (

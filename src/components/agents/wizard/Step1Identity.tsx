@@ -58,6 +58,9 @@ export function Step1Identity({
   initialType,
   initialCli,
   connectedProviders = [],
+  providersLoading = false,
+  providersError,
+  onRetryProviders,
 }: StepProps) {
   const isWorker = initialType !== 'Main'
   const isExternal = initialType === 'subagent_3p'
@@ -76,6 +79,34 @@ export function Step1Identity({
     providerId: p.id,
     models: p.models ?? [],
   }))
+
+  // Bug fix: the picker used to collapse "still loading", "fetch failed",
+  // "provider connected but its model catalogue came back empty", and
+  // "genuinely no provider connected" into one message, true only for the
+  // last case. Motivating incident: CI logged the gateway's upstream fetch
+  // to openrouter.ai failing 9 times with `context canceled` (zero
+  // successes) while the healthy /providers endpoint itself returned 200
+  // in 0.46s from the same worker — the picker still told the user no
+  // provider was connected, which was false.
+  const catalogStatus: 'loading' | 'error' | 'ready' = providersLoading
+    ? 'loading'
+    : providersError
+      ? 'error'
+      : 'ready'
+  const flatModels = connectedProviders.flatMap((p) => p.models ?? [])
+  // Ready + empty is itself two different truths: a provider IS connected
+  // but its model catalogue came back empty (surface the backend's own
+  // `Provider.warning` — e.g. "could not fetch upstream model list: status
+  // 429" — rather than blaming the user for not connecting one), vs.
+  // genuinely no connected provider at all (today's message, the one case
+  // where it was already honest).
+  const providerWithWarning = connectedProviders.find((p) => p.warning)
+  const emptyCatalogHint =
+    connectedProviders.length > 0 && flatModels.length === 0
+      ? providerWithWarning
+        ? `Model list unavailable: ${providerWithWarning.warning}`
+        : 'Connected provider has no models available'
+      : 'Connect a provider in Settings to pick a model'
 
   return (
     <>
@@ -183,7 +214,7 @@ export function Step1Identity({
              "unresolved" chip can never fire. When no provider is connected
              the picker shows a disabled "connect a provider" state. */
           <ModelSelector
-            models={[...connectedProviders.flatMap((p) => p.models ?? [])]}
+            models={[...flatModels]}
             providerGroups={providerGroups}
             value={payload.model}
             onChange={(m) => setField('model', m)}
@@ -191,7 +222,10 @@ export function Step1Identity({
             placeholder="Pick a connected model"
             triggerTestId="wizard-model"
             constrainToCatalog
-            emptyCatalogHint="Connect a provider in Settings to pick a model"
+            emptyCatalogHint={emptyCatalogHint}
+            catalogStatus={catalogStatus}
+            catalogErrorMessage={providersError}
+            onRetryCatalog={onRetryProviders}
           />
         )}
       </div>
