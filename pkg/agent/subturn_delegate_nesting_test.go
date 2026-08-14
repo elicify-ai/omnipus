@@ -111,10 +111,20 @@ const (
 // "ray" and "planner", both policy-allowed to call "delegate", plus a
 // workspace whose delegation graph carries a single, fully-unrestricted
 // ray -> planner edge (mirroring the UAT repro's "wired ray -> planner
-// (unrestricted)" setup). "jim" is not a registered config agent — the test
-// drives the jim -> ray hop via a direct spawnSubTurn call (matching the
-// established pattern in approval_grant_delegation_test.go), so jim's own
-// identity/policy is never exercised; only ray's nested call is under test.
+// (unrestricted)" setup), plus "jim" as the outermost delegator.
+//
+// jim used to be left UNREGISTERED here, on the reasoning that the test drives
+// the jim -> ray hop via a direct spawnSubTurn call so jim's own identity is
+// never exercised. That worked only because the parent turnState's agent
+// instance came from GetDefaultAgent's last-resort rung, which would return
+// ANY registered agent — including a worker. That rung is gone (ADR-064 §7:
+// resolving a worker or System Agent as the chat default could route real user
+// messages at an agent that must never receive them), and with ray and planner
+// both being workers there was nothing left to resolve, so spawnSubTurn failed
+// with "parent turnState has no agent instance".
+//
+// A parent needs a real instance. Registering jim says that plainly instead of
+// depending on a fallback that should never have been load-bearing.
 func newNestedDelegationAgentLoop(t *testing.T) *AgentLoop {
 	t.Helper()
 
@@ -141,6 +151,12 @@ func newNestedDelegationAgentLoop(t *testing.T) *AgentLoop {
 				MaxToolIterations: 10,
 			},
 			List: []config.AgentConfig{
+				{
+					ID:    "jim",
+					Home:  tmpDir,
+					Model: &config.AgentModelConfig{Primary: "test-model"},
+					Tools: allowDelegate,
+				},
 				{
 					ID:    "ray",
 					Type:  config.AgentTypeWorker,

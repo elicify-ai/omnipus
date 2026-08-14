@@ -965,6 +965,10 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10
+	// An explicitly registered agent. The registry no longer contains an
+	// implicit "main" sentinel (ADR-064), so with an empty list there is no
+	// agent to resolve as the default and no tools/skills to report.
+	cfg.Agents.List = []config.AgentConfig{{ID: "mia", Home: tmpDir}}
 
 	msgBus := bus.NewMessageBus()
 	provider := &artifactThenSendProvider{}
@@ -1063,6 +1067,10 @@ func TestAgentLoop_GetStartupInfo(t *testing.T) {
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10
+	// An explicitly registered agent. The registry no longer contains an
+	// implicit "main" sentinel (ADR-064), so with an empty list there is no
+	// agent to resolve as the default and no tools/skills to report.
+	cfg.Agents.List = []config.AgentConfig{{ID: "mia", Home: tmpDir}}
 
 	msgBus := bus.NewMessageBus()
 	provider := &mockProvider{}
