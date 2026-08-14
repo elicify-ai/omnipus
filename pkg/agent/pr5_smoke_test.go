@@ -73,7 +73,11 @@ func TestBash_JimSeedPolicyAppliedInLoop(t *testing.T) {
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			// Deliberately NO List here — coreagent.SeedConfig only seeds
+			// the full core roster (with real tool policies) when
+			// cfg.Agents.List starts EMPTY; pre-populating it makes
+			// SeedConfig treat this as an existing install and skip
+			// seeding properly.
 		},
 	}
 

@@ -128,7 +128,7 @@ func TestResolveWorkspaceIDForContinuation_NoSession_ReturnsEmpty(t *testing.T) 
 				Home:      t.TempDir(),
 				ModelName: "scripted-model",
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), testutil.NewScenario())
@@ -154,7 +154,7 @@ func TestResolveWorkspaceIDForContinuation_SessionWithWorkspace_ReturnsIt(t *tes
 				Home:      t.TempDir(),
 				ModelName: "scripted-model",
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), testutil.NewScenario())
@@ -216,7 +216,7 @@ func TestResolveSessionStore_CorruptMeta_ReturnsStoreNotNil(t *testing.T) {
 				Home:      t.TempDir(),
 				ModelName: "scripted-model",
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), testutil.NewScenario())
@@ -294,7 +294,7 @@ func TestResolveSessionStore_MissingSession_StaysSilent(t *testing.T) {
 				Home:      t.TempDir(),
 				ModelName: "scripted-model",
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), testutil.NewScenario())
@@ -346,7 +346,7 @@ func TestResolveWorkspaceIDForContinuation_CorruptMeta_WarnsDownstream(t *testin
 				Home:      t.TempDir(),
 				ModelName: "scripted-model",
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), testutil.NewScenario())

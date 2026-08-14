@@ -953,7 +953,7 @@ func TestSpawnSubTurn_PanicRecovery(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), panicProvider)

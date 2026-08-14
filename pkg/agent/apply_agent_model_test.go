@@ -28,7 +28,7 @@ func TestApplyAgentModel_SwitchesInPlacePreservingInstance(t *testing.T) {
 			},
 			// No "main" sentinel to fall back to anymore — this test needs
 			// a REAL registered agent for GetDefaultAgent() to resolve.
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 		Providers: []*config.ModelConfig{
 			{
@@ -101,7 +101,7 @@ func TestApplyAgentModel_UnknownModelRejectedNoMutation(t *testing.T) {
 			},
 			// No "main" sentinel to fall back to anymore — this test needs
 			// a REAL registered agent for GetDefaultAgent() to resolve.
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 		Providers: []*config.ModelConfig{
 			{ModelName: "local", Model: "openai/qwen", APIBase: "http://127.0.0.1:1", APIKeyRef: "LOOP_APPLY2_KEY"},
@@ -156,7 +156,7 @@ func TestApplyAgentModel_PassthroughModel_UpdatesInMemory(t *testing.T) {
 			},
 			// No "main" sentinel to fall back to anymore — this test needs
 			// a REAL registered agent for GetDefaultAgent() to resolve.
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 		Providers: []*config.ModelConfig{
 			{

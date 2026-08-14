@@ -281,7 +281,7 @@ func TestAgentLoop_SteeringMode_ConfiguredFromConfig(t *testing.T) {
 				MaxToolIterations: 10,
 				SteeringMode:      "all",
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -344,7 +344,7 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 			// No "main" sentinel to fall back to anymore — this test drives
 			// a real turn through ProcessDirectWithChannel/Continue, which
 			// needs a REAL registered agent to route to.
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -392,7 +392,7 @@ func TestSessionWorker_DifferentScopesGetIndependentWorkers(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Session: config.SessionConfig{
 			DMScope: "per-peer",
@@ -683,7 +683,7 @@ func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
 			// No "main" sentinel to fall back to anymore — this test drives
 			// a real turn through ProcessDirectWithChannel/Continue, which
 			// needs a REAL registered agent to route to.
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -811,7 +811,7 @@ func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
 			// No "main" sentinel to fall back to anymore — this test drives
 			// a real turn through ProcessDirectWithChannel/Continue, which
 			// needs a REAL registered agent to route to.
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -895,7 +895,7 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 			// No "main" sentinel to fall back to anymore — this test drives
 			// a real turn through ProcessDirectWithChannel/Continue, which
 			// needs a REAL registered agent to route to.
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -1042,7 +1042,7 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 			// No "main" sentinel to fall back to anymore — this test drives
 			// a real turn through ProcessDirectWithChannel/Continue, which
 			// needs a REAL registered agent to route to.
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -1141,7 +1141,7 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 			// No "main" sentinel to fall back to anymore — this test drives
 			// a real turn through ProcessDirectWithChannel/Continue, which
 			// needs a REAL registered agent to route to.
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -1265,7 +1265,7 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 			// No "main" sentinel to fall back to anymore — this test drives
 			// a real turn through ProcessDirectWithChannel/Continue, which
 			// needs a REAL registered agent to route to.
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -1456,7 +1456,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 			// No "main" sentinel to fall back to anymore — this test drives
 			// a real turn through ProcessDirectWithChannel/Continue, which
 			// needs a REAL registered agent to route to.
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -1634,7 +1634,7 @@ func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
 			// No "main" sentinel to fall back to anymore — this test drives
 			// a real turn through ProcessDirectWithChannel/Continue, which
 			// needs a REAL registered agent to route to.
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 

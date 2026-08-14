@@ -36,7 +36,7 @@ func buildTrimTestAgentLoop(t *testing.T, contextWindow, maxTokens int) (*AgentL
 				MaxTokens:         maxTokens,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	mp := &mockProvider{}

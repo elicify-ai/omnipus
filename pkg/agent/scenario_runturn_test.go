@@ -124,7 +124,7 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			// Enable audit logging so emitPolicyDenyAudit writes to audit.jsonl.

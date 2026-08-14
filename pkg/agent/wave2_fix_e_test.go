@@ -297,7 +297,7 @@ func TestRunTurn_StampsModelFieldOnAssistantEntry(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 	}
 
@@ -710,7 +710,7 @@ func TestApplyAgentModel_SwitchesInPlace_PreservesID(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 		Providers: []*config.ModelConfig{
 			{
@@ -776,7 +776,7 @@ func TestRunAgentLoop_ProviderError_HasStatusErrorField(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 	}
 

@@ -189,7 +189,7 @@ func setupC2ParkScenario(t *testing.T) *c2ParkTestHarness {
 				ModelName: "c2-park-mock",
 				MaxTokens: 4096,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 	}
 

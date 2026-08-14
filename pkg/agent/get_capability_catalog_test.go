@@ -41,7 +41,7 @@ func newMinimalAgentLoopForCapabilityTest(t *testing.T) *AgentLoop {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})

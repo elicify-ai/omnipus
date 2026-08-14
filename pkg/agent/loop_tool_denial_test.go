@@ -166,7 +166,7 @@ func baseLoopDenialTestConfig(t *testing.T) (*config.Config, string) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			AuditLog: true,

@@ -36,7 +36,7 @@ func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
 				MaxTokens:         1234,
 				MaxToolIterations: 5,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -78,7 +78,7 @@ func TestNewAgentInstance_DefaultsTemperatureWhenZero(t *testing.T) {
 				MaxTokens:         1234,
 				MaxToolIterations: 5,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -117,7 +117,7 @@ func TestNewAgentInstance_DefaultsTemperatureWhenUnset(t *testing.T) {
 				MaxTokens:         1234,
 				MaxToolIterations: 5,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -156,7 +156,7 @@ func TestNewAgentInstance_FallbackModelsPerEntryProvider(t *testing.T) {
 				ModelName: "gpt-5",
 				Provider:  "openrouter",
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Providers: []*config.ModelConfig{
 			{
@@ -279,7 +279,7 @@ func TestNewAgentInstance_FallbackModelsPrefersExplicitOverLegacy(t *testing.T) 
 				ModelName: "gpt-5",
 				Provider:  "openrouter",
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Providers: []*config.ModelConfig{
 			{
@@ -442,7 +442,7 @@ func TestNewAgentInstance_ResolveCandidatesFromModelListAlias(t *testing.T) {
 						Home:      tmpDir,
 						ModelName: tt.aliasName,
 					},
-					List: []config.AgentConfig{{ID: "mia"}},
+					List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 				},
 				Providers: []*config.ModelConfig{
 					{
@@ -497,7 +497,7 @@ func TestNewAgentInstance_AllowsMediaTempDirForReadAndList_RejectsForBash(t *tes
 				ModelName:           "test-model",
 				RestrictToWorkspace: true,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: workspace}},
 		},
 		Tools: config.ToolsConfig{
 			ReadFile: config.ReadFileToolConfig{Enabled: true},
@@ -570,7 +570,7 @@ func TestNewAgentInstance_InvalidExecConfigDoesNotExit(t *testing.T) {
 				Home:      workspace,
 				ModelName: "test-model",
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: workspace}},
 		},
 		Tools: config.ToolsConfig{
 			ReadFile: config.ReadFileToolConfig{Enabled: true},

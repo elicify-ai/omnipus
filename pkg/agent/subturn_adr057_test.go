@@ -86,7 +86,7 @@ func u7NewTestAgentLoopWithProvider(t *testing.T, provider providers.LLMProvider
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: agentHome}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

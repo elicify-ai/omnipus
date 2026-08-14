@@ -153,7 +153,7 @@ func TestRequestCancel_OrphanedBackgroundDelegate_HardAbortedAfterParentGraceful
 				ModelName: "orphan-delegate-test-model",
 				MaxTokens: 4096,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

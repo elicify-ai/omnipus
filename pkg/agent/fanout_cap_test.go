@@ -99,7 +99,7 @@ func TestSubTurnFanOutCap_ChildSemaphoreCapacity(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: agentHome}},
 		},
 	}
 	al := mustNewAgentLoop(t, agentCfg, bus.NewMessageBus(), &mockProvider{})

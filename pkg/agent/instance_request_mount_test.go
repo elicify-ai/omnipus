@@ -43,7 +43,7 @@ func TestNewAgentInstance_RegistersRequestMount(t *testing.T) {
 				MaxTokens:         256,
 				MaxToolIterations: 3,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: home}},
 		},
 	}
 

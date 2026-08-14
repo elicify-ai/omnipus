@@ -158,7 +158,10 @@ func newE2ECfg(t *testing.T, workspaceDir string) *config.Config {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			// Deliberately NO List here — see newCompressedCfg's identical
+			// comment in tool_manifest_test.go: coreagent.SeedConfig only
+			// seeds the full core roster (with real tool policies) when
+			// cfg.Agents.List starts EMPTY.
 		},
 	}
 	cfg.Tools.Manifest.Compressed = true

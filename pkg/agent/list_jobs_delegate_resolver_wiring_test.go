@@ -60,7 +60,7 @@ func TestWireJobRoster_SubagentActionable_ReflectsDelegateSessionIndex(t *testin
 				Home:      filepath.Join(home, "agents"),
 				ModelName: "test-model",
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: filepath.Join(home, "agents")}},
 		},
 	}
 
@@ -159,7 +159,7 @@ func TestWireJobRoster_SubagentActionable_FalseForUnknownSession(t *testing.T) {
 				Home:      filepath.Join(home, "agents"),
 				ModelName: "test-model",
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: filepath.Join(home, "agents")}},
 		},
 	}
 

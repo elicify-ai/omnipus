@@ -38,7 +38,13 @@ func newCompressedCfg(t *testing.T) *config.Config {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			// Deliberately NO List here — coreagent.SeedConfig below only
+			// takes its fresh-install path (seeding the full core roster
+			// with real tool policies) when cfg.Agents.List starts EMPTY.
+			// Pre-populating so much as a bare {ID: "mia"} makes SeedConfig
+			// think this is an existing, already-configured install and
+			// skip seeding her properly — leaving her with no tool policy
+			// at all instead of the real core Mia config.
 		},
 	}
 	cfg.Tools.Manifest.Compressed = true

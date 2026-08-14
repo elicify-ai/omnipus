@@ -56,7 +56,7 @@ func newOrphanTestAgentLoop(t *testing.T) (*AgentLoop, string) {
 				ModelName: "orphan-watch-test-model",
 				MaxTokens: 4096,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -585,7 +585,7 @@ func TestOrphanWatch_Close_StopsTimerAndNeverReaps(t *testing.T) {
 				ModelName: "orphan-watch-close-test",
 				MaxTokens: 4096,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

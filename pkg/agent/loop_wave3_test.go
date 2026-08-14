@@ -57,7 +57,7 @@ func TestPromptGuard_InitializedFromConfig(t *testing.T) {
 						MaxTokens:         4096,
 						MaxToolIterations: 10,
 					},
-					List: []config.AgentConfig{{ID: "mia"}},
+					List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 				},
 				Sandbox: config.OmnipusSandboxConfig{
 					PromptInjectionLevel: config.PromptInjectionLevel(tc.configLevel),
@@ -179,7 +179,7 @@ func TestExecProxy_StartedWhenEnabled(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	cfg.Tools.Exec.EnableProxy = true
@@ -209,7 +209,7 @@ func TestExecProxy_NilWhenDisabled(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	// EnableProxy defaults to false — do not set it.
@@ -321,7 +321,7 @@ func TestAgentLoopClose_StopsExecProxy(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	cfg.Tools.Exec.EnableProxy = true
@@ -368,7 +368,7 @@ func TestAgentLoop_PromptGuardAuditTrail(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: filepath.Join(tmpDir, "workspace")}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			AuditLog:             true,

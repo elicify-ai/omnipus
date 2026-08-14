@@ -34,7 +34,7 @@ func TestRootDelegationAdmission_UnsetInheritsCentralValueLive(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 		Performance: config.PerformanceConfig{MaxParallelAgents: 40},
 	}
@@ -109,7 +109,7 @@ func TestRootDelegationAdmission_NegativeConfigFailsClosedToCentralValue(t *test
 				MaxToolIterations: 10,
 				SubTurn:           config.SubTurnConfig{MaxConcurrent: -1}, // genuine misconfiguration
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 		Performance: config.PerformanceConfig{MaxParallelAgents: 40},
 	}
@@ -160,7 +160,7 @@ func TestRootDelegationAdmission_ValidOverrideIsNotCoerced(t *testing.T) {
 				MaxToolIterations: 10,
 				SubTurn:           config.SubTurnConfig{MaxConcurrent: operatorCap},
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 		Performance: config.PerformanceConfig{MaxParallelAgents: centralValue},
 	}

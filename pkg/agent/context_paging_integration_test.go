@@ -664,7 +664,7 @@ func TestBreadcrumb_ZeroLLMCallsViaStubCounter(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 	}
 	_ = mustNewAgentLoop(t, cfg, bus.NewMessageBus(), cp)

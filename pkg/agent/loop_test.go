@@ -138,7 +138,18 @@ func newTestAgentLoop(
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: testDefaultAgentID}},
+			// Home explicitly pinned to the SAME dir as Defaults.Home:
+			// resolveAgentHome (instance.go) gives any NAMED agent
+			// (agentCfg.ID != "") its own per-agent subdirectory
+			// (Home/agents/<id>/) — a resolution branch the old anonymous
+			// "main" sentinel (agentCfg == nil) never took, since it fell
+			// into the "no identity at all" case and got Defaults.Home
+			// directly. Many tests in this package assert paths straight
+			// off cfg.Agents.Defaults.Home (e.g. Home/state, Home/sessions)
+			// expecting them to be the default agent's own Home too; without
+			// this explicit override those assertions look in the wrong
+			// directory now that the default agent is a real, named entry.
+			List: []config.AgentConfig{{ID: testDefaultAgentID, Home: tmpDir}},
 		},
 	}
 	msgBus = bus.NewMessageBus()
@@ -171,7 +182,7 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -270,7 +281,7 @@ func TestProcessMessage_WebRenderingNoteWiring(t *testing.T) {
 					MaxTokens:         4096,
 					MaxToolIterations: 10,
 				},
-				List: []config.AgentConfig{{ID: "mia"}},
+				List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 			},
 		}
 		provider := &recordingProvider{}
@@ -372,7 +383,7 @@ func TestProcessMessage_SkillCommandLoadsRequestedSkill(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -424,7 +435,7 @@ func TestHandleCommand_UseTokenIsNormalMessage(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -472,7 +483,7 @@ func TestProcessMessage_SkillTokenAloneRunsSkill(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -639,7 +650,7 @@ func TestNewAgentLoop_StateInitialized(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -685,7 +696,7 @@ func TestToolRegistry_ToolRegistration(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -752,7 +763,7 @@ func TestToolRegistry_GetDefinitions(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -785,7 +796,7 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -890,7 +901,7 @@ func TestProcessMessage_HandledToolProcessesQueuedSteeringBeforeReturning(t *tes
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -1106,7 +1117,7 @@ func TestAgentLoop_Stop(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -1652,7 +1663,7 @@ func TestProcessMessage_UsesRouteSessionKey(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -1720,7 +1731,7 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Session: config.SessionConfig{
 			DMScope: "per-channel-peer",
@@ -1845,7 +1856,7 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Providers: []*config.ModelConfig{
 			{
@@ -1930,7 +1941,7 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Providers: []*config.ModelConfig{
 			{
@@ -2024,7 +2035,7 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Providers: []*config.ModelConfig{
 			{
@@ -2175,7 +2186,7 @@ func TestProcessMessage_ModelRoutingUsesLightProvider(t *testing.T) {
 					Threshold:  0.99,
 				},
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Providers: []*config.ModelConfig{
 			{
@@ -2249,7 +2260,7 @@ func TestToolResult_SilentToolDoesNotSendUserMessage(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -2303,7 +2314,7 @@ func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -2386,7 +2397,7 @@ func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -2476,7 +2487,7 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 3,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -2525,7 +2536,7 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 1,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -2599,7 +2610,7 @@ func TestAgentLoop_SuccessfulTurnDoesNotSetTurnFailed(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -2652,7 +2663,7 @@ func TestProcessDirectWithChannel_TriggersMCPInitialization(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
@@ -2714,7 +2725,7 @@ func TestTargetReasoningChannelID_AllChannels(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -2792,7 +2803,7 @@ func TestHandleReasoning(t *testing.T) {
 					MaxTokens:         4096,
 					MaxToolIterations: 10,
 				},
-				List: []config.AgentConfig{{ID: "mia"}},
+				List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 			},
 		}
 		msgBus := bus.NewMessageBus()
@@ -2959,7 +2970,7 @@ func TestProcessMessage_PublishesReasoningContentToReasoningChannel(t *testing.T
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -3027,7 +3038,7 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 					MaxArgsLength: 300,
 				},
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Tools: config.ToolsConfig{
 			ReadFile: config.ReadFileToolConfig{

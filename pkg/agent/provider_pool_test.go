@@ -32,7 +32,7 @@ func newPoolTestConfig(t *testing.T) *config.Config {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 		Providers: []*config.ModelConfig{
 			{

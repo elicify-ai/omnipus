@@ -30,7 +30,7 @@ func makeRateLimitCfg(t *testing.T) (*config.Config, *bus.MessageBus) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			RateLimits: config.OmnipusRateLimitsConfig{

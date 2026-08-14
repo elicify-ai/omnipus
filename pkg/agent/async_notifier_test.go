@@ -41,7 +41,7 @@ func newAsyncNotifierTestLoop(t *testing.T) (*AgentLoop, *bus.MessageBus) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -321,7 +321,7 @@ func TestAsyncNotifier_NotificationGrantsNoCapability(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpHome}},
 		},
 	}
 

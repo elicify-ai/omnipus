@@ -42,7 +42,11 @@ func newScenarioCfg(t *testing.T) (*config.Config, string) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			// Deliberately NO List here — coreagent.SeedConfig only seeds
+			// the full core roster (with real tool policies) when
+			// cfg.Agents.List starts EMPTY; pre-populating it makes
+			// SeedConfig treat this as an existing install and skip
+			// seeding properly.
 		},
 	}
 	coreagent.SeedConfig(cfg)
@@ -138,7 +142,7 @@ func TestScenario5RateLimitFiresOnThirdCall(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			RateLimits: config.OmnipusRateLimitsConfig{

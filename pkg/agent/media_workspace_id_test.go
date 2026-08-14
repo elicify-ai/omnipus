@@ -51,7 +51,7 @@ func TestProcessMessage_MediaToolDelivery_StampsWorkspaceID(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		// Bind a telegram instance to workspace "sales" — the same shape
 		// session_workspace_id_test.go uses to prove a channel session
@@ -129,7 +129,7 @@ func TestProcessMessage_MediaToolDelivery_UnboundChannel_EmptyWorkspaceID(t *tes
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		// No cfg.Channels entry — "telegram" is an unbound instance.
 	}

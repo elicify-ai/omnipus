@@ -98,7 +98,7 @@ func stiNewNestedHomeAgentLoop(t *testing.T) *AgentLoop {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: agentHome}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})
@@ -480,6 +480,16 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel(t *t
 				ModelName: "parent-native-model",
 			},
 			List: []config.AgentConfig{
+				// The delegating PARENT: an ordinary, explicitly-registered
+				// non-worker agent. No "main" sentinel to fall back to
+				// anymore — GetDefaultAgent's Priority 2 skips workers, so
+				// without this entry the only registered agent would be the
+				// worker itself and the "target and parent must have
+				// distinct Workspace/Model" invariant below would fail.
+				{
+					ID:   "mia",
+					Type: config.AgentTypeCore,
+				},
 				{
 					ID:    "native-target",
 					Type:  config.AgentTypeWorker,

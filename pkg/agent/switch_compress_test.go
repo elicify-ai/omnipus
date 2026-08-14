@@ -57,7 +57,7 @@ func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg 
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Providers: cfgProviders,
 	}

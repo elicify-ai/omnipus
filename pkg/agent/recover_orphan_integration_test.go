@@ -72,7 +72,7 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 5,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			AuditLog: true,
@@ -231,7 +231,7 @@ func TestRecoverOrphan_CleanSession_IsNoOp(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 5,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 	}
 
