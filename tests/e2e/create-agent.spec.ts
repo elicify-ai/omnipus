@@ -11,14 +11,66 @@ async function selectFirstModel(page: Page) {
   await expect(modelTrigger).toBeVisible()
   await modelTrigger.click()
   const firstOption = page.locator('[role="option"]').first()
-  // Model-catalog options load asynchronously; 5s was too tight under CI load
-  // (flaked as "[role=option] not visible"). 15s gives headroom without masking
-  // a genuinely broken selector.
+  // The catalog itself is stubbed (see stubModelCatalog below), so this is
+  // no longer waiting on a live upstream fetch — 15s is headroom for local
+  // rendering only, not a mask for third-party latency.
   await expect(firstOption).toBeVisible({ timeout: 15_000 })
   await firstOption.click()
 }
 
+/**
+ * Stub GET /api/v1/providers so the wizard's model picker gets a
+ * deterministic catalog instead of depending on a live call to OpenRouter.
+ *
+ * WHY: GET /api/v1/providers fetches the upstream `/models` catalog using
+ * the INBOUND request's own context (`pkg/providers/validate.go`'s
+ * `FetchModels`, invoked from `pkg/gateway/rest.go`'s `HandleProviders`) —
+ * so the browser's request lifecycle gates a live third-party HTTP call.
+ * On CI this produced `Get "https://openrouter.ai/api/v1/models": context
+ * canceled` on every attempt (OpenRouter itself confirmed healthy via curl
+ * from the same worker: HTTP 200 in 0.46s), and the wizard's model dropdown
+ * never got an option within 15s, on all retries. Raising the timeout again
+ * would only mask the flake — this spec exists to test the WIZARD, not
+ * OpenRouter's uptime or this handler's request-context plumbing.
+ *
+ * What this still catches: the model picker failing to render options from
+ * a normal, well-formed /providers response; a selected model failing to
+ * propagate into the create payload; and any regression in the wizard's
+ * own steps (identity, soul, voice detection, tools, the real terminal
+ * `POST /api/v1/agents` call and its 201 response) — none of those are
+ * stubbed, only the upstream model-catalog fetch is short-circuited.
+ *
+ * What this no longer catches: a broken /api/v1/providers handler, a
+ * genuine OpenRouter outage, or a bug in the FetchModels-fails fallback
+ * path (falling back to the configured model_name). Those need their own,
+ * non-E2E coverage — flagged separately, this spec was never a reasonable
+ * place to assert third-party uptime.
+ */
+async function stubModelCatalog(page: Page) {
+  await page.route('**/api/v1/providers', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: 'openrouter',
+          name: 'openrouter',
+          display_name: 'OpenRouter',
+          status: 'connected',
+          models: ['z-ai/glm-5.2', 'z-ai/glm-5-turbo'],
+          has_models_endpoint: true,
+          has_api_key: true,
+        },
+      ]),
+    })
+  })
+}
+
 test.describe('create agent wizard', () => {
+  test.beforeEach(async ({ page }) => {
+    await stubModelCatalog(page)
+  })
+
   // Agents this spec actually creates (only the end-to-end test does) so afterEach can
   // delete them — otherwise they accumulate in the shard's gateway roster across tests.
   // Inert today (no sibling asserts roster count) but a latent trap once the suite runs
