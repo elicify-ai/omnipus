@@ -105,23 +105,31 @@ func TestUpdateAgent_DefaultToggle_RegistryAndRoutingAgree(t *testing.T) {
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 	seedRoutingAgentEntities(t, tmpDir, cfg.Agents.List)
 
-	// Sanity check on the precondition itself: before the ★ toggle, the two
-	// ladders already disagree (this is the bug report's exact claim — "the
-	// two ladders DISAGREE on every install"), using the SAME construction
-	// this test uses after the toggle. If this stops disagreeing, the fixture
-	// no longer reproduces the bug's precondition and this test would be
-	// vacuous.
+	// The precondition INVERTED, deliberately.
+	//
+	// This block used to assert that the two ladders DISAGREE before the ★
+	// toggle — that was the release blocker's exact claim, and the fixture
+	// reverses cfg.Agents.List specifically to reproduce it: GetDefaultAgent
+	// took the lexicographically-first agent while ResolveRoute took the first
+	// in slice order.
+	//
+	// That divergence is now FIXED (ADR-064 §7): both ladders apply the same
+	// eligibility rule and both sort, so they agree with or without an
+	// override. Asserting they still disagree would pin a bug as if it were a
+	// requirement, so this asserts the property that replaced it.
+	//
+	// The test's actual subject is unchanged and follows below: setting the
+	// default via ★ must move BOTH ladders to the chosen agent.
 	preRegistry := agent.NewAgentRegistry(al.GetConfig(), provider)
 	preDefault := preRegistry.GetDefaultAgent()
 	require.NotNil(t, preDefault)
 	preResolved := preRegistry.ResolveRoute(routing.RouteInput{Channel: "telegram", AccountID: "*"})
 	preRegistry.Close()
-	require.NotEqual(t, preDefault.ID, preResolved.AgentID,
-		"precondition check: with no configured default, GetDefaultAgent (falls back to the "+
-			"lexicographically-first non-worker agent, \"agent-a\") and ResolveRoute (falls back "+
-			"to the first chat-target agent in cfg.Agents.List ORDER, \"agent-b\" per this "+
-			"fixture's deliberately-reversed list) must actually disagree — otherwise this test "+
-			"no longer reproduces the release blocker")
+	require.Equal(t, preDefault.ID, preResolved.AgentID,
+		"with no configured default the two ladders must AGREE: they answer the same question "+
+			"and both now fall back to the lexicographically-first chat-target agent. This "+
+			"fixture reverses cfg.Agents.List precisely because slice order used to change "+
+			"routing's answer — if that ever returns, this fails here")
 
 	// The ★ toggle: PUT /api/v1/agents/agent-b {"default": true}.
 	body := `{"default": true}`
