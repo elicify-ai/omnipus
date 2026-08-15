@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -873,7 +875,11 @@ func (h *BrowserWSHandler) ensureCaptureSession(
 	cfg *config.Config,
 ) (*browser.CaptureSession, error) {
 	return mgr.EnsureCaptureSession(func() (*browser.CaptureSession, error) {
-		webrtcCfg := webrtc.Config{StunServer: cfg.Tools.Browser.WebRTCStunServer}
+		webrtcCfg := webrtc.Config{
+			StunServer: cfg.Tools.Browser.WebRTCStunServer,
+			MediaConn:  h.sharedMediaConn(cfg),
+			PublicIPs:  resolveWebRTCPublicIPs(cfg),
+		}
 		sink := h.webrtcInputSink(mgr, cfg)
 		logf := webrtcRelayLogf(agentID)
 		cs, err := browser.NewCaptureSession(mgr, agentID, webrtcCfg, sink, logf)
@@ -1400,4 +1406,91 @@ func (h *captureIngestWSHandler) auditIngestRejected(remoteAddr, reason string) 
 	}
 	audit.Emit(context.Background(), al, audit.EventBrowserWebRTCIngestAuthRejected, audit.SeverityWarn,
 		map[string]any{"remote_addr": remoteAddr, "reason": reason})
+}
+
+// resolveWebRTCPublicIPs decides what address viewers are told to send media
+// to (ADR-062 tier 1).
+//
+// Order, and why: an explicit tools.browser.webrtc_public_ip wins, because an
+// operator who set it knows something we do not (split DNS, a separate media
+// IP). Otherwise it is DERIVED from gateway.public_url -- the setting every
+// operator behind a domain has already configured for CSP/CORS/WS origin
+// checks. That derivation is the point of ADR-062's "no additional
+// configuration for the user": a hosted install must not require the operator
+// to discover a WebRTC-specific knob before video works.
+//
+// Returns nil when neither is available (a laptop install, or a hosted box
+// with no public_url). nil is correct there, not a failure: without it the
+// gateway advertises its real interface addresses, which is exactly right on
+// a laptop -- and on a hosted box with no public_url there is no address we
+// could honestly advertise anyway. The ICE-failure log names this case so the
+// operator is told what to set rather than left guessing.
+//
+// A HOSTNAME in public_url is deliberately NOT resolved to an IP here.
+// SetNAT1To1IPs takes literal addresses; resolving a name at boot would bake
+// in whatever DNS said at that moment and silently rot on a DNS change.
+// Operators fronted by a hostname set webrtc_public_ip explicitly.
+func resolveWebRTCPublicIPs(cfg *config.Config) []string {
+	if explicit := strings.TrimSpace(cfg.Tools.Browser.WebRTCPublicIP); explicit != "" {
+		return []string{explicit}
+	}
+	raw := strings.TrimSpace(cfg.Gateway.PublicURL)
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil
+	}
+	host := u.Hostname()
+	if host == "" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return []string{ip.String()}
+	}
+	return nil
+}
+
+// sharedMediaConn returns the process-wide fixed media socket, binding it on
+// first use (ADR-062 tier 1). Returns nil when fixed-port media is not
+// configured, or when the bind fails.
+//
+// A bind failure is deliberately NON-FATAL and loud: the gateway keeps
+// serving and Sessions fall back to ephemeral ports. On a laptop that is
+// completely fine; on a hosted box video will not connect, and the log line
+// says so in those words rather than leaving an operator to infer it from an
+// ICE timeout three layers away.
+func (h *BrowserWSHandler) sharedMediaConn(cfg *config.Config) net.PacketConn {
+	port := cfg.Tools.Browser.WebRTCMediaUDPPort
+	if port <= 0 {
+		return nil
+	}
+	h.mediaConnMu.Lock()
+	defer h.mediaConnMu.Unlock()
+	if h.mediaConn != nil {
+		return h.mediaConn
+	}
+	bindAddr := strings.TrimSpace(cfg.Tools.Browser.WebRTCMediaUDPBindAddress)
+	addr := ":" + strconv.Itoa(port)
+	if bindAddr != "" {
+		// Some platforms route inbound UDP only to a specific address --
+		// Fly.io requires "fly-global-services" and documents that binding
+		// 0.0.0.0 makes Linux pick the wrong SOURCE address on replies, so
+		// the peer discards them silently.
+		addr = net.JoinHostPort(bindAddr, strconv.Itoa(port))
+	}
+	conn, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		slog.Error(
+			"browser-webrtc: could not bind the fixed media UDP port — live video will fall back to "+
+				"ephemeral ports, which works on a same-host/LAN viewer but NEVER on a hosted install "+
+				"(no provider routes inbound UDP to an undeclared ephemeral port)",
+			"addr", addr, "error", err,
+		)
+		return nil
+	}
+	slog.Info("browser-webrtc: fixed media UDP socket bound", "addr", conn.LocalAddr().String())
+	h.mediaConn = conn
+	return conn
 }

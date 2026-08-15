@@ -109,7 +109,7 @@ func (s *Session) HandleViewerOfferHandle(viewerID string, sdpOffer string) (ans
 		return "", nil, fmt.Errorf("webrtc: session closed")
 	}
 
-	pc, err := s.buildPeerConnection()
+	pc, err := s.buildPeerConnection(s.apiViewer) // internet-facing leg: fixed socket + public candidates
 	if err != nil {
 		return "", nil, fmt.Errorf("webrtc: viewer %s: %w", prefix, err)
 	}

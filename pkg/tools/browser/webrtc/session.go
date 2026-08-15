@@ -61,10 +61,15 @@ var Available = true
 // exercised a persistent viewer across a reconnect so the sequence-number
 // issue never surfaced there).
 type Session struct {
-	api   *webrtc.API
-	cfg   Config
-	sink  InputSink
-	logfn func(string, ...any)
+	api *webrtc.API
+	cfg Config
+
+	// apiViewer builds the VIEWER leg only; s.api builds the loopback ingest
+	// leg. See NewSession for why they must not share a SettingEngine.
+	// Never nil after NewSession (it aliases s.api in the degraded paths).
+	apiViewer *webrtc.API
+	sink      InputSink
+	logfn     func(string, ...any)
 
 	mu     sync.Mutex
 	closed bool
@@ -185,12 +190,14 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 		// that can never negotiate media.
 		s.logf("webrtc: register default codecs failed: %v (session will reject all offers)", err)
 		s.api = webrtc.NewAPI()
+		s.apiViewer = s.api
 		return s
 	}
 	ir := &interceptor.Registry{}
 	if err := webrtc.RegisterDefaultInterceptors(m, ir); err != nil {
 		s.logf("webrtc: register default interceptors failed: %v (session will reject all offers)", err)
 		s.api = webrtc.NewAPI()
+		s.apiViewer = s.api
 		return s
 	}
 
@@ -203,7 +210,44 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 	// "lo" is present.
 	se.SetIncludeLoopbackCandidate(true)
 
+	// ADR-062 tier 1 applies to the VIEWER leg ONLY, so the settings are
+	// split in two from here on.
+	//
+	// The legs are not alike and must not share a SettingEngine. The INGEST
+	// leg is the gateway talking to its OWN headless Chrome over loopback;
+	// it needs no public address and no shared socket. The VIEWER leg is a
+	// browser somewhere on the internet. Rewriting host candidates to a
+	// public address on the shared engine would hand the loopback encoder an
+	// address it cannot reach -- breaking capture on EVERY install,
+	// including laptops, in exchange for fixing hosted ones. (Caught in
+	// adversarial review of ADR-062 before it shipped; both legs run through
+	// buildPeerConnection, which made the blast radius easy to miss.)
+	viewerSE := se
+	if cfg.MediaConn != nil {
+		// One gateway-owned socket, shared by every agent's Session: Pion's
+		// UDP mux demultiplexes concurrent ICE agents on it by ufrag. See
+		// Config.MediaConn for why a per-Session bind would break the
+		// second agent.
+		viewerSE.SetICEUDPMux(webrtc.NewICEUDPMux(nil, cfg.MediaConn))
+	}
+	if len(cfg.PublicIPs) > 0 {
+		// ICECandidateTypeHost with Pion's default mode APPENDS for srflx and
+		// replaces for host. The socket really is reachable at this address
+		// once the provider routes the fixed port, so "host" is honest and
+		// earns its higher priority; the loopback/private candidates remain
+		// in the list for same-host viewers.
+		viewerSE.SetNAT1To1IPs(cfg.PublicIPs, webrtc.ICECandidateTypeHost)
+	}
+
 	s.api = webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir), webrtc.WithSettingEngine(se))
+	s.apiViewer = webrtc.NewAPI(
+		webrtc.WithMediaEngine(m),
+		webrtc.WithInterceptorRegistry(ir),
+		webrtc.WithSettingEngine(viewerSE),
+	)
+	if cfg.MediaConn != nil || len(cfg.PublicIPs) > 0 {
+		s.logf("webrtc: viewer leg using fixed media socket=%v public=%v", cfg.MediaConn != nil, cfg.PublicIPs)
+	}
 	return s
 }
 
@@ -234,12 +278,17 @@ func (s *Session) nextConnID() int64 {
 // buildPeerConnection returns a PeerConnection configured with the
 // Session's STUN policy (empty Config.StunServer -> host candidates only,
 // per wave-plan decision 7).
-func (s *Session) buildPeerConnection() (*webrtc.PeerConnection, error) {
+// buildPeerConnection builds a PC on the api the CALLER names, because the
+// two legs need different ICE settings (ADR-062): pass s.api for the loopback
+// ingest leg, s.apiViewer for a viewer. Making it a parameter rather than a
+// field read means a new call site has to state which leg it is, instead of
+// silently inheriting whichever engine happened to be default.
+func (s *Session) buildPeerConnection(api *webrtc.API) (*webrtc.PeerConnection, error) {
 	config := webrtc.Configuration{}
 	if s.cfg.StunServer != "" {
 		config.ICEServers = []webrtc.ICEServer{{URLs: []string{s.cfg.StunServer}}}
 	}
-	pc, err := s.api.NewPeerConnection(config)
+	pc, err := api.NewPeerConnection(config)
 	if err != nil {
 		return nil, fmt.Errorf("webrtc: new peer connection: %w", err)
 	}

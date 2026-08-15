@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -339,6 +340,20 @@ type BrowserWSHandler struct {
 	// WS handler so a browser_capture_hello can locate the CaptureSession
 	// its token belongs to.
 	captures *captureRegistry
+
+	// mediaConn is the ONE gateway-owned UDP socket every agent's viewer leg
+	// multiplexes media over (ADR-062 tier 1), lazily bound on first use and
+	// reused for the process's lifetime. nil when fixed-port media is not
+	// configured (the laptop default) -- Sessions then use ephemeral ports,
+	// exactly as before ADR-062.
+	//
+	// Gateway-owned, not Session-owned, because a Session exists PER AGENT:
+	// if each bound the same fixed port itself, the first agent would win and
+	// every later one would silently fall back to an ephemeral port, giving a
+	// multi-agent hosted install working video for one agent and an
+	// inexplicable failure for the rest.
+	mediaConnMu sync.Mutex
+	mediaConn   net.PacketConn
 
 	// captureFenceMu serializes handleWebRTCOffer's ADR-048 condition-2
 	// fence-check + ensure/registry-set sequence (fix-wave HIGH, TOCTOU

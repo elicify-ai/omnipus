@@ -3566,6 +3566,32 @@ type BrowserToolConfig struct {
 	// deployments, or operators who want zero external network dependency
 	// at the cost of NAT traversal). See ADR-047 D1.
 	WebRTCStunServer string `json:"webrtc_stun_server" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_STUN_SERVER"`
+	// WebRTCMediaUDPPort pins live-browser media to ONE fixed UDP port
+	// (ADR-062 tier 1). 0 = the pre-ADR-062 ephemeral-port behaviour.
+	//
+	// Set this on ANY hosted install. Measured 2026-08-15 on Fly UAT: no
+	// hosted provider routes inbound UDP to an undeclared ephemeral port, so
+	// with 0 the viewer's ICE can never complete however healthy the network
+	// is -- and the network WAS healthy there (raw datagrams and STUN
+	// replies both traversed once the port was declared). Whatever value is
+	// set here is the port the operator must expose/declare; it is also the
+	// only port they need to expose for direct media.
+	WebRTCMediaUDPPort int `json:"webrtc_media_udp_port,omitempty" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_UDP_PORT"`
+	// WebRTCMediaUDPBindAddress is the address the fixed media socket binds.
+	// Empty = all interfaces, which is right nearly everywhere.
+	//
+	// Exists because some platforms route inbound UDP to a specific address:
+	// Fly.io requires "fly-global-services" and documents that binding
+	// 0.0.0.0 makes Linux choose the WRONG SOURCE ADDRESS on replies, so the
+	// peer discards them silently (fly.io/docs/networking/udp-and-tcp).
+	WebRTCMediaUDPBindAddress string `json:"webrtc_media_udp_bind_address,omitempty" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_UDP_BIND_ADDRESS"`
+	// WebRTCPublicIP overrides the address advertised to viewers as the media
+	// host candidate. Normally EMPTY: the gateway derives it from
+	// gateway.public_url, which an operator behind a domain has already set
+	// -- ADR-062 deliberately adds no configuration the user must discover.
+	// Set it only when the media address genuinely differs from the web
+	// origin (split DNS, a separate media IP).
+	WebRTCPublicIP string `json:"webrtc_public_ip,omitempty" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_PUBLIC_IP"`
 	// CaptureSharedContext promotes the former OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT
 	// experimental env flag to a first-class config knob (ADR-048 condition 1).
 	// When true, a browsing agent's own session is bootstrapped in Chrome's

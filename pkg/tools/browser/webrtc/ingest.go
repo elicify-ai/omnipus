@@ -91,7 +91,7 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 		return "", fmt.Errorf("webrtc: session closed")
 	}
 
-	pc, err := s.buildPeerConnection()
+	pc, err := s.buildPeerConnection(s.api) // loopback encoder leg: no public rewrite, no shared mux
 	if err != nil {
 		return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, err)
 	}
