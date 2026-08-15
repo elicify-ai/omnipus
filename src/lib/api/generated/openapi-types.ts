@@ -215,7 +215,7 @@ export interface paths {
         put?: never;
         /**
          * Finalize first-run onboarding
-         * @description Two-phase commit: writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 409 when onboarding is already complete. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
+         * @description Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response's `warning` field explains what could not be checked, because this endpoint is the only door into the product and a flaky network must not make it uninstallable. Returns 409 when onboarding is already complete. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
          */
         post: operations["completeOnboarding"];
         delete?: never;
@@ -2944,8 +2944,8 @@ export interface components {
              */
             username: string;
             /**
-             * @description Non-fatal advisory message. Present on onboarding/complete when the credential store is locked and the API key was stored in plaintext.
-             * @example API key stored in plaintext — set OMNIPUS_MASTER_KEY for encrypted storage
+             * @description Non-fatal advisory message. Present on onboarding/complete for either of two independent reasons, mutually exclusive on a single response: (1) the credential store is locked and the API key was stored in plaintext, or (2) the provider API key was submitted but could not be positively verified — the provider was unreachable, the key has no credit, access is regionally/model restricted, or no endpoint was available to probe against. Absent entirely when the key was actively verified as valid. A key the provider actively confirms is WRONG is never represented via this field — that outcome rejects the request with 400 instead (see POST /onboarding/complete). Never present on POST /auth/login.
+             * @example Couldn't reach OpenAI to check the key — check your internet connection. Continuing for now; the key will be used as entered.
              */
             warning?: string;
         };

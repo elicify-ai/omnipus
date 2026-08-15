@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,40 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 )
+
+// startFakeProviderUpstream starts a loopback stand-in for an OpenAI-compatible
+// provider that accepts ANY api key: GET /models returns a one-model catalog and
+// POST /chat/completions returns a minimal completion, so
+// pkg/providers.ValidateKey classifies the key as `valid`.
+//
+// HandleCompleteOnboarding (pkg/gateway/rest_onboarding.go) now probes the
+// submitted api_key before completing onboarding. Every security test in this
+// package that onboards an admin needs to point provider.endpoint at a stand-in
+// like this one — otherwise the probe makes a live call to api.openai.com /
+// api.anthropic.com, which both fails hermeticity (network-dependent test) and,
+// on an egress-restricted runner, silently flips the result from a real 401
+// (blocked) to Unreachable (200, proceeds) — a red/green that depends on the
+// runner's network rather than the code under test.
+//
+// This is the tests/security counterpart of pkg/gateway's identically-named
+// unexported helper in rest_onboarding_test.go; it cannot be reused directly
+// because this file lives in the external security_test package.
+func startFakeProviderUpstream(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models"):
+			_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4o-mini"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
 
 // randSuffix returns a short timestamp-based suffix suitable for making test
 // identifiers unique across parallel runs. It is NOT cryptographic.
@@ -45,9 +80,10 @@ func onboardCSRFAdmin(t *testing.T, gw *testutil.TestGateway, password string) (
 	t.Helper()
 	onboardBody := map[string]any{
 		"provider": map[string]any{
-			"id":      "openai",
-			"api_key": "sk-test-csrf-" + randSuffix(),
-			"model":   "gpt-4o",
+			"id":       "openai",
+			"api_key":  "sk-test-csrf-" + randSuffix(),
+			"model":    "gpt-4o",
+			"endpoint": startFakeProviderUpstream(t),
 		},
 		"admin": map[string]any{
 			"username": "csrfadmin",

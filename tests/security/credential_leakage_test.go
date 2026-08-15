@@ -72,9 +72,10 @@ func TestCredentialLeakage(t *testing.T) {
 	// --- Stage 1: onboard (creates admin, stores API key) ---
 	onboardBody := map[string]any{
 		"provider": map[string]any{
-			"id":      "anthropic",
-			"api_key": injectedAPIKey,
-			"model":   "claude-sonnet-4-6",
+			"id":       "anthropic",
+			"api_key":  injectedAPIKey,
+			"model":    "claude-sonnet-4-6",
+			"endpoint": startFakeProviderUpstream(t),
 		},
 		"admin": map[string]any{
 			"username": "leakadmin",

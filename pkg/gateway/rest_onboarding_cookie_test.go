@@ -62,6 +62,7 @@ func TestOnboardingIssuesSessionCookie_RoundTrip(t *testing.T) {
 	require.False(t, api.onboardingMgr.IsComplete(), "onboarding should not be complete initially")
 
 	body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -151,6 +152,7 @@ func TestOnboardingCookieFailureReturns500(t *testing.T) {
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
 	body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

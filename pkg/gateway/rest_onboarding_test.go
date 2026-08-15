@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
@@ -44,6 +46,67 @@ func newOnboardingTestAPI(t *testing.T, tmpDir string, al *agent.AgentLoop) *res
 		taskStore:     task.New(tmpDir + "/tasks"),
 		credStore:     credStore,
 	}
+}
+
+// --- provider key-validation test scaffolding ---
+
+// startFakeProviderUpstream starts a loopback stand-in for an OpenAI-compatible
+// provider that accepts ANY api key: GET /models returns a one-model catalog and
+// POST /chat/completions returns a minimal completion, so providers.ValidateKey
+// classifies the key as `valid`.
+//
+// Every onboarding test that expects to reach the end of HandleCompleteOnboarding
+// needs one. Since the handler now probes the submitted api_key (see the
+// "Provider API-key validation" block in rest_onboarding.go), a test posting
+// {"id":"openai","api_key":"sk-test"} with no endpoint override would otherwise
+// make a live call to api.openai.com on every CI run — and get a real 401, i.e.
+// the tests would both depend on the public internet AND fail once they reached
+// it. Pointing provider.endpoint at this server keeps them hermetic.
+//
+// The server binds 127.0.0.1; onboarding tests leave api.ssrfChecker nil, so the
+// SSRF gate (which blocks loopback by default) does not skip the probe.
+func startFakeProviderUpstream(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models"):
+			_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4o-mini"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// withProviderEndpoint returns body with provider.endpoint set to endpoint. It is
+// a pure string transform (no *testing.T) so it is safe to call from the
+// goroutines in the concurrency tests.
+func withProviderEndpoint(body, endpoint string) string {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(body), &m); err != nil {
+		panic("withProviderEndpoint: body is not valid JSON: " + err.Error())
+	}
+	prov, ok := m["provider"].(map[string]any)
+	if !ok {
+		panic("withProviderEndpoint: body has no provider object")
+	}
+	prov["endpoint"] = endpoint
+	out, err := json.Marshal(m)
+	if err != nil {
+		panic("withProviderEndpoint: re-marshal failed: " + err.Error())
+	}
+	return string(out)
+}
+
+// hermeticOnboardBody is the one-call form: start a stand-in provider and point
+// the request body at it.
+func hermeticOnboardBody(t *testing.T, body string) string {
+	t.Helper()
+	return withProviderEndpoint(body, startFakeProviderUpstream(t))
 }
 
 // --- HandleCompleteOnboarding tests ---
@@ -76,6 +139,7 @@ func TestHandleCompleteOnboarding_Success(t *testing.T) {
 	require.False(t, api.onboardingMgr.IsComplete(), "onboarding should not be complete initially")
 
 	body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -343,6 +407,7 @@ func TestHandleCompleteOnboarding_ThenLogin(t *testing.T) {
 
 	// Step 1: Complete onboarding
 	onboardingBody := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	onboardingBody = hermeticOnboardBody(t, onboardingBody)
 	onboardingReq := httptest.NewRequest(
 		http.MethodPost,
 		"/api/v1/onboarding/complete",
@@ -419,6 +484,7 @@ func TestHandleCompleteOnboarding_PersistsAdmin(t *testing.T) {
 
 	// Complete onboarding
 	body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -487,6 +553,7 @@ func TestHandleCompleteOnboarding_WritesActualModelAsAlias(t *testing.T) {
 
 	body := `{"provider":{"id":"openrouter","api_key":"sk-or-v1-test","model":"z-ai/glm-5v-turbo"},` +
 		`"admin":{"username":"admin","password":"secret123"}}`
+	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -560,6 +627,7 @@ func TestHandleCompleteOnboarding_SecondModelSameProviderCreatesNewEntry(t *test
 
 	body := `{"provider":{"id":"openrouter","api_key":"sk-or-v1-test","model":"anthropic/claude-sonnet-4.6"},` +
 		`"admin":{"username":"admin","password":"secret123"}}`
+	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -630,6 +698,10 @@ func TestHandleCompleteOnboarding_Concurrent(t *testing.T) {
 		credStore:     credStore,
 	}
 
+	// One shared stand-in provider for all n goroutines: startFakeProviderUpstream
+	// registers a t.Cleanup, which must not be called from inside a goroutine.
+	upstream := startFakeProviderUpstream(t)
+
 	const n = 5
 	codes := make([]int, n)
 	var wg sync.WaitGroup
@@ -638,6 +710,7 @@ func TestHandleCompleteOnboarding_Concurrent(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+			body = withProviderEndpoint(body, upstream)
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -703,6 +776,10 @@ func TestHandleCompleteOnboarding_ConcurrentDifferentUsers(t *testing.T) {
 		credStore:     credStore,
 	}
 
+	// One shared stand-in provider for all n goroutines: startFakeProviderUpstream
+	// registers a t.Cleanup, which must not be called from inside a goroutine.
+	upstream := startFakeProviderUpstream(t)
+
 	const n = 5
 	codes := make([]int, n)
 	var wg sync.WaitGroup
@@ -715,6 +792,7 @@ func TestHandleCompleteOnboarding_ConcurrentDifferentUsers(t *testing.T) {
 			) + `"},"admin":{"username":"admin` + string(
 				rune('0'+idx),
 			) + `","password":"secret123"}}`
+			body = withProviderEndpoint(body, upstream)
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -934,6 +1012,7 @@ func TestHandleCompleteOnboarding_BadRequest_ReleasesReservation(t *testing.T) {
 		"onboarding must NOT be complete after a 400 response")
 
 	goodBody := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	goodBody = hermeticOnboardBody(t, goodBody)
 	goodReq := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(goodBody))
 	goodReq.Header.Set("Content-Type", "application/json")
 	goodW := httptest.NewRecorder()
@@ -1517,4 +1596,429 @@ func TestHandleOnboardingProbeProvider_EmptyModelsWarns(t *testing.T) {
 	// But the skip must be observable.
 	assert.Contains(t, logBuf.String(), "provider returned no models",
 		"an empty model list must emit an observable WARN that the key was not verified")
+}
+
+// --- provider API-key validation at first-run setup ---
+//
+// Regression coverage for the bug where HandleCompleteOnboarding checked only
+// that provider.api_key was non-empty and then stored it: a typo'd or revoked
+// key produced a 200, a "welcome" screen, and an install whose agent could not
+// answer a single message. The provider EDIT path (PUT /api/v1/providers/{id})
+// had probed the key all along — the strictest moment in the product was the
+// only one with no check.
+//
+// The three tests below pin the whole accept/reject policy, which is deliberately
+// asymmetric: only "the provider told us this key is wrong" rejects. See the
+// ACCEPT/REJECT POLICY note in rest_onboarding.go for why anything else blocking
+// would be worse than the bug being fixed.
+
+// TestHandleCompleteOnboarding_ValidKeyAccepted pins the happy path: a key the
+// provider accepts completes onboarding and is persisted.
+//
+// BDD: Given a provider whose /chat/completions accepts the submitted key,
+// When POST /api/v1/onboarding/complete is called,
+// Then 200, no warning, and the key is in the encrypted credential store.
+func TestHandleCompleteOnboarding_ValidKeyAccepted(t *testing.T) {
+	tmpDir := t.TempDir()
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	api := newOnboardingTestAPI(t, tmpDir, al)
+
+	// A provider that answers the probe successfully — i.e. says the key is good.
+	upstream := startFakeProviderUpstream(t)
+	body := withProviderEndpoint(
+		`{"provider":{"id":"openai","api_key":"sk-good-key"},"admin":{"username":"admin","password":"secret123"}}`,
+		upstream,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	api.HandleCompleteOnboarding(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "a key the provider accepts must complete onboarding (body=%s)", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp["token"])
+	assert.Nil(t, resp["warning"], "a valid key must not produce a warning")
+
+	stored, err := api.credStore.Get("openai_API_KEY")
+	require.NoError(t, err, "the accepted key must be in the credential store")
+	assert.Equal(t, "sk-good-key", stored)
+}
+
+// TestHandleCompleteOnboarding_InvalidKeyRejectedAndNotStored is the core
+// regression test: a key the provider rejects must not complete onboarding, and
+// must not be written anywhere.
+//
+// BDD: Given a provider whose /chat/completions returns 401 invalid_api_key,
+// When POST /api/v1/onboarding/complete is called,
+// Then 400 with a message naming the provider, the credential store does NOT
+// gain the entry, onboarding is NOT marked complete, and no admin user is
+// written to config.json — so the operator can retry with a corrected key.
+func TestHandleCompleteOnboarding_InvalidKeyRejectedAndNotStored(t *testing.T) {
+	tmpDir := t.TempDir()
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+
+	// Stand-in provider that rejects the credential the way a real
+	// OpenAI-compatible endpoint does.
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			// The catalog is deliberately served WITHOUT auth (OpenRouter really
+			// does this) — proving the check does not rely on /models to detect
+			// a bad key.
+			_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4o-mini"}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Incorrect API key provided","type":"invalid_request_error","code":"invalid_api_key"}}`))
+	}))
+	defer upstreamSrv.Close()
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	api := newOnboardingTestAPI(t, tmpDir, al)
+
+	body := withProviderEndpoint(
+		`{"provider":{"id":"openai","api_key":"sk-typo"},"admin":{"username":"admin","password":"secret123"}}`,
+		upstreamSrv.URL,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	api.HandleCompleteOnboarding(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code,
+		"a key the provider rejects must not complete onboarding (body=%s)", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	errMsg, _ := resp["error"].(string)
+	assert.Contains(t, errMsg, "rejected", "the message must say the key was rejected, got %q", errMsg)
+	assert.Contains(t, errMsg, "OpenAI", "the message must name the provider, got %q", errMsg)
+	assert.NotContains(t, errMsg, "sk-typo", "SEC-16: the message must never echo the key")
+
+	// The rejected key must not exist anywhere.
+	_, credErr := api.credStore.Get("openai_API_KEY")
+	require.Error(t, credErr, "a rejected key must NOT be written to the credential store")
+
+	assert.False(t, api.onboardingMgr.IsComplete(),
+		"a rejected key must leave onboarding retryable, not complete")
+
+	cfgData, err := os.ReadFile(tmpDir + "/config.json")
+	require.NoError(t, err)
+	assert.NotContains(t, string(cfgData), "sk-typo", "the rejected key must not reach config.json")
+	assert.NotContains(t, string(cfgData), "password_hash",
+		"no admin user may be created when the provider key is rejected")
+}
+
+// TestHandleCompleteOnboarding_UnreachableProviderStillCompletes pins the other
+// half of the policy, and the reason it is not simply "validate everything":
+// onboarding is the ONLY door into the product, so a provider we cannot reach
+// right now must NOT be treated as a bad key. If it were, a flaky network would
+// make Omnipus uninstallable — a worse failure than the bug this check fixes.
+//
+// BDD: Given the provider endpoint refuses connections (network down / DNS
+// failure / provider outage, all classified providers.OutcomeUnreachable),
+// When POST /api/v1/onboarding/complete is called,
+// Then 200, the key is stored as entered, and the response carries a warning
+// saying the key could not be checked — never an "invalid key" rejection.
+func TestHandleCompleteOnboarding_UnreachableProviderStillCompletes(t *testing.T) {
+	tmpDir := t.TempDir()
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+
+	// A server that is started (so we get a real, currently-free port) and then
+	// immediately closed: every probe gets connection-refused, which is exactly
+	// what classify() maps to OutcomeUnreachable.
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	api := newOnboardingTestAPI(t, tmpDir, al)
+
+	body := withProviderEndpoint(
+		`{"provider":{"id":"openai","api_key":"sk-cannot-check"},"admin":{"username":"admin","password":"secret123"}}`,
+		deadURL,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	api.HandleCompleteOnboarding(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"an unreachable provider must NOT block first-run setup (body=%s)", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp["token"], "onboarding must still issue a token")
+
+	warning, _ := resp["warning"].(string)
+	require.NotEmpty(t, warning, "the operator must be told the key could not be checked")
+	assert.Contains(t, warning, "Couldn't reach",
+		"the warning must say the provider was unreachable, not that the key is bad, got %q", warning)
+
+	stored, err := api.credStore.Get("openai_API_KEY")
+	require.NoError(t, err, "an unchecked key must still be stored as entered")
+	assert.Equal(t, "sk-cannot-check", stored)
+
+	assert.True(t, api.onboardingMgr.IsComplete(), "onboarding must be marked complete")
+}
+
+// --- coverage for the two branches that diverge from PUT (review finding D5) ---
+//
+// newOnboardingTestAPI deliberately leaves ssrfChecker nil (see its own comment),
+// so none of the tests above ever exercise probeSkipReason != "". The two tests
+// below wire a real *security.SSRFChecker so both skip branches — "no endpoint
+// resolved" (a protocol like azure with no vendor default and no operator
+// override) and "ssrf blocked" (a resolved base the SSRF gate refuses) — are
+// pinned, along with the provider_key_validation_skipped audit event and the
+// D4 fix that both branches now set a user-visible warning instead of
+// completing onboarding with zero signal that the key was never checked.
+
+// TestHandleCompleteOnboarding_NoEndpointResolvedStillCompletesWithWarning covers
+// the "no endpoint resolved" skip branch: azure is a known protocol (see
+// providers.IsKnownProtocol) with no vendor default base (providers.GetDefaultAPIBase
+// falls to its `default: return ""` case for it) and the request supplies no
+// endpoint override either, so probeBase resolves to "". There is nothing to
+// probe — no outbound call is possible, hermetic by construction.
+func TestHandleCompleteOnboarding_NoEndpointResolvedStillCompletesWithWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	api := newOnboardingTestAPI(t, tmpDir, al)
+
+	auditDir := t.TempDir()
+	auditLogger, err := audit.NewLogger(audit.LoggerConfig{Dir: auditDir, MaxSizeBytes: 1 << 20, RetentionDays: 1})
+	require.NoError(t, err, "audit logger must initialize")
+	t.Cleanup(func() { _ = auditLogger.Close() })
+	api.auditor = auditLogger
+
+	body := `{"provider":{"id":"azure","api_key":"sk-azure-key"},"admin":{"username":"admin","password":"secret123"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	api.HandleCompleteOnboarding(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"a provider with no resolvable endpoint must NOT block first-run setup (body=%s)", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp["token"], "onboarding must still issue a token")
+
+	warning, _ := resp["warning"].(string)
+	require.NotEmpty(t, warning,
+		"D4: a skipped probe must still warn the operator — otherwise it is indistinguishable from a verified key")
+	assert.Contains(t, warning, "endpoint",
+		"the warning must explain that no endpoint was available to check, got %q", warning)
+
+	stored, err := api.credStore.Get("azure_API_KEY")
+	require.NoError(t, err, "an unchecked key must still be stored as entered")
+	assert.Equal(t, "sk-azure-key", stored)
+	assert.True(t, api.onboardingMgr.IsComplete(), "onboarding must be marked complete")
+
+	_ = auditLogger.Close()
+	entries := readAuditLog(t, auditDir)
+	var found bool
+	for _, line := range entries {
+		if line["event"] == "provider_key_validation_skipped" {
+			found = true
+			details, _ := line["details"].(map[string]any)
+			assert.Equal(t, "azure", details["provider"])
+			assert.Equal(t, "no endpoint resolved", details["reason"])
+			assert.Equal(t, "onboarding", details["source"])
+		}
+	}
+	assert.True(t, found, "provider_key_validation_skipped audit event must be present with reason=%q",
+		"no endpoint resolved")
+}
+
+// TestHandleCompleteOnboarding_SSRFBlockedProbeStillCompletesWithWarning covers
+// the "ssrf blocked" skip branch AND, simultaneously, the real GetDefaultAPIBase
+// (no operator-supplied endpoint) resolution path that review finding D5 flagged
+// as having zero coverage once every other test in this file started injecting
+// `endpoint` via hermeticOnboardBody: the request below supplies NO endpoint at
+// all, so probeBase comes from providers.GetDefaultAPIBase("litellm"), which is
+// itself a loopback address (http://localhost:4000/v1 — see the ollama/litellm
+// case list in factory_provider.go, the exact "operators the divergence was
+// designed to protect" the D4 review comment names). A real, unallowlisted
+// *security.SSRFChecker blocks it before any outbound call — hermetic by
+// construction, and it proves the vendor-default branch resolves to a real,
+// loopback-shaped base rather than the empty string.
+func TestHandleCompleteOnboarding_SSRFBlockedProbeStillCompletesWithWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	api := newOnboardingTestAPI(t, tmpDir, al)
+	// Real SSRF checker, no loopback allowlist — blocks localhost:4000 by default.
+	api.ssrfChecker = security.NewSSRFChecker(nil)
+
+	auditDir := t.TempDir()
+	auditLogger, err := audit.NewLogger(audit.LoggerConfig{Dir: auditDir, MaxSizeBytes: 1 << 20, RetentionDays: 1})
+	require.NoError(t, err, "audit logger must initialize")
+	t.Cleanup(func() { _ = auditLogger.Close() })
+	api.auditor = auditLogger
+
+	// No `endpoint` field at all — probeBase must come from GetDefaultAPIBase.
+	body := `{"provider":{"id":"litellm","api_key":"sk-litellm-key"},"admin":{"username":"admin","password":"secret123"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	api.HandleCompleteOnboarding(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"an SSRF-blocked probe must NOT block first-run setup (body=%s)", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp["token"], "onboarding must still issue a token")
+
+	warning, _ := resp["warning"].(string)
+	require.NotEmpty(t, warning,
+		"D4: an SSRF-skipped probe must still warn the operator — otherwise it is indistinguishable from a verified key")
+	assert.Contains(t, warning, "endpoint",
+		"the warning must explain the endpoint could not be checked, got %q", warning)
+
+	stored, err := api.credStore.Get("litellm_API_KEY")
+	require.NoError(t, err, "an unchecked key must still be stored as entered")
+	assert.Equal(t, "sk-litellm-key", stored)
+	assert.True(t, api.onboardingMgr.IsComplete(), "onboarding must be marked complete")
+
+	_ = auditLogger.Close()
+	entries := readAuditLog(t, auditDir)
+	var found bool
+	for _, line := range entries {
+		if line["event"] == "provider_key_validation_skipped" {
+			found = true
+			details, _ := line["details"].(map[string]any)
+			assert.Equal(t, "litellm", details["provider"])
+			assert.Equal(t, "ssrf blocked", details["reason"])
+			assert.Equal(t, "onboarding", details["source"])
+		}
+	}
+	assert.True(t, found, "provider_key_validation_skipped audit event must be present with reason=%q",
+		"ssrf blocked")
+}
+
+// TestHandleCompleteOnboarding_UsesLiveCatalogForProbeModel is the regression
+// test for review finding D6: HandleCompleteOnboarding previously called
+// providers.ValidateKey without a Catalog, so providers.pickProbeModel returned
+// providers.probeModelDefaults' hardcoded slug for openrouter
+// ("meta-llama/llama-3.1-8b-instruct") immediately — WITHOUT ever calling
+// providers.FetchModels — whenever that slug existed in the rules table,
+// regardless of whether it still exists on the provider's live catalog.
+//
+// This stand-in simulates that slug having been retired: /models does not list
+// it, but does list a different chat-capable model. If the handler still probes
+// the hardcoded slug, /chat/completions 404s and classify() maps that to
+// Unreachable — a false "couldn't check" warning for a perfectly good key. With
+// the live catalog wired through, pickProbeModel falls back to the first
+// chat-capable catalog entry instead, the probe succeeds, and onboarding
+// completes with NO warning (OutcomeValid).
+func TestHandleCompleteOnboarding_UsesLiveCatalogForProbeModel(t *testing.T) {
+	tmpDir := t.TempDir()
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+
+	const retiredDefault = "meta-llama/llama-3.1-8b-instruct"
+	const liveModel = "some-vendor/still-live-chat-model"
+
+	var probedModels []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models"):
+			// The rules-table default is deliberately ABSENT — simulating a
+			// retired slug — alongside one still-live chat-capable model.
+			_, _ = w.Write([]byte(`{"data":[{"id":"` + liveModel + `"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
+			var payload struct {
+				Model string `json:"model"`
+			}
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &payload)
+			probedModels = append(probedModels, payload.Model)
+			if payload.Model == retiredDefault {
+				// The real OpenRouter behavior for an unknown/retired slug.
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error":{"message":"model not found","code":404}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	api := newOnboardingTestAPI(t, tmpDir, al)
+
+	body := withProviderEndpoint(
+		`{"provider":{"id":"openrouter","api_key":"sk-or-v1-still-good"},"admin":{"username":"admin","password":"secret123"}}`,
+		upstream.URL,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	api.HandleCompleteOnboarding(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"a good key must still complete onboarding even when the hardcoded default slug is retired (body=%s)", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Nil(t, resp["warning"],
+		"D6: with the live catalog wired through, the probe must use a model that is actually live — no warning expected")
+
+	require.NotEmpty(t, probedModels, "the probe must have hit /chat/completions at least once")
+	assert.NotContains(t, probedModels, retiredDefault,
+		"D6: the handler must not probe the retired rules-table slug when a live catalog is available; probed=%v", probedModels)
+	assert.Contains(t, probedModels, liveModel,
+		"D6: the handler must fall back to a live catalog entry; probed=%v", probedModels)
 }

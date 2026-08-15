@@ -38,12 +38,23 @@ export interface OnboardingOptions {
  *   - Body: { provider: {id, api_key, model}, admin: {username, password} }.
  *   - 200 on success, 409 if already complete — both are treated as success.
  *   - Password must be ≥8 characters.
+ *   - The backend now PROBES the key against the real provider before
+ *     completing onboarding (see the "Provider API-key validation" block in
+ *     rest_onboarding.go) and returns 400 when the provider confirms the key
+ *     is wrong (`providers.OutcomeInvalidKey`) — no_credit / unreachable /
+ *     restricted still proceed with a warning. Onboarding is NO LONGER a pure
+ *     "store whatever was typed" write; a fake key is now rejected, not
+ *     silently accepted.
  *
  * The API key is sourced from OPENROUTER_API_KEY_CI (or falls back to
- * OPENROUTER_API_KEY for local runs). If neither is set, the call uses a
- * placeholder that will likely cause provider tests to fail — but onboarding
- * itself only stores the key, it does not validate it. Matches the upstream
- * UI flow behavior.
+ * OPENROUTER_API_KEY for local runs). If NEITHER is set, this throws
+ * immediately, before making any request — a placeholder key would either get
+ * a real 400 from the provider probe (a confusing failure deep inside
+ * onboarding) or, worse, if OpenRouter ever starts probe-accepting garbage
+ * keys, would silently seed a broken install that fails every subsequent spec
+ * one at a time with no indication why. Failing fast, at fixture-build time,
+ * with a message that names the two env vars to set, is strictly better than
+ * either.
  */
 export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
   // W4-7: validate password length at fixture-build time, not at 400-response time.
@@ -55,11 +66,20 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
     );
   }
 
-  const apiKey =
-    opts.apiKey ??
-    process.env.OPENROUTER_API_KEY_CI ??
-    process.env.OPENROUTER_API_KEY ??
-    'sk-test-placeholder';
+  const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY_CI ?? process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    // No placeholder fallback (see the doc comment above): onboarding now
+    // validates the key for real, so a fake key cannot silently seed a
+    // broken install — but running the whole suite against one is still a
+    // waste of a CI shard's worth of time before the same 400 surfaces at
+    // spec #1 instead of here. Fail immediately with the fix.
+    throw new Error(
+      'onboard-via-api: no OpenRouter API key available. Set OPENROUTER_API_KEY_CI ' +
+        '(CI) or OPENROUTER_API_KEY (local), or pass { apiKey } explicitly. Onboarding ' +
+        'now probes the key against the real provider before completing (see ' +
+        'pkg/gateway/rest_onboarding.go), so the suite cannot run against a placeholder.'
+    );
+  }
 
   const ctx: APIRequestContext = await request.newContext({ baseURL: opts.baseURL });
   try {
@@ -105,6 +125,25 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
       }
       throw new Error(
         `onboard-via-api: POST /api/v1/onboarding/complete returned unexpected 409: ${body}`,
+      );
+    }
+
+    // 400 with the key-rejected outcome is a distinct, actionable failure from
+    // any other 400 (malformed body, bad username, etc.): the key that
+    // OPENROUTER_API_KEY_CI/OPENROUTER_API_KEY points at is wrong or revoked.
+    // Surface that plainly instead of letting the raw provider-rejection
+    // message (from providers.BuildMessage) read like a suite bug.
+    if (res.status() === 400) {
+      const body = await res.text();
+      if (body.toLowerCase().includes('rejected')) {
+        throw new Error(
+          `onboard-via-api: the configured OpenRouter key was rejected by the provider — ` +
+            `check OPENROUTER_API_KEY_CI/OPENROUTER_API_KEY is a valid, active key. ` +
+            `Server said: ${body}`,
+        );
+      }
+      throw new Error(
+        `onboard-via-api: POST /api/v1/onboarding/complete returned 400: ${body}`,
       );
     }
 

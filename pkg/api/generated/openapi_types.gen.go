@@ -8385,7 +8385,7 @@ type LoginResponse struct {
 	// Username The authenticated user's login name.
 	Username string `json:"username"`
 
-	// Warning Non-fatal advisory message. Present on onboarding/complete when the credential store is locked and the API key was stored in plaintext.
+	// Warning Non-fatal advisory message. Present on onboarding/complete for either of two independent reasons, mutually exclusive on a single response: (1) the credential store is locked and the API key was stored in plaintext, or (2) the provider API key was submitted but could not be positively verified — the provider was unreachable, the key has no credit, access is regionally/model restricted, or no endpoint was available to probe against. Absent entirely when the key was actively verified as valid. A key the provider actively confirms is WRONG is never represented via this field — that outcome rejects the request with 400 instead (see POST /onboarding/complete). Never present on POST /auth/login.
 	Warning *string `json:"warning,omitempty"`
 }
 
@@ -9162,7 +9162,7 @@ type OnboardingCompleteResponse struct {
 	// Username The authenticated user's login name.
 	Username string `json:"username"`
 
-	// Warning Non-fatal advisory message. Present on onboarding/complete when the credential store is locked and the API key was stored in plaintext.
+	// Warning Non-fatal advisory message. Present on onboarding/complete for either of two independent reasons, mutually exclusive on a single response: (1) the credential store is locked and the API key was stored in plaintext, or (2) the provider API key was submitted but could not be positively verified — the provider was unreachable, the key has no credit, access is regionally/model restricted, or no endpoint was available to probe against. Absent entirely when the key was actively verified as valid. A key the provider actively confirms is WRONG is never represented via this field — that outcome rejects the request with 400 instead (see POST /onboarding/complete). Never present on POST /auth/login.
 	Warning *string `json:"warning,omitempty"`
 }
 
