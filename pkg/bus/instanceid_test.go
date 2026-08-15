@@ -34,14 +34,29 @@ func TestInstanceID_InboundMessageSetGet(t *testing.T) {
 	}
 }
 
-// TestInstanceID_OutboundMessageSetGet verifies the InstanceID field on
-// OutboundMessage is settable and readable.
-func TestInstanceID_OutboundMessageSetGet(t *testing.T) {
-	msg := OutboundMessage{
-		InstanceID: "irc:libera",
+// TestOutboundMessage_InstanceIDRemoved_DecodesOldPayload proves ADR-065/FR-6's
+// removal of OutboundMessage.InstanceID (never set by any non-test producer —
+// channels.Manager.dispatchLoop resolves the target worker via msg.Channel
+// alone, confirmed at pkg/channels/manager.go's dispatchOutbound, which passes
+// `func(msg bus.OutboundMessage) string { return msg.Channel }` as the
+// dispatch key) is backward-compatible: an old, already-persisted or
+// in-flight payload that still carries "instance_id" must decode cleanly,
+// with json.Unmarshal silently dropping the now-unknown key rather than
+// erroring. This is the "old data must still decode" requirement — losing it
+// would break replay of pre-upgrade queued/logged frames.
+func TestOutboundMessage_InstanceIDRemoved_DecodesOldPayload(t *testing.T) {
+	oldJSON := `{"channel":"telegram","chat_id":"123","instance_id":"tg:bot2","content":"hi"}`
+	var ob OutboundMessage
+	if err := jsonUnmarshal([]byte(oldJSON), &ob); err != nil {
+		t.Fatalf("unmarshal old OutboundMessage payload with instance_id: %v", err)
 	}
-	if msg.InstanceID != "irc:libera" {
-		t.Fatalf("expected InstanceID irc:libera, got %q", msg.InstanceID)
+	if ob.Channel != "telegram" || ob.ChatID != "123" || ob.Content != "hi" {
+		t.Fatalf("old payload fields did not survive decode: %+v", ob)
+	}
+	// The removed field must not resurface anywhere reachable — re-marshal
+	// and confirm "instance_id" does not appear in the output.
+	if has, s := jsonContains(jsonMarshal(t, ob), `"instance_id"`); has {
+		t.Fatalf("re-marshaled OutboundMessage must not contain instance_id, got %s", s)
 	}
 }
 
@@ -79,15 +94,10 @@ func TestInstanceID_JSONRoundTrip(t *testing.T) {
 		t.Fatalf("expected InboundMessage.InstanceID tg:bot2, got %q", ib.InstanceID)
 	}
 
-	// OutboundMessage
-	obJSON := `{"channel":"telegram","chat_id":"123","instance_id":"tg:bot2","content":"hi"}`
-	var ob OutboundMessage
-	if err := jsonUnmarshal([]byte(obJSON), &ob); err != nil {
-		t.Fatalf("unmarshal OutboundMessage: %v", err)
-	}
-	if ob.InstanceID != "tg:bot2" {
-		t.Fatalf("expected OutboundMessage.InstanceID tg:bot2, got %q", ob.InstanceID)
-	}
+	// OutboundMessage no longer carries InstanceID (ADR-065/FR-6 — Channel is
+	// the instance key on dispatch; see
+	// TestOutboundMessage_InstanceIDRemoved_DecodesOldPayload above for its
+	// decode-compat coverage). Intentionally not asserted here anymore.
 }
 
 // TestInstanceID_Omitempty verifies that an empty InstanceID is omitted from
@@ -109,8 +119,7 @@ func TestInstanceID_Omitempty(t *testing.T) {
 		t.Fatal("InboundMessage with empty InstanceID should omit instance_id from JSON")
 	}
 
-	ob := OutboundMessage{Channel: "slack", ChatID: "C1", Content: "hi"}
-	if has, _ := jsonContains(jsonMarshal(t, ob), `"instance_id"`); has {
-		t.Fatal("OutboundMessage with empty InstanceID should omit instance_id from JSON")
-	}
+	// OutboundMessage no longer has an InstanceID field at all (ADR-065/FR-6),
+	// so there is nothing to omit-check here anymore; covered instead by
+	// TestOutboundMessage_InstanceIDRemoved_DecodesOldPayload.
 }

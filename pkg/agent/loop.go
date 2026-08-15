@@ -1696,13 +1696,19 @@ func registerSharedTools(
 
 		// Message tool — outbound inter-agent message via bus.
 		messageTool := tools.NewMessageTool()
-		messageTool.SetSendCallback(func(channel, chatID, content string) error {
+		messageTool.SetSendCallback(func(channel, chatID, content string, origin tools.SendOrigin) error {
 			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer pubCancel()
+			// Origin travels with the message (ADR-065 spec FR-6) so a send can
+			// be attributed, and so dispatch can re-check ownership at the last
+			// common point before the wire. System-originated publishes leave
+			// these empty and are exempt by that emptiness.
 			return msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-				Channel: channel,
-				ChatID:  chatID,
-				Content: content,
+				Channel:     channel,
+				ChatID:      chatID,
+				Content:     content,
+				AgentID:     origin.AgentID,
+				WorkspaceID: origin.WorkspaceID,
 			})
 		})
 		agent.Tools.Register(messageTool)
@@ -12927,4 +12933,45 @@ func (al *AgentLoop) forgetSession(sessionID string) {
 		}
 		return true
 	})
+}
+
+// SetChannelOwnership installs the channel-ownership resolver on every
+// registered agent's send_message tool (ADR-065).
+//
+// It is injected AFTER construction, following the SetPlanStore precedent,
+// because the resolver reads live gateway config and pkg/agent cannot import
+// pkg/gateway without a cycle. Until it runs, send_message has no ownership
+// information: it will reply into the turn's own conversation and REFUSE any
+// other target rather than assume the send is allowed. That is deliberate —
+// an unresolvable ownership question must not read as permission.
+func (al *AgentLoop) SetChannelOwnership(o tools.ChannelOwnership) {
+	if o == nil {
+		logger.ErrorCF("agent", "SetChannelOwnership: installed a nil resolver — "+
+			"send_message will refuse every target except the turn's own conversation", nil)
+		return
+	}
+	reg := al.GetRegistry()
+	if reg == nil {
+		logger.WarnCF("agent", "SetChannelOwnership: no registry yet; ownership not installed", nil)
+		return
+	}
+	installed := 0
+	for _, id := range reg.ListAgentIDs() {
+		ag, ok := reg.GetAgent(id)
+		if !ok || ag == nil || ag.Tools == nil {
+			continue
+		}
+		t, found := ag.Tools.Get("send_message")
+		if !found {
+			continue
+		}
+		mt, isMessageTool := t.(*tools.MessageTool)
+		if !isMessageTool {
+			continue
+		}
+		mt.SetChannelOwnership(o)
+		installed++
+	}
+	logger.InfoCF("agent", "channel ownership installed on send_message",
+		map[string]any{"agents": installed})
 }

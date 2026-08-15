@@ -391,7 +391,7 @@ func TestToolChain_SendMessage_ChannelDelivery(t *testing.T) {
 	var sentMessages []captured
 	var mu sync.Mutex
 
-	callback := func(channel, chatID, content string) error {
+	callback := func(channel, chatID, content string, _ tools.SendOrigin) error {
 		mu.Lock()
 		defer mu.Unlock()
 		sentMessages = append(sentMessages, captured{channel: channel, chatID: chatID, content: content})
@@ -442,7 +442,7 @@ func TestToolChain_SendMessage_Differentiation(t *testing.T) {
 	var sent []captured
 	var mu sync.Mutex
 
-	callback := func(_, _, content string) error {
+	callback := func(_, _, content string, _ tools.SendOrigin) error {
 		mu.Lock()
 		defer mu.Unlock()
 		sent = append(sent, captured{content: content})

@@ -159,6 +159,13 @@ type blockedConfigKey struct {
 	// Key is a config key or the root of a subtree. A candidate key matches
 	// when it is AT, UNDER or ABOVE Key — see configKeyCovers and
 	// configKeyIsAncestorOf — compared case-insensitively.
+	//
+	// A segment may be configWildcardSegment ("*"), which matches any single
+	// segment. That is for the config sections that are MAPS keyed by an
+	// operator-chosen id rather than structs with fixed field names —
+	// channels.<instance>.* is the only one today. Without it a map-keyed
+	// section could only be protected by blocking the whole section, which
+	// would freeze every ordinary setting in it.
 	Key string
 	// Reason is surfaced verbatim in the rejection so the caller — usually an
 	// LLM — is told what it hit and where the setting really lives, instead of
@@ -371,6 +378,72 @@ var blockedConfigKeys = []blockedConfigKey{
 			"same list, and the credential-ref redaction below covers auth_token_ref/token_ref",
 	},
 
+	// ---- the channel ownership record (ADR-065 FR-5) ----
+	//
+	// ADR-065 makes a channel instance owned by exactly one (workspace, agent)
+	// pair and gates every outbound send on that pair. The pair is stored right
+	// here in config.json: channels.<instance>.identity (kind + id) and
+	// channels.<instance>.workspace_id. set_config is `allow` in the global
+	// tool-policy ceiling and "channels." is a permitted section, so before
+	// these two entries an agent with shipped-default permissions could rewrite
+	// its own ownership record and then egress through any instance it liked,
+	// using that instance's bot token. A constraint the constrained party can
+	// edit is not a constraint.
+	//
+	// The keys are wildcarded at the instance segment because Config.Channels is
+	// a MAP keyed by an operator-chosen instance id ("telegram", "slack.eu"), so
+	// there is no finite set of literal keys to enumerate. The wildcard is the
+	// narrowest shape that works: blocking "channels" outright would freeze
+	// enabled, base_url, mention_only and every other ordinary per-instance
+	// setting an agent may legitimately manage.
+	//
+	// A single-segment wildcard is enough, and the reason is worth writing down
+	// because it is not obvious. A NAMESPACED instance id contains a dot
+	// ("slack.eu"), so "channels.slack.eu.workspace_id" has four segments and
+	// this three-segment rule does not match it. That key is nonetheless
+	// harmless: dotSet splits on ".", so it builds channels→slack→eu→…, and
+	// unmarshalling that back into map[string]ChannelInstanceConfig produces an
+	// instance called "slack" whose "eu" field does not exist and is dropped.
+	// The real "slack.eu" record is never addressable by this writer at all.
+	// That is a property of dotSet rather than of this table, so it is PINNED by
+	// a test (TestConfigSet_NamespacedInstanceOwnershipIsUnreachable) instead of
+	// left as a happy accident: if dotSet ever learns to address dotted map
+	// keys, that test fails and these entries must grow with it.
+	//
+	// The block is on the whole identity OBJECT rather than identity.id alone.
+	// identity.kind is equally load-bearing — flipping it to "user" makes the
+	// instance route as the user instead of as its owning agent (route.go's
+	// documented default for an absent kind) — and a subtree entry stays correct
+	// when a field is added. Consequence, by design: a bare write at
+	// "channels.<instance>" or at "channels" is refused too, because
+	// json.Unmarshal MERGES an object written at an ancestor path into the live
+	// struct and would reach these fields (configKeyIsAncestorOf).
+	{
+		Key: "channels.*.identity",
+		Reason: "it is half the channel's ownership record — identity names the agent that owns this " +
+			"channel instance, and ADR-065 gates outbound sends on workspace-bound instances against " +
+			"it, so rewriting it would let an agent egress through a channel it does not own, under " +
+			"that channel's own bot token — change the owner in the Channels screen or config.json, " +
+			"never from an agent",
+		ReadOKReason: "the ownership record is enforcement configuration, not credential material, and " +
+			"the same OPERATOR DECISION 2026-08-12 that made the sandbox namespace readable applies: an " +
+			"agent refused a send under ADR-065 must be able to say WHICH instance it owns instead of " +
+			"failing opaquely. The disclosure conceded is small and largely unavoidable — the instance " +
+			"KEYS under channels are map keys and stay visible whatever the leaf policy is, and " +
+			"enforcement now sits at the send tool and at dispatch, so knowing an owner buys nothing " +
+			"actionable. Writing it stays blocked: reading the cage is diagnosis, opening it is escape",
+	},
+	{
+		Key: "channels.*.workspace_id",
+		Reason: "it is the other half of the channel's ownership record — it binds the instance to one " +
+			"workspace (ADR-029) and ADR-065 gates outbound sends on the (workspace, agent) pair, so " +
+			"rewriting it would move a channel into the agent's own workspace and hand it the keys — " +
+			"rebind the instance in the Channels screen or config.json, never from an agent",
+		ReadOKReason: "readable for the same reason as identity above — an agent that cannot see which " +
+			"workspace its channel is bound to cannot explain a refused send, and the binding is " +
+			"enforcement configuration rather than a secret. The write stays blocked",
+	},
+
 	// ---- reserved: no such config section exists TODAY ----
 	//
 	// "security" and "workspace_path" are listed in knownConfigPrefixes but
@@ -402,6 +475,10 @@ var blockedConfigKeys = []blockedConfigKey{
 // that does.
 func configKeySegments(key string) []string { return strings.Split(key, ".") }
 
+// configWildcardSegment is the blocked-key segment that matches any single
+// candidate segment. See blockedConfigKey.Key and configSegmentMatches.
+const configWildcardSegment = "*"
+
 // configSegmentMatches reports whether one key segment names the same field as
 // one blocked-key segment.
 //
@@ -424,7 +501,17 @@ func configKeySegments(key string) []string { return strings.Split(key, ".") }
 //
 // A trailing array index binds to the segment it indexes, so "sandbox[0]"
 // matches the blocked key "sandbox".
+//
+// configWildcardSegment on the BLOCKED side matches any candidate segment. The
+// asymmetry is deliberate and is the same fail-closed direction as the folding
+// above: the wildcard is only ever honoured in blockedSeg, never in seg, so a
+// caller cannot write the literal key "channels.*.enabled" and have its "*"
+// match a blocked segment it does not name. Widening what is DENIED is safe;
+// widening what a candidate can match is not.
 func configSegmentMatches(seg, blockedSeg string) bool {
+	if blockedSeg == configWildcardSegment {
+		return true
+	}
 	if strings.EqualFold(seg, blockedSeg) {
 		return true
 	}

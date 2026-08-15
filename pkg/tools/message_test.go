@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -10,7 +11,7 @@ func TestMessageTool_Execute_Success(t *testing.T) {
 	tool := NewMessageTool()
 
 	var sentChannel, sentChatID, sentContent string
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(channel, chatID, content string, _ SendOrigin) error {
 		sentChannel = channel
 		sentChatID = chatID
 		sentContent = content
@@ -57,17 +58,32 @@ func TestMessageTool_Execute_Success(t *testing.T) {
 	}
 }
 
+// TestMessageTool_Execute_WithCustomChannel asserts an agent may direct a
+// message at a channel OTHER than the turn's — the reason send_message has a
+// channel argument at all, since one tool addresses every channel type.
+//
+// It used to pass with no ownership installed, i.e. any named channel was
+// accepted unconditionally. ADR-065 makes that a checked capability rather
+// than an unchecked one: the agent may name a channel IT OWNS. The assertion
+// is otherwise unchanged, which is the point — the legitimate case still
+// works, and TestSendMessage_CannotUseAnotherAgentsChannelSameWorkspace covers
+// the case that no longer does.
 func TestMessageTool_Execute_WithCustomChannel(t *testing.T) {
 	tool := NewMessageTool()
+	tool.SetChannelOwnership(fakeOwnership{owner: map[string]string{
+		"custom-channel": "W1/mia",
+	}})
 
 	var sentChannel, sentChatID string
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(channel, chatID, content string, _ SendOrigin) error {
 		sentChannel = channel
 		sentChatID = chatID
 		return nil
 	})
 
 	ctx := WithToolContext(context.Background(), "default-channel", "default-chat-id")
+	ctx = WithAgentID(ctx, "mia")
+	ctx = WithWorkspaceID(ctx, "W1")
 	args := map[string]any{
 		"content": "Test message",
 		"channel": "custom-channel",
@@ -96,7 +112,7 @@ func TestMessageTool_Execute_SendFailure(t *testing.T) {
 	tool := NewMessageTool()
 
 	sendErr := errors.New("network error")
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(channel, chatID, content string, _ SendOrigin) error {
 		return sendErr
 	})
 
@@ -149,7 +165,7 @@ func TestMessageTool_Execute_NoTargetChannel(t *testing.T) {
 	tool := NewMessageTool()
 	// No WithToolContext — channel/chatID are empty
 
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(channel, chatID, content string, _ SendOrigin) error {
 		return nil
 	})
 
@@ -164,7 +180,11 @@ func TestMessageTool_Execute_NoTargetChannel(t *testing.T) {
 	if !result.IsError {
 		t.Error("Expected IsError=true when no target channel")
 	}
-	if result.ForLLM != "No target channel/chat specified" {
+	// The message changed with ADR-065: the tool now explains WHY it has no
+	// target (no conversation, and no ownership information to resolve one)
+	// instead of stating only that a target is missing. An agent reading the
+	// old text could not tell whether to retry with a channel argument.
+	if !strings.Contains(result.ForLLM, "no channel to send on") {
 		t.Errorf("Expected ForLLM 'No target channel/chat specified', got '%s'", result.ForLLM)
 	}
 }

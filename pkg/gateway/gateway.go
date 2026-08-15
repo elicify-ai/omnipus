@@ -3429,6 +3429,12 @@ func setupAndStartServices(
 	// above, so this guards against a future refactor silently routing a
 	// nil store through, not today's happy path.
 	agentLoop.SetPlanStore(planStore)
+
+	// Channel ownership for send_message (ADR-065). Injected here, next to the
+	// plan store, for the same reason: it reads live config, so pkg/agent
+	// cannot construct it without importing pkg/gateway. Until this runs
+	// send_message refuses every target except the turn's own conversation.
+	agentLoop.SetChannelOwnership(newChannelOwnershipResolver(agentLoop.GetConfig))
 	if agentLoop.GetPlanStore() == nil {
 		return nil, fmt.Errorf("gateway: plan store wiring failed — SetPlanStore did not install a non-nil store")
 	}
