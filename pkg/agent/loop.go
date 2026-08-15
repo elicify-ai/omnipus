@@ -168,6 +168,11 @@ type AgentLoop struct {
 	// before boot wiring completes — create_plan/execute_plan then register
 	// but fail closed at Execute() (Wave-1 discipline, pkg/tools/plan.go).
 	planStore *plan.Store
+
+	// channelOwnership resolves which (workspace, agent) owns a channel
+	// instance (ADR-065). Stored rather than only pushed into tools, because
+	// registerSharedTools rebuilds every MessageTool on reload.
+	channelOwnership tools.ChannelOwnership
 	// loopSched is the dedicated /loop time-driven scheduler (ADR-049 D6/D7,
 	// loop_scheduler.go). Set once at boot by the gateway
 	// (SetLoopScheduler); nil in tests / before wiring — applyLoopCommandPrompt
@@ -1704,13 +1709,19 @@ func registerSharedTools(
 			// common point before the wire. System-originated publishes leave
 			// these empty and are exempt by that emptiness.
 			return msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-				Channel:     channel,
-				ChatID:      chatID,
-				Content:     content,
-				AgentID:     origin.AgentID,
-				WorkspaceID: origin.WorkspaceID,
+				Channel:          channel,
+				ChatID:           chatID,
+				Content:          content,
+				AgentID:          origin.AgentID,
+				WorkspaceID:      origin.WorkspaceID,
+				OwnershipChecked: origin.OwnershipChecked,
 			})
 		})
+		// Re-apply the stored resolver: this runs on every reload, and the
+		// MessageTool above is brand new each time (ADR-065).
+		if own := al.ChannelOwnership(); own != nil {
+			messageTool.SetChannelOwnership(own)
+		}
 		agent.Tools.Register(messageTool)
 
 		// Handoff tools — always registered (ScopeCore).
@@ -10150,6 +10161,9 @@ turnLoop:
 					parts = append(parts, part)
 				}
 				outboundMedia := bus.OutboundMediaMessage{
+					// ADR-065 FR-6: media sends carry their origin too, so
+					// send_file is not a silent gap in the audit trail.
+					AgentID: tools.ToolAgentID(ctx),
 					Channel: ts.channel,
 					ChatID:  ts.chatID,
 					// FIX 1: workspace-scoped media resolution (channels'
@@ -12935,6 +12949,13 @@ func (al *AgentLoop) forgetSession(sessionID string) {
 	})
 }
 
+// ChannelOwnership returns the stored resolver, or nil before wiring.
+func (al *AgentLoop) ChannelOwnership() tools.ChannelOwnership {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	return al.channelOwnership
+}
+
 // SetChannelOwnership installs the channel-ownership resolver on every
 // registered agent's send_message tool (ADR-065).
 //
@@ -12945,6 +12966,20 @@ func (al *AgentLoop) forgetSession(sessionID string) {
 // other target rather than assume the send is allowed. That is deliberate —
 // an unresolvable ownership question must not read as permission.
 func (al *AgentLoop) SetChannelOwnership(o tools.ChannelOwnership) {
+	// STORE it, not just push it. registerSharedTools builds a FRESH
+	// MessageTool per agent on every reload — and it re-runs on agent
+	// create/update, tool-policy writes, god-mode toggles and mailbox changes
+	// via ReloadProviderAndConfig and UpsertAgentFast. Pushing only into the
+	// instances that exist right now meant every one of those silently reset
+	// ownership to nil for the rest of the process lifetime. Because the tool
+	// is fail-closed that degraded into "refuses every target except the
+	// turn's own conversation" rather than a hole, but it was permanent and
+	// silent. This mirrors what SetPlanStore actually does: al.planStore is
+	// stored and re-read at registration.
+	al.mu.Lock()
+	al.channelOwnership = o
+	al.mu.Unlock()
+
 	if o == nil {
 		logger.ErrorCF("agent", "SetChannelOwnership: installed a nil resolver — "+
 			"send_message will refuse every target except the turn's own conversation", nil)

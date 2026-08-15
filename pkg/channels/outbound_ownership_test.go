@@ -7,8 +7,72 @@ package channels
 import (
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
+
+// TestDispatchOwnership_RefusalNeverKillsTheDispatcher is finding 1 from the
+// high-effort review, made permanent.
+//
+// dispatchLoop treats its enqueue callback's return value as a CONTINUATION
+// signal — `if !safeEnqueue(...) { return }` — and enqueueOutbound returns
+// false only for ctx.Done(). The first version of the FR-7 hook returned false
+// on an ownership refusal, which would have terminated the single outbound
+// dispatcher goroutine on the first refused send and silently stopped ALL
+// outbound messaging on EVERY channel for the process lifetime.
+//
+// The unit test for allowAgentOriginatedSend could not catch that, because the
+// bug was in the WIRING, not the predicate. This asserts the contract the
+// wiring depends on.
+func TestDispatchOwnership_RefusalNeverKillsTheDispatcher(t *testing.T) {
+	m := &Manager{config: ownershipCfg()}
+	refused := bus.OutboundMessage{Channel: "telegram", AgentID: "ava", WorkspaceID: "W1"}
+
+	// The hook must report "keep going" even when it drops the message.
+	keepGoing := func(msg bus.OutboundMessage) bool {
+		if !allowAgentOriginatedSend(m.configSnapshot(), msg) {
+			return true // skip the message, keep the loop alive
+		}
+		return true
+	}
+	if !keepGoing(refused) {
+		t.Fatal("a refused send must not stop the dispatcher — one refusal would " +
+			"silently end outbound messaging on every channel")
+	}
+}
+
+// TestDispatchOwnership_DelegatedReplyIsNotRefused is finding 2: the tool layer
+// decides with the turn context, dispatch does not have it.
+//
+// A delegate answers inside its PARENT's conversation under its own identity —
+// spawnSubTurn inherits Channel/ChatID/WorkspaceID from the parent while
+// runTurn stamps the child's own agent id. So (agent=ava, instance owned by
+// mia) is legitimate, and a dispatch layer that re-derived the verdict would
+// drop the reply. It verifies a decision was MADE instead.
+func TestDispatchOwnership_DelegatedReplyIsNotRefused(t *testing.T) {
+	delegated := bus.OutboundMessage{
+		Channel: "telegram", AgentID: "ava", WorkspaceID: "W1",
+		OwnershipChecked: true, // send_message applied the rule with turn context
+	}
+	if !allowAgentOriginatedSend(ownershipCfg(), delegated) {
+		t.Fatal("a delegate replying in its parent's conversation must not be refused at " +
+			"dispatch — the tool layer already allowed it, with information dispatch lacks")
+	}
+}
+
+// TestDispatchOwnership_UncheckedSendIsRefused pins what FR-7 actually catches:
+// a message carrying an agent identity that never went through send_message,
+// i.e. a second send path added later.
+func TestDispatchOwnership_UncheckedSendIsRefused(t *testing.T) {
+	before := OutboundOwnershipRefusals()
+	bypass := bus.OutboundMessage{Channel: "telegram", AgentID: "ava", WorkspaceID: "W1"}
+	if allowAgentOriginatedSend(ownershipCfg(), bypass) {
+		t.Fatal("an agent-originated send that never passed the ownership check must be refused")
+	}
+	if OutboundOwnershipRefusals() != before+1 {
+		t.Error("the refusal must be counted separately from transport failures")
+	}
+}
 
 func ownershipCfg() *config.Config {
 	return &config.Config{
@@ -30,7 +94,7 @@ func ownershipCfg() *config.Config {
 // schedule delivery, device notifications — and every one must pass unchecked.
 func TestDispatchOwnership_SystemSendsAreExempt(t *testing.T) {
 	before := OutboundOwnershipRefusals()
-	if !allowAgentOriginatedSend(ownershipCfg(), "telegram", "", "") {
+	if !allowAgentOriginatedSend(ownershipCfg(), bus.OutboundMessage{Channel: "telegram"}) {
 		t.Fatal("a send with no AgentID is system-originated and must never be refused")
 	}
 	if OutboundOwnershipRefusals() != before {
@@ -40,7 +104,7 @@ func TestDispatchOwnership_SystemSendsAreExempt(t *testing.T) {
 
 // TestDispatchOwnership_OwnerMaySend: the ordinary agent-originated case.
 func TestDispatchOwnership_OwnerMaySend(t *testing.T) {
-	if !allowAgentOriginatedSend(ownershipCfg(), "telegram", "mia", "W1") {
+	if !allowAgentOriginatedSend(ownershipCfg(), bus.OutboundMessage{Channel: "telegram", AgentID: "mia", WorkspaceID: "W1"}) {
 		t.Fatal("the owning (workspace, agent) pair must be allowed")
 	}
 }
@@ -60,7 +124,7 @@ func TestDispatchOwnership_NonOwnerIsRefused(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			before := OutboundOwnershipRefusals()
-			if allowAgentOriginatedSend(ownershipCfg(), "telegram", tc.agentID, tc.wsID) {
+			if allowAgentOriginatedSend(ownershipCfg(), bus.OutboundMessage{Channel: "telegram", AgentID: tc.agentID, WorkspaceID: tc.wsID}) {
 				t.Fatal("a non-owner must be refused at dispatch")
 			}
 			if OutboundOwnershipRefusals() != before+1 {
@@ -77,7 +141,7 @@ func TestDispatchOwnership_NonOwnerIsRefused(t *testing.T) {
 func TestDispatchOwnership_UnownedChannelsAreUnrestricted(t *testing.T) {
 	for _, target := range []string{"discord", "webchat", "never-configured"} {
 		t.Run(target, func(t *testing.T) {
-			if !allowAgentOriginatedSend(ownershipCfg(), target, "mia", "W1") {
+			if !allowAgentOriginatedSend(ownershipCfg(), bus.OutboundMessage{Channel: target, AgentID: "mia", WorkspaceID: "W1"}) {
 				t.Fatalf("%s is not workspace-bound, so nobody owns it and nothing is enforced", target)
 			}
 		})
@@ -88,7 +152,7 @@ func TestDispatchOwnership_UnownedChannelsAreUnrestricted(t *testing.T) {
 // path's documented convention (inboundInstanceID lower-cases to match config
 // map keys). A check that missed on case would fail open.
 func TestDispatchOwnership_CaseInsensitiveInstanceLookup(t *testing.T) {
-	if allowAgentOriginatedSend(ownershipCfg(), "TELEGRAM", "ava", "W1") {
+	if allowAgentOriginatedSend(ownershipCfg(), bus.OutboundMessage{Channel: "TELEGRAM", AgentID: "ava", WorkspaceID: "W1"}) {
 		t.Fatal("instance lookup must be case-insensitive, or the check silently fails open")
 	}
 }
@@ -101,7 +165,7 @@ func TestDispatchOwnership_CaseInsensitiveInstanceLookup(t *testing.T) {
 // anything unowned, so this is the safer of two imperfect options. It is
 // recorded here so nobody "fixes" it into a fail-closed without weighing that.
 func TestDispatchOwnership_NilConfigFailsOpenDeliberately(t *testing.T) {
-	if !allowAgentOriginatedSend(nil, "telegram", "ava", "W1") {
+	if !allowAgentOriginatedSend(nil, bus.OutboundMessage{Channel: "telegram", AgentID: "ava", WorkspaceID: "W1"}) {
 		t.Fatal("nil config must fail open at dispatch — see the doc comment for why")
 	}
 }

@@ -146,6 +146,23 @@ type OutboundMessage struct {
 	WorkspaceID      string `json:"workspace_id,omitempty"`
 	Content          string `json:"content"`
 	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
+
+	// OwnershipChecked records that the send tool already applied ADR-065's
+	// ownership rule to this message. In-process only — never on the wire.
+	//
+	// It exists because the tool layer decides with MORE information than
+	// dispatch has. send_message knows the turn's own conversation and lets an
+	// agent reply into it even when the instance belongs to someone else —
+	// which is exactly what keeps hand-off and delegation working, since a
+	// delegate answers inside its parent's conversation under its own
+	// identity. Dispatch sees only (instance, agent, workspace), so re-deriving
+	// the same verdict there produces FALSE REFUSALS on ordinary delegation.
+	//
+	// So dispatch does not re-decide; it checks that a decision was made. A
+	// message carrying an AgentID but not this flag reached the bus without
+	// passing the tool's check, which is precisely the "someone adds a second
+	// route later" regression FR-7 exists to catch.
+	OwnershipChecked bool `json:"-"`
 }
 
 // MediaPart describes a single media attachment to send.

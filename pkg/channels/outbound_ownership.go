@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
@@ -50,9 +51,18 @@ func OutboundOwnershipRefusals() int64 { return outboundOwnershipRefusals.Load()
 //
 // Unbound instances and webchat are unowned and therefore unrestricted, exactly
 // as at the tool layer: webchat is SHARED by operator decision.
-func allowAgentOriginatedSend(cfg *config.Config, instanceID, agentID, workspaceID string) bool {
+func allowAgentOriginatedSend(cfg *config.Config, msg bus.OutboundMessage) bool {
+	instanceID, agentID, workspaceID := msg.Channel, msg.AgentID, msg.WorkspaceID
 	if agentID == "" {
 		return true // system-originated; not in scope
+	}
+	// The send tool already applied the rule, with the turn context this layer
+	// does not have. Re-deciding here with less information produces false
+	// refusals — an ordinary delegated reply is sent by the DELEGATE into the
+	// PARENT's conversation, so the pair legitimately mismatches the instance
+	// owner. Trust the decision; verify that one was made.
+	if msg.OwnershipChecked {
+		return true
 	}
 	if cfg == nil {
 		// No config to check against. Fail OPEN here, deliberately: the tool
@@ -82,8 +92,9 @@ func allowAgentOriginatedSend(cfg *config.Config, instanceID, agentID, workspace
 			"sender_workspace": workspaceID,
 			"owner_agent":      owner,
 			"owner_workspace":  inst.WorkspaceID,
-			"note": "the tool layer should have refused this already (ADR-065 FR-1) — " +
-				"if this fires, a send path reached the bus without passing that check",
+			"note": "this message carried an agent identity but no ownership decision, so it " +
+				"reached the bus without going through send_message (ADR-065 FR-1). That is the " +
+				"regression FR-7 exists to catch: a second send path added later.",
 		})
 	return false
 }

@@ -13,6 +13,10 @@ import (
 type SendOrigin struct {
 	AgentID     string
 	WorkspaceID string
+	// OwnershipChecked marks that ADR-065's rule was applied to this send.
+	// Dispatch checks for it rather than re-deriving the verdict — see
+	// bus.OutboundMessage.OwnershipChecked for why re-deriving is wrong.
+	OwnershipChecked bool
 }
 
 type SendCallback func(channel, chatID, content string, origin SendOrigin) error
@@ -120,15 +124,30 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return denied
 	}
 
-	if channel == "" || chatID == "" {
-		return &ToolResult{ForLLM: "No target channel/chat specified", IsError: true}
+	if channel == "" {
+		return &ToolResult{ForLLM: "No target channel specified", IsError: true}
+	}
+	if chatID == "" {
+		// Resolving the agent's OWN instance (FR-2) yields a channel but no
+		// conversation within it — an instance is not a chat. The generic
+		// "no target" message used to swallow this and report the wrong
+		// reason, which made the whole proactive path look broken rather than
+		// under-specified.
+		return &ToolResult{
+			ForLLM: fmt.Sprintf("no recipient on %q: this turn has no conversation, so name the "+
+				"chat_id you mean", channel),
+			IsError: true,
+		}
 	}
 
 	if t.sendCallback == nil {
 		return &ToolResult{ForLLM: "Message sending not configured", IsError: true}
 	}
 
-	origin := SendOrigin{AgentID: actingAgent, WorkspaceID: workspaceID}
+	// Ownership has now been decided for this message. Dispatch verifies that
+	// a decision was made rather than re-making it with less context
+	// (ADR-065 FR-7).
+	origin := SendOrigin{AgentID: actingAgent, WorkspaceID: workspaceID, OwnershipChecked: true}
 	if err := t.sendCallback(channel, chatID, content, origin); err != nil {
 		return &ToolResult{
 			ForLLM:  fmt.Sprintf("sending message: %v", err),

@@ -317,7 +317,13 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	// A worker is never a chat target, so a hand-edited override pointing at one
 	// is skipped (defense in depth; consistent with the Priority-2 hardening).
 	if r.defaultAgentOverride != "" {
-		if agent, ok := r.agents[r.defaultAgentOverride]; ok && !agent.IsWorker() {
+		// IsChatTarget, not merely !IsWorker. routing's Priority 1 requires
+		// IsChatTarget, so accepting a System Agent here made the two ladders
+		// disagree on the CONFIGURED default — the more serious half of the
+		// divergence, since a System Agent must never receive user messages.
+		// The last-resort rungs were aligned first; this is the same fix one
+		// rung up.
+		if agent, ok := r.agents[r.defaultAgentOverride]; ok && agent.IsChatTarget() {
 			return agent
 		}
 	}
@@ -325,9 +331,9 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	// Priority 2: lexicographically first registered agent (M10) — but never a
 	// worker. Workers are not chat targets and must not be resolved as the
 	// default even in the last-resort fallback. Prefer the first non-worker; only
-	// if EVERY registered agent is a worker do we fall back to the first overall
-	// (degenerate config — better to return something than nil so callers that
-	// require a default don't panic). If the registry holds no agents at all,
+	// if every registered agent is a worker or a System Agent there is NO
+	// legitimate chat target and this returns nil — naming one anyway would
+	// route real user messages at an agent that must never receive them. If the registry holds no agents at all,
 	// there is nothing to fall back to and this returns nil — callers must
 	// handle that case explicitly.
 	// Last resort: the lexicographically-first CHAT-TARGET agent.
@@ -347,6 +353,9 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	// The two ladders were only ever guaranteed to agree via the configured
 	// override, which is why the override being unset was a release blocker in
 	// July 2026 (see ADR-064 §7). They now agree without it too.
+	// Sort on the NORMALIZED id, matching routing, which sorts
+	// NormalizeAgentID(a.ID). Sorting raw map keys let mixed-case ids order
+	// differently between the two ladders.
 	ids := make([]string, 0, len(r.agents))
 	for id := range r.agents {
 		ids = append(ids, id)
@@ -354,7 +363,9 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	if len(ids) == 0 {
 		return nil
 	}
-	sort.Strings(ids)
+	sort.Slice(ids, func(i, j int) bool {
+		return routing.NormalizeAgentID(ids[i]) < routing.NormalizeAgentID(ids[j])
+	})
 	for _, id := range ids {
 		if ag := r.agents[id]; ag != nil && ag.IsChatTarget() {
 			return ag
@@ -418,6 +429,11 @@ func (r *AgentRegistry) cloneAgents() *AgentRegistry {
 		agents:         agents,
 		degraded:       r.degraded,
 		degradedReason: r.degradedReason,
+		// The provider MUST be carried. It exists so the registry can hand one
+		// out with NO agents registered (ADR-064) — dropping it here put every
+		// registry the fast path publishes straight back into the state that
+		// produced the #571 full-reload cascade on first agent creation.
+		provider: r.provider,
 	}
 }
 

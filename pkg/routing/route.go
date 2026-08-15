@@ -403,24 +403,23 @@ func (r *RouteResolver) isSkippedAgentID(id string) bool {
 // settings-singleton override config.Agents.Defaults.DefaultAgentID), but the
 // two are independent resolvers over different data and are NOT guaranteed
 // to produce the same agent ID:
-//   - This function's Priority 2 fallback returns the FIRST chat-target
-//     agent in cfg.Agents.List's SLICE ORDER (not sorted), and returns EMPTY
-//     when the list has no chat-target agent at all.
-//   - GetDefaultAgent's registry-map equivalent falls back to the
-//     lexicographically-first non-worker, and returns nil when the registry
-//     is empty.
+//   - Both ladders now apply the SAME rule at every rung: Priority 1 accepts
+//     the configured override only when it names a chat target (not a worker,
+//     not a System Agent); the last resort is the lexicographically-first
+//     chat-target agent, sorted on the NORMALIZED id; and both yield nothing
+//     — empty here, nil there — when no legitimate chat target exists.
 //
-// Both ladders lost their "main" sentinel rung when that agent was removed.
-// They still differ in their last resort (slice order here, sorted order
-// there), so they are only guaranteed to agree via the configured override —
-// which is why the override being unset was a release blocker in July 2026.
+// They agree with or without an override. Before ADR-064 §7 they did not: this
+// one took slice order while the registry sorted, and the registry accepted a
+// System Agent where this one skipped it. That divergence is why an unset
+// override was a release blocker in July 2026.
 //
 // Concretely: with no override configured and at least one chat-target
 // custom/core agent in cfg.Agents.List, this function resolves to that agent
-// (e.g. Mia) while GetDefaultAgent resolves to "main" for the same config —
-// intentional, since the two serve different callers (this one the channel
-// binding cascade; GetDefaultAgent registry-level lookups with no routing
-// input), not a bug to reconcile here.
+// The two serve different callers — this one the channel binding cascade,
+// GetDefaultAgent registry-level lookups with no routing input — but they must
+// answer "who is the default agent?" identically, and
+// TestDefaultAgentLadders_AgreeWithoutAnOverride pins that.
 func (r *RouteResolver) resolveDefaultAgentID() string {
 	agents := r.cfg.Agents.List
 	if len(agents) == 0 {
