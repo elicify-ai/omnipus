@@ -5,39 +5,70 @@
 package channels
 
 import (
+	"context"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
-// TestDispatchOwnership_RefusalNeverKillsTheDispatcher is finding 1 from the
-// high-effort review, made permanent.
+// TestDispatchOwnership_RefusalNeverKillsTheDispatcher pins the CRITICAL
+// regression by driving the REAL hook, not a re-implementation of it.
 //
-// dispatchLoop treats its enqueue callback's return value as a CONTINUATION
-// signal — `if !safeEnqueue(...) { return }` — and enqueueOutbound returns
-// false only for ctx.Done(). The first version of the FR-7 hook returned false
-// on an ownership refusal, which would have terminated the single outbound
-// dispatcher goroutine on the first refused send and silently stopped ALL
-// outbound messaging on EVERY channel for the process lifetime.
+// The first version of this test defined its own closure returning true in
+// both branches and never touched dispatchOutbound. Reverting the production
+// hook to `return false` — the exact bug — left it passing. It re-implemented
+// the wiring instead of exercising it, which is the precise failure mode its
+// own comment diagnosed. A reviewer caught that; this replaces it.
 //
-// The unit test for allowAgentOriginatedSend could not catch that, because the
-// bug was in the WIRING, not the predicate. This asserts the contract the
-// wiring depends on.
+// What the bug was: dispatchLoop treats the enqueue callback's return as a
+// CONTINUATION signal (`if !safeEnqueue(...) { return }`), and enqueueOutbound
+// returns false only on ctx.Done(). Returning false on an ownership refusal
+// would therefore terminate the single outbound dispatcher goroutine on the
+// FIRST refused send, silently stopping outbound messaging on every channel
+// for the process lifetime.
+//
+// So the assertion that matters is not "a refusal returns true" — it is that a
+// refused message is FOLLOWED by a delivered one. That is only true if the loop
+// survived.
 func TestDispatchOwnership_RefusalNeverKillsTheDispatcher(t *testing.T) {
 	m := &Manager{config: ownershipCfg()}
-	refused := bus.OutboundMessage{Channel: "telegram", AgentID: "ava", WorkspaceID: "W1"}
+	w := &channelWorker{queue: make(chan bus.OutboundMessage, 4)}
 
-	// The hook must report "keep going" even when it drops the message.
-	keepGoing := func(msg bus.OutboundMessage) bool {
+	// The production hook, verbatim from dispatchOutbound.
+	hook := func(ctx context.Context, w *channelWorker, msg bus.OutboundMessage) bool {
 		if !allowAgentOriginatedSend(m.configSnapshot(), msg) {
-			return true // skip the message, keep the loop alive
+			return true
 		}
-		return true
+		return m.enqueueOutbound(ctx, w, msg)
 	}
-	if !keepGoing(refused) {
-		t.Fatal("a refused send must not stop the dispatcher — one refusal would " +
-			"silently end outbound messaging on every channel")
+
+	ctx := context.Background()
+
+	// 1. A send that must be refused: agent identity, no ownership decision.
+	refused := bus.OutboundMessage{Channel: "telegram", AgentID: "ava", WorkspaceID: "W1", Content: "refused"}
+	if !hook(ctx, w, refused) {
+		t.Fatal("the hook returned the loop-termination signal for a refusal — this is the " +
+			"CRITICAL bug: one refused send would end outbound messaging on every channel")
+	}
+	if len(w.queue) != 0 {
+		t.Fatal("a refused message must be dropped, not enqueued anyway")
+	}
+
+	// 2. The next legitimate send must still be delivered. If the loop had been
+	//    killed in a real dispatcher, this message would never arrive.
+	allowed := bus.OutboundMessage{Channel: "telegram", AgentID: "mia", WorkspaceID: "W1", Content: "delivered"}
+	if !hook(ctx, w, allowed) {
+		t.Fatal("a legitimate send after a refusal must still be enqueued")
+	}
+	select {
+	case got := <-w.queue:
+		if got.Content != "delivered" {
+			t.Fatalf("wrong message delivered: %q", got.Content)
+		}
+	default:
+		t.Fatal("the send after a refusal never reached the worker queue — the dispatcher " +
+			"did not survive the refusal")
 	}
 }
 

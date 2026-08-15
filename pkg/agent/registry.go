@@ -323,7 +323,15 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 		// divergence, since a System Agent must never receive user messages.
 		// The last-resort rungs were aligned first; this is the same fix one
 		// rung up.
-		if agent, ok := r.agents[r.defaultAgentOverride]; ok && agent.IsChatTarget() {
+		// NORMALIZE the lookup. r.agents is always keyed by
+		// routing.NormalizeAgentID(ac.ID), but defaultAgentOverride is stored
+		// verbatim from config — and PUT /api/v1/agents/{id} writes the raw URL
+		// path segment. So an override of "Mia" missed the "mia" key entirely
+		// and fell through to the last resort, while routing (which normalizes
+		// both sides) resolved Mia. Same release-blocker class as July 2026,
+		// one rung up: the previous commit normalized the SORT and left the
+		// LOOKUP raw.
+		if agent, ok := r.agents[routing.NormalizeAgentID(r.defaultAgentOverride)]; ok && agent.IsChatTarget() {
 			return agent
 		}
 	}

@@ -105,9 +105,15 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 
 	if channel == "" {
 		channel = turnChannel
-		if chatID == "" {
-			chatID = turnChat
-		}
+	}
+	// Default the recipient from the turn whenever the target IS the turn's
+	// own conversation — including when the agent named that channel
+	// explicitly. Nesting this inside the "no channel named" branch meant
+	// send_message(content, channel:"telegram") mid-Telegram-turn had no
+	// chat id and was then told its turn had no conversation, which was both
+	// unhelpful and untrue.
+	if chatID == "" && channel == turnChannel {
+		chatID = turnChat
 	}
 
 	// No channel named and no conversation to reply into: resolve the acting
@@ -134,8 +140,8 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		// reason, which made the whole proactive path look broken rather than
 		// under-specified.
 		return &ToolResult{
-			ForLLM: fmt.Sprintf("no recipient on %q: this turn has no conversation, so name the "+
-				"chat_id you mean", channel),
+			ForLLM: fmt.Sprintf("no recipient on %q: name the chat_id you mean. (Only the "+
+				"turn's own conversation supplies one automatically.)", channel),
 			IsError: true,
 		}
 	}

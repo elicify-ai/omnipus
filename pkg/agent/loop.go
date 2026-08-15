@@ -10163,7 +10163,13 @@ turnLoop:
 				outboundMedia := bus.OutboundMediaMessage{
 					// ADR-065 FR-6: media sends carry their origin too, so
 					// send_file is not a silent gap in the audit trail.
-					AgentID: tools.ToolAgentID(ctx),
+					//
+					// From ts.agent.ID, NOT tools.ToolAgentID(ctx): ctx here is
+					// runTurn's ORIGINAL parameter and never carries the agent
+					// id — only the derived turnCtx does. The FIX 1 comment on
+					// WorkspaceID two fields below says precisely this, and the
+					// first version of this line ignored it and read back "".
+					AgentID: ts.agent.ID,
 					Channel: ts.channel,
 					ChatID:  ts.chatID,
 					// FIX 1: workspace-scoped media resolution (channels'

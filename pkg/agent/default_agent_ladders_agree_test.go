@@ -83,3 +83,62 @@ func TestDefaultAgentLadders_AgreeWithoutAnOverride(t *testing.T) {
 			"a System Agent or worker sorting earlier must never be chosen", fromRegistry.ID)
 	}
 }
+
+// TestDefaultAgentLadders_AgreeOnAMixedCaseOverride pins the rung the sibling
+// test cannot reach.
+//
+// TestDefaultAgentLadders_AgreeWithoutAnOverride deliberately sets NO override,
+// so it exercises only the last resort. That left Priority 1 unguarded, and it
+// was genuinely broken: the registry's map is keyed by
+// routing.NormalizeAgentID(id), but the override is stored verbatim — from
+// config, or from the raw URL path segment that PUT /api/v1/agents/{id} writes.
+// So an override of "Mia" missed the "mia" key, fell through to the last
+// resort, and returned a DIFFERENT agent than routing did.
+//
+// That is the July-2026 release-blocker class: inbound messages go to one
+// agent while every registry-level default lookup returns another. A reviewer
+// reproduced it after the commit that claimed to have aligned this rung — the
+// sort was normalized and the lookup was not.
+func TestDefaultAgentLadders_AgreeOnAMixedCaseOverride(t *testing.T) {
+	home := t.TempDir()
+	agentsCfg := []config.AgentConfig{
+		{ID: "ava", Home: filepath.Join(home, "ava")},
+		{ID: "mia", Home: filepath.Join(home, "mia")},
+	}
+	for _, a := range agentsCfg {
+		if err := os.MkdirAll(a.Home, 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:      home,
+				ModelName: "test-model",
+				MaxTokens: 256,
+				// Mixed case on purpose: "ava" sorts first, so if the override
+				// is missed the registry returns ava and the divergence shows.
+				DefaultAgentID: "Mia",
+			},
+			List: agentsCfg,
+		},
+	}
+
+	registry := NewAgentRegistry(cfg, &mockProvider{})
+	registry.SetDefaultAgentOverride(cfg.Agents.Defaults.DefaultAgentID)
+	fromRegistry := registry.GetDefaultAgent()
+	if fromRegistry == nil {
+		t.Fatal("registry resolved no default agent")
+	}
+	fromRouting := routing.NewRouteResolver(cfg).DefaultAgentIDForTest()
+
+	if fromRegistry.ID != fromRouting {
+		t.Fatalf("the two resolvers disagree on a mixed-case override: registry=%q routing=%q — "+
+			"the registry map is keyed by the NORMALIZED id, so the override must be "+
+			"normalized before the lookup", fromRegistry.ID, fromRouting)
+	}
+	if fromRegistry.ID != "mia" {
+		t.Fatalf("the configured override must win regardless of case; got %q", fromRegistry.ID)
+	}
+}
