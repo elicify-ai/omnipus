@@ -117,3 +117,41 @@ provided the socket is gateway-owned, which it now is.
 3. Local macOS: unchanged, still direct.
 4. ICE failure yields a named-tier error, never a silent hang (ADR-061 discipline).
 5. CI green; contract-first for every wire change; regression tests for each tier's selection.
+
+## Verification of tier 1 (2026-08-15, measured end to end)
+
+Both legs were driven over the public internet from a real Chromium on the
+operator's Mac against the deployed UAT gateway (`uat-omnipus.fly.dev`), using
+the gateway's own machine-local service token (`$OMNIPUS_HOME/cli.token`) for
+the browser WebSocket's in-band auth frame — no human credential involved. The
+probe speaks the same frame sequence the SPA panel does: `auth` →
+`browser_attach` → `browser_tab_action{open}` → `browser_webrtc_offer` →
+`browser_webrtc_answer`.
+
+Result — the selected ICE candidate pair is the fixed-port host candidate this
+ADR introduces:
+
+| Measurement | Value |
+|---|---|
+| ICE connection state | `connected` (`new → checking → connected`) |
+| Selected pair, remote | `109.105.222.208:50000`, **udp**, type **host** |
+| Round-trip time | 216 ms |
+| Inbound video | 20 754 bytes, 4 frames decoded, 12 fps (blank tab — low motion by design) |
+| Audio track negotiated | yes (`has_audio: true`) |
+
+The server also offered `srflx` candidates on ephemeral ports
+(`216.246.119.120:58967`, `[2605:4c40:119:f110::1192]:55212`). Those are the
+only candidates the pre-ADR-062 build could offer, and neither was selected —
+Fly routes nothing to them. That is the failure this tier fixes, and the
+candidate that won is the one the fix adds.
+
+Regression note observed during the run: a stale capture session belonging to
+another agent makes the gateway answer `browser_webrtc_state{available:false,
+reason:"error"}` with the real cause only in the gateway log
+(`capture denied — another agent's capture session is actively viewed`,
+ADR-048 condition 2). Per ADR-061's discipline the client-visible reason should
+name that cause; filed as follow-up, not fixed here.
+
+Local macOS re-test after UAT passed: `tests/e2e/browser-live-video.spec.ts`
+green in 40.6 s with 143 ms measured end-to-end input latency — the direct path
+is unaffected by the shared-socket change.
