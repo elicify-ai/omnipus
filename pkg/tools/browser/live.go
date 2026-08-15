@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -732,6 +733,7 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 	lv.mu.Lock()
 	lv.cssViewportW = int(actualW)
 	lv.cssViewportH = int(actualH)
+	lv.cssViewportScale = deviceScaleFactor
 	lv.mu.Unlock()
 
 	return true, nil
@@ -859,6 +861,7 @@ func clampViewportDim(v int) int {
 func (lv *LiveView) invalidateCSSViewportCache() {
 	lv.mu.Lock()
 	lv.cssViewportW, lv.cssViewportH = 0, 0
+	lv.cssViewportScale = 0
 	lv.mu.Unlock()
 }
 
@@ -1041,6 +1044,21 @@ type LiveView struct {
 	// than an empty one, since it passes rescaleToCSSViewport's cache-hit
 	// guard and silently mis-maps input by the old/new ratio.
 	cssViewportW, cssViewportH int
+
+	// cssViewportScale records the deviceScaleFactor SetViewport last applied
+	// (Emulation.setDeviceMetricsOverride), so rescaleToCSSViewport can derive
+	// the captured surface's CSS size straight from the capture frame's own
+	// dimensions when the cached layout viewport is provably inconsistent with
+	// it — see viewportBasisForCapture. Zero means "never set / unknown", in
+	// which case that fallback is unavailable and the layout viewport is used
+	// as before.
+	cssViewportScale float64
+
+	// viewportBasisWarned throttles viewportBasisForCapture's warning to once
+	// per LiveView: the condition it reports is per-resize, but the call site
+	// is per input event (hundreds per scroll), so logging every time would
+	// bury the very line an operator needs.
+	viewportBasisWarned bool
 
 	// viewportMu serializes SetViewport's multi-round-trip
 	// apply→compensate→read-back sequence (see SetViewport). Separate from mu
@@ -1689,8 +1707,94 @@ func (lv *LiveView) rescaleToCSSViewport(tabCtx context.Context, x, y, capW, cap
 		cssW, cssH = int(w), int(h)
 	}
 
-	rx, ry = rescaleInputCoords(x, y, capW, capH, float64(cssW), float64(cssH))
+	basisW, basisH := lv.viewportBasisForCapture(capW, capH, float64(cssW), float64(cssH))
+	rx, ry = rescaleInputCoords(x, y, capW, capH, basisW, basisH)
 	return rx, ry, true
+}
+
+// viewportAspectTolerance is how far the capture frame's aspect ratio may
+// differ from the cached layout viewport's before the two are treated as
+// describing DIFFERENT surfaces. 2% absorbs rounding (odd pixel dimensions,
+// the encoder's even-number alignment) while the failure this guards against
+// is an order of magnitude larger — measured live on UAT at 26%.
+const viewportAspectTolerance = 0.02
+
+// viewportBasisForCapture returns the CSS width/height that the capture frame
+// (capW x capH) actually depicts, which is what input coordinates must be
+// mapped into.
+//
+// Normally that is the cached layout viewport (cssW x cssH) — including when
+// the encoder downscales the stream under load, because a downscale preserves
+// the aspect ratio, so the capture is a scaled copy of the same surface and
+// the ratio math stays exact (root-cause doc Fault 3).
+//
+// It is NOT the layout viewport when the two disagree in SHAPE. Measured on
+// the Fly UAT install 2026-08-15: a 633x686 panel produced a 1266x1372 capture
+// (aspect 0.92) while Page.getLayoutMetrics reported a 633x543 layout viewport
+// (aspect 1.17). Ground truth — hit-testing the live tab via /browser/inspect,
+// which resolved elements up to y=660 and failed from y=686 — showed the tab's
+// real viewport was ~686 CSS tall, i.e. the capture was right and the
+// layout-metrics read was wrong. Mapping through it put every click ~21% of
+// the frame height too high and made the bottom fifth of the page unclickable.
+// SetViewport already NOTICES this case (it logs "window resize not fully
+// reflected in the tab's CSS viewport") but still cached the number, so the
+// mis-aim was silent.
+//
+// When the shapes disagree and the applied deviceScaleFactor is known, the
+// capture's own dimensions divided by that scale are the trustworthy basis:
+// the capture is by construction the tab surface rendered at that scale. With
+// no recorded scale there is nothing better to switch to, so the layout
+// viewport is kept (pre-existing behaviour) rather than guessing.
+func (lv *LiveView) viewportBasisForCapture(capW, capH, cssW, cssH float64) (float64, float64) {
+	if capW <= 0 || capH <= 0 || cssW <= 0 || cssH <= 0 {
+		return cssW, cssH
+	}
+	capAspect, cssAspect := capW/capH, cssW/cssH
+	if math.Abs(capAspect-cssAspect) <= viewportAspectTolerance*cssAspect {
+		return cssW, cssH
+	}
+
+	lv.mu.Lock()
+	scale := lv.cssViewportScale
+	warned := lv.viewportBasisWarned
+	lv.viewportBasisWarned = true
+	lv.mu.Unlock()
+
+	if scale < 1 {
+		if !warned {
+			logger.WarnCF(
+				"browser",
+				"live view: input rescale — the capture frame's shape disagrees with the cached CSS viewport and no device scale factor is recorded; mapping through the cached viewport anyway (clicks may be mis-aimed)",
+				map[string]any{
+					"session_id":     lv.sessionID,
+					"capture_width":  capW,
+					"capture_height": capH,
+					"css_width":      cssW,
+					"css_height":     cssH,
+				},
+			)
+		}
+		return cssW, cssH
+	}
+
+	basisW, basisH := capW/scale, capH/scale
+	if !warned {
+		logger.WarnCF(
+			"browser",
+			"live view: input rescale — the cached CSS viewport does not describe the captured surface; mapping through the capture's own size instead so clicks land where they are aimed",
+			map[string]any{
+				"session_id":          lv.sessionID,
+				"capture_width":       capW,
+				"capture_height":      capH,
+				"cached_css_width":    cssW,
+				"cached_css_height":   cssH,
+				"device_scale_factor": scale,
+				"basis_width":         basisW,
+				"basis_height":        basisH,
+			},
+		)
+	}
+	return basisW, basisH
 }
 
 // rescaleInputCoords maps (x, y) from the capture frame's pixel space
