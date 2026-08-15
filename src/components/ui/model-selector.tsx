@@ -218,6 +218,11 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           <button
             type="button"
             onClick={onRetryCatalog}
+            // Explicit tabIndex: src/lib/tabindex-convention.test.ts requires
+            // every native interactive element in src/ to declare one — WebKit
+            // does not make buttons tabbable by default, so an omitted tabIndex
+            // silently costs keyboard users this control on Safari.
+            tabIndex={tabIndex}
             data-testid={triggerTestId ? `${triggerTestId}-retry` : undefined}
             className="shrink-0 text-xs font-medium underline underline-offset-2 hover:opacity-80"
             style={{ color: 'var(--color-accent)' }}
