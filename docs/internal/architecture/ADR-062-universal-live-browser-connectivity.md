@@ -155,3 +155,57 @@ name that cause; filed as follow-up, not fixed here.
 Local macOS re-test after UAT passed: `tests/e2e/browser-live-video.spec.ts`
 green in 40.6 s with 143 ms measured end-to-end input latency — the direct path
 is unaffected by the shared-socket change.
+
+## Follow-up finding (2026-08-15): tier 1 connects, but the stream is not yet usable on a hosted install
+
+With tier 1 in place the UAT install connects reliably, and the operator then
+reported the remaining symptoms: sluggish scrolling and clicks that do not
+work. Both were reproduced and measured. They are two independent defects, and
+neither is a build difference — the deployed Linux binary was fingerprinted and
+contains every fix, and its seeded `encoder.js` is byte-identical (md5
+`1e76742dac52f729c84aba5e56969b77`) to the one in the repo.
+
+### Finding 1 — clicks landed ~21% too high (FIXED)
+
+Fixed in the commit that follows this ADR; see its message and
+`pkg/tools/browser/live_viewport_basis_test.go` for the measured geometry.
+Summary: the cached CSS layout viewport (633×543) did not describe the
+captured surface (1266×1372 = 633×686 CSS), and input coordinates were mapped
+through it anyway.
+
+### Finding 2 — the encoder congestion-controls against the wrong link (OPEN)
+
+The relay forwards only `PictureLossIndication`/`FullIntraRequest` from the
+viewer leg to the encoder leg (`pkg/tools/browser/webrtc/viewer.go`,
+`ingest.go`). No REMB, no transport-wide feedback, no bandwidth estimate. Chrome
+therefore measures the **loopback** ingest hop — infinite bandwidth, zero loss —
+and encodes for it, up to `maxBitrate` = 6 Mbps × deviceScaleFactor² = 24 Mbps
+at a retina viewer's DPR 2. The gateway then relays that to a viewer whose real
+path cannot carry it.
+
+Measured from macOS to the `ams` UAT machine, viewer-side `getStats`:
+
+| Measurement | Value |
+|---|---|
+| Packet loss | **27.6%** over the sampled window (452 received, 172 lost) |
+| Jitter | 180–330 ms |
+| Round-trip time | 166–223 ms |
+| Delivered rate | 355–1021 kbps |
+| Frame rate | 1–6 fps |
+| Resolution | pinned at 1266×1372 throughout |
+| Freezes | 7, totalling ~6 s |
+| Scroll feedback latency | 202 ms – 3.7 s |
+| Machine load | 1.5 on 4 cores (~37%) — **not** encoder starvation |
+
+Resolution stays pinned because `encoder.js` sets `contentHint='detail'` with
+`scaleResolutionDownBy=1` — deliberately, to fix a 2026-07-31 resolution
+collapse — so frame rate is the only thing left that can give under pressure.
+That trade is right on loopback and wrong on a real link.
+
+Proposed direction (not yet implemented, no decision taken): derive a bandwidth
+target from the viewer leg's own RTCP receiver reports (fraction-lost and jitter
+are already arriving), and drive the encoder with it — either by emitting REMB
+on the ingest leg or by extending the existing `browser_capture_control` channel
+so the gateway can set `maxBitrate` and the degradation preference at runtime.
+On a constrained link the preference should invert: keep frame rate, let
+resolution drop.
