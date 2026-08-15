@@ -47,6 +47,18 @@ primary_region = "fra"
     hard_limit = 200
     soft_limit = 100
 
+# WebRTC media over UDP (live-browser video). Fly delivers inbound UDP ONLY to
+# a declared UDP service, ONLY on a dedicated IPv4, and ONLY to a process
+# bound to fly-global-services on this exact port (no port rewriting for UDP).
+# The gateway's ICE mux binds fly-global-services:50000 and advertises the
+# app's dedicated IPv4 as its candidate. See docs: fly.io/docs/networking/udp-and-tcp
+[[services]]
+  internal_port = 50000
+  protocol = "udp"
+
+  [[services.ports]]
+    port = 50000
+
 # Persist ~/.omnipus (config, credentials, sessions, workspaces) across
 # restarts so a UAT persona's setup survives a machine bounce.
 [[mounts]]
