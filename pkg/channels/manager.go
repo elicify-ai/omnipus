@@ -1482,7 +1482,15 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 		ctx, m,
 		m.bus.OutboundChan(),
 		func(msg bus.OutboundMessage) string { return msg.Channel },
-		m.enqueueOutbound,
+		func(ctx context.Context, w *channelWorker, msg bus.OutboundMessage) bool {
+			// ADR-065 FR-7: the last common point before the wire. Only
+			// agent-originated sends are in scope; see
+			// allowAgentOriginatedSend for why a second check exists.
+			if !allowAgentOriginatedSend(m.configSnapshot(), msg.Channel, msg.AgentID, msg.WorkspaceID) {
+				return false
+			}
+			return m.enqueueOutbound(ctx, w, msg)
+		},
 		"Outbound dispatcher started",
 		"Outbound dispatcher stopped",
 		"Unknown channel for outbound message",

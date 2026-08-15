@@ -1,6 +1,6 @@
 # Spec — A channel belongs to one (workspace, agent) pair
 
-- **Status:** Draft, revision 3 (2026-08-14). Implements [ADR-065](../architecture/ADR-065-channel-ownership-per-agent-workspace.md).
+- **Status:** IMPLEMENTED, revision 4 (2026-08-15). Implements [ADR-065](../architecture/ADR-065-channel-ownership-per-agent-workspace.md).
 - **Reviews:** [round 1](channel-agent-ownership-spec-review.md) (BLOCK, 31) · [round 2](channel-agent-ownership-spec-review-round2.md) (BLOCK, 20). Revision 3 additionally applies three operator decisions that overturned parts of revision 2 — see §7.
 - **Scope:** OUTBOUND. Inbound is ADR-029's and is only regression-pinned here.
 - **Model followed:** the M11 email tools, with one deliberate divergence (§2.1).
@@ -172,13 +172,27 @@ and MUST include an audit of any persisted job carrying these fields.
 An instance with no `WorkspaceID` behaves as it does now. "No workspace (global default routing)"
 remains a valid operator choice.
 
-### FR-10 — webchat is protected by validation, not by ownership
+### FR-10 — webchat is SHARED and unchanged
 
-`webchat` has no ownership pair to check: registered synthetically, absent from
-`knownChannelTypes`, no `ChannelInstanceConfig`. Since FR-1 keeps the `chat_id` parameter, webchat
-is protected by FR-1's validation and FR-6's re-check, **not** by an ownership record it does not
-have. `webchatChannel.Send` resolving a recipient from `msg.ChatID` alone is safe only while those
-checks hold — which is why §2.1 matters here most.
+**OPERATOR DECISION (2026-08-15):** every agent may use webchat. It is not
+separately configured, and this spec changes nothing about it.
+
+Revisions 0–3 got this wrong twice and the record is kept because the second
+mistake is the more instructive one:
+
+1. They claimed webchat was "protected by FR-1's validation". It is not and
+   cannot be. `webchat` is registered synthetically
+   (`gateway.go`'s `RegisterChannel("webchat", wch)`), is absent from
+   `knownChannelTypes`, and has no `ChannelInstanceConfig` — so there is no
+   ownership record for validation to check. That sentence described
+   protection that did not exist.
+2. Revision 3's implementation then over-corrected, refusing any unconfigured
+   target that was not the turn's own conversation. That would have restricted
+   webchat, which is explicitly not wanted.
+
+The rule is therefore ONE condition, not three cases: **only workspace-bound
+instances are owned.** An instance the operator configured and left unbound
+(FR-9) and webchat are both unowned, unenforced and untouched.
 
 ---
 
