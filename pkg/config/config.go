@@ -4124,7 +4124,8 @@ func expandHome(path string) string {
 
 // GetModelConfig returns the ModelConfig for the given model name.
 // If multiple configs exist with the same model_name, it uses round-robin
-// selection for load balancing. Returns an error if the model is not found.
+// selection for load balancing — over the USABLE ones only, see findMatches.
+// Returns an error if the model is not found.
 func (c *Config) GetModelConfig(modelName string) (*ModelConfig, error) {
 	matches := c.findMatches(modelName)
 	if len(matches) == 0 {
@@ -4139,15 +4140,66 @@ func (c *Config) GetModelConfig(modelName string) (*ModelConfig, error) {
 	return matches[idx], nil
 }
 
-// findMatches finds all ModelConfig entries with the given model_name.
+// modelConfigCredentialUsable reports whether m's credential requirement is
+// satisfied: either it names no vault ref at all (local model, CLI/OAuth
+// auth, api_base-only provider — these never had a vault credential to
+// begin with), or its api_key_ref resolved to a non-empty value in the
+// process environment (InjectFromConfig runs at boot/reload, before any
+// caller reaches GetModelConfig). Mirrors the "usable" test
+// gateway.go's defaultModelCredentialBlocked applies to the default model.
+func modelConfigCredentialUsable(m *ModelConfig) bool {
+	if m == nil {
+		return false
+	}
+	if strings.TrimSpace(m.APIKeyRef) == "" {
+		return true
+	}
+	return m.APIKey() != ""
+}
+
+// findMatches finds all ModelConfig entries with the given model_name,
+// preferring USABLE ones (see modelConfigCredentialUsable) when at least one
+// exists.
+//
+// Why (2026-08-15): several providers[] entries may share one model_name for
+// load balancing, round-robinned by GetModelConfig above. Before this
+// change, an entry whose api_key_ref never resolved (missing from the
+// vault, wrong master key while it was still degradable, …) stayed in the
+// candidate pool on equal footing with a working sibling — round-robin,
+// being a plain counter with no key-awareness, could hand the broken entry
+// back to CreateProviderFromConfig, which happily builds an *HTTPProvider
+// with an empty API key (api_key OR api_base satisfies its check) and
+// produces a bare upstream 401 naming neither the provider nor the
+// credential — non-deterministically, since which call in the rotation gets
+// the broken entry depends on the shared global rrCounter. This was
+// unreachable before gateway.go's reportInjectionErrors started degrading
+// (rather than aborting) on a single unresolvable provider ref, because
+// boot used to abort outright on that config; the degrade-not-abort fix
+// made this reachable for the first time.
+//
+// Filtering to the usable subset (when non-empty) removes the broken
+// entries from the rotation entirely — the exact fix load-balanced
+// failover already implies: an unusable sibling behaves like it isn't
+// there. If NONE of the matches are usable, all of them are returned
+// unfiltered so the caller still gets a ModelConfig back (and, for the
+// default model, gateway.go's defaultModelCredentialBlocked reports it as
+// blocked rather than silently 401ing).
 func (c *Config) findMatches(modelName string) []*ModelConfig {
-	var matches []*ModelConfig
+	var all []*ModelConfig
+	var usable []*ModelConfig
 	for i := range c.Providers {
-		if c.Providers[i].ModelName == modelName {
-			matches = append(matches, c.Providers[i])
+		if c.Providers[i].ModelName != modelName {
+			continue
+		}
+		all = append(all, c.Providers[i])
+		if modelConfigCredentialUsable(c.Providers[i]) {
+			usable = append(usable, c.Providers[i])
 		}
 	}
-	return matches
+	if len(usable) > 0 {
+		return usable
+	}
+	return all
 }
 
 // ValidateProviders validates all ModelConfig entries in the providers config.

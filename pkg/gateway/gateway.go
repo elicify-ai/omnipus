@@ -331,11 +331,20 @@ func (p *startupBlockedProvider) GetDefaultModel() string {
 // for why a non-NotFoundError failure is worse than a simple missing ref)
 // from one on a disabled/unused feature (Info/Warn + continue).
 //
-// Provider APIKeyRef misses are NOT included here — they are already fatal
-// via InjectFromConfig, which independently aborts boot/reload on any
-// provider credential injection error (see bootCredentials and executeReload,
-// both of which call InjectFromConfig before ever consulting this map), so
-// they never need this map's separate escalation path.
+// Provider APIKeyRef misses are NOT included here — and, since 2026-08-14,
+// NOT because InjectFromConfig already aborts on them (it no longer does; a
+// single unresolvable provider ref bricked whole installs, see
+// reportInjectionErrors). They are excluded because a provider whose
+// credential is genuinely absent from the vault (*credentials.NotFoundError)
+// is handled end to end as a DEGRADED entry rather than a fatal one: ERROR in
+// gateway.log at injection time, status reported through GET
+// /api/v1/providers, and a startupBlockedProvider naming the missing
+// credential if it is the default model's provider. Escalating the same ref
+// again here would put back exactly the fatal boot this change removed.
+// A provider whose credential fails for any OTHER reason — wrong master key,
+// corrupted store entry — is NOT silently degraded: reportInjectionErrors
+// keeps that fatal at injection time, so it never reaches "degraded
+// provider" state and never needs to appear in this map at all.
 //
 // The non-channel categories (voice, web-search tools, skill marketplaces)
 // mirror credentials.ResolveAll's nonChannelRefs slice (pkg/credentials/
@@ -482,13 +491,112 @@ func enabledRefFromBundleError(err error, enabledRefs map[string]bool) (string, 
 	return ref, true
 }
 
+// reportInjectionErrors logs every credentials.InjectFromConfig failure at
+// ERROR and returns only the ones that must stop the caller (boot or reload).
+//
+// The split, and why it is not "everything is fatal" any more (2026-08-14,
+// corrected 2026-08-15 — see the "wrong master key" note below):
+//
+//   - A *credentials.CredentialRefError whose Err unwraps to a
+//     *credentials.NotFoundError is SCOPED to one config entry — one
+//     provider's api_key_ref, one mailbox's password_ref genuinely is not in
+//     the vault. It makes that ONE thing unusable. Treating it as fatal is
+//     what bricked an install: a config.json carrying a leftover
+//     onboarding-created provider entry (api_key_ref "openrouter_API_KEY")
+//     whose credential was never stored made the gateway print "provider
+//     credential injection failed" and exit on every start. The operator
+//     could not reach the UI to delete the entry — the only recovery was
+//     hand-editing config.json. One stale line of config must not cost the
+//     whole application.
+//
+//   - Everything else is STORE-WIDE, and stays fatal: the bare
+//     credentials.ErrStoreLocked (store never unlocked — short-circuited
+//     before this function is even reached, see InjectFromConfig), AND —
+//     this is the part the 2026-08-14 fix got wrong — a *CredentialRefError
+//     whose Err is credentials.ErrWrongKey or a corrupted-entry decrypt
+//     failure. UnlockWithKey performs NO verification against the stored
+//     data, so a stale/rotated master.key or a drifted OMNIPUS_MASTER_KEY
+//     unlocks cleanly (IsLocked() is false, the ErrStoreLocked short-circuit
+//     never fires) and EVERY store.Get call then fails with ErrWrongKey —
+//     wrapped, per ref, in a *CredentialRefError that looks identically
+//     "scoped" to the NotFoundError case above. It is not: the cause is the
+//     master key, not that one config entry, and every OTHER provider and
+//     mailbox is equally dead even though only one happened to be checked
+//     first. Degrading on the wrapper TYPE alone (any *CredentialRefError)
+//     let a wrong master key boot as if a single stale provider were the
+//     only casualty — silently serving with a broken vault, which is worse
+//     than refusing to start. The discriminator has to be the Err field's
+//     type, not the wrapper's type: only *NotFoundError degrades; ErrWrongKey,
+//     store corruption, and any other cause (including an os.Setenv failure)
+//     stay fatal. This exactly mirrors rest.go's
+//     describeCredentialResolutionError, which classifies the same two cases
+//     for the REST credential-resolution path.
+//
+// Unknown error shapes (neither *CredentialRefError nor recognized inside
+// one) fall into the fatal bucket on purpose: a future failure mode nobody
+// has classified yet stops the process loudly rather than being silently
+// downgraded to a log line.
+//
+// This is a change in HOW LOUD, not in WHETHER we complain. Every degraded
+// entry is logged at ERROR naming the scope, the owner and the credential, so
+// it is unmissable in gateway.log; the provider is additionally reported as
+// unusable through GET /api/v1/providers, and a default model whose credential
+// is missing gets a startupBlockedProvider that says exactly that instead of
+// an upstream 401 (see createStartupProvider). Nothing here degrades quietly.
+//
+// The channel-credential path (ResolveBundle, below) is deliberately NOT
+// changed: a missing credential on an ENABLED channel remains fatal, because
+// a channel silently not connecting is invisible to the operator in a way a
+// provider in the Settings list is not.
+func reportInjectionErrors(errs []error, phase string) []error {
+	var fatal []error
+	for _, e := range errs {
+		var refErr *credentials.CredentialRefError
+		if errors.As(e, &refErr) {
+			var notFound *credentials.NotFoundError
+			if errors.As(refErr.Err, &notFound) {
+				slog.Error(
+					phase+": credential unusable — the referencing entry will not work until it is fixed, "+
+						"the rest of the system continues",
+					"scope", refErr.Scope,
+					"owner", refErr.Owner,
+					"workspace", refErr.SubOwner,
+					"credential_ref", refErr.Ref,
+					"error", refErr.Err,
+				)
+				continue
+			}
+			// The ref IS configured but the cause is store-wide, not scoped
+			// to this one entry — see the doc comment above. Treat it the
+			// same as a locked store: fatal.
+			slog.Error(
+				phase+": credential store unreadable for a configured ref — "+
+					"not a simple missing ref, treating as store-wide (wrong master key or "+
+					"corrupted credential store), not a scoped failure",
+				"scope", refErr.Scope,
+				"owner", refErr.Owner,
+				"workspace", refErr.SubOwner,
+				"credential_ref", refErr.Ref,
+				"error", refErr.Err,
+			)
+			fatal = append(fatal, e)
+			continue
+		}
+		slog.Error(phase+": provider credential injection failed", "error", e)
+		fatal = append(fatal, e)
+	}
+	return fatal
+}
+
 // bootCredentials runs the canonical credential + config boot sequence and
 // returns the initialized config, secret bundle, and store.
 //
 // Sequence (matches ADR-004 §Boot Order Contract):
 //  1. NewStore → Unlock (fatal on failure)
 //  2. LoadConfigWithStore (fatal on failure)
-//  3. InjectFromConfig for provider env-vars (fatal on failure)
+//  3. InjectFromConfig for provider env-vars (fatal only on a store-wide
+//     failure; a single unresolvable ref is an ERROR + degraded entry — see
+//     reportInjectionErrors)
 //  4. ResolveBundle for channel secrets (NotFoundError for disabled channels is Info, rest Warn)
 //  5. cfg.RegisterSensitiveValues with all resolved plaintexts
 //
@@ -509,13 +617,18 @@ func bootCredentials(
 
 	// Inject provider API keys into the process environment so LLM SDK clients
 	// can read them via os.Getenv. Channels use SecretBundle instead (no env injection).
+	//
+	// A single unresolvable ref no longer aborts boot — it is logged at ERROR
+	// and that provider/mailbox is left unusable, so the operator can start the
+	// gateway and fix it in the UI. A store-wide failure is still fatal. See
+	// reportInjectionErrors for the full rationale and the incident behind it.
 	if errs := credentials.InjectFromConfig(cfg, credStore); len(errs) > 0 {
-		for _, e := range errs {
-			slog.Error("provider credential injection failed", "error", e)
+		if fatal := reportInjectionErrors(errs, "boot"); len(fatal) > 0 {
+			return nil, nil, nil, fmt.Errorf(
+				"fatal: provider credential injection failed — ensure OMNIPUS_MASTER_KEY is set and all referenced credentials exist: %w",
+				errors.Join(fatal...),
+			)
 		}
-		return nil, nil, nil, fmt.Errorf(
-			"fatal: provider credential injection failed — ensure OMNIPUS_MASTER_KEY is set and all referenced credentials exist",
-		)
 	}
 
 	// Build a ref→in-use map so we can distinguish a missing credential on
@@ -2862,15 +2975,24 @@ func executeReload(
 	}
 
 	// Re-inject provider credentials for the new config so LLM SDK clients
-	// receive their secrets. If injection fails, reject the reload.
+	// receive their secrets.
+	//
+	// Symmetric with boot (2026-08-14): one unresolvable provider/mailbox ref
+	// is an ERROR + a degraded entry, NOT a rejected reload. Rejecting threw
+	// away every other edit in the same save — an operator who typo'd one
+	// api_key_ref got none of their changes applied and a degraded gateway,
+	// and the same config would then refuse to boot on the next restart. A
+	// store-wide failure (locked vault) still rejects and rolls back.
 	if cs := runningServices.credStore; cs != nil {
 		if errs := credentials.InjectFromConfig(newCfg, cs); len(errs) > 0 {
-			for _, e := range errs {
-				slog.Error("reload: provider credential injection failed — rejecting reload", "error", e)
+			if fatal := reportInjectionErrors(errs, "reload"); len(fatal) > 0 {
+				reloadErr := fmt.Errorf(
+					"reload rejected: provider credential injection failed: %w",
+					errors.Join(fatal...),
+				)
+				markDegraded(reloadErr)
+				return reloadErr
 			}
-			reloadErr := fmt.Errorf("reload rejected: provider credential injection failed")
-			markDegraded(reloadErr)
-			return reloadErr
 		}
 
 		// Re-resolve the SecretBundle for channels (no os.Setenv for channel creds).
@@ -2980,7 +3102,91 @@ func createStartupProvider(
 		return &startupBlockedProvider{reason: reason}, "", nil
 	}
 
+	// The default model's credential never resolved (2026-08-14). Boot no
+	// longer dies on this — but it must not paper over it either. Without this
+	// branch the factory happily builds an HTTP provider with an EMPTY API key
+	// (pkg/providers/factory_provider.go accepts api_key OR api_base), and the
+	// operator's first chat message comes back as a bare upstream 401 that
+	// names neither the provider nor the credential. Answer with the real
+	// cause on every turn instead, using the same limited-mode mechanism the
+	// no-model case already uses.
+	if reason, blocked := defaultModelCredentialBlocked(cfg); blocked {
+		fmt.Printf("⚠ Warning: %s\n", reason)
+		logger.WarnCF("gateway", "Gateway started with an unusable default provider", map[string]any{
+			"limited_mode": true,
+			"reason":       reason,
+		})
+		slog.Error("gateway: default model's provider is unusable", "reason", reason)
+		return &startupBlockedProvider{reason: reason}, "", nil
+	}
+
 	return providers.CreateProvider(cfg)
+}
+
+// defaultModelCredentialBlocked reports whether EVERY providers[] entry backing
+// the default model names an api_key_ref that did not resolve — i.e. the
+// credential is absent from (or unreadable in) the vault, so no request to that
+// provider can succeed.
+//
+// "Every entry" and not "the entry" on purpose: several entries may share one
+// model_name for load balancing (config.GetModelConfig round-robins over them).
+// If any one of them still has a usable key, the model is not blocked and the
+// factory keeps its existing behaviour.
+//
+// Entries with no api_key_ref at all (local models, CLI/OAuth providers) are
+// never blocked — they are not supposed to have a vault credential.
+//
+// The returned message unconditionally says the credential is "missing from
+// the credential vault" and advises re-entering the API key. That wording is
+// only correct for a genuinely-absent credential (*credentials.NotFoundError)
+// — for a wrong master key or a corrupted store entry, the credential is NOT
+// missing (it is there, encrypted under the right key) and re-entering it
+// would encrypt the new value under the WRONG key into the same
+// credentials.json, corrupting that entry for good once the real master key
+// is restored (mirrors rest.go's describeCredentialResolutionError, which
+// draws exactly this NotFoundError-vs-everything-else line for the same
+// reason). This function does NOT itself re-derive the cause from cfg — it
+// can't; by the time createStartupProvider is reached, cfg.Providers carries
+// no error value, only an empty ModelConfig.APIKey(). Correctness here
+// depends entirely on an upstream invariant: reportInjectionErrors (called by
+// both bootCredentials and executeReload, the only two callers of
+// createStartupProvider) keeps any *CredentialRefError whose cause is NOT a
+// *NotFoundError fatal, aborting boot/reload before this function is ever
+// reached. So the only way m.APIKey() can be empty here is the NotFoundError
+// case, and the wording is safe. Do not weaken reportInjectionErrors's
+// fatal-on-non-NotFoundError behavior without also fixing this message —
+// see the incident note on reportInjectionErrors (2026-08-15).
+func defaultModelCredentialBlocked(cfg *config.Config) (string, bool) {
+	modelName := cfg.Agents.Defaults.GetModelName()
+	if modelName == "" {
+		return "", false
+	}
+	var missingRef string
+	var candidates int
+	for _, m := range cfg.Providers {
+		if m == nil || m.ModelName != modelName {
+			continue
+		}
+		candidates++
+		ref := strings.TrimSpace(m.APIKeyRef)
+		if ref == "" || m.APIKey() != "" {
+			return "", false // this entry is usable — nothing to block
+		}
+		if missingRef == "" {
+			missingRef = ref
+		}
+	}
+	if candidates == 0 || missingRef == "" {
+		// No entry matches the default model name at all — that is
+		// providers.CreateProvider's error to report ("model %q not found"),
+		// not ours to pre-empt.
+		return "", false
+	}
+	return fmt.Sprintf(
+		"the default model %q cannot be used: its credential %q is missing from the credential vault — "+
+			"re-enter the API key in Settings → Providers (or remove the stale provider entry)",
+		modelName, missingRef,
+	), true
 }
 
 func setupAndStartServices(
