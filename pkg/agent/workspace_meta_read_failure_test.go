@@ -165,7 +165,7 @@ func TestResolveWorkspaceIDForContinuation_SessionWithWorkspace_ReturnsIt(t *tes
 		t.Fatal("expected a shared session store on a freshly constructed AgentLoop")
 	}
 
-	meta, err := store.NewChannelSession("telegram", "888", "mia", "test session")
+	meta, err := store.NewChannelSession("telegram", "telegram", "888", "mia", "test session")
 	if err != nil {
 		t.Fatalf("NewChannelSession: %v", err)
 	}

@@ -123,17 +123,26 @@ func TestConfigSet_ChannelOwnershipRecordRefused(t *testing.T) {
 // Instance ids may be namespaced and therefore contain a dot ("slack.eu"), so
 // "channels.slack.eu.workspace_id" has four segments and the three-segment
 // blocked key "channels.*.workspace_id" does not cover it. That key is
-// nonetheless harmless, but for a reason that lives in the WRITER rather than
-// in the policy table: dotSet splits on ".", so the value lands under a
-// separate instance called "slack" whose "eu" field does not exist on
-// ChannelInstanceConfig and is dropped by json.Unmarshal. The real "slack.eu"
-// record is not addressable by this writer at all.
+// nonetheless harmless, for a reason that lives in the WRITER rather than in
+// the policy table: dotSet splits on ".", so the value can only ever land under
+// a separate instance called "slack" whose "eu" field does not exist on
+// ChannelInstanceConfig. The real "slack.eu" record is not addressable by this
+// writer at all.
 //
 // The assertion below is deliberately about the OWNERSHIP RECORD, not about the
 // tool's verdict: FR-5 says the record must not be agent-writable, and that must
 // hold whatever mechanism happens to deliver it. If dotSet ever learns to
 // address dotted map keys, this test fails and blockedConfigKeys must grow a
 // matching rule — instead of the hole opening silently.
+//
+// Keeping the assertion verdict-free earned its keep: the mechanism DID change
+// underneath it. The key used to be reported as a successful write and silently
+// dropped by json.Unmarshal; validateConfigKeyLands now refuses it outright, so
+// the same property is delivered by a refusal rather than by an evaporating
+// write. This test did not need editing, and it should not grow a verdict
+// assertion now — the verdict is pinned separately, by
+// TestConfigSet_NamespacedInstanceKeyIsRefusedNotReportedAsWritten in
+// config_write_truth_test.go, which is about honesty rather than about FR-5.
 func TestConfigSet_NamespacedInstanceOwnershipIsUnreachable(t *testing.T) {
 	const instance = "slack.eu"
 	for _, tc := range []struct {

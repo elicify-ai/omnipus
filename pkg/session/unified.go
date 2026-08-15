@@ -92,6 +92,10 @@ type MetaPatch struct {
 	// WorkspaceID tags the session with the active workspace (M4 workspace→turn
 	// binding). Only written when non-nil; empty string clears the tag.
 	WorkspaceID *string
+
+	// InstanceID patches the channel instance key. Needed so a session created
+	// before the field existed can be identified later rather than guessed at.
+	InstanceID *string
 	// ParentSessionID stamps this session's direct parent (ADR-057 FR-008).
 	// Only written when non-nil; empty string clears it (making the session
 	// a root again). The write path also wires the FR-097 in-memory parent
@@ -593,11 +597,19 @@ func (us *UnifiedStore) NewSession(
 // NewChannelSession creates a new shared session for (channel, peerID).
 // Unlike NewSession it writes PeerID and Title atomically so the caller does
 // not need a follow-up SetMeta call.
-func (us *UnifiedStore) NewChannelSession(channel, peerID, agentID, title string) (*UnifiedMeta, error) {
+// NewChannelSession creates a channel session.
+//
+// instanceID is the channel INSTANCE key (e.g. "whatsapp.eu"), not the bare
+// type. It is separate from channel because an install can hold many instances
+// of one platform, each bound to its own (workspace, agent) pair — without it,
+// their sessions are indistinguishable and anything acting on "this channel's
+// sessions" acts on all of them.
+func (us *UnifiedStore) NewChannelSession(channel, instanceID, peerID, agentID, title string) (*UnifiedMeta, error) {
 	meta, err := us.NewSession(SessionTypeChannel, channel, agentID)
 	if err != nil {
 		return nil, err
 	}
+	meta.InstanceID = instanceID
 	meta.PeerID = peerID
 	meta.Title = title
 	h := us.lockSession(meta.ID)
@@ -831,6 +843,9 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	if patch.TaskID != nil {
 		meta.TaskID = *patch.TaskID
 		identityTouched = true
+	}
+	if patch.InstanceID != nil {
+		meta.InstanceID = *patch.InstanceID
 	}
 	if patch.Owner != nil {
 		meta.Owner = *patch.Owner

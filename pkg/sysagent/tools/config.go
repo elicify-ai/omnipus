@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -114,34 +116,84 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 	}
 	requiresRestart := isRestartRequired(key)
 
-	// Capture prevValue before mutation (under the same lock as the mutation).
-	var prevValue any
-	var setErr error
+	// Capture prevValue before mutation (under the same lock as the mutation),
+	// and observe what the config actually holds afterwards. Everything happens
+	// inside the one WithConfig closure so the "did it land" answer is read from
+	// the same config the write mutated, under the same lock — and so a failed
+	// check rides WithConfig's own rollback (deps.go: fn error restores the
+	// pre-mutation snapshot and never calls SaveConfigLocked).
+	var prevValue, storedValue any
+	var schemaErr, setErr, landErr error
+	var normalised []string
 	err := t.deps.WithConfig(func(cfg *config.Config) error {
+		// Truth gate, before any mutation: does this key name a place a write
+		// can actually land? See validateConfigKeyLands — without it, a key that
+		// json.Unmarshal silently drops was reported as a successful write.
+		if err := validateConfigKeyLands(cfg, key); err != nil {
+			schemaErr = err
+			return fmt.Errorf("INVALID_KEY: %w", err)
+		}
 		prevValue, _ = dotGet(cfg, key)
 		if err := dotSet(cfg, key, value); err != nil {
 			setErr = err
 			return fmt.Errorf("SET_FAILED: %w", err)
 		}
+		// Truth gate, after the mutation. The schema walk above is a static
+		// check against the config TYPE; this one reads the live config back and
+		// is what catches a drop no type walk can predict — a custom
+		// UnmarshalJSON that ignores a field, for instance.
+		storedValue, normalised, landErr = observeConfigWrite(cfg, key, value)
+		if landErr != nil {
+			return fmt.Errorf("WRITE_NOT_APPLIED: %w", landErr)
+		}
 		return nil
 	})
+	if schemaErr != nil {
+		return tools.ErrorResult(errorJSON("INVALID_KEY", schemaErr.Error(),
+			"Use get_config to inspect the settings that actually exist"))
+	}
 	if setErr != nil {
 		return tools.ErrorResult(errorJSON("SET_FAILED", setErr.Error(),
 			"Check that the key is a valid config path"))
 	}
+	if landErr != nil {
+		return tools.ErrorResult(errorJSON("WRITE_NOT_APPLIED", landErr.Error(),
+			"Nothing was changed. Re-read the key with get_config before acting on it"))
+	}
 	if err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
-	return tools.NewToolResult(successJSON(map[string]any{
+	payload := map[string]any{
 		"key":              key,
 		"value":            value,
 		"previous_value":   prevValue,
 		"requires_restart": requiresRestart,
-	}))
+	}
+	// The write landed, but not byte-for-byte: the config layer normalised it
+	// (a bare string stored as a one-element list, an enum lower-cased, …).
+	// Report the stored form rather than letting "value" stand as the whole
+	// truth — same principle as the checks above, one step milder, because
+	// normalisation is legitimate behaviour and must not fail the call.
+	if len(normalised) > 0 {
+		payload["stored_value"] = storedValue
+		payload["note"] = fmt.Sprintf(
+			"stored, but normalised by the config layer at %s — trust stored_value, not value",
+			strings.Join(normalised, ", "))
+	}
+	return tools.NewToolResult(successJSON(payload))
 }
 
 // knownConfigPrefixes are the top-level config sections that can be set at runtime.
 // Keys outside this set are rejected by system.config.set to avoid corrupting the config.
+//
+// This list is a POLICY statement — which sections an agent may touch — and not
+// a claim that they exist. Three entries name nothing on config.Config today:
+// "security." and "workspace_path" are reserved (see blockedConfigKeys, which
+// refuses them), and "heartbeat." is simply dead — heartbeats are a per-agent
+// concern (HEARTBEAT.md), not a config section. That used to matter, because a
+// write under a section that does not exist was reported as a success and
+// dropped; validateConfigKeyLands is now the authority on whether a key exists,
+// so a dead prefix here costs a clear refusal rather than a silent lie.
 var knownConfigPrefixes = []string{
 	"gateway.", "agents.", "sandbox.", "security.", "channels.", "tools.",
 	"heartbeat.", "devices.", "providers", "workspace_path",
@@ -401,14 +453,20 @@ var blockedConfigKeys = []blockedConfigKey{
 	// because it is not obvious. A NAMESPACED instance id contains a dot
 	// ("slack.eu"), so "channels.slack.eu.workspace_id" has four segments and
 	// this three-segment rule does not match it. That key is nonetheless
-	// harmless: dotSet splits on ".", so it builds channels→slack→eu→…, and
-	// unmarshalling that back into map[string]ChannelInstanceConfig produces an
-	// instance called "slack" whose "eu" field does not exist and is dropped.
-	// The real "slack.eu" record is never addressable by this writer at all.
-	// That is a property of dotSet rather than of this table, so it is PINNED by
-	// a test (TestConfigSet_NamespacedInstanceOwnershipIsUnreachable) instead of
-	// left as a happy accident: if dotSet ever learns to address dotted map
-	// keys, that test fails and these entries must grow with it.
+	// harmless: dotSet splits on ".", so it can only ever build
+	// channels→slack→eu→…, addressing an instance called "slack" whose "eu"
+	// field does not exist on ChannelInstanceConfig. The real "slack.eu" record
+	// is never addressable by this writer at all. That is a property of dotSet
+	// rather than of this table, so it is PINNED by a test
+	// (TestConfigSet_NamespacedInstanceOwnershipIsUnreachable) instead of left
+	// as a happy accident: if dotSet ever learns to address dotted map keys,
+	// that test fails and these entries must grow with it.
+	//
+	// The key USED to be answered with a success the write never earned — the
+	// unreachable member was dropped by json.Unmarshal and set_config reported
+	// {"key":…,"value":…} anyway. validateConfigKeyLands now refuses it, so the
+	// same safety is delivered visibly. FR-5 does not depend on which of the two
+	// delivers it; the test above asserts the ownership record, not the verdict.
 	//
 	// The block is on the whole identity OBJECT rather than identity.id alone.
 	// identity.kind is equally load-bearing — flipping it to "user" makes the
@@ -698,6 +756,400 @@ func isRestartRequired(key string) bool {
 		}
 	}
 	return false
+}
+
+// ---- truth gates: a reported write must be a write that happened ----
+//
+// set_config used to answer {"key":…, "value":…} for every key that cleared the
+// deny list and the allow list, whether or not the value reached config.Config.
+// It cannot reach it in two ordinary cases, and both were silent:
+//
+//  1. The key names nothing. dotSet round-trips through JSON, and
+//     json.Unmarshal DROPS an object member that matches no struct field. So
+//     "heartbeat.enabled" — a section listed in knownConfigPrefixes that has no
+//     field on config.Config at all — reported success and changed nothing. So
+//     did the namespaced-channel case ("channels.slack.eu.workspace_id": dotSet
+//     splits on ".", so "eu" lands as a field of a ChannelInstanceConfig and is
+//     dropped). ADR-065 FR-5 leaned on that drop for its safety.
+//  2. The key names a NEW entry in a map-keyed section, and so creates config
+//     rather than updating it — "channels.foo.type" conjures a channel instance
+//     that no operator ever configured.
+//
+// Neither is a security hole on its own; both are the same defect, which is
+// that the tool's answer was not evidence of anything. An agent told "value:
+// true" acts on it, and the operator then reads a config that disagrees with
+// what the agent reported. The two gates below make the tool's success mean
+// what a reader assumes it means: validateConfigKeyLands refuses before the
+// write, observeConfigWrite verifies after it.
+//
+// This is deliberately NOT a value round-trip comparison of the whole config.
+// json.Unmarshal MERGES an object into the live struct, `omitempty` erases a
+// zero value on the way back out, and Config.MarshalJSON re-emits
+// Config.UnknownFields (keys with no struct field, preserved verbatim for
+// round-trip safety, FR-004) — so a whole-document strict decode or a naive
+// equality check would reject perfectly legitimate writes. Each gate is scoped
+// to the one key being written and tolerates all three behaviours.
+
+// jsonAddressableField is one field of a struct type together with the name a
+// config-key segment must use to reach it.
+type jsonAddressableField struct {
+	Name  string
+	Field reflect.StructField
+}
+
+// jsonAddressableFields returns the fields of struct type t that a JSON member
+// name can address, in the order encoding/json would consider them.
+//
+// It mirrors encoding/json's promotion rule rather than reflect.VisibleFields'
+// looser one: the fields of an anonymous (embedded) struct are promoted ONLY
+// when the embedded field carries no json name, because an embedded field WITH
+// a name is an ordinary nested object. pkg/config depends on this — ToolWebConfig,
+// ToolCronConfig, ToolExecConfig and ToolSkillsConfig all embed ToolConfig
+// untagged, so "tools.web.enabled" must reach the promoted ToolConfig.Enabled.
+//
+// Shallower wins on a name collision and a collision at the SAME depth removes
+// the name entirely, both matching encoding/json. The second rule is the
+// fail-closed direction: an ambiguous name becomes unaddressable, so the write
+// is refused rather than landing on whichever field reflection happened to
+// enumerate first.
+func jsonAddressableFields(t reflect.Type) []jsonAddressableField {
+	var out []jsonAddressableField
+	taken := map[string]bool{}
+	type queued struct {
+		typ   reflect.Type
+		index []int
+	}
+	queue := []queued{{typ: t}}
+	for len(queue) > 0 {
+		var next []queued
+		var level []jsonAddressableField
+		count := map[string]int{}
+		for _, q := range queue {
+			for i := range q.typ.NumField() {
+				f := q.typ.Field(i)
+				if !f.IsExported() {
+					continue
+				}
+				tag := f.Tag.Get("json")
+				if tag == "-" {
+					continue
+				}
+				name, _, _ := strings.Cut(tag, ",")
+				index := append(append([]int{}, q.index...), i)
+				if f.Anonymous && name == "" && derefType(f.Type).Kind() == reflect.Struct {
+					next = append(next, queued{typ: derefType(f.Type), index: index})
+					continue
+				}
+				if name == "" {
+					name = f.Name
+				}
+				promoted := f
+				promoted.Index = index
+				level = append(level, jsonAddressableField{Name: name, Field: promoted})
+				count[name]++
+			}
+		}
+		for _, f := range level {
+			if count[f.Name] == 1 && !taken[f.Name] {
+				taken[f.Name] = true
+				out = append(out, f)
+			}
+		}
+		queue = next
+	}
+	return out
+}
+
+// lookupJSONField finds the field a config-key segment addresses on struct type
+// t: an exact name match first, then a case-insensitive one, which is the
+// precedence encoding/json itself applies when decoding.
+func lookupJSONField(t reflect.Type, seg string) (reflect.StructField, bool) {
+	fields := jsonAddressableFields(t)
+	for _, f := range fields {
+		if f.Name == seg {
+			return f.Field, true
+		}
+	}
+	for _, f := range fields {
+		if strings.EqualFold(f.Name, seg) {
+			return f.Field, true
+		}
+	}
+	return reflect.StructField{}, false
+}
+
+// derefType strips pointer indirection from a type.
+func derefType(t reflect.Type) reflect.Type {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t
+}
+
+// derefValue strips pointer indirection from a type/value pair. A nil pointer
+// still has a type and json.Unmarshal allocates one on the way down, so the
+// walk continues on the type alone with no live value left to inspect.
+func derefValue(t reflect.Type, v reflect.Value) (reflect.Type, reflect.Value) {
+	for t.Kind() == reflect.Pointer {
+		if v.IsValid() && !v.IsNil() {
+			v = v.Elem()
+		} else {
+			v = reflect.Value{}
+		}
+		t = t.Elem()
+	}
+	return t, v
+}
+
+// fieldValue reads the (possibly promoted) field at index out of v, giving up
+// and returning an invalid Value the moment it meets a nil embedded pointer.
+// Losing the live value is harmless: it only costs the map-entry check below
+// its evidence, and a map under a nil pointer has no entries anyway.
+func fieldValue(v reflect.Value, index []int) reflect.Value {
+	for _, i := range index {
+		if !v.IsValid() {
+			return reflect.Value{}
+		}
+		_, v = derefValue(v.Type(), v)
+		if !v.IsValid() {
+			return reflect.Value{}
+		}
+		v = v.Field(i)
+	}
+	return v
+}
+
+// validateConfigKeyLands returns an error unless key addresses a setting that
+// exists in cfg and that a write can land on. It is the gate that turns the two
+// silent no-ops described above into refusals.
+//
+// It answers three questions, walking cfg one key segment at a time:
+//
+//   - Does this segment name a field of the struct it sits in? If not, the
+//     write would be dropped by json.Unmarshal. Refused.
+//   - Does this segment name an EXISTING entry of a map-keyed section? If not,
+//     the write would CREATE config rather than update it. Refused — see the
+//     DECISION note below.
+//   - Is there anything left to address? A segment below a string, an int or a
+//     slice addresses nothing (dotSet cannot index a slice either). Refused.
+//
+// An `any`-typed field ends the walk successfully: everything below it is
+// schema-free and lands verbatim.
+//
+// DECISION — set_config updates settings, it does not create them.
+// Refusing a new map entry is the stricter reading, and it is the right one
+// here. A map-keyed section is keyed by an operator-chosen id, so a new key is
+// never a typo the tool can catch and never a setting the operator declared: it
+// is a new object conjured mid-write, half-populated by construction, and
+// indistinguishable in config.json from one the operator meant. The only such
+// section an agent can reach today is channels.<instance>, where creation is
+// also useless — the credential fields are refused by isSensitiveConfigName and
+// the ownership record by blockedConfigKeys (ADR-065 FR-5) — so every instance
+// an agent could conjure is a phantom that can never send anything. Creating
+// one belongs to configure_channel and the Channels screen, which route secrets
+// into the encrypted store; this tool points there instead.
+//
+// The cost is bounded and visible: an agent that wants to change a setting on a
+// channel instance that does not exist yet now gets a refusal naming the
+// creation path, instead of a success that leaves a phantom behind. Updating an
+// instance that DOES exist is untouched — TestConfigSet_ChannelOwnershipBlockDoesNotOverBlock
+// is the positive control.
+func validateConfigKeyLands(cfg *config.Config, key string) error {
+	t, v := reflect.TypeOf(cfg), reflect.ValueOf(cfg)
+	segs := configKeySegments(key)
+	for i, seg := range segs {
+		t, v = derefValue(t, v)
+		sofar := strings.Join(segs[:i+1], ".")
+		parent := strings.Join(segs[:i], ".")
+		if parent == "" {
+			parent = "the config root"
+		} else {
+			parent = fmt.Sprintf("%q", parent)
+		}
+		switch t.Kind() {
+		case reflect.Interface:
+			// A free-form field: everything below it is stored as written.
+			return nil
+		case reflect.Struct:
+			f, ok := lookupJSONField(t, seg)
+			if !ok {
+				return fmt.Errorf(
+					"config key %q names no setting: %s has no field %q, so the write would be "+
+						"silently dropped rather than applied", key, parent, seg)
+			}
+			v = fieldValue(v, f.Index)
+			t = f.Type
+		case reflect.Map:
+			if t.Key().Kind() != reflect.String {
+				return fmt.Errorf("config key %q cannot be written: %s is not addressable by name", key, parent)
+			}
+			var entry reflect.Value
+			if v.IsValid() && !v.IsNil() {
+				entry = v.MapIndex(reflect.ValueOf(seg).Convert(t.Key()))
+			}
+			if !entry.IsValid() {
+				// The hint is section-specific because a wrong pointer is worse
+				// than none: an agent told to use configure_channel for something
+				// that is not a channel will just fail twice. channels is the only
+				// map section reachable here today — every other map on
+				// config.Config (session.identity_links, hooks.builtins,
+				// hooks.processes, tools.mcp.servers, mailboxes, channel_policies,
+				// sandbox.tool_policies) is refused earlier by knownConfigPrefixes
+				// or blockedConfigKeys — so the generic branch is unreachable now
+				// and correct if that ever changes.
+				where := "; it must be created by whatever owns that section"
+				if strings.EqualFold(segs[0], "channels") {
+					where = "; create a channel instance with configure_channel or in the " +
+						"Channels screen, which also stores its credentials encrypted"
+				}
+				return fmt.Errorf(
+					"config key %q would CREATE a new %s entry (%q), not update an existing setting — "+
+						"set_config only updates settings that already exist%s", key, parent, sofar, where)
+			}
+			v, t = entry, t.Elem()
+		default:
+			return fmt.Errorf(
+				"config key %q cannot be written: %s is a %s value, so %q addresses nothing inside it",
+				key, parent, t.Kind(), seg)
+		}
+	}
+	return nil
+}
+
+// observeConfigWrite reads key back out of cfg after dotSet wrote value there
+// and reports what actually happened.
+//
+// It returns the stored value, a non-nil error when the write did NOT land, and
+// the leaf paths that landed in a different FORM than they were written in.
+//
+// The distinction between those last two is the whole design, and it is what
+// keeps this check from breaking legitimate writes:
+//
+//   - MISSING — the path, or a non-zero leaf of the object written to it, is
+//     absent afterwards. Nothing plausible explains that except a drop, so it
+//     is an error and WithConfig rolls the whole write back.
+//   - DIFFERENT — the leaf is there but does not equal what was sent. That is
+//     ordinary, legitimate normalisation: config.FlexibleStringSlice stores the
+//     bare string "alice" as ["alice"], and several config enums lower-case
+//     themselves on the way in. Failing the call here would break real writes,
+//     so it is reported instead, via stored_value.
+//
+// An absent leaf whose requested value is the JSON zero is NOT treated as
+// missing: `omitempty` erases a zero on the way back out, so absence and zero
+// are the same observable state — and validateConfigKeyLands has already proved
+// the field exists, which is the fact that absence would otherwise cast doubt on.
+func observeConfigWrite(cfg *config.Config, key string, value any) (stored any, normalised []string, missingErr error) {
+	want, ok := normaliseJSONValue(value)
+	if !ok {
+		// value came in as JSON and must re-marshal; if it somehow cannot, say
+		// nothing rather than invent a verdict.
+		return nil, nil, nil
+	}
+	got, err := dotGet(cfg, key)
+	if err != nil {
+		if isJSONZero(want) {
+			return want, nil, nil
+		}
+		return nil, nil, fmt.Errorf(
+			"the write to %q did not take effect: the config holds no value there afterwards "+
+				"(%v). The config was left unchanged", key, err)
+	}
+	missing, differing := configWriteDrift(key, got, want)
+	if len(missing) > 0 {
+		return got, nil, fmt.Errorf(
+			"the write to %q did not take effect: %s %s absent from the config afterwards. "+
+				"The config was left unchanged",
+			key, strings.Join(missing, ", "), plural(len(missing), "is", "are"))
+	}
+	return got, differing, nil
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// configWriteDrift compares what the config holds at a path (got) with what was
+// written there (want), descending object members so that a partial write of an
+// object is judged member by member.
+//
+// Object members present in got but absent from want are ignored ON PURPOSE:
+// json.Unmarshal MERGES an object into the live struct, so writing
+// {"model_name":"x"} at "agents.defaults" legitimately leaves every sibling
+// setting standing. Judging the merge as drift would reject that write.
+func configWriteDrift(path string, got, want any) (missing, differing []string) {
+	wantMap, wantIsMap := want.(map[string]any)
+	if !wantIsMap {
+		if !reflect.DeepEqual(got, want) {
+			differing = append(differing, path)
+		}
+		return nil, differing
+	}
+	gotMap, gotIsMap := got.(map[string]any)
+	if !gotIsMap {
+		// An object was written and something that is not an object came back.
+		// Reported as a difference rather than a drop: a config type may
+		// legitimately accept an object and marshal back as a scalar (several
+		// in pkg/config have exactly that UnmarshalJSON/MarshalJSON pair).
+		return nil, []string{path}
+	}
+	names := make([]string, 0, len(wantMap))
+	for name := range wantMap {
+		names = append(names, name)
+	}
+	sort.Strings(names) // deterministic messages
+	for _, name := range names {
+		child := path + "." + name
+		gotChild, present := gotMap[name]
+		if !present {
+			if isJSONZero(wantMap[name]) {
+				continue
+			}
+			missing = append(missing, child)
+			continue
+		}
+		m, d := configWriteDrift(child, gotChild, wantMap[name])
+		missing, differing = append(missing, m...), append(differing, d...)
+	}
+	return missing, differing
+}
+
+// normaliseJSONValue puts a value into the same shape dotGet returns — float64
+// numbers, map[string]any objects — so the two can be compared without every
+// int/float64 pair reading as a difference.
+func normaliseJSONValue(v any) (any, bool) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, false
+	}
+	var out any
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// isJSONZero reports whether v is the JSON zero for its kind — the values
+// `omitempty` erases on the way out.
+func isJSONZero(v any) bool {
+	switch typed := v.(type) {
+	case nil:
+		return true
+	case bool:
+		return !typed
+	case float64:
+		return typed == 0
+	case string:
+		return typed == ""
+	case []any:
+		return len(typed) == 0
+	case map[string]any:
+		return len(typed) == 0
+	default:
+		return false
+	}
 }
 
 // dotGet reads a dot-notation key from cfg by marshaling to a generic map.

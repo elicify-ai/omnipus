@@ -108,6 +108,28 @@ separable, and this ADR changes only the second: sending stays entirely ungated 
 the destination becomes a property of the turn rather than a model-supplied argument — exactly
 as `send_file` and the email tools already behave.
 
+## 4a. A session must record the channel INSTANCE
+
+Implementing this exposed a gap in the data model, not merely in the code.
+
+A channel session recorded workspace, agent, bare channel type and peer — but **not the instance
+key**. Since an install can hold a hundred WhatsApp numbers, each bound to its own
+`(workspace, agent)` pair, every one of their sessions read `channel: "whatsapp"` and they were
+indistinguishable once persisted. The in-memory dedup index had always keyed on the instance; the
+stored record had not, so the distinction died at process restart.
+
+That made the ownership model unrepresentable in stored data: anything acting on "the sessions of
+this channel" acted on all of them. The first version of the re-stamp did exactly that, and would
+have moved ninety-nine other conversations to the wrong workspace.
+
+`UnifiedMeta.InstanceID` closes it. The field threads through the ADR-057 identity file, and the
+rule for consumers is that an EMPTY instance means *unknown* and must never be treated as a match.
+
+**Worth recording for the next person adding a session field:** the identifiers are enumerated by
+hand in three separate places — the write projection, the read composition, and the post-write
+cache refresh. Adding a field to two of the three compiles cleanly and silently half-works; that
+is how this one first appeared to persist and then read back empty.
+
 ## 5. Consequences
 
 - `send_message` loses `channel` and `chat_id` as model-supplied parameters. Any agent prompt or

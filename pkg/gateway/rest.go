@@ -8290,6 +8290,26 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 			}
 		}
 
+		// Re-stamp workspace_id onto every session that already existed for
+		// this channel BEFORE the bind — resolveOrCreateChannelSession
+		// (pkg/agent/loop.go) only stamps workspace_id at session CREATION
+		// time and explicitly does not patch already-existing sessions.
+		// Without this, an existing conversation keeps routing delegation
+		// trust, memory rooms, and task-board placement against the stale
+		// (or empty, silently-default-substituted) workspace forever, even
+		// though new messages on the SAME conversation resolve the new
+		// agent via routing. See restampChannelSessionsWorkspace's doc
+		// comment for the full rationale.
+		if store := a.agentLoop.GetSessionStore(); store != nil {
+			if n, rsErr := restampChannelSessionsWorkspace(store, channelID, workspaceID); rsErr != nil {
+				slog.Warn("rest: setChannelRouting: restamp existing sessions",
+					"instance_id", channelID, "workspace_id", workspaceID, "error", rsErr)
+			} else if n > 0 {
+				slog.Info("rest: setChannelRouting: restamped existing sessions to bound workspace",
+					"instance_id", channelID, "workspace_id", workspaceID, "count", n)
+			}
+		}
+
 		// Return the bound representation.
 		wsIDCopy := workspaceID
 		agentIDCopy := agentID
@@ -8434,6 +8454,24 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 		}
 	}
 
+	// Symmetric with the bound flow above: unbinding a previously-bound
+	// channel clears cfg.Channels[id].WorkspaceID, so every existing
+	// session that was stamped from that binding must be cleared too —
+	// otherwise it stays pinned to a workspace the channel is no longer
+	// routed through, forever. A channel that was never bound has no
+	// sessions carrying a channel-derived workspace stamp, so this is a
+	// harmless no-op for it (restampChannelSessionsWorkspace skips writes
+	// where WorkspaceID already matches the target).
+	if store := a.agentLoop.GetSessionStore(); store != nil {
+		if n, rsErr := restampChannelSessionsWorkspace(store, channelID, ""); rsErr != nil {
+			slog.Warn("rest: setChannelRouting: clear existing sessions on unbind",
+				"instance_id", channelID, "error", rsErr)
+		} else if n > 0 {
+			slog.Info("rest: setChannelRouting: cleared stale workspace on existing sessions after unbind",
+				"instance_id", channelID, "count", n)
+		}
+	}
+
 	// Return the resulting routing state.
 	liveCfg := a.agentLoop.GetConfig()
 	idx := channelWildcardIdx(liveCfg.Bindings, channelID)
@@ -8443,6 +8481,90 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 		resp.DefaultAgentId = &id
 	}
 	jsonOK(w, resp)
+}
+
+// restampChannelSessionsWorkspace re-stamps WorkspaceID on every existing
+// session belonging to the given channel base type (e.g. "whatsapp" for
+// both the bare "whatsapp" instance key and namespaced ones like
+// "whatsapp.eu"). SessionMeta.Channel persists only the bare channel TYPE,
+// never the instance slug (see pkg/agent/loop.go::resolveOrCreateChannelSession's
+// NewChannelSession(channel, chatID, ...) call, which is handed msg.Channel —
+// the bare type — not the instance ID) — so this is the finest granularity
+// the session data model supports today. On an install with two instances
+// of the same channel type (e.g. "whatsapp.eu" and "whatsapp.us"), binding
+// one instance's workspace will also restamp the other instance's sessions,
+// because they are indistinguishable at the session-meta level; that is a
+// pre-existing limitation of SessionMeta (no InstanceID field), not
+// something introduced here, and fixing it would require a session schema
+// change outside this handler's scope.
+//
+// Closes the gap where setChannelRouting updated cfg.Channels[id].WorkspaceID
+// but left every session created BEFORE the change pinned to its stale
+// workspace_id forever: resolveOrCreateChannelSession only stamps
+// workspace_id at session CREATION time and its own doc comment concedes
+// "Already-existing sessions are NOT patched." A stale or empty workspace_id
+// is not a safe no-op — resolveEffectiveWorkspaceID (pkg/agent/loop.go)
+// silently substitutes the operator's default workspace, so a stale stamp
+// routes delegation trust (ADR-037), memory rooms, and task-board placement
+// against the WRONG workspace's graph.
+//
+// newWorkspaceID may be "" to clear the stamp (the unbind case). Every
+// matching session's WorkspaceID is unconditionally overwritten with
+// newWorkspaceID (skipping sessions that already match, to avoid a
+// no-op SetMeta write) — this must be able to MOVE a session off a stale
+// workspace onto a new one on re-bind, so it deliberately does not use the
+// non-clobber-once-set policy pkg/gateway/schedules.go's
+// stampScheduledSessionWorkspace uses for a different (single-anchor)
+// purpose.
+//
+// Only sessions whose Channel field equals baseType are touched — webchat
+// and other-channel sessions are never affected. A per-session SetMeta
+// failure is logged and does not abort the rest of the batch; the returned
+// count is the number of sessions successfully updated, and the returned
+// error (if any) is the first SetMeta failure encountered, for the caller's
+// own WARN log.
+// restampChannelSessionsWorkspace moves the sessions of ONE channel instance
+// onto a new workspace.
+//
+// It matches on the INSTANCE key, never the bare channel type. An install can
+// hold many instances of one platform — a hundred WhatsApp numbers, each bound
+// to its own (workspace, agent) pair under ADR-029 — and every one of their
+// sessions records Channel=="whatsapp". Matching on type would relabel all
+// hundred when an operator re-binds one of them: the very bug this restamp
+// exists to fix, inflicted on the other ninety-nine.
+//
+// A session with NO instance key is left alone. Those predate the field, so
+// "unknown" is the honest reading; guessing from the type is exactly the
+// conflation above. Their workspace still resolves correctly at turn time via
+// processMessage's channel-instance fallback whenever it is empty.
+func restampChannelSessionsWorkspace(store *session.UnifiedStore, instanceID, newWorkspaceID string) (int, error) {
+	if store == nil || instanceID == "" {
+		return 0, nil
+	}
+	sessions, err := store.ListSessionsFiltered(func(m *session.UnifiedMeta) bool {
+		return m != nil && m.InstanceID != "" && m.InstanceID == instanceID
+	})
+	if err != nil {
+		return 0, fmt.Errorf("list sessions for channel instance %q: %w", instanceID, err)
+	}
+	updated := 0
+	var firstErr error
+	for _, m := range sessions {
+		if m.WorkspaceID == newWorkspaceID {
+			continue // already correct — skip the redundant write
+		}
+		wsCopy := newWorkspaceID
+		if setErr := store.SetMeta(m.ID, session.MetaPatch{WorkspaceID: &wsCopy}); setErr != nil {
+			slog.Warn("rest: restampChannelSessionsWorkspace: SetMeta failed",
+				"session_id", m.ID, "instance_id", instanceID, "workspace_id", newWorkspaceID, "error", setErr)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("session %q: %w", m.ID, setErr)
+			}
+			continue
+		}
+		updated++
+	}
+	return updated, firstErr
 }
 
 // createChannelInstance handles POST /api/v1/channels (ADR-029 FR-024/FR-025,

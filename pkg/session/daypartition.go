@@ -86,6 +86,21 @@ type SessionMeta struct {
 	WorkspaceID string        `json:"workspace_id,omitempty"`
 	TaskID      string        `json:"task_id,omitempty"`
 	Channel     string        `json:"channel"`
+	// InstanceID is the channel INSTANCE this session belongs to — the key in
+	// cfg.Channels, e.g. "whatsapp.eu", not the bare type "whatsapp".
+	//
+	// Channel alone is not an identity. An install can hold many instances of
+	// one platform — a hundred WhatsApp numbers, each bound to its own
+	// (workspace, agent) pair under ADR-029 — and every one of their sessions
+	// records Channel=="whatsapp". Without this field they are
+	// indistinguishable, so anything that acts on "the sessions of this
+	// channel" acts on all of them: re-binding one number's workspace would
+	// relabel the other ninety-nine.
+	//
+	// Empty on sessions created before this field existed, and on non-channel
+	// sessions. Callers that key on it MUST treat empty as "unknown", never as
+	// a match.
+	InstanceID string `json:"instance_id,omitempty"`
 	// PeerID is the channel-native chat/peer identifier (e.g. Telegram user ID "7236886139").
 	// Set for non-webchat sessions to allow per-peer session resumption.
 	PeerID     string   `json:"peer_id,omitempty"`

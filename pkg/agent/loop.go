@@ -5496,7 +5496,12 @@ func (al *AgentLoop) resolveOrCreateChannelSession(
 	if title == "" {
 		title = chatID
 	}
-	meta, err := al.sharedSessionStore.NewChannelSession(channel, chatID, agentID, title)
+	// Persist the instance identity, not just the bare type. The in-memory
+	// index above has always keyed on it ("so two instances of the same type
+	// do not collide") — the session record did not, so that distinction was
+	// lost the moment the process restarted, and anything acting on "this
+	// channel's sessions" could not tell a hundred WhatsApp numbers apart.
+	meta, err := al.sharedSessionStore.NewChannelSession(channel, indexID, chatID, agentID, title)
 	if err != nil {
 		logger.WarnCF("agent", "Failed to create channel session",
 			map[string]any{"channel": channel, "chat_id": chatID, "error": err.Error()})
@@ -6853,6 +6858,34 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			}
 		} else if meta != nil {
 			workspaceID = meta.WorkspaceID
+		}
+	}
+	if workspaceID == "" {
+		// The channel instance itself, before falling back to inbound metadata.
+		//
+		// resolveWorkspaceIDForContinuation has had this rung all along; this
+		// path did not, and the asymmetry was the bug: a session created
+		// BEFORE its channel was bound to a workspace keeps an empty
+		// workspace_id forever (resolveOrCreateChannelSession returns early on
+		// an index hit and never patches an existing session), and
+		// resolveEffectiveWorkspaceID then silently substitutes the DEFAULT
+		// workspace. Since ADR-037 makes delegation trust workspace-scoped,
+		// that authorises delegation against the wrong workspace's trust
+		// graph, and memory rooms, task placement and the working directory
+		// degrade the same way.
+		//
+		// setChannelRouting now re-stamps existing sessions when a binding is
+		// written, which repairs data. This closes it at resolution time as
+		// well, so a session created by any path that never went through that
+		// handler still resolves correctly — and so the two ladders stop
+		// disagreeing on this axis, which is the same defect shape as the
+		// default-agent divergence.
+		if instanceID := inboundInstanceID(msg); instanceID != "" {
+			if cfg := al.GetConfig(); cfg != nil {
+				if inst, ok := cfg.Channels[instanceID]; ok && inst.WorkspaceID != "" {
+					workspaceID = inst.WorkspaceID
+				}
+			}
 		}
 	}
 	if workspaceID == "" {

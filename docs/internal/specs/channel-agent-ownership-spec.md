@@ -1,9 +1,36 @@
 # Spec — A channel belongs to one (workspace, agent) pair
 
-- **Status:** IMPLEMENTED, revision 4 (2026-08-15). Implements [ADR-065](../architecture/ADR-065-channel-ownership-per-agent-workspace.md).
+- **Status:** IMPLEMENTED, revision 5 (2026-08-15). Implements [ADR-065](../architecture/ADR-065-channel-ownership-per-agent-workspace.md).
 - **Reviews:** [round 1](channel-agent-ownership-spec-review.md) (BLOCK, 31) · [round 2](channel-agent-ownership-spec-review-round2.md) (BLOCK, 20). Revision 3 additionally applies three operator decisions that overturned parts of revision 2 — see §7.
 - **Scope:** OUTBOUND. Inbound is ADR-029's and is only regression-pinned here.
 - **Model followed:** the M11 email tools, with one deliberate divergence (§2.1).
+
+---
+
+## 0. A session records the instance, not the type
+
+**A channel session carries four identifiers: workspace, agent, channel INSTANCE, and peer.** Three
+were already there. The instance key was not, and its absence made the ownership model
+unrepresentable in stored data.
+
+An install can hold **many instances of one platform** — a hundred WhatsApp numbers, each bound to
+its own `(workspace, agent)` pair. Every one of their sessions recorded `channel: "whatsapp"` and
+nothing more, so they were indistinguishable once written. The in-memory dedup index had keyed on
+the instance all along (*"so two instances of the same type do not collide"*), but that distinction
+was lost the moment the process restarted.
+
+The consequence was concrete: re-binding one number's workspace re-stamped **every** session of
+that platform, moving the other ninety-nine conversations' delegation trust, memory rooms and task
+placement to the wrong workspace — inflicting the exact staleness bug the re-stamp was written to
+cure.
+
+`UnifiedMeta.InstanceID` now carries it, persisted through the ADR-057 identity file. Anything
+acting on "this channel's sessions" MUST match on the instance and MUST treat an empty instance as
+*unknown*, never as a match — guessing from the type is the same conflation.
+
+Sessions predating the field have it empty. Their workspace still resolves correctly at turn time
+through FR-2's channel-instance fallback whenever it is empty; a re-stamp declines to touch them
+rather than guess.
 
 ---
 
