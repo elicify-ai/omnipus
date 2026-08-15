@@ -168,33 +168,26 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // worker returned 200 in 0.46s) — and the picker still told the user no
   // provider was connected. `catalogStatus` defaults to `'ready'`, so a
   // caller that never sets it (every existing call site) is unaffected.
-  if (catalogStatus === 'loading') {
-    const isGhost = variant === 'ghost'
-    return (
-      <div
-        data-testid={triggerTestId}
-        aria-busy="true"
-        role="status"
-        className={
-          isGhost
-            ? 'flex items-center gap-1.5 h-7 rounded-md px-1.5 text-xs'
-            : 'flex w-full items-center gap-2 h-10 rounded-md border px-3 py-2 text-sm'
-        }
-        style={
-          isGhost
-            ? { color: 'var(--color-muted)' }
-            : {
-                borderColor: 'var(--color-border)',
-                backgroundColor: 'var(--color-surface-1)',
-                color: 'var(--color-muted)',
-              }
-        }
-      >
-        <CircleNotch size={12} className="animate-spin shrink-0" aria-hidden="true" />
-        <span className="truncate text-xs">Loading models…</span>
-      </div>
-    )
-  }
+  // catalogStatus === 'loading' deliberately has NO early return: it renders
+  // the SAME interactive combobox every other ready state does, and shows
+  // "Loading models…" INSIDE the popover (see CommandList below).
+  //
+  // WHY (root-caused 2026-08-14, reproduced locally): this state used to
+  // return a non-interactive <div role="status"> carrying triggerTestId —
+  // an element that LOOKS like the trigger and answers to its test id, but
+  // cannot be opened. The provider catalog is fetched live on every mount
+  // (0.13s idle, measured 1.2-4.5s under a full e2e shard), so for that
+  // whole window a click on "Model" hit the placeholder, did nothing, and
+  // was LOST: when the catalog landed the real combobox replaced the div,
+  // but nothing re-opened the popover. The user clicks, gets no feedback,
+  // and must click again with no idea why. It failed the create-agent e2e
+  // spec exactly this way — and passed in isolation, where the window is
+  // ~0ms, which is why it read as flake for weeks.
+  //
+  // An earlier pass at this only changed the placeholder's TEXT (from a
+  // false "Connect a provider in Settings" to "Loading models…"). That
+  // fixed the lie and left the swallowed click untouched. Rendering one
+  // trigger in every state is what actually fixes it.
 
   if (catalogStatus === 'error') {
     const isGhost = variant === 'ghost'
@@ -246,7 +239,13 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // onboarding bootstrap path (`allowFreeTextWhenEmpty`) is the one
   // exception — there the user must type the first slug for an
   // endpoint-less provider.
-  if (catalogEmpty && constrainToCatalog && !allowFreeTextWhenEmpty) {
+  // catalogStatus !== 'loading' is load-bearing: while the catalog is in
+  // flight `models` is legitimately empty, and without this guard the
+  // loading state falls into this disabled "no models" placeholder — the
+  // same non-interactive, click-swallowing element the loading branch was
+  // just fixed to stop rendering. Empty-because-loading is not
+  // empty-because-there-is-nothing.
+  if (catalogEmpty && constrainToCatalog && !allowFreeTextWhenEmpty && catalogStatus !== 'loading') {
     const isGhost = variant === 'ghost'
     return (
       <div
@@ -274,8 +273,12 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
     )
   }
 
-  // Text input mode — no models available
-  if (catalogEmpty) {
+  // Text input mode — no models available.
+  // Excluded while loading for the same reason as the branch above: an empty
+  // `models` during the fetch means "not here YET", and falling into free-text
+  // entry mid-load would swap the control out from under a user who is
+  // waiting for a list — a second way to lose their interaction.
+  if (catalogEmpty && catalogStatus !== 'loading') {
     // W6-C4 / G12: in text-input mode the trigger is just an <input>; we
     // surface the unresolved state via a small inline note beneath the
     // input when a non-empty value isn't in the supplied flat list (which
@@ -382,6 +385,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           type="button"
           role="combobox"
           aria-expanded={open}
+          aria-busy={catalogStatus === 'loading' || undefined}
           aria-label={value ? `Model selector, currently ${value}${valueUnresolved ? ' (unresolved)' : ''}` : `Model selector, ${displayValue}`}
           aria-invalid={valueUnresolved || undefined}
           aria-describedby={valueUnresolved ? `${descriptionId}-unresolved` : undefined}
@@ -464,7 +468,20 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             onValueChange={setQuery}
           />
           <CommandList>
-            <CommandEmpty>No models found.</CommandEmpty>
+            {catalogStatus === 'loading' ? (
+              <div
+                className="flex items-center gap-2 px-3 py-6 text-sm"
+                style={{ color: 'var(--color-muted)' }}
+                role="status"
+                aria-live="polite"
+                data-testid={triggerTestId ? `${triggerTestId}-loading` : undefined}
+              >
+                <CircleNotch size={14} className="animate-spin shrink-0" aria-hidden="true" />
+                <span>Loading models…</span>
+              </div>
+            ) : (
+              <CommandEmpty>No models found.</CommandEmpty>
+            )}
             {useGrouped ? (
               // ≥2 providers: render one CommandGroup per provider with a heading
               groupsWithModels.map((group) => {

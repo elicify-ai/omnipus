@@ -410,12 +410,63 @@ describe('ModelSelector — catalogStatus (four-state provider-catalog fix)', ()
         onChange={vi.fn()}
         constrainToCatalog
         catalogStatus="loading"
+        triggerTestId="model-trigger"
         emptyCatalogHint="Connect a provider in Settings to pick a model"
       />,
     )
-    expect(screen.getByText(/loading models/i)).toBeInTheDocument()
+    // The trigger stays a REAL combobox while loading (see the swallowed-click
+    // regression below); the loading feedback moved inside the popover, so it
+    // is reached by opening the trigger rather than rendered beside it.
+    const trigger = screen.getByTestId('model-trigger')
+    expect(trigger).toHaveAttribute('role', 'combobox')
+    expect(trigger).toHaveAttribute('aria-busy', 'true')
     expect(screen.queryByText(/connect a provider/i)).not.toBeInTheDocument()
-    expect(screen.getByRole('status')).toBeInTheDocument()
+
+    fireEvent.click(trigger)
+    expect(screen.getByText(/loading models/i)).toBeInTheDocument()
+  })
+
+  // REGRESSION — the swallowed click (root-caused 2026-08-14, reproduced
+  // against a real gateway before this fix). The loading state used to render
+  // a non-interactive <div role="status"> wearing triggerTestId. A click
+  // during the catalog fetch (0.13s idle, 1.2-4.5s under a loaded e2e shard)
+  // hit that div, did nothing, and was LOST: when the catalog arrived the real
+  // combobox replaced it and nothing re-opened the popover. The user got no
+  // feedback and had to click again. It is the true cause of the create-agent
+  // e2e failure that was misdiagnosed twice — once as OpenRouter latency, once
+  // as a provider-configuration problem.
+  it('does not swallow a click made while the catalog is still loading', () => {
+    const { rerender } = render(
+      <ModelSelector
+        models={[]}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+        catalogStatus="loading"
+        triggerTestId="model-trigger"
+      />,
+    )
+
+    // The user clicks "Model" while the fetch is still in flight.
+    fireEvent.click(screen.getByTestId('model-trigger'))
+    expect(screen.getByText(/loading models/i)).toBeInTheDocument()
+    expect(screen.queryByRole('option')).not.toBeInTheDocument()
+
+    // The catalog lands. The popover the user already opened must now show the
+    // models — WITHOUT a second click, which is exactly what used to be needed.
+    rerender(
+      <ModelSelector
+        models={['gpt-4o', 'claude-3-haiku']}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+        catalogStatus="ready"
+        triggerTestId="model-trigger"
+      />,
+    )
+    expect(screen.getAllByRole('option').length).toBeGreaterThan(0)
+    expect(screen.getByText('gpt-4o')).toBeInTheDocument()
+    expect(screen.queryByText(/loading models/i)).not.toBeInTheDocument()
   })
 
   it('renders the real error message and a working Retry, not the "connect a provider" empty-catalog message', () => {
