@@ -1,0 +1,86 @@
+app = "omnipus-uat-swimlane"
+primary_region = "sin"
+
+[build]
+  # Path is relative to THIS config file, which must therefore live in the repo.
+  dockerfile = "docker/Dockerfile.heavy"
+
+[env]
+  # Bind all interfaces so Fly's proxy (which reaches the private address)
+  # can route to us — a loopback bind returns 502.
+  OMNIPUS_GATEWAY_HOST = "0.0.0.0"
+  OMNIPUS_GATEWAY_PORT = "5000"
+  # The default container seccomp profile blocks syscalls the hardened-exec
+  # path needs; enforce would break `bash` with "permission denied".
+  OMNIPUS_SANDBOX_MODE = "permissive"
+  # NO trust_path_chrome override here — deliberately.
+  #
+  # An earlier revision of this file set
+  # OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME="true" as a UAT workaround, back
+  # when Dockerfile.heavy shipped a Chromium the resolver refused (B2a). That
+  # override is now not just unnecessary but actively harmful, and it silently
+  # defeated the B2a fix: exec_resolver.go's step 3 (the chrome.sha256-verified
+  # package-Chrome path) only runs when `pathResolved == "" || PreferPackaged`,
+  # and PreferPackaged defaults false (defaults.go:465). So trusting $PATH made
+  # the resolver return the UNVERIFIED $PATH binary and never reach the
+  # verification the image now provides — i.e. a deploy from this file would
+  # have exercised the OLD insecure path while appearing to test the new one.
+  #
+  # Dockerfile.heavy now generates a chrome.sha256 manifest at the package root,
+  # so the default posture (TrustPathChrome=false) resolves correctly on its
+  # own: $PATH is discarded, step 3 finds the verified package Chrome.
+  # SEC-ADR052-002's threat model stays intact.
+  # Reverse-proxy origin: drives CanonicalGatewayOrigin, which CSP/CORS and
+  # the WS CheckOrigin all validate against. Without it the SPA's WebSocket
+  # is rejected at the origin check.
+  OMNIPUS_GATEWAY_PUBLIC_URL = "https://omnipus-uat-swimlane.fly.dev"
+  # ADR-062 tier 1 — live-browser media on ONE declared UDP port.
+  # All three are required together on Fly and each was measured 2026-08-15:
+  #   port  : must match the [[services]] UDP port below; Fly does not rewrite
+  #           ports for UDP, so internal and external must be identical.
+  #   bind  : Fly delivers inbound UDP only to fly-global-services, and
+  #           documents that binding 0.0.0.0 makes Linux choose the wrong
+  #           SOURCE address on replies, so the viewer discards them silently.
+  #   public: public_url here is a HOSTNAME, which is deliberately not resolved
+  #           at boot (one frozen DNS answer would rot silently), so the app's
+  #           dedicated IPv4 is given explicitly. A dedicated IPv4 is mandatory
+  #           for UDP on Fly — a shared one cannot carry it at all.
+  OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_UDP_PORT = "50000"
+  OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_UDP_BIND_ADDRESS = "fly-global-services"
+  # This app's dedicated IPv4, allocated 2026-08-15 specifically so Fly can
+  # route the media UDP service (a shared v4 cannot carry UDP at all).
+  OMNIPUS_TOOLS_BROWSER_WEBRTC_PUBLIC_IP = "168.220.92.84"
+
+[http_service]
+  internal_port = 5000
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 200
+    soft_limit = 100
+
+# WebRTC media over UDP (live-browser video). Fly delivers inbound UDP ONLY to
+# a declared UDP service, ONLY on a dedicated IPv4, and ONLY to a process
+# bound to fly-global-services on this exact port (no port rewriting for UDP).
+# The gateway's ICE mux binds fly-global-services:50000 and advertises the
+# app's dedicated IPv4 as its candidate. See docs: fly.io/docs/networking/udp-and-tcp
+[[services]]
+  internal_port = 50000
+  protocol = "udp"
+
+  [[services.ports]]
+    port = 50000
+
+# NOTE: no [[mounts]] here — this app has NO volume, so $OMNIPUS_HOME is
+# ephemeral and a restart wipes config, credentials and sessions entirely.
+
+[[vm]]
+  # 2 PERFORMANCE (dedicated) cores, unlike uat-omnipus's 4 shared ones. Kept
+  # as-is deliberately: this machine exists to measure the hosted live-browser
+  # stream on dedicated CPU close to the operator (sin), against ams/shared.
+  size = "performance-2x"
+  memory = "4096mb"
