@@ -310,3 +310,101 @@ describe('the terminal-status rules do not disturb the paths they sit beside', (
 function streamingPlaceholder2(): ChatMessage {
   return { ...streamingPlaceholder(), id: 'optimistic-assistant-placeholder-2' }
 }
+
+describe('an internal rate_limit frame is a visible denial, not a successful close', () => {
+  it('keeps rateLimitEvent set when done follows — removing case rate_limit cannot stay green', () => {
+    seedBucket([streamingPlaceholder()])
+    const store = useChatStore.getState()
+    act(() => {
+      store.handleFrame({
+        type: 'rate_limit',
+        session_id: SID,
+        scope: 'agent',
+        resource: 'turns',
+        policy_rule: 'sec26',
+        retry_after_seconds: 60,
+        agent_id: 'mia',
+      })
+    })
+    act(() => {
+      store.handleFrame({
+        type: 'done',
+        session_id: SID,
+        stats: { tokens: 0, cost: 0, duration_ms: 12 },
+      })
+    })
+
+    const event = useChatStore.getState().sessionsById[SID]?.rateLimitEvent
+    expect(event).not.toBeNull()
+    expect(event?.scope).toBe('agent')
+    expect(event?.resource).toBe('turns')
+    expect(event?.retryAfterSeconds).toBe(60)
+    // Banner-only path: no error bubble. Provider 429 is a separate error frame.
+    const msgs = bucketMessages()
+    expect(msgs.every((m) => m.status !== 'error')).toBe(true)
+  })
+})
+
+describe('a live error on a second tab does not rewrite the last healthy reply', () => {
+  function healthyReply(): ChatMessage {
+    return {
+      id: 'prior-healthy-reply',
+      role: 'assistant',
+      content: 'Yesterday this worked.',
+      timestamp: new Date().toISOString(),
+      status: 'done',
+      isStreaming: false,
+      agentId: 'mia',
+    } as ChatMessage
+  }
+
+  it('pushes a new error bubble instead of flipping the last successful reply', () => {
+    seedBucket([healthyReply()])
+    playRefusedTurnFrames({ includeOutboundDuplicate: false })
+
+    const msgs = bucketMessages()
+    expect(msgs).toHaveLength(2)
+    expect(msgs[0].id).toBe('prior-healthy-reply')
+    expect(msgs[0].status).toBe('done')
+    expect(msgs[0].content).toBe('Yesterday this worked.')
+    expect(msgs[0].errorCode).toBeUndefined()
+    expect(msgs[1].status).toBe('error')
+    expect(msgs[1].errorCode).toBe('rate_limited')
+    expect(msgs[1].content).toBe(RATE_LIMIT_COPY)
+  })
+
+  it('does not mint a second bubble when replay already drew the same error', () => {
+    seedBucket([
+      {
+        id: 'replayed-error',
+        role: 'assistant',
+        content: RATE_LIMIT_COPY,
+        timestamp: new Date().toISOString(),
+        status: 'error',
+        isStreaming: false,
+        errorCode: 'rate_limited',
+        agentId: 'mia',
+      } as ChatMessage,
+    ])
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'error',
+        session_id: SID,
+        message: RATE_LIMIT_COPY,
+        payload: {
+          llm_error: {
+            code: 'rate_limited',
+            message: RATE_LIMIT_COPY,
+            retryable: true,
+          },
+        },
+      })
+    })
+
+    const msgs = bucketMessages()
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].id).toBe('replayed-error')
+    expect(msgs[0].status).toBe('error')
+    expect(msgs[0].errorCode).toBe('rate_limited')
+  })
+})

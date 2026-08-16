@@ -3804,26 +3804,38 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 }
               }
               const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
-              // C8 defense-in-depth: close the UNION of {the last assistant
-              // message} (unchanged — always closed exactly as before, even
-              // when it isn't flagged "streaming" at all, e.g. a
-              // replay-reconstructed bubble whose `isStreaming` is
-              // `undefined` — mirrors the matching `done`-handler fix above)
-              // ∪ {every OTHER still-streaming assistant message in the
-              // bucket} — mirrors clearStreamingState's own sweep (used on a
-              // hard WS-drop). A mid-turn steer (sendMessage's `isStreaming`
-              // branch) appends the steering text as a new USER message
-              // AFTER the still-open assistant bubble, so that bubble is no
-              // longer "the last message" by the time `error` arrives —
-              // closing only the last assistant message here would leave the
-              // ORIGINAL bubble permanently stuck at isStreaming:true even
-              // though the turn just errored out.
+              const lastMsg = lastMsgId ? b.messagesById[lastMsgId] : undefined
+              // Mirror replay_error: only coalesce into lastMsgId when that
+              // bubble is THIS turn (streaming, or an empty placeholder).
+              // A second tab / reload has history and no placeholder —
+              // lastMsgId is the last successful reply and must not be
+              // restamped as the failure. SessionID delivery made that
+              // live frame reach the second tab; this guard is the pair.
+              const lastContentEmpty = !!lastMsg && (!lastMsg.content || !lastMsg.content.trim())
+              const lastIsThisTurn = !!lastMsg && (
+                lastMsg.isStreaming
+                || lastMsg.status === 'streaming'
+                || lastContentEmpty
+              )
+              const lastIsTerminalError = !!lastMsg
+                && lastMsg.status === 'error'
+                && !lastMsg.isStreaming
+              const lastIsSameError = lastIsTerminalError
+                && !!llmError
+                && (
+                  lastMsg?.errorCode === llmError.code
+                  || lastMsg?.content === translatedMessage
+                )
+              // C8: close every still-streaming assistant (a mid-turn steer
+              // appends a USER message after the open bubble, so it is no
+              // longer last). Include last only when it belongs to this turn.
               const streamingIds: string[] = []
               for (let i = b.messageOrder.length - 1; i >= 0; i--) {
                 const id = b.messageOrder[i]
                 const m = b.messagesById[id]
                 if (m?.role !== 'assistant') continue
-                if (id === lastMsgId || m.isStreaming || m.status === 'streaming') {
+                const isLastThisTurn = id === lastMsgId && lastIsThisTurn && !lastIsTerminalError
+                if (isLastThisTurn || m.isStreaming || m.status === 'streaming') {
                   // ADR-051 — when the incoming frame carries a typed
                   // payload, do NOT include an already-terminal 'error'
                   // bubble in the C8 close sweep. The sweep's purpose is to
@@ -3902,11 +3914,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   }
                 }) as Partial<SessionChatState>
               }
-              // streamingIds is empty here only when there is NO assistant
-              // message in the bucket at all (lastMsgId, unconditionally
-              // included above whenever it exists, would otherwise have made
-              // it non-empty) — push one below so the error isn't silently
-              // dropped. Only show an error toast for non-cancel errors.
+              // Same catalogue already on the last bubble (replay drew it,
+              // then the live frame arrived): do not mint a duplicate.
+              if (lastIsSameError) {
+                return produce(b, (draft) => {
+                  draft.isStreaming = false
+                  if (clearReplayingNow) draft.isReplaying = false
+                }) as Partial<SessionChatState>
+              }
+              // No this-turn assistant to coalesce into — last is a prior
+              // healthy reply, or the bucket is empty. Push one new bubble
+              // so the error is not silently dropped or written onto history.
               if (!isCancelAck) {
                 // D5 fix (Site 3): safeMessage, not the raw frame.message.
                 useConnectionStore.getState().setConnectionError(safeMessage)

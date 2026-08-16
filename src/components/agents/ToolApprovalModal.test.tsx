@@ -276,6 +276,28 @@ describe('ToolApprovalModal — button dispatch', () => {
     expect(useToolApprovalStore.getState().queue).toHaveLength(0)
   })
 
+  it('toasts when Always Allow omits grant_recorded — treated as did-not-stick', async () => {
+    vi.mocked(api.submitToolApproval).mockResolvedValue({
+      approval_id: 'appr-001',
+      action: 'always',
+      status: 'ok',
+    })
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+
+    await waitFor(() => {
+      expect(capturedAddToast).toHaveBeenCalledWith({
+        message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
+        variant: 'warning',
+      })
+    })
+    expect(useToolApprovalStore.getState().queue).toHaveLength(0)
+  })
+
   it('removes approval from queue after successful Approve', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
@@ -290,6 +312,12 @@ describe('ToolApprovalModal — button dispatch', () => {
   })
 
   it('removes approval from queue after successful Always Allow', async () => {
+    vi.mocked(api.submitToolApproval).mockResolvedValue({
+      approval_id: 'appr-001',
+      action: 'always',
+      status: 'ok',
+      grant_recorded: true,
+    })
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
@@ -300,6 +328,7 @@ describe('ToolApprovalModal — button dispatch', () => {
     await waitFor(() => {
       expect(useToolApprovalStore.getState().queue).toHaveLength(0)
     })
+    expect(capturedAddToast).not.toHaveBeenCalled()
   })
 })
 

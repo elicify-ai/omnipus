@@ -43,6 +43,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"testing"
@@ -142,6 +143,12 @@ func TestToolApproval_AlwaysAllow_SurvivesChildTeardown_ScopedToChildAgent(t *te
 	require.True(t, accepted)
 	w := postToolApproval(t, api, entry.ApprovalID, "always")
 	require.Equal(t, http.StatusOK, w.Code)
+	var happyResp struct {
+		GrantRecorded *bool `json:"grant_recorded"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &happyResp))
+	require.NotNil(t, happyResp.GrantRecorded, "always must report whether the durable grant stuck")
+	assert.True(t, *happyResp.GrantRecorded, "child + parent writes both succeeded — Always Allow stuck")
 
 	// (1) Immediate effect preserved: this exact child turn's own further
 	// calls within the SAME turn are still covered.
@@ -246,4 +253,55 @@ func TestToolApproval_AlwaysAllow_RootSessionNoSpuriousParentWrite(t *testing.T)
 
 	assert.True(t, grants.IsAllowed(rootID, "jim", "bash", nil),
 		"a root (non-delegated) session's own Always-Allow grant must still work exactly as before this fix")
+}
+
+// TestToolApproval_AlwaysAllow_ParentUnresolved_GrantRecordedFalse is the
+// honesty contract for a delegated child whose parent write cannot land:
+// this call is still approved, but grant_recorded must be false so the
+// modal can say Always Allow did not stick. The child session is torn
+// down at the end of the turn; a true here would lie.
+func TestToolApproval_AlwaysAllow_ParentUnresolved_GrantRecordedFalse(t *testing.T) {
+	api := newDefect2TestRestAPI(t)
+	reg := newApprovalRegistryV2(64, 300*time.Second)
+	api.approvalReg = reg
+
+	store := api.agentLoop.GetSessionStore()
+	require.NotNil(t, store)
+	grants := api.agentLoop.ApprovalGrants()
+	require.NotNil(t, grants)
+
+	// Parent session owned by an agent that is NOT in the registry, so
+	// AgentForSession fails the liveness gate and the parent write is skipped.
+	parentMeta, err := store.NewSession(session.SessionTypeChat, "web", "ghost")
+	require.NoError(t, err)
+	parentSessionID := parentMeta.ID
+
+	childMeta, err := store.NewSession(session.SessionTypeDelegate, "delegate", "ava")
+	require.NoError(t, err)
+	childID := childMeta.ID
+	require.NoError(t, store.SetMeta(childID, session.MetaPatch{ParentSessionID: &parentSessionID}))
+
+	lsArgs := map[string]any{"command": "ls"}
+	entry, accepted := reg.requestApproval("tc-ghost-parent", "bash", lsArgs, "ava", childID, "turn-ghost")
+	require.True(t, accepted)
+	w := postToolApproval(t, api, entry.ApprovalID, "always")
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Action        string `json:"action"`
+		Status        string `json:"status"`
+		GrantRecorded *bool  `json:"grant_recorded"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "always", resp.Action)
+	assert.Equal(t, "ok", resp.Status)
+	require.NotNil(t, resp.GrantRecorded, "always must report the grant outcome")
+	assert.False(t, *resp.GrantRecorded,
+		"parent write skipped — Always Allow will not survive this child's teardown")
+
+	// Child Record still succeeded (this-turn reuse works); parent did not.
+	assert.True(t, grants.IsAllowed(childID, "ava", "bash", lsArgs),
+		"this child turn's own key must still be granted")
+	assert.False(t, grants.IsAllowed(parentSessionID, "ava", "bash", lsArgs),
+		"the parent key must not have been written")
 }

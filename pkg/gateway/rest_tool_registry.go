@@ -497,8 +497,12 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		// NEXT delegation will inherit from, so "Always Allow" clicked
 		// during a delegated child's own turn survives past that child's
 		// session lifetime. See recordGrantOnDelegationParent's doc comment.
-		a.recordGrantOnDelegationParent(entry, approvalID)
-		resp.GrantRecorded = boolPtr(recorded)
+		// Honesty: if this IS a delegated child and the parent write did
+		// not stick, grant_recorded must be false — the child session is
+		// torn down at the end of the turn and the next same-identity use
+		// will ask again.
+		parentOK := a.recordGrantOnDelegationParent(entry, approvalID)
+		resp.GrantRecorded = boolPtr(recorded && parentOK)
 	}
 
 	jsonOK(w, resp)
@@ -573,16 +577,16 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 // relationship itself, even though its value no longer supplies the grant
 // key; the immediate grant above already succeeded, so the tool call itself
 // is unaffected, only this extra durability is missed.
-func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID string) {
+func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID string) bool {
 	store := a.agentLoop.GetSessionStore()
 	if store == nil {
-		return
+		return true
 	}
 	meta, err := store.GetMeta(entry.SessionID)
 	if err != nil || meta.ParentSessionID == "" {
 		// Not a delegated child's session (or unresolvable) — nothing more
 		// to propagate; the direct record above already covers this case.
-		return
+		return true
 	}
 	// AgentForSession is a liveness/validity gate on the delegation
 	// relationship (does the parent session still resolve to a real,
@@ -596,7 +600,7 @@ func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID
 			"child_session_id", entry.SessionID,
 			"parent_session_id", meta.ParentSessionID,
 			"error", err)
-		return
+		return false
 	}
 	if a.agentLoop.ApprovalGrants().Record(meta.ParentSessionID, entry.AgentID, entry.ToolName, entry.Args) {
 		slog.Info("tool-approval: also recorded Always-Allow grant on the delegating parent's session, "+
@@ -608,15 +612,16 @@ func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID
 			"parent_agent_id", parentAgent.ID,
 			"agent_id", entry.AgentID,
 			"tool", entry.ToolName)
-	} else {
-		slog.Warn("tool-approval: parent Always-Allow grant was NOT recorded "+
-			"(missing parent session, agent, or tool identity) — this delegation's teardown will drop the child grant",
-			"approval_id", approvalID,
-			"child_session_id", entry.SessionID,
-			"parent_session_id", meta.ParentSessionID,
-			"agent_id", entry.AgentID,
-			"tool", entry.ToolName)
+		return true
 	}
+	slog.Warn("tool-approval: parent Always-Allow grant was NOT recorded "+
+		"(missing parent session, agent, or tool identity) — this delegation's teardown will drop the child grant",
+		"approval_id", approvalID,
+		"child_session_id", entry.SessionID,
+		"parent_session_id", meta.ParentSessionID,
+		"agent_id", entry.AgentID,
+		"tool", entry.ToolName)
+	return false
 }
 
 // toolsCfgToPolicy converts a config.AgentToolsCfg to ToolPolicyCfg.

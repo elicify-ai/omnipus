@@ -365,6 +365,29 @@ func TestRunTurn_WorkspacelessAgentRefused_EmitsTypedError(t *testing.T) {
 		"EventKindError must carry code agent_not_configured; payloads=%+v", errPayloads)
 	assert.True(t, sawTurnEndError,
 		"the turn must end as TurnEndStatusError so markTurnFailed fires and done cannot claim success")
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "ProcessDirect must have a session store so the refusal can persist")
+	metas, listErr := store.ListSessions()
+	require.NoError(t, listErr)
+	var persisted *session.TranscriptEntry
+	for _, meta := range metas {
+		entries, readErr := store.ReadTranscript(meta.ID)
+		require.NoError(t, readErr)
+		for i := range entries {
+			if entries[i].Type == session.EntryTypeSystem && entries[i].Status == "error" {
+				persisted = &entries[i]
+				break
+			}
+		}
+		if persisted != nil {
+			break
+		}
+	}
+	require.NotNil(t, persisted,
+		"a live workspace refusal must persist ErrorCode — helper-only tests stay green if runTurn writes the catalogue sentence uncoded")
+	assert.Equal(t, string(CodeAgentNotConfigured), persisted.ErrorCode,
+		"reload looks up by ErrorCode; unknown would resurrect the UAT lie")
 }
 
 func eventKinds(events []Event) []string {
@@ -627,6 +650,94 @@ func TestAppendClassifiedError_OutcomeRelabelStillLabelsUnknown(t *testing.T) {
 	assert.Equal(t, string(CodeMediaUnsupported), got.ErrorCode,
 		"FR-017a must still label an inconclusive residual 4xx as media after a successful strip-retry")
 	assert.Equal(t, defaultUserMessage(CodeMediaUnsupported), got.Content)
+}
+
+func TestRunTurn_MemberWorkDirUnavailable_EmitsAndPersistsWorkspaceUnavailable(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", tmpHome)
+
+	agentWorkspaceDir := filepath.Join(tmpHome, "agents", "main")
+	require.NoError(t, os.MkdirAll(agentWorkspaceDir, 0o755))
+
+	workspacesDir := filepath.Join(tmpHome, "workspaces")
+	wsDir := filepath.Join(workspacesDir, "blocked-ws")
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+	wsJSON := `{"id":"blocked-ws","core_team":["main"]}`
+	require.NoError(t, os.WriteFile(filepath.Join(workspacesDir, "blocked-ws.json"), []byte(wsJSON), 0o644))
+	// Make work/ a file so EnsureWorkDir's MkdirAll fails. The agent IS a
+	// member — this must not restamp as "add this agent to a workspace".
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, "work"), []byte("not-a-dir"), 0o644))
+
+	provider := testutil.NewScenario().WithText("should-never-be-called")
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:                agentWorkspaceDir,
+				ModelName:           "scripted-model",
+				MaxTokens:           4096,
+				MaxToolIterations:   10,
+				RestrictToWorkspace: true,
+			},
+			List: []config.AgentConfig{{ID: "main"}},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al, err := NewAgentLoop(cfg, msgBus, provider)
+	require.NoError(t, err)
+	defer al.Close()
+
+	sub := al.SubscribeEvents(32)
+	t.Cleanup(func() { al.UnsubscribeEvents(sub.ID) })
+
+	_, procErr := al.ProcessDirect(context.Background(), "hello", "test-session-workdir-blocked")
+	require.Error(t, procErr, "a member whose work dir cannot be opened must be refused")
+	assert.True(t, errors.Is(procErr, ErrWorkspaceWorkDirUnavailable),
+		"refusal must wrap ErrWorkspaceWorkDirUnavailable, not membership; got: %v", procErr)
+	assert.False(t, errors.Is(procErr, ErrAgentNotWorkspaceMember),
+		"a member with a broken work dir must not be told they are not on the team")
+
+	events := drainEvents(sub.C)
+	var errPayloads []ErrorPayload
+	for _, e := range events {
+		if e.Kind == EventKindError {
+			if p, ok := e.Payload.(ErrorPayload); ok {
+				errPayloads = append(errPayloads, p)
+			}
+		}
+	}
+	require.NotEmpty(t, errPayloads, "live frame must carry the work-dir failure; events=%v", eventKinds(events))
+	found := false
+	for _, p := range errPayloads {
+		if p.Code == string(CodeWorkspaceUnavailable) {
+			found = true
+			assert.Equal(t, UserMessageForCode(CodeWorkspaceUnavailable), p.Message)
+			assert.Equal(t, "workspace", p.Stage)
+			assert.NotEqual(t, string(CodeAgentNotConfigured), p.Code)
+		}
+	}
+	assert.True(t, found, "live EventKindError must be workspace_unavailable; payloads=%+v", errPayloads)
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	metas, listErr := store.ListSessions()
+	require.NoError(t, listErr)
+	var persisted *session.TranscriptEntry
+	for _, meta := range metas {
+		entries, readErr := store.ReadTranscript(meta.ID)
+		require.NoError(t, readErr)
+		for i := range entries {
+			if entries[i].Type == session.EntryTypeSystem && entries[i].Status == "error" {
+				persisted = &entries[i]
+				break
+			}
+		}
+		if persisted != nil {
+			break
+		}
+	}
+	require.NotNil(t, persisted, "work-dir failure must persist for reload")
+	assert.Equal(t, string(CodeWorkspaceUnavailable), persisted.ErrorCode,
+		"reload must not say add-this-agent-to-a-workspace for a disk/path failure")
 }
 
 func TestRunTurn_MemberGetsWorkspaceWorkDir(t *testing.T) {

@@ -155,7 +155,7 @@ function ToolApprovalCard({
       setSubmitting(true)
       try {
         const resp = await submitToolApproval(approvalId, action)
-        if (action === 'always' && resp.grant_recorded === false) {
+        if (action === 'always' && resp.grant_recorded !== true) {
           addToast({
             message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
             variant: 'warning',
