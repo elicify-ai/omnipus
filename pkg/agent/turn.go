@@ -1861,7 +1861,8 @@ var trustedInternalStageSet = map[internalStage]struct{}{
 	// sentence. Without this entry the write choke point re-classifies
 	// that sentence as unknown, and replay looks up the unknown line
 	// ("we can't tell why") — the live fix vanishing on reload.
-	{"workspace", "error"}: {},
+	{"workspace", "error"}:    {},
+	{"external_cli", "error"}: {},
 }
 
 func isTrustedInternalStage(stage, kind string) bool {
@@ -1870,6 +1871,18 @@ func isTrustedInternalStage(stage, kind string) bool {
 }
 
 func (ts *turnState) appendErrorTranscript(kind, stage, message string, pe ...*ProviderError) {
+	ts.writeErrorTranscript(kind, stage, message, "", pe...)
+}
+
+// appendClassifiedError persists an error the caller already classified.
+// Replay looks up the bubble by ErrorCode, not Content. Re-running the
+// catalogue sentence through TranslateLLMError stamps unknown — the live
+// fix then vanishes on reload. Pass the live LLMError instead.
+func (ts *turnState) appendClassifiedError(kind, stage string, llm LLMError) {
+	ts.writeErrorTranscript(kind, stage, llm.Message, llm.Code)
+}
+
+func (ts *turnState) writeErrorTranscript(kind, stage, message string, code LLMErrorCode, pe ...*ProviderError) {
 	if ts == nil {
 		return
 	}
@@ -1911,22 +1924,22 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string, pe ...*P
 	// but the user-visible text is the caller-provided copy verbatim.
 	llm := TranslateLLMError(providerErr, message)
 
-	// Workspace-membership refusals are turn-level sentinels, not provider
-	// errors. TranslateLLMError(nil, the catalogue sentence) has no
-	// substring match and returns unknown. Replay then calls
-	// getLLMErrorDisplay → codeToMessage("unknown") and the user sees
-	// "This turn didn't finish, and we can't tell why" — the original
-	// UAT defect, back after a reload. Re-stamp from the same sentinel
-	// TranslateTurnError already used for the live frame.
-	if stage == "workspace" && kind == EventKindError.String() {
-		llm = TranslateTurnError(ErrAgentNotWorkspaceMember)
+	// Prefer the caller's already-classified code. Catalogue sentences do
+	// not contain the classifier substrings, so a second TranslateLLMError
+	// would stamp unknown and reload would say we cannot tell why.
+	if code != "" {
+		llm.Code = code
+		llm.Retryable = isRetryable(code)
+		if isTrustedInternalStage(stage, kind) {
+			llm.Message = message
+		} else {
+			llm.Message = defaultUserMessage(code)
+		}
 	}
-	// Internal SEC-26 denials are written as kind=rate_limit, stage=rate_limit.
-	// TranslateLLMError(nil, msg) only hits CodeRateLimited when the caller
-	// text happens to contain "rate limit:". The live frame is EventKindRateLimit
-	// (not this classifier). Replay looks up by ErrorCode — without this
-	// restamp a reworded denial becomes "we can't tell why".
-	if stage == "rate_limit" && kind == EventKindRateLimit.String() {
+	// Belt for the one uncoded producer that is unambiguous: an internal
+	// SEC-26 denial written as kind=rate_limit, stage=rate_limit. Live is
+	// EventKindRateLimit; replay looks up by ErrorCode.
+	if code == "" && stage == "rate_limit" && kind == EventKindRateLimit.String() {
 		llm.Code = CodeRateLimited
 		llm.Message = message
 		llm.Retryable = isRetryable(CodeRateLimited)

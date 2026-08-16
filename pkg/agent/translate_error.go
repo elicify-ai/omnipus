@@ -107,6 +107,17 @@ const (
 	// to a workspace team first.
 	CodeAgentNotConfigured LLMErrorCode = "agent_not_configured"
 
+	// CodeWorkspaceUnavailable: the agent IS on a workspace, but its working
+	// folder could not be opened (disk, permissions, invalid id, or a
+	// system-agent home that could not be created). Distinct from
+	// CodeAgentNotConfigured — adding the agent to a team will not help.
+	CodeWorkspaceUnavailable LLMErrorCode = "workspace_unavailable"
+
+	// CodeModelUnavailable: the caller asked for a different model and the
+	// switch failed. The turn continues on the previous model; this code
+	// is how we say so instead of "we can't tell why".
+	CodeModelUnavailable LLMErrorCode = "model_unavailable"
+
 	// CodeUnknown: unclassified — the residual/inconclusive verdict.
 	//
 	// ⚠️ LOAD-BEARING BEYOND ITS NAME. This code does double duty: it means
@@ -644,6 +655,9 @@ func TranslateLLMError(pe *ProviderError, message string) LLMError {
 //   - ErrAgentNotWorkspaceMember → CodeAgentNotConfigured. Raised by
 //     resolveTurnWorkDirOrRefuse (pkg/agent/workspace_reroot.go) and preserved
 //     through runTurn → runAgentLoop → processMessage.
+//   - ErrWorkspaceWorkDirUnavailable / ErrAgentHomeUnavailable →
+//     CodeWorkspaceUnavailable. The agent is on a workspace (or is a system
+//     agent with a home) but the folder could not be opened.
 //
 // Anything else falls through to the substring classifier, preserving the
 // previous behaviour for every other error shape.
@@ -659,6 +673,14 @@ func TranslateTurnError(err error) LLMError {
 			// Our own refusal text, not provider text — safe as a
 			// Verbose-Chat detail and never persisted.
 			Detail: buildDetail(nil, err.Error()),
+		}
+	}
+	if errors.Is(err, ErrWorkspaceWorkDirUnavailable) || errors.Is(err, ErrAgentHomeUnavailable) {
+		return LLMError{
+			Code:      CodeWorkspaceUnavailable,
+			Message:   defaultUserMessage(CodeWorkspaceUnavailable),
+			Retryable: isRetryable(CodeWorkspaceUnavailable),
+			Detail:    buildDetail(nil, err.Error()),
 		}
 	}
 	return TranslateLLMError(nil, err.Error())

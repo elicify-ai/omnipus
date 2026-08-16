@@ -472,8 +472,14 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	// matching call will prompt again, not that this call fails. We log at Warn
 	// instead of Info in that case so an operator can see the grant did not
 	// actually take effect, rather than silently believing it did.
+	resp := gen.ToolApprovalResponse{
+		ApprovalId: approvalID,
+		Action:     gen.ToolApprovalResponseAction(body.Action),
+		Status:     gen.ToolApprovalResponseStatusOk,
+	}
 	if recordGrant {
-		if a.agentLoop.ApprovalGrants().Record(entry.SessionID, entry.AgentID, entry.ToolName, entry.Args) {
+		recorded := a.agentLoop.ApprovalGrants().Record(entry.SessionID, entry.AgentID, entry.ToolName, entry.Args)
+		if recorded {
 			slog.Info("tool-approval: recorded session Always-Allow grant",
 				"approval_id", approvalID,
 				"session_id", entry.SessionID,
@@ -492,13 +498,10 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		// during a delegated child's own turn survives past that child's
 		// session lifetime. See recordGrantOnDelegationParent's doc comment.
 		a.recordGrantOnDelegationParent(entry, approvalID)
+		resp.GrantRecorded = boolPtr(recorded)
 	}
 
-	jsonOK(w, gen.ToolApprovalResponse{
-		ApprovalId: approvalID,
-		Action:     gen.ToolApprovalResponseAction(body.Action),
-		Status:     gen.ToolApprovalResponseStatusOk,
-	})
+	jsonOK(w, resp)
 }
 
 // recordGrantOnDelegationParent is the fix for the bug where an "Always
@@ -603,6 +606,14 @@ func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID
 			"child_session_id", entry.SessionID,
 			"parent_session_id", meta.ParentSessionID,
 			"parent_agent_id", parentAgent.ID,
+			"agent_id", entry.AgentID,
+			"tool", entry.ToolName)
+	} else {
+		slog.Warn("tool-approval: parent Always-Allow grant was NOT recorded "+
+			"(missing parent session, agent, or tool identity) — this delegation's teardown will drop the child grant",
+			"approval_id", approvalID,
+			"child_session_id", entry.SessionID,
+			"parent_session_id", meta.ParentSessionID,
 			"agent_id", entry.AgentID,
 			"tool", entry.ToolName)
 	}

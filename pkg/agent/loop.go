@@ -711,6 +711,14 @@ var ErrReloadAlreadyInProgress = errors.New("reload already in progress")
 // since both resolve ts.agent.ID the same way in the re-root block below.
 var ErrAgentNotWorkspaceMember = errors.New("agent is not a member of any workspace; turn refused")
 
+// ErrWorkspaceWorkDirUnavailable is returned when the agent belongs to a
+// workspace but its work/ directory could not be created or opened.
+var ErrWorkspaceWorkDirUnavailable = errors.New("workspace work directory unavailable")
+
+// ErrAgentHomeUnavailable is returned when a system agent's private home
+// directory is missing or could not be created.
+var ErrAgentHomeUnavailable = errors.New("agent home directory unavailable")
+
 // perCandidateTimeoutFromConfig derives a per-candidate timeout for the fallback
 // chain from the provider config. It uses the RequestTimeout of the first provider
 // that has a positive RequestTimeout value, falling back to the providers package
@@ -1346,7 +1354,11 @@ func (al *AgentLoop) recordRateLimitDenial(
 		retryHint = "retry shortly"
 	}
 	rlMsg := fmt.Sprintf("rate limit: %s (%s)", payload.PolicyRule, retryHint)
-	ts.appendErrorTranscript(EventKindRateLimit.String(), "rate_limit", rlMsg)
+	ts.appendClassifiedError(EventKindRateLimit.String(), "rate_limit", LLMError{
+		Code:      CodeRateLimited,
+		Message:   rlMsg,
+		Retryable: isRetryable(CodeRateLimited),
+	})
 }
 
 // wireExecToolDeps replaces each agent's bash tool with one constructed via
@@ -4286,10 +4298,8 @@ func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDe
 	// US-1: persist the hook abort to the JSONL transcript so the
 	// replay path re-renders it after page reload (see appendErrorTranscript
 	// docstring). Without this, hook aborts vanish on session reopen.
-	ts.appendErrorTranscript(
-		EventKindError.String(), "hooks",
-		err.Error(),
-	)
+	llm.Message = err.Error()
+	ts.appendClassifiedError(EventKindError.String(), "hooks", llm)
 	return err
 }
 
@@ -7920,7 +7930,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				Message:   llm.Message,
 			},
 		)
-		ts.appendErrorTranscript(EventKindError.String(), "workspace", llm.Message)
+		ts.appendClassifiedError(EventKindError.String(), "workspace", llm)
 		return turnResult{}, wsErr
 	}
 	turnCtx = tools.WithTurnWorkspaceDir(turnCtx, wsDir)
@@ -7964,26 +7974,32 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				// CURRENT session learns immediately — the transcript write alone
 				// only becomes visible after a reload.
 				//
-				// Wave 1 (ADR-051 §RD5 MAJ-003): sanitize the model_switch
-				// message via the classifier so the model name does not leak
-				// into the assistant-facing copy. The classifier recognizes
-				// the "could not switch to model" shape via substring and
-				// emits a generic message; raw stays in logger.WarnCF for
-				// operator triage.
+				// The classifier has never recognized this sentence — the
+				// comment that said it did was stale. Stamp the dedicated
+				// code so live and replay both say the switch failed, not
+				// "we can't tell why". Raw stays in the warn log.
 				switchFailMsg := fmt.Sprintf(
 					"Could not switch to model %q: %s. This reply used %q instead.",
 					requested, switchErr.Error(), ts.agent.Model,
 				)
-				switchLLM := TranslateLLMError(nil, switchFailMsg)
+				switchLLM := LLMError{
+					Code:      CodeModelUnavailable,
+					Message:   defaultUserMessage(CodeModelUnavailable),
+					Retryable: isRetryable(CodeModelUnavailable),
+					Detail:    buildDetail(nil, switchFailMsg),
+				}
 				al.emitEvent(
 					EventKindError,
 					ts.eventMeta("runTurn", "turn.error"),
 					ErrorPayload{
-						Stage: "model_switch", Code: string(switchLLM.Code),
-						Message: switchLLM.Message, ChatID: ts.opts.ChatID,
+						Stage:     "model_switch",
+						Code:      string(switchLLM.Code),
+						Message:   switchLLM.Message,
+						ChatID:    ts.chatID,
+						SessionID: string(ts.routingSessionID),
 					},
 				)
-				ts.appendErrorTranscript(EventKindError.String(), "model_switch", switchLLM.Message)
+				ts.appendClassifiedError(EventKindError.String(), "model_switch", switchLLM)
 				// NB: no notification frame here — `model_switch_failed` is not a
 				// contract NotificationFrame.notification_type, so the SPA's
 				// inbound Zod validation would drop it. The EventKindError +
@@ -9218,11 +9234,7 @@ turnLoop:
 			// FR-002: persist the translated provider error to the transcript
 			// (write choke point — ADR-051 §RD5). pe threaded through so the
 			// classifier sees status/body, not the stringified err.
-			ts.appendErrorTranscript(
-				EventKindError.String(), "runTurn",
-				llm.Message,
-				pe,
-			)
+			ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
 			logger.ErrorCF("agent", "LLM call failed",
 				map[string]any{
 					"agent_id":  ts.agent.ID,
@@ -9425,11 +9437,7 @@ turnLoop:
 				)
 				// FR-002: persist this provider error to the transcript (write
 				// choke point).
-				ts.appendErrorTranscript(
-					EventKindError.String(), "runTurn",
-					llm.Message,
-					pe,
-				)
+				ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
 				return turnResult{}, fmt.Errorf("LLM call failed during empty-response retry: %w", err)
 			}
 			if strings.TrimSpace(responseContent) == "" {
@@ -10749,10 +10757,7 @@ turnLoop:
 			// US-1: persist the session-save failure to the JSONL
 			// transcript so the replay path re-renders it after reload (see
 			// appendErrorTranscript docstring).
-			ts.appendErrorTranscript(
-				EventKindError.String(), "runTurn",
-				saveLLM.Message,
-			)
+			ts.appendClassifiedError(EventKindError.String(), "runTurn", saveLLM)
 			return turnResult{}, err
 		}
 	}
@@ -10885,13 +10890,15 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 		EventKindError,
 		ts.eventMeta("abortTurn", "turn.error"),
 		ErrorPayload{
-			Stage:   stage,
-			Code:    string(abortLLM.Code),
-			Message: presented,
-			ChatID:  ts.opts.ChatID,
+			Stage:     stage,
+			Code:      string(abortLLM.Code),
+			Message:   presented,
+			ChatID:    ts.opts.ChatID,
+			SessionID: string(ts.routingSessionID),
 		},
 	)
-	ts.appendErrorTranscript(EventKindError.String(), stage, presented)
+	abortLLM.Message = presented
+	ts.appendClassifiedError(EventKindError.String(), stage, abortLLM)
 	return turnResult{status: TurnEndStatusAborted}, err
 }
 

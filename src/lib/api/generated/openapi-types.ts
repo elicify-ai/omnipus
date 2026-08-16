@@ -7328,6 +7328,8 @@ export interface components {
              * @enum {string}
              */
             status: "ok";
+            /** @description Present only when action is "always". True when the standing Always Allow grant was stored. False means this call was approved once, but the next identical call will ask again — the grant did not stick (missing session, agent, or tool identity on the approval). */
+            grant_recorded?: boolean;
         };
         /**
          * UploadFilesResponse

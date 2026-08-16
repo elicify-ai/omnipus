@@ -212,7 +212,7 @@ func runExternalCLISubTurn(
 				Message:   llm.Message,
 			},
 		)
-		childTS.appendErrorTranscript(EventKindError.String(), "workspace", llm.Message)
+		childTS.appendClassifiedError(EventKindError.String(), "workspace", llm)
 		return nil, fmt.Errorf("external-cli dispatch: %w", wsErr)
 	}
 
@@ -880,9 +880,9 @@ func emitExternalCLIErrorEvent(
 	// Mirror to the JSONL transcript via the write choke point. The raw
 	// runnerErr.Message stays in sanitized.LogText / gateway.log; the
 	// transcript gets the generic copy.
-	ts.appendErrorTranscript(
-		EventKindError.String(),
-		"external_cli",
-		sanitized.AssistantText,
-	)
+	ts.appendClassifiedError(EventKindError.String(), "external_cli", LLMError{
+		Code:      sanitized.Code,
+		Message:   sanitized.AssistantText,
+		Retryable: isRetryable(sanitized.Code),
+	})
 }

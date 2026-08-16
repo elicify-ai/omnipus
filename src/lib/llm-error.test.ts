@@ -39,6 +39,8 @@ const ALL_CODES: LLMErrorCode[] = [
   'tool_args',
   'schema',
   'agent_not_configured',
+  'workspace_unavailable',
+  'model_unavailable',
   'unknown',
 ]
 

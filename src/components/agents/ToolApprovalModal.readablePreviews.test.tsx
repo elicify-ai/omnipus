@@ -60,7 +60,11 @@ beforeEach(() => {
     useToolApprovalStore.setState({ queue: [] })
   })
   vi.clearAllMocks()
-  vi.mocked(api.submitToolApproval).mockResolvedValue(undefined)
+  vi.mocked(api.submitToolApproval).mockResolvedValue({
+    approval_id: 'appr-mount-readable',
+    action: 'approve',
+    status: 'ok',
+  })
   queryClient.clear()
 })
 

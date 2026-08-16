@@ -13138,6 +13138,9 @@ type ToolApprovalResponse struct {
 	// ApprovalId The approval ID that was resolved.
 	ApprovalId string `json:"approval_id"`
 
+	// GrantRecorded Present only when action is "always". True when the standing Always Allow grant was stored. False means this call was approved once, but the next identical call will ask again — the grant did not stick (missing session, agent, or tool identity on the approval).
+	GrantRecorded *bool `json:"grant_recorded,omitempty"`
+
 	// Status Result status. Always "ok" when the action was accepted.
 	Status ToolApprovalResponseStatus `json:"status"`
 }

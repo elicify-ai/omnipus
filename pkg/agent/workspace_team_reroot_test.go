@@ -390,8 +390,13 @@ func TestAppendErrorTranscript_WorkspaceRefusal_StampsAgentNotConfigured(t *test
 		transcriptSessionID: meta.ID,
 		agentID:             "main",
 	}
-	catalogue := UserMessageForCode(CodeAgentNotConfigured)
-	ts.appendErrorTranscript(EventKindError.String(), "workspace", catalogue)
+	llm := LLMError{
+		Code:      CodeAgentNotConfigured,
+		Message:   UserMessageForCode(CodeAgentNotConfigured),
+		Retryable: isRetryable(CodeAgentNotConfigured),
+	}
+	ts.appendClassifiedError(EventKindError.String(), "workspace", llm)
+	catalogue := llm.Message
 
 	entries, err := store.ReadTranscript(meta.ID)
 	require.NoError(t, err)
@@ -410,6 +415,104 @@ func TestAppendErrorTranscript_WorkspaceRefusal_StampsAgentNotConfigured(t *test
 	assert.Equal(t, isRetryable(CodeAgentNotConfigured), got.ErrorRetryable)
 	assert.True(t, isTrustedInternalStage("workspace", EventKindError.String()),
 		"workspace/error must be a trusted internal stage so a later classifier change cannot clobber the sentence")
+}
+
+// Uncoded workspace writes must NOT be restamped as membership. That lie
+// is how a work-dir failure replayed as "add this agent to a workspace".
+func TestAppendErrorTranscript_UncodedWorkspaceDoesNotStampMembership(t *testing.T) {
+	store, err := session.NewUnifiedStore(t.TempDir())
+	require.NoError(t, err)
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	require.NoError(t, err)
+
+	ts := &turnState{
+		transcriptStore:     store,
+		transcriptSessionID: meta.ID,
+		agentID:             "main",
+	}
+	catalogue := UserMessageForCode(CodeWorkspaceUnavailable)
+	ts.appendErrorTranscript(EventKindError.String(), "workspace", catalogue)
+
+	entries, err := store.ReadTranscript(meta.ID)
+	require.NoError(t, err)
+	var got *session.TranscriptEntry
+	for i := range entries {
+		if entries[i].Type == session.EntryTypeSystem && entries[i].Status == "error" {
+			got = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, got)
+	assert.NotEqual(t, string(CodeAgentNotConfigured), got.ErrorCode,
+		"an uncoded workspace write must not be restamped as membership")
+	assert.Equal(t, string(CodeUnknown), got.ErrorCode,
+		"a catalogue sentence has no classifier substring; uncoded write must stay unknown")
+}
+
+func TestAppendClassifiedError_KeepsCallerCodeThroughCatalogueSentence(t *testing.T) {
+	store, err := session.NewUnifiedStore(t.TempDir())
+	require.NoError(t, err)
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	require.NoError(t, err)
+
+	ts := &turnState{
+		transcriptStore:     store,
+		transcriptSessionID: meta.ID,
+		agentID:             "main",
+	}
+	llm := LLMError{
+		Code:      CodeWorkspaceUnavailable,
+		Message:   UserMessageForCode(CodeWorkspaceUnavailable),
+		Retryable: isRetryable(CodeWorkspaceUnavailable),
+	}
+	ts.appendClassifiedError(EventKindError.String(), "workspace", llm)
+
+	entries, err := store.ReadTranscript(meta.ID)
+	require.NoError(t, err)
+	var got *session.TranscriptEntry
+	for i := range entries {
+		if entries[i].Type == session.EntryTypeSystem && entries[i].Status == "error" {
+			got = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, got)
+	assert.Equal(t, string(CodeWorkspaceUnavailable), got.ErrorCode,
+		"replay looks up by ErrorCode; re-classifying the catalogue sentence would stamp unknown")
+	assert.Equal(t, llm.Message, got.Content)
+}
+
+func TestAppendClassifiedError_ModelSwitchStampsModelUnavailable(t *testing.T) {
+	store, err := session.NewUnifiedStore(t.TempDir())
+	require.NoError(t, err)
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	require.NoError(t, err)
+
+	ts := &turnState{
+		transcriptStore:     store,
+		transcriptSessionID: meta.ID,
+		agentID:             "main",
+	}
+	llm := LLMError{
+		Code:      CodeModelUnavailable,
+		Message:   UserMessageForCode(CodeModelUnavailable),
+		Retryable: isRetryable(CodeModelUnavailable),
+	}
+	ts.appendClassifiedError(EventKindError.String(), "model_switch", llm)
+
+	entries, err := store.ReadTranscript(meta.ID)
+	require.NoError(t, err)
+	var got *session.TranscriptEntry
+	for i := range entries {
+		if entries[i].Type == session.EntryTypeSystem && entries[i].Status == "error" {
+			got = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, got)
+	assert.Equal(t, string(CodeModelUnavailable), got.ErrorCode)
+	assert.Equal(t, llm.Message, got.Content)
+	assert.NotEqual(t, string(CodeUnknown), got.ErrorCode)
 }
 
 func TestAppendErrorTranscript_RateLimitDenial_StampsRateLimited(t *testing.T) {

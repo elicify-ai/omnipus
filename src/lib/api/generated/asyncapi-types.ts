@@ -146,14 +146,14 @@ export interface DoneFrame {
 }
 
 export interface LLMError {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "agent_not_configured" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "unknown";
   message: string;
   retryable: boolean;
   detail?: string;
 }
 
 export interface LLMErrorReplay {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "agent_not_configured" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "unknown";
   message: string;
   retryable: boolean;
 }

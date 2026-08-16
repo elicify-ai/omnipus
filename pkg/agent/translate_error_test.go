@@ -337,6 +337,8 @@ func allClassifierCodes() []LLMErrorCode {
 		CodeToolArgs,
 		CodeSchema,
 		CodeAgentNotConfigured,
+		CodeWorkspaceUnavailable,
+		CodeModelUnavailable,
 		CodeUnknown,
 	}
 }
@@ -436,6 +438,8 @@ func TestUserMessages_SplitCodesAttributedToRealOwners(t *testing.T) {
 	assert.Equal(t, generated.LLMErrorAttributionProduct, AttributionForCode(CodeRequestTooLarge))
 	assert.Equal(t, generated.LLMErrorAttributionConfig, AttributionForCode(CodeProviderAuthFailed))
 	assert.Equal(t, generated.LLMErrorAttributionConfig, AttributionForCode(CodeAgentNotConfigured))
+	assert.Equal(t, generated.LLMErrorAttributionConfig, AttributionForCode(CodeWorkspaceUnavailable))
+	assert.Equal(t, generated.LLMErrorAttributionConfig, AttributionForCode(CodeModelUnavailable))
 	assert.Equal(t, generated.LLMErrorAttributionModel, AttributionForCode(CodeProviderRejected))
 
 	assert.Contains(t, strings.ToLower(UserMessageForCode(CodeProviderAuthFailed)), "settings",
@@ -480,6 +484,29 @@ func TestTranslateTurnError_AgentNotWorkspaceMember(t *testing.T) {
 		"the substring classifier must still run for non-sentinel errors")
 	assert.Equal(t, CodeUnknown, TranslateTurnError(nil).Code,
 		"a nil error must not panic")
+}
+
+func TestTranslateTurnError_WorkspaceWorkDirUnavailable(t *testing.T) {
+	wrapped := fmt.Errorf("run turn: %w",
+		fmt.Errorf("%w: agent_id=mia workspace_id=ws-1: %w",
+			ErrWorkspaceWorkDirUnavailable, errors.New("no space left on device")))
+
+	llm := TranslateTurnError(wrapped)
+	assert.Equal(t, CodeWorkspaceUnavailable, llm.Code,
+		"a work-dir failure must not be sold as a membership problem or as unknown")
+	assert.False(t, llm.Retryable)
+	assert.Equal(t, UserMessageForCode(CodeWorkspaceUnavailable), llm.Message)
+	assert.NotContains(t, llm.Message, "agent_id=mia")
+	assert.NotContains(t, llm.Message, "no space left")
+}
+
+func TestTranslateTurnError_AgentHomeUnavailable(t *testing.T) {
+	wrapped := fmt.Errorf("%w: agent_id=sys", ErrAgentHomeUnavailable)
+
+	llm := TranslateTurnError(wrapped)
+	assert.Equal(t, CodeWorkspaceUnavailable, llm.Code)
+	assert.Equal(t, UserMessageForCode(CodeWorkspaceUnavailable), llm.Message)
+	assert.NotContains(t, llm.Message, "agent_id=sys")
 }
 
 // TestUserMessageForCode_NoLegacyAIServiceCopy locks the brand-tone

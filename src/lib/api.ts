@@ -101,6 +101,7 @@ import {
   ExecutorSmokeTestResponse as ExecutorSmokeTestResponseSchema,
   GatewayStatus as GatewayStatusSchema,
   ToolRegistryEntry as ToolRegistryEntrySchema,
+  ToolApprovalResponse as ToolApprovalResponseSchema,
   ChannelEntry as ChannelEntrySchema,
   ChannelEnabledResponse as ChannelEnabledResponseSchema,
   ChannelCreateResponse as ChannelCreateResponseSchema,
@@ -442,6 +443,7 @@ import type {
   MailboxConfigureRequest,
   // Tool-approval "always" grant action (commit 35447760, contract-first #8):
   ToolApprovalActionRequest,
+  ToolApprovalResponse,
   // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
   BrowserInspectRequest,
   BrowserInspectResponse,
@@ -3899,16 +3901,18 @@ export function updateAgentTools(
  * action is the generated ToolApprovalActionRequest['action'] union — includes
  * "always" (approve this call AND record a session-scoped Always-Allow grant
  * via ApprovalGrantStore.Record; see pkg/gateway/rest_tool_registry.go).
+ * On "always", grant_recorded is present: true if the standing grant stuck,
+ * false if this call was approved once but the next identical call will ask
+ * again.
  */
 export function submitToolApproval(
   approvalId: string,
   action: ToolApprovalActionRequest['action'],
-): Promise<void> {
-  // no-schema: void response; POST returns 204 No Content.
-  return request<void>(`/tool-approvals/${encodeURIComponent(approvalId)}`, {
+): Promise<ToolApprovalResponse> {
+  return request<ToolApprovalResponse>(`/tool-approvals/${encodeURIComponent(approvalId)}`, {
     method: 'POST',
     body: JSON.stringify({ action }),
-  })
+  }, ToolApprovalResponseSchema as ZodType<ToolApprovalResponse>)
 }
 
 // ── Global Tool Policies ──────────────────────────────────────────────────────

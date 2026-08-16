@@ -1608,6 +1608,12 @@ components:
         agent_not_configured:
           message: "This agent isn’t on any workspace yet, so it has nowhere to work. Add it to a workspace team to get started."
           attribution: config
+        workspace_unavailable:
+          message: "This agent’s working folder could not be opened. Check that the disk has space and the folder is writable."
+          attribution: config
+        model_unavailable:
+          message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
+          attribution: config
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -1626,6 +1632,8 @@ components:
             - tool_args
             - schema
             - agent_not_configured
+            - workspace_unavailable
+            - model_unavailable
             - unknown
         message:
           type: string
@@ -1720,6 +1728,12 @@ components:
         agent_not_configured:
           message: "This agent isn’t on any workspace yet, so it has nowhere to work. Add it to a workspace team to get started."
           attribution: config
+        workspace_unavailable:
+          message: "This agent’s working folder could not be opened. Check that the disk has space and the folder is writable."
+          attribution: config
+        model_unavailable:
+          message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
+          attribution: config
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -1738,6 +1752,8 @@ components:
             - tool_args
             - schema
             - agent_not_configured
+            - workspace_unavailable
+            - model_unavailable
             - unknown
         message:
           type: string

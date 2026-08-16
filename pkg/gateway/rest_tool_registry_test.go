@@ -1064,14 +1064,17 @@ func TestApproveTool_ActionAlways_RecordsGrantAndApproves(t *testing.T) {
 	// (a1) HTTP 200 with the echoed action and ok status.
 	require.Equal(t, http.StatusOK, w.Code, "always must be accepted with 200")
 	var resp struct {
-		ApprovalID string `json:"approval_id"`
-		Action     string `json:"action"`
-		Status     string `json:"status"`
+		ApprovalID    string `json:"approval_id"`
+		Action        string `json:"action"`
+		Status        string `json:"status"`
+		GrantRecorded *bool  `json:"grant_recorded"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, entry.ApprovalID, resp.ApprovalID)
 	assert.Equal(t, "always", resp.Action, "response must echo the always action")
 	assert.Equal(t, "ok", resp.Status)
+	require.NotNil(t, resp.GrantRecorded, "always must report whether the grant stuck")
+	assert.True(t, *resp.GrantRecorded, "a complete identity must record the grant")
 
 	// (a2) The pending tool call proceeds: entry transitioned to approved and the
 	// blocked loop goroutine receives an Approved outcome on its result channel.
@@ -1100,6 +1103,42 @@ func TestApproveTool_ActionAlways_RecordsGrantAndApproves(t *testing.T) {
 		"grant must not apply to a different session")
 	assert.False(t, grants.IsAllowed(sessionID, agentID, "read_file", lsArgs),
 		"grant must not apply to a different tool")
+}
+
+// HTTP 200 + grant_recorded:false is the honesty contract: this call is
+// approved, but Always Allow did not stick because the approval had no
+// session identity. requestApproval still accepts an empty session id
+// (it increments missingActingSessionID) — that is the production shape
+// of a grant that cannot be stored.
+func TestApproveTool_ActionAlways_GrantNotRecordedWhenSessionMissing(t *testing.T) {
+	api, reg := newTestRestAPIWithApprovalReg(t)
+	grants := api.agentLoop.ApprovalGrants()
+	require.NotNil(t, grants)
+
+	lsArgs := map[string]any{"command": "ls"}
+	entry, accepted := reg.requestApproval(
+		"tc-always-nosess", "bash", lsArgs, "agent-a", "", "turn-1",
+	)
+	require.True(t, accepted)
+
+	w := postToolApproval(t, api, entry.ApprovalID, "always")
+	require.Equal(t, http.StatusOK, w.Code, "the call itself is still approved")
+
+	var resp struct {
+		Action        string `json:"action"`
+		Status        string `json:"status"`
+		GrantRecorded *bool  `json:"grant_recorded"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "always", resp.Action)
+	assert.Equal(t, "ok", resp.Status)
+	require.NotNil(t, resp.GrantRecorded, "always must report the grant outcome")
+	assert.False(t, *resp.GrantRecorded, "an empty session id cannot store a standing grant")
+
+	require.NotNil(t, reg.get(entry.ApprovalID))
+	assert.Equal(t, ApprovalStateApproved, reg.get(entry.ApprovalID).state)
+	assert.False(t, grants.IsAllowed("", "agent-a", "bash", lsArgs),
+		"Record must refuse an empty session key")
 }
 
 // Compile-time check that wsConn has the userID field used by emitSessionState.
