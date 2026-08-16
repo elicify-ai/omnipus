@@ -342,7 +342,7 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 					"other_live_agent_id",
 					other,
 				)
-				h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "error")
+				h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "multi_agent_capture_denied")
 				h.auditStream(
 					userID,
 					frame.AgentId,

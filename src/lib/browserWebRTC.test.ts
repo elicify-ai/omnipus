@@ -31,6 +31,10 @@ describe('translateWebRTCFallbackReason', () => {
     expect(translateWebRTCFallbackReason('error')).toMatch(/reported an error/i)
   })
 
+  it('maps multi_agent_capture_denied to a named, actionable explanation', () => {
+    expect(translateWebRTCFallbackReason('multi_agent_capture_denied')).toMatch(/already in use by another agent/i)
+  })
+
   it('maps every other known runtime reason to a generic connection-failed message that names the raw reason', () => {
     for (const reason of [
       'ice-failed',
@@ -1001,6 +1005,29 @@ describe('BrowserWebRTCSession — ICE gathering timeout (LOW, fix-wave B)', () 
       expect(onFallback).toHaveBeenCalledWith('ice-gathering-empty')
       expect(machine.state).toBe('fallback')
       expect(pc.close).toHaveBeenCalled() // the dead PC is torn down, not left dangling
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not fire onFallback if stop() lands before the ICE-gathering timeout', async () => {
+    vi.useFakeTimers()
+    try {
+      const pc = makeFakePc()
+      const sendOffer = vi.fn(() => true)
+      const onFallback = vi.fn()
+      const machine = new BrowserWebRTCSession({
+        pcFactory: () => asRTCPeerConnection(pc),
+        iceGatheringTimeoutMs: 50,
+      })
+      machine.onFallback(onFallback)
+      machine.start(sendOffer)
+      await vi.advanceTimersByTimeAsync(0)
+      machine.stop()
+      await vi.advanceTimersByTimeAsync(80)
+      expect(onFallback).not.toHaveBeenCalled()
+      expect(sendOffer).not.toHaveBeenCalled()
+      expect(machine.state).toBe('idle')
     } finally {
       vi.useRealTimers()
     }

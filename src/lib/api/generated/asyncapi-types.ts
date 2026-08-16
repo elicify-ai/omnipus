@@ -559,7 +559,7 @@ export interface BrowserWebRTCStateFrame {
   type: "browser_webrtc_state";
   session_id?: string;
   available: boolean;
-  reason?: "disabled" | "not_capable" | "lite_build" | "error";
+  reason?: "disabled" | "not_capable" | "lite_build" | "error" | "multi_agent_capture_denied";
   has_audio?: boolean;
   active?: boolean;
 }

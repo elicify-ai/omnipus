@@ -75,8 +75,12 @@ primary_region = "sin"
   [[services.ports]]
     port = 50000
 
-# NOTE: no [[mounts]] here — this app has NO volume, so $OMNIPUS_HOME is
-# ephemeral and a restart wipes config, credentials and sessions entirely.
+# Persist $OMNIPUS_HOME across deploys. Volume created 2026-08-16:
+# swimlane_omnipus_data (vol_vp2w0w1259987124) in sin. First attach is empty
+# (the previous ephemeral onboard is gone); later deploys keep config.
+[[mounts]]
+  source = "swimlane_omnipus_data"
+  destination = "/home/omnipus/.omnipus"
 
 [[vm]]
   # 2 PERFORMANCE (dedicated) cores, unlike uat-omnipus's 4 shared ones. Kept

@@ -288,13 +288,14 @@ export function CreateAgentModal({
   // catalogue" case is derived from each `Provider.warning` field
   // (already on the wire — see `pkg/gateway/rest.go`'s providers-list
   // handler) directly in Step1Identity, no extra fetch needed.
-  const providersLoading = providersQuery.isLoading
+  const providersLoading = providersQuery.isLoading || providersQuery.isFetching
   const providersError = providersQuery.isError
     ? getErrorMessage(providersQuery.error, 'Failed to load providers')
     : undefined
+  const refetchProviders = providersQuery.refetch
   const handleRetryProviders = useCallback(() => {
-    void providersQuery.refetch()
-  }, [providersQuery])
+    void refetchProviders()
+  }, [refetchProviders])
 
   // Dev-time drift guard: once the full tool registry resolves, warn if any
   // role-preset override key (toolPolicyPresets.ts) doesn't match a real

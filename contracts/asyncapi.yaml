@@ -3392,10 +3392,12 @@ components:
           - not_capable
           - lite_build
           - error
+          - multi_agent_capture_denied
           description: 'Present when available=false (or when active unexpectedly drops to false): disabled = tools.browser.webrtc_enabled
             is off; not_capable = platform/managed-Chrome capability classification is below WebRTC eligibility (ADR-047 D5,
             e.g. chrome-headless-shell only, no full Chrome); lite_build = binary built with -tags lite (Pion compiled out,
-            ADR-047 D7); error = a runtime failure (capture/encoder/ICE) took the WebRTC path out of service for this session.'
+            ADR-047 D7); error = a runtime failure (capture/encoder/ICE) took the WebRTC path out of service for this session;
+            multi_agent_capture_denied = another agent''s capture is already being viewed (ADR-048 condition 2; v1 is single-capture).'
         has_audio:
           type: boolean
           description: True if the active (or about-to-be-offered) media includes an audio track from the captured tab. Absent/false

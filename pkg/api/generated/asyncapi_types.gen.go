@@ -195,7 +195,7 @@ type BrowserWebRTCStateFrame struct {
 	Available bool `json:"available"`
 	// True if the active (or about-to-be-offered) media includes an audio track from the captured tab. Absent/false when audio is unavailable or not yet known.
 	HasAudio *bool `json:"has_audio,omitempty"`
-	// Present when available=false (or when active unexpectedly drops to false): disabled = tools.browser.webrtc_enabled is off; not_capable = platform/managed-Chrome capability classification is below WebRTC eligibility (ADR-047 D5, e.g. chrome-headless-shell only, no full Chrome); lite_build = binary built with -tags lite (Pion compiled out, ADR-047 D7); error = a runtime failure (capture/encoder/ICE) took the WebRTC path out of service for this session.
+	// Present when available=false (or when active unexpectedly drops to false): disabled = tools.browser.webrtc_enabled is off; not_capable = platform/managed-Chrome capability classification is below WebRTC eligibility (ADR-047 D5, e.g. chrome-headless-shell only, no full Chrome); lite_build = binary built with -tags lite (Pion compiled out, ADR-047 D7); error = a runtime failure (capture/encoder/ICE) took the WebRTC path out of service for this session; multi_agent_capture_denied = another agent's capture is already being viewed (ADR-048 condition 2; v1 is single-capture).
 	Reason *string `json:"reason,omitempty"`
 	// Echoes the session_id from the triggering browser_webrtc_offer / browser_attach, for client-side correlation only.
 	SessionId *string `json:"session_id,omitempty"`

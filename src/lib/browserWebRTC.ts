@@ -99,7 +99,7 @@ export interface BrowserWebRTCSessionOptions { // not-wire-format: local constru
    * 'complete' before giving up and sending the offer with whatever
    * candidates have gathered so far (non-trickle still works with a partial
    * candidate set — better than wedging in 'offering' forever on a stuck
-   * gathering). Default 3000. */
+   * gathering). Default 12000. */
   iceGatheringTimeoutMs?: number
 }
 
@@ -211,6 +211,8 @@ export function translateWebRTCFallbackReason(reason: string): string {
       return "Live video isn't available in this lite build."
     case 'error':
       return 'The live browser reported an error starting video. Retry, or reload the page if it keeps failing.'
+    case 'multi_agent_capture_denied':
+      return 'Live video is already in use by another agent. Close that live view first, then retry.'
     default:
       return `Live video connection failed (${reason}). Retry, or reload the page if it keeps failing.`
   }
@@ -255,6 +257,7 @@ export class BrowserWebRTCSession {
   private answerTimeoutTimer: ReturnType<typeof setTimeout> | null = null
   private disconnectedTimer: ReturnType<typeof setTimeout> | null = null
   private retryTimer: ReturnType<typeof setTimeout> | null = null
+  private iceGatheringTimer: ReturnType<typeof setTimeout> | null = null
 
   private streamCb: ((stream: MediaStream) => void) | null = null
   private inputOpenCb: (() => void) | null = null
@@ -523,7 +526,8 @@ export class BrowserWebRTCSession {
       // (`_beginOffer`) re-checks `this.pc !== pc` right after this resolves,
       // so a timeout firing after the session was superseded/stopped is
       // harmless.
-      const timer = setTimeout(() => {
+      this.iceGatheringTimer = setTimeout(() => {
+        this.iceGatheringTimer = null
         pc.onicegatheringstatechange = null
         // Proceeding with a PARTIAL candidate set is fine. Proceeding with an
         // EMPTY one never is: non-trickle means an offer carrying no
@@ -562,7 +566,10 @@ export class BrowserWebRTCSession {
       }, this.iceGatheringTimeoutMs)
       pc.onicegatheringstatechange = () => {
         if (pc.iceGatheringState === 'complete') {
-          clearTimeout(timer)
+          if (this.iceGatheringTimer !== null) {
+            clearTimeout(this.iceGatheringTimer)
+            this.iceGatheringTimer = null
+          }
           pc.onicegatheringstatechange = null
           resolve()
         }
@@ -686,8 +693,10 @@ export class BrowserWebRTCSession {
     if (this._state === 'fallback') return
     this._cleanupPeer()
     this._setState('fallback')
-    this.fallbackCb?.(reason)
+    // A stop() mid-gather used to still fire onFallback after the panel
+    // closed (the gathering timeout is a local setTimeout). Do not notify.
     if (this.stopped) return
+    this.fallbackCb?.(reason)
     if (this.retryCount >= this.maxRetries) return
     // Exponential backoff, capped by the attempt count: a transient blip
     // recovers on the first retry (retryDelayMs), while a genuinely-down
@@ -703,6 +712,10 @@ export class BrowserWebRTCSession {
   private _cleanupPeer(): void {
     this._clearAnswerTimeout()
     this._clearDisconnectedTimer()
+    if (this.iceGatheringTimer !== null) {
+      clearTimeout(this.iceGatheringTimer)
+      this.iceGatheringTimer = null
+    }
     if (this.inputChannel) {
       try {
         this.inputChannel.close()
