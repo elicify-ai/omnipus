@@ -94,7 +94,11 @@ describe('ToolApprovalModal — rendering', () => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
     render(<ToolApprovalModal />)
-    expect(screen.getByText('fetch_url')).toBeInTheDocument()
+    // Deliverable 3: the modal shows the HUMAN tool name (humanizeToolName),
+    // not the raw wire identifier — 'fetch_url' has an EXPLICIT_LABELS entry
+    // ('Fetch URL'), so the raw id should no longer appear as the Tool label.
+    expect(screen.getByText('Fetch URL')).toBeInTheDocument()
+    expect(screen.queryByText('fetch_url')).not.toBeInTheDocument()
     expect(screen.getByText('Tool Approval Required')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Deny/i })).toBeInTheDocument()
@@ -639,14 +643,21 @@ describe('ToolApprovalModal — Always Allow suppression', () => {
     expect(screen.queryByTestId('always-allow-toggle')).toBeNull()
   })
 
-  it('still offers Approve and Deny for request_mount', () => {
+  it('still offers a way to approve and a way to deny request_mount', () => {
     // Only the SHORTCUT is withheld. Removing the decision itself would leave
     // the agent hanging with no way for the operator to answer.
+    //
+    // request_mount's copy diverges from the generic Approve/Deny labels
+    // (operator-approved "Add folder" / "Don't add" — see
+    // approvalPreviews/registry.ts and RequestMountApprovalPreview.tsx) but
+    // still dispatches the same 'approve'/'deny' actions — covered by the
+    // dedicated ToolApprovalModal.readablePreviews.test.tsx suite. This test
+    // only asserts BOTH decision buttons are present, whatever their label.
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
     render(<ToolApprovalModal />)
-    expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Deny/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Add folder/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Don't add/i })).toBeInTheDocument()
   })
 })

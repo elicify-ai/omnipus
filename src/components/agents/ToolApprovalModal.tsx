@@ -40,9 +40,11 @@
 // flow, its rendering was compared against this one:
 //   - PORTED: the readable "binary highlighted, env-prefix separated"
 //     command preview + working-dir line ExecApprovalBlock showed for shell
-//     commands. See formatBashCommand() below and its use in ToolApprovalCard
-//     — rendered whenever toolName is "bash" and args.command is a string,
-//     in addition to (not instead of) the generic Arguments JSON dump.
+//     commands. Now lives in approvalPreviews/BashApprovalPreview.tsx,
+//     registered under the 'bash' key in approvalPreviews/registry.ts as an
+//     'additive' entry — rendered whenever toolName is "bash" and
+//     args.command is a string, in addition to (not instead of) the generic
+//     Arguments JSON dump. See the per-tool preview registry note below.
 //   - PORTED: ExecApprovalBlock's 3-way decision (Allow / Deny / "Always
 //     Allow") is now fully available here too — the Always Allow button
 //     posts {action:"always"}, which the gateway resolves by approving the
@@ -54,7 +56,7 @@
 //     exec-only flow.
 
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { CheckCircle, XCircle, ProhibitInset, Shield, Lock } from '@phosphor-icons/react'
+import { CheckCircle, XCircle, ProhibitInset, Shield, Lock, WarningCircle } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import {
@@ -66,8 +68,13 @@ import {
 } from '@/components/ui/dialog'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { submitToolApproval, isApiError } from '@/lib/api'
+import type { Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { forceLogout } from '@/lib/authLogout'
+import { humanizeToolName } from '@/lib/humanizeToolName'
+import { queryClient } from '@/lib/queryClient'
+import { TOOL_APPROVAL_PREVIEWS } from './approvalPreviews/registry'
+import type { ToolApprovalPreviewContext } from './approvalPreviews/types'
 
 /**
  * Tools for which the "Always Allow" shortcut is withheld — see the
@@ -108,28 +115,6 @@ function formatCountdown(ms: number): string {
   return `${mins}m ${remainSecs}s`
 }
 
-// Formats a `bash` command string for display: separates any leading
-// `KEY=value` env-var assignments from the binary name and highlights the
-// binary. Ported verbatim (in spirit) from the retired ExecApprovalBlock so
-// approving a `bash` call still shows a readable command preview, not just
-// the raw Arguments JSON — see the ADR-036 note atop this file.
-function formatBashCommand(command: string): { envPrefix: string; binary: string; args: string } {
-  const parts = command.split(' ')
-  let binaryIndex = 0
-  for (let i = 0; i < parts.length; i++) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[i])) {
-      binaryIndex = i
-      break
-    }
-  }
-  const envPrefix = parts.slice(0, binaryIndex).join(' ')
-  const afterEnv = envPrefix ? command.slice(envPrefix.length + 1) : command
-  const firstSpace = afterEnv.indexOf(' ')
-  const binary = firstSpace === -1 ? afterEnv : afterEnv.slice(0, firstSpace)
-  const args = firstSpace === -1 ? '' : afterEnv.slice(firstSpace)
-  return { envPrefix, binary, args }
-}
-
 interface ToolApprovalCardProps {
   approvalId: string
   toolName: string
@@ -137,6 +122,15 @@ interface ToolApprovalCardProps {
   agentId: string
   expiresAt: number
   queueLength: number
+  /**
+   * Present on every entry sourced from a live tool_approval_required frame
+   * (the wire schema requires both non-empty, minLength 1). Empty here is the
+   * "reconnect stub" signal — see isReconnectStub below and the Deliverable 4
+   * note on ToolApprovalModal's call site.
+   */
+  toolCallId: string
+  turnId: string
+  sessionId: string
 }
 
 function ToolApprovalCard({
@@ -146,6 +140,9 @@ function ToolApprovalCard({
   agentId,
   expiresAt,
   queueLength,
+  toolCallId,
+  turnId,
+  sessionId,
 }: ToolApprovalCardProps) {
   const dequeue = useToolApprovalStore((s) => s.dequeue)
   const addToast = useUiStore((s) => s.addToast)
@@ -242,15 +239,39 @@ function ToolApprovalCard({
   // Deny and Approve are unaffected; only the shortcut is withheld.
   const alwaysAllowSuppressed = ALWAYS_ALLOW_SUPPRESSED_TOOLS.has(toolName)
 
-  // Ported from the retired ExecApprovalBlock (see the ADR-036 note atop this
-  // file) — a readable command preview for `bash` calls, additive to (not a
-  // replacement for) the generic Arguments JSON below.
-  const bashCommand =
-    toolName === 'bash' && typeof args.command === 'string' && args.command.length > 0
-      ? args.command
-      : null
-  const bashPreview = bashCommand ? formatBashCommand(bashCommand) : null
-  const bashCwd = typeof args.cwd === 'string' && args.cwd.length > 0 ? args.cwd : undefined
+  // ── Reconnect-gap guard (Deliverable 4) ───────────────────────────────────
+  // SessionStatePendingApproval (the WS session_state reconnect snapshot)
+  // carries no `args`, `tool_call_id`, or `turn_id` — strictly less than a
+  // live tool_approval_required frame. When an approval the server still
+  // considers pending was never seen by this tab as a live frame (page
+  // reload while an approval was outstanding, or a second tab connecting
+  // afterwards), reconcileWithSessionState (src/store/toolApproval.ts) adds a
+  // stub queue entry for it with toolCallId/turnId set to '' — see that
+  // function's own comment for the full rationale. This is a safe,
+  // collision-free signal rather than a heuristic: toolCallId and turnId are
+  // both required + minLength 1 on the wire (ToolApprovalRequiredFrame
+  // schema), so a genuine live frame — the only thing enqueue() ever
+  // constructs a queue entry from — can never produce an empty string here.
+  const isReconnectStub = toolCallId === '' && turnId === ''
+
+  // ── Per-tool readable-summary registry (Deliverables 1-3) ─────────────────
+  const resolvedAgentName =
+    queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)?.name || agentId
+  const previewEntry = TOOL_APPROVAL_PREVIEWS[toolName]
+  const replaceEntry = previewEntry?.mode === 'replace' ? previewEntry : undefined
+  const previewCtx: ToolApprovalPreviewContext = {
+    toolName,
+    args,
+    agentId,
+    agentName: resolvedAgentName,
+    sessionId,
+  }
+  const dialogTitleText = replaceEntry
+    ? (replaceEntry.title?.(previewCtx) ?? 'Tool Approval Required')
+    : 'Tool Approval Required'
+  const primaryLabel = replaceEntry?.primaryLabel ?? 'Approve'
+  const secondaryLabel = replaceEntry?.secondaryLabel ?? 'Deny'
+  const showCancelButton = replaceEntry ? (replaceEntry.showCancel ?? true) : true
 
   return (
     <Dialog
@@ -290,10 +311,19 @@ function ToolApprovalCard({
               id={titleId}
               className="text-sm font-semibold text-[var(--color-secondary)] font-headline"
             >
-              Tool Approval Required
+              {isReconnectStub ? 'Approval Details Unavailable' : dialogTitleText}
             </DialogTitle>
             <DialogDescription id={descId} className="text-xs text-[var(--color-muted)] truncate">
-              Agent <span className="font-mono">{agentId}</span> is requesting permission to run a tool.
+              {isReconnectStub ? (
+                "This page can't show what's being asked — see below."
+              ) : replaceEntry ? (
+                'Review the details below before deciding.'
+              ) : (
+                <>
+                  Agent <span className="font-mono">{agentId}</span> is requesting permission to run a
+                  tool.
+                </>
+              )}
             </DialogDescription>
           </div>
           {queueLength > 1 && (
@@ -303,43 +333,45 @@ function ToolApprovalCard({
           )}
         </DialogHeader>
 
-        {/* Tool info */}
-        <div className="px-5 py-4 space-y-3">
-          <div>
-            <p className="text-xs text-[var(--color-muted)] mb-1">Tool</p>
-            <p className="font-mono text-sm text-[var(--color-accent)] font-semibold">
-              {toolName}
+        {/* Tool info — reconnect-stub notice, a 'replace'-mode readable summary
+            (e.g. request_mount), or the generic Tool line + optional
+            'additive' preview (e.g. bash) + raw Arguments JSON fallback. */}
+        {isReconnectStub ? (
+          <div className="px-5 py-4 space-y-2">
+            <div className="flex items-start gap-2 text-sm text-[var(--color-warning)]">
+              <WarningCircle size={16} weight="bold" className="shrink-0 mt-0.5" aria-hidden="true" />
+              <p>
+                This page reconnected after {humanizeToolName(toolName)} was already waiting on a
+                decision, and the original request details did not come back with it.
+              </p>
+            </div>
+            <p className="text-xs text-[var(--color-muted)]">
+              Denying is the safe choice when you can&apos;t see what&apos;s being asked.
             </p>
           </div>
-
-          {bashPreview && (
+        ) : replaceEntry ? (
+          <replaceEntry.Body {...previewCtx} />
+        ) : (
+          <div className="px-5 py-4 space-y-3">
             <div>
-              <p className="text-xs text-[var(--color-muted)] mb-1">Command</p>
-              <pre className="font-mono text-xs bg-[var(--color-surface-2)] rounded-lg px-3 py-2 whitespace-pre-wrap break-all text-[var(--color-secondary)]">
-                {bashPreview.envPrefix && (
-                  <span className="text-[var(--color-muted)]">{bashPreview.envPrefix} </span>
-                )}
-                <span className="text-[var(--color-accent)] font-semibold">{bashPreview.binary}</span>
-                <span>{bashPreview.args}</span>
-              </pre>
-              {bashCwd && (
-                <p className="mt-1 text-[10px] text-[var(--color-muted)]">
-                  <span className="text-[var(--color-border)]">dir: </span>
-                  <span className="font-mono">{bashCwd}</span>
-                </p>
-              )}
+              <p className="text-xs text-[var(--color-muted)] mb-1">Tool</p>
+              <p className="font-mono text-sm text-[var(--color-accent)] font-semibold">
+                {humanizeToolName(toolName)}
+              </p>
             </div>
-          )}
 
-          {args && Object.keys(args).length > 0 && (
-            <div>
-              <p className="text-xs text-[var(--color-muted)] mb-1">Arguments</p>
-              <pre className="text-xs font-mono bg-[var(--color-surface-2)] rounded-lg px-3 py-2 overflow-auto max-h-40 whitespace-pre-wrap break-all text-[var(--color-secondary)]">
-                {argsJson}
-              </pre>
-            </div>
-          )}
-        </div>
+            {previewEntry && <previewEntry.Body {...previewCtx} />}
+
+            {args && Object.keys(args).length > 0 && (
+              <div>
+                <p className="text-xs text-[var(--color-muted)] mb-1">Arguments</p>
+                <pre className="text-xs font-mono bg-[var(--color-surface-2)] rounded-lg px-3 py-2 overflow-auto max-h-40 whitespace-pre-wrap break-all text-[var(--color-secondary)]">
+                  {argsJson}
+                </pre>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Countdown */}
         <div className="px-5 pb-3">
@@ -375,50 +407,72 @@ function ToolApprovalCard({
             without any button clipping. */}
         {!hasExpired && (
           <div className="flex flex-wrap gap-2 px-5 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
-            <Button
-              size="sm"
-              variant="default"
-              onClick={() => handleAction('approve')}
-              disabled={submitting}
-              className="h-8 text-xs flex-1 sm:flex-none"
-            >
-              <CheckCircle size={14} weight="bold" aria-hidden="true" />
-              Approve
-            </Button>
-            <Button
-              ref={denyButtonRef}
-              size="sm"
-              variant="outline"
-              onClick={() => handleAction('deny')}
-              disabled={submitting}
-              className="h-8 text-xs flex-1 sm:flex-none"
-            >
-              <XCircle size={14} weight="bold" aria-hidden="true" />
-              Deny
-            </Button>
-            {!alwaysAllowSuppressed && (
+            {isReconnectStub ? (
+              // Only the safe action is offered — see the Deliverable 4 note
+              // above isReconnectStub's definition. No Approve, no Always
+              // Allow: approving a request this page cannot show would be a
+              // blind decision on the highest-consequence class of tool call.
               <Button
+                ref={denyButtonRef}
                 size="sm"
-                variant="ghost"
-                data-testid="always-allow-toggle"
-                onClick={() => handleAction('always')}
+                variant="outline"
+                onClick={() => handleAction('deny')}
                 disabled={submitting}
-                className="h-8 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] flex-1 sm:flex-none"
+                className="h-8 text-xs w-full"
               >
-                <Lock size={14} aria-hidden="true" />
-                Always Allow
+                <XCircle size={14} weight="bold" aria-hidden="true" />
+                Deny
               </Button>
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={() => handleAction('approve')}
+                  disabled={submitting}
+                  className="h-8 text-xs flex-1 sm:flex-none"
+                >
+                  <CheckCircle size={14} weight="bold" aria-hidden="true" />
+                  {primaryLabel}
+                </Button>
+                <Button
+                  ref={denyButtonRef}
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleAction('deny')}
+                  disabled={submitting}
+                  className="h-8 text-xs flex-1 sm:flex-none"
+                >
+                  <XCircle size={14} weight="bold" aria-hidden="true" />
+                  {secondaryLabel}
+                </Button>
+                {!alwaysAllowSuppressed && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    data-testid="always-allow-toggle"
+                    onClick={() => handleAction('always')}
+                    disabled={submitting}
+                    className="h-8 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] flex-1 sm:flex-none"
+                  >
+                    <Lock size={14} aria-hidden="true" />
+                    Always Allow
+                  </Button>
+                )}
+                {showCancelButton && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleAction('cancel')}
+                    disabled={submitting}
+                    className="h-8 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] ml-auto"
+                  >
+                    <ProhibitInset size={14} aria-hidden="true" />
+                    Cancel
+                  </Button>
+                )}
+              </>
             )}
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => handleAction('cancel')}
-              disabled={submitting}
-              className="h-8 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] ml-auto"
-            >
-              <ProhibitInset size={14} aria-hidden="true" />
-              Cancel
-            </Button>
           </div>
         )}
 
@@ -455,6 +509,9 @@ export function ToolApprovalModal() {
       agentId={first.agentId}
       expiresAt={first.expiresAt}
       queueLength={queue.length}
+      toolCallId={first.toolCallId}
+      turnId={first.turnId}
+      sessionId={first.sessionId}
     />
   )
 }

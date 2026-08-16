@@ -12,6 +12,13 @@ describe('humanizeToolName — explicit map', () => {
   ])('maps %s → %s', (id, expected) => {
     expect(humanizeToolName(id)).toBe(expected)
   })
+
+  // ADR-063 FR-7.2 / operator-approved copy: the raw tool id stays
+  // `request_mount` (label-only rename), but the approval UI must never say
+  // "mount" — see ToolApprovalModal.tsx's RequestMountApprovalPreview.
+  it('maps request_mount → Add folder', () => {
+    expect(humanizeToolName('request_mount')).toBe('Add folder')
+  })
 })
 
 describe('humanizeToolName — ADR-036 bash/delegate consolidation', () => {
