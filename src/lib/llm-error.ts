@@ -2,14 +2,11 @@ import type {
   LLMError as GeneratedLLMError,
   LLMErrorReplay as GeneratedLLMErrorReplay,
 } from '@/lib/api/generated/asyncapi-types'
-
-/**
- * fromModelPrefix is the attribution marker applied to upstream-caused
- * error codes. The bubble can render this with a muted style to make the
- * attribution skim-friendly without changing the copy itself; the string
- * is the single source of truth for both the bubble and the transcript.
- */
-export const fromModelPrefix = 'From the model:'
+import {
+  llmErrorUserAttributions,
+  llmErrorUserMessages,
+  type LLMErrorAttribution,
+} from '@/lib/api/generated/llm-error-messages'
 
 /**
  * llm-error.ts — ADR-051 SPA-side error translation.
@@ -44,42 +41,39 @@ export type LLMErrorCode = GeneratedLLMError['code']
  * bubble (it can leak provider internals / PII); verbose mode surfaces it
  * via the "Technical details" disclosure as `detail`.
  *
- * Copy is intentionally actionable — tells the user what happened and what
- * (if anything) they can do.
+ * GENERATED CONTENT — re-exported from
+ * `@/lib/api/generated/llm-error-messages`, which is emitted from the
+ * `x-user-messages` block on `components.schemas.LLMError` in
+ * `contracts/asyncapi.yaml`. To change a message, edit the contract and re-run
+ * `make gen-contracts`. The Go catalogue that backs the persisted transcript
+ * (`pkg/api/generated/llm_error_messages.gen.go`) is emitted from the same
+ * block, so the bubble and the transcript cannot drift — previously these were
+ * two hand-written maps that had to be edited in lockstep, and weren't.
  *
- * Attribution: errors whose cause is upstream of Omnipus (model/provider
- * rejections, capability, rate limits, content policy, shape, unclassified)
- * are prefixed with "From the model:" so the user knows the failure is
- * not a product bug — they should retry or switch models. Failures we own
- * outright (5xx, fallback) carry no prefix; we take the blame. `network`
- * is ambiguous and carries no prefix; the wording ("check the network")
- * already disambiguates. See `docs/internal/uat/ADR-051-rev4-error-copy-review.md`
- * for the full rationale.
+ * Attribution is written into each sentence rather than carried by a blanket
+ * "From the model:" prefix. That prefix was deleted: it blamed the model for
+ * every failure, including the ones Omnipus causes (an oversized request we
+ * built) and the ones an operator fixes in Settings (a bad API key). The
+ * machine-readable tag now lives in `codeToAttribution`.
  *
- * The `Record<LLMErrorCode, string>` shape is a compile-time gate: adding
- * a new code to the generated AsyncAPI types without updating this map
- * fails `tsc -b --noEmit`.
+ * The `Record<LLMErrorCode, string>` annotation is retained as a compile-time
+ * gate: a code in the generated AsyncAPI types with no catalogue entry (or an
+ * entry for a code that no longer exists) fails `tsc -b --noEmit`.
  */
-export const codeToDisplay: Record<LLMErrorCode, string> = {
-  media_unsupported:
-    "From the model: it can’t use that attachment. Try another format, or switch to a vision-capable model.",
-  provider_rejected:
-    "From the model: it refused this request. Retry once, or pick a different model.",
-  rate_limited:
-    "From the model: it’s rate-limited right now. Wait a moment, then retry.",
-  network:
-    "Couldn’t reach the model. Check the network, then retry.",
-  content_policy:
-    "From the model: it blocked this under its safety policy. Rephrase, or remove the flagged content.",
-  context_too_long:
-    "From the model: this chat is too long for its context window. Start a new session, or drop older turns.",
-  tool_args:
-    "From the model: a tool call had invalid arguments. Retry the turn — Verbose chat shows which tool.",
-  schema:
-    "From the model: the request didn’t match what it expects. Retry; if it keeps failing, switch models or check the tool setup.",
-  unknown:
-    "From the model: it didn’t complete this turn. Retry. If it keeps failing, open Technical details (Verbose chat) or switch models.",
-}
+export const codeToDisplay: Record<LLMErrorCode, string> = llmErrorUserMessages
+
+/**
+ * Who owns the fault behind each code — `model`, `provider`, `product` (ours),
+ * `config` (operator-fixable), `ambiguous`, or `unknown`. Generated from the
+ * same contract block as `codeToDisplay`.
+ *
+ * Consumed by the copy-rule tests (a `product`/`config` message must never tell
+ * the user to switch models, rephrase their content, or — for `config` — retry)
+ * and available to any renderer that wants to style the bubble by fault owner
+ * rather than by code.
+ */
+export const codeToAttribution: Record<LLMErrorCode, LLMErrorAttribution> =
+  llmErrorUserAttributions
 
 /**
  * Resolve the user-facing copy for a code, with a safe fallback for an

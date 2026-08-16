@@ -44,12 +44,20 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Fprintf(os.Stderr, "usage: gen-asyncapi-go <asyncapi.yaml> <output.go>\n")
+	if len(os.Args) != 3 && len(os.Args) != 4 {
+		fmt.Fprintf(os.Stderr,
+			"usage: gen-asyncapi-go <asyncapi.yaml> <types-output.go> [<llm-error-messages-output.go>]\n")
 		os.Exit(1)
 	}
 	inputPath := os.Args[1]
 	outputPath := os.Args[2]
+	// Optional third output: the LLMError user-facing copy catalogue emitted
+	// from components.schemas.LLMError's x-user-messages block. See
+	// usermessages.go. Omitted by callers that only want the struct types.
+	messagesOutputPath := ""
+	if len(os.Args) == 4 {
+		messagesOutputPath = os.Args[3]
+	}
 
 	raw, err := os.ReadFile(inputPath)
 	if err != nil {
@@ -86,6 +94,25 @@ func main() {
 
 	if err := os.WriteFile(outputPath, formatted, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "write %s: %v\n", outputPath, err)
+		os.Exit(1)
+	}
+
+	if messagesOutputPath == "" {
+		return
+	}
+
+	catalogue, err := extractUserMessageCatalogue(doc, "LLMError")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "extract LLMError user-message catalogue: %v\n", err)
+		os.Exit(1)
+	}
+	messagesSrc, err := generateUserMessages(catalogue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "generate LLMError user-message catalogue: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile(messagesOutputPath, messagesSrc, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "write %s: %v\n", messagesOutputPath, err)
 		os.Exit(1)
 	}
 }

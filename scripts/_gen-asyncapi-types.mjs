@@ -1,13 +1,20 @@
 /**
  * _gen-asyncapi-types.mjs
  *
- * Generates two files from contracts/asyncapi.yaml:
+ * Generates three files from contracts/asyncapi.yaml:
  *
  *   1. src/lib/api/generated/asyncapi-types.ts
  *      TypeScript interfaces for every AsyncAPI component schema.
  *
  *   2. src/lib/api/generated/_asyncapi-zod-schemas.generated.ts
  *      Zod runtime schemas for every AsyncAPI component schema.
+ *
+ *   3. src/lib/api/generated/llm-error-messages.ts
+ *      The LLMError user-facing copy catalogue, from the x-user-messages
+ *      extension on components.schemas.LLMError. src/lib/llm-error.ts consumes
+ *      it instead of hand-maintaining `codeToDisplay`; the Go half of the same
+ *      catalogue is emitted by scripts/gen-asyncapi-go from the same block, so
+ *      the chat bubble and the persisted transcript cannot drift apart.
  *
  * Approach: parse the AsyncAPI YAML, extract components.schemas, convert each
  * JSON Schema to TypeScript + Zod using purpose-built converters.
@@ -96,6 +103,7 @@ const CONTRACTS_DIR = resolveContractsDir();
 const asyncapiPath = resolve(CONTRACTS_DIR, "asyncapi.yaml");
 const outPath = resolve(ROOT, "src/lib/api/generated/asyncapi-types.ts");
 const zodOutPath = resolve(ROOT, "src/lib/api/generated/_asyncapi-zod-schemas.generated.ts");
+const messagesOutPath = resolve(ROOT, "src/lib/api/generated/llm-error-messages.ts");
 
 const doc = yaml.load(readFileSync(asyncapiPath, "utf8"));
 const schemas = doc.components?.schemas ?? {};
@@ -538,3 +546,133 @@ zodLines.push("export type WsFrame = z.infer<typeof WsFrame>;");
 const zodOutput = zodLines.join("\n");
 writeFileSync(zodOutPath, zodOutput, "utf8");
 console.log(`Generated ${zodOutPath} (${zodOutput.split("\n").length} lines)`);
+
+// ── Generate the LLMError user-facing copy catalogue ─────────────────────────
+//
+// Emits src/lib/api/generated/llm-error-messages.ts from the x-user-messages /
+// x-user-message-attributions extensions on components.schemas.LLMError.
+//
+// Every check below THROWS. A code with no message, a catalogue entry for a
+// code that is not in the enum, an empty message, or an attribution outside the
+// declared vocabulary aborts codegen instead of shipping a catalogue with a
+// hole in it. The Go emitter (scripts/gen-asyncapi-go/usermessages.go) applies
+// the identical validation to the identical block, so the two halves of the
+// catalogue are exhaustive and consistent by construction rather than by review.
+
+/**
+ * Read and validate the LLMError copy catalogue out of the parsed contract.
+ * Returns { attributions, entries } with entries in contract (enum) order.
+ */
+function extractUserMessageCatalogue(allSchemas, schemaName) {
+  const schema = allSchemas[schemaName];
+  if (!schema) throw new Error(`missing components.schemas.${schemaName}`);
+
+  const codes = schema.properties?.code?.enum;
+  if (!Array.isArray(codes) || codes.length === 0) {
+    throw new Error(`${schemaName}.properties.code.enum: must be a non-empty list`);
+  }
+
+  const attributions = schema["x-user-message-attributions"];
+  if (!Array.isArray(attributions) || attributions.length === 0) {
+    throw new Error(`${schemaName}.x-user-message-attributions: must declare at least one attribution`);
+  }
+  const allowed = new Set();
+  for (const a of attributions) {
+    if (typeof a !== "string") {
+      throw new Error(`${schemaName}.x-user-message-attributions: expected strings, got ${typeof a}`);
+    }
+    if (allowed.has(a)) {
+      throw new Error(`${schemaName}.x-user-message-attributions: duplicate attribution "${a}"`);
+    }
+    allowed.add(a);
+  }
+
+  const rawMessages = schema["x-user-messages"];
+  if (!rawMessages || typeof rawMessages !== "object" || Array.isArray(rawMessages)) {
+    throw new Error(
+      `${schemaName}: missing or malformed x-user-messages (want a mapping of code → {message, attribution})`,
+    );
+  }
+
+  const entries = [];
+  const seen = new Set();
+  for (const code of codes) {
+    const entry = rawMessages[code];
+    if (!entry || typeof entry !== "object") {
+      throw new Error(
+        `${schemaName}.x-user-messages: no entry for code "${code}" — every value of the code enum needs a message and an attribution`,
+      );
+    }
+    if (typeof entry.message !== "string" || entry.message.trim() === "") {
+      throw new Error(`${schemaName}.x-user-messages.${code}: message must be a non-empty string`);
+    }
+    if (!allowed.has(entry.attribution)) {
+      throw new Error(
+        `${schemaName}.x-user-messages.${code}: attribution "${entry.attribution}" is not in x-user-message-attributions (${attributions.join(", ")})`,
+      );
+    }
+    entries.push({ code, message: entry.message, attribution: entry.attribution });
+    seen.add(code);
+  }
+
+  const orphans = Object.keys(rawMessages).filter((c) => !seen.has(c)).sort();
+  if (orphans.length > 0) {
+    throw new Error(`${schemaName}.x-user-messages: entries for codes not in the enum: ${orphans.join(", ")}`);
+  }
+
+  return { attributions, entries };
+}
+
+const catalogue = extractUserMessageCatalogue(schemas, "LLMError");
+
+const messageLines = [
+  "/**",
+  " * This file was auto-generated from contracts/asyncapi.yaml",
+  " * (components.schemas.LLMError → x-user-messages).",
+  " * Do not make direct changes to the file.",
+  " * Re-run: node scripts/_gen-asyncapi-types.mjs",
+  " *",
+  " * The user-facing copy and the fault attribution for every LLMError code are",
+  " * contract data, not code. Edit the x-user-messages block in",
+  " * contracts/components/schemas/LLMError.yaml (and its three sibling copies)",
+  " * and re-run `make gen-contracts`. The Go half of this catalogue,",
+  " * pkg/api/generated/llm_error_messages.gen.go, is emitted from the same block.",
+  " */",
+  "",
+  'import type { LLMError } from "./asyncapi-types"',
+  "",
+  "/** Every wire-stable LLMError code, as a union. */",
+  "export type LLMErrorCode = LLMError[\"code\"]",
+  "",
+  "/**",
+  " * Who owns the fault behind a code, so the UI (and a copy test) can tell an",
+  " * upstream failure from one Omnipus caused.",
+  " */",
+  "export type LLMErrorAttribution =",
+  ...catalogue.attributions.map((a) => `  | ${JSON.stringify(a)}`),
+  "",
+  "/** The closed attribution vocabulary, in contract order. */",
+  `export const llmErrorAttributionValues = [${catalogue.attributions.map((a) => JSON.stringify(a)).join(", ")}] as const`,
+  "",
+  "/** Every LLMError code, in contract (enum) order. */",
+  `export const llmErrorCodes = [${catalogue.entries.map((e) => JSON.stringify(e.code)).join(", ")}] as const`,
+  "",
+  "/**",
+  " * The sentence a user sees for each code. Exhaustive by construction: codegen",
+  " * aborts if any code lacks an entry, and the `Record<LLMErrorCode, string>`",
+  " * annotation makes a stale catalogue a `tsc -b --noEmit` failure.",
+  " */",
+  "export const llmErrorUserMessages: Record<LLMErrorCode, string> = {",
+  ...catalogue.entries.map((e) => `  ${e.code}: ${JSON.stringify(e.message)},`),
+  "}",
+  "",
+  "/** The fault attribution for each code. Exhaustive by construction. */",
+  "export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution> = {",
+  ...catalogue.entries.map((e) => `  ${e.code}: ${JSON.stringify(e.attribution)},`),
+  "}",
+  "",
+];
+
+const messagesOutput = messageLines.join("\n");
+writeFileSync(messagesOutPath, messagesOutput, "utf8");
+console.log(`Generated ${messagesOutPath} (${messagesOutput.split("\n").length} lines)`);

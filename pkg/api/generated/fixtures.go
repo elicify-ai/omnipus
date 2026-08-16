@@ -269,8 +269,12 @@ func FixtureErrorFrame_Populated() ErrorFrame {
 		SessionId: &sessId,
 		Payload: &ErrorPayload{
 			LlmError: LLMError{
-				Code:      "rate_limited",
-				Message:   "From the model: it’s rate-limited right now. Wait a moment, then retry.",
+				Code: "rate_limited",
+				// Read from the generated catalogue rather than pasted: this
+				// fixture used to carry a hardcoded copy of the message, which
+				// went stale the moment the copy changed and left the retired
+				// "From the model:" prefix sitting in the repo.
+				Message:   LLMErrorUserMessages["rate_limited"],
 				Retryable: true,
 				Detail:    &detail,
 			},

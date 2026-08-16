@@ -282,7 +282,12 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 		// reply. Route through the classifier so provider-originated body /
 		// status / model identity is replaced with the typed copy. The raw
 		// err stays in worker logging for operator triage.
-		response = TranslateLLMError(nil, err.Error()).Message
+		//
+		// TranslateTurnError, not TranslateLLMError(nil, err.Error()): passing
+		// the error VALUE keeps the sentinels intact, so a turn refused for a
+		// known reason (agent on no workspace) says so instead of falling to
+		// the "we can't tell why" copy.
+		response = TranslateTurnError(err).Message
 	}
 	finalResponse = response
 

@@ -6,13 +6,17 @@
 //   - Status precedence: status wins over body for 4xx except where the
 //     body matches a pinned media / capability-absence / policy shape
 //     (CRIT-002 in ADR-051).
-//   - 413 + "request too large" → CodeProviderRejected (NOT
-//     CodeContextTooLong) per ADR-051 Rev 3 edge case "HTTP 413 →
-//     provider_rejected (not context_too_long)".
+//   - 413 → CodeRequestTooLarge (NOT CodeContextTooLong) per ADR-051 Rev 3
+//     edge case "HTTP 413 → not context_too_long".
+//   - 401 / 403 → CodeProviderAuthFailed.
 //   - 408 / 5xx / timeout → CodeNetwork (retryable).
 //   - 429 → CodeRateLimited.
-//   - Generic 400 + no body → CodeProviderRejected (NOT CodeMedia).
+//   - Generic 400 + no body → CodeUnknown (NOT CodeMedia).
 //   - PDF / image pinned phrases → CodeMediaUnsupported.
+//
+// Plus the copy-rule tests that keep the generated message catalogue honest:
+// every code has a message and an attribution; a message for a fault WE own
+// never sends the user model-shopping; nothing points at a support desk.
 //
 // Each test is a small, table-driven case so adding a new pinned
 // substring or HTTP-status mapping is a one-line addition.
@@ -21,11 +25,15 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
 )
@@ -78,14 +86,14 @@ func TestTranslateLLMError_StatusWinsOverBody(t *testing.T) {
 			want: CodeMediaUnsupported,
 		},
 		{
-			name: "401 → provider_rejected (auth, retryable=false)",
+			name: "401 → provider_auth_failed (operator's credentials, retryable=false)",
 			pe:   &ProviderError{Status: 401, Body: ""},
-			want: CodeProviderRejected,
+			want: CodeProviderAuthFailed,
 		},
 		{
-			name: "403 → provider_rejected (auth, retryable=false)",
+			name: "403 → provider_auth_failed (operator's credentials, retryable=false)",
 			pe:   &ProviderError{Status: 403, Body: ""},
-			want: CodeProviderRejected,
+			want: CodeProviderAuthFailed,
 		},
 	}
 	for _, tc := range cases {
@@ -99,19 +107,23 @@ func TestTranslateLLMError_StatusWinsOverBody(t *testing.T) {
 }
 
 // TestTranslateLLMError_413WithRequestTooLarge is the regression for the
-// ADR-051 Rev 3 edge case "HTTP 413 → provider_rejected (not
-// context_too_long)". A 413 with a "request too large" body must NOT be
-// classified as context overflow — the model accepted the conversation,
-// the request payload is the too-large thing.
+// ADR-051 Rev 3 edge case "HTTP 413 is not context_too_long", now sharpened:
+// 413 maps to its OWN code rather than sharing provider_rejected with auth
+// failures. A 413 with a "request too large" body must not be classified as
+// context overflow — the model never weighed the conversation; the request
+// payload is the too-large thing, and we assembled it.
 func TestTranslateLLMError_413WithRequestTooLarge(t *testing.T) {
 	pe := &ProviderError{
 		Status: 413,
 		Body:   "request too large; payload exceeds the provider limit",
 	}
 	llm := TranslateLLMError(pe, "")
-	assert.Equal(t, CodeProviderRejected, llm.Code,
-		"413 + 'request too large' must map to provider_rejected, NOT context_too_long (ADR-051 Rev 3)")
-	assert.False(t, llm.Retryable, "provider_rejected is not retryable")
+	assert.Equal(t, CodeRequestTooLarge, llm.Code,
+		"413 must map to request_too_large — NOT context_too_long (ADR-051 Rev 3), "+
+			"and no longer provider_rejected (it is our fault, not a model refusal)")
+	assert.False(t, llm.Retryable, "request_too_large is not retryable — the same request is the same size")
+	assert.Equal(t, LLMErrorAttribution("product"), AttributionForCode(CodeRequestTooLarge),
+		"an oversized request is Omnipus' fault; the copy must not blame the model or the operator")
 
 	// 413 with a context-overflow-shaped body is the narrow exception —
 	// substring matches for context-overflow shapes still route to
@@ -271,41 +283,203 @@ func TestTranslateLLMError_NilSafety(t *testing.T) {
 	assert.False(t, llm.Retryable)
 }
 
-// TestUserMessageForCode_AttributionPrefix locks the "From the model:"
-// attribution contract for upstream-caused codes. Failures whose cause is
-// upstream of Omnipus (model/provider rejections, capability, rate
-// limits, content policy, shape, unclassified) MUST carry the prefix so
-// the user knows the failure is not a product bug — they should retry or
-// switch models. Failures we own outright (5xx, fallback) carry no
-// prefix; we take the blame. `network` is ambiguous and carries no prefix
-// because the wording ("check the network") already disambiguates.
-//
-// This mirrors the SPA catalog in src/lib/llm-error.ts so the chat
-// bubble and the persisted transcript stay in one voice. See
-// docs/internal/uat/ADR-051-rev4-error-copy-review.md for rationale.
-func TestUserMessageForCode_AttributionPrefix(t *testing.T) {
-	upstreamCodes := []LLMErrorCode{
+// TestUserMessages_EveryCodeHasMessageAndAttribution is the exhaustiveness
+// assertion for the generated catalogue. It is exhaustive BY CONSTRUCTION —
+// codegen aborts if a code in the contract enum has no x-user-messages entry
+// (scripts/gen-asyncapi-go/usermessages.go) — but asserting it here means a
+// broken generator surfaces as a failing test rather than as silently missing
+// copy, and it pins the catalogue to the code constants this package declares.
+func TestUserMessages_EveryCodeHasMessageAndAttribution(t *testing.T) {
+	require.NotEmpty(t, generated.LLMErrorCodes, "the generated catalogue must not be empty")
+
+	validAttribution := make(map[LLMErrorAttribution]bool, len(generated.LLMErrorAttributionValues))
+	for _, a := range generated.LLMErrorAttributionValues {
+		validAttribution[a] = true
+	}
+
+	for _, raw := range generated.LLMErrorCodes {
+		code := LLMErrorCode(raw)
+		msg := UserMessageForCode(code)
+		assert.NotEmpty(t, strings.TrimSpace(msg), "code %q must have non-empty user-facing copy", code)
+		assert.True(t, validAttribution[AttributionForCode(code)],
+			"code %q must carry an attribution from the contract vocabulary; got %q",
+			code, AttributionForCode(code))
+	}
+
+	// Every code the Go classifier can emit must be in the catalogue — a
+	// constant added here without a contract entry would silently fall back to
+	// the CodeUnknown copy at runtime.
+	catalogued := make(map[string]bool, len(generated.LLMErrorCodes))
+	for _, raw := range generated.LLMErrorCodes {
+		catalogued[raw] = true
+	}
+	for _, code := range allClassifierCodes() {
+		assert.True(t, catalogued[string(code)],
+			"classifier constant %q has no entry in the generated catalogue — "+
+				"add it to contracts/components/schemas/LLMError.yaml (all four copies) and regenerate",
+			code)
+	}
+}
+
+// allClassifierCodes lists every LLMErrorCode constant this package declares.
+// Kept as an explicit literal so adding a constant is a conscious decision that
+// shows up in this file's diff.
+func allClassifierCodes() []LLMErrorCode {
+	return []LLMErrorCode{
 		CodeMediaUnsupported,
 		CodeProviderRejected,
+		CodeRequestTooLarge,
+		CodeProviderAuthFailed,
 		CodeRateLimited,
+		CodeNetwork,
 		CodeContentPolicy,
 		CodeContextTooLong,
 		CodeToolArgs,
 		CodeSchema,
+		CodeAgentNotConfigured,
 		CodeUnknown,
 	}
-	for _, code := range upstreamCodes {
-		msg := UserMessageForCode(code)
-		assert.True(t, strings.HasPrefix(msg, FromModelPrefix),
-			"code %q must carry FromModelPrefix attribution; got %q", code, msg)
+}
+
+// TestUserMessages_NoRetiredFromModelPrefix locks the deletion of the blanket
+// "From the model:" attribution marker. It labelled every failure as the
+// model's, including the ones Omnipus causes (an oversized request we built)
+// and the ones an operator fixes in Settings (a bad API key) — the copy now
+// carries attribution in the sentence itself, plus a machine-readable tag.
+func TestUserMessages_NoRetiredFromModelPrefix(t *testing.T) {
+	for _, raw := range generated.LLMErrorCodes {
+		msg := UserMessageForCode(LLMErrorCode(raw))
+		assert.NotContains(t, msg, "From the model:",
+			"code %q must not reintroduce the retired blanket prefix", raw)
+	}
+}
+
+// TestUserMessages_OurFaultsDoNotSendUsersModelShopping is the class-killer.
+//
+// When the fault is OURS (attribution "product") or the operator's SETTINGS
+// (attribution "config"), the copy must not push the user at remedies that
+// cannot possibly work. Telling someone to switch models because we built a
+// malformed request, or to rephrase a perfectly good sentence because an API
+// key is wrong, sends them off to burn time on the wrong thing — and buries
+// the real defect under apparent user error. Every banned phrase below was in
+// the shipped copy before this change.
+//
+// Note the asymmetry on retry: `product` may legitimately suggest one (a
+// request we built badly can come out right the second time), `config` may
+// not (the same wrong key fails identically, forever).
+func TestUserMessages_OurFaultsDoNotSendUsersModelShopping(t *testing.T) {
+	var product, config []LLMErrorCode
+	for _, raw := range generated.LLMErrorCodes {
+		code := LLMErrorCode(raw)
+		switch AttributionForCode(code) {
+		case generated.LLMErrorAttributionProduct:
+			product = append(product, code)
+		case generated.LLMErrorAttributionConfig:
+			config = append(config, code)
+		}
+	}
+	// Guard against a vacuous pass: if a future edit re-attributed everything
+	// upstream, the loops below would assert nothing at all.
+	require.NotEmpty(t, product, "at least one code must be attributed to us (product)")
+	require.NotEmpty(t, config, "at least one code must be attributed to operator config")
+
+	// Unqualified model-shopping only. "switch to a model with a larger limit"
+	// is fine — it names the property that would actually help.
+	bannedSwitch := []string{"switch models", "switch model.", "different model", "another model", "pick a model"}
+	bannedBlame := []string{"rephras", "reword", "try asking differently"}
+
+	for _, code := range append(append([]LLMErrorCode{}, product...), config...) {
+		msg := strings.ToLower(UserMessageForCode(code))
+		for _, phrase := range bannedSwitch {
+			assert.NotContains(t, msg, phrase,
+				"code %q is attributed %q but tells the user to shop for a model (%q)",
+				code, AttributionForCode(code), phrase)
+		}
+		for _, phrase := range bannedBlame {
+			assert.NotContains(t, msg, phrase,
+				"code %q is attributed %q but blames the user's wording (%q)",
+				code, AttributionForCode(code), phrase)
+		}
 	}
 
-	// Network is ambiguous — caller-side or upstream-side; wording must
-	// disambiguate instead of the prefix.
-	assert.False(t, strings.HasPrefix(UserMessageForCode(CodeNetwork), FromModelPrefix),
-		"network must not carry the prefix; wording disambiguates instead")
-	assert.Contains(t, strings.ToLower(UserMessageForCode(CodeNetwork)), "network",
-		"network copy must name the network so users know where to look")
+	for _, code := range config {
+		msg := strings.ToLower(UserMessageForCode(code))
+		for _, phrase := range []string{"retry", "try again"} {
+			assert.NotContains(t, msg, phrase,
+				"code %q is a config fault — retrying cannot fix a setting", code)
+		}
+	}
+}
+
+// TestUserMessages_NoSupportDeskReferences locks the "never mention support"
+// rule. Omnipus is self-hosted and MIT-licensed; there is no support desk to
+// send anyone to, so a message that does is a dead end dressed as help.
+func TestUserMessages_NoSupportDeskReferences(t *testing.T) {
+	banned := []string{
+		"contact support", "contact us", "customer support", "support team",
+		"our support", "reach out", "get in touch", "file a ticket",
+		"open a ticket", "help desk", "helpdesk",
+	}
+	for _, raw := range generated.LLMErrorCodes {
+		msg := strings.ToLower(UserMessageForCode(LLMErrorCode(raw)))
+		for _, phrase := range banned {
+			assert.NotContains(t, msg, phrase,
+				"code %q points the user at a support desk that does not exist (%q)", raw, phrase)
+		}
+	}
+}
+
+// TestUserMessages_SplitCodesAttributedToRealOwners pins the three-way split of
+// the old provider_rejected bucket to the fault owner each half actually has,
+// and checks each message names where to go.
+func TestUserMessages_SplitCodesAttributedToRealOwners(t *testing.T) {
+	assert.Equal(t, generated.LLMErrorAttributionProduct, AttributionForCode(CodeRequestTooLarge))
+	assert.Equal(t, generated.LLMErrorAttributionConfig, AttributionForCode(CodeProviderAuthFailed))
+	assert.Equal(t, generated.LLMErrorAttributionConfig, AttributionForCode(CodeAgentNotConfigured))
+	assert.Equal(t, generated.LLMErrorAttributionModel, AttributionForCode(CodeProviderRejected))
+
+	assert.Contains(t, strings.ToLower(UserMessageForCode(CodeProviderAuthFailed)), "settings",
+		"a credentials failure must say where the operator fixes it")
+	assert.Contains(t, strings.ToLower(UserMessageForCode(CodeAgentNotConfigured)), "workspace",
+		"an unconfigured agent must say what it is missing")
+	assert.Contains(t, strings.ToLower(UserMessageForCode(CodeNetwork)), "internet connection",
+		"an ambiguous failure must name where to look instead of assigning blame")
+}
+
+// TestTranslateTurnError_AgentNotWorkspaceMember is the Deliverable-4
+// regression: the turn-refusal sentinel must survive to the user as its own
+// code with its own copy.
+//
+// Before this, both terminal-response call sites did
+// TranslateLLMError(nil, err.Error()) — stringifying the error first and
+// discarding the type. A refusal whose cause was known exactly, and which was
+// one workspace-membership away from being fixed, reached the user as "This
+// turn didn't finish, and we can't tell why."
+func TestTranslateTurnError_AgentNotWorkspaceMember(t *testing.T) {
+	// The real chain wraps the sentinel (workspace_reroot.go appends the agent
+	// id, then runTurn/runAgentLoop/processMessage wrap further), so errors.Is
+	// — not equality — is what has to hold.
+	wrapped := fmt.Errorf("run turn: %w",
+		fmt.Errorf("%w: agent_id=mia", ErrAgentNotWorkspaceMember))
+
+	llm := TranslateTurnError(wrapped)
+	assert.Equal(t, CodeAgentNotConfigured, llm.Code,
+		"a workspace-membership refusal must classify as agent_not_configured, not unknown")
+	assert.False(t, llm.Retryable, "adding the agent to a workspace is the fix; retrying is not")
+	assert.Equal(t, UserMessageForCode(CodeAgentNotConfigured), llm.Message,
+		"the message must be the catalogue copy for the code")
+	assert.NotEqual(t, UserMessageForCode(CodeUnknown), llm.Message,
+		"the whole point is that this no longer falls to the we-cannot-tell-why copy")
+	assert.NotContains(t, llm.Message, "agent_id=mia",
+		"internal error text must never reach the user-facing message")
+
+	// Every other error shape keeps the previous behaviour.
+	assert.Equal(t, CodeUnknown, TranslateTurnError(errors.New("something novel xyz123")).Code,
+		"unrecognised errors must still fall through to the substring classifier")
+	assert.Equal(t, CodeRateLimited, TranslateTurnError(errors.New("rate limit exceeded")).Code,
+		"the substring classifier must still run for non-sentinel errors")
+	assert.Equal(t, CodeUnknown, TranslateTurnError(nil).Code,
+		"a nil error must not panic")
 }
 
 // TestUserMessageForCode_NoLegacyAIServiceCopy locks the brand-tone
@@ -326,9 +500,9 @@ func TestUserMessageForCode_NoLegacyAIServiceCopy(t *testing.T) {
 // The classification path: when pe.Status == 0 (no HTTP status) the
 // classifier falls through to classifyByMessage, which returns
 // CodeUnknown when no pinned substring matches. We pass nil status to
-// exercise that fallback path — when status is 4xx with no body, the
-// classifier maps to CodeProviderRejected (NOT CodeUnknown); that case
-// is locked by TestTranslateLLMError_Generic400_NoBody.
+// exercise that fallback path; the parallel case where the status IS a
+// residual 4xx is locked by TestTranslateLLMError_Generic400_NoBody (also
+// CodeUnknown, and load-bearing for the FR-017 media strip-retry gate).
 func TestClassifyByProviderError_UnknownSubstring(t *testing.T) {
 	pe := &ProviderError{
 		Status: 0,
@@ -419,15 +593,14 @@ func TestSanitizeRunnerError_AlwaysGeneric(t *testing.T) {
 				assert.NotContains(t, s.AssistantText, tc.raw,
 					"AssistantText must NEVER echo raw stderr verbatim (raw=%q)", tc.raw)
 			}
-			// Either the classifier emitted one of the userMessages entries,
-			// or the fail-closed fallback "The external CLI failed..." — both
-			// are acceptable; both are generic.
+			// Either the classifier emitted one of the catalogue entries, or
+			// the fail-closed fallback "The external CLI failed..." — both are
+			// acceptable; both are generic. Iterating the generated code list
+			// (rather than a hand-written subset) keeps this check honest when
+			// a new code is added.
 			isKnown := false
-			for _, code := range []LLMErrorCode{
-				CodeMediaUnsupported, CodeProviderRejected, CodeRateLimited,
-				CodeNetwork, CodeContentPolicy, CodeContextTooLong, CodeUnknown,
-			} {
-				if s.AssistantText == userMessages[code] {
+			for _, raw := range generated.LLMErrorCodes {
+				if s.AssistantText == userMessages[LLMErrorCode(raw)] {
 					isKnown = true
 					break
 				}

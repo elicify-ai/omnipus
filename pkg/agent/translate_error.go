@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
@@ -34,10 +35,37 @@ const (
 	// (model has vision, but the supplied format is not acceptable).
 	CodeMediaUnsupported LLMErrorCode = "media_unsupported"
 
-	// CodeProviderRejected: non-media, non-policy rejection (incl. HTTP 413
-	// with "request too large"). The provider refused the request for a
-	// generic reason.
+	// CodeProviderRejected: a genuine model refusal — the model declined to
+	// answer for a reason that is neither media, policy, size, nor auth.
+	//
+	// ⚠️ NO CLASSIFIER PRODUCES THIS CODE TODAY, AND THAT IS DELIBERATE.
+	// It used to be the catch-all for three unrelated fault owners: HTTP 413
+	// (ours — we built an oversized request) and HTTP 401/403 (the operator's
+	// — bad credentials). Those are now CodeRequestTooLarge and
+	// CodeProviderAuthFailed, which leaves this code with no producer, because
+	// the "genuine refusal" case it is NAMED for was never routed here in the
+	// first place — a residual 4xx we cannot attribute falls to CodeUnknown
+	// (see that constant for why it must keep doing so).
+	//
+	// The code is retained, NOT dead: session.TranscriptEntry.ErrorCode
+	// persists it to the session JSONL (pkg/session/daypartition.go), so every
+	// transcript written before this split still replays it and both message
+	// catalogues must keep rendering copy for it. Re-arming it for a real
+	// refusal shape needs evidence of what such a response looks like on the
+	// wire — do not point residual 4xx at it to "give it a producer".
 	CodeProviderRejected LLMErrorCode = "provider_rejected"
+
+	// CodeRequestTooLarge: HTTP 413 — the request payload exceeded what the
+	// model will accept. OUR fault, not the user's and not the provider's: we
+	// assembled the oversized request. Distinct from CodeContextTooLong, which
+	// is about the conversation exceeding the context window; here the model
+	// never got as far as considering the conversation.
+	CodeRequestTooLarge LLMErrorCode = "request_too_large"
+
+	// CodeProviderAuthFailed: HTTP 401 / 403 — the provider rejected our
+	// credentials. The operator's fault and the operator's fix: an API key in
+	// Settings. Not retryable; retrying with the same key fails identically.
+	CodeProviderAuthFailed LLMErrorCode = "provider_auth_failed"
 
 	// CodeRateLimited: 429 / quota / overloaded. RateLimitFrame is the
 	// authoritative live frame; the error frame is suppressed at the WS
@@ -50,8 +78,8 @@ const (
 	// CodeContentPolicy: provider flagged content moderation / safety.
 	CodeContentPolicy LLMErrorCode = "content_policy"
 
-	// CodeContextTooLong: body indicates window exceeded (substring match;
-	// not HTTP 413 — that maps to provider_rejected).
+	// CodeContextTooLong: body indicates window exceeded (substring match).
+	// HTTP 413 is NOT this code — that is CodeRequestTooLarge.
 	CodeContextTooLong LLMErrorCode = "context_too_long"
 
 	// CodeToolArgs: tool-call argument format error (FR-018 / ADR-051
@@ -69,41 +97,42 @@ const (
 	// CodeToolArgs. Status-code backstop applies identically.
 	CodeSchema LLMErrorCode = "schema"
 
-	// CodeUnknown: unclassified — fallback bucket.
+	// CodeAgentNotConfigured: the acting agent belongs to no workspace, so
+	// resolveTurnWorkDirOrRefuse refused the turn before any LLM call
+	// (ErrAgentNotWorkspaceMember). Not a provider failure at all — an
+	// operator-fixable setup gap, and not retryable: the agent has to be added
+	// to a workspace team first.
+	CodeAgentNotConfigured LLMErrorCode = "agent_not_configured"
+
+	// CodeUnknown: unclassified — the residual/inconclusive verdict.
+	//
+	// ⚠️ LOAD-BEARING BEYOND ITS NAME. This code does double duty: it means
+	// "we could not attribute this failure" AND it is the gate value for the
+	// FR-017 media strip-retry fallback. pkg/agent/media_downgrade.go's
+	// outcomeFallbackEligible fires ONLY when the classifier returns exactly
+	// CodeUnknown, and TryMediaDowngrade re-runs classifyByProviderError
+	// itself — so this classifier's verdict IS that gate's input.
+	//
+	// Concretely: a residual 4xx (a 4xx whose body matches no pinned shape,
+	// e.g. the Gemini 400 "Unsupported MIME type: image/svg+xml" row) must
+	// keep returning CodeUnknown. Re-pointing it at any more specific code —
+	// CodeProviderRejected being the tempting one — silently disables media
+	// strip-retry for every turn carrying an attachment. Silently: no error,
+	// no failing test in the obvious places, just a retry that stops
+	// happening. If you change the residual-4xx verdict, change
+	// outcomeFallbackEligible in the same commit.
 	CodeUnknown LLMErrorCode = "unknown"
 )
 
-// FromModelPrefix is the attribution marker prepended to userMessages for
-// upstream-caused error codes. The bubble can render this with a muted
-// style to make the attribution skim-friendly without changing the copy
-// itself; the string is the single source of truth for both the bubble and
-// the persisted transcript. See the comment on userMessages for rationale.
-const FromModelPrefix = "From the model:"
-
-// withFromModelPrefix prefixes msg with FromModelPrefix when cond is true.
-func withFromModelPrefix(cond bool, msg string) string {
-	if cond {
-		return FromModelPrefix + " " + msg
-	}
-	return msg
-}
-
-// userMessage* hold the user-facing copy that backs the userMessages map.
-// The strings are kept as package constants so the literal stays under the
-// 120-char line-length cap (golangci lll), and so a future test or renderer
-// can reference the same source of truth. Names are pinned to their code
-// for grep-ability.
-const (
-	userMessageMediaUnsupported = "it can’t use that attachment. Try another format, or switch to a vision-capable model."
-	userMessageProviderRejected = "it refused this request. Retry once, or pick a different model."
-	userMessageRateLimited      = "it’s rate-limited right now. Wait a moment, then retry."
-	userMessageNetwork          = "Couldn’t reach the model. Check the network, then retry."
-	userMessageContentPolicy    = "it blocked this under its safety policy. Rephrase, or remove the flagged content."
-	userMessageContextTooLong   = "this chat is too long for its context window. Start a new session, or drop older turns."
-	userMessageToolArgs         = "a tool call had invalid arguments. Retry the turn — Verbose chat shows which tool."
-	userMessageSchema           = "the request didn’t match what it expects. Retry; if it keeps failing, switch models or check the tool setup."
-	userMessageUnknown          = "it didn’t complete this turn. Retry. If it keeps failing, open Technical details (Verbose chat) or switch models."
-)
+// LLMErrorAttribution names who owns the fault behind a code — the model, the
+// hosting provider, Omnipus itself ("product"), an operator-fixable setting
+// ("config"), or neither/unknown. The vocabulary and the per-code tags are
+// contract data (contracts/components/schemas/LLMError.yaml's
+// x-user-message-attributions / x-user-messages), not a Go-side judgement call.
+//
+// Aliased rather than redeclared so there is exactly one set of attribution
+// constants in the binary.
+type LLMErrorAttribution = generated.LLMErrorAttribution
 
 // LLMError is the structured, wire-stable shape produced by the classifier.
 // All four fields are required for the wire shape; Code/Message/Retryable
@@ -131,28 +160,47 @@ type LLMError struct {
 // identity, model names, or raw body substrings. Operators see the same
 // copy regardless of which upstream rejected the request.
 //
-// Attribution: errors whose cause is upstream of Omnipus (model/provider
-// rejections, capability, rate limits, content policy, shape, unclassified)
-// are prefixed with "From the model:" so the user knows the failure is
-// not a product bug — they should retry or switch models. Failures we own
-// outright (5xx, fallback) carry no prefix; we take the blame. `network`
-// is ambiguous and carries no prefix; the wording ("check the network")
-// already disambiguates. This copy mirrors the SPA catalog in
-// src/lib/llm-error.ts so the chat bubble and the persisted transcript
-// stay in one voice.
+// GENERATED CONTENT — the strings live in the contract, not here. Edit the
+// x-user-messages block in contracts/components/schemas/LLMError.yaml (and its
+// three sibling copies) and re-run `make gen-contracts`. The SPA's catalogue
+// (src/lib/api/generated/llm-error-messages.ts, consumed by
+// src/lib/llm-error.ts) is emitted from the SAME block, which is what keeps the
+// chat bubble and the persisted transcript in one voice — previously two
+// hand-written maps that had to be edited in lockstep.
 //
-// See docs/internal/uat/ADR-051-rev4-error-copy-review.md for the full
-// rationale, including the four attribution options considered.
-var userMessages = map[LLMErrorCode]string{
-	CodeMediaUnsupported: withFromModelPrefix(true, userMessageMediaUnsupported),
-	CodeProviderRejected: withFromModelPrefix(true, userMessageProviderRejected),
-	CodeRateLimited:      withFromModelPrefix(true, userMessageRateLimited),
-	CodeNetwork:          withFromModelPrefix(false, userMessageNetwork),
-	CodeContentPolicy:    withFromModelPrefix(true, userMessageContentPolicy),
-	CodeContextTooLong:   withFromModelPrefix(true, userMessageContextTooLong),
-	CodeToolArgs:         withFromModelPrefix(true, userMessageToolArgs),
-	CodeSchema:           withFromModelPrefix(true, userMessageSchema),
-	CodeUnknown:          withFromModelPrefix(true, userMessageUnknown),
+// Attribution is written into each sentence rather than carried by a blanket
+// "From the model:" prefix. The prefix mechanism was deleted: it mis-attributed
+// every fault upstream, including the ones Omnipus causes (an oversized request
+// we built) and the ones an operator fixes in Settings (a bad API key). Each
+// code now carries a machine-readable attribution tag alongside its copy — see
+// AttributionForCode.
+var userMessages = buildUserMessages()
+
+// buildUserMessages converts the generated catalogue's string-keyed map into
+// the LLMErrorCode-keyed map this package uses. The generator guarantees an
+// entry for every code in the contract enum (codegen aborts on a gap), so this
+// map is exhaustive over the wire enum by construction.
+func buildUserMessages() map[LLMErrorCode]string {
+	out := make(map[LLMErrorCode]string, len(generated.LLMErrorUserMessages))
+	for code, message := range generated.LLMErrorUserMessages {
+		out[LLMErrorCode(code)] = message
+	}
+	return out
+}
+
+// AttributionForCode returns the fault attribution for code — who owns the
+// failure the user is looking at. Returns the CodeUnknown attribution for an
+// unrecognised code, mirroring UserMessageForCode's fallback.
+//
+// Consumed by the copy-rule tests (a `product`/`config` message must never tell
+// the user to switch models, rephrase their content, or — for `config` — retry)
+// and available to any renderer that wants to style the bubble by fault owner
+// rather than by code.
+func AttributionForCode(code LLMErrorCode) LLMErrorAttribution {
+	if attribution, ok := generated.LLMErrorUserAttributions[string(code)]; ok {
+		return attribution
+	}
+	return generated.LLMErrorUserAttributions[string(CodeUnknown)]
 }
 
 // defaultUserMessage returns the canonical user-facing message for code.
@@ -415,10 +463,10 @@ func isSchemaMessage(body string) bool {
 //
 // 408 / 5xx / timeout / transient → CodeNetwork.
 // 429 / quota → CodeRateLimited.
-// 413 + "request too large" body → CodeProviderRejected (NOT
-// context_too_long — the model accepted the conversation, the request
-// payload itself is too large).
-// 413 with no body / generic body → CodeProviderRejected.
+// 413 → CodeRequestTooLarge (NOT context_too_long — the model never got as
+// far as the conversation; the request payload itself is oversized, and we
+// built it).
+// 401 / 403 → CodeProviderAuthFailed (operator-fixable credentials).
 func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 	if pe == nil {
 		return CodeUnknown
@@ -435,26 +483,26 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 	case status >= 500 && status <= 599:
 		return CodeNetwork
 	case status == 413:
-		// 413 + "request too large" body → provider_rejected (NOT
-		// context_too_long). The model accepted the conversation; the
-		// request payload itself is too large. Per ADR-051 Rev 3, this is
-		// explicitly NOT context_too_long. Bodies mentioning context-window
-		// overflow on a 413 are exceedingly rare; if one ever appears, the
-		// context_overflow substring check below still maps it to
-		// CodeContextTooLong (the user's request is fundamentally about the
-		// conversation size, not the request shape).
+		// 413 → request_too_large (NOT context_too_long). The model never
+		// weighed the conversation; the request payload itself is oversized,
+		// and WE assembled it — the copy for this code says so rather than
+		// blaming the model. Per ADR-051 Rev 3 this is explicitly not
+		// context_too_long. Bodies mentioning context-window overflow on a 413
+		// are exceedingly rare; if one ever appears, the context_overflow
+		// substring check still maps it to CodeContextTooLong (the user's
+		// problem is genuinely the conversation size, not the request shape).
 		if isContextOverflowMessage(body) {
 			return CodeContextTooLong
 		}
-		return CodeProviderRejected
+		return CodeRequestTooLarge
 	case status == 401, status == 403:
-		// Auth — surface as provider_rejected. Distinct from rate_limit;
-		// retryable=false (the operator must fix credentials). The
-		// outcome-based fallback gate excludes these statuses explicitly,
-		// so surfacing as ProviderRejected here does not load the fallback
-		// path; it preserves the user-facing copy ("provider rejected the
-		// request") for credential-related failures.
-		return CodeProviderRejected
+		// Auth — the provider rejected OUR credentials. Distinct from
+		// rate_limit and from a model refusal: it is operator-fixable in
+		// Settings, and retryable=false because the same key fails
+		// identically. The outcome-based fallback gate excludes these statuses
+		// explicitly, and this code is not CodeUnknown, so neither path loads
+		// the media strip-retry fallback.
+		return CodeProviderAuthFailed
 	case status >= 400 && status <= 499:
 		// Generic 4xx + body absent → CodeUnknown (NOT CodeProviderRejected).
 		// The spec's outcome-based fallback gate fires only on CodeUnknown
@@ -578,8 +626,45 @@ func TranslateLLMError(pe *ProviderError, message string) LLMError {
 	return llm
 }
 
+// TranslateTurnError classifies a turn-level error — one that reached a caller
+// as a Go error value rather than as a *ProviderError — into an LLMError.
+//
+// Use this instead of TranslateLLMError(nil, err.Error()) at any site that
+// holds the error VALUE. Stringifying first throws away the error type, and
+// with it every sentinel the chain carefully preserved: a turn refused because
+// the agent belongs to no workspace arrived at the user as "This turn didn't
+// finish, and we can't tell why" when the cause was known exactly and was
+// one setting away from being fixed.
+//
+// Sentinels recognised (checked with errors.Is, so wrapping is fine):
+//
+//   - ErrAgentNotWorkspaceMember → CodeAgentNotConfigured. Raised by
+//     resolveTurnWorkDirOrRefuse (pkg/agent/workspace_reroot.go) and preserved
+//     through runTurn → runAgentLoop → processMessage.
+//
+// Anything else falls through to the substring classifier, preserving the
+// previous behaviour for every other error shape.
+func TranslateTurnError(err error) LLMError {
+	if err == nil {
+		return TranslateLLMError(nil, "")
+	}
+	if errors.Is(err, ErrAgentNotWorkspaceMember) {
+		return LLMError{
+			Code:      CodeAgentNotConfigured,
+			Message:   defaultUserMessage(CodeAgentNotConfigured),
+			Retryable: isRetryable(CodeAgentNotConfigured),
+			// Our own refusal text, not provider text — safe as a
+			// Verbose-Chat detail and never persisted.
+			Detail: buildDetail(nil, err.Error()),
+		}
+	}
+	return TranslateLLMError(nil, err.Error())
+}
+
 // isRetryable reports whether code's user-facing condition is one the
-// operator can safely retry without changing inputs.
+// operator can safely retry without changing inputs. Everything else —
+// capability, content, size, auth, and setup failures — fails identically on
+// retry and is reported as not retryable.
 func isRetryable(code LLMErrorCode) bool {
 	switch code {
 	case CodeRateLimited, CodeNetwork:
