@@ -51,7 +51,7 @@ func TestSubagent3pForbiddenFieldsDrift(t *testing.T) {
 		// today — guard rather than silently skip if that ever changes, since
 		// a non-pointer field would make this test's "unset" sentinel
 		// technique invalid.
-		if field.Type.Kind() != reflect.Ptr {
+		if field.Type.Kind() != reflect.Pointer {
 			t.Fatalf(
 				"AgentUpdateRequest.%s (json:%q) is not a pointer type — "+
 					"the drift test's zero-value/sentinel technique assumes every field is optional",

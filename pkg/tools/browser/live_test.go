@@ -1084,6 +1084,13 @@ func findMouseEvent(t *testing.T, actions []chromedp.Action) *input.DispatchMous
 // hits the cache (no extra runCDP call), keeping "exactly one action
 // dispatched" a valid proxy for "no rescale fetch happened" across every
 // case, not just the non-pointer kinds.
+//
+// Capture dimensions changed 2026-08-16 from 319x158 to 320x180 — an
+// aspect-preserving downscale of the 1280x720 cache. The old pair had a shape
+// the tab could not have, which now (correctly) costs one Page.getLayoutMetrics
+// round trip to ask the tab which of the two is right, so it stopped isolating
+// the property this table is about. Shape disagreement has its own tests in
+// live_viewport_basis_test.go and live_viewport_resize_test.go.
 func TestLiveView_DispatchInput_RescaleGate(t *testing.T) {
 	const cssW, cssH = 1280.0, 720.0
 
@@ -1097,13 +1104,13 @@ func TestLiveView_DispatchInput_RescaleGate(t *testing.T) {
 			in: LiveInput{
 				Kind: "wheel", HasXY: true, X: 100, Y: 79,
 				DeltaX: 3, DeltaY: -4,
-				CaptureWidth: 319, CaptureHeight: 158,
+				CaptureWidth: 320, CaptureHeight: 180,
 			},
 			check: func(t *testing.T, actions []chromedp.Action) {
 				require.Len(t, actions, 1, "a cache hit must never trigger an extra rescale fetch")
 				p := findMouseEvent(t, actions)
-				require.InDelta(t, 100*cssW/319.0, p.X, 0.0001, "X must be rescaled")
-				require.InDelta(t, 79*cssH/158.0, p.Y, 0.0001, "Y must be rescaled")
+				require.InDelta(t, 100*cssW/320.0, p.X, 0.0001, "X must be rescaled")
+				require.InDelta(t, 79*cssH/180.0, p.Y, 0.0001, "Y must be rescaled")
 				require.InDelta(
 					t,
 					3.0,
@@ -1118,32 +1125,32 @@ func TestLiveView_DispatchInput_RescaleGate(t *testing.T) {
 			name: "mouse_move rescales X/Y",
 			in: LiveInput{
 				Kind: "mouse_move", HasXY: true, X: 100, Y: 79,
-				CaptureWidth: 319, CaptureHeight: 158,
+				CaptureWidth: 320, CaptureHeight: 180,
 			},
 			check: func(t *testing.T, actions []chromedp.Action) {
 				require.Len(t, actions, 1)
 				p := findMouseEvent(t, actions)
-				require.InDelta(t, 100*cssW/319.0, p.X, 0.0001)
-				require.InDelta(t, 79*cssH/158.0, p.Y, 0.0001)
+				require.InDelta(t, 100*cssW/320.0, p.X, 0.0001)
+				require.InDelta(t, 79*cssH/180.0, p.Y, 0.0001)
 			},
 		},
 		{
 			name: "key_down never rescales (no coordinates to rescale)",
-			in:   LiveInput{Kind: "key_down", Key: "a", Code: "KeyA", CaptureWidth: 319, CaptureHeight: 158},
+			in:   LiveInput{Kind: "key_down", Key: "a", Code: "KeyA", CaptureWidth: 320, CaptureHeight: 180},
 			check: func(t *testing.T, actions []chromedp.Action) {
 				require.Len(t, actions, 1, "key_down must never trigger a layout-metrics rescale fetch")
 			},
 		},
 		{
 			name: "text never rescales (no coordinates to rescale)",
-			in:   LiveInput{Kind: "text", Text: "hi", CaptureWidth: 319, CaptureHeight: 158},
+			in:   LiveInput{Kind: "text", Text: "hi", CaptureWidth: 320, CaptureHeight: 180},
 			check: func(t *testing.T, actions []chromedp.Action) {
 				require.Len(t, actions, 1, "text must never trigger a layout-metrics rescale fetch")
 			},
 		},
 		{
 			name: "navigate never rescales (no coordinates to rescale)",
-			in:   LiveInput{Kind: "navigate", URL: "http://8.8.8.8/", CaptureWidth: 319, CaptureHeight: 158},
+			in:   LiveInput{Kind: "navigate", URL: "http://8.8.8.8/", CaptureWidth: 320, CaptureHeight: 180},
 			check: func(t *testing.T, actions []chromedp.Action) {
 				require.Len(t, actions, 1, "navigate must never trigger a layout-metrics rescale fetch")
 			},
@@ -1231,36 +1238,35 @@ func newViewportTestLiveView(
 	return reg, lv
 }
 
-// TestLiveViewRegistry_SetViewport_Orchestration is the table test for item
-// 6b: SetViewport's full compensation orchestration — the happy path, the
-// chrome-delta compensation re-apply triggered by an over-tolerance drift
-// (live evidence, UAT v24: requested 615x744, actual 615x657 — an 87px
-// HEIGHT deficit), and the two cache-invalidation paths (hard read-back
-// failure, degenerate read-back). Each subtest scripts LiveView.runCDP by
-// the POSITION of the call in SetViewport's fixed sequence (apply -> first
-// read-back -> [compensate -> second read-back]), since that sequence is
-// deterministic and well-known — no real chromedp/Chromium connection is
-// needed (see this file's header comment).
+// TestLiveViewRegistry_SetViewport_Orchestration is the table test for
+// SetViewport's full orchestration — the happy path, the chrome-delta
+// compensation re-apply triggered by an over-tolerance SHORTFALL (live
+// evidence, UAT v24: requested 615x744, actual 615x657 — an 87px HEIGHT
+// deficit), and the two cache-invalidation paths (hard read-back failure,
+// degenerate read-back).
+//
+// Rewritten 2026-08-16 to script runCDP by the TYPE of the action rather than
+// by the position of the call. Position-scripting encoded two things that are
+// no longer true: that the window resize and the device-scale override share
+// one call (they are now separately budgeted — see viewportScaleTimeout), and
+// that the read-back is a single read (it is now a settle poll — see
+// settleCSSViewport). Type-scripting states what each call MEANS, so it
+// survives changes in how many of them there are.
 func TestLiveViewRegistry_SetViewport_Orchestration(t *testing.T) {
 	t.Run("happy path: cache equals the actual read-back, no compensation", func(t *testing.T) {
-		var calls [][]chromedp.Action
+		var bounds []windowBoundsAction
+		var readBacks int
 		runCDP := func(_ context.Context, timeout time.Duration, actions ...chromedp.Action) error {
-			calls = append(calls, actions)
-			switch len(calls) {
-			case 1: // initial apply: [windowBoundsAction, emulation action]
-				require.Len(t, actions, 2)
+			switch a := actions[0].(type) {
+			case windowBoundsAction:
 				require.Equal(t, viewportSetTimeout, timeout)
-				return nil
-			case 2: // first read-back
-				require.Equal(t, viewportSetTimeout, timeout)
-				lm := actions[0].(layoutMetricsAction)
-				*lm.w, *lm.h = 615, 744
-				return nil
+				require.Len(t, actions, 1,
+					"the window resize must be its own call, never bundled with the renderer-bound scale override")
+				bounds = append(bounds, a)
+			case layoutMetricsAction:
+				readBacks++
+				*a.w, *a.h = 615, 744
 			}
-			t.Fatalf(
-				"unexpected extra runCDP call (drift was within tolerance, no compensation expected): %#v",
-				actions,
-			)
 			return nil
 		}
 		reg, lv := newViewportTestLiveView(runCDP)
@@ -1269,7 +1275,8 @@ func TestLiveViewRegistry_SetViewport_Orchestration(t *testing.T) {
 		applied, err := reg.SetViewport("s1", 615, 744, 1)
 		require.NoError(t, err)
 		require.True(t, applied)
-		require.Len(t, calls, 2, "happy path must not trigger compensation")
+		require.Len(t, bounds, 1, "an on-target read-back must not trigger compensation")
+		require.Equal(t, 1, readBacks, "a read-back already on target must settle on the first poll")
 
 		lv.mu.Lock()
 		defer lv.mu.Unlock()
@@ -1277,27 +1284,21 @@ func TestLiveViewRegistry_SetViewport_Orchestration(t *testing.T) {
 		require.Equal(t, 744, lv.cssViewportH)
 	})
 
-	t.Run("drift over tolerance triggers exactly one compensation and caches the final read-back", func(t *testing.T) {
-		var calls [][]chromedp.Action
-		var compensationBounds windowBoundsAction
+	t.Run("shortfall over tolerance triggers exactly one compensation and caches the final read-back", func(t *testing.T) {
+		var bounds []windowBoundsAction
 		runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-			calls = append(calls, actions)
-			switch len(calls) {
-			case 1: // initial apply
-				return nil
-			case 2: // first read-back — the live UAT v24 evidence: 615x744 requested, 615x657 actual
-				lm := actions[0].(layoutMetricsAction)
-				*lm.w, *lm.h = 615, 657
-				return nil
-			case 3: // compensation re-apply
-				compensationBounds = actions[0].(windowBoundsAction)
-				return nil
-			case 4: // second (post-compensation) read-back — now exact
-				lm := actions[0].(layoutMetricsAction)
-				*lm.w, *lm.h = 615, 744
-				return nil
+			switch a := actions[0].(type) {
+			case windowBoundsAction:
+				bounds = append(bounds, a)
+			case layoutMetricsAction:
+				// Before compensation the tab is 87px short (the live UAT v24
+				// evidence); after it, the request is met exactly.
+				if len(bounds) < 2 {
+					*a.w, *a.h = 615, 657
+				} else {
+					*a.w, *a.h = 615, 744
+				}
 			}
-			t.Fatalf("unexpected extra runCDP call: %#v", actions)
 			return nil
 		}
 		reg, lv := newViewportTestLiveView(runCDP)
@@ -1305,12 +1306,13 @@ func TestLiveViewRegistry_SetViewport_Orchestration(t *testing.T) {
 		applied, err := reg.SetViewport("s1", 615, 744, 1)
 		require.NoError(t, err)
 		require.True(t, applied)
-		require.Len(t, calls, 4, "drift over tolerance must trigger exactly one compensation re-apply + re-read")
+		require.Len(t, bounds, 2,
+			"a shortfall over tolerance must trigger exactly one compensation re-apply, never a loop")
 
-		require.Equal(t, 615, compensationBounds.width,
-			"compensated width = requested + (requested - actual) = 615 + (615-615)")
-		require.Equal(t, 744+87, compensationBounds.height,
-			"compensated height = requested + (requested - actual) = 744 + (744-657)")
+		require.Equal(t, 615, bounds[1].width,
+			"width was already exact, so its correction must be zero — not a negative one")
+		require.Equal(t, 744+87, bounds[1].height,
+			"compensated height = requested + shortfall = 744 + (744-657)")
 
 		lv.mu.Lock()
 		defer lv.mu.Unlock()
@@ -1320,16 +1322,10 @@ func TestLiveViewRegistry_SetViewport_Orchestration(t *testing.T) {
 
 	t.Run("read-back failure invalidates a stale cache instead of leaving it", func(t *testing.T) {
 		simulatedErr := fmt.Errorf("simulated GetLayoutMetrics failure")
-		var calls [][]chromedp.Action
 		runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-			calls = append(calls, actions)
-			switch len(calls) {
-			case 1:
-				return nil
-			case 2:
+			if _, ok := actions[0].(layoutMetricsAction); ok {
 				return simulatedErr
 			}
-			t.Fatalf("unexpected extra runCDP call after a read-back failure: %#v", actions)
 			return nil
 		}
 		reg, lv := newViewportTestLiveView(runCDP)
@@ -1346,18 +1342,10 @@ func TestLiveViewRegistry_SetViewport_Orchestration(t *testing.T) {
 	})
 
 	t.Run("zero-valued read-back invalidates a stale cache", func(t *testing.T) {
-		var calls [][]chromedp.Action
 		runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-			calls = append(calls, actions)
-			switch len(calls) {
-			case 1:
-				return nil
-			case 2:
-				lm := actions[0].(layoutMetricsAction)
+			if lm, ok := actions[0].(layoutMetricsAction); ok {
 				*lm.w, *lm.h = 0, 0 // degenerate — e.g. cssLayoutViewport was nil
-				return nil
 			}
-			t.Fatalf("unexpected extra runCDP call after a degenerate read-back: %#v", actions)
 			return nil
 		}
 		reg, lv := newViewportTestLiveView(runCDP)
@@ -1390,10 +1378,19 @@ func TestLiveView_RescaleToCSSViewport(t *testing.T) {
 				return nil
 			},
 		}
-		x, y, ok := lv.rescaleToCSSViewport(context.Background(), 100, 79, 319, 158)
+		// The capture is an aspect-preserving downscale of the cached viewport
+		// (320x180 of 1280x720), which is the ordinary case: the encoder shrinks
+		// the stream under load but still depicts the same surface. Changed from
+		// the original 319x158 on 2026-08-16 — those numbers describe a capture
+		// whose SHAPE differs from the tab's, which now (correctly) costs one
+		// round trip to ask the tab which of the two is right, so they no longer
+		// isolate the property this subtest is about. The shape-disagreement
+		// behaviour has its own tests in live_viewport_basis_test.go and
+		// live_viewport_resize_test.go.
+		x, y, ok := lv.rescaleToCSSViewport(context.Background(), 100, 79, 320, 180)
 		require.True(t, ok, "a cache hit must be mappable")
-		require.InDelta(t, 100*1280.0/319.0, x, 0.0001)
-		require.InDelta(t, 79*720.0/158.0, y, 0.0001)
+		require.InDelta(t, 100*1280.0/320.0, x, 0.0001)
+		require.InDelta(t, 79*720.0/180.0, y, 0.0001)
 		require.Zero(t, calls, "a cache hit must never call runCDP")
 	})
 
@@ -1410,11 +1407,12 @@ func TestLiveView_RescaleToCSSViewport(t *testing.T) {
 				return nil
 			},
 		}
-		x, y, ok := lv.rescaleToCSSViewport(context.Background(), 100, 79, 319, 158)
+		// Aspect-preserving capture, for the same reason as the subtest above.
+		x, y, ok := lv.rescaleToCSSViewport(context.Background(), 100, 79, 320, 180)
 		require.True(t, ok, "a successful fetch must be mappable")
-		require.InDelta(t, 100*1280.0/319.0, x, 0.0001)
-		require.InDelta(t, 79*720.0/158.0, y, 0.0001)
-		require.Equal(t, 1, calls)
+		require.InDelta(t, 100*1280.0/320.0, x, 0.0001)
+		require.InDelta(t, 79*720.0/180.0, y, 0.0001)
+		require.Equal(t, 1, calls, "one fetch, and no probe — the capture's shape agrees with the tab's")
 
 		lv.mu.Lock()
 		defer lv.mu.Unlock()

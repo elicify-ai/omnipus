@@ -504,7 +504,7 @@ func fileInfoInode(info os.FileInfo) uint64 {
 		return 0
 	}
 	value := reflect.ValueOf(info.Sys())
-	if value.Kind() == reflect.Ptr {
+	if value.Kind() == reflect.Pointer {
 		if value.IsNil() {
 			return 0
 		}

@@ -404,6 +404,14 @@ type BrowserManager struct {
 	// initialized; nil is a valid empty state.
 	pendingAdopt map[target.ID]*pendingAdoptEntry
 
+	// adoptRetryBackoff overrides defaultAdoptRetryBackoff, the bounded
+	// schedule adoptTargetWithRetry walks after a failed adoption. A field
+	// rather than a package var purely so tests can shrink the delays
+	// without mutating state shared with every other test in this package
+	// (the same isolation rationale as createTabFn/tabFocusFn). nil in
+	// production. Guarded by m.mu.
+	adoptRetryBackoff []time.Duration
+
 	// listTargets executes chromedp.Targets against a resolved tab context
 	// to list every CDP target the browser currently knows about (ADR-041
 	// D2's ReconcileTabs). A field — not a direct chromedp.Targets call at
@@ -1175,8 +1183,15 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 
 		var tabs []Tab
 		notify := true
+		// newActiveCtx is the context of the tab this call actually installed
+		// as index 0/active, captured under the SAME lock that installed it.
+		// Left nil in the "someone else already populated this session"
+		// branch below, where this call's tab is discarded and the active tab
+		// belongs to (and was activated by) whoever won that race.
+		var newActiveCtx context.Context
 		if existing == nil {
 			tabs = m.registerFreshSessionLocked(sessionID, tab, browserCtx, browserCancel)
+			newActiveCtx = tab.ctx
 		} else {
 			switch se := m.sessions[sessionID]; {
 			case se == nil:
@@ -1202,11 +1217,23 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 				se.activeIdx = 0
 				m.installTargetListenerLocked(sessionID, se)
 				tabs = snapshotTabsLocked(se)
+				newActiveCtx = tab.ctx
 			}
 		}
 		m.mu.Unlock()
 		close(done)
 		if notify {
+			// Tell Chrome which tab is active, BEFORE notifyTabsChanged fires
+			// the WebRTC recapture — the last of the five paths that moved
+			// se.activeIdx without stating its intent to Chrome (SwitchTab,
+			// OpenTab, CloseTab and adoptTarget are the other four). This one
+			// matters most on CloseTab's last-tab replacement: the tab the
+			// user was watching has just been destroyed, so Chrome's own
+			// active-tab answer at that instant is whatever it fell back to,
+			// and the encoder would bind to that instead of the replacement
+			// this call just created. Best-effort and no lock held, like every
+			// other call site.
+			m.activateTabInChrome(newActiveCtx, sessionID, 0)
 			m.notifyTabsChanged(sessionID, tabs, 0)
 		}
 		return nil
@@ -1606,7 +1633,12 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 	// see releaseTabFocusInChrome for the measured background-compositing
 	// cost of leaving it set).
 	var prevCtx context.Context
-	if se.activeIdx != index && se.activeIdx >= 0 && se.activeIdx < len(se.tabs) {
+	// modelMoved records whether THIS manager's own bookkeeping actually
+	// changed, captured BEFORE the mutation below — it is what decides
+	// whether anyone downstream will fire a recapture (see the call to
+	// recaptureForTabChange at the end of this function).
+	modelMoved := se.activeIdx != index
+	if modelMoved && se.activeIdx >= 0 && se.activeIdx < len(se.tabs) {
 		prevCtx = se.tabs[se.activeIdx].ctx
 	}
 	se.activeIdx = index
@@ -1633,7 +1665,56 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 	m.releaseTabFocusInChrome(prevCtx, sessionID)
 
 	m.notifyTabsChanged(sessionID, tabs, index)
+
+	// The model did NOT move, so nobody downstream will ask for a recapture
+	// and the picture would stay on whatever tab Chrome was showing — the
+	// live-measured 2026-08-15 defect. Mechanism: LiveView.onTabsChanged
+	// (live.go) triggers the WebRTC recapture only when the ACTIVE TAB
+	// CHANGED (its activeTabChanged check, which compares the resolved
+	// active-tab context against the last one it saw). That is correct for
+	// its own purposes but assumes this manager's model and Chrome's own
+	// idea of the active tab never disagree. They do disagree, routinely:
+	// when a page-opened tab fails to be adopted (measured on the operator's
+	// box — "auto-attach: failed to adopt new tab target ... timed out after
+	// 20s", three times, from an advert), Chrome activates that tab and this
+	// manager never learns about it. The user then clicks the tab strip
+	// entry that is ALREADY the model's active index to get back: the
+	// activateTabInChrome call above genuinely corrects Chrome, the call
+	// returns success — and the video never follows, because no recapture
+	// was ever requested. Reproduced deterministically by forcing a
+	// recapture with no model change: the picture snapped straight back.
+	//
+	// Guarded on !modelMoved precisely so the normal path does not fire
+	// twice: when the model DID move, onTabsChanged's own activeTabChanged
+	// branch has already issued exactly one recapture from the
+	// notifyTabsChanged call immediately above.
+	//
+	// Round-2 finding F3: that branch now goes through the SAME entry point
+	// this one does (CaptureSession.RecaptureForTabChangeAt, via
+	// LiveView.signalRecaptureForTabChange), so the independent foreground
+	// re-assert — the second attempt that exists because activateTabInChrome
+	// above is best-effort and its failure is a WARN log and nothing more —
+	// is on the path every ordinary tab click takes, not only on this rare
+	// recovery one. It used to be reachable ONLY from here, which had the
+	// hardening exactly backwards.
+	if !modelMoved {
+		m.recaptureForTabChange()
+	}
 	return tabs[index], nil
+}
+
+// recaptureForTabChange asks this manager's WebRTC CaptureSession (if any)
+// to re-bind its capture to the current model-active tab. A no-op when no
+// capture session exists (WebRTC never used, or the panel is closed), which
+// is why every call site can invoke it unconditionally.
+//
+// Must be called with NO BrowserManager lock held: CaptureSession() takes
+// m.captureMu, and the work RecaptureForTabChange schedules calls back into
+// m.Session(), which takes m.mu.
+func (m *BrowserManager) recaptureForTabChange() {
+	if cs := m.CaptureSession(); cs != nil {
+		cs.RecaptureForTabChange()
+	}
 }
 
 // activateTabInChrome makes tabCtx's tab the one Chrome itself considers
@@ -2189,6 +2270,12 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 		newTab.cancel()
 		return result, nil
 	}
+	// The tab being left, captured BEFORE activeIdx moves — same rationale as
+	// SwitchTab's and OpenTab's (review finding F9).
+	var prevCtx context.Context
+	if se.activeIdx >= 0 && se.activeIdx < len(se.tabs) {
+		prevCtx = se.tabs[se.activeIdx].ctx
+	}
 	se.tabs = append(se.tabs, newTab)
 	se.activeIdx = len(se.tabs) - 1 // ADR-041 D2: adopted tabs become active by default
 	tabs := snapshotTabsLocked(se)
@@ -2197,10 +2284,134 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 	result := tabAdoptResult{Adopted: &active}
 	entry.result = result
 	close(entry.done)
+	newCtx := newTab.ctx
 	m.mu.Unlock()
+
+	// Adoption moves the active tab exactly as SwitchTab/OpenTab/CloseTab do,
+	// and the notifyTabsChanged below drives the SAME WebRTC recapture — but
+	// until now this path was the one that moved se.activeIdx WITHOUT ever
+	// telling Chrome, so the encoder's chrome.tabs.query({active:true})
+	// resolution was left to agree with us by luck. It is also the path where
+	// disagreement is MOST likely: an adopted target is one Chrome itself just
+	// opened and (for a user-initiated target="_blank"/window.open) usually
+	// already activated, so "whatever Chrome picked" and "the tab we just made
+	// active" are two independent answers. State the intent instead of
+	// inheriting it. Best-effort and no lock held, like every other call site.
+	m.activateTabInChrome(newCtx, sessionID, activeIdx)
+	m.releaseTabFocusInChrome(prevCtx, sessionID)
 
 	m.notifyTabsChanged(sessionID, tabs, activeIdx)
 	return result, nil
+}
+
+// defaultAdoptRetryBackoff is the bounded backoff schedule
+// adoptTargetWithRetry walks after a FAILED adoption attempt (an ERROR — a
+// refusal such as the MaxTabs cap is a decision, not a failure, and is never
+// retried).
+//
+// Why retries exist at all (measured on the operator's box, 2026-08-15): a
+// failed adoption used to be PERMANENT. adoptTarget deletes its pendingAdopt
+// entry on the error path, and Chrome fires Target.targetCreated for a given
+// target exactly once, so nothing ever looks at that target again — one
+// transient stall stranded the tab for the entire life of the browsing
+// context. The observed stall was exactly that: "auto-attach: failed to
+// adopt new tab target ... timed out after 20s", three times over, from an
+// advert opening tabs on a 2-CPU hosted box where the CDP transport was
+// already saturated. A tab stranded this way is the ROOT of the tab-switch
+// symptom this fix wave is about: Chrome activates the tab it opened, our
+// model never learns of it, and the two sources of truth are desynced from
+// then on.
+//
+// Shape of the schedule: the first attempt's own failure already cost up to
+// firstAttachTimeout (20s), so the point of the backoff is not speed, it is
+// giving a saturated CDP transport progressively more room to drain while
+// staying bounded. Three retries ≈ 14s of added waiting in the worst case,
+// after which the tab is genuinely reported as stranded rather than retried
+// forever — an unbounded retry against a target that no longer exists would
+// be a per-advert goroutine leak.
+var defaultAdoptRetryBackoff = []time.Duration{
+	750 * time.Millisecond,
+	3 * time.Second,
+	10 * time.Second,
+}
+
+// adoptRetrySchedule returns this manager's adoption backoff schedule,
+// falling back to defaultAdoptRetryBackoff. A field on the manager (see
+// adoptRetryBackoff) rather than a package var so tests can shrink the
+// schedule without mutating global state shared with every other test in
+// the package.
+func (m *BrowserManager) adoptRetrySchedule() []time.Duration {
+	m.mu.Lock()
+	sched := m.adoptRetryBackoff
+	m.mu.Unlock()
+	if sched == nil {
+		return defaultAdoptRetryBackoff
+	}
+	return sched
+}
+
+// sessionExists reports whether sessionID still has a browsing context. Used
+// by adoptTargetWithRetry to abandon a pending retry promptly when the
+// context is torn down (Shutdown/CloseSession) rather than sleeping out the
+// rest of its schedule against a session that no longer exists.
+func (m *BrowserManager) sessionExists(sessionID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.sessions[sessionID]
+	return ok
+}
+
+// adoptTargetWithRetry runs adoptTarget and, on a genuine ERROR, retries it
+// on defaultAdoptRetryBackoff's bounded schedule — see that var's doc
+// comment for the stranded-tab defect this closes.
+//
+// Only an error is retried. Every non-error outcome ends the loop
+// immediately, and all of them are correct terminal states: a successful
+// adoption, "already ours" (a racing adopter won), "no browsing context"
+// (torn down), and a REFUSAL such as the MaxTabs cap — which is a policy
+// decision already reported to the agent via tabAdoptResult.Unadopted, not
+// something a retry could improve.
+//
+// Blocking by design; every caller already runs it on its own goroutine
+// (handleTargetEvent must never block the CDP event-dispatch goroutine —
+// see its doc comment).
+func (m *BrowserManager) adoptTargetWithRetry(sessionID string, targetID target.ID) {
+	_, err := m.adoptTarget(sessionID, targetID)
+	if err == nil {
+		return
+	}
+
+	sched := m.adoptRetrySchedule()
+	for attempt, delay := range sched {
+		logger.WarnCF("browser", "auto-attach: failed to adopt new tab target — retrying", map[string]any{
+			"session_id":   sessionID,
+			"target_id":    string(targetID),
+			"error":        err.Error(),
+			"attempt":      attempt + 1,
+			"of":           len(sched),
+			"retry_in_ms":  delay.Milliseconds(),
+			"consequences": "tab stays stranded (not in the tab strip, and Chrome may show it) until a retry succeeds",
+		})
+		if !m.sessionExists(sessionID) {
+			return // browsing context torn down under us — nothing left to adopt into
+		}
+		timer := time.NewTimer(delay)
+		<-timer.C
+		timer.Stop()
+		if !m.sessionExists(sessionID) {
+			return
+		}
+		if _, err = m.adoptTarget(sessionID, targetID); err == nil {
+			return
+		}
+	}
+
+	logger.WarnCF("browser", "auto-attach: gave up adopting new tab target", map[string]any{
+		"session_id": sessionID,
+		"target_id":  string(targetID),
+		"error":      err.Error(),
+		"attempts":   len(sched) + 1,
+	})
 }
 
 // reconcileTargetListTimeout bounds the chromedp.Targets CDP round trip
@@ -2404,15 +2615,11 @@ func (m *BrowserManager) handleTargetEvent(sessionID string, ev any) {
 	if info.OpenerID == "" {
 		return // not opened by a page — a top-level/browser-initiated target, not ours
 	}
-	go func() {
-		if _, err := m.adoptTarget(sessionID, info.TargetID); err != nil {
-			logger.WarnCF("browser", "auto-attach: failed to adopt new tab target", map[string]any{
-				"session_id": sessionID,
-				"target_id":  string(info.TargetID),
-				"error":      err.Error(),
-			})
-		}
-	}()
+	// adoptTargetWithRetry, not a bare adoptTarget: Target.targetCreated
+	// fires exactly once per target, so a single transient failure here used
+	// to strand the tab permanently — see defaultAdoptRetryBackoff's doc
+	// comment for the measurement.
+	go m.adoptTargetWithRetry(sessionID, info.TargetID)
 }
 
 // targetInfoFromEvent extracts *target.Info from the two CDP event types

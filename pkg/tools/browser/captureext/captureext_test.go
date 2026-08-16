@@ -393,6 +393,13 @@ var versionContentHashes = map[string]string{
 	"1.0.5": "ee383d255869ec8765da37e1dc2f7ca1971679d03d4868a0f72be578e7f60334",
 	"1.0.6": "27002761ba1ae644d9c86ffa85d7dfed0bb09a33a879a0dfd531ee8d644a31f0",
 	"1.0.7": "3d3421dcd59363f8ce3c0fe6c6463082c16125577fbeed01b5ed499accfd4b56",
+	"1.0.8": "95d494bd8751af4a33a801a85503dff81100e68720d4ac09ec8b68b1148dd3cb",
+	// 1.0.9 — round-2 F2/F7: the quality-adaptation loop no longer outlives
+	// the evidence behind it (ADAPT_EVIDENCE_TTL_MS + adaptCarryOverIndex, so
+	// a viewer never inherits a resolution a viewerless boot warm-up settled
+	// on), and an adaptation that fails to APPLY is now reported to the
+	// gateway instead of dying in the extension page's console.
+	"1.0.9": "559e1bb80b4c0ac5abb63bb799594b23045be6d99498bf6b1a86c083baa064ec",
 }
 
 func embeddedContentHash(t *testing.T) string {

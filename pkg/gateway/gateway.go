@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,6 +28,7 @@ import (
 	"regexp"
 	"runtime"
 	runtimedebug "runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -202,7 +204,13 @@ type services struct {
 	// agent loop's GetChannelManager). It is written only during executeReload,
 	// which is single-flighted by the reloading atomic.Bool. No handler reads
 	// this field directly, so no additional lock is required for read access.
-	ChannelManager   *channels.Manager
+	ChannelManager *channels.Manager
+	// browserWS is the live-browser panel WS handler (browser_ws.go),
+	// kept here so boot can reach the capture registry it owns AFTER
+	// setupAndStartServices returns — that is where the boot-time capture
+	// warm-up (startBrowserWarmBoot) lives, because it needs this gateway's
+	// own listener to already be accepting.
+	browserWS        *BrowserWSHandler
 	DeviceService    *devices.Service
 	HealthServer     *health.Server
 	manualReloadChan chan struct{}
@@ -2158,6 +2166,16 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	}
 	runningServices.stopNagBanner = stopNag
 
+	// Boot-time browser warm-up steps 1 and 2 — the first TAB and the WebRTC
+	// CAPTURE (see startBrowserWarmBoot's block comment). Deliberately here,
+	// after setupAndStartServices: both need this gateway's own listener to be
+	// accepting, since the warm tab lands on the gateway-served start page and
+	// the capture's encoder page dials the gateway's loopback capture-ingest
+	// WS. Step 0 (the Chrome PROCESS) still runs earlier, where it has nothing
+	// to wait for. Returns immediately; nothing joins it, and nothing it does
+	// can fail boot.
+	startBrowserWarmBoot(ctx, cfg, agentLoop, runningServices.browserWS)
+
 	// Surface sandbox state on /health via the existing degraded/check
 	// infrastructure. Registering a RegisterCheck puts the {mode, backend,
 	// applied} triplet into the /health response body.
@@ -2657,6 +2675,513 @@ func findSharedBrowserCoordinator(mgrs []*browser.BrowserManager) *browser.Brows
 		}
 	}
 	return nil
+}
+
+// --- boot-time browser WARM SURFACES (tab + capture) ------------------------
+//
+// browserWarmUpEnabled above governs step 0 of the warm-up ladder: the Chrome
+// PROCESS. Measured on a host whose Chrome binary is already present (the
+// Docker-image case, no download), that is genuinely all it does — the gateway
+// answered HTTP at 2.6s and Chrome's main process was live at 2.8s, with ZERO
+// renderer processes: no browsing context, no tab, no page. The first panel
+// open then paid for everything else on the user's own critical path:
+// attach 0.4s + tab-on-demand 1.0-2.2s + capture-extension load and WebRTC
+// negotiation 1.7-6.7s + first frame 1.2-4.3s, ~9.5s in total, and one run in
+// three failed outright with an ingest timeout ("no ingest video track after
+// waiting 15s").
+//
+// Two further steps close that gap, deliberately kept SEPARATELY controllable
+// because their cost profiles are nothing alike:
+//
+//	step 1 — the TAB (tools.browser.warm_tab_at_boot, default true).
+//	         One renderer parked on a static local page. Nearly free to keep.
+//	step 2 — the CAPTURE (tools.browser.warm_capture_at_boot, default true).
+//	         The expensive one: a running capture encodes video continuously.
+//	         It therefore stops itself after tools.browser.warm_capture_idle_sec
+//	         with no viewer ever attached, and the next offer starts a fresh one.
+//
+// Every property the process warm-up has is preserved here, because the
+// reasons for them are unchanged (Hard Constraint #4, graceful degradation):
+// best-effort, non-blocking (a bare goroutine nothing joins), panic-contained,
+// audited on failure, and skipped entirely by every existing opt-out —
+// tools.browser.warm_at_boot, tools.browser.enabled, a set cdp_url (a remote
+// CDP Chrome is not ours to warm) and OMNIPUS_SKIP_BROWSER_PREPROVISION=1 —
+// since browserWarmTabEnabled/browserWarmCaptureEnabled are both defined as
+// browserWarmUpEnabled AND their own flag. Nothing here can fail boot: the
+// caller starts it and moves on.
+//
+// PARITY (macOS vs Linux): everything above the CDP transport is identical on
+// both — same defaults, same config keys, same selection rule, same idle stop,
+// same log/audit lines, same recovery (the ordinary lazy path). What differs is
+// underneath and invisible from here: macOS encodes in hardware over loopback,
+// a hosted Linux box encodes in software over a real network, so the WALL-CLOCK
+// saving is larger on Linux than on a laptop. A failure degrades identically on
+// both: the warm surface is skipped, one WARN + one audit entry is written, and
+// the first open behaves exactly as it did before this existed.
+
+// warmBootListenerBudget bounds how long the warm-boot goroutine waits for the
+// gateway's own HTTP listener before giving up and warming anyway.
+//
+// This wait is load-bearing, not politeness: the start page a warm tab lands on
+// is served BY THIS GATEWAY (tools.browser.start_page_url defaults to
+// http://localhost:<gateway.port>/browser-start, pkg/agent/loop.go), and the
+// capture's encoder page connects back to this gateway's own loopback
+// capture-ingest WS. Warming before the listener accepts would leave the warm
+// tab parked on about:blank — which on this surface reads as a BROKEN panel,
+// indistinguishable from a real capture failure (the exact confusion
+// manager.go's navigateNewTabToStartPage exists to avoid) — and would fail the
+// capture outright. On expiry we proceed regardless rather than skipping: the
+// warm-up is best-effort, and a listener that is late is not a reason to leave
+// the first open cold.
+const warmBootListenerBudget = 20 * time.Second
+
+// warmBootListenerDialTimeout / warmBootListenerRetryDelay pace that wait.
+const (
+	warmBootListenerDialTimeout = 500 * time.Millisecond
+	warmBootListenerRetryDelay  = 100 * time.Millisecond
+)
+
+// warmCaptureIdleCheckInterval is how often the idle watcher re-reads a warm
+// capture's viewer count. Short relative to the (minutes-long) default idle
+// timeout so the handover to a real viewer is noticed promptly, and so the
+// watcher exits quickly on gateway shutdown.
+//
+// 1s, not the original 5s (round-2 finding F2): the handover is no longer a
+// bookkeeping event the watcher merely notices — it now performs an action on
+// the viewer's behalf (warmCaptureAdaptResetMinAge below), and every second of
+// detection lag is a second of that action landing later, mid-view, instead of
+// during the first moment of a panel that is still settling. A 1s tick that
+// reads one atomic counter, for at most the idle window, is not a cost worth
+// weighing against that.
+const warmCaptureIdleCheckInterval = time.Second
+
+// warmCaptureAdaptResetMinAge is how long a boot-warmed capture must have run
+// UNWATCHED before the handover to its first real viewer forces a recapture.
+//
+// Why the handover forces one at all (round-2 finding F2): the encoder page
+// runs a bounded resolution-adaptation loop (captureext/embedded/encoder.js)
+// that steps the picture down when the encoder reports it is CPU-limited. A
+// boot-warmed capture is a full software encode with NOBODY WATCHING, running
+// during the busiest minute of the process's life — gateway boot, Chrome
+// launch, extension load — and on a 2-core hosted Linux box it can reach the
+// loop's hard floor (a QUARTER of the pixels) within ~8 seconds. Without this,
+// the user's first panel open inherits a resolution decided by, and for, no
+// one, and needs 20+ seconds of sustained high frame rate to climb back out.
+//
+// A recapture is the signal, because it is the one the encoder already
+// understands — the same control frame a panel resize sends — and because the
+// encoder's own carry-over rule (adaptCarryOverIndex) is what interprets it:
+// the FIRST rebuild of a capture starts the viewer at full quality, later ones
+// keep whatever the loop learned while its evidence is still fresh. The
+// gateway does not, and should not, know about scale factors; it knows about
+// viewers, which is the thing the encoder cannot see.
+//
+// Why an age gate rather than "always": a viewer who opens the panel seconds
+// after boot — precisely the case the warm-up was built for, and the one that
+// measured 6,655ms -> 1,041ms to first frame — cannot have inherited an
+// adaptation, because the loop only starts on the PeerConnection's first
+// 'connected' transition and needs two further 2s samples before it can step
+// at all (~6s at the very earliest). Recapturing there would spend the whole
+// win on a rebuild that resets nothing.
+//
+// This is a SAFETY NET, not the primary mechanism, which is why a gate that
+// sits past the earliest possible step is acceptable rather than sloppy: the
+// SPA reports its panel geometry on every fresh attach (browserLiveWs.ts's
+// sendViewport, ~650ms in), and that already forces the encoder's first
+// rebuild — the one adaptCarryOverIndex resets unconditionally. What this
+// adds is the GUARANTEE, so a viewer whose geometry happened not to change,
+// or a future SPA that stops sending one, cannot silently inherit a
+// resolution chosen with nobody watching. The cost of the belt as well as the
+// braces is at most one extra capture rebuild (the same brief blip a panel
+// resize causes) in the first seconds of an open, and only for a capture that
+// has been warming, unwatched, for longer than this.
+//
+// A var, not a const, purely so the handover test can exercise the rule
+// without a 15-second sleep (same pattern as captureIngestWriteTimeout in
+// browser_webrtc.go). Never reassigned in production code.
+var warmCaptureAdaptResetMinAge = 15 * time.Second
+
+// browserWarmTabEnabled reports whether step 1 (warm the first tab) should
+// run. AND-ed with browserWarmUpEnabled by construction: warming a tab
+// presupposes warming the process, so every existing opt-out — including
+// OMNIPUS_SKIP_BROWSER_PREPROVISION=1 and a remote cdp_url — governs this
+// too, and an operator who turned warm_at_boot off gets a fully lazy browser
+// rather than a half-warmed one.
+func browserWarmTabEnabled(cfg *config.Config) bool {
+	return browserWarmUpEnabled(cfg) && cfg.Tools.Browser.WarmTabAtBoot
+}
+
+// browserWarmCaptureEnabled reports whether step 2 (warm the WebRTC capture)
+// should run. Same AND-ing rationale as browserWarmTabEnabled. Note this is
+// only the CONFIG half of the decision: the warm-boot path additionally
+// re-uses webrtcUnavailableReason — the exact gate a real viewer offer
+// applies — so warm-up can never start a capture an offer would have refused.
+func browserWarmCaptureEnabled(cfg *config.Config) bool {
+	return browserWarmUpEnabled(cfg) && cfg.Tools.Browser.WarmCaptureAtBoot
+}
+
+// warmCaptureIdleTimeout is how long a boot-warmed capture may run with no
+// viewer ever attached. 0 means "never stop it on idle" (an explicit
+// operator choice — see WarmCaptureIdleSec's doc comment), which is why a
+// non-positive configured value maps to 0 rather than to the default: an
+// operator who writes 0 is opting OUT of the idle stop, not asking for the
+// shipped 5 minutes back.
+func warmCaptureIdleTimeout(cfg *config.Config) time.Duration {
+	if cfg.Tools.Browser.WarmCaptureIdleSec <= 0 {
+		return 0
+	}
+	return time.Duration(cfg.Tools.Browser.WarmCaptureIdleSec) * time.Second
+}
+
+// pickWarmBrowserManager chooses the ONE agent whose tab (and, optionally,
+// capture) gets warmed at boot. Returns nil when no candidate exists.
+//
+// Why one and not all: each warmed tab is a renderer process (74-268MB RSS
+// measured on the UAT box, coordinator.go), and a warmed capture is a
+// continuously encoding video pipeline of which the shared Chrome can only
+// usefully serve ONE at a time anyway (ADR-048 condition 2 — handleWebRTCOffer
+// denies a second ACTIVELY-VIEWED capture). Warming every agent would multiply
+// the cost by the roster size to save time on exactly one panel.
+//
+// Selection is DETERMINISTIC — the default agent
+// (agents.defaults.default_agent_id, the single source of truth per ADR-054
+// D6.4 and the agent a fresh install's user actually opens), else the
+// lexicographically-first agent id that has a browser manager. Sorting matters:
+// AgentLoop.BrowserManagers() ranges a map, so without it the warmed agent
+// would differ between two boots of the SAME install — and, worse, between a
+// macOS and a Linux host, which is precisely the platform-divergent behaviour
+// this project forbids.
+func pickWarmBrowserManager(cfg *config.Config, mgrs []*browser.BrowserManager) *browser.BrowserManager {
+	byID := make(map[string]*browser.BrowserManager, len(mgrs))
+	ids := make([]string, 0, len(mgrs))
+	for _, mgr := range mgrs {
+		if mgr == nil {
+			continue
+		}
+		// Two hard requirements, both of which a candidate in the normal
+		// coordinator-mode gateway always satisfies:
+		//   - a real agent id, because the capture session is keyed by it
+		//     (ensureCaptureSession/the capture registry) and an empty key is
+		//     not an agent;
+		//   - an attached coordinator, so warming drives the ONE shared
+		//     Chrome. A manager with no coordinator falls back to the legacy
+		//     one-Chrome-per-manager managed mode (manager.go's ensureStarted),
+		//     which would have boot spawn a SECOND Chrome process — the exact
+		//     opposite of a cheap warm-up. WebRTC capture requires the
+		//     coordinator anyway (defaultEncoderStarter refuses without one).
+		id := strings.TrimSpace(mgr.AgentID())
+		if id == "" || mgr.Coordinator() == nil {
+			continue
+		}
+		if _, dup := byID[id]; dup {
+			continue
+		}
+		byID[id] = mgr
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if def := strings.TrimSpace(cfg.Agents.Defaults.DefaultAgentID); def != "" {
+		if mgr, ok := byID[def]; ok {
+			return mgr
+		}
+	}
+	sort.Strings(ids)
+	return byID[ids[0]]
+}
+
+// waitForGatewayListener blocks until this gateway's own HTTP listener accepts
+// a loopback TCP connection, ctx is canceled, or budget expires. Reports
+// whether the listener actually answered.
+//
+// Loopback specifically (not cfg.Gateway.Host): both consumers of this wait are
+// in-process loopback clients — the warm tab fetches the start page and the
+// encoder page dials ws://127.0.0.1:<port>/api/v1/browser/capture-ingest, the
+// same hardcoded loopback address handleWebRTCOffer already builds. A gateway
+// bound exclusively to a non-loopback address therefore never satisfies this
+// wait, and we proceed on the budget instead — the same outcome the capture
+// path would reach on its own.
+func waitForGatewayListener(ctx context.Context, port int, budget time.Duration) bool {
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	deadline := time.Now().Add(budget)
+	for {
+		conn, err := net.DialTimeout("tcp", addr, warmBootListenerDialTimeout)
+		if err == nil {
+			_ = conn.Close()
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(warmBootListenerRetryDelay):
+		}
+	}
+}
+
+// warmCaptureHandle is the slice of *browser.CaptureSession the idle watcher
+// needs. An interface, not the concrete type, so the watcher's stop/handover
+// decision is testable without a real Chrome, a real encoder page and a real
+// WebRTC relay — the three things that make the capture path otherwise
+// untestable off a live host.
+type warmCaptureHandle interface {
+	ViewerCount() int
+	Done() <-chan struct{}
+	Stop()
+	// Recapture pushes a browser_capture_control{recapture} frame to the
+	// encoder page. Used at handover — see warmCaptureAdaptResetMinAge.
+	Recapture()
+}
+
+// watchWarmCaptureIdle stops a boot-warmed capture that no viewer ever came to
+// watch, and gets out of the way of one that a viewer DID take over.
+//
+// The handover matters: CaptureSession's own grace-stop timer is armed by
+// RemoveViewer, so it only ever protects a session that HAD a viewer. A capture
+// started by boot warm-up has never had one, so nothing in the capture session
+// itself would ever stop it — it would encode video for the process's whole
+// lifetime. Once a viewer attaches, that ordinary last-detach grace stop owns
+// the session and this watcher exits without touching it.
+//
+// Deliberately NOT via CaptureSession.SetOnStopped: ensureCaptureSession
+// already installs the hook that clears the capture registry and notifies
+// viewers, and that hook is single-slot — overwriting it here would silently
+// break the teardown path for every session.
+func watchWarmCaptureIdle(ctx context.Context, cs warmCaptureHandle, idle time.Duration, agentID string) {
+	if cs == nil || idle <= 0 {
+		return
+	}
+	startedAt := time.Now()
+	deadline := startedAt.Add(idle)
+	ticker := time.NewTicker(warmCaptureIdleCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-cs.Done():
+			// Someone else already stopped it (an offer superseded it, the
+			// browser died, shutdown) — nothing to do.
+			return
+		case <-ticker.C:
+			if cs.ViewerCount() > 0 {
+				unwatchedFor := time.Since(startedAt)
+				// Round-2 F2: hand the viewer a capture that starts from the
+				// quality THEY warrant, not one shaped by minutes of
+				// unwatched, boot-contended encoding — see
+				// warmCaptureAdaptResetMinAge for the full rationale.
+				if unwatchedFor >= warmCaptureAdaptResetMinAge {
+					// WARN, not INFO: this costs the viewer a brief, visible
+					// stream blip in the first seconds of their panel open,
+					// and production logs are WARN-only — an INFO line here
+					// would leave an operator investigating "the video
+					// blinked when I opened the panel" with nothing to find.
+					logger.WarnCF("browser",
+						"boot-warmed capture adopted by a viewer after running unwatched — forcing one capture rebuild so the picture starts at full quality (brief blip); "+
+							"the resolution the encoder settled on with nobody watching is not evidence about this viewer",
+						map[string]any{
+							"agent_id":      agentID,
+							"unwatched_for": unwatchedFor.Round(time.Second).String(),
+						})
+					cs.Recapture()
+				} else {
+					logger.InfoCF("browser", "boot-warmed capture adopted by a viewer — handing it to the normal grace-stop path",
+						map[string]any{"agent_id": agentID, "unwatched_for": unwatchedFor.Round(time.Second).String()})
+				}
+				return
+			}
+			if time.Now().Before(deadline) {
+				continue
+			}
+			// WARN for the same reason the start line is (see
+			// startBrowserWarmBoot): this is the moment the idle CPU burn
+			// ENDS, and an operator who saw the start line must be able to
+			// see it end — in a WARN-only production log, an INFO here would
+			// leave "is it still encoding?" unanswerable.
+			logger.WarnCF("browser", "boot-warmed capture idle-stopped (no viewer ever attached) — CPU released; the next viewer starts a fresh one",
+				map[string]any{"agent_id": agentID, "idle": idle.String()})
+			cs.Stop()
+			return
+		}
+	}
+}
+
+// startBrowserWarmBoot kicks off warm-up steps 1 and 2 (see the block comment
+// above) on their own goroutine and returns immediately. Call it AFTER the HTTP
+// listener is up: both steps need this gateway to be serving (start page /
+// capture-ingest WS), which is why they live here rather than alongside the
+// process warm-up earlier in boot.
+//
+// Nothing joins the returned goroutine, exactly like the process warm-up's:
+// gateway shutdown must not wait for a browser, and ctx (the gateway's own
+// shutdown-aware context) is what stops it early.
+func startBrowserWarmBoot(
+	ctx context.Context,
+	cfg *config.Config,
+	agentLoop *agent.AgentLoop,
+	h *BrowserWSHandler,
+) {
+	if agentLoop == nil {
+		return
+	}
+	wantTab := browserWarmTabEnabled(cfg)
+	wantCapture := browserWarmCaptureEnabled(cfg)
+	if !wantTab && !wantCapture {
+		return
+	}
+	mgr := pickWarmBrowserManager(cfg, agentLoop.BrowserManagers())
+	if mgr == nil {
+		// Say so rather than falling through silently — "enabled but nothing
+		// to warm" is otherwise indistinguishable from "disabled" and from
+		// "still running", the same three-way ambiguity the process warm-up's
+		// own no-coordinator branch calls out.
+		logger.InfoCF("browser",
+			"boot-time browser tab/capture warm-up enabled but no agent has a browser manager — nothing to warm",
+			nil)
+		return
+	}
+
+	go func() {
+		// A panic here must never take the gateway down with it: this is an
+		// optional latency optimisation, and the lazy path is a complete
+		// fallback. Same contract as the process warm-up's own recover().
+		defer func() {
+			if r := recover(); r != nil {
+				logger.WarnCF("browser",
+					"boot-time browser tab/capture warm-up panicked — recovered; the first panel open will build them lazily",
+					map[string]any{"panic": fmt.Sprintf("%v", r)})
+				audit.Emit(context.Background(), agentLoop.AuditLogger(),
+					audit.EventBrowserWarmUpFailed, audit.SeverityWarn,
+					map[string]any{"stage": "warm_boot", "reason": "panic", "error": fmt.Sprintf("%v", r)})
+			}
+		}()
+
+		agentID := mgr.AgentID()
+		if !waitForGatewayListener(ctx, cfg.Gateway.Port, warmBootListenerBudget) {
+			if ctx.Err() != nil {
+				return
+			}
+			logger.WarnCF("browser",
+				"boot-time browser warm-up: gateway listener did not answer on loopback in time — warming anyway (a warm tab may land on about:blank)",
+				map[string]any{"agent_id": agentID, "budget": warmBootListenerBudget.String()})
+		}
+		if ctx.Err() != nil {
+			return
+		}
+
+		// Step 1 — the tab. mgr.Session(browser.DefaultSessionID) is the SAME
+		// call the live panel, the capture's tab resolution and every browser_*
+		// tool make, so this warms the tab they will actually use rather than
+		// parking a stray extra one in the shared Chrome (which the encoder's
+		// fallback tab resolution could then bind to by mistake).
+		if wantTab {
+			started := time.Now()
+			if _, err := mgr.Session(browser.DefaultSessionID); err != nil {
+				logger.WarnCF("browser",
+					"boot-time browser tab warm-up failed — the first panel open will build the tab lazily",
+					map[string]any{"agent_id": agentID, "error": err.Error()})
+				audit.Emit(context.Background(), agentLoop.AuditLogger(),
+					audit.EventBrowserWarmUpFailed, audit.SeverityWarn,
+					map[string]any{"stage": "tab", "reason": "error", "agent_id": agentID, "error": err.Error()})
+			} else {
+				logger.InfoCF("browser", "boot-time browser tab warmed (parked on the start page)",
+					map[string]any{"agent_id": agentID, "took": time.Since(started).String()})
+			}
+		}
+
+		if !wantCapture || h == nil || ctx.Err() != nil {
+			return
+		}
+
+		// Step 2 — the capture. Refuse for exactly the reasons a real viewer
+		// offer would refuse (webrtcUnavailableReason is the shared gate
+		// handleWebRTCOffer and announceWebRTCAvailability both use), so
+		// warm-up can never start something an offer would not have.
+		if reason := webrtcUnavailableReason(cfg, mgr); reason != "" {
+			logger.InfoCF("browser", "boot-time capture warm-up skipped — WebRTC capture is unavailable for this agent",
+				map[string]any{"agent_id": agentID, "reason": reason})
+			return
+		}
+
+		// Take the same fence the offer path takes around get-or-create, so a
+		// viewer offer racing this warm-up cannot produce two capture sessions
+		// for the same agent (ADR-048 condition 2 / the fence's own TOCTOU
+		// rationale). Released before Start, which does CDP work — never hold
+		// a process-wide mutex across that.
+		h.captureFenceMu.Lock()
+		cs, err := h.ensureCaptureSession(mgr, agentID, cfg)
+		h.captureFenceMu.Unlock()
+		if err != nil {
+			logger.WarnCF("browser", "boot-time capture warm-up: could not create the capture session",
+				map[string]any{"agent_id": agentID, "error": err.Error()})
+			audit.Emit(context.Background(), agentLoop.AuditLogger(),
+				audit.EventBrowserWarmUpFailed, audit.SeverityWarn,
+				map[string]any{"stage": "capture", "reason": "ensure_failed", "agent_id": agentID, "error": err.Error()})
+			return
+		}
+
+		started := time.Now()
+		ingestURL := fmt.Sprintf("ws://127.0.0.1:%d/api/v1/browser/capture-ingest", cfg.Gateway.Port)
+		if _, startErr := cs.Start(ctx, ingestURL); startErr != nil {
+			logger.WarnCF("browser",
+				"boot-time capture warm-up failed to start — the first viewer will start one the ordinary way",
+				map[string]any{"agent_id": agentID, "error": startErr.Error()})
+			audit.Emit(context.Background(), agentLoop.AuditLogger(),
+				audit.EventBrowserWarmUpFailed, audit.SeverityWarn,
+				map[string]any{"stage": "capture", "reason": "start_failed", "agent_id": agentID, "error": startErr.Error()})
+			// Stop() is idempotent and its onStopped hook (installed by
+			// ensureCaptureSession) clears BOTH the manager's reference and the
+			// token registry, so the next offer builds a fresh session instead
+			// of reusing this permanently-broken one — the same recovery
+			// handleWebRTCOffer performs on a failed Start.
+			cs.Stop()
+			return
+		}
+		idle := warmCaptureIdleTimeout(cfg)
+		// WARN, deliberately, for a SUCCESSFUL step (round-2 finding F2).
+		// This line is the only disclosure an operator gets that their box is
+		// now software-encoding video for a viewer who does not exist —
+		// measured at ~26% of one core for the whole idle window on macOS,
+		// and more on a hosted Linux box with no hardware encoder. Every
+		// other warm-boot line is INFO, and this project's production logs
+		// are WARN-only, so at INFO the entire feature (and its cost) is
+		// invisible in exactly the deployment where it is most expensive.
+		// Bounded: this fires at most once per boot, and only when
+		// tools.browser.warm_capture_at_boot is on. It names both dials so
+		// the line itself is the fix.
+		//
+		// A warm capture that is NEVER idle-stopped (idle_sec 0, an explicit
+		// operator opt-out) burns that core for the process's whole lifetime,
+		// so it says so instead of printing "0s".
+		idleDesc := idle.String()
+		if idle <= 0 {
+			idleDesc = "never (tools.browser.warm_capture_idle_sec=0)"
+		}
+		logger.WarnCF("browser",
+			"boot-time capture warm-up started: Chrome is now encoding this agent's tab with NO viewer attached, to make the first panel open fast. "+
+				"Cost ~1/4 of a CPU core until a viewer attaches or it idle-stops. Turn it off with tools.browser.warm_capture_at_boot=false, "+
+				"or shorten tools.browser.warm_capture_idle_sec.",
+			map[string]any{
+				"agent_id":     agentID,
+				"took":         time.Since(started).String(),
+				"idle_stop_in": idleDesc,
+			})
+		// Note the boundary this leaves, deliberately: with idle-stop turned
+		// OFF (warm_capture_idle_sec=0) there is no watcher, so there is no
+		// handover recapture either — the F2 belt is absent in exactly the
+		// configuration where an unwatched capture runs longest. The braces
+		// still hold there: the encoder discards what its FIRST capture
+		// learned on that capture's first rebuild (adaptCarryOverIndex), and
+		// the SPA forces one by reporting its panel geometry on attach. An
+		// operator who opts out of the idle stop gets the same picture, just
+		// without the second, gateway-side guarantee.
+		if idle > 0 {
+			go watchWarmCaptureIdle(ctx, cs, idle, agentID)
+		}
+	}()
 }
 
 // servicesSnapshot captures all fields that restartServices and executeReload
@@ -3528,6 +4053,7 @@ func setupAndStartServices(
 	// (a raw HTTP-level rejection would surface to browser JS as an opaque,
 	// unparseable WebSocket error).
 	browserWSHandler := newBrowserWSHandler(agentLoop, allowedOrigin)
+	runningServices.browserWS = browserWSHandler
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/browser/ws", browserWSHandler)
 
 	// Capture-ingest WS (ADR-047 D6, wave-plan W2-A) — the gateway-owned

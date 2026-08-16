@@ -3,6 +3,9 @@ package browser
 import (
 	"context"
 	"testing"
+	"time"
+
+	"github.com/chromedp/chromedp"
 )
 
 // The UAT install measured on 2026-08-15: a 633x686 panel produced a
@@ -15,7 +18,23 @@ import (
 // unreachable — the operator's "mouse clicks are not working" on the hosted
 // install, invisible on macOS where the read-back agrees with the capture.
 func TestViewportBasisPrefersCaptureWhenLayoutViewportDisagrees(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{})}
+	// Updated 2026-08-16: the basis is no longer inferred from the capture's
+	// own dimensions divided by the recorded scale (that inference assumed the
+	// capture always depicts the tab 1:1, which encoder.js documents as false —
+	// it letterboxes). It now asks the TAB, once, and believes whichever side
+	// the tab backs. Here the tab reports the 686 that /browser/inspect proved
+	// live, i.e. it backs the capture, so the stale cache is refreshed and the
+	// clicks land in the same place this test always demanded.
+	lv := &LiveView{
+		sessionID: "s1",
+		viewers:   make(map[string]struct{}),
+		runCDP: func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
+			if lm, ok := actions[0].(layoutMetricsAction); ok {
+				*lm.w, *lm.h = 633, 686 // ground truth, per the hit-test above
+			}
+			return nil
+		},
+	}
 	lv.cssViewportW, lv.cssViewportH = 633, 543
 	lv.cssViewportScale = 2
 
@@ -56,7 +75,7 @@ func TestViewportBasisKeepsLayoutViewportWhenEncoderDownscales(t *testing.T) {
 	lv.cssViewportW, lv.cssViewportH = 1280, 720
 	lv.cssViewportScale = 2
 
-	w, h := lv.viewportBasisForCapture(320, 180, 1280, 720)
+	w, h := lv.viewportBasisForCapture(context.Background(), 320, 180, 1280, 720)
 	if w != 1280 || h != 720 {
 		t.Fatalf("basis = %vx%v, want the layout viewport 1280x720 for an aspect-preserving downscale", w, h)
 	}
@@ -76,7 +95,7 @@ func TestViewportBasisKeepsLayoutViewportWithoutRecordedScale(t *testing.T) {
 	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{})}
 	lv.cssViewportW, lv.cssViewportH = 633, 543
 
-	w, h := lv.viewportBasisForCapture(1266, 1372, 633, 543)
+	w, h := lv.viewportBasisForCapture(context.Background(), 1266, 1372, 633, 543)
 	if w != 633 || h != 543 {
 		t.Fatalf("basis = %vx%v, want the cached 633x543 when no scale is recorded", w, h)
 	}

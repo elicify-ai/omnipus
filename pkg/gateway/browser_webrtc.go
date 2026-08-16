@@ -495,6 +495,14 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		SessionId: &sessID,
 	}, dropContext(sessID, viewerID, "webrtc-answer"))
 	h.sendWebRTCState(wc, sessID, viewerID, true, true, stats.HasAudio, "")
+	// ADR-061 / round-2 F6: if the shared media socket fell back off the
+	// operator's declared UDP port, say so IN THE PANEL. The answer above is
+	// honest — media really is being offered — but on a hosted install it can
+	// never reach a remote viewer, and only the panel reaches the person who
+	// can fix that. See notifyMediaPortDegraded for why it rides
+	// browser_status rather than browser_webrtc_state, and why it is here
+	// rather than at attach.
+	h.notifyMediaPortDegraded(wc, sessID, viewerID)
 }
 
 // applyColdStartRecapture corrects a just-committed WebRTC attachment's
@@ -531,10 +539,16 @@ func (h *BrowserWSHandler) applyColdStartRecapture(state *browserConnState, cs *
 	if scale > 0 {
 		cs.SetCaptureScale(scale)
 	}
-	if state.mgr == nil {
+	// Snapshot under attachMu (FIX WAVE B finding A): this runs on the offer's
+	// own background goroutine while handleAttach may be committing
+	// state.mgr from the connection's worker. It was ALREADY a data race
+	// before that change — offers moved off readLoop first, so this read
+	// raced handleAttach's inline write — and the accessor closes it.
+	mgr, _ := state.attachment()
+	if mgr == nil {
 		return
 	}
-	if w, hgt, ok := state.mgr.Live().CSSViewport(browser.DefaultSessionID); ok {
+	if w, hgt, ok := mgr.Live().CSSViewport(browser.DefaultSessionID); ok {
 		cs.RecaptureAt(w, hgt)
 	} else if scale > 0 {
 		cs.Recapture()
@@ -1372,6 +1386,19 @@ func (h *captureIngestWSHandler) serveConn(conn *websocket.Conn, remoteAddr stri
 			}
 			if ctrlFrame.Action == "ping" {
 				cs.RecordPing()
+				// Round-2 finding F7, gateway half. The encoder rides the
+				// liveness ping to report a quality-adaptation failure it
+				// cannot otherwise surface (a rejected setParameters dies in
+				// a devtools console nobody opens). A ping carrying a reason
+				// is that report; a bare ping is the ordinary beacon and
+				// stays silent. WARN, not INFO, because this project's
+				// production log level is warn — at INFO the cause would
+				// reach the process and still be invisible to the operator,
+				// which is the exact defect F7 names.
+				if ctrlFrame.Reason != nil && *ctrlFrame.Reason != "" {
+					slog.Warn("capture-ingest: encoder reported a stream-quality failure",
+						"reason", *ctrlFrame.Reason, "agent_id", agentID)
+				}
 			} else {
 				slog.Debug("capture-ingest: unexpected control action from encoder, ignoring",
 					"action", ctrlFrame.Action, "agent_id", agentID)
@@ -1452,15 +1479,183 @@ func resolveWebRTCPublicIPs(cfg *config.Config) []string {
 	return nil
 }
 
+// mediaPortFallbackSpan is how many consecutive ports ABOVE the configured
+// one sharedMediaConn will try before giving up. Deliberately small: the
+// point is to survive the one realistic collision (a second Omnipus on the
+// same host, or anything else already holding the port), not to hunt the
+// whole port space for a socket the operator's firewall has not been told
+// about.
+const mediaPortFallbackSpan = 16
+
+// maxUDPPort bounds the fallback probe so a configured port near the top of
+// the range cannot walk past 65535.
+const maxUDPPort = 65535
+
+// mediaUDPAddr builds the listen address for a media-port bind attempt.
+func mediaUDPAddr(bindAddr string, port int) string {
+	if bindAddr == "" {
+		return ":" + strconv.Itoa(port)
+	}
+	// Some platforms route inbound UDP only to a specific address --
+	// Fly.io requires "fly-global-services" and documents that binding
+	// 0.0.0.0 makes Linux pick the wrong SOURCE address on replies, so
+	// the peer discards them silently.
+	return net.JoinHostPort(bindAddr, strconv.Itoa(port))
+}
+
+// mediaPortFallbackState records that sharedMediaConn could NOT bind the
+// fixed media UDP port the operator explicitly configured, and what it did
+// instead. Written at most once, under h.mediaConnMu, at the moment the
+// process-wide media socket is decided; read-only afterwards for the
+// lifetime of the process (the socket is memoised, so the degradation is
+// too).
+//
+// It exists because the log alone is not a user-visible surface (round-2
+// finding F6). The person who has to fix this — free the port, or change
+// tools.browser.webrtc_media_udp_port and re-declare it to their provider —
+// is the operator, and on a hosted install the ONLY symptom they otherwise
+// get is a live-browser panel that never shows a picture, with the panel
+// itself claiming nothing is wrong. ADR-061 deleted the JPEG screencast
+// fallback for exactly this shape: a degradation nobody can see stays broken
+// indefinitely. bound == 0 means nothing in the probe range could be bound at
+// all and every Session is back on ephemeral ports.
+type mediaPortFallbackState struct {
+	configured int
+	bound      int
+	lastProbed int
+}
+
+// notice renders the operator-facing sentence sent to the live-browser panel
+// as a browser_status(error) message.
+//
+// Constraints it must respect, both load-bearing:
+//   - BrowserStatusFrame.message is maxLength 512 in
+//     contracts/components/schemas/BrowserStatusFrame.yaml. An over-length
+//     message is dropped outright by the SPA's zod edge validation, which
+//     would turn this fix back into the silence it exists to remove —
+//     TestMediaPortFallbackNotice_FitsContractMaxLength pins it.
+//   - It must not collide with any pattern in the SPA's
+//     translateBrowserErrorMessage (src/lib/browserLiveWs.ts), which rewrites
+//     recognised Go-internal strings into plain language and passes
+//     everything else through verbatim. This copy is already plain language,
+//     so it must stay OUT of those patterns — notably no "blocked", no
+//     "could not resolve", no "browser_attach:"-style prefix.
+func (s mediaPortFallbackState) notice() string {
+	if s.bound > 0 {
+		return fmt.Sprintf(
+			"Live video is running on UDP port %d, not port %d from your configuration, because port %d could "+
+				"not be bound. Video works for a viewer on this machine or your LAN, but a remote viewer "+
+				"will get no picture: a hosted install only routes the port you declared. Free port %d (a "+
+				"second Omnipus on this host is the usual cause), or set "+
+				"tools.browser.webrtc_media_udp_port to a port your provider routes, then restart.",
+			s.bound, s.configured, s.configured, s.configured,
+		)
+	}
+	return fmt.Sprintf(
+		"Live video is running on a random UDP port: port %d from your configuration, and every port up to "+
+			"%d, was unavailable. Video works for a viewer on this machine or your LAN, but a remote viewer "+
+			"will get no picture, because a hosted install only routes the port you declared. Free port %d, "+
+			"or set tools.browser.webrtc_media_udp_port to a port your provider routes, then restart.",
+		s.configured, s.lastProbed, s.configured,
+	)
+}
+
+// mediaPortFallbackNotice returns the operator-facing degradation sentence,
+// or "" when the configured media port was bound exactly (or fixed-port
+// media is not configured at all — the laptop default, where there is
+// nothing to warn about).
+func (h *BrowserWSHandler) mediaPortFallbackNotice() string {
+	h.mediaConnMu.Lock()
+	defer h.mediaConnMu.Unlock()
+	if h.mediaPortFallback == nil {
+		return ""
+	}
+	return h.mediaPortFallback.notice()
+}
+
+// notifyMediaPortDegraded tells THIS viewer, in the panel, that live video is
+// not on the port the operator declared — ADR-061's rule that a degradation
+// must name its cause to the user, not only in a log.
+//
+// Sent as browser_status(error) rather than browser_webrtc_state, and that is
+// deliberate on both counts:
+//   - browser_webrtc_state.reason is a CLOSED enum (disabled / not_capable /
+//     lite_build / error) with additionalProperties:false, and its `reason`
+//     is meaningful only alongside available:false. Reporting this as
+//     available:false would be a lie — media IS available, and on a laptop it
+//     works perfectly — and it would stop the SPA from ever sending an offer,
+//     breaking the local dev experience this fallback exists to preserve.
+//   - browser_status(error) carries free-text the SPA already renders as a
+//     persistent strip UNDER a playing video (BrowserLiveView's "Persistent
+//     error strip"), which is exactly the semantics wanted: video keeps
+//     working where it can, and the reason it will not work remotely is on
+//     screen the whole time.
+//
+// Called on the offer SUCCESS path (not at attach) because that is the
+// earliest point at which the answer is true: sharedMediaConn is bound lazily
+// by ensureCaptureSession, so on the very first viewer the degradation is not
+// yet known when browser_attach is answered. Sending it after the answer also
+// keeps a laptop's ordinary "Connecting…" empty state honest instead of
+// replacing it with an error before any video attempt has been made.
+//
+// No-op — no frame at all — when nothing degraded, so the ordinary install
+// (fixed port bound exactly, or not configured) is completely unaffected.
+func (h *BrowserWSHandler) notifyMediaPortDegraded(wc *browserWSConn, sessID, viewerID string) {
+	notice := h.mediaPortFallbackNotice()
+	if notice == "" {
+		return
+	}
+	wc.sendCriticalGen(sessionErrorStatus(sessID, notice),
+		dropContext(sessID, viewerID, "media-port-fallback"))
+}
+
 // sharedMediaConn returns the process-wide fixed media socket, binding it on
 // first use (ADR-062 tier 1). Returns nil when fixed-port media is not
-// configured, or when the bind fails.
+// configured, or when no port in the fallback range could be bound.
 //
-// A bind failure is deliberately NON-FATAL and loud: the gateway keeps
-// serving and Sessions fall back to ephemeral ports. On a laptop that is
-// completely fine; on a hosted box video will not connect, and the log line
-// says so in those words rather than leaving an operator to infer it from an
-// ICE timeout three layers away.
+// The configured port is always tried FIRST and is the only port the operator
+// has declared to their provider/firewall, so it is the only one that can
+// actually work on a hosted install. If it is unavailable we fall back to the
+// next free port (FIX WAVE B finding C) rather than returning nil, because
+// returning nil drops every Session back to EPHEMERAL ports, which is
+// strictly worse in every deployment: identical failure on a hosted box, and
+// a needless loss of the single stable port on a laptop.
+//
+// The fallback is LOUD at ERROR, names BOTH ports, AND is recorded in
+// h.mediaPortFallback so every viewer is TOLD in the panel (see
+// mediaPortFallbackState / notifyMediaPortDegraded). It is a
+// misconfiguration the operator has to fix — measured 2026-08-15, a second
+// Omnipus on the same host failed with `listen udp :50000: bind: address
+// already in use`, logged ERROR, silently continued on ephemeral ports, and
+// on a hosted install that means live video just stops working with nothing
+// in the product saying why. Silently continuing as if nothing happened is
+// the specific behaviour this replaces.
+//
+// ERROR, not WARN (round-2 finding F6), and that choice is about who has to
+// act on it. tools.browser.webrtc_media_udp_port has NO default — 0 means
+// "ephemeral, pre-ADR-062" and is the laptop default (see
+// config.BrowserConfig.WebRTCMediaUDPPort). So any non-zero value reaching
+// this function was typed by an operator into config.json or
+// OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_UDP_PORT: there is no "merely defaulted"
+// case where the fallback overrides nothing. The fallback ALWAYS overrides an
+// explicit, deliberate operator instruction, and on a hosted install it turns
+// working live video into a permanently dead panel for every remote viewer.
+// The gateway's own default log level is "warn"
+// (pkg/config/defaults.go's LogLevel), so a WARN line does survive — but it
+// survives as one line among hundreds, which for a defect only the operator
+// can fix is indistinguishable from silence. ADR-061's rule is that a
+// degradation names its cause where the person affected will see it; ERROR
+// plus the panel notice is that rule applied here.
+//
+// The retry is attempted on ANY bind error rather than on EADDRINUSE
+// specifically, and that is a deliberate cross-platform choice: errno
+// spelling differs (Linux/macOS EADDRINUSE vs Windows WSAEADDRINUSE) and
+// matching it would make the three platforms behave differently for the same
+// user-visible situation. A systemic failure instead (a bad bind address, a
+// privileged port) fails every probe immediately -- ListenPacket rejects them
+// without touching the network -- and lands on exactly the same ERROR the old
+// code produced. Both branches quote the ORIGINAL error, so they stay
+// truthful whatever the cause was.
 func (h *BrowserWSHandler) sharedMediaConn(cfg *config.Config) net.PacketConn {
 	port := cfg.Tools.Browser.WebRTCMediaUDPPort
 	if port <= 0 {
@@ -1472,25 +1667,50 @@ func (h *BrowserWSHandler) sharedMediaConn(cfg *config.Config) net.PacketConn {
 		return h.mediaConn
 	}
 	bindAddr := strings.TrimSpace(cfg.Tools.Browser.WebRTCMediaUDPBindAddress)
-	addr := ":" + strconv.Itoa(port)
-	if bindAddr != "" {
-		// Some platforms route inbound UDP only to a specific address --
-		// Fly.io requires "fly-global-services" and documents that binding
-		// 0.0.0.0 makes Linux pick the wrong SOURCE address on replies, so
-		// the peer discards them silently.
-		addr = net.JoinHostPort(bindAddr, strconv.Itoa(port))
+
+	conn, err := net.ListenPacket("udp", mediaUDPAddr(bindAddr, port))
+	if err == nil {
+		slog.Info("browser-webrtc: fixed media UDP socket bound", "addr", conn.LocalAddr().String())
+		h.mediaConn = conn
+		return conn
 	}
-	conn, err := net.ListenPacket("udp", addr)
-	if err != nil {
+	configuredErr := err
+
+	lastProbed := port
+	for probe := port + 1; probe <= port+mediaPortFallbackSpan && probe <= maxUDPPort; probe++ {
+		lastProbed = probe
+		fallback, probeErr := net.ListenPacket("udp", mediaUDPAddr(bindAddr, probe))
+		if probeErr != nil {
+			continue
+		}
+		h.mediaPortFallback = &mediaPortFallbackState{configured: port, bound: probe, lastProbed: probe}
 		slog.Error(
-			"browser-webrtc: could not bind the fixed media UDP port — live video will fall back to "+
-				"ephemeral ports, which works on a same-host/LAN viewer but NEVER on a hosted install "+
-				"(no provider routes inbound UDP to an undeclared ephemeral port)",
-			"addr", addr, "error", err,
+			"browser-webrtc: OPERATOR ACTION REQUIRED — the fixed media UDP port you configured could not be "+
+				"bound, so live video is using the next free port instead. This works for a viewer on the same "+
+				"host or LAN, but on a hosted install your provider only routes the port you declared, so video "+
+				"will NOT connect for any remote viewer until you fix this: either free the configured port (a "+
+				"second Omnipus already running on this host is the usual cause) or set "+
+				"tools.browser.webrtc_media_udp_port to the port actually bound, and declare that port to your "+
+				"provider",
+			"configured_port", port,
+			"bound_port", probe,
+			"addr", fallback.LocalAddr().String(),
+			"configured_port_error", configuredErr,
 		)
-		return nil
+		h.mediaConn = fallback
+		return fallback
 	}
-	slog.Info("browser-webrtc: fixed media UDP socket bound", "addr", conn.LocalAddr().String())
-	h.mediaConn = conn
-	return conn
+
+	h.mediaPortFallback = &mediaPortFallbackState{configured: port, bound: 0, lastProbed: lastProbed}
+	slog.Error(
+		"browser-webrtc: OPERATOR ACTION REQUIRED — could not bind the fixed media UDP port you configured, "+
+			"nor any port in the fallback range, so live video falls back to ephemeral ports. That works on a "+
+			"same-host/LAN viewer but NEVER on a hosted install (no provider routes inbound UDP to an "+
+			"undeclared ephemeral port)",
+		"configured_port", port,
+		"last_probed_port", lastProbed,
+		"bind_address", bindAddr,
+		"error", configuredErr,
+	)
+	return nil
 }

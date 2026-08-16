@@ -367,15 +367,20 @@ function applyVideoSenderConstraints(pc, opts) {
     // fluid-when-moving is the correct trade for a remote-control surface on
     // hardware that cannot have both at once.
     params.degradationPreference = 'balanced';
-    // Belt-and-braces against any lingering per-encoding down-scale --
-    // degradationPreference governs the encoder's *runtime* trade-off, but
-    // scaleResolutionDownBy is a separate, persistent per-encoding factor;
-    // pin it to 1 so nothing above this layer is quietly resizing the
-    // output out from under the resolution guarantee just established.
-    // scaleResolutionDownBy stays pinned to 1: it is the STATIC per-encoding
-    // factor; the RUNTIME downscale under load is degradationPreference's
-    // job, and pinning the static factor keeps the steady-state at full 2x.
-    params.encodings[0].scaleResolutionDownBy = 1;
+    // scaleResolutionDownBy is NO LONGER hardcoded to 1 (2026-08-15). It is
+    // now owned by the bounded adaptation loop below (see
+    // "adaptive resolution" section): currentAdaptScale() returns 1 on a
+    // machine that can encode at full resolution, and only the loop -- on
+    // the encoder's OWN cpu-limitation self-report -- ever moves it, in
+    // fixed steps, never past the hard floor of 2.
+    //
+    // Reading it from the loop here (rather than writing a literal) is
+    // load-bearing, not cosmetic: this function is re-invoked post-answer
+    // and post-connected, and a fresh 'connected' transition re-invokes it
+    // on every reconnect. A literal 1 would silently undo whatever the loop
+    // had already decided, which is exactly the "green but broken" shape
+    // where the loop logs a step down and the picture never changes.
+    params.encodings[0].scaleResolutionDownBy = currentAdaptScale();
     sender
       .setParameters(params)
       .then(() => {
@@ -398,6 +403,11 @@ function applyVideoSenderConstraints(pc, opts) {
         const msg = logPrefix + ': setParameters failed: ' + String(e);
         warn(msg, e);
         window.__omnipusState.lastError = msg;
+        // Same reasoning as the adaptation loop's own apply failure (F7):
+        // this rejection means the bitrate ceiling, the degradation
+        // preference AND the current adapt scale all silently failed to
+        // stick, and this page's console is not a surface anyone reads.
+        reportAdaptFailure(msg);
       });
   } catch (e) {
     const msg = logPrefix + ': getParameters/setParameters failed: ' + String(e);
@@ -430,6 +440,505 @@ function applyVideoSenderConstraints(pc, opts) {
     window.__omnipusState.lastError = msg;
   }
 }
+
+// ---- adaptive resolution ----------------------------------------------------
+//
+// WHY THIS EXISTS (measured 2026-08-14/15, hosted UAT vs macOS):
+// contentHint='detail' + scaleResolutionDownBy=1 together FORBID the encoder
+// from shrinking the picture. That was itself a fix -- on 2026-07-31 the
+// stream collapsed to 319x158, unreadably blurry, and the pin is what
+// stopped it -- but it leaves FRAME RATE as the only thing that can give,
+// and on a slow software encoder it gives all the way down:
+//
+//   4x SHARED-cpu box, software H.264, scrolling at 1266x1372 ->  1 fps
+//     @ ~700kbps, 0% packet loss, machine only 9% busy
+//   the same scroll at 632x684 (a quarter of the pixels)       -> 18 fps @ 2.5Mbps
+//   an animated page, no input, full resolution                -> 15 fps
+//   2x PERFORMANCE-cpu box, same full-resolution scroll        -> 15 fps
+//   macOS (VideoToolbox HARDWARE H.264, loopback)              -> 13 fps
+//
+// So the pipeline, the network and the bitrate cap are all fine: it is the
+// per-frame encode cost under a full-screen repaint that collapses, and only
+// on a machine whose encoder cannot keep up. The fix is therefore NOT to
+// un-pin the scaler (that reproduces 2026-07-31), but a BOUNDED closed loop:
+// give up resolution in fixed, logged steps, only while the encoder itself
+// reports it is CPU-limited, and never past half linear scale.
+//
+// PARITY (the point of this change): the user-visible contract on every
+// platform becomes "smooth, and as sharp as this machine can manage" instead
+// of "sharp on one, a slideshow on the other". Same controls, same log lines,
+// same recovery on both. The loop is gated on the encoder's OWN
+// qualityLimitationReason === 'cpu' self-report, so on a hardware encoder
+// over loopback -- which is never CPU-limited -- it never steps at all and
+// the picture stays exactly as sharp as it is today. A macOS-shaped sample
+// (reason 'none' at 13 fps) is deliberately NEUTRAL below: not good enough to
+// step up, and not evidence of pressure, so it touches nothing.
+//
+// Hard floor: ADAPT_SCALE_STEPS cannot express a scale worse than 2 (a
+// quarter of the pixels), so the 2026-07-31 collapse to ~1/4 LINEAR scale
+// cannot recur through this path even if every heuristic below misfires.
+
+// ADAPT_SCALE_STEPS are the only scaleResolutionDownBy values this loop will
+// ever set. The last entry IS the hard floor -- keep it at 2.
+const ADAPT_SCALE_STEPS = [1, 1.5, 2];
+const ADAPT_MAX_STEP_INDEX = ADAPT_SCALE_STEPS.length - 1;
+
+// How often sender stats are sampled. 2s is long enough for
+// framesPerSecond (a rolling average) to reflect a step, short enough that a
+// scroll-induced collapse is corrected within ~4-6s.
+const ADAPT_POLL_MS = 2000;
+
+// Step DOWN when the encoder says 'cpu' and delivered fps is below this.
+const ADAPT_TARGET_FPS = 12;
+
+// Step UP only when unlimited AND comfortably above the target. The gap
+// between 24 and 12 is the hysteresis band: a step up roughly halves the
+// achievable fps (each step is ~2.25x the pixels), so requiring 2x the
+// down-threshold before restoring means a step up should not immediately
+// re-trigger a step down.
+const ADAPT_RESTORE_FPS = 24;
+
+// Consecutive-sample requirements. Asymmetric on purpose: react to pressure
+// in ~4s, but require ~10s of sustained headroom before spending it again.
+const ADAPT_DOWN_SAMPLES = 2;
+const ADAPT_UP_SAMPLES = 5;
+
+// Samples ignored after a step, so the next decision is made on stats that
+// actually describe the NEW scale rather than the old one's rolling average.
+const ADAPT_SETTLE_SAMPLES = 2;
+
+// ADAPT_EVIDENCE_TTL_MS is how long a step down stays justified without the
+// encoder re-confirming CPU pressure (round-2 finding F2, 2026-08-16).
+//
+// A step down is a HYPOTHESIS about current conditions, not a permanent
+// verdict about this machine, and the round-1 loop had no way to retire one:
+// the only restore path requires reason !== 'cpu' AND >= 24 fps for five
+// consecutive samples. A STATIC page -- the single most common thing this
+// panel shows, and the thing a text-reading user most wants sharp -- encodes
+// at ~0-2 fps by definition, so on a page that stops moving the restore path
+// can NEVER fire and a scale learned during one busy moment latches forever.
+//
+// So: if no cpu-limited sample has been seen for this long, the loop gives
+// one step back and re-tests. If the pressure is real it returns in ~4s (two
+// samples), and the TTL restarts -- the cost is a ~4s dip at most once a
+// minute on a machine that genuinely cannot keep up. If it is not real, the
+// picture comes back to full resolution on its own.
+//
+// It is also the freshness clock for what a capture REBUILD inherits --
+// see adaptCarryOverIndex.
+const ADAPT_EVIDENCE_TTL_MS = 60000;
+
+function adaptInitialState() {
+  return { index: 0, badStreak: 0, goodStreak: 0, cooldown: 0, lastPressureAt: 0 };
+}
+
+// adaptState persists ACROSS recapture cycles CONDITIONALLY: it describes
+// this MACHINE's encoder, not this PeerConnection, so resetting it on every
+// viewport resize (each of which triggers a recapture) would restart the 1
+// fps collapse from scratch every time the panel is dragged -- but a scale
+// learned minutes ago, or learned by a capture NOBODY WAS WATCHING, is not
+// evidence about what the viewer in front of the panel right now is
+// experiencing. adaptCarryOverIndex is the rule; see its doc comment.
+let adaptState = adaptInitialState();
+let adaptTimer = null;
+
+// adaptCycleCount counts CAPTURES THAT ACTUALLY RAN -- incremented where the
+// adaptation loop starts (the PeerConnection's first 'connected' transition),
+// which is once per capture cycle and never for a capture that failed to
+// negotiate. It exists so the state learned by a page's FIRST capture can be
+// treated differently from every later one -- see adaptCarryOverIndex.
+//
+// Counted at START, not at teardown, deliberately: runCaptureAndOfferOnce
+// calls teardownCapture as its own first step, so teardowns are one ahead of
+// captures and the very first one happens before any capture exists at all.
+// Counting those would make "the first capture's state" arrive a cycle late --
+// i.e. exactly the boot-warmed, viewerless capture whose state this rule
+// exists to discard would be the one that got carried.
+let adaptCycleCount = 0;
+
+function noteAdaptCycleStarted() {
+  adaptCycleCount += 1;
+}
+
+function clampAdaptIndex(i) {
+  if (!(typeof i === 'number') || !isFinite(i) || i < 0) return 0;
+  if (i > ADAPT_MAX_STEP_INDEX) return ADAPT_MAX_STEP_INDEX;
+  return Math.floor(i);
+}
+
+// currentAdaptScale is the single source of truth for scaleResolutionDownBy.
+// applyVideoSenderConstraints reads it so its post-answer/post-connected
+// re-applies preserve, rather than silently undo, the loop's decision.
+function currentAdaptScale() {
+  return ADAPT_SCALE_STEPS[clampAdaptIndex(adaptState.index)];
+}
+
+// qualityAdaptDecide is deliberately PURE (sample + previous state -> new
+// state + action) so the policy can be exercised exhaustively off-browser --
+// see TestEncoderJS_QualityAdaptLoop. It never touches the sender itself.
+//
+// Neutral is the default: anything that is not "cpu-limited and slow" or
+// "unlimited and fast" decays both streaks and changes nothing. That matters
+// because a STATIC page legitimately produces near-zero fps (there is
+// nothing to encode), so low fps ALONE is never treated as pressure.
+function qualityAdaptDecide(sample, prev, now) {
+  const st = {
+    index: clampAdaptIndex(prev && prev.index),
+    badStreak: (prev && prev.badStreak) || 0,
+    goodStreak: (prev && prev.goodStreak) || 0,
+    cooldown: (prev && prev.cooldown) || 0,
+    lastPressureAt: (prev && prev.lastPressureAt) || 0,
+  };
+  sample = sample || {};
+  now = typeof now === 'number' && isFinite(now) ? now : Date.now();
+
+  if (st.cooldown > 0) {
+    st.cooldown -= 1;
+    return { state: st, action: 'settle', note: 'settling after a step, ' + st.cooldown + ' sample(s) left' };
+  }
+
+  const fps = typeof sample.framesPerSecond === 'number' && isFinite(sample.framesPerSecond) ? sample.framesPerSecond : null;
+  const reason = typeof sample.qualityLimitationReason === 'string' ? sample.qualityLimitationReason : null;
+  if (fps === null) {
+    // No usable reading yet (the first samples after connect, or a browser
+    // that omits it). Never act on absent evidence.
+    return { state: st, action: 'hold', note: 'no framesPerSecond in sender stats' };
+  }
+
+  // Any cpu-limited sample -- at whatever frame rate -- is fresh evidence
+  // that the encoder is the bottleneck, and is what keeps an existing step
+  // down justified (ADAPT_EVIDENCE_TTL_MS). Recorded before the thresholds
+  // below so a machine that is cpu-limited but still delivering (say 15 fps
+  // at scale 1.5, i.e. the step WORKED) does not read as stale evidence.
+  if (reason === 'cpu') {
+    st.lastPressureAt = now;
+  }
+
+  if (reason === 'cpu' && fps < ADAPT_TARGET_FPS) {
+    st.goodStreak = 0;
+    st.badStreak += 1;
+    if (st.badStreak >= ADAPT_DOWN_SAMPLES && st.index < ADAPT_MAX_STEP_INDEX) {
+      st.index += 1;
+      st.badStreak = 0;
+      st.cooldown = ADAPT_SETTLE_SAMPLES;
+      return {
+        state: st,
+        action: 'down',
+        note: 'cpu-limited at ' + fps + 'fps (< ' + ADAPT_TARGET_FPS + '), scaling to ' + ADAPT_SCALE_STEPS[st.index],
+      };
+    }
+    const atFloor = st.index >= ADAPT_MAX_STEP_INDEX;
+    return {
+      state: st,
+      action: 'hold',
+      note: atFloor
+        ? 'cpu-limited at ' + fps + 'fps but already at the hard floor (scale ' + ADAPT_SCALE_STEPS[st.index] + ')'
+        : 'cpu-limited at ' + fps + 'fps, ' + st.badStreak + '/' + ADAPT_DOWN_SAMPLES + ' samples',
+    };
+  }
+
+  if (reason !== 'cpu' && fps >= ADAPT_RESTORE_FPS) {
+    st.badStreak = 0;
+    st.goodStreak += 1;
+    if (st.goodStreak >= ADAPT_UP_SAMPLES && st.index > 0) {
+      st.index -= 1;
+      st.goodStreak = 0;
+      st.cooldown = ADAPT_SETTLE_SAMPLES;
+      return {
+        state: st,
+        action: 'up',
+        note: 'headroom at ' + fps + 'fps (>= ' + ADAPT_RESTORE_FPS + '), restoring scale ' + ADAPT_SCALE_STEPS[st.index],
+      };
+    }
+    return { state: st, action: 'hold', note: 'headroom at ' + fps + 'fps, ' + st.goodStreak + '/' + ADAPT_UP_SAMPLES + ' samples' };
+  }
+
+  st.badStreak = 0;
+  st.goodStreak = 0;
+
+  // Stale-evidence probe (round-2 F2). Nothing above fired, so this sample is
+  // neither pressure nor headroom -- the ordinary reading for a page that has
+  // stopped moving, which is exactly the reading a boot-warmed capture with
+  // no viewer produces for minutes on end. If the picture is still shrunk on
+  // the strength of evidence this old, give a step back and re-test rather
+  // than waiting for 24 fps that a static page can never deliver.
+  if (st.index > 0 && now - st.lastPressureAt >= ADAPT_EVIDENCE_TTL_MS) {
+    st.index -= 1;
+    st.goodStreak = 0;
+    st.cooldown = ADAPT_SETTLE_SAMPLES;
+    // Restart the clock so a probe is never taken twice in a row on the same
+    // stale reading: the next one is due another full TTL from now.
+    st.lastPressureAt = now;
+    return {
+      state: st,
+      action: 'up',
+      note:
+        'no cpu-limited sample for ' +
+        ADAPT_EVIDENCE_TTL_MS +
+        'ms (' +
+        (reason || 'unknown') +
+        ' at ' +
+        fps +
+        'fps), re-testing scale ' +
+        ADAPT_SCALE_STEPS[st.index],
+    };
+  }
+
+  return { state: st, action: 'hold', note: 'neutral (' + (reason || 'unknown') + ' at ' + fps + 'fps)' };
+}
+
+// adaptCarryOverIndex decides what a capture REBUILD (recapture: viewport
+// resize, tab change, or the gateway's own boot-warm handover) inherits from
+// the cycle that just ended. It is the round-2 F2 fix, and it is
+// deliberately pure so the rule can be exercised without a browser.
+//
+// Two rules, both about whether the learned scale is evidence about the
+// stream a VIEWER is now watching:
+//
+//  1. The state learned by a page's FIRST capture is never inherited. That
+//     capture is the one most likely to have been measured under
+//     unrepresentative conditions -- gateway boot, Chrome launch and
+//     extension load all competing for the same cores -- and, for a capture
+//     the gateway warmed at boot (tools.browser.warm_capture_at_boot), it is
+//     measured with NOBODY WATCHING. An unwatched warm-up that software-
+//     encodes a static page on a 2-core hosted box can reach the hard floor
+//     within ~8 seconds; without this rule the user's first panel open would
+//     then render at a QUARTER of the pixels on the strength of a
+//     measurement no human ever saw, and would need 20+ seconds of >= 24 fps
+//     samples to climb back. Re-measuring costs at most ~4s of re-collapse
+//     if the pressure is real.
+//  2. Every later capture's state is inherited only while its evidence is
+//     fresh (ADAPT_EVIDENCE_TTL_MS). This is what preserves the round-1
+//     property that matters: dragging the panel fires recaptures seconds
+//     apart on a cpu-limited box, and re-collapsing from 1 fps on every drag
+//     frame is precisely what the carry-over exists to prevent.
+function adaptCarryOverIndex(prev, cycleCount, now) {
+  const index = clampAdaptIndex(prev && prev.index);
+  if (index === 0) return 0;
+  if (!(cycleCount > 1)) return 0;
+  now = typeof now === 'number' && isFinite(now) ? now : Date.now();
+  const last = (prev && prev.lastPressureAt) || 0;
+  if (now - last >= ADAPT_EVIDENCE_TTL_MS) return 0;
+  return index;
+}
+
+// readVideoSenderSample pulls the two fields the loop needs off the SENDER's
+// own stats -- qualityLimitationReason is the encoder telling us, in its own
+// words, that CPU is what is holding quality back; framesPerSecond is what
+// the viewer actually gets. No gateway round-trip is involved.
+async function readVideoSenderSample(pc) {
+  const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+  if (!sender || typeof sender.getStats !== 'function') return null;
+  const report = await sender.getStats();
+  if (!report || typeof report.forEach !== 'function') return null;
+  let out = null;
+  report.forEach((s) => {
+    if (s && s.type === 'outbound-rtp' && (s.kind === 'video' || s.mediaType === 'video')) out = s;
+  });
+  if (!out) return null;
+  return {
+    framesPerSecond: out.framesPerSecond,
+    qualityLimitationReason: out.qualityLimitationReason,
+    frameWidth: out.frameWidth,
+    frameHeight: out.frameHeight,
+  };
+}
+
+async function applyAdaptScale(pc, scale) {
+  const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+  if (!sender) throw new Error('no video sender');
+  const params = sender.getParameters();
+  if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+  params.encodings[0].scaleResolutionDownBy = scale;
+  await sender.setParameters(params);
+}
+
+// ADAPT_REPORT_MIN_INTERVAL_MS throttles the server-side failure report
+// below. A sender that rejects setParameters once usually rejects it every
+// time, and the loop re-tries every 2s -- unthrottled that is a frame every
+// 2s forever on a socket whose only other traffic is a 15s heartbeat.
+const ADAPT_REPORT_MIN_INTERVAL_MS = 30000;
+let lastAdaptReportAt = 0;
+
+// reportAdaptFailure pushes an encoder-side quality-adaptation failure to the
+// GATEWAY, over the ingest WebSocket this page already holds open (round-2
+// finding F7).
+//
+// It rides the existing browser_capture_control{action:'ping'} beacon rather
+// than inventing a frame type, because the frame's `reason` field is exactly
+// this ("optional human-readable context for the action", BrowserCaptureControl
+// Frame.yaml) and because a new action would be a wire-contract change the
+// encoder cannot make unilaterally -- generated Go/TS types and the inbound
+// schema validator all have to move together (Constraint #8). An extra ping
+// is semantically harmless: the server's only reaction to one is to refresh
+// its liveness timestamp, and this page IS alive.
+//
+// The gateway half landed with this one: a ping CARRYING a reason is logged
+// at WARN ("capture-ingest: encoder reported a stream-quality failure", in
+// pkg/gateway/browser_webrtc.go's capture-ingest read loop), while a bare
+// liveness ping stays silent. WARN because production runs at warn, so an
+// INFO line would reach the process and still never reach the operator.
+function reportAdaptFailure(msg) {
+  const now = Date.now();
+  if (now - lastAdaptReportAt < ADAPT_REPORT_MIN_INTERVAL_MS) return;
+  lastAdaptReportAt = now;
+  // 512 is the schema's maxLength for `reason`; an over-long frame would be
+  // dropped by the gateway's inbound validator, which would turn the report
+  // itself into another silent failure.
+  const reason = ('quality-adapt apply failed: ' + String(msg)).slice(0, 512);
+  sendFrame({ type: 'browser_capture_control', action: 'ping', reason: reason });
+}
+
+// adaptTick is one iteration of the closed loop. pcOverride exists so the
+// off-browser harness can drive a fake PeerConnection through the REAL wiring
+// (stats -> decision -> setParameters), not just the pure policy above.
+async function adaptTick(pcOverride, nowOverride) {
+  if (shuttingDown) return null;
+  const pc = pcOverride || currentPC;
+  if (!pc) return null;
+  if (!pcOverride && pc.connectionState !== 'connected') return null;
+
+  const sample = await readVideoSenderSample(pc);
+  if (!sample) return null;
+
+  const before = adaptState.index;
+  const decision = qualityAdaptDecide(sample, adaptState, nowOverride);
+  adaptState = decision.state;
+
+  if (decision.action === 'down' || decision.action === 'up') {
+    const scale = ADAPT_SCALE_STEPS[adaptState.index];
+    record('qualityAdapt: step ' + decision.action + ' -> scaleResolutionDownBy ' + scale + ' (' + decision.note + ')');
+    try {
+      await applyAdaptScale(pc, scale);
+      record('qualityAdapt: scaleResolutionDownBy ' + scale + ' applied');
+    } catch (e) {
+      // Keep the recorded index honest: if setParameters did not take, the
+      // stream is still at the OLD scale and the loop must not believe
+      // otherwise (or it would never retry, and would later "restore" to a
+      // scale that was never applied).
+      adaptState.index = before;
+      const msg = 'qualityAdapt: setParameters failed, staying at scale ' + ADAPT_SCALE_STEPS[before] + ': ' + String(e);
+      warn(msg, e);
+      window.__omnipusState.lastError = msg;
+      // Round-2 finding F7: an adaptation that does not APPLY is the one
+      // failure of this loop nobody outside this page could ever learn
+      // about. record()/warn() reach console.log, and nothing forwards the
+      // extension page's console anywhere -- so on a hosted box the picture
+      // would stay collapsed at 1 fps while every layer reported success,
+      // the exact "green but broken" shape this whole file's other fixes
+      // exist to close. Push it to the gateway over the ingest socket.
+      reportAdaptFailure(msg);
+    }
+  }
+
+  window.__omnipusState.qualityAdapt = {
+    scale: ADAPT_SCALE_STEPS[clampAdaptIndex(adaptState.index)],
+    index: adaptState.index,
+    action: decision.action,
+    note: decision.note,
+    // How long ago the encoder last reported CPU as the limiting factor, and
+    // how many capture rebuilds this page has been through -- the two inputs
+    // to "is the current scale still justified" (adaptCarryOverIndex).
+    pressureAgeMs: adaptState.lastPressureAt ? Date.now() - adaptState.lastPressureAt : null,
+    cycle: adaptCycleCount,
+    fps: sample.framesPerSecond,
+    qualityLimitationReason: sample.qualityLimitationReason,
+    frameWidth: sample.frameWidth,
+    frameHeight: sample.frameHeight,
+    at: Date.now(),
+  };
+  return decision.action;
+}
+
+function startQualityAdaptLoop() {
+  if (adaptTimer) return;
+  noteAdaptCycleStarted();
+  adaptTimer = setInterval(() => {
+    adaptTick().catch((e) => warn('qualityAdapt: tick failed', e));
+  }, ADAPT_POLL_MS);
+  record('qualityAdapt: loop started (poll ' + ADAPT_POLL_MS + 'ms, target ' + ADAPT_TARGET_FPS + 'fps, floor scale ' + ADAPT_SCALE_STEPS[ADAPT_MAX_STEP_INDEX] + ')');
+}
+
+function stopQualityAdaptLoop() {
+  if (adaptTimer) {
+    clearInterval(adaptTimer);
+    adaptTimer = null;
+  }
+  const now = Date.now();
+  const carried = adaptCarryOverIndex(adaptState, adaptCycleCount, now);
+  if (carried !== clampAdaptIndex(adaptState.index)) {
+    record(
+      'qualityAdapt: capture rebuild starts from scale ' +
+        ADAPT_SCALE_STEPS[carried] +
+        ' (was ' +
+        ADAPT_SCALE_STEPS[clampAdaptIndex(adaptState.index)] +
+        '; ' +
+        (adaptCycleCount <= 1
+          ? 'first capture of this page — it may have had no viewer (boot warm-up)'
+          : 'evidence older than ' + ADAPT_EVIDENCE_TTL_MS + 'ms') +
+        ')'
+    );
+  }
+  // Carry (or drop) the learned index per adaptCarryOverIndex, drop the
+  // streaks, and make the first sample of the next cycle a settle sample, so
+  // a decision is never made on stats straddling two different captures.
+  adaptState = {
+    index: carried,
+    badStreak: 0,
+    goodStreak: 0,
+    cooldown: ADAPT_SETTLE_SAMPLES,
+    // A dropped index must drop its evidence with it, or the very first
+    // stale-evidence probe of the next cycle would be computed against a
+    // timestamp belonging to a scale that is no longer applied.
+    lastPressureAt: carried === 0 ? 0 : adaptState.lastPressureAt || 0,
+  };
+}
+
+// Debug/verification surface only -- never part of the wire protocol, same
+// contract as window.__omnipusState. The off-browser harness drives the loop
+// through this.
+window.__omnipusQualityAdapt = {
+  decide: qualityAdaptDecide,
+  tick: adaptTick,
+  scale: currentAdaptScale,
+  steps: ADAPT_SCALE_STEPS,
+  carryOver: adaptCarryOverIndex,
+  // endCycle drives the REAL teardown-time carry-over decision (the one
+  // teardownCapture takes on every recapture), so the off-browser harness can
+  // prove what a rebuild inherits without a browser, a WebRTC stack or a
+  // relay. Same function the production path calls -- not a re-implementation.
+  endCycle: function () {
+    stopQualityAdaptLoop();
+  },
+  // beginCycle is the counting half of the same production wiring
+  // (startQualityAdaptLoop calls noteAdaptCycleStarted on the PC's first
+  // 'connected'). Exposed separately so the off-browser harness can advance
+  // the cycle without starting a real 2s interval that would keep the harness
+  // process alive.
+  beginCycle: noteAdaptCycleStarted,
+  cycles: function () {
+    return adaptCycleCount;
+  },
+  state: function () {
+    return adaptState;
+  },
+  reset: function () {
+    adaptState = adaptInitialState();
+    adaptCycleCount = 0;
+    lastAdaptReportAt = 0;
+  },
+  constants: {
+    pollMs: ADAPT_POLL_MS,
+    targetFps: ADAPT_TARGET_FPS,
+    restoreFps: ADAPT_RESTORE_FPS,
+    downSamples: ADAPT_DOWN_SAMPLES,
+    upSamples: ADAPT_UP_SAMPLES,
+    settleSamples: ADAPT_SETTLE_SAMPLES,
+    maxScale: ADAPT_SCALE_STEPS[ADAPT_MAX_STEP_INDEX],
+    evidenceTtlMs: ADAPT_EVIDENCE_TTL_MS,
+    reportMinIntervalMs: ADAPT_REPORT_MIN_INTERVAL_MS,
+  },
+};
 
 // mungeVideoStartBitrate appends libwebrtc's bitrate-hint fmtp parameters
 // (x-google-start-bitrate/min-bitrate/max-bitrate, kbps) to whichever video
@@ -568,6 +1077,13 @@ function mungeVideoStartBitrate(sdp) {
 
 function teardownCapture() {
   clearOfferAnswerTimeout();
+  // Stop sampling BEFORE the PC goes away, so a tick in flight cannot call
+  // getStats()/setParameters() on a closing sender. Whether the learned scale
+  // survives into the next cycle is adaptCarryOverIndex's decision (fresh
+  // evidence carries over so a panel drag does not re-collapse to 1fps on
+  // every frame; a first rebuild, or evidence older than the TTL, starts the
+  // viewer at full quality).
+  stopQualityAdaptLoop();
   try {
     if (currentPC) currentPC.close();
   } catch (e) {
@@ -847,6 +1363,10 @@ function newPeerConnection() {
     if (pc.connectionState === 'connected' && !connectedConstraintsApplied) {
       connectedConstraintsApplied = true;
       applyVideoSenderConstraints(pc, { context: 'post-connected', recordSuccess: true });
+      // Only now is there a settled sender whose getStats() reports a real
+      // qualityLimitationReason/framesPerSecond, so this is where the
+      // bounded adaptation loop starts. It is stopped by teardownCapture.
+      startQualityAdaptLoop();
     }
   };
   return pc;

@@ -709,6 +709,22 @@ func DefaultConfig() *Config {
 				// WebSocket's 60s read deadline. Best-effort — a warm-up
 				// failure is logged and the lazy path still works.
 				WarmAtBoot: true,
+				// Warm the first TAB too, not just the Chrome process. Default
+				// TRUE and cheap: a warmed Chrome with zero renderers still made
+				// the first panel open build a browsing context + tab on demand
+				// (measured 1.0-2.2s of a ~9.5s first open). A tab parked on the
+				// static start page costs one idle renderer.
+				WarmTabAtBoot: true,
+				// Warm the WebRTC capture pipeline as well. Default TRUE: the
+				// encoder page + ingest + negotiation are the largest remaining
+				// share of a first open (1.7-6.7s measured) and the part that
+				// fails first under load. Unlike the tab, this one costs
+				// continuous CPU, so it stops itself after WarmCaptureIdleSec
+				// with no viewer — see WarmCaptureAtBoot's doc comment.
+				WarmCaptureAtBoot: true,
+				// Conservative: 5 minutes covers "restart, then open the panel"
+				// without leaving an unattended host encoding video forever.
+				WarmCaptureIdleSec: 300,
 			},
 			Skills: SkillsToolsConfig{
 				ToolConfig: ToolConfig{

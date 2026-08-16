@@ -2967,7 +2967,8 @@ func (t *DelegateTool) executeInboxAck(ctx context.Context, args map[string]any)
 	if t.inbox == nil {
 		return ErrorResult("delegate: no message inbox configured")
 	}
-	if _, err := requiredStringArg(args, "session_id"); err != nil {
+	sessionID, err := requiredStringArg(args, "session_id")
+	if err != nil {
 		return ErrorResult(err.Error())
 	}
 	ids, serr := stringSliceArg(args, "message_ids")
@@ -2981,7 +2982,41 @@ func (t *DelegateTool) executeInboxAck(ctx context.Context, args map[string]any)
 	if ownerKey == "" {
 		return ErrorResult("delegate: no session context available to resolve the inbox owner key")
 	}
-	result, err := t.inbox.AckDetailed(ownerKey, ids)
+	// HIGH (nested-delegation message leak, 2026-08): the READ path
+	// (executeInbox/executePeek) was re-keyed to rec.ParentDurableKey but the
+	// ACK path was left on the calling ownerKey, so read and ack disagreed
+	// for every caller that is not the target's DIRECT parent. Because
+	// verifyCallerOwnsSession deliberately permits an ANCESTOR (FR-039) —
+	// whose key is by definition NOT rec.ParentDurableKey — an A -> B -> C
+	// chain let A drain C's question successfully and then ack it against
+	// A's OWN inbox file: every id came back Unknown, nothing was actually
+	// acknowledged, the messages were redelivered on every subsequent drain,
+	// and they permanently consumed C's InboxUnackedMax budget until C's
+	// message_parent sends started failing outright (the ceiling is enforced
+	// in pkg/session/message_inbox.go::MessageInboxStore.Append against the
+	// child's own owner key, which only an ack under THAT key can relieve).
+	// The ack must therefore be keyed exactly like the read: by the target
+	// session's own direct parent, the key its messages were actually
+	// Appended under.
+	//
+	// Loading the record also closes a second gap this action had: keying by
+	// rec.ParentDurableKey without an ownership check would let any caller
+	// ack messages in an inbox it does not own, so the same MANDATORY,
+	// fail-closed verification executeInbox performs is applied here (a Load
+	// error denies — it never falls through to whatever session_id the
+	// caller named).
+	if t.lifecycle == nil {
+		return ErrorResult("delegate: no lifecycle store configured")
+	}
+	rec, lerr := t.lifecycle.Load(sessionID)
+	if lerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: inbox_ack: %v", lerr))
+	}
+	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: inbox_ack: %v", verr))
+	}
+
+	result, err := t.inbox.AckDetailed(rec.ParentDurableKey, ids)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox_ack: %v", err)).WithError(err)
 	}

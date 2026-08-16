@@ -30,8 +30,13 @@ func TestSetViewport_RetriesOnceOnDeadlineTimeout(t *testing.T) {
 			}
 			return nil
 		}
-		lm := actions[0].(layoutMetricsAction)
-		*lm.w, *lm.h = 615, 744
+		// The device-scale override is now its own call (see
+		// viewportScaleTimeout), so the sequence is bounds -> scale ->
+		// read-back and this stub must not assume every non-bounds call is a
+		// read-back.
+		if lm, ok := actions[0].(layoutMetricsAction); ok {
+			*lm.w, *lm.h = 615, 744
+		}
 		return nil
 	}
 	reg, _ := newViewportTestLiveView(runCDP)

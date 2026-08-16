@@ -3669,6 +3669,80 @@ type BrowserToolConfig struct {
 	// browser tools are disabled or when CDPURL points at a remote Chrome
 	// this gateway does not own.
 	WarmAtBoot bool `json:"warm_at_boot" env:"OMNIPUS_TOOLS_BROWSER_WARM_AT_BOOT"`
+
+	// WarmTabAtBoot creates the first browsing tab (parked on the configured
+	// start page, tools.browser.start_page_url — normally the gateway's own
+	// /browser-start landing page) during boot, right after WarmAtBoot brought
+	// the shared Chrome process up. Default true.
+	//
+	// Why: WarmAtBoot alone launches the Chrome BROWSER process and stops
+	// there — measured on a host whose Chrome binary is already present, the
+	// process was live 2.8s after boot with ZERO renderer processes: no
+	// browsing context, no tab, no page. The first panel open then paid
+	// 1.0-2.2s to build that tab on demand, on the user's critical path. A tab
+	// parked on a static local page costs almost nothing to keep (one idle
+	// renderer) and removes that wait.
+	//
+	// It warms the SAME session the live panel and the agent's own browser
+	// tools use (browser.DefaultSessionID) on ONE agent — the default agent
+	// (agents.defaults.default_agent_id), or, when that is unset/has no
+	// browser manager, the lexicographically-first agent that has one. It is
+	// not a per-agent pool: warming every agent would spawn one renderer per
+	// agent for a panel only one of them is likely to open first.
+	//
+	// Best-effort and never blocks or fails boot (Hard Constraint #4), exactly
+	// like WarmAtBoot: a failure is logged at WARN, audited, and the ordinary
+	// lazy path still builds the tab at first use. Turning it off leaves the
+	// browser fully functional. It is skipped whenever WarmAtBoot itself is
+	// skipped (browser tools disabled, a remote cdp_url, or
+	// OMNIPUS_SKIP_BROWSER_PREPROVISION=1).
+	//
+	// Note the idle reaper still owns the tab's LIFETIME: an untouched warm
+	// tab is closed after tools.browser.idle_ttl_sec like any other, so a
+	// first open long after boot pays tab creation again (against an
+	// already-warm Chrome, which is far cheaper than a cold start).
+	WarmTabAtBoot bool `json:"warm_tab_at_boot" env:"OMNIPUS_TOOLS_BROWSER_WARM_TAB_AT_BOOT"`
+
+	// WarmCaptureAtBoot starts the WebRTC capture pipeline (the capture
+	// extension's encoder page + its ingest leg into the gateway's relay)
+	// during boot instead of on the first viewer's offer. Default true.
+	//
+	// Why: with Chrome and the tab already warm, the encoder page's load,
+	// ingest connect and WebRTC negotiation are what is left of a measured
+	// ~9.5s first open (1.7-6.7s of it), and they are also what fails first
+	// under load — one first open in three timed out waiting for the ingest
+	// video track. Starting the pipeline at boot makes the first open
+	// near-instant, because the viewer's offer joins a capture that is already
+	// producing frames.
+	//
+	// COST, and why WarmCaptureIdleSec exists: unlike a parked tab, a running
+	// capture encodes video continuously and burns CPU for as long as it runs.
+	// On a shared-CPU host that is the very resource whose exhaustion produces
+	// the 1fps stream this warm-up exists to avoid. So the warm capture is NOT
+	// permanent: it stops itself after WarmCaptureIdleSec with no viewer ever
+	// attached, and the next viewer offer starts a fresh one on the ordinary
+	// path. Once a viewer HAS attached, the warm-up hands the session over to
+	// the normal last-viewer-detach grace stop and never stops it itself.
+	//
+	// Same agent selection, same best-effort/never-fatal contract, and the
+	// same opt-outs as WarmTabAtBoot. Additionally skipped whenever WebRTC
+	// capture is unavailable for that agent anyway (webrtc_enabled=false, a
+	// lite build with no WebRTC, or a not-capture-capable configuration) —
+	// evaluated with the SAME gate a real viewer offer uses, so warm-up can
+	// never start something an offer would have refused.
+	WarmCaptureAtBoot bool `json:"warm_capture_at_boot" env:"OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_AT_BOOT"`
+
+	// WarmCaptureIdleSec is how long (in seconds) a boot-warmed capture keeps
+	// running with NO viewer ever attached before it stops itself. Default 300
+	// (5 minutes) — long enough to cover the realistic "operator restarts the
+	// gateway, then opens the panel" window, short enough that an unattended
+	// host is not encoding video forever.
+	//
+	// <= 0 means "never stop it on idle": the warm capture then runs until a
+	// viewer takes it over or the gateway shuts down. Only sensible on a host
+	// with CPU to spare — see WarmCaptureAtBoot's cost note. Ignored entirely
+	// when WarmCaptureAtBoot is false.
+	WarmCaptureIdleSec int `json:"warm_capture_idle_sec" env:"OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_IDLE_SEC"`
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled
