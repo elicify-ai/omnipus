@@ -642,8 +642,8 @@ describe('ToolApprovalModal — Always Allow for request_mount', () => {
   })
 
   it('still offers a way to approve and a way to deny request_mount', () => {
-    // Only the SHORTCUT is withheld. Removing the decision itself would leave
-    // the agent hanging with no way for the operator to answer.
+    // Always Allow is offered when args are present (a grant is this folder,
+    // this session). Approve and Deny must still be there either way.
     //
     // request_mount's copy diverges from the generic Approve/Deny labels
     // (operator-approved "Add folder" / "Don't add" — see
