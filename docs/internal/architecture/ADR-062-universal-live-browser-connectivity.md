@@ -146,11 +146,11 @@ Fly routes nothing to them. That is the failure this tier fixes, and the
 candidate that won is the one the fix adds.
 
 Regression note observed during the run: a stale capture session belonging to
-another agent makes the gateway answer `browser_webrtc_state{available:false,
+another agent used to make the gateway answer `browser_webrtc_state{available:false,
 reason:"error"}` with the real cause only in the gateway log
 (`capture denied — another agent's capture session is actively viewed`,
-ADR-048 condition 2). Per ADR-061's discipline the client-visible reason should
-name that cause; filed as follow-up, not fixed here.
+ADR-048 condition 2). **FIXED 2026-08-16** (`05bccea6`): the wire reason is now
+`multi_agent_capture_denied` (contract enum + SPA translator).
 
 Local macOS re-test after UAT passed: `tests/e2e/browser-live-video.spec.ts`
 green in 40.6 s with 143 ms measured end-to-end input latency — the direct path
