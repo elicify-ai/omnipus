@@ -1141,8 +1141,12 @@ jobs:
 
       - name: Run Playwright tests
         # OPENROUTER_API_KEY_CI is inherited per-shard from $GITHUB_ENV (Resolve shard LLM key).
+        # Mirror it onto OPENROUTER_API_KEY so self-managed gateways
+        # (tests/e2e/setup.ts startGateway → onboardAdmin) send the same live
+        # key instead of sk-test-placeholder, which OpenRouter 400s.
         env:
           OMNIPUS_URL: http://localhost:6060
+          OPENROUTER_API_KEY: ${{ env.OPENROUTER_API_KEY_CI }}
         run: npx playwright test ${{ matrix.specs }}
 
       - name: Upload Playwright artifacts
