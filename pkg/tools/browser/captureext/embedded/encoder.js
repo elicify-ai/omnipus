@@ -322,8 +322,19 @@ function applyVideoSenderConstraints(pc, opts) {
 
   try {
     const params = sender.getParameters();
+    // Chrome only treats getParameters() as "called" once negotiation has
+    // populated encodings. Synthesizing encodings: [{}] and then calling
+    // setParameters() is what produces:
+    //   InvalidStateError: Failed to set parameters since getParameters()
+    //   has never been called on this sender
+    // Live CI (2026-08-16 ui-heavy): that rejection fired at post-connected
+    // and the encoder reported it as a stream-quality failure. Skip until
+    // the sender has real encodings; the post-answer / post-connected
+    // re-applies catch it once they exist. Video keeps flowing uncapped
+    // rather than a failed setParameters poisoning the sender.
     if (!params.encodings || params.encodings.length === 0) {
-      params.encodings = [{}];
+      record(logPrefix + ': encodings empty, skipping setParameters');
+      return;
     }
     params.encodings[0].maxBitrate = maxBitrate;
     // degradationPreference 'maintain-resolution' (previously 'balanced' --
@@ -748,7 +759,9 @@ async function applyAdaptScale(pc, scale) {
   const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
   if (!sender) throw new Error('no video sender');
   const params = sender.getParameters();
-  if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+  if (!params.encodings || params.encodings.length === 0) {
+    throw new Error('encodings empty; sender not negotiated');
+  }
   params.encodings[0].scaleResolutionDownBy = scale;
   await sender.setParameters(params);
 }
@@ -1619,6 +1632,19 @@ async function handleWsMessage(raw) {
       clearOfferAnswerTimeout();
       if (!currentPC) {
         warn('browser_capture_answer received with no active PeerConnection, ignoring');
+        return;
+      }
+      // A second answer on a PC that is already stable is what froze the
+      // 2026-08-16 ui-heavy live-video run: Chrome logged
+      // "Failed to set remote answer sdp: Called in wrong state: stable",
+      // DTLS never started, and ingest ICE failed 30s later. Recapture /
+      // viewport / self-heal can deliver a late answer for the previous
+      // offer; applying it does not recover and can stall the current
+      // sender. Only an answer that completes the offer we just sent is
+      // legal.
+      if (currentPC.signalingState && currentPC.signalingState !== 'have-local-offer') {
+        warn('browser_capture_answer ignored: signalingState=' + currentPC.signalingState + ' (want have-local-offer)');
+        record('ignored stale browser_capture_answer in state ' + currentPC.signalingState);
         return;
       }
       try {

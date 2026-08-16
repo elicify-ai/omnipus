@@ -483,15 +483,24 @@ test(
       });
       expect(framesBefore, 'getVideoPlaybackQuality() must be supported by this Chromium build').toBeGreaterThanOrEqual(0);
 
-      await page.waitForTimeout(1_500);
-
-      const framesAfter = await video.evaluate((el) => {
-        const v = el as HTMLVideoElement & { getVideoPlaybackQuality?: () => { totalVideoFrames: number } };
-        return v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : -1;
-      });
+      // Poll rather than a single 1.5s sample. A recapture / late answer can
+      // stall decode for a beat (CI ui-heavy 2026-08-16: evidence 1 color
+      // change passed, then totalVideoFrames sat flat at 9–21). If the
+      // stream resumes, frames climb inside this budget. A permanently
+      // dead ingest still fails.
+      const FRAME_BUDGET_MS = 8_000;
+      const frameDeadline = Date.now() + FRAME_BUDGET_MS;
+      let framesAfter = framesBefore;
+      while (framesAfter <= framesBefore && Date.now() < frameDeadline) {
+        await page.waitForTimeout(250);
+        framesAfter = await video.evaluate((el) => {
+          const v = el as HTMLVideoElement & { getVideoPlaybackQuality?: () => { totalVideoFrames: number } };
+          return v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : -1;
+        });
+      }
       expect(
         framesAfter,
-        `totalVideoFrames must increase over 1.5s of real playback (before=${framesBefore}, after=${framesAfter}) ` +
+        `totalVideoFrames must increase within ${FRAME_BUDGET_MS}ms of real playback (before=${framesBefore}, after=${framesAfter}) ` +
           '— a stalled/frozen decode would leave this flat',
       ).toBeGreaterThan(framesBefore);
     });

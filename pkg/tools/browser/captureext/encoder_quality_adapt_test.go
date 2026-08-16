@@ -96,6 +96,22 @@ func TestEncoderJS_QualityAdaptGuards(t *testing.T) {
 		t.Error("encoder.js: the adaptation-failure report must ride the existing browser_capture_control frame — " +
 			"a new action would be a wire-contract change (Constraint #8) the encoder cannot make on its own")
 	}
+
+	// --- 1.0.10: do not apply a stale answer or a pre-negotiation setParameters --
+	if !strings.Contains(src, "signalingState !== 'have-local-offer'") {
+		t.Error("encoder.js: must ignore a browser_capture_answer unless the PC is in have-local-offer — " +
+			"a second answer in stable froze CI live video (ingest ICE failed after " +
+			"Failed to set remote answer sdp: Called in wrong state: stable)")
+	}
+	if !strings.Contains(src, "encodings empty, skipping setParameters") {
+		t.Error("encoder.js: applyVideoSenderConstraints must skip setParameters when encodings are empty — " +
+			"synthesizing encodings:[{}] is what Chrome rejects as " +
+			"'getParameters() has never been called on this sender'")
+	}
+	if strings.Contains(src, "params.encodings = [{}]") {
+		t.Error("encoder.js: must not synthesize encodings:[{}] before setParameters — that is the " +
+			"InvalidStateError that the 1.0.10 skip exists to prevent")
+	}
 }
 
 // encoderHarnessOptOutEnv makes the node requirement below skippable, but only
@@ -232,7 +248,7 @@ const K = adapt.constants;
 function makePC(sample, opts) {
   opts = opts || {};
   const applied = [];
-  let params = { encodings: [{}] };
+  let params = { encodings: opts.emptyEncodings ? [] : [{}] };
   const sender = {
     track: { kind: 'video' },
     getStats: function () {
@@ -382,7 +398,18 @@ async function ticksAt(pc, n, now) { for (let i = 0; i < n; i++) await adapt.tic
     'after re-apply scaleResolutionDownBy=' + reapplied + ' (loop had chosen ' + scaleAfterLoop + ')');
 
   // --- 11. the diagnostic surface is populated --------------------------
-  check('state_surface_populated',
+  
+  // --- 1.0.10: empty encodings must not synthesize and setParameters --------
+  adapt.reset();
+  pc = makePC({ fps: 13, reason: 'none' }, { emptyEncodings: true });
+  vm.runInContext('applyVideoSenderConstraints(globalThis.__harnessPC, {context: "post-connected"})',
+    Object.assign(sandbox, { __harnessPC: pc }));
+  await new Promise(function (r) { setTimeout(r, 20); });
+  check('empty_encodings_skips_setParameters',
+    pc.applied.length === 0,
+    'setParameters called ' + pc.applied.length + ' time(s) on empty encodings (want 0)');
+
+check('state_surface_populated',
     win.__omnipusState.qualityAdapt && typeof win.__omnipusState.qualityAdapt.scale === 'number',
     JSON.stringify(win.__omnipusState.qualityAdapt));
 

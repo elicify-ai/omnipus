@@ -400,6 +400,12 @@ var versionContentHashes = map[string]string{
 	// on), and an adaptation that fails to APPLY is now reported to the
 	// gateway instead of dying in the extension page's console.
 	"1.0.9": "559e1bb80b4c0ac5abb63bb799594b23045be6d99498bf6b1a86c083baa064ec",
+	// 1.0.10 — ignore a second SDP answer unless the PC is in have-local-offer
+	// (CI ui-heavy 2026-08-16: ingest ICE died after "Failed to set remote
+	// answer sdp: Called in wrong state: stable"), and do not call
+	// setParameters when getParameters() returned empty encodings (Chrome
+	// treats that as "getParameters has never been called").
+	"1.0.10": "74d37064ceab571fb7890deb39f0f8fc434e10b00e58035988581046ac6b0fb4",
 }
 
 func embeddedContentHash(t *testing.T) string {

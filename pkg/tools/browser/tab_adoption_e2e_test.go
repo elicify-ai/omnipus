@@ -509,6 +509,23 @@ func realChromePageTargetIDs(t *testing.T, ctx context.Context) map[target.ID]bo
 	return ids
 }
 
+// waitUntilChromeTargetGone polls Chrome's real page-target list until id is
+// gone or the budget expires. CloseTab's cancel() returns before Chrome has
+// necessarily dropped the target from Target.getTargets.
+func waitUntilChromeTargetGone(t *testing.T, ctx context.Context, id target.ID, budget time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(budget)
+	for {
+		if !realChromePageTargetIDs(t, ctx)[id] {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // chromeTargetIDOf extracts the real CDP TargetID a chromedp tab context is
 // bound to — the same identifier Chrome itself uses in Target.getTargets —
 // so a test can assert on Chrome's OWN notion of "which target is this",
@@ -593,13 +610,17 @@ func TestCloseTab_RealChromium_TargetGenuinelyClosedInChrome(t *testing.T) {
 	survivorID := chromeTargetIDOf(t, survivorCtx)
 	assert.Equal(t, tab1ID, survivorID, "the surviving tab must still be Chrome's original tab1 target")
 
-	afterFirstClose := realChromePageTargetIDs(t, survivorCtx)
-	assert.False(t, afterFirstClose[tab0ID],
+	// CloseTarget is in-flight when cancel() returns — listing immediately
+	// flaked on CI (2026-08-16 #615: tab0 still present, count still 4).
+	// Wait on the identity condition, never a fixed delay. Do NOT assert
+	// the total target count: the comment above already records that a
+	// shared Chrome can hold extra page targets, so a count that stays
+	// put is not evidence the closed tab leaked.
+	require.True(t, waitUntilChromeTargetGone(t, survivorCtx, tab0ID, 2*time.Second),
 		"MEASURED: tab0's real CDP target (%s) must be GONE from Chrome's own target list after CloseTab — "+
 			"if this is still present, CloseTab only detached our client and leaked the tab in Chrome", tab0ID)
+	afterFirstClose := realChromePageTargetIDs(t, survivorCtx)
 	assert.True(t, afterFirstClose[tab1ID], "the surviving tab's real target must still be present")
-	assert.NotEqual(t, len(before), len(afterFirstClose),
-		"Chrome's real target count must DROP by the close — an unchanged count means nothing was closed")
 
 	// --- Case 2: close the LAST remaining tab (createFirstTab replacement). ---
 	closedTabs2, activeIdx2, err := mgr.CloseTab(defaultSessionID, 0)
@@ -613,10 +634,10 @@ func TestCloseTab_RealChromium_TargetGenuinelyClosedInChrome(t *testing.T) {
 	assert.NotEqual(t, tab1ID, replacementID,
 		"the last-tab replacement must be a genuinely NEW real Chrome target, not a relabeled survivor")
 
-	afterSecondClose := realChromePageTargetIDs(t, replacementCtx)
-	assert.False(t, afterSecondClose[tab1ID],
+	require.True(t, waitUntilChromeTargetGone(t, replacementCtx, tab1ID, 2*time.Second),
 		"MEASURED: tab1's real CDP target (%s) must be GONE from Chrome's own target list after closing the "+
 			"last tab — if still present, the last-tab-replacement path leaked it", tab1ID)
+	afterSecondClose := realChromePageTargetIDs(t, replacementCtx)
 	assert.True(t, afterSecondClose[replacementID], "the replacement tab's real target must be present")
 	assert.False(t, afterSecondClose[tab0ID],
 		"tab0's target must still be gone after the second close — it must not reappear")
