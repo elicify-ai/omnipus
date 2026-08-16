@@ -1287,24 +1287,31 @@ type streamerIOStatsSetter interface {
 // receive the turn-failed flag before Finalize is called. When implemented,
 // finalizeStreamer calls SetTurnFailed(true) whenever the turn ended via the
 // engine's error/limit fallback — (1) empty response after retries (engine
-// defaultResponse sentinel), (2) tool-iteration limit, or (3) generic
+// defaultResponse sentinel), (2) tool-iteration limit, (3) generic
 // empty-content exhaustion that resolved to the defaultResponse sentinel
 // (excluding caller-supplied success DefaultResponse strings such as the
-// heartbeat path's "Background task completed.").
+// heartbeat path's "Background task completed."), or (4) any return path that
+// left turnStatus == TurnEndStatusError, including the LLM-error early returns.
 // The done frame carries DoneStats.TurnFailed=true. CLI/automation clients
 // read this field to exit non-zero on a failed turn.
 type streamerFailedSetter interface {
 	SetTurnFailed(failed bool)
 }
 
-// markTurnFailed records that this turn ended via the engine's error/limit
-// fallback rather than a real model response.  It is called from three sites
-// in loop.go: (1) empty-response-after-retry, (2) tool-iteration limit, and
-// (3) generic empty-content exhaustion when the caller's DefaultResponse equals
-// the engine's own error sentinel (never when a success message is supplied).
+// markTurnFailed records that this turn did NOT end in a real, successful model
+// response. It is called from four sites in loop.go: (1) empty-response-after-
+// retry, (2) tool-iteration limit, (3) generic empty-content exhaustion when the
+// caller's DefaultResponse equals the engine's own error sentinel (never when a
+// success message is supplied), and (4) runTurn's turn-end defer, whenever
+// turnStatus == TurnEndStatusError — the catch-all that covers every error
+// return path, including the LLM-error early return that a provider refusal
+// takes. See that defer's own comment for why the trigger is exactly
+// TurnEndStatusError and not emptiness, and why its LIFO registration position
+// relative to `defer ts.finalizeStreamer(ctx)` is load-bearing.
+//
 // The flag is read by finalizeStreamer and forwarded to the streamer's
 // SetTurnFailed before Finalize so it can set DoneStats.TurnFailed on the done
-// WS frame.
+// WS frame. Idempotent: sites (1)-(3) and (4) can both fire for the same turn.
 func (ts *turnState) markTurnFailed() {
 	ts.mu.Lock()
 	ts.turnFailed = true

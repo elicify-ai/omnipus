@@ -3945,9 +3945,42 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			// ADR-051 §RD6: forward translated provider/LLM errors to the
 			// browser so the chat UI can render the typed ErrorFrame inline
 			// (Code/Retryable/Detail) instead of the raw provider text.
-			// `code==rate_limited` is suppressed here — the dedicated
-			// RateLimitFrame above is authoritative for that class and the SPA
-			// would otherwise render two bubbles for the same denial.
+			//
+			// NO CODE IS SUPPRESSED HERE — and `rate_limited` least of all.
+			// This arm used to end with an unconditional
+			// `if code == agent.CodeRateLimited { continue }`, justified as
+			// "the dedicated RateLimitFrame above is authoritative for that
+			// class". That justification was false, and it cost a user their
+			// only signal: an upstream HTTP 429 produced a turn that opened,
+			// said nothing, and closed reporting success.
+			//
+			// The two mechanisms share a code NAME but not a producer:
+			//
+			//   - EventKindRateLimit (the arm above) has EXACTLY ONE producer,
+			//     AgentLoop.recordRateLimitDenial (pkg/agent/loop.go), called
+			//     from two sites both guarded on Omnipus's OWN internal SEC-26
+			//     limiter being configured (cfg.Sandbox.RateLimits.MaxAgent{
+			//     LLMCallsPerHour,ToolCallsPerMinute} > 0). It means "Omnipus
+			//     denied this".
+			//   - An UPSTREAM refusal never reaches that function at all. It
+			//     travels runTurn's LLM-error block, which emits EventKindError
+			//     with Code: "rate_limited". It means "the provider denied
+			//     this" — a different fact with a different remedy (wait /
+			//     retry / switch model, not raise your own cap).
+			//
+			// So the suppression could never de-duplicate anything: it only
+			// ever deleted the provider case, with nothing replacing it.
+			//
+			// Nor is a dual-emit lurking behind it. recordRateLimitDenial emits
+			// ONE event, and its doc comment records that the prior
+			// "EventKindError + RateLimitPayload + EventKindRateLimit"
+			// dual-emit was deliberately removed as bus pollution — that
+			// removal was correct and stays. Even reinstated in its old shape
+			// it could not reach this frame: it carried a RateLimitPayload,
+			// which the ErrorPayload type assertion immediately below already
+			// rejects. Dedup belongs at the producer (one event per denial),
+			// not here — pinned end-to-end by
+			// TestEventForwarder_InternalRateLimitDenial_EmitsExactlyOneFrame.
 			p, ok := evt.Payload.(agent.ErrorPayload)
 			if !ok {
 				continue
@@ -3997,9 +4030,6 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				// diagnostic string that was never validated against the
 				// curated Code/Message this frame actually carries.
 				detail = agent.BuildDetail(p.ProviderError, message)
-			}
-			if code == agent.CodeRateLimited {
-				continue
 			}
 			errSID := sessionIDForChat(p.ChatID)
 			errF := generated.ErrorFrame{

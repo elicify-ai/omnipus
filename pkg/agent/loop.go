@@ -7844,6 +7844,46 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		)
 	}()
 
+	// A turn that ended in error must never close by claiming success.
+	//
+	// The "done" WS frame is emitted by the streamer reached through the
+	// unconditional `defer ts.finalizeStreamer(ctx)` registered above, which
+	// fires on EVERY return path — including the LLM-error early returns.
+	// Those paths set turnStatus = TurnEndStatusError but did NOT call
+	// markTurnFailed(), so the frame went out with DoneStats.TurnFailed
+	// absent — byte-for-byte what a successful turn looks like on the wire.
+	// Live consequence: a provider's HTTP 429 produced a turn that opened,
+	// streamed nothing, and reported success. It read as an agent ignoring
+	// the user, with nothing to retry from.
+	//
+	// The trigger is deliberately NARROW: turnStatus == TurnEndStatusError,
+	// nothing else. Emptiness is explicitly NOT a failure signal — a prior
+	// investigation enumerated eight legitimate zero-output cases (shadow
+	// sub-turn, user cancel/hard abort, abandoned turn, heartbeat with a
+	// caller-supplied success DefaultResponse, silent tool-only turn,
+	// SendResponse=false/NoHistory, client disconnected mid-stream, and the
+	// media-rejection friendly-response path) that a "no output = failed"
+	// guard would wrongly flag. None of the eight can reach this branch:
+	// every one of them exits with turnStatus Completed, Aborted, or Parked.
+	// TurnEndStatusAborted is likewise left alone — a user-initiated cancel
+	// is an intentional, successful action, and a system-initiated abort
+	// (abortTurn case 2) already emits its own EventKindError, so the user
+	// is never left in silence there.
+	//
+	// ORDERING IS LOAD-BEARING. Go runs defers LIFO, so this — registered
+	// AFTER the turn_end defer above and after finalizeStreamer's — runs
+	// FIRST, before finalizeStreamer reads ts.turnFailed and hands it to the
+	// streamer's SetTurnFailed. Registering it any earlier than
+	// `defer ts.finalizeStreamer(ctx)` would make it run too late and
+	// silently restore the bug — verified by mutation: moving this
+	// registration above finalizeStreamer's turns
+	// TestWS_ProviderRateLimitRefusal_DoneFrameDoesNotClaimSuccess red again.
+	defer func() {
+		if turnStatus == TurnEndStatusError {
+			ts.markTurnFailed()
+		}
+	}()
+
 	al.emitEvent(
 		EventKindTurnStart,
 		ts.eventMeta("runTurn", "turn.start"),

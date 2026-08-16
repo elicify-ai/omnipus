@@ -3261,6 +3261,35 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // placeholder — either would erase the (interrupted) label or create a
                 // ghost streaming bubble without the label.
                 if (lastMsgId && draft.messagesById[lastMsgId].status === 'interrupted') return
+                // Same rule, same reason, for a terminally errored bubble.
+                //
+                // A failed turn delivers its explanation TWICE by design, on two
+                // independent paths: the typed `error` frame (rich — code,
+                // retryable, detail, Retry button), and then a plain `token` +
+                // `done` from the outbound-publish fallback that exists so a
+                // turn which produced no tokens still terminates the stream
+                // instead of leaving a stuck "thinking" spinner
+                // (pkg/gateway/websocket.go, wsStreamer.Finalize's markStreamed
+                // guard). Both carry the same user-facing sentence.
+                //
+                // Without this guard the trailing token crosses the closed-bubble
+                // segment boundary below and mints a SECOND bubble holding a
+                // duplicate of the text already shown — and the duplicate carries
+                // none of the error treatment, so the copy the user is most
+                // likely to read is the one with no Retry button. Worse, the two
+                // paths classify independently (the frame from the provider's
+                // HTTP status, the fallback from the error STRING via
+                // TranslateTurnError with a nil ProviderError), so they can
+                // legitimately disagree and show the user two different
+                // explanations for one failure.
+                //
+                // Discarding here rather than suppressing server-side is
+                // deliberate: the client is the only party that KNOWS the error
+                // frame arrived. A backend suppression would have to assume
+                // delivery, and a wrong assumption there turns a duplicate
+                // message into no message at all — trading a cosmetic defect for
+                // the silence this whole fix exists to remove.
+                if (lastMsgId && draft.messagesById[lastMsgId].status === 'error') return
                 // Track the bubble being left behind by either boundary check
                 // below so any tool calls it already holds can be baked onto
                 // it (see the baking block right after both checks) instead
@@ -3505,8 +3534,28 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   if (m?.role !== 'assistant') continue
                   if (id !== lastMsgId && !m.isStreaming && m.status !== 'streaming') continue
                   // FR-21 / T21–T25: do NOT overwrite 'interrupted' status with 'done'.
+                  //
+                  // 'error' is preserved for the same reason, and it is not a
+                  // theoretical case: a failed turn emits its typed `error`
+                  // frame and then, microseconds later, the streamer's
+                  // deferred finalize emits `done` for the SAME session. The
+                  // error bubble IS lastMsgId, so the `continue` above does not
+                  // protect it, and demoting it to 'done' silently erased every
+                  // bit of the error treatment the frame had just earned:
+                  // the "Error" label, the Retry button (AssistantUI maps
+                  // 'error' → incomplete), and the verbose "Technical details"
+                  // disclosure. errorCode was left set, so the bubble ended in
+                  // a state no renderer can act on — status 'done' carrying an
+                  // errorCode, while every renderer gates on status === 'error'.
+                  //
+                  // A terminal status is terminal. `done` means "the turn is
+                  // over", which is already true of an errored turn; it must
+                  // never be read as "the turn succeeded". The rendering layer
+                  // owns this property rather than inheriting it from whatever
+                  // order the backend happens to emit its frames in.
                   m.isStreaming = false
-                  m.status = m.status === 'interrupted' ? 'interrupted' : 'done'
+                  m.status =
+                    m.status === 'interrupted' || m.status === 'error' ? m.status : 'done'
                   // Clear the tool-call text-boundary marker on finalize. If the
                   // turn's last event was a tool call with no trailing narration
                   // token before `done`, pendingTextBoundary would otherwise be
