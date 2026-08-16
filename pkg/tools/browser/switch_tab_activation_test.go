@@ -298,3 +298,19 @@ func TestSwitchTab_SkipsActivationForDeadContext(t *testing.T) {
 	m.activateTabInChrome(nil, DefaultSessionID, 0)
 	assert.Len(t, rec.calls(), before, "a nil tab context must be skipped")
 }
+
+// TestRunTabFocusCDP_NonChromedpContextDoesNotAllocate is the production
+// half of the dead/nil skip: a LIVE context that is not a chromedp target
+// must not reach chromedp.Run. Run treats a non-chromedp context as
+// "start a new browser", which is how TestCloseTab_CancelsTheClosedTabsContext
+// launched a second Chrome on CI, hit "No usable sandbox", and panicked
+// in chromedp's Allocate cleanup. The recorded-activation seam is
+// deliberately NOT installed here — that seam is what hid the defect
+// from every SwitchTab unit test.
+func TestRunTabFocusCDP_NonChromedpContextDoesNotAllocate(t *testing.T) {
+	cfg, err := DefaultConfig()
+	require.NoError(t, err)
+	m := &BrowserManager{cfg: cfg}
+	err = m.runTabFocusCDP(context.Background(), page.BringToFront())
+	require.NoError(t, err, "a non-chromedp context must be a no-op, not a new Chrome")
+}
