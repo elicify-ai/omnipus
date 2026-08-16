@@ -1767,8 +1767,15 @@ func registerSharedTools(
 			// already handles an empty result as "no default agent
 			// configured" rather than silently switching to a name that
 			// doesn't exist.
-			if registry := al.GetRegistry(); registry != nil {
-				if def := registry.GetDefaultAgent(); def != nil {
+			// liveRegistry, not the `registry` parameter this closure could
+			// capture: that one is the boot-time instance, and a full registry
+			// rebuild (TriggerReload, e.g. after the default agent changes)
+			// REPLACES al.registry. This closure runs long after construction,
+			// so reading the captured parameter would resolve the default
+			// against a stale roster. The name difference is deliberate — it
+			// used to shadow, which read as an accident rather than intent.
+			if liveRegistry := al.GetRegistry(); liveRegistry != nil {
+				if def := liveRegistry.GetDefaultAgent(); def != nil {
 					return def.ID
 				}
 			}
