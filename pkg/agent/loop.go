@@ -9881,7 +9881,7 @@ turnLoop:
 				// consults the SAME store first, so a granted call still
 				// short-circuits identically), and write the placeholder only on
 				// the path that genuinely blocks on a human.
-				approved := al.ApprovalGrants().IsAllowed(ts.transcriptSessionID, ts.agentID, toolName)
+				approved := al.ApprovalGrants().IsAllowed(ts.transcriptSessionID, ts.agentID, toolName, toolArgs)
 				denialReason := ""
 				if !approved {
 					// About to block on a human, for up to the approval
@@ -12497,7 +12497,7 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 	sessionID, agentID, toolName, toolCallID, turnID string,
 	args map[string]any,
 ) (approved bool, denialReason string) {
-	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName) {
+	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName, args) {
 		return true, ""
 	}
 	approver := al.loadToolApprover()

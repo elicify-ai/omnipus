@@ -366,7 +366,7 @@ func resolveConfiguredPolicy(toolName string, cfg *config.AgentToolsCfg, globalP
 //
 //   - approve/deny/cancel — resolve this single pending call (FR-017, FR-018).
 //   - always — resolve this call as approved AND record a session-scoped
-//     "Always Allow" grant for the approval's (session, agent, tool) so future
+//     "Always Allow" grant for the approval's (session, agent, tool, args) so future
 //     matching calls in the same session auto-approve without re-prompting.
 //     This is the generic REST replacement for the retired
 //     exec_approval_response{decision:"always"} WS-frame path (ADR-036 §3.4):
@@ -458,9 +458,9 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// "always": the pending call is now approved — record the session-scoped
-	// grant. Identity (session_id, agent_id, tool) comes from the immutable
+	// grant. Identity (session_id, agent_id, tool, args) comes from the immutable
 	// approval entry set at creation, never from client-supplied data, so a
-	// caller cannot install a grant for an arbitrary (session, agent, tool).
+	// caller cannot install a grant for an arbitrary (session, agent, tool, args).
 	// ApprovalGrantStore.Record is nil-receiver-safe and no-ops (returns false)
 	// on any empty key component (fail-safe: never records under an empty
 	// session/agent/tool key). This is now the ONLY writer of "always" grants
@@ -473,7 +473,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	// instead of Info in that case so an operator can see the grant did not
 	// actually take effect, rather than silently believing it did.
 	if recordGrant {
-		if a.agentLoop.ApprovalGrants().Record(entry.SessionID, entry.AgentID, entry.ToolName) {
+		if a.agentLoop.ApprovalGrants().Record(entry.SessionID, entry.AgentID, entry.ToolName, entry.Args) {
 			slog.Info("tool-approval: recorded session Always-Allow grant",
 				"approval_id", approvalID,
 				"session_id", entry.SessionID,
@@ -595,7 +595,7 @@ func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID
 			"error", err)
 		return
 	}
-	if a.agentLoop.ApprovalGrants().Record(meta.ParentSessionID, entry.AgentID, entry.ToolName) {
+	if a.agentLoop.ApprovalGrants().Record(meta.ParentSessionID, entry.AgentID, entry.ToolName, entry.Args) {
 		slog.Info("tool-approval: also recorded Always-Allow grant on the delegating parent's session, "+
 			"scoped to the SAME agent identity the approval modal named, so it survives this delegation's "+
 			"own teardown without crossing into the parent's own agent identity",

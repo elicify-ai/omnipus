@@ -340,6 +340,9 @@ describe('ToolApprovalModal — reconnect-stub (Deliverable 4)', () => {
     render(<ToolApprovalModal />)
     expect(screen.queryByText('Approval Details Unavailable')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Add folder/i })).toBeInTheDocument()
+    // Real args are present, so Always Allow must be offered — it remembers
+    // THIS folder, not any folder.
+    expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
   })
 })
 

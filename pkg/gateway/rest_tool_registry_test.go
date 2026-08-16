@@ -1049,11 +1049,12 @@ func TestApproveTool_ActionAlways_RecordsGrantAndApproves(t *testing.T) {
 	require.NotNil(t, grants, "test harness must wire a real ApprovalGrantStore")
 
 	// Precondition: no grant exists for this (session, agent, tool) yet.
-	require.False(t, grants.IsAllowed(sessionID, agentID, toolName),
+	require.False(t, grants.IsAllowed(sessionID, agentID, toolName, nil),
 		"precondition: no Always-Allow grant may exist before the request")
 
+	lsArgs := map[string]any{"command": "ls"}
 	entry, accepted := reg.requestApproval(
-		"tc-always", toolName, map[string]any{"command": "ls"}, agentID, sessionID, "turn-1",
+		"tc-always", toolName, lsArgs, agentID, sessionID, "turn-1",
 	)
 	require.True(t, accepted)
 
@@ -1086,16 +1087,18 @@ func TestApproveTool_ActionAlways_RecordsGrantAndApproves(t *testing.T) {
 	}
 
 	// (b) A session-scoped grant was recorded and is queryable via IsAllowed.
-	assert.True(t, grants.IsAllowed(sessionID, agentID, toolName),
-		"always must record a grant queryable via ApprovalGrantStore.IsAllowed")
+	assert.True(t, grants.IsAllowed(sessionID, agentID, toolName, lsArgs),
+		"always must record a grant for the approval's exact arguments")
+	assert.False(t, grants.IsAllowed(sessionID, agentID, toolName, map[string]any{"command": "rm -rf /"}),
+		"a grant for {command:ls} must not approve a different argv")
 
 	// Scoping proof (consent boundary): the grant must NOT leak to a different
 	// agent, session, or tool.
-	assert.False(t, grants.IsAllowed(sessionID, "agent-b", toolName),
+	assert.False(t, grants.IsAllowed(sessionID, "agent-b", toolName, lsArgs),
 		"grant must not apply to a different agent")
-	assert.False(t, grants.IsAllowed("session-other", agentID, toolName),
+	assert.False(t, grants.IsAllowed("session-other", agentID, toolName, lsArgs),
 		"grant must not apply to a different session")
-	assert.False(t, grants.IsAllowed(sessionID, agentID, "read_file"),
+	assert.False(t, grants.IsAllowed(sessionID, agentID, "read_file", lsArgs),
 		"grant must not apply to a different tool")
 }
 

@@ -606,14 +606,12 @@ describe.each(edgeCases)(
   },
 )
 
-// ── "Always Allow" suppression (ADR-063 FR-7.2) ─────────────────────────────
+// ── "Always Allow" for request_mount ────────────────────────────────────────
 //
-// Grants are keyed on (session, agent, TOOL NAME) — the ARGUMENTS are not part
-// of the key. For most tools that is fine. For request_mount it would mean
-// "this agent may mount ANY folder for the rest of the session, without
-// asking": a blanket grant over the whole disk from one click, with no path
-// ever shown. Approving once already creates a mount that persists until
-// revoked, so the shortcut buys nothing and costs the boundary.
+// Grants remember the whole arguments object, so Always Allow on Add folder
+// means "this folder, this session" — not "any folder". The button is shown
+// whenever we have real args. It stays hidden only on reconnect stubs, which
+// have no arguments to remember.
 
 const MOUNT_APPROVAL = {
   approvalId: 'appr-mount',
@@ -626,7 +624,7 @@ const MOUNT_APPROVAL = {
   expiresAt: Date.now() + 300_000,
 }
 
-describe('ToolApprovalModal — Always Allow suppression', () => {
+describe('ToolApprovalModal — Always Allow for request_mount', () => {
   it('offers Always Allow for an ordinary tool', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
@@ -635,12 +633,12 @@ describe('ToolApprovalModal — Always Allow suppression', () => {
     expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
   })
 
-  it('withholds Always Allow for request_mount', () => {
+  it('offers Always Allow for request_mount when args are present', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
     render(<ToolApprovalModal />)
-    expect(screen.queryByTestId('always-allow-toggle')).toBeNull()
+    expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
   })
 
   it('still offers a way to approve and a way to deny request_mount', () => {
