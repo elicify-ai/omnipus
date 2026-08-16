@@ -141,9 +141,19 @@ export function Sidebar() {
       logError({ event: 'logoutRevokeFailed', error: String(err) })
     }).finally(() => {
       useAuthStore.getState().clearAuth()
+      // Drop every cached query/mutation along with the session — otherwise
+      // a subsequent login (same tab, possibly a different user) can ride
+      // this session's cached workspaces/sessions/agents data for as long as
+      // its staleTime window allows. Mirrors forceLogout()'s own
+      // queryClient.clear() (src/lib/authLogout.ts) for the involuntary path;
+      // this is the deliberate manual "Sign out" path, which calls
+      // clearAuth()/navigate() directly rather than forceLogout() so it never
+      // shows the involuntary-logout banner (D2 fix #3) — but it needs the
+      // same cache teardown.
+      queryClient.clear()
       navigate({ to: '/login' })
     })
-  }, [navigate])
+  }, [navigate, queryClient])
 
   // Workspaces query — refetch every 30s
   const { data: projects = [], isLoading: projectsLoading, isError: projectsError } = useQuery({

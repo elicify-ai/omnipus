@@ -101,6 +101,23 @@ export function forceLogout(reason: LogoutReason = 'elsewhere'): void {
       // Store not yet loaded — the redirect below still runs regardless.
     })
 
+  // Drop every cached query/mutation along with the session. This session's
+  // data (workspaces, sessions, agents, ...) belongs to a specific user;
+  // leaving it cached risks a subsequent login (same tab, a different user,
+  // or the same user with a changed workspace list) silently reusing STALE
+  // cross-session data for as long as its staleTime window allows — see
+  // DefaultWorkspaceRedirect.tsx / Sidebar.tsx's shared workspacesQueryKeys
+  // entry. Dynamic import avoids a circular import: queryClient.ts imports
+  // forceLogout from THIS module for its own 401 handler, so a static import
+  // here would cycle back.
+  void import('@/lib/queryClient')
+    .then(({ queryClient }) => {
+      queryClient.clear()
+    })
+    .catch(() => {
+      // queryClient not yet loaded — nothing cached yet to worry about.
+    })
+
   // Reset the flags after 2 seconds so a fresh login can trigger a new logout cycle.
   setTimeout(() => {
     _logoutScheduled = false
