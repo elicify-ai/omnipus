@@ -142,7 +142,6 @@ func TestRunTurn_RateLimit_LLMCallsPerHour(t *testing.T) {
 		ChatID:          "direct",
 		UserMessage:     "first message",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	require.NoError(t, err1, "call 1 must succeed — budget not yet exhausted")
@@ -158,7 +157,6 @@ func TestRunTurn_RateLimit_LLMCallsPerHour(t *testing.T) {
 		ChatID:          "direct",
 		UserMessage:     "second message",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 

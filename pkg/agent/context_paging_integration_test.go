@@ -242,7 +242,6 @@ func TestFitInvariantHolds_WindowPlusRecall(t *testing.T) {
 
 	assembled := cb.BuildMessages(
 		window,
-		"",
 		"Current question",
 		nil,
 		"",
@@ -377,7 +376,6 @@ func TestRecallSpan_ZeroDuplicateOrphanToolCallIDs_EndToEnd(t *testing.T) {
 
 	assembled := cb.BuildMessages(
 		liveWindow,
-		"",
 		"What did we find?",
 		nil,
 		"",
@@ -435,96 +433,6 @@ func TestRecallSpan_ZeroDuplicateOrphanToolCallIDs_EndToEnd(t *testing.T) {
 	if declared[liveCallID] > 1 {
 		t.Errorf("SC-015: live window ID %q duplicated in assembled messages (appeared %d times)",
 			liveCallID, declared[liveCallID])
-	}
-}
-
-// ============================================================================
-// T22 / FR-014 — legacy [dropped N] summary marker is inert
-// ============================================================================
-
-// TestLegacySummaryMarker_Inert loads a session whose summary carries a
-// "[dropped N ...]" legacy marker and verifies:
-//
-//	(a) BuildMessages accepts it with no error (inert, rendered as plain text)
-//	(b) The marker is NOT re-parsed or re-applied (window is unchanged)
-//	(c) No [dropped] content leaks into non-system parts of the assembled request
-//
-// Traces to: spec §7 T22, FR-014, US-8.2, spec line 299.
-func TestLegacySummaryMarker_Inert(t *testing.T) {
-	// BDD: Given a session whose summary contains "[dropped 15 turns — emergency compression]",
-	//      When BuildMessages is called with that summary,
-	//      Then the assembled request contains no parse-error and the marker is treated
-	//      as plain summary text, not as a control instruction.
-
-	tmpDir := setupWorkspace(t, map[string]string{
-		"AGENT.md": "# Agent\nTest agent.",
-	})
-	cb := NewContextBuilder(tmpDir)
-
-	// Real-world legacy summary carrying the old forceCompression marker.
-	legacySummary := "[dropped 15 turns — emergency compression due to context overflow]\n" +
-		"The user was discussing travel plans to France. They asked about Paris hotels."
-
-	history := []providers.Message{
-		trimTestMsg("user", "Tell me more about Paris"),
-		trimTestMsg("assistant", "Paris has many famous landmarks."),
-	}
-
-	// Must not panic or error.
-	assembled := cb.BuildMessages(
-		history,
-		legacySummary,
-		"What about the Eiffel Tower?",
-		nil,
-		"",
-		"test", "chat1", "", "",
-		"",  // no breadcrumb
-		nil, // no recall span
-	)
-
-	if len(assembled) == 0 {
-		t.Fatal("T22: BuildMessages returned empty assembled messages with legacy summary")
-	}
-
-	// The system message must contain the legacy summary rendered as inert text.
-	systemMsg := assembled[0]
-	if systemMsg.Role != "system" {
-		t.Fatalf("T22: first message must be system, got %s", systemMsg.Role)
-	}
-
-	// The "[dropped N]" marker text must be present in the system message
-	// (it is rendered as part of the CONTEXT_SUMMARY block — inertly).
-	if !strings.Contains(systemMsg.Content, "dropped 15 turns") {
-		t.Errorf("T22: legacy summary marker must appear inertly in system message; got: %q",
-			systemMsg.Content[:min(200, len(systemMsg.Content))])
-	}
-
-	// FR-014: the marker must NOT cause re-parsing. Verify the live window is
-	// unchanged (history messages are all present).
-	foundUser := false
-	foundAsst := false
-	for _, m := range assembled[1:] {
-		if m.Role == "user" && strings.Contains(m.Content, "Tell me more about Paris") {
-			foundUser = true
-		}
-		if m.Role == "assistant" && strings.Contains(m.Content, "Paris has many famous") {
-			foundAsst = true
-		}
-	}
-	if !foundUser {
-		t.Error("T22: history user message missing from assembled messages after legacy summary load")
-	}
-	if !foundAsst {
-		t.Error("T22: history assistant message missing from assembled messages after legacy summary load")
-	}
-
-	// The "[dropped N]" text must NOT appear as a standalone non-system message
-	// (it should only be in the system block as part of CONTEXT_SUMMARY).
-	for _, m := range assembled[1:] {
-		if strings.Contains(m.Content, "[dropped") {
-			t.Errorf("T22: [dropped] marker leaked into non-system message role=%s content=%q",
-				m.Role, m.Content)
-		}
 	}
 }
 
@@ -759,7 +667,6 @@ func TestBuildMessages_SpanPlacedViaRealContextBuilder(t *testing.T) {
 
 	assembled := cb.BuildMessages(
 		windowMsgs,
-		"",
 		currentMsg,
 		nil,
 		"",

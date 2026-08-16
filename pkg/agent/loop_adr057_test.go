@@ -264,7 +264,6 @@ func TestToolExecPayloads_RealRootTurn_StampsRoutingKeyOnly(t *testing.T) {
 		ChatID:              sessionID,
 		UserMessage:         "run the stub tool",
 		DefaultResponse:     defaultResponse,
-		EnableSummary:       false,
 		SendResponse:        false,
 		TranscriptSessionID: sessionID,
 		TranscriptStore:     store,

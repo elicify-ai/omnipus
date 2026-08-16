@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -346,7 +345,6 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 		ChatID:          "direct",
 		UserMessage:     "run tool",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	if err != nil {
@@ -655,7 +653,6 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 		ChatID:          "direct",
 		UserMessage:     "Trigger message",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	if err != nil {
@@ -694,206 +691,6 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 	}
 	if payload.DroppedMessages == 0 {
 		t.Fatal("expected dropped messages to be recorded")
-	}
-}
-
-func TestAgentLoop_EmitsSessionSummarizeEvent(t *testing.T) {
-	tmpDirOuter, err := os.MkdirTemp("", "agent-eventbus-summary-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDirOuter)
-	// Nested one level below the freshly-made outer container so
-	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
-	// session/task store at) is THIS test's own private tmpDirOuter,
-	// never the shared OS temp root — see loop_test.go's
-	// newTestAgentLoop doc comment for the leak this closes.
-	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
-		t.Fatalf("Failed to create nested home dir: %v", err)
-	}
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:                      tmpDir,
-				ModelName:                 "test-model",
-				MaxTokens:                 4096,
-				MaxToolIterations:         10,
-				ContextWindow:             8000,
-				SummarizeMessageThreshold: 2,
-				SummarizeTokenPercent:     75,
-			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	al := mustNewAgentLoop(t, cfg, msgBus, &simpleMockProvider{response: "summary text"})
-	defaultAgent := al.registry.GetDefaultAgent()
-	if defaultAgent == nil {
-		t.Fatal("expected default agent")
-	}
-
-	defaultAgent.Sessions.SetHistory("session-1", []providers.Message{
-		{Role: "user", Content: "Question one"},
-		{Role: "assistant", Content: "Answer one"},
-		{Role: "user", Content: "Question two"},
-		{Role: "assistant", Content: "Answer two"},
-		{Role: "user", Content: "Question three"},
-		{Role: "assistant", Content: "Answer three"},
-	})
-
-	sub := al.SubscribeEvents(16)
-	defer al.UnsubscribeEvents(sub.ID)
-
-	turnScope := al.newTurnEventScope(defaultAgent.ID, "session-1")
-	al.summarizeSession(defaultAgent, "session-1", turnScope)
-
-	events := collectEventStream(sub.C)
-	summaryEvt, ok := findEvent(events, EventKindSessionSummarize)
-	if !ok {
-		t.Fatal("expected session summarize event")
-	}
-	payload, ok := summaryEvt.Payload.(SessionSummarizePayload)
-	if !ok {
-		t.Fatalf("expected SessionSummarizePayload, got %T", summaryEvt.Payload)
-	}
-	if payload.SummaryLen == 0 {
-		t.Fatal("expected non-empty summary length")
-	}
-	if payload.Degraded {
-		t.Fatal(
-			"expected Degraded=false on the happy path (always-succeeding provider) — false-positive guard for the degraded test below",
-		)
-	}
-}
-
-// TestAgentLoop_EmitsSessionSummarizeEvent_DegradedOnSummarizationFailure
-// covers the Degraded flag on SessionSummarizePayload — previously untested
-// (the only existing test, TestAgentLoop_EmitsSessionSummarizeEvent above,
-// used an always-succeeding provider, so Degraded was always false and the
-// crude-truncation fallback path in summarizeBatch (pkg/agent/loop.go
-// ~8385-8463) was never exercised). This was a silent-failure fix: when LLM
-// summarization fails after retries, the loop must set Degraded=true on the
-// emitted event so operators get a signal that context compression fell back
-// to crude truncation instead of a real summary.
-//
-// BDD: Given a session with enough history to trigger summarization,
-//
-//	And an LLM provider that always fails (simulating summarization
-//	  exhausting its retry budget),
-//
-// When summarizeSession runs,
-// Then the emitted SessionSummarizePayload.Degraded must be true,
-// And the persisted summary text must be the crude-truncation fallback
-//
-//	("Conversation summary: ..."), not real LLM-produced content.
-//
-// Traces to: pkg/agent/loop.go:8385-8463 (summarizeBatch, Degraded return),
-// pkg/agent/events.go:262-276 (SessionSummarizePayload.Degraded doc comment).
-func TestAgentLoop_EmitsSessionSummarizeEvent_DegradedOnSummarizationFailure(t *testing.T) {
-	tmpDirOuter, err := os.MkdirTemp("", "agent-eventbus-summary-degraded-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDirOuter)
-	// Nested one level below the freshly-made outer container so
-	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
-	// session/task store at) is THIS test's own private tmpDirOuter,
-	// never the shared OS temp root — see loop_test.go's
-	// newTestAgentLoop doc comment for the leak this closes.
-	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
-		t.Fatalf("Failed to create nested home dir: %v", err)
-	}
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:                      tmpDir,
-				ModelName:                 "test-model",
-				MaxTokens:                 4096,
-				MaxToolIterations:         10,
-				ContextWindow:             8000,
-				SummarizeMessageThreshold: 2,
-				SummarizeTokenPercent:     75,
-			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	// alwaysErrorProvider (session_end_gaps_test.go) never returns usable
-	// content — retryLLMCall exhausts its 3-attempt budget on every call, so
-	// summarizeBatch must fall back to crude truncation and report degraded=true.
-	provider := &alwaysErrorProvider{}
-	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-	defaultAgent := al.registry.GetDefaultAgent()
-	if defaultAgent == nil {
-		t.Fatal("expected default agent")
-	}
-
-	defaultAgent.Sessions.SetHistory("session-1", []providers.Message{
-		{Role: "user", Content: "Question one"},
-		{Role: "assistant", Content: "Answer one"},
-		{Role: "user", Content: "Question two"},
-		{Role: "assistant", Content: "Answer two"},
-		{Role: "user", Content: "Question three"},
-		{Role: "assistant", Content: "Answer three"},
-	})
-
-	sub := al.SubscribeEvents(16)
-	defer al.UnsubscribeEvents(sub.ID)
-
-	turnScope := al.newTurnEventScope(defaultAgent.ID, "session-1")
-	al.summarizeSession(defaultAgent, "session-1", turnScope)
-
-	// Non-vacuous: the failing provider must actually have been invoked —
-	// otherwise this test would pass even if summarizeSession never attempted
-	// LLM summarization at all (e.g. an early-return bug).
-	provider.mu.Lock()
-	calls := provider.callCount
-	provider.mu.Unlock()
-	if calls == 0 {
-		t.Fatal(
-			"expected the failing provider to be called at least once — summarizeSession did not attempt LLM summarization",
-		)
-	}
-
-	events := collectEventStream(sub.C)
-	summaryEvt, ok := findEvent(events, EventKindSessionSummarize)
-	if !ok {
-		t.Fatal("expected session summarize event")
-	}
-	payload, ok := summaryEvt.Payload.(SessionSummarizePayload)
-	if !ok {
-		t.Fatalf("expected SessionSummarizePayload, got %T", summaryEvt.Payload)
-	}
-	if payload.SummaryLen == 0 {
-		t.Fatal("expected non-empty summary length even in the degraded/fallback case")
-	}
-	if !payload.Degraded {
-		t.Fatal(
-			"expected Degraded=true when LLM summarization fails after retries — the crude-truncation fallback path was taken but the flag did not reflect it",
-		)
-	}
-
-	// Content test: the persisted summary must actually BE the crude-truncation
-	// fallback text, not a real LLM summary — proves Degraded reflects genuine
-	// fallback content rather than a flag flipped independently of behavior.
-	persistedSummary := defaultAgent.Sessions.GetSummary("session-1")
-	if !strings.HasPrefix(persistedSummary, "Conversation summary:") {
-		t.Fatalf(
-			"expected persisted summary to be the crude-truncation fallback (prefix %q), got %q",
-			"Conversation summary:",
-			persistedSummary,
-		)
-	}
-	if strings.Contains(persistedSummary, "summary text") {
-		t.Fatal(
-			"persisted summary must not contain the happy-path mock's canned success text — the failing provider was not actually exercised",
-		)
 	}
 }
 
@@ -969,7 +766,6 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 		ChatID:          "direct",
 		UserMessage:     "run async tool",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	if err != nil {

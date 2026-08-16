@@ -229,9 +229,6 @@ type OmnipusRetentionConfig struct {
 	Disabled bool `json:"disabled,omitempty"`
 	// ArchiveBeforeDelete compresses old partitions to .jsonl.gz before deletion.
 	ArchiveBeforeDelete bool `json:"archive_before_delete,omitempty"`
-	// KeepCompactionSummary preserves last_compaction_summary in meta.json
-	// even when all partitions are purged by the retention policy.
-	KeepCompactionSummary bool `json:"keep_compaction_summary,omitempty"`
 	// MemoryRetrosDays is how many days of retrospective files to keep per
 	// agent. 0 = use default (30 days). Used by MemoryStore.SweepRetros.
 	// Spec v7 FR-034.
@@ -1553,7 +1550,6 @@ type AgentDefaults struct {
 	ContextWindow             int                `json:"context_window,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
 	Temperature               *float64           `json:"temperature,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_TEMPERATURE"`
 	MaxToolIterations         int                `json:"max_tool_iterations"             env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
-	SummarizeMessageThreshold int                `json:"summarize_message_threshold"     env:"OMNIPUS_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
 	SummarizeTokenPercent     int                `json:"summarize_token_percent"         env:"OMNIPUS_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
 	MaxMediaSize              int                `json:"max_media_size,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
 	Routing                   *RoutingConfig     `json:"routing,omitempty"`

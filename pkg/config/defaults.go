@@ -28,15 +28,14 @@ func DefaultConfig() *Config {
 		Version: CurrentVersion,
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
-				Home:                      workspacePath,
-				RestrictToWorkspace:       true,
-				Provider:                  "",
-				MaxTokens:                 32768,
-				Temperature:               nil, // nil means use provider default
-				MaxToolIterations:         200,
-				SummarizeMessageThreshold: 20,
-				SummarizeTokenPercent:     75,
-				SteeringMode:              "one-at-a-time",
+				Home:                  workspacePath,
+				RestrictToWorkspace:   true,
+				Provider:              "",
+				MaxTokens:             32768,
+				Temperature:           nil, // nil means use provider default
+				MaxToolIterations:     200,
+				SummarizeTokenPercent: 75,
+				SteeringMode:          "one-at-a-time",
 				// Concurrency-gate consolidation (2026-08-04, commit
 				// 536b7340's follow-up fix): SubTurn.MaxConcurrent is
 				// deliberately left UNSET (Go zero value) rather than seeded.

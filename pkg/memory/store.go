@@ -8,7 +8,7 @@ import (
 
 // StoreReader defines the read-only persistence operations for session
 // storage. Split out of Store (interface segregation) so callers that only
-// ever read a session's history/summary can depend on the narrower contract.
+// ever read a session's history can depend on the narrower contract.
 type StoreReader interface {
 	// GetHistory returns the live window messages for a session in insertion order,
 	// honoring meta.Skip (evicted lines are excluded). Returns an empty slice
@@ -24,10 +24,6 @@ type StoreReader interface {
 	// Use ReadArchive (not GetHistory) whenever evicted turns must be
 	// reachable — e.g. recall_conversation and the breadcrumb builder (FR-016).
 	ReadArchive(ctx context.Context, sessionKey string) ([]ArchivedMessage, error)
-
-	// GetSummary returns the conversation summary for a session.
-	// Returns an empty string if no summary exists.
-	GetSummary(ctx context.Context, sessionKey string) (string, error)
 }
 
 // StoreWriter defines the mutating persistence operations for session
@@ -39,9 +35,6 @@ type StoreWriter interface {
 
 	// AddFullMessage appends a complete message (with tool calls, etc.) to a session.
 	AddFullMessage(ctx context.Context, sessionKey string, msg providers.Message) error
-
-	// SetSummary updates the conversation summary for a session.
-	SetSummary(ctx context.Context, sessionKey, summary string) error
 
 	// TruncateHistory removes all but the last keepLast messages from a session.
 	// If keepLast <= 0, all messages are removed.

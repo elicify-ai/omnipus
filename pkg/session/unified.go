@@ -1914,23 +1914,6 @@ func (us *UnifiedStore) GetHistory(sessionKey string) []providers.Message {
 	return msgs
 }
 
-// GetSummary implements SessionStore.
-func (us *UnifiedStore) GetSummary(sessionKey string) string {
-	summary, err := us.backend.GetSummary(context.Background(), sessionKey)
-	if err != nil {
-		slog.Error("unified_store: get summary", "key", sessionKey, "error", err)
-		return ""
-	}
-	return summary
-}
-
-// SetSummary implements SessionStore.
-func (us *UnifiedStore) SetSummary(sessionKey, summary string) {
-	if err := us.backend.SetSummary(context.Background(), sessionKey, summary); err != nil {
-		slog.Error("unified_store: set summary", "key", sessionKey, "error", err)
-	}
-}
-
 // SetHistory implements SessionStore.
 func (us *UnifiedStore) SetHistory(sessionKey string, history []providers.Message) {
 	if err := us.backend.SetHistory(context.Background(), sessionKey, history); err != nil {

@@ -17,7 +17,6 @@ import (
 type jsonSession struct {
 	Key      string              `json:"key"`
 	Messages []providers.Message `json:"messages"`
-	Summary  string              `json:"summary,omitempty"`
 	Created  time.Time           `json:"created"`
 	Updated  time.Time           `json:"updated"`
 }
@@ -29,7 +28,7 @@ type jsonSession struct {
 // Files that fail to parse are logged and skipped. Already-migrated
 // files (.json.migrated) are ignored, making the function idempotent.
 //
-// Only StoreWriter (SetHistory/SetSummary) is required — migration never
+// Only StoreWriter (SetHistory) is required — migration never
 // reads back through the interface, so the narrower type is sufficient
 // (interface segregation: this is the one clear, safe narrowing call site
 // for the Store split, since every other production caller round-trips
@@ -100,15 +99,6 @@ func MigrateFromJSON(
 				"memory: migrate %s: set history: %w",
 				name, setErr,
 			)
-		}
-
-		if sess.Summary != "" {
-			if sumErr := store.SetSummary(ctx, key, sess.Summary); sumErr != nil {
-				return migrated, fmt.Errorf(
-					"memory: migrate %s: set summary: %w",
-					name, sumErr,
-				)
-			}
 		}
 
 		// Rename to .migrated as backup (not delete).

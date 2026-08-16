@@ -33,8 +33,6 @@ const (
 	EventKindLLMRetry
 	// EventKindContextCompress is emitted when session history is forcibly compressed.
 	EventKindContextCompress
-	// EventKindSessionSummarize is emitted when asynchronous summarization completes.
-	EventKindSessionSummarize
 	// EventKindToolExecStart is emitted immediately before a tool executes.
 	EventKindToolExecStart
 	// EventKindToolExecEnd is emitted immediately after a tool finishes executing.
@@ -120,7 +118,6 @@ var eventKindNames = [...]string{
 	"llm_response",
 	"llm_retry",
 	"context_compress",
-	"session_summarize",
 	"tool_exec_start",
 	"tool_exec_end",
 	"tool_exec_skipped",
@@ -313,22 +310,6 @@ type ContextCompressPayload struct {
 	Reason            ContextCompressReason
 	DroppedMessages   int
 	RemainingMessages int
-}
-
-// SessionSummarizePayload describes a completed async session summarization.
-type SessionSummarizePayload struct {
-	SummarizedMessages int
-	KeptMessages       int
-	SummaryLen         int
-	OmittedOversized   bool
-	// Degraded is true when the LLM summarization call failed (after
-	// retries) and the result is a crude fallback — either per-batch
-	// truncation (summarizeBatch) or, for multi-part summaries, a raw
-	// concatenation of the two part-summaries instead of an LLM merge.
-	// Downstream consumers (logs today; a future UI surface could read this
-	// field, but none exists yet) use this to distinguish a real summary
-	// from a degraded fallback.
-	Degraded bool
 }
 
 // ToolExecStartPayload describes a tool execution request.

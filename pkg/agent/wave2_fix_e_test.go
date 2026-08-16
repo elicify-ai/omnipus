@@ -139,7 +139,6 @@ func TestRunAgentLoop_RoundTrip_AfterReopen_PreservesModelAndErrorStatus(t *test
 		ChatID:              sessionID,
 		UserMessage:         "warm up",
 		DefaultResponse:     defaultResponse,
-		EnableSummary:       false,
 		SendResponse:        false,
 		TranscriptSessionID: sessionID,
 		TranscriptStore:     store,
@@ -156,7 +155,6 @@ func TestRunAgentLoop_RoundTrip_AfterReopen_PreservesModelAndErrorStatus(t *test
 		ChatID:              sessionID,
 		UserMessage:         "trigger limit",
 		DefaultResponse:     defaultResponse,
-		EnableSummary:       false,
 		SendResponse:        false,
 		TranscriptSessionID: sessionID,
 		TranscriptStore:     store,
@@ -338,7 +336,6 @@ func TestRunTurn_StampsModelFieldOnAssistantEntry(t *testing.T) {
 		ChatID:              sessionID,
 		UserMessage:         "test model stamp",
 		DefaultResponse:     defaultResponse,
-		EnableSummary:       false,
 		SendResponse:        false,
 		TranscriptSessionID: sessionID,
 		TranscriptStore:     store,
@@ -609,14 +606,14 @@ func TestRunAgentLoop_ErrorEntry_HasStatusErrorField(t *testing.T) {
 	// Warm-up
 	_, err = al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey: "sc-warm", Channel: "web", ChatID: sessionID,
-		UserMessage: "warm", DefaultResponse: defaultResponse, EnableSummary: false, SendResponse: false,
+		UserMessage: "warm", DefaultResponse: defaultResponse, SendResponse: false,
 		TranscriptSessionID: sessionID, TranscriptStore: store,
 	})
 	require.NoError(t, err)
 	// Trigger rate limit
 	_, err = al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey: "sc-block", Channel: "web", ChatID: sessionID,
-		UserMessage: "block", DefaultResponse: defaultResponse, EnableSummary: false, SendResponse: false,
+		UserMessage: "block", DefaultResponse: defaultResponse, SendResponse: false,
 		TranscriptSessionID: sessionID, TranscriptStore: store,
 	})
 	require.Error(t, err)
@@ -793,7 +790,7 @@ func TestRunAgentLoop_ProviderError_HasStatusErrorField(t *testing.T) {
 
 	_, err = al.runAgentLoop(context.Background(), al.GetRegistry().GetDefaultAgent(), processOptions{
 		SessionKey: "pe-block", Channel: "web", ChatID: sessionID,
-		UserMessage: "trigger", DefaultResponse: defaultResponse, EnableSummary: false, SendResponse: false,
+		UserMessage: "trigger", DefaultResponse: defaultResponse, SendResponse: false,
 		TranscriptSessionID: sessionID, TranscriptStore: store,
 	})
 	require.Error(t, err)

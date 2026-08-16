@@ -202,7 +202,6 @@ type turnState struct {
 	cancelling atomic.Bool
 
 	restorePointHistory []providers.Message
-	restorePointSummary string
 	persistedMessages   []providers.Message
 
 	// SubTurn support
@@ -1459,11 +1458,10 @@ func (ts *turnState) eventMeta(source, tracePath string) EventMeta {
 	}
 }
 
-func (ts *turnState) captureRestorePoint(history []providers.Message, summary string) {
+func (ts *turnState) captureRestorePoint(history []providers.Message) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.restorePointHistory = append([]providers.Message(nil), history...)
-	ts.restorePointSummary = summary
 }
 
 func (ts *turnState) recordPersistedMessage(msg providers.Message) {
@@ -1474,7 +1472,6 @@ func (ts *turnState) recordPersistedMessage(msg providers.Message) {
 
 func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
 	history := agent.Sessions.GetHistory(ts.sessionKey)
-	summary := agent.Sessions.GetSummary(ts.sessionKey)
 
 	ts.mu.RLock()
 	persisted := append([]providers.Message(nil), ts.persistedMessages...)
@@ -1484,12 +1481,11 @@ func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
 		history = append([]providers.Message(nil), history[:len(history)-matched]...)
 	}
 
-	ts.captureRestorePoint(history, summary)
+	ts.captureRestorePoint(history)
 }
 
 func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	ts.mu.RLock()
-	summary := ts.restorePointSummary
 	targetLen := ts.initialArchiveLen
 	initialHistLen := ts.initialHistoryLength
 	ts.mu.RUnlock()
@@ -1516,7 +1512,6 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	// the entire JSONL file and reset Skip=0, permanently deleting any evicted
 	// turns that preceded this turn (CRITICAL 1, path 2).
 	agent.Sessions.RollbackAppended(ts.sessionKey, targetLen, targetSkip)
-	agent.Sessions.SetSummary(ts.sessionKey, summary)
 
 	// M4 mirror: verify the rollback actually took effect. RollbackAppended is
 	// fire-and-forget (no error return). Re-read the archive and confirm the

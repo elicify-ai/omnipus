@@ -117,7 +117,6 @@ func TestAgentLoop_AbortTurn_HookHardAbort_SurfacesSystemInitiatedError(t *testi
 		ChatID:          "direct",
 		UserMessage:     "hello",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 

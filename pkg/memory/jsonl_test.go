@@ -199,48 +199,6 @@ func TestGetHistory_Ordering(t *testing.T) {
 	}
 }
 
-func TestSetSummary_GetSummary(t *testing.T) {
-	store := newTestStore(t)
-	ctx := context.Background()
-
-	// No summary yet.
-	summary, err := store.GetSummary(ctx, "s1")
-	if err != nil {
-		t.Fatalf("GetSummary: %v", err)
-	}
-	if summary != "" {
-		t.Errorf("expected empty, got %q", summary)
-	}
-
-	// Set a summary.
-	err = store.SetSummary(ctx, "s1", "talked about Go")
-	if err != nil {
-		t.Fatalf("SetSummary: %v", err)
-	}
-
-	summary, err = store.GetSummary(ctx, "s1")
-	if err != nil {
-		t.Fatalf("GetSummary: %v", err)
-	}
-	if summary != "talked about Go" {
-		t.Errorf("summary = %q", summary)
-	}
-
-	// Update summary.
-	err = store.SetSummary(ctx, "s1", "updated summary")
-	if err != nil {
-		t.Fatalf("SetSummary: %v", err)
-	}
-
-	summary, err = store.GetSummary(ctx, "s1")
-	if err != nil {
-		t.Fatalf("GetSummary: %v", err)
-	}
-	if summary != "updated summary" {
-		t.Errorf("summary = %q", summary)
-	}
-}
-
 func TestTruncateHistory_KeepLast(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
@@ -643,10 +601,6 @@ func TestPersistence_AcrossInstances(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddMessage: %v", err)
 	}
-	err = store1.SetSummary(ctx, "persist", "a test session")
-	if err != nil {
-		t.Fatalf("SetSummary: %v", err)
-	}
 	store1.Close()
 
 	// Read with second instance.
@@ -662,14 +616,6 @@ func TestPersistence_AcrossInstances(t *testing.T) {
 	}
 	if len(history) != 1 || history[0].Content != "remember me" {
 		t.Errorf("history = %+v", history)
-	}
-
-	summary, err := store2.GetSummary(ctx, "persist")
-	if err != nil {
-		t.Fatalf("GetSummary: %v", err)
-	}
-	if summary != "a test session" {
-		t.Errorf("summary = %q", summary)
 	}
 }
 
@@ -703,9 +649,12 @@ func TestConcurrent_AddAndRead(t *testing.T) {
 	}
 }
 
-func TestConcurrent_SummarizeRace(t *testing.T) {
+func TestConcurrent_TruncateRace(t *testing.T) {
 	// Simulates the #704 race: one goroutine adds messages while
-	// another truncates + sets summary — like summarizeSession().
+	// another truncates the live window — the shape windowTrim has on a
+	// live session. (This test used to drive SetSummary alongside the
+	// truncate; the legacy summariser is decommissioned, the truncate
+	// half is the coverage that still matters.)
 	store := newTestStore(t)
 	ctx := context.Background()
 
@@ -728,12 +677,11 @@ func TestConcurrent_SummarizeRace(t *testing.T) {
 		}
 	}()
 
-	// Summarizer goroutine (background task).
+	// Trimmer goroutine (background task).
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 10; i++ {
-			_ = store.SetSummary(ctx, "race", "summary")
 			_ = store.TruncateHistory(ctx, "race", 5)
 		}
 	}()
@@ -745,9 +693,8 @@ func TestConcurrent_SummarizeRace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetHistory after race: %v", err)
 	}
-	_, err = store.GetSummary(ctx, "race")
-	if err != nil {
-		t.Fatalf("GetSummary after race: %v", err)
+	if _, err = store.ReadArchive(ctx, "race"); err != nil {
+		t.Fatalf("ReadArchive after race: %v", err)
 	}
 }
 
