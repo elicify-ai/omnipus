@@ -63,17 +63,17 @@ func loadCatalogueFrom(t *testing.T, label string, schema map[string]any) llmErr
 	rawCodes, ok := codeProp["enum"].([]any)
 	require.True(t, ok, "%s: properties.code.enum must be a list", label)
 	for _, c := range rawCodes {
-		s, ok := c.(string)
-		require.True(t, ok, "%s: enum values must be strings, got %T", label, c)
-		out.codes = append(out.codes, s)
+		code, isString := c.(string)
+		require.True(t, isString, "%s: enum values must be strings, got %T", label, c)
+		out.codes = append(out.codes, code)
 	}
 
 	rawAttributions, ok := schema["x-user-message-attributions"].([]any)
 	require.True(t, ok, "%s: missing x-user-message-attributions", label)
 	for _, a := range rawAttributions {
-		s, ok := a.(string)
-		require.True(t, ok, "%s: attributions must be strings, got %T", label, a)
-		out.attributions = append(out.attributions, s)
+		attribution, isString := a.(string)
+		require.True(t, isString, "%s: attributions must be strings, got %T", label, a)
+		out.attributions = append(out.attributions, attribution)
 	}
 
 	rawMessages, ok := schema["x-user-messages"].(map[string]any)

@@ -2,11 +2,13 @@
 //
 // Usage:
 //
-//	go run . <asyncapi.yaml> <output.go>
+//	go run . <asyncapi.yaml> <types-output.go> [<llm-error-messages-output.go>]
 //
 // The generator reads the `components.schemas` section of the given AsyncAPI YAML
-// file and emits a Go source file containing one struct per schema. It applies the
-// following mapping rules:
+// file and emits a Go source file containing one struct per schema. Given the
+// optional third path it ALSO emits the LLMError user-facing copy catalogue from
+// the x-user-messages block on components.schemas.LLMError — see usermessages.go.
+// It applies the following mapping rules:
 //
 //   - required fields → non-pointer Go types (string, int, bool, map[string]any, []T)
 //   - optional fields → pointer types (*string, *int, *bool) or `,omitempty` for maps/slices
@@ -92,8 +94,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := os.WriteFile(outputPath, formatted, 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "write %s: %v\n", outputPath, err)
+	if writeErr := os.WriteFile(outputPath, formatted, 0o644); writeErr != nil {
+		fmt.Fprintf(os.Stderr, "write %s: %v\n", outputPath, writeErr)
 		os.Exit(1)
 	}
 
@@ -111,8 +113,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "generate LLMError user-message catalogue: %v\n", err)
 		os.Exit(1)
 	}
-	if err := os.WriteFile(messagesOutputPath, messagesSrc, 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "write %s: %v\n", messagesOutputPath, err)
+	if writeErr := os.WriteFile(messagesOutputPath, messagesSrc, 0o644); writeErr != nil {
+		fmt.Fprintf(os.Stderr, "write %s: %v\n", messagesOutputPath, writeErr)
 		os.Exit(1)
 	}
 }
