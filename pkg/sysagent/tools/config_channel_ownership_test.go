@@ -117,43 +117,60 @@ func TestConfigSet_ChannelOwnershipRecordRefused(t *testing.T) {
 	}
 }
 
-// TestConfigSet_NamespacedInstanceOwnershipIsUnreachable pins FR-5 as a
-// PROPERTY for the one case the blocked-key rule does not literally match.
+// TestConfigSet_NamespacedInstanceOwnershipRefused is FR-5 for a NAMESPACED
+// channel instance (ADR-029) — the namespaced counterpart of
+// TestConfigSet_ChannelOwnershipRecordRefused above.
 //
-// Instance ids may be namespaced and therefore contain a dot ("slack.eu"), so
-// "channels.slack.eu.workspace_id" has four segments and the three-segment
-// blocked key "channels.*.workspace_id" does not cover it. That key is
-// nonetheless harmless, for a reason that lives in the WRITER rather than in
-// the policy table: dotSet splits on ".", so the value can only ever land under
-// a separate instance called "slack" whose "eu" field does not exist on
-// ChannelInstanceConfig. The real "slack.eu" record is not addressable by this
-// writer at all.
+// This test used to be TestConfigSet_NamespacedInstanceOwnershipIsUnreachable,
+// asserting a narrower, ACCIDENTAL property: instance ids may be namespaced
+// and therefore contain a dot ("slack.eu"), so "channels.slack.eu.workspace_id"
+// split into four raw segments and the three-segment blocked key
+// "channels.*.workspace_id" did not cover it positionally. The key was
+// harmless anyway, for a reason that lived in the WRITER rather than in the
+// policy table: dotSet split on every ".", so the value could only ever land
+// under a SEPARATE instance called "slack" whose "eu" field does not exist on
+// ChannelInstanceConfig — and json.Unmarshal silently dropped it. The real
+// "slack.eu" record was never addressable by that writer at all. That test's
+// own comment named exactly this moment: "if dotSet ever learns to address
+// dotted map keys, this test fails and blockedConfigKeys must grow a matching
+// rule — instead of the hole opening silently."
 //
-// The assertion below is deliberately about the OWNERSHIP RECORD, not about the
-// tool's verdict: FR-5 says the record must not be agent-writable, and that must
-// hold whatever mechanism happens to deliver it. If dotSet ever learns to
-// address dotted map keys, this test fails and blockedConfigKeys must grow a
-// matching rule — instead of the hole opening silently.
-//
-// Keeping the assertion verdict-free earned its keep: the mechanism DID change
-// underneath it. The key used to be reported as a successful write and silently
-// dropped by json.Unmarshal; validateConfigKeyLands now refuses it outright, so
-// the same property is delivered by a refusal rather than by an evaporating
-// write. This test did not need editing, and it should not grow a verdict
-// assertion now — the verdict is pinned separately, by
-// TestConfigSet_NamespacedInstanceKeyIsRefusedNotReportedAsWritten in
-// config_write_truth_test.go, which is about honesty rather than about FR-5.
-func TestConfigSet_NamespacedInstanceOwnershipIsUnreachable(t *testing.T) {
+// configKeySegments (config.go) is that change: it now resolves "slack"+"eu"
+// into the real "slack.eu" map entry ON PURPOSE, for every ORDINARY field —
+// that is the whole point of the multi-account fix (see
+// config_multi_account_test.go). Left alone, that would open exactly the hole
+// the old comment warned about: an agent could rewrite a namespaced
+// instance's ownership record the same way it could once rewrite a bare
+// one's, before FR-5 existed. blockedConfigKeys' existing
+// "channels.*.identity" / "channels.*.workspace_id" entries close it WITHOUT
+// growing — configKeySegments coalesces "slack"+"eu" into the single token
+// "slack.eu" before the wildcard match ever runs, so the SAME single-segment
+// wildcard that has always covered a bare instance covers a namespaced one
+// too (see the "single-segment wildcard is enough for BOTH shapes" comment
+// above those entries in config.go). The write is REFUSED, and refused for
+// the reason FR-5 names — not by an accident of the old writer, and the
+// assertion below says so directly instead of staying verdict-free.
+func TestConfigSet_NamespacedInstanceOwnershipRefused(t *testing.T) {
 	const instance = "slack.eu"
-	for _, tc := range []struct {
+	cases := []struct {
+		name  string
 		key   string
 		value any
 	}{
-		{"channels.slack.eu.workspace_id", "workspace-beta"},
-		{"channels.slack.eu.identity.id", "attacker-agent"},
-		{"channels.slack.eu.identity", map[string]any{"kind": "agent", "id": "attacker-agent"}},
-	} {
-		t.Run(tc.key, func(t *testing.T) {
+		{"steal the instance outright", "channels.slack.eu.identity.id", "attacker-agent"},
+		{"flip the identity kind", "channels.slack.eu.identity.kind", "user"},
+		{"replace the whole identity object", "channels.slack.eu.identity",
+			map[string]any{"kind": "agent", "id": "attacker-agent"}},
+		{"move the instance to another workspace", "channels.slack.eu.workspace_id", "workspace-beta"},
+		{"unbind the instance", "channels.slack.eu.workspace_id", ""},
+		// dotSet writes through json.Unmarshal, which matches struct fields
+		// case-insensitively (and configSegmentMatches folds the same way),
+		// so a case variant reaches the same field.
+		{"case variant of the owner id", "channels.slack.eu.Identity.ID", "attacker-agent"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			deps, cfg := newTestDeps()
 			cfg.Channels = map[string]config.ChannelInstanceConfig{
 				instance: {
@@ -163,20 +180,29 @@ func TestConfigSet_NamespacedInstanceOwnershipIsUnreachable(t *testing.T) {
 					Identity:    &config.ChannelIdentity{Kind: config.ChannelIdentityKindAgent, ID: "mia"},
 				},
 			}
+			before := snapshotConfig(t, cfg)
 
-			systools.NewConfigSetTool(deps).Execute(context.Background(),
+			result := systools.NewConfigSetTool(deps).Execute(context.Background(),
 				map[string]any{"key": tc.key, "value": tc.value})
 
-			owned := cfg.Channels[instance]
-			if owned.WorkspaceID != "workspace-alpha" {
-				t.Errorf("set_config(%q) moved %q to workspace %q — the ownership record of a "+
-					"namespaced instance became agent-writable (ADR-065 FR-5)",
-					tc.key, instance, owned.WorkspaceID)
+			if !result.IsError {
+				t.Fatalf("set_config(%q) succeeded — an agent can rewrite a NAMESPACED instance's "+
+					"own ownership record (ADR-065 FR-5)\nbody: %s", tc.key, result.ForLLM)
 			}
-			if owned.Identity == nil || owned.Identity.ID != "mia" || owned.Identity.Kind != config.ChannelIdentityKindAgent {
-				t.Errorf("set_config(%q) rewrote the owner of %q: %+v — the ownership record of a "+
-					"namespaced instance became agent-writable (ADR-065 FR-5)",
-					tc.key, instance, owned.Identity)
+			errObj, _ := parseError(t, result.ForLLM)["error"].(map[string]any)
+			message, _ := errObj["message"].(string)
+			if message == "" {
+				t.Fatalf("set_config(%q) refusal carries no error.message: %s", tc.key, result.ForLLM)
+			}
+			// The refusal must NAME the reason, same as the bare-instance
+			// case above — an LLM told only "no" retries variations of the
+			// same key.
+			if !strings.Contains(strings.ToLower(message), "ownership") {
+				t.Errorf("set_config(%q) refusal does not name the reason: %s", tc.key, message)
+			}
+			if after := snapshotConfig(t, cfg); after != before {
+				t.Errorf("set_config(%q) was refused but the config changed:\nbefore: %s\nafter:  %s",
+					tc.key, before, after)
 			}
 		})
 	}

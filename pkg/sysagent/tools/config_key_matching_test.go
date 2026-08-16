@@ -91,7 +91,7 @@ func TestValidateConfigKey_CaseVariantsOfEveryBlockedKeyRefused(t *testing.T) {
 	for _, b := range blockedConfigKeys {
 		for _, base := range []string{b.Key, b.Key + ".some_child", b.Key + ".some_child.grandchild"} {
 			for _, variant := range configKeyCaseVariants(base) {
-				if err := validateConfigKey(variant); err == nil {
+				if err := validateConfigKey(nil, variant); err == nil {
 					t.Errorf("validateConfigKey(%q) = nil, want refusal — a case variant of the "+
 						"blocked key %q reaches the same field, because dotSet writes through "+
 						"json.Unmarshal, which matches field names case-insensitively",
@@ -113,7 +113,7 @@ func TestValidateConfigKey_AncestorOfEveryBlockedKeyRefused(t *testing.T) {
 			ancestor := strings.Join(segments[:i], ".")
 			candidates := append([]string{ancestor}, configKeyCaseVariants(ancestor)...)
 			for _, candidate := range candidates {
-				err := validateConfigKey(candidate)
+				err := validateConfigKey(nil, candidate)
 				if err == nil {
 					t.Errorf("validateConfigKey(%q) = nil, want refusal — writing that section "+
 						"replaces the blocked key %q wholesale", candidate, b.Key)
@@ -148,7 +148,7 @@ func TestValidateConfigKey_MalformedKeysStillRefused(t *testing.T) {
 		"nonexistent.section",
 		"",
 	} {
-		if err := validateConfigKey(key); err == nil {
+		if err := validateConfigKey(nil, key); err == nil {
 			t.Errorf("validateConfigKey(%q) = nil, want refusal", key)
 		}
 	}
@@ -168,7 +168,7 @@ func TestValidateConfigKey_LegitimateKeysStillWritable(t *testing.T) {
 		"tools.skills.max_concurrent_searches",
 		"channels.telegram.enabled",
 	} {
-		if err := validateConfigKey(key); err != nil {
+		if err := validateConfigKey(nil, key); err != nil {
 			t.Errorf("validateConfigKey(%q) = %v, want nil — this key is legitimately writable",
 				key, err)
 		}
@@ -185,7 +185,7 @@ func TestValidateConfigReadKey_EveryUndisclosableKeyRefused(t *testing.T) {
 		for _, base := range []string{b.Key, b.Key + ".some_child", b.Key + "[0]"} {
 			candidates := append([]string{base}, configKeyCaseVariants(base)...)
 			for _, candidate := range candidates {
-				err := validateConfigReadKey(candidate)
+				err := validateConfigReadKey(nil, candidate)
 				if err == nil {
 					t.Errorf("validateConfigReadKey(%q) = nil, want refusal (undisclosable via %q)",
 						candidate, b.Key)
@@ -213,7 +213,7 @@ func TestValidateConfigReadKey_CarveOutsStayReadable(t *testing.T) {
 		}
 		carveOuts++
 		for _, candidate := range []string{b.Key, b.Key + ".child"} {
-			if err := validateConfigReadKey(candidate); err != nil {
+			if err := validateConfigReadKey(nil, candidate); err != nil {
 				t.Errorf("validateConfigReadKey(%q) = %v, want nil — the table marks it readable: %s",
 					candidate, err, b.ReadOKReason)
 			}
@@ -235,7 +235,7 @@ func TestValidateConfigReadKey_OrdinaryKeysStillReadable(t *testing.T) {
 		"agents.defaults.model_name",
 		"tools.read_file.max_read_file_size",
 	} {
-		if err := validateConfigReadKey(key); err != nil {
+		if err := validateConfigReadKey(nil, key); err != nil {
 			t.Errorf("validateConfigReadKey(%q) = %v, want nil", key, err)
 		}
 	}

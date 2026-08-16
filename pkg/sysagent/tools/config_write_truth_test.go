@@ -92,60 +92,93 @@ func TestConfigSet_UnknownFieldInKnownSectionRejected(t *testing.T) {
 	}
 }
 
-// TestConfigSet_NamespacedInstanceKeyIsRefusedNotReportedAsWritten is the
-// headline case of the truthfulness defect, and the one
-// TestConfigSet_NamespacedInstanceOwnershipIsUnreachable (config_channel_ownership_test.go)
-// documents from the security side.
+// TestConfigSet_NamespacedInstanceFieldsAreTruthfullyReported is the
+// namespaced-instance counterpart of every other test in this file: whatever
+// set_config reports must match what actually happened, in BOTH directions —
+// a reported success must be a real write, and a refusal must be a real
+// refusal, never the reverse.
 //
-// A namespaced channel instance id contains a dot ("slack.eu"), so
-// "channels.slack.eu.workspace_id" has FOUR segments and the three-segment
-// blocked key "channels.*.workspace_id" does not match it. ADR-065 FR-5 is
-// still safe, because dotSet splits on "." and the write lands as a field "eu"
-// of an instance "slack" — which json.Unmarshal drops. Safe, but the tool said
-// {"key":"channels.slack.eu.workspace_id","value":"workspace-beta"} and an
-// agent reading that believes it has rebound the channel.
+// This test used to be TestConfigSet_NamespacedInstanceKeyIsRefusedNotReportedAsWritten,
+// asserting only the refusal half, because at the time EVERY namespaced
+// instance key was unreachable — ordinary and ownership fields alike — so
+// there was only one behaviour worth pinning: a namespaced channel instance
+// id contains a dot ("slack.eu"), so "channels.slack.eu.workspace_id" split
+// into FOUR segments and the three-segment blocked key
+// "channels.*.workspace_id" did not match it; ADR-065 FR-5 stayed safe only
+// because dotSet split on "." too and the write landed as a field "eu" of an
+// instance "slack" that json.Unmarshal then dropped — safe, but the tool
+// answered {"key":"channels.slack.eu.workspace_id","value":"workspace-beta"}
+// and an agent reading that believed it had rebound the channel.
 //
-// Both shapes of the case are covered, because they fail for different reasons:
-// with a real "slack" instance present it is an unknown FIELD; without one it
-// is a new MAP ENTRY.
-func TestConfigSet_NamespacedInstanceKeyIsRefusedNotReportedAsWritten(t *testing.T) {
+// configKeySegments (config.go) now resolves a namespaced instance correctly,
+// which SPLITS that one behaviour into two: an ordinary field now truthfully
+// SUCCEEDS — the headline fix; multi-account channel settings were completely
+// unconfigurable through this tool before this change — and an ownership
+// field still truthfully REFUSES, via the deny list rather than by the old
+// accident (see config_channel_ownership_test.go's
+// TestConfigSet_NamespacedInstanceOwnershipRefused for the FR-5 side of that
+// same refusal, proved with a fuller set of ownership-field spellings).
+func TestConfigSet_NamespacedInstanceFieldsAreTruthfullyReported(t *testing.T) {
 	const namespaced = "slack.eu"
-	for _, tc := range []struct {
-		name          string
-		siblingExists bool
-	}{
-		{"sibling instance \"slack\" exists — \"eu\" is an unknown field", true},
-		{"no \"slack\" instance — the write would create one", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			deps, cfg := newTestDeps()
-			cfg.Channels = map[string]config.ChannelInstanceConfig{
-				namespaced: {
-					Type:        "slack",
-					Enabled:     true,
-					WorkspaceID: "workspace-alpha",
-					Identity:    &config.ChannelIdentity{Kind: config.ChannelIdentityKindAgent, ID: "mia"},
-				},
-			}
-			if tc.siblingExists {
-				cfg.Channels["slack"] = config.ChannelInstanceConfig{Type: "slack", Enabled: true}
-			}
-
-			result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
-				"key":   "channels.slack.eu.workspace_id",
-				"value": "workspace-beta",
-			})
-			if !result.IsError {
-				t.Fatalf("set_config(channels.slack.eu.workspace_id) reported success: %s — "+
-					"nothing was written; the real %q record still reads %q",
-					result.ForLLM, namespaced, cfg.Channels[namespaced].WorkspaceID)
-			}
-			// The safety property from FR-5 must survive the new refusal.
-			if got := cfg.Channels[namespaced].WorkspaceID; got != "workspace-alpha" {
-				t.Errorf("the %q ownership record moved to %q (ADR-065 FR-5)", namespaced, got)
-			}
-		})
+	newSeededDeps := func() (*systools.Deps, *config.Config) {
+		deps, cfg := newTestDeps()
+		cfg.Channels = map[string]config.ChannelInstanceConfig{
+			namespaced: {
+				Type:        "slack",
+				Enabled:     true,
+				WorkspaceID: "workspace-alpha",
+				Identity:    &config.ChannelIdentity{Kind: config.ChannelIdentityKindAgent, ID: "mia"},
+			},
+		}
+		return deps, cfg
 	}
+
+	t.Run("ordinary field succeeds and truthfully lands", func(t *testing.T) {
+		deps, cfg := newSeededDeps()
+		ctx := context.Background()
+
+		result := systools.NewConfigSetTool(deps).Execute(ctx, map[string]any{
+			"key":   "channels.slack.eu.enabled",
+			"value": false,
+		})
+		if result.IsError {
+			t.Fatalf("set_config(channels.slack.eu.enabled) = error %s — an ordinary field on a "+
+				"namespaced channel instance is legitimately writable; this is the multi-account "+
+				"bug this change fixes", result.ForLLM)
+		}
+		if cfg.Channels[namespaced].Enabled {
+			t.Fatalf("set_config reported success but Enabled is still true on %q", namespaced)
+		}
+		// get_config must be able to show what set_config just reported — the
+		// same property TestConfigSet_EveryReportedSuccessIsReadableBack pins
+		// for every other key in this file, now proved for a namespaced one.
+		getResult := systools.NewConfigGetTool(deps).Execute(ctx,
+			map[string]any{"key": "channels.slack.eu.enabled"})
+		if getResult.IsError {
+			t.Fatalf("set_config reported success but get_config cannot read it back: %s", getResult.ForLLM)
+		}
+		if value := parseSuccess(t, getResult.ForLLM)["value"]; value != false {
+			t.Errorf("get_config(channels.slack.eu.enabled) = %v, want false", value)
+		}
+	})
+
+	t.Run("ownership field is refused, not silently dropped", func(t *testing.T) {
+		deps, cfg := newSeededDeps()
+
+		result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
+			"key":   "channels.slack.eu.workspace_id",
+			"value": "workspace-beta",
+		})
+		if !result.IsError {
+			t.Fatalf("set_config(channels.slack.eu.workspace_id) reported success: %s — nothing "+
+				"was written; the real %q record still reads %q",
+				result.ForLLM, namespaced, cfg.Channels[namespaced].WorkspaceID)
+		}
+		// The safety property from FR-5 must survive the new refusal.
+		if got := cfg.Channels[namespaced].WorkspaceID; got != "workspace-alpha" {
+			t.Errorf("the %q ownership record moved to %q (ADR-065 FR-5)", namespaced, got)
+		}
+	})
 }
 
 // ---- group 2: a write that would CREATE config must be refused ----

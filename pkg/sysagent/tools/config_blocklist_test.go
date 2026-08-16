@@ -58,7 +58,7 @@ func TestValidateConfigKey_EveryBlockedKeyIsRefused(t *testing.T) {
 			b.Key + ".some_child.grandchild",
 			b.Key + "[0]",
 		} {
-			err := validateConfigKey(candidate)
+			err := validateConfigKey(nil, candidate)
 			if err == nil {
 				t.Errorf("validateConfigKey(%q) = nil, want refusal (blocked by %q)", candidate, b.Key)
 				continue
@@ -125,7 +125,7 @@ func TestValidateConfigKey_NamedEscalationsRefused(t *testing.T) {
 	}
 	for _, e := range escalations {
 		t.Run(e.key, func(t *testing.T) {
-			if err := validateConfigKey(e.key); err == nil {
+			if err := validateConfigKey(nil, e.key); err == nil {
 				t.Fatalf("validateConfigKey(%q) = nil — an agent could %s", e.key, e.what)
 			}
 		})
@@ -153,7 +153,7 @@ func TestValidateConfigKey_LegitimateKeysStillAccepted(t *testing.T) {
 	}
 	for _, key := range allowed {
 		t.Run(key, func(t *testing.T) {
-			if err := validateConfigKey(key); err != nil {
+			if err := validateConfigKey(nil, key); err != nil {
 				t.Fatalf("validateConfigKey(%q) = %v, want nil — the block list must not "+
 					"collaterally freeze ordinary settings", key, err)
 			}
@@ -172,7 +172,7 @@ func TestValidateConfigKey_BlockedSectionsKeepAWritableSibling(t *testing.T) {
 		"tools":   "tools.read_file.max_read_file_size",
 	}
 	for section, sibling := range siblings {
-		if err := validateConfigKey(sibling); err != nil {
+		if err := validateConfigKey(nil, sibling); err != nil {
 			t.Errorf("section %q has no writable sibling: validateConfigKey(%q) = %v",
 				section, sibling, err)
 		}

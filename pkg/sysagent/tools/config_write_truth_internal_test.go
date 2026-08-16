@@ -190,6 +190,25 @@ func TestValidateConfigKeyLands_Table(t *testing.T) {
 		"channels.telegram.enabled":          "a field of an EXISTING map entry",
 		"channels.telegram.base_url":         "an omitempty field of an existing map entry",
 		"providers":                          "a slice field, written wholesale",
+		// The multi-account fix: "slack.eu" is a NAMESPACED instance id
+		// (ADR-029) that itself contains a dot, so these two keys split into
+		// FOUR raw segments. configKeySegments now coalesces "slack"+"eu"
+		// back into the single map key "slack.eu" — exactly the
+		// createChannelInstance map key (pkg/gateway/rest.go) — before
+		// walking the schema, so an ordinary field on a namespaced instance
+		// lands exactly like one on a bare instance always has.
+		"channels.slack.eu.enabled": "an ordinary field of an EXISTING namespaced map entry",
+		// workspace_id is ALSO an ownership field (ADR-065 FR-5), and it DOES
+		// land here: this function only walks the schema, it has no notion of
+		// which fields are security-sensitive. Landing here is necessary but
+		// not sufficient for set_config to actually apply the write — the
+		// refusal for this specific key comes from a DIFFERENT, EARLIER
+		// layer, validateConfigKey / blockedConfigKeys, which ConfigSetTool
+		// always runs first. See
+		// TestConfigSet_NamespacedInstanceOwnershipRefused
+		// (config_channel_ownership_test.go) for that refusal proved through
+		// the real tool.
+		"channels.slack.eu.workspace_id": "an ownership field — lands at the schema level; blocked one layer up",
 	}
 	for key, why := range accepted {
 		t.Run("accept/"+key, func(t *testing.T) {
@@ -205,7 +224,6 @@ func TestValidateConfigKeyLands_Table(t *testing.T) {
 		"gateway.nonexistent_field_zzz":         "no such field in an existing section",
 		"agents.defaults.restrict_to_workspace": "json:\"-\" — it can never be written through JSON",
 		"channels.foo.enabled":                  "\"foo\" is a NEW map entry, i.e. creation",
-		"channels.slack.eu.workspace_id":        "dotSet splits on \".\": \"slack\" is a new map entry",
 		"gateway.port.sub":                      "there is nothing inside an int",
 		"providers.0.model_name":                "a slice is not addressable by segment",
 	}
@@ -223,15 +241,24 @@ func TestValidateConfigKeyLands_Table(t *testing.T) {
 		})
 	}
 
-	// The namespaced instance again, this time with its dotted PREFIX also
-	// present as a real instance: "slack" then exists as a map key, so the
-	// refusal has to come from "eu" not being a field of ChannelInstanceConfig.
-	t.Run("refuse/channels.slack.eu.workspace_id with a real slack instance", func(t *testing.T) {
+	// The namespaced instance again, this time with its dotted PREFIX ALSO
+	// present as a real, separate instance: both "slack" (bare) and
+	// "slack.eu" (namespaced) exist at once — a real coexistence scenario (a
+	// legacy bare-keyed instance alongside a newer namespaced one, same
+	// type). "eu" is not a field of ChannelInstanceConfig, so the bare
+	// reading is impossible regardless of the fact that "slack" happens to
+	// exist; configKeySegments must fall through to the namespaced reading
+	// rather than getting stuck on a same-typed bare sibling. See
+	// configKeySegments' comment on why lookupJSONField — not mere
+	// existence — decides which reading wins.
+	t.Run("accept/channels.slack.eu.workspace_id with a coexisting bare slack instance", func(t *testing.T) {
 		cfg := newCfg()
 		cfg.Channels["slack"] = config.ChannelInstanceConfig{Type: "slack"}
-		if err := validateConfigKeyLands(cfg, "channels.slack.eu.workspace_id"); err == nil {
-			t.Error("validateConfigKeyLands = nil — \"eu\" is not a field of " +
-				"ChannelInstanceConfig, so the write lands nowhere (ADR-065 FR-5)")
+		if err := validateConfigKeyLands(cfg, "channels.slack.eu.workspace_id"); err != nil {
+			t.Errorf("validateConfigKeyLands = %v — \"eu\" cannot be a field of the BARE \"slack\" "+
+				"instance, so the namespaced \"slack.eu\" instance must be tried instead, and it has "+
+				"a real workspace_id field (the write is still refused one layer up, by "+
+				"validateConfigKey/blockedConfigKeys — ADR-065 FR-5 — not by failing to land here)", err)
 		}
 	})
 }

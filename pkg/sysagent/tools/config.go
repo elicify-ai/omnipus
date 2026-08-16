@@ -47,16 +47,20 @@ func (t *ConfigGetTool) Execute(_ context.Context, args map[string]any) *tools.T
 			"Use list_providers to see configured providers (without keys)",
 		))
 	}
+	// Fetched once and reused for both the read-policy check and the read
+	// itself, so a namespaced channel instance key ("channels.telegram.one.…")
+	// resolves to the SAME instance for both — see configKeySegments' comment.
+	cfg := t.deps.GetCfg()
 	// Block reading the keys the policy table marks undisclosable. get_config
 	// used to have no deny list at all: every key set_config refuses was
 	// readable, so the tool handed out the account hashes (gateway.users), the
 	// auth-bypass flag and the whole enforcement configuration — the map an
 	// attacker wants BEFORE using any of the write-side findings.
-	if err := validateConfigReadKey(key); err != nil {
+	if err := validateConfigReadKey(cfg, key); err != nil {
 		return tools.ErrorResult(errorJSON("FORBIDDEN", err.Error(),
 			"Operators inspect these in Settings → Security or config.json"))
 	}
-	value, err := dotGet(t.deps.GetCfg(), key)
+	value, err := dotGet(cfg, key)
 	if err != nil {
 		return tools.ErrorResult(errorJSON("KEY_NOT_FOUND",
 			fmt.Sprintf("Config key %q not found: %v", key, err),
@@ -109,11 +113,6 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 			"Credentials are stored encrypted in credentials.json, not config.json",
 		))
 	}
-	// Validate that the key refers to a known config path to prevent arbitrary injection.
-	if err := validateConfigKey(key); err != nil {
-		return tools.ErrorResult(errorJSON("INVALID_KEY", err.Error(),
-			"Use get_config to inspect available config keys"))
-	}
 	requiresRestart := isRestartRequired(key)
 
 	// Capture prevValue before mutation (under the same lock as the mutation),
@@ -122,10 +121,26 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 	// the same config the write mutated, under the same lock — and so a failed
 	// check rides WithConfig's own rollback (deps.go: fn error restores the
 	// pre-mutation snapshot and never calls SaveConfigLocked).
+	//
+	// validateConfigKey (the deny/allow-list gate) runs INSIDE this closure now,
+	// not before it. It used to be a lock-free pre-check, which was fine while
+	// it was purely static — but it now resolves a namespaced channel instance
+	// key against the live cfg (configKeySegments), exactly like
+	// validateConfigKeyLands does. Checking the deny list against one snapshot
+	// and then writing against a later, different one would reopen a TOCTOU
+	// window the lock exists to close: an instance created between the two
+	// reads could flip the deny-list verdict. Both checks now read the SAME
+	// locked cfg.
+	var denyErr, schemaErr, setErr, landErr error
 	var prevValue, storedValue any
-	var schemaErr, setErr, landErr error
 	var normalised []string
 	err := t.deps.WithConfig(func(cfg *config.Config) error {
+		// Validate that the key refers to a known, non-security-critical
+		// config path to prevent arbitrary injection and privilege escalation.
+		if err := validateConfigKey(cfg, key); err != nil {
+			denyErr = err
+			return fmt.Errorf("INVALID_KEY: %w", err)
+		}
 		// Truth gate, before any mutation: does this key name a place a write
 		// can actually land? See validateConfigKeyLands — without it, a key that
 		// json.Unmarshal silently drops was reported as a successful write.
@@ -148,6 +163,10 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 		}
 		return nil
 	})
+	if denyErr != nil {
+		return tools.ErrorResult(errorJSON("INVALID_KEY", denyErr.Error(),
+			"Use get_config to inspect available config keys"))
+	}
 	if schemaErr != nil {
 		return tools.ErrorResult(errorJSON("INVALID_KEY", schemaErr.Error(),
 			"Use get_config to inspect the settings that actually exist"))
@@ -449,24 +468,48 @@ var blockedConfigKeys = []blockedConfigKey{
 	// enabled, base_url, mention_only and every other ordinary per-instance
 	// setting an agent may legitimately manage.
 	//
-	// A single-segment wildcard is enough, and the reason is worth writing down
-	// because it is not obvious. A NAMESPACED instance id contains a dot
-	// ("slack.eu"), so "channels.slack.eu.workspace_id" has four segments and
-	// this three-segment rule does not match it. That key is nonetheless
-	// harmless: dotSet splits on ".", so it can only ever build
-	// channels→slack→eu→…, addressing an instance called "slack" whose "eu"
-	// field does not exist on ChannelInstanceConfig. The real "slack.eu" record
-	// is never addressable by this writer at all. That is a property of dotSet
-	// rather than of this table, so it is PINNED by a test
-	// (TestConfigSet_NamespacedInstanceOwnershipIsUnreachable) instead of left
-	// as a happy accident: if dotSet ever learns to address dotted map keys,
-	// that test fails and these entries must grow with it.
+	// A single-segment wildcard is enough for BOTH shapes, bare and namespaced,
+	// and the reason is worth writing down because it is not obvious. A
+	// NAMESPACED instance id contains a dot itself ("slack.eu"), so naively
+	// splitting "channels.slack.eu.workspace_id" on "." gives four segments,
+	// and this three-segment pattern would not match it position-by-position.
+	// configKeySegments (config.go, used by validateConfigKeyLands, dotGet,
+	// dotSet — and, critically, by configKeyCovers/configKeyIsAncestorOf
+	// below) closes that gap upstream of matching, not by widening the table:
+	// when "slack.eu" is a real entry in cfg.Channels, "slack" and "eu" are
+	// coalesced back into the single token "slack.eu" — exactly the map key
+	// createChannelInstance (pkg/gateway/rest.go) wrote — so the candidate
+	// actually compared here is the three-segment
+	// [channels, "slack.eu", workspace_id], and the wildcard at position 1
+	// matches that whole token, dot included, the same way it already matches
+	// a bare "telegram". One entry, one wildcard segment, both shapes.
+	//
+	// Before configKeySegments learned to coalesce, this table's single
+	// wildcard genuinely did NOT cover the namespaced shape, and the key was
+	// safe for an entirely different, accidental reason: dotSet split on
+	// every ".", so it could only ever build channels→slack→eu→…, addressing
+	// a field "eu" on a DIFFERENT instance called "slack" — one that
+	// json.Unmarshal then silently dropped. TestConfigSet_NamespacedInstanceOwnershipIsUnreachable
+	// pinned that accident as a property (not a verdict) for exactly this
+	// reason: so the day dotSet learned to address dotted map keys, the test
+	// would fail loudly instead of the hole opening silently. That day is
+	// this change. The test is now TestConfigSet_NamespacedInstanceOwnershipRefused
+	// (config_channel_ownership_test.go) and asserts the SAME property — the
+	// ownership record does not move — delivered by this table's explicit
+	// match instead of by a lucky accident of the old writer.
 	//
 	// The key USED to be answered with a success the write never earned — the
 	// unreachable member was dropped by json.Unmarshal and set_config reported
-	// {"key":…,"value":…} anyway. validateConfigKeyLands now refuses it, so the
-	// same safety is delivered visibly. FR-5 does not depend on which of the two
-	// delivers it; the test above asserts the ownership record, not the verdict.
+	// {"key":…,"value":…} anyway. validateConfigKeyLands refusing it outright
+	// was the first fix — same safety, delivered visibly instead of by
+	// accident. It is no longer what delivers it for THIS pair of fields:
+	// configKeySegments now resolves a real namespaced instance correctly, so
+	// validateConfigKeyLands would LAND the write (structurally, "eu" really is
+	// the "workspace_id" field of a real "slack.eu" instance). The refusal for
+	// identity/workspace_id specifically comes from here — this table, via the
+	// wildcard match described above — the same layer that has always refused
+	// the bare shape. FR-5 does not depend on which layer delivers it; the
+	// test above asserts the ownership record does not move, not the verdict.
 	//
 	// The block is on the whole identity OBJECT rather than identity.id alone.
 	// identity.kind is equally load-bearing — flipping it to "user" makes the
@@ -526,12 +569,100 @@ var blockedConfigKeys = []blockedConfigKey{
 	},
 }
 
+// channelInstanceConfigType is reflect.TypeOf(config.ChannelInstanceConfig{}),
+// computed once. configKeySegments uses it to ask "could this dot-segment
+// name a FIELD of a channel instance" without allocating a fresh zero value
+// on every call.
+var channelInstanceConfigType = reflect.TypeOf(config.ChannelInstanceConfig{})
+
 // configKeySegments splits a dot-notation config key into its segments. It does
 // NOT trim: " sandbox.mode" keeps its leading space and therefore matches
 // nothing, which is the correct outcome — that key names no real field, so it
 // must be refused by the allow list rather than quietly normalised into one
 // that does.
-func configKeySegments(key string) []string { return strings.Split(key, ".") }
+//
+// cfg resolves the one ambiguity a channels.* path can carry: a namespaced
+// channel instance id contains a dot itself (ADR-029, e.g. "telegram.one"),
+// so "channels.telegram.one.enabled" splits into FOUR raw segments even
+// though "telegram.one" — the literal createChannelInstance map key,
+// pkg/gateway/rest.go — is really ONE token. Grammar alone cannot always
+// tell which: a slug ("one") and a real ChannelInstanceConfig field name
+// ("identity") share the same character set, so
+// "channels.telegram.identity.id" — an existing, security-critical address,
+// see TestConfigSet_ChannelOwnershipRecordRefused — is grammatically
+// indistinguishable from a namespaced instance "telegram.identity"
+// addressing field "id". cfg breaks the tie with ground truth instead:
+// segments[1] is kept as the WHOLE instance key when it (a) already names a
+// real entry in cfg.Channels AND (b) segments[2] could plausibly be one of
+// ITS fields (lookupJSONField) — i.e. the bare reading is at least
+// plausible — and segments[1]+"."+segments[2] is coalesced into one token
+// only when that fails. config.ParseInstanceKey supplies the type/slug
+// boundary (the first dot) rather than this function re-deriving it by hand,
+// and config.ValidateInstanceKey confirms the coalesced candidate is even
+// grammatically a channel instance key (known type, valid slug) before it is
+// trusted — the SAME known-channel-types list createChannelInstance itself
+// validates new instances against.
+//
+// cfg may be nil. Every caller that does not have a live config in scope —
+// the blockedConfigKeys deny/allow-list matching used to run before
+// WithConfig even started — gets the same unresolved split it always got.
+// That is safe, never unsafe: an unresolved candidate for a channels.* path
+// either fails to land (validateConfigKeyLands refuses "would create a new
+// entry") or, for the deny list, is matched without knowing the real
+// instance boundary — which can only make the deny list MORE conservative,
+// never less (the same asymmetric-safety direction as configSegmentMatches'
+// folding, see its comment).
+//
+// All three places that ever need to agree on where a channels.* instance
+// key ends — the deny/allow-list matching (configKeyCovers,
+// configKeyIsAncestorOf), the schema walk (validateConfigKeyLands), and the
+// actual read/write (dotGet, dotSet) — call this ONE function with the SAME
+// cfg, so a key the deny list allows and a key validateConfigKeyLands says
+// lands are guaranteed to be the SAME field dotSet then writes. Before this,
+// dotGet/dotSet called strings.Split directly: fixing only this function
+// would have let a namespaced write pass validation and then land on the
+// WRONG target underneath dotSet's literal, uncoalesced walk — a stray field
+// bolted onto an unrelated bare-typed sibling, or a phantom top-level entry
+// — while still reporting success, because observeConfigWrite reads back
+// through that same wrong, uncoalesced path.
+func configKeySegments(cfg *config.Config, key string) []string {
+	segs := strings.Split(key, ".")
+	if cfg == nil || len(segs) < 3 || !strings.EqualFold(segs[0], "channels") {
+		return segs
+	}
+	// No built-in channel type name contains a dot (config.ParseInstanceKey's
+	// documented invariant), so segments[1] is always the channel type.
+	chType := segs[1]
+	if _, bareExists := cfg.Channels[chType]; bareExists {
+		if _, isField := lookupJSONField(channelInstanceConfigType, segs[2]); isField {
+			// The bare instance exists AND segments[2] could be one of its
+			// fields — the bare reading is at least plausible, and it must
+			// win: "identity" is both a real field name and a syntactically
+			// valid slug, so "channels.telegram.identity.id" has to keep
+			// addressing the bare instance's Identity.ID, never a same-typed
+			// namespaced sibling that happens to be slugged "identity".
+			return segs
+		}
+	}
+	// Either no bare instance exists, or segments[2] cannot be one of its
+	// fields (the bare reading is impossible) — try the namespaced reading.
+	tail := strings.Join(segs[1:], ".")
+	parsedType, _ := config.ParseInstanceKey(tail)
+	namespaced := parsedType + "." + segs[2]
+	if err := config.ValidateInstanceKey(namespaced); err != nil {
+		return segs // not even a grammatically valid instance key — leave alone
+	}
+	if _, namespacedExists := cfg.Channels[namespaced]; !namespacedExists {
+		// set_config only updates existing settings (see validateConfigKeyLands's
+		// DECISION note below) — an unresolved candidate is left uncoalesced
+		// and falls through to the ordinary "would create a new entry" refusal.
+		return segs
+	}
+	coalesced := make([]string, 0, len(segs)-1)
+	coalesced = append(coalesced, segs[0], namespaced)
+	coalesced = append(coalesced, segs[3:]...)
+	return coalesced
+}
 
 // configWildcardSegment is the blocked-key segment that matches any single
 // candidate segment. See blockedConfigKey.Key and configSegmentMatches.
@@ -582,8 +713,15 @@ func configSegmentMatches(seg, blockedSeg string) bool {
 
 // configKeyCovers reports whether key is AT or UNDER blocked — the key itself,
 // a child, a grandchild, or an index into it.
-func configKeyCovers(key, blocked string) bool {
-	ks, bs := configKeySegments(key), configKeySegments(blocked)
+//
+// cfg is threaded straight through to configKeySegments for both key and
+// blocked, so a namespaced channel instance id in EITHER string is coalesced
+// the same way before comparison. blocked is always a literal pattern out of
+// blockedConfigKeys (e.g. "channels.*.identity") — its "*" segments never
+// name a real channel type, so configKeySegments is always a no-op on it; the
+// cfg argument only ever does real work on the candidate key.
+func configKeyCovers(cfg *config.Config, key, blocked string) bool {
+	ks, bs := configKeySegments(cfg, key), configKeySegments(cfg, blocked)
 	if len(ks) < len(bs) {
 		return false
 	}
@@ -613,8 +751,8 @@ func configKeyCovers(key, blocked string) bool {
 // security had them; gateway, tools and agents did not). "At, under, or above"
 // is a property of the key space, so a leaf entry added later cannot
 // reintroduce the hole.
-func configKeyIsAncestorOf(key, blocked string) bool {
-	ks, bs := configKeySegments(key), configKeySegments(blocked)
+func configKeyIsAncestorOf(cfg *config.Config, key, blocked string) bool {
+	ks, bs := configKeySegments(cfg, key), configKeySegments(cfg, blocked)
 	if len(ks) >= len(bs) {
 		return false
 	}
@@ -631,12 +769,22 @@ func configKeyIsAncestorOf(key, blocked string) bool {
 // not start with a known config prefix (knownConfigPrefixes). Deny is evaluated
 // first, so an entry in blockedConfigKeys always wins over its enclosing
 // allowed section.
-func validateConfigKey(key string) error {
+//
+// cfg resolves a namespaced channel instance key exactly the way
+// validateConfigKeyLands and dotSet do (configKeySegments) — see that
+// function's comment. This is why the caller (ConfigSetTool.Execute) now
+// calls validateConfigKey from INSIDE the same WithConfig closure that
+// validateConfigKeyLands runs in, on the same locked cfg, rather than before
+// it: checking the deny list against one snapshot and then writing against a
+// later, different one would reopen the exact TOCTOU the lock exists to
+// close — a namespaced instance created between the two reads could flip the
+// deny-list verdict.
+func validateConfigKey(cfg *config.Config, key string) error {
 	for _, blocked := range blockedConfigKeys {
-		if configKeyCovers(key, blocked.Key) {
+		if configKeyCovers(cfg, key, blocked.Key) {
 			return fmt.Errorf("config key %q is not writable via this tool: %s", key, blocked.Reason)
 		}
-		if configKeyIsAncestorOf(key, blocked.Key) {
+		if configKeyIsAncestorOf(cfg, key, blocked.Key) {
 			return fmt.Errorf(
 				"config key %q is not writable via this tool: writing it replaces %q, which is blocked because %s — set a specific key below %q instead",
 				key, blocked.Key, blocked.Reason, key)
@@ -654,12 +802,17 @@ func validateConfigKey(key string) error {
 // marks unreadable (ReadReason). An ANCESTOR read is not refused here — it is
 // served with the blocked subtrees redacted (redactConfigValue), because
 // refusing it outright would make whole sections unreadable over one leaf.
-func validateConfigReadKey(key string) error {
+//
+// cfg is threaded through to configKeyCovers for the same reason as
+// validateConfigKey above; ConfigGetTool.Execute fetches cfg once and reuses
+// it for both this check and the read itself, so the two never disagree
+// about which channel instance a namespaced key resolves to.
+func validateConfigReadKey(cfg *config.Config, key string) error {
 	for _, blocked := range blockedConfigKeys {
 		if blocked.ReadReason == "" {
 			continue
 		}
-		if configKeyCovers(key, blocked.Key) {
+		if configKeyCovers(cfg, key, blocked.Key) {
 			return fmt.Errorf("config key %q is not readable via this tool: %s", key, blocked.ReadReason)
 		}
 	}
@@ -668,9 +821,20 @@ func validateConfigReadKey(key string) error {
 
 // configReadIsBlocked reports whether a fully-qualified config path is one
 // get_config must never disclose.
+//
+// It calls configKeyCovers with a nil cfg — deliberately, not an oversight.
+// This function walks a VALUE TREE that redactConfigValue is already
+// recursing over (built from data already read, not from a caller-supplied
+// key string), and it runs with no live *config.Config in scope at all. That
+// is safe today because no blockedConfigKeys entry under "channels." carries
+// a ReadReason — channels.*.identity and channels.*.workspace_id are
+// deliberately readable (ReadOKReason) — so configReadIsBlocked can never
+// even reach a case where the channels instance-key ambiguity matters. If a
+// channels.* entry ever gains a ReadReason, this comment is the trip-wire to
+// come back and thread cfg through redactConfigValue too.
 func configReadIsBlocked(path string) bool {
 	for _, blocked := range blockedConfigKeys {
-		if blocked.ReadReason != "" && configKeyCovers(path, blocked.Key) {
+		if blocked.ReadReason != "" && configKeyCovers(nil, path, blocked.Key) {
 			return true
 		}
 	}
@@ -956,7 +1120,7 @@ func fieldValue(v reflect.Value, index []int) reflect.Value {
 // is the positive control.
 func validateConfigKeyLands(cfg *config.Config, key string) error {
 	t, v := reflect.TypeOf(cfg), reflect.ValueOf(cfg)
-	segs := configKeySegments(key)
+	segs := configKeySegments(cfg, key)
 	for i, seg := range segs {
 		t, v = derefValue(t, v)
 		sofar := strings.Join(segs[:i+1], ".")
@@ -1153,22 +1317,33 @@ func isJSONZero(v any) bool {
 }
 
 // dotGet reads a dot-notation key from cfg by marshaling to a generic map.
+//
+// The path is resolved via configKeySegments(cfg, key) rather than a bare
+// strings.Split, so a namespaced channel instance key ("channels.telegram.one.enabled")
+// walks the SAME map key ("telegram.one") that dotSet writes and
+// validateConfigKeyLands validates — see configKeySegments' comment for why
+// all three must agree.
 func dotGet(cfg *config.Config, key string) (any, error) {
 	m, err := configToMap(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("marshal config: %w", err)
 	}
-	return walkDot(m, strings.Split(key, "."))
+	return walkDot(m, configKeySegments(cfg, key))
 }
 
 // dotSet writes a dot-notation key into cfg by round-tripping through JSON.
 // This is a safe, reflection-free approach for dynamic config writes.
+//
+// See dotGet's comment: the path is resolved via configKeySegments(cfg, key)
+// so a namespaced channel instance key lands on the real map entry instead of
+// being split apart and written into an unrelated bare-typed sibling (or a
+// brand-new phantom one).
 func dotSet(cfg *config.Config, key string, value any) error {
 	m, err := configToMap(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	if setErr := setDot(m, strings.Split(key, "."), value); setErr != nil {
+	if setErr := setDot(m, configKeySegments(cfg, key), value); setErr != nil {
 		return setErr
 	}
 	data, err := json.Marshal(m)
