@@ -1856,6 +1856,12 @@ var trustedInternalStageSet = map[internalStage]struct{}{
 	{"hooks", "error"}:       {},
 	{"before_tool", "error"}: {},
 	{"after_tool", "error"}:  {},
+	// Workspace-membership refusals (runTurn after EventKindTurnStart).
+	// The caller already ran TranslateTurnError and passed the catalogue
+	// sentence. Without this entry the write choke point re-classifies
+	// that sentence as unknown, and replay looks up the unknown line
+	// ("we can't tell why") — the live fix vanishing on reload.
+	{"workspace", "error"}: {},
 }
 
 func isTrustedInternalStage(stage, kind string) bool {
@@ -1904,6 +1910,17 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string, pe ...*P
 	// classifier still stamps a typed code on the entry for replay routing,
 	// but the user-visible text is the caller-provided copy verbatim.
 	llm := TranslateLLMError(providerErr, message)
+
+	// Workspace-membership refusals are turn-level sentinels, not provider
+	// errors. TranslateLLMError(nil, the catalogue sentence) has no
+	// substring match and returns unknown. Replay then calls
+	// getLLMErrorDisplay → codeToMessage("unknown") and the user sees
+	// "This turn didn't finish, and we can't tell why" — the original
+	// UAT defect, back after a reload. Re-stamp from the same sentinel
+	// TranslateTurnError already used for the live frame.
+	if stage == "workspace" && kind == EventKindError.String() {
+		llm = TranslateTurnError(ErrAgentNotWorkspaceMember)
+	}
 
 	// FR-017a: outcome-based relabel overrides the classifier's code for
 	// this turn when the outcome-based strip-retry succeeded. The relabeled

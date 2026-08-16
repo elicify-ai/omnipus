@@ -32,6 +32,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -370,6 +371,43 @@ func eventKinds(events []Event) []string {
 		out = append(out, e.Kind.String())
 	}
 	return out
+}
+
+// Replay looks up the catalogue by ErrorCode (getLLMErrorDisplay →
+// codeToMessage), not by the persisted Content. If the workspace refusal
+// lands as unknown, a reload shows "we can't tell why" even though the
+// live frame was right.
+func TestAppendErrorTranscript_WorkspaceRefusal_StampsAgentNotConfigured(t *testing.T) {
+	store, err := session.NewUnifiedStore(t.TempDir())
+	require.NoError(t, err)
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	require.NoError(t, err)
+
+	ts := &turnState{
+		transcriptStore:     store,
+		transcriptSessionID: meta.ID,
+		agentID:             "main",
+	}
+	catalogue := UserMessageForCode(CodeAgentNotConfigured)
+	ts.appendErrorTranscript(EventKindError.String(), "workspace", catalogue)
+
+	entries, err := store.ReadTranscript(meta.ID)
+	require.NoError(t, err)
+	var got *session.TranscriptEntry
+	for i := range entries {
+		if entries[i].Type == session.EntryTypeSystem && entries[i].Status == "error" {
+			got = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, got, "workspace refusal must persist a system error entry for replay")
+	assert.Equal(t, string(CodeAgentNotConfigured), got.ErrorCode,
+		"replay stamps the bubble from ErrorCode; unknown would resurrect the UAT defect")
+	assert.Equal(t, catalogue, got.Content,
+		"persisted text must stay the catalogue sentence, not a re-classified unknown line")
+	assert.Equal(t, isRetryable(CodeAgentNotConfigured), got.ErrorRetryable)
+	assert.True(t, isTrustedInternalStage("workspace", EventKindError.String()),
+		"workspace/error must be a trusted internal stage so a later classifier change cannot clobber the sentence")
 }
 
 func TestRunTurn_MemberGetsWorkspaceWorkDir(t *testing.T) {
