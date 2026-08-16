@@ -13,7 +13,7 @@ RUN npm run build
 # ============================================================
 # Stage 2: Build the Go binary with the SPA embedded
 # ============================================================
-FROM golang:1.26.5-alpine AS go-builder
+FROM golang:1.26.6-alpine AS go-builder
 
 RUN apk add --no-cache git make
 

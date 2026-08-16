@@ -429,10 +429,10 @@ jobs:
           go-package: ./...
           # The action runs its OWN setup-go with go-version-input:stable and
           # GOTOOLCHAIN=local, so it ignores both the job's Setup Go step and
-          # go.mod's toolchain. Pin it to the patched stdlib (go1.26.5 fixes
-          # GO-2026-5856 crypto/tls and GO-2026-4970 os). Keep this
+          # go.mod's toolchain. Pin it to the patched stdlib (go1.26.6
+          # clears GO-2026-6218/6090/6089/6088/5972/5026). Keep this
           # in sync with the `go` directive in go.mod.
-          go-version-input: '1.26.5'
+          go-version-input: '1.26.6'
 
   cgo-gate:
     name: CGO_ENABLED=0 Build Gate

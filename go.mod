@@ -1,6 +1,6 @@
 module github.com/elicify-ai/omnipus
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -51,7 +51,7 @@ require (
 	go.mau.fi/util v0.9.10
 	go.mau.fi/whatsmeow v0.0.0-20260713112832-d8960d9575d2
 	go.uber.org/goleak v1.3.0
-	golang.org/x/image v0.44.0
+	golang.org/x/image v0.45.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/term v0.44.0
 	golang.org/x/time v0.15.0
@@ -164,7 +164,7 @@ require (
 	go.mau.fi/libsignal v0.2.2 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
-	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
@@ -197,5 +197,5 @@ require (
 	golang.org/x/crypto v0.53.0
 	golang.org/x/net v0.56.0
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.46.0
+	golang.org/x/sys v0.47.0
 )
