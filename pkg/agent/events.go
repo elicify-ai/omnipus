@@ -605,10 +605,14 @@ type ErrorPayload struct {
 	Message       string
 	ProviderError *ProviderError
 	// ChatID is needed so the WS event forwarder can route this event to the
-	// right connection via matchesChatID. Mirrors RateLimitPayload's
-	// explicit ChatID field; both are required for the live path to deliver
-	// typed errors to the right user.
+	// originating connection via matchesChatID.
 	ChatID string
+	// SessionID is the routing session id (ADR-057). matchesEvent falls back
+	// on this so a second tab or a reload attached to the same session still
+	// receives the typed error. ChatID alone dies when ServeHTTP mints a new
+	// webchat: uuid per connection. Not a wire-frame field — ErrorFrame is
+	// .strict() and already has its own session_id.
+	SessionID string
 }
 
 // TurnTimeoutPayload describes a turn that exceeded its configured timeout.

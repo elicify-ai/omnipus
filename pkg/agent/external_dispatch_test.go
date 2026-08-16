@@ -208,7 +208,12 @@ func TestExternalDispatch_WorkspacelessAgentRefused(t *testing.T) {
 		agentID:             agent.ID,
 		turnID:              "ext-run-no-workspace",
 		transcriptSessionID: "session_ext_no_workspace_test",
+		chatID:              "webchat:ext-parent",
 	}
+	ts.routingSessionID = session.RoutingSessionID("session_ext_no_workspace_test")
+
+	sub := al.SubscribeEvents(32)
+	t.Cleanup(func() { al.UnsubscribeEvents(sub.ID) })
 
 	fr, restore := withFakeDriver(t)
 	defer restore()
@@ -228,6 +233,40 @@ func TestExternalDispatch_WorkspacelessAgentRefused(t *testing.T) {
 			"driver Run called %d times, want 0 — the external CLI must never be spawned for a refused dispatch",
 			len(opts),
 		)
+	}
+
+	events := drainEvents(sub.C)
+	var errPayloads []ErrorPayload
+	for _, e := range events {
+		if e.Kind == EventKindError {
+			if p, ok := e.Payload.(ErrorPayload); ok {
+				errPayloads = append(errPayloads, p)
+			}
+		}
+	}
+	if len(errPayloads) == 0 {
+		t.Fatalf("external-CLI workspace refusal must emit EventKindError — the sentinel was known and the thread stayed silent; events=%v", eventKinds(events))
+	}
+	found := false
+	for _, p := range errPayloads {
+		if p.Code == string(CodeAgentNotConfigured) {
+			found = true
+			if p.Message != UserMessageForCode(CodeAgentNotConfigured) {
+				t.Errorf("message = %q, want catalogue copy", p.Message)
+			}
+			if p.Stage != "workspace" {
+				t.Errorf("stage = %q, want workspace", p.Stage)
+			}
+			if p.ChatID != "webchat:ext-parent" {
+				t.Errorf("ChatID = %q, want webchat:ext-parent", p.ChatID)
+			}
+			if p.SessionID != "session_ext_no_workspace_test" {
+				t.Errorf("SessionID = %q, want session_ext_no_workspace_test", p.SessionID)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("EventKindError must carry agent_not_configured; payloads=%+v", errPayloads)
 	}
 }
 

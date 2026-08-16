@@ -357,6 +357,8 @@ func TestRunTurn_WorkspacelessAgentRefused_EmitsTypedError(t *testing.T) {
 			assert.Equal(t, UserMessageForCode(CodeAgentNotConfigured), p.Message,
 				"the live error must carry the catalogue copy, not the raw sentinel")
 			assert.Equal(t, "workspace", p.Stage)
+			assert.NotEmpty(t, p.SessionID,
+				"ErrorPayload.SessionID must be the routing session so a second tab/reload can matchesEvent")
 		}
 	}
 	assert.True(t, found,
@@ -408,6 +410,39 @@ func TestAppendErrorTranscript_WorkspaceRefusal_StampsAgentNotConfigured(t *test
 	assert.Equal(t, isRetryable(CodeAgentNotConfigured), got.ErrorRetryable)
 	assert.True(t, isTrustedInternalStage("workspace", EventKindError.String()),
 		"workspace/error must be a trusted internal stage so a later classifier change cannot clobber the sentence")
+}
+
+func TestAppendErrorTranscript_RateLimitDenial_StampsRateLimited(t *testing.T) {
+	store, err := session.NewUnifiedStore(t.TempDir())
+	require.NoError(t, err)
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	require.NoError(t, err)
+
+	ts := &turnState{
+		transcriptStore:     store,
+		transcriptSessionID: meta.ID,
+		agentID:             "main",
+	}
+	// Caller text without the historical "rate limit:" prefix — trusted
+	// stage must still stamp CodeRateLimited, not unknown.
+	ts.appendErrorTranscript(EventKindRateLimit.String(), "rate_limit", "session daily cost cap (retry shortly)")
+
+	entries, err := store.ReadTranscript(meta.ID)
+	require.NoError(t, err)
+	var got *session.TranscriptEntry
+	for i := range entries {
+		if entries[i].Type == session.EntryTypeSystem && entries[i].Status == "error" {
+			got = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, got)
+	assert.True(t, isTrustedInternalStage("rate_limit", EventKindRateLimit.String()),
+		"rate_limit/rate_limit must be trusted; stage runTurn was the live-vs-reload landmine")
+	assert.Equal(t, string(CodeRateLimited), got.ErrorCode,
+		"replay looks up by ErrorCode; unknown would say we cannot tell why")
+	assert.Equal(t, "session daily cost cap (retry shortly)", got.Content,
+		"trusted stage must keep the caller text, not a reclassified unknown line")
 }
 
 func TestRunTurn_MemberGetsWorkspaceWorkDir(t *testing.T) {

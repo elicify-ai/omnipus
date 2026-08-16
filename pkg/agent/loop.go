@@ -1346,7 +1346,7 @@ func (al *AgentLoop) recordRateLimitDenial(
 		retryHint = "retry shortly"
 	}
 	rlMsg := fmt.Sprintf("rate limit: %s (%s)", payload.PolicyRule, retryHint)
-	ts.appendErrorTranscript(EventKindRateLimit.String(), "runTurn", rlMsg)
+	ts.appendErrorTranscript(EventKindRateLimit.String(), "rate_limit", rlMsg)
 }
 
 // wireExecToolDeps replaces each agent's bash tool with one constructed via
@@ -7913,10 +7913,11 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			EventKindError,
 			ts.eventMeta("runTurn", "turn.error"),
 			ErrorPayload{
-				Stage:   "workspace",
-				ChatID:  ts.opts.ChatID,
-				Code:    string(llm.Code),
-				Message: llm.Message,
+				Stage:     "workspace",
+				ChatID:    ts.chatID,
+				SessionID: string(ts.routingSessionID),
+				Code:      string(llm.Code),
+				Message:   llm.Message,
 			},
 		)
 		ts.appendErrorTranscript(EventKindError.String(), "workspace", llm.Message)

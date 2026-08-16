@@ -191,6 +191,28 @@ func runExternalCLISubTurn(
 	//    outside their root, not merely guarded against.
 	workDir, wsErr := resolveTurnWorkDirOrRefuse(ctx, agent.ID, agent.Home, childTS.opts.WorkspaceID)
 	if wsErr != nil {
+		// Same defect class as native runTurn: the sentinel was known and
+		// the driver never started, but nothing typed reached the user.
+		// Parent delegate is hidden on failure, so the thread stayed silent
+		// unless the parent happened to narrate. Emit the catalogue frame
+		// and stamp the transcript the way runTurn now does.
+		llm := TranslateTurnError(wsErr)
+		chatID := childTS.chatID
+		if chatID == "" {
+			chatID = childTS.opts.ChatID
+		}
+		al.emitEvent(
+			EventKindError,
+			childTS.eventMeta("runTurn", "turn.error"),
+			ErrorPayload{
+				Stage:     "workspace",
+				ChatID:    chatID,
+				SessionID: string(childTS.routingSessionID),
+				Code:      string(llm.Code),
+				Message:   llm.Message,
+			},
+		)
+		childTS.appendErrorTranscript(EventKindError.String(), "workspace", llm.Message)
 		return nil, fmt.Errorf("external-cli dispatch: %w", wsErr)
 	}
 
@@ -763,8 +785,9 @@ type SanitizedRunnerError struct {
 	LogText string
 
 	// Code is the LLMErrorCode the classifier mapped this error to. Empty
-	// string when classification is unknown; the WS forwarder reads this
-	// to gate the live error frame (e.g. suppress when rate_limited).
+	// string when classification is unknown. The WS forwarder prefers this
+	// already-computed code on the live error frame; rate_limited is
+	// forwarded (a provider 429 is the user's only signal).
 	Code LLMErrorCode
 
 	// Retryable mirrors the LLMError's retryable bit — the WS forwarder
@@ -844,7 +867,8 @@ func emitExternalCLIErrorEvent(
 			// dropped for every live subscriber. External-CLI errors
 			// (claude-code/codex/opencode sub-turns) were invisible live,
 			// appearing only after a page reload replayed the transcript.
-			ChatID: ts.opts.ChatID,
+			ChatID:    ts.opts.ChatID,
+			SessionID: string(ts.routingSessionID),
 			// FIX 3: SanitizeRunnerError already computed the classifier
 			// code (sanitized.Code) alongside sanitized.AssistantText —
 			// thread it through so the WS forwarder (FIX 2) can use the

@@ -23,12 +23,14 @@
 package gateway
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -119,4 +121,85 @@ func TestEventForwarder_SessionBasedFallback_DoesNotLeakAcrossDifferentSessions(
 
 	assert.Empty(t, ch,
 		"an event belonging to a different session must not be forwarded to this connection")
+}
+
+// TestEventForwarder_ErrorFrame_ReachesReattachedConnection pins the D5-class
+// hole the EventKindError arm kept after every other live event moved to
+// matchesEvent: a workspace refuse / provider 429 stamped the originating
+// tab's chatID, so a second tab (or a reload) attached to the same session
+// dropped the typed error. token+done still fanned out, and the error
+// bubble never appeared.
+func TestEventForwarder_ErrorFrame_ReachesReattachedConnection(t *testing.T) {
+	bus := agent.NewEventBus()
+	defer bus.Close()
+	h := makeMinimalHandler()
+
+	const newChatID = "webchat:new-connection-after-reload"
+	const staleChatID = "webchat:stale-connection-before-reload"
+	const durableSessionID = "session-durable-error-abc"
+
+	h.mu.Lock()
+	h.sessionIDs[newChatID] = durableSessionID
+	h.mu.Unlock()
+
+	wc, ch := makeForwarderTestConn(64)
+	done := runForwarder(h, wc, newChatID, bus)
+
+	bus.Emit(agent.Event{
+		Kind: agent.EventKindError,
+		Payload: agent.ErrorPayload{
+			Stage:     "workspace",
+			Code:      string(agent.CodeAgentNotConfigured),
+			Message:   agent.UserMessageForCode(agent.CodeAgentNotConfigured),
+			ChatID:    staleChatID,
+			SessionID: durableSessionID,
+		},
+	})
+
+	bus.Close()
+	<-done
+
+	require.Len(t, ch, 1,
+		"a typed error whose ChatID names a stale connection must still reach a NEW connection attached to the SAME session")
+	raw := <-ch
+	var frame generated.ErrorFrame
+	require.NoError(t, json.Unmarshal(raw, &frame))
+	require.NotNil(t, frame.Payload)
+	assert.Equal(t, string(agent.CodeAgentNotConfigured), frame.Payload.LlmError.Code)
+	assert.Equal(t, agent.UserMessageForCode(agent.CodeAgentNotConfigured), frame.Message)
+	require.NotNil(t, frame.SessionId)
+	assert.Equal(t, durableSessionID, *frame.SessionId)
+}
+
+// TestEventForwarder_ErrorFrame_DoesNotLeakAcrossDifferentSessions is the
+// negative twin: SessionID matching is not a broadcast.
+func TestEventForwarder_ErrorFrame_DoesNotLeakAcrossDifferentSessions(t *testing.T) {
+	bus := agent.NewEventBus()
+	defer bus.Close()
+	h := makeMinimalHandler()
+
+	const thisConnChatID = "webchat:this-connection"
+	h.mu.Lock()
+	h.sessionIDs[thisConnChatID] = "session-A"
+	h.mu.Unlock()
+
+	wc, ch := makeForwarderTestConn(64)
+	done := runForwarder(h, wc, thisConnChatID, bus)
+
+	bus.Emit(agent.Event{
+		Kind: agent.EventKindError,
+		Payload: agent.ErrorPayload{
+			Stage:     "workspace",
+			Code:      string(agent.CodeAgentNotConfigured),
+			Message:   agent.UserMessageForCode(agent.CodeAgentNotConfigured),
+			ChatID:    "webchat:unrelated-connection",
+			SessionID: "session-B",
+		},
+	})
+
+	bus.Close()
+	<-done
+
+	assert.Empty(t, ch,
+		"a typed error belonging to a different session must not be forwarded to this connection")
 }

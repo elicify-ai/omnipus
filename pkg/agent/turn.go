@@ -1921,6 +1921,16 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string, pe ...*P
 	if stage == "workspace" && kind == EventKindError.String() {
 		llm = TranslateTurnError(ErrAgentNotWorkspaceMember)
 	}
+	// Internal SEC-26 denials are written as kind=rate_limit, stage=rate_limit.
+	// TranslateLLMError(nil, msg) only hits CodeRateLimited when the caller
+	// text happens to contain "rate limit:". The live frame is EventKindRateLimit
+	// (not this classifier). Replay looks up by ErrorCode — without this
+	// restamp a reworded denial becomes "we can't tell why".
+	if stage == "rate_limit" && kind == EventKindRateLimit.String() {
+		llm.Code = CodeRateLimited
+		llm.Message = message
+		llm.Retryable = isRetryable(CodeRateLimited)
+	}
 
 	// FR-017a: outcome-based relabel overrides the classifier's code for
 	// this turn when the outcome-based strip-retry succeeded. The relabeled

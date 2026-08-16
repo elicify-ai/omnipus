@@ -3985,7 +3985,15 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			if !ok {
 				continue
 			}
-			if !matchesChatID(p.ChatID) {
+			// Prefer the routing session stamped on the payload (survives
+			// reload: the originating chatID is a dead webchat: uuid).
+			// Fall back to the live chatID→session map for older emitters
+			// that only set ChatID.
+			errSID := p.SessionID
+			if errSID == "" {
+				errSID = sessionIDForChat(p.ChatID)
+			}
+			if !matchesEvent(p.ChatID, errSID) {
 				continue
 			}
 			// FIX 2: prefer the already-computed p.Code/p.Message over a
@@ -4031,7 +4039,6 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				// curated Code/Message this frame actually carries.
 				detail = agent.BuildDetail(p.ProviderError, message)
 			}
-			errSID := sessionIDForChat(p.ChatID)
 			errF := generated.ErrorFrame{
 				Type:      string(generated.WsFrameTypeError),
 				SessionId: &errSID,
