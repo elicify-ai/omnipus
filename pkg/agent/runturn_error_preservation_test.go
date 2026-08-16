@@ -278,9 +278,9 @@ func TestRunTurn_RateLimit_WritesErrorEntryToTranscript(t *testing.T) {
 
 // TestRunTurn_ProviderError_WritesErrorEntryToTranscript is the FIX-1 /
 // FR-002 transcript-side test. Drives runAgentLoop with a scripted provider
-// that returns an error on every Chat call (a 401, which classifies as
-// provider_auth_failed since the three-way split of the old catch-all auth
-// failure or a transport-level error). Asserts that the JSONL transcript
+// that returns an error on every Chat call. The fixture scripts a 401, which
+// classifies as provider_auth_failed since the three-way split of the old
+// catch-all. Asserts that the JSONL transcript
 // carries a system entry carrying the error context, AND that an
 // EventKindError is emitted on the event bus.
 //
