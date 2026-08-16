@@ -278,7 +278,8 @@ func TestRunTurn_RateLimit_WritesErrorEntryToTranscript(t *testing.T) {
 
 // TestRunTurn_ProviderError_WritesErrorEntryToTranscript is the FIX-1 /
 // FR-002 transcript-side test. Drives runAgentLoop with a scripted provider
-// that returns an error on every Chat call (e.g. simulating a 401 auth
+// that returns an error on every Chat call (a 401, which classifies as
+// provider_auth_failed since the three-way split of the old catch-all auth
 // failure or a transport-level error). Asserts that the JSONL transcript
 // carries a system entry carrying the error context, AND that an
 // EventKindError is emitted on the event bus.
@@ -370,23 +371,23 @@ func TestRunTurn_ProviderError_WritesErrorEntryToTranscript(t *testing.T) {
 		c := systemEntries[i]
 		assert.NotContains(t, c.Content, rawProviderText,
 			"transcript must never contain raw provider text")
-		if c.ErrorCode == string(CodeProviderRejected) {
+		if c.ErrorCode == string(CodeProviderAuthFailed) {
 			cp := c
 			errEntry = &cp
 			break
 		}
 	}
 	require.NotNil(t, errEntry,
-		"transcript must contain a system entry carrying provider_rejected; system entries found: %+v",
+		"transcript must contain a system entry carrying provider_auth_failed; system entries found: %+v",
 		systemEntries)
 
 	assert.Equal(t, defaultAgent.ID, errEntry.AgentID,
 		"system entry must record the agent that hit the provider error")
-	assert.Equal(t, string(CodeProviderRejected), errEntry.ErrorCode,
+	assert.Equal(t, string(CodeProviderAuthFailed), errEntry.ErrorCode,
 		"system entry must carry the provider-shaped BLOCK 2 code")
 	assert.False(t, errEntry.ErrorRetryable,
 		"provider rejection must not be marked retryable")
-	assert.Equal(t, UserMessageForCode(CodeProviderRejected), errEntry.Content,
+	assert.Equal(t, UserMessageForCode(CodeProviderAuthFailed), errEntry.Content,
 		"transcript must use the generic classifier copy")
 	assert.NotContains(t, errEntry.Content, rawProviderText,
 		"raw provider text must never appear in the transcript")
