@@ -67,9 +67,12 @@ const (
 	// Settings. Not retryable; retrying with the same key fails identically.
 	CodeProviderAuthFailed LLMErrorCode = "provider_auth_failed"
 
-	// CodeRateLimited: 429 / quota / overloaded. RateLimitFrame is the
-	// authoritative live frame; the error frame is suppressed at the WS
-	// forwarder.
+	// CodeRateLimited: 429 / quota / overloaded. Two producers share this
+	// name and must not be collapsed: Omnipus's own SEC-26 limiter emits
+	// EventKindRateLimit (RateLimitFrame); an upstream provider 429 emits
+	// EventKindError and MUST be forwarded as an error frame. The forwarder
+	// used to drop the latter on the false premise that the former covered
+	// it — it does not.
 	CodeRateLimited LLMErrorCode = "rate_limited"
 
 	// CodeNetwork: 408 / 5xx / timeout / connection drop. Retryable.

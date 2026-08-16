@@ -283,6 +283,95 @@ func TestRunTurn_WorkspacelessAgentRefused_ViaProcessMessage(t *testing.T) {
 // msg.Metadata["workspace_id"] set — the same fallback path a board-task run
 // uses (loop.go's processMessage, "Falls back to the inbound metadata key
 // when present") — so ts.opts.WorkspaceID is non-empty for a member agent.
+// TestRunTurn_WorkspacelessAgentRefused_EmitsTypedError pins the UAT defect
+// the classifier-only fix left open: TranslateTurnError already mapped
+// ErrAgentNotWorkspaceMember to agent_not_configured, but runTurn returned
+// BEFORE registerActiveTurn, so no EventKindError was ever emitted and the
+// user saw a turn that never started. The refusal must now be a real failed
+// turn — typed error on the bus, catalogue copy, not silence.
+func TestRunTurn_WorkspacelessAgentRefused_EmitsTypedError(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", tmpHome)
+
+	agentWorkspaceDir := filepath.Join(tmpHome, "agents", "main")
+	require.NoError(t, os.MkdirAll(agentWorkspaceDir, 0o755))
+
+	provider := testutil.NewScenario().WithText("should-never-be-called")
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:                agentWorkspaceDir,
+				ModelName:           "scripted-model",
+				MaxTokens:           4096,
+				MaxToolIterations:   10,
+				RestrictToWorkspace: true,
+			},
+			List: []config.AgentConfig{{ID: "main"}},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	al, err := NewAgentLoop(cfg, msgBus, provider)
+	require.NoError(t, err, "NewAgentLoop must succeed")
+	defer al.Close()
+
+	sub := al.SubscribeEvents(32)
+	t.Cleanup(func() { al.UnsubscribeEvents(sub.ID) })
+
+	_, procErr := al.ProcessDirect(context.Background(), "hello", "test-session-workspaceless-visible")
+	require.Error(t, procErr, "a turn for an agent that is a member of no workspace must be refused")
+	assert.True(t, errors.Is(procErr, ErrAgentNotWorkspaceMember),
+		"refusal error must wrap ErrAgentNotWorkspaceMember, got: %v", procErr)
+
+	events := drainEvents(sub.C)
+	var errPayloads []ErrorPayload
+	var sawTurnStart, sawTurnEndError bool
+	for _, e := range events {
+		switch e.Kind {
+		case EventKindTurnStart:
+			sawTurnStart = true
+		case EventKindTurnEnd:
+			if p, ok := e.Payload.(TurnEndPayload); ok && p.Status == TurnEndStatusError {
+				sawTurnEndError = true
+			}
+		case EventKindError:
+			if p, ok := e.Payload.(ErrorPayload); ok {
+				errPayloads = append(errPayloads, p)
+			}
+		}
+	}
+
+	require.True(t, sawTurnStart,
+		"a workspace refusal must start a real turn (EventKindTurnStart) so the SPA has something to attach the error to; events=%v",
+		eventKinds(events))
+	require.NotEmpty(t, errPayloads,
+		"a workspace refusal must emit EventKindError — the classifier already knew the cause and the user still saw silence; events=%v",
+		eventKinds(events))
+
+	found := false
+	for _, p := range errPayloads {
+		if p.Code == string(CodeAgentNotConfigured) {
+			found = true
+			assert.Equal(t, UserMessageForCode(CodeAgentNotConfigured), p.Message,
+				"the live error must carry the catalogue copy, not the raw sentinel")
+			assert.Equal(t, "workspace", p.Stage)
+		}
+	}
+	assert.True(t, found,
+		"EventKindError must carry code agent_not_configured; payloads=%+v", errPayloads)
+	assert.True(t, sawTurnEndError,
+		"the turn must end as TurnEndStatusError so markTurnFailed fires and done cannot claim success")
+}
+
+func eventKinds(events []Event) []string {
+	out := make([]string, 0, len(events))
+	for _, e := range events {
+		out = append(out, e.Kind.String())
+	}
+	return out
+}
+
 func TestRunTurn_MemberGetsWorkspaceWorkDir(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", tmpHome)

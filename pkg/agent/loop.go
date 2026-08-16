@@ -7732,11 +7732,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// and external-cli dispatch paths again (a prior review found
 	// runExternalCLISubTurn had its own, weaker copy that fell through to the
 	// agent's private home directory instead of refusing).
-	wsDir, wsErr := resolveTurnWorkDirOrRefuse(turnCtx, ts.agent.ID, ts.agent.Home, ts.opts.WorkspaceID)
-	if wsErr != nil {
-		return turnResult{}, wsErr
-	}
-	turnCtx = tools.WithTurnWorkspaceDir(turnCtx, wsDir)
+	// The CALL itself is below, AFTER registerActiveTurn and the turn-end
+	// defers. A prior version returned here, before the turn existed as a
+	// turn: no EventKindError, no transcript, no done frame. The classifier
+	// already knew the cause (TranslateTurnError → agent_not_configured) and
+	// still had nowhere to put it. The user saw a turn that never started.
+	// Moving the call below makes a refusal a real failed turn the SPA can
+	// render. The gate function is unchanged — only when it runs changed.
 
 	// FR-7.5 / NFR-1: install a per-turn citation tracker so recall_memory can
 	// report surfaced memories and the loop can emit op:cited counter events
@@ -7895,6 +7897,32 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			IsRoot:      ts.parentTurnID == "",
 		},
 	)
+
+	// Shared workspace-membership gate — see the ADR-046 comment above for
+	// WHY this refuses. It runs HERE so a refusal is a registered turn:
+	// turn.start has already gone out, the LIFO defers (markTurnFailed →
+	// turn.end → finalizeStreamer) will fire on return, and the typed
+	// EventKindError below is what the SPA actually renders. Returning
+	// before registerActiveTurn left the user with silence and a classifier
+	// result nobody ever saw.
+	wsDir, wsErr := resolveTurnWorkDirOrRefuse(turnCtx, ts.agent.ID, ts.agent.Home, ts.opts.WorkspaceID)
+	if wsErr != nil {
+		turnStatus = TurnEndStatusError
+		llm := TranslateTurnError(wsErr)
+		al.emitEvent(
+			EventKindError,
+			ts.eventMeta("runTurn", "turn.error"),
+			ErrorPayload{
+				Stage:   "workspace",
+				ChatID:  ts.opts.ChatID,
+				Code:    string(llm.Code),
+				Message: llm.Message,
+			},
+		)
+		ts.appendErrorTranscript(EventKindError.String(), "workspace", llm.Message)
+		return turnResult{}, wsErr
+	}
+	turnCtx = tools.WithTurnWorkspaceDir(turnCtx, wsDir)
 
 	// FR-011, FR-012: detect a per-thread model switch via the inbound message
 	// metadata. When the user-selected model differs from the agent's currently
