@@ -642,9 +642,9 @@ type BackgroundProcessKillPayload struct {
 }
 
 // RateLimitPayload describes a rate-limit denial for an LLM or tool call (SEC-26).
-// ChatID is required so the WebSocket event forwarder can route the frame to
-// the correct connection via matchesChatID — a rate-limit denial is meaningless
-// without the chat context it applies to.
+// ChatID routes the frame to the originating connection. SessionID is the
+// fallback so a second tab or a reload attached to the same session still
+// receives the denial after ServeHTTP mints a new webchat: uuid.
 type RateLimitPayload struct {
 	Scope             string  `json:"scope"`
 	Resource          string  `json:"resource"` // "llm_call" or "tool_call"
@@ -652,7 +652,13 @@ type RateLimitPayload struct {
 	RetryAfterSeconds float64 `json:"retry_after_seconds"`
 	AgentID           string  `json:"agent_id,omitempty"`
 	ChatID            string  `json:"chat_id,omitempty"`
-	Tool              string  `json:"tool,omitempty"`
+	// SessionID is the routing session id (ADR-057). matchesEvent falls
+	// back on this so a second tab or a reload still receives the
+	// dedicated rate_limit frame. ChatID alone dies when ServeHTTP mints
+	// a new webchat: uuid per connection. Not a new wire field —
+	// RateLimitFrame already has session_id.
+	SessionID string `json:"session_id,omitempty"`
+	Tool      string `json:"tool,omitempty"`
 }
 
 // NotificationAdminBroadcast is the sentinel Recipient value used when a

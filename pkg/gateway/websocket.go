@@ -3919,11 +3919,18 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			if !ok {
 				continue
 			}
-			if p.Scope != "global" && !matchesChatID(p.ChatID) {
+			// Prefer the routing session stamped on the payload so a
+			// second tab / reload attached to the same session still
+			// sees the denial. ChatID alone is a dead webchat: uuid
+			// after ServeHTTP mints a new connection.
+			rateSID := p.SessionID
+			if rateSID == "" {
+				rateSID = sessionIDForChat(p.ChatID)
+			}
+			if p.Scope != "global" && !matchesEvent(p.ChatID, rateSID) {
 				continue
 			}
 			// Use generated.RateLimitFrame (contract-first migration).
-			rateSID := sessionIDForChat(p.ChatID)
 			rateF := generated.RateLimitFrame{
 				Type:              string(generated.WsFrameTypeRateLimit),
 				SessionId:         rateSID,

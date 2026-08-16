@@ -203,3 +203,82 @@ func TestEventForwarder_ErrorFrame_DoesNotLeakAcrossDifferentSessions(t *testing
 	assert.Empty(t, ch,
 		"a typed error belonging to a different session must not be forwarded to this connection")
 }
+
+// TestEventForwarder_RateLimitFrame_ReachesReattachedConnection is the
+// internal-limiter twin of TestEventForwarder_ErrorFrame_ReachesReattachedConnection.
+// EventKindRateLimit used to match on ChatID only, so a second tab (or a
+// reload) attached to the same session never saw Omnipus's own SEC-26 denial.
+func TestEventForwarder_RateLimitFrame_ReachesReattachedConnection(t *testing.T) {
+	bus := agent.NewEventBus()
+	defer bus.Close()
+	h := makeMinimalHandler()
+
+	const newChatID = "webchat:new-connection-after-reload"
+	const staleChatID = "webchat:stale-connection-before-reload"
+	const durableSessionID = "session-durable-ratelimit-abc"
+
+	h.mu.Lock()
+	h.sessionIDs[newChatID] = durableSessionID
+	h.mu.Unlock()
+
+	wc, ch := makeForwarderTestConn(64)
+	done := runForwarder(h, wc, newChatID, bus)
+
+	bus.Emit(agent.Event{
+		Kind: agent.EventKindRateLimit,
+		Payload: agent.RateLimitPayload{
+			Scope:             "agent",
+			Resource:          "llm_call",
+			PolicyRule:        "max_agent_llm_calls_per_hour",
+			RetryAfterSeconds: 12,
+			AgentID:           "mia",
+			ChatID:            staleChatID,
+			SessionID:         durableSessionID,
+		},
+	})
+
+	bus.Close()
+	<-done
+
+	require.Len(t, ch, 1,
+		"an internal rate-limit whose ChatID names a stale connection must still reach a NEW connection attached to the SAME session")
+	raw := <-ch
+	var frame generated.RateLimitFrame
+	require.NoError(t, json.Unmarshal(raw, &frame))
+	assert.Equal(t, string(generated.WsFrameTypeRateLimit), frame.Type)
+	assert.Equal(t, durableSessionID, frame.SessionId)
+	assert.Equal(t, "max_agent_llm_calls_per_hour", frame.PolicyRule)
+}
+
+// TestEventForwarder_RateLimitFrame_DoesNotLeakAcrossDifferentSessions is
+// the negative twin: SessionID matching is not a broadcast.
+func TestEventForwarder_RateLimitFrame_DoesNotLeakAcrossDifferentSessions(t *testing.T) {
+	bus := agent.NewEventBus()
+	defer bus.Close()
+	h := makeMinimalHandler()
+
+	const thisConnChatID = "webchat:this-connection"
+	h.mu.Lock()
+	h.sessionIDs[thisConnChatID] = "session-A"
+	h.mu.Unlock()
+
+	wc, ch := makeForwarderTestConn(64)
+	done := runForwarder(h, wc, thisConnChatID, bus)
+
+	bus.Emit(agent.Event{
+		Kind: agent.EventKindRateLimit,
+		Payload: agent.RateLimitPayload{
+			Scope:      "agent",
+			Resource:   "llm_call",
+			PolicyRule: "max_agent_llm_calls_per_hour",
+			ChatID:     "webchat:unrelated-connection",
+			SessionID:  "session-B",
+		},
+	})
+
+	bus.Close()
+	<-done
+
+	assert.Empty(t, ch,
+		"an internal rate-limit belonging to a different session must not be forwarded to this connection")
+}

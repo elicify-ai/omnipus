@@ -1335,6 +1335,9 @@ func (al *AgentLoop) recordRateLimitDenial(
 	// the prior dual-emit (EventKindError carrying RateLimitPayload +
 	// EventKindRateLimit) was a live-bus pollution source and was removed
 	// in the Wave 1 fix pass.
+	if payload.SessionID == "" {
+		payload.SessionID = string(ts.routingSessionID)
+	}
 	al.emitEvent(
 		EventKindRateLimit,
 		ts.eventMeta("runTurn", "turn.rate_limit"),
@@ -4293,6 +4296,7 @@ func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDe
 		ErrorPayload{
 			Stage: "hook." + stage, ChatID: ts.opts.ChatID,
 			Code: string(llm.Code), Message: err.Error(),
+			SessionID: string(ts.routingSessionID),
 		},
 	)
 	// US-1: persist the hook abort to the JSONL transcript so the
@@ -8165,6 +8169,7 @@ turnLoop:
 						RetryAfterSeconds: result.RetryAfterSeconds,
 						AgentID:           ts.agent.ID,
 						ChatID:            ts.chatID,
+						SessionID:         string(ts.routingSessionID),
 					},
 					map[string]any{"retry_after_seconds": result.RetryAfterSeconds},
 				)
@@ -9229,6 +9234,7 @@ turnLoop:
 					Code:          string(llm.Code),
 					Message:       llm.Message,
 					ProviderError: pe,
+					SessionID:     string(ts.routingSessionID),
 				},
 			)
 			// FR-002: persist the translated provider error to the transcript
@@ -9433,7 +9439,7 @@ turnLoop:
 				al.emitEvent(
 					EventKindError,
 					ts.eventMeta("runTurn", "turn.error"),
-					ErrorPayload{Stage: "llm_empty_retry", Code: string(llm.Code), Message: llm.Message, ProviderError: pe, ChatID: ts.opts.ChatID},
+					ErrorPayload{Stage: "llm_empty_retry", Code: string(llm.Code), Message: llm.Message, ProviderError: pe, ChatID: ts.opts.ChatID, SessionID: string(ts.routingSessionID)},
 				)
 				// FR-002: persist this provider error to the transcript (write
 				// choke point).
@@ -10153,6 +10159,7 @@ turnLoop:
 							AgentID:           ts.agent.ID,
 							ChatID:            ts.chatID,
 							Tool:              toolName,
+							SessionID:         string(ts.routingSessionID),
 						},
 						map[string]any{"retry_after_seconds": toolRLResult.RetryAfterSeconds},
 					)
@@ -10752,6 +10759,7 @@ turnLoop:
 				ErrorPayload{
 					Stage: "session_save", ChatID: ts.opts.ChatID,
 					Code: string(saveLLM.Code), Message: saveLLM.Message,
+					SessionID: string(ts.routingSessionID),
 				},
 			)
 			// US-1: persist the session-save failure to the JSONL
@@ -10847,12 +10855,14 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 				EventKindError,
 				ts.eventMeta("abortTurn", "turn.error"),
 				ErrorPayload{
-					Stage:   "session_restore",
-					Code:    string(restoreLLM.Code),
-					Message: restoreLLM.Message,
-					ChatID:  ts.opts.ChatID,
+					Stage:     "session_restore",
+					Code:      string(restoreLLM.Code),
+					Message:   restoreLLM.Message,
+					ChatID:    ts.opts.ChatID,
+					SessionID: string(ts.routingSessionID),
 				},
 			)
+			ts.appendClassifiedError(EventKindError.String(), "session_restore", restoreLLM)
 			return turnResult{}, err
 		}
 	}
