@@ -548,6 +548,87 @@ func TestAppendErrorTranscript_RateLimitDenial_StampsRateLimited(t *testing.T) {
 		"trusted stage must keep the caller text, not a reclassified unknown line")
 }
 
+func TestOutcomeRelabelApplies(t *testing.T) {
+	assert.True(t, outcomeRelabelApplies("", CodeMediaUnsupported),
+		"empty residual 4xx is the FR-017a inconclusive case")
+	assert.True(t, outcomeRelabelApplies(CodeUnknown, CodeMediaUnsupported),
+		"CodeUnknown is the FR-017a inconclusive case")
+	assert.False(t, outcomeRelabelApplies(CodeRateLimited, CodeMediaUnsupported),
+		"a later classified failure must keep its own code")
+	assert.False(t, outcomeRelabelApplies(CodeUnknown, ""),
+		"no stamp means the classifier verdict stands")
+}
+
+func TestAppendClassifiedError_OutcomeRelabelDoesNotClobberDistinctCode(t *testing.T) {
+	store, err := session.NewUnifiedStore(t.TempDir())
+	require.NoError(t, err)
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	require.NoError(t, err)
+
+	ts := &turnState{
+		transcriptStore:     store,
+		transcriptSessionID: meta.ID,
+		agentID:             "main",
+	}
+	ts.setOutcomeRelabel(CodeMediaUnsupported)
+	llm := LLMError{
+		Code:      CodeRateLimited,
+		Message:   UserMessageForCode(CodeRateLimited),
+		Retryable: isRetryable(CodeRateLimited),
+	}
+	ts.appendClassifiedError(EventKindError.String(), "hooks", llm)
+
+	entries, err := store.ReadTranscript(meta.ID)
+	require.NoError(t, err)
+	var got *session.TranscriptEntry
+	for i := range entries {
+		if entries[i].Type == session.EntryTypeSystem && entries[i].Status == "error" {
+			got = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, got)
+	assert.Equal(t, string(CodeRateLimited), got.ErrorCode,
+		"a later classified failure must keep its own code after a successful media strip-retry")
+	assert.Equal(t, llm.Message, got.Content)
+	assert.NotEqual(t, string(CodeMediaUnsupported), got.ErrorCode,
+		"reload must not say the model rejected an image when the later failure was a rate limit")
+}
+
+func TestAppendClassifiedError_OutcomeRelabelStillLabelsUnknown(t *testing.T) {
+	store, err := session.NewUnifiedStore(t.TempDir())
+	require.NoError(t, err)
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	require.NoError(t, err)
+
+	ts := &turnState{
+		transcriptStore:     store,
+		transcriptSessionID: meta.ID,
+		agentID:             "main",
+	}
+	ts.setOutcomeRelabel(CodeMediaUnsupported)
+	llm := LLMError{
+		Code:      CodeUnknown,
+		Message:   UserMessageForCode(CodeUnknown),
+		Retryable: isRetryable(CodeUnknown),
+	}
+	ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+
+	entries, err := store.ReadTranscript(meta.ID)
+	require.NoError(t, err)
+	var got *session.TranscriptEntry
+	for i := range entries {
+		if entries[i].Type == session.EntryTypeSystem && entries[i].Status == "error" {
+			got = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, got)
+	assert.Equal(t, string(CodeMediaUnsupported), got.ErrorCode,
+		"FR-017a must still label an inconclusive residual 4xx as media after a successful strip-retry")
+	assert.Equal(t, defaultUserMessage(CodeMediaUnsupported), got.Content)
+}
+
 func TestRunTurn_MemberGetsWorkspaceWorkDir(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", tmpHome)

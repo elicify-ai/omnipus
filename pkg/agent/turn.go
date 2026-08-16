@@ -395,15 +395,14 @@ type turnState struct {
 	// outcomeRelabel is the FR-017a relabel-on-success contract. When the
 	// outcome-based strip-retry fallback fires AND the subsequent LLM
 	// call succeeds, this field is stamped with CodeMediaUnsupported so
-	// any later classifier-driven emission for this turn (warn logs,
-	// audit, transcript) carries the outcome-labeled verdict rather
-	// than the original (inconclusive) classifier verdict. Empty when
-	// no outcome-based retry succeeded this turn — the classifier's own
-	// verdict governs in that case. Written by the loop call site
-	// (loop.go) only; read by emit sites that consult the recorded
-	// turn classifier verdict.
+	// a later *inconclusive* residual 4xx (CodeUnknown or empty) is
+	// labeled as media. A later distinct classified failure (hook abort,
+	// session save, rate limit, workspace) keeps its own code — the
+	// stamp must not overwrite it, or reload tells the user the model
+	// rejected an image. Empty when no outcome-based retry succeeded
+	// this turn. Written by the loop call site (loop.go) only; read
+	// by persist/emit sites via outcomeRelabelApplies.
 	outcomeRelabel LLMErrorCode
-
 	// lastProducedModel is the model string that produced the most recent
 	// assistant message in this turn. Set after each successful LLM call in
 	// loop.go (and external_dispatch.go for CLI providers). The transcript
@@ -578,11 +577,14 @@ func (ts *turnState) setOutcomeRelabel(code LLMErrorCode) {
 	ts.outcomeRelabel = code
 }
 
-// outcomeRelabel is the FR-017a relabel-on-success contract field — see (*AgentLoop).emitError consumer.
-// FR-017a: when the outcome-based retry succeeds, the loop writes the
-// outcome-labeled verdict here and consults it to relabel the error before
-// persisting it. The write-only flag is intentional at this layer;
-// the gateway boundary in (*AgentLoop).emitError is the next-step consumer.
+// outcomeRelabelApplies reports whether FR-017a's media-retry stamp should
+// override this persist/emit. Residual 4xx stays CodeUnknown so the stamp
+// can label that inconclusive trigger as media after a successful
+// strip-retry. A later distinct classified failure must keep its own code
+// — otherwise reload tells the user the model rejected an image.
+func outcomeRelabelApplies(current, relabel LLMErrorCode) bool {
+	return relabel != "" && (current == "" || current == CodeUnknown)
+}
 
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
 	ts := &turnState{
@@ -1945,12 +1947,9 @@ func (ts *turnState) writeErrorTranscript(kind, stage, message string, code LLME
 		llm.Retryable = isRetryable(CodeRateLimited)
 	}
 
-	// FR-017a: outcome-based relabel overrides the classifier's code for
-	// this turn when the outcome-based strip-retry succeeded. The relabeled
-	// code is always CodeMediaUnsupported, matching what the classifier
-	// would have returned had it classified the outcome rather than the
-	// trigger.
-	if ts.outcomeRelabel != "" {
+	// FR-017a: label an *inconclusive* residual 4xx after a successful
+	// strip-retry. Do not overwrite a later distinct classified code.
+	if outcomeRelabelApplies(llm.Code, ts.outcomeRelabel) {
 		llm.Code = ts.outcomeRelabel
 		llm.Message = defaultUserMessage(ts.outcomeRelabel)
 	}

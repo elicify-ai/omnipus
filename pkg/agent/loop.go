@@ -9217,11 +9217,10 @@ turnLoop:
 			pe := errorToProviderError(err)
 			llm := TranslateLLMError(pe, err.Error())
 
-			// FR-017a: outcome-based relabel overrides the classifier's code
-			// for both the live WS frame AND the transcript write. The relabel
-			// applies to any error emitted by this turn after the outcome-based
-			// strip-retry succeeded.
-			if ts.outcomeRelabel != "" {
+			// FR-017a: label an inconclusive residual 4xx after a
+			// successful strip-retry. A later distinct classified
+			// failure keeps its own code so live and persist agree.
+			if outcomeRelabelApplies(llm.Code, ts.outcomeRelabel) {
 				llm.Code = ts.outcomeRelabel
 				llm.Message = UserMessageForCode(ts.outcomeRelabel)
 			}
@@ -9430,8 +9429,10 @@ turnLoop:
 				pe := errorToProviderError(err)
 				llm := TranslateLLMError(pe, err.Error())
 
-				// FR-017a: outcome-based relabel override for this turn.
-				if ts.outcomeRelabel != "" {
+				// FR-017a: label an inconclusive residual 4xx after a
+				// successful strip-retry. A later distinct classified
+				// failure keeps its own code so live and persist agree.
+				if outcomeRelabelApplies(llm.Code, ts.outcomeRelabel) {
 					llm.Code = ts.outcomeRelabel
 					llm.Message = UserMessageForCode(ts.outcomeRelabel)
 				}
@@ -10863,6 +10864,24 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 				},
 			)
 			ts.appendClassifiedError(EventKindError.String(), "session_restore", restoreLLM)
+			// Restore failed, so the rest of abortTurn cannot run. The
+			// live error is the restore failure (already emitted). If
+			// this was a system-initiated abort, also persist that
+			// reason so replay is not restore-only. Do not emit a
+			// second live abort frame.
+			if reason != hardInterruptAbortReason {
+				if reason == "" {
+					reason = "no reason provided"
+				}
+				abortErr := fmt.Errorf("turn aborted during %s: %s", stage, reason)
+				abortLLM := TranslateLLMError(nil, abortErr.Error())
+				presented := abortErr.Error()
+				if abortLLM.Code != CodeUnknown {
+					presented = abortLLM.Message
+				}
+				abortLLM.Message = presented
+				ts.appendClassifiedError(EventKindError.String(), stage, abortLLM)
+			}
 			return turnResult{}, err
 		}
 	}
