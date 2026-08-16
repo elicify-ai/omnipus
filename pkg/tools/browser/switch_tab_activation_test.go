@@ -314,3 +314,22 @@ func TestRunTabFocusCDP_NonChromedpContextDoesNotAllocate(t *testing.T) {
 	err = m.runTabFocusCDP(context.Background(), page.BringToFront())
 	require.NoError(t, err, "a non-chromedp context must be a no-op, not a new Chrome")
 }
+
+// TestRunTabFocusCDP_UnattachedChromedpContextDoesNotAllocate covers the
+// actual fake-tab factory shape: chromedp.NewContext(context.Background()).
+// FromContext is non-nil (default ExecAllocator) but Target is nil until
+// the first Run — and that first Run is what launched Chrome on CI and
+// panicked Allocate. The recorded-activation seam is deliberately NOT
+// installed here, matching TestRunTabFocusCDP_NonChromedpContextDoesNotAllocate.
+func TestRunTabFocusCDP_UnattachedChromedpContextDoesNotAllocate(t *testing.T) {
+	cfg, err := DefaultConfig()
+	require.NoError(t, err)
+	m := &BrowserManager{cfg: cfg}
+	ctx, cancel := chromedp.NewContext(context.Background())
+	t.Cleanup(cancel)
+	c := chromedp.FromContext(ctx)
+	require.NotNil(t, c, "NewContext must install a chromedp context")
+	require.Nil(t, c.Target, "a never-Run NewContext must have no Target — that is the fake-tab shape")
+	err = m.runTabFocusCDP(ctx, page.BringToFront())
+	require.NoError(t, err, "an unattached chromedp context must be a no-op, not a new Chrome")
+}

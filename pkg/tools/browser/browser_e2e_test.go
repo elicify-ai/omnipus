@@ -153,11 +153,12 @@ func TestBrowserTools_E2E_DirectChromedp(t *testing.T) {
 	defer os.RemoveAll(profileDir)
 
 	cfg := BrowserConfig{
-		Enabled:     true,
-		Headless:    true,
-		PageTimeout: 15 * time.Second,
-		MaxTabs:     3,
-		ProfileDir:  profileDir,
+		Enabled:         true,
+		Headless:        true,
+		PageTimeout:     15 * time.Second,
+		MaxTabs:         3,
+		ProfileDir:      profileDir,
+		TrustPathChrome: true, // skipIfNoBrowser already probed $PATH Chrome
 	}
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 
@@ -326,11 +327,12 @@ func TestSSRFBlocksPrivateNavigation(t *testing.T) {
 	skipIfNoBrowser(t)
 
 	cfg := BrowserConfig{
-		Enabled:     true,
-		Headless:    true,
-		PageTimeout: 5 * time.Second,
-		MaxTabs:     1,
-		ProfileDir:  t.TempDir(),
+		Enabled:         true,
+		Headless:        true,
+		PageTimeout:     5 * time.Second,
+		MaxTabs:         1,
+		ProfileDir:      t.TempDir(),
+		TrustPathChrome: true, // skipIfNoBrowser already probed $PATH Chrome
 	}
 	// SSRF checker with NO whitelist — private IPs are blocked.
 	ssrf := security.NewSSRFChecker(nil)

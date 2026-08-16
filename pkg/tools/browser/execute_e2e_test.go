@@ -109,14 +109,23 @@ func newPermissiveRegistry(t *testing.T, cfg BrowserConfig) (*tools.ToolRegistry
 
 // testBrowserCfg returns a BrowserConfig suitable for tests: headless, short
 // timeout, single tab, fresh temp profile dir.
+//
+// TrustPathChrome is on because skipIfNoBrowser already probed a working
+// Chrome on $PATH (the #615 job installs google-chrome for this). ADR-052's
+// production default (false) would discard that binary and try a managed
+// install under InstallRootForProfileDir(t.TempDir()) — /tmp/chromium, or
+// /chromium when ProfileDir itself is under /tmp — which is not the Chrome
+// the gate found, and is what made TestBrowserTools_E2E_DirectChromedp fail
+// with `mkdir /chromium: permission denied`.
 func testBrowserCfg(t *testing.T) BrowserConfig {
 	t.Helper()
 	return BrowserConfig{
-		Enabled:     true,
-		Headless:    true,
-		PageTimeout: 15 * time.Second,
-		MaxTabs:     5,
-		ProfileDir:  t.TempDir(),
+		Enabled:         true,
+		Headless:        true,
+		PageTimeout:     15 * time.Second,
+		MaxTabs:         5,
+		ProfileDir:      t.TempDir(),
+		TrustPathChrome: true,
 	}
 }
 
@@ -340,11 +349,12 @@ func TestExecute_Evaluate_Edges(t *testing.T) {
 	// Use a separate manager with a short timeout to make the test fast.
 	t.Run("long running eval timeout", func(t *testing.T) {
 		shortCfg := BrowserConfig{
-			Enabled:     true,
-			Headless:    true,
-			PageTimeout: 3 * time.Second,
-			MaxTabs:     2,
-			ProfileDir:  t.TempDir(),
+			Enabled:         true,
+			Headless:        true,
+			PageTimeout:     3 * time.Second,
+			MaxTabs:         2,
+			ProfileDir:      t.TempDir(),
+			TrustPathChrome: true,
 		}
 		shortRegistry, shortMgr := newPermissiveRegistry(t, shortCfg)
 		defer shortMgr.Shutdown()
@@ -677,11 +687,12 @@ func TestExecute_Wait_TimeoutForAbsentSelector(t *testing.T) {
 	srv := executeTestServer(t)
 	// Use a short timeout so the test does not block.
 	cfg := BrowserConfig{
-		Enabled:     true,
-		Headless:    true,
-		PageTimeout: 3 * time.Second,
-		MaxTabs:     2,
-		ProfileDir:  t.TempDir(),
+		Enabled:         true,
+		Headless:        true,
+		PageTimeout:     3 * time.Second,
+		MaxTabs:         2,
+		ProfileDir:      t.TempDir(),
+		TrustPathChrome: true,
 	}
 	registry, mgr := newPermissiveRegistry(t, cfg)
 	defer mgr.Shutdown()
@@ -733,11 +744,12 @@ func TestExecute_GetText_FailsFastOnInvisibleOrMissingSelector(t *testing.T) {
 
 	srv := executeTestServer(t)
 	cfg := BrowserConfig{
-		Enabled:     true,
-		Headless:    true,
-		PageTimeout: 20 * time.Second,
-		MaxTabs:     2,
-		ProfileDir:  t.TempDir(),
+		Enabled:         true,
+		Headless:        true,
+		PageTimeout:     20 * time.Second,
+		MaxTabs:         2,
+		ProfileDir:      t.TempDir(),
+		TrustPathChrome: true,
 	}
 	registry, mgr := newPermissiveRegistry(t, cfg)
 	defer mgr.Shutdown()
@@ -835,11 +847,12 @@ func TestExecute_MaxTabs_LimitError(t *testing.T) {
 	srv := executeTestServer(t)
 	// Set MaxTabs=1 so the first call occupies the only slot.
 	cfg := BrowserConfig{
-		Enabled:     true,
-		Headless:    true,
-		PageTimeout: 10 * time.Second,
-		MaxTabs:     1,
-		ProfileDir:  t.TempDir(),
+		Enabled:         true,
+		Headless:        true,
+		PageTimeout:     10 * time.Second,
+		MaxTabs:         1,
+		ProfileDir:      t.TempDir(),
+		TrustPathChrome: true,
 	}
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()

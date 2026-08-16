@@ -1825,14 +1825,25 @@ func (m *BrowserManager) runTabFocusCDP(tabCtx context.Context, actions ...chrom
 		// Test seam — see tabFocusFn's doc comment.
 		return fn(tabCtx, actions...)
 	}
-	// A context that is not a chromedp target/allocator must never reach
-	// chromedp.Run: Run treats a non-chromedp context as "start a new
-	// browser". That is how a fake-tab unit test (and any bookkeeping ctx
-	// that is not a live target) used to launch a second Chrome, hit
-	// "No usable sandbox" on CI, and panic in chromedp's Allocate cleanup
-	// (`close of closed channel`). Focus helpers only ever talk to an
-	// existing tab.
-	if chromedp.FromContext(tabCtx) == nil {
+	// Focus helpers only ever talk to an EXISTING tab. chromedp.Run on
+	// anything else starts a new Chrome:
+	//
+	//   - FromContext == nil: a plain context.Background() (or any
+	//     non-chromedp ctx). Run installs the default ExecAllocator.
+	//   - FromContext != nil but Target == nil: chromedp.NewContext
+	//     (context.Background()) — the fake-tab factory shape. FromContext
+	//     is already the default ExecAllocator, so the FromContext-only
+	//     check is not enough. The first Run still launches Chrome with
+	//     chromedp's default flags (no --no-sandbox), which dies on CI
+	//     ("No usable sandbox") and panics in Allocate cleanup
+	//     (`close of closed channel`).
+	//
+	// A real tab has Target set: createTab's runFirstAttach does the first
+	// Run before the tab is stored, so activate/release after that always
+	// see a live target. Skipping here never drops a production focus
+	// round-trip.
+	c := chromedp.FromContext(tabCtx)
+	if c == nil || c.Target == nil {
 		return nil
 	}
 	runCtx, cancel := context.WithTimeout(tabCtx, m.PageTimeout())
