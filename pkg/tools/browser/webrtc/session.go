@@ -42,8 +42,9 @@ var Available = true
 // for the two things that make that safe: (1) Pion rewrites SSRC/PayloadType
 // per-viewer-binding on every write, so the shared local track is decoupled
 // from whichever upstream ingest connection is currently feeding it, and (2)
-// this package additionally rewrites each packet's SEQUENCE NUMBER to a
-// session-lifetime monotonic counter per kind (videoSeq/audioSeq below) --
+// this package additionally rewrites each packet's SEQUENCE NUMBER by a
+// constant per-connection offset anchored on a session-lifetime high-water
+// mark per kind (videoLastOutSeq/audioLastOutSeq below) --
 // without that second rewrite, a fresh ingest connection's independently-
 // randomized packetizer sequence numbers cause every already-attached
 // viewer's SRTP receive window to silently discard the "replayed"/
@@ -60,10 +61,15 @@ var Available = true
 // exercised a persistent viewer across a reconnect so the sequence-number
 // issue never surfaced there).
 type Session struct {
-	api   *webrtc.API
-	cfg   Config
-	sink  InputSink
-	logfn func(string, ...any)
+	api *webrtc.API
+	cfg Config
+
+	// apiViewer builds the VIEWER leg only; s.api builds the loopback ingest
+	// leg. See NewSession for why they must not share a SettingEngine.
+	// Never nil after NewSession (it aliases s.api in the degraded paths).
+	apiViewer *webrtc.API
+	sink      InputSink
+	logfn     func(string, ...any)
 
 	mu     sync.Mutex
 	closed bool
@@ -86,15 +92,18 @@ type Session struct {
 	audioPktCount atomic.Int64
 	pliBursting   atomic.Bool
 
-	// videoSeq/audioSeq are session-lifetime, monotonically-incrementing
-	// OUTGOING sequence-number generators for the two shared local tracks,
-	// used by attachIngestTrack to rewrite each forwarded packet's sequence
-	// number before it reaches any viewer binding. See the long comment on
-	// attachIngestTrack in ingest.go for why this rewrite -- not just
-	// SSRC/PayloadType rewriting, which Pion already does per viewer binding
-	// -- is required for ingest replacement to work at all.
-	videoSeq atomic.Uint32
-	audioSeq atomic.Uint32
+	// videoLastOutSeq/audioLastOutSeq are the session-lifetime OUTGOING
+	// sequence-number high-water marks (RFC 1982 16-bit serial space, stored
+	// widened) for the two shared local tracks. attachIngestTrack anchors
+	// each new ingest connection's constant rewrite offset on them, and
+	// advances them only forward as packets are forwarded. See the long
+	// comment on attachIngestTrack in ingest.go for why a rewrite -- not
+	// just the SSRC/PayloadType rewriting Pion already does per viewer
+	// binding -- is required for ingest replacement to work at all, and the
+	// forward-loop comment there for why it must be a constant offset, never
+	// read-order renumbering (2026-08-13 corruption incident).
+	videoLastOutSeq atomic.Uint32
+	audioLastOutSeq atomic.Uint32
 
 	connSeq atomic.Int64
 
@@ -181,12 +190,14 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 		// that can never negotiate media.
 		s.logf("webrtc: register default codecs failed: %v (session will reject all offers)", err)
 		s.api = webrtc.NewAPI()
+		s.apiViewer = s.api
 		return s
 	}
 	ir := &interceptor.Registry{}
 	if err := webrtc.RegisterDefaultInterceptors(m, ir); err != nil {
 		s.logf("webrtc: register default interceptors failed: %v (session will reject all offers)", err)
 		s.api = webrtc.NewAPI()
+		s.apiViewer = s.api
 		return s
 	}
 
@@ -199,7 +210,52 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 	// "lo" is present.
 	se.SetIncludeLoopbackCandidate(true)
 
+	// ADR-062 tier 1 applies to the VIEWER leg ONLY, so the settings are
+	// split in two from here on.
+	//
+	// The legs are not alike and must not share a SettingEngine. The INGEST
+	// leg is the gateway talking to its OWN headless Chrome over loopback;
+	// it needs no public address and no shared socket. The VIEWER leg is a
+	// browser somewhere on the internet. Rewriting host candidates to a
+	// public address on the shared engine would hand the loopback encoder an
+	// address it cannot reach -- breaking capture on EVERY install,
+	// including laptops, in exchange for fixing hosted ones. (Caught in
+	// adversarial review of ADR-062 before it shipped; both legs run through
+	// buildPeerConnection, which made the blast radius easy to miss.)
+	viewerSE := se
+	if cfg.MediaConn != nil {
+		// One gateway-owned socket, shared by every agent's Session: Pion's
+		// UDP mux demultiplexes concurrent ICE agents on it by ufrag. See
+		// Config.MediaConn for why a per-Session bind would break the
+		// second agent.
+		viewerSE.SetICEUDPMux(webrtc.NewICEUDPMux(nil, cfg.MediaConn))
+	}
+	if cfg.MediaTCP != nil {
+		// ADR-062 tier 2. Default Pion network types omit TCP; without
+		// SetNetworkTypes the mux is installed and never advertised.
+		viewerSE.SetICETCPMux(webrtc.NewICETCPMux(nil, cfg.MediaTCP, 8))
+		viewerSE.SetNetworkTypes([]webrtc.NetworkType{
+			webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6, webrtc.NetworkTypeTCP4,
+		})
+	}
+	if len(cfg.PublicIPs) > 0 {
+		// ICECandidateTypeHost with Pion's default mode APPENDS for srflx and
+		// replaces for host. The socket really is reachable at this address
+		// once the provider routes the fixed port, so "host" is honest and
+		// earns its higher priority; the loopback/private candidates remain
+		// in the list for same-host viewers.
+		viewerSE.SetNAT1To1IPs(cfg.PublicIPs, webrtc.ICECandidateTypeHost)
+	}
+
 	s.api = webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir), webrtc.WithSettingEngine(se))
+	s.apiViewer = webrtc.NewAPI(
+		webrtc.WithMediaEngine(m),
+		webrtc.WithInterceptorRegistry(ir),
+		webrtc.WithSettingEngine(viewerSE),
+	)
+	if cfg.MediaConn != nil || cfg.MediaTCP != nil || len(cfg.PublicIPs) > 0 {
+		s.logf("webrtc: viewer leg using fixed media udp=%v tcp=%v public=%v", cfg.MediaConn != nil, cfg.MediaTCP != nil, cfg.PublicIPs)
+	}
 	return s
 }
 
@@ -230,12 +286,17 @@ func (s *Session) nextConnID() int64 {
 // buildPeerConnection returns a PeerConnection configured with the
 // Session's STUN policy (empty Config.StunServer -> host candidates only,
 // per wave-plan decision 7).
-func (s *Session) buildPeerConnection() (*webrtc.PeerConnection, error) {
+// buildPeerConnection builds a PC on the api the CALLER names, because the
+// two legs need different ICE settings (ADR-062): pass s.api for the loopback
+// ingest leg, s.apiViewer for a viewer. Making it a parameter rather than a
+// field read means a new call site has to state which leg it is, instead of
+// silently inheriting whichever engine happened to be default.
+func (s *Session) buildPeerConnection(api *webrtc.API) (*webrtc.PeerConnection, error) {
 	config := webrtc.Configuration{}
 	if s.cfg.StunServer != "" {
 		config.ICEServers = []webrtc.ICEServer{{URLs: []string{s.cfg.StunServer}}}
 	}
-	pc, err := s.api.NewPeerConnection(config)
+	pc, err := api.NewPeerConnection(config)
 	if err != nil {
 		return nil, fmt.Errorf("webrtc: new peer connection: %w", err)
 	}

@@ -136,17 +136,43 @@ func TestPackageChromeRoot_EmptySlot1Skipped_FindsSlot2(t *testing.T) {
 		t.Skip("Phase 1 deferral: packageChromeRoot returns empty on Windows")
 	}
 	base := t.TempDir()
-	exe := filepath.Join(base, "bin", "omnipus")
+	// The exe sits four levels below base so that EVERY platform's candidate
+	// list lands inside t.TempDir(): darwin's second candidate is three levels
+	// up from exeDir (the sibling-of-.app layout), which from a shallower exe
+	// would resolve outside base and into the shared system temp dir.
+	exe := filepath.Join(base, "opt", "omnipus", "bin", "omnipus")
 	require.NoError(t, os.MkdirAll(filepath.Dir(exe), 0o755))
 	require.NoError(t, os.WriteFile(exe, []byte("binary"), 0o755))
-	slot1 := filepath.Join(base, "chromium")
-	slot2 := filepath.Join(base, "share", "omnipus", "chromium")
-	require.NoError(t, os.MkdirAll(slot1, 0o755))
-	seedPackageChrome(t, slot2, true)
 
 	previousExecutable := osExecutable
 	osExecutable = func() (string, error) { return exe, nil }
 	t.Cleanup(func() { osExecutable = previousExecutable })
+
+	// Derive the two slots from the real candidate list rather than hardcoding
+	// the linux FHS share/ layout: darwin's packageChromeRootCandidates returns
+	// a 2-element list with NO share/omnipus/ entry (ADR-052 Phase 3 / C3), so a
+	// hardcoded slot2 was never probed there and the probe correctly returned
+	// slot1/ProbeEmptyRoot. What this test actually pins is platform-agnostic —
+	// an existing-but-empty first slot is skipped in favour of the first
+	// candidate holding a valid payload — so read the slots from the contract.
+	candidates := packageChromeRootCandidates()
+	require.GreaterOrEqual(t, len(candidates), 2,
+		"every non-windows platform must expose at least two package-root candidates")
+	slot1, slot2 := candidates[0], candidates[1]
+	// F9 (#615/#617/#618 hardening review): both derived slots MUST stay
+	// inside t.TempDir(). Without this, a future candidate-layout change
+	// (e.g. widening a platform's "levels up from exeDir" walk) could make
+	// slot1/slot2 resolve outside base and into the real filesystem — the
+	// MkdirAll below would then create directories on the host running the
+	// test rather than in a throwaway temp dir. The exe-nesting depth
+	// comment above already reasons about this; this assertion makes the
+	// invariant it depends on self-enforcing instead of relying on a human
+	// re-deriving it by hand on every future candidate-list change.
+	require.True(t, strings.HasPrefix(slot1, base), "slot1 %q must resolve inside t.TempDir() %q", slot1, base)
+	require.True(t, strings.HasPrefix(slot2, base), "slot2 %q must resolve inside t.TempDir() %q", slot2, base)
+	require.NoError(t, os.MkdirAll(slot1, 0o755))
+	seedPackageChrome(t, slot2, true)
+
 	previousRoot := packageChromeRootForTest
 	packageChromeRootForTest = ""
 	t.Cleanup(func() { packageChromeRootForTest = previousRoot })
@@ -166,7 +192,24 @@ func TestPackageChromeRoot_NoCandidatePresent_ReturnsEmpty(t *testing.T) {
 		t.Skip("Phase 1 deferral: packageChromeRoot returns empty on Windows")
 	}
 	base := t.TempDir()
-	exe := filepath.Join(base, "bin", "omnipus")
+	// Four levels below base, for the same reason as the sibling test above —
+	// and this one is the reason that rule exists. On darwin the SECOND
+	// candidate is three levels up from exeDir, so from a shallow
+	// <base>/bin/omnipus it resolves to <system temp>/chromium: OUTSIDE
+	// t.TempDir(), in the shared per-user temp root.
+	//
+	// That made this test read state it does not own. A real
+	// /var/folders/.../T/chromium (a seeded 151.0.7922.138 + chrome.sha256,
+	// left behind by an EARLIER run of the sibling test back when it also used
+	// a shallow exe and seeded its slot 2 out there) made this assertion fail
+	// with "Should be empty, but was /var/folders/.../T/chromium" — a genuine
+	// failure of a genuinely correct probe, caused entirely by test pollution
+	// that outlived the run that created it.
+	//
+	// Keeping every candidate inside t.TempDir() makes the "no candidate
+	// present" premise actually true, and makes it impossible for this test to
+	// be poisoned by, or to poison, anything else on the machine.
+	exe := filepath.Join(base, "opt", "omnipus", "bin", "omnipus")
 	require.NoError(t, os.MkdirAll(filepath.Dir(exe), 0o755))
 	require.NoError(t, os.WriteFile(exe, []byte("binary"), 0o755))
 	previousExecutable := osExecutable
@@ -175,6 +218,15 @@ func TestPackageChromeRoot_NoCandidatePresent_ReturnsEmpty(t *testing.T) {
 	previousRoot := packageChromeRootForTest
 	packageChromeRootForTest = ""
 	t.Cleanup(func() { packageChromeRootForTest = previousRoot })
+
+	// Precondition, asserted rather than assumed: every candidate this probe
+	// will consult must live under base. If a future layout change moves one
+	// outside again, this fails HERE with a clear reason instead of failing
+	// mysteriously later depending on what happens to be in the system temp.
+	for _, cand := range packageChromeRootCandidates() {
+		require.True(t, strings.HasPrefix(cand, base),
+			"candidate %q escapes t.TempDir() %q — it would read (or create) shared system temp state", cand, base)
+	}
 
 	gotRoot, gotStatus := packageChromeRootProbe()
 	assert.Empty(t, gotRoot)
@@ -424,9 +476,17 @@ func TestResolve_Step3_TrustPathChromeTrue_AllowsPATH(t *testing.T) {
 // hard-fail-in-the-safe-direction behavior: package chrome present with a
 // chrome.sha256 whose digest disagrees with the binary's actual SHA-256 —
 // step 3 logs WARN and falls through to step 4 (managed download). The
-// fixture here has nothing on $PATH and no pre-installed managed binary,
-// so step 4 will fail in this test environment too; the test asserts the
-// PACKAGE binary was NOT returned (its mismatch rejected it).
+// fixture here has nothing on $PATH and no pre-installed managed binary, so
+// step 4 must fail — deterministically and fast, via withManifestURL
+// pointing at an unreachable local address, NOT by assuming the real
+// chrome-for-testing endpoint happens to be unreachable from the test host.
+// #615 found this test hanging for the full go-test-race timeout (900s) on
+// any host WITH real internet access (e.g. GitHub Actions runners): the
+// original comment's "step 4 will fail in this test environment too"
+// assumption only held on an offline host, and this test package is not
+// gated by skipIfNoBrowser (only the real-Chrome-launching tests are) —
+// see installer_test.go's TestInstaller_PrefersInstalledBinary for the same
+// unreachable-local-URL pattern, established for exactly this reason.
 func TestResolve_Step3_SHAMismatchFallsThroughToManaged(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell-script test double")
@@ -434,6 +494,7 @@ func TestResolve_Step3_SHAMismatchFallsThroughToManaged(t *testing.T) {
 	if _, err := cftPlatform(); err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
+	withManifestURL(t, "http://127.0.0.1:1/unreachable-manifest")
 
 	binDir := t.TempDir()
 	for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
@@ -469,10 +530,12 @@ func TestResolve_Step3_SHAMismatchFallsThroughToManaged(t *testing.T) {
 // TestResolve_Step3_SHAMissingFallsThrough proves the SEC-ADR052-001
 // fail-closed contract on the resolve path: a package Chrome without a
 // sibling chrome.sha256 is REFUSED at step 3 (not an unverified acceptance).
-// Resolution falls through to step 4 (managed download). In this test
-// environment step 4 will also fail (no manifest server, no pre-installed
-// binary) — the relevant assertion is that pkgBin is NOT the returned
-// path.
+// Resolution falls through to step 4 (managed download), which must fail —
+// deterministically and fast, via withManifestURL pointing at an
+// unreachable local address (see the sibling test above for why: #615
+// found the un-mocked version of this pattern hanging for the full
+// go-test-race timeout on any host with real internet access, since the
+// "step 4 will also fail" comment's assumption only holds offline).
 func TestResolve_Step3_SHAMissingFallsThrough(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell-script test double")
@@ -480,6 +543,7 @@ func TestResolve_Step3_SHAMissingFallsThrough(t *testing.T) {
 	if _, err := cftPlatform(); err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
+	withManifestURL(t, "http://127.0.0.1:1/unreachable-manifest")
 
 	binDir := t.TempDir()
 	for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {

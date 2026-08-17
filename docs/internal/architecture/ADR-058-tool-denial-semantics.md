@@ -1,6 +1,7 @@
 # ADR-058: Tool-denial semantics — say which denials are permanent, and bound the retry
 
 - **Status:** Accepted; **Amended 2026-08-05** (see [§10](#10-amendments-2026-08-05) — D4's mechanism superseded, W6 resolved by deletion, D1's reason enumeration corrected). Original decision text preserved throughout.
+- **⚠️ PARTIALLY SUPERSEDED 2026-08-11 by [ADR-060](ADR-060-structured-tool-failure-family.md) §10:** §3's last bullet (scoping the `*ToolResult` refusal family OUT) is reversed, and §7 item 4's *"`PermissionDeniedResult` emits a plain string with no schema and is unaffected either way"* is no longer true — it now emits the generated `PermissionDenied` wire shape. Everything else in §3 and §7 stands.
 - **Date:** 2026-08-05
 - **Related:** [#594](https://github.com/elicify-ai/omnipus/issues/594) (this ADR is the second half of it; `6d0735ef` was the first); [ADR-036](ADR-036-consolidate-shell-and-subagent-tools.md) §3.4 (the standing-grant consultation point); [ADR-057](ADR-057-session-parent-child-parity.md) FR-080/FR-081 (approval-entry identity); FR-011/FR-016/FR-082 (the approval gate); FR-084 (`turn_synthetic_error_floor`); FR-009/#264 (headless auto-deny)
 - **Deciders:** Operator (Daniel Piatkowski)

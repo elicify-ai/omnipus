@@ -111,6 +111,82 @@ func TestGetModelConfig_RoundRobinStartsFromFirstMatch(t *testing.T) {
 	}
 }
 
+// TestGetModelConfig_SkipsUnusableCredentialInFavorOfWorkingSibling is the D3
+// review regression (2026-08-15): several providers[] entries may share one
+// model_name for load balancing, round-robinned by GetModelConfig. Before
+// this fix, an entry whose api_key_ref never resolved stayed in the
+// candidate pool on equal footing with a working sibling — the round-robin
+// counter has no key-awareness, so it could hand the broken entry back to
+// CreateProviderFromConfig, which happily builds a provider with an empty API
+// key and produces a bare upstream 401 naming neither the provider nor the
+// credential. This was unreachable before gateway.go's reportInjectionErrors
+// started degrading (rather than aborting) on an unresolvable provider ref —
+// boot used to abort outright, so a config carrying a broken load-balanced
+// sibling never got to run. The degrade-not-abort fix made it reachable for
+// the first time.
+func TestGetModelConfig_SkipsUnusableCredentialInFavorOfWorkingSibling(t *testing.T) {
+	rrCounter.Store(0)
+
+	const goodRef = "MODELCFG_TEST_LB_GOOD_KEY"
+	const badRef = "MODELCFG_TEST_LB_BAD_KEY"
+	t.Setenv(goodRef, "sk-good")
+	t.Setenv(badRef, "") // present but never resolved — simulates a failed injection
+
+	cfg := &Config{
+		Providers: []*ModelConfig{
+			{ModelName: "lb-model", Model: "openai/gpt-4o-bad", APIKeyRef: badRef},
+			{ModelName: "lb-model", Model: "openai/gpt-4o-good", APIKeyRef: goodRef},
+		},
+	}
+
+	for i := range 20 {
+		result, err := cfg.GetModelConfig("lb-model")
+		if err != nil {
+			t.Fatalf("GetModelConfig() call %d error = %v", i, err)
+		}
+		if result.Model != "openai/gpt-4o-good" {
+			t.Fatalf(
+				"call %d returned %q — round-robin must never select an entry whose credential "+
+					"never resolved when a working sibling exists; a bare upstream 401 naming neither "+
+					"the provider nor the credential would result",
+				i, result.Model,
+			)
+		}
+	}
+}
+
+// TestGetModelConfig_AllUnusableFallsBackToUnfiltered pins the fallback: when
+// NONE of the siblings sharing a model_name are usable, GetModelConfig must
+// still return one of them rather than reporting "model not found" — the
+// caller (gateway.go's defaultModelCredentialBlocked) is responsible for
+// reporting the model as blocked, and needs a real ModelConfig (for its
+// APIKeyRef) to name the credential in that message.
+func TestGetModelConfig_AllUnusableFallsBackToUnfiltered(t *testing.T) {
+	rrCounter.Store(0)
+
+	const ref1 = "MODELCFG_TEST_ALL_BAD_1"
+	const ref2 = "MODELCFG_TEST_ALL_BAD_2"
+	t.Setenv(ref1, "")
+	t.Setenv(ref2, "")
+
+	cfg := &Config{
+		Providers: []*ModelConfig{
+			{ModelName: "lb-model", Model: "openai/gpt-4o-1", APIKeyRef: ref1},
+			{ModelName: "lb-model", Model: "openai/gpt-4o-2", APIKeyRef: ref2},
+		},
+	}
+
+	for i := range 10 {
+		result, err := cfg.GetModelConfig("lb-model")
+		if err != nil {
+			t.Fatalf("GetModelConfig() call %d error = %v — must still resolve when all siblings are unusable", i, err)
+		}
+		if result == nil {
+			t.Fatalf("GetModelConfig() call %d returned a nil result", i)
+		}
+	}
+}
+
 func TestGetModelConfig_Concurrent(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{

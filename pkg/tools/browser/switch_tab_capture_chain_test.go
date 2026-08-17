@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -69,8 +70,10 @@ func TestSwitchTab_ActivationPrecedesTabsChangedNotification(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t, 5)
 	rec := &chainRecorder{}
 
-	m.activateTabFn = func(context.Context) error {
-		rec.add("chrome-activated")
+	m.tabFocusFn = func(_ context.Context, actions ...chromedp.Action) error {
+		if focusTreatment(actions) == "foreground" {
+			rec.add("chrome-activated")
+		}
 		return nil
 	}
 	m.SetTabsChangedFunc(func(_ string, _ []Tab, activeIdx int) {
@@ -108,8 +111,10 @@ func TestSwitchTab_EverySwitchActivatesAndNotifies(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t, 5)
 	rec := &chainRecorder{}
 
-	m.activateTabFn = func(context.Context) error {
-		rec.add("activate")
+	m.tabFocusFn = func(_ context.Context, actions ...chromedp.Action) error {
+		if focusTreatment(actions) == "foreground" {
+			rec.add("activate")
+		}
 		return nil
 	}
 	m.SetTabsChangedFunc(func(string, []Tab, int) { rec.add("notify") })
@@ -151,7 +156,10 @@ func TestSwitchTab_ActivatesTabMatchingResolvedSession(t *testing.T) {
 	// context for later comparison is exactly the pattern that lint discourages.
 	var mu sync.Mutex
 	activatedCtxs := make([]context.Context, 0, 1)
-	m.activateTabFn = func(tabCtx context.Context) error {
+	m.tabFocusFn = func(tabCtx context.Context, actions ...chromedp.Action) error {
+		if focusTreatment(actions) != "foreground" {
+			return nil
+		}
 		mu.Lock()
 		activatedCtxs = append(activatedCtxs, tabCtx)
 		mu.Unlock()
@@ -162,6 +170,12 @@ func TestSwitchTab_ActivatesTabMatchingResolvedSession(t *testing.T) {
 	require.NoError(t, err)
 	_, err = m.OpenTab(DefaultSessionID)
 	require.NoError(t, err)
+
+	// Discard setup activations: OpenTab foregrounds the tab it opens too
+	// (review finding F9), so only the switch below is under test here.
+	mu.Lock()
+	activatedCtxs = activatedCtxs[:0]
+	mu.Unlock()
 
 	_, err = m.SwitchTab(DefaultSessionID, 1)
 	require.NoError(t, err)
@@ -228,7 +242,17 @@ func TestSwitchTab_SlowActivationDoesNotBlockOtherSessions(t *testing.T) {
 
 	release := make(chan struct{})
 	entered := make(chan struct{}, 1)
-	m.activateTabFn = func(context.Context) error {
+
+	_, err := m.Session(DefaultSessionID)
+	require.NoError(t, err)
+	_, err = m.OpenTab(DefaultSessionID)
+	require.NoError(t, err)
+
+	// Installed AFTER setup, deliberately: OpenTab drives the same focus seam
+	// as SwitchTab (review finding F9 — opening a tab moves the active tab
+	// too), so a hook that blocks forever would hang the setup instead of the
+	// switch this test is about.
+	m.tabFocusFn = func(context.Context, ...chromedp.Action) error {
 		select {
 		case entered <- struct{}{}:
 		default:
@@ -236,11 +260,6 @@ func TestSwitchTab_SlowActivationDoesNotBlockOtherSessions(t *testing.T) {
 		<-release // simulate a hung CDP call
 		return nil
 	}
-
-	_, err := m.Session(DefaultSessionID)
-	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
-	require.NoError(t, err)
 
 	switched := make(chan struct{})
 	go func() {

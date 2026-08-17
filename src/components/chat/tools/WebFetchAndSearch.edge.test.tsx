@@ -10,7 +10,11 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/react'
 import type { ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
 
-type RenderFn = (props: { args: unknown; result: unknown; status: { type: string; reason?: string } }) => React.ReactNode
+// Issue #617: `isError` is now a real field on the render-prop object (set
+// by omnipus-runtime.ts from the store's resolved ToolCall.status) — it is
+// NOT derivable from `status.type === 'incomplete'` any more, since that can
+// never be true for a finished call carrying a result.
+type RenderFn = (props: { args: unknown; result: unknown; status: { type: string; reason?: string }; isError?: boolean }) => React.ReactNode
 
 // vi.hoisted runs before vi.mock factory and before all imports.
 const captured = vi.hoisted((): Record<string, RenderFn> => ({}))
@@ -223,9 +227,9 @@ describe.each([
 // data-testid on their root, so these assertions use `container` queries.
 
 describe('WebFetchBlock — flat text-line status dot', () => {
-  function renderFetch(result: unknown, statusType: string, url = 'https://example.com') {
+  function renderFetch(result: unknown, statusType: string, url = 'https://example.com', isError?: boolean) {
     const renderFn = captured['web_fetch']
-    return render(renderFn({ args: { url }, result, status: { type: statusType } }) as React.ReactElement)
+    return render(renderFn({ args: { url }, result, status: { type: statusType }, isError }) as React.ReactElement)
   }
 
   it('running: indicator is the spinning icon, not a dot', () => {
@@ -243,8 +247,11 @@ describe('WebFetchBlock — flat text-line status dot', () => {
     expect(indicator?.getAttribute('class')).toContain('rounded-full')
   })
 
-  it('error: indicator is an 8px error-colored dot with a "Failed" label — not a green dot, not silent', () => {
-    const { container, getByText } = renderFetch(null, 'incomplete')
+  it('isError=true: indicator is an 8px error-colored dot with a "Failed" label — not a green dot, not silent', () => {
+    // Issue #617: producible pairing — a finished fetch always carries a
+    // truthy `result` in production, so `status.type === 'incomplete'`
+    // alone (the old shape here) never occurs; `isError` is the real signal.
+    const { container, getByText } = renderFetch(null, 'complete', undefined, true)
     const indicator = container.querySelector('button')?.children[0] as HTMLElement
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
     expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-success)]')
@@ -326,12 +333,57 @@ describe('WebFetchBlock — flat text-line status dot', () => {
   })
 })
 
+// M7 (second review wave): every test above drives `captured['web_fetch']`
+// — the LEGACY alias registration (WebFetchLegacyUI, kept only for old
+// transcript replay). The CANONICAL registration the backend actually emits
+// post-§7-rename, `captured['fetch_url']` (WebFetchPreviewUI), was never
+// separately exercised — both are distinct `makeAssistantToolUI({...})` call
+// sites in WebFetchPreview.tsx, each with its own `render` closure, so
+// proving the alias threads `isError` correctly says nothing about whether
+// the canonical one does.
+describe('WebFetchPreviewUI — canonical fetch_url registration wiring (issue #617)', () => {
+  it('captures a distinct render function under "fetch_url"', () => {
+    expect(captured['fetch_url']).toBeDefined()
+    expect(captured['fetch_url']).not.toBe(captured['web_fetch'])
+  })
+
+  it('a genuine error outcome (isError=true from the real render prop) renders the error dot and "Failed" label', () => {
+    const renderFn = captured['fetch_url']!
+    const { container, getByText } = render(
+      renderFn({
+        args: { url: 'https://example.com' },
+        result: null,
+        status: { type: 'complete' },
+        isError: true,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+    expect(getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('a finished call with content but isError=false renders the success dot, not error', () => {
+    const renderFn = captured['fetch_url']!
+    const { container, getByText } = render(
+      renderFn({
+        args: { url: 'https://example.com' },
+        result: 'page content',
+        status: { type: 'complete' },
+        isError: false,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(getByText('Done')).toBeInTheDocument()
+  })
+})
+
 describe('WebSearchBlock — flat text-line status dot', () => {
   const structuredResult = '1. Example Site\n   https://example.com\n   Site description here.\n'
 
-  function renderSearch(result: unknown, statusType: string) {
+  function renderSearch(result: unknown, statusType: string, isError?: boolean) {
     const renderFn = captured['web_search']
-    return render(renderFn({ args: { query: 'test' }, result, status: { type: statusType } }) as React.ReactElement)
+    return render(renderFn({ args: { query: 'test' }, result, status: { type: statusType }, isError }) as React.ReactElement)
   }
 
   it('running: indicator is the spinning icon, not a dot', () => {
@@ -349,8 +401,10 @@ describe('WebSearchBlock — flat text-line status dot', () => {
     expect(indicator?.getAttribute('class')).toContain('rounded-full')
   })
 
-  it('error: indicator is an 8px error-colored dot with a "Failed" label — not a green dot, not silent', () => {
-    const { container, getByText } = renderSearch(null, 'incomplete')
+  it('isError=true: indicator is an 8px error-colored dot with a "Failed" label — not a green dot, not silent', () => {
+    // Issue #617: producible pairing — see the equivalent WebFetchBlock test
+    // above for the full rationale.
+    const { container, getByText } = renderSearch(null, 'complete', true)
     const indicator = container.querySelector('button')?.children[0] as HTMLElement
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
     expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-success)]')

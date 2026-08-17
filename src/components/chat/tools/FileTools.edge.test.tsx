@@ -7,11 +7,50 @@
  * makeAssistantToolUI mock (hoisted before static imports).
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, fireEvent } from '@testing-library/react'
 import type { ToolCallStartFrame } from '@/lib/api/generated/asyncapi-types'
+import { useChatStore } from '@/store/chat'
+import type { ToolCall } from '@/lib/api'
 
-type RenderFn = (props: { args: unknown; result: unknown; status: { type: string; reason?: string } }) => React.ReactNode
+// Issue #617: `isError` (for read_file/file.read/list_dir) is now a real
+// field on the render-prop object, set by omnipus-runtime.ts from the
+// store's resolved ToolCall.status — it is NOT derivable from
+// `status.type === 'incomplete'` any more. `toolCallId` (for
+// write_file/edit_file/append_file, routed through FileWriteConfirm.tsx's
+// FileOpRow) is the key FileOpRow uses to read the SAME resolved status
+// from the store directly via a hook — see the `seedCall` helper below,
+// which mirrors FileWriteConfirm.test.tsx's established pattern.
+type RenderFn = (props: {
+  toolCallId?: string
+  args: unknown
+  result: unknown
+  status: { type: string; reason?: string }
+  isError?: boolean
+}) => React.ReactNode
+
+/** seedCall puts a tool call in the store the way the WS frame handler does
+ *  (mirrors FileWriteConfirm.test.tsx's seedCall — see that file's header
+ *  comment for why FileOpRow needs a real store record rather than a bare
+ *  `status.type === 'incomplete'` prop to render an error). */
+function seedCall(toolCallId: string, partial: Partial<ToolCall>) {
+  useChatStore.setState({
+    toolCalls: {
+      [toolCallId]: {
+        id: toolCallId,
+        call_id: toolCallId,
+        tool: 'write_file',
+        params: { path: '/file.txt' },
+        status: 'success',
+        ...partial,
+      } as ToolCall & { call_id: string },
+    },
+  })
+}
+
+beforeEach(() => {
+  useChatStore.setState({ toolCalls: {} })
+})
 
 // vi.hoisted runs before vi.mock factory and before all imports.
 const captured = vi.hoisted((): Record<string, RenderFn> => ({}))
@@ -32,7 +71,7 @@ vi.mock('@assistant-ui/react', async (importOriginal) => {
 // Static imports: vi.mock intercepts makeAssistantToolUI before these run.
 import { FileReadPreviewUI, FileReadAliasDotUI } from './FileReadPreview'
 import { FileWriteConfirmUI, EditFileConfirmUI, AppendFileConfirmUI } from './FileWriteConfirm'
-import { FileTreeViewUI } from './FileTreeView'
+import { FileTreeViewUI, FileListAliasDotUI } from './FileTreeView'
 
 // ── FileReadBlock result edge cases ───────────────────────────────────────────
 
@@ -264,9 +303,11 @@ describe.each([
 // their root, so assertions use `container` queries.
 
 describe('FileReadBlock — flat text-line status dot', () => {
-  function renderRead(result: unknown, statusType: string) {
+  function renderRead(result: unknown, statusType: string, isError?: boolean) {
     const renderFn = captured['read_file']
-    return render(renderFn({ args: { path: '/workspace/file.ts' }, result, status: { type: statusType } }) as React.ReactElement)
+    return render(
+      renderFn({ args: { path: '/workspace/file.ts' }, result, status: { type: statusType }, isError }) as React.ReactElement
+    )
   }
 
   it('running: indicator is the spinning icon, not a dot', () => {
@@ -285,7 +326,12 @@ describe('FileReadBlock — flat text-line status dot', () => {
   })
 
   it('error: indicator is an 8px error-colored dot with a "Failed" label — not a green dot, not silent', () => {
-    const { container, getByText } = renderRead(null, 'incomplete')
+    // Issue #617: `isError` is now a real, separate field on the render-prop
+    // object (set by omnipus-runtime.ts from the store's resolved
+    // ToolCall.status) — `status.type === 'incomplete'` alone no longer
+    // drives the error dot. The pairing here (result:null, status:complete,
+    // isError:true) matches a read that genuinely failed with no output.
+    const { container, getByText } = renderRead(null, 'complete', true)
     const indicator = container.querySelector('button')?.children[0] as HTMLElement
     expect(indicator?.tagName.toLowerCase()).toBe('span')
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
@@ -353,11 +399,57 @@ describe('FileReadBlock — flat text-line status dot', () => {
   })
 })
 
+// M7 (second review wave): `captured['file.read']` (the BRD C.6.1.4
+// dot-notation alias, FileReadAliasDotUI) previously only got the
+// `.not.toThrow()` smoke coverage above — never an isError-threading
+// assertion. It is a SEPARATE `makeAssistantToolUI({...})` render closure
+// from the canonical `read_file` registration (FileReadPreview.tsx), so the
+// canonical block's coverage above says nothing about whether this one
+// wires `isError` correctly.
+describe('FileReadBlock (file.read alias) live wiring — issue #617', () => {
+  it('isError=true renders the error dot and "Failed" label', () => {
+    const renderFn = captured['file.read']!
+    const { container, getByText } = render(
+      renderFn({
+        args: { path: '/workspace/file.ts' },
+        result: null,
+        status: { type: 'complete' },
+        isError: true,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+    expect(getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('isError=false with a result renders the success dot, not error', () => {
+    const renderFn = captured['file.read']!
+    const { container } = render(
+      renderFn({
+        args: { path: '/workspace/file.ts' },
+        result: 'const x = 1\n',
+        status: { type: 'complete' },
+        isError: false,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-error)]')
+  })
+})
+
 describe('FileOpBlock (write/edit/append) — flat text-line status dot', () => {
-  function renderWrite(statusType: string) {
+  const WRITE_CALL_ID = 'call-write-1'
+
+  function renderWrite(statusType: string, toolCallId = WRITE_CALL_ID) {
     const renderFn = captured['write_file']
     return render(
-      renderFn({ args: { path: '/file.txt', content: 'data' }, result: null, status: { type: statusType } }) as React.ReactElement
+      renderFn({
+        toolCallId,
+        args: { path: '/file.txt', content: 'data' },
+        result: null,
+        status: { type: statusType },
+      }) as React.ReactElement
     )
   }
 
@@ -377,7 +469,15 @@ describe('FileOpBlock (write/edit/append) — flat text-line status dot', () => 
   })
 
   it('error: indicator is an 8px error-colored dot', () => {
-    const { container } = renderWrite('incomplete')
+    // Issue #617: FileOpRow reads the real outcome from the chat store
+    // (ToolCall.status via a hook keyed by toolCallId), not from
+    // `status.type === 'incomplete'` — see FileWriteConfirm.test.tsx's file
+    // header for the full rationale (a finished call always carries a
+    // truthy result, so the part status is always 'complete' in
+    // production). Seed the store with the SAME toolCallId this render
+    // passes, matching how the WS frame handler populates it.
+    seedCall(WRITE_CALL_ID, { status: 'error', result: 'disk full while writing output', error: 'disk full while writing output' })
+    const { container } = renderWrite('complete')
     const indicator = container.firstElementChild?.children[0] as HTMLElement
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
   })
@@ -385,23 +485,28 @@ describe('FileOpBlock (write/edit/append) — flat text-line status dot', () => 
   it('running/success/error/cancelled each render a status-differentiating label, not just a bare dot (WCAG 1.4.1)', () => {
     const renderFn = captured['write_file']
     expect(
-      render(renderFn({ args: { path: '/file.txt' }, result: null, status: { type: 'running' } }) as React.ReactElement).getByText(
-        'Running...'
-      )
+      render(
+        renderFn({ toolCallId: 'call-running', args: { path: '/file.txt' }, result: null, status: { type: 'running' } }) as React.ReactElement
+      ).getByText('Running...')
     ).toBeInTheDocument()
     expect(
-      render(renderFn({ args: { path: '/file.txt' }, result: null, status: { type: 'complete' } }) as React.ReactElement).getByText(
-        'Done'
-      )
+      render(
+        renderFn({ toolCallId: 'call-success', args: { path: '/file.txt' }, result: null, status: { type: 'complete' } }) as React.ReactElement
+      ).getByText('Done')
     ).toBeInTheDocument()
+    // Issue #617: producible pairing — seed the store for this toolCallId
+    // with status:'error' and render with the real part status
+    // (status:'complete', since the call carries a result).
+    seedCall('call-error', { status: 'error', result: 'boom', error: 'boom' })
     expect(
-      render(renderFn({ args: { path: '/file.txt' }, result: null, status: { type: 'incomplete' } }) as React.ReactElement).getByText(
-        'Failed'
-      )
+      render(
+        renderFn({ toolCallId: 'call-error', args: { path: '/file.txt' }, result: 'boom', status: { type: 'complete' } }) as React.ReactElement
+      ).getByText('Failed')
     ).toBeInTheDocument()
     expect(
       render(
         renderFn({
+          toolCallId: 'call-cancelled',
           args: { path: '/file.txt' },
           result: null,
           status: { type: 'incomplete', reason: 'cancelled' },
@@ -445,9 +550,11 @@ describe('FileOpBlock (write/edit/append) — flat text-line status dot', () => 
 describe('FileTreeBlock — flat text-line status dot', () => {
   const treeResult = 'file1.txt\nfile2.txt\ndir1/\n'
 
-  function renderTree(result: unknown, statusType: string) {
+  function renderTree(result: unknown, statusType: string, isError?: boolean) {
     const renderFn = captured['list_dir']
-    return render(renderFn({ args: { path: '.' }, result, status: { type: statusType } }) as React.ReactElement)
+    return render(
+      renderFn({ args: { path: '.' }, result, status: { type: statusType }, isError }) as React.ReactElement
+    )
   }
 
   it('running: indicator is the spinning icon, not a dot', () => {
@@ -466,7 +573,9 @@ describe('FileTreeBlock — flat text-line status dot', () => {
   })
 
   it('error: indicator is an 8px error-colored dot with a "Failed" label — not a green dot, not silent', () => {
-    const { container, getByText } = renderTree(null, 'incomplete')
+    // Issue #617: `isError` is now a real, separate render-prop field — see
+    // the equivalent FileReadBlock test above for the full rationale.
+    const { container, getByText } = renderTree(null, 'complete', true)
     const indicator = container.querySelector('button')?.children[0] as HTMLElement
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
     expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-success)]')
@@ -529,6 +638,49 @@ describe('FileTreeBlock — flat text-line status dot', () => {
       expect(row.querySelector('svg')).toBeTruthy()
       expect((row as HTMLElement).style.paddingLeft).toBeDefined()
     })
+  })
+})
+
+// M7 (second review wave): `captured['file.list']` (the BRD C.6.1.4
+// dot-notation alias, FileListAliasDotUI) had ZERO coverage — not even a
+// `.not.toThrow()` smoke test, unlike its `file.read` sibling. It is a
+// SEPARATE `makeAssistantToolUI({...})` render closure from the canonical
+// `list_dir` registration (FileTreeView.tsx).
+describe('FileTreeBlock (file.list alias) live wiring — issue #617', () => {
+  it('is registered as a distinct render function from the canonical list_dir registration', () => {
+    expect(FileListAliasDotUI).toBeDefined()
+    expect(captured['file.list']).toBeDefined()
+    expect(captured['file.list']).not.toBe(captured['list_dir'])
+  })
+
+  it('isError=true renders the error dot and "Failed" label', () => {
+    const renderFn = captured['file.list']!
+    const { container, getByText } = render(
+      renderFn({
+        args: { path: '.' },
+        result: null,
+        status: { type: 'complete' },
+        isError: true,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+    expect(getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('isError=false with a result renders the success dot, not error', () => {
+    const renderFn = captured['file.list']!
+    const { container } = render(
+      renderFn({
+        args: { path: '.' },
+        result: 'file1.txt\nfile2.txt\n',
+        status: { type: 'complete' },
+        isError: false,
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-error)]')
   })
 })
 

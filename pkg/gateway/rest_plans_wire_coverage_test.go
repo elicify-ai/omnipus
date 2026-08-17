@@ -214,7 +214,7 @@ func jsonFieldName(f reflect.StructField) string {
 
 // deref unwraps pointer indirection so a *T and a T are swept identically.
 func derefType(t reflect.Type) reflect.Type {
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	return t

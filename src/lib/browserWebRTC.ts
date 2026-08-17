@@ -16,19 +16,15 @@
 // offer is not sent until `RTCPeerConnection.iceGatheringState` reaches
 // 'complete', so there is no `onicecandidate`/trickle handling here at all.
 //
-// Fallback contract (wave-plan W2-B): the JPEG screencast remains AVAILABLE
-// underneath — but note it is no longer literally always-on. The server pauses
-// the CDP screencast while every JPEG-attached viewer is also covered by a
-// live WebRTC stream, and resumes it as soon as that stops being true
-// (CaptureSession.ReconcileScreencast, plus the relay's own eviction
-// notification for a mid-session WebRTC failure). So "keeps running" is a
-// dynamic per-viewer-coverage guarantee, not an unconditional one; an earlier
-// version of this comment claimed the latter and was wrong once the pause was
-// introduced. Either way it is owned entirely by browserLiveWs.ts/
-// BrowserLiveView, outside this class — this class's only job on fallback is
-// to clean up its own PC/data-channel state and tell the caller via
-// `onFallback(reason)` so the caller can drop back to the `<img>` sink.
-// Triggers:
+// Fallback contract (operator directive — JPEG-fallback removal): there is
+// NO second sink to drop back to any more. This class's only job on
+// fallback is to clean up its own PC/data-channel state and tell the caller
+// via `onFallback(reason)`; BrowserLiveView.tsx (the sole caller) turns that
+// into a persistent, honest, user-visible failure state — never a silent
+// degrade — since a fallback here now means live video simply stopped
+// working, full stop. (What the backend capture pipeline does independently
+// of this — pause, stop, keep running — is out of this class's and this
+// file's scope; it observes only the WebRTC signaling surface.) Triggers:
 //   - a `browser_webrtc_state{available:false}` frame while offering/connected
 //   - no answer within the current answer timeout of sending the offer (see
 //     `hasConnectedOnce`/`firstAnswerTimeoutMs` below — it is NOT always
@@ -42,15 +38,15 @@
 // The counter RESETS on every successful connect, so only a sustained
 // inability to connect exhausts it; once exhausted the caller must call
 // `start()` again (a fresh re-attach) to re-arm. `start()` always resets the
-// budget. This replaced a one-shot boolean that stranded the panel in the
-// JPEG sink permanently after a single failed re-offer.
+// budget. This replaced a one-shot boolean that stranded the panel in a
+// failed state permanently after a single failed re-offer.
 //
 // Answer-timeout duration (fix-wave, MED — reviewer finding 4): the gateway's
 // legitimate COLD START (capture start ~20s + bringToFront ~5s + tracks wait)
 // can run past 25s worst case, well past the regular `answerTimeoutMs`
 // (default 5s) — a plain 5s timeout on a cold start is a FALSE fallback that
-// then connects fine on its own retry, degrading the panel to JPEG and
-// showing a spurious warning for no reason. `hasConnectedOnce` (a public,
+// then connects fine on its own retry, needlessly surfacing the panel's
+// error state and a spurious warning. `hasConnectedOnce` (a public,
 // read-only, lifetime flag — never reset once true, not per-attempt) is what
 // decides which timeout governs any given negotiation: false (this instance
 // has never once reached 'connected') uses the generous `firstAnswerTimeoutMs`
@@ -64,7 +60,8 @@
  * 'fallback' as a *reason string* passed to `onFallback` rather than a
  * separate public state — from the caller's point of view "ICE failed" and
  * "gateway reported unavailable" both mean exactly one thing: stop trying to
- * render WebRTC video and let the JPEG sink carry on. */
+ * render WebRTC video and tell the caller why (there is no second sink to
+ * carry on with any more — see `onFallback`'s doc comment above). */
 export type BrowserWebRTCState = 'idle' | 'offering' | 'connected' | 'fallback'
 
 export interface BrowserWebRTCSessionOptions { // not-wire-format: local constructor options for the client-side PC state machine (timer durations + injected RTCPeerConnection factory for tests); never serialized, never crosses the gateway/SPA boundary
@@ -102,7 +99,7 @@ export interface BrowserWebRTCSessionOptions { // not-wire-format: local constru
    * 'complete' before giving up and sending the offer with whatever
    * candidates have gathered so far (non-trickle still works with a partial
    * candidate set — better than wedging in 'offering' forever on a stuck
-   * gathering). Default 3000. */
+   * gathering). Default 12000. */
   iceGatheringTimeoutMs?: number
 }
 
@@ -127,7 +124,15 @@ interface BrowserWebRTCStateSignal { // not-wire-format: locally widened view of
 
 const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
 const DEFAULT_ANSWER_TIMEOUT_MS = 5000
-const DEFAULT_FIRST_ANSWER_TIMEOUT_MS = 30000
+// Exported (external review F6, 2026-08-13): BrowserLiveView.tsx's own
+// FIRST_FRAME_TIMEOUT_MS — how long it waits for a decoded VIDEO FRAME,
+// which can only happen AFTER this session's own cold-start answer round
+// trip completes — used to be a hardcoded 15_000, independent of this
+// constant (30_000) and silently drifted shorter than it. A healthy cold
+// start showed a false "No video received" error and then connected seconds
+// later anyway. Exporting this is what lets the two stay derived from one
+// source instead of drifting apart again.
+export const DEFAULT_FIRST_ANSWER_TIMEOUT_MS = 30000
 // DEFAULT_DISCONNECTED_GRACE_MS (2026-07-30 UAT, Batam→Fly over VPN on iPad
 // Safari): was 5000. A 5s grace is far too tight for a high-latency mobile /
 // VPN path, where ICE 'disconnected' is a routine, self-recovering blip. The
@@ -151,10 +156,66 @@ const DEFAULT_RETRY_DELAY_MS = 15000
 // successful connection, so only a sustained inability to connect
 // (5 consecutive failures, ~15s/30s/60s/120s/240s apart) gives up for good.
 const DEFAULT_MAX_RETRIES = 5
-const DEFAULT_ICE_GATHERING_TIMEOUT_MS = 3000
+// 3000 was a hair-trigger that macOS loses. Measured on darwin 2026-08-12 in a
+// real browser on this machine: gathering completes at ~3224ms and yields
+// exactly ONE candidate, an mDNS `<uuid>.local` host candidate. Chrome
+// registers that name with the system mDNS responder before it will emit the
+// candidate, and on macOS that registration is what costs the ~3s.
+//
+// Losing this race is not a degraded connection, it is a guaranteed dead one:
+// signaling here is NON-TRICKLE, so candidates that arrive after the offer is
+// sent are never delivered at all. The old value shipped an offer with ZERO
+// candidates, Pion had nothing to pair against, and ICE failed 30s later with
+// no indication why. Every live-browser session on macOS hit this.
+const DEFAULT_ICE_GATHERING_TIMEOUT_MS = 12000
 
 function defaultPcFactory(): RTCPeerConnection {
   return new RTCPeerConnection({ iceServers: [{ urls: DEFAULT_STUN_SERVER }] })
+}
+
+/**
+ * Operator directive (JPEG-fallback removal) — turns a raw `onFallback`
+ * reason string into the honest, actionable message BrowserLiveView.tsx
+ * shows as the panel's PRIMARY content once WebRTC fails, not a toast:
+ * WebRTC is the only live-video path left, so every one of these reasons —
+ * including the three "capability gate" reasons that used to be swallowed
+ * silently because the JPEG sink kept working underneath — now means the
+ * user is looking at a broken panel and deserves to know why.
+ *
+ * Grouped by what the user can actually do about it:
+ *   - `disabled`/`not_capable`/`lite_build`: this install/build genuinely
+ *     doesn't offer live video here — retrying changes nothing; the copy
+ *     says so plainly rather than inviting a doomed retry.
+ *   - everything else (ice-failed, ice-disconnected-timeout, answer-timeout,
+ *     offer-send-failed, set-remote-description-failed, pc-create-failed,
+ *     offer-setup-failed, no-local-description, stream-stopped, `error`, the
+ *     `unavailable` default, or any future reason string not in this list
+ *     yet): a genuine connection/negotiation failure that a fresh attempt
+ *     can plausibly recover from — the caller's Retry button is meaningful.
+ *
+ * Deliberately a plain switch over known strings with a generic fallback
+ * (not an exhaustive union) — `reason` is intentionally widened to `string`
+ * (see `BrowserWebRTCStateSignal`'s own doc comment) so a future gateway
+ * build can introduce a new wire reason without this function needing to
+ * enumerate it first; the fallback branch keeps the raw reason visible
+ * (never swallows it) so a support engineer can still search logs/console
+ * for the exact string even when the copy above it is generic.
+ */
+export function translateWebRTCFallbackReason(reason: string): string {
+  switch (reason) {
+    case 'disabled':
+      return 'Live video is turned off for this installation. Ask your operator to enable it in Settings.'
+    case 'not_capable':
+      return "Live video isn't supported on this server (WebRTC capture isn't available on this platform or build)."
+    case 'lite_build':
+      return "Live video isn't available in this lite build."
+    case 'error':
+      return 'The live browser reported an error starting video. Retry, or reload the page if it keeps failing.'
+    case 'multi_agent_capture_denied':
+      return 'Live video is already in use by another agent. Close that live view first, then retry.'
+    default:
+      return `Live video connection failed (${reason}). Retry, or reload the page if it keeps failing.`
+  }
 }
 
 export class BrowserWebRTCSession {
@@ -196,6 +257,7 @@ export class BrowserWebRTCSession {
   private answerTimeoutTimer: ReturnType<typeof setTimeout> | null = null
   private disconnectedTimer: ReturnType<typeof setTimeout> | null = null
   private retryTimer: ReturnType<typeof setTimeout> | null = null
+  private iceGatheringTimer: ReturnType<typeof setTimeout> | null = null
 
   private streamCb: ((stream: MediaStream) => void) | null = null
   private inputOpenCb: (() => void) | null = null
@@ -455,19 +517,59 @@ export class BrowserWebRTCSession {
       // reaches 'complete' (a stuck STUN round trip, a flaky network) used to
       // wedge this Promise forever, leaving the machine stuck in 'offering'
       // with no offer ever sent and no fallback ever triggered. Non-trickle
-      // still works fine with whatever candidates gathered in the timeout
-      // window (worst case: fewer candidate types, not zero), so proceeding
-      // with a partial set beats never proceeding at all. The caller
+      // still works with whatever candidates gathered in the timeout window,
+      // so proceeding with a PARTIAL set beats never proceeding at all. NOTE:
+      // an earlier revision of this comment claimed the worst case was 'fewer
+      // candidate types, not zero'. That is false on macOS, where the sole
+      // candidate is an mDNS name whose registration can outlast the deadline
+      // — measured 3224ms against a 3000ms timeout — leaving exactly zero. The caller
       // (`_beginOffer`) re-checks `this.pc !== pc` right after this resolves,
       // so a timeout firing after the session was superseded/stopped is
       // harmless.
-      const timer = setTimeout(() => {
+      this.iceGatheringTimer = setTimeout(() => {
+        this.iceGatheringTimer = null
         pc.onicegatheringstatechange = null
+        // Proceeding with a PARTIAL candidate set is fine. Proceeding with an
+        // EMPTY one never is: non-trickle means an offer carrying no
+        // candidates can only ever fail, 30s later, with ICE 'failed' and
+        // nothing pointing at the cause.
+        //
+        // Bugfix (SMALL-1, external review 2026-08-13): an earlier revision
+        // (277cf7b7) titled itself "refuse to ship an empty offer" but only
+        // ever logged the console.warn below and then called `resolve()`
+        // regardless — the offer shipped anyway, exactly as before. The
+        // commit message overclaimed what the code did. This now genuinely
+        // refuses: `_fallback` reports a real, visible reason immediately
+        // (ADR-061 — no silent failures) instead of shipping a doomed offer
+        // and burning the full answer timeout waiting on a reply that could
+        // never arrive. `_fallback` tears down `this.pc` itself, so
+        // `_beginOffer`'s own `if (this.pc !== pc) return` guard — the same
+        // "superseded" check it already uses for a stop()/retry mid-flight —
+        // is what actually stops the offer from going out; the `resolve()`
+        // below only unblocks that check, it does not mean "proceed".
+        const gathered = (pc.localDescription?.sdp ?? '')
+          .split('\n')
+          .filter((l) => l.trim().startsWith('a=candidate:')).length
+        if (gathered === 0) {
+          console.warn(
+            `[browserWebRTC] ICE gathering timed out after ${this.iceGatheringTimeoutMs}ms with ZERO ` +
+              'candidates. Refusing to ship an undeliverable offer — signaling is non-trickle, so ' +
+              'candidates gathered after this point would never be sent anyway. Falling back now ' +
+              'instead of waiting 30s for an answer that could never come. On macOS this is usually ' +
+              'slow or blocked mDNS (.local) candidate registration.',
+          )
+          this._fallback('ice-gathering-empty')
+          resolve()
+          return
+        }
         resolve()
       }, this.iceGatheringTimeoutMs)
       pc.onicegatheringstatechange = () => {
         if (pc.iceGatheringState === 'complete') {
-          clearTimeout(timer)
+          if (this.iceGatheringTimer !== null) {
+            clearTimeout(this.iceGatheringTimer)
+            this.iceGatheringTimer = null
+          }
           pc.onicegatheringstatechange = null
           resolve()
         }
@@ -477,6 +579,33 @@ export class BrowserWebRTCSession {
 
   private _wirePeerConnectionEvents(pc: RTCPeerConnection): void {
     pc.ontrack = (event: RTCTrackEvent) => {
+      // Remote-CONTROL latency fix (live report, macOS 2026-08-13: "scrolling
+      // is terrible... like the inputs are queued and reach the browser with
+      // a lot of delay"). Chrome's receiver runs an ADAPTIVE jitter buffer
+      // sized for smooth playback of media streams; our capture has an
+      // irregular, content-driven frame cadence (a static page emits almost
+      // nothing, a scroll emits a burst), which that adaptivity reads as
+      // network jitter and answers with hundreds of ms of buffering. Every
+      // rendered frame — i.e. ALL visual feedback for the user's own input —
+      // then runs that far behind their hand, so a direction change keeps
+      // showing old-direction motion until the buffer drains: exactly the
+      // reported stickiness, with no queue anywhere in the input path (the
+      // server DROPS over-limit input, it never queues).
+      //
+      // Remote-desktop apps disable this buffering; so do we.
+      // jitterBufferTarget (spec'd, ms) with playoutDelayHint (older Chrome)
+      // as fallback — both best-effort, feature-detected, harmless where
+      // unsupported.
+      try {
+        const receiver = event.receiver as RTCRtpReceiver & {
+          jitterBufferTarget?: number | null
+          playoutDelayHint?: number | null
+        }
+        if (receiver && 'jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 0
+        if (receiver && 'playoutDelayHint' in receiver) receiver.playoutDelayHint = 0
+      } catch {
+        // Hint-setting must never break track wiring.
+      }
       const incoming = event.streams[0]
       if (incoming) {
         this.remoteStream = incoming
@@ -506,7 +635,7 @@ export class BrowserWebRTCSession {
         // attempts rather than inheriting exhaustion from an earlier,
         // already-recovered one. Without this reset the counter would be a
         // session-lifetime cap and a long session on a flaky link would
-        // still end up permanently stranded in the JPEG sink.
+        // still end up permanently stranded in the panel's failure state.
         this.retryCount = 0
       } else if (iceState === 'failed') {
         this._fallback('ice-failed')
@@ -564,8 +693,10 @@ export class BrowserWebRTCSession {
     if (this._state === 'fallback') return
     this._cleanupPeer()
     this._setState('fallback')
-    this.fallbackCb?.(reason)
+    // A stop() mid-gather used to still fire onFallback after the panel
+    // closed (the gathering timeout is a local setTimeout). Do not notify.
     if (this.stopped) return
+    this.fallbackCb?.(reason)
     if (this.retryCount >= this.maxRetries) return
     // Exponential backoff, capped by the attempt count: a transient blip
     // recovers on the first retry (retryDelayMs), while a genuinely-down
@@ -581,6 +712,10 @@ export class BrowserWebRTCSession {
   private _cleanupPeer(): void {
     this._clearAnswerTimeout()
     this._clearDisconnectedTimer()
+    if (this.iceGatheringTimer !== null) {
+      clearTimeout(this.iceGatheringTimer)
+      this.iceGatheringTimer = null
+    }
     if (this.inputChannel) {
       try {
         this.inputChannel.close()

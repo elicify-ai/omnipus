@@ -2,7 +2,7 @@ title: BrowserInspectRequest
 description: >
   Resolve the DOM element at a point in the live browser so the SPA can attach
   the element's text/HTML as context when a user annotates a spot. Coordinates
-  are device (CSS) pixels of the screencast frame. Best-effort — see ADR-039.
+  are device (CSS) pixels of the WebRTC video frame. Best-effort — see ADR-039.
 type: object
 required:
   - session_id

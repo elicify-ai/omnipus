@@ -275,6 +275,28 @@ export function CreateAgentModal({
     ? { policies: globalPoliciesQuery.data.policies ?? {} }
     : undefined
 
+  // Bug: the model picker collapsed four distinct provider-catalog states
+  // (query loading / query failed / provider connected but its model
+  // catalogue came back empty / genuinely no provider connected) into one
+  // "connect a provider in Settings" message — true for only the last
+  // case. Motivating incident: CI logged the gateway's upstream fetch to
+  // openrouter.ai failing nine times with `context canceled` and zero
+  // successes (the /providers endpoint itself was healthy — a direct curl
+  // from the same worker returned 200 in 0.46s), and the picker still told
+  // the user no provider was connected. `providersLoading` /
+  // `providersError` let Step 1 tell those apart; the "connected but empty
+  // catalogue" case is derived from each `Provider.warning` field
+  // (already on the wire — see `pkg/gateway/rest.go`'s providers-list
+  // handler) directly in Step1Identity, no extra fetch needed.
+  const providersLoading = providersQuery.isLoading || providersQuery.isFetching
+  const providersError = providersQuery.isError
+    ? getErrorMessage(providersQuery.error, 'Failed to load providers')
+    : undefined
+  const refetchProviders = providersQuery.refetch
+  const handleRetryProviders = useCallback(() => {
+    void refetchProviders()
+  }, [refetchProviders])
+
   // Dev-time drift guard: once the full tool registry resolves, warn if any
   // role-preset override key (toolPolicyPresets.ts) doesn't match a real
   // tool name — the exact class of bug that shipped with the dotted
@@ -316,6 +338,9 @@ export function CreateAgentModal({
       registryTools={registryTools}
       skills={skills}
       globalPolicies={globalPolicies}
+      providersLoading={providersLoading}
+      providersError={providersError}
+      onRetryProviders={handleRetryProviders}
     />
   )
 }

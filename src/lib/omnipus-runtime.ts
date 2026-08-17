@@ -18,11 +18,20 @@ type StoreToolCall = ToolCall & { call_id: string }; // not-wire-format: interna
 /**
  * Push text + history tool calls onto parts.
  *
- * When `textAtToolCallStart` carries a snapshot for any tool ID, interleave
- * the tool-call parts with text segments so the rendered order matches the
- * sequence in which the assistant streamed them. Without snapshots, fall
- * back to "text first, then tool calls" — the historical behavior used for
- * REST-loaded transcripts where snapshots are unavailable.
+ * Interleaves the tool-call parts with text segments, using whatever
+ * `textAtToolCallStart` snapshots are available, so the rendered order
+ * matches the sequence in which the assistant streamed them. A tool call
+ * with no snapshot entry for its own id (legacy bake / reconnect edge —
+ * offset genuinely unknown) sorts after every snapshotted call (via the
+ * `Number.POSITIVE_INFINITY` fallback below) and is pushed without an
+ * immediately preceding text slice of its own — it does not fall the WHOLE
+ * message back to "all text, then all tools"; only ever an id-by-id
+ * degradation. F5 (second review wave on branch fix/615-617-618-hardening):
+ * this function previously also had a second, `textAtToolCallStart ===
+ * undefined` fallback path with exactly that "text first, then tool calls"
+ * behavior — dead code, since the sole caller (buildContentParts) always
+ * passes a defined `Record` (store/chat.ts initializes the bucket to `{}`,
+ * never `undefined`); deleted, and the parameter is now required.
  *
  * This is what allows non-last (older) assistant turns to keep their tool
  * calls interleaved with the text after a new turn starts; the first-fix
@@ -35,7 +44,19 @@ function pushHistoryParts(
   text: string,
   historyToolCalls: NonNullable<ChatMessage["tool_calls"]>,
   toolCalls: Record<string, StoreToolCall>,
-  textAtToolCallStart?: Record<string, string>,
+  // F5 (second review wave on branch fix/615-617-618-hardening): required,
+  // not optional. This was previously `textAtToolCallStart?: Record<string,
+  // string>`, with a fallback code path below for the `undefined` case — but
+  // pushHistoryParts is never exported, and its ONE caller (buildContentParts,
+  // itself only reachable from convertMessage) always passes the store's own
+  // `textAtToolCallStart` bucket, which store/chat.ts initializes to `{}`
+  // (truthy, never `undefined` — see resetSession's `textAtToolCallStart: {}`).
+  // The fallback branch this replaced was therefore unreachable in production;
+  // verified by grep (no other caller, no `as any`/`undefined` cast at either
+  // call site) before deleting it, rather than just asserting it. Making the
+  // parameter required turns that invariant into a type-checked fact instead
+  // of a runtime one.
+  textAtToolCallStart: Record<string, string>,
 ): void {
   if (historyToolCalls.length === 0) {
     parts.push({ type: "text", text });
@@ -56,38 +77,18 @@ function pushHistoryParts(
     });
   }
 
-  if (textAtToolCallStart) {
-    const ordered = [...historyToolCalls].sort((a, b) => {
-      const sa = textAtToolCallStart[a.id]?.length ?? Number.POSITIVE_INFINITY;
-      const sb = textAtToolCallStart[b.id]?.length ?? Number.POSITIVE_INFINITY;
-      return sa - sb;
-    });
-    let prevTextEnd = 0;
-    for (const tc of ordered) {
-      const segmentEnd = textAtToolCallStart[tc.id]?.length;
-      if (segmentEnd !== undefined && segmentEnd > prevTextEnd && segmentEnd <= text.length) {
-        parts.push({ type: "text", text: text.slice(prevTextEnd, segmentEnd) });
-        prevTextEnd = segmentEnd;
-      }
-      const resolved: ToolCall = toolCalls[tc.id] ?? tc;
-      parts.push({
-        type: "tool-call",
-        toolCallId: tc.id,
-        toolName: tc.tool,
-        args: tc.params,
-        result: resolved.result,
-      });
+  const ordered = [...historyToolCalls].sort((a, b) => {
+    const sa = textAtToolCallStart[a.id]?.length ?? Number.POSITIVE_INFINITY;
+    const sb = textAtToolCallStart[b.id]?.length ?? Number.POSITIVE_INFINITY;
+    return sa - sb;
+  });
+  let prevTextEnd = 0;
+  for (const tc of ordered) {
+    const segmentEnd = textAtToolCallStart[tc.id]?.length;
+    if (segmentEnd !== undefined && segmentEnd > prevTextEnd && segmentEnd <= text.length) {
+      parts.push({ type: "text", text: text.slice(prevTextEnd, segmentEnd) });
+      prevTextEnd = segmentEnd;
     }
-    if (prevTextEnd < text.length) {
-      parts.push({ type: "text", text: text.slice(prevTextEnd) });
-    } else if (prevTextEnd === 0 && text.length === 0) {
-      parts.push({ type: "text", text: "" });
-    }
-    return;
-  }
-
-  parts.push({ type: "text", text });
-  for (const tc of historyToolCalls) {
     const resolved: ToolCall = toolCalls[tc.id] ?? tc;
     parts.push({
       type: "tool-call",
@@ -95,7 +96,22 @@ function pushHistoryParts(
       toolName: tc.tool,
       args: tc.params,
       result: resolved.result,
+      // Issue #617: derive isError from the store's own resolved status
+      // (written from the WS tool_call_result frame — chat.ts:4222) rather
+      // than letting the renderer infer it from AssistantUI's part status.
+      // toMessagePartStatus (message-runtime.ts) returns 'incomplete' only
+      // for a RESULTLESS part inheriting the enclosing message's status —
+      // it never reflects whether THIS tool call actually failed. A
+      // cancelled call has status:'cancelled' here (never 'error'), so
+      // isCancelledStatus's message-level derivation (unchanged) still
+      // renders cancellation correctly downstream.
+      isError: resolved.status === "error",
     });
+  }
+  if (prevTextEnd < text.length) {
+    parts.push({ type: "text", text: text.slice(prevTextEnd) });
+  } else if (prevTextEnd === 0 && text.length === 0) {
+    parts.push({ type: "text", text: "" });
   }
 }
 
@@ -154,6 +170,8 @@ function buildContentParts(
         toolName: tc.tool,
         args: tc.params,
         result: tc.result,
+        // Issue #617 — same derivation as pushHistoryParts above.
+        isError: tc.status === "error",
       });
     }
 

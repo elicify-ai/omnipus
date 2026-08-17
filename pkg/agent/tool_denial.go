@@ -24,7 +24,11 @@
 // same turn.
 package agent
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/elicify-ai/omnipus/pkg/tools"
+)
 
 // turnDenialBudget is the aggregate, per-turn ceiling on tool-call denial
 // responses a turn may accumulate — real or served from the quarantine
@@ -277,17 +281,38 @@ func ClassifyDenial(reason string) (DenialClass, bool) {
 // classified). Callers MUST pass the same reason string they gave to
 // ClassifyDenial.
 //
-// Uses fmt.Sprintf with %q (matching the pre-existing construction at the
-// three loop.go call sites this replaces) rather than encoding/json: %q's
-// Go-string escaping produces valid JSON string literals for the plain
-// ASCII/control-character content every field here carries, and keeping
-// the same mechanism as the code being replaced avoids introducing a new
-// dependency for this one file.
+// Builds via tools.PermissionDeniedPayload (contracts/asyncapi.yaml's
+// PermissionDenied schema), the ONE producer this function shares with
+// pkg/tools' filesystem-scope denial path (fserrors.go's
+// PermissionDeniedResult) — issue #618.
+//
+// This used to build the JSON by hand with fmt.Sprintf's %q verb, on the
+// claim that %q's Go-string escaping "produces valid JSON string literals
+// for the plain ASCII/control-character content every field here carries".
+// That claim is false: %q emits \xNN for a control byte outside \n\t\r
+// (e.g. NUL, 0x01, DEL), and \x is not a legal JSON escape — json.Unmarshal
+// rejects it with "invalid character 'x' in string escape code". tool is
+// narrower than the filesystem-scope side (closed reason enums keep
+// message/reason short and fixed), but tool itself takes MCP-declared names
+// that are not statically enumerable, so the failure mode is reachable here
+// too, not just on the filesystem-scope side. encoding/json (via
+// PermissionDeniedPayload -> marshalWithinBudget) escapes every control byte
+// as \u00NN, which is always valid JSON, and also bounds the encoded size —
+// this function had no length budget at all before this fix.
 func denialPayloadJSON(tool, reason string, cls DenialClass) string {
-	return fmt.Sprintf(
-		`{"error":"permission_denied","message":%q,"tool":%q,"reason":%q,"permanent":%t}`,
-		cls.ModelMessage, tool, reason, cls.Permanent,
-	)
+	encoded, err := tools.PermissionDeniedPayload(tool, cls.ModelMessage, reason, cls.Permanent)
+	if err != nil {
+		// Fully static fallback — no caller-supplied content interpolated —
+		// so a marshal failure (should not happen for this plain-string
+		// payload) can never itself reintroduce the escaping bug this
+		// function exists to close. Reported rather than swallowed: this
+		// branch replaces the caller's real reason and tool with fixed text,
+		// which is exactly the kind of substitution that should never happen
+		// invisibly.
+		tools.ReportStructuredFailureMarshalError("pkg/agent.denialPayloadJSON", tool, tools.PermissionDeniedCode, err)
+		return `{"error":"permission_denied","message":"An internal error occurred while building the denial payload. Do not retry; stop and report the blocker.","tool":"unknown","reason":"internal_error","permanent":true}`
+	}
+	return string(encoded)
 }
 
 // toolDenialAbortReason formats the abort reason for a turn that has

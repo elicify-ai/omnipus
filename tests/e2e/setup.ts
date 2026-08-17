@@ -376,7 +376,15 @@ export async function onboardAdmin(
     body: JSON.stringify({
       provider: {
         id: 'openrouter',
-        api_key: process.env.OPENROUTER_API_KEY ?? 'sk-test-placeholder',
+        // CI injects OPENROUTER_API_KEY_CI (per-shard via GITHUB_ENV). Local
+        // runs and the Go Tests job use OPENROUTER_API_KEY. Either is a real
+        // key; the placeholder is last so a self-managed gateway (hot-reload)
+        // does not onboard with sk-test-placeholder and get a 400 from
+        // OpenRouter.
+        api_key:
+          process.env.OPENROUTER_API_KEY ??
+          process.env.OPENROUTER_API_KEY_CI ??
+          'sk-test-placeholder',
         model: 'openai/gpt-4o',
       },
       admin: { username, password },

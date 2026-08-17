@@ -21,7 +21,17 @@ export interface DeviceCoords { // not-wire-format: local {x,y} result of coordi
  * Maps a client-space pointer coordinate (from a PointerEvent/MouseEvent/
  * WheelEvent's clientX/clientY) to the CSS-pixel coordinate space CDP's
  * Input.dispatchMouseEvent/dispatchKeyEvent expect, matching the dimensions
- * of the latest `browser_screencast` frame.
+ * of whatever live-view frame the caller is mapping against.
+ *
+ * ADR-047 (JPEG-fallback removal) — the only live caller today is
+ * `mapClientToDeviceVideo` below, always with `pageScale` fixed at 1 (the
+ * WebRTC video path has no analogous factor to divide out). This function
+ * keeps its general `pageScale`-aware form because the underlying math is a
+ * real, independently-tested general-purpose coordinate mapping — not
+ * because anything still calls it with a variable `pageScale`. The
+ * `browser_screencast`-specific framing below (CDP's Page.startScreencast /
+ * pageScaleFactor) is historical: that wire frame no longer exists, but the
+ * derivation is kept for context.
  *
  * Formula (ADR-038 D5): the frame container is sized to exactly match the
  * screencast frame's aspect ratio (no letterboxing — see BrowserLiveView),
@@ -156,10 +166,10 @@ export interface FrameCropRect { // not-wire-format: local crop-rectangle result
 
 /**
  * Maps a client-space pointer coordinate to the NATURAL PIXEL space of the
- * screencast frame's `<img>` (i.e. frame.width × frame.height — the raw JPEG
- * dimensions CDP captured via Page.startScreencast). This is the coordinate
- * space `ctx.drawImage(img, sx, sy, sw, sh, …)` expects when cropping the
- * currently-rendered `<img>` element (annotate-and-discuss, ADR-039 D-B1/B2).
+ * currently-rendered `<video>` sink (i.e. frameWidth × frameHeight, the
+ * video's own `videoWidth`/`videoHeight`). This is the coordinate space
+ * `ctx.drawImage(video, sx, sy, sw, sh, …)` expects when cropping it
+ * (annotate-and-discuss, ADR-039 D-B1/B2).
  *
  * Deliberately distinct from mapClientToDevice: that function additionally
  * divides by pageScaleFactor to land in the CSS-pixel space CDP's

@@ -1,7 +1,9 @@
 title: BrowserAttachFrame
 description: >
   Client → server. Binds this browser-live WebSocket connection to a
-  session's browser and starts the screencast. Per ADR-043 agents browse
+  session's browser and starts watching it for control-lock and tab-strip
+  bookkeeping (video is carried exclusively by WebRTC — see
+  BrowserWebRTCStateFrame, ADR-061). Per ADR-043 agents browse
   concurrently in isolated per-agent browser contexts within one shared
   Chrome; agent_id is the binding key (selects which agent's
   BrowserManager + browser context the live view attaches to), and
@@ -23,8 +25,8 @@ properties:
     maxLength: 128
     description: >-
       The client's chat session id, carried for context/correlation and
-      logging only — echoed back on outgoing browser_screencast /
-      browser_status frames so the client can match them to this attach
+      logging only — echoed back on outgoing browser_status / browser_tabs /
+      browser_webrtc_* frames so the client can match them to this attach
       request. It does NOT select which browser tab the live view attaches
       to: the server binds to the active tab in the attaching agent's OWN
       browser context (per ADR-043, agents browse concurrently in isolated

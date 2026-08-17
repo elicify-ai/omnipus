@@ -8,9 +8,42 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// focusTreatment classifies one tabFocusFn call by the CDP actions it carried,
+// so tests can tell the two halves of the treatment apart: bringing a tab to
+// the foreground (foregroundTabActions) versus releasing the one being left
+// (backgroundTabActions). Both go through the SAME seam — see tabFocusFn's doc
+// comment for why the actions are passed through rather than hidden.
+func focusTreatment(actions []chromedp.Action) string {
+	var broughtToFront bool
+	var focusEnabled, focusDisabled bool
+	for _, a := range actions {
+		switch v := a.(type) {
+		case *page.BringToFrontParams:
+			broughtToFront = true
+		case *emulation.SetFocusEmulationEnabledParams:
+			if v.Enabled {
+				focusEnabled = true
+			} else {
+				focusDisabled = true
+			}
+		}
+	}
+	switch {
+	case broughtToFront && focusEnabled:
+		return "foreground"
+	case !broughtToFront && focusDisabled:
+		return "background"
+	default:
+		return "unknown"
+	}
+}
 
 // Regression coverage for the live-measured 2026-08-03 defect: switching tabs
 // updated ONLY this manager's se.activeIdx and never told Chrome, so the
@@ -26,31 +59,53 @@ import (
 // That silence is why these tests assert on the ACTIVATION CALL itself rather
 // than on any error signal: there was none to observe.
 //
-// The JPEG screencast path never had this bug because it calls
-// page.BringToFront() itself before every StartScreencast (live.go's attach /
-// rebindScreencastOnce). These tests pin the equivalent guarantee for the
-// switch path so the asymmetry cannot silently return.
+// activateTabInChrome (manager.go's SwitchTab) is the ONLY BringToFront call
+// left on the tab-switch path (ADR-061: the JPEG screencast path, which used
+// to call page.BringToFront() itself before every StartScreencast, is gone —
+// video is carried exclusively by WebRTC now). These tests pin the guarantee
+// that SwitchTab still tells Chrome itself which tab is active, so the
+// WebRTC capture's chrome.tabs.query({active:true}) resolution can't desync
+// from it.
 
-// recordingActivator is a test double for the activateTabFn seam that records
-// every context it was asked to activate, in order.
+// recordingActivator is a test double for the tabFocusFn seam that records
+// every context it was asked to focus, in order, together with which half of
+// the treatment that call carried.
 type recordingActivator struct {
-	mu   sync.Mutex
-	ctxs []context.Context
-	err  error
+	mu        sync.Mutex
+	ctxs      []context.Context
+	treatment []string
+	err       error
 }
 
-func (r *recordingActivator) fn(tabCtx context.Context) error {
+func (r *recordingActivator) fn(tabCtx context.Context, actions ...chromedp.Action) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ctxs = append(r.ctxs, tabCtx)
+	r.treatment = append(r.treatment, focusTreatment(actions))
 	return r.err
 }
 
+// calls returns the contexts brought to the FOREGROUND, in order — the
+// "activations" every test in this file was written about. Release-of-focus
+// calls on the tab being left (review finding F9) are reported separately by
+// blurCalls so they cannot be miscounted as activations.
 func (r *recordingActivator) calls() []context.Context {
+	return r.filtered("foreground")
+}
+
+func (r *recordingActivator) blurCalls() []context.Context {
+	return r.filtered("background")
+}
+
+func (r *recordingActivator) filtered(want string) []context.Context {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]context.Context, len(r.ctxs))
-	copy(out, r.ctxs)
+	out := make([]context.Context, 0, len(r.ctxs))
+	for i, c := range r.ctxs {
+		if r.treatment[i] == want {
+			out = append(out, c)
+		}
+	}
 	return out
 }
 
@@ -60,7 +115,7 @@ func newManagerWithRecordedActivation(t *testing.T, maxTabs int) (*BrowserManage
 	t.Helper()
 	m := newTestManagerWithFakeTabs(t, maxTabs)
 	rec := &recordingActivator{}
-	m.activateTabFn = rec.fn
+	m.tabFocusFn = rec.fn
 	return m, rec
 }
 
@@ -108,7 +163,10 @@ func TestSwitchTab_ActivatesBeforeNotifyingTabsChanged(t *testing.T) {
 
 	var mu sync.Mutex
 	var order []string
-	m.activateTabFn = func(context.Context) error {
+	m.tabFocusFn = func(_ context.Context, actions ...chromedp.Action) error {
+		if focusTreatment(actions) != "foreground" {
+			return nil // the release-of-focus half; ordering here is about activation
+		}
 		mu.Lock()
 		order = append(order, "activate")
 		mu.Unlock()
@@ -195,7 +253,7 @@ func TestSwitchTab_ActivatesUnderNoManagerLock(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t, 5)
 
 	var reentered atomic.Bool
-	m.activateTabFn = func(context.Context) error {
+	m.tabFocusFn = func(context.Context, ...chromedp.Action) error {
 		// Would deadlock if SwitchTab held m.mu across the activation.
 		if _, _, err := m.ListTabs(DefaultSessionID); err == nil {
 			reentered.Store(true)
@@ -239,4 +297,39 @@ func TestSwitchTab_SkipsActivationForDeadContext(t *testing.T) {
 	// A nil context must be equally inert.
 	m.activateTabInChrome(nil, DefaultSessionID, 0)
 	assert.Len(t, rec.calls(), before, "a nil tab context must be skipped")
+}
+
+// TestRunTabFocusCDP_NonChromedpContextDoesNotAllocate is the production
+// half of the dead/nil skip: a LIVE context that is not a chromedp target
+// must not reach chromedp.Run. Run treats a non-chromedp context as
+// "start a new browser", which is how TestCloseTab_CancelsTheClosedTabsContext
+// launched a second Chrome on CI, hit "No usable sandbox", and panicked
+// in chromedp's Allocate cleanup. The recorded-activation seam is
+// deliberately NOT installed here — that seam is what hid the defect
+// from every SwitchTab unit test.
+func TestRunTabFocusCDP_NonChromedpContextDoesNotAllocate(t *testing.T) {
+	cfg, err := DefaultConfig()
+	require.NoError(t, err)
+	m := &BrowserManager{cfg: cfg}
+	err = m.runTabFocusCDP(context.Background(), page.BringToFront())
+	require.NoError(t, err, "a non-chromedp context must be a no-op, not a new Chrome")
+}
+
+// TestRunTabFocusCDP_UnattachedChromedpContextDoesNotAllocate covers the
+// actual fake-tab factory shape: chromedp.NewContext(context.Background()).
+// FromContext is non-nil (default ExecAllocator) but Target is nil until
+// the first Run — and that first Run is what launched Chrome on CI and
+// panicked Allocate. The recorded-activation seam is deliberately NOT
+// installed here, matching TestRunTabFocusCDP_NonChromedpContextDoesNotAllocate.
+func TestRunTabFocusCDP_UnattachedChromedpContextDoesNotAllocate(t *testing.T) {
+	cfg, err := DefaultConfig()
+	require.NoError(t, err)
+	m := &BrowserManager{cfg: cfg}
+	ctx, cancel := chromedp.NewContext(context.Background())
+	t.Cleanup(cancel)
+	c := chromedp.FromContext(ctx)
+	require.NotNil(t, c, "NewContext must install a chromedp context")
+	require.Nil(t, c.Target, "a never-Run NewContext must have no Target — that is the fake-tab shape")
+	err = m.runTabFocusCDP(ctx, page.BringToFront())
+	require.NoError(t, err, "an unattached chromedp context must be a no-op, not a new Chrome")
 }

@@ -39,7 +39,7 @@ type AuthFrame struct {
 	Type  string `json:"type"`
 }
 
-// BrowserAttachFrame — Client → server. Binds this browser-live WebSocket connection to a session's browser and starts the screencast. Per ADR-043 agents browse concurrently in isolated per-agent browser contexts within one shared Chrome; agent_id is the binding key (selects which agent's BrowserManager + browser context the live view attaches to), and session_id is correlation-only (the server binds to the active tab in that agent's context).
+// BrowserAttachFrame — Client → server. Binds this browser-live WebSocket connection to a session's browser and starts watching it for control-lock and tab-strip bookkeeping (video is carried exclusively by WebRTC — see BrowserWebRTCStateFrame, ADR-061). Per ADR-043 agents browse concurrently in isolated per-agent browser contexts within one shared Chrome; agent_id is the binding key (selects which agent's BrowserManager + browser context the live view attaches to), and session_id is correlation-only (the server binds to the active tab in that agent's context).
 type BrowserAttachFrame struct {
 	AgentId   string `json:"agent_id"`
 	SessionId string `json:"session_id"`
@@ -53,9 +53,11 @@ type BrowserCaptureAnswerFrame struct {
 	Type string `json:"type"`
 }
 
-// BrowserCaptureControlFrame — Bidirectional control frame on the /api/v1/browser/capture-ingest channel. Server (gateway) → client (extension) for `recapture` (the agent's active tab changed — chrome.tabs.query({active:true}) must be re-bound, the onTabsChanged/rebindScreencast analog for the WebRTC path, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer detached past the grace period, or the gateway is stopping the stream); client (extension) → server (gateway) for `ping`, the encoder page's periodic health beacon / reconnect-watchdog signal. `reason` is an optional human-readable note (e.g. why shutdown was requested).
+// BrowserCaptureControlFrame — Bidirectional control frame on the /api/v1/browser/capture-ingest channel. Server (gateway) → client (extension) for `recapture` (the agent's active tab changed — chrome.tabs.query({active:true}) must be re-bound; triggered by the same live.go onTabsChanged/rebindWatch tab-follow logic that also drives the live-view session/control-lock bookkeeping, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer detached past the grace period, or the gateway is stopping the stream); client (extension) → server (gateway) for `ping`, the encoder page's periodic health beacon / reconnect-watchdog signal. `reason` is an optional human-readable note (e.g. why shutdown was requested).
 type BrowserCaptureControlFrame struct {
 	Action string `json:"action"`
+	// recapture only, server → extension: the deviceScaleFactor the captured tab renders at (driven by the controlling viewer's window.devicePixelRatio via the viewport frame). The encoder multiplies its tabCapture width/height constraints by this so captured frames carry PHYSICAL pixels, not CSS pixels. Absent or 1 = CSS resolution. Without it a Retina (dpr=2) viewer gets a 1x capture stretched over 2x display pixels — uniformly blurry video (live report, macOS 2026-08-12). The tabs.get convergence check stays in CSS px; only the media constraints scale.
+	CaptureScale *float64 `json:"capture_scale,omitempty"`
 	// recapture only: expected CSS viewport height. See expected_width.
 	ExpectedHeight *int `json:"expected_height,omitempty"`
 	// recapture only, server → extension: the CDP-verified CSS viewport width the tab was just resized to. chrome.tabs.get lags the OS window reflow, so a recapture racing a resize can pin the stream to a stale size — the encoder polls tabs.get until it converges on this, falling back to it on timeout.
@@ -87,13 +89,13 @@ type BrowserControlFrame struct {
 	Type   string `json:"type"`
 }
 
-// BrowserDetachFrame — Client → server. Detach this viewer from the live browser; the server stops the screencast when the last viewer detaches. Sent when the panel closes.
+// BrowserDetachFrame — Client → server. Detach this viewer from the live browser; the server stops watching the session when the last viewer detaches. Sent when the panel closes.
 type BrowserDetachFrame struct {
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
 }
 
-// BrowserInputFrame — Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the screencast frame, UNLESS capture_width/capture_height are present — then x/y are in that capture-frame pixel space and the server rescales them into the tab's real CSS viewport before dispatch (root cause 2026-07-31, fault 3).
+// BrowserInputFrame — Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the WebRTC video frame, UNLESS capture_width/capture_height are present — then x/y are in that capture-frame pixel space and the server rescales them into the tab's real CSS viewport before dispatch (root cause 2026-07-31, fault 3).
 type BrowserInputFrame struct {
 	Button *string `json:"button,omitempty"`
 	// Intrinsic pixel height of the capture frame the client mapped x/y into. See capture_width.
@@ -113,21 +115,6 @@ type BrowserInputFrame struct {
 	Url       *string  `json:"url,omitempty"`
 	X         *float64 `json:"x,omitempty"`
 	Y         *float64 `json:"y,omitempty"`
-}
-
-// BrowserScreencastFrame — Server → client. One CDP screencast frame (a JPEG snapshot of the live browser tab) plus the metadata needed to map viewer input coordinates back to the page. Screencast is repaint-driven, not fixed-FPS.
-type BrowserScreencastFrame struct {
-	// Base64-encoded JPEG image (no data URI prefix).
-	Data          string   `json:"data"`
-	Height        int      `json:"height"`
-	OffsetTop     *float64 `json:"offset_top,omitempty"`
-	PageScale     *float64 `json:"page_scale,omitempty"`
-	ScrollOffsetX *float64 `json:"scroll_offset_x,omitempty"`
-	ScrollOffsetY *float64 `json:"scroll_offset_y,omitempty"`
-	Seq           int      `json:"seq"`
-	SessionId     string   `json:"session_id"`
-	Type          string   `json:"type"`
-	Width         int      `json:"width"`
 }
 
 // BrowserStatusFrame — Server → client. Lifecycle / control status for the live browser connection. state=controlling means this viewer holds interactive control; released means control was dropped; error carries a human-readable message.
@@ -153,9 +140,9 @@ type BrowserTabActionFrame struct {
 	Type      string  `json:"type"`
 }
 
-// BrowserTabsFrame — Server → client. The current set of open tabs for a live-browser session and which one is active, broadcast whenever a tab is opened (e.g. a target=_blank click or window.open the agent/user followed), closed, switched, or its title/url changes. The SPA renders this as the panel's tab strip; the live screencast always reflects the active tab. See ADR-041.
+// BrowserTabsFrame — Server → client. The current set of open tabs for a live-browser session and which one is active, broadcast whenever a tab is opened (e.g. a target=_blank click or window.open the agent/user followed), closed, switched, or its title/url changes. The SPA renders this as the panel's tab strip; the WebRTC capture always follows the active tab. See ADR-041.
 type BrowserTabsFrame struct {
-	// Index into tabs of the currently-active (screencasted) tab.
+	// Index into tabs of the currently-active (WebRTC-captured) tab.
 	ActiveIndex int     `json:"active_index"`
 	SessionId   *string `json:"session_id,omitempty"`
 	Tabs        []struct {
@@ -200,15 +187,15 @@ type BrowserWebRTCOfferFrame struct {
 	Type      string `json:"type"`
 }
 
-// BrowserWebRTCStateFrame — Server → client. Availability / lifecycle state for the WebRTC media path on a live-browser connection, distinct from the general lifecycle carried by browser_status. `available` tells the SPA whether it may attempt a browser_webrtc_offer at all (feature flag off, platform/build not capable, or a runtime error takes it out of service); `active` tells the SPA whether a WebRTC session is currently flowing media for this connection. Per ADR-047 D3, the JPEG browser_screencast path keeps running unconditionally as the automatic fallback tier — the SPA falls back to it whenever available=false or active drops to false after being true (e.g. ICE failure), with no separate error frame needed. See ADR-047 D1/D3/D7 (lite builds compile WebRTC out entirely).
+// BrowserWebRTCStateFrame — Server → client. Availability / lifecycle state for the WebRTC media path on a live-browser connection, distinct from the general lifecycle carried by browser_status. `available` tells the SPA whether it may attempt a browser_webrtc_offer at all (feature flag off, platform/build not capable, or a runtime error takes it out of service); `active` tells the SPA whether a WebRTC session is currently flowing media for this connection. Per ADR-061, WebRTC is the ONLY live-browser video path — there is no screencast fallback to degrade to. available=false or active dropping to false after being true (e.g. ICE failure) means the panel genuinely has no video right now, and the SPA must show that honestly rather than silently substituting another stream. See ADR-047 D1/D7 (lite builds compile WebRTC out entirely), ADR-061.
 type BrowserWebRTCStateFrame struct {
-	// True while a WebRTC PeerConnection for this viewer is currently connected and flowing media. False (or absent) means the viewer is on the JPEG fallback tier, whether by choice, by availability, or after an ICE/connection failure.
+	// True while a WebRTC PeerConnection for this viewer is currently connected and flowing media. False (or absent) means this viewer currently has no video — WebRTC not yet offered, not yet negotiated, or lost after an ICE/connection failure (ADR-061 — there is no fallback tier to degrade to).
 	Active *bool `json:"active,omitempty"`
-	// True if the gateway currently offers WebRTC for this connection (the webrtc_enabled config flag is on, the platform/build supports it, and no runtime error has taken it out of service). False means the SPA must not send browser_webrtc_offer and should rely on the JPEG browser_screencast path only.
+	// True if the gateway currently offers WebRTC for this connection (the webrtc_enabled config flag is on, the platform/build supports it, and no runtime error has taken it out of service). False means the SPA must not send browser_webrtc_offer — there is no video for this connection until it becomes true.
 	Available bool `json:"available"`
 	// True if the active (or about-to-be-offered) media includes an audio track from the captured tab. Absent/false when audio is unavailable or not yet known.
 	HasAudio *bool `json:"has_audio,omitempty"`
-	// Present when available=false (or when active unexpectedly drops to false): disabled = tools.browser.webrtc_enabled is off; not_capable = platform/managed-Chrome capability classification is below WebRTC eligibility (ADR-047 D5, e.g. chrome-headless-shell only, no full Chrome); lite_build = binary built with -tags lite (Pion compiled out, ADR-047 D7); error = a runtime failure (capture/encoder/ICE) took the WebRTC path out of service for this session.
+	// Present when available=false (or when active unexpectedly drops to false): disabled = tools.browser.webrtc_enabled is off; not_capable = platform/managed-Chrome capability classification is below WebRTC eligibility (ADR-047 D5, e.g. chrome-headless-shell only, no full Chrome); lite_build = binary built with -tags lite (Pion compiled out, ADR-047 D7); error = a runtime failure (capture/encoder/ICE) took the WebRTC path out of service for this session; multi_agent_capture_denied = another agent's capture is already being viewed (ADR-048 condition 2; v1 is single-capture).
 	Reason *string `json:"reason,omitempty"`
 	// Echoes the session_id from the triggering browser_webrtc_offer / browser_attach, for client-side correlation only.
 	SessionId *string `json:"session_id,omitempty"`
@@ -428,6 +415,20 @@ type NotificationFrame struct {
 	Severity         string  `json:"severity"`
 	Title            string  `json:"title"`
 	Type             string  `json:"type"`
+}
+
+// PermissionDenied — Structured tool-result payload emitted when a tool call is refused for permission reasons. TWO producers share this one shape and one discriminator (issue #618): pkg/agent's tool-policy denial path (approval outcomes — user/timeout/saturated/policy_denied/no_approver_configured/... — and the headless ask-policy auto-deny) and pkg/tools' filesystem-scope denial path (ResolvePath rejecting a path outside the effective scope, or on a protected carve-out). Before this schema existed, both producers hand-built this JSON with fmt.Sprintf's %q verb, which is Go-string quoting, not JSON quoting, and silently produced invalid JSON for a path or approval-tool name containing invalid UTF-8 or a C0/C1 control byte outside \n\t\r. The two producers do NOT reach the SPA the same way. pkg/tools' filesystem-scope producer (PermissionDeniedResult) writes this payload as the tool's ForLLM verbatim, which flows through the normal tool_call_result frame (live) and the persisted ToolCall.Error field (replay) — parseStructuredToolFailure lifts `reason` into the frame's top-level `error` field there, and the SPA can render it. pkg/agent's tool-policy producer (denialPayloadJSON) embeds the SAME JSON shape as plain message content (providers.Message{Role:"tool"/"system"}) on a EventKindToolExecSkipped event, never inside a tool_call_result frame's `result`; the persisted transcript entry for that denial (settleAskToolCallTranscript) records status "denied" with a boolean `Result["error"]=true`, not this typed payload, and leaves ToolCall.Error empty. parseStructuredToolFailure is therefore never invoked on the tool-policy producer's bytes — that path is LLM-facing only today; no SPA rendering claim should be made for it without a corresponding code change.
+type PermissionDenied struct {
+	// Fixed discriminator the SPA matches on.
+	Error string `json:"error"`
+	// Model-facing guidance on how to proceed (e.g. "do not retry; stop and report the blocker").
+	Message string `json:"message"`
+	// Whether the model should treat this denial as terminal for the rest of the turn. True for essentially every reason; false only for the transient "saturated" approval-queue condition, which may succeed on a later retry within the same turn. A filesystem-scope denial is always true — the same path against the same effective scope fails identically on retry.
+	Permanent bool `json:"permanent"`
+	// The denial reason: an approval-flow reason code (user / timeout / saturated / policy_denied / ...) for a tool-policy denial, or the filesystem-scope classification error's message (e.g. "access denied: path is outside the effective filesystem scope") for a ResolvePath denial.
+	Reason string `json:"reason"`
+	// The tool call that was denied.
+	Tool string `json:"tool"`
 }
 
 // PingFrame — Client → server heartbeat.
@@ -667,6 +668,14 @@ type ToolApprovalRequiredFrame struct {
 	Type               string  `json:"type"`
 }
 
+// ToolAssemblyDuplicate — Structured payload emitted (as message content, role="system", with no ToolCallID) when pkg/agent/loop.go's tool-call dedup invariant guard (checkToolDedupInvariant) finds the assembled tools[] list is not name-unique right before an LLM call, and aborts the turn rather than feeding the LLM a malformed tool list. Before this schema existed the payload was hand-built with fmt.Sprintf's %q verb (the same defect PermissionDenied fixes — see its description) and carried no contract schema, no allow-list entry, and no length budget at all (issue #618, the fourth ungoverned member). ADR-060 D2/D3: this is a `message`-channel payload — it is appended directly to session history and never becomes a tool_call_result frame, so parseStructuredToolFailure can never be invoked on it and it has no SPA detector, BY DESIGN, not as a gap. It is admitted to this file's `oneOf` and to pkg/gateway/tool_result_store.go's structuredFailureDiscriminators allow-list anyway (ADR-060 §7 item 3, "defensive over-provisioning"): the allow-list entry is what enrolls it in the coverage test's schema-and-budget assertions, and the `oneOf` entry keeps the union a complete catalogue of the family even though this member can never actually arrive in a ToolCallResultFrame.result. It is LLM-facing only.
+type ToolAssemblyDuplicate struct {
+	// Fixed discriminator identifying this payload family. Unlike its siblings, this one is never delivered via ToolCallResultFrame.result, so the SPA has no matcher for it — see the schema description.
+	Error string `json:"error"`
+	// Human-readable explanation of the duplicate tool-assembly refusal.
+	Message string `json:"message"`
+}
+
 // ToolCallResultFrame — Server → client tool execution completed. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
 type ToolCallResultFrame struct {
 	AgentId      *string `json:"agent_id,omitempty"`
@@ -676,7 +685,7 @@ type ToolCallResultFrame struct {
 	ParentCallId *string `json:"parent_call_id,omitempty"`
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	// Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes.
+	// Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes. Real oneOf (round-2 hardening, ADR-060 finding F1). The previous revision switched this to `anyOf` reasoning that branch 1's permissive `type: [object, array, ...]` already matched every object, so a genuine oneOf would double-match every $ref sentinel/family member against its own union. That diagnosis was correct but `anyOf` was the wrong fix: under `anyOf` nothing is ever rejected, including a malformed PermissionDenied missing `permanent` — the seven $refs below became unreachable as constraints, which nullifies ADR-060 §7 item 2's own rationale for admitting new members ("when the union is ever made executable, a member missing from it would be the silent-drop failure ADR-058 §7 item 4 warned about" — an anyOf over a universal branch can never be made executable). Fixed here with a real `oneOf`: the single permissive branch is split into (a) an unconditional non-object catch-all (array/string/number/boolean/null — the JSON Schema `required` keyword is inapplicable to non-object instances, so no exclusion is needed there) and (b) an object catch-all that excludes every reserved discriminator key the seven $refs below use — `_truncated`, `_marshal_error`, `_ref`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch matches a plain scalar/array/object and exactly one matches a valid named shape; a payload carrying a reserved key but failing its own $ref (e.g. PermissionDenied missing `permanent`) matches none and is correctly rejected, rather than silently passing through branch (b). ADR-034's external-file-$ref constraint does not block this — these are internal `#/components/schemas/...` refs (D4). Verified by compiling this exact file with santhosh-tekuri/jsonschema/v6: pkg/api/generated/contract_test.go wraps one fixture per family member in a real ToolCallResultFrame and validates it end-to-end; pkg/gateway/structured_failure_discriminator_coverage_test.go validates each producer's output standalone and asserts a malformed member is rejected. F13 follow-up hardening: the object catch-all's `error` exclusion below now keys on `error` being a STRING, not merely present — see that branch's own description for why (settleAskToolCallTranscript / spawnSubTurn persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the four `error`-keyed $refs and must still match the catch-all). Regression fixture: pkg/api/generated/tool_call_result_error_key_contract_test.go. Still documentary in the generated artifacts (ADR-060 D6): the asyncapi->Go converter (scripts/gen-asyncapi-go) and the TS/Zod generator both key off "is this schema a oneOf/anyOf with no top-level type", which is unchanged by this edit — TS still emits `result: z.unknown()`, Go still emits `Result any`. So this is a spec-correctness fix (the union now actually constrains what a conformant producer may emit) with no generated-code behavior change; the hand-written detectors (isPermissionDenied and friends) remain the real enforcement at the SPA read boundary.
 	Result    any    `json:"result"`
 	SessionId string `json:"session_id"`
 	Status    string `json:"status"`
@@ -773,7 +782,6 @@ const (
 	WsFrameTypeBrowserInput             WsFrameType = "browser_input"
 	WsFrameTypeBrowserControl           WsFrameType = "browser_control"
 	WsFrameTypeBrowserDetach            WsFrameType = "browser_detach"
-	WsFrameTypeBrowserScreencast        WsFrameType = "browser_screencast"
 	WsFrameTypeBrowserStatus            WsFrameType = "browser_status"
 	WsFrameTypeBrowserTabAction         WsFrameType = "browser_tab_action"
 	WsFrameTypeBrowserTabs              WsFrameType = "browser_tabs"

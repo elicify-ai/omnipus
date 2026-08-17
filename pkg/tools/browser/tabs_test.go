@@ -72,8 +72,8 @@ func newTestManagerWithFakeTabs(t *testing.T, maxTabs int) *BrowserManager {
 	m.createTabFn = fn
 	// Fake tabs are chromedp contexts with no CDP connection behind them, so
 	// SwitchTab's real Page.bringToFront would block until PageTimeout. Same
-	// rationale as createTabFn — see activateTabFn's doc comment.
-	m.activateTabFn = func(context.Context) error { return nil }
+	// rationale as createTabFn — see tabFocusFn's doc comment.
+	m.tabFocusFn = func(context.Context, ...chromedp.Action) error { return nil }
 	return m
 }
 

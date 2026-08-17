@@ -42,9 +42,7 @@ import (
 // survives a Settings save). Also guards CRIT-003 (no manager path disposes the
 // context).
 func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
-	if testing.Short() {
-		t.Skip("needs a real Chrome")
-	}
+	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
 	coord := NewBrowserCoordinator(home, cfg, 30)
 	t.Cleanup(func() { coord.Shutdown() })
@@ -149,9 +147,7 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 // restart), and the next Register creates a NEW browser context id (not a stale
 // dead one). Session works against the relaunched Chrome.
 func TestCoordinator_CrashRecovery(t *testing.T) {
-	if testing.Short() {
-		t.Skip("needs a real Chrome")
-	}
+	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
 	coord := NewBrowserCoordinator(home, cfg, 30)
 	t.Cleanup(func() { coord.Shutdown() })

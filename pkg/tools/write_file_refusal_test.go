@@ -139,7 +139,8 @@ func TestWriteFile_RefusalDiscriminatorSurvivesTruncation(t *testing.T) {
 
 // TestFileExistsRefusalResult_DefendsEveryRequiredField covers the other three
 // contract minLength:1 fields, not just reason. A schema-invalid payload is
-// dropped at the SPA edge, which leaves the caller with nothing — worse than
+// NOT dropped at the SPA edge (the union is documentary in both generated
+// artifacts — ADR-060 W1); it renders as a raw JSON blob, which is worse than
 // the prose the tag replaced.
 func TestFileExistsRefusalResult_DefendsEveryRequiredField(t *testing.T) {
 	parsed := decodeRefusal(t, FileExistsRefusalResult("", "", "").ForLLM)

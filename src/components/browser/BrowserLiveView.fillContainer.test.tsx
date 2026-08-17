@@ -61,20 +61,32 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 
 import { BrowserLiveView } from './BrowserLiveView'
 
+/** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. Passed via
+ * the `mediaStream` test/override seam (see BrowserLiveView.webrtcSink.test.tsx)
+ * — the JPEG screencast sink is gone (ADR-047), WebRTC video is the only path. */
+function fakeMediaStream(id = 'stream-1'): MediaStream {
+  return { id } as unknown as MediaStream
+}
+
+/** Simulates the <video> sink decoding its first real frame at 1280x720
+ * (16:9) — deliberately NOT the same aspect ratio as the container box the
+ * tests below stub (2:1), so a correct fix MUST letterbox-correct rather
+ * than treat the raw box as content-tight. Direct replacement for the old
+ * JPEG-era screencast frame's declared width/height. Requires the component
+ * to already be attached (rendered with `mediaStream`). */
+function decodeFirstFrame() {
+  const video = screen.getByTestId('browser-live-video') as HTMLVideoElement
+  Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
+  Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
+  fireEvent.loadedMetadata(video)
+}
+
 function connectFrameAndDrive() {
   act(() => {
     callbacksRef.current?.onConnected?.()
-    callbacksRef.current?.onScreencast?.({
-      type: 'browser_screencast',
-      session_id: 's1',
-      seq: 1,
-      data: 'AAAA',
-      // 16:9 content — deliberately NOT the same aspect ratio as the
-      // container box the tests below stub (2:1), so a correct fix MUST
-      // letterbox-correct rather than treat the raw box as content-tight.
-      width: 1280,
-      height: 720,
-    })
+  })
+  act(() => {
+    decodeFirstFrame()
     callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
   })
 }
@@ -105,10 +117,14 @@ function classTokens(el: Element): Set<string> {
   return new Set(el.className.split(/\s+/).filter(Boolean))
 }
 
+/** Connects the WS and decodes a first frame — requires the component to
+ * already be attached (rendered with `mediaStream`), since the container
+ * (and the `<video>` element `decodeFirstFrame` fires `loadedmetadata` on)
+ * only mounts once attached. */
 function emitFirstFrame() {
   act(() => {
     callbacksRef.current?.onConnected?.()
-    callbacksRef.current?.onScreencast?.({ type: 'browser_screencast', session_id: 's1', seq: 1, data: 'AAAA', width: 1280, height: 720 })
+    decodeFirstFrame()
   })
 }
 
@@ -124,9 +140,9 @@ describe('BrowserLiveView — fillContainer sizing (BUG 1)', () => {
   // panel, too small to interact with, because the capped classes below can
   // shrink but never grow.
   it('defaults to the intrinsic-capped sizing classes when fillContainer is omitted', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     emitFirstFrame()
-    const classes = classTokens(screen.getByTestId('browser-live-img'))
+    const classes = classTokens(screen.getByTestId('browser-live-video'))
     expect(classes.has('h-auto')).toBe(true)
     expect(classes.has('w-auto')).toBe(true)
     expect(classes.has('max-h-full')).toBe(true)
@@ -136,9 +152,9 @@ describe('BrowserLiveView — fillContainer sizing (BUG 1)', () => {
   })
 
   it('switches to fill+object-contain sizing classes when fillContainer is set (pop-out layout)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer />)
     emitFirstFrame()
-    const classes = classTokens(screen.getByTestId('browser-live-img'))
+    const classes = classTokens(screen.getByTestId('browser-live-video'))
     expect(classes.has('h-full')).toBe(true)
     expect(classes.has('w-full')).toBe(true)
     expect(classes.has('object-contain')).toBe(true)
@@ -156,9 +172,9 @@ describe('BrowserLiveView — fillContainer sizing (BUG 1)', () => {
   // so the docked panel can have both — this pins that the combination renders
   // the fill sizing rather than silently falling back to the capped classes.
   it('applies fill sizing when combined with canAnnotate (the docked panel\'s configuration)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer canAnnotate />)
     emitFirstFrame()
-    const classes = classTokens(screen.getByTestId('browser-live-img'))
+    const classes = classTokens(screen.getByTestId('browser-live-video'))
     expect(classes.has('h-full')).toBe(true)
     expect(classes.has('w-full')).toBe(true)
     expect(classes.has('object-contain')).toBe(true)
@@ -167,14 +183,14 @@ describe('BrowserLiveView — fillContainer sizing (BUG 1)', () => {
   })
 
   it('the frame container itself switches from shrink-wrap to fill-the-box sizing', () => {
-    const { rerender } = render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    const { rerender } = render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     emitFirstFrame()
     let classes = classTokens(screen.getByTestId('browser-live-frame'))
     expect(classes.has('inline-block')).toBe(true)
     expect(classes.has('max-h-full')).toBe(true)
     expect(classes.has('h-full')).toBe(false)
 
-    rerender(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer />)
+    rerender(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer />)
     classes = classTokens(screen.getByTestId('browser-live-frame'))
     expect(classes.has('h-full')).toBe(true)
     expect(classes.has('w-full')).toBe(true)
@@ -196,7 +212,7 @@ describe('BrowserLiveView — letterbox-corrected coordinate mapping (BUG 1 reve
   // instead of `x: 0` — restoring that behavior locally and re-running
   // confirms the regression.
   it('clamps a click inside the pillarboxed dead-zone to the content edge, not a false in-content coordinate', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer />)
     connectFrameAndDrive()
     const container = stubMismatchedContainerRect()
 
@@ -217,7 +233,7 @@ describe('BrowserLiveView — letterbox-corrected coordinate mapping (BUG 1 reve
   })
 
   it('maps a click at the exact box center to the exact content center (sanity check both pre- and post-fix agree here)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer />)
     connectFrameAndDrive()
     const container = stubMismatchedContainerRect()
 
@@ -230,7 +246,7 @@ describe('BrowserLiveView — letterbox-corrected coordinate mapping (BUG 1 reve
   })
 
   it('maps a click just inside the visible content edge to a small-but-correct offset (not the raw-box offset)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer />)
     connectFrameAndDrive()
     const container = stubMismatchedContainerRect()
 
@@ -251,34 +267,44 @@ describe('BrowserLiveView — letterbox-corrected coordinate mapping (BUG 1 reve
 // Regression for the BLOCKER found in review of the adaptive-viewport feature.
 //
 // The effect that reports the panel geometry reads `containerRef.current` and
-// bails if it is null. But the container div is gated on `frame`, while
-// `connected` flips true from ws.onopen — SECONDS earlier, because the
-// backend's cold capture start can take ~25s. With `[connected]` as the only
-// dependency the effect ran exactly once, against a null ref, and never again:
-// sendViewport was never called on a fresh open, so the capture stayed at its
-// hardcoded 1280x720 and the feature was dead on its primary path.
+// bails if it is null. But the container div is gated on `attached`
+// (mediaStream !== null — the WebRTC-build replacement for the old JPEG-era
+// `frame` gate), while `connected` flips true from ws.onopen — SECONDS
+// earlier, because the backend's cold capture start / WebRTC negotiation can
+// take ~25s. With `[connected]` as the only dependency the effect ran exactly
+// once, against a null ref, and never again: sendViewport was never called
+// on a fresh open, so the capture stayed at its hardcoded 1280x720 and the
+// feature was dead on its primary path.
 //
-// This test reproduces the REAL ordering (connected first, frame later, in
-// SEPARATE acts) rather than the collapsed single-act ordering the other
+// This test reproduces the REAL ordering (connected first, the stream
+// attaching later — via a `rerender` that adds the `mediaStream` prop,
+// standing in for the internal WebRTC signaling resolving asynchronously —
+// in SEPARATE acts) rather than the collapsed single-act ordering the other
 // helpers use — which is precisely why the existing suite could not see it.
 describe('BrowserLiveView — adaptive viewport reporting (BLOCKER regression)', () => {
-  it('sends the panel geometry after a frame arrives, even though `connected` fired first', async () => {
+  it('sends the panel geometry after the video attaches, even though `connected` fired first', async () => {
     vi.useFakeTimers()
     try {
       mockSendViewport.mockClear()
-      render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
+      const { rerender } = render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
 
-      // 1. Connection opens. The container does NOT exist yet.
+      // 1. Connection opens. No mediaStream yet — the container does NOT
+      //    exist yet either.
       act(() => {
         callbacksRef.current?.onConnected?.()
       })
       await vi.advanceTimersByTimeAsync(500)
       expect(mockSendViewport).not.toHaveBeenCalled()
 
-      // 2. First frame arrives — NOW the container mounts and the effect must
-      //    re-run. Give the element a real box so the send is not skipped.
+      // 2. The video attaches (internal WebRTC signaling resolving, stood in
+      //    for here via a `mediaStream` prop rerender) — NOW the container
+      //    mounts and the effect must re-run. Give the element a real box so
+      //    the send is not skipped.
       act(() => {
-        emitFirstFrame()
+        rerender(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer canAnnotate />)
+      })
+      act(() => {
+        decodeFirstFrame()
       })
       const el = document.querySelector('[data-testid="browser-live-frame"]') as HTMLElement | null
       if (el) {
@@ -307,7 +333,7 @@ describe('BrowserLiveView — transient-resize guard and input pacing', () => {
   it('does not push a viewport while focus sits in a panel input', async () => {
     vi.useFakeTimers()
     try {
-      render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer canAnnotate />)
       act(() => {
         callbacksRef.current?.onConnected?.()
         emitFirstFrame()
@@ -353,7 +379,7 @@ describe('BrowserLiveView — transient-resize guard and input pacing', () => {
   it('does not commit an intermediate size while the box is still changing', async () => {
     vi.useFakeTimers()
     try {
-      render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer canAnnotate />)
       act(() => {
         callbacksRef.current?.onConnected?.()
         emitFirstFrame()
@@ -407,7 +433,7 @@ describe('BrowserLiveView — settle must not lose the final size', () => {
   it('commits the final size when the box stops changing mid-settle', async () => {
     vi.useFakeTimers()
     try {
-      render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer canAnnotate />)
       act(() => {
         callbacksRef.current?.onConnected?.()
         emitFirstFrame()
@@ -450,7 +476,7 @@ describe('BrowserLiveView — focus guard covers the settle window', () => {
   it('does not commit a size measured after focus entered a text field', async () => {
     vi.useFakeTimers()
     try {
-      render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer canAnnotate />)
       act(() => {
         callbacksRef.current?.onConnected?.()
         emitFirstFrame()
@@ -494,7 +520,7 @@ describe('BrowserLiveView — viewport settle: recovery paths', () => {
     ({ width: w, height: h, top: 0, left: 0, right: w, bottom: h, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
 
   function mountSettled() {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer canAnnotate />)
     act(() => {
       callbacksRef.current?.onConnected?.()
       emitFirstFrame()

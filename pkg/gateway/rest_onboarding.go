@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
@@ -152,6 +153,213 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	if len(body.Admin.Password) < 8 {
 		jsonErr(w, http.StatusBadRequest, "admin.password must be at least 8 characters")
 		return
+	}
+
+	// ── Provider API-key validation ──────────────────────────────────────────
+	//
+	// Before this block, first-run setup checked only that api_key was non-empty
+	// and then stored it verbatim. That made the STRICTEST moment in the product
+	// — the one where a wrong key leaves an install whose agent cannot answer a
+	// single message — the ONLY place with no key check, while the far less
+	// consequential provider EDIT path (PUT /api/v1/providers/{id}, rest.go's
+	// keyChanged branch) has probed the key and rejected a bad one all along.
+	// The operator's words: "a provider without key or other authentication
+	// should not be possible to configure."
+	//
+	// This deliberately calls the SAME validator as that PUT path and as the CLI
+	// wizard (cmd/omnipus/internal/onboard/onboard.go::validateAndResolveKey) —
+	// providers.ValidateKey — rather than an onboarding-local check that would
+	// drift from them the first time a provider changes its error shape.
+	//
+	// Placement is deliberate on both sides:
+	//   * LAST of the request validations, so a malformed body (bad username,
+	//     short password) is still rejected without a billable upstream call.
+	//   * BEFORE storeCredential, so a rejected key never reaches the credential
+	//     store or config.json.
+	//   * AFTER a credential-store readiness check, for the same reason the PUT
+	//     path orders it that way: there is no point probing a key we have
+	//     nowhere to put, and a locked store must report itself as a locked
+	//     store (503) rather than be mistaken for a bad key.
+	//
+	// ACCEPT/REJECT POLICY — only "the provider told us this key is wrong"
+	// blocks. providers.ValidationResult.Blocks() is true for exactly one
+	// outcome, invalid_key; no_credit / unreachable / restricted all proceed
+	// with a warning. That asymmetry matters more here than anywhere else in
+	// the product, because onboarding is the only door in: if a DNS hiccup, a
+	// captive portal, a provider 5xx or a 30-second outage could block it, a
+	// flaky network would make Omnipus uninstallable — strictly worse than the
+	// bad-key bug this check fixes. Fail CLOSED on "we asked and the answer was
+	// no"; fail OPEN on "we could not find out".
+	//
+	// KNOWN, ACCEPTED TRADE-OFF (review finding D8): this probe is now a real,
+	// billed upstream call that can take up to ~25s (10s catalog fetch + 15s
+	// completion probe) — up from ~1s before this check existed — and that
+	// time is spent INSIDE the ReserveComplete()/committed-guard window above,
+	// and counts against onboardingCompleteLimiter's 3-requests/minute-per-IP
+	// budget (rest_auth.go). Three mistyped keys in a row therefore cost a
+	// real minute of lockout, and a double-click mid-probe can surface a
+	// spurious 409 "onboarding already complete" instead of a clean retry.
+	// This is not fixed here: retuning onboardingCompleteLimiter or adding a
+	// fast client-side debounce is a rate-limiting/UX design change with its
+	// own blast radius, not a one-line fix alongside a validation-correctness
+	// patch, and PUT /providers/{id} already accepts the identical latency
+	// profile for the same reason (a probe cannot be both real and instant).
+	// Tracked as follow-up, not a blocker for this change.
+	if err := a.credentialStoreReady(); err != nil {
+		slog.Error("onboarding: credential store unavailable before key validation", "error", err)
+		jsonErr(
+			w,
+			http.StatusServiceUnavailable,
+			"credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets",
+		)
+		return
+	}
+
+	// Resolve what the probe will talk to: the operator's endpoint override if
+	// they supplied one, else the vendor default for this protocol.
+	probeBase := ""
+	if body.Provider.Endpoint != nil {
+		probeBase = strings.TrimSpace(*body.Provider.Endpoint)
+	}
+	if probeBase == "" {
+		probeBase = providers.GetDefaultAPIBase(body.Provider.Id)
+	}
+
+	// keyWarning carries a non-blocking validation outcome to the response's
+	// existing `warning` field. Empty means "nothing to say".
+	keyWarning := ""
+	// probeSkipReason is empty when the probe actually ran; otherwise it names
+	// why it could not, for the audit trail.
+	probeSkipReason := ""
+	providerDisplayName := providers.DisplayName(body.Provider.Id)
+	if probeBase == "" {
+		// A known protocol with no vendor default and no operator-supplied
+		// endpoint (azure is the live example — it has no fixed base). There is
+		// nothing to probe against, which is "we could not find out", not "the
+		// key is bad".
+		probeSkipReason = "no endpoint resolved"
+		// D4: this is a non-blocking outcome just like `unreachable`, three
+		// lines below in the other skip branch — it must be equally visible to
+		// the operator, not just to the audit log. Without this, a provider
+		// with no fixed default base (azure) always looks EXACTLY like a
+		// verified key on the completion screen, which is indistinguishable
+		// from the "warning nobody sees" failure mode this whole check exists
+		// to avoid.
+		keyWarning = fmt.Sprintf(
+			"Couldn't verify your %s key: no endpoint is configured for this provider and none was supplied. Continuing with the key as entered.",
+			providerDisplayName,
+		)
+	} else if a.ssrfChecker != nil {
+		if err := a.ssrfChecker.CheckURL(r.Context(), probeBase); err != nil {
+			// SEC-24: this endpoint is reachable pre-auth and CSRF-exempt, and
+			// probeBase can come straight from the request body, so the probe
+			// must never be the thing that reaches an internal address. Skipping
+			// the outbound call IS the mitigation — we do not additionally reject
+			// the request the way PUT /providers/{id} does. PUT can afford a 422
+			// because it runs post-auth against an already-persisted api_base;
+			// rejecting here would mean an operator running a local model server
+			// (Ollama / LM Studio / LiteLLM on 127.0.0.1 — loopback is blocked by
+			// default unless allowlisted, see security.NewSSRFChecker) could not
+			// finish first-run setup at all. Same principle as the unreachable
+			// rule: not being permitted to look is not evidence the key is bad.
+			slog.Warn("onboarding: SSRF guard blocked the key-validation probe; proceeding without it",
+				"provider", body.Provider.Id, "error", err)
+			probeSkipReason = "ssrf blocked"
+			// D4: same visibility fix as the branch above. Deliberately does NOT
+			// echo probeBase/err — those are already in the WARN log above for an
+			// operator/support engineer, and the completion-screen message is
+			// user-facing text, not a debug trace (SEC-16 posture: curated,
+			// no raw detail on the wire).
+			keyWarning = fmt.Sprintf(
+				"Couldn't verify your %s key: the configured endpoint isn't reachable for an automatic check (e.g. a local model server). Continuing with the key as entered.",
+				providerDisplayName,
+			)
+		}
+	}
+
+	if probeSkipReason == "" {
+		// D6: fetch the live model catalog first, exactly as
+		// HandleOnboardingProbeProvider does (see its Catalog: models call
+		// below), so ValidateKey's pickProbeModel can prefer a probe model that
+		// is actually present in the provider's current catalog. Without this,
+		// pickProbeModel returns providers.probeModelDefaults' hardcoded slug
+		// immediately for any of the 10 providers in that table WITHOUT ever
+		// calling FetchModels (see pickProbeModel: it only reaches the
+		// catalog-fetch fallback when the filtered catalog is empty AND no
+		// rules-table default exists) — so a retired default slug would silently
+		// degrade the check to a false Unreachable, or a wrong-model 400 to a
+		// false Valid, defeating the whole point of this fix for exactly the
+		// providers it's most likely to matter for. A fetch failure here is not
+		// fatal: ValidateKey falls back to the rules-table default exactly as it
+		// did before this fetch existed.
+		catalog, catalogErr := providers.FetchModels(r.Context(), probeBase, body.Provider.ApiKey, a.ssrfChk())
+		if catalogErr != nil {
+			slog.Debug("onboarding: catalog fetch before key validation failed; falling back to rules-table probe model",
+				"provider", body.Provider.Id, "error", catalogErr)
+			catalog = nil
+		}
+		// SEC-16: result.RawDetail is server-debug-only and never leaves this process.
+		result := providers.ValidateKey(r.Context(), providers.ValidateInput{
+			ProviderID:   body.Provider.Id,
+			ProviderName: providerDisplayName,
+			BaseURL:      probeBase,
+			APIKey:       body.Provider.ApiKey,
+			Catalog:      catalog,
+		}, a.ssrfChk())
+		slog.Debug("onboarding: provider key validation result",
+			"provider", body.Provider.Id, "outcome", result.Outcome, "detail", result.RawDetail)
+
+		if result.Blocks() {
+			// invalid_key — the only blocking outcome. Nothing is stored: the
+			// credential-store write and the config.json transaction are both
+			// still below this point, and the committed-guard defer above
+			// releases the onboarding reservation so the operator can retry
+			// immediately with a corrected key.
+			//
+			// 400 rather than the PUT path's 422 purely because
+			// /onboarding/complete's contract (contracts/openapi.yaml) declares
+			// 400/409/429/500/503 and not 422, and a rejected api_key is a
+			// rejected request field exactly like the checks above it. The
+			// decision itself — which outcomes reject — is shared with PUT via
+			// Blocks(); only the status code differs.
+			jsonErr(w, http.StatusBadRequest, result.Message)
+			return
+		}
+		if result.Outcome != providers.OutcomeValid {
+			// no_credit / unreachable / restricted: proceed, but do not proceed
+			// silently — a first-run that quietly accepts an out-of-credit key is
+			// how someone ends up debugging a "broken" install.
+			keyWarning = result.Message
+			if a.auditor != nil {
+				if err := a.auditor.Log(&audit.Entry{
+					Event:    "provider_key_validated",
+					Decision: audit.DecisionAllow,
+					Details: map[string]any{
+						"provider": body.Provider.Id,
+						"outcome":  string(result.Outcome),
+						"action":   "proceeded",
+						"source":   "onboarding",
+					},
+				}); err != nil {
+					slog.Warn("audit write failed", "event", "provider_key_validated", "error", err)
+				}
+			}
+		}
+	} else if a.auditor != nil {
+		// The probe did not run at all. That is a legitimate outcome (see the
+		// two branches above) but it must be visible afterwards, so it uses the
+		// audit event pkg/audit/audit.go already reserves for exactly this.
+		if err := a.auditor.Log(&audit.Entry{
+			Event:    "provider_key_validation_skipped",
+			Decision: audit.DecisionAllow,
+			Details: map[string]any{
+				"provider": body.Provider.Id,
+				"reason":   probeSkipReason,
+				"source":   "onboarding",
+			},
+		}); err != nil {
+			slog.Warn("audit write failed", "event", "provider_key_validation_skipped", "error", err)
+		}
 	}
 
 	// Store the API key in the encrypted credentials store (AES-256-GCM).
@@ -422,9 +630,16 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		Token:    token,
 		Username: body.Admin.Username,
 	}
-	if credRefName == "" {
+	switch {
+	case credRefName == "":
 		warningMsg := "API key stored in plaintext — set OMNIPUS_MASTER_KEY for encrypted storage"
 		resp.Warning = &warningMsg
+	case keyWarning != "":
+		// A non-blocking key-validation outcome (no_credit / unreachable /
+		// restricted). Surfaced on the existing warning field so the SPA's
+		// first-run screen can tell the operator now, rather than letting them
+		// discover it on their first message.
+		resp.Warning = &keyWarning
 	}
 	jsonOK(w, resp)
 }

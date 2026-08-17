@@ -8,12 +8,22 @@ import type { Page } from '@playwright/test'
 async function selectFirstModel(page: Page) {
   // Main/Subagent use the searchable ModelSelector combobox.
   const modelTrigger = page.getByTestId('wizard-model')
-  await expect(modelTrigger).toBeVisible()
+  // Wait for the trigger to be the READY combobox, not merely visible.
+  //
+  // This spec spent weeks being misdiagnosed — first as OpenRouter latency,
+  // then as a provider-misconfiguration — because the model field used to be
+  // swapped for a non-interactive placeholder carrying this same test id
+  // while the provider catalog loaded (0.13s idle, measured 1.2-4.5s under a
+  // full shard). toBeVisible() passed on that placeholder, click() "succeeded"
+  // and did nothing, and the click was lost: when the catalog landed the real
+  // combobox replaced it with the popover still closed. The product bug is
+  // fixed (the trigger is now the real combobox in every state, with
+  // aria-busy while loading), and this assertion pins the READY state so a
+  // regression surfaces here as an honest timeout rather than a mystery.
+  await expect(modelTrigger).toHaveAttribute('role', 'combobox')
+  await expect(modelTrigger).not.toHaveAttribute('aria-busy', 'true', { timeout: 20_000 })
   await modelTrigger.click()
   const firstOption = page.locator('[role="option"]').first()
-  // Model-catalog options load asynchronously; 5s was too tight under CI load
-  // (flaked as "[role=option] not visible"). 15s gives headroom without masking
-  // a genuinely broken selector.
   await expect(firstOption).toBeVisible({ timeout: 15_000 })
   await firstOption.click()
 }

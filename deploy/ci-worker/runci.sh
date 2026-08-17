@@ -117,7 +117,25 @@ run_lint() {
     curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
       | sh -s -- -b /cache/go/bin "$GOLANGCI_VERSION" || return 1
   fi
-  CGO_ENABLED=0 golangci-lint run --build-tags="$TAGS"
+  CGO_ENABLED=0 golangci-lint run --build-tags="$TAGS" || return 1
+  # #615 regression guard: every pkg/tools/browser real-Chrome test must be
+  # gated by the package's own skipIfNoBrowser(t) convention.
+  #
+  # There is deliberately NO -race package-list lockstep check here any more.
+  # That invariant used to be enforced by comparing this file against
+  # .github/workflows/pr.yml with a regex scraper, which could not see the
+  # drift class most likely to produce a false verdict: this file is executed
+  # from /cache/runci.sh on the worker, while the checker read the repo copy.
+  # Both surfaces now consume scripts/race-packages.sh — which the worker gets
+  # from the checkout — so the lists cannot diverge at all. See run_gorace.
+  bash scripts/check-browser-tests-gated.sh || return 1
+  # #618 and #617 regression guards, same reasoning: pr.yml runs each in its
+  # own job, so omitting either here lets the worker report a green lint while
+  # GitHub's is red.
+  bash scripts/check-no-handwritten-wire-types.sh || return 1
+  bash scripts/check-no-tool-error-from-status.sh || return 1
+  # ADR-061 regression guard: the deleted JPEG screencast path must not return.
+  bash scripts/check-no-jpeg-screencast.sh
 }
 # Full suite with a flake filter: a package that fails the contended full run but passes when
 # re-run isolated (-p 1) is a timing flake → not a real failure. Fails both = real.
@@ -143,33 +161,64 @@ run_lint() {
 # repo's own standard CI surface structurally incapable of catching the defect
 # class it most needed to catch.
 #
-# The package list, timeout, CGO_ENABLED=1 and the DATA RACE carve-out are
-# COPIED FROM .github/workflows/pr.yml's "Run go test -race" step deliberately.
+# The package list is NO LONGER copied from .github/workflows/pr.yml — both
+# surfaces now consume scripts/race-packages.sh, the single source of truth,
+# on the scripts/e2e-shards.sh precedent. Edit that file, not this one. The
+# timeout, CGO_ENABLED=1 and the DATA RACE carve-out are still deliberately
+# mirrored from pr.yml's "Run go test -race" step; keep those in step by hand.
 #
 # pkg/task, pkg/plan, pkg/tools and pkg/providers joined the list on
 # 2026-08-10 (both files together, as the rule below demands) after a manual
 # scoped run found TWO data races in them on an otherwise fully green commit.
-# pkg/tools is NON-recursive on purpose: pkg/tools/browser itself fails under
-# -race headlessly, and a false-RED gate gets ignored, which is worse than no
-# gate (#615). Its four SUBpackages are listed explicitly — a bare
-# `./pkg/tools` silently dropped five packages while the comment named one,
-# and cdppipe/webrtc carry the densest concurrency tests in the tree.
-# Do not "improve" one without the other: a worker gate that measures something
-# GitHub does not (or vice versa) is exactly how a green local verdict stops
-# predicting the real one. -race forces cgo, which is why CGO_ENABLED=1 here
-# does not weaken the pure-Go guarantee — that is proved by the CGO_ENABLED=0
-# build/test gates, not by this one.
+#
+# pkg/tools/browser joined the recursive glob on 2026-08-11 (#615). It was
+# originally left off `./pkg/tools/...` on the theory that the package
+# "launches real Chrome and hits missing dbus headlessly" — that diagnosis
+# was WRONG: the package already ran its real-Chrome tests and PASSED in the
+# plain (non-race) `go test ./...` gate (run_gotest) on these same runners,
+# so dbus availability cannot explain a race-only exclusion. The real cause
+# was that its 15 real-Chrome tests (plus two more found ungated entirely
+# during the #615 fix — pkg/tools/browser/coordinator_test.go's
+# TestCoordinator_OwnershipMarker_RoundTrip and
+# coordinator_window_size_test.go's
+# TestCoordinator_Register_CreateTargetParams_PinsWindowSize) were only
+# gated by `testing.Short()` (or, for those two, not gated at all) instead
+# of the package's own `skipIfNoBrowser` convention, and two tight
+# wall-clock assertions in coldstart_bound_test.go were exactly the shape
+# pkg/task hit above (race instrumentation blowing a <200ms bound). Both are
+# fixed: every real-Chrome test now uses skipIfNoBrowser (which also removed
+# an undeclared ~100MB Chrome-for-Testing network download from every CI
+# gate that reached these tests), and the two wall-clock assertions now use
+# a //go:build race / !race split bound (runFirstAttachPromptBound), exactly
+# like pkg/task's livenessBound above.
+#
+# A worker gate that measures something GitHub does not (or vice versa) is
+# exactly how a green local verdict stops predicting the real one — which is
+# why the package list is now shared rather than duplicated. -race forces cgo,
+# which is why CGO_ENABLED=1 here does not weaken the pure-Go guarantee — that
+# is proved by the CGO_ENABLED=0 build/test gates, not by this one.
 run_gorace() {
   ensure_spa_stub
   local out
-  out=$(CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s \
-    ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... \
-    ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... \
-    ./pkg/logger/... ./pkg/task/... ./pkg/plan/... ./pkg/tools \
-    ./pkg/tools/browser/cdppipe/... ./pkg/tools/browser/webrtc/... \
-    ./pkg/tools/browser/captureext/... ./pkg/tools/browser/chromeintegrity/... \
-    ./pkg/providers/... \
-    ./tests/integration/... 2>&1)
+  # CI=true is REQUIRED here, and is the single thing that makes this gate
+  # predict GitHub's. GitHub Actions always sets CI, so pkg/tools/browser's
+  # skipIfNoBrowser(t) skips every real-Chrome test in GitHub's -race step.
+  # This worker is a plain SSH shell with no CI in the environment, so without
+  # this line the SAME command runs ~58 real-Chrome e2e tests under -race here
+  # and zero of them there.
+  #
+  # That is not a theoretical divergence — it is what #615's glob widening
+  # actually produced on this worker: race instrumentation plus a shared real
+  # Chrome made a DIFFERENT handful of browser e2e tests fail on each run
+  # (execute/inspect/text-selector), while GitHub's identical step was
+  # unaffected. Real-Chrome coverage belongs to the dedicated browser-e2e job
+  # (.github/workflows/pr.yml), which runs WITHOUT -race and with Chrome as a
+  # declared dependency. This gate's job is the concurrency logic.
+  #
+  # shellcheck disable=SC2046 — intentional word-splitting: race-packages.sh
+  # emits a space-separated package list that must expand to separate args.
+  out=$(CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s \
+    $(scripts/race-packages.sh) 2>&1)
   local code=$?
   echo "$out"
   # Checked BEFORE the exit-code short-circuit, for the same reason pr.yml and
@@ -213,7 +262,18 @@ run_gorace() {
     # in the SECOND run be stamped "FLAKE (passed isolated)" and excused,
     # which is precisely what the carve-out forbids. pr.yml has the same
     # hole; fix both together or the gates diverge.
-    if CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 600s -p 1 "$p" >"/tmp/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
+    #
+    # Timeout is 900s, matching BOTH the contended run above and pr.yml's
+    # isolated re-run. It was 600s, which had the asymmetry backwards: the
+    # isolated -p 1 re-run is SLOWER than the contended one (no parallelism),
+    # yet got less time. With ./pkg/tools/... now in the glob, a slow package
+    # that trips the flake filter could time out at 600s and be stamped
+    # "REAL FAILURE (failed twice)" — a false RED that reads as a code defect.
+    # CI=true for the same reason as the contended run above: the isolated
+    # re-run must measure the SAME thing, or a package that only "fails" here
+    # because it launched a real Chrome would be re-run without one and
+    # stamped a flake — or vice versa.
+    if CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s -p 1 "$p" >"/tmp/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
        && ! grep -aq "DATA RACE" "/tmp/rr_race_$(echo "$p" | tr '/' '_').log"; then
       echo "FLAKE (passed isolated): $p"
       echo "  contended-run failures (each is a REAL BUG that has not been diagnosed yet):"
@@ -232,7 +292,23 @@ run_gorace() {
 
 run_gotest() {
   ensure_spa_stub
-  local out; out=$(GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 2 ./... 2>&1)
+  # CI=true for the same reason run_gorace sets it: this gate exists to predict
+  # GitHub's "Tests" job, and GitHub always sets CI. After #615 converted
+  # pkg/tools/browser's real-Chrome tests to the package's own skipIfNoBrowser(t)
+  # convention, those tests SKIP in GitHub's Tests job — their coverage moved to
+  # the dedicated browser-e2e job, which provisions Chrome as a declared
+  # dependency and runs without -race.
+  #
+  # This worker is a plain SSH shell with no CI set, so without this line it runs
+  # ~58 real-Chrome e2e tests that GitHub's Tests job no longer runs at all. This
+  # box has no dbus and a slow shared Chrome, so they fail on the environment
+  # rather than on the code: the observed failure was
+  #   "post-redirect SSRF error must mention redirect/blocked/SSRF/169.254;
+  #    got: browser_navigate: page load failed: context deadline exceeded"
+  # — a navigation timeout, not a broken SSRF guard. The flake filter correctly
+  # refused to excuse it (it failed both runs), which is exactly why the gate
+  # must not measure something GitHub does not.
+  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 2 ./... 2>&1)
   local code=$?
   echo "$out"
   # DATA RACE carve-out — checked BEFORE the exit-code short-circuit, because a
@@ -262,7 +338,10 @@ run_gotest() {
     # summary line; simpler and good enough: collect all contended failures once
     # and intersect per package below (a test name is unique enough in practice).
     local run1; run1=$(echo "$out" | grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' | awk '{print $3}' | sort -u)
-    if CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 1 "$p" >/tmp/rr.log 2>&1; then
+    # CI=true here too: the isolated re-run must measure the same thing as the
+    # contended run, or a package that only failed because it launched a real
+    # Chrome would be re-run without one and stamped a flake (or vice versa).
+    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 1 "$p" >/tmp/rr.log 2>&1; then
       echo "FLAKE (passed isolated): $p"
       echo "  contended-run failures (each one is a REAL BUG that has not been diagnosed yet):"
       echo "$run1" | sed 's/^/    /'

@@ -6338,7 +6338,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/onboarding/complete",
     alias: "completeOnboarding",
-    description: `Two-phase commit: writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 409 when onboarding is already complete. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
+    description: `Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response&#x27;s &#x60;warning&#x60; field explains what could not be checked, because this endpoint is the only door into the product and a flaky network must not make it uninstallable. Returns 409 when onboarding is already complete. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
 `,
     requestFormat: "json",
     parameters: [
@@ -9820,7 +9820,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
 
 export const AuthFrame = z
   .object({
@@ -10023,6 +10023,23 @@ export const FileExistsRefusal = z
     reason: z.string().min(1),
     tool: z.string().min(1),
     path: z.string().min(1),
+  })
+  .strict();
+
+export const PermissionDenied = z
+  .object({
+    error: z.literal("permission_denied"),
+    message: z.string().min(1),
+    tool: z.string().min(1),
+    reason: z.string().min(1),
+    permanent: z.boolean(),
+  })
+  .strict();
+
+export const ToolAssemblyDuplicate = z
+  .object({
+    error: z.literal("tool_assembly_duplicate"),
+    message: z.string().min(1),
   })
   .strict();
 
@@ -10366,21 +10383,6 @@ export const BrowserDetachFrame = z
   })
   .strict();
 
-export const BrowserScreencastFrame = z
-  .object({
-    type: z.literal("browser_screencast"),
-    session_id: z.string().min(1),
-    seq: z.number().int().min(0),
-    data: z.string().min(1),
-    width: z.number().int().min(1),
-    height: z.number().int().min(1),
-    page_scale: z.number().optional(),
-    offset_top: z.number().optional(),
-    scroll_offset_x: z.number().optional(),
-    scroll_offset_y: z.number().optional(),
-  })
-  .strict();
-
 export const BrowserStatusFrame = z
   .object({
     type: z.literal("browser_status"),
@@ -10452,7 +10454,7 @@ export const BrowserWebRTCStateFrame = z
     type: z.literal("browser_webrtc_state"),
     session_id: z.string().max(128).optional(),
     available: z.boolean(),
-    reason: z.enum(["disabled", "not_capable", "lite_build", "error"]).optional(),
+    reason: z.enum(["disabled", "not_capable", "lite_build", "error", "multi_agent_capture_denied"]).optional(),
     has_audio: z.boolean().optional(),
     active: z.boolean().optional(),
   })
@@ -10487,6 +10489,7 @@ export const BrowserCaptureControlFrame = z
     reason: z.string().max(512).optional(),
     expected_width: z.number().int().min(1).max(16384).optional(),
     expected_height: z.number().int().min(1).max(16384).optional(),
+    capture_scale: z.number().min(1).max(4).optional(),
   })
   .strict();
 
@@ -10606,7 +10609,6 @@ export const WsFrame = z.discriminatedUnion("type", [
   BrowserInputFrame,
   BrowserControlFrame,
   BrowserDetachFrame,
-  BrowserScreencastFrame,
   BrowserStatusFrame,
   BrowserViewportFrame,
   BrowserTabActionFrame,

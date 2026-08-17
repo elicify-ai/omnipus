@@ -132,14 +132,18 @@ function FileTreeBlock({
   )
 }
 
+// Issue #617: isError comes from the tool-call part's own `isError` field
+// (set in omnipus-runtime.ts from the store's resolved ToolCall.status), not
+// from `status.type === 'incomplete'` — that can never be true for a
+// finished call carrying a result.
 export const FileTreeViewUI = makeAssistantToolUI<ListDirArgs, unknown>({
   toolName: 'list_dir',
-  render: ({ args, result, status }) => (
+  render: ({ args, result, status, isError }) => (
     <FileTreeBlock
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
-      isError={status.type === 'incomplete'}
+      isError={isError}
       isCancelled={isCancelledStatus(status)}
     />
   ),
@@ -148,12 +152,12 @@ export const FileTreeViewUI = makeAssistantToolUI<ListDirArgs, unknown>({
 // BRD C.6.1.4 tool name (dot-notation). Backend uses Omnipus convention (list_dir); both registered.
 export const FileListAliasDotUI = makeAssistantToolUI<ListDirArgs, unknown>({
   toolName: 'file.list',
-  render: ({ args, result, status }) => (
+  render: ({ args, result, status, isError }) => (
     <FileTreeBlock
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
-      isError={status.type === 'incomplete'}
+      isError={isError}
       isCancelled={isCancelledStatus(status)}
     />
   ),

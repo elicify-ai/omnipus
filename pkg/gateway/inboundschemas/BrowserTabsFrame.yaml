@@ -3,8 +3,8 @@ description: >
   Server → client. The current set of open tabs for a live-browser session and
   which one is active, broadcast whenever a tab is opened (e.g. a target=_blank
   click or window.open the agent/user followed), closed, switched, or its
-  title/url changes. The SPA renders this as the panel's tab strip; the live
-  screencast always reflects the active tab. See ADR-041.
+  title/url changes. The SPA renders this as the panel's tab strip; the WebRTC
+  capture always follows the active tab. See ADR-041.
 type: object
 required:
   - type
@@ -20,7 +20,7 @@ properties:
   active_index:
     type: integer
     minimum: 0
-    description: Index into `tabs` of the currently-active (screencasted) tab.
+    description: Index into `tabs` of the currently-active (WebRTC-captured) tab.
   tabs:
     type: array
     maxItems: 32

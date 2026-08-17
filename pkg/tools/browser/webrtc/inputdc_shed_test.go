@@ -43,17 +43,19 @@ func TestEnqueueInput_MoveFloodNeverEvictsDiscreteEvents(t *testing.T) {
 	queue.close()
 	var kinds []string
 	for {
-		raw, ok := queue.pop()
+		batch, ok := queue.popBatch()
 		if !ok {
 			break
 		}
-		var probe struct {
-			Kind string `json:"kind"`
+		for _, raw := range batch {
+			var probe struct {
+				Kind string `json:"kind"`
+			}
+			if err := json.Unmarshal(raw, &probe); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			kinds = append(kinds, probe.Kind)
 		}
-		if err := json.Unmarshal(raw, &probe); err != nil {
-			t.Fatalf("unmarshal: %v", err)
-		}
-		kinds = append(kinds, probe.Kind)
 	}
 
 	var down, keys int
@@ -119,25 +121,29 @@ func TestInputQueue_OrderingHoldsWithConcurrentConsumer(t *testing.T) {
 	go func() {
 		defer close(done)
 		for {
-			raw, ok := queue.pop()
+			batch, ok := queue.popBatch()
 			if !ok {
 				return
 			}
-			var probe struct {
-				Kind string `json:"kind"`
-				Seq  int    `json:"seq"`
+			// Mirror runInputQueue: the whole drained batch is consumed in
+			// order. Per-item cost simulates the real consumer's CDP round
+			// trip so the producer genuinely outruns it and the shed path
+			// stays hot.
+			for _, raw := range batch {
+				var probe struct {
+					Kind string `json:"kind"`
+					Seq  int    `json:"seq"`
+				}
+				if err := json.Unmarshal(raw, &probe); err != nil {
+					continue
+				}
+				if probe.Kind == "mouse_down" || probe.Kind == "key_down" {
+					mu.Lock()
+					gotDiscrete = append(gotDiscrete, probe.Seq)
+					mu.Unlock()
+				}
+				time.Sleep(50 * time.Microsecond)
 			}
-			if err := json.Unmarshal(raw, &probe); err != nil {
-				continue
-			}
-			if probe.Kind == "mouse_down" || probe.Kind == "key_down" {
-				mu.Lock()
-				gotDiscrete = append(gotDiscrete, probe.Seq)
-				mu.Unlock()
-			}
-			// Simulate the real consumer's cost (a CDP round trip) so the
-			// producer genuinely outruns it and the shed path stays hot.
-			time.Sleep(50 * time.Microsecond)
 		}
 	}()
 

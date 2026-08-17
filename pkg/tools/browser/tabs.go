@@ -245,16 +245,22 @@ func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	// navigate-then-verify-redirect flow (tools.go) so a provided url gets
 	// the SAME two-stage SSRF gate (initial + post-redirect), not a weaker
 	// one-off check.
-	tabCtx, err := t.mgr.Session(defaultSessionID)
+	sessionCtx, err := t.mgr.Session(defaultSessionID)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_open_tab: %s", err))
 	}
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, t.mgr.PageTimeout())
+	tabCtx, timeoutCancel := context.WithTimeout(sessionCtx, t.mgr.PageTimeout())
 	defer timeoutCancel()
+
+	hops := watchRedirectHops(tabCtx)
 
 	var title string
 	if err := chromedp.Run(tabCtx, chromedp.Navigate(rawURL), chromedp.Title(&title)); err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_open_tab: opened the new tab but navigation failed: %s", err))
+		// SECURITY: same gap as NavigateTool -- a failed load must not leave
+		// the NEW tab parked on the target (see abandonTabAfterFailedLoad).
+		return tools.ErrorResult(abandonTabAfterFailedLoad(
+			ctx, t.mgr, sessionCtx, "browser_open_tab", rawURL, hops, err,
+		))
 	}
 
 	var finalURL string

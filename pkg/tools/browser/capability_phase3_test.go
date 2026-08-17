@@ -42,8 +42,8 @@ func TestClassifyVideoCapability_DarwinAudioUnverified_NotCapable(t *testing.T) 
 	}
 	// Explicitly the default; set for clarity so the test is self-documenting
 	// and resilient to any future default change.
-	withDarwinAudioSeam(t, false)
 	withCapabilitySeams(t, "darwin")
+	withDarwinAudioSeam(t, false)
 
 	pkgRoot := t.TempDir()
 	seedPackageChromeAtRoot(t, pkgRoot, true) // valid package Chrome + matching chrome.sha256
@@ -70,8 +70,8 @@ func TestClassifyVideoCapability_DarwinAudioVerified_Capable(t *testing.T) {
 	if _, err := cftPlatform(); err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
-	withDarwinAudioSeam(t, true)
 	withCapabilitySeams(t, "darwin")
+	withDarwinAudioSeam(t, true)
 
 	pkgRoot := t.TempDir()
 	seedPackageChromeAtRoot(t, pkgRoot, true) // valid package Chrome + matching chrome.sha256
@@ -95,8 +95,8 @@ func TestClassifyVideoCapability_DarwinAudioVerified_Capable(t *testing.T) {
 // of its basename — the per-OS gate precedes the headless-shell basename
 // check.
 func TestClassifyVideoCapabilityWithExec_DarwinAudioUnverified_NotCapable(t *testing.T) {
-	withDarwinAudioSeam(t, false)
 	withCapabilitySeams(t, "darwin")
+	withDarwinAudioSeam(t, false)
 
 	// A plausible FULL-chrome basename (not headless-shell) — only the
 	// GOOS+audio seam can block capability here.
@@ -117,8 +117,8 @@ func TestClassifyVideoCapabilityWithExec_DarwinAudioUnverified_NotCapable(t *tes
 // darwin + a non-headless-shell exec_path classifies Capable (the basename
 // heuristic still admits it).
 func TestClassifyVideoCapabilityWithExec_DarwinAudioVerified_Capable(t *testing.T) {
-	withDarwinAudioSeam(t, true)
 	withCapabilitySeams(t, "darwin")
+	withDarwinAudioSeam(t, true)
 
 	execPath := filepath.Join(t.TempDir(), "chrome") // non-headless-shell basename
 	got := ClassifyVideoCapabilityWithExec(execPath, t.TempDir())
@@ -140,8 +140,8 @@ func TestClassifyVideoCapabilityWithExec_DarwinAudioVerified_Capable(t *testing.
 // entirely). The audio spike relaxes the per-OS gate, not the
 // capture-surface requirement.
 func TestClassifyVideoCapabilityWithExec_DarwinAudioVerified_HeadlessShellStillBlocked(t *testing.T) {
-	withDarwinAudioSeam(t, true)
 	withCapabilitySeams(t, "darwin")
+	withDarwinAudioSeam(t, true)
 
 	execPath := filepath.Join(t.TempDir(), "chrome-headless-shell")
 	got := ClassifyVideoCapabilityWithExec(execPath, t.TempDir())

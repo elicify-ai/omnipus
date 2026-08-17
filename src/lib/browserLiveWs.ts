@@ -1,16 +1,16 @@
 // browserLiveWs — WebSocket client for /api/v1/browser/ws (ADR-038 D1/D5).
 //
 // A second, self-contained WS connection separate from the chat WS
-// (src/lib/ws.ts). Deliberately lighter-weight than WsConnection: no Web
-// Worker parse offload, no visibility/online listeners, no application-level
-// ping/pong heartbeat — the panel is user-opened/closed on demand, liveness
-// is left to the browser's own WS transport ping/pong plus the socket's
-// close event (see ws.onclose below), and the screencast is repaint-driven
-// (CDP only emits a frame when the page's compositor actually paints), so an
-// idle-but-healthy page can legitimately go quiet with no frames for a long
-// stretch — that is not, by itself, a liveness signal. Auth rides the
-// same-origin `omnipus-session` HttpOnly cookie on the WS handshake (ADR-044),
-// like ws.ts — no client-sent auth frame, no JS-readable token.
+// (src/lib/ws.ts), carrying control/input/tab/signaling frames — live VIDEO
+// itself rides the WebRTC data plane (browserWebRTC.ts), not this socket
+// (the JPEG-screencast-over-WS path was removed outright, ADR-047). Kept
+// deliberately lighter-weight than WsConnection: no Web Worker parse
+// offload, no visibility/online listeners, no application-level ping/pong
+// heartbeat — the panel is user-opened/closed on demand, and liveness is
+// left to the browser's own WS transport ping/pong plus the socket's close
+// event (see ws.onclose below). Auth rides the same-origin
+// `omnipus-session` HttpOnly cookie on the WS handshake (ADR-044), like
+// ws.ts — no client-sent auth frame, no JS-readable token.
 //
 // Wire types are sourced exclusively from the generated AsyncAPI types/Zod —
 // hand-written interface declarations for wire-format frames are FORBIDDEN
@@ -22,7 +22,6 @@ import type {
   BrowserControlFrame,
   BrowserDetachFrame,
   BrowserInputFrame,
-  BrowserScreencastFrame,
   BrowserStatusFrame,
   BrowserTabActionFrame,
   BrowserViewportFrame,
@@ -33,9 +32,12 @@ import type {
   ErrorFrame,
 } from '@/lib/api/generated/asyncapi-types'
 
-/** Frame types this socket ever receives — a narrow slice of the full WsFrame union. */
+/** Frame types this socket ever receives — a narrow slice of the full WsFrame union.
+ * Deliberately excludes `browser_screencast` (JPEG fallback, removed — ADR-047
+ * WebRTC is the only live-video path now); if the gateway still emits one
+ * mid-flight, `parseBrowserFrame` below drops it like any other frame type
+ * this socket doesn't understand. */
 type BrowserServerFrame =
-  | BrowserScreencastFrame
   | BrowserStatusFrame
   | BrowserTabsFrame
   | BrowserWebRTCAnswerFrame
@@ -43,7 +45,6 @@ type BrowserServerFrame =
   | ErrorFrame
 
 export interface BrowserLiveWsCallbacks { // not-wire-format: SPA-only callback interface passed to BrowserLiveWsConnection's constructor. Never serialized to or from the gateway.
-  onScreencast: (frame: BrowserScreencastFrame) => void
   onStatus: (frame: BrowserStatusFrame) => void
   /** ADR-041 D4 — the current tab list + active index, broadcast on any tab open/close/switch/title-change. */
   onTabs: (frame: BrowserTabsFrame) => void
@@ -118,7 +119,6 @@ export function parseBrowserFrame(data: unknown): BrowserServerFrame | null {
 
   const frame = result.data
   if (
-    frame.type === 'browser_screencast' ||
     frame.type === 'browser_status' ||
     frame.type === 'browser_tabs' ||
     frame.type === 'browser_webrtc_answer' ||
@@ -127,9 +127,10 @@ export function parseBrowserFrame(data: unknown): BrowserServerFrame | null {
   ) {
     return frame
   }
-  // Any other (chat-only) frame type is not relevant to this socket — the
-  // gateway is expected to never emit one here, but drop defensively rather
-  // than forwarding something the panel doesn't understand.
+  // Any other frame type — including a `browser_screencast` from a gateway
+  // that hasn't dropped the JPEG path yet, and any chat-only frame — is not
+  // relevant to this socket; drop defensively rather than forwarding
+  // something the panel doesn't understand.
   return null
 }
 
@@ -282,9 +283,7 @@ export class BrowserLiveWsConnection {
     ws.onmessage = (event: MessageEvent) => {
       const frame = parseBrowserFrame(event.data as string)
       if (!frame) return
-      if (frame.type === 'browser_screencast') {
-        this.callbacks.onScreencast(frame)
-      } else if (frame.type === 'browser_status') {
+      if (frame.type === 'browser_status') {
         this.callbacks.onStatus(frame)
       } else if (frame.type === 'browser_tabs') {
         this.callbacks.onTabs(frame)

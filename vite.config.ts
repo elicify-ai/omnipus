@@ -50,7 +50,25 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
-    include: ['src/**/*.test.{ts,tsx}'],
+    // 'tests/**' covers unit tests for the E2E FIXTURES (helpers in
+    // tests/e2e/fixtures/), not the Playwright specs themselves — those are
+    // *.spec.ts and are deliberately not matched by this *.test.ts pattern.
+    // Added 2026-08-13: tests/e2e/fixtures/selectors.test.ts was written,
+    // passed locally, and then ran NOWHERE — the include was src-only, so
+    // `npx vitest run <that path>` reported "No test files found" and CI
+    // never executed it. A test that cannot run is worse than no test: it
+    // reads as coverage while proving nothing.
+    include: ['src/**/*.test.{ts,tsx}', 'tests/**/*.test.{ts,tsx}'],
+    // Pin the locale (and time zone) the test workers run under. The date
+    // pickers format via toLocaleDateString(undefined, ...) — i.e. the HOST
+    // locale — while their tests assert US-style output ('Jun 22, 2026').
+    // On a machine set to en-GB that renders '22 Jun 2026' and three tests
+    // fail, so the suite passed on CI and failed on a developer's Mac for a
+    // reason that had nothing to do with their change (found 2026-08-13).
+    // Pinning here keeps the assertions meaningful AND machine-independent;
+    // TZ is pinned for the same reason, since a date-only Date renders
+    // differently across zones.
+    env: { LC_ALL: 'en-US', LANG: 'en-US', TZ: 'UTC' },
     css: false,
     pool: 'forks',
     // Cap forks at half the LOGICAL cores, i.e. roughly one per physical core.

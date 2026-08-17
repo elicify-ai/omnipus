@@ -34,11 +34,23 @@ func resolveTestBinary(t *testing.T) string {
 	t.Helper()
 	sharedTestBinOnce.Do(func() {
 		// Prefer the gateway's real managed install (~/.omnipus/browser/chromium).
+		//
+		// platform is derived from cftPlatform() (installer.go), NOT
+		// hardcoded to "linux64" — the hardcoded value silently made this
+		// resolver Linux-only: on macOS a real managed install lives under
+		// mac-arm64/mac-x64, so findInstalledBinary("linux64") always missed
+		// it and every darwin run fell through to a fresh ~130 MB download
+		// (#615/#617/#618 hardening review, F1). A cftPlatform() error means
+		// an unsupported platform; fall through to the download attempt
+		// below, which will itself fail with a clear message for
+		// resolveTestBinary's t.Skipf to surface.
 		if home, err := os.UserHomeDir(); err == nil {
-			installRoot := filepath.Join(home, ".omnipus", "browser", "chromium")
-			if bin := findInstalledBinary(installRoot, "linux64"); bin != "" {
-				sharedTestBin = bin
-				return
+			if platform, perr := cftPlatform(); perr == nil {
+				installRoot := filepath.Join(home, ".omnipus", "browser", "chromium")
+				if bin := findInstalledBinary(installRoot, platform); bin != "" {
+					sharedTestBin = bin
+					return
+				}
 			}
 		}
 		// Else download once into a STABLE shared dir. Deliberately NOT
@@ -92,11 +104,17 @@ var (
 func resolveTestBinaryHeadlessShell(t *testing.T) string {
 	t.Helper()
 	sharedTestBinHeadlessShellOnce.Do(func() {
+		// See resolveTestBinary's matching comment: platform comes from
+		// cftPlatform(), not a hardcoded "linux64" (F1, #615/#617/#618
+		// hardening review) — otherwise this resolver never finds a real
+		// managed install on macOS.
 		if home, err := os.UserHomeDir(); err == nil {
-			installRoot := filepath.Join(home, ".omnipus", "browser", "chromium")
-			if bin := findInstalledBuild(installRoot, "linux64", headlessShellBuild()); bin != "" {
-				sharedTestBinHeadlessShell = bin
-				return
+			if platform, perr := cftPlatform(); perr == nil {
+				installRoot := filepath.Join(home, ".omnipus", "browser", "chromium")
+				if bin := findInstalledBuild(installRoot, platform, headlessShellBuild()); bin != "" {
+					sharedTestBinHeadlessShell = bin
+					return
+				}
 			}
 		}
 		sharedTestBinHeadlessShell, errSharedTestBinHeadlessShell = EnsureChromiumBuild(
@@ -134,9 +152,7 @@ func newTestManager(t *testing.T, cfg BrowserConfig) *BrowserManager {
 // M2: two agents Register against one coordinator → exactly one Chrome (one
 // PID), two DISTINCT browser contexts (per-agent isolation).
 func TestCoordinator_TwoAgents_OneChrome_TwoContexts(t *testing.T) {
-	if testing.Short() {
-		t.Skip("needs a real Chrome")
-	}
+	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
 	coord := NewBrowserCoordinator(home, cfg, 30)
 
@@ -185,9 +201,7 @@ func TestCoordinator_TwoAgents_OneChrome_TwoContexts(t *testing.T) {
 // agent's browser context (the coordinator owns both; the context persists so a
 // reload re-adopts it and login survives).
 func TestManager_Shutdown_DropsConnectionNotProcess(t *testing.T) {
-	if testing.Short() {
-		t.Skip("needs a real Chrome")
-	}
+	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
 	coord := NewBrowserCoordinator(home, cfg, 30)
 	mgr := newTestManager(t, cfg)
@@ -228,9 +242,7 @@ func TestManager_Shutdown_DropsConnectionNotProcess(t *testing.T) {
 // FR-008: coordinator.Shutdown() is the SOLE process-kill path. After it the
 // pid is gone and KillCount==1.
 func TestCoordinator_Shutdown_IsSoleKill(t *testing.T) {
-	if testing.Short() {
-		t.Skip("needs a real Chrome")
-	}
+	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
 	coord := NewBrowserCoordinator(home, cfg, 30)
 	mgr := newTestManager(t, cfg)
@@ -314,9 +326,7 @@ func TestBrowserCoordinator_CaptureSharedContext_ConfigAndEnvOverride(t *testing
 // session then bootstraps in the DEFAULT browser context, which
 // chrome.tabCapture can actually reach).
 func TestCoordinator_Register_SharedContextMode_ReturnsRootCtxAndEmptyBrowserCtxID(t *testing.T) {
-	if testing.Short() {
-		t.Skip("needs a real Chrome")
-	}
+	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
 	coord := NewBrowserCoordinator(home, cfg, 30)
 	coord.SetCaptureSharedContext(true)
@@ -359,9 +369,15 @@ func TestCoordinator_Register_SharedContextMode_ReturnsRootCtxAndEmptyBrowserCtx
 }
 
 // Ownership marker round-trip (M2 primitive): the coordinator can write+read
-// its own marker; a stale/foreign pid is detected as not-alive.
+// its own marker; a stale/foreign pid is detected as not-alive. This never
+// launches Chrome (writeOwnershipMarker/readOwnershipMarker/pidAlive are pure
+// file/OS-signal logic), so it deliberately uses budgetTestConfig — NOT
+// newCoordinatorTestConfig, whose ExecPath resolution can trigger a real
+// Chrome-for-Testing download this test does not need (#615 finding: this
+// call was previously ungated by testing.Short()/skipIfNoBrowser, so it ran —
+// and could download — unconditionally in every CI gate).
 func TestCoordinator_OwnershipMarker_RoundTrip(t *testing.T) {
-	cfg, home := newCoordinatorTestConfig(t)
+	cfg, home := budgetTestConfig(t)
 	coord := NewBrowserCoordinator(home, cfg, 30)
 	if err := coord.writeOwnershipMarker(999999, "Chrome-for-Testing"); err != nil {
 		t.Fatalf("write marker: %v", err)

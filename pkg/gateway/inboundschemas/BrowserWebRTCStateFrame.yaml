@@ -6,11 +6,12 @@ description: >
   browser_webrtc_offer at all (feature flag off, platform/build not
   capable, or a runtime error takes it out of service); `active` tells the
   SPA whether a WebRTC session is currently flowing media for this
-  connection. Per ADR-047 D3, the JPEG browser_screencast path keeps
-  running unconditionally as the automatic fallback tier — the SPA falls
-  back to it whenever available=false or active drops to false after being
-  true (e.g. ICE failure), with no separate error frame needed. See
-  ADR-047 D1/D3/D7 (lite builds compile WebRTC out entirely).
+  connection. Per ADR-061, WebRTC is the ONLY live-browser video path —
+  there is no screencast fallback to degrade to. available=false or active
+  dropping to false after being true (e.g. ICE failure) means the panel
+  genuinely has no video right now, and the SPA must show that honestly
+  rather than silently substituting another stream. See ADR-047 D1/D7
+  (lite builds compile WebRTC out entirely), ADR-061.
 type: object
 required:
   - type
@@ -32,8 +33,8 @@ properties:
       True if the gateway currently offers WebRTC for this connection (the
       webrtc_enabled config flag is on, the platform/build supports it, and
       no runtime error has taken it out of service). False means the SPA
-      must not send browser_webrtc_offer and should rely on the JPEG
-      browser_screencast path only.
+      must not send browser_webrtc_offer — there is no video for this
+      connection until it becomes true.
   reason:
     type: string
     enum:
@@ -41,6 +42,7 @@ properties:
       - not_capable
       - lite_build
       - error
+      - multi_agent_capture_denied
     description: >-
       Present when available=false (or when active unexpectedly drops to
       false): disabled = tools.browser.webrtc_enabled is off; not_capable =
@@ -48,7 +50,9 @@ properties:
       eligibility (ADR-047 D5, e.g. chrome-headless-shell only, no full
       Chrome); lite_build = binary built with -tags lite (Pion compiled
       out, ADR-047 D7); error = a runtime failure (capture/encoder/ICE)
-      took the WebRTC path out of service for this session.
+      took the WebRTC path out of service for this session;
+      multi_agent_capture_denied = another agent's capture is already
+      being viewed (ADR-048 condition 2; v1 is single-capture).
   has_audio:
     type: boolean
     description: >-
@@ -59,6 +63,7 @@ properties:
     type: boolean
     description: >-
       True while a WebRTC PeerConnection for this viewer is currently
-      connected and flowing media. False (or absent) means the viewer is on
-      the JPEG fallback tier, whether by choice, by availability, or after
-      an ICE/connection failure.
+      connected and flowing media. False (or absent) means this viewer
+      currently has no video — WebRTC not yet offered, not yet negotiated,
+      or lost after an ICE/connection failure (ADR-061: there is no
+      fallback tier to degrade to).

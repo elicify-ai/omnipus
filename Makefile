@@ -24,7 +24,7 @@
 #   bedrock    compiles in the real AWS Bedrock provider (stub without it)
 # =============================================================================
 
-.PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types spa-embed release-snapshot release-build
+.PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast spa-embed release-snapshot release-build
 
 # Build variables
 BINARY_NAME=omnipus
@@ -425,6 +425,16 @@ gen-contracts:
 ## Add `// not-wire-format` on the struct/interface declaration line to suppress a false positive.
 lint-wire-types:
 	bash scripts/check-no-handwritten-wire-types.sh
+
+## lint-tool-error-status: Fail if any SPA component derives tool-call error state from status.type==='incomplete'
+## Regression guard for issue #617 — see scripts/check-no-tool-error-from-status.sh's header comment.
+lint-tool-error-status:
+	bash scripts/check-no-tool-error-from-status.sh
+
+## lint-no-jpeg-screencast: Fail if the deleted JPEG live-browser screencast path reappears
+## Regression guard for ADR-061 — see scripts/check-no-jpeg-screencast.sh's header comment.
+lint-no-jpeg-screencast:
+	bash scripts/check-no-jpeg-screencast.sh
 
 ## verify-contracts: Regenerate contracts, run wire-type lint, typecheck TS, fail if anything has drifted
 # Note: `tsc --noEmit` (without -b) is a silent no-op on a project-references

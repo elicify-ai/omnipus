@@ -277,20 +277,43 @@ func maybeOffloadResult(
 }
 
 // structuredFailureDiscriminators are the fixed `error` values that mark a
-// tool result string as a STRUCTURED failure payload rather than prose.
-//
-// Each corresponds to a contract schema whose producer writes it as the tool's
-// ForLLM verbatim, so the calling agent and the SPA read the same bytes:
-//   - "delegation_denied" → DelegationFailure   (pkg/tools.DelegationDeniedResult)
-//   - "file_exists"       → FileExistsRefusal   (pkg/tools.FileExistsRefusalResult)
+// tool result string as a STRUCTURED failure payload rather than prose. See
+// ADR-060 (docs/internal/architecture/ADR-060-structured-tool-failure-family.md)
+// D1/D2 for the full membership rule and delivery-channel taxonomy this
+// package implements; the summary:
+//   - "delegation_denied"       → DelegationFailure     (pkg/tools.DelegationDeniedResult) — toolResult-channel
+//   - "file_exists"             → FileExistsRefusal     (pkg/tools.FileExistsRefusalResult) — toolResult-channel
+//   - "permission_denied"       → PermissionDenied      (pkg/tools.PermissionDeniedPayload, shared by
+//     pkg/tools.PermissionDeniedResult AND pkg/agent's denialPayloadJSON — issue #618) — BOTH channels: the
+//     filesystem-scope producer (PermissionDeniedResult) is toolResult-channel and its payload IS what this map
+//     routes through parseStructuredToolFailure; the tool-policy producer (denialPayloadJSON) is message-channel
+//     and never reaches this map's consumer at all (see ADR-060 D3) — it is included here on the strength of the
+//     other producer.
+//   - "tool_assembly_duplicate" → ToolAssemblyDuplicate (pkg/tools.ToolAssemblyDuplicatePayload,
+//     pkg/agent/loop.go's checkToolDedupInvariant guard) — message-channel ONLY. It is included in this map as
+//     deliberate "defensive over-provisioning" (ADR-060 §7 item 3): parseStructuredToolFailure's only two
+//     production callers (this file's live path, replay.go's reload path) both operate on tool-result strings,
+//     and this discriminator never becomes one — the emit site appends a providers.Message directly and returns
+//     before any tool-execution event fires. Its entry here exists ONLY so
+//     structured_failure_discriminator_coverage_test.go enrolls it in the schema-and-budget assertions every
+//     other member gets; it is never actually looked up by a live parseStructuredToolFailure call in production.
 //
 // A discriminator that is not in this set is left as prose and forwarded
 // unchanged, which is why an unrelated `{"error":"timeout"}` from some other
 // tool is not mistaken for one of these.
-var structuredFailureDiscriminators = map[string]struct{}{
-	tools.DelegationDeniedCode:  {},
-	tools.FileExistsRefusalCode: {},
-}
+// DERIVED, deliberately, from tools.AllStructuredFailureCodes() rather than
+// re-typing the same literals in a second package. Re-typing them is what let
+// issue #618 ship: a discriminator existed in pkg/tools with a real, reachable
+// producer while this hand-maintained list simply never learned about it, and
+// nothing anywhere compared the two. A new member added to the pkg/tools
+// enumeration now lands here automatically.
+var structuredFailureDiscriminators = func() map[string]struct{} {
+	m := make(map[string]struct{}, len(tools.AllStructuredFailureCodes()))
+	for _, code := range tools.AllStructuredFailureCodes() {
+		m[code] = struct{}{}
+	}
+	return m
+}()
 
 // unparseableFailureWarns counts how many unparseable structured payloads we
 // have seen, so the warning below can be logged sparsely.

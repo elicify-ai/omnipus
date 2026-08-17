@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>MOTION</title>
+<body style="margin:0"><canvas id=c style="width:100vw;height:100vh"></canvas>
+<script>
+const c=document.getElementById('c');c.width=1280;c.height=900;const g=c.getContext('2d');
+let f=0;(function loop(){f++;
+g.fillStyle=`hsl(${f%360},80%,45%)`;g.fillRect(0,0,1280,900);
+for(let i=0;i<24;i++){g.fillStyle=`hsl(${(f*3+i*30)%360},90%,60%)`;
+g.fillRect(((f*7+i*111)%1400)-60,(i*37)%900,90,60);}
+g.fillStyle='#fff';g.font='40px monospace';g.fillText('frame '+f,40,60);
+requestAnimationFrame(loop)})();
+</script>

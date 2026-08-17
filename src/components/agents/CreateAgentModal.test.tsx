@@ -19,8 +19,9 @@ import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CreateAgentModal } from './CreateAgentModal'
 import { useUiStore } from '@/store/ui'
-import { createAgent, fetchRegistryTools, fetchSkills, ApiError } from '@/lib/api'
+import { createAgent, fetchProviders, fetchRegistryTools, fetchSkills, ApiError } from '@/lib/api'
 import type { RegistryTool, Skill } from '@/lib/api'
+import type { Provider } from '@/lib/api/generated/openapi-types'
 import { applyRolePreset } from '@/lib/toolPolicyPresets'
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -39,22 +40,54 @@ vi.mock('@/lib/api', async (importOriginal) => {
 // state (no <input>). These modal tests fill the model via the trigger test
 // id to exercise the wire-payload plumbing, so stub the selector with a plain
 // forwarding <input>. Picker mechanics are covered by model-selector.test.tsx.
+// The primary element STAYS the plain forwarding <input> the pre-existing
+// tests already drive via `fireEvent.change(screen.getByTestId('wizard-model'), ...)`
+// — only new, additive attributes/siblings are appended so this file can
+// also assert CreateAgentModal's `providersQuery` states actually reach the
+// picker (CreateAgentModal → CreateAgentWizard → Step1Identity →
+// ModelSelector) end to end, without re-testing the picker's own render
+// logic (covered by model-selector.test.tsx and Step1Identity.test.tsx).
 vi.mock('@/components/ui/model-selector', () => ({
   ModelSelector: ({
     value,
     onChange,
     triggerTestId,
+    catalogStatus,
+    catalogErrorMessage,
+    emptyCatalogHint,
+    onRetryCatalog,
   }: {
     value: string
     onChange: (v: string) => void
     triggerTestId?: string
-  }) => (
-    <input
-      data-testid={triggerTestId ?? 'model-selector'}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-    />
-  ),
+    catalogStatus?: 'loading' | 'error' | 'ready'
+    catalogErrorMessage?: string
+    emptyCatalogHint?: string
+    onRetryCatalog?: () => void
+  }) => {
+    const testId = triggerTestId ?? 'model-selector'
+    return (
+      <>
+        <input
+          data-testid={testId}
+          data-catalog-status={catalogStatus ?? 'ready'}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        {catalogStatus === 'error' && (
+          <span data-testid={`${testId}-error-message`}>{catalogErrorMessage}</span>
+        )}
+        {catalogStatus !== 'error' && catalogStatus !== 'loading' && (
+          <span data-testid={`${testId}-empty-hint`}>{emptyCatalogHint}</span>
+        )}
+        {onRetryCatalog && (
+          <button type="button" data-testid={`${testId}-retry`} onClick={onRetryCatalog}>
+            Retry
+          </button>
+        )}
+      </>
+    )
+  },
 }))
 
 // Advanced.tsx renders a TanStack Router <Link> to the delegation-trust
@@ -174,6 +207,11 @@ beforeEach(() => {
   // override it with a real tool catalog; reset back to [] so unrelated
   // tests (which assume no tools) are not affected.
   vi.mocked(fetchRegistryTools).mockReset().mockResolvedValue([])
+  // Same leak risk for fetchProviders — the four-state provider-catalog
+  // tests below override it with pending/rejected/warned-provider results;
+  // reset back to the "no provider connected" default so unrelated tests
+  // are unaffected.
+  vi.mocked(fetchProviders).mockReset().mockResolvedValue([])
 })
 
 describe('CreateAgentModal — prop-driven opening', () => {
@@ -1003,5 +1041,93 @@ describe('CreateAgentModal — Subagent inherit-flag wire-omission contract (UAT
     // The create still went through with the fields that DO apply.
     expect(call.type).toBe('Subagent')
     expect(call.name).toBe('All Inherited')
+  })
+})
+
+// =====================================================================
+// Providers-query four-state plumbing (bug fix)
+//
+// The model picker used to collapse LOADING / FAILED / connected-but-
+// empty-catalog / no-provider-connected into one "connect a provider"
+// message, true for only the last state. Motivating incident: CI logged
+// the gateway's upstream fetch to openrouter.ai failing 9 times with
+// `context canceled` (zero successes) while /providers itself was healthy
+// (curl from the same worker: 200 in 0.46s) — and the picker still told
+// the user no provider was connected. These tests exercise the REAL
+// `providers` useQuery in CreateAgentModal end to end (ModelSelector is
+// stubbed above, but only to expose the props it receives — not to fake
+// the query states themselves).
+// =====================================================================
+
+function connectedProvider(overrides: Partial<Provider> = {}): Provider {
+  return {
+    id: 'openrouter',
+    name: 'openrouter',
+    display_name: 'OpenRouter',
+    status: 'connected',
+    models: [],
+    has_models_endpoint: true,
+    has_api_key: true,
+    ...overrides,
+  }
+}
+
+describe('CreateAgentModal — providers-query four-state plumbing (bug fix)', () => {
+  it('state 1 (loading): the picker sees catalogStatus="loading" while fetchProviders is still in flight', async () => {
+    let resolveProviders: (v: Provider[]) => void = () => {}
+    vi.mocked(fetchProviders).mockReset().mockReturnValue(
+      new Promise<Provider[]>((resolve) => {
+        resolveProviders = resolve
+      }),
+    )
+    renderModal({ open: true, onClose: vi.fn() })
+    expect(screen.getByTestId('wizard-model')).toHaveAttribute('data-catalog-status', 'loading')
+    expect(screen.queryByTestId('wizard-model-empty-hint')).not.toBeInTheDocument()
+    // Drain the pending promise so the test doesn't leak a dangling timer.
+    resolveProviders([])
+    await waitFor(() => expect(screen.getByTestId('wizard-model')).toHaveAttribute('data-catalog-status', 'ready'))
+  })
+
+  it('state 2 (error): the picker sees catalogStatus="error" with the real message and a working Retry', async () => {
+    vi.mocked(fetchProviders).mockReset().mockRejectedValue(
+      new Error('Get "https://openrouter.ai/api/v1/models": context canceled'),
+    )
+    renderModal({ open: true, onClose: vi.fn() })
+    await waitFor(() =>
+      expect(screen.getByTestId('wizard-model')).toHaveAttribute('data-catalog-status', 'error'),
+    )
+    expect(screen.getByTestId('wizard-model-error-message')).toHaveTextContent(/context canceled/)
+    // Retry re-invokes the same query function (CreateAgentModal wraps
+    // providersQuery.refetch, not a fresh fetch — the wire-up is what
+    // this test proves).
+    vi.mocked(fetchProviders).mockClear()
+    fireEvent.click(screen.getByTestId('wizard-model-retry'))
+    await waitFor(() => expect(fetchProviders).toHaveBeenCalledTimes(1))
+  })
+
+  it('state 3 (connected, empty catalog with backend warning): the picker sees the provider\'s warning text, not the generic "connect a provider" hint', async () => {
+    vi.mocked(fetchProviders)
+      .mockReset()
+      .mockResolvedValue([
+        connectedProvider({ models: [], warning: 'could not fetch upstream model list: status 429' }),
+      ])
+    renderModal({ open: true, onClose: vi.fn() })
+    await waitFor(() =>
+      expect(screen.getByTestId('wizard-model')).toHaveAttribute('data-catalog-status', 'ready'),
+    )
+    expect(screen.getByTestId('wizard-model-empty-hint')).toHaveTextContent(
+      /model list unavailable: could not fetch upstream model list: status 429/i,
+    )
+  })
+
+  it('state 4 (no provider connected at all): the picker keeps today\'s exact "connect a provider" hint — the one true case', async () => {
+    vi.mocked(fetchProviders).mockReset().mockResolvedValue([])
+    renderModal({ open: true, onClose: vi.fn() })
+    await waitFor(() =>
+      expect(screen.getByTestId('wizard-model')).toHaveAttribute('data-catalog-status', 'ready'),
+    )
+    expect(screen.getByTestId('wizard-model-empty-hint')).toHaveTextContent(
+      /connect a provider in settings to pick a model/i,
+    )
   })
 })

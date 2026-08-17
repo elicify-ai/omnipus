@@ -768,7 +768,7 @@ func TestClone_GuardsEveryReferenceField(t *testing.T) {
 					// Any other nested struct (e.g. time.Time) is treated as
 					// scalar-like for this test's purposes.
 				}
-			case reflect.Slice, reflect.Map, reflect.Ptr, reflect.Chan, reflect.Func, reflect.Interface:
+			case reflect.Slice, reflect.Map, reflect.Pointer, reflect.Chan, reflect.Func, reflect.Interface:
 				refFields = append(refFields, refField{path: prefix + f.Name, kind: f.Type.Kind()})
 			}
 		}

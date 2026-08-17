@@ -3562,6 +3562,36 @@ type BrowserToolConfig struct {
 	// deployments, or operators who want zero external network dependency
 	// at the cost of NAT traversal). See ADR-047 D1.
 	WebRTCStunServer string `json:"webrtc_stun_server" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_STUN_SERVER"`
+	// WebRTCMediaUDPPort pins live-browser media to ONE fixed UDP port
+	// (ADR-062 tier 1). 0 = the pre-ADR-062 ephemeral-port behaviour.
+	//
+	// Set this on ANY hosted install. Measured 2026-08-15 on Fly UAT: no
+	// hosted provider routes inbound UDP to an undeclared ephemeral port, so
+	// with 0 the viewer's ICE can never complete however healthy the network
+	// is -- and the network WAS healthy there (raw datagrams and STUN
+	// replies both traversed once the port was declared). Whatever value is
+	// set here is the port the operator must expose/declare; it is also the
+	// only port they need to expose for direct media.
+	WebRTCMediaUDPPort int `json:"webrtc_media_udp_port,omitempty" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_UDP_PORT"`
+	// WebRTCMediaUDPBindAddress is the address the fixed media socket binds.
+	// Empty = all interfaces, which is right nearly everywhere.
+	//
+	// Exists because some platforms route inbound UDP to a specific address:
+	// Fly.io requires "fly-global-services" and documents that binding
+	// 0.0.0.0 makes Linux choose the WRONG SOURCE ADDRESS on replies, so the
+	// peer discards them silently (fly.io/docs/networking/udp-and-tcp).
+	WebRTCMediaUDPBindAddress string `json:"webrtc_media_udp_bind_address,omitempty" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_UDP_BIND_ADDRESS"`
+	// WebRTCMediaTCPPort pins ICE-TCP to ONE fixed TCP port (ADR-062 tier 2).
+	// 0 = UDP only. Hosted installs set this so a viewer whose network drops
+	// raw UDP (VPN extensions) can open outbound TCP to the same public IP.
+	WebRTCMediaTCPPort int `json:"webrtc_media_tcp_port,omitempty" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_TCP_PORT"`
+	// WebRTCPublicIP overrides the address advertised to viewers as the media
+	// host candidate. Normally EMPTY: the gateway derives it from
+	// gateway.public_url, which an operator behind a domain has already set
+	// -- ADR-062 deliberately adds no configuration the user must discover.
+	// Set it only when the media address genuinely differs from the web
+	// origin (split DNS, a separate media IP).
+	WebRTCPublicIP string `json:"webrtc_public_ip,omitempty" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_PUBLIC_IP"`
 	// CaptureSharedContext promotes the former OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT
 	// experimental env flag to a first-class config knob (ADR-048 condition 1).
 	// When true, a browsing agent's own session is bootstrapped in Chrome's
@@ -3639,6 +3669,80 @@ type BrowserToolConfig struct {
 	// browser tools are disabled or when CDPURL points at a remote Chrome
 	// this gateway does not own.
 	WarmAtBoot bool `json:"warm_at_boot" env:"OMNIPUS_TOOLS_BROWSER_WARM_AT_BOOT"`
+
+	// WarmTabAtBoot creates the first browsing tab (parked on the configured
+	// start page, tools.browser.start_page_url — normally the gateway's own
+	// /browser-start landing page) during boot, right after WarmAtBoot brought
+	// the shared Chrome process up. Default true.
+	//
+	// Why: WarmAtBoot alone launches the Chrome BROWSER process and stops
+	// there — measured on a host whose Chrome binary is already present, the
+	// process was live 2.8s after boot with ZERO renderer processes: no
+	// browsing context, no tab, no page. The first panel open then paid
+	// 1.0-2.2s to build that tab on demand, on the user's critical path. A tab
+	// parked on a static local page costs almost nothing to keep (one idle
+	// renderer) and removes that wait.
+	//
+	// It warms the SAME session the live panel and the agent's own browser
+	// tools use (browser.DefaultSessionID) on ONE agent — the default agent
+	// (agents.defaults.default_agent_id), or, when that is unset/has no
+	// browser manager, the lexicographically-first agent that has one. It is
+	// not a per-agent pool: warming every agent would spawn one renderer per
+	// agent for a panel only one of them is likely to open first.
+	//
+	// Best-effort and never blocks or fails boot (Hard Constraint #4), exactly
+	// like WarmAtBoot: a failure is logged at WARN, audited, and the ordinary
+	// lazy path still builds the tab at first use. Turning it off leaves the
+	// browser fully functional. It is skipped whenever WarmAtBoot itself is
+	// skipped (browser tools disabled, a remote cdp_url, or
+	// OMNIPUS_SKIP_BROWSER_PREPROVISION=1).
+	//
+	// Note the idle reaper still owns the tab's LIFETIME: an untouched warm
+	// tab is closed after tools.browser.idle_ttl_sec like any other, so a
+	// first open long after boot pays tab creation again (against an
+	// already-warm Chrome, which is far cheaper than a cold start).
+	WarmTabAtBoot bool `json:"warm_tab_at_boot" env:"OMNIPUS_TOOLS_BROWSER_WARM_TAB_AT_BOOT"`
+
+	// WarmCaptureAtBoot starts the WebRTC capture pipeline (the capture
+	// extension's encoder page + its ingest leg into the gateway's relay)
+	// during boot instead of on the first viewer's offer. Default true.
+	//
+	// Why: with Chrome and the tab already warm, the encoder page's load,
+	// ingest connect and WebRTC negotiation are what is left of a measured
+	// ~9.5s first open (1.7-6.7s of it), and they are also what fails first
+	// under load — one first open in three timed out waiting for the ingest
+	// video track. Starting the pipeline at boot makes the first open
+	// near-instant, because the viewer's offer joins a capture that is already
+	// producing frames.
+	//
+	// COST, and why WarmCaptureIdleSec exists: unlike a parked tab, a running
+	// capture encodes video continuously and burns CPU for as long as it runs.
+	// On a shared-CPU host that is the very resource whose exhaustion produces
+	// the 1fps stream this warm-up exists to avoid. So the warm capture is NOT
+	// permanent: it stops itself after WarmCaptureIdleSec with no viewer ever
+	// attached, and the next viewer offer starts a fresh one on the ordinary
+	// path. Once a viewer HAS attached, the warm-up hands the session over to
+	// the normal last-viewer-detach grace stop and never stops it itself.
+	//
+	// Same agent selection, same best-effort/never-fatal contract, and the
+	// same opt-outs as WarmTabAtBoot. Additionally skipped whenever WebRTC
+	// capture is unavailable for that agent anyway (webrtc_enabled=false, a
+	// lite build with no WebRTC, or a not-capture-capable configuration) —
+	// evaluated with the SAME gate a real viewer offer uses, so warm-up can
+	// never start something an offer would have refused.
+	WarmCaptureAtBoot bool `json:"warm_capture_at_boot" env:"OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_AT_BOOT"`
+
+	// WarmCaptureIdleSec is how long (in seconds) a boot-warmed capture keeps
+	// running with NO viewer ever attached before it stops itself. Default 300
+	// (5 minutes) — long enough to cover the realistic "operator restarts the
+	// gateway, then opens the panel" window, short enough that an unattended
+	// host is not encoding video forever.
+	//
+	// <= 0 means "never stop it on idle": the warm capture then runs until a
+	// viewer takes it over or the gateway shuts down. Only sensible on a host
+	// with CPU to spare — see WarmCaptureAtBoot's cost note. Ignored entirely
+	// when WarmCaptureAtBoot is false.
+	WarmCaptureIdleSec int `json:"warm_capture_idle_sec" env:"OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_IDLE_SEC"`
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled
@@ -4122,7 +4226,8 @@ func expandHome(path string) string {
 
 // GetModelConfig returns the ModelConfig for the given model name.
 // If multiple configs exist with the same model_name, it uses round-robin
-// selection for load balancing. Returns an error if the model is not found.
+// selection for load balancing — over the USABLE ones only, see findMatches.
+// Returns an error if the model is not found.
 func (c *Config) GetModelConfig(modelName string) (*ModelConfig, error) {
 	matches := c.findMatches(modelName)
 	if len(matches) == 0 {
@@ -4137,15 +4242,66 @@ func (c *Config) GetModelConfig(modelName string) (*ModelConfig, error) {
 	return matches[idx], nil
 }
 
-// findMatches finds all ModelConfig entries with the given model_name.
+// modelConfigCredentialUsable reports whether m's credential requirement is
+// satisfied: either it names no vault ref at all (local model, CLI/OAuth
+// auth, api_base-only provider — these never had a vault credential to
+// begin with), or its api_key_ref resolved to a non-empty value in the
+// process environment (InjectFromConfig runs at boot/reload, before any
+// caller reaches GetModelConfig). Mirrors the "usable" test
+// gateway.go's defaultModelCredentialBlocked applies to the default model.
+func modelConfigCredentialUsable(m *ModelConfig) bool {
+	if m == nil {
+		return false
+	}
+	if strings.TrimSpace(m.APIKeyRef) == "" {
+		return true
+	}
+	return m.APIKey() != ""
+}
+
+// findMatches finds all ModelConfig entries with the given model_name,
+// preferring USABLE ones (see modelConfigCredentialUsable) when at least one
+// exists.
+//
+// Why (2026-08-15): several providers[] entries may share one model_name for
+// load balancing, round-robinned by GetModelConfig above. Before this
+// change, an entry whose api_key_ref never resolved (missing from the
+// vault, wrong master key while it was still degradable, …) stayed in the
+// candidate pool on equal footing with a working sibling — round-robin,
+// being a plain counter with no key-awareness, could hand the broken entry
+// back to CreateProviderFromConfig, which happily builds an *HTTPProvider
+// with an empty API key (api_key OR api_base satisfies its check) and
+// produces a bare upstream 401 naming neither the provider nor the
+// credential — non-deterministically, since which call in the rotation gets
+// the broken entry depends on the shared global rrCounter. This was
+// unreachable before gateway.go's reportInjectionErrors started degrading
+// (rather than aborting) on a single unresolvable provider ref, because
+// boot used to abort outright on that config; the degrade-not-abort fix
+// made this reachable for the first time.
+//
+// Filtering to the usable subset (when non-empty) removes the broken
+// entries from the rotation entirely — the exact fix load-balanced
+// failover already implies: an unusable sibling behaves like it isn't
+// there. If NONE of the matches are usable, all of them are returned
+// unfiltered so the caller still gets a ModelConfig back (and, for the
+// default model, gateway.go's defaultModelCredentialBlocked reports it as
+// blocked rather than silently 401ing).
 func (c *Config) findMatches(modelName string) []*ModelConfig {
-	var matches []*ModelConfig
+	var all []*ModelConfig
+	var usable []*ModelConfig
 	for i := range c.Providers {
-		if c.Providers[i].ModelName == modelName {
-			matches = append(matches, c.Providers[i])
+		if c.Providers[i].ModelName != modelName {
+			continue
+		}
+		all = append(all, c.Providers[i])
+		if modelConfigCredentialUsable(c.Providers[i]) {
+			usable = append(usable, c.Providers[i])
 		}
 	}
-	return matches
+	if len(usable) > 0 {
+		return usable
+	}
+	return all
 }
 
 // ValidateProviders validates all ModelConfig entries in the providers config.

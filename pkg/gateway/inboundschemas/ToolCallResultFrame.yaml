@@ -37,7 +37,17 @@ properties:
       and does not crash on null. When the result exceeded 1 MiB the value is a
       TruncatedResult sentinel. When marshaling the result failed the value is a
       MarshalErrorResult sentinel.
-    oneOf:
+
+
+      anyOf, not oneOf: the bare `type: object` branch already matches any object,
+      so a TruncatedResult/MarshalErrorResult-shaped value (itself an object)
+      always matches BOTH that branch AND its own $ref — oneOf demands exactly
+      one match and would make every sentinel-shaped result schema-invalid
+      against this very union (pre-existing; not introduced by this change, see
+      ADR-060 D6/§7 item 2 for the sibling fix on the AsyncAPI copy of this
+      union). anyOf (at least one match) is correct here since this union
+      catalogues possible shapes rather than asserting mutual exclusivity.
+    anyOf:
       - type: object
       - type: array
         items: {}

@@ -7,6 +7,7 @@
 package captureext
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"embed"
 	"encoding/base64"
@@ -59,7 +60,7 @@ const ExtensionID = "nibcmjlmohchocjndnbajhmlhkeldobo"
 // UAT 2026-07-31 and none of them ran, while every layer reported success.
 // TestEmbeddedAssetsRequireVersionBump pins the embedded content hash to
 // this constant so that omission is now a test failure, not a silent no-op.
-const Version = "1.0.5"
+const Version = "1.0.11"
 
 // manifestKeyDoc is the minimal shape needed to read the "key" field back
 // out of the embedded manifest.json for ID verification. It is not a wire
@@ -114,12 +115,22 @@ func ManifestExtensionID() (string, error) {
 	return ExtensionIDFromPublicKeyDER(der), nil
 }
 
-// Seed idempotently seeds the embedded capture extension into
+// Seed seeds the embedded capture extension into
 // <destRoot>/captureext/<Version>/ via a staged-tmpdir + atomic rename (the
-// pkg/skills.SeedDefaults pattern). If that directory already exists, Seed
-// does nothing and returns it unchanged — safe to call on every boot.
+// pkg/skills.SeedDefaults pattern). Safe to call on every boot.
 //
-// Seed never overwrites or deletes existing files.
+// The gate is CONTENT-verified, not existence-verified: if the directory
+// already exists AND every embedded file matches it byte-for-byte, Seed does
+// nothing and returns it unchanged; if any embedded file differs or is
+// missing on disk, the whole directory is atomically REPLACED with the
+// embedded content. This is the runtime backstop for the
+// TestEmbeddedAssetsRequireVersionBump commit-time discipline: on 2026-08-13
+// an encoder.js change shipped without a Version bump and the old
+// existence-only gate kept the operator's install loading a two-day-stale
+// extension while a fresh-home test install got the new one — every layer
+// reported success. A drifted seed is always a bug (embedded assets changed
+// without a bump), so replacing it is always correct; operator files are
+// never expected inside this managed, versioned directory.
 func Seed(destRoot string) (dir string, err error) {
 	if destRoot == "" {
 		return "", fmt.Errorf("captureext: seed destination root is empty")
@@ -127,8 +138,16 @@ func Seed(destRoot string) (dir string, err error) {
 
 	destDir := filepath.Join(destRoot, "captureext", Version)
 
+	replacing := false
 	if _, statErr := os.Stat(destDir); statErr == nil {
-		return destDir, nil // idempotent: already seeded
+		match, matchErr := seededContentMatches(destDir)
+		if matchErr != nil {
+			return "", fmt.Errorf("captureext: verify seeded content in %q: %w", destDir, matchErr)
+		}
+		if match {
+			return destDir, nil // idempotent: already seeded, content verified
+		}
+		replacing = true
 	} else if !os.IsNotExist(statErr) {
 		return "", fmt.Errorf("captureext: stat %q: %w", destDir, statErr)
 	}
@@ -174,10 +193,79 @@ func Seed(destRoot string) (dir string, err error) {
 		return "", fmt.Errorf("captureext: stage embedded files: %w", walkErr)
 	}
 
+	if replacing {
+		// Swap via an aside-rename (rename-over-existing-dir is not
+		// portable): move the stale seed out of the way, move the staged
+		// replacement in, then drop the stale copy. If the second rename
+		// fails, restore the original so the extension keeps loading.
+		aside := filepath.Join(parent, ".stale-captureext-"+filepath.Base(tmpDir))
+		if err := os.Rename(destDir, aside); err != nil {
+			return "", fmt.Errorf("captureext: move stale seed aside: %w", err)
+		}
+		if err := os.Rename(tmpDir, destDir); err != nil {
+			_ = os.Rename(aside, destDir) // best-effort restore
+			return "", fmt.Errorf("captureext: commit staged extension dir: %w", err)
+		}
+		committed = true
+		_ = os.RemoveAll(aside)
+		return destDir, nil
+	}
+
 	if err := os.Rename(tmpDir, destDir); err != nil {
 		return "", fmt.Errorf("captureext: commit staged extension dir: %w", err)
 	}
 	committed = true
 
 	return destDir, nil
+}
+
+// seededContentMatches reports whether every file embedded in the extension
+// exists under destDir with identical bytes. Files present on disk but not
+// embedded are ignored — the versioned dir is managed, and stale extras are
+// swept by the replace path the next time real drift is detected.
+func seededContentMatches(destDir string) (bool, error) {
+	match := true
+	err := fs.WalkDir(embeddedExt, embeddedRoot, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || !match {
+			return nil
+		}
+		rel, relErr := filepath.Rel(embeddedRoot, p)
+		if relErr != nil {
+			return relErr
+		}
+		want, readErr := embeddedExt.ReadFile(p)
+		if readErr != nil {
+			return fmt.Errorf("read embedded file %q: %w", p, readErr)
+		}
+		got, diskErr := os.ReadFile(filepath.Join(destDir, rel))
+		if diskErr != nil {
+			// F11 (external review, 2026-08-13): ANY failure reading a
+			// seeded file — missing (os.IsNotExist) OR unreadable for any
+			// other reason (mode bits changed under it, a permission error,
+			// a transient I/O hiccup) — means the seed no longer matches the
+			// embedded content, i.e. DRIFT, which Seed's replace path exists
+			// to fix. Before this fix only os.IsNotExist was treated as
+			// drift; every other read error propagated up through
+			// fs.WalkDir as a hard `err`, which Seed's caller turned into a
+			// PERMANENT failure (see Seed's matchErr handling) instead of
+			// falling through to the rename-based replace that would
+			// actually recover it. Verified: chmod 000 on one seeded file
+			// made Seed fail on every subsequent call forever, reporting
+			// not_capable, while the replace that would have fixed it was
+			// never reached.
+			match = false
+			// nilerr: returning nil here is the POINT — an unreadable seeded
+			// file is drift to be REPLACED, not an error to propagate. See
+			// the comment above.
+			return nil //nolint:nilerr // unreadable seed == drift, handled by the replace path
+		}
+		if !bytes.Equal(want, got) {
+			match = false
+		}
+		return nil
+	})
+	return match, err
 }

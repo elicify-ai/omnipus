@@ -118,10 +118,11 @@ func newInspectTestManager(t *testing.T) *BrowserManager {
 	t.Helper()
 	tmpDir := t.TempDir()
 	cfg := BrowserConfig{
-		ProfileDir:  filepath.Join(tmpDir, "profile"),
-		Headless:    true,
-		PageTimeout: 15 * time.Second,
-		MaxTabs:     5,
+		ProfileDir:      filepath.Join(tmpDir, "profile"),
+		Headless:        true,
+		PageTimeout:     15 * time.Second,
+		MaxTabs:         5,
+		TrustPathChrome: true, // skipIfNoBrowser already probed $PATH Chrome
 	}
 	mgr, err := NewBrowserManager(cfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
@@ -216,10 +217,11 @@ func TestInspectPoint_BoundedByInspectEvalTimeout_NotPageTimeout(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	cfg := BrowserConfig{
-		ProfileDir:  filepath.Join(tmpDir, "profile"),
-		Headless:    true,
-		PageTimeout: 45 * time.Second, // deliberately large — proves InspectPoint does NOT wait anywhere near this long
-		MaxTabs:     5,
+		ProfileDir:      filepath.Join(tmpDir, "profile"),
+		Headless:        true,
+		PageTimeout:     45 * time.Second, // deliberately large — proves InspectPoint does NOT wait anywhere near this long
+		MaxTabs:         5,
+		TrustPathChrome: true, // skipIfNoBrowser already probed $PATH Chrome
 	}
 	mgr, err := NewBrowserManager(cfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)

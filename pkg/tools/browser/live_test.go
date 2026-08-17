@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/input"
-	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/require"
 
@@ -18,122 +17,16 @@ import (
 
 // These tests deliberately avoid a real Chromium/CDP connection (Chrome-in-CI
 // is not approved for this repo — see execute_e2e_test.go's skipIfNoBrowser
-// convention). They exercise the pure engine logic — frame relay, ack
-// dispatch, control-lock gating, rate limiting, and viewer refcounting — by
-// driving LiveView/LiveViewRegistry directly (same package, unexported
-// fields/methods) rather than through Attach's chromedp.Run(StartScreencast)
-// path. The CDP wire calls themselves (StartScreencast/ScreencastFrameAck/
-// StopScreencast, Input.dispatch*) are spike-proven (ADR-038 context) and
-// covered by the existing OMNIPUS_BROWSER_E2E-gated suite for the 7 tool
-// Execute paths; nothing here needs a live browser to be a real,
-// non-trivial test of this file's logic.
-
-// --- frame relay + seq assignment + metadata fallback ---
-
-func TestLiveView_DeliverFansOutAndAssignsSeq(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
-
-	var mu sync.Mutex
-	var got1, got2 []LiveFrame
-	lv.viewers["v1"] = func(f LiveFrame) { mu.Lock(); got1 = append(got1, f); mu.Unlock() }
-	lv.viewers["v2"] = func(f LiveFrame) { mu.Lock(); got2 = append(got2, f); mu.Unlock() }
-
-	lv.deliver(&page.EventScreencastFrame{
-		Data: "AAAA",
-		Metadata: &page.ScreencastFrameMetadata{
-			DeviceWidth: 800, DeviceHeight: 600, PageScaleFactor: 1.5,
-			OffsetTop: 10, ScrollOffsetX: 5, ScrollOffsetY: 7,
-		},
-	})
-	lv.deliver(&page.EventScreencastFrame{Data: "BBBB"}) // no metadata -> defaults
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	require.Len(t, got1, 2, "both viewers must receive every frame")
-	require.Len(t, got2, 2)
-
-	require.Equal(t, 1, got1[0].Seq, "seq must be monotonic starting at 1")
-	require.Equal(t, 2, got1[1].Seq)
-	require.Equal(t, "AAAA", got1[0].Data)
-
-	require.Equal(t, 800, got1[0].Width)
-	require.Equal(t, 600, got1[0].Height)
-	require.InDelta(t, 1.5, got1[0].PageScale, 0.0001)
-	require.InDelta(t, 10.0, got1[0].OffsetTop, 0.0001)
-	require.InDelta(t, 5.0, got1[0].ScrollOffsetX, 0.0001)
-	require.InDelta(t, 7.0, got1[0].ScrollOffsetY, 0.0001)
-
-	// A frame with no metadata still needs a schema-valid (>=1) width/height
-	// (generated.BrowserScreencastFrame requires it — Constraint #8), so
-	// deliver falls back to the configured screencast max dimensions.
-	require.Equal(t, screencastMaxWidth, got1[1].Width)
-	require.Equal(t, screencastMaxHeight, got1[1].Height)
-}
-
-func TestLiveView_DeliverWithNoViewers(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
-	// Must not panic when nobody is attached (defensive: deliver can race a
-	// detach that empties the viewers map between the CDP callback firing
-	// and the lock being taken).
-	require.NotPanics(t, func() {
-		lv.deliver(&page.EventScreencastFrame{Data: "X"})
-	})
-}
-
-// --- ack dispatched off the event-dispatch goroutine ---
-
-func TestLiveView_HandleScreencastEvent_DeliversAndDoesNotBlockOnAck(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink), ackCh: make(chan int64, 1)}
-	received := make(chan LiveFrame, 1)
-	lv.viewers["v1"] = func(f LiveFrame) { received <- f }
-
-	// handleScreencastEvent must never block: it runs synchronously on
-	// chromedp's own CDP event-dispatch goroutine (see its doc comment), so
-	// the ack is only ever queued (queueAck, non-blocking, coalescing) for a
-	// separate ack worker to consume — never dispatched inline and never via
-	// a fresh goroutine per frame (ADR-038 deadlock postmortem: the latter
-	// piled up under a heavy page and helped saturate the shared CDP
-	// transport). Nobody is draining lv.ackCh in this test, which is exactly
-	// the point: it must still return immediately, and the frame must still
-	// reach the viewer synchronously.
-	start := time.Now()
-	lv.handleScreencastEvent(context.Background(), &page.EventScreencastFrame{
-		Data:      "CCCC",
-		Metadata:  &page.ScreencastFrameMetadata{DeviceWidth: 100, DeviceHeight: 50},
-		SessionID: 42,
-	})
-	elapsed := time.Since(start)
-	require.Less(t, elapsed, 500*time.Millisecond,
-		"handleScreencastEvent must return immediately regardless of ack worker state")
-
-	select {
-	case f := <-received:
-		require.Equal(t, "CCCC", f.Data)
-		require.Equal(t, 1, f.Seq)
-	case <-time.After(2 * time.Second):
-		t.Fatal("frame was not delivered to the viewer")
-	}
-
-	// The ack was queued for the (absent, in this test) worker to consume.
-	select {
-	case sessionID := <-lv.ackCh:
-		require.Equal(t, int64(42), sessionID)
-	default:
-		t.Fatal("frame's session ID was not queued for ack")
-	}
-}
-
-func TestLiveView_HandleScreencastEvent_IgnoresOtherEventTypes(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
-	called := false
-	lv.viewers["v1"] = func(LiveFrame) { called = true }
-
-	require.NotPanics(t, func() {
-		lv.handleScreencastEvent(context.Background(), "not-a-screencast-event")
-	})
-	require.False(t, called, "a non-screencast CDP event must not be delivered as a frame")
-}
+// convention). They exercise the pure engine logic — control-lock gating,
+// rate limiting, viewer refcounting, and tab-following — by driving
+// LiveView/LiveViewRegistry directly (same package, unexported
+// fields/methods). Video is carried exclusively by WebRTC (ADR-061); this
+// package's LiveView has no CDP screencast path left to exercise here. The
+// CDP wire calls that remain (Input.dispatch*, Page.getLayoutMetrics,
+// Browser.setWindowBounds) are spike-proven (ADR-038 context) and covered by
+// the existing OMNIPUS_BROWSER_E2E-gated suite for the tool Execute paths;
+// nothing here needs a live browser to be a real, non-trivial test of this
+// file's logic.
 
 // --- input is NEVER gated by control (operator directive, 2026-08-03) ---
 //
@@ -146,7 +39,7 @@ func TestLiveView_HandleScreencastEvent_IgnoresOtherEventTypes(t *testing.T) {
 // driving".
 
 func TestLiveView_DispatchInput_NeverRequiresControl(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{})}
 
 	// Nobody holds control at all. The input must still reach the dispatch
 	// step — proven by it failing on the UNATTACHED SESSION (nil tabCtx)
@@ -169,7 +62,7 @@ func TestLiveView_DispatchInput_NeverRequiresControl(t *testing.T) {
 }
 
 func TestLiveView_DispatchInput_RateLimited(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{})}
 	require.True(t, lv.takeControl("viewerA"))
 
 	// Exhaust the per-second budget; every call fails closed on "not
@@ -209,7 +102,7 @@ func newNavigateTestLiveView(
 	return &LiveView{
 		mgr:       mgr,
 		sessionID: "s1",
-		viewers:   make(map[string]FrameSink),
+		viewers:   make(map[string]struct{}),
 		tabCtx:    context.Background(),
 		runCDP:    runCDP,
 	}
@@ -304,7 +197,7 @@ func TestLiveView_DispatchInput_Navigate_DNSResolutionIsBounded(t *testing.T) {
 	lv := &LiveView{
 		mgr:       mgr,
 		sessionID: "s1",
-		viewers:   make(map[string]FrameSink),
+		viewers:   make(map[string]struct{}),
 		tabCtx:    context.Background(), // deliberately never-expiring — see doc comment
 		runCDP: func(context.Context, time.Duration, ...chromedp.Action) error {
 			dispatched = true
@@ -409,7 +302,7 @@ func TestLiveView_DispatchInput_Navigate_NeverRequiresControl(t *testing.T) {
 }
 
 func TestLiveView_AllowInputLocked_CapsPerSecond(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{})}
 
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
@@ -439,7 +332,7 @@ func TestLiveView_AllowInputLocked_CapsPerSecond(t *testing.T) {
 // control lock having been removed) could exhaust the whole allowance and the
 // button release that followed was refused.
 func TestLiveView_AllowInputLocked_MoveFloodCannotStarveButtonRelease(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{})}
 
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
@@ -460,7 +353,7 @@ func TestLiveView_AllowInputLocked_MoveFloodCannotStarveButtonRelease(t *testing
 // The discrete bucket is still bounded — splitting the budget must not create
 // an unmetered path for a runaway client.
 func TestLiveView_AllowInputLocked_DiscreteBucketStillBounded(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{})}
 
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
@@ -475,27 +368,22 @@ func TestLiveView_AllowInputLocked_DiscreteBucketStillBounded(t *testing.T) {
 		"discrete transitions must remain capped, just on their own budget")
 }
 
-// --- viewer refcount: screencast stops only when the last viewer detaches ---
+// --- viewer refcount: the death watch stops only when the last viewer detaches ---
 
 func TestLiveView_Detach_RefCountsViewers(t *testing.T) {
-	// mgr is needed because detach()'s teardown path (the last viewer
-	// leaving) reads mgr.PageTimeout() to bound its StopScreencast call —
-	// see the ADR-038 deadlock postmortem in live.go. Production LiveViews
-	// always go through LiveViewRegistry.view(), which sets mgr; this
-	// hand-built test LiveView needs it set explicitly.
 	mgr := &BrowserManager{cfg: BrowserConfig{PageTimeout: 5 * time.Second}}
-	lv := &LiveView{mgr: mgr, sessionID: "s1", viewers: make(map[string]FrameSink), runCDP: runCDPWithTimeout}
+	lv := &LiveView{mgr: mgr, sessionID: "s1", viewers: make(map[string]struct{}), runCDP: runCDPWithTimeout}
 
-	// Fake an "active" screencast the same way attach() would have left it,
-	// without a real chromedp.Run(StartScreencast) call (spike-proven CDP
-	// mechanics are covered elsewhere; this test is about the refcount
-	// bookkeeping, not the wire call).
+	// Fake an "active" watch the same way attach() would have left it, with
+	// no real goroutine watching (this test is about the refcount
+	// bookkeeping, not watchForUnexpectedDeath's own behavior — covered
+	// separately).
 	listenCtx, cancel := context.WithCancel(context.Background())
 	lv.tabCtx = context.Background()
 	lv.listenCtx = listenCtx
 	lv.stopListen = cancel
-	lv.viewers["v1"] = func(LiveFrame) {}
-	lv.viewers["v2"] = func(LiveFrame) {}
+	lv.viewers["v1"] = struct{}{}
+	lv.viewers["v2"] = struct{}{}
 
 	lv.mu.Lock()
 	require.True(t, lv.isActiveLocked())
@@ -505,21 +393,21 @@ func TestLiveView_Detach_RefCountsViewers(t *testing.T) {
 
 	lv.mu.Lock()
 	require.Len(t, lv.viewers, 1, "detaching one of two viewers must not remove the other")
-	require.True(t, lv.isActiveLocked(), "screencast must stay active while a viewer remains")
+	require.True(t, lv.isActiveLocked(), "the watch must stay active while a viewer remains")
 	lv.mu.Unlock()
 
 	lv.detach("v2")
 
 	lv.mu.Lock()
 	require.Empty(t, lv.viewers)
-	require.False(t, lv.isActiveLocked(), "screencast must stop once the last viewer detaches")
+	require.False(t, lv.isActiveLocked(), "the watch must stop once the last viewer detaches")
 	lv.mu.Unlock()
-	require.Error(t, listenCtx.Err(), "detaching the last viewer must cancel the listen subscription")
+	require.Error(t, listenCtx.Err(), "detaching the last viewer must cancel the watch")
 }
 
 func TestLiveView_Detach_UnknownViewerIsNoop(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
-	lv.viewers["v1"] = func(LiveFrame) {}
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{})}
+	lv.viewers["v1"] = struct{}{}
 	require.NotPanics(t, func() { lv.detach("never-attached") })
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
@@ -527,8 +415,8 @@ func TestLiveView_Detach_UnknownViewerIsNoop(t *testing.T) {
 }
 
 func TestLiveView_Detach_ReleasesControl(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
-	lv.viewers["v1"] = func(LiveFrame) {}
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{})}
+	lv.viewers["v1"] = struct{}{}
 	require.True(t, lv.takeControl("v1"))
 	require.Equal(t, "v1", lv.getController())
 
@@ -540,7 +428,7 @@ func TestLiveView_Detach_ReleasesControl(t *testing.T) {
 // --- control lock: take/release/query, no preemption in v1 ---
 
 func TestLiveView_TakeReleaseControl(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{})}
 
 	require.Equal(t, "", lv.getController())
 	require.True(t, lv.takeControl("viewerA"))
@@ -609,7 +497,7 @@ func requireNoControlBroadcast(t *testing.T, ch <-chan bool, msg string) {
 // Uses buffered channels (not a captured slice) because broadcastControl
 // (B2) delivers asynchronously, on its own goroutine per sink.
 func TestLiveView_TakeReleaseControl_BroadcastsToOtherViewers(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink), controlSinks: make(map[string]ControlSink)}
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{}), controlSinks: make(map[string]ControlSink)}
 
 	gotA := make(chan bool, 4)
 	gotB := make(chan bool, 4)
@@ -635,7 +523,7 @@ func TestLiveView_TakeReleaseControl_BroadcastsToOtherViewers(t *testing.T) {
 // DENIED take (someone else already controls) never fans out — the control
 // state didn't actually change, so no OTHER viewer's display should move.
 func TestLiveView_TakeReleaseControl_BroadcastSkippedOnDeniedTake(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink), controlSinks: make(map[string]ControlSink)}
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{}), controlSinks: make(map[string]ControlSink)}
 
 	gotC := make(chan bool, 4)
 	lv.controlSinks["connC"] = func(controlledByOther bool) { gotC <- controlledByOther }
@@ -661,9 +549,9 @@ func TestLiveView_TakeReleaseControl_BroadcastSkippedOnDeniedTake(t *testing.T) 
 // TestLiveView_Detach_ReleasesControl's setup but adds a second viewer (B)
 // with a registered ControlSink to observe the implicit-release fan-out.
 func TestLiveView_Detach_ImplicitReleaseBroadcastsToOtherViewers(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink), controlSinks: make(map[string]ControlSink)}
-	lv.viewers["viewerA"] = func(LiveFrame) {}
-	lv.viewers["viewerB"] = func(LiveFrame) {}
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{}), controlSinks: make(map[string]ControlSink)}
+	lv.viewers["viewerA"] = struct{}{}
+	lv.viewers["viewerB"] = struct{}{}
 
 	gotB := make(chan bool, 4)
 	lv.controlSinks["viewerB"] = func(controlledByOther bool) { gotB <- controlledByOther }
@@ -698,17 +586,16 @@ func TestLiveView_Detach_ImplicitReleaseBroadcastsToOtherViewers(t *testing.T) {
 // connection attaching to a session some other viewer already controls must
 // see controlled_by_other=true on its very first status frame, not only on
 // the next take/release broadcast. Exercises the piggyback attach path (a
-// screencast already active) so no chromedp.Run(StartScreencast) call is
-// needed — see attach()'s isActiveLocked branch.
+// watch already active) — see attach()'s isActiveLocked branch.
 func TestLiveView_Attach_ReturnsControlledByOtherForNewViewer(t *testing.T) {
 	lv := &LiveView{
 		sessionID:    "s1",
-		viewers:      make(map[string]FrameSink),
+		viewers:      make(map[string]struct{}),
 		statusSinks:  make(map[string]StatusSink),
 		controlSinks: make(map[string]ControlSink),
 	}
-	// Fake an already-active screencast so attach() takes the piggyback path
-	// (no CDP call) — same technique as TestLiveView_Detach_RefCountsViewers.
+	// Fake an already-active watch so attach() takes the piggyback path —
+	// same technique as TestLiveView_Detach_RefCountsViewers.
 	listenCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	lv.tabCtx = context.Background()
@@ -716,7 +603,7 @@ func TestLiveView_Attach_ReturnsControlledByOtherForNewViewer(t *testing.T) {
 
 	require.True(t, lv.takeControl("viewerA"))
 
-	controlledByOther, err := lv.attach(context.Background(), "viewerB", func(LiveFrame) {}, nil, nil, nil)
+	controlledByOther, err := lv.attach(context.Background(), "viewerB", nil, nil, nil)
 	require.NoError(t, err)
 	require.True(
 		t,
@@ -725,13 +612,13 @@ func TestLiveView_Attach_ReturnsControlledByOtherForNewViewer(t *testing.T) {
 	)
 
 	// The controller itself sees controlled_by_other=false on its own (re-)attach.
-	controlledByOther, err = lv.attach(context.Background(), "viewerA", func(LiveFrame) {}, nil, nil, nil)
+	controlledByOther, err = lv.attach(context.Background(), "viewerA", nil, nil, nil)
 	require.NoError(t, err)
 	require.False(t, controlledByOther, "the controller's own attach must never report itself as 'someone else'")
 
 	// A third viewer attaching after control was released sees false.
 	lv.releaseControl("viewerA")
-	controlledByOther, err = lv.attach(context.Background(), "viewerC", func(LiveFrame) {}, nil, nil, nil)
+	controlledByOther, err = lv.attach(context.Background(), "viewerC", nil, nil, nil)
 	require.NoError(t, err)
 	require.False(t, controlledByOther, "an uncontrolled session must report controlled_by_other=false to a new attach")
 }
@@ -790,7 +677,7 @@ func TestLiveViewRegistry_DetachReleasesControl(t *testing.T) {
 	// Simulate an attached viewer without starting a real screencast (see
 	// TestLiveView_Detach_RefCountsViewers for why this is the right level
 	// to test refcounting at).
-	reg.view("s1").viewers["viewerA"] = func(LiveFrame) {}
+	reg.view("s1").viewers["viewerA"] = struct{}{}
 
 	reg.Detach("s1", "viewerA")
 
@@ -1051,123 +938,6 @@ func TestControlledResult(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// QA regression-wave item 5: BringToFront-before-StartScreencast ordering.
-// ---------------------------------------------------------------------------
-
-// TestLiveView_Attach_BringsTabToFrontBeforeStartingScreencast and
-// TestLiveView_RebindScreencastOnce_BringsTabToFrontBeforeStartingScreencast
-// are brittle-by-design interim guards (W3 e2e finding — full-Chrome
-// --headless=new delivers ZERO screencast frames for a target the
-// compositor considers hidden until Page.bringToFront is called first; see
-// attach()'s and rebindScreencastOnce()'s doc comments in live.go) for the
-// ORDERED PAIR [BringToFront, StartScreencast] within the SAME runCDP call.
-// This does not (and, short of a real headless Chrome, cannot) prove Chrome
-// actually renders the tab visible — it proves the two CDP calls are issued
-// in the specific order the fix requires, using the EXISTING
-// LiveView.runCDP test-injection seam (no production change needed): a
-// future regression that reordered the actions slice, or split them into
-// two separate runCDP calls where a failed BringToFront silently skipped
-// StartScreencast, would be caught here.
-func TestLiveView_Attach_BringsTabToFrontBeforeStartingScreencast(t *testing.T) {
-	mgr := &BrowserManager{cfg: BrowserConfig{PageTimeout: 5 * time.Second}}
-
-	var recorded []chromedp.Action
-	lv := &LiveView{
-		mgr:          mgr,
-		sessionID:    "s1",
-		viewers:      make(map[string]FrameSink),
-		statusSinks:  make(map[string]StatusSink),
-		controlSinks: make(map[string]ControlSink),
-		tabsSinks:    make(map[string]TabsSink),
-		ackCh:        make(chan int64, 1),
-	}
-	lv.runCDP = func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
-		recorded = append(recorded, actions...)
-		return nil
-	}
-
-	tabCtx, cancel := chromedp.NewContext(context.Background())
-	t.Cleanup(cancel)
-
-	_, err := lv.attach(tabCtx, "viewer1", func(LiveFrame) {}, nil, nil, nil)
-	require.NoError(t, err)
-
-	require.Len(t, recorded, 2, "attach must issue BringToFront and StartScreencast as ONE runCDP call")
-	_, firstIsBringToFront := recorded[0].(chromedp.ActionFunc)
-	require.True(t, firstIsBringToFront, "the FIRST action must be the BringToFront ActionFunc wrapper")
-	_, secondIsStartScreencast := recorded[1].(*page.StartScreencastParams)
-	require.True(t, secondIsStartScreencast,
-		"the SECOND action must be StartScreencastParams — BringToFront must precede StartScreencast (W3 e2e finding)")
-}
-
-// TestLiveView_RebindScreencastOnce_BringsTabToFrontBeforeStartingScreencast
-// is the rebindScreencastOnce() half of the same guard — see the doc comment
-// above. Establishes a real initial epoch via attach() (so
-// rebindScreencastOnce's hasEpochLocked() precondition is met), then rebinds
-// to a second tab and inspects whichever recorded runCDP call carries
-// StartScreencastParams (rebindScreencastOnce issues a SEPARATE runCDP call
-// for the old epoch's StopScreencast first, so the [BringToFront,
-// StartScreencast] pair is not necessarily the first call recorded).
-func TestLiveView_RebindScreencastOnce_BringsTabToFrontBeforeStartingScreencast(t *testing.T) {
-	tabInit, cancelInit := chromedp.NewContext(context.Background())
-	t.Cleanup(cancelInit)
-	tabNext, cancelNext := chromedp.NewContext(context.Background())
-	t.Cleanup(cancelNext)
-
-	mgr := &BrowserManager{
-		cfg:     BrowserConfig{PageTimeout: 5 * time.Second},
-		started: true,
-		sessions: map[string]*sessionEntry{
-			"s1": {
-				tabs:      []*tabEntry{{ctx: tabNext, cancel: cancelNext}},
-				activeIdx: 0,
-			},
-		},
-	}
-
-	var callsMu sync.Mutex
-	var calls [][]chromedp.Action
-	lv := &LiveView{
-		mgr:          mgr,
-		sessionID:    "s1",
-		viewers:      make(map[string]FrameSink),
-		statusSinks:  make(map[string]StatusSink),
-		controlSinks: make(map[string]ControlSink),
-		tabsSinks:    make(map[string]TabsSink),
-		ackCh:        make(chan int64, 1),
-	}
-	lv.runCDP = func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
-		callsMu.Lock()
-		calls = append(calls, append([]chromedp.Action(nil), actions...))
-		callsMu.Unlock()
-		return nil
-	}
-
-	_, err := lv.attach(tabInit, "viewer1", func(LiveFrame) {}, nil, nil, nil)
-	require.NoError(t, err)
-
-	lv.rebindScreencast(tabNext)
-
-	callsMu.Lock()
-	defer callsMu.Unlock()
-
-	var found bool
-	for _, actions := range calls {
-		if len(actions) != 2 {
-			continue // e.g. the old epoch's lone StopScreencast call
-		}
-		if _, isStart := actions[1].(*page.StartScreencastParams); !isStart {
-			continue
-		}
-		found = true
-		_, firstIsBringToFront := actions[0].(chromedp.ActionFunc)
-		require.True(t, firstIsBringToFront,
-			"the action immediately before StartScreencast must be the BringToFront ActionFunc wrapper")
-	}
-	require.True(t, found, "rebindScreencastOnce must issue a [BringToFront, StartScreencast] pair in one runCDP call")
-}
-
-// ---------------------------------------------------------------------------
 // QA regression-wave item 10: lifecycle wiring TRIGGERS for
 // CaptureSession.Stop()/Recapture() — TestCaptureSession_RecapturePropagatesToRelayAndIngest
 // (capture_session_test.go) already covers what Recapture()/Stop() DO once
@@ -1185,12 +955,10 @@ func TestLiveView_RebindScreencastOnce_BringsTabToFrontBeforeStartingScreencast(
 // (as opposed to a mere tab close/switch, which watchForUnexpectedDeath
 // deliberately leaves alone — see its doc comment).
 func TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSession(t *testing.T) {
-	// NewBrowserManager (not a bare &BrowserManager{} literal) — Stop()
-	// -> ReconcileScreencast() -> mgr.Live().ResumeScreencast() needs a
-	// real, non-nil live-view registry (mgr.live), which only
-	// NewBrowserManager wires up. mgr.sessions starts as an empty map,
-	// which is exactly what this test wants: browserAlive("s1") reports
-	// false (no sessionEntry at all) without any further setup.
+	// NewBrowserManager (not a bare &BrowserManager{} literal) so mgr.sessions
+	// starts as an empty map, which is exactly what this test wants:
+	// browserAlive("s1") reports false (no sessionEntry at all) without any
+	// further setup.
 	mgr, err := NewBrowserManager(BrowserConfig{}, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
 	relay := &fakeRelay{}
@@ -1202,11 +970,10 @@ func TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSessio
 	lv := &LiveView{
 		mgr:          mgr,
 		sessionID:    "s1",
-		viewers:      make(map[string]FrameSink),
+		viewers:      make(map[string]struct{}),
 		statusSinks:  make(map[string]StatusSink),
 		controlSinks: make(map[string]ControlSink),
 		tabsSinks:    make(map[string]TabsSink),
-		ackCh:        make(chan int64, 1),
 	}
 	watchedCtx, cancel := context.WithCancel(context.Background())
 	lv.listenCtx = watchedCtx
@@ -1239,9 +1006,8 @@ func TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSessio
 // this single onTabsChanged call observes activeTabChanged=true on its very
 // first real comparison (mirroring a genuine second call after an initial
 // baseline one). Deliberately leaves lv.listenCtx unset (hasEpochLocked()
-// stays false) so onTabsChanged's separate needsRebind/rebindScreencast
-// branch — which would issue a real (faked) CDP call — is never reached;
-// this test is scoped to the Recapture trigger alone.
+// stays false) so onTabsChanged's separate needsRebind/rebindWatch branch is
+// never reached; this test is scoped to the Recapture trigger alone.
 func TestLiveView_OnTabsChanged_ActiveTabSwitch_TriggersCaptureSessionRecapture(t *testing.T) {
 	tabOld, cancelOld := context.WithCancel(context.Background())
 	t.Cleanup(cancelOld)
@@ -1266,11 +1032,10 @@ func TestLiveView_OnTabsChanged_ActiveTabSwitch_TriggersCaptureSessionRecapture(
 	lv := &LiveView{
 		mgr:                mgr,
 		sessionID:          "s1",
-		viewers:            make(map[string]FrameSink),
+		viewers:            make(map[string]struct{}),
 		statusSinks:        make(map[string]StatusSink),
 		controlSinks:       make(map[string]ControlSink),
 		tabsSinks:          make(map[string]TabsSink),
-		ackCh:              make(chan int64, 1),
 		lastKnownActiveCtx: tabOld,
 	}
 
@@ -1319,6 +1084,13 @@ func findMouseEvent(t *testing.T, actions []chromedp.Action) *input.DispatchMous
 // hits the cache (no extra runCDP call), keeping "exactly one action
 // dispatched" a valid proxy for "no rescale fetch happened" across every
 // case, not just the non-pointer kinds.
+//
+// Capture dimensions changed 2026-08-16 from 319x158 to 320x180 — an
+// aspect-preserving downscale of the 1280x720 cache. The old pair had a shape
+// the tab could not have, which now (correctly) costs one Page.getLayoutMetrics
+// round trip to ask the tab which of the two is right, so it stopped isolating
+// the property this table is about. Shape disagreement has its own tests in
+// live_viewport_basis_test.go and live_viewport_resize_test.go.
 func TestLiveView_DispatchInput_RescaleGate(t *testing.T) {
 	const cssW, cssH = 1280.0, 720.0
 
@@ -1332,13 +1104,13 @@ func TestLiveView_DispatchInput_RescaleGate(t *testing.T) {
 			in: LiveInput{
 				Kind: "wheel", HasXY: true, X: 100, Y: 79,
 				DeltaX: 3, DeltaY: -4,
-				CaptureWidth: 319, CaptureHeight: 158,
+				CaptureWidth: 320, CaptureHeight: 180,
 			},
 			check: func(t *testing.T, actions []chromedp.Action) {
 				require.Len(t, actions, 1, "a cache hit must never trigger an extra rescale fetch")
 				p := findMouseEvent(t, actions)
-				require.InDelta(t, 100*cssW/319.0, p.X, 0.0001, "X must be rescaled")
-				require.InDelta(t, 79*cssH/158.0, p.Y, 0.0001, "Y must be rescaled")
+				require.InDelta(t, 100*cssW/320.0, p.X, 0.0001, "X must be rescaled")
+				require.InDelta(t, 79*cssH/180.0, p.Y, 0.0001, "Y must be rescaled")
 				require.InDelta(
 					t,
 					3.0,
@@ -1353,32 +1125,32 @@ func TestLiveView_DispatchInput_RescaleGate(t *testing.T) {
 			name: "mouse_move rescales X/Y",
 			in: LiveInput{
 				Kind: "mouse_move", HasXY: true, X: 100, Y: 79,
-				CaptureWidth: 319, CaptureHeight: 158,
+				CaptureWidth: 320, CaptureHeight: 180,
 			},
 			check: func(t *testing.T, actions []chromedp.Action) {
 				require.Len(t, actions, 1)
 				p := findMouseEvent(t, actions)
-				require.InDelta(t, 100*cssW/319.0, p.X, 0.0001)
-				require.InDelta(t, 79*cssH/158.0, p.Y, 0.0001)
+				require.InDelta(t, 100*cssW/320.0, p.X, 0.0001)
+				require.InDelta(t, 79*cssH/180.0, p.Y, 0.0001)
 			},
 		},
 		{
 			name: "key_down never rescales (no coordinates to rescale)",
-			in:   LiveInput{Kind: "key_down", Key: "a", Code: "KeyA", CaptureWidth: 319, CaptureHeight: 158},
+			in:   LiveInput{Kind: "key_down", Key: "a", Code: "KeyA", CaptureWidth: 320, CaptureHeight: 180},
 			check: func(t *testing.T, actions []chromedp.Action) {
 				require.Len(t, actions, 1, "key_down must never trigger a layout-metrics rescale fetch")
 			},
 		},
 		{
 			name: "text never rescales (no coordinates to rescale)",
-			in:   LiveInput{Kind: "text", Text: "hi", CaptureWidth: 319, CaptureHeight: 158},
+			in:   LiveInput{Kind: "text", Text: "hi", CaptureWidth: 320, CaptureHeight: 180},
 			check: func(t *testing.T, actions []chromedp.Action) {
 				require.Len(t, actions, 1, "text must never trigger a layout-metrics rescale fetch")
 			},
 		},
 		{
 			name: "navigate never rescales (no coordinates to rescale)",
-			in:   LiveInput{Kind: "navigate", URL: "http://8.8.8.8/", CaptureWidth: 319, CaptureHeight: 158},
+			in:   LiveInput{Kind: "navigate", URL: "http://8.8.8.8/", CaptureWidth: 320, CaptureHeight: 180},
 			check: func(t *testing.T, actions []chromedp.Action) {
 				require.Len(t, actions, 1, "navigate must never trigger a layout-metrics rescale fetch")
 			},
@@ -1458,7 +1230,7 @@ func newViewportTestLiveView(
 ) (*LiveViewRegistry, *LiveView) {
 	lv := &LiveView{
 		sessionID: "s1",
-		viewers:   make(map[string]FrameSink),
+		viewers:   make(map[string]struct{}),
 		tabCtx:    context.Background(),
 		runCDP:    runCDP,
 	}
@@ -1466,36 +1238,35 @@ func newViewportTestLiveView(
 	return reg, lv
 }
 
-// TestLiveViewRegistry_SetViewport_Orchestration is the table test for item
-// 6b: SetViewport's full compensation orchestration — the happy path, the
-// chrome-delta compensation re-apply triggered by an over-tolerance drift
-// (live evidence, UAT v24: requested 615x744, actual 615x657 — an 87px
-// HEIGHT deficit), and the two cache-invalidation paths (hard read-back
-// failure, degenerate read-back). Each subtest scripts LiveView.runCDP by
-// the POSITION of the call in SetViewport's fixed sequence (apply -> first
-// read-back -> [compensate -> second read-back]), since that sequence is
-// deterministic and well-known — no real chromedp/Chromium connection is
-// needed (see this file's header comment).
+// TestLiveViewRegistry_SetViewport_Orchestration is the table test for
+// SetViewport's full orchestration — the happy path, the chrome-delta
+// compensation re-apply triggered by an over-tolerance SHORTFALL (live
+// evidence, UAT v24: requested 615x744, actual 615x657 — an 87px HEIGHT
+// deficit), and the two cache-invalidation paths (hard read-back failure,
+// degenerate read-back).
+//
+// Rewritten 2026-08-16 to script runCDP by the TYPE of the action rather than
+// by the position of the call. Position-scripting encoded two things that are
+// no longer true: that the window resize and the device-scale override share
+// one call (they are now separately budgeted — see viewportScaleTimeout), and
+// that the read-back is a single read (it is now a settle poll — see
+// settleCSSViewport). Type-scripting states what each call MEANS, so it
+// survives changes in how many of them there are.
 func TestLiveViewRegistry_SetViewport_Orchestration(t *testing.T) {
 	t.Run("happy path: cache equals the actual read-back, no compensation", func(t *testing.T) {
-		var calls [][]chromedp.Action
+		var bounds []windowBoundsAction
+		var readBacks int
 		runCDP := func(_ context.Context, timeout time.Duration, actions ...chromedp.Action) error {
-			calls = append(calls, actions)
-			switch len(calls) {
-			case 1: // initial apply: [windowBoundsAction, emulation action]
-				require.Len(t, actions, 2)
+			switch a := actions[0].(type) {
+			case windowBoundsAction:
 				require.Equal(t, viewportSetTimeout, timeout)
-				return nil
-			case 2: // first read-back
-				require.Equal(t, viewportSetTimeout, timeout)
-				lm := actions[0].(layoutMetricsAction)
-				*lm.w, *lm.h = 615, 744
-				return nil
+				require.Len(t, actions, 1,
+					"the window resize must be its own call, never bundled with the renderer-bound scale override")
+				bounds = append(bounds, a)
+			case layoutMetricsAction:
+				readBacks++
+				*a.w, *a.h = 615, 744
 			}
-			t.Fatalf(
-				"unexpected extra runCDP call (drift was within tolerance, no compensation expected): %#v",
-				actions,
-			)
 			return nil
 		}
 		reg, lv := newViewportTestLiveView(runCDP)
@@ -1504,7 +1275,8 @@ func TestLiveViewRegistry_SetViewport_Orchestration(t *testing.T) {
 		applied, err := reg.SetViewport("s1", 615, 744, 1)
 		require.NoError(t, err)
 		require.True(t, applied)
-		require.Len(t, calls, 2, "happy path must not trigger compensation")
+		require.Len(t, bounds, 1, "an on-target read-back must not trigger compensation")
+		require.Equal(t, 1, readBacks, "a read-back already on target must settle on the first poll")
 
 		lv.mu.Lock()
 		defer lv.mu.Unlock()
@@ -1512,27 +1284,21 @@ func TestLiveViewRegistry_SetViewport_Orchestration(t *testing.T) {
 		require.Equal(t, 744, lv.cssViewportH)
 	})
 
-	t.Run("drift over tolerance triggers exactly one compensation and caches the final read-back", func(t *testing.T) {
-		var calls [][]chromedp.Action
-		var compensationBounds windowBoundsAction
+	t.Run("shortfall over tolerance triggers exactly one compensation and caches the final read-back", func(t *testing.T) {
+		var bounds []windowBoundsAction
 		runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-			calls = append(calls, actions)
-			switch len(calls) {
-			case 1: // initial apply
-				return nil
-			case 2: // first read-back — the live UAT v24 evidence: 615x744 requested, 615x657 actual
-				lm := actions[0].(layoutMetricsAction)
-				*lm.w, *lm.h = 615, 657
-				return nil
-			case 3: // compensation re-apply
-				compensationBounds = actions[0].(windowBoundsAction)
-				return nil
-			case 4: // second (post-compensation) read-back — now exact
-				lm := actions[0].(layoutMetricsAction)
-				*lm.w, *lm.h = 615, 744
-				return nil
+			switch a := actions[0].(type) {
+			case windowBoundsAction:
+				bounds = append(bounds, a)
+			case layoutMetricsAction:
+				// Before compensation the tab is 87px short (the live UAT v24
+				// evidence); after it, the request is met exactly.
+				if len(bounds) < 2 {
+					*a.w, *a.h = 615, 657
+				} else {
+					*a.w, *a.h = 615, 744
+				}
 			}
-			t.Fatalf("unexpected extra runCDP call: %#v", actions)
 			return nil
 		}
 		reg, lv := newViewportTestLiveView(runCDP)
@@ -1540,12 +1306,13 @@ func TestLiveViewRegistry_SetViewport_Orchestration(t *testing.T) {
 		applied, err := reg.SetViewport("s1", 615, 744, 1)
 		require.NoError(t, err)
 		require.True(t, applied)
-		require.Len(t, calls, 4, "drift over tolerance must trigger exactly one compensation re-apply + re-read")
+		require.Len(t, bounds, 2,
+			"a shortfall over tolerance must trigger exactly one compensation re-apply, never a loop")
 
-		require.Equal(t, 615, compensationBounds.width,
-			"compensated width = requested + (requested - actual) = 615 + (615-615)")
-		require.Equal(t, 744+87, compensationBounds.height,
-			"compensated height = requested + (requested - actual) = 744 + (744-657)")
+		require.Equal(t, 615, bounds[1].width,
+			"width was already exact, so its correction must be zero — not a negative one")
+		require.Equal(t, 744+87, bounds[1].height,
+			"compensated height = requested + shortfall = 744 + (744-657)")
 
 		lv.mu.Lock()
 		defer lv.mu.Unlock()
@@ -1555,16 +1322,10 @@ func TestLiveViewRegistry_SetViewport_Orchestration(t *testing.T) {
 
 	t.Run("read-back failure invalidates a stale cache instead of leaving it", func(t *testing.T) {
 		simulatedErr := fmt.Errorf("simulated GetLayoutMetrics failure")
-		var calls [][]chromedp.Action
 		runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-			calls = append(calls, actions)
-			switch len(calls) {
-			case 1:
-				return nil
-			case 2:
+			if _, ok := actions[0].(layoutMetricsAction); ok {
 				return simulatedErr
 			}
-			t.Fatalf("unexpected extra runCDP call after a read-back failure: %#v", actions)
 			return nil
 		}
 		reg, lv := newViewportTestLiveView(runCDP)
@@ -1581,18 +1342,10 @@ func TestLiveViewRegistry_SetViewport_Orchestration(t *testing.T) {
 	})
 
 	t.Run("zero-valued read-back invalidates a stale cache", func(t *testing.T) {
-		var calls [][]chromedp.Action
 		runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-			calls = append(calls, actions)
-			switch len(calls) {
-			case 1:
-				return nil
-			case 2:
-				lm := actions[0].(layoutMetricsAction)
+			if lm, ok := actions[0].(layoutMetricsAction); ok {
 				*lm.w, *lm.h = 0, 0 // degenerate — e.g. cssLayoutViewport was nil
-				return nil
 			}
-			t.Fatalf("unexpected extra runCDP call after a degenerate read-back: %#v", actions)
 			return nil
 		}
 		reg, lv := newViewportTestLiveView(runCDP)
@@ -1625,10 +1378,19 @@ func TestLiveView_RescaleToCSSViewport(t *testing.T) {
 				return nil
 			},
 		}
-		x, y, ok := lv.rescaleToCSSViewport(context.Background(), 100, 79, 319, 158)
+		// The capture is an aspect-preserving downscale of the cached viewport
+		// (320x180 of 1280x720), which is the ordinary case: the encoder shrinks
+		// the stream under load but still depicts the same surface. Changed from
+		// the original 319x158 on 2026-08-16 — those numbers describe a capture
+		// whose SHAPE differs from the tab's, which now (correctly) costs one
+		// round trip to ask the tab which of the two is right, so they no longer
+		// isolate the property this subtest is about. The shape-disagreement
+		// behaviour has its own tests in live_viewport_basis_test.go and
+		// live_viewport_resize_test.go.
+		x, y, ok := lv.rescaleToCSSViewport(context.Background(), 100, 79, 320, 180)
 		require.True(t, ok, "a cache hit must be mappable")
-		require.InDelta(t, 100*1280.0/319.0, x, 0.0001)
-		require.InDelta(t, 79*720.0/158.0, y, 0.0001)
+		require.InDelta(t, 100*1280.0/320.0, x, 0.0001)
+		require.InDelta(t, 79*720.0/180.0, y, 0.0001)
 		require.Zero(t, calls, "a cache hit must never call runCDP")
 	})
 
@@ -1645,11 +1407,12 @@ func TestLiveView_RescaleToCSSViewport(t *testing.T) {
 				return nil
 			},
 		}
-		x, y, ok := lv.rescaleToCSSViewport(context.Background(), 100, 79, 319, 158)
+		// Aspect-preserving capture, for the same reason as the subtest above.
+		x, y, ok := lv.rescaleToCSSViewport(context.Background(), 100, 79, 320, 180)
 		require.True(t, ok, "a successful fetch must be mappable")
-		require.InDelta(t, 100*1280.0/319.0, x, 0.0001)
-		require.InDelta(t, 79*720.0/158.0, y, 0.0001)
-		require.Equal(t, 1, calls)
+		require.InDelta(t, 100*1280.0/320.0, x, 0.0001)
+		require.InDelta(t, 79*720.0/180.0, y, 0.0001)
+		require.Equal(t, 1, calls, "one fetch, and no probe — the capture's shape agrees with the tab's")
 
 		lv.mu.Lock()
 		defer lv.mu.Unlock()

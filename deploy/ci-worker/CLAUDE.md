@@ -11,7 +11,7 @@ false sense of completeness (2026-07-26 — a green worker verdict was reported 
 as if it were a full pass):
 
 1. ~~**There is no `-race` gate here at all.**~~ **Fixed 2026-08-10 — there is now a `go-race`
-   gate**, and it is included in `all`. It copies pr.yml's package list, `-timeout 600s`,
+   gate**, and it is included in `all`. It copies pr.yml's package list, `-timeout 900s`,
    `CGO_ENABLED=1` and DATA RACE carve-out verbatim; keep the two in lockstep, because a worker
    gate that measures something GitHub does not is how a green local verdict stops predicting the
    real one — including pr.yml's **flake filter**, which the gate initially shipped without and which
@@ -20,12 +20,36 @@ as if it were a full pass):
    isolated re-run is itself grepped for `DATA RACE` (checking only its exit code would
    let a race reported in the second run be stamped `FLAKE (passed isolated)` — the
    carve-out's own rationale is that a race can be reported without flipping the exit
-   code). **`.github/workflows/pr.yml` still has that second hole** — fix both together
-   or the two gates diverge.
-   **Two limits remain:** (a) `go-test` and `go-race` are separate gates, so running
-   `go-test` alone still carries zero race signal — use `all` or run `go-race` explicitly; (b) the
-   package list is pr.yml's, which does **not** include `pkg/tools` or `pkg/providers`, so races
-   there are still caught by neither surface.
+   code). The two package lists can no longer diverge, because there is only one: both
+   surfaces consume `scripts/race-packages.sh` (the `scripts/e2e-shards.sh` precedent —
+   one file, both consumers). Edit that script, never the invocations. This replaced an
+   earlier `check-race-package-lockstep.sh` comparator, which could not see the drift class
+   that matters most here: it read the repo copy of `runci.sh`, while the worker executes
+   `/cache/runci.sh`. The `lint` gate here and pr.yml's guard job still run
+   `scripts/check-browser-tests-gated.sh`, which fails if any pkg/tools/browser test
+   launches real Chrome without going through the package's own `skipIfNoBrowser(t)`
+   convention.
+   `pkg/tools`/`pkg/providers` joined the list 2026-08-10, and `pkg/tools/browser` (previously
+   excluded — see the `go-race` package-list comment in this file's `run_gorace` for the full
+   #615 history: the "launches real Chrome, hits missing dbus" exclusion rationale was wrong,
+   the real cause was 17 real-Chrome tests not following the package's own `skipIfNoBrowser`
+   convention plus two tight wall-clock assertions) joined 2026-08-11, so `./pkg/tools/...` is
+   now fully recursive in both files — nothing under `pkg/tools` or `pkg/providers` is excluded
+   from either race surface any more.
+   **Two limits remain:**
+   (a) `go-test` and `go-race` are separate gates, so running `go-test` alone still carries
+   zero race signal — use `all` or run `go-race` explicitly.
+   (b) **This worker runs NO real-Chrome tests, in any gate.** Both `run_gotest` and
+   `run_gorace` set `CI=true`, which makes `pkg/tools/browser`'s `skipIfNoBrowser(t)` skip
+   every test that would launch a browser. That is deliberate and it is what GitHub does —
+   GitHub always sets `CI`, so its `Tests` and `-race` steps skip them too. Their coverage
+   lives in GitHub's dedicated **`browser-e2e`** job (`.github/workflows/pr.yml`), which sets
+   `OMNIPUS_BROWSER_E2E=1`, provisions Chrome via an action, runs WITHOUT `-race`, and fails
+   loudly if the tests skip. **There is no `browser-e2e` equivalent here**, so an `all`-green
+   verdict on this worker carries zero real-Chrome signal — read GitHub for that. Forcing
+   them on here is not the answer: this box has no dbus and a slow shared Chrome, so they
+   fail on the environment (`page load failed: context deadline exceeded`) rather than on
+   the code, which is precisely how a false RED trains people to ignore a gate.
 2. **`run_gotest` excuses flakes.** A package that fails the parallel run but passes the
    isolated `-p 1` re-run prints `FLAKE (passed isolated)` and the gate still returns 0.
    That is intentional for timing-sensitive integration tests — but it means a green

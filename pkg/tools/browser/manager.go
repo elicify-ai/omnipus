@@ -404,6 +404,14 @@ type BrowserManager struct {
 	// initialized; nil is a valid empty state.
 	pendingAdopt map[target.ID]*pendingAdoptEntry
 
+	// adoptRetryBackoff overrides defaultAdoptRetryBackoff, the bounded
+	// schedule adoptTargetWithRetry walks after a failed adoption. A field
+	// rather than a package var purely so tests can shrink the delays
+	// without mutating state shared with every other test in this package
+	// (the same isolation rationale as createTabFn/tabFocusFn). nil in
+	// production. Guarded by m.mu.
+	adoptRetryBackoff []time.Duration
+
 	// listTargets executes chromedp.Targets against a resolved tab context
 	// to list every CDP target the browser currently knows about (ADR-041
 	// D2's ReconcileTabs). A field — not a direct chromedp.Targets call at
@@ -423,14 +431,32 @@ type BrowserManager struct {
 	// default, in which case createTab runs its normal chromedp body.
 	createTabFn func(allocCtx context.Context, targetID target.ID) (*tabEntry, error)
 
-	// activateTabFn is the test seam for activateTabInChrome's single CDP
-	// call (Page.bringToFront), mirroring createTabFn's rationale exactly:
-	// the fake tab contexts unit tests build (tabs_test.go's fakeTabFactory)
-	// are chromedp contexts with no CDP connection behind them, so a real
+	// tabFocusFn is the test seam for the CDP round trips that move Chrome's
+	// foreground between this session's tabs — activateTabInChrome's
+	// foregroundTabActions and releaseTabFocusInChrome's
+	// backgroundTabActions. It mirrors createTabFn's rationale exactly: the
+	// fake tab contexts unit tests build (tabs_test.go's fakeTabFactory) are
+	// chromedp contexts with no CDP connection behind them, so a real
 	// chromedp.Run against one would block until PageTimeout rather than
-	// doing anything observable. nil by default, in which case
-	// activateTabInChrome runs its normal chromedp body.
-	activateTabFn func(tabCtx context.Context) error
+	// doing anything observable. nil by default, in which case both
+	// functions run their normal chromedp body.
+	//
+	// The actions are passed THROUGH rather than hidden behind the seam
+	// (review finding F9, 2026-08-13) so a test can see WHICH treatment a tab
+	// got, not merely that some CDP call happened — the defect it closes was
+	// precisely a path that did half the treatment.
+	tabFocusFn func(tabCtx context.Context, actions ...chromedp.Action) error
+
+	// abandonCDPFn is the test seam for the two recovery CDP round trips
+	// abandonTabAfterFailedLoad makes (tools.go): the diagnostic location read
+	// and the security-critical about:blank navigation. Each is handed an
+	// ALREADY-BOUNDED context (one independent tabAbandonTimeout budget per
+	// call), so a stand-in can reproduce "this step burned its entire budget"
+	// — the wedged-renderer case the whole helper exists for — deterministically
+	// and observe what context the NEXT step then received. Same rationale as
+	// tabFocusFn/LiveView.runCDP (see runCDPWithTimeout's doc comment); nil
+	// in production, where the calls go to chromedp.Run.
+	abandonCDPFn func(ctx context.Context, actions ...chromedp.Action) error
 
 	// nowFn overrides the clock for idle/TTL logic (ReapIdleSessions), so
 	// tests can age a session deterministically instead of sleeping. nil in
@@ -438,7 +464,7 @@ type BrowserManager struct {
 	nowFn func() time.Time
 
 	// navigateFn is the test seam for navigateNewTabToStartPage's single CDP
-	// navigation, same rationale as createTabFn/activateTabFn: unit tests hold
+	// navigation, same rationale as createTabFn/tabFocusFn: unit tests hold
 	// chromedp contexts with no CDP connection behind them, where a real
 	// chromedp.Run would block until PageTimeout. nil in production.
 	navigateFn func(tabCtx context.Context, url string) error
@@ -881,6 +907,28 @@ const execPathNegativeCacheTTL = 60 * time.Second
 // a second).
 const chromiumProbeTimeout = 5 * time.Second
 
+// managedChromiumProbeTimeout bounds the MANAGED binary's `--version` probe,
+// which is a fundamentally different situation from a PATH candidate and
+// needs a far longer budget (macOS, measured 2026-08-13).
+//
+// The short chromiumProbeTimeout above is sized for "is this one of four
+// unknown PATH candidates a real browser, or a hung stub?" — where being
+// wrong is cheap and the loop's total cost is what matters. The managed
+// binary is the opposite: exactly ONE candidate, one we downloaded and
+// extracted ourselves, with NO fallback after it. A slow answer there means
+// "still starting", not "wrong candidate".
+//
+// And on macOS the FIRST execution of a freshly-downloaded ~200MB app bundle
+// is genuinely slow: Gatekeeper verifies the bundle's code signature before
+// letting it run, and that verification is cached only afterwards. Observed
+// on a 4-core Intel MacBook Pro: the first `--version` on a just-extracted
+// Chrome for Testing exceeded 5s and the probe declared the install corrupt
+// with "remove and retry" — while the very same binary answered in under a
+// second immediately after, verification now cached. A fresh macOS install
+// could therefore fail its first browser call with a wrong, alarming
+// diagnosis and no way for the operator to tell it was a false alarm.
+const managedChromiumProbeTimeout = 90 * time.Second
+
 // probeChromiumBinary reports whether path is a real, runnable
 // Chromium/Chrome binary by actually executing it (`--version`), not merely
 // checking that it exists and is executable — which exec.LookPath, the only
@@ -900,7 +948,18 @@ const chromiumProbeTimeout = 5 * time.Second
 // different operational problems with different fixes — collapsing them
 // into one message hides which one actually applies.
 func probeChromiumBinary(ctx context.Context, path string) (ok bool, reason string) {
-	probeCtx, cancel := context.WithTimeout(ctx, chromiumProbeTimeout)
+	return probeChromiumBinaryWithTimeout(ctx, path, chromiumProbeTimeout)
+}
+
+// probeChromiumBinaryWithTimeout is probeChromiumBinary with an explicit
+// budget — see managedChromiumProbeTimeout for why the managed binary needs
+// a different one from a PATH candidate.
+func probeChromiumBinaryWithTimeout(
+	ctx context.Context,
+	path string,
+	timeout time.Duration,
+) (ok bool, reason string) {
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	err := exec.CommandContext(probeCtx, path, "--version").Run()
 	if err == nil {
@@ -908,7 +967,7 @@ func probeChromiumBinary(ctx context.Context, path string) (ok bool, reason stri
 	}
 	switch {
 	case errors.Is(probeCtx.Err(), context.DeadlineExceeded):
-		return false, fmt.Sprintf("probe timed out after %s (binary may be hung)", chromiumProbeTimeout)
+		return false, fmt.Sprintf("probe timed out after %s (binary may be hung)", timeout)
 	case errors.Is(probeCtx.Err(), context.Canceled):
 		return false, "probe was canceled"
 	case errors.Is(err, os.ErrPermission):
@@ -1124,8 +1183,15 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 
 		var tabs []Tab
 		notify := true
+		// newActiveCtx is the context of the tab this call actually installed
+		// as index 0/active, captured under the SAME lock that installed it.
+		// Left nil in the "someone else already populated this session"
+		// branch below, where this call's tab is discarded and the active tab
+		// belongs to (and was activated by) whoever won that race.
+		var newActiveCtx context.Context
 		if existing == nil {
 			tabs = m.registerFreshSessionLocked(sessionID, tab, browserCtx, browserCancel)
+			newActiveCtx = tab.ctx
 		} else {
 			switch se := m.sessions[sessionID]; {
 			case se == nil:
@@ -1151,11 +1217,23 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 				se.activeIdx = 0
 				m.installTargetListenerLocked(sessionID, se)
 				tabs = snapshotTabsLocked(se)
+				newActiveCtx = tab.ctx
 			}
 		}
 		m.mu.Unlock()
 		close(done)
 		if notify {
+			// Tell Chrome which tab is active, BEFORE notifyTabsChanged fires
+			// the WebRTC recapture — the last of the five paths that moved
+			// se.activeIdx without stating its intent to Chrome (SwitchTab,
+			// OpenTab, CloseTab and adoptTarget are the other four). This one
+			// matters most on CloseTab's last-tab replacement: the tab the
+			// user was watching has just been destroyed, so Chrome's own
+			// active-tab answer at that instant is whatever it fell back to,
+			// and the encoder would bind to that instead of the replacement
+			// this call just created. Best-effort and no lock held, like every
+			// other call site.
+			m.activateTabInChrome(newActiveCtx, sessionID, 0)
 			m.notifyTabsChanged(sessionID, tabs, 0)
 		}
 		return nil
@@ -1550,6 +1628,19 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 		m.mu.Unlock()
 		return Tab{}, err
 	}
+	// The tab being left. Captured BEFORE activeIdx moves, under the same
+	// lock, so its focus emulation can be cleared below (review finding F9 —
+	// see releaseTabFocusInChrome for the measured background-compositing
+	// cost of leaving it set).
+	var prevCtx context.Context
+	// modelMoved records whether THIS manager's own bookkeeping actually
+	// changed, captured BEFORE the mutation below — it is what decides
+	// whether anyone downstream will fire a recapture (see the call to
+	// recaptureForTabChange at the end of this function).
+	modelMoved := se.activeIdx != index
+	if modelMoved && se.activeIdx >= 0 && se.activeIdx < len(se.tabs) {
+		prevCtx = se.tabs[se.activeIdx].ctx
+	}
 	se.activeIdx = index
 	// Switching TO a tab is activity on it — a human/agent flipping to a tab
 	// via browser_switch_tab is unambiguously "using" it, so it must not read
@@ -1569,20 +1660,72 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 	// which tab is active by the time that fires, or the recapture re-binds to
 	// the old tab and the stream never moves.
 	m.activateTabInChrome(tabCtx, sessionID, index)
+	// After, not before: the new tab takes over the foreground first, so
+	// there is never a moment with no focused tab.
+	m.releaseTabFocusInChrome(prevCtx, sessionID)
 
 	m.notifyTabsChanged(sessionID, tabs, index)
+
+	// The model did NOT move, so nobody downstream will ask for a recapture
+	// and the picture would stay on whatever tab Chrome was showing — the
+	// live-measured 2026-08-15 defect. Mechanism: LiveView.onTabsChanged
+	// (live.go) triggers the WebRTC recapture only when the ACTIVE TAB
+	// CHANGED (its activeTabChanged check, which compares the resolved
+	// active-tab context against the last one it saw). That is correct for
+	// its own purposes but assumes this manager's model and Chrome's own
+	// idea of the active tab never disagree. They do disagree, routinely:
+	// when a page-opened tab fails to be adopted (measured on the operator's
+	// box — "auto-attach: failed to adopt new tab target ... timed out after
+	// 20s", three times, from an advert), Chrome activates that tab and this
+	// manager never learns about it. The user then clicks the tab strip
+	// entry that is ALREADY the model's active index to get back: the
+	// activateTabInChrome call above genuinely corrects Chrome, the call
+	// returns success — and the video never follows, because no recapture
+	// was ever requested. Reproduced deterministically by forcing a
+	// recapture with no model change: the picture snapped straight back.
+	//
+	// Guarded on !modelMoved precisely so the normal path does not fire
+	// twice: when the model DID move, onTabsChanged's own activeTabChanged
+	// branch has already issued exactly one recapture from the
+	// notifyTabsChanged call immediately above.
+	//
+	// Round-2 finding F3: that branch now goes through the SAME entry point
+	// this one does (CaptureSession.RecaptureForTabChangeAt, via
+	// LiveView.signalRecaptureForTabChange), so the independent foreground
+	// re-assert — the second attempt that exists because activateTabInChrome
+	// above is best-effort and its failure is a WARN log and nothing more —
+	// is on the path every ordinary tab click takes, not only on this rare
+	// recovery one. It used to be reachable ONLY from here, which had the
+	// hardening exactly backwards.
+	if !modelMoved {
+		m.recaptureForTabChange()
+	}
 	return tabs[index], nil
+}
+
+// recaptureForTabChange asks this manager's WebRTC CaptureSession (if any)
+// to re-bind its capture to the current model-active tab. A no-op when no
+// capture session exists (WebRTC never used, or the panel is closed), which
+// is why every call site can invoke it unconditionally.
+//
+// Must be called with NO BrowserManager lock held: CaptureSession() takes
+// m.captureMu, and the work RecaptureForTabChange schedules calls back into
+// m.Session(), which takes m.mu.
+func (m *BrowserManager) recaptureForTabChange() {
+	if cs := m.CaptureSession(); cs != nil {
+		cs.RecaptureForTabChange()
+	}
 }
 
 // activateTabInChrome makes tabCtx's tab the one Chrome itself considers
 // active, via CDP Page.bringToFront.
 //
 // Why this is load-bearing (root-caused live on UAT, 2026-08-03): switching
-// tabs used to update ONLY this manager's se.activeIdx. The JPEG screencast
-// path happened to survive that because it calls page.BringToFront() itself
-// before every StartScreencast (live.go's attach/rebindScreencastOnce), but
-// the WebRTC path does not: its encoder picks a capture target with
-// chrome.tabs.query({active: true, lastFocusedWindow: true})
+// tabs used to update ONLY this manager's se.activeIdx. At the time this was
+// root-caused, the (since-removed, ADR-061) JPEG screencast path happened to
+// survive that because it called page.BringToFront() itself before every
+// StartScreencast, but the WebRTC path does not: its encoder picks a capture
+// target with chrome.tabs.query({active: true, lastFocusedWindow: true})
 // (captureext/embedded/encoder.js findActiveTargetTab). With Chrome never told
 // about the switch, that query kept returning the OLD tab, so every recapture
 // re-bound chrome.tabCapture to the tab the user had just switched AWAY from —
@@ -1591,37 +1734,121 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 //
 // Best-effort by design: a failure here is logged, never fatal. The switch has
 // already been recorded in se.activeIdx, so every server-side consumer
-// (Session(), tool calls, the JPEG path) still follows the new tab correctly;
-// only the WebRTC capture's own tab resolution degrades to its previous
-// behavior. Runs with NO BrowserManager lock held — the same ADR-038 rule
-// every other CDP call in this file follows.
+// (Session(), tool calls) still follows the new tab correctly; only the
+// WebRTC capture's own tab resolution degrades to its previous behavior.
+// Runs with NO BrowserManager lock held — the same ADR-038 rule every other
+// CDP call in this file follows.
 func (m *BrowserManager) activateTabInChrome(tabCtx context.Context, sessionID string, index int) {
-	if tabCtx == nil || tabCtx.Err() != nil {
-		return
-	}
-
-	m.mu.Lock()
-	fn := m.activateTabFn
-	m.mu.Unlock()
-
-	var err error
-	if fn != nil {
-		// Test seam — see activateTabFn's doc comment.
-		err = fn(tabCtx)
-	} else {
-		runCtx, cancel := context.WithTimeout(tabCtx, m.PageTimeout())
-		defer cancel()
-		err = chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
-			return page.BringToFront().Do(c)
-		}))
-	}
-	if err != nil {
+	if err := m.runTabFocusCDP(tabCtx, foregroundTabActions()...); err != nil {
 		logger.WarnCF(
 			"browser",
 			"switch tab: bring new active tab to front failed (WebRTC capture may keep streaming the previous tab)",
 			map[string]any{"error": err.Error(), "session_id": sessionID, "index": index},
 		)
 	}
+}
+
+// releaseTabFocusInChrome is activateTabInChrome's counterpart for the tab
+// being left behind: it clears the focus emulation that made that tab render
+// as if it were foreground.
+//
+// Why (review finding F9, 2026-08-13): focus emulation is sticky per target.
+// Without this, every tab the agent ever visited stays convinced it is
+// foreground forever. Measured on this project's own Chrome (headless,
+// 4 paired trials, rAF ticks under a full-viewport animation): a tab the user
+// had switched AWAY from kept rendering at 25–35 fps while still emulated, and
+// dropped to 0 fps the moment the emulation was cleared. That is pure waste —
+// nothing captures or displays a background tab — and it scales with every tab
+// the agent opens.
+//
+// Best-effort and non-fatal, exactly like activateTabInChrome: failing to
+// un-emulate a tab costs CPU, never correctness.
+func (m *BrowserManager) releaseTabFocusInChrome(tabCtx context.Context, sessionID string) {
+	if err := m.runTabFocusCDP(tabCtx, backgroundTabActions()...); err != nil {
+		logger.WarnCF(
+			"browser",
+			"switch tab: could not clear focus emulation on the previous tab (it will keep compositing in the background)",
+			map[string]any{"error": err.Error(), "session_id": sessionID},
+		)
+	}
+}
+
+// foregroundTabActions is THE treatment a tab gets when it becomes the one
+// Chrome should be compositing for: told to come to front, AND told to render
+// as focused.
+//
+// Both halves, always, on every path (review finding F9, 2026-08-13). Focus
+// emulation used to be applied ONLY by the capture-start path
+// (CaptureSession.bringAgentTabToFront), while the tab-switch path did
+// Page.bringToFront alone — so one browser_switch_tab silently downgraded the
+// captured tab to a different rendering regime than the one capture start had
+// established. Splitting a treatment across two call sites is how that
+// happened; keeping the sequence in one place is what stops it recurring.
+//
+// Honest scope of the second half: bringToFront alone was NOT measurably
+// slower here (headless, brought-to-front tab, 6/6 trials at 60 rAF/s with and
+// without emulation), so this is not a claimed framerate win on the
+// switched-TO tab — it is identical treatment on every path, which is what
+// makes the tab the encoder re-binds to indistinguishable from the tab capture
+// started on. The measured win is on the other side: see
+// releaseTabFocusInChrome.
+func foregroundTabActions() []chromedp.Action {
+	return []chromedp.Action{
+		page.BringToFront(),
+		emulation.SetFocusEmulationEnabled(true),
+	}
+}
+
+// backgroundTabActions is the exact inverse of foregroundTabActions' focus
+// half — see releaseTabFocusInChrome. There is deliberately no
+// "send to back" counterpart to Page.bringToFront: Chrome has no such call,
+// and bringing the NEW tab to front is what backgrounds the old one.
+func backgroundTabActions() []chromedp.Action {
+	return []chromedp.Action{
+		emulation.SetFocusEmulationEnabled(false),
+	}
+}
+
+// runTabFocusCDP executes one tab-focus round trip against tabCtx, bounded by
+// PageTimeout, with NO BrowserManager lock held (the ADR-038 rule every CDP
+// call in this file follows). A dead or nil tab context is skipped rather than
+// dispatched: in production that is a guaranteed PageTimeout stall for a tab
+// that cannot be focused anyway.
+func (m *BrowserManager) runTabFocusCDP(tabCtx context.Context, actions ...chromedp.Action) error {
+	if tabCtx == nil || tabCtx.Err() != nil {
+		return nil
+	}
+	m.mu.Lock()
+	fn := m.tabFocusFn
+	m.mu.Unlock()
+	if fn != nil {
+		// Test seam — see tabFocusFn's doc comment.
+		return fn(tabCtx, actions...)
+	}
+	// Focus helpers only ever talk to an EXISTING tab. chromedp.Run on
+	// anything else starts a new Chrome:
+	//
+	//   - FromContext == nil: a plain context.Background() (or any
+	//     non-chromedp ctx). Run installs the default ExecAllocator.
+	//   - FromContext != nil but Target == nil: chromedp.NewContext
+	//     (context.Background()) — the fake-tab factory shape. FromContext
+	//     is already the default ExecAllocator, so the FromContext-only
+	//     check is not enough. The first Run still launches Chrome with
+	//     chromedp's default flags (no --no-sandbox), which dies on CI
+	//     ("No usable sandbox") and panics in Allocate cleanup
+	//     (`close of closed channel`).
+	//
+	// A real tab has Target set: createTab's runFirstAttach does the first
+	// Run before the tab is stored, so activate/release after that always
+	// see a live target. Skipping here never drops a production focus
+	// round-trip.
+	c := chromedp.FromContext(tabCtx)
+	if c == nil || c.Target == nil {
+		return nil
+	}
+	runCtx, cancel := context.WithTimeout(tabCtx, m.PageTimeout())
+	defer cancel()
+	return chromedp.Run(runCtx, actions...)
 }
 
 // CloseTab closes tab `index` in sessionID's browsing context (cancels its
@@ -1696,9 +1923,32 @@ func (m *BrowserManager) CloseTab(sessionID string, index int) (tabs []Tab, acti
 	m.installTargetListenerLocked(sessionID, se)
 	tabs = snapshotTabsLocked(se)
 	activeIdx = se.activeIdx
+	// Captured under the SAME lock that just settled activeIdx, for the same
+	// reason SwitchTab captures it there: the tab this call made active must
+	// be the one told to come forward, even if a concurrent switch/close
+	// lands right after the unlock.
+	var newActiveCtx context.Context
+	if activeIdx >= 0 && activeIdx < len(se.tabs) {
+		newActiveCtx = se.tabs[activeIdx].ctx
+	}
 	m.mu.Unlock()
 
 	closing.cancel()
+	// Tell Chrome which tab is active now — the third path that needed this
+	// and did not have it (review F9 follow-up, 2026-08-13). SwitchTab and
+	// OpenTab both activate; CloseTab moved activeIdx and then fired
+	// notifyTabsChanged (-> WebRTC recapture) without ever telling Chrome,
+	// leaving the encoder's chrome.tabs.query({active:true}) resolution to
+	// whatever Chrome happened to pick on target close. That is exactly the
+	// silent capture-follows-the-wrong-tab failure activateTabInChrome was
+	// written for on 2026-08-03 -- see its doc comment. Whether Chrome's own
+	// choice agrees with this manager's ("the tab that slid into this index")
+	// is not something to leave to chance in the one path that never states
+	// its intent. Best-effort, like every other call site; no lock held.
+	//
+	// No corresponding releaseTabFocusInChrome: the tab that was left is the
+	// one just closed, and its context is already cancelled.
+	m.activateTabInChrome(newActiveCtx, sessionID, activeIdx)
 	m.notifyTabsChanged(sessionID, tabs, activeIdx)
 	return tabs, activeIdx, nil
 }
@@ -1802,12 +2052,28 @@ func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
 	// browser_open_tab reserved a global slot before calling us — record that
 	// THIS tab owns it, so exactly one close/reap hands it back.
 	newTab.holdsGlobalReservation = true
+	// The tab being left, captured before activeIdx moves — same rationale as
+	// SwitchTab's (review finding F9).
+	var prevCtx context.Context
+	if se.activeIdx >= 0 && se.activeIdx < len(se.tabs) {
+		prevCtx = se.tabs[se.activeIdx].ctx
+	}
 	se.tabs = append(se.tabs, newTab)
 	se.activeIdx = len(se.tabs) - 1
 	m.installTargetListenerLocked(sessionID, se) // no-op: tab 0 is unchanged by an append
 	tabs := snapshotTabsLocked(se)
 	activeIdx := se.activeIdx
+	newCtx := newTab.ctx
 	m.mu.Unlock()
+
+	// Opening a tab moves the active tab just as switching does, and the
+	// tabs-changed callback below drives the SAME WebRTC recapture — so the
+	// new tab needs the SAME treatment, or a browser_open_tab lands the
+	// encoder on a tab that was never told it is foreground (review finding
+	// F9; before this, OpenTab told Chrome nothing at all). Before
+	// notifyTabsChanged for the ordering reason SwitchTab documents.
+	m.activateTabInChrome(newCtx, sessionID, activeIdx)
+	m.releaseTabFocusInChrome(prevCtx, sessionID)
 
 	m.notifyTabsChanged(sessionID, tabs, activeIdx)
 	return tabs[activeIdx], nil
@@ -2025,6 +2291,12 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 		newTab.cancel()
 		return result, nil
 	}
+	// The tab being left, captured BEFORE activeIdx moves — same rationale as
+	// SwitchTab's and OpenTab's (review finding F9).
+	var prevCtx context.Context
+	if se.activeIdx >= 0 && se.activeIdx < len(se.tabs) {
+		prevCtx = se.tabs[se.activeIdx].ctx
+	}
 	se.tabs = append(se.tabs, newTab)
 	se.activeIdx = len(se.tabs) - 1 // ADR-041 D2: adopted tabs become active by default
 	tabs := snapshotTabsLocked(se)
@@ -2033,10 +2305,134 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 	result := tabAdoptResult{Adopted: &active}
 	entry.result = result
 	close(entry.done)
+	newCtx := newTab.ctx
 	m.mu.Unlock()
+
+	// Adoption moves the active tab exactly as SwitchTab/OpenTab/CloseTab do,
+	// and the notifyTabsChanged below drives the SAME WebRTC recapture — but
+	// until now this path was the one that moved se.activeIdx WITHOUT ever
+	// telling Chrome, so the encoder's chrome.tabs.query({active:true})
+	// resolution was left to agree with us by luck. It is also the path where
+	// disagreement is MOST likely: an adopted target is one Chrome itself just
+	// opened and (for a user-initiated target="_blank"/window.open) usually
+	// already activated, so "whatever Chrome picked" and "the tab we just made
+	// active" are two independent answers. State the intent instead of
+	// inheriting it. Best-effort and no lock held, like every other call site.
+	m.activateTabInChrome(newCtx, sessionID, activeIdx)
+	m.releaseTabFocusInChrome(prevCtx, sessionID)
 
 	m.notifyTabsChanged(sessionID, tabs, activeIdx)
 	return result, nil
+}
+
+// defaultAdoptRetryBackoff is the bounded backoff schedule
+// adoptTargetWithRetry walks after a FAILED adoption attempt (an ERROR — a
+// refusal such as the MaxTabs cap is a decision, not a failure, and is never
+// retried).
+//
+// Why retries exist at all (measured on the operator's box, 2026-08-15): a
+// failed adoption used to be PERMANENT. adoptTarget deletes its pendingAdopt
+// entry on the error path, and Chrome fires Target.targetCreated for a given
+// target exactly once, so nothing ever looks at that target again — one
+// transient stall stranded the tab for the entire life of the browsing
+// context. The observed stall was exactly that: "auto-attach: failed to
+// adopt new tab target ... timed out after 20s", three times over, from an
+// advert opening tabs on a 2-CPU hosted box where the CDP transport was
+// already saturated. A tab stranded this way is the ROOT of the tab-switch
+// symptom this fix wave is about: Chrome activates the tab it opened, our
+// model never learns of it, and the two sources of truth are desynced from
+// then on.
+//
+// Shape of the schedule: the first attempt's own failure already cost up to
+// firstAttachTimeout (20s), so the point of the backoff is not speed, it is
+// giving a saturated CDP transport progressively more room to drain while
+// staying bounded. Three retries ≈ 14s of added waiting in the worst case,
+// after which the tab is genuinely reported as stranded rather than retried
+// forever — an unbounded retry against a target that no longer exists would
+// be a per-advert goroutine leak.
+var defaultAdoptRetryBackoff = []time.Duration{
+	750 * time.Millisecond,
+	3 * time.Second,
+	10 * time.Second,
+}
+
+// adoptRetrySchedule returns this manager's adoption backoff schedule,
+// falling back to defaultAdoptRetryBackoff. A field on the manager (see
+// adoptRetryBackoff) rather than a package var so tests can shrink the
+// schedule without mutating global state shared with every other test in
+// the package.
+func (m *BrowserManager) adoptRetrySchedule() []time.Duration {
+	m.mu.Lock()
+	sched := m.adoptRetryBackoff
+	m.mu.Unlock()
+	if sched == nil {
+		return defaultAdoptRetryBackoff
+	}
+	return sched
+}
+
+// sessionExists reports whether sessionID still has a browsing context. Used
+// by adoptTargetWithRetry to abandon a pending retry promptly when the
+// context is torn down (Shutdown/CloseSession) rather than sleeping out the
+// rest of its schedule against a session that no longer exists.
+func (m *BrowserManager) sessionExists(sessionID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.sessions[sessionID]
+	return ok
+}
+
+// adoptTargetWithRetry runs adoptTarget and, on a genuine ERROR, retries it
+// on defaultAdoptRetryBackoff's bounded schedule — see that var's doc
+// comment for the stranded-tab defect this closes.
+//
+// Only an error is retried. Every non-error outcome ends the loop
+// immediately, and all of them are correct terminal states: a successful
+// adoption, "already ours" (a racing adopter won), "no browsing context"
+// (torn down), and a REFUSAL such as the MaxTabs cap — which is a policy
+// decision already reported to the agent via tabAdoptResult.Unadopted, not
+// something a retry could improve.
+//
+// Blocking by design; every caller already runs it on its own goroutine
+// (handleTargetEvent must never block the CDP event-dispatch goroutine —
+// see its doc comment).
+func (m *BrowserManager) adoptTargetWithRetry(sessionID string, targetID target.ID) {
+	_, err := m.adoptTarget(sessionID, targetID)
+	if err == nil {
+		return
+	}
+
+	sched := m.adoptRetrySchedule()
+	for attempt, delay := range sched {
+		logger.WarnCF("browser", "auto-attach: failed to adopt new tab target — retrying", map[string]any{
+			"session_id":   sessionID,
+			"target_id":    string(targetID),
+			"error":        err.Error(),
+			"attempt":      attempt + 1,
+			"of":           len(sched),
+			"retry_in_ms":  delay.Milliseconds(),
+			"consequences": "tab stays stranded (not in the tab strip, and Chrome may show it) until a retry succeeds",
+		})
+		if !m.sessionExists(sessionID) {
+			return // browsing context torn down under us — nothing left to adopt into
+		}
+		timer := time.NewTimer(delay)
+		<-timer.C
+		timer.Stop()
+		if !m.sessionExists(sessionID) {
+			return
+		}
+		if _, err = m.adoptTarget(sessionID, targetID); err == nil {
+			return
+		}
+	}
+
+	logger.WarnCF("browser", "auto-attach: gave up adopting new tab target", map[string]any{
+		"session_id": sessionID,
+		"target_id":  string(targetID),
+		"error":      err.Error(),
+		"attempts":   len(sched) + 1,
+	})
 }
 
 // reconcileTargetListTimeout bounds the chromedp.Targets CDP round trip
@@ -2240,15 +2636,11 @@ func (m *BrowserManager) handleTargetEvent(sessionID string, ev any) {
 	if info.OpenerID == "" {
 		return // not opened by a page — a top-level/browser-initiated target, not ours
 	}
-	go func() {
-		if _, err := m.adoptTarget(sessionID, info.TargetID); err != nil {
-			logger.WarnCF("browser", "auto-attach: failed to adopt new tab target", map[string]any{
-				"session_id": sessionID,
-				"target_id":  string(info.TargetID),
-				"error":      err.Error(),
-			})
-		}
-	}()
+	// adoptTargetWithRetry, not a bare adoptTarget: Target.targetCreated
+	// fires exactly once per target, so a single transient failure here used
+	// to strand the tab permanently — see defaultAdoptRetryBackoff's doc
+	// comment for the measurement.
+	go m.adoptTargetWithRetry(sessionID, info.TargetID)
 }
 
 // targetInfoFromEvent extracts *target.Info from the two CDP event types

@@ -62,6 +62,8 @@ describe.each([
             args={{}}
             result={result}
             isRunning={isRunning}
+            isError={undefined}
+            isCancelled={undefined}
             toolName="web_serve"
           />
         )
@@ -92,6 +94,8 @@ describe.each([
             args={{}}
             result={result}
             isRunning={false}
+            isError={undefined}
+            isCancelled={undefined}
             toolName="web_serve"
           />
         )
@@ -120,6 +124,8 @@ describe.each([
             args={{}}
             result={result}
             isRunning={false}
+            isError={undefined}
+            isCancelled={undefined}
             toolName="web_serve"
           />
         )
@@ -148,6 +154,8 @@ describe.each([
             args={{}}
             result={result}
             isRunning={false}
+            isError={undefined}
+            isCancelled={undefined}
             toolName="web_serve"
           />
         )
@@ -176,6 +184,8 @@ describe.each([
             args={args}
             result={null}
             isRunning={true}
+            isError={undefined}
+            isCancelled={undefined}
             toolName="web_serve"
           />
         )
@@ -219,6 +229,8 @@ describe.each([
             args={frame.params as Record<string, unknown>}
             result={null}
             isRunning={true}
+            isError={undefined}
+            isCancelled={undefined}
             toolName={frame.tool}
           />
         )
@@ -245,6 +257,8 @@ describe.each([
             args={{}}
             result={validStaticResult}
             isRunning={false}
+            isError={undefined}
+            isCancelled={undefined}
             toolName={toolName}
           />
         )
@@ -264,6 +278,8 @@ it('renders a visible tool header for a static result', () => {
       args={{}}
       result={validStaticResult}
       isRunning={false}
+      isError={undefined}
+      isCancelled={undefined}
       toolName="web_serve"
     />
   )
@@ -277,6 +293,8 @@ it('renders a non-empty DOM for null result (tool in-progress)', () => {
       args={{}}
       result={null}
       isRunning={true}
+      isError={undefined}
+      isCancelled={undefined}
       toolName="web_serve"
     />
   )

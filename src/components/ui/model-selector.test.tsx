@@ -390,6 +390,137 @@ describe('ModelSelector — constrainToCatalog (UAT model-catalog fix)', () => {
 })
 
 // =====================================================================
+// catalogStatus — the four-state provider-catalog fix.
+//
+// Bug: the picker used to collapse "still loading", "fetch failed", and
+// "genuinely no provider connected" into one "connect a provider" message
+// — true for only the last case. Motivating incident: CI logged the
+// gateway's upstream fetch to openrouter.ai failing 9 times with
+// `context canceled` (zero successes) while /providers itself was healthy
+// (curl from the same worker: 200 in 0.46s) — and the picker still told
+// the user no provider was connected.
+// =====================================================================
+
+describe('ModelSelector — catalogStatus (four-state provider-catalog fix)', () => {
+  it('renders a distinct loading state, not the "connect a provider" empty-catalog message', () => {
+    render(
+      <ModelSelector
+        models={[]}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+        catalogStatus="loading"
+        triggerTestId="model-trigger"
+        emptyCatalogHint="Connect a provider in Settings to pick a model"
+      />,
+    )
+    // The trigger stays a REAL combobox while loading (see the swallowed-click
+    // regression below); the loading feedback moved inside the popover, so it
+    // is reached by opening the trigger rather than rendered beside it.
+    const trigger = screen.getByTestId('model-trigger')
+    expect(trigger).toHaveAttribute('role', 'combobox')
+    expect(trigger).toHaveAttribute('aria-busy', 'true')
+    expect(screen.queryByText(/connect a provider/i)).not.toBeInTheDocument()
+
+    fireEvent.click(trigger)
+    expect(screen.getByText(/loading models/i)).toBeInTheDocument()
+  })
+
+  // REGRESSION — the swallowed click (root-caused 2026-08-14, reproduced
+  // against a real gateway before this fix). The loading state used to render
+  // a non-interactive <div role="status"> wearing triggerTestId. A click
+  // during the catalog fetch (0.13s idle, 1.2-4.5s under a loaded e2e shard)
+  // hit that div, did nothing, and was LOST: when the catalog arrived the real
+  // combobox replaced it and nothing re-opened the popover. The user got no
+  // feedback and had to click again. It is the true cause of the create-agent
+  // e2e failure that was misdiagnosed twice — once as OpenRouter latency, once
+  // as a provider-configuration problem.
+  it('does not swallow a click made while the catalog is still loading', () => {
+    const { rerender } = render(
+      <ModelSelector
+        models={[]}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+        catalogStatus="loading"
+        triggerTestId="model-trigger"
+      />,
+    )
+
+    // The user clicks "Model" while the fetch is still in flight.
+    fireEvent.click(screen.getByTestId('model-trigger'))
+    expect(screen.getByText(/loading models/i)).toBeInTheDocument()
+    expect(screen.queryByRole('option')).not.toBeInTheDocument()
+
+    // The catalog lands. The popover the user already opened must now show the
+    // models — WITHOUT a second click, which is exactly what used to be needed.
+    rerender(
+      <ModelSelector
+        models={['gpt-4o', 'claude-3-haiku']}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+        catalogStatus="ready"
+        triggerTestId="model-trigger"
+      />,
+    )
+    expect(screen.getAllByRole('option').length).toBeGreaterThan(0)
+    expect(screen.getByText('gpt-4o')).toBeInTheDocument()
+    expect(screen.queryByText(/loading models/i)).not.toBeInTheDocument()
+  })
+
+  it('renders the real error message and a working Retry, not the "connect a provider" empty-catalog message', () => {
+    const onRetryCatalog = vi.fn()
+    render(
+      <ModelSelector
+        models={[]}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+        triggerTestId="wizard-model"
+        catalogStatus="error"
+        catalogErrorMessage='Get "https://openrouter.ai/api/v1/models": context canceled'
+        onRetryCatalog={onRetryCatalog}
+        emptyCatalogHint="Connect a provider in Settings to pick a model"
+      />,
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent(/context canceled/)
+    expect(screen.queryByText(/connect a provider/i)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('wizard-model-retry'))
+    expect(onRetryCatalog).toHaveBeenCalledTimes(1)
+  })
+
+  it('omits the Retry control when onRetryCatalog is not provided', () => {
+    render(
+      <ModelSelector
+        models={[]}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+        triggerTestId="wizard-model"
+        catalogStatus="error"
+        catalogErrorMessage="network error"
+      />,
+    )
+    expect(screen.queryByTestId('wizard-model-retry')).not.toBeInTheDocument()
+  })
+
+  it('defaults catalogStatus to "ready" so pre-existing call sites are unaffected', () => {
+    render(
+      <ModelSelector
+        models={[]}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+        emptyCatalogHint="Connect a provider in Settings to pick a model"
+      />,
+    )
+    expect(screen.getByText(/connect a provider in settings/i)).toBeInTheDocument()
+    expect(screen.queryByText(/loading models/i)).not.toBeInTheDocument()
+  })
+})
+
+// =====================================================================
 // O3 two-field model selector — onPairChange callback
 // =====================================================================
 
@@ -585,5 +716,32 @@ describe('ModelSelector — variant="ghost"', () => {
     expect(trigger.className).toContain('border')
     // Default trigger uses the taller h-10 class.
     expect(trigger.className).toContain('h-10')
+  })
+})
+
+describe('ModelSelector — search field focus ring (operator request 2026-08-13)', () => {
+  // globals.css applies ONE gold focus ring to every focusable element and
+  // forbids per-component ring utilities; the only sanctioned escape is the
+  // data-no-focus-ring attribute, for composite widgets whose focus is shown
+  // by a parent surface. The search input qualifies: it is auto-focused the
+  // instant the popover opens and is the only focusable thing inside it, so
+  // the ring fired on every single open and boxed a field the bordered
+  // popover already frames.
+  //
+  // Pinned as a test because the attribute is one easily-dropped word in a
+  // JSX prop list, and losing it brings the ring back with no other symptom.
+  it('opts the search input out of the global focus ring', () => {
+    renderSelector(FLAT_MODELS, '', vi.fn())
+    const input = screen.getByPlaceholderText(/search models/i)
+    expect(input).toHaveAttribute('data-no-focus-ring')
+  })
+
+  it('does not opt any OTHER control out of the ring', () => {
+    // Guards the opposite failure: a blanket application of the attribute
+    // would silently strip focus visibility from the whole widget, which is
+    // an accessibility regression rather than a cosmetic one.
+    renderSelector(FLAT_MODELS, '', vi.fn())
+    const optedOut = document.querySelectorAll('[data-no-focus-ring]')
+    expect(optedOut).toHaveLength(1)
   })
 })

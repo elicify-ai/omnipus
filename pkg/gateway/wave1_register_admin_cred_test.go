@@ -294,6 +294,7 @@ func TestOnboarding_CreatesAPIKeyRef(t *testing.T) {
 	api, tmpDir, _ := newTestAPIWithMasterKey(t)
 
 	body := `{"provider":{"id":"anthropic","api_key":"sk-ant-secret-key"},"admin":{"username":"alice","password":"alice1234"}}`
+	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

@@ -55,6 +55,117 @@ jobs:
           fi
           echo "OK: no removed CLI verbs in infra."
 
+  browser-tests-gated:
+    name: "#615 CI Guard: browser real-Chrome test gating"
+    # #615 regression guard (structural/grep-based check, no Go build needed,
+    # so this job stays fast): every pkg/tools/browser test that can launch a
+    # real Chrome (or trigger the ~100MB Chrome-for-Testing download that
+    # precedes it) must call the package's own skipIfNoBrowser(t) convention.
+    # #615 found 17 tests that didn't — 15 gated only by the wrong/no-op
+    # testing.Short(), and 2 with no gate at all. See
+    # scripts/check-browser-tests-gated.sh.
+    #
+    # The SECOND #615 guard this job used to also run — a checker that
+    # diffed this workflow's "-race package list" against
+    # deploy/ci-worker/runci.sh's copy — is gone. scripts/race-packages.sh is
+    # now the single source both files consume (see that script's header for
+    # why a comparator was the wrong fix): there is no longer a second copy
+    # for a lockstep checker to compare against.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Verify pkg/tools/browser real-Chrome tests are skipIfNoBrowser-gated
+        run: bash scripts/check-browser-tests-gated.sh
+
+  browser-e2e:
+    name: "#615: real-Chrome browser tests"
+    # Restores the real-Chrome coverage that #615's skipIfNoBrowser conversion
+    # silently removed. Before that conversion these 16 tests were gated by
+    # testing.Short(), which no gate here sets, so they ran and passed in the
+    # plain "Tests" job (`ok .../pkg/tools/browser 48.108s`). Converting them to
+    # skipIfNoBrowser was correct — it removed an undeclared ~100MB in-test
+    # Chrome-for-Testing download from every gate — but skipIfNoBrowser's CI
+    # branch fires on every GitHub runner (GitHub always sets CI=true), so
+    # without this job the coverage would be zero while every gate stayed green.
+    #
+    # This is a SEPARATE job rather than OMNIPUS_BROWSER_E2E=1 on the "Tests"
+    # job for two reasons: (a) the whole point is that Chrome is a DECLARED
+    # dependency installed by an action, which we want on exactly one job
+    # rather than slowing the main suite; (b) a Chrome/driver provisioning
+    # failure then reads as "browser-e2e red" instead of failing the entire
+    # test matrix for a reason unrelated to the code under review — the
+    # missing-browser false-RED trap documented in deploy/ci-worker/CLAUDE.md.
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+      # Opts past skipIfNoBrowser's CI branch. Set ONLY here.
+      OMNIPUS_BROWSER_E2E: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install Chrome (declared dependency, not an in-test download)
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+
+      - name: Verify Chrome resolves under a name skipIfNoBrowser probes
+        # skipIfNoBrowser (pkg/tools/browser/browser_e2e_test.go) probes
+        # EXACTLY these four names via exec.LookPath. Bare `chrome` is NOT
+        # among them, and setup-chrome can install the executable under that
+        # name — so checking for "some chrome binary" would pass while every
+        # test still skipped. Check the names the code actually looks for.
+        run: |
+          set -euo pipefail
+          for n in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$n" >/dev/null 2>&1; then
+              echo "found $n: $("$n" --version)"; exit 0
+            fi
+          done
+          echo "::error::No Chrome binary under a name skipIfNoBrowser probes" >&2
+          echo "PATH candidates present: $(command -v chrome || true)" >&2
+          exit 1
+
+      - name: Run pkg/tools/browser real-Chrome tests
+        # Assert the tests RAN — do not just assert the process exited 0.
+        # `go test` exits 0 when every test skips, which is exactly how #615's
+        # real-Chrome coverage went to zero while all gates stayed green.
+        #
+        # Two deliberate choices here:
+        #  * NON-recursive ./pkg/tools/browser. Every skipIfNoBrowser call site
+        #    is in the top-level package; the subpackages carry unrelated skips
+        #    (webrtc/inputdc_backpressure_test.go ends in an UNCONDITIONAL
+        #    t.Skip), so a recursive skip-ban would fail this job on every run
+        #    for reasons that have nothing to do with Chrome.
+        #  * Assert on skipIfNoBrowser's OWN skip reasons plus a floor on the
+        #    pass count, rather than banning every SKIP. Platform-gated skips
+        #    are legitimate; a browser skip is the failure this job exists to
+        #    catch. The floor catches the case where the suite runs but the
+        #    gated tests silently vanish.
+        run: |
+          set -euo pipefail
+          go test -v -tags goolm,stdjson -count=1 -timeout 900s ./pkg/tools/browser 2>&1 | tee /tmp/browser-e2e.log
+
+          if grep -qE 'skipping browser E2E test|no managed Chrome for' /tmp/browser-e2e.log; then
+            echo "::error::skipIfNoBrowser skipped — real-Chrome coverage is NOT running despite OMNIPUS_BROWSER_E2E=1" >&2
+            grep -E 'skipping browser E2E test|no managed Chrome for' /tmp/browser-e2e.log >&2
+            exit 1
+          fi
+
+          passes=$(grep -c -- '--- PASS' /tmp/browser-e2e.log || true)
+          echo "pkg/tools/browser passing tests: $passes"
+          if [ "$passes" -lt 40 ]; then
+            echo "::error::Only $passes tests passed; expected >=40 real-Chrome-capable tests. Coverage has silently shrunk." >&2
+            exit 1
+          fi
+
   typecheck:
     name: TypeScript Type Check
     # Runs `tsc -b --noEmit` (project-references build mode) against the repo
@@ -138,11 +249,56 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Run wire-types lint self-tests
+        # F8 (round-2 review): the script's --self-test mode (35+ synthetic
+        # pattern assertions covering every rule, including the F8 additions
+        # ST-23/ST-24) previously ran nowhere in CI — a regression in the
+        # lint's own regex logic could ship silently since nothing exercised
+        # it. Run BEFORE the real scan below so a broken pattern is caught
+        # before it either false-negatives on a real finding or false-
+        # positives across the whole tree.
+        run: bash scripts/check-no-handwritten-wire-types.sh --self-test
+
       - name: Run wire-types lint
         # No language runtimes needed beyond bash + python3 (both present on
         # ubuntu-latest). The script exits 1 if any hand-written wire-format
         # types are found; exit 0 means clean.
         run: bash scripts/check-no-handwritten-wire-types.sh
+
+  tool-error-status-lint:
+    name: Tool-Error-From-Status Lint
+    # Regression guard for issue #617: an SPA tool-call component must never
+    # derive its ERROR state from AssistantUI's `status.type === 'incomplete'`
+    # — a finished tool call always carries a truthy result, so that status
+    # can never be true for a real failure (see this job's script for the
+    # full mechanism). This exact anti-pattern was independently introduced
+    # across several component families before being fixed; this job stops a
+    # third recurrence rather than relying on review alone.
+    #
+    # Developer note: this check has no opt-out comment (unlike the wire-
+    # types lint) — the two legitimate exceptions (isCancelledStatus's own
+    # reason-qualified check, and GenericToolCall's `|| !!error`-disjuncted
+    # form) are structurally excluded by the script itself, not via a
+    # per-line annotation. If this fires, read the real outcome instead — see
+    # the script's header comment for the correct pattern.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run tool-error-from-status lint
+        # python3-based (not `grep -P`) so it behaves identically on
+        # contributors' local macOS/BSD-grep machines and on this
+        # ubuntu-latest runner — see the script's header comment.
+        run: bash scripts/check-no-tool-error-from-status.sh
+
+      - name: Run JPEG-screencast removal guard
+        # ADR-061: the JPEG live-browser fallback is deleted and WebRTC is the
+        # only live-video path. Long-lived branches cut before the removal
+        # still contain the whole pipeline, so a merge re-adds it as an
+        # ordinary, conflict-free addition. This is the mechanical half of
+        # CLAUDE.md's "Retired surfaces — do NOT reintroduce" rule.
+        run: bash scripts/check-no-jpeg-screencast.sh
 
   verify-contracts:
     name: Verify Contracts
@@ -273,10 +429,10 @@ jobs:
           go-package: ./...
           # The action runs its OWN setup-go with go-version-input:stable and
           # GOTOOLCHAIN=local, so it ignores both the job's Setup Go step and
-          # go.mod's toolchain. Pin it to the patched stdlib (go1.26.5 fixes
-          # GO-2026-5856 crypto/tls and GO-2026-4970 os). Keep this
+          # go.mod's toolchain. Pin it to the patched stdlib (go1.26.6
+          # clears GO-2026-6218/6090/6089/6088/5972/5026). Keep this
           # in sync with the `go` directive in go.mod.
-          go-version-input: '1.26.5'
+          go-version-input: '1.26.6'
 
   cgo-gate:
     name: CGO_ENABLED=0 Build Gate
@@ -440,6 +596,13 @@ jobs:
           exit $rc
 
       - name: Run go test -race (concurrency-sensitive packages)
+        # The PACKAGE LIST itself lives in scripts/race-packages.sh (F5,
+        # #615/#617/#618 hardening review) — that is the single source both
+        # this step and deploy/ci-worker/runci.sh's run_gorace consume, so
+        # they can no longer drift. The comments below explain WHY each
+        # package earned its place; edit scripts/race-packages.sh, not this
+        # comment block, to add or remove one.
+        #
         # pkg/agent is now INCLUDED. It was excluded for "2 pre-existing races in
         # unrelated tests"; a full `go test -race -count=1 -p 1 ./pkg/agent/` run
         # on 2026-07-26 reported ZERO data races (ok, 124.6s), so the exclusion
@@ -478,11 +641,29 @@ jobs:
         # under Lock, on the path of every log call in the binary — reverting
         # the fix would have kept CI green forever without this line, since the
         # package's only other coverage is the plain (non-race) `go test` job
-        # above, which cannot detect a race by construction. Timeout left at
-        # 600s: verified locally, the package's whole race suite (a single
-        # 300ms-deadline goroutine-hammer test plus the ordinary unit tests)
-        # completes in ~1.3s under -race — negligible next to the headroom the
-        # 240s→600s raise already bought pkg/agent/pkg/gateway/tests/integration.
+        # above, which cannot detect a race by construction. The package's
+        # whole race suite (a single 300ms-deadline goroutine-hammer test plus
+        # the ordinary unit tests) completes in ~1.3s under -race — negligible
+        # next to the headroom the 240s→600s raise already bought
+        # pkg/agent/pkg/gateway/tests/integration. (Timeout was raised again,
+        # 600s→900s, when pkg/task/pkg/plan/pkg/tools/pkg/providers joined
+        # below — see that entry for why. The 900s figure in the invocation
+        # further down covers the FIRST (parallel) `go test` call.
+        #
+        # CORRECTION (round-2 review, F7): this comment used to claim "there
+        # is no 600s left anywhere in this step by design" — false on its own
+        # terms, since the flake-filter's per-package isolated re-run further
+        # down in this same step passed `-timeout 600s`. Beyond the false
+        # claim, that asymmetry was backwards: the isolated `-p 1` re-run
+        # forces serial execution of whatever it was given, which is SLOWER
+        # per-package than the parallel run's shared CPU budget, yet it was
+        # given LESS time. With pkg/tools/... now in the glob (see below), a
+        # merely-slow package that trips the flake filter for an unrelated
+        # reason (a transient parallel-run hiccup, not a real failure) could
+        # time out again in isolation and get stamped "REAL FAILURE (failed
+        # twice)" — a false RED read as a code defect, not an infra timing
+        # issue. Fixed by raising the isolated re-run's timeout to 900s too,
+        # matching the parallel run instead of undercutting it.)
         #
         # pkg/task, pkg/plan, pkg/tools and pkg/providers were added 2026-08-10,
         # and they earned it on the first run: `go test -race ./pkg/tools/...`
@@ -493,22 +674,51 @@ jobs:
         # test. Neither was reachable by any gate that existed before: this
         # list is the only race surface in the project, and it omitted the
         # packages holding the tool registry, the delegation tool, the task
-        # store and every LLM provider.
+        # store and every LLM provider. Timeout raised 600s → 900s here to
+        # accommodate the four added packages (pkg/tools in particular pulls
+        # in pkg/tools/browser — see that entry below for the further cost
+        # that package added on top).
         #
-        # pkg/tools is NON-recursive (`./pkg/tools`, not `./pkg/tools/...`)
-        # because pkg/tools/browser itself fails under -race on a headless box.
-        # A false-RED gate gets ignored, which is worse than no gate. Tracked
-        # in #615; do not widen without first making that package race-clean
-        # headlessly.
+        # pkg/tools/browser joined the recursive glob on 2026-08-11 (#615).
+        # It was originally left off `./pkg/tools/...` on the theory that the
+        # package "launches real Chrome and hits missing dbus headlessly" —
+        # that diagnosis was WRONG: the package already ran its real-Chrome
+        # tests and PASSED in the plain (non-race) `go test ./...` gate above
+        # on these same runners (e.g. run 31184160184: `ok
+        # .../pkg/tools/browser 48.108s`), so dbus availability cannot explain
+        # a race-only exclusion. The real cause was that its 15 real-Chrome
+        # tests (plus two more found ungated entirely during the #615 fix —
+        # see pkg/tools/browser/coordinator_test.go's
+        # TestCoordinator_OwnershipMarker_RoundTrip and
+        # coordinator_window_size_test.go's
+        # TestCoordinator_Register_CreateTargetParams_PinsWindowSize) were
+        # only gated by `testing.Short()` (or, for those two, not gated at
+        # all) instead of the package's own `skipIfNoBrowser` convention, and
+        # two tight wall-clock assertions in coldstart_bound_test.go were
+        # exactly the shape pkg/task hit in the entry above (race
+        # instrumentation blowing a <200ms bound). Both are fixed: every
+        # real-Chrome test now uses skipIfNoBrowser, and the two wall-clock
+        # assertions now use a //go:build race / !race split bound
+        # (runFirstAttachPromptBound) exactly like pkg/task's livenessBound.
+        # `go test -race ./pkg/tools/...` is verified race-clean before this
+        # change lands.
         #
-        # Its four SUBpackages are listed explicitly rather than swept up with
-        # it. `./pkg/tools` alone silently excluded five packages while the
-        # comment named one — and cdppipe and webrtc hold some of the most
-        # concurrency-dense tests in the tree (allocator/dialer/pipeconn,
-        # backpressure/ordering/shed/sustained-growth). All four verified
-        # race-clean before being added here.
-        #
-        # Timeout raised 600s -> 900s to accommodate the added packages.
+        # CORRECTION (found in the #615/#617/#618 hardening review, F1): the
+        # line that used to sit here framed skipIfNoBrowser's CI check as
+        # having "also removed an undeclared ~100MB Chrome-for-Testing
+        # network download from every CI gate" — true, but stated as a pure
+        # benefit. It was not: skipIfNoBrowser's own CI branch (`CI != "" &&
+        # OMNIPUS_BROWSER_E2E == ""` → skip) fires unconditionally on every
+        # GitHub-hosted runner (GitHub always sets `CI=true`), and
+        # `OMNIPUS_BROWSER_E2E` was set NOWHERE in .github/, deploy/,
+        # Makefile, or scripts/ — so this step's real-Chrome coverage for
+        # pkg/tools/browser went from 16 tests actually running (verified:
+        # `ok .../pkg/tools/browser 48.108s` above) to ZERO, silently, with
+        # every gate still green. The "browser-e2e" job further down in this
+        # workflow restores that coverage with Chrome as a declared
+        # dependency (not the undeclared in-test download #615 removed) —
+        # see that job's own comment for why it is a separate job rather
+        # than just setting OMNIPUS_BROWSER_E2E=1 here.
         #
         # DATA RACE carve-out (never routed through the flake filter): a race
         # that manifests under the default parallel `-p` (NumCPU) run but
@@ -525,7 +735,9 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           set +e
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 900s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... ./pkg/logger/... ./pkg/task/... ./pkg/plan/... ./pkg/tools ./pkg/tools/browser/cdppipe/... ./pkg/tools/browser/webrtc/... ./pkg/tools/browser/captureext/... ./pkg/tools/browser/chromeintegrity/... ./pkg/providers/... ./tests/integration/... 2>&1)
+          # shellcheck disable=SC2046 — intentional word-splitting: race-packages.sh
+          # prints one package path per line with no globs/spaces to mis-split.
+          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 900s $(scripts/race-packages.sh) 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
@@ -563,7 +775,7 @@ jobs:
           echo "=== FLAKE FILTER (-race): re-running failed packages isolated (-p 1): $failed ==="
           rc=0
           for p in $failed; do
-            if go test -race -tags goolm,stdjson -count=1 -timeout 600s -p 1 "$p" >/tmp/rr_race.log 2>&1; then
+            if go test -race -tags goolm,stdjson -count=1 -timeout 900s -p 1 "$p" >/tmp/rr_race.log 2>&1; then
               echo "FLAKE (passed isolated): $p"
             else
               echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL|DATA RACE' /tmp/rr_race.log | head; rc=1
@@ -929,8 +1141,12 @@ jobs:
 
       - name: Run Playwright tests
         # OPENROUTER_API_KEY_CI is inherited per-shard from $GITHUB_ENV (Resolve shard LLM key).
+        # Mirror it onto OPENROUTER_API_KEY so self-managed gateways
+        # (tests/e2e/setup.ts startGateway → onboardAdmin) send the same live
+        # key instead of sk-test-placeholder, which OpenRouter 400s.
         env:
           OMNIPUS_URL: http://localhost:6060
+          OPENROUTER_API_KEY: ${{ env.OPENROUTER_API_KEY_CI }}
         run: npx playwright test ${{ matrix.specs }}
 
       - name: Upload Playwright artifacts

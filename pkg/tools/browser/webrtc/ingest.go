@@ -5,6 +5,7 @@ package webrtc
 import (
 	"fmt"
 	"io"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -90,7 +91,7 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 		return "", fmt.Errorf("webrtc: session closed")
 	}
 
-	pc, err := s.buildPeerConnection()
+	pc, err := s.buildPeerConnection(s.api) // loopback encoder leg: no public rewrite, no shared mux
 	if err != nil {
 		return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, err)
 	}
@@ -238,11 +239,14 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 //     mandatory anti-replay window (RFC 3711) then silently drops the
 //     "out of window" packets on the VIEWER side, with no error visible
 //     anywhere on this side (TrackLocalStaticRTP.Write still returns nil).
-//     This package therefore rewrites SequenceNumber to a session-lifetime
-//     monotonic counter per kind (Session.videoSeq/audioSeq) before handing
-//     the packet to the local track, so the local track's OUTGOING sequence
-//     stream is always continuous regardless of which upstream ingest
-//     connection is currently feeding it. Timestamp is passed through
+//     This package therefore rewrites SequenceNumber by a constant
+//     per-connection OFFSET (chosen at each connection's first packet to
+//     continue past Session.videoLastOutSeq/audioLastOutSeq, the shared
+//     outgoing high-water marks), so the local track's OUTGOING sequence
+//     stream stays within one continuous serial-number progression across
+//     source switches while intra-connection gaps and ordering pass through
+//     intact for the viewer's loss recovery (see the offset-rewrite comment
+//     in the forward loop below). Timestamp is passed through
 //     unmodified -- a timestamp discontinuity on source switch is normal,
 //     expected WebRTC behavior (decoders resync on the next keyframe, which
 //     pliBurstForNewViewer already requests) and, unlike sequence number, is
@@ -252,6 +256,62 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 // few packets, and the new one starting) can safely write concurrently: the
 // sequence counter is an atomic, and the old one simply stops once its
 // remote.Read returns an error after the old PeerConnection closes.
+// seqReconnectGap is the deliberate forward jump opened in the outgoing RTP
+// sequence numbering when a new ingest connection takes over the shared
+// local track (see the offset-rewrite comment in attachIngestTrack's forward
+// loop). Big enough that reordering straggler packets from the outgoing old
+// connection can never overlap the new connection's range, small enough that
+// the viewer's brief NACK burst for the phantom gap is negligible.
+const seqReconnectGap = 64
+
+// seq16Ahead reports whether a is strictly ahead of b in RFC 1982 16-bit
+// serial-number space (the RTP sequence-number ordering).
+func seq16Ahead(a, b uint16) bool {
+	return a != b && (a-b) < 0x8000
+}
+
+// seqRewriter applies one ingest connection's constant sequence-number
+// offset (see the offset-rewrite comment in attachIngestTrack's forward
+// loop) and maintains the session-lifetime outgoing high-water mark shared
+// with past and future connections.
+type seqRewriter struct {
+	lastOut    *atomic.Uint32
+	haveOffset bool
+	offset     uint16
+}
+
+// rewrite maps one inbound sequence number to the outgoing stream. The
+// offset is fixed at the connection's FIRST packet: lastOut + seqReconnectGap
+// deliberately opens a forward gap at every source switch (forward jumps are
+// legal loss as far as the viewer is concerned -- it NACKs briefly and
+// resyncs on the keyframe that pliBurstForNewViewer/recapture already
+// requests), whereas overlapping the previous connection's numbering risks
+// the SRTP anti-replay drop described on attachIngestTrack. Every later
+// packet shifts by that same constant, preserving intra-connection gaps and
+// ordering exactly.
+//
+// The high-water mark advances only forward in RFC 1982 space: late
+// (reordered/retransmitted) packets must not drag it backwards, and at
+// reconnect the outgoing old writer's stragglers must not fight the new
+// writer's fresh range.
+func (r *seqRewriter) rewrite(in uint16) uint16 {
+	if !r.haveOffset {
+		r.offset = uint16(r.lastOut.Load()) + seqReconnectGap - in
+		r.haveOffset = true
+	}
+	out := in + r.offset
+	for {
+		cur := r.lastOut.Load()
+		if !seq16Ahead(out, uint16(cur)) {
+			break
+		}
+		if r.lastOut.CompareAndSwap(cur, uint32(out)) {
+			break
+		}
+	}
+	return out
+}
+
 func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 	codec := remote.Codec()
 	kind := remote.Kind()
@@ -324,15 +384,16 @@ func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, r
 		}
 	}()
 
-	seqCounter := &s.videoSeq
+	lastOutSeq := &s.videoLastOutSeq
 	pktCounter := &s.videoPktCount
 	if kind == webrtc.RTPCodecTypeAudio {
-		seqCounter = &s.audioSeq
+		lastOutSeq = &s.audioLastOutSeq
 		pktCounter = &s.audioPktCount
 	}
 
 	buf := make([]byte, 1500)
 	var lastLog time.Time
+	rewriter := seqRewriter{lastOut: lastOutSeq}
 	for {
 		n, _, err := remote.Read(buf)
 		if err != nil {
@@ -349,13 +410,32 @@ func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, r
 			s.logf("%s dropping unparseable RTP packet: kind=%s err=%v", prefix, kind, err)
 			continue
 		}
-		// See the long comment on attachIngestTrack above: rewriting the
-		// sequence number to a session-lifetime monotonic counter is what
-		// makes reusing the shared local track across ingest reconnects
-		// actually work (not just compile) -- without it, an already
-		// -attached viewer's SRTP anti-replay window silently discards
-		// every packet from a freshly-reconnected ingest source.
-		pkt.SequenceNumber = uint16(seqCounter.Add(1))
+		// See the long comment on attachIngestTrack above: the sequence
+		// number is rewritten by a CONSTANT PER-CONNECTION OFFSET, chosen at
+		// this connection's first packet so its outgoing stream continues
+		// ahead of wherever the previous ingest connection left off --
+		// without that continuity, an already-attached viewer's SRTP
+		// anti-replay window silently discards every packet from a freshly
+		// reconnected ingest source.
+		//
+		// A constant offset -- NOT a per-packet monotonic counter, which is
+		// what shipped first (renumbering packets in READ order). Read-order
+		// renumbering destroyed the two loss-recovery signals the viewer leg
+		// depends on (operator-visible as persistent cyan macroblock
+		// smearing during scroll, 2026-08-13): (a) an ingest-leg packet loss
+		// left NO GAP in the outgoing numbering, so the viewer's decoder
+		// could not detect the loss -- no NACK, no prompt PLI, just a broken
+		// bitstream decoded as garbage until some unrelated keyframe; and
+		// (b) a packet recovered late by ingest-leg retransmission was
+		// renumbered into its READ position, splicing it into the wrong
+		// bitstream position with perfectly sequential numbering, actively
+		// corrupting the decode. Offset rewriting preserves intra-connection
+		// gaps and relative order, so the viewer's jitter buffer reorders
+		// correctly, its NACK generator sees real gaps (answered by the
+		// default-interceptor NACK responder from the local track's send
+		// cache), and unrecoverable loss escalates to the PLI path
+		// (forwardPLIThrottled) for a proper keyframe resync.
+		pkt.SequenceNumber = rewriter.rewrite(pkt.SequenceNumber)
 
 		if err := local.WriteRTP(&pkt); err != nil {
 			// ErrClosedPipe just means no viewer is bound to this local

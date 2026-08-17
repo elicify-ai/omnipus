@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { CaretUpDown, Check, Keyboard, WarningCircle } from '@phosphor-icons/react'
+import { CaretUpDown, Check, CircleNotch, Keyboard, WarningCircle } from '@phosphor-icons/react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
@@ -108,6 +108,21 @@ interface ModelSelectorProps {
    */
   emptyCatalogHint?: string
   /**
+   * Distinguishes "the catalogue is empty" from "we don't know yet" /
+   * "the fetch failed" — collapsing those into one state is the bug this
+   * prop exists to fix (CI observed a healthy /providers endpoint whose
+   * upstream model fetch failed 9x with `context canceled`; the picker
+   * told the user no provider was connected, which was false — see
+   * `Step1Identity.tsx`'s `catalogStatus` derivation for the full incident
+   * note). Defaults to `'ready'` so every existing call site — which has
+   * no loading/error concept of its own — renders exactly as before.
+   */
+  catalogStatus?: 'loading' | 'error' | 'ready'
+  /** Message shown in the `catalogStatus === 'error'` state. Falls back to a generic message. */
+  catalogErrorMessage?: string
+  /** Retry action for the `catalogStatus === 'error'` state. Omit to render the error with no retry control. */
+  onRetryCatalog?: () => void
+  /**
    * Visual style of the trigger button.
    * - `'default'` (the default) — bordered form-field look: solid border, filled
    *   background, h-10, full-width. Preserves the existing appearance for all
@@ -126,7 +141,7 @@ interface ModelSelectorProps {
   onOpenChange?: (open: boolean) => void
 }
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange }: ModelSelectorProps) {
+export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, catalogStatus = 'ready', catalogErrorMessage, onRetryCatalog, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange }: ModelSelectorProps) {
   const [internalOpen, setInternalOpen] = React.useState(false)
   const isControlled = controlledOpen !== undefined
   const open = isControlled ? controlledOpen : internalOpen
@@ -143,6 +158,82 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // ModelSelectors are mounted on the same page.
   const descriptionId = React.useId()
 
+  // Loading / error catalogue states pre-empt every other render path below.
+  // A providers fetch that is still in flight, or has failed outright, must
+  // never render as "no models available" — that copy reads as user error
+  // ("you haven't connected a provider") when the real cause is transient:
+  // CI observed exactly this, the gateway's upstream fetch to openrouter.ai
+  // failing 9 times in a row with `context canceled` (zero successes) while
+  // the /providers endpoint itself was healthy (a direct curl from the same
+  // worker returned 200 in 0.46s) — and the picker still told the user no
+  // provider was connected. `catalogStatus` defaults to `'ready'`, so a
+  // caller that never sets it (every existing call site) is unaffected.
+  // catalogStatus === 'loading' deliberately has NO early return: it renders
+  // the SAME interactive combobox every other ready state does, and shows
+  // "Loading models…" INSIDE the popover (see CommandList below).
+  //
+  // WHY (root-caused 2026-08-14, reproduced locally): this state used to
+  // return a non-interactive <div role="status"> carrying triggerTestId —
+  // an element that LOOKS like the trigger and answers to its test id, but
+  // cannot be opened. The provider catalog is fetched live on every mount
+  // (0.13s idle, measured 1.2-4.5s under a full e2e shard), so for that
+  // whole window a click on "Model" hit the placeholder, did nothing, and
+  // was LOST: when the catalog landed the real combobox replaced the div,
+  // but nothing re-opened the popover. The user clicks, gets no feedback,
+  // and must click again with no idea why. It failed the create-agent e2e
+  // spec exactly this way — and passed in isolation, where the window is
+  // ~0ms, which is why it read as flake for weeks.
+  //
+  // An earlier pass at this only changed the placeholder's TEXT (from a
+  // false "Connect a provider in Settings" to "Loading models…"). That
+  // fixed the lie and left the swallowed click untouched. Rendering one
+  // trigger in every state is what actually fixes it.
+
+  if (catalogStatus === 'error') {
+    const isGhost = variant === 'ghost'
+    return (
+      <div
+        data-testid={triggerTestId}
+        role="alert"
+        className={
+          isGhost
+            ? 'flex items-center gap-1.5 h-7 rounded-md px-1.5 text-xs'
+            : 'flex w-full items-center gap-2 h-10 rounded-md border px-3 py-2 text-sm'
+        }
+        style={
+          isGhost
+            ? { color: 'var(--color-warning)' }
+            : {
+                borderColor: 'var(--color-warning)',
+                backgroundColor: 'var(--color-surface-1)',
+                color: 'var(--color-warning)',
+              }
+        }
+      >
+        <WarningCircle size={12} weight="fill" className="shrink-0" aria-hidden="true" />
+        <span className="truncate text-xs flex-1">
+          {catalogErrorMessage ?? 'Failed to load providers'}
+        </span>
+        {onRetryCatalog && (
+          <button
+            type="button"
+            onClick={onRetryCatalog}
+            // Explicit tabIndex: src/lib/tabindex-convention.test.ts requires
+            // every native interactive element in src/ to declare one — WebKit
+            // does not make buttons tabbable by default, so an omitted tabIndex
+            // silently costs keyboard users this control on Safari.
+            tabIndex={tabIndex}
+            data-testid={triggerTestId ? `${triggerTestId}-retry` : undefined}
+            className="shrink-0 text-xs font-medium underline underline-offset-2 hover:opacity-80"
+            style={{ color: 'var(--color-accent)' }}
+          >
+            Retry
+          </button>
+        )}
+      </div>
+    )
+  }
+
   const catalogEmpty =
     models.length === 0 && (!providerGroups || providerGroups.every((g) => g.models.length === 0))
 
@@ -153,7 +244,13 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // onboarding bootstrap path (`allowFreeTextWhenEmpty`) is the one
   // exception — there the user must type the first slug for an
   // endpoint-less provider.
-  if (catalogEmpty && constrainToCatalog && !allowFreeTextWhenEmpty) {
+  // catalogStatus !== 'loading' is load-bearing: while the catalog is in
+  // flight `models` is legitimately empty, and without this guard the
+  // loading state falls into this disabled "no models" placeholder — the
+  // same non-interactive, click-swallowing element the loading branch was
+  // just fixed to stop rendering. Empty-because-loading is not
+  // empty-because-there-is-nothing.
+  if (catalogEmpty && constrainToCatalog && !allowFreeTextWhenEmpty && catalogStatus !== 'loading') {
     const isGhost = variant === 'ghost'
     return (
       <div
@@ -181,8 +278,12 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
     )
   }
 
-  // Text input mode — no models available
-  if (catalogEmpty) {
+  // Text input mode — no models available.
+  // Excluded while loading for the same reason as the branch above: an empty
+  // `models` during the fetch means "not here YET", and falling into free-text
+  // entry mid-load would swap the control out from under a user who is
+  // waiting for a list — a second way to lose their interaction.
+  if (catalogEmpty && catalogStatus !== 'loading') {
     // W6-C4 / G12: in text-input mode the trigger is just an <input>; we
     // surface the unresolved state via a small inline note beneath the
     // input when a non-empty value isn't in the supplied flat list (which
@@ -289,6 +390,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           type="button"
           role="combobox"
           aria-expanded={open}
+          aria-busy={catalogStatus === 'loading' || undefined}
           aria-label={value ? `Model selector, currently ${value}${valueUnresolved ? ' (unresolved)' : ''}` : `Model selector, ${displayValue}`}
           aria-invalid={valueUnresolved || undefined}
           aria-describedby={valueUnresolved ? `${descriptionId}-unresolved` : undefined}
@@ -356,13 +458,35 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
         </p>
         {/* shouldFilter=false: we handle filtering ourselves so search targets model name only */}
         <Command shouldFilter={false}>
+          {/* data-no-focus-ring: the sanctioned opt-out for a composite widget
+              whose focus is shown by its parent surface (globals.css, "Central
+              focus ring"). This input is auto-focused the instant the popover
+              opens and is the only focusable thing in it, so the gold ring
+              fires immediately on every open and boxes a field the bordered
+              popover already frames — noise, not a focus cue. Same rationale
+              as the chat textarea inside the composer card. Operator-requested
+              2026-08-13. */}
           <CommandInput
+            data-no-focus-ring
             placeholder="Search models..."
             value={query}
             onValueChange={setQuery}
           />
           <CommandList>
-            <CommandEmpty>No models found.</CommandEmpty>
+            {catalogStatus === 'loading' ? (
+              <div
+                className="flex items-center gap-2 px-3 py-6 text-sm"
+                style={{ color: 'var(--color-muted)' }}
+                role="status"
+                aria-live="polite"
+                data-testid={triggerTestId ? `${triggerTestId}-loading` : undefined}
+              >
+                <CircleNotch size={14} className="animate-spin shrink-0" aria-hidden="true" />
+                <span>Loading models…</span>
+              </div>
+            ) : (
+              <CommandEmpty>No models found.</CommandEmpty>
+            )}
             {useGrouped ? (
               // ≥2 providers: render one CommandGroup per provider with a heading
               groupsWithModels.map((group) => {

@@ -136,12 +136,12 @@ type RelaySession interface {
 // viewerRemover is the optional RelaySession capability for learning about a
 // RELAY-SIDE-ONLY viewer eviction (a terminal ICE/PeerConnection state, or an
 // unrecovered Disconnected timeout) -- see webrtc.Session.SetOnViewerRemoved's
-// doc comment for the full incident this closes ("nothing resumes the JPEG
-// screencast once WebRTC dies mid-session with the signaling connection
-// still open" -- the browser_ws connection and the JPEG live-view attachment
-// both stay alive on an ICE failure, per the SPA's fallback contract, so no
-// browser_detach frame ever arrives to trigger the existing AddViewer/
-// RemoveViewer/Stop/HandleViewerOffer reconcile call sites).
+// doc comment for the full incident this closes ("nothing removes this
+// session's stale viewer registration once WebRTC dies mid-session with the
+// signaling connection still open" -- the browser_ws connection stays alive
+// on an ICE failure, so no browser_detach frame ever arrives to trigger the
+// existing AddViewer/RemoveViewer/Stop cleanup call sites, and the grace-stop
+// timer never arms for a viewer that's actually gone).
 //
 // GAP 2 fix-wave finding: the callback additionally receives the relay's own
 // identity handle for the evicted registration (dynamically a
@@ -267,13 +267,16 @@ type CaptureSession struct {
 	mu sync.Mutex
 	// startOnce/startErr collapse concurrent Start() callers into exactly one
 	// startEncoder invocation — see Start's doc comment.
-	startOnce  sync.Once
-	startErr   error
-	extVersion string
-	lastPingAt time.Time
-	tabCtx     context.Context
-	tabCancel  context.CancelFunc
-	started    bool
+	startOnce sync.Once
+	startErr  error
+	// captureScale is the controlling viewer's devicePixelRatio (see
+	// SetCaptureScale). Guarded by mu. Zero means "never set" -> treated as 1.
+	captureScale float64
+	extVersion   string
+	lastPingAt   time.Time
+	tabCtx       context.Context
+	tabCancel    context.CancelFunc
+	started      bool
 	// starting is true only for the narrow window between Start() entering
 	// its one-time startOnce.Do body and cs.startEncoder returning (success
 	// or failure) — see IsStarting's doc comment for why the gateway's
@@ -318,6 +321,31 @@ type CaptureSession struct {
 	// comment. Lets a caller (the gateway's encoder-liveness watchdog)
 	// select on session lifetime without a redundant onStopped wiring.
 	done chan struct{}
+
+	// tabChangeRecaptureRunning/Pending coalesce concurrent
+	// RecaptureForTabChange calls onto a SINGLE background worker — see that
+	// method's doc comment. Guarded by mu.
+	tabChangeRecaptureRunning bool
+	tabChangeRecapturePending bool
+
+	// tabChangeRecaptureW/H carry the CDP-verified CSS viewport the NEXT
+	// worker pass should hand the encoder (0,0 = "no measurement to offer",
+	// same convention as RecaptureAt). Written by every
+	// RecaptureForTabChangeAt call — including one that only coalesces into a
+	// running worker — and read fresh at the top of each pass, so a burst of
+	// tab changes converges on the LAST caller's geometry rather than
+	// replaying the first one's. Guarded by mu.
+	tabChangeRecaptureW int
+	tabChangeRecaptureH int
+
+	// foregroundAssertFn is the test seam for the CDP foreground re-assert
+	// RecaptureForTabChange performs (production: bringAgentTabToFront).
+	// Mirrors BrowserManager.tabFocusFn's rationale exactly: the fake tab
+	// contexts unit tests build have no CDP connection behind them, so the
+	// real chromedp.Run inside bringAgentTabToFront would burn its whole
+	// bringToFrontTimeout budget rather than doing anything observable. nil
+	// in production. Read under mu, invoked with NO lock held.
+	foregroundAssertFn func(ctx context.Context) bool
 }
 
 // NewCaptureSession constructs a production CaptureSession: mgr is the
@@ -714,9 +742,12 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) bool {
 		// threading ctx into runCtx here.
 		runCtx, cancel := context.WithTimeout(tabCtx, bringToFrontTimeout)
 		defer cancel()
-		if runErr := chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
-			return page.BringToFront().Do(c)
-		})); runErr != nil {
+		// foregroundTabActions (manager.go), NOT a local bringToFront+focus
+		// pair: this used to be the ONLY place focus emulation was applied,
+		// so the tab-switch path gave a captured tab a DIFFERENT treatment
+		// and one browser_switch_tab undid half of what capture start did
+		// (review finding F9, 2026-08-13). One definition, every path.
+		if runErr := chromedp.Run(runCtx, foregroundTabActions()...); runErr != nil {
 			cs.logf(
 				"capture[%s]: bring agent tab to front failed (capture may fall back to first-tab resolution): %v",
 				cs.agentID,
@@ -1007,25 +1038,6 @@ type ViewerAttachHandle struct {
 // *ViewerAttachHandle (never nil) identifying this specific attempt — pass
 // it to CleanupViewerOffer, NOT the raw viewerID, when tearing down a failed
 // or superseded-before-commit offer.
-//
-// FIX WAVE A finding 2: reconciles the JPEG screencast pause decision again
-// on a successful return, not just on the AddViewer/RemoveViewer/Stop viewer-
-// set-change events ReconcileScreencast's other call sites already cover.
-// This closes a real gap: for a BRAND NEW capture session (the ordinary
-// single-viewer case), AddViewer runs BEFORE the ingest side has connected at
-// all, so its own ReconcileScreencast call is guaranteed to observe
-// Stats().HasVideo == false and correctly leave the JPEG screencast running
-// (see TestCaptureSession_ReconcileScreencast_StaysResumedWhenVideoNotFlowingYet)
-// — and nothing else ever re-checked afterward, so BOTH the CDP screencast
-// encode and the WebRTC encode ran for the ENTIRE session even once video was
-// flowing (the "choppy input under heavy video" UAT regression). The relay's
-// own waitForTracks (pkg/tools/browser/webrtc/viewer.go) blocks until the
-// ingest video track exists before HandleViewerOffer can ever return a
-// success answer, so a nil err here is exactly the moment this session's
-// video-flowing transition (false->true) becomes observable — reconciling
-// right here catches it unconditionally, independent of whether this was the
-// viewer whose AddViewer call happened to run before or after that
-// transition.
 func (cs *CaptureSession) HandleViewerOffer(
 	viewerID, sdp string,
 	gen uint64,
@@ -1049,9 +1061,6 @@ func (cs *CaptureSession) HandleViewerOffer(
 	// CloseViewerIfCurrent branch will need to find in order to close it.
 	cs.recordViewerRelayHandle(viewerID, gen, relayHandle)
 	handle = &ViewerAttachHandle{viewerID: viewerID, gen: gen, relay: relayHandle}
-	if err == nil {
-		cs.ReconcileScreencast()
-	}
 	return answer, handle, err
 }
 
@@ -1141,8 +1150,7 @@ func (cs *CaptureSession) removeViewerByRelayHandle(viewerID string, relayHandle
 //     closes+evicts it via the SAME identity-checked path
 //     (webrtc.Session.removeViewer) a relay-side ICE eviction uses — which
 //     also fires the onViewerRemoved notification that keeps
-//     CaptureSession.viewers (and the JPEG-screencast reconcile decision) in
-//     sync for THIS generation.
+//     CaptureSession.viewers in sync for THIS generation.
 //   - CaptureSession-side: RemoveViewerIfCurrent only removes viewerID's
 //     entry if handle.gen still matches the CURRENTLY-registered generation
 //     — a no-op if a newer AddViewer call for the same viewerID (a winning
@@ -1253,9 +1261,170 @@ func (cs *CaptureSession) Recapture() {
 //
 // Safe to call with no ingest connection bound (a no-op send) or no relay
 // tracks yet (SignalRecapture is itself a no-op then, per its doc comment).
+// SetCaptureScale records the deviceScaleFactor the captured tab renders at
+// (the controlling viewer's window.devicePixelRatio, threaded through the
+// viewport frame — the same source SetViewport's Emulation override uses).
+// The gateway's ingest send closure reads it back via CaptureScale when
+// building a recapture control frame, so the encoder can size its tabCapture
+// constraints in PHYSICAL pixels. Values below 1 (including the zero value)
+// are treated as 1 by CaptureScale — capture-at-CSS-resolution, the pre-fix
+// behavior — so an SPA that never sends a scale changes nothing.
+func (cs *CaptureSession) SetCaptureScale(scale float64) {
+	cs.mu.Lock()
+	cs.captureScale = scale
+	cs.mu.Unlock()
+}
+
+// CaptureScale returns the last SetCaptureScale value, clamped to >= 1.
+func (cs *CaptureSession) CaptureScale() float64 {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.captureScale < 1 {
+		return 1
+	}
+	return cs.captureScale
+}
+
 func (cs *CaptureSession) RecaptureAt(expectedW, expectedH int) {
 	cs.requestControl("recapture", nil, expectedW, expectedH)
 	cs.relay.SignalRecapture()
+}
+
+// RecaptureForTabChange is the recapture entry point for "the active tab
+// moved", as opposed to "the viewport was resized" (RecaptureAt). It does
+// everything Recapture() does AND first re-asserts this agent's CURRENT
+// model-active tab as Chrome's foreground tab, so the encoder's own
+// chrome.tabs.query({active: true, lastFocusedWindow: true}) resolution
+// (captureext/embedded/encoder.js findActiveTargetTab) cannot answer with a
+// tab this manager no longer considers active.
+//
+// Why a SEPARATE entry point rather than putting the re-assert in
+// RecaptureAt (measured trade-off, 2026-08-15): RecaptureAt is also the
+// viewport-resize path, which the SPA drives at drag frequency
+// (pkg/gateway/browser_ws.go's handleViewport, and its Recapture() fallback
+// branches when the CDP resize handle fails). Adding a CDP round trip to
+// EVERY recapture would put a Page.bringToFront on that high-frequency path
+// — on a 2-CPU hosted box, CDP starvation is already what produced the
+// measured "auto-attach: failed to adopt new tab target ... timed out after
+// 20s". A tab change is a human clicking a tab strip: low frequency, one
+// extra round trip, paid only where it buys something. So the resize path
+// stays exactly as cheap as it was, and only this path pays.
+//
+// Why the re-assert is not redundant with the caller's own
+// activateTabInChrome (manager.go): that call is best-effort and its failure
+// is a WARN log, nothing more — the exact silence this whole defect class
+// lives in. This re-assert is an independent second attempt that resolves
+// the tab through mgr.Session (which recreates a dead tab context) rather
+// than through a context captured earlier, and it completes BEFORE the
+// control frame is pushed, so the encoder never re-queries Chrome ahead of
+// it.
+//
+// Runs on its own goroutine so a slow or wedged CDP round trip cannot add
+// latency to the caller's tab switch, and coalesces: a second call while a
+// worker is in flight sets a pending flag instead of spawning a second
+// goroutine, and the worker loops once more. Coalescing is SAFE rather than
+// lossy because the worker resolves the then-current model-active tab from
+// scratch on each pass — two rapid switches converge on the last one, which
+// is the correct answer anyway. A no-op once Stop() has run.
+//
+// Carries no expected geometry — see RecaptureForTabChangeAt for the variant
+// a caller that HAS a CDP-verified measurement (live.go's post-viewport-
+// re-apply tab-change path) must prefer.
+func (cs *CaptureSession) RecaptureForTabChange() {
+	cs.RecaptureForTabChangeAt(0, 0)
+}
+
+// RecaptureForTabChangeAt is RecaptureForTabChange carrying the CDP-verified
+// CSS viewport the encoder should converge on (0,0 = absent — see
+// RecaptureAt's doc comment for why a verified measurement beats the
+// encoder's own chrome.tabs.get stability poll, which two equally-stale reads
+// can satisfy).
+//
+// Why this exists (round-2 finding F3, 2026-08-16): the foreground re-assert
+// was reachable ONLY from BrowserManager.SwitchTab's "the model did not move"
+// branch — the rare recovery path — while the ORDINARY tab switch went
+// LiveView.onTabsChanged -> plain Recapture(), with no re-assert at all. That
+// is backwards: the re-assert exists precisely because
+// BrowserManager.activateTabInChrome is best-effort and its failure is a WARN
+// log and nothing more, so the path a user takes on every single tab click is
+// the one that most needs a second, independent attempt. live.go's tab-change
+// path now comes through here — and it has a verified viewport to offer by
+// then (it re-applies the panel's viewport to the new target first, because
+// Chrome's deviceScaleFactor override is per TARGET), which is why the
+// geometry-carrying variant is the one it needs.
+//
+// The dimensions are stored rather than captured by the worker goroutine, so
+// a call that merely coalesces into a running worker still gets ITS geometry
+// used on the next pass.
+func (cs *CaptureSession) RecaptureForTabChangeAt(expectedW, expectedH int) {
+	cs.mu.Lock()
+	if cs.stopped {
+		cs.mu.Unlock()
+		return
+	}
+	cs.tabChangeRecaptureW, cs.tabChangeRecaptureH = expectedW, expectedH
+	if cs.tabChangeRecaptureRunning {
+		cs.tabChangeRecapturePending = true
+		cs.mu.Unlock()
+		return
+	}
+	cs.tabChangeRecaptureRunning = true
+	cs.mu.Unlock()
+
+	// Prime attached viewers for the coming gap NOW, on the caller's own
+	// goroutine, rather than behind the foreground re-assert. SignalRecapture
+	// is pure relay-side signalling (an immediate + bursted PLI) with no CDP
+	// in it, and there is no reason to make a viewer wait for a browser round
+	// trip before it starts recovering. The ENCODER's half — the control frame
+	// that makes it re-bind chrome.tabCapture — is the half that genuinely
+	// must come after the re-assert, and that is the half the worker still
+	// owns. Exactly one signal per pass either way; only the first one moved
+	// earlier.
+	cs.relay.SignalRecapture()
+
+	go func() {
+		firstPass := true
+		for {
+			cs.mu.Lock()
+			w, h := cs.tabChangeRecaptureW, cs.tabChangeRecaptureH
+			cs.mu.Unlock()
+
+			if !firstPass {
+				cs.relay.SignalRecapture()
+			}
+			firstPass = false
+
+			cs.assertForeground(context.Background())
+			cs.requestControl("recapture", nil, w, h)
+
+			cs.mu.Lock()
+			if !cs.tabChangeRecapturePending || cs.stopped {
+				cs.tabChangeRecaptureRunning = false
+				cs.tabChangeRecapturePending = false
+				cs.mu.Unlock()
+				return
+			}
+			cs.tabChangeRecapturePending = false
+			cs.mu.Unlock()
+		}
+	}()
+}
+
+// assertForeground routes the foreground re-assert through the
+// foregroundAssertFn test seam when one is installed, and to the real
+// bringAgentTabToFront otherwise. Best-effort in both cases: the boolean is
+// informational (bringAgentTabToFront logs its own failures), and a false
+// result never blocks the recapture — a recapture that binds the wrong tab
+// is still strictly better than no recapture at all, which is the state that
+// left the picture frozen on the old tab indefinitely.
+func (cs *CaptureSession) assertForeground(ctx context.Context) bool {
+	cs.mu.Lock()
+	fn := cs.foregroundAssertFn
+	cs.mu.Unlock()
+	if fn != nil {
+		return fn(ctx)
+	}
+	return cs.bringAgentTabToFront(ctx)
 }
 
 // requestControl pushes a browser_capture_control{action, reason,
@@ -1283,9 +1452,7 @@ func (cs *CaptureSession) requestControl(action string, reason *string, expected
 // AddViewer registers viewerID as an attached WebRTC viewer, canceling any
 // pending grace-stop timer (wave-plan W2-A item 4). Idempotent for an
 // already-registered viewerID (a fresh generation is still minted — see
-// below). Fix-wave finding 3: also recomputes whether the JPEG screencast
-// should now be paused (this new WebRTC viewer may be the one that makes
-// every JPEG-attached viewer WebRTC-covered) — see ReconcileScreencast.
+// below).
 //
 // Returns a generation token unique to THIS call, stored as viewerID's
 // current registration — pass it to RemoveViewerIfCurrent (via
@@ -1314,7 +1481,6 @@ func (cs *CaptureSession) AddViewer(viewerID string) uint64 {
 		cs.stopTimer = nil
 	}
 	cs.mu.Unlock()
-	cs.ReconcileScreencast()
 	return gen
 }
 
@@ -1354,17 +1520,12 @@ func (cs *CaptureSession) armGraceStopLocked() {
 // when it fires — giving a viewer that's merely reloading the panel a
 // window to reconnect without tearing down and re-provisioning the whole
 // encoder page. A subsequent AddViewer within the grace window cancels the
-// timer. Fix-wave finding 3: also recomputes the JPEG screencast pause state
-// — a departing WebRTC viewer (e.g. its ICE connection failed and it fell
-// back to JPEG per ADR-047 D3's per-viewer degradation) may be the one still
-// attached to the JPEG live view, which must resume the screencast for it.
-// See ReconcileScreencast.
+// timer.
 func (cs *CaptureSession) RemoveViewer(viewerID string) {
 	cs.mu.Lock()
 	delete(cs.viewers, viewerID)
 	cs.armGraceStopLocked()
 	cs.mu.Unlock()
-	cs.ReconcileScreencast()
 }
 
 // RemoveViewerIfCurrent unregisters viewerID ONLY if gen — the generation
@@ -1384,54 +1545,6 @@ func (cs *CaptureSession) RemoveViewerIfCurrent(viewerID string, gen uint64) {
 	delete(cs.viewers, viewerID)
 	cs.armGraceStopLocked()
 	cs.mu.Unlock()
-	cs.ReconcileScreencast()
-}
-
-// ReconcileScreencast recomputes whether the agent's JPEG screencast
-// (pkg/tools/browser/live.go) should be paused (ADR-047 fix-wave finding 3,
-// UAT: "inputs feel dead / choppy under heavy video" traced to pod CPU
-// saturation from running BOTH the CDP screencast and the WebRTC encoder
-// simultaneously). Paused when this session has at least one WebRTC viewer
-// AND the relay reports video actually flowing (Stats().HasVideo) AND EVERY
-// viewer currently attached to the JPEG live view (cs.mgr.Live().
-// AttachedViewerIDs) is ALSO one of this session's own WebRTC viewers — i.e.
-// nobody is relying on the JPEG stream for pixels right now. Resumed in
-// every other case: this session has stopped, no WebRTC viewers yet, video
-// not flowing yet, or at least one JPEG-only (mixed-viewer, e.g. a
-// per-viewer ICE fallback per ADR-047 D3) attachment remains.
-//
-// Called from this session's own viewer-set changes (AddViewer/RemoveViewer/
-// Stop above) AND exported for the gateway to call from
-// browser_ws.go's handleAttach/detach when the JPEG-viewer set changes on
-// ITS side instead — a plain browser_attach/browser_detach that never
-// touches WebRTC at all is invisible to this session otherwise. A safe no-op
-// if cs.mgr is nil (NewCaptureSessionWithDeps(nil, ...) is a documented,
-// supported test-construction pattern — see its doc comment).
-func (cs *CaptureSession) ReconcileScreencast() {
-	if cs.mgr == nil {
-		return
-	}
-	live := cs.mgr.Live()
-
-	cs.mu.Lock()
-	stopped := cs.stopped
-	webrtcViewers := make(map[string]struct{}, len(cs.viewers))
-	for id := range cs.viewers {
-		webrtcViewers[id] = struct{}{}
-	}
-	cs.mu.Unlock()
-
-	if stopped || len(webrtcViewers) == 0 || !cs.relay.Stats().HasVideo {
-		live.ResumeScreencast(DefaultSessionID)
-		return
-	}
-	for _, id := range live.AttachedViewerIDs(DefaultSessionID) {
-		if _, ok := webrtcViewers[id]; !ok {
-			live.ResumeScreencast(DefaultSessionID)
-			return
-		}
-	}
-	live.PauseScreencast(DefaultSessionID)
 }
 
 // ViewerCount returns the current number of attached WebRTC viewers.
@@ -1493,14 +1606,6 @@ func (cs *CaptureSession) Stop() {
 	if cs.mgr != nil {
 		cs.mgr.ClearCaptureSession(cs)
 	}
-	// Fix-wave finding 3: unconditionally resume the JPEG screencast now
-	// that WebRTC capture has stopped entirely. ReconcileScreencast's own
-	// cs.stopped check (true by this point, set at the top of Stop()) always
-	// resolves to "resume" here regardless of cs.viewers' stale contents
-	// (Stop() deliberately does not clear cs.viewers — see ViewerIDs' doc
-	// comment), and safely no-ops if cs.mgr is nil (test-constructed
-	// sessions).
-	cs.ReconcileScreencast()
 	cs.logf("capture[%s]: stopped", cs.agentID)
 	if onStopped != nil {
 		onStopped()

@@ -24,11 +24,25 @@ func newCapabilityTestManager(t *testing.T) *BrowserManager {
 // test, restoring the previous value on cleanup — lets the platform-matrix
 // rows below exercise every platform (including macOS/Windows) regardless of
 // the host actually running the test.
+// It also PINS darwinAudioVerified to false. Every caller of this helper
+// asserts the per-OS gate itself — "an OS that has not had its own audio
+// verification is not capable" — which is a statement about the GATE, not
+// about whichever value the production default happens to hold. Leaving it
+// unpinned made these tests silently depend on that default: when the darwin
+// AC-1 spike was verified on 2026-08-12 and the default flipped to true, five
+// of them failed, having never intended to assert anything about darwin's
+// verification status in the first place.
+//
+// Pinning keeps them testing the gate. The verified-darwin case is covered
+// separately and explicitly by capability_phase3_test.go's withDarwinAudioSeam.
 func withCapabilitySeams(t *testing.T, goos string) {
 	t.Helper()
 	prev := goosForCapability
 	goosForCapability = goos
 	t.Cleanup(func() { goosForCapability = prev })
+	prevAudio := darwinAudioVerified
+	darwinAudioVerified = false
+	t.Cleanup(func() { darwinAudioVerified = prevAudio })
 }
 
 // TestVideoCapability_DS5Table exercises the WebRTC capability-decision

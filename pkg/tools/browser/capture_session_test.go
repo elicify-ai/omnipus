@@ -17,9 +17,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/captureext"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 )
+
+// newCaptureTestManager builds a real BrowserManager (no chromedp/CDP
+// machinery touched by anything in this file — every CaptureSession test
+// uses a fake RelaySession/EncoderStarter) for the Shutdown/
+// invalidateConnection orphaned-capture-session tests below, which need a
+// real manager to call m.Shutdown()/m.invalidateConnection() on.
+func newCaptureTestManager(t *testing.T) *BrowserManager {
+	t.Helper()
+	cfg, err := DefaultConfig()
+	if err != nil {
+		t.Fatalf("DefaultConfig: %v", err)
+	}
+	mgr, err := NewBrowserManager(cfg, security.NewSSRFChecker(nil))
+	if err != nil {
+		t.Fatalf("NewBrowserManager: %v", err)
+	}
+	return mgr
+}
 
 // fakeRelay is a test double for RelaySession.
 type fakeRelay struct {
@@ -672,6 +691,63 @@ func TestCaptureSession_AddViewerCancelsGraceTimer(t *testing.T) {
 	}
 }
 
+// TestCaptureSession_RelayViewerEviction_RemovesViewerAndArmsGraceTimer
+// proves CaptureSession's consumption of a RELAY-SIDE-ONLY viewer eviction
+// (ICE failure / disconnect-grace timeout) — no gateway-driven RemoveViewer
+// or browser_detach ever happens; the relay itself notifies via
+// SetOnViewerRemoved, wired to cs.removeViewerByRelayHandle
+// (newCaptureSessionWithDeps). Uses fakeRelay's SetOnViewerRemoved/
+// triggerViewerRemoved to simulate the eviction without real Pion/ICE
+// machinery — the real relay's OWN identity-checked notification wiring
+// (removeViewer -> notifyViewerRemoved) has its own dedicated Go<->Go proof
+// in pkg/tools/browser/webrtc/session_test.go; this test isolates
+// CaptureSession's consumption of that notification: the evicted viewer must
+// actually be removed from cs.viewers (ViewerCount drops to 0) and the
+// grace-stop timer must arm exactly as it would for an explicit
+// RemoveViewer, so an orphaned WebRTC session doesn't linger forever because
+// nobody ever told it its one viewer is gone.
+func TestCaptureSession_RelayViewerEviction_RemovesViewerAndArmsGraceTimer(t *testing.T) {
+	orig := captureGracePeriod
+	captureGracePeriod = 30 * time.Millisecond
+	defer func() { captureGracePeriod = orig }()
+
+	relay := &fakeRelay{}
+	var calls int32
+	cs := newTestCaptureSession(t, relay, fakeEncoderStarter(&calls, nil))
+	if _, err := cs.Start(context.Background(), "ws://127.0.0.1:1/api/v1/browser/capture-ingest"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	cs.AddViewer("webrtc-only-viewer")
+	if got := cs.ViewerCount(); got != 1 {
+		t.Fatalf("setup: ViewerCount = %d, want 1", got)
+	}
+
+	// Simulate the relay itself evicting "webrtc-only-viewer" (ICE failure /
+	// disconnect timeout) -- no gateway-driven RemoveViewer/browser_detach
+	// ever happens.
+	relay.triggerViewerRemoved("webrtc-only-viewer")
+
+	if got := cs.ViewerCount(); got != 0 {
+		t.Fatalf(
+			"ViewerCount after relay-side eviction = %d, want 0 (CaptureSession never learned the viewer left)",
+			got,
+		)
+	}
+
+	// The grace-stop timer must have armed exactly as it would for an
+	// explicit RemoveViewer — otherwise a relay-side eviction leaves the
+	// capture session (and its encoder tab) running forever with zero
+	// viewers and nothing to ever stop it.
+	deadline := time.Now().Add(2 * time.Second)
+	for relay.closeCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := relay.closeCount(); got != 1 {
+		t.Fatalf("relay.Close called %d times after grace period, want 1 (Stop should have fired)", got)
+	}
+}
+
 func TestBrowserManager_CaptureSessionRegistryLifecycle(t *testing.T) {
 	m := &BrowserManager{}
 
@@ -825,7 +901,7 @@ func TestCaptureSession_ViewerIDs_SnapshotAndSurvivesStop(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBrowserManager_Shutdown_StopsOrphanedCaptureSession(t *testing.T) {
-	m := newReconcileTestManager(t)
+	m := newCaptureTestManager(t)
 
 	relay := &fakeRelay{}
 	var calls int32
@@ -864,7 +940,7 @@ func TestBrowserManager_Shutdown_StopsOrphanedCaptureSession(t *testing.T) {
 // common case) — m.CaptureSession() returning nil must not panic or alter
 // Shutdown's existing behavior.
 func TestBrowserManager_Shutdown_NoCaptureSessionIsNoop(t *testing.T) {
-	m := newReconcileTestManager(t)
+	m := newCaptureTestManager(t)
 	m.Shutdown() // must not panic
 	if m.CaptureSession() != nil {
 		t.Fatal("CaptureSession() on a manager that never had one should stay nil after Shutdown")
@@ -872,7 +948,7 @@ func TestBrowserManager_Shutdown_NoCaptureSessionIsNoop(t *testing.T) {
 }
 
 func TestBrowserManager_InvalidateConnection_StopsOrphanedCaptureSession(t *testing.T) {
-	m := newReconcileTestManager(t)
+	m := newCaptureTestManager(t)
 
 	relay := &fakeRelay{}
 	var calls int32

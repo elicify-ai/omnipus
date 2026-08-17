@@ -1,11 +1,14 @@
 /**
- * browserLiveWs.test.ts — BrowserLiveWsConnection tests (ADR-038 D1/D5, ADR-044).
+ * browserLiveWs.test.ts — BrowserLiveWsConnection tests (ADR-038 D1/D5, ADR-044,
+ * ADR-047).
  *
  * Covers: connect → browser_attach handshake (auth rides the same-origin
  * omnipus-session HttpOnly cookie — no client-sent auth frame, no JS-readable
- * token per ADR-044), frame parse/dispatch (browser_screencast /
- * browser_status / error), sendInput/sendControl/detach wire shapes, close-code
- * 1008 (no reconnect), and bounded reconnect on unexpected close.
+ * token per ADR-044), frame parse/dispatch (browser_status / browser_tabs /
+ * browser_webrtc_answer / browser_webrtc_state / error — NOT
+ * browser_screencast, the JPEG-fallback wire frame this socket no longer
+ * handles at all, see ADR-047), sendInput/sendControl/detach wire shapes,
+ * close-code 1008 (no reconnect), and bounded reconnect on unexpected close.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -50,7 +53,6 @@ MockWebSocket.CLOSED = 3
 
 function makeCallbacks() {
   return {
-    onScreencast: vi.fn(),
     onStatus: vi.fn(),
     onTabs: vi.fn(),
     onWebRTCAnswer: vi.fn(),
@@ -122,7 +124,12 @@ describe('BrowserLiveWsConnection — connect handshake', () => {
 })
 
 describe('BrowserLiveWsConnection — inbound frame dispatch', () => {
-  it('routes a browser_screencast frame to onScreencast', () => {
+  // ADR-047 — the JPEG screencast fallback was removed outright: this socket
+  // no longer recognizes browser_screencast at all, even a well-formed one —
+  // it is dropped exactly like any other frame type this socket doesn't
+  // understand (see the "chat-only frame type" coverage further down and the
+  // parseBrowserFrame describe block below).
+  it('drops a browser_screencast frame — no longer a recognized type on this socket', () => {
     const callbacks = makeCallbacks()
     const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', callbacks)
     conn.connect()
@@ -138,8 +145,8 @@ describe('BrowserLiveWsConnection — inbound frame dispatch', () => {
     }
     lastWsInstance.onmessage?.({ data: JSON.stringify(frame) })
 
-    expect(callbacks.onScreencast).toHaveBeenCalledWith(frame)
     expect(callbacks.onStatus).not.toHaveBeenCalled()
+    expect(callbacks.onTabs).not.toHaveBeenCalled()
   })
 
   it('routes a browser_status frame to onStatus', () => {
@@ -196,9 +203,8 @@ describe('BrowserLiveWsConnection — inbound frame dispatch', () => {
     callbacks.onError.mockClear()
 
     lastWsInstance.onmessage?.({ data: 'not json' })
-    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'browser_screencast', width: 1280 /* missing required fields */ }) })
+    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'browser_status' /* missing required state */ }) })
 
-    expect(callbacks.onScreencast).not.toHaveBeenCalled()
     expect(callbacks.onStatus).not.toHaveBeenCalled()
     expect(callbacks.onError).not.toHaveBeenCalled()
   })
@@ -221,7 +227,6 @@ describe('BrowserLiveWsConnection — inbound frame dispatch', () => {
     lastWsInstance.onmessage?.({ data: JSON.stringify(frame) })
 
     expect(callbacks.onTabs).toHaveBeenCalledWith(frame)
-    expect(callbacks.onScreencast).not.toHaveBeenCalled()
     expect(callbacks.onStatus).not.toHaveBeenCalled()
   })
 
@@ -235,7 +240,6 @@ describe('BrowserLiveWsConnection — inbound frame dispatch', () => {
     lastWsInstance.onmessage?.({ data: JSON.stringify(frame) })
 
     expect(callbacks.onWebRTCAnswer).toHaveBeenCalledWith(frame)
-    expect(callbacks.onScreencast).not.toHaveBeenCalled()
     expect(callbacks.onWebRTCState).not.toHaveBeenCalled()
   })
 
@@ -272,7 +276,6 @@ describe('BrowserLiveWsConnection — inbound frame dispatch', () => {
 
     lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'done', session_id: 'sess-1' }) })
 
-    expect(callbacks.onScreencast).not.toHaveBeenCalled()
     expect(callbacks.onStatus).not.toHaveBeenCalled()
   })
 })
@@ -480,7 +483,10 @@ describe('BrowserLiveWsConnection — close / reconnect', () => {
 })
 
 describe('parseBrowserFrame', () => {
-  it('accepts a valid browser_screencast payload', () => {
+  // ADR-047 — even a well-formed browser_screencast payload (the JPEG
+  // fallback's wire frame) is dropped: this socket no longer treats it as a
+  // recognized type at all.
+  it('drops a well-formed browser_screencast payload — not a recognized type on this socket', () => {
     const payload = {
       type: 'browser_screencast',
       session_id: 's1',
@@ -489,7 +495,7 @@ describe('parseBrowserFrame', () => {
       width: 100,
       height: 100,
     }
-    expect(parseBrowserFrame(JSON.stringify(payload))).toEqual(payload)
+    expect(parseBrowserFrame(JSON.stringify(payload))).toBeNull()
   })
 
   it('accepts a valid browser_tabs payload', () => {
@@ -581,9 +587,7 @@ describe('parseBrowserFrame — drop counter (LOW, fix-wave B, Constraint #8)', 
   it('does NOT increment for a valid, accepted frame', () => {
     const before = getBrowserFrameDropCount()
 
-    parseBrowserFrame(
-      JSON.stringify({ type: 'browser_screencast', session_id: 's1', seq: 0, data: 'abc', width: 1, height: 1 }),
-    )
+    parseBrowserFrame(JSON.stringify({ type: 'browser_status', state: 'idle' }))
 
     expect(getBrowserFrameDropCount()).toBe(before)
   })

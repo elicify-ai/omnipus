@@ -26,9 +26,7 @@ import (
 // confirms WarmUp creates no per-agent browser context or manager
 // registration (Task 2's "one shared Chrome, no per-agent launch" contract).
 func TestBrowserCoordinator_WarmUp_LaunchesRealChrome(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping real-Chrome integration test in -short mode")
-	}
+	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
 	coord := NewBrowserCoordinator(home, cfg, 5)
 	t.Cleanup(coord.Shutdown)
@@ -70,9 +68,7 @@ func TestBrowserCoordinator_WarmUp_LaunchesRealChrome(t *testing.T) {
 // call against an already-warm coordinator is a cheap no-op that resolves to
 // the SAME live Chrome, rather than launching a second process or erroring.
 func TestBrowserCoordinator_WarmUp_IdempotentSameChrome(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping real-Chrome integration test in -short mode")
-	}
+	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
 	coord := NewBrowserCoordinator(home, cfg, 5)
 	t.Cleanup(coord.Shutdown)
@@ -100,9 +96,7 @@ func TestBrowserCoordinator_WarmUp_IdempotentSameChrome(t *testing.T) {
 // reuses — i.e. warm-up genuinely pre-pays the cold-start cost rather than
 // warming an unrelated/throwaway instance.
 func TestBrowserCoordinator_WarmUp_ThenRegisterReusesSameChrome(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping real-Chrome integration test in -short mode")
-	}
+	skipIfNoBrowser(t)
 	cfg, home := newCoordinatorTestConfig(t)
 	coord := NewBrowserCoordinator(home, cfg, 5)
 	t.Cleanup(coord.Shutdown)

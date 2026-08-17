@@ -6,8 +6,8 @@ import { cn } from '@/lib/utils'
 import { humanizeToolName } from '@/lib/humanizeToolName'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall, shouldRenderToolCallInPanel } from '@/lib/toolVisibility'
-import { getToolBadgeStatusConfig, statusDot, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
-import { isDelegationFailure, policyAxisLabel, isFileExistsRefusal } from './tools/GenericToolCall'
+import { getToolBadgeStatusConfig, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
+import { detectToolResultSentinels } from './tools/toolResultSentinels'
 
 interface ToolCallBadgeProps {
   toolCall: ToolCall & { call_id: string }
@@ -63,20 +63,19 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
   // sit after every hook above and before the JSX return (Rules of Hooks).
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   const marshalErr = isMarshalErrorResult(toolCall.result)
-  // Ported from GenericToolCall.tsx (G17/BLOCKER 2): a denied delegation is
-  // an error-status result carrying the structured DelegationFailure
-  // sentinel as its `result`. Detected here too so the historical-list /
-  // SubagentBlock-step badge (this component) renders the SAME amber
-  // "Delegation denied · <axis>" chip GenericToolCall's live/replay path
-  // does, instead of a generic red "Failed".
-  const delegationFailure = isDelegationFailure(toolCall.result) ? toolCall.result : null
-  // Same reasoning for the write_file precondition refusal (ADR-059 W5). This
-  // surface is the one that most needed it: ToolCallBadge renders SubagentBlock's
-  // nested steps — a DELEGATED worker's tool calls — which is exactly the case
-  // the gateway's own emitNestedToolCalls fix was written to carry. Without a
-  // branch here the backend delivers the structured object and this component
-  // drops it: red "Failed" plus the raw JSON in the expanded body.
-  const fileExistsRefusal = isFileExistsRefusal(toolCall.result) ? toolCall.result : null
+  // F1: the three structured-failure sentinels (delegation-denied,
+  // file-exists refusal, permission-denied) are detected by the ONE shared
+  // module (./tools/toolResultSentinels) GenericToolCall.tsx also uses —
+  // previously this component carried its own byte-identical copy of all
+  // three detectors plus their amber statusConfig branches. Detected here so
+  // the historical-list / SubagentBlock-step badge (this component) renders
+  // the SAME amber "Delegation denied · <axis>" / "File already exists" /
+  // "Permission denied" chip GenericToolCall's live/replay path does,
+  // instead of a generic red "Failed" — this surface is the one that most
+  // needed it: ToolCallBadge renders SubagentBlock's nested steps, a
+  // DELEGATED worker's tool calls, which is exactly where a
+  // filesystem-scope or tool-policy denial reaches the model.
+  const sentinels = detectToolResultSentinels(toolCall.result)
   const isVisible =
     surface === 'panel'
       ? shouldRenderToolCallInPanel(toolCall.tool, verboseChatEnabled)
@@ -84,27 +83,20 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
           toolCall.tool,
           toolCall.params,
           verboseChatEnabled,
-          toolCall.status === 'error' || marshalErr || !!delegationFailure || !!fileExistsRefusal,
+          toolCall.status === 'error' || marshalErr || sentinels.any,
         )
   if (!isVisible) {
     return null
   }
 
-  const config: ToolBadgeStatusConfig = delegationFailure
-    ? {
-        // No equivalent status in getToolBadgeStatusConfig's 4-value domain
-        // (see toolStatusConfig.tsx's file header) — reuses the shared
-        // `statusDot` helper so its dot matches the other four exactly,
-        // mirroring GenericToolCall's own local delegationFailure branch.
-        indicator: statusDot('bg-[var(--color-warning)]'),
-        label: `Delegation denied · ${policyAxisLabel(delegationFailure.policy)}`,
-      }
-    : fileExistsRefusal
-      ? {
-          indicator: statusDot('bg-[var(--color-warning)]'),
-          label: 'File already exists',
-        }
-      : getToolBadgeStatusConfig(toolCall.status, { durationMs: toolCall.duration_ms })
+  // F1: sentinel detection sits ABOVE all four ordinary statuses
+  // (running/success/error/cancelled) — a sentinel result always wins here,
+  // unlike GenericToolCall.tsx which checks isRunning/isCancelled FIRST (see
+  // that file's own precedence comment). This is the two callers'
+  // deliberately different precedence the shared module's doc comment
+  // describes — do not "fix" this to match GenericToolCall's ordering.
+  const config: ToolBadgeStatusConfig =
+    sentinels.statusConfig ?? getToolBadgeStatusConfig(toolCall.status, { durationMs: toolCall.duration_ms })
   const isRunning = toolCall.status === 'running'
 
   return (

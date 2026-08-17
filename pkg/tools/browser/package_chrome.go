@@ -77,14 +77,33 @@ var packageChromeRootForTest string
 var osExecutable = os.Executable
 
 // packageChromeRootCandidates returns every candidate package-root path
-// the resolver should inspect, in priority order. The list covers the three
-// package layouts produced by the goreleaser archive, install.sh FHS layout,
-// and deb/rpm nfpm mapping. The hand-cp InstallRootForProfileDir(profileDir)
+// the resolver should inspect, in priority order. It covers the package
+// layouts produced by the goreleaser archive, install.sh FHS layout, and
+// deb/rpm nfpm mapping. The hand-cp InstallRootForProfileDir(profileDir)
 // path is handled by the resolver's managed-download step, not this probe.
+//
+// NEITHER THE LENGTH NOR THE MEANING OF A GIVEN INDEX IS CONSTANT ACROSS
+// PLATFORMS — do not index positionally past 0 without checking len(), and
+// do not assume slot 1 is the FHS share/ layout. Callers that need a
+// specific layout should select by path shape, not by index.
+//
+// linux and every other non-darwin platform — 3 candidates:
 //
 //  1. <dir(exe)>/../chromium                    — goreleaser archive layout
 //  2. <dir(exe)>/../share/omnipus/chromium      — install.sh FHS layout
 //  3. <dir(exe)>/../libexec/omnipus/chromium    — deb/rpm nfpm mapping
+//
+// darwin — 2 candidates, and slot 1 means something entirely different
+// (there is no FHS share/ or libexec/ layout on macOS; see the ADR-052
+// Phase 3 / C3 rationale in the darwin branch below):
+//
+//  1. <dir(exe)>/../chromium                    — non-.app installs (homebrew,
+//     dev builds) and the in-bundle Contents/chromium layout
+//  2. <dir(exe)>/../../../chromium              — sibling-of-<Gateway.app>
+//
+// Returns nil — not an empty non-nil slice, and with no error — when
+// os.Executable() fails; callers treat that as "no package Chrome available"
+// and fall through to the managed-download path.
 func packageChromeRootCandidates() []string {
 	exe, err := osExecutable()
 	if err != nil {
@@ -485,7 +504,7 @@ func fileInfoInode(info os.FileInfo) uint64 {
 		return 0
 	}
 	value := reflect.ValueOf(info.Sys())
-	if value.Kind() == reflect.Ptr {
+	if value.Kind() == reflect.Pointer {
 		if value.IsNil() {
 			return 0
 		}

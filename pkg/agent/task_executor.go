@@ -210,6 +210,24 @@ type TaskExecutor struct {
 	// three CI matrix legs before this gate existed). Never reset: a drained
 	// executor belongs to an AgentLoop that is shutting down for good.
 	draining atomic.Bool
+
+	// dispatchGate makes "is intake still open?" and "register this dispatch on
+	// wg" ONE atomic step with respect to Drain's "close intake, then wait".
+	//
+	// The two halves cannot be separate: sync.WaitGroup panics
+	// ("Add called concurrently with Wait", sync/waitgroup.go) when an Add takes
+	// the counter 0 -> N while a waiter is parked, and Drain parks exactly such
+	// a waiter for the whole drain budget. Checking `draining` BEFORE the Add
+	// does not close that window either — Drain's Store can land between the
+	// check and the Add — and checking AFTER (the previous shape) guaranteed a
+	// refused dispatch still drove the counter 0 -> 1, which is the panicking
+	// transition. Only mutual exclusion removes it.
+	//
+	// Dispatchers take RLock (concurrent with each other, uncontended in the
+	// steady state); Drain takes Lock around the Store alone, never across
+	// wg.Wait. Held for two atomic ops and never across I/O or a lock of
+	// te.mu, so it cannot participate in a lock cycle.
+	dispatchGate sync.RWMutex
 }
 
 // evidenceGateMaxConsecutiveRejections is N in ADR-052 FR-035's "after N
@@ -258,11 +276,38 @@ func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
 // this closes). Bounded so a wedged execution (a mock/real LLM that never
 // returns) can never hang Close() forever; on timeout it logs a warning and
 // returns so the rest of teardown can proceed.
+// enterDispatch registers one in-flight dispatch against te.wg unless intake
+// has been closed by Drain. Returns false when the executor is draining, in
+// which case NOTHING was added and the caller must refuse WITHOUT calling
+// te.wg.Done.
+//
+// This is the only place outside a goroutine-launch site that may touch
+// te.wg.Add for a dispatch entry point — see dispatchGate's doc comment for
+// why the check and the Add must not be separated.
+func (te *TaskExecutor) enterDispatch() bool {
+	te.dispatchGate.RLock()
+	defer te.dispatchGate.RUnlock()
+	if te.draining.Load() {
+		return false
+	}
+	te.wg.Add(1)
+	return true
+}
+
 func (te *TaskExecutor) Drain(budget time.Duration) {
 	// Close intake FIRST — see draining's doc comment: with intake open the
 	// goal-loop's synchronous redispatch chains keep wg forever non-empty
 	// and spin against half-torn-down stores.
+	//
+	// Under dispatchGate's write lock so it cannot interleave with an
+	// enterDispatch that has already passed its draining check but not yet
+	// reached its Add — that interleaving is what used to panic wg.Wait below.
+	// The lock is released BEFORE wg.Wait: holding it across the wait would
+	// block the very dispatchers whose Done() the wait depends on.
+	te.dispatchGate.Lock()
 	te.draining.Store(true)
+	te.dispatchGate.Unlock()
+
 	done := make(chan struct{})
 	go func() {
 		te.wg.Wait()
@@ -494,11 +539,10 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string, occurren
 	// refuse before touching any store. The goroutine launched below (if any)
 	// gets its OWN independent Add(1)/Done() pair (te.wg's doc comment) that
 	// this defer does not double-count.
-	te.wg.Add(1)
-	defer te.wg.Done()
-	if te.draining.Load() {
+	if !te.enterDispatch() {
 		return ErrExecutorDraining
 	}
+	defer te.wg.Done()
 	return te.executeTask(ctx, taskID, occurrenceMs, task.RunKindScheduled, false)
 }
 
@@ -532,11 +576,10 @@ func (te *TaskExecutor) executeTaskPlanVerified(ctx context.Context, taskID stri
 	// Same wg-before-draining gate as ExecuteTask/StartTaskNow (fix-wave
 	// finding #1) — this bypass entry point skipped both halves entirely,
 	// leaving plan-member dispatches invisible to Drain's wg.Wait.
-	te.wg.Add(1)
-	defer te.wg.Done()
-	if te.draining.Load() {
+	if !te.enterDispatch() {
 		return ErrExecutorDraining
 	}
+	defer te.wg.Done()
 	// Plan-member dispatch is never tied to a recurring occurrence — nil,
 	// task.RunKindScheduled (matching every other non-manual dispatch path).
 	return te.executeTask(ctx, taskID, nil, task.RunKindScheduled, true)
@@ -2095,7 +2138,20 @@ func (te *TaskExecutor) notifyParentIfAllSiblingsDone(parentID string) {
 	// the panic-recovery defer below, which is registered second and thus
 	// runs first) — Drain only ever sees this goroutine as "done" once it has
 	// genuinely finished, panic or not.
-	te.wg.Add(1)
+	//
+	// Routed through enterDispatch, NOT a bare Add: unlike runTask and
+	// runTaskFromInProgress, this launch site does NOT run while its caller
+	// already holds a wg entry. It is reached from the task_update tool via
+	// AgentLoop's SetOnComplete hook — an ordinary agent turn that holds no
+	// count of its own. A bare Add here can therefore take the counter 0 -> 1
+	// while Drain has a waiter parked, which is the sync.WaitGroup panic this
+	// gate exists to prevent (see dispatchGate's doc comment). Refusing while
+	// draining is also the correct BEHAVIOUR, not merely the safe one: Close()
+	// is already tearing down the session and transcript stores this follow-up
+	// turn would write through.
+	if !te.enterDispatch() {
+		return
+	}
 	go func() {
 		defer te.wg.Done()
 		defer func() {
@@ -2384,11 +2440,10 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	// ...) is now covered by this single deferred Done(); the goroutine
 	// launched near the bottom of this function keeps its own separate
 	// Add(1)/Done() pair (unchanged).
-	te.wg.Add(1)
-	defer te.wg.Done()
-	if te.draining.Load() {
+	if !te.enterDispatch() {
 		return "", ErrExecutorDraining
 	}
+	defer te.wg.Done()
 	t, err := te.store.Get(taskID)
 	if err != nil {
 		return "", fmt.Errorf("task_executor: StartTaskNow get task %q: %w", taskID, err)
@@ -2737,11 +2792,10 @@ func (te *TaskExecutor) StartOccurrenceRun(_ context.Context, taskID string, occ
 	// Same wg-before-draining order as ExecuteTask/StartTaskNow (fix-wave
 	// finding #1): reserve the slot first so a dispatch that passes the gate
 	// concurrently with Drain's Store(true) is still visible to its wg.Wait.
-	te.wg.Add(1)
-	defer te.wg.Done()
-	if te.draining.Load() {
+	if !te.enterDispatch() {
 		return ErrExecutorDraining
 	}
+	defer te.wg.Done()
 	if _, err := te.store.SpawnReset(taskID); err != nil {
 		return fmt.Errorf("task_executor: StartOccurrenceRun: reset task %q: %w", taskID, err)
 	}

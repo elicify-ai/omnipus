@@ -118,8 +118,9 @@ channels:
   browser:
     address: /api/v1/browser/ws
     description: 'Live interactive browser channel (ADR-038). A dedicated WebSocket, separate from the chat channel, carrying
-      CDP screencast frames (server → client) and viewer input / control frames (client → server) for the live browser panel.
-      Authenticated with the same first-message auth frame as the chat channel.
+      session/control/tab-strip lifecycle frames (server → client), viewer input / control frames (client → server), and
+      WebRTC signaling (ADR-047/ADR-061) for the live browser panel. Video is carried exclusively by WebRTC — there is no
+      screencast frame stream on this channel. Authenticated with the same first-message auth frame as the chat channel.
 
       '
     servers:
@@ -143,8 +144,6 @@ channels:
         $ref: '#/components/messages/BrowserWebRTCOfferFrame'
       ErrorFrame:
         $ref: '#/components/messages/ErrorFrame'
-      BrowserScreencastFrame:
-        $ref: '#/components/messages/BrowserScreencastFrame'
       BrowserStatusFrame:
         $ref: '#/components/messages/BrowserStatusFrame'
       BrowserTabsFrame:
@@ -565,8 +564,10 @@ operations:
     action: send
     channel:
       $ref: '#/channels/browser'
-    summary: 'Bind this browser-live connection to a session''s browser and start the screencast. Sent after the auth frame.
-      The server responds with browser_status(attached) then a stream of browser_screencast frames.
+    summary: 'Bind this browser-live connection to a session''s browser and start watching it for control-lock and tab-strip
+      bookkeeping. Sent after the auth frame. The server responds with browser_status(attached), then browser_tabs and
+      browser_webrtc_state — video is carried exclusively by WebRTC (ADR-047/ADR-061), offered once browser_webrtc_state
+      reports available=true.
 
       '
     messages:
@@ -595,7 +596,8 @@ operations:
     action: send
     channel:
       $ref: '#/channels/browser'
-    summary: 'Detach this viewer; the server stops the screencast when the last viewer leaves. Sent when the live panel closes.
+    summary: 'Detach this viewer; the server stops watching the session when the last viewer leaves. Sent when the live
+      panel closes.
 
       '
     messages:
@@ -605,7 +607,7 @@ operations:
     channel:
       $ref: '#/channels/browser'
     summary: 'Switch the active tab, close a tab, or open a new blank tab in this session''s browsing context. The server
-      replies with browser_tabs. Switch re-binds the live screencast to the new active tab. See ADR-041.
+      replies with browser_tabs. Switch re-binds the live view (and the WebRTC capture) to the new active tab. See ADR-041.
 
       '
     messages:
@@ -621,16 +623,6 @@ operations:
       '
     messages:
     - $ref: '#/channels/browser/messages/BrowserViewportFrame'
-  receiveBrowserScreencast:
-    action: receive
-    channel:
-      $ref: '#/channels/browser'
-    summary: 'One CDP screencast frame (JPEG + coordinate metadata) for the live browser. Repaint-driven, not fixed-FPS. The
-      SPA blits it and maps input coordinates.
-
-      '
-    messages:
-    - $ref: '#/channels/browser/messages/BrowserScreencastFrame'
   receiveBrowserStatus:
     action: receive
     channel:
@@ -645,7 +637,7 @@ operations:
     channel:
       $ref: '#/channels/browser'
     summary: 'The current set of open tabs + the active index, broadcast on any tab open/close/switch/title-change. The SPA
-      renders the tab strip; the live screencast always reflects the active tab. See ADR-041.
+      renders the tab strip; the WebRTC capture always follows the active tab. See ADR-041.
 
       '
     messages:
@@ -676,9 +668,9 @@ operations:
     channel:
       $ref: '#/channels/browser'
     summary: 'Availability / lifecycle state for the WebRTC media path: whether the SPA may offer WebRTC at all, whether it
-      is currently active, and whether the captured tab currently has audio. The JPEG browser_screencast path keeps streaming
-      regardless, so this frame only ever moves the SPA between "prefer WebRTC" and "fall back to JPEG" — it never gates baseline
-      browsing. See ADR-047 D1/D3.
+      is currently active, and whether the captured tab currently has audio. WebRTC is the ONLY live-browser video path
+      (ADR-061) — a false/unavailable/inactive state means the panel has no video, and the SPA must show that honestly
+      rather than silently degrading to another stream. See ADR-047 D1, ADR-061.
 
       '
     messages:
@@ -1022,7 +1014,7 @@ components:
     BrowserAttachFrame:
       name: BrowserAttachFrame
       title: browser_attach
-      summary: Attach to a session's live browser and start the screencast (client → server).
+      summary: Attach to a session's live browser and start the live view (client → server).
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserAttachFrame'
@@ -1061,13 +1053,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserViewportFrame'
-    BrowserScreencastFrame:
-      name: BrowserScreencastFrame
-      title: browser_screencast
-      summary: One CDP screencast frame of the live browser (server → client).
-      contentType: application/json
-      payload:
-        $ref: '#/components/schemas/BrowserScreencastFrame'
     BrowserStatusFrame:
       name: BrowserStatusFrame
       title: browser_status
@@ -1183,7 +1168,6 @@ components:
       - browser_input
       - browser_control
       - browser_detach
-      - browser_screencast
       - browser_status
       - browser_tab_action
       - browser_tabs
@@ -1981,6 +1965,101 @@ components:
           type: string
           minLength: 1
           description: The path that already exists, as the caller supplied it.
+    PermissionDenied:
+      title: PermissionDenied
+      description: 'Structured tool-result payload emitted when a tool call is refused for permission reasons. TWO
+        producers share this one shape and one discriminator (issue #618): pkg/agent''s tool-policy denial path
+        (approval outcomes — user/timeout/saturated/policy_denied/no_approver_configured/... — and the headless
+        ask-policy auto-deny) and pkg/tools'' filesystem-scope denial path (ResolvePath rejecting a path outside the
+        effective scope, or on a protected carve-out). Before this schema existed, both producers hand-built this
+        JSON with fmt.Sprintf''s %q verb, which is Go-string quoting, not JSON quoting, and silently produced invalid
+        JSON for a path or approval-tool name containing invalid UTF-8 or a C0/C1 control byte outside \n\t\r.
+
+
+        The two producers do NOT reach the SPA the same way. pkg/tools'' filesystem-scope producer
+        (PermissionDeniedResult) writes this payload as the tool''s ForLLM verbatim, which flows through the normal
+        tool_call_result frame (live) and the persisted ToolCall.Error field (replay) — parseStructuredToolFailure
+        lifts `reason` into the frame''s top-level `error` field there, and the SPA can render it. pkg/agent''s
+        tool-policy producer (denialPayloadJSON) embeds the SAME JSON shape as plain message content
+        (providers.Message{Role:"tool"/"system"}) on a EventKindToolExecSkipped event, never inside a
+        tool_call_result frame''s `result`; the persisted transcript entry for that denial
+        (settleAskToolCallTranscript) records status "denied" with a boolean `Result["error"]=true`, not this typed
+        payload, and leaves ToolCall.Error empty. parseStructuredToolFailure is therefore never invoked on the
+        tool-policy producer''s bytes — that path is LLM-facing only today; no SPA rendering claim should be made for
+        it without a corresponding code change.
+
+        '
+      type: object
+      required:
+      - error
+      - message
+      - tool
+      - reason
+      - permanent
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+          const: permission_denied
+          description: Fixed discriminator the SPA matches on.
+        message:
+          type: string
+          minLength: 1
+          description: Model-facing guidance on how to proceed (e.g. "do not retry; stop and report the blocker").
+        tool:
+          type: string
+          minLength: 1
+          description: The tool call that was denied.
+        reason:
+          type: string
+          minLength: 1
+          description: 'The denial reason: an approval-flow reason code (user / timeout / saturated / policy_denied /
+            ...) for a tool-policy denial, or the filesystem-scope classification error''s message (e.g. "access denied:
+            path is outside the effective filesystem scope") for a ResolvePath denial.
+
+            '
+        permanent:
+          type: boolean
+          description: 'Whether the model should treat this denial as terminal for the rest of the turn. True for
+            essentially every reason; false only for the transient "saturated" approval-queue condition, which may
+            succeed on a later retry within the same turn. A filesystem-scope denial is always true — the same path
+            against the same effective scope fails identically on retry.
+
+            '
+    ToolAssemblyDuplicate:
+      title: ToolAssemblyDuplicate
+      description: 'Structured payload emitted (as message content, role="system", with no ToolCallID) when
+        pkg/agent/loop.go''s tool-call dedup invariant guard (checkToolDedupInvariant) finds the assembled tools[]
+        list is not name-unique right before an LLM call, and aborts the turn rather than feeding the LLM a
+        malformed tool list. Before this schema existed the payload was hand-built with fmt.Sprintf''s %q verb (the
+        same defect PermissionDenied fixes — see its description) and carried no contract schema, no allow-list
+        entry, and no length budget at all (issue #618, the fourth ungoverned member).
+
+
+        ADR-060 D2/D3: this is a `message`-channel payload — it is appended directly to session history and never
+        becomes a tool_call_result frame, so parseStructuredToolFailure can never be invoked on it and it has no
+        SPA detector, BY DESIGN, not as a gap. It is admitted to this file''s `oneOf` and to
+        pkg/gateway/tool_result_store.go''s structuredFailureDiscriminators allow-list anyway (ADR-060 §7 item 3,
+        "defensive over-provisioning"): the allow-list entry is what enrolls it in the coverage test''s
+        schema-and-budget assertions, and the `oneOf` entry keeps the union a complete catalogue of the family even
+        though this member can never actually arrive in a ToolCallResultFrame.result. It is LLM-facing only.
+
+        '
+      type: object
+      required:
+      - error
+      - message
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+          const: tool_assembly_duplicate
+          description: Fixed discriminator identifying this payload family. Unlike its siblings, this one is never
+            delivered via ToolCallResultFrame.result, so the SPA has no matcher for it — see the schema description.
+        message:
+          type: string
+          minLength: 1
+          description: Human-readable explanation of the duplicate tool-assembly refusal.
     ToolCallResultFrame:
       title: ToolCallResultFrame
       description: >
@@ -2015,20 +2094,95 @@ components:
           description: 'Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult,
             MarshalErrorResult, and ToolResultRef are alternative shapes.
 
+
+            Real oneOf (round-2 hardening, ADR-060 finding F1). The previous revision switched this to `anyOf`
+            reasoning that branch 1''s permissive `type: [object, array, ...]` already matched every object, so a
+            genuine oneOf would double-match every $ref sentinel/family member against its own union. That
+            diagnosis was correct but `anyOf` was the wrong fix: under `anyOf` nothing is ever rejected, including a
+            malformed PermissionDenied missing `permanent` — the seven $refs below became unreachable as
+            constraints, which nullifies ADR-060 §7 item 2''s own rationale for admitting new members ("when the
+            union is ever made executable, a member missing from it would be the silent-drop failure ADR-058 §7
+            item 4 warned about" — an anyOf over a universal branch can never be made executable).
+
+            Fixed here with a real `oneOf`: the single permissive branch is split into (a) an unconditional
+            non-object catch-all (array/string/number/boolean/null — the JSON Schema `required` keyword is
+            inapplicable to non-object instances, so no exclusion is needed there) and (b) an object catch-all that
+            excludes every reserved discriminator key the seven $refs below use — `_truncated`, `_marshal_error`,
+            `_ref`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch
+            matches a plain scalar/array/object and exactly one matches a valid named shape; a payload carrying a
+            reserved key but failing its own $ref (e.g. PermissionDenied missing `permanent`) matches none and is
+            correctly rejected, rather than silently passing through branch (b). ADR-034''s external-file-$ref
+            constraint does not block this — these are internal `#/components/schemas/...` refs (D4).
+
+            Verified by compiling this exact file with santhosh-tekuri/jsonschema/v6:
+            pkg/api/generated/contract_test.go wraps one fixture per family member in a real ToolCallResultFrame and
+            validates it end-to-end; pkg/gateway/structured_failure_discriminator_coverage_test.go validates each
+            producer''s output standalone and asserts a malformed member is rejected.
+
+            F13 follow-up hardening: the object catch-all''s `error` exclusion below now keys on `error` being a
+            STRING, not merely present — see that branch''s own description for why (settleAskToolCallTranscript /
+            spawnSubTurn persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the
+            four `error`-keyed $refs and must still match the catch-all). Regression fixture:
+            pkg/api/generated/tool_call_result_error_key_contract_test.go.
+
+            Still documentary in the generated artifacts (ADR-060 D6): the asyncapi->Go converter
+            (scripts/gen-asyncapi-go) and the TS/Zod generator both key off "is this schema a oneOf/anyOf with no
+            top-level type", which is unchanged by this edit — TS still emits `result: z.unknown()`, Go still emits
+            `Result any`. So this is a spec-correctness fix (the union now actually constrains what a conformant
+            producer may emit) with no generated-code behavior change; the hand-written detectors
+            (isPermissionDenied and friends) remain the real enforcement at the SPA read boundary.
+
             '
           oneOf:
           - type:
-            - object
             - array
             - string
             - number
             - boolean
             - 'null'
+            description: Catch-all for a non-object tool result. Unconditional — the `required` keyword used
+              by the object catch-all's exclusion below does not apply to non-object instances, so no reserved-key
+              exclusion is needed on this branch.
+          - type: object
+            not:
+              anyOf:
+              - required:
+                - _truncated
+              - required:
+                - _marshal_error
+              - required:
+                - _ref
+              - required:
+                - error
+                properties:
+                  error:
+                    type: string
+            description: 'Catch-all for an ordinary object tool result carrying none of the seven $refs'' reserved
+              discriminator keys (_truncated, _marshal_error, _ref, error) below.
+
+
+              The `error` exclusion is keyed on `error` being a STRING (F13 hardening) — matching the
+              const-string discriminator every one of the four `error`-keyed $refs below actually uses
+              (DelegationFailure, FileExistsRefusal, PermissionDenied, ToolAssemblyDuplicate) — not merely on
+              `error` being present. `error` is not a reserved key in practice: pkg/agent/approval_transcript.go''s
+              settleAskToolCallTranscript and pkg/agent/subturn.go''s spawnSubTurn both persist plain
+              map[string]any results carrying a BOOLEAN `"error": true` flag (alongside `text`/`reason`/`permanent`),
+              which is a legitimate ordinary object, not an attempted use of any of the four typed discriminator
+              shapes. Excluding on bare presence of `error` made every such object match NO branch of this oneOf
+              (excluded from the catch-all, but not shaped like any $ref), so a replayed denied-approval or
+              failed-delegation frame was unconditionally schema-invalid. Keying the exclusion on `error` being a
+              string lets a boolean-error object fall through to this catch-all (valid, matches only this branch)
+              while a string-`error` object still gets checked against the four typed $refs as before (matches
+              this branch only if it also fails every $ref, which is correctly rejected as malformed).
+
+              '
           - $ref: '#/components/schemas/TruncatedResult'
           - $ref: '#/components/schemas/MarshalErrorResult'
           - $ref: '#/components/schemas/ToolResultRef'
           - $ref: '#/components/schemas/DelegationFailure'
           - $ref: '#/components/schemas/FileExistsRefusal'
+          - $ref: '#/components/schemas/PermissionDenied'
+          - $ref: '#/components/schemas/ToolAssemblyDuplicate'
         status:
           type: string
           enum:
@@ -3000,10 +3154,11 @@ components:
           type: string
     BrowserAttachFrame:
       title: BrowserAttachFrame
-      description: 'Client → server. Binds this browser-live WebSocket connection to a session''s browser and starts the screencast.
-        Per ADR-043 agents browse concurrently in isolated per-agent browser contexts within one shared Chrome; agent_id is
-        the binding key (selects which agent''s BrowserManager + browser context the live view attaches to), and session_id
-        is correlation-only (the server binds to the active tab in that agent''s context).
+      description: 'Client → server. Binds this browser-live WebSocket connection to a session''s browser and starts watching
+        it for control-lock and tab-strip bookkeeping (video is carried exclusively by WebRTC — see BrowserWebRTCStateFrame,
+        ADR-061). Per ADR-043 agents browse concurrently in isolated per-agent browser contexts within one shared Chrome;
+        agent_id is the binding key (selects which agent''s BrowserManager + browser context the live view attaches to), and
+        session_id is correlation-only (the server binds to the active tab in that agent''s context).
 
         '
       type: object
@@ -3027,7 +3182,7 @@ components:
     BrowserInputFrame:
       title: BrowserInputFrame
       description: 'Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured
-        while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the screencast
+        while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the WebRTC video
         frame, UNLESS capture_width/capture_height are present — then x/y are in that capture-frame pixel space and the
         server rescales them into the tab''s real CSS viewport before dispatch (root cause 2026-07-31, fault 3).
 
@@ -3127,8 +3282,8 @@ components:
           - release
     BrowserDetachFrame:
       title: BrowserDetachFrame
-      description: 'Client → server. Detach this viewer from the live browser; the server stops the screencast when the last
-        viewer detaches. Sent when the panel closes.
+      description: 'Client → server. Detach this viewer from the live browser; the server stops watching the session when
+        the last viewer detaches. Sent when the panel closes.
 
         '
       type: object
@@ -3142,49 +3297,6 @@ components:
         session_id:
           type: string
           maxLength: 128
-    BrowserScreencastFrame:
-      title: BrowserScreencastFrame
-      description: 'Server → client. One CDP screencast frame (a JPEG snapshot of the live browser tab) plus the metadata
-        needed to map viewer input coordinates back to the page. Screencast is repaint-driven, not fixed-FPS.
-
-        '
-      type: object
-      required:
-      - type
-      - session_id
-      - seq
-      - data
-      - width
-      - height
-      additionalProperties: false
-      properties:
-        type:
-          type: string
-          const: browser_screencast
-        session_id:
-          type: string
-          minLength: 1
-        seq:
-          type: integer
-          minimum: 0
-        data:
-          type: string
-          minLength: 1
-          description: Base64-encoded JPEG image (no data URI prefix).
-        width:
-          type: integer
-          minimum: 1
-        height:
-          type: integer
-          minimum: 1
-        page_scale:
-          type: number
-        offset_top:
-          type: number
-        scroll_offset_x:
-          type: number
-        scroll_offset_y:
-          type: number
     BrowserStatusFrame:
       title: BrowserStatusFrame
       description: 'Server → client. Lifecycle / control status for the live browser connection. state=controlling means this
@@ -3305,7 +3417,7 @@ components:
       title: BrowserTabsFrame
       description: 'Server → client. The current set of open tabs for a live-browser session and which one is active, broadcast
         whenever a tab is opened (e.g. a target=_blank click or window.open the agent/user followed), closed, switched, or
-        its title/url changes. The SPA renders this as the panel''s tab strip; the live screencast always reflects the active
+        its title/url changes. The SPA renders this as the panel''s tab strip; the WebRTC capture always follows the active
         tab. See ADR-041.
 
         '
@@ -3325,7 +3437,7 @@ components:
         active_index:
           type: integer
           minimum: 0
-          description: Index into tabs of the currently-active (screencasted) tab.
+          description: Index into tabs of the currently-active (WebRTC-captured) tab.
         tabs:
           type: array
           maxItems: 32
@@ -3423,10 +3535,11 @@ components:
       description: 'Server → client. Availability / lifecycle state for the WebRTC media path on a live-browser connection,
         distinct from the general lifecycle carried by browser_status. `available` tells the SPA whether it may attempt a
         browser_webrtc_offer at all (feature flag off, platform/build not capable, or a runtime error takes it out of service);
-        `active` tells the SPA whether a WebRTC session is currently flowing media for this connection. Per ADR-047 D3, the
-        JPEG browser_screencast path keeps running unconditionally as the automatic fallback tier — the SPA falls back to
-        it whenever available=false or active drops to false after being true (e.g. ICE failure), with no separate error frame
-        needed. See ADR-047 D1/D3/D7 (lite builds compile WebRTC out entirely).
+        `active` tells the SPA whether a WebRTC session is currently flowing media for this connection. Per ADR-061, WebRTC
+        is the ONLY live-browser video path — there is no screencast fallback to degrade to. available=false or active
+        dropping to false after being true (e.g. ICE failure) means the panel genuinely has no video right now, and the
+        SPA must show that honestly rather than silently substituting another stream. See ADR-047 D1/D7 (lite builds
+        compile WebRTC out entirely), ADR-061.
 
         '
       type: object
@@ -3446,8 +3559,8 @@ components:
         available:
           type: boolean
           description: True if the gateway currently offers WebRTC for this connection (the webrtc_enabled config flag is
-            on, the platform/build supports it, and no runtime error has taken it out of service). False means the SPA must
-            not send browser_webrtc_offer and should rely on the JPEG browser_screencast path only.
+            on, the platform/build supports it, and no runtime error has taken it out of service). False means the SPA
+            must not send browser_webrtc_offer — there is no video for this connection until it becomes true.
         reason:
           type: string
           enum:
@@ -3455,19 +3568,21 @@ components:
           - not_capable
           - lite_build
           - error
+          - multi_agent_capture_denied
           description: 'Present when available=false (or when active unexpectedly drops to false): disabled = tools.browser.webrtc_enabled
             is off; not_capable = platform/managed-Chrome capability classification is below WebRTC eligibility (ADR-047 D5,
             e.g. chrome-headless-shell only, no full Chrome); lite_build = binary built with -tags lite (Pion compiled out,
-            ADR-047 D7); error = a runtime failure (capture/encoder/ICE) took the WebRTC path out of service for this session.'
+            ADR-047 D7); error = a runtime failure (capture/encoder/ICE) took the WebRTC path out of service for this session;
+            multi_agent_capture_denied = another agent''s capture is already being viewed (ADR-048 condition 2; v1 is single-capture).'
         has_audio:
           type: boolean
           description: True if the active (or about-to-be-offered) media includes an audio track from the captured tab. Absent/false
             when audio is unavailable or not yet known.
         active:
           type: boolean
-          description: True while a WebRTC PeerConnection for this viewer is currently connected and flowing media. False
-            (or absent) means the viewer is on the JPEG fallback tier, whether by choice, by availability, or after an ICE/connection
-            failure.
+          description: 'True while a WebRTC PeerConnection for this viewer is currently connected and flowing media. False
+            (or absent) means this viewer currently has no video — WebRTC not yet offered, not yet negotiated, or lost
+            after an ICE/connection failure (ADR-061 — there is no fallback tier to degrade to).'
     BrowserCaptureHelloFrame:
       title: BrowserCaptureHelloFrame
       description: 'Client (capture extension) → server (gateway). First frame on the loopback-only /api/v1/browser/capture-ingest
@@ -3549,8 +3664,9 @@ components:
     BrowserCaptureControlFrame:
       title: BrowserCaptureControlFrame
       description: 'Bidirectional control frame on the /api/v1/browser/capture-ingest channel. Server (gateway) → client (extension)
-        for `recapture` (the agent''s active tab changed — chrome.tabs.query({active:true}) must be re-bound, the onTabsChanged/rebindScreencast
-        analog for the WebRTC path, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer detached past
+        for `recapture` (the agent''s active tab changed — chrome.tabs.query({active:true}) must be re-bound; triggered by
+        the same live.go onTabsChanged/rebindWatch tab-follow logic that also drives the live-view session/control-lock
+        bookkeeping, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer detached past
         the grace period, or the gateway is stopping the stream); client (extension) → server (gateway) for `ping`, the encoder
         page''s periodic health beacon / reconnect-watchdog signal. `reason` is an optional human-readable note (e.g. why
         shutdown was requested).
@@ -3587,6 +3703,16 @@ components:
           minimum: 1
           maximum: 16384
           description: 'recapture only: expected CSS viewport height. See expected_width.'
+        capture_scale:
+          type: number
+          minimum: 1
+          maximum: 4
+          description: 'recapture only, server → extension: the deviceScaleFactor the captured tab renders at (driven by
+            the controlling viewer''s window.devicePixelRatio via the viewport frame). The encoder multiplies its
+            tabCapture width/height constraints by this so captured frames carry PHYSICAL pixels, not CSS pixels. Absent
+            or 1 = CSS resolution. Without it a Retina (dpr=2) viewer gets a 1x capture stretched over 2x display pixels
+            — uniformly blurry video (live report, macOS 2026-08-12). The tabs.get convergence check stays in CSS px;
+            only the media constraints scale.'
 
     # ── Planning & Goals (ADR-049) ──────────────────────────────────────────────
 

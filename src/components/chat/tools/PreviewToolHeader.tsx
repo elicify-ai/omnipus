@@ -23,8 +23,26 @@ export interface PreviewToolHeaderProps {
   trailing?: ReactNode
   /** Whether the tool is still running (drives the leading status dot/spinner). */
   isRunning: boolean
-  /** Whether the tool completed successfully (drives the leading status dot colour). */
-  hasResult: boolean
+  /**
+   * Whether the tool call actually failed. Issue #617: this used to be
+   * `hasResult` (`success` when a result parsed, `error` otherwise) — an
+   * accidental proxy that conflated "the tool failed" with "the result
+   * didn't match the expected schema". A malformed-but-successful result
+   * showed "Failed"; a genuine failure that happened to return a
+   * well-formed payload showed "Done". Callers now pass the tool call's
+   * real error outcome (the upstream `isError` field / ToolCall.status)
+   * instead of deriving it from whether parsing succeeded.
+   */
+  isError: boolean
+  /**
+   * F2 (issue #617 follow-up): whether the tool call was cancelled. Adds a
+   * third terminal state alongside isRunning/isError — WebServeUI's replay
+   * path has no `status` object to derive this from the way the
+   * isCancelledStatus(status) callers do, so callers pass the outcome
+   * explicitly. Required (not optional) for the same reason `isError` is —
+   * see WebServeUI.tsx's isCancelled prop doc comment.
+   */
+  isCancelled: boolean
   /** Optional data-testid for targeted e2e tests. */
   'data-testid'?: string
 }
@@ -35,7 +53,8 @@ export function PreviewToolHeader({
   label,
   trailing,
   isRunning,
-  hasResult,
+  isError,
+  isCancelled,
   'data-testid': testId,
 }: PreviewToolHeaderProps) {
   // Flat text-line redesign (ticket "Tool components in chat", P2): the old
@@ -46,9 +65,10 @@ export function PreviewToolHeader({
   // `icon` still renders alongside it since (unlike those callers) it is the
   // only thing distinguishing preview kind — WebServeUI passes an
   // identical `toolName` ("web_serve") for both its static and dev modes.
-  const statusConfig = getToolBadgeStatusConfig(isRunning ? 'running' : hasResult ? 'success' : 'error', {
-    size: 13,
-  })
+  const statusConfig = getToolBadgeStatusConfig(
+    isRunning ? 'running' : isCancelled ? 'cancelled' : isError ? 'error' : 'success',
+    { size: 13, cancelledVariant: 'muted' },
+  )
 
   return (
     <div data-testid={testId} className="flex items-center gap-2 py-1 font-mono text-xs">

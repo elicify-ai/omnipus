@@ -1,12 +1,18 @@
-// BrowserLiveView.webrtcSink.test.tsx — WebRTC build (webrtc-build/wave-plan.md
-// W1-F) SPA playback groundwork: the <video> sink swap, mute/unmute control,
-// video-mode coordinate mapping routing, and the annotate-crop video-mode
-// branch. No signaling exists yet (Wave 2 owns browserLiveWs.ts's offer/
-// answer exchange) — every test here either exercises the `mediaStream`
-// prop directly (a fake object standing in for a real MediaStream, since
-// jsdom doesn't implement WebRTC) or asserts the JPEG-only default is
-// byte-identical when the prop is omitted/null. Mocks BrowserLiveWsConnection
-// the same way BrowserLiveView.takeTheWheel.test.tsx does.
+// BrowserLiveView.webrtcSink.test.tsx — the <video> sink: mount/attach gating,
+// srcObject binding, mute/unmute control, coordinate-mapping routing, and the
+// annotate-crop video branch.
+//
+// ADR-047 (operator directive — JPEG-fallback removal): the JPEG screencast
+// `<img>` sink is DELETED, not flagged off. WebRTC video is the only live
+// sink; `attached` (mediaStream !== null) is what gates the interactive
+// container/video mounting at all, and `videoReady` (set on the video's
+// `onLoadedMetadata`) is what gates real pixel dimensions being available to
+// coordinate mapping / annotate crop. Every test here drives the `mediaStream`
+// test/override seam directly (a fake object standing in for a real
+// MediaStream, since jsdom doesn't implement WebRTC) rather than the real
+// internal signaling path (covered by BrowserLiveView.webrtcInputRouting.test.tsx
+// and browserWebRTC.test.ts). Mocks BrowserLiveWsConnection the same way
+// BrowserLiveView.takeTheWheel.test.tsx does.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -50,26 +56,28 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 import { BrowserLiveView } from './BrowserLiveView'
 
 /** A fake MediaStream stand-in — jsdom has no real WebRTC/MediaStream
- * implementation, and this wave only needs `video.srcObject = mediaStream`
+ * implementation, and this only needs `video.srcObject = mediaStream`
  * assignment/readback to work (a plain property set/get, verified against
  * jsdom directly), never actual playback. Cast at the call site. */
 function fakeMediaStream(id = 'stream-1'): MediaStream {
   return { id } as unknown as MediaStream
 }
 
-function connectAndFrame(pageScale?: number) {
+/** Connects the WS. Requires the component to already be rendered with a
+ * `mediaStream` prop (attached) for the <video> element to exist at all. */
+function connectAndFrame() {
   act(() => {
     callbacksRef.current?.onConnected?.()
-    callbacksRef.current?.onScreencast?.({
-      type: 'browser_screencast',
-      session_id: 's1',
-      seq: 1,
-      data: 'AAAA',
-      width: 1280,
-      height: 720,
-      page_scale: pageScale,
-    })
   })
+}
+
+/** Stubs the video's intrinsic dimensions and fires `loadedmetadata` — the
+ * signal `videoReady`/`activeFrameDims` wait for. */
+function decodeFrame(width = 1280, height = 720) {
+  const video = screen.getByTestId('browser-live-video') as HTMLVideoElement
+  Object.defineProperty(video, 'videoWidth', { value: width, configurable: true })
+  Object.defineProperty(video, 'videoHeight', { value: height, configurable: true })
+  fireEvent.loadedMetadata(video)
 }
 
 /** Mirrors the sibling suites' technique: jsdom reports all-zero rects by
@@ -89,29 +97,29 @@ beforeEach(() => {
   useUiStore.setState({ toasts: [] })
 })
 
-describe('BrowserLiveView — sink swap (WebRTC build W1-F)', () => {
-  it('renders the JPEG <img> sink and no <video> when mediaStream is not provided (default)', () => {
+describe('BrowserLiveView — video sink mount gating (attached vs. not)', () => {
+  it('renders neither the interactive container nor the video sink when mediaStream is not provided (default)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
 
-    expect(screen.getByTestId('browser-live-img')).toBeInTheDocument()
+    expect(screen.queryByTestId('browser-live-frame')).not.toBeInTheDocument()
     expect(screen.queryByTestId('browser-live-video')).not.toBeInTheDocument()
   })
 
-  it('renders the JPEG <img> sink when mediaStream is explicitly null (same as omitted — byte-identical default)', () => {
+  it('renders neither when mediaStream is explicitly null (same as omitted)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={null} />)
     connectAndFrame()
 
-    expect(screen.getByTestId('browser-live-img')).toBeInTheDocument()
+    expect(screen.queryByTestId('browser-live-frame')).not.toBeInTheDocument()
     expect(screen.queryByTestId('browser-live-video')).not.toBeInTheDocument()
   })
 
-  it('renders a <video> sink IN PLACE of the <img> when mediaStream is set', () => {
+  it('mounts the video sink as soon as mediaStream is set, even before the video decodes a frame', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
 
+    expect(screen.getByTestId('browser-live-frame')).toBeInTheDocument()
     expect(screen.getByTestId('browser-live-video')).toBeInTheDocument()
-    expect(screen.queryByTestId('browser-live-img')).not.toBeInTheDocument()
   })
 
   it('binds the mediaStream to the <video> element\'s srcObject', () => {
@@ -134,25 +142,39 @@ describe('BrowserLiveView — sink swap (WebRTC build W1-F)', () => {
     expect((screen.getByTestId('browser-live-video') as HTMLVideoElement).srcObject).toBe(streamB)
   })
 
-  it('falls back to the <img> sink again when mediaStream transitions from set to null', () => {
+  it('unmounts the container/video entirely when mediaStream transitions from set to null (no silent fallback — the whole panel visibly reverts to its empty state)', () => {
     const { rerender } = render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     expect(screen.getByTestId('browser-live-video')).toBeInTheDocument()
 
     rerender(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={null} />)
-    expect(screen.getByTestId('browser-live-img')).toBeInTheDocument()
     expect(screen.queryByTestId('browser-live-video')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('browser-live-frame')).not.toBeInTheDocument()
   })
 
-  it('the <video> sink is sized to mirror the <img> (object-contain within the panel)', () => {
+  it('the <video> sink sizing defaults to intrinsic-capped, object-contain', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
 
     expect(screen.getByTestId('browser-live-video').className).toContain('object-contain')
   })
+
+  it('shows the "waiting for first frame" overlay until the video decodes real dimensions, then clears it', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectAndFrame()
+
+    expect(screen.getByTestId('browser-live-waiting-overlay')).toBeInTheDocument()
+    expect(screen.getByText('Waiting for the first frame…')).toBeInTheDocument()
+
+    act(() => {
+      decodeFrame()
+    })
+
+    expect(screen.queryByTestId('browser-live-waiting-overlay')).not.toBeInTheDocument()
+  })
 })
 
-describe('BrowserLiveView — video mute/unmute control (WebRTC build W1-F)', () => {
+describe('BrowserLiveView — video mute/unmute control', () => {
   it('the <video> sink starts muted (autoplay-safe)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} hasAudio />)
     connectAndFrame()
@@ -167,7 +189,7 @@ describe('BrowserLiveView — video mute/unmute control (WebRTC build W1-F)', ()
     expect(screen.queryByTestId('browser-live-mute-toggle')).not.toBeInTheDocument()
   })
 
-  it('does not render the mute toggle in video mode when hasAudio is false (default)', () => {
+  it('does not render the mute toggle when hasAudio is false (default)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
 
@@ -219,46 +241,40 @@ describe('BrowserLiveView — video mute/unmute control (WebRTC build W1-F)', ()
   })
 })
 
-describe('BrowserLiveView — coordinate mapping routes to the video-mode variant when the video sink is active (WebRTC build W1-F)', () => {
-  it('dispatches input using video-mode mapping (page_scale fixed at 1) instead of the JPEG frame\'s page_scale, once the video reports its dimensions', () => {
+describe('BrowserLiveView — coordinate mapping (video-mode only)', () => {
+  it('dispatches input using the video\'s real decoded dimensions', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
-    // JPEG frame reports page_scale: 2 — if coordinate mapping wrongly kept
-    // reading this while in video mode, a 1:1 rect→video click would land at
-    // HALF the expected device coordinate (mapClientToDevice divides by
-    // page_scale). Video mode must ignore it entirely.
-    connectAndFrame(2)
+    connectAndFrame()
     const container = stubFrameRect()
-    const video = screen.getByTestId('browser-live-video') as HTMLVideoElement
-    Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
-    Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
+    act(() => {
+      decodeFrame(1280, 720)
+    })
 
     fireEvent.pointerDown(container, { clientX: 640, clientY: 360 })
 
-    // Video-mode math (scale fixed at 1): device coords equal the raw
-    // rect-relative client coords for this 1:1 rect/video size. The
-    // JPEG-mode math (page_scale 2) would have produced {x:320, y:180}.
+    // 1:1 rect/video size — device coords equal the raw rect-relative client
+    // coords (no page_scale-style division; the video path never had one).
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 640, y: 360 }))
   })
 
-  it('falls back to the JPEG-frame mapping (with its page_scale) when mediaStream is set but the video has not yet reported dimensions (videoWidth/videoHeight still 0)', () => {
+  it('does not dispatch input while the video has not yet reported real dimensions (videoWidth/videoHeight still 0)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
-    connectAndFrame(2)
+    connectAndFrame()
     const container = stubFrameRect()
-    // Deliberately do NOT set videoWidth/videoHeight — jsdom defaults them to
-    // 0, exactly the pre-`loadedmetadata` state a real <video> starts in.
+    // Deliberately do NOT decode a frame — jsdom defaults videoWidth/Height
+    // to 0, exactly the pre-`loadedmetadata` state a real <video> starts in.
+    // There is no fallback sink to map against instead any more — the click
+    // is silently declined (mapPointerToDeviceCoords/activeFrameDims return
+    // null), not garbage-dispatched.
 
     fireEvent.pointerDown(container, { clientX: 640, clientY: 360 })
 
-    // Falls back to the JPEG frame's mapping — page_scale 2 halves the
-    // device coordinate, proving activeFrameDims's video branch correctly
-    // declined (videoWidth/Height not yet reported) rather than dispatching
-    // garbage (0-sized) coordinates.
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 320, y: 180 }))
+    expect(mockSendInput).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })
 })
 
-describe('BrowserLiveView — annotate crop video-mode branch (WebRTC build W1-F — math/wiring only, draw covered in e2e)', () => {
-  it('is wired (does not throw/crash) and surfaces the same graceful failure toast as the img path when the video has no decoded frame yet (readyState 0 in jsdom)', async () => {
+describe('BrowserLiveView — annotate crop (video sink only)', () => {
+  it('is wired (does not throw/crash) and surfaces a graceful failure toast when the video has no decoded frame yet (readyState 0 in jsdom)', async () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
@@ -268,17 +284,17 @@ describe('BrowserLiveView — annotate crop video-mode branch (WebRTC build W1-F
     fireEvent.pointerMove(container, { clientX: 200, clientY: 150 })
     fireEvent.pointerUp(container, { clientX: 200, clientY: 150 })
 
-    // cropFrameToFile's video-mode branch checks `video.readyState < 2`
-    // BEFORE ever touching canvas (jsdom has no `canvas` package either way)
-    // — this deterministically exercises that guard without needing to mock
-    // video playback or canvas drawing.
+    // cropFrameToFile checks `video.readyState < 2` BEFORE ever touching
+    // canvas (jsdom has no `canvas` package either way) — this
+    // deterministically exercises that guard without needing to mock video
+    // playback or canvas drawing.
     await vi.waitFor(() => {
       expect(useUiStore.getState().toasts.some((t) => /could not capture/i.test(t.message))).toBe(true)
     })
     expect(screen.queryByTestId('annotate-popover')).not.toBeInTheDocument()
   })
 
-  it('does not forward any driving input while annotating in video mode (annotate/driving mutual exclusion holds regardless of sink)', () => {
+  it('does not forward any driving input while annotating (annotate/driving mutual exclusion)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))

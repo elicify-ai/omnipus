@@ -83,41 +83,38 @@ func TestInputQueueDropOldest_OverflowHappensButHasNoProductionCounter(t *testin
 	}
 	close(gate)
 
+	// With dequeue-time coalescing (2026-08-13, coalesceInputBatch) the
+	// worker drains the WHOLE backlog per wakeup and collapses a mouse_move
+	// run to its newest frame, so a pure-move overflow burst reaches the
+	// sink as a HANDFUL of frames (the pre-gate in-flight batch plus the
+	// coalesced remainder), not ~capacity frames. That is the fix for the
+	// operator-reported progressive input lag: a full queue used to replay
+	// `capacity` stale cursor positions through a slow CDP sink, adding
+	// capacity x dispatch-time of latency for whatever queued behind them.
 	deadline := time.Now().Add(5 * time.Second)
+	var final []int
 	for {
 		mu.Lock()
-		n := len(seen)
+		final = append([]int(nil), seen...)
 		mu.Unlock()
-		if n >= inputQueueCapacity {
+		if len(final) > 0 && final[len(final)-1] == burstSize-1 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for the queue to drain; only %d messages arrived", n)
+			t.Fatalf("timed out waiting for the freshest burst message to arrive; got %v", final)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	time.Sleep(100 * time.Millisecond) // let anything still settling finish
 
-	mu.Lock()
-	final := append([]int(nil), seen...)
-	mu.Unlock()
-
-	// --- Real, executable assertions: the overflow scenario genuinely
-	// reproduces, and drop-oldest genuinely (a) drops from the front, (b)
-	// never reorders survivors, and (c) never loses the freshest message.
-	// This is proven via TEST-ONLY instrumentation (`seen` above), which is
-	// NOT a production signal — see the skip below for the actual gap. ---
-	if len(final) >= burstSize {
+	// --- Real, executable assertions: the overflow burst reaches the sink
+	// COALESCED (far fewer dispatches than the burst), in order, and never
+	// loses the freshest message. Proven via TEST-ONLY instrumentation
+	// (`seen` above), NOT a production signal — see the skip below. ---
+	if len(final) >= inputQueueCapacity {
 		t.Fatalf(
-			"expected fewer than %d surviving messages from a %d-deep-queue overflow burst of %d "+
-				"(no drop occurred -- overflow scenario did not reproduce), got %d",
-			burstSize, inputQueueCapacity, burstSize, len(final),
-		)
-	}
-	if len(final) < inputQueueCapacity || len(final) > inputQueueCapacity+1 {
-		t.Fatalf(
-			"expected %d or %d surviving messages (queue depth, +1 for the one in-flight blocked call), got %d: %v",
-			inputQueueCapacity, inputQueueCapacity+1, len(final), final,
+			"expected the %d-message move burst to reach the sink coalesced to well under the queue capacity (%d), "+
+				"got %d dispatches — dequeue-time coalescing is not working",
+			burstSize, inputQueueCapacity, len(final),
 		)
 	}
 	if !sort.IntsAreSorted(final) {
@@ -125,15 +122,15 @@ func TestInputQueueDropOldest_OverflowHappensButHasNoProductionCounter(t *testin
 	}
 	if final[len(final)-1] != burstSize-1 {
 		t.Fatalf(
-			"the LAST-sent message must always survive drop-oldest (freshest state wins over a stale backlog), got last=%d want %d",
+			"the LAST-sent message must always survive (freshest state wins over a stale backlog), got last=%d want %d",
 			final[len(final)-1],
 			burstSize-1,
 		)
 	}
 	t.Logf(
-		"OBSERVED (test-only instrumentation, NOT a production signal): %d of %d burst messages survived; "+
-			"%d silently dropped under backpressure (queue capacity=%d)",
-		len(final), burstSize, burstSize-len(final), inputQueueCapacity,
+		"OBSERVED (test-only instrumentation, NOT a production signal): %d-message move burst reached the sink as "+
+			"%d dispatch(es) after shed+coalesce (queue capacity=%d)",
+		burstSize, len(final), inputQueueCapacity,
 	)
 
 	// --- The actual gap this test exists to surface ---

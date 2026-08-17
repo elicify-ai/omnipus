@@ -1,11 +1,14 @@
-// BrowserLiveView — shared live-view core for the ADR-038/039/040 interactive
-// browser panel. Rendered by two callers:
+// BrowserLiveView — shared live-view core for the ADR-038/039/040/047
+// interactive browser panel. Rendered by two callers:
 //   1. BrowserLivePanel.tsx  — inside the app-root Sheet overlay (or docked
 //      beside chat when pinned — layout is entirely the panel owner's call)
 //   2. routes/_app/browser-live.tsx — the fullscreen pop-out window
 //
-// Owns the second WS connection (browserLiveWs.ts), the latest screencast
-// frame, the ADR-040 "implicit control" state machine (D2), and
+// Owns the second WS connection (browserLiveWs.ts, used for control/input/
+// tab/signaling frames), the WebRTC viewer session (browserWebRTC.ts) that is
+// the ONLY live-video path (ADR-047 — the JPEG screencast fallback was
+// removed outright, not flagged off: there is no second sink to degrade to
+// any more), the ADR-040 "implicit control" state machine (D2), and
 // pointer/keyboard capture while driving. Deliberately has NO knowledge of
 // how it's being hosted (docked panel vs. fullscreen route) — onPopOut/
 // onClose are optional callbacks so each host wires up its own chrome
@@ -56,14 +59,13 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { BrowserLiveWsConnection, translateBrowserErrorMessage } from '@/lib/browserLiveWs'
-import { BrowserWebRTCSession } from '@/lib/browserWebRTC'
+import { BrowserWebRTCSession, translateWebRTCFallbackReason, DEFAULT_FIRST_ANSWER_TIMEOUT_MS } from '@/lib/browserWebRTC'
 import {
   computeCropRect,
   computeModifiers,
   computeObjectContainRect,
   framePixelToDeviceCoords,
   isPrintableKey,
-  mapClientToDevice,
   mapClientToDeviceVideo,
   mapClientToFramePixels,
   mapMouseButton,
@@ -78,7 +80,7 @@ import { useUiStore } from '@/store/ui'
 import { useChatStore } from '@/store/chat'
 import { queryClient } from '@/lib/queryClient'
 import type { Agent } from '@/lib/api'
-import type { BrowserInputFrame, BrowserScreencastFrame, BrowserStatusFrame, BrowserTabsFrame } from '@/lib/api/generated/asyncapi-types'
+import type { BrowserInputFrame, BrowserStatusFrame, BrowserTabsFrame } from '@/lib/api/generated/asyncapi-types'
 
 export interface BrowserLiveViewProps {
   sessionId: string
@@ -105,29 +107,30 @@ export interface BrowserLiveViewProps {
   canAnnotate?: boolean
   className?: string
   /**
-   * WebRTC build (wave-plan W1-F) — a live WebRTC MediaStream for the
-   * agent's active tab, or `null`/`undefined` (the default) to keep today's
-   * JPEG-screencast `<img>` sink exactly as-is. Wave 1 ships ONLY this
-   * groundwork: no signaling exists yet, so no caller passes a non-null
-   * stream — a Wave-2 agent wires `browserLiveWs.ts`'s offer/answer
-   * exchange and threads the resulting track's MediaStream down through
-   * this prop (or a small dedicated context, if a future host needs it
-   * without prop-drilling — this component doesn't care which). When set,
-   * a `<video>` element replaces the `<img>` as the render sink, coordinate
-   * mapping switches to the video-dimension variant (`mapClientToDeviceVideo`
-   * — `browserLiveCoords.ts`), and the annotate-crop path draws from the
-   * video frame instead of the JPEG bitmap. JPEG screencast frames keep
-   * flowing underneath regardless (ADR: v1 keeps both paths active while a
-   * live view is attached — instant fallback) — `frame`/`frameRef` stays the
-   * "is a live session actually attached" signal for both sinks.
+   * A live WebRTC `MediaStream` for the agent's active tab — the ONLY video
+   * source this component ever renders (ADR-047; the JPEG-screencast `<img>`
+   * sink was deleted outright, not flagged off). Production callers
+   * (BrowserLivePanel.tsx, routes/_app/browser-live.tsx) always omit this
+   * prop and let the component drive its OWN internal WebRTC signaling over
+   * `browserLiveWs.ts`'s offer/answer/state exchange (see the WS lifecycle
+   * effect below) — the resulting stream lands in `webrtcStream` state and
+   * flows through the `mediaStream` merge point just below the props
+   * destructure. This prop exists purely as a test/override seam (a caller
+   * can supply a fake `MediaStream` to exercise the sink/coordinate-mapping/
+   * annotate-crop machinery without a real signaling round trip — jsdom has
+   * no WebRTC implementation) — see BrowserLiveView.webrtcSink.test.tsx.
+   * `null`/`undefined` (the default) defers entirely to the internal
+   * signaling result. Coordinate mapping always uses the video-dimension
+   * variant (`mapClientToDeviceVideo` — `browserLiveCoords.ts`), and the
+   * annotate-crop path always draws from the `<video>` element.
    */
   mediaStream?: MediaStream | null
   /**
    * Whether the stream carries an audio track — gates the mute/unmute
-   * toolbar button (only shown in video mode when true). Ignored while
-   * `mediaStream` is null. Defaults to `false` (no audio control shown)
-   * rather than inferring it from the stream itself, since a Wave-2 caller
-   * may know this before the track metadata is fully available.
+   * toolbar button. Ignored while `mediaStream` is null. Defaults to `false`
+   * (no audio control shown) rather than inferring it from the stream
+   * itself, since the internal signaling result reports this before the
+   * track metadata is fully available (see `hasAudio`'s merge point below).
    */
   hasAudio?: boolean
   /**
@@ -217,12 +220,12 @@ function computeDriveMode(state: {
 /**
  * Fault 3 fix (docs/internal/browser-viewport-input-rootcause-2026-07-31.md)
  * — builds the `capture_width`/`capture_height` keys for a coordinate-
- * carrying `BrowserInputFrame`, or an empty object in JPEG mode. A plain
- * `capture_width: undefined` field would survive property-existence checks
- * (and any consumer reading the object before it hits `JSON.stringify`,
- * which is the only place `undefined` values actually vanish) — spreading
- * this return value keeps the keys genuinely absent, not merely undefined,
- * matching the legacy JPEG-mode wire shape exactly.
+ * carrying `BrowserInputFrame`, or an empty object before the video has
+ * reported real dimensions yet. A plain `capture_width: undefined` field
+ * would survive property-existence checks (and any consumer reading the
+ * object before it hits `JSON.stringify`, which is the only place
+ * `undefined` values actually vanish) — spreading this return value keeps
+ * the keys genuinely absent, not merely undefined.
  */
 // Toolbar icon buttons share ONE shape (operator direction, 2026-08-04: "the
 // buttons should be icons ... it needs to be flatter"). Back, refresh, annotate,
@@ -267,17 +270,16 @@ type LiveStatus = BrowserStatusFrame['state'] | 'connecting' | 'disconnected'
 // take-control-disabled, no-manager-for-agent, live-view-disabled, malformed
 // control).
 
-// fix-wave B (HIGH) — the `BrowserWebRTCSession.onFallback` reason strings
-// that mean "WebRTC was never available here at all" (arrive via
-// `applyState` before any video sink ever mounted) rather than "a live/
-// negotiating session just failed." These are a mode choice, not a
-// degradation, so the fallback wiring below (the WS-lifecycle effect's
-// `machine.onFallback` callback) stays silent for them and only warns/toasts
-// for every other (runtime-failure) reason. Kept as the exact wire-contract
-// `reason` enum values (`BrowserWebRTCStateFrame.reason` minus 'error', which
-// IS surfaced — an explicit gateway-reported error is a runtime failure, not
-// a capability gate).
-const WEBRTC_CAPABILITY_GATE_REASONS = new Set(['disabled', 'not_capable', 'lite_build'])
+// Operator directive (JPEG-fallback removal): WebRTC is now the ONLY live-
+// video path — there is no second sink left to quietly keep working while
+// this one degrades. Every `BrowserWebRTCSession.onFallback` reason
+// (including the former "capability gate" reasons — `disabled`/
+// `not_capable`/`lite_build`, previously suppressed because JPEG carried on
+// underneath) is therefore now a REAL, user-facing failure: see the WS
+// lifecycle effect's `machine.onFallback` callback below, which always sets
+// `webrtcError` and never swallows a reason silently.
+// translateWebRTCFallbackReason (browserWebRTC.ts) turns the raw reason
+// string into the honest, actionable message actually shown.
 
 // FIRST_FRAME_TIMEOUT_MS bounds how long the panel shows "Waiting for the first
 // frame…" before admitting failure. Generous on purpose: a cold Chrome launch
@@ -285,7 +287,22 @@ const WEBRTC_CAPABILITY_GATE_REASONS = new Set(['disabled', 'not_capable', 'lite
 // and a premature error on a session that was about to work is worse than a few
 // extra seconds of spinner. What is NOT acceptable is waiting forever — see
 // firstFrameTimedOut for the silent-failure this bounds.
-const FIRST_FRAME_TIMEOUT_MS = 15_000
+//
+// Bugfix (MED, external review F6, 2026-08-13): this used to be a fixed
+// 15_000, defined with no relationship to browserWebRTC.ts's own cold-start
+// answer budget (DEFAULT_FIRST_ANSWER_TIMEOUT_MS, 30s — the gateway's
+// capture-start + bringToFront + tracks-wait sequence can legitimately run
+// past 25s worst case, per that file's own header doc). This timer is armed
+// against `videoReady` — a DECODED FRAME, which can only happen AFTER that
+// answer round trip completes, AND ICE connects, AND the first video RTP
+// packets arrive — so it must never be shorter than the answer budget it
+// sits downstream of, or a perfectly healthy cold start shows the red "No
+// video received…" error and then connects seconds later anyway (exactly
+// what was reported live). Derived from the SAME constant the machine uses
+// for its own cold-start timeout, plus a margin for the post-answer
+// ICE-connect + first-frame-decode gap, so the two can never silently drift
+// apart again the way they just did.
+const FIRST_FRAME_TIMEOUT_MS = DEFAULT_FIRST_ANSWER_TIMEOUT_MS + 15_000
 
 // VIEWPORT_SETTLE_MS is how long a new panel size must hold still before it is
 // committed to the server. Each commit REBUILDS the capture stream (tabCapture
@@ -439,14 +456,13 @@ export function BrowserLiveView({
   // read (never as a dependency) by the stable `dispatchInput` callback
   // below to decide DC-vs-WS routing without needing to be in anyone's
   // dependency array, same rationale as every other *Ref mirror in this
-  // file (frameRef, connectedRef, ...).
+  // file (attachedRef, connectedRef, ...).
   const inputChannelOpenRef = useRef(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const imgRef = useRef<HTMLImageElement | null>(null)
-  // WebRTC build (W1-F) — bound to the <video> sink's srcObject via the
-  // effect below whenever `mediaStream` is set. Null while the JPEG <img>
-  // sink is active (mediaStream null) since the <video> element itself isn't
-  // rendered then — see the sink-switch JSX further down.
+  // Bound to the `<video>` sink's srcObject via the effect below whenever
+  // `mediaStream` is set. The `<video>` element is only ever mounted once a
+  // stream exists (see the "attached" gate and the sink JSX further down) —
+  // there is no other sink for this to stand in for any more.
   const videoRef = useRef<HTMLVideoElement | null>(null)
   // WCAG 2.1.2 fix — Escape-releases-the-wheel focus target: handleKeyDown's
   // Escape branch moves focus here once driving ends, so the user lands
@@ -460,14 +476,20 @@ export function BrowserLiveView({
   // itself" symptom from the 2026-08-03 recordings. Set on focus, cleared on
   // blur and on submit.
   const urlBarEditingRef = useRef(false)
-  const frameRef = useRef<BrowserScreencastFrame | null>(null)
+  // attachedRef mirrors `attached` (mediaStream !== null — see its own
+  // definition below) — the "is a live WebRTC session actually attached"
+  // signal every stable-identity pointer/keyboard/wheel handler consults
+  // before doing real work, replacing the old JPEG-era `frameRef` (which
+  // used to serve the same "is there a live session" role, backed by the
+  // screencast frame instead of the WebRTC stream).
+  const attachedRef = useRef(false)
   const controllingRef = useRef(false)
   // ── ADR-040 D2 implicit control model ───────────────────────────────────
   // agentWorkingRef mirrors the `agentWorking` (chat-store isStreaming for
   // this session) state into a ref so the pointer/keyboard/wheel handlers
   // below (all stable useCallbacks) always read the LATEST value without
   // needing it in their dependency arrays — same rationale as
-  // frameRef/controllingRef.
+  // attachedRef/controllingRef.
   const agentWorkingRef = useRef(false)
   // True from the instant an implicit (click-to-drive) or explicit (Take
   // over) `sendControl('take')` is sent until the server's 'controlling'
@@ -537,7 +559,7 @@ export function BrowserLiveView({
   // mutually exclusive with driving (isControlling). annotateDraggingRef +
   // selectionStartClientRef are refs (not state) so the pointerup handler
   // always reads the exact values captured on pointerdown, never a stale
-  // closure — same pattern as frameRef/controllingRef above.
+  // closure — same pattern as attachedRef/controllingRef above.
   const annotateDraggingRef = useRef(false)
   const selectionStartClientRef = useRef<{ x: number; y: number } | null>(null)
   const pendingAnnotationRef = useRef<PendingAnnotation | null>(null)
@@ -576,27 +598,38 @@ export function BrowserLiveView({
   const inputFlushScheduledRef = useRef(false)
   const inputFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const [frame, setFrame] = useState<BrowserScreencastFrame | null>(null)
-  // WebRTC build (W2-B) — this component's OWN signaling result (populated
-  // by the machine's onStream/onFallback callbacks and the gateway's
-  // browser_webrtc_state frame — see the WS lifecycle effect further down).
-  // Reset to null/false on fallback AND on transport disconnect (a dropped
-  // WS means the PC's fate is unknown/stale either way — JPEG is always
-  // safe to fall back to, the machine is stopped and re-armed on reconnect).
+  // This component's OWN WebRTC signaling result (populated by the machine's
+  // onStream/onFallback callbacks and the gateway's browser_webrtc_state
+  // frame — see the WS lifecycle effect further down). Reset to null/false
+  // on fallback AND on transport disconnect (a dropped WS means the PC's
+  // fate is unknown/stale either way — there is no second sink to fall back
+  // to any more, so a reset here means the panel visibly stops being
+  // interactive until the machine is stopped and re-armed on reconnect).
   const [webrtcStream, setWebrtcStream] = useState<MediaStream | null>(null)
-  // Persistent degraded indicator (review finding). Before this the ONLY
-  // signal that live video had fallen back to still-picture mode was a toast
-  // that auto-dismissed after 4s — look away for five seconds and a broken
-  // video path was indistinguishable from a working one, since the <img> sink
-  // renders identically either way. `null` = not degraded.
-  const [degradedReason, setDegradedReason] = useState<string | null>(null)
+  // Persistent, honest failure indicator (operator directive — JPEG fallback
+  // removal). WebRTC is the ONLY live-video path now: there is no second
+  // sink to quietly keep working while this one degrades, so EVERY
+  // `onFallback` reason — including the reasons that used to be silently
+  // suppressed because JPEG carried on underneath — lands here and drives
+  // the panel's primary error state (see `displayError` below). `null` =
+  // no failure reported (yet).
+  const [webrtcError, setWebrtcError] = useState<string | null>(null)
   const [webrtcHasAudio, setWebrtcHasAudio] = useState(false)
-  // WebRTC build (W1-F) — starts MUTED (autoplay-safe: browsers block
-  // autoplaying audio without a prior user gesture; the video itself still
-  // autoplays fine muted). Flipped by the mute/unmute toolbar button, which
-  // only renders in video mode with hasAudio — that click IS the user
+  // True once the `<video>` sink has decoded its first real frame
+  // (`onLoadedMetadata` — the point `videoWidth`/`videoHeight` become
+  // non-zero). This is the direct replacement for the old JPEG-era `frame`
+  // state: it is what gates the "waiting for first frame" overlay, the
+  // FIRST_FRAME_TIMEOUT_MS honesty deadline, and (via `activeFrameDims`)
+  // every coordinate-mapping/annotate-crop call. Reset to false whenever the
+  // bound stream changes (a fresh stream must prove it decodes too) — see
+  // the srcObject-binding effect and the WS lifecycle effect's
+  // onFallback/onDisconnected handlers.
+  const [videoReady, setVideoReady] = useState(false)
+  // Starts MUTED (autoplay-safe: browsers block autoplaying audio without a
+  // prior user gesture; the video itself still autoplays fine muted).
+  // Flipped by the mute/unmute toolbar button — that click IS the user
   // gesture that makes unmuting reliable. Local component state only (no
-  // persistence yet — out of scope for this wave).
+  // persistence yet).
   const [videoMuted, setVideoMuted] = useState(true)
   const [statusState, setStatusState] = useState<LiveStatus>('connecting')
   // The human-readable text carried on the latest browser_status frame (set
@@ -616,7 +649,7 @@ export function BrowserLiveView({
   const [connected, setConnected] = useState(false)
   // cursorPos state removed — the synthetic cursor overlay is gone (native
   // cursor only). This eliminates a per-pointer-move setState that re-rendered
-  // the entire component (including the screencast <img>) on every coalesced
+  // the entire component (including the <video> sink) on every coalesced
   // move, which competed with wheel/scroll event processing and caused lag.
   // UAT finding FE-6: true whenever the LATEST browser_status frame reported
   // another connection of this same browser session is the one holding
@@ -688,37 +721,76 @@ export function BrowserLiveView({
   const [annotateSubmitting, setAnnotateSubmitting] = useState(false)
   const [annotateError, setAnnotateError] = useState<string | null>(null)
 
-  // WebRTC build (W2-B) — the merge point described at the destructuring
-  // site above: an explicit caller-supplied `mediaStreamProp` always wins
-  // (test/override seam); otherwise this component's own internally-driven
-  // signaling result is what every downstream consumer (`activeFrameDims`,
-  // `cropFrameToFile`, the sink JSX, the mute toggle, `dispatchInput`) reads
-  // as `mediaStream`/`hasAudio`, unchanged from their W1-F names.
+  // The merge point described at the destructuring site above: an explicit
+  // caller-supplied `mediaStreamProp` always wins (test/override seam);
+  // otherwise this component's own internally-driven signaling result is
+  // what every downstream consumer (`activeFrameDims`, `cropFrameToFile`,
+  // the sink JSX, the mute toggle, `dispatchInput`) reads as
+  // `mediaStream`/`hasAudio`.
   const mediaStream = mediaStreamProp ?? webrtcStream
   const hasAudio = mediaStreamProp !== null ? hasAudioProp : webrtcHasAudio
 
+  // Sync `muted` to the DOM PROPERTY, imperatively.
+  //
+  // React writes `muted` on a <video> as an ATTRIBUTE. The browser reads that
+  // attribute once, at mount, to seed the property — and then ignores it. So
+  // `muted={videoMuted}` in the JSX below correctly mutes the element on first
+  // render and NEVER unmutes it: the toolbar button flipped the icon, flipped
+  // aria-pressed, and changed nothing audible. Reported from live use on
+  // macOS 2026-08-12 ("the mute unmute icon does not have an effect").
+  //
+  // This is a long-standing React quirk (facebook/react#10389), not a bug in
+  // this component's logic, which is why it survives a reading of the state
+  // flow. The only reliable fix is to assign the property directly.
+  useEffect(() => {
+    const el = videoRef.current
+    if (el) el.muted = videoMuted
+  }, [videoMuted, mediaStream])
+
+  // "Is a live WebRTC session actually attached" — the direct replacement
+  // for the old JPEG-era `frame !== null` gate (see attachedRef's own doc
+  // comment). Gates whether the interactive container/video sink mounts at
+  // all; `videoReady` (below) separately gates whether it has decoded real
+  // pixels yet.
+  const attached = mediaStream !== null
+
   const isControlling = statusState === 'controlling'
-  // Unified error surface: a transport-level error always wins; otherwise
-  // the latest browser_status{state:'error'} frame's message is shown —
-  // gated on `statusIsError` rather than `statusState === 'error'` so this
-  // still surfaces even when onStatus deliberately left statusState alone
-  // (the "error while controlling" case below). This is what actually
-  // renders (both before and after the first frame arrives) — see the
-  // "!frame" branch and the persistent error strip below.
-  // firstFrameTimedOut (2026-08-03): the connection can be fully established —
-  // WS connected, video track live and unmuted, ZERO console errors — while no
-  // frame ever arrives, because the capture bound to a tab that is no longer
-  // the one being shown. Live-measured on UAT: the panel sat on "Waiting for
-  // the first frame…" and then fell to indistinguishable black, with nothing
-  // anywhere telling the user it had failed. Silence is the bug: without a
-  // deadline this state is visually identical to "still loading" forever.
+  const webrtcErrorMessage = webrtcError ? translateWebRTCFallbackReason(webrtcError) : null
+  // Unified error surface: a transport-level error always wins; then a
+  // WebRTC failure (there is nothing left to fall back to, so this is
+  // terminal until the user retries or a fresh attempt succeeds); then the
+  // latest browser_status{state:'error'} frame's message — gated on
+  // `statusIsError` rather than `statusState === 'error'` so this still
+  // surfaces even when onStatus deliberately left statusState alone (the
+  // "error while controlling" case below). This is what actually renders
+  // (both before and after the video attaches) — see the "!attached" branch
+  // and the persistent error strip below.
+  // firstFrameTimedOut (2026-08-03): the connection can be fully established
+  // — WS connected, WebRTC stream attached, ZERO console errors — while no
+  // real frame ever decodes, because the capture bound to a tab that is no
+  // longer the one being shown. Live-measured on UAT: the panel sat on
+  // "Waiting for the first frame…" and then fell to indistinguishable
+  // black, with nothing anywhere telling the user it had failed. Silence is
+  // the bug: without a deadline this state is visually identical to "still
+  // loading" forever.
   //
   // Only armed once `connected` is true — before that the honest message is
   // "Connecting…", and a slow connect is not a first-frame failure.
   const [firstFrameTimedOut, setFirstFrameTimedOut] = useState(false)
+  // Bumped by `retryWebRTC` (F7 fix, external review 2026-08-13) to re-arm a
+  // FRESH FIRST_FRAME_TIMEOUT_MS deadline for a fresh negotiation attempt.
+  // Without this, clicking Retry after a `firstFrameTimedOut` failure clears
+  // the flag once via `setFirstFrameTimedOut(false)` but never re-runs this
+  // effect (neither `videoReady` nor `connected` changes on retry — only the
+  // WebRTC PC/DC gets torn down and rebuilt, not the WS `connected` state),
+  // so no new timer is ever scheduled: a fresh attempt that ALSO never
+  // decodes a frame would leave the panel stuck on "Waiting for the first
+  // frame…" forever, silently, instead of re-reporting the same honest
+  // failure after another full deadline.
+  const [firstFrameDeadlineNonce, setFirstFrameDeadlineNonce] = useState(0)
   useEffect(() => {
-    if (frame) {
-      // A frame arrived (possibly after a previous timeout — a recapture can
+    if (videoReady) {
+      // A frame decoded (possibly after a previous timeout — a recapture can
       // recover): clear the deadline state so the error does not stick.
       setFirstFrameTimedOut(false)
       return
@@ -729,13 +801,14 @@ export function BrowserLiveView({
     }
     const timer = setTimeout(() => setFirstFrameTimedOut(true), FIRST_FRAME_TIMEOUT_MS)
     return () => clearTimeout(timer)
-  }, [frame, connected])
+  }, [videoReady, connected, firstFrameDeadlineNonce])
 
   const displayError =
     connError ??
+    webrtcErrorMessage ??
     (statusIsError ? statusMessage ?? 'The live browser session reported an error.' : null) ??
-    (firstFrameTimedOut && !frame
-      ? 'No video received from the browser. The capture may be bound to a tab that is no longer active — try switching tabs or reloading the page.'
+    (firstFrameTimedOut && !videoReady
+      ? 'No video received from the live browser. The capture may be bound to a tab that is no longer active — try switching tabs or reloading the page.'
       : null)
 
   // ── ADR-040 D2 — "agent working" signal ───────────────────────────────────
@@ -888,8 +961,8 @@ export function BrowserLiveView({
   }, [])
 
   useEffect(() => {
-    frameRef.current = frame
-  }, [frame])
+    attachedRef.current = attached
+  }, [attached])
   useEffect(() => {
     controllingRef.current = isControlling
     // ADR-040 D2: once the server confirms this connection holds the lock,
@@ -1011,7 +1084,7 @@ export function BrowserLiveView({
     webrtcRef.current = machine
     machine.onStream((stream) => {
       setWebrtcStream(stream)
-      setDegradedReason(null) // recovered
+      setWebrtcError(null) // recovered
     })
     machine.onInputChannelOpen(() => {
       inputChannelOpenRef.current = true
@@ -1019,78 +1092,33 @@ export function BrowserLiveView({
     machine.onInputChannelClose(() => {
       inputChannelOpenRef.current = false
     })
-    // ADR-047 fallback contract: the JPEG path is a wholly separate WS path,
-    // untouched here, and stays AVAILABLE — but it is not unconditionally
-    // running. The server pauses the CDP screencast while every JPEG viewer is
-    // also covered by live WebRTC, and resumes it the moment that stops being
-    // true, including on a mid-session relay-side eviction. (An earlier
-    // revision of this comment said JPEG "never stopped running underneath";
-    // that became false once the pause landed.) This handler just drops the
-    // video sink back to null so the <img> sink takes over on the next
-    // render, and
-    // clears the DC-open flag so dispatchInput routes back to WS immediately
-    // rather than waiting for a stale readyState check to catch up.
-    machine.onFallback((reason) => {
+    // Operator directive (JPEG-fallback removal) — WebRTC is the ONLY live-
+    // video path left; there is nothing to silently swap to any more. Every
+    // reason lands here, unconditionally: drops the stream, resets
+    // `videoReady` (a fresh attempt must decode its own first frame), clears
+    // the DC-open flag so `dispatchInput` stops trying the data channel
+    // immediately rather than waiting for a stale readyState check to catch
+    // up, and records `reason` as a persistent, honest, user-visible error
+    // (`webrtcError` → `displayError`/`webrtcErrorMessage` above) — never a
+    // toast that could auto-dismiss unnoticed. `console.warn` always fires
+    // too, for a support engineer reading the console. The machine itself
+    // keeps retrying automatically in the background (exponential backoff,
+    // up to its own retry budget — browserWebRTC.ts); the error UI's Retry
+    // button is for after that budget is exhausted, or for a manual nudge.
+    // Factored out (fix-wave, external review F1, 2026-08-13) so the SAME
+    // reset-and-report logic can also run from `onWebRTCState` below for the
+    // gap that callback covers on its own — see that handler's doc comment.
+    const applyWebrtcFailure = (reason: string) => {
+      console.warn('[browser-live] WebRTC failed:', reason)
       setWebrtcStream(null)
-      setDegradedReason(reason)
       setWebrtcHasAudio(false)
+      setVideoReady(false)
+      setWebrtcError(reason)
       inputChannelOpenRef.current = false
-      // fix-wave B (HIGH): the reason used to be discarded entirely — a
-      // silent drop to JPEG with nothing telling the user (or a support
-      // engineer reading the console) WHY. Capability-gate reasons
-      // (disabled/not_capable/lite_build) arrive via `applyState` before any
-      // video ever started — those are simply "this mode isn't available
-      // here," not a failure, so they stay silent (JPEG is just the mode, not
-      // a degradation). Every other reason (ice-failed, answer-timeout,
-      // ice-disconnected-timeout, offer-send-failed, set-remote-description-
-      // failed, stream-stopped, pc-create-failed, offer-setup-failed,
-      // no-local-description, or a gateway 'error'/'unavailable') means a
-      // session that WAS live (or was actively being negotiated) just fell
-      // over — that's worth a console trace plus a transient, non-blocking
-      // heads-up so the user understands why the picture just changed.
-      if (!WEBRTC_CAPABILITY_GATE_REASONS.has(reason)) {
-        console.warn('[browser-live] WebRTC fell back to JPEG:', reason)
-        // fix-wave (MED): an 'answer-timeout' fallback while this machine has
-        // NEVER reached 'connected' in this panel session is very likely the
-        // legitimate cold-start latency (capture start ~20s + bringToFront
-        // ~5s + tracks wait, ~25s+ worst case) racing the machine's own
-        // extended-but-still-finite firstAnswerTimeoutMs, NOT a real
-        // degradation — a toast here is a false alarm that then connects
-        // fine on the machine's own automatic retry. `machine.hasConnectedOnce`
-        // is the lifetime "ever connected" flag (browserWebRTC.ts) —
-        // console.warn still fires unconditionally (so a support engineer
-        // reading the console still sees it), only the user-facing toast is
-        // suppressed. Every OTHER reason, and 'answer-timeout' once the
-        // stream HAD connected before, still toasts — that's a genuine
-        // degradation of a previously-working stream.
-        // Cold-start suppression is correct for the FIRST attempt (a slow
-        // capture start racing the timeout, which then connects fine on
-        // retry) — but suppressing it for EVERY retry meant a total WebRTC
-        // failure produced no user-facing explanation at all, ever: the panel
-        // just silently looked like plain JPEG (review finding). The
-        // persistent degraded badge now covers the steady state; this keeps
-        // the toast suppressed only while a cold start is still plausibly in
-        // progress, i.e. the first attempt.
-        const coldStartAnswerTimeout =
-          reason === 'answer-timeout' && !machine.hasConnectedOnce && machine.retryAttempts === 0
-        if (!coldStartAnswerTimeout) {
-          useUiStore.getState().addToast({
-            // The reason is carried IN the toast, not just console.warn'd
-            // above (2026-07-30 UAT): the operator reproduces this on an
-            // iPad, where opening a JS console is impractical, so a bare
-            // "degraded" message left the actual trigger — the one thing
-            // needed to tell an ICE drop from a gateway-side unavailability
-            // from an answer timeout — unobservable on the only device that
-            // reproduces it.
-            message: `Live video degraded to picture mode — audio unavailable. (${reason})`,
-            variant: 'warning',
-          })
-        }
-      }
-    })
+    }
+    machine.onFallback(applyWebrtcFailure)
 
     const conn = new BrowserLiveWsConnection(sessionId, agentId, {
-      onScreencast: (f) => setFrame(f),
       // ADR-041 D4 — tab list + active index, broadcast on any
       // open/close/switch/title-change. This is the sole source of truth
       // the tab strip renders from (see the `tabState` doc comment above).
@@ -1170,6 +1198,29 @@ export function BrowserLiveView({
           // burning the full 5s answer timeout waiting for an answer that was
           // never going to arrive because the offer itself never left.
           machine.start((sdp) => wsRef.current?.sendWebRTCOffer(sdp) ?? false)
+          return
+        }
+        // Bugfix (HIGH, external review F1, 2026-08-13): `applyState` above
+        // (browserWebRTC.ts) deliberately only reacts to `available:false`
+        // while the machine is `offering`/`connected` — its own doc comment
+        // says deciding whether/when to react to an unavailable signal
+        // BEFORE `start()` has ever been called is THIS caller's job, not
+        // applyState's. But a capability-gate refusal (`disabled`/
+        // `lite_build`/`not_capable`) arrives at ATTACH time, before
+        // `start()` has EVER run — the machine is still `idle`, so
+        // `applyState` no-ops, and (since `f.available` is false) the
+        // `machine.start()` branch above is skipped too. NOTHING reacted:
+        // the panel sat on "Connecting…" for the full FIRST_FRAME_TIMEOUT_MS
+        // and then showed an unrelated "stale tab" message instead of the
+        // real, honest capability-gate reason — exactly the silent-degrade
+        // ADR-061 exists to eliminate. Cover the complement of applyState's
+        // own condition: whenever the machine is NOT actively
+        // offering/connected (idle, or already reporting a fallback),
+        // nothing else is going to surface this, so surface it here. Reuses
+        // the exact same reset-and-report logic `onFallback` uses above, so
+        // this can never drift into different copy for the identical signal.
+        if (machine.state !== 'offering' && machine.state !== 'connected') {
+          applyWebrtcFailure(f.reason ?? 'unavailable')
         }
       },
       onError: (message) => setConnError(message),
@@ -1189,6 +1240,7 @@ export function BrowserLiveView({
         machine.stop()
         setWebrtcStream(null)
         setWebrtcHasAudio(false)
+        setVideoReady(false)
         inputChannelOpenRef.current = false
         // The control-lock is server-side and per-connection — once the
         // transport drops, whatever control state we last knew is stale (the
@@ -1228,58 +1280,45 @@ export function BrowserLiveView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, agentId])
 
-  // ── WebRTC build (W1-F) — bind the <video> sink's srcObject imperatively.
-  // React has no `srcObject` JSX prop (it's a DOM property, not an
-  // attribute) — this is the standard pattern. Re-runs whenever `mediaStream`
-  // changes (a fresh stream after reconnect/recapture must rebind the SAME
-  // <video> element rather than relying on a remount) AND whenever the
-  // <video> element itself transitions between mounted/unmounted (`frame !==
-  // null` — the JSX below only renders the <video> at all once `frame` is
-  // truthy, mirroring the wheel-listener effect's own `frame !== null`
-  // dependency further down for the identical reason). Without the second
-  // dependency, a `mediaStream` that was ALREADY set on the render where
-  // `frame` first flips true would bind against a stale `videoRef.current ===
-  // null` (captured before the element existed) and never re-run, since
-  // `mediaStream`'s identity didn't change on that render — the first frame
-  // would leave the video sink with no stream bound at all. No-ops whenever
-  // the element isn't currently mounted (mediaStream null → the <img> sink
-  // renders instead, see the JSX below — videoRef.current is null then).
+  // ── Bind the <video> sink's srcObject imperatively. React has no
+  // `srcObject` JSX prop (it's a DOM property, not an attribute) — this is
+  // the standard pattern. Re-runs whenever `mediaStream` changes (a fresh
+  // stream after reconnect/recapture must rebind the SAME <video> element
+  // rather than relying on a remount, since the element is already mounted
+  // by the time this fires — the JSX below mounts <video> as soon as
+  // `attached`/`mediaStream` is truthy, in the SAME render, so there is no
+  // separate "element exists yet?" gap to bridge any more). Also resets
+  // `videoReady` on every rebind — a new stream must prove it decodes its
+  // own first frame before the "waiting" overlay clears; `onLoadedMetadata`
+  // on the element (JSX below) is what flips it back to true. No-ops
+  // whenever the element isn't currently mounted (mediaStream null →
+  // nothing renders — see the "attached" gate in the JSX further down).
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
     video.srcObject = mediaStream ?? null
-  }, [mediaStream, frame !== null])
+    setVideoReady(false)
+  }, [mediaStream])
 
-  // ── WebRTC build (W1-F) — the single "which sink's dimensions do
-  // coordinate-mapping and annotate-crop use right now" resolver. Video wins
-  // whenever a stream is attached AND the <video> element has actually
-  // reported its intrinsic size (`videoWidth`/`videoHeight` — 0 until the
-  // `loadedmetadata` event fires); otherwise falls back to the JPEG
-  // screencast frame exactly as before. `page_scale` is omitted (implicitly
-  // 1) for the video branch — see mapClientToDeviceVideo's doc comment
-  // (browserLiveCoords.ts) for why tabCapture has no analogous factor to
-  // divide out. Stable identity except when the `mediaStream` prop itself
-  // changes — safe to call from any handler/effect below.
-  const activeFrameDims = useCallback((): { width: number; height: number; pageScale?: number; video: boolean } | null => {
+  // ── The single "what are the video sink's real pixel dimensions right
+  // now" resolver — null until the <video> element has actually reported its
+  // intrinsic size (`videoWidth`/`videoHeight` — 0 until the
+  // `loadedmetadata` event fires). Every coordinate-mapping/annotate-crop
+  // call routes through this so "no real dimensions yet" is handled in
+  // exactly one place. Stable identity except when the `mediaStream` prop
+  // itself changes — safe to call from any handler/effect below.
+  const activeFrameDims = useCallback((): { width: number; height: number } | null => {
     const video = videoRef.current
     if (mediaStream && video && video.videoWidth > 0 && video.videoHeight > 0) {
-      return { width: video.videoWidth, height: video.videoHeight, video: true }
+      return { width: video.videoWidth, height: video.videoHeight }
     }
-    const f = frameRef.current
-    if (f) return { width: f.width, height: f.height, pageScale: f.page_scale, video: false }
     return null
   }, [mediaStream])
 
-  // ── WebRTC build (W1-F) — the ONE place a client-space pointer coordinate
-  // is turned into the device-space coordinate CDP dispatch/BrowserInputFrame
-  // expects, for EITHER sink. Replaces four previously-duplicated
-  // `mapClientToDevice(e.clientX, e.clientY, rect, frameRef.current.width,
-  // frameRef.current.height, frameRef.current.page_scale)` call sites (wheel/
-  // pointerMove/pointerDown/pointerUp below) with one routed call — so the
-  // video-vs-JPEG branch can never drift between handlers. Returns exactly
-  // what mapClientToDevice would have returned when `mediaStream` is null
-  // (activeFrameDims's fallback branch reads the identical frameRef fields),
-  // preserving byte-identical JPEG-mode behavior.
+  // ── The ONE place a client-space pointer coordinate is turned into the
+  // device-space coordinate CDP dispatch/BrowserInputFrame expects. Replaces
+  // four previously-duplicated call sites (wheel/pointerMove/pointerDown/
+  // pointerUp below) with one routed call.
   const mapPointerToDeviceCoords = useCallback(
     (clientX: number, clientY: number, rect: RectLike): (DeviceCoords & { captureWidth?: number; captureHeight?: number }) | null => {
       const dims = activeFrameDims()
@@ -1294,18 +1333,14 @@ export function BrowserLiveView({
       // here, so this stays correct even if a future container size doesn't
       // match its content for some other reason.
       const contentRect = computeObjectContainRect(rect, dims.width, dims.height)
-      const coords = dims.video
-        ? mapClientToDeviceVideo(clientX, clientY, contentRect, dims.width, dims.height)
-        : mapClientToDevice(clientX, clientY, contentRect, dims.width, dims.height, dims.pageScale)
+      const coords = mapClientToDeviceVideo(clientX, clientY, contentRect, dims.width, dims.height)
       if (!coords) return null
       // Fault 3 fix (docs/internal/browser-viewport-input-rootcause-2026-07-31.md):
       // the video sink's intrinsic size can silently drift from the page's CSS
       // pixel space (measured 319x158 vs ~1280 page — the encoder downscales
-      // under load), which broke the server's old "videoWidth == page pixels"
-      // assumption. Report the SAME `dims` this call just mapped into, so the
-      // server can rescale instead of assuming. JPEG mode omits both — its
-      // page_scale handling already produces CSS pixels, nothing to correct.
-      return dims.video ? { ...coords, captureWidth: dims.width, captureHeight: dims.height } : coords
+      // under load). Report the SAME `dims` this call just mapped into, so
+      // the server can rescale instead of assuming videoWidth == page pixels.
+      return { ...coords, captureWidth: dims.width, captureHeight: dims.height }
     },
     [activeFrameDims],
   )
@@ -1326,13 +1361,12 @@ export function BrowserLiveView({
     return driveModeRef.current === 'you-driving' || implicitDriveActive
   }, [])
 
-  // ── WebRTC build (W2-B) — the ONE place a `browser_input` payload picks
-  // its transport. Rule (wave-plan W2-B): DC-first (the WebRTC machine's
-  // "input" data channel) when BOTH the video sink is active (`mediaStream`
-  // set — matches the sink-swap/activeFrameDims resolver above) AND that
-  // channel is actually open right now; otherwise the existing WS
-  // `browser_input` path (JPEG mode, or video mode before/between DC
-  // availability). Only pointer/key/wheel/text input kinds ever reach this
+  // ── The ONE place a `browser_input` payload picks its transport. Rule
+  // (wave-plan W2-B): DC-first (the WebRTC machine's "input" data channel)
+  // when BOTH the video sink is attached (`mediaStream` set) AND that
+  // channel is actually open right now; otherwise the WS `browser_input`
+  // path (before/between DC availability — there is no other fallback mode
+  // left). Only pointer/key/wheel/text input kinds ever reach this
   // function — `navigate`/`navigate_back`/`reload` (control-gated, like
   // `browser_control`/`browser_tab_action`) stay on WS unconditionally at
   // their own call sites, matching the gateway's input-frame parsing
@@ -1394,7 +1428,7 @@ export function BrowserLiveView({
     // handleViewport drops it (applied=false) — and with the panel size never
     // changing again, the sub-threshold gate below suppressed every future
     // send, pinning the capture to launch geometry forever. This effect
-    // re-runs when `frame` flips non-null (media now exists server-side), so
+    // re-runs when `attached` flips true (media now exists server-side), so
     // clearing the sent-marker here forces exactly one re-send at a moment
     // the server can actually apply it. Worst case is one duplicate frame,
     // which the server-side throttle absorbs.
@@ -1574,16 +1608,17 @@ export function BrowserLiveView({
       document.removeEventListener('focusout', schedule)
       ro.disconnect()
     }
-    // `frame !== null` is load-bearing, not incidental (BLOCKER caught in
-    // review): containerRef is only attached once a frame exists (the
-    // container div is gated on `frame`), but `connected` flips true from
-    // ws.onopen — SECONDS before the first frame arrives, since the backend's
-    // cold capture start can run ~25s. With `[connected]` alone this effect
-    // ran exactly once, while containerRef.current was still null, bailed,
-    // and never re-ran — so sendViewport was NEVER called on a fresh open and
-    // the capture stayed at its hardcoded default. Same dependency shape the
-    // wheel listener below already uses, for the same reason.
-  }, [connected, frame !== null])
+    // `attached` is load-bearing, not incidental (BLOCKER caught in review):
+    // containerRef is only attached once a session is attached (the
+    // container div is gated on `attached`), but `connected` flips true from
+    // ws.onopen — SECONDS before a WebRTC stream ever attaches, since the
+    // backend's cold capture start can run ~25s. With `[connected]` alone
+    // this effect ran exactly once, while containerRef.current was still
+    // null, bailed, and never re-ran — so sendViewport was NEVER called on a
+    // fresh open and the capture stayed at its hardcoded default. Same
+    // dependency shape the wheel listener below already uses, for the same
+    // reason.
+  }, [connected, attached])
 
   // ── coalesced pointer-move + wheel pacing ────────────────────────────────
   // Native pointermove fires far faster than the backend's input rate limiter
@@ -1695,7 +1730,7 @@ export function BrowserLiveView({
       // gives annotating top priority — closes a latent gap where a stale
       // isControlling:true during the annotate-entry release race used to
       // let a scroll through).
-      if (!canDispatchInput(false) || !frameRef.current) return
+      if (!canDispatchInput(false) || !attachedRef.current) return
       e.preventDefault()
       const rect = el!.getBoundingClientRect()
       const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
@@ -1716,7 +1751,7 @@ export function BrowserLiveView({
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [frame !== null, canDispatchInput, mapPointerToDeviceCoords, scheduleInputFlush])
+  }, [attached, canDispatchInput, mapPointerToDeviceCoords, scheduleInputFlush])
 
 
   // Cancel any in-flight coalesced move on unmount — nothing to flush once
@@ -1853,46 +1888,22 @@ export function BrowserLiveView({
     setAnnotateMode(true)
   }, [annotateMode, isControlling, handleCancelAnnotation, setPendingTake])
 
-  // Crops the CURRENTLY-RENDERED sink — the JPEG <img> (default) or, in
-  // WebRTC video mode (W1-F), the <video> element — to a PNG File (mirrors
-  // the canvas pattern in media-actions.ts's fetchImagePng). Reads the live
+  // Crops the CURRENTLY-RENDERED <video> sink to a PNG File (mirrors the
+  // canvas pattern in media-actions.ts's fetchImagePng). Reads the live
   // element at call time (not a stale snapshot) so the crop always reflects
   // exactly what the user was looking at when they finished the drag/click.
+  // `readyState >= 2` (HAVE_CURRENT_DATA) means "there is an actual decoded
+  // frame available to draw right now," not just "the element exists in the
+  // DOM." `drawCropToPngFile` reuses `scaleCropToImagePixels` to correct for
+  // a recapture-driven resolution change landing mid-gesture (see that
+  // function's own doc comment).
   const cropFrameToFile = useCallback(
     async (rect: FrameCropRect, frameWidth: number, frameHeight: number): Promise<File | null> => {
-      // WebRTC build (W1-F) — video-mode source. `readyState >= 2`
-      // (HAVE_CURRENT_DATA) mirrors the img path's `img.complete` check
-      // below: both mean "there is an actual decoded frame available to
-      // draw right now," not just "the element exists in the DOM." Draws
-      // from `videoWidth`/`videoHeight` — same output contract as the img
-      // path (a cropped PNG File), same scale-correction math
-      // (`drawCropToPngFile` below reuses `scaleCropToImagePixels` for
-      // both sinks rather than duplicating it — see that function's own
-      // doc comment for why a video-mode drift case still needs it).
-      if (mediaStream && videoRef.current) {
-        const video = videoRef.current
-        if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) return null
-        return drawCropToPngFile(video, video.videoWidth, video.videoHeight, rect, frameWidth, frameHeight)
-      }
-      const img = imgRef.current
-      if (!img || !img.complete || img.naturalWidth === 0) return null
-      // UAT finding (blank crop): `rect` is in frame-METADATA space
-      // (frame.width/height = CDP Metadata.DeviceWidth/DeviceHeight — the full
-      // viewport device-pixel size), but the screencast JPEG is captured with
-      // BOTH WithMaxWidth(screencastMaxWidth=1280) AND
-      // WithMaxHeight(screencastMaxHeight=720) (live.go), so the decoded
-      // <img>'s natural pixels (img.naturalWidth/Height) are DOWNSCALED
-      // whenever the device size exceeds the screencast max bound on EITHER
-      // axis (a narrow-tall/portrait viewport hits the same downscale via the
-      // height axis). Using `rect` directly as the drawImage SOURCE rect then
-      // reads an out-of-bounds/misaligned region of the smaller bitmap →
-      // drawImage draws nothing → a transparent (blank white/black) crop.
-      // `drawCropToPngFile` scales the source rect from frame space into the
-      // img's actual natural-pixel space; the destination canvas is sized to
-      // that native region so we capture at the JPEG's true resolution.
-      return drawCropToPngFile(img, img.naturalWidth, img.naturalHeight, rect, frameWidth, frameHeight)
+      const video = videoRef.current
+      if (!video || video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) return null
+      return drawCropToPngFile(video, video.videoWidth, video.videoHeight, rect, frameWidth, frameHeight)
     },
-    [mediaStream],
+    [],
   )
 
   // Finalizes a drag/click selection into a pendingAnnotation (crop + open
@@ -1911,13 +1922,10 @@ export function BrowserLiveView({
         useUiStore.getState().addToast({ message: 'Could not capture that region — try again.', variant: 'error' })
         resetSelection()
       }
-      // WebRTC build (W1-F): activeFrameDims() resolves to the <video>'s
-      // videoWidth/videoHeight (page_scale 1) in video mode, or the JPEG
-      // frame's width/height/page_scale otherwise — the SAME resolver the
-      // pointer/wheel handlers use, so the crop rect computed here always
-      // matches the sink cropFrameToFile actually draws from. Reduces to
-      // exactly the old `frameRef.current` read/gate when mediaStream is
-      // null (byte-identical JPEG-mode behavior).
+      // activeFrameDims() resolves to the <video>'s videoWidth/videoHeight —
+      // the SAME resolver the pointer/wheel handlers use, so the crop rect
+      // computed here always matches what cropFrameToFile actually draws
+      // from.
       const dims = activeFrameDims()
       if (!dims) return fail()
       // Letterbox correction (2026-07-31) — the precondition this component's
@@ -1946,11 +1954,7 @@ export function BrowserLiveView({
 
       const file = await cropFrameToFile(cropRect, dims.width, dims.height)
       if (!file) return fail()
-      const center = framePixelToDeviceCoords(
-        cropRect.x + cropRect.width / 2,
-        cropRect.y + cropRect.height / 2,
-        dims.pageScale,
-      )
+      const center = framePixelToDeviceCoords(cropRect.x + cropRect.width / 2, cropRect.y + cropRect.height / 2)
       setPendingAnnotation({ file, previewUrl: URL.createObjectURL(file), point: center })
     },
     [cropFrameToFile, resetSelection, activeFrameDims],
@@ -2074,7 +2078,7 @@ export function BrowserLiveView({
     // ack may not have landed yet — see implicitDriveRef's doc comment).
     // canDispatchInput folds in the agent-working / annotate-mode / drive
     // gates that used to be re-derived here separately.
-    if (!canDispatchInput(implicitDriveRef.current) || !frameRef.current || !containerRef.current) return
+    if (!canDispatchInput(implicitDriveRef.current) || !attachedRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
     // Local cursor overlay updates immediately every event — only the
     // network send is throttled, so the synthetic cursor still tracks the
@@ -2120,7 +2124,7 @@ export function BrowserLiveView({
       // must be Cancelled or Sent before starting a new drag; reading the
       // ref (rather than adding pendingAnnotation to the dep array) keeps
       // this callback's identity stable across every popover open/close.
-      if (!frameRef.current || !containerRef.current || pendingAnnotationRef.current) return
+      if (!attachedRef.current || !containerRef.current || pendingAnnotationRef.current) return
       focusAndCapturePointer(e)
       const rect = containerRef.current.getBoundingClientRect()
       const point = { x: e.clientX - rect.left, y: e.clientY - rect.top }
@@ -2130,6 +2134,31 @@ export function BrowserLiveView({
       setSelectionCurrent(point)
       return
     }
+    // Bugfix (MED, external review F5, 2026-08-13): the interactive
+    // container mounts the instant a WebRTC stream ATTACHES (`attached`),
+    // independently of whether it has decoded a real first frame yet — the
+    // "Waiting for the first frame…" overlay covering it is deliberately
+    // `pointer-events-none` so a click reaches THIS handler once a frame IS
+    // actually showing (see the overlay's own doc comment). Before this fix,
+    // the mode branch below ran regardless: for a click during that gap
+    // while the agent was mid-turn, `takeWheelIfNeeded` (further down)
+    // paused the agent via `cancelStream` and grabbed the control lock for a
+    // click that could never have landed on the page at all —
+    // `mapPointerToDeviceCoords` (via `activeFrameDims`) would have returned
+    // null anyway, but only AFTER the turn was already aborted. That window
+    // is the entire WebRTC cold start (seconds to tens of seconds), and the
+    // black box gives no visual reason not to click it. Bail out before any
+    // take/dispatch decision — not just before dispatch — so a click here is
+    // a true no-op, matching how it already LOOKS (nothing to click on yet).
+    // Reuses `activeFrameDims()` — the SAME "is there a real decoded frame to
+    // map coordinates against" check `mapPointerToDeviceCoords` already runs
+    // further down — rather than the `videoReady` React state directly: the
+    // two are meant to always agree in production (both driven by the same
+    // `onLoadedMetadata` event), but `activeFrameDims()` is what the rest of
+    // this file already treats as the canonical "ready" signal, so gating on
+    // it here keeps a single source of truth instead of introducing a
+    // second, parallel one.
+    if (!attachedRef.current || !activeFrameDims() || !containerRef.current) return
     // ADR-040 D2, UAT fix (two-click take-over bug): a click on the frame
     // while the agent is working now takes the wheel in ONE action, exactly
     // like the omnibox submit handler (which has always allowed
@@ -2175,7 +2204,9 @@ export function BrowserLiveView({
       takeWheelIfNeeded()
       implicitDriveRef.current = true
     }
-    if (!frameRef.current || !containerRef.current) return
+    // attachedRef/containerRef are already guarded by the readiness check at
+    // the top of this handler (which also requires a real activeFrameDims())
+    // — no need to re-check either here.
     focusAndCapturePointer(e)
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
@@ -2214,6 +2245,7 @@ export function BrowserLiveView({
     )
   }, [
     annotateMode,
+    activeFrameDims,
     focusAndCapturePointer,
     takeWheelIfNeeded,
     mapPointerToDeviceCoords,
@@ -2243,7 +2275,7 @@ export function BrowserLiveView({
     // duration, not the just-cleared one.
     const wasImplicitDrive = implicitDriveRef.current
     implicitDriveRef.current = false
-    if (!canDispatchInput(wasImplicitDrive) || !frameRef.current || !containerRef.current) return
+    if (!canDispatchInput(wasImplicitDrive) || !attachedRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
@@ -2446,6 +2478,39 @@ export function BrowserLiveView({
     ? 'Someone else is currently driving'
     : `Take over — pause ${agentDisplayName} and take control`
 
+  // Operator directive (JPEG-fallback removal) — the one manual "try live
+  // video again" entry point, offered wherever `displayError` is shown (the
+  // empty-state error and the stuck-decoding overlay below). Clears the
+  // stale error optimistically so the UI immediately reflects "trying
+  // again" rather than showing the old failure while a fresh attempt is
+  // already in flight; a repeat failure re-populates it via `onFallback`.
+  // The machine's own automatic retry (exponential backoff, its own budget
+  // — browserWebRTC.ts) runs independently of this; this button is for
+  // after that budget is exhausted, or a manual nudge.
+  //
+  // Bugfix (MED, external review F7, 2026-08-13): `machine.start()` alone
+  // (the old body) is a documented no-op once the machine is already
+  // 'offering' or 'connected' (browserWebRTC.ts's own doc comment) — exactly
+  // the state a `firstFrameTimedOut` failure leaves it in (ICE connected,
+  // stream attached, just no decoded pixels), so clicking Retry for THAT
+  // failure did nothing observable: no new offer went out, and neither
+  // `firstFrameTimedOut` nor `webrtcError` was cleared, so the identical
+  // message just sat there looking clicked-and-ignored. `stop()` first
+  // forces a clean teardown (closes the stale PC/DC, cancels any pending
+  // auto-retry, resets the machine to 'idle') so the following `start()`
+  // always begins a genuinely fresh negotiation attempt, regardless of what
+  // state the machine was previously stuck in — and `firstFrameTimedOut` is
+  // now cleared here too, alongside `webrtcError`, since it is the OTHER
+  // source `displayError` can come from (see `displayError`'s own doc
+  // comment) and a real retry attempt must reset both, not just one.
+  const retryWebRTC = () => {
+    setWebrtcError(null)
+    setFirstFrameTimedOut(false)
+    setFirstFrameDeadlineNonce((n) => n + 1)
+    webrtcRef.current?.stop()
+    webrtcRef.current?.start((sdp) => wsRef.current?.sendWebRTCOffer(sdp) ?? false)
+  }
+
   return (
     <div className={cn('flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
       {/* == Row A: tabs + window controls =============================
@@ -2646,22 +2711,6 @@ export function BrowserLiveView({
           <driveChip.Icon size={12} weight={driveChip.pulse ? 'fill' : 'regular'} />
           {driveChip.label}
         </span>
-        {degradedReason && (
-          <button
-            type="button"
-            tabIndex={0}
-            data-testid="browser-degraded-badge"
-            onClick={() => {
-              setDegradedReason(null)
-              webrtcRef.current?.start((sdp) => wsRef.current?.sendWebRTCOffer(sdp) ?? false)
-            }}
-            title={`Live video degraded to picture mode (${degradedReason}). Click to retry.`}
-            aria-label={`Live video degraded: ${degradedReason}. Retry live video.`}
-            className={cn(TOOLBAR_ICON_BTN, 'text-[var(--color-warning)] hover:text-[var(--color-warning)]')}
-          >
-            <WarningCircle size={16} weight="fill" />
-          </button>
-        )}
         {canAnnotate && (
           <button tabIndex={0}
             type="button"
@@ -2725,23 +2774,32 @@ export function BrowserLiveView({
         >
           Send a message to hand back to {resolvedAgentName ?? 'the agent'} — or press Esc to stop driving
         </p>
-        {!frame && (
+        {!attached && (
           <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-[var(--color-muted)]">
             {displayError ? (
               <>
                 <WarningCircle size={22} className="text-[var(--color-error)]" />
                 <p className="text-[var(--color-error)]">{displayError}</p>
+                <button
+                  type="button"
+                  tabIndex={0}
+                  onClick={retryWebRTC}
+                  data-testid="browser-live-retry"
+                  className="mt-1 rounded-full border border-[var(--color-border)] px-3 py-1 text-xs font-medium text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                >
+                  Retry
+                </button>
               </>
             ) : (
               <>
                 <SpinnerGap size={20} className="animate-spin" />
-                <p>{connected ? 'Waiting for the first frame…' : 'Connecting to the live browser…'}</p>
+                <p>{connected ? 'Starting live video…' : 'Connecting to the live browser…'}</p>
               </>
             )}
           </div>
         )}
 
-        {frame && (
+        {attached && (
           <div
             ref={containerRef}
             tabIndex={0}
@@ -2770,54 +2828,77 @@ export function BrowserLiveView({
             onKeyUp={handleKeyUp}
             onDragStart={(e) => e.preventDefault()}
           >
-            {/* WebRTC build (W1-F) — sink swap: a <video> bound to
-                `mediaStream` replaces the JPEG <img> IN PLACE whenever a
-                stream is attached; falls straight back to the <img> when
-                `mediaStream` is null (the default, and the only case any
-                caller exercises until Wave 2 wires signaling) — byte-
-                identical to the pre-W1-F render in that case. Sizing mirrors
-                the <img> (object-contain within the panel). Starts muted
+            {/* The ONLY video sink — mounted the instant a WebRTC stream is
+                attached (`attached`), independently of whether it has
+                decoded a real frame yet (`videoReady`, tracked via
+                onLoadedMetadata below) — the element has to exist and be
+                bound before it can ever report metadata. The "waiting for
+                first frame" overlay just below covers the gap honestly
+                instead of showing a silent black box. Starts muted
                 (autoplay-safe) — see the mute toggle button in the header
                 above and the srcObject-binding effect earlier in this
                 component. No <track> captions: this is a live remote-control
                 surface (mirrors the agent's own screen), not authored video
-                content — same rationale the <img>'s plain alt text already
-                reflects. */}
-            {mediaStream ? (
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted={videoMuted}
-                aria-label="Live browser session"
-                data-testid="browser-live-video"
-                // BUG 1 fix: fillContainer stretches to 100% of the
-                // (now-container-sized) box and lets object-contain do the
-                // aspect-preserving fit — the OLD `h-auto w-auto max-h-full
-                // max-w-full` combination can shrink but never grow past
-                // intrinsic size, which is exactly what left the pop-out's
-                // video tiny and letterboxed inside a much larger window.
-                className={cn(
-                  'block select-none object-contain',
-                  fillContainer ? 'h-full w-full' : 'h-auto max-h-full w-auto max-w-full',
+                content. */}
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted={videoMuted}
+              onLoadedMetadata={() => setVideoReady(true)}
+              aria-label="Live browser session"
+              data-testid="browser-live-video"
+              // BUG 1 fix: fillContainer stretches to 100% of the
+              // (now-container-sized) box and lets object-contain do the
+              // aspect-preserving fit — the OLD `h-auto w-auto max-h-full
+              // max-w-full` combination can shrink but never grow past
+              // intrinsic size, which is exactly what left the pop-out's
+              // video tiny and letterboxed inside a much larger window.
+              className={cn(
+                'block select-none object-contain',
+                fillContainer ? 'h-full w-full' : 'h-auto max-h-full w-auto max-w-full',
+              )}
+            />
+            {/* "Waiting for first frame" honesty gate (2026-08-03 UAT fix) —
+                the stream can be attached (ICE connected, track live) while
+                no real pixels ever decode, because the capture is bound to a
+                tab that is no longer the one being shown. Overlays the still
+                (black) video rather than un-mounting it, so `loadedmetadata`
+                stays reachable and a late recovery clears this without a
+                remount. `firstFrameTimedOut` promotes the spinner to the
+                same honest, actionable error + Retry the top-level empty
+                state uses once FIRST_FRAME_TIMEOUT_MS elapses with nothing
+                decoded. */}
+            {!videoReady && (
+              <div
+                data-testid="browser-live-waiting-overlay"
+                className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/70 p-6 text-center text-sm text-[var(--color-muted)]"
+              >
+                {displayError ? (
+                  <>
+                    <WarningCircle size={22} className="text-[var(--color-error)]" />
+                    <p className="text-[var(--color-error)]">{displayError}</p>
+                    <button
+                      type="button"
+                      tabIndex={0}
+                      onClick={retryWebRTC}
+                      data-testid="browser-live-retry-overlay"
+                      className="pointer-events-auto mt-1 rounded-full border border-[var(--color-border)] px-3 py-1 text-xs font-medium text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                    >
+                      Retry
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <SpinnerGap size={20} className="animate-spin" />
+                    <p>Waiting for the first frame…</p>
+                  </>
                 )}
-              />
-            ) : (
-              <img
-                ref={imgRef}
-                src={`data:image/jpeg;base64,${frame.data}`}
-                alt="Live browser session"
-                draggable={false}
-                className={cn(
-                  'block select-none',
-                  fillContainer ? 'h-full w-full object-contain' : 'h-auto max-h-full w-auto max-w-full',
-                )}
-                data-testid="browser-live-img"
-              />
+              </div>
             )}
             {/* Synthetic cursor removed — the native cursor is used directly
                 when driving (more accurate, no double-cursor). The agent's
-                pointer is visible in the screencast image itself. */}
+                pointer is visible in the live video itself. */}
             {/* Selection-box overlay (ADR-039 D-B1/B2) — container-relative CSS
                 coords, drawn live while dragging and frozen once the
                 selection finalizes into pendingAnnotation (comment popover
@@ -2841,8 +2922,8 @@ export function BrowserLiveView({
             watch-only (agent working, user doesn't hold the lock). Adjacent
             to the frame (not a header button — D1's header stays limited to
             Close/Pin/Pen/Pop-out). Rendered whenever agent-working, even
-            before a frame has arrived, so the user can pause the agent
-            immediately rather than waiting on the first screencast frame. */}
+            before the video has attached, so the user can pause the agent
+            immediately rather than waiting on the first decoded frame. */}
         {visualState === 'agent-working' && (
           <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center">
             <button tabIndex={0}
@@ -2937,12 +3018,18 @@ export function BrowserLiveView({
         )}
       </div>
 
-      {/* Persistent error strip — shown alongside the frame once one has rendered (the
-          empty-state branch above already surfaces displayError before any frame arrives).
-          Covers both transport errors (connError) and a terminal browser_status{state:'error'}
-          (already-controlled, take-control-disabled, no-manager-for-agent, live-view-disabled,
-          malformed control, …) so a semantic status error is just as visible as a transport one. */}
-      {frame && displayError && (
+      {/* Persistent error strip — shown once the video is ATTACHED AND READY
+          (the empty-state branch and the "waiting for first frame" overlay
+          above already surface displayError before then, each with its own
+          Retry). Covers a transport error (connError) or a terminal
+          browser_status{state:'error'} (already-controlled,
+          take-control-disabled, no-manager-for-agent, live-view-disabled,
+          malformed control, …) arriving AFTER the video was already playing
+          fine — a semantic status error is just as visible as a transport
+          one. `webrtcError` never reaches this branch: a WebRTC failure
+          clears `mediaStream`, which flips `attached` false and routes the
+          user to the top-level empty-state error instead. */}
+      {attached && videoReady && displayError && (
         <div role="alert" className="shrink-0 border-t border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-2 text-xs text-[var(--color-error)]">
           {displayError}
         </div>

@@ -15,7 +15,51 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { BrowserWebRTCSession } from './browserWebRTC'
+import { BrowserWebRTCSession, translateWebRTCFallbackReason } from './browserWebRTC'
+
+// Operator directive (JPEG-fallback removal) — WebRTC is the only live-video
+// path now, so every onFallback reason must translate to an honest,
+// user-facing message (BrowserLiveView.tsx's `displayError`), never silence.
+describe('translateWebRTCFallbackReason', () => {
+  it('maps the three capability-gate reasons to a specific, non-retry-inviting explanation', () => {
+    expect(translateWebRTCFallbackReason('disabled')).toMatch(/turned off for this installation/i)
+    expect(translateWebRTCFallbackReason('not_capable')).toMatch(/isn't supported on this server/i)
+    expect(translateWebRTCFallbackReason('lite_build')).toMatch(/lite build/i)
+  })
+
+  it('maps "error" to a generic-but-honest message inviting a retry', () => {
+    expect(translateWebRTCFallbackReason('error')).toMatch(/reported an error/i)
+  })
+
+  it('maps multi_agent_capture_denied to a named, actionable explanation', () => {
+    expect(translateWebRTCFallbackReason('multi_agent_capture_denied')).toMatch(/already in use by another agent/i)
+  })
+
+  it('maps every other known runtime reason to a generic connection-failed message that names the raw reason', () => {
+    for (const reason of [
+      'ice-failed',
+      'ice-disconnected-timeout',
+      'answer-timeout',
+      'offer-send-failed',
+      'set-remote-description-failed',
+      'pc-create-failed',
+      'offer-setup-failed',
+      'no-local-description',
+      'stream-stopped',
+      'unavailable',
+    ]) {
+      const message = translateWebRTCFallbackReason(reason)
+      expect(message).toMatch(/connection failed/i)
+      expect(message).toContain(reason)
+    }
+  })
+
+  it('never returns an empty string, and never silently swallows an unrecognized future reason', () => {
+    const message = translateWebRTCFallbackReason('some-future-reason-not-yet-enumerated')
+    expect(message.length).toBeGreaterThan(0)
+    expect(message).toContain('some-future-reason-not-yet-enumerated')
+  })
+})
 
 // jsdom has no `MediaStream` global at all — stub a minimal one (just
 // enough for the ontrack-assembly branch's `new MediaStream([track])` /
@@ -902,10 +946,17 @@ describe('BrowserWebRTCSession — sendOffer failure (MED, fix-wave B)', () => {
 })
 
 describe('BrowserWebRTCSession — ICE gathering timeout (LOW, fix-wave B)', () => {
-  it('proceeds to send the offer with whatever candidates gathered if iceGatheringState never reaches complete within iceGatheringTimeoutMs', async () => {
+  it('proceeds to send the offer with a PARTIAL (non-empty) candidate set if iceGatheringState never reaches complete within iceGatheringTimeoutMs', async () => {
     vi.useFakeTimers()
     try {
       const pc = makeFakePc()
+      // A non-empty (but incomplete) candidate set — the "proceed anyway"
+      // case, distinct from an EMPTY set (which is refused outright — see
+      // the sibling "refuses to ship" test below, SMALL-1 fix).
+      pc.createOffer = vi.fn(async () => ({
+        type: 'offer',
+        sdp: 'fake-offer-sdp\na=candidate:1 1 UDP 2122260223 10.0.0.1 12345 typ host\n',
+      }))
       const sendOffer = vi.fn(() => true)
       const machine = new BrowserWebRTCSession({
         pcFactory: () => asRTCPeerConnection(pc),
@@ -920,8 +971,63 @@ describe('BrowserWebRTCSession — ICE gathering timeout (LOW, fix-wave B)', () 
 
       await vi.advanceTimersByTimeAsync(50)
 
-      expect(sendOffer).toHaveBeenCalledWith('fake-offer-sdp')
+      expect(sendOffer).toHaveBeenCalled()
       expect(machine.state).toBe('offering') // now waiting on the answer timeout instead
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // SMALL-1 fix (external review, 2026-08-13): a prior revision (277cf7b7)
+  // titled itself "refuse to ship an empty offer" but only ever logged a
+  // console.warn and shipped the offer anyway — the commit message
+  // overclaimed what the code did. This proves the genuine refusal.
+  it('refuses to ship an offer with ZERO gathered candidates — falls back honestly instead of shipping it', async () => {
+    vi.useFakeTimers()
+    try {
+      const pc = makeFakePc() // default fake offer sdp has no a=candidate: lines at all
+      const sendOffer = vi.fn(() => true)
+      const onFallback = vi.fn()
+      const machine = new BrowserWebRTCSession({
+        pcFactory: () => asRTCPeerConnection(pc),
+        iceGatheringTimeoutMs: 50,
+      })
+      machine.onFallback(onFallback)
+      machine.start(sendOffer)
+      await vi.advanceTimersByTimeAsync(0)
+
+      await vi.advanceTimersByTimeAsync(50)
+
+      // The offer must never go out — an empty, non-trickle offer can only
+      // ever fail 30s later with no indication why, so this reports a real,
+      // visible reason immediately instead.
+      expect(sendOffer).not.toHaveBeenCalled()
+      expect(onFallback).toHaveBeenCalledWith('ice-gathering-empty')
+      expect(machine.state).toBe('fallback')
+      expect(pc.close).toHaveBeenCalled() // the dead PC is torn down, not left dangling
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not fire onFallback if stop() lands before the ICE-gathering timeout', async () => {
+    vi.useFakeTimers()
+    try {
+      const pc = makeFakePc()
+      const sendOffer = vi.fn(() => true)
+      const onFallback = vi.fn()
+      const machine = new BrowserWebRTCSession({
+        pcFactory: () => asRTCPeerConnection(pc),
+        iceGatheringTimeoutMs: 50,
+      })
+      machine.onFallback(onFallback)
+      machine.start(sendOffer)
+      await vi.advanceTimersByTimeAsync(0)
+      machine.stop()
+      await vi.advanceTimersByTimeAsync(80)
+      expect(onFallback).not.toHaveBeenCalled()
+      expect(sendOffer).not.toHaveBeenCalled()
+      expect(machine.state).toBe('idle')
     } finally {
       vi.useRealTimers()
     }

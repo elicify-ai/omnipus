@@ -46,7 +46,6 @@ export type WsFrameType =
   | "browser_input"
   | "browser_control"
   | "browser_detach"
-  | "browser_screencast"
   | "browser_status"
   | "browser_tab_action"
   | "browser_tabs"
@@ -210,6 +209,19 @@ export interface FileExistsRefusal {
   reason: string;
   tool: string;
   path: string;
+}
+
+export interface PermissionDenied {
+  error: "permission_denied";
+  message: string;
+  tool: string;
+  reason: string;
+  permanent: boolean;
+}
+
+export interface ToolAssemblyDuplicate {
+  error: "tool_assembly_duplicate";
+  message: string;
 }
 
 export interface ToolCallResultFrame {
@@ -491,19 +503,6 @@ export interface BrowserDetachFrame {
   session_id?: string;
 }
 
-export interface BrowserScreencastFrame {
-  type: "browser_screencast";
-  session_id: string;
-  seq: number;
-  data: string;
-  width: number;
-  height: number;
-  page_scale?: number;
-  offset_top?: number;
-  scroll_offset_x?: number;
-  scroll_offset_y?: number;
-}
-
 export interface BrowserStatusFrame {
   type: "browser_status";
   state: "attached" | "idle" | "controlling" | "released" | "detached" | "error";
@@ -560,7 +559,7 @@ export interface BrowserWebRTCStateFrame {
   type: "browser_webrtc_state";
   session_id?: string;
   available: boolean;
-  reason?: "disabled" | "not_capable" | "lite_build" | "error";
+  reason?: "disabled" | "not_capable" | "lite_build" | "error" | "multi_agent_capture_denied";
   has_audio?: boolean;
   active?: boolean;
 }
@@ -587,6 +586,7 @@ export interface BrowserCaptureControlFrame {
   reason?: string;
   expected_width?: number;
   expected_height?: number;
+  capture_scale?: number;
 }
 
 export interface GoalStatusFrame {
@@ -691,7 +691,6 @@ export type WsFrame =
   | BrowserInputFrame
   | BrowserControlFrame
   | BrowserDetachFrame
-  | BrowserScreencastFrame
   | BrowserStatusFrame
   | BrowserViewportFrame
   | BrowserTabActionFrame
@@ -760,7 +759,6 @@ export type ServerFrame =
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
   | NotificationFrame
-  | BrowserScreencastFrame
   | BrowserStatusFrame
   | BrowserViewportFrame
   | BrowserTabActionFrame

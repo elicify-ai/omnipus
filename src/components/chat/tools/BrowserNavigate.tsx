@@ -195,14 +195,19 @@ export function BrowserNavigateBlock({
   )
 }
 
+// Issue #617: isError comes from the tool-call part's own `isError` field
+// (set in omnipus-runtime.ts from the store's resolved ToolCall.status), not
+// from `status.type === 'incomplete'` — that can never be true for a
+// finished call carrying a result (see BashOutput.tsx's makeBashUI comment
+// for the full mechanism).
 export const BrowserNavigateUI = makeAssistantToolUI<BrowserNavigateArgs, unknown>({
   toolName: 'browser.navigate',
-  render: ({ args, result, status }) => (
+  render: ({ args, result, status, isError }) => (
     <BrowserNavigateBlock
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
-      isError={status.type === 'incomplete'}
+      isError={isError}
       isCancelled={isCancelledStatus(status)}
     />
   ),
@@ -211,12 +216,12 @@ export const BrowserNavigateUI = makeAssistantToolUI<BrowserNavigateArgs, unknow
 // Underscore alias for the same tool
 export const BrowserNavigateUnderscoreUI = makeAssistantToolUI<BrowserNavigateArgs, unknown>({
   toolName: 'browser_navigate',
-  render: ({ args, result, status }) => (
+  render: ({ args, result, status, isError }) => (
     <BrowserNavigateBlock
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
-      isError={status.type === 'incomplete'}
+      isError={isError}
       isCancelled={isCancelledStatus(status)}
     />
   ),

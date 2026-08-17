@@ -873,7 +873,7 @@ func TestCaptureIngestWSHandler_HelloSupersedesPreviousConnection(t *testing.T) 
 
 // TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied: another agent's
 // capture session with an attached viewer is a true conflict — the offer is
-// denied with reason "error", and the other session is left untouched.
+// denied with reason "multi_agent_capture_denied", and the other session is left untouched.
 func TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied(t *testing.T) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		// chrome-for-testing publishes no linux/arm64 build (installer.go's
@@ -940,7 +940,7 @@ func TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied(t *testing.T) {
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "an actively-viewed conflicting capture must deny the offer")
-	require.Equal(t, "error", got.Reason)
+	require.Equal(t, "multi_agent_capture_denied", got.Reason)
 	require.Nil(t, state.webrtc)
 	select {
 	case <-otherCS.Done():

@@ -13,13 +13,94 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
+// Injection scopes and operations reported by CredentialRefError.
+const (
+	ScopeProvider = "provider"
+	ScopeMailbox  = "mailbox"
+
+	opResolve = "credential"
+	opSetEnv  = "set env"
+)
+
+// CredentialRefError names the ONE credential reference that failed to inject,
+// and the config entry that referenced it. It carries no more information than
+// the error string already did — its whole purpose is to let a caller tell a
+// SCOPED failure ("this single provider's key is missing") apart from a
+// STORE-WIDE one ("the vault is locked; nothing will resolve") without parsing
+// the message.
+//
+// Why it exists (incident 2026-08-14): gateway boot treated ANY error out of
+// InjectFromConfig as fatal, so one stale providers[] entry — an
+// onboarding-created "openrouter_API_KEY" ref whose credential was never
+// stored — made the gateway log "provider credential injection failed" and
+// EXIT. Not one broken provider: the whole install, with no way to reach the
+// UI and delete the entry. Boot now degrades that single provider loudly and
+// keeps store-wide failures fatal, and the classification has to be reliable
+// to do that. The alternative — matching on message text — is the approach
+// gateway.go's enabledRefFromBundleError was forced into and documents as a
+// misdirection hazard; a second instance of it is not wanted. Unknown error
+// shapes stay fatal by default precisely because they are NOT this type.
+//
+// IMPORTANT — this type does NOT itself mean "degradable". *CredentialRefError
+// is emitted for every per-ref failure this package's per-entry loop sees,
+// including ones whose root cause is store-wide: a wrong/rotated master key
+// (ErrWrongKey) or a corrupted credentials.json entry make EVERY credential
+// unreadable, not just the one InjectFromConfig happened to be resolving
+// when it hit the failure — it only LOOKS scoped because the per-ref loop
+// attributes it to whichever ref it was checking. The reliable discriminator
+// callers must use is the Err field's TYPE, checked with errors.As, exactly
+// mirroring rest.go's describeCredentialResolutionError:
+//   - Err is *NotFoundError: the ref genuinely is not in the vault. Scoped,
+//     degradable — this ONE entry is unusable, nothing else is affected.
+//   - Err is anything else (ErrWrongKey, a corrupted-entry decrypt failure,
+//     an unreadable credentials.json, an os.Setenv failure, …): store-wide
+//     or environment-wide. MUST be treated the same as the bare
+//     ErrStoreLocked short-circuit below — fatal, not degraded. Gateway.go's
+//     reportInjectionErrors is the canonical caller; see its doc comment for
+//     the incident (2026-08-15) where degrading on *CredentialRefError alone
+//     let a wrong master key boot as if only one provider were broken.
+type CredentialRefError struct {
+	// Scope is ScopeProvider or ScopeMailbox.
+	Scope string
+	// Owner is the provider's model_name, or the mailbox's agent id.
+	Owner string
+	// SubOwner is the mailbox's workspace id. Empty for providers.
+	SubOwner string
+	// Ref is the credential name that failed (the api_key_ref / password_ref value).
+	Ref string
+	// Op is opResolve (store lookup failed) or opSetEnv (os.Setenv failed).
+	Op string
+	// Err is the underlying cause — *NotFoundError, ErrWrongKey, an os error, …
+	Err error
+}
+
+// Error reproduces, byte for byte, the message shape this package emitted
+// before the type existed ("provider %q: credential %q: %v",
+// "mailbox %q/%q: set env %q: %v", …) so operator-facing logs and any
+// message-matching caller are unchanged by the refactor.
+func (e *CredentialRefError) Error() string {
+	if e.Scope == ScopeMailbox {
+		return fmt.Sprintf("mailbox %q/%q: %s %q: %v", e.Owner, e.SubOwner, e.Op, e.Ref, e.Err)
+	}
+	return fmt.Sprintf("%s %q: %s %q: %v", e.Scope, e.Owner, e.Op, e.Ref, e.Err)
+}
+
+// Unwrap exposes the cause so errors.As/errors.Is still reach *NotFoundError,
+// ErrWrongKey and friends through this wrapper.
+func (e *CredentialRefError) Unwrap() error { return e.Err }
+
 // InjectFromConfig iterates over cfg.Providers entries, reads each entry's
 // APIKeyRef field, resolves the referenced credential name from store, and
 // injects the plaintext value into the process environment under that name.
 //
-// If store is locked or a referenced credential is missing, the affected
-// provider fails to initialize with a descriptive error. Other providers
-// continue. All errors are collected and returned as a slice.
+// If a referenced credential is missing, the affected provider fails to
+// initialize with a descriptive *CredentialRefError. Other providers continue.
+// All errors are collected and returned as a slice.
+//
+// A LOCKED store is different in kind: nothing can resolve, so it is reported
+// once as the bare ErrStoreLocked — deliberately NOT a *CredentialRefError,
+// because callers use that distinction to decide fatal-vs-degrade (see the
+// type's doc comment).
 //
 // Implements US-11 acceptance criteria (SEC-22).
 func InjectFromConfig(cfg *config.Config, store *Store) []error {
@@ -42,12 +123,16 @@ func InjectFromConfig(cfg *config.Config, store *Store) []error {
 
 		value, err := store.Get(ref)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("provider %q: credential %q: %w", model.ModelName, ref, err))
+			errs = append(errs, &CredentialRefError{
+				Scope: ScopeProvider, Owner: model.ModelName, Ref: ref, Op: opResolve, Err: err,
+			})
 			continue
 		}
 
 		if err := os.Setenv(ref, value); err != nil {
-			errs = append(errs, fmt.Errorf("provider %q: set env %q: %w", model.ModelName, ref, err))
+			errs = append(errs, &CredentialRefError{
+				Scope: ScopeProvider, Owner: model.ModelName, Ref: ref, Op: opSetEnv, Err: err,
+			})
 			continue
 		}
 		injected[ref] = true
@@ -69,11 +154,15 @@ func InjectFromConfig(cfg *config.Config, store *Store) []error {
 			}
 			value, err := store.Get(ref)
 			if err != nil {
-				errs = append(errs, fmt.Errorf("mailbox %q/%q: credential %q: %w", agentID, workspaceID, ref, err))
+				errs = append(errs, &CredentialRefError{
+					Scope: ScopeMailbox, Owner: agentID, SubOwner: workspaceID, Ref: ref, Op: opResolve, Err: err,
+				})
 				continue
 			}
 			if err := os.Setenv(ref, value); err != nil {
-				errs = append(errs, fmt.Errorf("mailbox %q/%q: set env %q: %w", agentID, workspaceID, ref, err))
+				errs = append(errs, &CredentialRefError{
+					Scope: ScopeMailbox, Owner: agentID, SubOwner: workspaceID, Ref: ref, Op: opSetEnv, Err: err,
+				})
 				continue
 			}
 			injected[ref] = true

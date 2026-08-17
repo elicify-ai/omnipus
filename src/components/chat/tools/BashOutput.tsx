@@ -91,8 +91,9 @@ function BashOutputBlock({
   // outcome does not force this row visible; that failure is left to the
   // calling agent's own response text, with the raw output staying
   // inspectable in the ActivityPanel slide-out. The `isError` argument
-  // below (threaded from status.type === 'incomplete' by makeBashUI below)
-  // is therefore currently a no-op for bash — kept only so this call site
+  // below (threaded from the tool-call part's real `isError` field by
+  // makeBashUI below — see issue #617) is therefore currently a no-op for
+  // bash — kept only so this call site
   // matches shouldRenderToolCall's uniform 4-argument gate signature, the
   // same one GenericToolCall/ToolCallBadge call with their own outcome
   // signal, so a future revision that DOES add a bash-specific exception
@@ -181,13 +182,20 @@ function BashOutputBlock({
 function makeBashUI(toolName: string) {
   return makeAssistantToolUI<BashArgs, unknown>({
     toolName,
-    render: ({ args, result, status }) => (
+    // Issue #617: isError comes straight from the tool-call part's own
+    // `isError` field (set in omnipus-runtime.ts from the store's resolved
+    // ToolCall.status), not from `status.type === 'incomplete'` — that
+    // AssistantUI status can never be true for a finished tool call with a
+    // result (toMessagePartStatus always returns COMPLETE_STATUS once
+    // `result` is truthy), so the old check could never actually fire on a
+    // real tool failure.
+    render: ({ args, result, status, isError }) => (
       <BashOutputBlock
         toolName={toolName}
         args={args ?? {}}
         result={result}
         isRunning={status.type === 'running'}
-        isError={status.type === 'incomplete'}
+        isError={isError}
         isCancelled={isCancelledStatus(status)}
       />
     ),
