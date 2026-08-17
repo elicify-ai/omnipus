@@ -59,6 +59,9 @@ primary_region = "sin"
   # tools.browser object, so every browser default (including these two)
   # was the Go zero value = OFF once a volume was attached 2026-08-16 --
   # first open was slow again with no warm-up. Env wins over config.
+  # WARM_AT_BOOT is the master gate (browserWarmUpEnabled); the two below
+  # are AND-ed with it, so all three are required.
+  OMNIPUS_TOOLS_BROWSER_WARM_AT_BOOT = "true"
   OMNIPUS_TOOLS_BROWSER_WARM_TAB_AT_BOOT = "true"
   OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_AT_BOOT = "true"
   OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_IDLE_SEC = "300"
