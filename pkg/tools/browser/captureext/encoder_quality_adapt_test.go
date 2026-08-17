@@ -248,7 +248,11 @@ const K = adapt.constants;
 function makePC(sample, opts) {
   opts = opts || {};
   const applied = [];
-  let params = { encodings: opts.emptyEncodings ? [] : [{}] };
+  // A NEGOTIATED sender is the default: real Chrome populates ssrc once
+  // negotiation completes, and encodingsNegotiated() keys off exactly that.
+  // opts.placeholderEncodings reproduces Chrome's PRE-negotiation [{}],
+  // which is the shape that made setParameters throw InvalidStateError.
+  let params = { encodings: opts.emptyEncodings ? [] : (opts.placeholderEncodings ? [{}] : [{ ssrc: 424242 }]) };
   const sender = {
     track: { kind: 'video' },
     getStats: function () {
@@ -408,6 +412,17 @@ async function ticksAt(pc, n, now) { for (let i = 0; i < n; i++) await adapt.tic
   check('empty_encodings_skips_setParameters',
     pc.applied.length === 0,
     'setParameters called ' + pc.applied.length + ' time(s) on empty encodings (want 0)');
+
+  // Chrome's PRE-negotiation placeholder is encodings:[{}] -- not empty, but
+  // setParameters on it throws "getParameters() has never been called".
+  adapt.reset();
+  pc = makePC({ fps: 13, reason: 'none' }, { placeholderEncodings: true });
+  vm.runInContext('applyVideoSenderConstraints(globalThis.__harnessPC, {context: "post-connected"})',
+    Object.assign(sandbox, { __harnessPC: pc }));
+  await new Promise(function (r) { setTimeout(r, 20); });
+  check('placeholder_encodings_skip_setParameters',
+    pc.applied.length === 0,
+    'setParameters called ' + pc.applied.length + ' time(s) on Chrome pre-negotiation encodings:[{}] (want 0)');
 
 check('state_surface_populated',
     win.__omnipusState.qualityAdapt && typeof win.__omnipusState.qualityAdapt.scale === 'number',
