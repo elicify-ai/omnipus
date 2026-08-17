@@ -50,9 +50,18 @@ primary_region = "sin"
   # This app's dedicated IPv4, allocated 2026-08-15 specifically so Fly can
   # route the media UDP service (a shared v4 cannot carry UDP at all).
   OMNIPUS_TOOLS_BROWSER_WEBRTC_PUBLIC_IP = "168.220.92.84"
-  # ADR-062 tier 2 — ICE-TCP so a VPN that eats Chrome UDP STUN replies
-  # can still open outbound TCP to the same dedicated IPv4.
-  OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_TCP_PORT = "50001"
+  # ADR-062 tier 2 (ICE-TCP) is DISABLED here. Fly's TCP proxy is not a
+  # transparent byte pipe for ICE: it reset the media connection
+  # ("could not proxy TCP data to/from instance ... Connection reset by
+  # peer", measured 2026-08-17), and a TCP media path also head-of-line
+  # blocks scroll/click input. UDP tier 1 only until a real decision.
+  # Boot warm-up. The persisted config.json on the volume carries an EMPTY
+  # tools.browser object, so every browser default (including these two)
+  # was the Go zero value = OFF once a volume was attached 2026-08-16 --
+  # first open was slow again with no warm-up. Env wins over config.
+  OMNIPUS_TOOLS_BROWSER_WARM_TAB_AT_BOOT = "true"
+  OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_AT_BOOT = "true"
+  OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_IDLE_SEC = "300"
 
 [http_service]
   internal_port = 5000
@@ -77,15 +86,6 @@ primary_region = "sin"
 
   [[services.ports]]
     port = 50000
-
-# ICE-TCP (ADR-062 tier 2). Same dedicated IPv4 as UDP; the viewer
-# connects outbound. Fly does not rewrite this port.
-[[services]]
-  internal_port = 50001
-  protocol = "tcp"
-
-  [[services.ports]]
-    port = 50001
 
 # Persist $OMNIPUS_HOME across deploys. Volume created 2026-08-16:
 # swimlane_omnipus_data (vol_vp2w0w1259987124) in sin. First attach is empty
