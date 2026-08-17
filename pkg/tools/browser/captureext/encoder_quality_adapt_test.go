@@ -103,7 +103,7 @@ func TestEncoderJS_QualityAdaptGuards(t *testing.T) {
 			"a second answer in stable froze CI live video (ingest ICE failed after " +
 			"Failed to set remote answer sdp: Called in wrong state: stable)")
 	}
-	if !strings.Contains(src, "encodings empty, skipping setParameters") {
+	if !strings.Contains(src, "encodings not negotiated, skipping setParameters") {
 		t.Error("encoder.js: applyVideoSenderConstraints must skip setParameters when encodings are empty — " +
 			"synthesizing encodings:[{}] is what Chrome rejects as " +
 			"'getParameters() has never been called on this sender'")

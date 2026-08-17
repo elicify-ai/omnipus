@@ -294,6 +294,18 @@ function clearOfferAnswerTimeout() {
 // post-connected call is gated by the connectedConstraintsApplied flag
 // newPeerConnection closes over -- so this never "stacks" repeated
 // setParameters calls onto a single connectionstatechange listener.
+function encodingsNegotiated(params) {
+  // Chrome returns encodings:[{}] BEFORE negotiation. Calling setParameters
+  // on that placeholder throws InvalidStateError ("getParameters() has never
+  // been called") even though we just called getParameters — hosted UAT
+  // 2026-08-17 still logged that on encoder 1.0.10. Require a real
+  // negotiated field (ssrc / rid / codecPayloadType / existing maxBitrate).
+  if (!params || !params.encodings || params.encodings.length === 0) return false;
+  const e = params.encodings[0];
+  if (!e || typeof e !== 'object') return false;
+  return !!(e.ssrc || e.rid || e.codecPayloadType || e.maxBitrate);
+}
+
 function applyVideoSenderConstraints(pc, opts) {
   opts = opts || {};
   const context = opts.context || 'pre-negotiation';
@@ -332,8 +344,8 @@ function applyVideoSenderConstraints(pc, opts) {
     // the sender has real encodings; the post-answer / post-connected
     // re-applies catch it once they exist. Video keeps flowing uncapped
     // rather than a failed setParameters poisoning the sender.
-    if (!params.encodings || params.encodings.length === 0) {
-      record(logPrefix + ': encodings empty, skipping setParameters');
+    if (!encodingsNegotiated(params)) {
+      record(logPrefix + ': encodings not negotiated, skipping setParameters');
       return;
     }
     params.encodings[0].maxBitrate = maxBitrate;
@@ -759,8 +771,8 @@ async function applyAdaptScale(pc, scale) {
   const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
   if (!sender) throw new Error('no video sender');
   const params = sender.getParameters();
-  if (!params.encodings || params.encodings.length === 0) {
-    throw new Error('encodings empty; sender not negotiated');
+  if (!encodingsNegotiated(params)) {
+    throw new Error('encodings not negotiated');
   }
   params.encodings[0].scaleResolutionDownBy = scale;
   await sender.setParameters(params);

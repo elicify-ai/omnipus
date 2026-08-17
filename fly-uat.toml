@@ -48,6 +48,7 @@ primary_region = "fra"
   OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_UDP_PORT = "50000"
   OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_UDP_BIND_ADDRESS = "fly-global-services"
   OMNIPUS_TOOLS_BROWSER_WEBRTC_PUBLIC_IP = "109.105.222.208"
+  OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_TCP_PORT = "50001"
 
 [http_service]
   internal_port = 5000
@@ -72,6 +73,13 @@ primary_region = "fra"
 
   [[services.ports]]
     port = 50000
+
+[[services]]
+  internal_port = 50001
+  protocol = "tcp"
+
+  [[services.ports]]
+    port = 50001
 
 # Persist ~/.omnipus (config, credentials, sessions, workspaces) across
 # restarts so a UAT persona's setup survives a machine bounce.

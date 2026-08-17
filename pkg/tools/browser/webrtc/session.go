@@ -230,6 +230,14 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 		// second agent.
 		viewerSE.SetICEUDPMux(webrtc.NewICEUDPMux(nil, cfg.MediaConn))
 	}
+	if cfg.MediaTCP != nil {
+		// ADR-062 tier 2. Default Pion network types omit TCP; without
+		// SetNetworkTypes the mux is installed and never advertised.
+		viewerSE.SetICETCPMux(webrtc.NewICETCPMux(nil, cfg.MediaTCP, 8))
+		viewerSE.SetNetworkTypes([]webrtc.NetworkType{
+			webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6, webrtc.NetworkTypeTCP4,
+		})
+	}
 	if len(cfg.PublicIPs) > 0 {
 		// ICECandidateTypeHost with Pion's default mode APPENDS for srflx and
 		// replaces for host. The socket really is reachable at this address
@@ -245,8 +253,8 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 		webrtc.WithInterceptorRegistry(ir),
 		webrtc.WithSettingEngine(viewerSE),
 	)
-	if cfg.MediaConn != nil || len(cfg.PublicIPs) > 0 {
-		s.logf("webrtc: viewer leg using fixed media socket=%v public=%v", cfg.MediaConn != nil, cfg.PublicIPs)
+	if cfg.MediaConn != nil || cfg.MediaTCP != nil || len(cfg.PublicIPs) > 0 {
+		s.logf("webrtc: viewer leg using fixed media udp=%v tcp=%v public=%v", cfg.MediaConn != nil, cfg.MediaTCP != nil, cfg.PublicIPs)
 	}
 	return s
 }

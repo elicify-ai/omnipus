@@ -660,6 +660,7 @@ type BrowserWSHandler struct {
 	// inexplicable failure for the rest.
 	mediaConnMu sync.Mutex
 	mediaConn   net.PacketConn
+	mediaTCP    net.Listener
 
 	// mediaPortFallback is non-nil ONLY when the fixed media UDP port the
 	// operator explicitly configured could not be bound and sharedMediaConn

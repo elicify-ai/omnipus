@@ -892,6 +892,7 @@ func (h *BrowserWSHandler) ensureCaptureSession(
 		webrtcCfg := webrtc.Config{
 			StunServer: cfg.Tools.Browser.WebRTCStunServer,
 			MediaConn:  h.sharedMediaConn(cfg),
+			MediaTCP:   h.sharedMediaTCP(cfg),
 			PublicIPs:  resolveWebRTCPublicIPs(cfg),
 		}
 		sink := h.webrtcInputSink(mgr, cfg)
@@ -1713,4 +1714,29 @@ func (h *BrowserWSHandler) sharedMediaConn(cfg *config.Config) net.PacketConn {
 		"error", configuredErr,
 	)
 	return nil
+}
+
+// sharedMediaTCP returns the process-wide ICE-TCP listener (ADR-062 tier 2),
+// binding it on first use. Returns nil when ICE-TCP is not configured or the
+// listen failed (logged at ERROR).
+func (h *BrowserWSHandler) sharedMediaTCP(cfg *config.Config) net.Listener {
+	port := cfg.Tools.Browser.WebRTCMediaTCPPort
+	if port <= 0 {
+		return nil
+	}
+	h.mediaConnMu.Lock()
+	defer h.mediaConnMu.Unlock()
+	if h.mediaTCP != nil {
+		return h.mediaTCP
+	}
+	bindAddr := strings.TrimSpace(cfg.Tools.Browser.WebRTCMediaUDPBindAddress)
+	ln, err := net.Listen("tcp", mediaUDPAddr(bindAddr, port))
+	if err != nil {
+		slog.Error("browser-webrtc: ICE-TCP listen failed — viewers whose network drops UDP will not connect",
+			"addr", mediaUDPAddr(bindAddr, port), "error", err)
+		return nil
+	}
+	slog.Info("browser-webrtc: ICE-TCP socket bound", "addr", ln.Addr().String())
+	h.mediaTCP = ln
+	return ln
 }

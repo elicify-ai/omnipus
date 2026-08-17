@@ -345,3 +345,27 @@ func TestHandleWebRTCOffer_MediaPortFallback_TellsTheViewerInThePanel(t *testing
 	assert.Contains(t, *status.Message, "50000", "the panel must name the port the operator configured")
 	assert.Contains(t, *status.Message, "50003", "the panel must name the port live video actually uses")
 }
+
+func TestSharedMediaTCP_ConfiguredPortBinds(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	free := probe.Addr().(*net.TCPAddr).Port
+	require.NoError(t, probe.Close())
+
+	cfg := &config.Config{}
+	cfg.Tools.Browser.WebRTCMediaTCPPort = free
+	cfg.Tools.Browser.WebRTCMediaUDPBindAddress = "127.0.0.1"
+
+	h := &BrowserWSHandler{}
+	ln := h.sharedMediaTCP(cfg)
+	require.NotNil(t, ln)
+	t.Cleanup(func() { _ = ln.Close() })
+	got := ln.Addr().(*net.TCPAddr).Port
+	require.Equal(t, free, got)
+	require.Same(t, ln, h.sharedMediaTCP(cfg), "ICE-TCP listener must be bound once and reused")
+}
+
+func TestSharedMediaTCP_Unconfigured_ReturnsNil(t *testing.T) {
+	h := &BrowserWSHandler{}
+	require.Nil(t, h.sharedMediaTCP(&config.Config{}))
+}

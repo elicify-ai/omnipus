@@ -100,8 +100,11 @@ provided the socket is gateway-owned, which it now is.
 ## Status of each tier
 
 - **Tier 1 — IMPLEMENTED and committed.** Measured working on Fly (see Acceptance).
-- **Tier 2 (ICE-TCP) — designed, not implemented.** Needs its own declared TCP port; on Fly a raw
-  TCP service, not the HTTP one.
+- **Tier 2 (ICE-TCP) — IMPLEMENTED 2026-08-17.** Fixed TCP port via `SetICETCPMux` +
+  `SetNetworkTypes(UDP4,UDP6,TCP4)`. Hosted recipe: `OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_TCP_PORT`
+  and a declared TCP service (swimlane: 50001). Serves viewers whose network drops raw UDP
+  (VPN system extensions eating Chrome STUN replies — measured 2026-08-15 / reproduced
+  2026-08-17 as `ice-disconnected-timeout` while Playwright on the same Mac held ICE).
 - **Tier 3 (embedded TURN) — BLOCKED pending a real decision** on the port question (Correction 1),
   the permission handler (Correction 2), and credential lifecycle. Not "TLS on 443".
 

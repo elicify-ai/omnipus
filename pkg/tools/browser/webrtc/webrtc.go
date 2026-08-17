@@ -90,6 +90,12 @@ type Config struct {
 	// should LISTEN somewhere reachable and SAY WHERE, never hole-punch.
 	MediaConn net.PacketConn
 
+	// MediaTCP is a SHARED, already-bound TCP listener for ICE-TCP
+	// (ADR-062 tier 2). nil keeps UDP-only. Same sharing rule as MediaConn:
+	// one gateway-owned listener, muxed by ufrag, because a Session is per-agent.
+	// Used when the viewer's network drops raw UDP (VPN system extensions).
+	MediaTCP net.Listener
+
 	// PublicIPs are addresses advertised to VIEWERS as media candidates
 	// (ADR-062 tier 1). Applied to the viewer leg ONLY -- see
 	// Session.apiViewer. On a hosted box

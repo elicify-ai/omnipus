@@ -3585,6 +3585,10 @@ type BrowserToolConfig struct {
 	// 0.0.0.0 makes Linux choose the WRONG SOURCE ADDRESS on replies, so the
 	// peer discards them silently (fly.io/docs/networking/udp-and-tcp).
 	WebRTCMediaUDPBindAddress string `json:"webrtc_media_udp_bind_address,omitempty" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_UDP_BIND_ADDRESS"`
+	// WebRTCMediaTCPPort pins ICE-TCP to ONE fixed TCP port (ADR-062 tier 2).
+	// 0 = UDP only. Hosted installs set this so a viewer whose network drops
+	// raw UDP (VPN extensions) can open outbound TCP to the same public IP.
+	WebRTCMediaTCPPort int `json:"webrtc_media_tcp_port,omitempty" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_TCP_PORT"`
 	// WebRTCPublicIP overrides the address advertised to viewers as the media
 	// host candidate. Normally EMPTY: the gateway derives it from
 	// gateway.public_url, which an operator behind a domain has already set

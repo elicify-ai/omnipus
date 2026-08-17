@@ -406,6 +406,8 @@ var versionContentHashes = map[string]string{
 	// setParameters when getParameters() returned empty encodings (Chrome
 	// treats that as "getParameters has never been called").
 	"1.0.10": "74d37064ceab571fb7890deb39f0f8fc434e10b00e58035988581046ac6b0fb4",
+	// 1.0.11 — skip setParameters on Chrome's pre-negotiation encodings:[{}].
+	"1.0.11": "2cbc1f94a415c83c6450c6c1557adecaf518b705b5ca058bf8635ede74d3fa03",
 }
 
 func embeddedContentHash(t *testing.T) string {
