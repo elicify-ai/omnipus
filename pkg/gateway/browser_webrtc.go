@@ -1729,11 +1729,14 @@ func (h *BrowserWSHandler) sharedMediaTCP(cfg *config.Config) net.Listener {
 	if h.mediaTCP != nil {
 		return h.mediaTCP
 	}
-	bindAddr := strings.TrimSpace(cfg.Tools.Browser.WebRTCMediaUDPBindAddress)
-	ln, err := net.Listen("tcp", mediaUDPAddr(bindAddr, port))
+	// Listen on every interface. fly-global-services is a UDP-only
+	// source-address trick; Fly's TCP proxy connects to the machine's
+	// private IP, which that name does not cover. Binding only
+	// fly-global-services:50001 would leave the proxy's SYN unanswered.
+	ln, err := net.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
 		slog.Error("browser-webrtc: ICE-TCP listen failed — viewers whose network drops UDP will not connect",
-			"addr", mediaUDPAddr(bindAddr, port), "error", err)
+			"addr", ":"+strconv.Itoa(port), "error", err)
 		return nil
 	}
 	slog.Info("browser-webrtc: ICE-TCP socket bound", "addr", ln.Addr().String())
