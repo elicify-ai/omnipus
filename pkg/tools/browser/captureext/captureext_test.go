@@ -408,6 +408,10 @@ var versionContentHashes = map[string]string{
 	"1.0.10": "74d37064ceab571fb7890deb39f0f8fc434e10b00e58035988581046ac6b0fb4",
 	// 1.0.11 — skip setParameters on Chrome's pre-negotiation encodings:[{}].
 	"1.0.11": "2cbc1f94a415c83c6450c6c1557adecaf518b705b5ca058bf8635ede74d3fa03",
+	// 1.0.12 — skip setParameters only on Chrome's literal placeholder
+	// encodings:[{}] (shape), not on guessed fields, and report a
+	// post-connected skip to the gateway instead of the console.
+	"1.0.12": "492045aea8d6c732674f2064a244338abb6846cf75e908b1cadb005066dcac17",
 }
 
 func embeddedContentHash(t *testing.T) string {

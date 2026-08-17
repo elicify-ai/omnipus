@@ -295,15 +295,22 @@ function clearOfferAnswerTimeout() {
 // newPeerConnection closes over -- so this never "stacks" repeated
 // setParameters calls onto a single connectionstatechange listener.
 function encodingsNegotiated(params) {
-  // Chrome returns encodings:[{}] BEFORE negotiation. Calling setParameters
-  // on that placeholder throws InvalidStateError ("getParameters() has never
-  // been called") even though we just called getParameters — hosted UAT
-  // 2026-08-17 still logged that on encoder 1.0.10. Require a real
-  // negotiated field (ssrc / rid / codecPayloadType / existing maxBitrate).
+  // Chrome hands out encodings:[{}] -- a single EMPTY object -- before
+  // negotiation has populated the sender. Calling setParameters on that
+  // throws InvalidStateError ("getParameters() has never been called on this
+  // sender") even though getParameters() was just called.
+  //
+  // Discriminate on that SHAPE and nothing else. An earlier revision required
+  // one of ssrc/rid/codecPayloadType/maxBitrate to be present, which was a
+  // guess about fields that are not part of RTCRtpEncodingParameters (and
+  // maxBitrate is self-referential -- it only exists after a successful apply,
+  // so a wrong guess would disable capping permanently and silently). Any
+  // non-empty encoding object is treated as negotiated; only the literal
+  // placeholder is skipped.
   if (!params || !params.encodings || params.encodings.length === 0) return false;
   const e = params.encodings[0];
   if (!e || typeof e !== 'object') return false;
-  return !!(e.ssrc || e.rid || e.codecPayloadType || e.maxBitrate);
+  return Object.keys(e).length > 0;
 }
 
 function applyVideoSenderConstraints(pc, opts) {
@@ -345,7 +352,12 @@ function applyVideoSenderConstraints(pc, opts) {
     // re-applies catch it once they exist. Video keeps flowing uncapped
     // rather than a failed setParameters poisoning the sender.
     if (!encodingsNegotiated(params)) {
-      record(logPrefix + ': encodings not negotiated, skipping setParameters');
+      const msg = logPrefix + ': encodings not negotiated, skipping setParameters';
+      record(msg);
+      // A skip at post-connected means the sender never got its bitrate cap.
+      // Report it so it lands in the gateway log instead of dying in an
+      // extension console nobody opens (round-2 finding F7's discipline).
+      if (context === 'post-connected') reportAdaptFailure(msg);
       return;
     }
     params.encodings[0].maxBitrate = maxBitrate;
