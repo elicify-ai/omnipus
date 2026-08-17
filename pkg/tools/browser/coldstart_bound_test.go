@@ -47,9 +47,14 @@ func writeMinimalUnpackedExtension(t *testing.T, dir string) {
 // LoadExtension fix, the caller's ctx was never even referenced, so this
 // exact property did not hold at all.
 func TestBoundedCallContext_HonorsCallerDeadline(t *testing.T) {
-	parent, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	// A deadline ALREADY in the past, rather than a 1ms timeout plus a 2ms
+	// sleep. context.WithDeadline cancels synchronously at construction when
+	// the deadline has passed, so the parent is guaranteed done before
+	// boundedCallContext runs. The sleep version depended on the parent's
+	// timer goroutine having been scheduled, which a loaded CI runner does
+	// not guarantee — it failed exactly that way on 2026-08-17.
+	parent, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
 	defer cancel()
-	time.Sleep(2 * time.Millisecond) // let parent's deadline elapse
 
 	got, gotCancel := boundedCallContext(parent, time.Hour)
 	defer gotCancel()
