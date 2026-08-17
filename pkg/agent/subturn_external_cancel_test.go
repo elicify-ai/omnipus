@@ -354,12 +354,20 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 		secondResultCh <- res
 	}()
 	<-secondStarted
-	// Give the second goroutine a moment to actually reach (and start
-	// blocking on) the lock acquire before firing the cancel — otherwise the
-	// cancel could win the race and land before the second goroutine even
-	// starts waiting, which would prove nothing about the QUEUED case
-	// specifically.
-	time.Sleep(200 * time.Millisecond)
+	// Wait until the second run has actually reached the lock acquire, rather
+	// than sleeping and hoping. runExternalCLISubTurn calls setTurnCancel
+	// immediately before acquireWorkspaceRunLockCtx, so a non-nil turnCancel
+	// on secondTS is the exact "registered, now queued behind the first run"
+	// signal InterruptSessionHard needs to find. The old 200ms sleep was not
+	// enough on a loaded CI runner: the cancel landed before the goroutine
+	// registered, nothing was cancelled, and the run then blocked on the lock
+	// until the 3s assertion below timed out (CI 2026-08-17).
+	require.Eventually(t, func() bool {
+		secondTS.mu.Lock()
+		defer secondTS.mu.Unlock()
+		return secondTS.turnCancel != nil
+	}, 5*time.Second, 5*time.Millisecond,
+		"the second run never registered its turn cancel, so it never reached the workspace-lock wait")
 
 	// Fire the REAL hard-abort cascade against the SECOND session while it is
 	// queued behind the first (still-running, still-locked) same-workspace

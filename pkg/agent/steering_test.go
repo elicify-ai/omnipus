@@ -937,6 +937,15 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 		t.Fatalf("publish late inbound: %v", err)
 	}
 
+	// PublishInbound returns once the message is on the bus, NOT once the loop
+	// has queued it as steering. Releasing the first provider call before that
+	// lets the turn finish with nothing to continue on, and the assertion below
+	// sees "first response" -- observed on CI 2026-08-17. Wait for the message
+	// to actually land in the steering queue first.
+	waitFor(t, 2*time.Second, func() bool {
+		return al.steering != nil && al.steering.len() > 0
+	})
+
 	close(provider.releaseFirstCall)
 
 	subCtx, subCancel := context.WithTimeout(context.Background(), 5*time.Second)
