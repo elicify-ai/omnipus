@@ -81,13 +81,17 @@ func (t *RequestMountTool) Parameters() map[string]any {
 				"description": "Absolute path of the folder on the operator's computer. " +
 					"Must already exist and be a directory.",
 			},
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Alias for host_path. Use host_path when you can.",
+			},
 			"reason": map[string]any{
 				"type": "string",
 				"description": "One sentence on what you need to do there. Shown to the " +
 					"operator with the request — it is the main thing they weigh.",
 			},
 		},
-		"required": []string{"host_path", "reason"},
+		"required": []string{"reason"},
 	}
 }
 

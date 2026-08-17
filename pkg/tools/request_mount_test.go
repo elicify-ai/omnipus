@@ -183,9 +183,12 @@ func TestMountNameFromHostPath(t *testing.T) {
 func TestRequestMount_AcceptsPathAlias(t *testing.T) {
 	home, wsID, target := newMountFixture(t)
 	tool := NewRequestMountTool(home)
-	res := tool.Execute(WithWorkspaceID(context.Background(), wsID), map[string]any{
+	args := map[string]any{
 		"path":   target,
 		"reason": "model used path instead of host_path",
-	})
+	}
+	require.NoError(t, validateToolArgs(tool.Parameters(), args),
+		"schema validation must accept path as the folder field")
+	res := tool.Execute(WithWorkspaceID(context.Background(), wsID), args)
 	require.False(t, res.IsError, "path must be accepted as an alias of host_path: %s", res.ForLLM)
 }
