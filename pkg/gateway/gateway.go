@@ -5551,16 +5551,6 @@ func setupCronTool(
 		return ok
 	})
 	runner := newScheduledRunner(agentLoop, checker, msgBus, notifStore, agentLoop.GetConfig)
-	// M2: resolve the channel registry lazily — the channel manager is wired onto
-	// the agent loop after this runner is built (SetChannelManager during service
-	// start), so the runner re-fetches it at delivery time. A nil manager makes
-	// channelIsActive degrade to the legacy non-empty check.
-	runner.setChannelChecker(func() channelChecker {
-		if cm := agentLoop.GetChannelManager(); cm != nil {
-			return cm
-		}
-		return nil
-	})
 	// Best-effort per-run child-process cleanup (FR-011). The minimal per-session
 	// registry tracks PIDs the run spawns (via the tracker installed on the run
 	// context, reported by the exec/shell tools) and terminates them on

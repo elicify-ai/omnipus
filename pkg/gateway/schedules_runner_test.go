@@ -446,11 +446,6 @@ func TestRunner_Failure_PushesEvenWhenCreateFails(t *testing.T) {
 	assert.True(t, recipients["bob"], "creator must get a live push")
 }
 
-// fakeChannelChecker stands in for the channel registry in M2 tests.
-type fakeChannelChecker struct{ registered map[string]bool }
-
-func (c fakeChannelChecker) ChannelRegistered(name string) bool { return c.registered[name] }
-
 // TestRunner_Timeout_ForceCancels asserts that a run exceeding its deadline is
 // force-aborted via RequestCancel(CancelScope{SessionID}) and that the returned
 // error is a context.DeadlineExceeded (so the cron lane records it as "timeout").

@@ -33,14 +33,6 @@ type scheduledExecutor interface {
 	EmitNotification(p agent.NotificationPayload)
 }
 
-// channelChecker reports whether a named channel is currently registered/active.
-// Used by the runner to validate a deliver=true target before publishing (M2),
-// so a publish to a channel nobody is subscribed to becomes a recorded failure
-// instead of a silent success. *channels.Manager satisfies this.
-type channelChecker interface {
-	ChannelRegistered(name string) bool
-}
-
 // agentChecker reports whether an agent id is available to run a schedule:
 // registered in the runtime registry. Kept narrow so the runner can be tested
 // with a stub.
@@ -71,12 +63,6 @@ type scheduledRunner struct {
 	msgBus    *bus.MessageBus
 	notifs    *notifications.Store
 	getConfig func() *config.Config
-
-	// getChannelChecker resolves the live channel registry at run time (the
-	// channel manager is wired after the runner is constructed). nil or a nil
-	// return means "no registry available" → the runner skips the M2 registered
-	// check and falls back to the legacy non-empty-channel validation.
-	getChannelChecker func() channelChecker
 
 	// procTrack records a child PID spawned during a run under the run's session
 	// id (FR-011). It is installed on the ProcessScheduled context so the exec/
@@ -357,26 +343,6 @@ func (r *scheduledRunner) setProcessCleanup(fn func(sessionID string)) {
 // fn clears the hook.
 func (r *scheduledRunner) setProcessTracker(fn func(sessionID string, pid int)) {
 	r.procTrack = fn
-}
-
-// setChannelChecker wires the lazy channel-registry resolver used to validate a
-// deliver=true target before publishing (M2). A nil fn clears it.
-func (r *scheduledRunner) setChannelChecker(fn func() channelChecker) {
-	r.getChannelChecker = fn
-}
-
-// channelIsActive reports whether channel is registered/active per the live
-// channel registry. When no registry is reachable it returns true so the runner
-// degrades to the legacy non-empty check rather than failing every delivery.
-func (r *scheduledRunner) channelIsActive(channel string) bool {
-	if r.getChannelChecker == nil {
-		return true
-	}
-	cc := r.getChannelChecker()
-	if cc == nil {
-		return true
-	}
-	return cc.ChannelRegistered(channel)
 }
 
 // scheduledProcRegistry is a per-session child-process registry for scheduled
@@ -1351,13 +1317,6 @@ func derefStr(p *string) string {
 func derefInt(p *int) int {
 	if p == nil {
 		return 0
-	}
-	return *p
-}
-
-func derefBool(p *bool, def bool) bool {
-	if p == nil {
-		return def
 	}
 	return *p
 }

@@ -3823,8 +3823,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
               const lastIsSameError = lastIsTerminalError
                 && !!llmError
                 && (
-                  lastMsg?.errorCode === llmError.code
-                  || lastMsg?.content === translatedMessage
+                  errorEntryId
+                    ? lastMsg?.errorEntryId === errorEntryId
+                    : (lastMsg?.errorCode === llmError.code
+                      || lastMsg?.content === translatedMessage)
                 )
               // C8: close every still-streaming assistant (a mid-turn steer
               // appends a USER message after the open bubble, so it is no

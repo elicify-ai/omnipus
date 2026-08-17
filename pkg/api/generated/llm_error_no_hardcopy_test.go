@@ -73,7 +73,10 @@ func TestLLMErrorMessages_NoHandCopiesOutsideTheCatalogue(t *testing.T) {
 				return nil
 			}
 			rel, relErr := filepath.Rel(root, path)
-			if relErr != nil || allowed[rel] {
+			if relErr != nil {
+				return relErr
+			}
+			if allowed[rel] {
 				return nil
 			}
 			// This test file names none of the messages itself, but skip it
@@ -83,7 +86,7 @@ func TestLLMErrorMessages_NoHandCopiesOutsideTheCatalogue(t *testing.T) {
 			}
 			body, readErr := os.ReadFile(path)
 			if readErr != nil {
-				return nil
+				return readErr
 			}
 			text := string(body)
 			for code, needle := range needles {
