@@ -69,7 +69,7 @@ primary_region = "sin"
   # fully cold first open and reports "no warm-up" -- exactly what
   # happened 2026-08-17. This box is dedicated-CPU UAT; paying ~1/4 core
   # continuously is the point of it.
-  OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_IDLE_SEC = "0"
+  OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_IDLE_SEC = "300"
 
 [http_service]
   internal_port = 5000
