@@ -234,9 +234,17 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 		// ADR-062 tier 2. Default Pion network types omit TCP; without
 		// SetNetworkTypes the mux is installed and never advertised.
 		viewerSE.SetICETCPMux(webrtc.NewICETCPMux(nil, cfg.MediaTCP, 8))
-		viewerSE.SetNetworkTypes([]webrtc.NetworkType{
-			webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6, webrtc.NetworkTypeTCP4,
-		})
+	}
+	if cfg.MediaConn != nil || cfg.MediaTCP != nil || len(cfg.PublicIPs) > 0 {
+		// Hosted viewer: declared public IPv4 only. UDP6 gathered a Fly 6PN
+		// plus ephemeral IPv6 srflx Chrome cannot use (answer dump 2026-08-17).
+		// ICE-Lite: we listen; Chrome checks toward us.
+		nets := []webrtc.NetworkType{webrtc.NetworkTypeUDP4}
+		if cfg.MediaTCP != nil {
+			nets = append(nets, webrtc.NetworkTypeTCP4)
+		}
+		viewerSE.SetNetworkTypes(nets)
+		viewerSE.SetLite(true)
 	}
 	if len(cfg.PublicIPs) > 0 {
 		// ICECandidateTypeHost with Pion's default mode APPENDS for srflx and
@@ -293,7 +301,8 @@ func (s *Session) nextConnID() int64 {
 // silently inheriting whichever engine happened to be default.
 func (s *Session) buildPeerConnection(api *webrtc.API) (*webrtc.PeerConnection, error) {
 	config := webrtc.Configuration{}
-	if s.cfg.StunServer != "" {
+	hostedViewer := api == s.apiViewer && (s.cfg.MediaConn != nil || len(s.cfg.PublicIPs) > 0)
+	if s.cfg.StunServer != "" && !hostedViewer {
 		config.ICEServers = []webrtc.ICEServer{{URLs: []string{s.cfg.StunServer}}}
 	}
 	pc, err := api.NewPeerConnection(config)
