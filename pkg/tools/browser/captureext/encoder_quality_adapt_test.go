@@ -248,7 +248,16 @@ const K = adapt.constants;
 function makePC(sample, opts) {
   opts = opts || {};
   const applied = [];
-  let params = { encodings: opts.emptyEncodings ? [] : [{}] };
+  // A NEGOTIATED sender carries an ssrc. encodingsNegotiated() in encoder.js
+  // was tightened on 2026-08-17 to require a real negotiated field
+  // (ssrc/rid/codecPayloadType/maxBitrate), because Chrome hands back the
+  // bare placeholder encodings:[{}] BEFORE negotiation and then rejects
+  // setParameters on it with InvalidStateError. This fixture still handed the
+  // loop that placeholder, so every adaptation case threw 'encodings not
+  // negotiated' and the loop could never step — the whole behavioural suite
+  // went red while the product was fine. opts.emptyEncodings keeps the
+  // genuinely-unnegotiated case ([]) for the skip test.
+  let params = { encodings: opts.emptyEncodings ? [] : [{ ssrc: 1 }] };
   const sender = {
     track: { kind: 'video' },
     getStats: function () {

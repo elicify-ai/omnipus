@@ -3901,9 +3901,13 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 		return nil, err
 	}
 
-	// First, try to detect config version by reading the version field
+	// First, try to detect config version by reading the version field.
+	// A POINTER so an absent "version" key is distinguishable from an
+	// explicit "version": 0 — the two need different errors (a missing field
+	// is an operator omission with an obvious fix; an explicit 0 is a config
+	// predating the current schema, which has no migration path).
 	var versionInfo struct {
-		Version int `json:"version"`
+		Version *int `json:"version"`
 	}
 	if e := json.Unmarshal(data, &versionInfo); e != nil {
 		return nil, fmt.Errorf("failed to detect config version: %w", e)
@@ -3921,7 +3925,10 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 
 	// Load config based on detected version
 	var cfg *Config
-	switch versionInfo.Version {
+	if versionInfo.Version == nil {
+		return nil, fmt.Errorf("config is missing a version field — add \"version\": %d", CurrentVersion)
+	}
+	switch *versionInfo.Version {
 	case CurrentVersion:
 		// Current version
 		cfg, err = loadConfig(data)
@@ -3929,10 +3936,8 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 			return nil, err
 		}
 
-	case 0:
-		return nil, fmt.Errorf("config is missing a version field — add \"version\": %d", CurrentVersion)
 	default:
-		return nil, fmt.Errorf("unsupported config version: %d", versionInfo.Version)
+		return nil, fmt.Errorf("unsupported config version: %d", *versionInfo.Version)
 	}
 
 	if err := env.Parse(cfg); err != nil {
