@@ -41,7 +41,11 @@ function resolveWorkspaceName(sessionId: string): string {
 }
 
 export function RequestMountApprovalPreview({ args, agentName, sessionId }: ToolApprovalPreviewContext) {
-  const hostPath = typeof args.host_path === 'string' ? args.host_path.trim() : ''
+  const hostPath = (
+    typeof args.host_path === 'string' ? args.host_path
+    : typeof args.path === 'string' ? args.path
+    : ''
+  ).trim()
   const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
   const workspaceName = resolveWorkspaceName(sessionId)
 

@@ -237,6 +237,14 @@ function ToolApprovalCard({
   // schema), so a genuine live frame — the only thing enqueue() ever
   // constructs a queue entry from — can never produce an empty string here.
   const isReconnectStub = toolCallId === '' && turnId === ''
+  const mountPath =
+    typeof args.host_path === 'string' ? args.host_path.trim()
+    : typeof args.path === 'string' ? args.path.trim()
+    : ''
+  // Always Allow remembers the exact arguments. A request_mount with no
+  // folder path has nothing safe to remember — hide the button, same as a
+  // reconnect stub.
+  const hideAlwaysAllow = isReconnectStub || (toolName === 'request_mount' && !mountPath)
 
   // ── Per-tool readable-summary registry (Deliverables 1-3) ─────────────────
   const resolvedAgentName =
@@ -431,6 +439,7 @@ function ToolApprovalCard({
                   <XCircle size={14} weight="bold" aria-hidden="true" />
                   {secondaryLabel}
                 </Button>
+                {!hideAlwaysAllow && (
                 <Button
                   size="sm"
                   variant="ghost"
@@ -442,6 +451,7 @@ function ToolApprovalCard({
                   <Lock size={14} aria-hidden="true" />
                   Always Allow
                 </Button>
+                )}
                 {showCancelButton && (
                   <Button
                     size="sm"

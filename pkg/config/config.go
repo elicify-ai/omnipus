@@ -3825,6 +3825,8 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 			return nil, err
 		}
 
+	case 0:
+		return nil, fmt.Errorf("config is missing a version field — add \"version\": %d", CurrentVersion)
 	default:
 		return nil, fmt.Errorf("unsupported config version: %d", versionInfo.Version)
 	}

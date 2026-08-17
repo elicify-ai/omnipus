@@ -975,7 +975,7 @@ func (t *ExecTool) checkPathSegment(raw, cwdPath string) string {
 		return "Command blocked by safety guard (cannot resolve relative path)"
 	}
 	if strings.HasPrefix(rel, "..") {
-		return "Command blocked by safety guard (path outside working dir)"
+		return fmt.Sprintf("Command blocked by safety guard (path outside working dir): %q is outside the effective working directory %q and no mount covers it", p, cwdPath)
 	}
 	return ""
 }

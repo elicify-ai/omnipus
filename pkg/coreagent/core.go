@@ -2048,11 +2048,13 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				// the same read-only filesystem surface as read_file/
 				// list_directory above — a fresh agent can find and read
 				// whatever the operator uploaded to this workspace's chat.
-				"library_list":  allow,
-				"library_read":  allow,
-				"request_mount": ask,
-				"remember":      allow,
-				"recall_memory": allow,
+				"library_list":        allow,
+				"library_read":        allow,
+				"request_mount":       ask,
+				"remember":            allow,
+				"recall_memory":       allow,
+				"run_retrospective":   allow,
+				"recall_conversation": allow,
 			}),
 		},
 	}

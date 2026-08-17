@@ -190,7 +190,7 @@ func TestBoot_HasSystemAllowsInConstructorSeed(t *testing.T) {
 //	And bash is explicitly "deny" (closes the historical privilege gap where
 //	the dead "system.*" wildcard let every system-management tool fall
 //	through to allow);
-//	And read_file/list_directory/remember/recall_memory are explicitly "allow";
+//	And read_file/list_directory/remember/recall_memory/run_retrospective/recall_conversation are explicitly "allow";
 //	And every other known tool has an explicit "deny" entry (no gaps).
 //
 // Traces to: pkg/coreagent/core.go — NewCustomAgentToolsCfg.
@@ -206,7 +206,7 @@ func TestAgentConstructor_CustomAgent_DenyByDefaultFullCoverage(t *testing.T) {
 	assert.Equal(t, config.ToolPolicyDeny, denyByDefault,
 		"custom agent 'bash' must be explicit 'deny' (closes the system.* privilege gap)")
 
-	for _, allow := range []string{"read_file", "list_directory", "remember", "recall_memory"} {
+	for _, allow := range []string{"read_file", "list_directory", "remember", "recall_memory", "run_retrospective", "recall_conversation"} {
 		p, ok := cfg.Builtin.Policies[allow]
 		require.True(t, ok, "custom agent must have explicit policy for %q", allow)
 		assert.Equal(t, config.ToolPolicyAllow, p, "custom agent %q must be 'allow'", allow)

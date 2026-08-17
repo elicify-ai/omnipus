@@ -61,7 +61,10 @@ var ErrPathInvalid = errors.New("invalid path")
 // "reason" field is omitted entirely, matching loop.go's own two message
 // shapes (one with reason, one without).
 func PermissionDeniedResult(toolName string, classErr error, detail string) *ToolResult {
-	const message = "Access to this path is denied by filesystem policy."
+	message := "Access to this path is denied by filesystem policy."
+	if classErr != nil && errors.Is(classErr, ErrOutsideScope) && detail != "" {
+		message = detail
+	}
 
 	reason := detail
 	if reason == "" && classErr != nil {

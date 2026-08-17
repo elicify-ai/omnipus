@@ -112,6 +112,9 @@ func (t *RequestMountTool) Category() ToolCategory { return CategoryFilesystem }
 // valid when shown and is not when used.
 func (t *RequestMountTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	hostPath, _ := args["host_path"].(string)
+	if strings.TrimSpace(hostPath) == "" {
+		hostPath, _ = args["path"].(string)
+	}
 	hostPath = strings.TrimSpace(hostPath)
 	if hostPath == "" {
 		return ErrorResult("request_mount: host_path is required")

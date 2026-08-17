@@ -697,6 +697,17 @@ describe('ToolApprovalModal — Always Allow for request_mount', () => {
     expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
   })
 
+  it('hides Always Allow for request_mount when no folder path is present', () => {
+    act(() => {
+      useToolApprovalStore.setState({
+        queue: [{ ...MOUNT_APPROVAL, args: { reason: 'UAT folder A' } }],
+      })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.queryByTestId('always-allow-toggle')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Add folder|Approve/i })).toBeInTheDocument()
+  })
+
   it('still offers a way to approve and a way to deny request_mount', () => {
     // Always Allow is offered when args are present (a grant is this folder,
     // this session). Approve and Deny must still be there either way.

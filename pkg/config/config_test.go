@@ -2065,3 +2065,18 @@ func TestLoadConfig_PublicURL_AutoDetectFromDevpodPreviewURL(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadConfig_MissingVersionField(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"gateway":{"host":"127.0.0.1","port":5000}}`), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := LoadConfig(cfgPath)
+	if err == nil {
+		t.Fatal("LoadConfig must refuse a config with no version field")
+	}
+	if !strings.Contains(err.Error(), "missing a version field") {
+		t.Fatalf("error = %q, want it to name the missing version field", err.Error())
+	}
+}

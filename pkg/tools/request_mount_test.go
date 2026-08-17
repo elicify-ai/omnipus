@@ -179,3 +179,13 @@ func TestMountNameFromHostPath(t *testing.T) {
 	// No separator can survive, or the "name" would be a path.
 	assert.NotContains(t, mountNameFromHostPath("/tmp/a/b"), "/")
 }
+
+func TestRequestMount_AcceptsPathAlias(t *testing.T) {
+	home, wsID, target := newMountFixture(t)
+	tool := NewRequestMountTool(home)
+	res := tool.Execute(WithWorkspaceID(context.Background(), wsID), map[string]any{
+		"path":   target,
+		"reason": "model used path instead of host_path",
+	})
+	require.False(t, res.IsError, "path must be accepted as an alias of host_path: %s", res.ForLLM)
+}
