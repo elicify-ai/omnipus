@@ -100,11 +100,36 @@ provided the socket is gateway-owned, which it now is.
 ## Status of each tier
 
 - **Tier 1 — IMPLEMENTED and committed.** Measured working on Fly (see Acceptance).
-- **Tier 2 (ICE-TCP) — IMPLEMENTED 2026-08-17.** Fixed TCP port via `SetICETCPMux` +
-  `SetNetworkTypes(UDP4,UDP6,TCP4)`. Hosted recipe: `OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_TCP_PORT`
-  and a declared TCP service (swimlane: 50001). Serves viewers whose network drops raw UDP
-  (VPN system extensions eating Chrome STUN replies — measured 2026-08-15 / reproduced
-  2026-08-17 as `ice-disconnected-timeout` while Playwright on the same Mac held ICE).
+- **Tier 2 (ICE-TCP) — CODE IMPLEMENTED, DISABLED EVERYWHERE, 2026-08-17.** `SetICETCPMux` +
+  `SetNetworkTypes(UDP4,UDP6,TCP4)` behind `tools.browser.webrtc_media_tcp_port` (0 = off, the
+  default). It is **off in both Fly configs** because enabling it made things measurably worse,
+  not better: Fly's TCP proxy resets the media connection (`could not proxy TCP data to/from
+  instance … Connection reset by peer`) and a TCP media path head-of-line blocks scroll and
+  click input. Do not re-enable on Fly without solving the proxy behaviour first.
+  Covered by `pkg/tools/browser/webrtc/ice_tcp_test.go` (strict `a=candidate: … tcp …
+  tcptype passive` assertion — an earlier substring check for `"tcp"` was vacuous because
+  every Pion answer contains `rtcp`).
+  Known gap while disabled: a failed ICE-TCP bind logs ERROR only and has no panel surface,
+  unlike the UDP sibling's `mediaPortFallback` notice.
+
+### Viewer-leg ICE posture (2026-08-17, wider blast radius than tier 2)
+
+With a **declared public address** (`PublicIPs` non-empty) the viewer leg is now **ICE-Lite with
+no STUN URL**: we listen and say where, the viewer checks toward us. This removes the
+server-reflexive candidates a hosted box gathers but no viewer can reach — the Fly answer dump
+carried `138.199.24.232:36534` and a 6PN address next to the real one, and Chrome burned its
+attempt on them and never completed DTLS.
+
+Two constraints this must keep:
+- **One predicate for both settings.** ICE-Lite and skipping STUN are gated by the same
+  `hostedViewerLeg()`. pion rejects a lite agent that is also handed an ICE URL
+  (`ErrUselessUrlsProvided`), and `CreateOffer` then fails outright — no offer, no nameable
+  failure. Guarded by `TestSession_TCPOnlyWithStun_StillNegotiates`.
+- **Gated on the public address alone, never on a fixed media port.** A self-hoster who pins a
+  port for a firewall forward but declares no public address still needs srflx (their NAT
+  mapping is the only way in). Guarded by `TestSession_SelfHostedNoPublicIP_KeepsSrflx`.
+  Network types are widened (not narrowed) only when a TCP mux exists; an earlier revision
+  narrowed to UDP4-only, which silently removed every IPv6 host candidate.
 - **Tier 3 (embedded TURN) — BLOCKED pending a real decision** on the port question (Correction 1),
   the permission handler (Correction 2), and credential lifecycle. Not "TLS on 443".
 

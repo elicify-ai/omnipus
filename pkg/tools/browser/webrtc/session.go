@@ -167,6 +167,14 @@ type viewerConn struct {
 	handle *ViewerHandle
 }
 
+// hostedViewerLeg reports whether the VIEWER leg has a declared public
+// address, i.e. whether this gateway can honestly say "connect to me here".
+// It is the single source of truth for the two settings that must never
+// disagree: ICE-Lite (NewSession) and skipping STUN (buildPeerConnection).
+func hostedViewerLeg(cfg Config) bool {
+	return len(cfg.PublicIPs) > 0
+}
+
 // NewSession builds a Session backed by a fresh Pion API: an explicit
 // MediaEngine with the default codec set (VP8/H264 + Opus, among others) so
 // Chrome's tabCapture-derived offer negotiates cleanly, and the default
@@ -231,19 +239,32 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 		viewerSE.SetICEUDPMux(webrtc.NewICEUDPMux(nil, cfg.MediaConn))
 	}
 	if cfg.MediaTCP != nil {
-		// ADR-062 tier 2. Default Pion network types omit TCP; without
-		// SetNetworkTypes the mux is installed and never advertised.
+		// ADR-062 tier 2. Default Pion network types omit TCP entirely, so the
+		// mux would be installed and never advertised. Widen to include TCP;
+		// deliberately KEEP both UDP families -- an earlier revision narrowed
+		// this to UDP4 only, which silently removed every IPv6 host candidate
+		// and made an IPv6-only viewer unconnectable. The Fly 6PN/ephemeral
+		// candidates that motivated that narrowing are removed by the
+		// fly-global-services bind and by ICE-Lite dropping srflx, not by the
+		// network-type list (with a UDP mux, pion's gatherCandidatesLocalUDPMux
+		// ignores networkTypes and just enumerates the mux's addresses).
 		viewerSE.SetICETCPMux(webrtc.NewICETCPMux(nil, cfg.MediaTCP, 8))
+		viewerSE.SetNetworkTypes([]webrtc.NetworkType{
+			webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6, webrtc.NetworkTypeTCP4,
+		})
 	}
-	if cfg.MediaConn != nil || cfg.MediaTCP != nil || len(cfg.PublicIPs) > 0 {
-		// Hosted viewer: declared public IPv4 only. UDP6 gathered a Fly 6PN
-		// plus ephemeral IPv6 srflx Chrome cannot use (answer dump 2026-08-17).
-		// ICE-Lite: we listen; Chrome checks toward us.
-		nets := []webrtc.NetworkType{webrtc.NetworkTypeUDP4}
-		if cfg.MediaTCP != nil {
-			nets = append(nets, webrtc.NetworkTypeTCP4)
-		}
-		viewerSE.SetNetworkTypes(nets)
+	if hostedViewerLeg(cfg) {
+		// We have a declared public address, so this is client-to-SERVER: we
+		// listen and say where, and the viewer checks toward us. ICE-Lite says
+		// exactly that, and it drops the server-reflexive candidates that a
+		// hosted box gathers but no viewer can use (Fly answer dump
+		// 2026-08-17: 138.199.24.232:36534 + a 6PN address alongside the real
+		// one; Chrome tried them and never completed DTLS).
+		//
+		// Gated on PublicIPs ALONE, not on a fixed media port: a self-hoster
+		// who pins a port for a firewall forward but declares no public
+		// address still NEEDS srflx (their NAT mapping is the only way in),
+		// and lite would take it away.
 		viewerSE.SetLite(true)
 	}
 	if len(cfg.PublicIPs) > 0 {
@@ -299,9 +320,14 @@ func (s *Session) nextConnID() int64 {
 // ingest leg, s.apiViewer for a viewer. Making it a parameter rather than a
 // field read means a new call site has to state which leg it is, instead of
 // silently inheriting whichever engine happened to be default.
-func (s *Session) buildPeerConnection(api *webrtc.API) (*webrtc.PeerConnection, error) {
+func (s *Session) buildPeerConnection(api *webrtc.API, viewerLeg bool) (*webrtc.PeerConnection, error) {
 	config := webrtc.Configuration{}
-	hostedViewer := api == s.apiViewer && (s.cfg.MediaConn != nil || len(s.cfg.PublicIPs) > 0)
+	// MUST agree with the SetLite gate in NewSession. pion rejects a lite
+	// agent that is also handed an ICE URL (ErrUselessUrlsProvided: lite
+	// forces candidateTypes=[host], which makes a STUN URL useless), and
+	// CreateOffer then fails outright -- no offer, no nameable ICE failure.
+	// One predicate, used by both sites, is what keeps that from happening.
+	hostedViewer := viewerLeg && hostedViewerLeg(s.cfg)
 	if s.cfg.StunServer != "" && !hostedViewer {
 		config.ICEServers = []webrtc.ICEServer{{URLs: []string{s.cfg.StunServer}}}
 	}

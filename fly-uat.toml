@@ -48,7 +48,10 @@ primary_region = "fra"
   OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_UDP_PORT = "50000"
   OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_UDP_BIND_ADDRESS = "fly-global-services"
   OMNIPUS_TOOLS_BROWSER_WEBRTC_PUBLIC_IP = "109.105.222.208"
-  OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_TCP_PORT = "50001"
+  # ADR-062 tier 2 (ICE-TCP) is deliberately NOT set here. Measured on the
+  # swimlane box 2026-08-17: Fly's TCP proxy resets the ICE-TCP connection
+  # ("could not proxy TCP data to/from instance ... Connection reset by
+  # peer"), and a TCP media path head-of-line blocks scroll and clicks.
 
 [http_service]
   internal_port = 5000
@@ -73,13 +76,6 @@ primary_region = "fra"
 
   [[services.ports]]
     port = 50000
-
-[[services]]
-  internal_port = 50001
-  protocol = "tcp"
-
-  [[services.ports]]
-    port = 50001
 
 # Persist ~/.omnipus (config, credentials, sessions, workspaces) across
 # restarts so a UAT persona's setup survives a machine bounce.

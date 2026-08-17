@@ -55,20 +55,26 @@ primary_region = "sin"
   # ("could not proxy TCP data to/from instance ... Connection reset by
   # peer", measured 2026-08-17), and a TCP media path also head-of-line
   # blocks scroll/click input. UDP tier 1 only until a real decision.
-  # Boot warm-up. The persisted config.json on the volume carries an EMPTY
-  # tools.browser object, so every browser default (including these two)
-  # was the Go zero value = OFF once a volume was attached 2026-08-16 --
-  # first open was slow again with no warm-up. Env wins over config.
-  # WARM_AT_BOOT is the master gate (browserWarmUpEnabled); the two below
-  # are AND-ed with it, so all three are required.
+  # Boot warm-up, pinned explicitly. CORRECTION 2026-08-17: an earlier
+  # revision of this comment claimed the volume's config.json disabled the
+  # browser defaults because tools.browser was empty. That was WRONG --
+  # loadConfig starts from DefaultConfig() and unmarshals the file over it
+  # (pkg/config/migration.go), and all three flags default to true
+  # (pkg/config/defaults.go). The boot warm-up log line was simply older
+  # than the log window I was reading. These pins therefore change no
+  # behaviour; they are kept only so the intent is explicit on the box.
+  #
+  # The REAL cause of "no warm-up recognisable" is the idle stop below.
   OMNIPUS_TOOLS_BROWSER_WARM_AT_BOOT = "true"
   OMNIPUS_TOOLS_BROWSER_WARM_TAB_AT_BOOT = "true"
   OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_AT_BOOT = "true"
-  # 0 = never idle-stop. The shipped 300s means the warm capture is gone
-  # 5 minutes after boot, so an operator opening the panel later sees a
-  # fully cold first open and reports "no warm-up" -- exactly what
-  # happened 2026-08-17. This box is dedicated-CPU UAT; paying ~1/4 core
-  # continuously is the point of it.
+  # The warm capture stops itself after this many idle seconds, so it only
+  # helps a panel opened within that window of a restart; open it later and
+  # the first open is fully cold. 0 (never stop) was tried and measured
+  # WORSE: a warm capture older than warmCaptureAdaptResetMinAge (15s) is
+  # rebuilt on attach, so every open paid a full rebuild -- ~17s to first
+  # frame vs ~4s inside the window. Keeping the shipped 300 until the
+  # rebuild-on-attach rule itself is fixed in code.
   OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_IDLE_SEC = "300"
 
 [http_service]
