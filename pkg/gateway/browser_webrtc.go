@@ -1602,12 +1602,30 @@ func (h *BrowserWSHandler) mediaPortFallbackNotice() string {
 // No-op — no frame at all — when nothing degraded, so the ordinary install
 // (fixed port bound exactly, or not configured) is completely unaffected.
 func (h *BrowserWSHandler) notifyMediaPortDegraded(wc *browserWSConn, sessID, viewerID string) {
-	notice := h.mediaPortFallbackNotice()
+	notice := strings.TrimSpace(h.mediaPortFallbackNotice() + " " + h.iceTCPUnavailableNotice())
 	if notice == "" {
 		return
 	}
 	wc.sendCriticalGen(sessionErrorStatus(sessID, notice),
 		dropContext(sessID, viewerID, "media-port-fallback"))
+}
+
+// iceTCPUnavailableNotice is the operator-facing sentence for a configured
+// ICE-TCP port that could not be bound. Same reasoning as
+// mediaPortFallbackState.notice: the person who has to free the port or pick
+// another one is the operator, and a log line is not a surface they watch.
+// Empty when ICE-TCP is not configured or bound fine, so an ordinary install
+// says nothing. Deliberately short: BrowserStatusFrame.message is capped at
+// 512 and this may be appended to the UDP notice.
+func (h *BrowserWSHandler) iceTCPUnavailableNotice() string {
+	h.mediaConnMu.Lock()
+	defer h.mediaConnMu.Unlock()
+	if h.mediaTCPBindErr == nil {
+		return ""
+	}
+	return "Live video could not open the TCP media port you configured " +
+		"(tools.browser.webrtc_media_tcp_port), so viewers whose network blocks UDP have no fallback. " +
+		"Free that port or choose one your provider routes, then restart."
 }
 
 // sharedMediaConn returns the process-wide fixed media socket, binding it on
@@ -1735,10 +1753,12 @@ func (h *BrowserWSHandler) sharedMediaTCP(cfg *config.Config) net.Listener {
 	// fly-global-services:50001 would leave the proxy's SYN unanswered.
 	ln, err := net.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
+		h.mediaTCPBindErr = err
 		slog.Error("browser-webrtc: ICE-TCP listen failed — viewers whose network drops UDP will not connect",
 			"addr", ":"+strconv.Itoa(port), "error", err)
 		return nil
 	}
+	h.mediaTCPBindErr = nil
 	slog.Info("browser-webrtc: ICE-TCP socket bound", "addr", ln.Addr().String())
 	h.mediaTCP = ln
 	return ln

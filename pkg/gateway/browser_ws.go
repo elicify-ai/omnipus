@@ -661,6 +661,12 @@ type BrowserWSHandler struct {
 	mediaConnMu sync.Mutex
 	mediaConn   net.PacketConn
 	mediaTCP    net.Listener
+	// mediaTCPBindErr records that ICE-TCP (ADR-062 tier 2) was configured
+	// but its listener could not be bound. Guarded by mediaConnMu. Like
+	// mediaPortFallback it exists so the failure reaches the PANEL, not just
+	// a log line: an operator who declared a TCP media port and silently got
+	// nothing has no other way to find out.
+	mediaTCPBindErr error
 
 	// mediaPortFallback is non-nil ONLY when the fixed media UDP port the
 	// operator explicitly configured could not be bound and sharedMediaConn

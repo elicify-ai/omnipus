@@ -369,3 +369,42 @@ func TestSharedMediaTCP_Unconfigured_ReturnsNil(t *testing.T) {
 	h := &BrowserWSHandler{}
 	require.Nil(t, h.sharedMediaTCP(&config.Config{}))
 }
+
+// TestSharedMediaTCP_BindFailure_IsUserVisible pins ADR-061's rule for the
+// tier-2 socket: a configured ICE-TCP port that cannot be bound must reach the
+// PANEL, not only the log. Without this an operator who declared a TCP media
+// port and silently got nothing has no way to discover it.
+func TestSharedMediaTCP_BindFailure_IsUserVisible(t *testing.T) {
+	blocker, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = blocker.Close() }()
+	taken := blocker.Addr().(*net.TCPAddr).Port
+
+	cfg := &config.Config{}
+	cfg.Tools.Browser.WebRTCMediaTCPPort = taken
+
+	h := &BrowserWSHandler{}
+	// Bind the same port on all interfaces first so the handler's own listen
+	// collides deterministically.
+	hog, err := net.Listen("tcp", ":"+strconv.Itoa(taken))
+	if err == nil {
+		defer func() { _ = hog.Close() }()
+	}
+
+	if ln := h.sharedMediaTCP(cfg); ln != nil {
+		_ = ln.Close()
+		t.Skip("port could not be made unavailable on this machine; nothing to assert")
+	}
+	notice := h.iceTCPUnavailableNotice()
+	require.NotEmpty(t, notice, "a failed ICE-TCP bind must produce an operator-facing notice")
+	require.Contains(t, notice, "webrtc_media_tcp_port")
+	require.LessOrEqual(t, len(notice), 512, "BrowserStatusFrame.message is capped at 512")
+}
+
+// TestSharedMediaTCP_Unconfigured_SaysNothing keeps the notice from becoming
+// noise on the default install, where ICE-TCP is off.
+func TestSharedMediaTCP_Unconfigured_SaysNothing(t *testing.T) {
+	h := &BrowserWSHandler{}
+	require.Nil(t, h.sharedMediaTCP(&config.Config{}))
+	require.Empty(t, h.iceTCPUnavailableNotice())
+}
