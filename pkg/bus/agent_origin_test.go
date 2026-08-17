@@ -21,6 +21,9 @@ func TestOutboundMessage_AgentOriginFields_SetGet(t *testing.T) {
 		AgentID:     "mia",
 		WorkspaceID: "ws-sales",
 	}
+	if msg.Channel != "telegram.acme" || msg.ChatID != "123" || msg.Content != "hi" {
+		t.Fatalf("carrier fields = %+v", msg)
+	}
 	if msg.AgentID != "mia" {
 		t.Fatalf("expected AgentID mia, got %q", msg.AgentID)
 	}
@@ -104,6 +107,9 @@ func TestOutboundMediaMessage_AgentOriginFields_SetGet(t *testing.T) {
 		WorkspaceID: "ws-sales",
 		AgentID:     "mia",
 		Parts:       []MediaPart{{Type: "image", Ref: "media://abc"}},
+	}
+	if msg.Channel != "telegram.acme" || msg.ChatID != "123" || len(msg.Parts) != 1 {
+		t.Fatalf("media carrier fields = %+v", msg)
 	}
 	if msg.AgentID != "mia" {
 		t.Fatalf("expected AgentID mia, got %q", msg.AgentID)
