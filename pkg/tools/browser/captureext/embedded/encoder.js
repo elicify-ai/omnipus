@@ -294,6 +294,31 @@ function clearOfferAnswerTimeout() {
 // post-connected call is gated by the connectedConstraintsApplied flag
 // newPeerConnection closes over -- so this never "stacks" repeated
 // setParameters calls onto a single connectionstatechange listener.
+// senderParamsChain serializes every getParameters()->setParameters() pair on
+// the video sender.
+//
+// Why this exists (measured on the hosted box 2026-08-17, and it is NOT the
+// empty-encodings theory 1.0.11/1.0.12 were built on -- that error still fired
+// with those in place): libwebrtc clears the sender's last_transaction_id_ on
+// EVERY setParameters call. A second setParameters built from parameters read
+// BEFORE that happened is rejected with
+//   InvalidStateError: Failed to set parameters since getParameters() has
+//   never been called on this sender
+// which reads like "you never called getParameters" but actually means "the
+// parameters you are handing me are stale". Three sites apply constraints --
+// post-answer, post-connected, and the 2s adaptation loop -- and nothing kept
+// them from overlapping.
+//
+// Queuing makes each pair atomic with respect to the others: the read happens
+// inside the queued step, immediately before its own write.
+let senderParamsChain = Promise.resolve();
+function queueSenderParams(fn) {
+  const run = function () { return Promise.resolve().then(fn); };
+  // Chain through BOTH paths so one rejection cannot wedge the queue forever.
+  senderParamsChain = senderParamsChain.then(run, run);
+  return senderParamsChain;
+}
+
 function encodingsNegotiated(params) {
   // Chrome hands out encodings:[{}] -- a single EMPTY object -- before
   // negotiation has populated the sender. Calling setParameters on that
@@ -339,7 +364,8 @@ function applyVideoSenderConstraints(pc, opts) {
   // at 4x base (= scale 2) so a scale-3/4 tab cannot demand unbounded rate.
   const maxBitrate = Math.min(baseBitrate * 4, Math.round(baseBitrate * captureScale * captureScale));
 
-  try {
+  queueSenderParams(function () {
+   try {
     const params = sender.getParameters();
     // Chrome only treats getParameters() as "called" once negotiation has
     // populated encodings. Synthesizing encodings: [{}] and then calling
@@ -416,7 +442,7 @@ function applyVideoSenderConstraints(pc, opts) {
     // had already decided, which is exactly the "green but broken" shape
     // where the loop logs a step down and the picture never changes.
     params.encodings[0].scaleResolutionDownBy = currentAdaptScale();
-    sender
+    return sender
       .setParameters(params)
       .then(() => {
         record(logPrefix + ': setParameters applied');
@@ -444,11 +470,12 @@ function applyVideoSenderConstraints(pc, opts) {
         // stick, and this page's console is not a surface anyone reads.
         reportAdaptFailure(msg);
       });
-  } catch (e) {
+   } catch (e) {
     const msg = logPrefix + ': getParameters/setParameters failed: ' + String(e);
     warn(msg, e);
     window.__omnipusState.lastError = msg;
-  }
+   }
+  });
 
   // contentHint 'detail' (REVERSED from 'motion', 2026-07-31 live evidence):
   // 'motion' tells libwebrtc this is camera-like video, which ENABLES the
@@ -782,12 +809,17 @@ async function readVideoSenderSample(pc) {
 async function applyAdaptScale(pc, scale) {
   const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
   if (!sender) throw new Error('no video sender');
-  const params = sender.getParameters();
-  if (!encodingsNegotiated(params)) {
-    throw new Error('encodings not negotiated');
-  }
-  params.encodings[0].scaleResolutionDownBy = scale;
-  await sender.setParameters(params);
+  // Queued for the same reason as applyVideoSenderConstraints: this loop runs
+  // every 2s and would otherwise interleave with the post-answer /
+  // post-connected applies and invalidate their transaction (or theirs, ours).
+  return queueSenderParams(async function () {
+    const params = sender.getParameters();
+    if (!encodingsNegotiated(params)) {
+      throw new Error('encodings not negotiated');
+    }
+    params.encodings[0].scaleResolutionDownBy = scale;
+    await sender.setParameters(params);
+  });
 }
 
 // ADAPT_REPORT_MIN_INTERVAL_MS throttles the server-side failure report

@@ -108,6 +108,12 @@ func TestEncoderJS_QualityAdaptGuards(t *testing.T) {
 			"synthesizing encodings:[{}] is what Chrome rejects as " +
 			"'getParameters() has never been called on this sender'")
 	}
+	if !strings.Contains(src, "senderParamsChain") || !strings.Contains(src, "queueSenderParams(") {
+		t.Error("encoder.js: every getParameters()->setParameters() pair must go through " +
+			"queueSenderParams — libwebrtc clears the sender transaction id on each " +
+			"setParameters, so overlapping applies (post-answer, post-connected, adapt loop) " +
+			"produce 'getParameters() has never been called on this sender' (hosted box, 2026-08-17)")
+	}
 	if strings.Contains(src, "params.encodings = [{}]") {
 		t.Error("encoder.js: must not synthesize encodings:[{}] before setParameters — that is the " +
 			"InvalidStateError that the 1.0.10 skip exists to prevent")

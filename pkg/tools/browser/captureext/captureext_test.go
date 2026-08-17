@@ -412,6 +412,11 @@ var versionContentHashes = map[string]string{
 	// encodings:[{}] (shape), not on guessed fields, and report a
 	// post-connected skip to the gateway instead of the console.
 	"1.0.12": "492045aea8d6c732674f2064a244338abb6846cf75e908b1cadb005066dcac17",
+	// 1.0.13 — serialize every getParameters()->setParameters() pair.
+	// The InvalidStateError survived 1.0.11 and 1.0.12 on the hosted box:
+	// the cause is overlapping applies invalidating each other's
+	// transaction, not empty encodings.
+	"1.0.13": "aea8a1f82b48584ffe0bcc0b55efa848893ddb40c8b7592cef667f7cb4d42241",
 }
 
 func embeddedContentHash(t *testing.T) string {
