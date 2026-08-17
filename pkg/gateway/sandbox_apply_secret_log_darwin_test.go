@@ -41,7 +41,7 @@ func TestApplySandbox_SecretSetLog_Darwin(t *testing.T) {
 	}
 
 	t.Run("permissive degrades to UNPROTECTED, not seatbelt_deny", func(t *testing.T) {
-		entries := captureSlogJSON(t)
+		entries := captureSlogJSONLines(t)
 		cfg := &config.Config{}
 		cfg.Sandbox.Mode = "permissive"
 
@@ -72,7 +72,7 @@ func TestApplySandbox_SecretSetLog_Darwin(t *testing.T) {
 	})
 
 	t.Run("enforce actually installs a profile → protected/seatbelt_deny", func(t *testing.T) {
-		entries := captureSlogJSON(t)
+		entries := captureSlogJSONLines(t)
 		cfg := &config.Config{}
 		cfg.Sandbox.Mode = "enforce"
 

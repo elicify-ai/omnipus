@@ -39,7 +39,7 @@ import (
 // captureSlogJSON redirects the default slog logger to a JSON buffer for the
 // duration of the test and restores it on cleanup. Returns a function that
 // parses every captured line into a slice of event maps.
-func captureSlogJSON(t *testing.T) (lines func() []map[string]any) {
+func captureSlogJSONLines(t *testing.T) (lines func() []map[string]any) {
 	t.Helper()
 	var buf bytes.Buffer
 	prev := slog.Default()
@@ -102,7 +102,7 @@ func (f *fakeLinuxBackend) PolicyApplied() bool { return f.applied }
 // name a kernel mechanism. Runs on every platform (this is exactly the case
 // that was silently wrong on both Linux, pre-fix, and macOS).
 func TestApplySandbox_SecretSetLog_FallbackBackend_UNPROTECTED(t *testing.T) {
-	entries := captureSlogJSON(t)
+	entries := captureSlogJSONLines(t)
 
 	cfg := &config.Config{}
 	cfg.Sandbox.Mode = "enforce"
@@ -137,7 +137,7 @@ func TestApplySandbox_SecretSetLog_FallbackBackend_UNPROTECTED(t *testing.T) {
 // this test, a build that always logs UNPROTECTED would also pass the
 // FallbackBackend test above.
 func TestApplySandbox_SecretSetLog_Linux_Enforce_Protected(t *testing.T) {
-	entries := captureSlogJSON(t)
+	entries := captureSlogJSONLines(t)
 
 	cfg := &config.Config{}
 	cfg.Sandbox.Mode = "enforce"
@@ -172,7 +172,7 @@ func TestApplySandbox_SecretSetLog_Linux_Enforce_Protected(t *testing.T) {
 // that mode. This is the "Landlock actually enforcing" half of the finding 3
 // fix guidance, distinct from merely "isLinux".
 func TestApplySandbox_SecretSetLog_Linux_Permissive_UNPROTECTED(t *testing.T) {
-	entries := captureSlogJSON(t)
+	entries := captureSlogJSONLines(t)
 
 	cfg := &config.Config{}
 	cfg.Sandbox.Mode = "permissive"
@@ -202,7 +202,7 @@ func TestApplySandbox_SecretSetLog_Linux_Permissive_UNPROTECTED(t *testing.T) {
 // emission sites (finding 4).
 func TestApplySandbox_SecretSetLog_ModelIncludedInBothVariants(t *testing.T) {
 	t.Run("UNPROTECTED via fallback backend", func(t *testing.T) {
-		entries := captureSlogJSON(t)
+		entries := captureSlogJSONLines(t)
 		cfg := &config.Config{}
 		cfg.Sandbox.Mode = "enforce"
 		cfg.Sandbox.FilesystemModel = string(sandbox.FilesystemModelOpen)
@@ -226,7 +226,7 @@ func TestApplySandbox_SecretSetLog_ModelIncludedInBothVariants(t *testing.T) {
 	})
 
 	t.Run("protected via fake Landlock backend", func(t *testing.T) {
-		entries := captureSlogJSON(t)
+		entries := captureSlogJSONLines(t)
 		cfg := &config.Config{}
 		cfg.Sandbox.Mode = "enforce"
 		cfg.Sandbox.FilesystemModel = string(sandbox.FilesystemModelConfined)
