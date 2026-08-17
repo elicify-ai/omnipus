@@ -64,7 +64,12 @@ primary_region = "sin"
   OMNIPUS_TOOLS_BROWSER_WARM_AT_BOOT = "true"
   OMNIPUS_TOOLS_BROWSER_WARM_TAB_AT_BOOT = "true"
   OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_AT_BOOT = "true"
-  OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_IDLE_SEC = "300"
+  # 0 = never idle-stop. The shipped 300s means the warm capture is gone
+  # 5 minutes after boot, so an operator opening the panel later sees a
+  # fully cold first open and reports "no warm-up" -- exactly what
+  # happened 2026-08-17. This box is dedicated-CPU UAT; paying ~1/4 core
+  # continuously is the point of it.
+  OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_IDLE_SEC = "0"
 
 [http_service]
   internal_port = 5000
