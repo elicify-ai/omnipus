@@ -666,8 +666,8 @@ describe.each(edgeCases)(
 //
 // Grants remember the whole arguments object, so Always Allow on Add folder
 // means "this folder, this session" — not "any folder". The button is shown
-// whenever we have real args. It stays hidden only on reconnect stubs, which
-// have no arguments to remember.
+// when a folder path is present. It stays hidden on reconnect stubs and when
+// request_mount arrives with no host_path/path.
 
 const MOUNT_APPROVAL = {
   approvalId: 'appr-mount',

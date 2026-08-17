@@ -26,20 +26,13 @@ import (
 // and approves it in the place they already approve everything else. A second,
 // parallel consent path would be a second thing to get subtly wrong.
 //
-// # Why "Always Allow" must not be offered for this tool
+// # Always Allow is offered only when a folder path is present
 //
-// Approval grants are keyed on (session, agent, TOOL NAME) — the ARGUMENTS are
-// not part of the key. For an ordinary tool that is fine. Here it would mean
-// "this agent may mount ANY folder for the rest of the session, without
-// asking": a blanket grant over the whole disk, obtained with one click, with
-// no path ever shown.
-//
-// It is also unnecessary. Approving once creates a mount that persists until
-// the operator revokes it, so the durable thing is the mount record, not a
-// standing permission to make more. The affordance is therefore suppressed in
-// the approval modal by tool NAME (alwaysAllowSuppressedTools in
-// ToolApprovalModal.tsx) — the scope enum has only "core" and "general" and
-// carries no notion of consequence, so it cannot express this on its own.
+// Grants are keyed on (session, agent, tool, exact arguments). Always Allow
+// therefore means "this folder, this session" — not "any folder". The modal
+// hides the button when host_path (or the path alias) is empty, because there
+// is nothing safe to remember. Approving once still creates a mount that
+// persists until the operator revokes it.
 //
 // # What this tool deliberately cannot do
 //
