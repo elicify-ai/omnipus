@@ -111,8 +111,10 @@ jobs:
               landlock*) echo "S.1 PASS: kernel backend active ($BACKEND)";;
               *) echo "S.1 FAIL: enforce on a Landlock kernel but backend=$BACKEND"; fail=1;;
             esac
-            if [ "$DISBY" = "config" ]; then
-              echo "S.2 FAIL: disabled_by=config while the operator asked for enforce"; fail=1
+            if [ -n "$DISBY" ]; then
+              echo "S.2 FAIL: disabled_by=$DISBY while the sandbox is enforcing — nothing is disabled"; fail=1
+            else
+              echo "S.2 PASS: no disabler claimed while enforcing"
             fi
           else
             echo "S.1 (permissive) backend=$BACKEND disabled_by=$DISBY"

@@ -309,7 +309,19 @@ func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err err
 		Backend:     backend,
 		BackendName: backendName,
 		Mode:        mode,
-		DisabledBy:  disabledBy,
+	}
+	// DisabledBy answers "what turned the sandbox OFF" and its own doc says
+	// it is empty for enforce and permissive. resolveMode returns the SOURCE
+	// of the mode setting, which is a different question — assigning it here
+	// unconditionally made a fully enforcing sandbox report that it had been
+	// disabled by config. Measured on a Landlock v7 runner (2026-08-19):
+	// backend=landlock-v7, landlock_enforced=true, seccomp_enforced=true,
+	// and disabled_by="config" alongside them. Nothing was disabled. The same
+	// constant also appeared on a kernel with no Landlock at all, where the
+	// real reason (kernel_too_old_or_non_linux) was known and logged — so the
+	// field carried no information in either direction.
+	if mode == sandbox.ModeOff {
+		result.DisabledBy = disabledBy
 	}
 
 	// Step 3 — Handle mode=off: no Apply, no Install. Log-only. Arm the
