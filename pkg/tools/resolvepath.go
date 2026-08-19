@@ -684,8 +684,38 @@ func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool) (
 	//
 	// A workspace with no mounts yields nil, which is the pre-mount behaviour
 	// exactly.
-	if workspaceID != "" {
-		policy.AllowedRoots = workspace.AllowedMountRoots(home, workspaceID)
+	//
+	// Mounts must follow the work dir, not the turn-carried workspace_id.
+	// EffectiveFSPolicy's WorkDir above already prefers TurnWorkspaceDir(ctx)
+	// — the CoreTeam-resolved re-root pkg/agent/workspace_reroot.go's
+	// resolveTurnWorkDirOrRefuse computes via
+	// workspace.FindForAgentPreferring(home, agentID, optWorkspaceID) — over
+	// agentHome, regardless of whether this turn carries an explicit
+	// workspace_id at all. A CLI/ProcessDirect turn (`omnipus <agent> "..."`)
+	// and a scheduled/heartbeat turn never set tools.WithWorkspaceID (that is
+	// deliberate — see workspace_reroot.go's "does NOT touch
+	// tools.WithWorkspaceID/memory-room routing (FR-030)" note), so
+	// ToolWorkspaceID(ctx) is empty even though the work dir was re-rooted
+	// into a CoreTeam workspace. Looking mounts up only by ToolWorkspaceID
+	// then silently drops every mount the operator granted on that
+	// workspace: the agent gets the work dir but not the write grants that
+	// go with it, and a write into a mounted folder is refused with "no
+	// mount covers it" despite the mount existing.
+	//
+	// Resolve the SAME way the work dir was resolved when workspaceID is
+	// empty, so the two never disagree about which workspace this turn is
+	// rooted in. This does not change behaviour when workspaceID is already
+	// set — FindForAgentPreferring is consulted only on the empty path — and
+	// it does not set tools.WithWorkspaceID or otherwise touch memory-room
+	// routing; it only decides which workspace's mounts apply here.
+	mountWorkspaceID := workspaceID
+	if mountWorkspaceID == "" {
+		if wsID, found := workspace.FindForAgentPreferring(home, ToolAgentID(ctx), workspaceID); found {
+			mountWorkspaceID = wsID
+		}
+	}
+	if mountWorkspaceID != "" {
+		policy.AllowedRoots = workspace.AllowedMountRoots(home, mountWorkspaceID)
 	}
 	return policy, nil
 }
