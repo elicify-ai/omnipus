@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -269,7 +270,7 @@ func TestSpawnSubTurn_AsyncAckNeverFound_LogsWarnAfterRetryBudgetExhausted(t *te
 		transcriptSessionID: sessionID,
 	}
 
-	var logBuf bytes.Buffer
+	var logBuf raceFreeLogBuffer
 	oldHandler := slog.Default().Handler()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	defer slog.SetDefault(slog.New(oldHandler))
@@ -289,4 +290,29 @@ func TestSpawnSubTurn_AsyncAckNeverFound_LogsWarnAfterRetryBudgetExhausted(t *te
 			"silently discarding `found` leaves this permanently undiagnosable in production")
 	assert.Contains(t, logOutput, callID, "the WARN must include the parent_spawn_call_id for diagnosis")
 	assert.Contains(t, logOutput, sessionID, "the WARN must include the session_id for diagnosis")
+}
+
+// raceFreeLogBuffer is a mutex-protected sink for slog output.
+//
+// The async sub-turn this test spawns keeps running (and logging through the
+// same process-wide slog default) after spawnSubTurn returns, so reading a
+// bare bytes.Buffer here is a genuine data race — the -race build caught it on
+// CI 2026-08-19 as a concurrent Buffer.String()/Write. The race is in the test
+// harness, not the loop: the fix is to synchronize the sink, not to silence
+// the detector.
+type raceFreeLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *raceFreeLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *raceFreeLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

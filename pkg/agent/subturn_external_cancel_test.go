@@ -166,7 +166,7 @@ func TestExternalCLISubTurn_CancelPropagates_Async(t *testing.T) {
 		if !errors.Is(res.Err, context.Canceled) {
 			t.Errorf("result.Err = %v, want context.Canceled", res.Err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("runExternalCLISubTurn did not return after Interrupt — " +
 			"cancel did not propagate to the external-cli child (async/background delegation)")
 	}
@@ -208,9 +208,16 @@ func TestExternalCLISubTurn_CancelPropagates_Sync(t *testing.T) {
 	// has started — mirroring RequestCancel's PHASE B timer firing while the
 	// PARENT is still synchronously blocked inside this exact call.
 	go func() {
+		// Wait for the driver without a short bail-out. The previous 2s
+		// deadline silently RETURNED WITHOUT CANCELLING on a loaded runner,
+		// so the run was never interrupted and the assertion below failed as
+		// "did not return after InterruptSessionHard" — a harness timeout
+		// reported as a lost-cancel regression (CI 2026-08-19). A genuine
+		// hang is still bounded by the select on doneCh below.
 		select {
 		case <-driver.started:
-		case <-time.After(2 * time.Second):
+		case <-time.After(30 * time.Second):
+			t.Errorf("driver.Run never started, so no cancel was fired")
 			return
 		}
 		if _, err := al.InterruptSessionHard(sessionID, ScopeSubtree, "test cancel (sync)"); err != nil {
@@ -231,7 +238,7 @@ func TestExternalCLISubTurn_CancelPropagates_Sync(t *testing.T) {
 
 	select {
 	case <-doneCh:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("runExternalCLISubTurn did not return after InterruptSessionHard — " +
 			"synchronous (await) external-cli delegation would deadlock the parent turn")
 	}
@@ -384,7 +391,7 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 		if res == nil || res.Err == nil || !errors.Is(res.Err, context.Canceled) {
 			t.Fatalf("expected the queued second run to return a canceled ToolResult, got %+v", res)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("the second (queued) external-cli sub-turn was not canceled while waiting for the workspace lock — " +
 			"lost-cancel regression under lock contention")
 	}
@@ -404,7 +411,7 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 		if res == nil || res.Err == nil || !errors.Is(res.Err, context.Canceled) {
 			t.Fatalf("expected the first run to return a canceled ToolResult, got %+v", res)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("the first external-cli sub-turn did not cancel during cleanup")
 	}
 	if !d.ctxCanceled.Load() {
@@ -494,7 +501,7 @@ func TestExternalCLISubTurn_RequestCancelEndToEnd_ExternalCLIOnlySession(t *test
 		if res == nil || res.Err == nil || !errors.Is(res.Err, context.Canceled) {
 			t.Fatalf("expected a canceled ToolResult with Err=context.Canceled, got %+v", res)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("runExternalCLISubTurn did not return after RequestCancel — " +
 			"the real public cancel entrypoint did not reach the external-cli child")
 	}

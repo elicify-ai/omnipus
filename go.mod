@@ -17,7 +17,7 @@ require (
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	github.com/ergochat/irc-go v0.6.0
 	github.com/gdamore/tcell/v2 v2.13.10
-	github.com/go-git/go-git/v5 v5.19.1
+	github.com/go-git/go-git/v5 v5.19.2
 	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433
 	github.com/gobwas/ws v1.4.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
