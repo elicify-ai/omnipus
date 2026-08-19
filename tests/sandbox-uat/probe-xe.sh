@@ -191,8 +191,10 @@ e20() {
   # sandboxed: /health reports its pid, and /proc/<pid>/status reports whether a
   # seccomp filter is actually installed. That is an observation, where
   # health.seccomp_enforced alone is only a claim.
-  local gw_pid proc_line seccomp_val
-  gw_pid="$(curl -sf "$BASE/health" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("pid",""))' 2>/dev/null)"
+  local gw_pid proc_line seccomp_val health_seccomp health_json
+  health_json="$(curl -sf "$BASE/health" 2>/dev/null || true)"
+  gw_pid="$(printf '%s' "$health_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("pid",""))' 2>/dev/null || true)"
+  health_seccomp="$(printf '%s' "$health_json" | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("sandbox",{}).get("seccomp_enforced","")).lower())' 2>/dev/null || true)"
   if [ -z "$gw_pid" ] || [ ! -r "/proc/$gw_pid/status" ]; then
     echo "E.20 N/A: could not read /proc/<gateway pid>/status (pid='$gw_pid'); health seccomp_enforced=$health_seccomp"
     return 0
@@ -205,12 +207,12 @@ e20() {
   fi
   if [ "$seccomp_val" = "0" ]; then
     echo "E.20 FAIL: gateway pid $gw_pid runs unfiltered (Seccomp=0) while health reports seccomp_enforced=$health_seccomp"
-    OVERALL_FAIL=1
+    overall_fail=1
     return 0
   fi
   if [ "$health_seccomp" != "true" ]; then
     echo "E.20 FAIL: kernel says a filter is installed (Seccomp=$seccomp_val) but health reports seccomp_enforced=$health_seccomp"
-    OVERALL_FAIL=1
+    overall_fail=1
     return 0
   fi
   echo "E.20 PASS: gateway pid $gw_pid has a seccomp filter installed (Seccomp=$seccomp_val) and health agrees (seccomp_enforced=$health_seccomp)"
