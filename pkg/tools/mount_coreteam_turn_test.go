@@ -61,7 +61,7 @@ func TestResolveTurnFSPolicy_CoreTeamMemberGetsMountsWithoutExplicitWorkspaceID(
 
 	// A folder outside the workspace entirely — the case mounts exist for.
 	target := t.TempDir()
-	if err := os.WriteFile(filepath.Join(target, "existing.txt"), []byte("x"), 0o600); err != nil {
+	if err = os.WriteFile(filepath.Join(target, "existing.txt"), []byte("x"), 0o600); err != nil {
 		t.Fatalf("seed target: %v", err)
 	}
 
