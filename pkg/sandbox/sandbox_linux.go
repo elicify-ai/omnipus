@@ -488,6 +488,13 @@ func (lb *LinuxBackend) ApplyToCmd(_ *exec.Cmd, _ SandboxPolicy) error {
 // need a conditional: the call is a no-op and the compiler will inline+elide it.
 func MarkStartLockedCalled() {}
 
+// isDirMode reports whether a stat mode describes a directory. It masks with
+// S_IFMT because the file-type field is 4 bits: testing `mode & S_IFDIR`
+// directly also matches S_IFSOCK and S_IFBLK, which share that bit.
+func isDirMode(mode uint32) bool {
+	return mode&unix.S_IFMT == unix.S_IFDIR
+}
+
 func addLandlockPathRule(rulesetFd int, path string, rights uint64) error {
 	fd, err := unix.Open(path, unix.O_PATH|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -499,8 +506,18 @@ func addLandlockPathRule(rulesetFd int, path string, rights uint64) error {
 	// allowed_access only contains rights valid for the FD type (file vs
 	// directory). Strip directory-only rights for regular/character files to
 	// avoid EINVAL when whitelisting paths like /dev/null or /etc/hosts.
+	//
+	// The file-type test MUST mask with S_IFMT. `mode & S_IFDIR` is not a
+	// type check: S_IFDIR is 0040000 and the type field is 4 bits wide, so a
+	// socket (S_IFSOCK, 0140000) and a block device (S_IFBLK, 0060000) both
+	// have that bit set and were misdetected as directories. They then kept
+	// the directory-only rights and the kernel rejected the rule with EINVAL,
+	// which aborts the whole spawn — one stray unix socket in a granted
+	// directory made every command fail under mode=enforce. Measured on a
+	// Landlock v7 runner (2026-08-19): a leftover
+	// /tmp/dotnet-diagnostic-*-socket broke `echo`.
 	var stat unix.Stat_t
-	if err := unix.Fstat(fd, &stat); err == nil && stat.Mode&unix.S_IFDIR == 0 {
+	if err := unix.Fstat(fd, &stat); err == nil && !isDirMode(stat.Mode) {
 		dirOnly := landlockAccessFSReadDir |
 			landlockAccessFSRemoveDir | landlockAccessFSRemoveFile |
 			landlockAccessFSMakeChar | landlockAccessFSMakeDir |
