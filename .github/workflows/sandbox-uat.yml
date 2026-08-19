@@ -175,6 +175,40 @@ jobs:
         env:
           OMNIPUS_MASTER_KEY: ${{ secrets.OMNIPUS_MASTER_KEY_CI }}
 
+      - name: Install chromium for the outside pass
+        run: ./node_modules/.bin/playwright install chromium chromium-headless-shell
+
+      - name: G/T/X/E — wave 2 probes, run in parallel
+        # Each script owns one group and prints "<ID> PASS|FAIL|N/A: <evidence>".
+        # They run concurrently; the rollup below decides the step outcome, so a
+        # single red group still lets the others report.
+        run: |
+          set -uo pipefail
+          chmod +x tests/sandbox-uat/*.sh
+          export BASE OMNIPUS_HOME SANDBOX_MODE
+          export TOK="$TOK"
+          export OMNIPUS_BIN="$PWD/omnipus"
+          export WS_ID="$(python3 -c "import json;print(json.load(open('/tmp/probe.json'))['workspace'])")"
+          export AGENT_ID="$(python3 -c "import json;print(json.load(open('/tmp/probe.json'))['agent'])")"
+          tests/sandbox-uat/probe-g.sh  > /tmp/w2-g.log  2>&1 &
+          tests/sandbox-uat/probe-t.sh  > /tmp/w2-t.log  2>&1 &
+          tests/sandbox-uat/probe-xe.sh > /tmp/w2-xe.log 2>&1 &
+          wait
+          for f in g t xe; do echo "===== probe-$f ====="; cat "/tmp/w2-$f.log"; done
+        env:
+          SANDBOX_MODE: ${{ matrix.mode }}
+          OMNIPUS_MASTER_KEY: ${{ secrets.OMNIPUS_MASTER_KEY_CI }}
+
+      - name: S.4 — outside pass (Playwright)
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/sbuat-shots
+          OUT_DIR=/tmp/sbuat-shots ADMIN_USER=admin ADMIN_PASS=admin12345 \
+            node tests/sandbox-uat/outside-playwright.mjs > /tmp/w2-s4.log 2>&1 || true
+          cat /tmp/w2-s4.log
+        env:
+          SANDBOX_MODE: ${{ matrix.mode }}
+
       - name: Verdicts
         run: |
           set -uo pipefail
@@ -187,6 +221,14 @@ jobs:
           chk "X.16" X16 'dangerous pattern|safety guard'
           chk "X.18" X18 'legit-ok'
           chk "F.5" F5 'worked|created|success|yes'
+          echo "--- wave 2 rollup ---"
+          for f in /tmp/w2-*.log; do
+            [ -e "$f" ] || continue
+            grep -aE '^(S|F|G|T|X|E)\.[0-9]+[a-z]? (PASS|FAIL|N/A)' "$f" || true
+          done
+          if grep -ahqE '^(S|F|G|T|X|E)\.[0-9]+[a-z]? FAIL' /tmp/w2-*.log 2>/dev/null; then
+            echo "wave 2 has failures:"; grep -ahE '^(S|F|G|T|X|E)\.[0-9]+[a-z]? FAIL' /tmp/w2-*.log; fail=1
+          fi
           exit $fail
 
       - name: Teardown + artifacts
@@ -194,7 +236,8 @@ jobs:
         run: |
           kill "$(cat /tmp/gw.pid)" 2>/dev/null || true
           mkdir -p /tmp/sbuat-artifacts
-          cp /tmp/gw-${{ matrix.mode }}.log /tmp/health-${{ matrix.mode }}.json /tmp/p-*.log /tmp/sbuat-artifacts/ 2>/dev/null || true
+          cp /tmp/gw-${{ matrix.mode }}.log /tmp/health-${{ matrix.mode }}.json /tmp/p-*.log /tmp/w2-*.log /tmp/sbuat-artifacts/ 2>/dev/null || true
+          cp -r /tmp/sbuat-shots /tmp/sbuat-artifacts/ 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
         if: always()
