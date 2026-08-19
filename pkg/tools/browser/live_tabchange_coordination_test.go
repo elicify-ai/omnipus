@@ -271,7 +271,7 @@ func newAttachedLiveManager(t *testing.T) (*BrowserManager, *LiveView, *CaptureS
 	}
 	cs.mu.Unlock()
 	ledger := &ingestLedger{}
-	cs.BindIngest(func(action string, _ *string, w, h int) error {
+	cs.BindIngest(func(action string, _ *string, w, h int, _ int) error {
 		order.add("control:" + action)
 		ledger.mu.Lock()
 		ledger.actions = append(ledger.actions, action)
@@ -380,7 +380,7 @@ func TestRecaptureForTabChangeAt_CoalescedPassUsesTheLatestGeometry(t *testing.T
 	}
 	cs.mu.Unlock()
 	ledger := &ingestLedger{}
-	cs.BindIngest(func(action string, _ *string, w, h int) error {
+	cs.BindIngest(func(action string, _ *string, w, h int, _ int) error {
 		ledger.mu.Lock()
 		ledger.actions = append(ledger.actions, action)
 		ledger.dims = append(ledger.dims, [2]int{w, h})

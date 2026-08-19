@@ -34,10 +34,22 @@ properties:
       - shutdown
       - ping
       - adapt_reset
+      - set_bitrate
   reason:
     type: string
     maxLength: 512
     description: Optional human-readable context for the action (e.g. shutdown cause).
+  max_bitrate:
+    type: integer
+    minimum: 50000
+    maximum: 40000000
+    description: >-
+      set_bitrate only, server → extension: the video sender's maximum
+      bitrate in bits per second, derived from the VIEWER leg's own RTCP
+      receiver reports. Without it the encoder congestion-controls against
+      the loopback ingest hop — infinite bandwidth, zero loss — and encodes
+      for a link that does not exist, while the real viewer path drops
+      packets (measured 27.6% loss, 1-6 fps on UAT; ADR-062 Finding 2).
   expected_width:
     type: integer
     minimum: 1

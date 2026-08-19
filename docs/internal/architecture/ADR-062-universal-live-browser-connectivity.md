@@ -230,10 +230,23 @@ Resolution stays pinned because `encoder.js` sets `contentHint='detail'` with
 collapse — so frame rate is the only thing left that can give under pressure.
 That trade is right on loopback and wrong on a real link.
 
-Proposed direction (not yet implemented, no decision taken): derive a bandwidth
-target from the viewer leg's own RTCP receiver reports (fraction-lost and jitter
-are already arriving), and drive the encoder with it — either by emitting REMB
-on the ingest leg or by extending the existing `browser_capture_control` channel
-so the gateway can set `maxBitrate` and the degradation preference at runtime.
-On a constrained link the preference should invert: keep frame rate, let
-resolution drop.
+**RESOLVED 2026-08-19** via the second option: the gateway now derives a target
+from the viewer leg's own RTCP receiver reports and pushes it over the existing
+`browser_capture_control` channel as a new `set_bitrate` action carrying
+`max_bitrate` (contract-first; `pkg/tools/browser/webrtc/bitrate.go`).
+
+- The drain that previously discarded everything except PLI/FIR now also reads
+  `rtcp.ReceiverReport` and takes the WORST fraction-lost block in it.
+- The policy is AIMD with hysteresis — multiplicative decrease above 5% loss,
+  additive increase below 2%, hold in between — bounded by a floor (300 kbps)
+  and by the encoder's own ceiling, and it is a pure function so it is tested
+  exhaustively without a network (`bitrate_test.go`).
+- Pushes are throttled (2s) and suppressed when the target has not actually
+  moved, so a healthy link generates no control traffic at all.
+- `applyVideoSenderConstraints` CLAMPS its locally-computed ceiling to the
+  reported one; a guard test fails if the value is stored but not applied,
+  which is the green-but-broken shape this finding was.
+
+Not done: inverting `degradationPreference` on a constrained link. The encoder
+already runs a bounded resolution-adaptation loop on its own CPU self-report,
+and changing the preference from underneath it needs its own measurement.

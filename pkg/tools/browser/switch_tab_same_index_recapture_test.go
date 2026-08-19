@@ -45,7 +45,7 @@ type recaptureLedger struct {
 }
 
 func (r *recaptureLedger) bind(cs *CaptureSession) {
-	cs.BindIngest(func(action string, _ *string, _, _ int) error {
+	cs.BindIngest(func(action string, _ *string, _, _ int, _ int) error {
 		if action == "recapture" {
 			r.mu.Lock()
 			r.n++
@@ -251,7 +251,7 @@ func TestRecaptureForTabChange_ReassertsForegroundBeforeControlFrame(t *testing.
 		return true
 	}
 	cs.mu.Unlock()
-	cs.BindIngest(func(action string, _ *string, _, _ int) error {
+	cs.BindIngest(func(action string, _ *string, _, _ int, _ int) error {
 		rec.add("control:" + action)
 		return nil
 	}, func() {})

@@ -46,3 +46,5 @@
 {"ts": "2026-07-31T09:25:55.527693+00:00", "event": "checkpoint", "id": "G002", "status": "complete", "evidence": "encoder.js maintain-resolution + scaleResolutionDownBy=1 + 6Mbps; node --check OK (agent report)", "verify_cmd": "", "verify_evidence": ""}
 {"ts": "2026-08-19T02:49:28.355283+00:00", "event": "plan_created", "brief": "Fix items 1-4: deploy final build, warm-up survives past idle window, ADR-062 tier 3 (TURN) for UDP-blocked viewers, encoder congestion-controls the viewer link. Tests for each. Release branch only.", "count": 5}
 {"ts": "2026-08-19T02:49:29.948625+00:00", "event": "story_started", "id": "G001", "title": "warmup"}
+{"ts": "2026-08-19T03:04:11.875853+00:00", "event": "checkpoint", "id": "G001", "status": "complete", "evidence": "adapt_reset added contract-first (asyncapi+zod regenerated); encoder handles it without runCaptureAndOffer (guard test); CaptureSession.ResetAdaptation; handover switched from Recapture; gateway handover test + captureext tests pass; ext 1.0.14 pinned", "verify_cmd": "", "verify_evidence": ""}
+{"ts": "2026-08-19T03:04:13.729853+00:00", "event": "story_started", "id": "G002", "title": "congestion"}

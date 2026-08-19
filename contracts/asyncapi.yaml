@@ -3512,10 +3512,17 @@ components:
           - shutdown
           - ping
           - adapt_reset
+          - set_bitrate
         reason:
           type: string
           maxLength: 512
           description: Optional human-readable context for the action (e.g. shutdown cause).
+        max_bitrate:
+          type: integer
+          minimum: 50000
+          maximum: 40000000
+          description: "set_bitrate only, server -> extension: the video sender's maximum bitrate in bits per\
+            \ second, derived from the VIEWER leg's own RTCP receiver reports (ADR-062 Finding 2)."
         expected_width:
           type: integer
           minimum: 1

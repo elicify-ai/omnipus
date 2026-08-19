@@ -421,6 +421,9 @@ var versionContentHashes = map[string]string{
 	// WITHOUT rebuilding the capture (a rebuild there measured ~17s to
 	// first frame against ~4s without it).
 	"1.0.14": "f04ed3f2e8fefe0490b160dad5b5e3223cf8381e6d13aa91123d7f41e8213394",
+	// 1.0.15 — clamp the sender bitrate to the ceiling the gateway derives
+	// from the VIEWER leg's RTCP receiver reports (ADR-062 Finding 2).
+	"1.0.15": "b6bfa6fb6eb5ad0391c38e1d4f9d03d02e1fd1af202ffbfc4c162eb26da69b21",
 }
 
 func embeddedContentHash(t *testing.T) string {

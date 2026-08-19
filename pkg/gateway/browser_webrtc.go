@@ -1247,7 +1247,7 @@ func (h *captureIngestWSHandler) serveConn(conn *websocket.Conn, remoteAddr stri
 	// set on the wire frame when the corresponding value is actually
 	// positive — an absent field, not a literal 0, is what tells the encoder
 	// there is no hint to converge on.
-	send := func(action string, reason *string, expectedW, expectedH int) error {
+	send := func(action string, reason *string, expectedW, expectedH, maxBitrate int) error {
 		frame := generated.BrowserCaptureControlFrame{
 			Type:   string(generated.WsFrameTypeBrowserCaptureControl),
 			Action: action,
@@ -1280,6 +1280,9 @@ func (h *captureIngestWSHandler) serveConn(conn *websocket.Conn, remoteAddr stri
 		if action == "recapture" {
 			scale := cs.CaptureScale()
 			frame.CaptureScale = &scale
+		}
+		if maxBitrate > 0 {
+			frame.MaxBitrate = &maxBitrate
 		}
 		return ic.sendJSON(frame)
 	}

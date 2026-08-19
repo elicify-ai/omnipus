@@ -6,14 +6,14 @@
    "id": "G001",
    "title": "warmup",
    "objective": "Warm capture helps a panel opened long after boot (fix rebuild-on-attach), with tests",
-   "status": "in_progress",
-   "evidence": null
+   "status": "complete",
+   "evidence": "adapt_reset added contract-first (asyncapi+zod regenerated); encoder handles it without runCaptureAndOffer (guard test); CaptureSession.ResetAdaptation; handover switched from Recapture; gateway handover test + captureext tests pass; ext 1.0.14 pinned"
   },
   {
    "id": "G002",
    "title": "congestion",
    "objective": "Encoder bitrate driven by viewer RTCP, not the loopback hop, with tests",
-   "status": "pending",
+   "status": "in_progress",
    "evidence": null
   },
   {

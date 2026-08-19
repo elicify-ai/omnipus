@@ -33,6 +33,10 @@ func (s *Session) HandleViewerOffer(_ string, _ string) (string, error) {
 	return "", ErrUnavailable
 }
 
+// SetOnBitrateTarget is a no-op in a lite build: there is no viewer leg to
+// receive RTCP from.
+func (s *Session) SetOnBitrateTarget(_ func(int)) {}
+
 // CloseViewer is a no-op: there is never an attached viewer to close in a
 // lite build (HandleViewerOffer can't have succeeded).
 func (s *Session) CloseViewer(_ string) {}

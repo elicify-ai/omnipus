@@ -186,6 +186,14 @@ type ingestLossNotifier interface {
 	SetOnIngestLost(fn func())
 }
 
+// bitrateTargetNotifier is the optional RelaySession capability that reports a
+// congestion target derived from the VIEWER leg's RTCP receiver reports
+// (ADR-062 Finding 2). Detected by type assertion for the same reason as the
+// interfaces above: the lite stub and the test fakes do not implement it.
+type bitrateTargetNotifier interface {
+	SetOnBitrateTarget(fn func(bps int))
+}
+
 // viewerOfferHandler is the optional RelaySession capability for
 // supersede-safe viewer-offer handling -- see webrtc.Session.
 // HandleViewerOfferHandle and CloseViewerIfCurrent's doc comments for the
@@ -292,7 +300,7 @@ type CaptureSession struct {
 	// follow-up, measured 2026-07-31 — stream stuck at 1278x632 launch
 	// geometry while the tab was CDP-verified at 615x744 in the same
 	// second).
-	ingestSend  func(action string, reason *string, expectedW, expectedH int) error
+	ingestSend  func(action string, reason *string, expectedW, expectedH, maxBitrate int) error
 	ingestClose func()
 	// ingestEpoch increments on every BindIngest call — UnbindIngest only
 	// clears ingestSend/ingestClose if the epoch it was handed still matches
@@ -440,6 +448,12 @@ func newCaptureSessionWithDeps(
 		// ingest at all and nothing ever asks for a new one, which is
 		// indistinguishable to the user from a hung browser.
 		il.SetOnIngestLost(cs.onIngestLost)
+	}
+	if bt, ok := relay.(bitrateTargetNotifier); ok {
+		// Close the congestion loop: the viewer leg measures the real path,
+		// the encoder is the only thing that can act on it, and this is the
+		// wire between them (ADR-062 Finding 2).
+		bt.SetOnBitrateTarget(cs.SetMaxBitrate)
 	}
 	return cs
 }
@@ -917,7 +931,7 @@ func (cs *CaptureSession) TokenHex() string {
 // CDP-verified CSS viewport RecaptureAt wants the encoder to converge on —
 // see that method's doc comment for why this exists.
 func (cs *CaptureSession) BindIngest(
-	send func(action string, reason *string, expectedW, expectedH int) error,
+	send func(action string, reason *string, expectedW, expectedH, maxBitrate int) error,
 	closeConn func(),
 ) (previousClose func(), epoch uint64) {
 	cs.mu.Lock()
@@ -1296,6 +1310,15 @@ func (cs *CaptureSession) CaptureScale() float64 {
 // a warm capture alive past its idle window worse than letting it stop. This
 // keeps the guarantee and drops the cost, so the warm capture stays useful for
 // a panel opened long after boot.
+// SetMaxBitrate pushes a viewer-derived bitrate ceiling to the encoder
+// (ADR-062 Finding 2). The value comes from the viewer leg's own RTCP
+// receiver reports; before this existed the encoder only ever measured the
+// loopback ingest hop and happily encoded 24 Mbps for a link delivering 355
+// kbps.
+func (cs *CaptureSession) SetMaxBitrate(bps int) {
+	cs.requestControlBitrate(bps)
+}
+
 func (cs *CaptureSession) ResetAdaptation(reason string) {
 	var reasonPtr *string
 	if reason != "" {
@@ -1456,6 +1479,22 @@ func (cs *CaptureSession) assertForeground(ctx context.Context) bool {
 // watchdog (encoder.js) and this session's own Stop() teardown are what
 // actually guarantee termination, not a successfully-delivered control
 // frame.
+// requestControlBitrate pushes browser_capture_control{set_bitrate}. Separate
+// from requestControl because it is the only action that carries max_bitrate,
+// and threading a bitrate through every recapture/shutdown call site would
+// make the common path lie about what it sends.
+func (cs *CaptureSession) requestControlBitrate(bps int) {
+	cs.mu.Lock()
+	send := cs.ingestSend
+	cs.mu.Unlock()
+	if send == nil {
+		return
+	}
+	if err := send("set_bitrate", nil, 0, 0, bps); err != nil {
+		cs.logf("capture[%s]: send control set_bitrate failed: %v", cs.agentID, err)
+	}
+}
+
 func (cs *CaptureSession) requestControl(action string, reason *string, expectedW, expectedH int) {
 	cs.mu.Lock()
 	send := cs.ingestSend
@@ -1463,7 +1502,7 @@ func (cs *CaptureSession) requestControl(action string, reason *string, expected
 	if send == nil {
 		return
 	}
-	if err := send(action, reason, expectedW, expectedH); err != nil {
+	if err := send(action, reason, expectedW, expectedH, 0); err != nil {
 		cs.logf("capture[%s]: send control %s failed: %v", cs.agentID, action, err)
 	}
 }

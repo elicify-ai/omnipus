@@ -457,7 +457,7 @@ func TestCaptureSession_BindIngestSupersedesPreviousConnection(t *testing.T) {
 
 	firstClosed := false
 	_, epoch1 := cs.BindIngest(
-		func(string, *string, int, int) error { return nil },
+		func(string, *string, int, int, int) error { return nil },
 		func() { firstClosed = true },
 	)
 	if epoch1 == 0 {
@@ -465,7 +465,7 @@ func TestCaptureSession_BindIngestSupersedesPreviousConnection(t *testing.T) {
 	}
 
 	prevClose, epoch2 := cs.BindIngest(
-		func(string, *string, int, int) error { return nil },
+		func(string, *string, int, int, int) error { return nil },
 		func() {},
 	)
 	if epoch2 == epoch1 {
@@ -509,7 +509,7 @@ func TestCaptureSession_RecapturePropagatesToRelayAndIngest(t *testing.T) {
 	var gotAction string
 	var gotW, gotH int
 	var mu sync.Mutex
-	cs.BindIngest(func(action string, _ *string, expectedW, expectedH int) error {
+	cs.BindIngest(func(action string, _ *string, expectedW, expectedH int, _ int) error {
 		mu.Lock()
 		gotAction = action
 		gotW, gotH = expectedW, expectedH
@@ -547,7 +547,7 @@ func TestCaptureSession_RecaptureAtPropagatesExpectedDims(t *testing.T) {
 	var gotAction string
 	var gotW, gotH int
 	var mu sync.Mutex
-	cs.BindIngest(func(action string, _ *string, expectedW, expectedH int) error {
+	cs.BindIngest(func(action string, _ *string, expectedW, expectedH int, _ int) error {
 		mu.Lock()
 		gotAction = action
 		gotW, gotH = expectedW, expectedH
@@ -595,7 +595,7 @@ func TestCaptureSession_StopSendsShutdownClosesViewersAndRelay(t *testing.T) {
 
 	var gotAction string
 	var reasonSet bool
-	cs.BindIngest(func(action string, reason *string, _, _ int) error {
+	cs.BindIngest(func(action string, reason *string, _, _ int, _ int) error {
 		gotAction = action
 		reasonSet = reason != nil
 		return nil

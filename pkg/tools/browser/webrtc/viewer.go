@@ -486,9 +486,22 @@ func (s *Session) drainViewerRTCP(prefix string, sender *webrtc.RTPSender) {
 			continue
 		}
 		for _, pkt := range pkts {
-			switch pkt.(type) {
+			switch p := pkt.(type) {
 			case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
 				s.forwardPLIThrottled(prefix)
+			case *rtcp.ReceiverReport:
+				// ADR-062 Finding 2: this is the only place the gateway ever
+				// learns what the VIEWER's link is actually doing. It used to
+				// be dropped on the floor, so the encoder congestion-
+				// controlled against the loopback ingest hop instead. Take the
+				// WORST block in the report: one bad receiver is congestion.
+				var worst float64
+				for _, rb := range p.Reports {
+					if f := normalizeFractionLost(rb.FractionLost); f > worst {
+						worst = f
+					}
+				}
+				s.noteViewerLoss(worst, time.Now())
 			}
 		}
 	}

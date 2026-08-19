@@ -78,12 +78,22 @@ type Session struct {
 	// handler in ingest.go. The owner uses it to ask the encoder for a fresh
 	// capture; nil is a valid no-op.
 	onIngestLost func()
-	ingestPC     *webrtc.PeerConnection
-	videoTrack   *webrtc.TrackLocalStaticRTP
-	audioTrack   *webrtc.TrackLocalStaticRTP
-	videoSSRC    webrtc.SSRC
-	videoCodec   string
-	audioCodec   string
+
+	// onBitrateTarget is invoked (no lock held) when the viewer leg's own RTCP
+	// receiver reports move the congestion target. ADR-062 Finding 2: without
+	// this the encoder only ever sees the loopback ingest hop and encodes for
+	// a link that does not exist.
+	onBitrateTarget func(bps int)
+	// bitrateTarget is the current target in bits/sec (0 = none computed yet).
+	bitrateTarget int
+	// lastBitratePush throttles how often a new target reaches the encoder.
+	lastBitratePush time.Time
+	ingestPC        *webrtc.PeerConnection
+	videoTrack      *webrtc.TrackLocalStaticRTP
+	audioTrack      *webrtc.TrackLocalStaticRTP
+	videoSSRC       webrtc.SSRC
+	videoCodec      string
+	audioCodec      string
 
 	viewersMu sync.Mutex
 	viewers   map[string]*viewerConn
@@ -293,6 +303,47 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 // fresh capture — without it a dead ingest is never noticed and every later PLI
 // write fails against a closed pipe, freezing the stream on its last frame.
 // Safe to call at any time; pass nil to unregister.
+// SetOnBitrateTarget registers cb, invoked when the viewer leg's RTCP receiver
+// reports move the congestion target (ADR-062 Finding 2). The owner wires it
+// to a browser_capture_control{set_bitrate} push so the encoder finally
+// congestion-controls against the VIEWER's link rather than the loopback
+// ingest hop. Safe to call at any time; pass nil to unregister.
+func (s *Session) SetOnBitrateTarget(cb func(bps int)) {
+	s.mu.Lock()
+	s.onBitrateTarget = cb
+	s.mu.Unlock()
+}
+
+// noteViewerLoss feeds one RTCP receiver-report block into the congestion
+// policy and pushes a new target to the encoder when it moves and the throttle
+// allows. Returns the target it settled on (for tests).
+func (s *Session) noteViewerLoss(fractionLost float64, now time.Time) int {
+	s.mu.Lock()
+	prev := s.bitrateTarget
+	next := nextBitrateTarget(prev, bitrateSample{FractionLost: fractionLost})
+	s.bitrateTarget = next
+	cb := s.onBitrateTarget
+	due := now.Sub(s.lastBitratePush) >= bitrateUpdateMinInterval
+	// Compare against what the encoder is EFFECTIVELY using, not against
+	// "unset": with no target yet the encoder is already running at its own
+	// ceiling, so a first clean report that computes the ceiling has changed
+	// nothing and must not cost a frame. A first LOSSY report has.
+	effectivePrev := prev
+	if effectivePrev <= 0 {
+		effectivePrev = bitrateCeiling
+	}
+	changed := next != effectivePrev
+	if cb != nil && changed && due {
+		s.lastBitratePush = now
+	}
+	s.mu.Unlock()
+
+	if cb != nil && changed && due {
+		cb(next)
+	}
+	return next
+}
+
 func (s *Session) SetOnIngestLost(cb func()) {
 	s.mu.Lock()
 	s.onIngestLost = cb

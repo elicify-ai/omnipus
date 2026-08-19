@@ -108,6 +108,18 @@ func TestEncoderJS_QualityAdaptGuards(t *testing.T) {
 			"synthesizing encodings:[{}] is what Chrome rejects as " +
 			"'getParameters() has never been called on this sender'")
 	}
+	// --- 1.0.15: the viewer-derived bitrate ceiling (ADR-062 Finding 2) -----
+	if !strings.Contains(src, "action === 'set_bitrate'") {
+		t.Error("encoder.js: must handle browser_capture_control{set_bitrate} — this page's own " +
+			"PeerConnection is loopback, so it cannot measure the link that matters; the gateway " +
+			"derives the ceiling from the VIEWER's RTCP receiver reports and sends it down")
+	}
+	if !strings.Contains(src, "viewerBitrateCeiling > 0 && viewerBitrateCeiling < maxBitrate") {
+		t.Error("encoder.js: applyVideoSenderConstraints must CLAMP its locally-computed maxBitrate to the " +
+			"viewer-reported ceiling — storing the value without applying it is the exact green-but-broken " +
+			"shape ADR-062 Finding 2 describes (27.6% loss, 1-6 fps, while the encoder aimed at 24 Mbps)")
+	}
+
 	// --- 1.0.14: the warm-handover reset must NOT be a capture rebuild ------
 	if !strings.Contains(src, "action === 'adapt_reset'") {
 		t.Error("encoder.js: must handle browser_capture_control{adapt_reset} — the gateway sends it at the " +

@@ -333,7 +333,7 @@ func TestHandleWebRTCOffer_SupersedeDoesNotBlockFenceOnSlowStop(t *testing.T) {
 	t.Cleanup(releaseStop)
 	sendStarted := make(chan struct{})
 	var sendStartedOnce sync.Once
-	otherCS.BindIngest(func(action string, reason *string, _, _ int) error {
+	otherCS.BindIngest(func(action string, reason *string, _, _ int, _ int) error {
 		sendStartedOnce.Do(func() { close(sendStarted) })
 		<-blockStop
 		return nil

@@ -21,7 +21,7 @@
 //   -> {type: 'browser_capture_hello',   token, ext_version}
 //   -> {type: 'browser_capture_offer',   sdp}
 //   <- {type: 'browser_capture_answer',  sdp}
-//   <-  {type: 'browser_capture_control', action: recapture|shutdown|adapt_reset, reason?, expected_width?, expected_height?}  (server -> client)
+//   <-  {type: 'browser_capture_control', action: recapture|shutdown|adapt_reset|set_bitrate, reason?, expected_width?, expected_height?}  (server -> client)
 //   ->  {type: 'browser_capture_control', action: ping}                        (client -> server)
 //
 // expected_width/expected_height (2026-07-31 follow-up,
@@ -311,6 +311,16 @@ function clearOfferAnswerTimeout() {
 //
 // Queuing makes each pair atomic with respect to the others: the read happens
 // inside the queued step, immediately before its own write.
+// viewerBitrateCeiling is the maximum bitrate the VIEWER's link was measured
+// to sustain, pushed by the gateway as browser_capture_control{set_bitrate}
+// (ADR-062 Finding 2). 0 = never reported, use the local calculation alone.
+//
+// This exists because this page cannot measure the link that matters. Its own
+// PeerConnection is loopback to the gateway -- infinite bandwidth, zero loss --
+// so libwebrtc's congestion control here is measuring a hop nobody watches.
+// The gateway sees the real receiver reports and sends the answer down.
+let viewerBitrateCeiling = 0;
+
 let senderParamsChain = Promise.resolve();
 function queueSenderParams(fn) {
   const run = function () { return Promise.resolve().then(fn); };
@@ -362,7 +372,11 @@ function applyVideoSenderConstraints(pc, opts) {
   // in FRAMERATE - observed live (macOS 2026-08-12) as visibly laggy video
   // playback after the blur fix. Scale the cap with the pixel count, bounded
   // at 4x base (= scale 2) so a scale-3/4 tab cannot demand unbounded rate.
-  const maxBitrate = Math.min(baseBitrate * 4, Math.round(baseBitrate * captureScale * captureScale));
+  let maxBitrate = Math.min(baseBitrate * 4, Math.round(baseBitrate * captureScale * captureScale));
+  // Never ask for more than the viewer's link was measured to carry.
+  if (viewerBitrateCeiling > 0 && viewerBitrateCeiling < maxBitrate) {
+    maxBitrate = viewerBitrateCeiling;
+  }
 
   queueSenderParams(function () {
    try {
@@ -1559,13 +1573,25 @@ function sendFrame(frame) {
 }
 
 // handleControlFrame handles the SERVER -> CLIENT control actions
-// (recapture, shutdown, adapt_reset). `ping` is this page's own CLIENT -> SERVER health
+// (recapture, shutdown, adapt_reset, set_bitrate). `ping` is this page's own CLIENT -> SERVER health
 // beacon (see startPingBeacon) — the gateway never sends ping to us, and
 // there is no `pong` action in the schema, so neither is handled as an
 // inbound case here.
 async function handleControlFrame(msg) {
   const action = msg.action;
   record('control frame: action=' + action + (msg.reason ? ' reason=' + msg.reason : ''));
+
+  if (action === 'set_bitrate') {
+    const bps = typeof msg.max_bitrate === 'number' && isFinite(msg.max_bitrate) ? msg.max_bitrate : 0;
+    if (bps > 0) {
+      viewerBitrateCeiling = bps;
+      record('viewer bitrate ceiling set to ' + bps + ' bps');
+      if (currentPC) {
+        applyVideoSenderConstraints(currentPC, { context: 'set-bitrate', recordSuccess: true });
+      }
+    }
+    return;
+  }
 
   if (action === 'adapt_reset') {
     // A boot-warmed capture is being handed to its FIRST real viewer. The
