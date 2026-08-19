@@ -16,6 +16,10 @@ on:
     branches: [feat/macos-seatbelt-enablement]
     paths:
       - '.github/workflows/sandbox-uat.yml'
+      # The probe scripts themselves. Omitting these meant a commit that fixed
+      # only the probes triggered no run, and the previous run's verdicts were
+      # read as if they were the new ones.
+      - 'tests/sandbox-uat/**'
       - 'pkg/sandbox/**'
       - 'pkg/tools/resolvepath.go'
       - 'pkg/tools/shell.go'
