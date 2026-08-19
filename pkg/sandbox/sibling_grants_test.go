@@ -176,19 +176,41 @@ func TestExpandRulesExcluding_UnreadableDirectoryFailsClosed(t *testing.T) {
 // as single grants, or the rule count explodes and so does spawn cost.
 func TestExpandRulesExcluding_UnrelatedRulesUntouched(t *testing.T) {
 	home := seedHome(t)
-	rules := []PathRule{
-		{Path: "/tmp", Access: AccessRead | AccessWrite},
-		{Path: "/usr/lib", Access: AccessRead},
-		{Path: home, Access: AccessRead},
+
+	// "Unrelated" means the rule contains no secret. A root that HAPPENS to
+	// contain home is not unrelated, and expanding it is the correct
+	// behaviour — withholding the secret is the whole point of this function.
+	//
+	// t.TempDir() honours $TMPDIR, so home lands under /tmp on a stock Linux
+	// box (GitHub runners) but under /var/folders on macOS and under
+	// /cache/tmp on the Fly CI worker, which sets TMPDIR explicitly. Hardcoding
+	// /tmp as "unrelated" therefore passed on two of those three environments
+	// and failed on the one where the kernel sandbox actually runs. Filter by
+	// the real relationship instead of assuming it.
+	candidates := []string{"/tmp", "/usr/lib"}
+	unrelated := make([]string, 0, len(candidates))
+	rules := []PathRule{{Path: home, Access: AccessRead}}
+	for _, c := range candidates {
+		if isAtOrUnderAny(home, []string{c}) {
+			continue // home lives inside it — genuinely related, must expand
+		}
+		unrelated = append(unrelated, c)
+		rules = append(rules, PathRule{Path: c, Access: AccessRead | AccessWrite})
 	}
+	// Positive lower bound: if $TMPDIR ever makes every candidate an ancestor
+	// of home, this test would assert nothing at all.
+	if len(unrelated) == 0 {
+		t.Fatalf("no unrelated root survived filtering against home %q — the test would be vacuous", home)
+	}
+
 	got, err := ExpandRulesExcluding(rules, SecretPaths(home), nil, nil)
 	if err != nil {
 		t.Fatalf("expand: %v", err)
 	}
 	paths := grantedPaths(t, got)
-	for _, want := range []string{"/tmp", "/usr/lib"} {
+	for _, want := range unrelated {
 		if !contains(paths, want) {
-			t.Errorf("unrelated rule %q must pass through unchanged", want)
+			t.Errorf("unrelated rule %q must pass through unchanged; got %v", want, paths)
 		}
 	}
 }
