@@ -114,9 +114,9 @@ fi
 # brief); fall back to the first tool whose effective_policy is "deny".
 DENIED_TOOL=$(jq -r '
   .tools as $t
-  | ( [$t[] | select(.name=="set_config" and .effective_policy=="deny")]
-    + [$t[] | select(.name=="create_agent" and .effective_policy=="deny")]
-    + [$t[] | select(.effective_policy=="deny")]
+  | ( [$t[] | select(.name=="set_config" and .configured_policy=="deny")]
+    + [$t[] | select(.name=="create_agent" and .configured_policy=="deny")]
+    + [$t[] | select(.configured_policy=="deny")]
     ) | (.[0].name // empty)
 ' "$AGENT_TOOLS_BODY" 2>/dev/null)
 
@@ -126,7 +126,7 @@ READ_FILE_POLICY=$(jq -r '.tools[]? | select(.name=="read_file") | .effective_po
 # T.14 — denied tool refused at load (naming the policy), allowed tool works.
 # ---------------------------------------------------------------------------
 if [ -z "$DENIED_TOOL" ]; then
-  report "T.14" "N/A" "no tool with effective_policy=deny found for agent ${AGENT_ID} in GET /api/v1/agents/${AGENT_ID}/tools"
+  report "T.14" "N/A" "no tool with configured_policy=deny found for agent ${AGENT_ID} in GET /api/v1/agents/${AGENT_ID}/tools"
 elif [ "$READ_FILE_POLICY" != "allow" ]; then
   report "T.14" "N/A" "read_file effective_policy for agent ${AGENT_ID} is '${READ_FILE_POLICY:-<absent>}', expected 'allow' — cannot run the positive-lower-bound check"
 else
@@ -157,7 +157,7 @@ fi
 # T.15 — per-agent policy does not leak between agents.
 # ---------------------------------------------------------------------------
 if [ -z "$DENIED_TOOL" ]; then
-  report "T.15" "N/A" "no tool with effective_policy=deny found for agent ${AGENT_ID} — no differentiation baseline to build the second agent's opposite policy against"
+  report "T.15" "N/A" "no tool with configured_policy=deny found for agent ${AGENT_ID} — no differentiation baseline to build the second agent's opposite policy against"
 else
   TOOL_T15="$DENIED_TOOL"
   NEW_AGENT_NAME="qa-probe-t15-$(date +%s)-$$"

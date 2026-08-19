@@ -51,7 +51,9 @@ overall_fail=0
 # effective filesystem scope", "protected carve-out") plus the bash
 # safety-guard wording and generic OS-level denials, in case the kernel
 # (Landlock) is what stops it rather than the app-layer policy.
-REFUSAL_RE='denied by filesystem policy|outside the effective|carve-out|no mount covers it|safety guard|permission denied|not permitted|access denied'
+# USE_METADATA_TOOL is a refusal too: the read did not happen. It was missing
+# here, so a held boundary was scored FAIL on the first live run.
+REFUSAL_RE='denied by filesystem policy|outside the effective|carve-out|no mount covers it|safety guard|permission denied|not permitted|access denied|USE_METADATA_TOOL|managed by agent metadata tools'
 
 # Extended vocabulary for "the mount is simply gone" after revocation — a
 # removed work/<name> symlink can legitimately surface as a not-found error
@@ -234,7 +236,23 @@ g13() {
   run_agent G13pos "$granted_prompt"
 
   if [ ! -f "$granted_file" ] || ! grep -q 'granted-ok' "$granted_file" 2>/dev/null; then
-    echo "G.13 FAIL: positive lower bound not met — agent could not write into its own granted mount (work/g13mount/), so this probe proves nothing. Log: $(tail -c 300 "$WORKDIR/G13pos.log" | tr '\n' ' ')"
+    # Diagnose rather than guess: is work/<name> a symlink to the host dir (the
+    # mount materialised and the write went elsewhere), a plain directory (a
+    # shadowing dir was created and the mount never took), or absent entirely?
+    local ws_work shadow_kind shadow_listing host_listing
+    ws_work="$OMNIPUS_HOME/workspaces/$WS_ID/work/g13mount"
+    if [ -L "$ws_work" ]; then
+      shadow_kind="symlink -> $(readlink "$ws_work" 2>/dev/null)"
+    elif [ -d "$ws_work" ]; then
+      shadow_kind="PLAIN DIRECTORY (mount did not materialise; a real dir shadows it)"
+    elif [ -e "$ws_work" ]; then
+      shadow_kind="exists but is neither symlink nor dir"
+    else
+      shadow_kind="absent"
+    fi
+    shadow_listing="$(ls -a "$ws_work" 2>/dev/null | tr '\n' ' ')"
+    host_listing="$(ls -a "$host_dir" 2>/dev/null | tr '\n' ' ')"
+    echo "G.13 FAIL: positive lower bound not met — the agent reported success but nothing landed in the granted host dir. work/g13mount is $shadow_kind; work listing: [$shadow_listing]; host listing: [$host_listing]. Log: $(tail -c 200 "$WORKDIR/G13pos.log" | tr '\n' ' ')"
     overall_fail=1
     return
   fi

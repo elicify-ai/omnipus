@@ -94,8 +94,8 @@ async function main() {
     // --- Log in through the real login form (src/routes/login.tsx):
     // labeled "Username" / "Password" text inputs, "Sign in" submit button. ---
     await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS })
-    await page.getByLabel('Username').fill(ADMIN_USER)
-    await page.getByLabel('Password').fill(ADMIN_PASS)
+    await page.locator('#login-username').fill(ADMIN_USER)
+    await page.locator('#login-password').fill(ADMIN_PASS)
     await page.getByRole('button', { name: 'Sign in' }).click()
 
     // A successful login navigates away from /login (to /onboarding if
