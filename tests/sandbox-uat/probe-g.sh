@@ -230,6 +230,13 @@ g13() {
     return
   fi
 
+  # Is the just-created mount actually visible to the operator via the API?
+  # This separates "create did not persist" from "persisted + visible but the
+  # path resolver does not honour it" (a genuine product bug).
+  local api_mounts
+  do_request GET "/api/v1/workspaces/$WS_ID/mounts"
+  api_mounts="$(printf '%s' "$http_body" | tr '\n' ' ' | cut -c1-300)"
+
   # --- positive lower bound: grant must actually be usable -----------
   local granted_file="$host_dir/g13-probe.txt"
   local granted_prompt="Use write_file to create g13mount/g13-probe.txt with content granted-ok. Say whether it worked."
@@ -256,7 +263,11 @@ g13() {
     # work/ tree, so a genuine product bug (file lands somewhere unexpected)
     # is instantly distinguishable from the file simply never being written.
     work_find="$(find "$OMNIPUS_HOME/workspaces/$WS_ID/work" -maxdepth 4 2>/dev/null | tr '\n' ' ')"
-    echo "G.13 FAIL: positive lower bound not met — the agent reported success but nothing landed in the granted host dir. work/g13mount is $shadow_kind; work listing: [$shadow_listing]; host listing: [$host_listing]; work/ tree: [$work_find]. Log: $(tail -c 200 "$WORKDIR/G13pos.log" | tr '\n' ' ')"
+    local classify="probe/other"
+    if printf '%s' "$api_mounts" | grep -q 'g13mount'; then
+      classify="PRODUCT-CANDIDATE: the API lists this mount (persisted + operator-visible) yet the write was refused with \"no mount covers it\" — the path resolver does not honour a mount created via POST /mounts"
+    fi
+    echo "G.13 FAIL [$classify]: agent reported success but nothing landed in the granted host dir. API mounts=[$api_mounts]; work/g13mount is $shadow_kind; host listing: [$host_listing]; work/ tree: [$work_find]. Log: $(tail -c 220 "$WORKDIR/G13pos.log" | tr '\n' ' ')"
     overall_fail=1
     return
   fi

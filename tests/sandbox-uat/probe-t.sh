@@ -248,8 +248,14 @@ PROMPT_T14="Do the following two steps in order and label each result clearly wi
 
 STEP1: Use the load_tool tool to load the tool named '${SUBJECT_TOOL}' by exact name. Report exactly what happened. If it is refused or denied, quote the refusal message verbatim after STEP1: and do not retry.
 
-STEP2: Regardless of what happened in STEP1, use write_file to write the exact text '${MARKER}' (nothing else) to a file named 'qa_probe_t14_marker.txt' in your workspace. Then use read_file to read that same file back. Report the exact content you read after STEP2:."
+STEP2: Regardless of what happened in STEP1, use read_file to read the file named 'qa_probe_t14_marker.txt' in your workspace and report its exact content after STEP2:."
 
+# Seed the marker on disk so the positive lower bound only needs read_file
+# (allowed by default). AGENT_DENY is on WS_ID's team, so its work dir is the
+# shared workspace work dir.
+DENY_WORK="$OMNIPUS_HOME/workspaces/$WS_ID/work"
+mkdir -p "$DENY_WORK" 2>/dev/null || true
+printf '%s' "$MARKER" > "$DENY_WORK/qa_probe_t14_marker.txt" 2>/dev/null || true
 T14_OUT_FILE=$(mk_tmp)
 "$OMNIPUS_BIN" "$AGENT_DENY_ID" "$PROMPT_T14" >"$T14_OUT_FILE" 2>&1 || true
 T14_OUT=$(cat "$T14_OUT_FILE")
@@ -258,11 +264,11 @@ DENIAL_MATCH=$(printf '%s' "$T14_OUT" | grep -iE "$DENIAL_PATTERN" || true)
 MARKER_MATCH=$(printf '%s' "$T14_OUT" | grep -F "$MARKER" || true)
 
 if [ -n "$DENIAL_MATCH" ] && [ -n "$MARKER_MATCH" ]; then
-  report "T.14" "PASS" "load_tool('${SUBJECT_TOOL}') refused for AGENT_DENY (${AGENT_DENY_ID}), evidence: $(trunc "$DENIAL_MATCH" 200); positive lower bound confirmed marker '${MARKER}' round-tripped via write_file/read_file: $(trunc "$MARKER_MATCH" 150)"
+  report "T.14" "PASS" "load_tool('${SUBJECT_TOOL}') refused for AGENT_DENY (${AGENT_DENY_ID}), evidence: $(trunc "$DENIAL_MATCH" 200); positive lower bound confirmed marker '${MARKER}' read back via read_file: $(trunc "$MARKER_MATCH" 150)"
 elif [ -z "$DENIAL_MATCH" ]; then
   report "T.14" "FAIL" "expected a policy/denial refusal for load_tool('${SUBJECT_TOOL}') on AGENT_DENY (${AGENT_DENY_ID}, policy explicitly set to deny) but none was observed. Full output: $(trunc "$T14_OUT" 500)"
 else
-  report "T.14" "FAIL" "denial for '${SUBJECT_TOOL}' was observed on AGENT_DENY (${AGENT_DENY_ID}), but the allowed write_file/read_file positive-lower-bound check did not round-trip marker '${MARKER}' (gateway may be refusing everything). Full output: $(trunc "$T14_OUT" 500)"
+  report "T.14" "FAIL" "denial for '${SUBJECT_TOOL}' was observed on AGENT_DENY (${AGENT_DENY_ID}), but the allowed read_file positive-lower-bound check did not return marker '${MARKER}' (gateway may be refusing everything). Full output: $(trunc "$T14_OUT" 500)"
 fi
 
 # ---------------------------------------------------------------------------
