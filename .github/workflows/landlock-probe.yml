@@ -54,4 +54,11 @@ jobs:
         run: |
           mkdir -p pkg/gateway/spa
           printf '<!doctype html><title>ci-stub</title>' > pkg/gateway/spa/index.html
-          CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -v ./pkg/sandbox/ 2>&1 | tail -40
+          CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 ./pkg/sandbox/ > /tmp/sb.log 2>&1 || true
+          echo "=== FAILING TESTS ==="
+          grep -aE '^--- FAIL|^    --- FAIL|^        --- FAIL' /tmp/sb.log | head -40 || echo "(none)"
+          echo "=== FAILURE DETAIL ==="
+          grep -aA 8 -E '^--- FAIL|^    --- FAIL' /tmp/sb.log | head -120 || true
+          echo "=== SUMMARY ==="
+          tail -5 /tmp/sb.log
+          grep -aqE '^(FAIL|ok)' /tmp/sb.log && grep -aE '^(FAIL|ok)' /tmp/sb.log | tail -3
