@@ -23,18 +23,33 @@ describe('DatePicker — trigger render', () => {
     expect(screen.getByRole('button', { name: 'Due date' })).toHaveTextContent('Pick a date')
   })
 
+  // These assert the date's PARTS rather than one region's ordering. The
+  // component formats with toLocaleDateString(undefined, ...) — deliberately
+  // the viewer's own locale — so "Jun 22, 2026" and "22 Jun 2026" are both
+  // correct output, and which one appears depends on the machine running the
+  // test rather than on anything the component does. Pinning the US ordering
+  // made these pass on a US-locale runner and fail on an en_SG one: a test that
+  // reports on the runner's regional settings, not on the product.
   it('shows the formatted date when value is set', () => {
     render(<DatePicker value={new Date(2026, 5, 22)} onChange={vi.fn()} aria-label="Due date" />)
-    const trigger = screen.getByRole('button', { name: 'Due date' })
-    expect(trigger).toHaveTextContent('Jun 22, 2026')
+    const label = screen.getByRole('button', { name: 'Due date' }).textContent ?? ''
+    expect(label).toMatch(/22/)
+    expect(label).toMatch(/Jun/i)
+    expect(label).toMatch(/2026/)
   })
 
   it('differentiation: two different values render two different labels', () => {
     const { unmount } = render(<DatePicker value={new Date(2026, 0, 5)} onChange={vi.fn()} aria-label="Due date" />)
-    expect(screen.getByRole('button', { name: 'Due date' })).toHaveTextContent('Jan 5, 2026')
+    const first = screen.getByRole('button', { name: 'Due date' }).textContent ?? ''
+    expect(first).toMatch(/Jan/i)
+    expect(first).toMatch(/5/)
     unmount()
     render(<DatePicker value={new Date(2026, 10, 30)} onChange={vi.fn()} aria-label="Due date" />)
-    expect(screen.getByRole('button', { name: 'Due date' })).toHaveTextContent('Nov 30, 2026')
+    const second = screen.getByRole('button', { name: 'Due date' }).textContent ?? ''
+    expect(second).toMatch(/Nov/i)
+    expect(second).toMatch(/30/)
+    // The point of this test: two different values must not render the same.
+    expect(second).not.toBe(first)
   })
 
   it('is disabled when disabled=true', () => {

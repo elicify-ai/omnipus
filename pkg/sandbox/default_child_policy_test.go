@@ -24,7 +24,7 @@ import (
 func TestDefaultChildPolicy_OmitsHomeRoot(t *testing.T) {
 	home := t.TempDir()
 
-	policy := DefaultChildPolicy(home, nil, nil, nil)
+	policy := DefaultChildPolicy(home, nil, nil, nil, nil)
 
 	cleanHome := filepath.Clean(home)
 	for _, r := range policy.FilesystemRules {
@@ -42,15 +42,20 @@ func TestDefaultChildPolicy_OmitsHomeRoot(t *testing.T) {
 // can still read/write within workspace/, sessions/, memory/, etc.
 func TestDefaultChildPolicy_GrantsSubdirsRWX(t *testing.T) {
 	home := t.TempDir()
-	for _, sub := range []string{"workspace", "sessions", "memory", "skills", "logs", "system"} {
+	for _, sub := range []string{"workspace", "sessions", "memory", "skills", "logs"} {
 		if err := os.MkdirAll(filepath.Join(home, sub), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", sub, err)
 		}
 	}
 
-	policy := DefaultChildPolicy(home, nil, nil, nil)
+	policy := DefaultChildPolicy(home, nil, nil, nil, nil)
 
-	wantPaths := []string{"workspace", "sessions", "memory", "skills", "logs", "system"}
+	// "system" was in this list until the audit log joined the secret set: it
+	// holds audit.jsonl and its HMAC chain anchor, and a child that can truncate
+	// or delete it erases the record of what it did. The HMAC chain detects
+	// modification; it does not survive rm. So system/ must now be carved out
+	// like any other secret rather than granted as an ordinary subdirectory.
+	wantPaths := []string{"workspace", "sessions", "memory", "skills", "logs"}
 	for _, want := range wantPaths {
 		fullPath := filepath.Join(home, want)
 		var found bool
@@ -77,19 +82,50 @@ func TestDefaultChildPolicy_GrantsSubdirsRWX(t *testing.T) {
 // appear in any rule.
 func TestDefaultChildPolicy_OmitsSecretFiles(t *testing.T) {
 	home := t.TempDir()
+	// Seed every secret. The set is no longer files-only: ADR-062 added
+	// entities/, a DIRECTORY, so seeding blindly with WriteFile would create a
+	// regular file named "entities" and the carve-out would be tested against a
+	// shape that never occurs on a real install.
 	for _, name := range SecretFilesRelative {
+		if name == "entities" || name == "agents" || name == "workspaces" {
+			if err := os.MkdirAll(filepath.Join(home, name), 0o700); err != nil {
+				t.Fatalf("mkdir %s: %v", name, err)
+			}
+			continue
+		}
 		if err := os.WriteFile(filepath.Join(home, name), []byte("seed"), 0o600); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	controlPath := filepath.Join(home, "config.json")
-	if err := os.WriteFile(controlPath, []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write config.json: %v", err)
+	// The control must be a file that is genuinely NOT in the secret set.
+	// This was config.json until ADR-062 widened the set to include it — a
+	// child that can write config.json can set sandbox.mode: off and remove its
+	// own confinement on the next boot. Keeping config.json as the "must still
+	// be granted" control would have asserted the hole stays open.
+	controlPath := filepath.Join(home, "notes.txt")
+	if err := os.WriteFile(controlPath, []byte("not a secret"), 0o644); err != nil {
+		t.Fatalf("write notes.txt: %v", err)
 	}
 
-	policy := DefaultChildPolicy(home, nil, nil, nil)
+	// agents/ vs entities/ — the distinction ADR-062 §4.0 turns on. agents/
+	// holds agent WORKSPACES and must stay writable; entities/ holds their tool
+	// POLICY and must not. Naming the wrong one would break every agent's
+	// working directory while looking like hardening, so both are asserted.
+	// agents/ is seeded by the loop above now that it is part of the secret
+	// vocabulary. It must still be GRANTED here: DefaultChildPolicy carves out
+	// the boot set, and agents/ is deliberately not in that — see
+	// TestSecretPaths.
 
-	for _, secret := range SecretFilesRelative {
+	policy := DefaultChildPolicy(home, nil, nil, nil, nil)
+
+	// Iterate the BOOT set, which is what DefaultChildPolicy carves out. The
+	// combined list additionally contains the coarse agents/ and workspaces/
+	// roots, and those are granted here on purpose — their exclusion is a
+	// per-turn decision that needs a work dir (see DeniedPathsFor). Asserting
+	// against the combined list here demands a carve-out this function must not
+	// perform, and the two explicit assertions at the end of this test pin that
+	// distinction directly.
+	for _, secret := range SecretEntriesAlwaysRelative {
 		secretPath := filepath.Clean(filepath.Join(home, secret))
 		for _, r := range policy.FilesystemRules {
 			if filepath.Clean(r.Path) == secretPath {
@@ -112,6 +148,24 @@ func TestDefaultChildPolicy_OmitsSecretFiles(t *testing.T) {
 	if !controlGranted {
 		t.Errorf("control file %q was unexpectedly stripped — only secrets should be omitted", cleanControl)
 	}
+
+	granted := func(rel string) bool {
+		want := filepath.Clean(filepath.Join(home, rel))
+		for _, r := range policy.FilesystemRules {
+			if filepath.Clean(r.Path) == want {
+				return true
+			}
+		}
+		return false
+	}
+	if !granted("agents") {
+		t.Error("agents/ MUST stay granted — it holds agent workspaces, not policy; " +
+			"stripping it makes every agent's own working directory unreachable")
+	}
+	if granted("entities") {
+		t.Error("entities/ MUST NOT be granted — it holds per-agent tool policy, " +
+			"and a child that can write it can flip its own tools to allow")
+	}
 }
 
 // TestDefaultChildPolicy_PreservesSystemPaths verifies that the system
@@ -119,7 +173,7 @@ func TestDefaultChildPolicy_OmitsSecretFiles(t *testing.T) {
 // the rest of the policy).
 func TestDefaultChildPolicy_PreservesSystemPaths(t *testing.T) {
 	home := t.TempDir()
-	policy := DefaultChildPolicy(home, nil, nil, nil)
+	policy := DefaultChildPolicy(home, nil, nil, nil, nil)
 
 	expected := []string{"/tmp", "/lib", "/usr/lib", "/usr/bin", "/etc/ssl", "/dev/null"}
 	for _, want := range expected {
@@ -141,7 +195,7 @@ func TestDefaultChildPolicy_PreservesSystemPaths(t *testing.T) {
 // returns a policy that grants no $OMNIPUS_HOME content (the safe default).
 func TestDefaultChildPolicy_NoEnumerationFailsSafe(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
-	policy := DefaultChildPolicy(missing, nil, nil, nil)
+	policy := DefaultChildPolicy(missing, nil, nil, nil, nil)
 
 	cleanMissing := filepath.Clean(missing)
 	for _, r := range policy.FilesystemRules {

@@ -152,8 +152,17 @@ type SessionPage = {
   next_cursor?: string | undefined;
   partial_errors?: Array<string> | undefined;
 };
-type LibraryUploadResponse = {
-  entries: Array<LibraryEntry>;
+type HostFolderListing = {
+  path: string;
+  parent?: string | undefined;
+  entries: Array<HostFolderEntry>;
+};
+type HostFolderEntry = {
+  name: string;
+  path: string;
+  mountable: boolean;
+  broad?: boolean | undefined;
+  reason?: string | undefined;
 };
 type LibraryEntry = {
   name: string;
@@ -163,7 +172,16 @@ type LibraryEntry = {
   size: number;
   modified_at: string;
   mime?: string | undefined;
+  mount?: LibraryEntryMount | undefined;
   is_text_editable: boolean;
+};
+type LibraryEntryMount = {
+  name: string;
+  host_path: string;
+  broad: boolean;
+};
+type LibraryUploadResponse = {
+  entries: Array<LibraryEntry>;
 };
 type Agent = {
   id: string;
@@ -764,12 +782,9 @@ type Schedule = {
   created_by?: string | undefined;
   trigger: ScheduleTrigger;
   message: string;
-  deliver: boolean;
   session_mode: "isolated" | "continue" | "main";
   timeout_seconds: number;
   session_id?: string | undefined;
-  channel?: string | undefined;
-  chat_id?: string | undefined;
   state: ScheduleState;
   runs?: Array<ScheduleRunRecord> | undefined;
   created_at_ms: number;
@@ -801,24 +816,18 @@ type ScheduleCreate = {
   owner_agent_id: string;
   trigger: ScheduleTrigger;
   message: string;
-  deliver?: boolean | undefined;
   session_mode?: ("isolated" | "continue" | "main") | undefined;
   timeout_seconds?: number | undefined;
   enabled?: boolean | undefined;
-  channel?: string | undefined;
-  chat_id?: string | undefined;
 };
 type ScheduleUpdate = Partial<{
   name: string;
   owner_agent_id: string;
   trigger: ScheduleTrigger;
   message: string;
-  deliver: boolean;
   session_mode: "isolated" | "continue" | "main";
   timeout_seconds: number;
   enabled: boolean;
-  channel: string;
-  chat_id: string;
 }>;
 type ScheduleList = {
   schedules: Array<Schedule>;
@@ -848,7 +857,13 @@ type Workspace = {
   pinned: boolean;
   pin_order: number;
   core_team?: Array<string> | undefined;
-  repository?: string | undefined;
+  mounts?:
+    | Array<{
+        name: string;
+        host_path: string;
+        status?: ("ok" | "broken") | undefined;
+      }>
+    | undefined;
   task_count: number;
   is_default?: boolean | undefined;
   setup_pending?: boolean | undefined;
@@ -883,7 +898,6 @@ type WorkspaceUpdateRequest = Partial<{
   pinned: boolean;
   pin_order: number;
   core_team: Array<string>;
-  repository: string;
   member_configs: {};
 }>;
 type WorkspaceDelegation = {
@@ -2172,6 +2186,7 @@ export const ToolApprovalResponse = z
     approval_id: z.string(),
     action: z.enum(["approve", "deny", "cancel", "always"]),
     status: z.literal("ok"),
+    grant_recorded: z.boolean().optional(),
   })
   .passthrough();
 export const GlobalToolPolicies = z.object({
@@ -2248,6 +2263,7 @@ export const RateLimitsUpdateResponse = z
 export const SandboxConfig = z
   .object({
     mode: z.enum(["off", "permissive", "enforce"]),
+    filesystem_model: z.enum(["confined", "open"]),
     applied_mode: z.string(),
     allow_network_outbound: z.boolean(),
     allowed_paths: z.array(z.string()),
@@ -2268,6 +2284,7 @@ export const SandboxConfig = z
 export const SandboxConfigUpdate = z
   .object({
     mode: z.enum(["off", "permissive", "enforce"]),
+    filesystem_model: z.enum(["confined", "open"]),
     allow_network_outbound: z.boolean(),
     allowed_paths: z.array(z.string()),
     ssrf_enabled: z.boolean(),
@@ -2293,6 +2310,7 @@ export const SandboxStatus = z
     landlock_features: z.array(z.string()).optional(),
     notes: z.array(z.string()).optional(),
     mode: z.string().optional(),
+    filesystem_model: z.enum(["confined", "open"]).optional(),
     disabled_by: z.string().optional(),
     landlock_enforced: z.boolean().optional(),
     seccomp_enforced: z.boolean().optional(),
@@ -2968,12 +2986,9 @@ export const Schedule: z.ZodType<Schedule> = z.object({
   created_by: z.string().optional(),
   trigger: ScheduleTrigger,
   message: z.string().min(1),
-  deliver: z.boolean(),
   session_mode: z.enum(["isolated", "continue", "main"]),
   timeout_seconds: z.number().int(),
   session_id: z.string().optional(),
-  channel: z.string().optional(),
-  chat_id: z.string().optional(),
   state: ScheduleState,
   runs: z.array(ScheduleRunRecord).optional(),
   created_at_ms: z.number().int(),
@@ -2987,12 +3002,9 @@ export const ScheduleCreate: z.ZodType<ScheduleCreate> = z.object({
   owner_agent_id: z.string().min(1),
   trigger: ScheduleTrigger,
   message: z.string().min(1),
-  deliver: z.boolean().optional(),
   session_mode: z.enum(["isolated", "continue", "main"]).optional(),
   timeout_seconds: z.number().int().gte(0).optional(),
   enabled: z.boolean().optional(),
-  channel: z.string().optional(),
-  chat_id: z.string().optional(),
 });
 export const ScheduleUpdate: z.ZodType<ScheduleUpdate> = z
   .object({
@@ -3000,12 +3012,9 @@ export const ScheduleUpdate: z.ZodType<ScheduleUpdate> = z
     owner_agent_id: z.string().min(1),
     trigger: ScheduleTrigger,
     message: z.string().min(1),
-    deliver: z.boolean(),
     session_mode: z.enum(["isolated", "continue", "main"]),
     timeout_seconds: z.number().int().gte(0),
     enabled: z.boolean(),
-    channel: z.string(),
-    chat_id: z.string(),
   })
   .partial();
 export const ScheduleRunResult = z.object({
@@ -3051,7 +3060,15 @@ export const Workspace: z.ZodType<Workspace> = z
     pinned: z.boolean(),
     pin_order: z.number().int(),
     core_team: z.array(z.string()).max(20).optional(),
-    repository: z.string().optional(),
+    mounts: z
+      .array(
+        z.object({
+          name: z.string().min(1),
+          host_path: z.string().min(1),
+          status: z.enum(["ok", "broken"]).optional(),
+        })
+      )
+      .optional(),
     task_count: z.number().int(),
     is_default: z.boolean().optional(),
     setup_pending: z.boolean().optional(),
@@ -3066,7 +3083,6 @@ export const WorkspaceCreateRequest = z
     name: z.string().min(1).max(200),
     description: z.string().max(2000).optional(),
     core_team: z.array(z.string()).max(20).optional(),
-    repository: z.string().optional(),
   })
   .passthrough();
 export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> = z
@@ -3077,7 +3093,6 @@ export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> = z
     pinned: z.boolean(),
     pin_order: z.number().int(),
     core_team: z.array(z.string()).max(20),
-    repository: z.string(),
     member_configs: z.record(WorkspaceMemberConfig),
   })
   .partial()
@@ -3109,6 +3124,11 @@ export const LibraryTransferRequest = z.object({
   to_workspace_id: z.string(),
   to_path: z.string().min(1),
 });
+export const LibraryEntryMount: z.ZodType<LibraryEntryMount> = z.object({
+  name: z.string().min(1),
+  host_path: z.string().min(1),
+  broad: z.boolean(),
+});
 export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   name: z.string().min(1),
   path: z.string().min(1),
@@ -3117,6 +3137,7 @@ export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   size: z.number().int().gte(0),
   modified_at: z.string().datetime({ offset: true }),
   mime: z.string().optional(),
+  mount: LibraryEntryMount.optional(),
   is_text_editable: z.boolean(),
 });
 export const LibraryContentResponse = z.object({
@@ -3158,6 +3179,16 @@ export const WorkspaceDelegation: z.ZodType<WorkspaceDelegation> = z.object({
 });
 export const WorkspaceDelegationUpdateRequest: z.ZodType<WorkspaceDelegationUpdateRequest> =
   z.object({ edges: z.array(WorkspaceDelegationEdge) });
+export const WorkspaceMountCreateRequest = z.object({
+  name: z.string().min(1),
+  host_path: z.string().min(1),
+});
+export const WorkspaceMountCreateResponse = z.object({
+  name: z.string().min(1),
+  host_path: z.string().min(1),
+  status: z.enum(["ok", "broken"]),
+  warning: z.string().min(1).optional(),
+});
 export const WorkspaceInstructionsResponse = z.object({ content: z.string() });
 export const WorkspaceInstructionsRequest = z.object({
   content: z.string().max(262144),
@@ -3301,6 +3332,18 @@ export const TokenUsageSummary: z.ZodType<TokenUsageSummary> = z
     partial_error_count: z.number().int().gte(0).optional(),
   })
   .passthrough();
+export const HostFolderEntry: z.ZodType<HostFolderEntry> = z.object({
+  name: z.string().min(1),
+  path: z.string().min(1),
+  mountable: z.boolean(),
+  broad: z.boolean().optional(),
+  reason: z.string().optional(),
+});
+export const HostFolderListing: z.ZodType<HostFolderListing> = z.object({
+  path: z.string().min(1),
+  parent: z.string().optional(),
+  entries: z.array(HostFolderEntry),
+});
 export const CliDetectEntry: z.ZodType<CliDetectEntry> = z.object({
   installed: z.boolean(),
   path: z.string().nullish(),
@@ -8157,6 +8200,41 @@ Polled by the SPA StatusBar every 15 seconds.
   },
   {
     method: "get",
+    path: "/system/folders",
+    alias: "listHostFolders",
+    description: `Returns the directories directly inside &#x60;path&#x60;, each with a verdict on whether it may be mounted into a workspace.
+It exists because a web page cannot open the native folder picker and learn a real filesystem path — the browser withholds it — so without a server-side listing the only way to add a mount is to type an absolute path from memory.
+It exposes nothing new: post-ADR-062 reading is open, so an agent can already read anywhere on this machine. This gives the OPERATOR the same view. Admin-authenticated, read-only, and deliberately not reachable from any agent tool — an agent that wants a folder asks for it and the operator approves, rather than browsing for one itself.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+    ],
+    response: HostFolderListing,
+    errors: [
+      {
+        status: 400,
+        description: `The path was relative, malformed, or not a directory.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Missing or invalid bearer token.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `The path does not exist.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/tasks",
     alias: "listTasks",
     description: `Returns tasks in a workspace, filterable by status, agent, and surface. This is the unified task surface (Sprint 2) — it subsumes the former GTD /board/tasks listing. By default only top-level tasks (parent_task_id absent) and &#x60;surface: user&#x60; tasks are returned; use the filters to widen. Workspace-scoped.
@@ -9578,6 +9656,87 @@ Returns HTTP 201 on success.
     ],
   },
   {
+    method: "post",
+    path: "/workspaces/:id/mounts",
+    alias: "createWorkspaceMount",
+    description: `FR-7.1/FR-5, ADR-063 D4/D6. Validates the name shape and uniqueness (400 on an invalid name, a collision with an existing mount, or a collision with an existing entry in work/; 400 also when host_path does not resolve to an existing, real, on-disk directory), resolves host_path to its realpath, and refuses (403) a target that IS or lies INSIDE $OMNIPUS_HOME (FR-7.5 — checked on the realpath-resolved target, so a symlink to it is refused too) — this is a policy refusal, not malformed input. Otherwise creates the mount and materialises it as a symlink under the workspace&#x27;s work/ directory. A target that is broad but not refused (the operator&#x27;s own home directory, the filesystem root, or a location that CONTAINS $OMNIPUS_HOME) still succeeds (201) but returns a non-empty &#x60;warning&#x60; (FR-7.4/FR-7.6) — the secret set is subtracted from every grant regardless of where it came from, so a broad mount is allowed, but the operator must be told what it covers. Takes effect immediately for every agent on the workspace — no restart (FR-8.1).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: WorkspaceMountCreateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: WorkspaceMountCreateResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/workspaces/:id/mounts/:name",
+    alias: "deleteWorkspaceMount",
+    description: `FR-7.3/FR-8.6. Removes the mount&#x27;s symlink under work/ and its record from the workspace. The operator&#x27;s real folder at the mount&#x27;s host_path, and everything inside it, is never touched — only the symlink and the mount record are removed. Returns 404 both when id does not name a known workspace and when name does not name any mount on it. Takes effect immediately for every agent on the workspace — no restart (FR-8.1).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "name",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "get",
     path: "/workspaces/:id/plans",
     alias: "listWorkspacePlans",
@@ -9784,7 +9943,7 @@ export const DoneFrame = z
 
 export const LLMError = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     detail: z.string().max(2048).optional(),
@@ -9793,7 +9952,7 @@ export const LLMError = z
 
 export const LLMErrorReplay = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
   })

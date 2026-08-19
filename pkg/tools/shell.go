@@ -227,7 +227,11 @@ var (
 	// verbatim from the pre-consolidation `exec` tool (FR-B4). Applies
 	// UNCONDITIONALLY — no policy verdict or operator configuration disables
 	// this list.
-	defaultDenyPatterns = []*regexp.Regexp{
+	//
+	// The secrets-subtree literal guards (v0.2 #155 item 8) are appended below
+	// via secretGuardPatterns rather than hand-copied here — see that var's doc
+	// comment for why hand-copying is exactly the bug this replaces.
+	defaultDenyPatterns = append([]*regexp.Regexp{
 		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
 		regexp.MustCompile(`\bdel\s+/[fq]\b`),
 		regexp.MustCompile(`\brmdir\s+/s\b`),
@@ -298,13 +302,181 @@ var (
 		regexp.MustCompile(`\bsource\s+.*\.sh\b`),
 		regexp.MustCompile(`<\([^)]*\)`),
 		regexp.MustCompile(`>\([^)]*\)`),
-		// v0.2 #155 item 8 — secrets-subtree path-guard (option B backstop).
-		regexp.MustCompile(`\bmaster\.key\b`),
-		regexp.MustCompile(`\bcredentials\.json\b`),
-	}
+	}, secretGuardPatterns...)
 
+	// secretGuardPatterns is the v0.2 #155 item 8 secrets-subtree literal-text
+	// backstop (option B), generated FROM fspolicy.SecretEntriesAlways rather
+	// than hand-copied.
+	//
+	// It used to be two hardcoded lines here — `\bmaster\.key\b` and
+	// `\bcredentials\.json\b` — written when the secret set had exactly those
+	// two entries. The set has since grown to five (config.json, cli.token,
+	// entities joined master.key and credentials.json; see
+	// fspolicy.SecretEntriesAlways), and grew again since (auth.json, backups).
+	// The hand-copied pair never gained any of them: this guard is a backstop
+	// over a boundary the kernel sandbox already enforces, so its silent
+	// drift was invisible in every test that exercises the kernel deny
+	// instead. A backstop that covers 2 of N entries and looks like it covers
+	// all of them is worse than no backstop, because a reviewer reads
+	// "secrets-subtree path-guard" and stops checking.
+	//
+	// Generating the list closes that class of drift structurally — there is
+	// no second copy to fall behind. TestSecretGuardPatterns_CoverEverySecretEntryAlways
+	// (shell_secret_guard_test.go) is the regression: it fails the moment
+	// SecretEntriesAlways gains an entry this can't already reach, which is
+	// possible only if this generation is ever replaced with a literal list
+	// again.
+	//
+	// Scoped to SecretEntriesAlways, not the combined SecretEntriesRelative:
+	// the per-turn half (agents/, workspaces/) is made of ordinary English
+	// words an agent legitimately types constantly ("list the workspaces",
+	// "check the agents dir"), and the own-tree exception that makes reaching
+	// them sometimes correct (fspolicy.DeniedPathsFor) is inherently
+	// contextual — a static text guard has no turn to evaluate that against.
+	// The five ALWAYS names are never legitimate in ANY turn, which is what
+	// makes a context-free literal match safe for them and not for the rest.
+	secretGuardPatterns = buildSecretGuardPatterns()
+)
+
+// buildSecretGuardPatterns compiles one case-insensitive-by-construction
+// (applyDenyPatterns lowercases the command before matching) word-boundary
+// regex per fspolicy.SecretEntriesAlways entry.
+func buildSecretGuardPatterns() []*regexp.Regexp {
+	out := make([]*regexp.Regexp, 0, len(fspolicy.SecretEntriesAlways))
+	for _, name := range fspolicy.SecretEntriesAlways {
+		out = append(out, regexp.MustCompile(`\b`+regexp.QuoteMeta(strings.ToLower(name))+`\b`))
+	}
+	return out
+}
+
+var (
 	// absolutePathPattern matches absolute file paths in commands (Unix and Windows).
-	absolutePathPattern = regexp.MustCompile(`[A-Za-z]:\\[^\\\"']+|/[^\s\"']+`)
+	// absolutePathPattern extracts absolute-path candidates from raw command
+	// TEXT so guardCommand can reject references outside the workspace.
+	//
+	// Three properties are load-bearing:
+	//
+	//  1. The path BODY stops at shell metacharacters (; | & ( ) < > , { } [ ]
+	//     ! * ` $ ~ \), not just at whitespace and quotes. The original class
+	//     was `[^\s"']+`, so the ubiquitous idiom `2>/dev/null;` extracted the
+	//     candidate `/dev/null;` — WITH the semicolon — which does not match
+	//     the safePaths key "/dev/null". The exemption silently missed and the
+	//     whole command was rejected, including every innocent fragment
+	//     chained beside it. The set was later widened (this revision) to
+	//     also stop at brace/bracket/glob punctuation so multi-path shell
+	//     shapes like `{/etc/shadow,/etc/passwd}` or `cat[/etc/shadow]` split
+	//     into the individual candidates they textually contain instead of
+	//     gluing trailing punctuation onto (or past) the real path.
+	//
+	//  2. The match must begin at a TOKEN BOUNDARY, captured in group 1.
+	//     Plain single-character boundaries (whitespace, quote, = : ; , { }
+	//     [ ] ! * ` $ ~ \ and the shell metacharacters above) cover most
+	//     cases. Without this restriction the pattern matched the first `/`
+	//     found ANYWHERE, including one in the middle of a relative path:
+	//     `-o build/app.min.js` yielded the fabricated candidate
+	//     `/app.min.js`, which resolves to the filesystem root and was
+	//     rejected as outside the workspace — even though the real argument
+	//     was a relative path inside it.
+	//
+	//     Two shapes need MORE than a single boundary character because no
+	//     single character sits directly before the leading `/`:
+	//
+	//       - Attached short flags: `-o/etc/passwd`, `-I/etc`, `-C/etc`. The
+	//         candidate has the exact same textual shape as the legitimate
+	//         relative path in `-o build/app.min.js` — a `/` following a
+	//         `-flag` token — so the two must be told apart by what comes
+	//         right after the flag, not by the flag itself. This pattern
+	//         additionally matches `(?:^|\s)-[A-Za-z]` immediately followed
+	//         by the candidate body, i.e. the flag itself must sit at a
+	//         token start (start of command or preceded by whitespace) AND
+	//         the very next character after the flag letter must be `/`. A
+	//         relative arg (`-o build/…`) never satisfies the second part
+	//         (there is a space, not a `/`, right after `-o`), and a
+	//         hyphenated relative path segment (`build-x/output`) never
+	//         satisfies the first part (the `-x` is not at a token start —
+	//         `d` precedes it, not whitespace) — so neither is affected.
+	//       - Variable-expansion prefixes: `$HOME/.ssh/id_rsa`,
+	//         `${HOME}/.ssh/id_rsa`. This pattern additionally matches
+	//         `(?:^|\s)\$\{?[A-Za-z_][A-Za-z0-9_]*\}?` (a token-start shell
+	//         variable reference) immediately followed by the candidate
+	//         body, so a resolved-at-runtime path prefix does not hide an
+	//         absolute suffix from this compile-time text scan.
+	//
+	//  3. The boundary set and the excluded body set are almost — but
+	//     deliberately NOT — the same metacharacters: `:` and `=` are
+	//     boundary-only, never excluded from the body. `=` bodies are
+	//     unrestricted by design (unchanged from the original version).
+	//     `:` is unrestricted so that a colon-joined path LIST (`PATH=`
+	//     assignments, `-I a:b`-style compiler/linker flags) is captured as
+	//     ONE candidate rather than split into several fragments that each
+	//     independently look like a bare absolute path outside the
+	//     workspace. guardCommand recognizes that specific shape
+	//     (colonPathListPattern) and evaluates EACH `:`-separated segment
+	//     against the same workspace-boundary check applied to a bare
+	//     candidate (safePaths / allowedPathPatterns exemption, then
+	//     containment) — see guardCommand's colon-list check. A list is
+	//     allowed only when every segment is inside the workspace or
+	//     exempt; a list containing any out-of-workspace segment is
+	//     blocked, same as a single bare candidate would be.
+	//
+	// Worked examples:
+	//   - `which node 2>/dev/null; echo done` -> candidate "/dev/null", exempt
+	//     via safePaths (rule 1).
+	//   - `curl -sL -o build/app.min.js https://…` -> no candidate at all
+	//     for `build/app.min.js` (rule 2, general case).
+	//   - `curl -o/etc/passwd https://x` -> candidate "/etc/passwd", blocked
+	//     (rule 2, attached-flag case) — contrast with the previous example,
+	//     where the space after `-o` prevents the flag alternative from
+	//     firing.
+	//   - `PATH=/usr/bin:/usr/local/bin make` -> candidate
+	//     "/usr/bin:/usr/local/bin" (ONE match, per rule 3); guardCommand's
+	//     colon-list check splits it into "/usr/bin" and "/usr/local/bin"
+	//     and evaluates each — both are outside the workspace, so the
+	//     command is BLOCKED (consistent with what a bare `/usr/bin`
+	//     candidate would do).
+	//
+	// Callers MUST read group 1, not the whole match, since the match also
+	// consumes the leading boundary text (which may be more than one
+	// character — see rule 2's attached-flag and variable-prefix cases).
+	//
+	// The attached-flag alternative is `-[A-Za-z]+`, not `-[A-Za-z]`. With
+	// exactly one letter, `-o/etc/passwd` was caught but a COMBINED short flag
+	// with an attached path was not: in `tar -cf/etc/passwd` the character
+	// before `/` is `f`, which is neither a single flag letter after `-` nor a
+	// boundary character, so no candidate was extracted at all and the
+	// workspace-boundary check never ran on that path. Same for `cc -Wl/etc/x`.
+	// Defence-in-depth rather than the primary control — the kernel sandbox is
+	// that — but a guard that misses the combined form misses the form people
+	// actually type.
+	absolutePathPattern = regexp.MustCompile(
+		`(?:^|[\s"'=:;,{}\[\]!*` + "`" + `$~\\|&()<>]|(?:^|\s)-[A-Za-z]+|(?:^|\s)\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)` +
+			`([A-Za-z]:\\[^\\\s"';,{}\[\]!*` + "`" + `$~|&()<>]+` +
+			`|/[^\s"';,{}\[\]!*` + "`" + `$~\\|&()<>]+)`,
+	)
+
+	// colonPathListPattern recognizes a colon-joined list of two or more
+	// absolute Unix paths — e.g. "/usr/bin:/usr/local/bin" — the shape
+	// produced by `PATH=` assignments and by multi-path compiler/linker
+	// flags (`-I a:b`). absolutePathPattern's Unix body does not exclude
+	// `:` (see that pattern's rule 3), so a colon-joined list is captured
+	// as a single raw candidate rather than fragmented at each colon.
+	// guardCommand matches that raw candidate against this pattern and, on
+	// a match, SPLITS it on `:` and evaluates each segment independently
+	// against the same workspace-boundary check applied to a bare
+	// candidate (safePaths exemption, allowedPathPatterns exemption, then
+	// containment relative to cwd). A list is allowed only when every
+	// segment clears that check; a list containing any out-of-workspace,
+	// non-exempt segment is blocked. This is deliberately narrow — every
+	// segment must independently look like an absolute path (start with
+	// `/`, contain none of the same excluded punctuation) — so it does not
+	// exempt a single path with a stray colon suffix appended to it
+	// (`/etc/passwd:evil` has a second segment that does not start with
+	// `/`, so it does not match and is still evaluated as a single,
+	// literal candidate).
+	colonPathListPattern = regexp.MustCompile(
+		`^/[^\s"';,{}\[\]!*` + "`" + `$~\\:]+` +
+			`(?::/[^\s"';,{}\[\]!*` + "`" + `$~\\:]+)+$`,
+	)
 
 	// safePaths are kernel pseudo-devices that are always safe to reference in
 	// commands, regardless of workspace restriction. They contain no user data
@@ -588,11 +760,61 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	}
 	lim.WorkspaceDir = cwd
 
+	// ADR-063 FR-3.5: carry THIS TURN's filesystem policy to the kernel, so the
+	// child bash spawns is confined the same way the app-layer path resolver
+	// confines this same turn's read_file/write_file.
+	//
+	// Without this the child inherited the BOOT profile, which grants
+	// $OMNIPUS_HOME as one tree — so `bash` from any agent could read and write
+	// every other agent's home and every workspace record, while the app layer
+	// denied exactly those paths. That divergence was demonstrated against real
+	// children, not inferred.
+	//
+	// God mode is excluded deliberately: it is an explicit operator opt-out of
+	// confinement, and runForeground routes it to runUnconstrained anyway.
+	if !t.godMode {
+		kernelPolicy, kpErr := t.turnKernelPolicy(ctx)
+		if kpErr != nil {
+			t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
+			return ErrorResult(fmt.Sprintf("sandbox policy error: %v", kpErr))
+		}
+		lim.KernelPolicy = kernelPolicy
+	}
+
 	if runInBackground {
 		ownerSessionID := ToolTranscriptSessionID(ctx)
 		return t.runBackground(ctx, command, cwd, timeoutSeconds, lim, ownerSessionID, cb)
 	}
 	return t.runForeground(ctx, command, lim, timeoutSeconds)
+}
+
+// turnKernelPolicy derives the per-turn kernel policy for this bash call from
+// the SAME authored fspolicy.FSPolicy that every path-taking tool resolves
+// (ResolveTurnFSPolicy), so the kernel and the app layer are answering "what
+// may this turn touch" from one input rather than two.
+//
+// Returns (nil, nil) when no kernel policy is in force — sandbox off, or a
+// platform that degraded to application-level enforcement. The spawn then uses
+// whatever the boot profile is, exactly as before.
+//
+// Returns an error, rather than a nil policy, when a policy IS in force but
+// could not be derived. Falling back on failure would hand the child the boot
+// profile, which is the WIDER of the two — a derivation bug would then quietly
+// restore the very cross-agent reach this exists to remove.
+func (t *ExecTool) turnKernelPolicy(ctx context.Context) (*sandbox.SandboxPolicy, error) {
+	if !sandbox.TurnPolicyBaseInstalled() {
+		return nil, nil
+	}
+	// restrict is t.restrictToWorkspace, not the hardcoded true that cwd
+	// resolution uses: cwd confinement is a separate, deliberately stricter
+	// decision (see resolveCWD's note 3), while this is the turn's real posture.
+	// Scope does not change the derived rules anyway — post-ADR-062 it governs
+	// writes through the work dir, which is identical either way (FR-2.5).
+	authored, err := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace)
+	if err != nil {
+		return nil, fmt.Errorf("resolve turn filesystem policy: %w", err)
+	}
+	return sandbox.KernelPolicyForTurn(authored)
 }
 
 // --- cwd resolution (FR-B2/FR-B13) -----------------------------------------
@@ -701,12 +923,37 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	// so file:// URIs are still validated against the workspace boundary.
 	webSchemes := []string{"http:", "https:", "ftp:", "ftps:", "sftp:", "ssh:", "git:"}
 
-	matchIndices := absolutePathPattern.FindAllStringIndex(cmd, -1)
+	// Group 1 is the path itself; the full match also consumes the leading
+	// boundary character, so indices 2:4 (not 0:2) are what we want. Reading
+	// the whole match here would re-introduce the leading space/operator into
+	// every candidate and break both filepath.Abs and the safePaths lookup.
+	matchIndices := absolutePathPattern.FindAllStringSubmatchIndex(cmd, -1)
 	for _, loc := range matchIndices {
-		raw := cmd[loc[0]:loc[1]]
+		start, end := loc[2], loc[3]
+		if start < 0 || end < 0 {
+			continue
+		}
+		raw := cmd[start:end]
 
-		if strings.HasPrefix(raw, "//") && loc[0] > 0 {
-			before := cmd[:loc[0]]
+		// Colon-joined path list (PATH= assignments, -I a:b-style flags):
+		// each `:`-separated segment is checked independently against the
+		// workspace boundary (the same check applied to a bare candidate
+		// below), rather than the whole list being skipped wholesale. See
+		// colonPathListPattern's doc comment for why this shape is
+		// recognized narrowly, and why an unconditional skip here would
+		// have let a colon-joined list smuggle an out-of-workspace segment
+		// past the guard entirely.
+		if strings.Contains(raw, ":") && colonPathListPattern.MatchString(raw) {
+			for _, seg := range strings.Split(raw, ":") {
+				if msg := t.checkPathSegment(seg, cwdPath); msg != "" {
+					return msg
+				}
+			}
+			continue
+		}
+
+		if strings.HasPrefix(raw, "//") && start > 0 {
+			before := cmd[:start]
 			isWebURL := false
 			for _, scheme := range webSchemes {
 				if strings.HasSuffix(before, scheme) {
@@ -719,26 +966,38 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 			}
 		}
 
-		p, err := filepath.Abs(raw)
-		if err != nil {
-			return "Command blocked by safety guard (cannot resolve path)"
-		}
-		if safePaths[p] {
-			continue
-		}
-		if isAllowedPath(p, t.allowedPathPatterns) {
-			continue
-		}
-
-		rel, err := filepath.Rel(cwdPath, p)
-		if err != nil {
-			return "Command blocked by safety guard (cannot resolve relative path)"
-		}
-		if strings.HasPrefix(rel, "..") {
-			return "Command blocked by safety guard (path outside working dir)"
+		if msg := t.checkPathSegment(raw, cwdPath); msg != "" {
+			return msg
 		}
 	}
 
+	return ""
+}
+
+// checkPathSegment evaluates a single absolute-path candidate — either a
+// bare candidate from the main scan loop, or one `:`-separated segment of a
+// colon-joined path list — against the safePaths exemption, the
+// operator-configured allowlist, and the workspace-containment boundary.
+// Returns "" when the segment is allowed, or a rejection message otherwise.
+func (t *ExecTool) checkPathSegment(raw, cwdPath string) string {
+	p, err := filepath.Abs(raw)
+	if err != nil {
+		return "Command blocked by safety guard (cannot resolve path)"
+	}
+	if safePaths[p] {
+		return ""
+	}
+	if isAllowedPath(p, t.allowedPathPatterns) {
+		return ""
+	}
+
+	rel, err := filepath.Rel(cwdPath, p)
+	if err != nil {
+		return "Command blocked by safety guard (cannot resolve relative path)"
+	}
+	if strings.HasPrefix(rel, "..") {
+		return fmt.Sprintf("Command blocked by safety guard (path outside working dir): %q is outside the effective working directory %q and no mount covers it", p, cwdPath)
+	}
 	return ""
 }
 

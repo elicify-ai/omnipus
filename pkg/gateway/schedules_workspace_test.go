@@ -27,7 +27,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -56,101 +55,6 @@ func withCapturedWarnLog(t *testing.T) string {
 }
 
 // --- resolveScheduleWorkspaceID: pure-function coverage ---------------------
-
-// TestResolveScheduleWorkspaceID_ChannelBinding asserts an operator-created
-// schedule resolves its workspace from the channel instance its
-// payload.Channel names, mirroring processMessage's
-// cfg.Channels[instanceID].WorkspaceID lookup.
-func TestResolveScheduleWorkspaceID_ChannelBinding(t *testing.T) {
-	cfg := &config.Config{
-		Channels: map[string]config.ChannelInstanceConfig{
-			"telegram.sales": {Type: "telegram", Enabled: true, WorkspaceID: "sales"},
-		},
-	}
-	job := cron.CronJob{
-		Payload: cron.CronPayload{Channel: "telegram.sales", To: "chat-1"},
-	}
-	assert.Equal(t, "sales", resolveScheduleWorkspaceID(cfg, job))
-}
-
-// TestResolveScheduleWorkspaceID_ChannelBinding_CaseInsensitive asserts the
-// channel lookup normalizes case/whitespace the same way inboundInstanceID
-// does for the interactive path, so a schedule created with a
-// differently-cased channel value still resolves.
-func TestResolveScheduleWorkspaceID_ChannelBinding_CaseInsensitive(t *testing.T) {
-	cfg := &config.Config{
-		Channels: map[string]config.ChannelInstanceConfig{
-			"telegram.sales": {Type: "telegram", Enabled: true, WorkspaceID: "sales"},
-		},
-	}
-	job := cron.CronJob{
-		Payload: cron.CronPayload{Channel: "  Telegram.Sales  "},
-	}
-	assert.Equal(t, "sales", resolveScheduleWorkspaceID(cfg, job))
-}
-
-// TestResolveScheduleWorkspaceID_UnboundChannel_ReturnsEmpty asserts a
-// schedule targeting a channel instance with no workspace binding resolves
-// to "" — never fabricated.
-func TestResolveScheduleWorkspaceID_UnboundChannel_ReturnsEmpty(t *testing.T) {
-	cfg := &config.Config{
-		Channels: map[string]config.ChannelInstanceConfig{
-			"telegram": {Type: "telegram", Enabled: true}, // no WorkspaceID
-		},
-	}
-	job := cron.CronJob{Payload: cron.CronPayload{Channel: "telegram"}}
-	assert.Equal(t, "", resolveScheduleWorkspaceID(cfg, job))
-}
-
-// TestResolveScheduleWorkspaceID_UnboundChannel_NoLog is the negative
-// complement to the FIX 3 regression test below: a channel instance that
-// DOES still exist but simply carries no WorkspaceID is the ordinary
-// "never bound to a workspace" state (true of every global, workspace-
-// unbound channel instance) — it must NOT log, or every fire of a schedule
-// on such a channel would spam a WARN for a perfectly normal configuration.
-func TestResolveScheduleWorkspaceID_UnboundChannel_NoLog(t *testing.T) {
-	logFile := withCapturedWarnLog(t)
-	cfg := &config.Config{
-		Channels: map[string]config.ChannelInstanceConfig{
-			"telegram": {Type: "telegram", Enabled: true}, // no WorkspaceID
-		},
-	}
-	job := cron.CronJob{Payload: cron.CronPayload{Channel: "telegram"}}
-	assert.Equal(t, "", resolveScheduleWorkspaceID(cfg, job))
-
-	logged, err := os.ReadFile(logFile)
-	require.NoError(t, err)
-	assert.Empty(t, string(logged),
-		"an unbound-but-present channel instance is the ordinary state, not a regression — it must not log")
-}
-
-// TestResolveScheduleWorkspaceID_ChannelInstanceDeleted_LogsWarn_ReturnsEmpty
-// is the FIX 3 regression test: a schedule's Payload.Channel names an
-// instance that no longer exists in cfg.Channels at all (the operator
-// deleted or renamed it after the schedule was created) — a REGRESSION from
-// a previously working binding. Before the fix this fell through to the
-// same silent "" as a schedule that never had a channel at all; the fix
-// requires this specific case to also emit a WARN so the regression is
-// discoverable, while still never fabricating a workspace id.
-func TestResolveScheduleWorkspaceID_ChannelInstanceDeleted_LogsWarn_ReturnsEmpty(t *testing.T) {
-	logFile := withCapturedWarnLog(t)
-	cfg := &config.Config{
-		Channels: map[string]config.ChannelInstanceConfig{
-			"telegram.sales": {Type: "telegram", Enabled: true, WorkspaceID: "sales"},
-		},
-	}
-	job := cron.CronJob{
-		ID:      "job-deleted-channel-1",
-		Payload: cron.CronPayload{Channel: "telegram.marketing", To: "chat-1"}, // no longer in cfg.Channels
-	}
-	assert.Equal(t, "", resolveScheduleWorkspaceID(cfg, job))
-
-	logged, err := os.ReadFile(logFile)
-	require.NoError(t, err)
-	assert.Contains(t, string(logged), "no longer exists in config")
-	assert.Contains(t, string(logged), "telegram.marketing")
-	assert.Contains(t, string(logged), "job-deleted-channel-1")
-}
 
 // TestResolveScheduleWorkspaceID_NoChannel_ReturnsEmpty asserts a schedule
 // with no channel context at all (e.g. deliver=false, no outbound context)
@@ -245,54 +149,7 @@ func TestWorkspaceIDFromHeartbeatJobName_NonHeartbeatJob_NoLog(t *testing.T) {
 	assert.Empty(t, string(logged), "a plain non-heartbeat schedule must never log here")
 }
 
-// TestResolveScheduleWorkspaceID_HeartbeatKind_PrefersNameOverChannel
-// asserts a heartbeat job's workspace comes from its name even when (in
-// principle) a Channel field were also set — heartbeats never set
-// Payload.Channel in production (heartbeat_schedule.go's buildHeartbeatMessage
-// path), but the resolution order must not accidentally prefer a stale/
-// irrelevant channel binding over the authoritative heartbeat identity.
-func TestResolveScheduleWorkspaceID_HeartbeatKind_PrefersNameOverChannel(t *testing.T) {
-	cfg := &config.Config{
-		Channels: map[string]config.ChannelInstanceConfig{
-			"telegram": {Type: "telegram", Enabled: true, WorkspaceID: "wrong-workspace"},
-		},
-	}
-	job := cron.CronJob{
-		Name:    heartbeatJobName("acme-corp", "mia"),
-		AgentID: "mia",
-		Payload: cron.CronPayload{Kind: heartbeatJobKind, Channel: "telegram"},
-	}
-	assert.Equal(t, "acme-corp", resolveScheduleWorkspaceID(cfg, job))
-}
-
 // --- RunScheduled end-to-end: the session actually gets stamped -------------
-
-// TestRunScheduled_ChannelBoundSchedule_StampsSessionWorkspace drives a real
-// RunScheduled call for an operator-created, channel-bound schedule and
-// asserts the picked session's meta.WorkspaceID carries the bound workspace
-// afterward — the precondition ProcessScheduled's existing GetMeta read
-// depends on.
-func TestRunScheduled_ChannelBoundSchedule_StampsSessionWorkspace(t *testing.T) {
-	cfg := baseConfig()
-	cfg.Channels = map[string]config.ChannelInstanceConfig{
-		"telegram.sales": {Type: "telegram", Enabled: true, WorkspaceID: "sales"},
-	}
-	r, exec, _, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
-
-	job := &cron.CronJob{
-		ID: "j-ws-1", Name: "daily report", AgentID: "mia", SessionMode: cron.SessionModeIsolated,
-		Payload: cron.CronPayload{Message: "run", Channel: "telegram.sales", To: "chat-1"},
-	}
-	sid, err := r.RunScheduled(context.Background(), job)
-	require.NoError(t, err)
-	require.NotEmpty(t, sid)
-	require.Len(t, exec.calls, 1)
-
-	meta, err := exec.store.GetMeta(sid)
-	require.NoError(t, err)
-	assert.Equal(t, "sales", meta.WorkspaceID,
-		"the session RunScheduled picked must carry the schedule's bound-channel workspace")
-}
 
 // TestRunScheduled_HeartbeatJob_StampsSessionWorkspace mirrors the above for
 // a workspace-scoped heartbeat job (name-encoded workspace, no
@@ -366,4 +223,37 @@ func TestStampScheduledSessionWorkspace_DoesNotClobberExisting(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "original-workspace", got.WorkspaceID,
 		"an already-stamped session's workspace must not be overwritten by a later resolution")
+}
+
+// TestResolveScheduleWorkspaceID_HeartbeatNameIsTheOnlySignal pins what
+// replaced the channel-derived lookup.
+//
+// A schedule used to carry its own channel, and the workspace was resolved by
+// looking that channel's instance up in config. That plumbing was removed with
+// the rest of the retired Schedules UI (ADR-065 spec FR-8), so a
+// workspace-scoped heartbeat's job name is the only signal left.
+//
+// Everything else resolves to "" DELIBERATELY. The caller treats "" as
+// "nothing to stamp" and leaves the session's existing tag alone — the one
+// thing it must never do is fabricate a workspace id, which would silently
+// place a scheduled run in the wrong workspace's memory, board and delegation
+// graph.
+func TestResolveScheduleWorkspaceID_HeartbeatNameIsTheOnlySignal(t *testing.T) {
+	hb := cron.CronJob{
+		Name:    heartbeatJobName("ws_sales", "mia"),
+		AgentID: "mia",
+		Payload: cron.CronPayload{Kind: heartbeatJobKind, Message: "beat"},
+	}
+	if got := resolveScheduleWorkspaceID(nil, hb); got != "ws_sales" {
+		t.Fatalf("heartbeat job name must resolve its workspace, got %q", got)
+	}
+
+	plain := cron.CronJob{
+		Name:    "some-ordinary-schedule",
+		AgentID: "mia",
+		Payload: cron.CronPayload{Message: "run"},
+	}
+	if got := resolveScheduleWorkspaceID(nil, plain); got != "" {
+		t.Fatalf("a non-heartbeat schedule must resolve to empty, never a guessed workspace; got %q", got)
+	}
 }

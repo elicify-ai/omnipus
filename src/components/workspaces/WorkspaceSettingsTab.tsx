@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowSquareOut, Archive, ArrowCounterClockwise, Trash, ArrowsClockwise } from '@phosphor-icons/react'
+import { Archive, ArrowCounterClockwise, Trash, ArrowsClockwise } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -50,7 +50,7 @@ function readAuthToken(): string | undefined {
 
 /**
  * Workspace Settings tab — properties with the S1 auto-save pattern.
- * Name / description / repository auto-save on debounce; archive + delete are
+ * Name / description auto-save on debounce; archive + delete are
  * explicit destructive actions; owner + team are surfaced read-only here (team
  * is edited on the Team tab — the delegation-graph editor).
  */
@@ -61,7 +61,6 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
 
   const [name, setName] = useState(workspace.name)
   const [description, setDescription] = useState(workspace.description ?? '')
-  const [repository, setRepository] = useState(workspace.repository ?? '')
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [instructionsContent, setInstructionsContent] = useState('')
 
@@ -70,7 +69,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
   // below gets its own dirty flag — set on every onChange, cleared only when
   // that group's `onSaved` confirms the save snapshot still equals the live
   // draft — and the matching hydration effect skips entirely while dirty.
-  // Two independent groups here (name/description/repository vs.
+  // Two independent groups here (name/description vs.
   // instructions) since they save through two separate useAutoSave
   // instances and can go dirty/settle independently.
   const identityDirtyRef = useRef(false)
@@ -90,11 +89,11 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
   //
   // That "safe by construction" analysis does NOT hold across a WORKSPACE
   // SWITCH, though — this component persists across switches (no `key` prop
-  // at the route), and `name`/`description`/`repository` are re-synced by
+  // at the route), and `name`/`description` are re-synced by
   // the `useEffect` below, which only runs AFTER the commit where
   // `workspace.id` (and thus `formData.workspaceId`) already changed. That
   // produces one real committed render with the NEW workspace's id paired
-  // with the OLD workspace's still-stale name/description/repository state
+  // with the OLD workspace's still-stale name/description state
   // — a self-inconsistent snapshot useAutoSave's change-detection reads as
   // "different from the last thing I saw" relative to the fully-settled OLD
   // snapshot. The FOLLOWING render (once the effect re-syncs the fields to
@@ -113,7 +112,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
   // fields as its new baseline instead of treating them as an edit.
   //
   // UX decision (deliberately NOT mirroring `disabled={!instructionsHydrated}`
-  // on the Instructions `<Textarea>` below): the Name/Description/Repository
+  // on the Instructions `<Textarea>` below): the Name/Description
   // inputs are NOT disabled while `identityHydrated` is false. Unlike
   // Instructions, there is no real network-loading window here worth
   // surfacing to the user — `workspace` is already fully loaded data by the
@@ -188,14 +187,13 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
     if (identityDirtyRef.current) return
     setName(workspace.name)
     setDescription(workspace.description ?? '')
-    setRepository(workspace.repository ?? '')
     // D3 residual (2nd site) fix: flip the reactive readiness flag in the
     // SAME commit the re-synced fields land (see `identityHydrated`'s doc
-    // comment above) — batched with the three setters above into one
+    // comment above) — batched with the setters above into one
     // render, so useAutoSave never observes a commit where `disabled` is
     // already false but the data is still the stale pre-switch snapshot.
     setIdentityHydrated(true)
-  }, [workspace.id, workspace.name, workspace.description, workspace.repository])
+  }, [workspace.id, workspace.name, workspace.description])
 
   // Fetch and track workspace instructions (AGENT.md content).
   const {
@@ -321,9 +319,8 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
       workspaceId: workspace.id,
       name,
       description,
-      repository,
     }),
-    [workspace.id, name, description, repository],
+    [workspace.id, name, description],
   )
 
   const { status, error, lastSavedAt } = useAutoSave(
@@ -339,7 +336,6 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
       await updateWorkspace(workspace.id, {
         name: trimmedName,
         description: data.description.trim(),
-        repository: data.repository.trim(),
       })
       // Item 6 (no-op invalidation): `workspacesQueryKeys.list()` called
       // with no args produces ['workspaces', undefined], which matches ZERO
@@ -446,32 +442,6 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
             placeholder="What is this workspace for?"
             className="bg-[var(--color-surface-2)] resize-none"
           />
-        </div>
-
-        {/* Repository */}
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="ws-repository">Repository</Label>
-          <div className="flex items-center gap-2">
-            <Input
-              id="ws-repository"
-              value={repository}
-              onChange={(e) => { markIdentityDirty(); setRepository(e.target.value) }}
-              placeholder="https://github.com/org/repo"
-              className="bg-[var(--color-surface-2)] flex-1"
-            />
-            {repository.trim() && /^https?:\/\//.test(repository.trim()) && (
-              <a tabIndex={0}
-                href={repository.trim()}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center justify-center h-9 w-9 rounded-md border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)]/40 transition-colors"
-                aria-label="Open repository in a new tab"
-                title="Open repository"
-              >
-                <ArrowSquareOut size={16} />
-              </a>
-            )}
-          </div>
         </div>
 
         {/* Workspace / Project Instructions */}

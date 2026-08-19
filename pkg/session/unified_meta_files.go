@@ -49,17 +49,21 @@ import (
 // reproduces byte-identical JSON when UnifiedMeta is marshalled again
 // (FR-057/AC-21(e)).
 type u5IdentityFile struct {
-	ID                    string             `json:"id"`
-	AgentID               string             `json:"agent_id"`
-	Title                 string             `json:"title,omitempty"`
-	Status                SessionStatus      `json:"status"`
-	CreatedAt             time.Time          `json:"created_at"`
-	UpdatedAt             time.Time          `json:"updated_at"`
-	Model                 string             `json:"model,omitempty"`
-	Provider              string             `json:"provider,omitempty"`
-	WorkspaceID           string             `json:"workspace_id,omitempty"`
-	TaskID                string             `json:"task_id,omitempty"`
-	Channel               string             `json:"channel"`
+	ID          string        `json:"id"`
+	AgentID     string        `json:"agent_id"`
+	Title       string        `json:"title,omitempty"`
+	Status      SessionStatus `json:"status"`
+	CreatedAt   time.Time     `json:"created_at"`
+	UpdatedAt   time.Time     `json:"updated_at"`
+	Model       string        `json:"model,omitempty"`
+	Provider    string        `json:"provider,omitempty"`
+	WorkspaceID string        `json:"workspace_id,omitempty"`
+	TaskID      string        `json:"task_id,omitempty"`
+	Channel     string        `json:"channel"`
+	// InstanceID is the channel INSTANCE key ("whatsapp.eu"), not the bare
+	// type. Channel alone is not an identity when an install holds many
+	// instances of one platform — see UnifiedMeta.InstanceID.
+	InstanceID            string             `json:"instance_id,omitempty"`
 	PeerID                string             `json:"peer_id,omitempty"`
 	Partitions            []string           `json:"partitions"`
 	LastCompactionSummary string             `json:"last_compaction_summary,omitempty"`
@@ -126,6 +130,7 @@ func u5IdentityFromMeta(meta *UnifiedMeta) u5IdentityFile {
 		WorkspaceID:           meta.WorkspaceID,
 		TaskID:                meta.TaskID,
 		Channel:               meta.Channel,
+		InstanceID:            meta.InstanceID,
 		PeerID:                meta.PeerID,
 		Partitions:            meta.Partitions,
 		LastCompactionSummary: meta.LastCompactionSummary,
@@ -198,6 +203,7 @@ func u5ComposeUnifiedMeta(identity u5IdentityFile, stats u5StatsFile, goal u5Goa
 			WorkspaceID:           identity.WorkspaceID,
 			TaskID:                identity.TaskID,
 			Channel:               identity.Channel,
+			InstanceID:            identity.InstanceID,
 			PeerID:                identity.PeerID,
 			Partitions:            identity.Partitions,
 			LastCompactionSummary: identity.LastCompactionSummary,
@@ -344,6 +350,7 @@ func (us *UnifiedStore) u5WriteIdentityLocked(sessionID string, meta *UnifiedMet
 		cached.WorkspaceID = meta.WorkspaceID
 		cached.TaskID = meta.TaskID
 		cached.Channel = meta.Channel
+		cached.InstanceID = meta.InstanceID
 		cached.PeerID = meta.PeerID
 		cached.Partitions = slices.Clone(meta.Partitions)
 		cached.LastCompactionSummary = meta.LastCompactionSummary

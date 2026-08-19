@@ -124,6 +124,7 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			// Enable audit logging so emitPolicyDenyAudit writes to audit.jsonl.
@@ -228,8 +229,12 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 	//
 	// Note: ProcessDirect uses channel="cli", chatID="direct" with no peer or
 	// session ID. The routing layer resolves this to DMScopeMain (default),
-	// which produces session key "agent:main:main" via BuildAgentMainSessionKey.
-	// This is the key under which history is stored — not the caller-supplied key.
+	// which produces session key "agent:<defaultAgent.ID>:main" via
+	// BuildAgentMainSessionKey. This is the key under which history is
+	// stored — not the caller-supplied key. (":main" here is
+	// routing.DefaultMainKey, the session-key SUFFIX for an agent's
+	// non-peer scope — an unrelated concept that survived the "main"
+	// sentinel's removal; it is not the agent id.)
 	//
 	// ADR-058 (tool-denial semantics) strengthening: this denial is emitted by
 	// loop.go's TOCTOU policy-deny site (site 1), which is uniformly rewired
@@ -244,7 +249,10 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent, "default agent must exist after boot")
 
-	const resolvedSessionKey = "agent:main:main" // BuildAgentMainSessionKey("main")
+	// "mia" is the only agent this test's cfg.Agents.List registers, so it is
+	// what GetDefaultAgent() resolves to (no "main" sentinel to fall back to
+	// anymore).
+	const resolvedSessionKey = "agent:mia:main" // BuildAgentMainSessionKey("mia")
 	history := defaultAgent.Sessions.GetHistory(resolvedSessionKey)
 	require.NotEmpty(
 		t,

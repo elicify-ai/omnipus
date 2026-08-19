@@ -88,3 +88,30 @@ describe('auth store — username persistence (display-only, not a credential)',
     expect(localStorage.getItem('omnipus_auth_username')).toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+// hasStoredSession — the "has this browser ever had a session" hint consumed
+// by routes/_app.tsx's beforeLoad guard (boot-401 fix) to decide whether to
+// call validateToken() at all.
+// ---------------------------------------------------------------------------
+describe('hasStoredSession (boot-401 fix hint)', () => {
+  it('is false when localStorage has no omnipus_auth_username (never signed in)', async () => {
+    const { hasStoredSession } = await import('./auth')
+    expect(hasStoredSession()).toBe(false)
+  })
+
+  it('is true once a username has been persisted directly to localStorage', async () => {
+    localStorage.setItem('omnipus_auth_username', 'erin')
+    const { hasStoredSession } = await import('./auth')
+    expect(hasStoredSession()).toBe(true)
+  })
+
+  it('flips true after setUsername and back to false after clearAuth', async () => {
+    const { useAuthStore, hasStoredSession } = await import('./auth')
+    expect(hasStoredSession()).toBe(false)
+    act(() => { useAuthStore.getState().setUsername('frank') })
+    expect(hasStoredSession()).toBe(true)
+    act(() => { useAuthStore.getState().clearAuth() })
+    expect(hasStoredSession()).toBe(false)
+  })
+})

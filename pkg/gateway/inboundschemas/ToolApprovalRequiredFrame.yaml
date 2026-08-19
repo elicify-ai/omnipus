@@ -57,6 +57,13 @@ properties:
     type: string
     minLength: 1
     description: Session in which approval is needed.
+  producing_session_id:
+    type: string
+    minLength: 1
+    description: >
+      ADR-057 FR-012/FR-013. Present iff it differs from session_id.
+      Class (a) (FR-089): the child turn's own session id when this
+      frame crosses the wire from a delegated child.
   turn_id:
     type: string
     minLength: 1

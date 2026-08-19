@@ -991,33 +991,33 @@ func TestHandleWorkspaces_OwnerImmutableOnPut(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Repository URL scheme validation tests (SEC-5)
+// repository retirement tests (FR-9.2, ADR-063 D7)
 // ---------------------------------------------------------------------------
 
-// TestHandleWorkspaces_RepositorySchemeValidation_POST verifies SEC-5: POST rejects
-// non-http/https repository URLs and accepts valid ones.
-// Traces to: SEC-5
-func TestHandleWorkspaces_RepositorySchemeValidation_POST(t *testing.T) {
+// TestHandleWorkspaces_RepositoryFieldRejected_POST verifies FR-9.2: POST
+// /api/v1/workspaces 400s via raw-body sniff whenever the request body
+// carries a "repository" field at all, regardless of its value — the field
+// is retired from the wire entirely, not merely URL-validated. A request
+// with no "repository" key at all is unaffected.
+// Traces to: FR-9.2, ADR-063 D7 (repository is deleted, not repurposed).
+func TestHandleWorkspaces_RepositoryFieldRejected_POST(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	cases := []struct {
 		name     string
 		repoURL  string
+		hasField bool
 		wantCode int
 	}{
-		{"http accepted", "http://github.com/foo/bar", http.StatusCreated},
-		{"https accepted", "https://github.com/foo/bar", http.StatusCreated},
-		{"empty accepted", "", http.StatusCreated},
-		{"javascript rejected", "javascript:alert(1)", http.StatusBadRequest},
-		{"data rejected", "data:text/html,<h1>x</h1>", http.StatusBadRequest},
-		{"ftp rejected", "ftp://example.com/repo", http.StatusBadRequest},
-		{"no scheme rejected", "github.com/foo/bar", http.StatusBadRequest},
+		{"no repository field accepted", "", false, http.StatusCreated},
+		{"https rejected — field retired regardless of value", "https://github.com/foo/bar", true, http.StatusBadRequest},
+		{"javascript rejected — field retired regardless of value", "javascript:alert(1)", true, http.StatusBadRequest},
 	}
 
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var body string
-			if tc.repoURL == "" {
+			if !tc.hasField {
 				body = fmt.Sprintf(`{"name":"RepoTest%d"}`, i)
 			} else {
 				body = fmt.Sprintf(`{"name":"RepoTest%d","repository":%q}`, i, tc.repoURL)
@@ -1028,8 +1028,12 @@ func TestHandleWorkspaces_RepositorySchemeValidation_POST(t *testing.T) {
 			r.URL.Path = "/api/v1/workspaces"
 			api.HandleWorkspaces(w, r)
 			assert.Equal(t, tc.wantCode, w.Code,
-				"[%s] POST with repository=%q must return %d; body=%s",
-				tc.name, tc.repoURL, tc.wantCode, w.Body.String())
+				"[%s] POST with repository field present=%v must return %d; body=%s",
+				tc.name, tc.hasField, tc.wantCode, w.Body.String())
+			if tc.hasField {
+				assert.Contains(t, w.Body.String(), "repository is retired",
+					"400 body must explain the field is retired, not a generic validation error")
+			}
 		})
 	}
 }
@@ -1045,12 +1049,12 @@ func TestHandleWorkspaces_RepositorySchemeValidation_POST(t *testing.T) {
 // BDD:
 //
 //	Given a workspace that has been written with all fields populated
-//	  (name, description, repository, status, pinned, pin_order, core_team,
+//	  (name, description, status, pinned, pin_order, core_team,
 //	   owner, is_default, delegation, created_at, updated_at),
 //	When PUT /api/v1/workspaces/{id} with {"name":"Renamed"} (one field only),
 //	Then GET /api/v1/workspaces/{id} returns the workspace with:
 //	  - name updated to "Renamed"
-//	  - description, repository, status, pinned, pin_order, core_team, owner
+//	  - description, status, pinned, pin_order, core_team, owner
 //	    all unchanged from the original values
 //	  - updated_at advanced past the original value
 //	And the on-disk file still contains the delegation edges (not a GET response
@@ -1067,8 +1071,7 @@ func TestHandleWorkspacePut_FullFieldRoundTrip(t *testing.T) {
 	// overwrites the on-disk file wholesale, including core_team.
 	body := `{
 		"name": "Original Name",
-		"description": "original description",
-		"repository": "https://github.com/example/full-field"
+		"description": "original description"
 	}`
 	wPost := httptest.NewRecorder()
 	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
@@ -1096,7 +1099,6 @@ func TestHandleWorkspacePut_FullFieldRoundTrip(t *testing.T) {
 		"pinned": true,
 		"pin_order": 5,
 		"core_team": ["mia","jim","ava","ray"],
-		"repository": "https://github.com/example/full-field",
 		"owner": "alice",
 		"is_default": false,
 		"delegation": [
@@ -1138,10 +1140,6 @@ func TestHandleWorkspacePut_FullFieldRoundTrip(t *testing.T) {
 	require.NotNil(t, got.Description, "description must survive the PUT (not be nil)")
 	assert.Equal(t, "original description", *got.Description,
 		"description must be unchanged after name-only PUT")
-
-	require.NotNil(t, got.Repository, "repository must survive the PUT")
-	assert.Equal(t, "https://github.com/example/full-field", *got.Repository,
-		"repository must be unchanged after name-only PUT")
 
 	assert.Equal(t, gen.WorkspaceStatusActive, got.Status,
 		"status must be unchanged after name-only PUT")
@@ -1189,31 +1187,35 @@ func TestHandleWorkspacePut_FullFieldRoundTrip(t *testing.T) {
 	assert.Equal(t, "ray", e1["to_agent"], "delegation edge 1 to_agent must survive PUT")
 }
 
-// TestHandleWorkspaces_RepositorySchemeValidation_PUT verifies SEC-5: PUT rejects
-// non-http/https repository URLs.
-// Traces to: SEC-5
-func TestHandleWorkspaces_RepositorySchemeValidation_PUT(t *testing.T) {
+// TestHandleWorkspaces_RepositoryFieldRejected_PUT verifies FR-9.2: PUT
+// /api/v1/workspaces/{id} 400s via raw-body sniff whenever the request body
+// carries a "repository" field at all, regardless of its value.
+// Traces to: FR-9.2, ADR-063 D7 (repository is deleted, not repurposed).
+func TestHandleWorkspaces_RepositoryFieldRejected_PUT(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	projID := createWorkspaceViaAPI(t, api, "RepoPUTProject", "")
 
-	// Valid https update.
+	// A PUT with no repository field at all is unaffected.
 	wOK := httptest.NewRecorder()
 	rOK := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+projID,
-		strings.NewReader(`{"repository":"https://github.com/ok/repo"}`))
+		strings.NewReader(`{"name":"RepoPUTProject Renamed"}`))
 	rOK.Header.Set("Content-Type", "application/json")
 	rOK.URL.Path = "/api/v1/workspaces/" + projID
 	api.HandleWorkspaces(wOK, rOK)
-	assert.Equal(t, http.StatusOK, wOK.Code, "PUT with https URL must return 200; body=%s", wOK.Body.String())
+	assert.Equal(t, http.StatusOK, wOK.Code, "PUT without repository must return 200; body=%s", wOK.Body.String())
 
-	// Invalid scheme — javascript.
+	// A PUT carrying "repository" — even a well-formed https URL — is rejected
+	// outright; the field is retired, not merely scheme-validated.
 	wBad := httptest.NewRecorder()
 	rBad := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+projID,
-		strings.NewReader(`{"repository":"javascript:alert(1)"}`))
+		strings.NewReader(`{"repository":"https://github.com/ok/repo"}`))
 	rBad.Header.Set("Content-Type", "application/json")
 	rBad.URL.Path = "/api/v1/workspaces/" + projID
 	api.HandleWorkspaces(wBad, rBad)
 	assert.Equal(t, http.StatusBadRequest, wBad.Code,
-		"PUT with javascript: URL must return 400; body=%s", wBad.Body.String())
+		"PUT with repository field must return 400; body=%s", wBad.Body.String())
+	assert.Contains(t, wBad.Body.String(), "repository is retired",
+		"400 body must explain the field is retired, not a generic validation error")
 }
 
 // ---------------------------------------------------------------------------
@@ -1519,7 +1521,7 @@ func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T
 	assert.False(t, ws.SetupPending,
 		"the boot default workspace must never be setup_pending — it never runs the setup interview")
 
-	wire := workspaceToWire(ws, 0)
+	wire := workspaceToWire(home, ws, 0)
 	assert.Nil(t, wire.SetupPending, "the wire response must not report setup_pending for the default workspace")
 }
 

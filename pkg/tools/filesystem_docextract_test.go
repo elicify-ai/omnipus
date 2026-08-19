@@ -225,10 +225,15 @@ func TestReadFile_DocumentPagination(t *testing.T) {
 	}
 }
 
-// TestReadFile_DocumentSymlinkEscapeBlocked verifies extraction reads through
-// the sandboxed filesystem: a document symlink pointing outside the workspace
-// is blocked, not extracted.
-func TestReadFile_DocumentSymlinkEscapeBlocked(t *testing.T) {
+// TestReadFile_DocumentSymlinkEscape_NowExtractsOpenly — was
+// TestReadFile_DocumentSymlinkEscapeBlocked. ADR-063 / spec
+// unified-file-access-and-mounts FR-2.2: reads (including the document-
+// extraction path, which routes through the identical ResolvePath call as a
+// plain read_file — see filesystem.go's extractDocument) are open outside
+// the work dir, minus the secret set. A document symlink pointing outside
+// the workspace is no longer blocked; it is extracted, exactly like any
+// other outside-work-dir read.
+func TestReadFile_DocumentSymlinkEscape_NowExtractsOpenly(t *testing.T) {
 	root := t.TempDir()
 	ws := filepath.Join(root, "workspace")
 	if err := os.MkdirAll(ws, 0o755); err != nil {
@@ -245,13 +250,13 @@ func TestReadFile_DocumentSymlinkEscapeBlocked(t *testing.T) {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
-	tool := NewReadFileTool(ws, true, MaxReadFileSize) // restrict=true -> os.Root sandbox
+	tool := NewReadFileTool(ws, true, MaxReadFileSize) // restrict=true, but FR-2.2 opens reads regardless
 	res := tool.Execute(context.Background(), map[string]any{"path": link})
 
-	if !res.IsError {
-		t.Fatalf("expected sandbox to block symlink-escape document, got:\n%s", res.ForLLM)
+	if res.IsError {
+		t.Fatalf("FR-2.2: expected extraction through the symlink escape to succeed, got:\n%s", res.ForLLM)
 	}
-	if strings.Contains(res.ForLLM, "TOP SECRET") {
-		t.Fatalf("sandbox escape: leaked out-of-workspace document content:\n%s", res.ForLLM)
+	if !strings.Contains(res.ForLLM, "TOP SECRET") {
+		t.Fatalf("expected the real out-of-workspace document content, got:\n%s", res.ForLLM)
 	}
 }

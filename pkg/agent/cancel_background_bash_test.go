@@ -439,6 +439,7 @@ func TestAgentLoop_Close_ReapsSharedSessionManagerBackgroundSessions(t *testing.
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

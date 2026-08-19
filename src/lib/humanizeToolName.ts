@@ -67,6 +67,10 @@ const EXPLICIT_LABELS: Record<string, string> = {
   list_directory: 'List directory',
   // Legacy filesystem names (backward compat)
   list_dir: 'List directory',
+  // ADR-063 FR-7.2: an agent asking for read/write access to a folder on the
+  // operator's machine. User-facing concept is "Add folder" — never "mount" —
+  // see ToolApprovalModal.tsx's approvalPreviews/RequestMountApprovalPreview.
+  request_mount: 'Add folder',
   // Shell — ADR-036 retires these three as distinct tools in favor of `bash`
   // (see the `bash` entry above); kept here only so old session transcripts
   // that still literally contain these tool_names render a readable label.

@@ -23,17 +23,24 @@ func (r *Root) Delete(rel string) error {
 	if rel == "" {
 		return ErrInvalidPath
 	}
-	fi, err := r.root.Stat(rel)
+	// Refuse the mount's own entry BEFORE resolving: resolving it yields the
+	// mount's root at ".", and the RemoveAll below would then empty the
+	// operator's real folder. See ErrIsMountRoot.
+	if r.isMountRootEntry(rel) {
+		return ErrIsMountRoot
+	}
+	rt, sub := r.resolve(rel)
+	fi, err := rt.Stat(sub)
 	if err != nil {
 		return translateErr(err)
 	}
 	if fi.IsDir() {
-		if err := r.root.RemoveAll(rel); err != nil {
+		if err := rt.RemoveAll(sub); err != nil {
 			return fmt.Errorf("library: remove directory: %w", err)
 		}
 		return nil
 	}
-	if err := r.root.Remove(rel); err != nil {
+	if err := rt.Remove(sub); err != nil {
 		return fmt.Errorf("library: remove file: %w", err)
 	}
 	return nil
@@ -51,13 +58,29 @@ func (r *Root) Rename(fromRel, toRel string) (os.FileInfo, error) {
 		return nil, ErrInvalidPath
 	}
 	if fromRel == toRel {
-		fi, err := r.root.Stat(fromRel)
+		rtF0, subF0 := r.resolve(fromRel)
+		fi, err := rtF0.Stat(subF0)
 		if err != nil {
 			return nil, translateErr(err)
 		}
 		return fi, nil
 	}
-	if _, err := r.root.Stat(fromRel); err != nil {
+	// A mounted folder's own entry is not an ordinary directory: its name is
+	// held in the mount record, so renaming the symlink alone would leave the
+	// two disagreeing, and renaming ONTO it would write through into the
+	// operator's real folder. Both directions refused. See ErrIsMountRoot.
+	if r.isMountRootEntry(fromRel) || r.isMountRootEntry(toRel) {
+		return nil, ErrIsMountRoot
+	}
+	// Source and destination must live in the same root for a rename to be
+	// expressible at all — see ErrCrossRootTransfer. Checked BEFORE any
+	// filesystem work so the caller gets the real reason rather than a
+	// containment error from whichever root it happened to be attempted in.
+	if !r.sameRoot(fromRel, toRel) {
+		return nil, ErrCrossRootTransfer
+	}
+	rtFrom, subFrom := r.resolve(fromRel)
+	if _, err := rtFrom.Stat(subFrom); err != nil {
 		return nil, translateErr(err)
 	}
 	// Case-insensitive collision backstop (see caseInsensitiveMatch's doc)
@@ -97,10 +120,11 @@ func (r *Root) Rename(fromRel, toRel string) (os.FileInfo, error) {
 	if err := r.requireParentDir(toRel); err != nil {
 		return nil, err
 	}
-	if err := r.root.Rename(fromRel, toRel); err != nil {
+	rtTo, subTo := r.resolve(toRel)
+	if err := rtTo.Rename(subFrom, subTo); err != nil {
 		return nil, fmt.Errorf("library: rename: %w", err)
 	}
-	fi, err := r.root.Stat(toRel)
+	fi, err := rtTo.Stat(subTo)
 	if err != nil {
 		return nil, fmt.Errorf("library: stat renamed entry: %w", err)
 	}
@@ -137,7 +161,8 @@ func (r *Root) CreateUnique(rel string) (finalRel string, f *os.File, err error)
 		if _, found, ciErr := r.caseInsensitiveMatch(dir, candidateBase); ciErr != nil {
 			return "", nil, ciErr
 		} else if !found {
-			file, openErr := r.root.OpenFile(candidate, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+			rtC, subC := r.resolve(candidate)
+			file, openErr := rtC.OpenFile(subC, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 			if openErr == nil {
 				return candidate, file, nil
 			}
@@ -172,11 +197,26 @@ func CopyInto(fromRoot, toRoot *Root, fromRel, toRel string) (os.FileInfo, error
 	if fromRel == "" || toRel == "" {
 		return nil, ErrInvalidPath
 	}
-	srcInfo, err := fromRoot.root.Stat(fromRel)
+	// Resolve BOTH sides through their own Root: either may sit inside a mount,
+	// in which case the real source/destination is that mount's os.Root rather
+	// than the work tree's. Copying is expressible across roots (unlike rename),
+	// so no cross-root refusal belongs here.
+	srcRt, srcSub := fromRoot.resolve(fromRel)
+	dstRt, dstSub := toRoot.resolve(toRel)
+
+	// Copying ONTO a mount's own entry would write through into the operator's
+	// real folder under a name they never chose; copying FROM it means copying
+	// the whole mounted tree, which is a duplication of their real data that no
+	// caller asked for by naming a folder.
+	if fromRoot.isMountRootEntry(fromRel) || toRoot.isMountRootEntry(toRel) {
+		return nil, ErrIsMountRoot
+	}
+
+	srcInfo, err := srcRt.Stat(srcSub)
 	if err != nil {
 		return nil, translateErr(err)
 	}
-	if _, statErr := toRoot.root.Stat(toRel); statErr == nil {
+	if _, statErr := dstRt.Stat(dstSub); statErr == nil {
 		return nil, ErrAlreadyExists
 	} else if !os.IsNotExist(statErr) {
 		return nil, translateErr(statErr)
@@ -199,15 +239,15 @@ func CopyInto(fromRoot, toRoot *Root, fromRel, toRel string) (os.FileInfo, error
 	}
 
 	if srcInfo.IsDir() {
-		if copyErr := copyDirRecursive(fromRoot.root, toRoot.root, fromRel, toRel); copyErr != nil {
+		if copyErr := copyDirRecursive(srcRt, dstRt, srcSub, dstSub); copyErr != nil {
 			return nil, copyErr
 		}
 	} else {
-		if copyErr := copyFile(fromRoot.root, toRoot.root, fromRel, toRel, srcInfo.Mode()); copyErr != nil {
+		if copyErr := copyFile(srcRt, dstRt, srcSub, dstSub, srcInfo.Mode()); copyErr != nil {
 			return nil, copyErr
 		}
 	}
-	fi, err := toRoot.root.Stat(toRel)
+	fi, err := dstRt.Stat(dstSub)
 	if err != nil {
 		return nil, fmt.Errorf("library: stat copy destination: %w", err)
 	}
@@ -237,7 +277,14 @@ var errSourceCleanupFailed = errors.New("library: move succeeded but removing th
 // not fully complete, and an operator should know a duplicate was left
 // behind rather than have it silently reported as a clean success.
 func MoveInto(fromRoot, toRoot *Root, fromRel, toRel string) (os.FileInfo, error) {
-	if fromRoot == toRoot {
+	// Pointer equality alone is no longer enough to mean "one atomic rename will
+	// do". A single *Root now holds several os.Roots (the work tree plus one per
+	// mount), so the same workspace can still be a CROSS-root move — work tree
+	// into a mounted folder is exactly the case the Transfer dialog exists for.
+	// Ask whether the two paths land in the same os.Root, not whether they came
+	// from the same wrapper; otherwise this delegates to Rename, which correctly
+	// refuses cross-root, and a legitimate move fails.
+	if fromRoot == toRoot && fromRoot.sameRoot(fromRel, toRel) {
 		return fromRoot.Rename(fromRel, toRel)
 	}
 	fi, err := CopyInto(fromRoot, toRoot, fromRel, toRel)

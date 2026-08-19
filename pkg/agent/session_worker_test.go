@@ -28,6 +28,7 @@ func newConcurrentTestAgentLoop(t *testing.T) (*AgentLoop, *bus.MessageBus) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -253,6 +254,7 @@ func TestSessionWorker_AdmissionRejection(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -468,6 +470,7 @@ func TestSessionWorker_PanicStillPublishesTerminalFrame(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

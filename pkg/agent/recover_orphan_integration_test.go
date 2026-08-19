@@ -72,6 +72,7 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 5,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			AuditLog: true,
@@ -83,8 +84,9 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 	defer al.Close()
 
 	// Resolve the session key that ProcessDirect will use.
-	// ProcessDirect → channel="cli", chatID="direct" → DMScopeMain → "agent:main:main".
-	const resolvedSessionKey = "agent:main:main"
+	// ProcessDirect → channel="cli", chatID="direct" → DMScopeMain → "agent:mia:main"
+	// ("mia" is the only agent this test's cfg.Agents.List registers — no "main" sentinel anymore).
+	const resolvedSessionKey = "agent:mia:main"
 
 	// Seed the default agent's session store with an orphaned history.
 	// An orphaned history = assistant message with tool_calls but NO subsequent
@@ -229,6 +231,7 @@ func TestRecoverOrphan_CleanSession_IsNoOp(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 5,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 	}
 
@@ -236,7 +239,7 @@ func TestRecoverOrphan_CleanSession_IsNoOp(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	defer al.Close()
 
-	const resolvedSessionKey = "agent:main:main"
+	const resolvedSessionKey = "agent:mia:main"
 
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)

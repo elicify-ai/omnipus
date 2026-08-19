@@ -51,11 +51,21 @@ describe('DateTimePicker — trigger render', () => {
     expect(screen.getByRole('button', { name: 'Trigger at' })).toHaveTextContent('Pick a date and time')
   })
 
+  // Parts, not one region's ordering — see the note in date-picker.test.tsx.
+  // The WHOLE string is locale-formatted here: formatDateTimeDisplay calls
+  // toLocaleString(undefined, ...), so the clock convention and even the
+  // meridiem casing follow the viewer ("02:30 PM" vs "02:30 pm", and a
+  // 24-hour locale would render neither). The time is therefore matched
+  // case-insensitively, and on the digits — which is the part that carries the
+  // meaning — rather than on a casing this component does not choose.
   it('shows the formatted date + time when value is set', () => {
     render(<DateTimePicker value={new Date(2026, 5, 22, 14, 30)} onChange={vi.fn()} aria-label="Trigger at" />)
-    const trigger = screen.getByRole('button', { name: 'Trigger at' })
-    expect(trigger).toHaveTextContent('Jun 22, 2026')
-    expect(trigger).toHaveTextContent('02:30 PM')
+    const label = screen.getByRole('button', { name: 'Trigger at' }).textContent ?? ''
+    expect(label).toMatch(/22/)
+    expect(label).toMatch(/Jun/i)
+    expect(label).toMatch(/2026/)
+    expect(label).toMatch(/02:30/)
+    expect(label).toMatch(/pm/i)
   })
 
   it('is disabled when disabled=true', () => {

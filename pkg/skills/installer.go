@@ -316,7 +316,37 @@ func isSkillDirectory(name string) bool {
 	return false
 }
 
+// Uninstall removes an installed skill directory from <workspace>/skills.
+//
+// skillName may be given either as a bare skill id ("pdf") or in the
+// namespaced form the installer accepts ("owner/repo/pdf", "pdf/") — the last
+// non-empty path segment is the skill id.
+//
+// SECURITY: the segment split below strips separators but NOT "." or "..", so
+// before this guard existed a caller passing ".." produced
+// filepath.Join(workspace, "skills", "..") — which Clean collapses to the
+// workspace root — and os.RemoveAll then deleted the operator's entire
+// workspace. "." wiped every installed skill. The extracted id is therefore
+// resolved through the SAME path-confinement guard the authoring layer uses
+// (SkillWriter.resolveSkillDir: namePattern + filepath.Rel confinement, FR-9.2
+// / M-6), so the only thing this function can ever remove is one well-formed
+// skill directory sitting directly under <workspace>/skills.
+//
+// Callers get defence at two layers, not one: the remove_skill tool rejects
+// path separators and ".." up front (validateID) and the REST handler rejects
+// them via validateEntityID, but neither of those rejects "." — this guard is
+// what makes the destructive operation itself safe regardless of caller.
 func (si *SkillInstaller) Uninstall(skillName string) error {
+	// An absolute path is never a skill id. Without this, the segment split
+	// below quietly reinterprets "/etc/passwd" as the skill "passwd": confined
+	// and therefore harmless, but reported to the caller as NOT_FOUND — an
+	// attack presented as a typo, in the tool result and in the audit trail
+	// alike. Refuse it as what it is.
+	trimmed := strings.TrimSpace(skillName)
+	if filepath.IsAbs(trimmed) || strings.HasPrefix(trimmed, "/") || strings.ContainsAny(trimmed, `\`) {
+		return fmt.Errorf("refusing to uninstall %q: %w", skillName, ErrPathConfinement)
+	}
+
 	parts := strings.Split(skillName, "/")
 	var finalSkillName string
 	for i := len(parts) - 1; i >= 0; i-- {
@@ -329,7 +359,14 @@ func (si *SkillInstaller) Uninstall(skillName string) error {
 		finalSkillName = skillName
 	}
 
-	skillDir := filepath.Join(si.workspace, "skills", finalSkillName)
+	// Resolve + confine. The error deliberately does NOT contain "not found":
+	// callers (remove_skill's isNotFound, the REST delete handler) map that
+	// substring to a 404/NOT_FOUND, and a refused traversal is a rejection, not
+	// a missing skill.
+	skillDir, err := NewSkillWriter(filepath.Join(si.workspace, "skills")).resolveSkillDir(finalSkillName)
+	if err != nil {
+		return fmt.Errorf("refusing to uninstall %q: %w", skillName, err)
+	}
 
 	if _, err := os.Stat(skillDir); os.IsNotExist(err) {
 		return fmt.Errorf("skill '%s' not found (processed as '%s')", skillName, finalSkillName)

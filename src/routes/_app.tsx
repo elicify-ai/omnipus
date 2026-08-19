@@ -2,6 +2,7 @@ import { createFileRoute, redirect } from '@tanstack/react-router'
 import { AppShell } from '@/components/layout/AppShell'
 import { fetchAppState, validateToken } from '@/lib/api'
 import { forceLogout } from '@/lib/authLogout'
+import { hasStoredSession } from '@/store/auth'
 import { checkTokenValidity, resetTokenValidationCache } from './authValidation'
 
 // Re-exported so the login flow (and tests) can reset the validation cache (#359).
@@ -27,11 +28,27 @@ export const Route = createFileRoute('/_app')({
     // Onboarding is complete — require an authenticated session. Auth is the
     // omnipus-session HttpOnly cookie (US-5 / FR-010): the SPA has no
     // JS-visible signal of whether one exists, so it always asks the server
-    // rather than pre-checking local storage (there is nothing to check —
-    // the cookie is invisible to JS). validateToken() rides the cookie
-    // automatically (credentials:'include' in src/lib/api.ts); a fresh
-    // install or expired/missing session comes back 401.
+    // rather than pre-checking local storage for the cookie itself (there is
+    // nothing to check — the cookie is invisible to JS). validateToken() rides
+    // the cookie automatically (credentials:'include' in src/lib/api.ts); a
+    // fresh install or expired/missing session comes back 401.
     //
+    // One thing IS checkable locally first: whether this browser has EVER
+    // signed in at all (hasStoredSession(), src/store/auth.ts —
+    // omnipus_auth_username is only ever written by a successful login). A
+    // browser that has never signed in has no session to validate, so asking
+    // the server would be a GUARANTEED 401 on every single first paint —
+    // noisy in normal operation and useless as a signal for spotting a real
+    // failure. Skip the round trip entirely for that case and go straight to
+    // /login, same as a manual sign-out (no forceLogout()/banner — there is
+    // no session being forced out). A RETURNING user — including one whose
+    // session has genuinely expired — still always goes through
+    // checkTokenValidity() below; hasStoredSession() only reports whether a
+    // login ever happened, not whether it's still valid.
+    if (!hasStoredSession()) {
+      throw redirect({ to: '/login' })
+    }
+
     // checkTokenValidity is cached + transient-tolerant (see
     // authValidation.ts) — only a CONFIRMED 401 evicts the session; a
     // network/5xx hiccup keeps it.

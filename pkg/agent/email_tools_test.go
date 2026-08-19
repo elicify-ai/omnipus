@@ -27,31 +27,62 @@ func assertEmailToolsRegistered(t *testing.T, ag *AgentInstance, want bool) {
 	}
 }
 
-func TestRegisterEmailTools_NoMailbox_NoTools(t *testing.T) {
+// TestRegisterEmailTools_NoMailbox_StillRegistersButRefuses pins the contract
+// after email stopped being a special case: the tools register like every other
+// builtin, and the ABSENCE of an inbox is reported when the agent tries to use
+// one, not by making the tool invisible.
+//
+// The security guarantee is unchanged and asserted directly here — an agent
+// with no mailbox still cannot send mail. What changed is that the operator can
+// now see and set the permission, because the per-agent permissions screen is
+// built from this registry.
+// assertEmailToolRefuses calls a registered email tool on a turn with no
+// workspace and requires it to fail. This is the guarantee that used to be
+// carried by not registering at all.
+func assertEmailToolRefuses(t *testing.T, ag *AgentInstance, name string) {
+	t.Helper()
+	tool, ok := ag.Tools.Get(name)
+	if !ok {
+		t.Fatalf("tool %q not registered", name)
+	}
+	res := tool.Execute(context.Background(), map[string]any{
+		"to": "someone@example.com", "subject": "s", "body": "b",
+	})
+	if res == nil || !res.IsError {
+		t.Fatalf("%s: want a refusal when the agent has no usable mailbox, got %+v", name, res)
+	}
+}
+
+func TestRegisterEmailTools_NoMailbox_StillRegistersButRefuses(t *testing.T) {
 	ag := newEmailTestAgent()
 	cfg := &config.Config{} // no mailboxes
 	registerEmailToolsForAgent(cfg, "mia", ag)
-	assertEmailToolsRegistered(t, ag, false)
+	assertEmailToolsRegistered(t, ag, true)
+	assertEmailToolRefuses(t, ag, "send_email")
 }
 
-func TestRegisterEmailTools_DisabledMailbox_NoTools(t *testing.T) {
+func TestRegisterEmailTools_DisabledMailbox_RegistersButRefuses(t *testing.T) {
 	ag := newEmailTestAgent()
 	cfg := &config.Config{Mailboxes: config.MailboxesConfig{
 		"mia": {"ws_my": {Enabled: false, PasswordRef: "REF", IMAPHost: "i", SMTPHost: "s", Username: "u"}},
 	}}
 	t.Setenv("REF", "secret")
 	registerEmailToolsForAgent(cfg, "mia", ag)
-	assertEmailToolsRegistered(t, ag, false)
+	assertEmailToolsRegistered(t, ag, true)
+	assertEmailToolRefuses(t, ag, "send_email")
 }
 
-func TestRegisterEmailTools_EnabledButPasswordUnresolved_NoTools(t *testing.T) {
+func TestRegisterEmailTools_UnresolvedPassword_RegistersButRefuses(t *testing.T) {
 	ag := newEmailTestAgent()
 	cfg := &config.Config{Mailboxes: config.MailboxesConfig{
 		"mia": {"ws_my": {Enabled: true, PasswordRef: "MISSING_REF", IMAPHost: "i", SMTPHost: "s", Username: "u"}},
 	}}
-	// MISSING_REF is not set in env → password does not resolve.
+	// MISSING_REF is not set in env → password does not resolve, so no
+	// transport is built. The tools still register; the unusable mailbox
+	// surfaces as a refusal at call time.
 	registerEmailToolsForAgent(cfg, "mia", ag)
-	assertEmailToolsRegistered(t, ag, false)
+	assertEmailToolsRegistered(t, ag, true)
+	assertEmailToolRefuses(t, ag, "send_email")
 }
 
 func TestRegisterEmailTools_EnabledResolvable_RegistersFive(t *testing.T) {
@@ -160,10 +191,11 @@ func TestRegisterEmailTools_EmptyWorkspaceKey_SkippedSiblingSurvives(t *testing.
 	}
 }
 
-// TestRegisterEmailTools_OnlyEmptyWorkspaceKey_NoTools verifies that when the
-// ONLY configured pair has an empty workspace key, it is dropped and no
-// tools register at all (the agent effectively owns no reachable mailbox).
-func TestRegisterEmailTools_OnlyEmptyWorkspaceKey_NoTools(t *testing.T) {
+// TestRegisterEmailTools_OnlyEmptyWorkspaceKey_RegistersButRefuses verifies
+// that a pair with an empty workspace key is still dropped — it is unreachable,
+// since a turn resolves its mailbox BY workspace id. The tools register anyway,
+// and the agent cannot send: unreachable is reported, not hidden.
+func TestRegisterEmailTools_OnlyEmptyWorkspaceKey_RegistersButRefuses(t *testing.T) {
 	ag := newEmailTestAgent()
 	cfg := &config.Config{Mailboxes: config.MailboxesConfig{
 		"mia": {
@@ -175,7 +207,8 @@ func TestRegisterEmailTools_OnlyEmptyWorkspaceKey_NoTools(t *testing.T) {
 	}}
 	t.Setenv("MIA_MAIL_PW_ONLY_EMPTY", "pass")
 	registerEmailToolsForAgent(cfg, "mia", ag)
-	assertEmailToolsRegistered(t, ag, false)
+	assertEmailToolsRegistered(t, ag, true)
+	assertEmailToolRefuses(t, ag, "send_email")
 }
 
 // TestRegisterEmailTools_EndToEndWiring_TwoPairs proves the registered tool
@@ -229,7 +262,7 @@ func TestRegisterEmailTools_EndToEndWiring_TwoPairs(t *testing.T) {
 	}
 }
 
-func TestRegisterEmailTools_OnlyOwningAgentGetsTools(t *testing.T) {
+func TestRegisterEmailTools_NonOwningAgentCannotReachTheInbox(t *testing.T) {
 	cfg := &config.Config{Mailboxes: config.MailboxesConfig{
 		"mia": {"ws_my": {
 			Enabled: true, PasswordRef: "MIA_MAIL_PW", WorkspaceID: "ws_my",
@@ -242,7 +275,11 @@ func TestRegisterEmailTools_OnlyOwningAgentGetsTools(t *testing.T) {
 	registerEmailToolsForAgent(cfg, "mia", owner)
 	assertEmailToolsRegistered(t, owner, true)
 
+	// Jim owns no mailbox. He now HAS the tools like everyone else — the
+	// isolation that matters is that they cannot reach Mia's inbox, which is
+	// asserted directly rather than inferred from the tools being absent.
 	other := &AgentInstance{ID: "jim", Name: "Jim", Tools: tools.NewToolRegistry()}
-	registerEmailToolsForAgent(cfg, "jim", other) // jim has no mailbox
-	assertEmailToolsRegistered(t, other, false)
+	registerEmailToolsForAgent(cfg, "jim", other)
+	assertEmailToolsRegistered(t, other, true)
+	assertEmailToolRefuses(t, other, "send_email")
 }

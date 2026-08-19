@@ -77,7 +77,8 @@ func (r *Root) ReadContent(rel string) (ContentResult, error) {
 	}
 	size := fi.Size()
 
-	f, err := r.root.Open(rel)
+	rt, sub := r.resolve(rel)
+	f, err := rt.Open(sub)
 	if err != nil {
 		return ContentResult{}, translateErr(err)
 	}
@@ -166,7 +167,8 @@ func (r *Root) WriteContent(rel string, content []byte) (os.FileInfo, error) {
 		// edit-and-save path (GET .../content returns entries by their
 		// exact on-disk name, and a well-behaved caller echoes that same
 		// name back to PUT), so proceed to the in-place overwrite below.
-		existing, statErr := r.root.Stat(rel)
+		rtEx, subEx := r.resolve(rel)
+		existing, statErr := rtEx.Stat(subEx)
 		if statErr != nil {
 			return nil, translateErr(statErr)
 		}
@@ -187,7 +189,12 @@ func (r *Root) WriteContent(rel string, content []byte) (os.FileInfo, error) {
 	// !found: no case-insensitive sibling at all — brand-new file, proceed.
 
 	tmpRel := fmt.Sprintf("%s.tmp-%d-%d", rel, os.Getpid(), time.Now().UnixNano())
-	f, err := r.root.OpenFile(tmpRel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	// tmpRel is rel plus a suffix, so it always shares rel's first segment and
+	// therefore resolves to the SAME root — the atomic create+rename never
+	// crosses a mount boundary, which os.Root could not perform.
+	rt, sub := r.resolve(rel)
+	_, tmpSub := r.resolve(tmpRel)
+	f, err := rt.OpenFile(tmpSub, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("library: create temp file: %w", err)
 	}
@@ -205,11 +212,11 @@ func (r *Root) WriteContent(rel string, content []byte) (os.FileInfo, error) {
 		r.removeQuiet(tmpRel)
 		return nil, fmt.Errorf("library: close temp file: %w", closeErr)
 	}
-	if renameErr := r.root.Rename(tmpRel, rel); renameErr != nil {
+	if renameErr := rt.Rename(tmpSub, sub); renameErr != nil {
 		r.removeQuiet(tmpRel)
 		return nil, fmt.Errorf("library: rename temp file over target: %w", renameErr)
 	}
-	fi, err := r.root.Stat(rel)
+	fi, err := rt.Stat(sub)
 	if err != nil {
 		return nil, fmt.Errorf("library: stat written file: %w", err)
 	}
@@ -225,7 +232,8 @@ func (r *Root) OpenFileForDownload(rel string) (*os.File, os.FileInfo, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	f, err := r.root.Open(rel)
+	rt, sub := r.resolve(rel)
+	f, err := rt.Open(sub)
 	if err != nil {
 		return nil, nil, translateErr(err)
 	}
@@ -239,7 +247,8 @@ func (r *Root) OpenFileForDownload(rel string) (*os.File, os.FileInfo, error) {
 // dead weight (a zero-byte or partially-written temp file) rather than
 // carrying the primary durability guarantee.
 func (r *Root) removeQuiet(rel string) {
-	if err := r.root.Remove(rel); err != nil && !os.IsNotExist(err) {
+	rt, sub := r.resolve(rel)
+	if err := rt.Remove(sub); err != nil && !os.IsNotExist(err) {
 		logger.WarnCF("library", "failed to remove temp file after write error",
 			map[string]any{"path": rel, "error": err.Error()})
 	}

@@ -279,8 +279,16 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 	}
 	defer unix.Close(int(rulesetFd))
 
+	// forChild=false: this restricts the GATEWAY, which must retain access to
+	// its own vault and config. Children get the excluded set in
+	// RestrictCurrentThread.
+	gatewayRules, err := lb.linuxFilesystemRules(policy, false)
+	if err != nil {
+		return fmt.Errorf("landlock: building filesystem rules: %w", err)
+	}
+
 	var ruleErrors []error
-	for _, rule := range policy.FilesystemRules {
+	for _, rule := range gatewayRules {
 		rights := lb.accessToLandlockRights(rule.Access)
 		if err := addLandlockPathRule(int(rulesetFd), rule.Path, rights); err != nil {
 			// ENOENT for system paths (e.g. /lib64 on ARM64) is expected —
@@ -480,6 +488,13 @@ func (lb *LinuxBackend) ApplyToCmd(_ *exec.Cmd, _ SandboxPolicy) error {
 // need a conditional: the call is a no-op and the compiler will inline+elide it.
 func MarkStartLockedCalled() {}
 
+// isDirMode reports whether a stat mode describes a directory. It masks with
+// S_IFMT because the file-type field is 4 bits: testing `mode & S_IFDIR`
+// directly also matches S_IFSOCK and S_IFBLK, which share that bit.
+func isDirMode(mode uint32) bool {
+	return mode&unix.S_IFMT == unix.S_IFDIR
+}
+
 func addLandlockPathRule(rulesetFd int, path string, rights uint64) error {
 	fd, err := unix.Open(path, unix.O_PATH|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -491,8 +506,18 @@ func addLandlockPathRule(rulesetFd int, path string, rights uint64) error {
 	// allowed_access only contains rights valid for the FD type (file vs
 	// directory). Strip directory-only rights for regular/character files to
 	// avoid EINVAL when whitelisting paths like /dev/null or /etc/hosts.
+	//
+	// The file-type test MUST mask with S_IFMT. `mode & S_IFDIR` is not a
+	// type check: S_IFDIR is 0040000 and the type field is 4 bits wide, so a
+	// socket (S_IFSOCK, 0140000) and a block device (S_IFBLK, 0060000) both
+	// have that bit set and were misdetected as directories. They then kept
+	// the directory-only rights and the kernel rejected the rule with EINVAL,
+	// which aborts the whole spawn — one stray unix socket in a granted
+	// directory made every command fail under mode=enforce. Measured on a
+	// Landlock v7 runner (2026-08-19): a leftover
+	// /tmp/dotnet-diagnostic-*-socket broke `echo`.
 	var stat unix.Stat_t
-	if err := unix.Fstat(fd, &stat); err == nil && stat.Mode&unix.S_IFDIR == 0 {
+	if err := unix.Fstat(fd, &stat); err == nil && !isDirMode(stat.Mode) {
 		dirOnly := landlockAccessFSReadDir |
 			landlockAccessFSRemoveDir | landlockAccessFSRemoveFile |
 			landlockAccessFSMakeChar | landlockAccessFSMakeDir |
@@ -586,30 +611,65 @@ func CurrentLinuxBackend() *LinuxBackend {
 	return currentLinuxBackend
 }
 
-// restrictCurrentThreadIfNeeded re-applies the saved enforce-mode policy to
-// the calling OS thread. No-op when the gateway is not in enforce mode. The
-// caller must hold runtime.LockOSThread before calling. See the linux
-// implementation's RestrictCurrentThread for the contract.
-func restrictCurrentThreadIfNeeded() error {
+// restrictCurrentThreadIfNeeded re-applies a policy to the calling OS thread.
+// No-op when the gateway is not in enforce mode. The caller must hold
+// runtime.LockOSThread before calling. See the linux implementation's
+// RestrictCurrentThread for the contract.
+//
+// kernelPolicy is the PER-TURN policy for the child about to be forked
+// (Limits.KernelPolicy). When nil, the boot policy saved by ApplyWithMode is
+// used instead — the documented fallback for spawn paths that have no turn.
+// This is Linux's half of the FR-3.5 wiring: macOS carries the per-turn policy
+// by rendering it into the child's Seatbelt profile, Linux carries it by
+// building the Landlock ruleset for THIS spawn thread out of it.
+func restrictCurrentThreadIfNeeded(kernelPolicy *SandboxPolicy) error {
 	lb := CurrentLinuxBackend()
 	if lb == nil {
 		return nil
 	}
-	return lb.RestrictCurrentThread()
+	return lb.RestrictCurrentThreadWithPolicy(kernelPolicy)
 }
 
-// RestrictCurrentThread applies the saved enforce-mode policy to the calling
-// OS thread. The caller MUST runtime.LockOSThread() before invoking this and
-// MUST NOT runtime.UnlockOSThread afterwards — the OS thread is permanently
-// restricted and Go must dispose of it (by exiting the goroutine that owns
-// the lock) rather than recycling it for unrelated work.
+// RestrictCurrentThread applies the SAVED BOOT policy to the calling OS thread.
+// Equivalent to RestrictCurrentThreadWithPolicy(nil); retained as the name the
+// rest of the codebase and its documentation already use for the boot case.
+func (lb *LinuxBackend) RestrictCurrentThread() error {
+	return lb.RestrictCurrentThreadWithPolicy(nil)
+}
+
+// RestrictCurrentThreadWithPolicy applies policy to the calling OS thread. The
+// caller MUST runtime.LockOSThread() before invoking this and MUST NOT
+// runtime.UnlockOSThread afterwards — the OS thread is permanently restricted
+// and Go must dispose of it (by exiting the goroutine that owns the lock)
+// rather than recycling it for unrelated work.
+//
+// policy is the per-turn kernel policy for the child about to be forked. A nil
+// policy means "no per-turn policy supplied" and falls back to the boot policy
+// saved by ApplyWithMode, which is what every caller did unconditionally before
+// per-turn confinement was wired up.
+//
+// The fallback is deliberately not an error: not every spawn belongs to an
+// agent turn. It is, however, the WIDER of the two policies — the boot policy
+// grants $OMNIPUS_HOME as one tree, so a child under it can reach every agent's
+// home and every workspace record. Supplying a per-turn policy is what narrows
+// that to the turn's own tree, which is why the tool-layer spawn sites always
+// do.
 //
 // Returns nil (no-op) if the saved mode was anything other than ModeEnforce.
 // Returns an error if the kernel rejects the ruleset; callers must abort the
 // spawn rather than fall through to an unrestricted exec.
-func (lb *LinuxBackend) RestrictCurrentThread() error {
+func (lb *LinuxBackend) RestrictCurrentThreadWithPolicy(policy *SandboxPolicy) error {
 	if lb == nil || lb.savedMode != ModeEnforce {
 		return nil
+	}
+
+	// Resolve which policy this thread's ruleset is built from, ONCE, so every
+	// step below reads the same value. Mixing per-turn filesystem rules with
+	// boot port rules (or vice versa) would produce a domain that matches
+	// neither policy and belongs to no reviewable decision.
+	effective := lb.savedPolicy
+	if policy != nil {
+		effective = *policy
 	}
 
 	// 1. PR_SET_NO_NEW_PRIVS is per-thread on Linux; new Go worker threads
@@ -639,7 +699,34 @@ func (lb *LinuxBackend) RestrictCurrentThread() error {
 	// 3. Re-add the saved filesystem and net port rules. We tolerate ENOENT
 	//    (path missing on this arch) and EINVAL/ENOENT for net rules on
 	//    older ABIs, matching ApplyWithMode's behavior.
-	for _, rule := range lb.savedPolicy.FilesystemRules {
+	// ADR-062 §4.2 / spec FR-4.5: exclude the secret set from what the CHILD
+	// can reach. Landlock has no deny primitive, so "exclude" means "grant the
+	// siblings and never the secret" — ExpandRulesExcluding does that walk.
+	//
+	// It happens HERE, per spawn, rather than once at boot for two reasons.
+	//
+	// First, correctness of the gateway itself: this function restricts only the
+	// thread that is about to fork, so a narrower rule set applied here confines
+	// the child WITHOUT touching the gateway's own access. The gateway must keep
+	// reading master.key and writing config.json; on macOS that separation is
+	// free, because sandbox-exec confines only children, but on Linux the
+	// gateway restricts itself and this thread seam is the only place the two
+	// can legitimately diverge.
+	//
+	// Second, freshness: the ruleset is rebuilt on every spawn anyway (see the
+	// step 2 comment above), so enumerating here costs a handful of directory
+	// listings per process start and removes staleness entirely. A directory an
+	// agent creates after boot is reachable by the next child it spawns.
+	//
+	// An enumeration failure aborts the spawn. RestrictCurrentThread's contract
+	// already requires callers to abort rather than fall through to an
+	// unrestricted exec, so the error is honoured; granting the parent instead
+	// would leave the key readable with nothing in the logs to say so.
+	childRules, err := lb.linuxFilesystemRules(effective, true)
+	if err != nil {
+		return fmt.Errorf("landlock: per-spawn secret-set exclusion failed: %w", err)
+	}
+	for _, rule := range childRules {
 		rights := lb.accessToLandlockRights(rule.Access)
 		if err := addLandlockPathRule(int(rulesetFd), rule.Path, rights); err != nil {
 			if errors.Is(err, unix.ENOENT) {
@@ -649,7 +736,7 @@ func (lb *LinuxBackend) RestrictCurrentThread() error {
 		}
 	}
 	if lb.abiVersion >= 4 {
-		for _, rule := range lb.savedPolicy.BindPortRules {
+		for _, rule := range effective.BindPortRules {
 			if err := addLandlockNetPortRule(int(rulesetFd), rule.Port, landlockAccessNetBindTcp); err != nil {
 				// B1.4-c: same hard-error contract as in ApplyWithMode. On ABI >=4
 				// the kernel explicitly supports net rules; EINVAL/ENOENT here is a
@@ -668,7 +755,7 @@ func (lb *LinuxBackend) RestrictCurrentThread() error {
 		// would silently drop connect enforcement on hardened-exec spawns
 		// even though the gateway thread itself was correctly restricted —
 		// the same drift the bind-rule re-add path guards against.
-		for _, rule := range lb.savedPolicy.ConnectPortRules {
+		for _, rule := range effective.ConnectPortRules {
 			if err := addLandlockNetPortRule(int(rulesetFd), rule.Port, landlockAccessNetConnectTcp); err != nil {
 				if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOENT) {
 					return fmt.Errorf("landlock: kernel (ABI v%d) rejected net connect rule for port %d"+
@@ -705,4 +792,45 @@ func selectBackendPlatform() (SandboxBackend, string) {
 		"backend", "fallback", "kernel_version", kernelVersion)
 	fb := NewFallbackBackend()
 	return fb, fb.Name()
+}
+
+// linuxFilesystemRules turns a SandboxPolicy into the path rules to install on
+// Landlock, resolving the ADR-062 filesystem model into grants.
+//
+// # Why the open model needs a rule at all
+//
+// Seatbelt can say "(allow file-read*)" and be done. Landlock cannot: it is
+// grant-only and has no unfiltered allow, so "reads are open" has to be
+// expressed as a grant on "/" — the one tree that contains everything. The two
+// backends are rendering the same intent, not disagreeing about it.
+//
+// # Why forChild exists, and why it is not symmetric
+//
+// The GATEWAY needs to read master.key to unlock the vault and write
+// config.json when an operator changes a setting; a CHILD must be able to do
+// neither. On macOS that separation is free, because sandbox-exec confines only
+// children and the gateway is never in the profile at all. On Linux the gateway
+// restricts ITSELF, so boot (forChild=false) installs the rules unexcluded and
+// the per-spawn re-restriction (forChild=true) installs the narrowed set.
+// Applying the exclusion at boot would lock the gateway out of its own vault —
+// a failure that looks like a corrupt install rather than a policy mistake.
+func (lb *LinuxBackend) linuxFilesystemRules(policy SandboxPolicy, forChild bool) ([]PathRule, error) {
+	rules := policy.FilesystemRules
+	if policy.ReadsOpen || policy.ExecOpen {
+		var access uint64
+		if policy.ReadsOpen {
+			access |= AccessRead
+		}
+		if policy.ExecOpen {
+			access |= AccessExecute
+		}
+		// Prepended, never appended: Landlock takes the union of rights per
+		// path, so order carries no meaning here, but keeping the broad grant
+		// first makes the rule list read the way the policy does.
+		rules = append([]PathRule{{Path: "/", Access: access}}, rules...)
+	}
+	if !forChild {
+		return rules, nil
+	}
+	return ExpandRulesExcluding(rules, policy.DeniedPaths, policy.DeniedNodes, policy.DeniedPathPrefixes)
 }

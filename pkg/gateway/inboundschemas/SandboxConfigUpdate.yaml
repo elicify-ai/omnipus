@@ -20,6 +20,20 @@ properties:
       "off" = no kernel enforcement (god-mode). "permissive" = log violations but
       allow. "enforce" = block violations. Restart-gated.
     example: "enforce"
+  filesystem_model:
+    type: string
+    enum:
+      - confined
+      - open
+    description: >
+      Switch the ADR-062 filesystem model. "confined" restricts reads and
+      execution to enumerated paths; "open" leaves both unrestricted apart from
+      the secret set. Neither model changes what may be WRITTEN.
+
+      Restart-gated, like `mode`: the running kernel profile was installed at
+      boot and is not rebuilt in place, so the change is persisted and takes
+      effect on the next start. Omit the field to leave the model unchanged.
+    example: "confined"
   allow_network_outbound:
     type: boolean
     description: Allow agent tool calls to make outbound network connections.

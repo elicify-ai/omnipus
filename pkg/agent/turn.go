@@ -202,7 +202,6 @@ type turnState struct {
 	cancelling atomic.Bool
 
 	restorePointHistory []providers.Message
-	restorePointSummary string
 	persistedMessages   []providers.Message
 
 	// SubTurn support
@@ -260,8 +259,12 @@ type turnState struct {
 	// Cache token split accumulated across all LLM iterations in this turn.
 	// Populated from UsageInfo.CacheReadTokens / CacheWriteTokens so the
 	// transcript entry can carry the full breakdown for SessionStats.ByModel.
-	turnCacheRead  int
-	turnCacheWrite int
+	turnCacheRead int
+	// turnPromptTokens/turnCompletionTokens carry the provider's input/output
+	// split, which turnTokens (a pre-collapsed total) cannot express.
+	turnPromptTokens     int
+	turnCompletionTokens int
+	turnCacheWrite       int
 
 	// turnFailed is set to true when the turn ended via the engine's error/limit
 	// fallback rather than a real model response.  Three conditions trigger it:
@@ -392,15 +395,14 @@ type turnState struct {
 	// outcomeRelabel is the FR-017a relabel-on-success contract. When the
 	// outcome-based strip-retry fallback fires AND the subsequent LLM
 	// call succeeds, this field is stamped with CodeMediaUnsupported so
-	// any later classifier-driven emission for this turn (warn logs,
-	// audit, transcript) carries the outcome-labeled verdict rather
-	// than the original (inconclusive) classifier verdict. Empty when
-	// no outcome-based retry succeeded this turn — the classifier's own
-	// verdict governs in that case. Written by the loop call site
-	// (loop.go) only; read by emit sites that consult the recorded
-	// turn classifier verdict.
+	// a later *inconclusive* residual 4xx (CodeUnknown or empty) is
+	// labeled as media. A later distinct classified failure (hook abort,
+	// session save, rate limit, workspace) keeps its own code — the
+	// stamp must not overwrite it, or reload tells the user the model
+	// rejected an image. Empty when no outcome-based retry succeeded
+	// this turn. Written by the loop call site (loop.go) only; read
+	// by persist/emit sites via outcomeRelabelApplies.
 	outcomeRelabel LLMErrorCode
-
 	// lastProducedModel is the model string that produced the most recent
 	// assistant message in this turn. Set after each successful LLM call in
 	// loop.go (and external_dispatch.go for CLI providers). The transcript
@@ -575,11 +577,14 @@ func (ts *turnState) setOutcomeRelabel(code LLMErrorCode) {
 	ts.outcomeRelabel = code
 }
 
-// outcomeRelabel is the FR-017a relabel-on-success contract field — see (*AgentLoop).emitError consumer.
-// FR-017a: when the outcome-based retry succeeds, the loop writes the
-// outcome-labeled verdict here and consults it to relabel the error before
-// persisting it. The write-only flag is intentional at this layer;
-// the gateway boundary in (*AgentLoop).emitError is the next-step consumer.
+// outcomeRelabelApplies reports whether FR-017a's media-retry stamp should
+// override this persist/emit. Residual 4xx stays CodeUnknown so the stamp
+// can label that inconclusive trigger as media after a successful
+// strip-retry. A later distinct classified failure must keep its own code
+// — otherwise reload tells the user the model rejected an image.
+func outcomeRelabelApplies(current, relabel LLMErrorCode) bool {
+	return relabel != "" && (current == "" || current == CodeUnknown)
+}
 
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
 	ts := &turnState{
@@ -1265,28 +1270,50 @@ type streamerStatsSetter interface {
 	SetTurnStats(tokens int64, costUSD float64, duration time.Duration)
 }
 
+// streamerIOStatsSetter is an optional interface a Streamer may implement to
+// receive the provider's input/output token split, and the cache split,
+// before Finalize is called.
+//
+// It exists because streamerStatsSetter carries only a COLLAPSED total, and
+// the streamer builds its own TranscriptEntry. Without this, a streamed turn —
+// which is every ordinary webchat turn — wrote an entry with no split, so
+// session stats fell back to booking the whole total as output and tokens_in
+// stayed 0. That is the exact defect the split was added to fix; wiring it
+// only into the non-streaming path fixed headless runs and left the flagship
+// chat surface reporting the same wrong numbers.
+type streamerIOStatsSetter interface {
+	SetTurnIOStats(promptTokens, completionTokens, cacheReadTokens, cacheWriteTokens int)
+}
+
 // streamerFailedSetter is an optional interface a Streamer may implement to
 // receive the turn-failed flag before Finalize is called. When implemented,
 // finalizeStreamer calls SetTurnFailed(true) whenever the turn ended via the
 // engine's error/limit fallback — (1) empty response after retries (engine
-// defaultResponse sentinel), (2) tool-iteration limit, or (3) generic
+// defaultResponse sentinel), (2) tool-iteration limit, (3) generic
 // empty-content exhaustion that resolved to the defaultResponse sentinel
 // (excluding caller-supplied success DefaultResponse strings such as the
-// heartbeat path's "Background task completed.").
+// heartbeat path's "Background task completed."), or (4) any return path that
+// left turnStatus == TurnEndStatusError, including the LLM-error early returns.
 // The done frame carries DoneStats.TurnFailed=true. CLI/automation clients
 // read this field to exit non-zero on a failed turn.
 type streamerFailedSetter interface {
 	SetTurnFailed(failed bool)
 }
 
-// markTurnFailed records that this turn ended via the engine's error/limit
-// fallback rather than a real model response.  It is called from three sites
-// in loop.go: (1) empty-response-after-retry, (2) tool-iteration limit, and
-// (3) generic empty-content exhaustion when the caller's DefaultResponse equals
-// the engine's own error sentinel (never when a success message is supplied).
+// markTurnFailed records that this turn did NOT end in a real, successful model
+// response. It is called from four sites in loop.go: (1) empty-response-after-
+// retry, (2) tool-iteration limit, (3) generic empty-content exhaustion when the
+// caller's DefaultResponse equals the engine's own error sentinel (never when a
+// success message is supplied), and (4) runTurn's turn-end defer, whenever
+// turnStatus == TurnEndStatusError — the catch-all that covers every error
+// return path, including the LLM-error early return that a provider refusal
+// takes. See that defer's own comment for why the trigger is exactly
+// TurnEndStatusError and not emptiness, and why its LIFO registration position
+// relative to `defer ts.finalizeStreamer(ctx)` is load-bearing.
+//
 // The flag is read by finalizeStreamer and forwarded to the streamer's
 // SetTurnFailed before Finalize so it can set DoneStats.TurnFailed on the done
-// WS frame.
+// WS frame. Idempotent: sites (1)-(3) and (4) can both fire for the same turn.
 func (ts *turnState) markTurnFailed() {
 	ts.mu.Lock()
 	ts.turnFailed = true
@@ -1346,11 +1373,18 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 	duration := time.Since(ts.startedAt)
 	finalContent := ts.finalContent
 	failed := ts.turnFailed
+	promptTokens := ts.turnPromptTokens
+	completionTokens := ts.turnCompletionTokens
+	cacheRead := ts.turnCacheRead
+	cacheWrite := ts.turnCacheWrite
 	ts.lastStreamer = nil
 	ts.mu.Unlock()
 	if s != nil {
 		if setter, ok := s.(streamerStatsSetter); ok {
 			setter.SetTurnStats(tokens, cost, duration)
+		}
+		if iosetter, ok := s.(streamerIOStatsSetter); ok {
+			iosetter.SetTurnIOStats(promptTokens, completionTokens, cacheRead, cacheWrite)
 		}
 		if fsetter, ok := s.(streamerFailedSetter); ok {
 			fsetter.SetTurnFailed(failed)
@@ -1433,11 +1467,10 @@ func (ts *turnState) eventMeta(source, tracePath string) EventMeta {
 	}
 }
 
-func (ts *turnState) captureRestorePoint(history []providers.Message, summary string) {
+func (ts *turnState) captureRestorePoint(history []providers.Message) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.restorePointHistory = append([]providers.Message(nil), history...)
-	ts.restorePointSummary = summary
 }
 
 func (ts *turnState) recordPersistedMessage(msg providers.Message) {
@@ -1448,7 +1481,6 @@ func (ts *turnState) recordPersistedMessage(msg providers.Message) {
 
 func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
 	history := agent.Sessions.GetHistory(ts.sessionKey)
-	summary := agent.Sessions.GetSummary(ts.sessionKey)
 
 	ts.mu.RLock()
 	persisted := append([]providers.Message(nil), ts.persistedMessages...)
@@ -1458,12 +1490,11 @@ func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
 		history = append([]providers.Message(nil), history[:len(history)-matched]...)
 	}
 
-	ts.captureRestorePoint(history, summary)
+	ts.captureRestorePoint(history)
 }
 
 func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	ts.mu.RLock()
-	summary := ts.restorePointSummary
 	targetLen := ts.initialArchiveLen
 	initialHistLen := ts.initialHistoryLength
 	ts.mu.RUnlock()
@@ -1490,7 +1521,6 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	// the entire JSONL file and reset Skip=0, permanently deleting any evicted
 	// turns that preceded this turn (CRITICAL 1, path 2).
 	agent.Sessions.RollbackAppended(ts.sessionKey, targetLen, targetSkip)
-	agent.Sessions.SetSummary(ts.sessionKey, summary)
 
 	// M4 mirror: verify the rollback actually took effect. RollbackAppended is
 	// fire-and-forget (no error return). Re-read the archive and confirm the
@@ -1715,6 +1745,7 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 	// path (#411). GetTurnStats is safe to call here — the turn is finishing.
 	turnTokens, turnCost := ts.GetTurnStats()
 	turnCacheRead, turnCacheWrite := ts.GetTurnCacheStats()
+	turnPromptTokens, turnCompletionTokens := ts.GetTurnIOStats()
 	entry := session.TranscriptEntry{
 		ID:      uuid.New().String(),
 		Role:    "assistant",
@@ -1736,6 +1767,8 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 		Tokens:           int(turnTokens),
 		Cost:             turnCost,
 		Model:            model,
+		PromptTokens:     turnPromptTokens,
+		CompletionTokens: turnCompletionTokens,
 		CacheReadTokens:  turnCacheRead,
 		CacheWriteTokens: turnCacheWrite,
 		// ParentSpawnCallID: see appendIntermediateAssistantTranscript's
@@ -1825,6 +1858,13 @@ var trustedInternalStageSet = map[internalStage]struct{}{
 	{"hooks", "error"}:       {},
 	{"before_tool", "error"}: {},
 	{"after_tool", "error"}:  {},
+	// Workspace-membership refusals (runTurn after EventKindTurnStart).
+	// The caller already ran TranslateTurnError and passed the catalogue
+	// sentence. Without this entry the write choke point re-classifies
+	// that sentence as unknown, and replay looks up the unknown line
+	// ("we can't tell why") — the live fix vanishing on reload.
+	{"workspace", "error"}:    {},
+	{"external_cli", "error"}: {},
 }
 
 func isTrustedInternalStage(stage, kind string) bool {
@@ -1833,6 +1873,18 @@ func isTrustedInternalStage(stage, kind string) bool {
 }
 
 func (ts *turnState) appendErrorTranscript(kind, stage, message string, pe ...*ProviderError) {
+	ts.writeErrorTranscript(kind, stage, message, "", pe...)
+}
+
+// appendClassifiedError persists an error the caller already classified.
+// Replay looks up the bubble by ErrorCode, not Content. Re-running the
+// catalogue sentence through TranslateLLMError stamps unknown — the live
+// fix then vanishes on reload. Pass the live LLMError instead.
+func (ts *turnState) appendClassifiedError(kind, stage string, llm LLMError) {
+	ts.writeErrorTranscript(kind, stage, llm.Message, llm.Code)
+}
+
+func (ts *turnState) writeErrorTranscript(kind, stage, message string, code LLMErrorCode, pe ...*ProviderError) {
 	if ts == nil {
 		return
 	}
@@ -1874,12 +1926,30 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string, pe ...*P
 	// but the user-visible text is the caller-provided copy verbatim.
 	llm := TranslateLLMError(providerErr, message)
 
-	// FR-017a: outcome-based relabel overrides the classifier's code for
-	// this turn when the outcome-based strip-retry succeeded. The relabeled
-	// code is always CodeMediaUnsupported, matching what the classifier
-	// would have returned had it classified the outcome rather than the
-	// trigger.
-	if ts.outcomeRelabel != "" {
+	// Prefer the caller's already-classified code. Catalogue sentences do
+	// not contain the classifier substrings, so a second TranslateLLMError
+	// would stamp unknown and reload would say we cannot tell why.
+	if code != "" {
+		llm.Code = code
+		llm.Retryable = isRetryable(code)
+		if isTrustedInternalStage(stage, kind) {
+			llm.Message = message
+		} else {
+			llm.Message = defaultUserMessage(code)
+		}
+	}
+	// Belt for the one uncoded producer that is unambiguous: an internal
+	// SEC-26 denial written as kind=rate_limit, stage=rate_limit. Live is
+	// EventKindRateLimit; replay looks up by ErrorCode.
+	if code == "" && stage == "rate_limit" && kind == EventKindRateLimit.String() {
+		llm.Code = CodeRateLimited
+		llm.Message = message
+		llm.Retryable = isRetryable(CodeRateLimited)
+	}
+
+	// FR-017a: label an *inconclusive* residual 4xx after a successful
+	// strip-retry. Do not overwrite a later distinct classified code.
+	if outcomeRelabelApplies(llm.Code, ts.outcomeRelabel) {
 		llm.Code = ts.outcomeRelabel
 		llm.Message = defaultUserMessage(ts.outcomeRelabel)
 	}
@@ -2106,6 +2176,32 @@ func (ts *turnState) AddTurnCacheStats(cacheRead, cacheWrite int) {
 	defer ts.mu.Unlock()
 	ts.turnCacheRead += cacheRead
 	ts.turnCacheWrite += cacheWrite
+}
+
+// AddTurnIOStats accumulates the prompt/completion split from a single LLM
+// iteration. It is a sibling of AddTurnCacheStats and must be called alongside
+// AddTurnStats for every LLM call.
+//
+// AddTurnStats only ever carried Usage.TotalTokens, so the input/output split
+// the provider already reports was discarded at that call site. Everything
+// downstream then had nothing to record, which is why every session's
+// tokens_in read 0 while tokens_out carried the entire volume.
+// B4: suppressed when the turn is marked abandoned.
+func (ts *turnState) AddTurnIOStats(promptTokens, completionTokens int) {
+	if ts.abandoned.Load() {
+		return
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.turnPromptTokens += promptTokens
+	ts.turnCompletionTokens += completionTokens
+}
+
+// GetTurnIOStats returns the accumulated prompt/completion split for this turn.
+func (ts *turnState) GetTurnIOStats() (promptTokens, completionTokens int) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.turnPromptTokens, ts.turnCompletionTokens
 }
 
 // GetTurnStats returns the accumulated turn stats.

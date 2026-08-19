@@ -33,7 +33,7 @@ func createTestSession(t *testing.T, api *restAPI) string {
 	t.Helper()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/sessions",
-		strings.NewReader(`{"agent_id":"main","type":"chat"}`))
+		strings.NewReader(`{"agent_id":"mia","type":"chat"}`))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/sessions"
 	api.HandleSessions(w, r)

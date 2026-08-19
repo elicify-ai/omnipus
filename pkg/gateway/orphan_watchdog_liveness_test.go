@@ -192,6 +192,10 @@ func TestOrphanWatchdog_GenuinelyActiveDelegate_NeverSynthesizesInterrupted(t *t
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			// An explicitly registered agent. Routing resolves to NO agent for an
+			// empty roster now that the "main" sentinel is gone (ADR-064), and the
+			// watchdog's turn dispatch then fails with "no agent available for route".
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -374,6 +378,10 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			// An explicitly registered agent. Routing resolves to NO agent for an
+			// empty roster now that the "main" sentinel is gone (ADR-064), and the
+			// watchdog's turn dispatch then fails with "no agent available for route".
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 

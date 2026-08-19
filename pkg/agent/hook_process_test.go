@@ -48,7 +48,6 @@ func TestAgentLoop_MountProcessHook_LLMAndObserver(t *testing.T) {
 		ChatID:          "direct",
 		UserMessage:     "hello",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	if err != nil {
@@ -94,7 +93,6 @@ func TestAgentLoop_MountProcessHook_ToolRewrite(t *testing.T) {
 		ChatID:          "direct",
 		UserMessage:     "run tool",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	if err != nil {
@@ -160,7 +158,6 @@ func TestAgentLoop_MountProcessHook_ApprovalDeny(t *testing.T) {
 		ChatID:          "direct",
 		UserMessage:     "run blocked tool",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	if err != nil {

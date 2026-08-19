@@ -5,12 +5,13 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,7 +26,6 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -80,18 +80,95 @@ func (a *restAPI) callerIdentity(r *http.Request) caller {
 	return c
 }
 
-// validateRepositoryURL returns an error when the repository field is non-empty but
-// does not use an http:// or https:// scheme. Empty repository is always accepted
-// (the field is optional). (SEC-5)
-func validateRepositoryURL(repository string) error {
-	if repository == "" {
-		return nil
+// repositoryRetiredMsg is returned (400) whenever a caller's raw request body
+// carries a "repository" field on POST/PUT /api/v1/workspaces (FR-9.2,
+// ADR-063 D7). Workspace.repository is deleted from the wire, storage and the
+// sysagent tool with no back-compat (FR-9.1) — a caller still sending it must
+// get a loud 400, not a silent drop. Git linkage is now a convenience on top
+// of mounting (FR-9.3): clone the URL to an operator-chosen location, then
+// mount that folder into the workspace.
+const repositoryRetiredMsg = "repository is retired — clone the git URL to a location of your choosing, then mount that folder into the workspace"
+
+// maxWorkspaceBodyBytes caps the buffered body these guards read.
+//
+// The previous code truncated at this size and then REPLACED r.Body with the
+// truncated copy, so a body over the limit silently became malformed JSON and
+// the caller reported a parse error for a request that was merely large. The
+// limit is kept — an unbounded read here is a trivial memory amplifier — but a
+// body that hits it is now reported as too large, by its own message, rather
+// than corrupted into a different error.
+const maxWorkspaceBodyBytes = 1 << 20 // 1 MiB
+
+// rejectRetiredRepositoryField reads the full request body, 400s when it
+// contains a "repository" field (FR-9.2), and — on success — restores r.Body
+// so the caller's normal decode is unaffected. Returns false (and has already
+// written the error response) when the body could not be read or carried the
+// retired field; true means the caller may proceed with decoding.
+// Mirrors the sandbox_profile/delegation_policy raw-body-sniff precedent in
+// pkg/gateway/rest.go's updateAgent (ADR-035 §7 / ADR-037).
+func rejectRetiredRepositoryField(w http.ResponseWriter, r *http.Request) bool {
+	return rejectTopLevelField(w, r, "repository", repositoryRetiredMsg)
+}
+
+// mountsNotWritableHereMsg is returned (400) whenever a caller's raw request
+// body carries a "mounts" field on POST/PUT /api/v1/workspaces.
+// WorkspaceMount.yaml/Workspace.yaml's own schema comment is explicit that
+// mounts are "created and removed via the dedicated mounts lifecycle, not
+// via this record's own create/update requests" — gen.WorkspaceCreateRequest
+// and gen.WorkspaceUpdateRequest carry no "mounts" field at all, so without
+// this raw-body sniff a client sending one would have it silently dropped by
+// Go's default JSON decode rather than getting a loud 400 (same rationale as
+// rejectRetiredRepositoryField above, mirroring the sandbox_profile /
+// delegation_policy / repository precedents).
+const mountsNotWritableHereMsg = "mounts cannot be created, changed, or removed via POST/PUT /api/v1/workspaces — use the dedicated mounts lifecycle"
+
+// rejectMountsWriteField is rejectRetiredRepositoryField's sibling for the
+// "mounts" field. Kept as a separate function (rather than folding into
+// rejectRetiredRepositoryField) so each retired/reserved field gets its own
+// named message and its own call site is self-documenting about which field
+// it guards; both are cheap raw-body substring sniffs on the same buffered
+// body.
+func rejectMountsWriteField(w http.ResponseWriter, r *http.Request) bool {
+	return rejectTopLevelField(w, r, "mounts", mountsNotWritableHereMsg)
+}
+
+// rejectTopLevelField 400s when the request body carries `field` as a TOP-LEVEL
+// KEY, and restores r.Body either way so the caller's normal decode is
+// unaffected.
+//
+// It decodes into map[string]json.RawMessage rather than sniffing the raw bytes
+// for `"field"`. A substring match cannot tell a key from a VALUE, so
+// POST /workspaces {"name":"repository"} — a perfectly reasonable workspace name
+// — was rejected with "repository is retired; clone the git URL…", which is
+// nonsense for the request actually made. The same held for a description or a
+// core_team entry equal to either word.
+//
+// A body that is not a JSON object at all is passed through untouched: rejecting
+// it here would pre-empt the caller's own decode, which produces a better error
+// for that case than this guard can.
+func rejectTopLevelField(w http.ResponseWriter, r *http.Request, field, msg string) bool {
+	// +1 so a body EXACTLY at the cap is distinguishable from one over it.
+	rawBody, readErr := io.ReadAll(io.LimitReader(r.Body, maxWorkspaceBodyBytes+1))
+	if readErr != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
+		return false
 	}
-	u, err := url.Parse(repository)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return fmt.Errorf("repository must be an http:// or https:// URL")
+	if len(rawBody) > maxWorkspaceBodyBytes {
+		jsonErr(w, http.StatusRequestEntityTooLarge, "request body too large")
+		return false
 	}
-	return nil
+	r.Body = io.NopCloser(bytes.NewReader(rawBody))
+
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(rawBody, &top); err != nil {
+		// Not an object (or malformed) — let the caller's decode report it.
+		return true
+	}
+	if _, present := top[field]; present {
+		jsonErr(w, http.StatusBadRequest, msg)
+		return false
+	}
+	return true
 }
 
 // readWorkspaceFile reads and parses ~/.omnipus/workspaces/{id}.json.
@@ -213,24 +290,64 @@ func countTasksForWorkspace(home, workspaceID string) int {
 }
 
 // writeWorkspaceFile atomically writes w to ~/.omnipus/workspaces/{id}.json.
+//
+// Delegates to workspace.SaveRecord. This function used to be a byte-for-byte
+// duplicate of it — same path, marshalling, flock and atomic write — which is
+// the shape that lets two writers of one file drift apart. Kept as a named
+// function because the call sites read better with it and it documents where
+// the gateway's workspace writes go.
 func writeWorkspaceFile(home string, w storedWorkspace) error {
-	dir := filepath.Join(home, "workspaces")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("mkdir workspaces: %w", err)
+	return workspace.SaveRecord(home, w)
+}
+
+// wireMount is a type ALIAS (not a new named type — the "=" form) for the
+// exact anonymous struct shape oapi-codegen generated for gen.Workspace's
+// Mounts field. Even though contracts/components/schemas/Workspace.yaml
+// references WorkspaceMount.yaml via $ref, oapi-codegen inlined it as an
+// anonymous struct rather than emitting a named gen.WorkspaceMount type (no
+// such type exists in pkg/api/generated) — so this alias, copied field-for-
+// field and tag-for-tag from openapi_types.gen.go, is the only way to
+// construct a value assignable to gen.Workspace.Mounts (*[]struct{...})
+// without hand-rolling a parallel, possibly-drifting wire struct. This is
+// NOT a new hand-written wire type under Constraint #8 — it is an alias of
+// the generated one; a `go vet`/lint mismatch here (wrong field/tag) would
+// fail to compile against gen.Workspace.Mounts, not silently drift.
+type wireMount = struct {
+	HostPath string                     `json:"host_path"`
+	Name     string                     `json:"name"`
+	Status   *gen.WorkspaceMountsStatus `json:"status,omitempty"`
+}
+
+// mountsToWire loads workspace id's mounts from the MOUNT STORE and converts
+// them to the wire shape, computing each entry's live status
+// (workspace.MountStatus, FR-8.2/FR-8.5) at response-build time — mirrors
+// task_count's own "computed at read time, never stored" convention
+// (gen.Workspace's own doc comment). Returns nil when there are no mounts so
+// the field is omitted entirely (json:"mounts,omitempty"), matching
+// WorkspaceMount.yaml's "Absent when no mount exists" contract.
+//
+// The source is workspace.LoadMounts, NOT a field on the workspace record —
+// mounts are write grants and were moved out of that (child-writable) record;
+// see pkg/workspace/mountstore.go. Mounts stay on the wire unchanged: only
+// where the server reads them from changed, so contracts/ is untouched.
+func mountsToWire(home, id string) *[]wireMount {
+	mounts, ok := workspace.LoadMounts(home, id)
+	if !ok || len(mounts) == 0 {
+		return nil
 	}
-	data, err := json.MarshalIndent(w, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal workspace: %w", err)
+	out := make([]wireMount, len(mounts))
+	for i, m := range mounts {
+		status := gen.WorkspaceMountsStatus(workspace.MountStatus(m))
+		out[i] = wireMount{HostPath: m.HostPath, Name: m.Name, Status: &status}
 	}
-	path := filepath.Join(dir, w.ID+".json")
-	return fileutil.WithFlock(path, func() error {
-		return fileutil.WriteFileAtomic(path, data, 0o600)
-	})
+	return &out
 }
 
 // workspaceToWire converts a storedWorkspace to the generated gen.Workspace wire type.
-// taskCount is passed in (computed by the caller).
-func workspaceToWire(w storedWorkspace, taskCount int) gen.Workspace {
+// taskCount is passed in (computed by the caller); home is $OMNIPUS_HOME, needed
+// because mounts no longer live on the record and are loaded from their own
+// store (see mountsToWire).
+func workspaceToWire(home string, w storedWorkspace, taskCount int) gen.Workspace {
 	createdAt, err := time.Parse(time.RFC3339, w.CreatedAt)
 	if err != nil {
 		slog.Warn("rest: workspace: invalid created_at timestamp", "id", w.ID, "raw", w.CreatedAt)
@@ -262,9 +379,6 @@ func workspaceToWire(w storedWorkspace, taskCount int) gen.Workspace {
 	}
 	if w.Description != "" {
 		wire.Description = &w.Description
-	}
-	if w.Repository != "" {
-		wire.Repository = &w.Repository
 	}
 	if len(w.CoreTeam) > 0 {
 		team := make([]string, len(w.CoreTeam))
@@ -302,6 +416,9 @@ func workspaceToWire(w storedWorkspace, taskCount int) gen.Workspace {
 		}
 		wire.MemberConfigs = &wireMC
 	}
+	// FR-5/FR-8.2: mounts, with each entry's status computed live (never
+	// stored — see mountsToWire's doc comment).
+	wire.Mounts = mountsToWire(home, w.ID)
 	return wire
 }
 
@@ -559,6 +676,14 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /api/v1/workspaces/{id}/mounts[/{name}] — the mount lifecycle (FR-7.1/
+	// FR-7.3, ADR-063 D4). Same second-path-segment dispatch as /media above
+	// (not suffix matching — /mounts/{name} has a trailing segment).
+	if segs := strings.Split(strings.TrimPrefix(rest, "/"), "/"); len(segs) >= 2 && segs[1] == "mounts" {
+		a.HandleWorkspaceMounts(w, r)
+		return
+	}
+
 	// /api/v1/workspaces/{id}
 	if len(rest) > 1 {
 		id := strings.TrimPrefix(rest, "/")
@@ -623,7 +748,7 @@ func (a *restAPI) handleWorkspaceList(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// Owner is attribution only (FR-1.9) — no access gate applied here.
-		result = append(result, workspaceToWire(ws, taskCounts[ws.ID]))
+		result = append(result, workspaceToWire(a.homePath, ws, taskCounts[ws.ID]))
 	}
 	if result == nil {
 		result = []gen.Workspace{}
@@ -652,6 +777,19 @@ func (a *restAPI) handleWorkspaceList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
+	// FR-9.2: repository is retired from the wire entirely (no back-compat).
+	// gen.WorkspaceCreateRequest no longer has the field at all, so without
+	// this raw-body sniff a client still sending it would have it silently
+	// dropped by Go's default JSON decode rather than getting a loud 400.
+	if !rejectRetiredRepositoryField(w, r) {
+		return
+	}
+	// FR-5: mounts have their own dedicated lifecycle (workspace.CreateMount/
+	// DeleteMount) — see mountsNotWritableHereMsg's doc comment.
+	if !rejectMountsWriteField(w, r) {
+		return
+	}
+
 	var req gen.WorkspaceCreateRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "WorkspaceCreateRequest", &req, validateEnabled) {
@@ -672,17 +810,6 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	if req.Description != nil && len(*req.Description) > 2000 {
 		jsonErr(w, http.StatusBadRequest, "description exceeds 2000 characters")
 		return
-	}
-	if req.Repository != nil && len(*req.Repository) > 500 {
-		jsonErr(w, http.StatusBadRequest, "repository exceeds 500 characters")
-		return
-	}
-	// SEC-5: reject non-http/https repository URLs.
-	if req.Repository != nil {
-		if err := validateRepositoryURL(*req.Repository); err != nil {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
 	}
 	if req.CoreTeam != nil && len(*req.CoreTeam) > 20 {
 		jsonErr(w, http.StatusBadRequest, "core_team may have at most 20 entries")
@@ -713,9 +840,6 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Description != nil {
 		ws.Description = *req.Description
-	}
-	if req.Repository != nil {
-		ws.Repository = *req.Repository
 	}
 	cfg := a.agentLoop.GetConfig()
 	if req.CoreTeam != nil && len(*req.CoreTeam) > 0 {
@@ -766,7 +890,7 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	wire := workspaceToWire(ws, 0)
+	wire := workspaceToWire(a.homePath, ws, 0)
 	if a.auditor != nil {
 		if err := a.auditor.Log(
 			&audit.Entry{
@@ -791,7 +915,7 @@ func (a *restAPI) handleWorkspaceGet(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	// FR-1.9: owner is attribution only — no access gate.
-	jsonOK(w, workspaceToWire(ws, countTasksForWorkspace(a.homePath, id)))
+	jsonOK(w, workspaceToWire(a.homePath, ws, countTasksForWorkspace(a.homePath, id)))
 }
 
 // workspaceMemberConfigsFromWire translates the generated member_configs map
@@ -833,6 +957,19 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
+	// FR-9.2: repository is retired from the wire entirely (no back-compat).
+	// gen.WorkspaceUpdateRequest no longer has the field at all, so without
+	// this raw-body sniff a client still sending it would have it silently
+	// dropped by Go's default JSON decode rather than getting a loud 400.
+	if !rejectRetiredRepositoryField(w, r) {
+		return
+	}
+	// FR-5: mounts have their own dedicated lifecycle (workspace.CreateMount/
+	// DeleteMount) — see mountsNotWritableHereMsg's doc comment.
+	if !rejectMountsWriteField(w, r) {
+		return
+	}
+
 	var req gen.WorkspaceUpdateRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "WorkspaceUpdateRequest", &req, validateEnabled) {
@@ -862,17 +999,6 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	if req.Description != nil && len(*req.Description) > 2000 {
 		jsonErr(w, http.StatusBadRequest, "description exceeds 2000 characters")
 		return
-	}
-	if req.Repository != nil && len(*req.Repository) > 500 {
-		jsonErr(w, http.StatusBadRequest, "repository exceeds 500 characters")
-		return
-	}
-	// SEC-5: reject non-http/https repository URLs.
-	if req.Repository != nil {
-		if err := validateRepositoryURL(*req.Repository); err != nil {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
 	}
 	if req.CoreTeam != nil && len(*req.CoreTeam) > 20 {
 		jsonErr(w, http.StatusBadRequest, "core_team may have at most 20 entries")
@@ -1119,10 +1245,6 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		ws.Description = *req.Description
 		changed = true
 	}
-	if req.Repository != nil && *req.Repository != ws.Repository {
-		ws.Repository = *req.Repository
-		changed = true
-	}
 	if req.CoreTeam != nil {
 		deduped := deduplicateStrings(*req.CoreTeam)
 		if !slices.Equal(deduped, ws.CoreTeam) {
@@ -1207,7 +1329,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 
 	// No-op: nothing changed — return current state without writing.
 	if !changed {
-		jsonOK(w, workspaceToWire(ws, countTasksForWorkspace(a.homePath, id)))
+		jsonOK(w, workspaceToWire(a.homePath, ws, countTasksForWorkspace(a.homePath, id)))
 		return
 	}
 
@@ -1240,7 +1362,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 			slog.Warn("audit write failed", "event", "workspace.update", "id", id, "error", err)
 		}
 	}
-	jsonOK(w, workspaceToWire(ws, countTasksForWorkspace(a.homePath, id)))
+	jsonOK(w, workspaceToWire(a.homePath, ws, countTasksForWorkspace(a.homePath, id)))
 }
 
 func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, id string) {
@@ -1343,6 +1465,17 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// bound to this workspace. Best-effort (logged on failure, never aborts
 	// the delete) — see removeMailboxesForWorkspace's doc comment.
 	removeMailboxesForWorkspace(a, id)
+
+	// Remove the workspace's mount record. Mounts live in
+	// entities/mounts/<id>.json (out of a sandboxed child's reach — see
+	// pkg/workspace/mountstore.go), NOT under the workspace directory, so the
+	// RemoveAll below does not reach them. This removes only the record of the
+	// grants; the operator's real folders are never touched (FR-8.6).
+	// Best-effort, and it runs AFTER unlock() above because DeleteMountStore
+	// takes LockID itself and that pool is not reentrant.
+	if err := workspace.DeleteMountStore(a.homePath, id); err != nil {
+		slog.Warn("rest: delete workspace: cascade mount store", "id", id, "error", err)
+	}
 
 	// Best-effort: remove the per-workspace directory. This now holds more than
 	// AGENT.md and the shared memory room: its work/ subdirectory is also the

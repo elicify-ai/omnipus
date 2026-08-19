@@ -6,7 +6,17 @@
 // REST endpoints via the callbacks LibraryExplorer passes down.
 
 import { useState } from 'react'
-import { Folder, DotsThree, DownloadSimple, PencilSimple, ArrowsLeftRight, Trash, Eye } from '@phosphor-icons/react'
+import {
+  Folder,
+  FolderSimpleDashed,
+  DotsThree,
+  DownloadSimple,
+  PencilSimple,
+  ArrowsLeftRight,
+  Trash,
+  Eye,
+  LinkBreak,
+} from '@phosphor-icons/react'
 import { fileTypeMeta } from '@/components/chat/AttachmentCard'
 import {
   DropdownMenu,
@@ -46,6 +56,11 @@ interface LibraryEntryRowProps {
   onRename: (entry: LibraryEntry) => void
   onTransfer: (entry: LibraryEntry, mode: 'move' | 'copy') => void
   onDelete: (entry: LibraryEntry) => void
+  /**
+   * Revoke a mount. Optional because only a mounted row can produce it, and
+   * absent means the row simply offers no unmount action.
+   */
+  onUnmount?: (entry: LibraryEntry) => void
 }
 
 export function LibraryEntryRow({
@@ -58,8 +73,20 @@ export function LibraryEntryRow({
   onRename,
   onTransfer,
   onDelete,
+  onUnmount,
 }: LibraryEntryRowProps) {
-  const { Icon, color } = entry.is_dir ? { Icon: Folder, color: '#D4AF37' } : fileTypeMeta(entry.name, entry.mime)
+  // A mount is a real folder on the operator's machine, not workspace storage.
+  // It must never borrow the gold folder icon: gold means "yours, inside the
+  // workspace", and a write inside a mount lands on their actual disk. Broad
+  // grants (home directory, filesystem root) shift to the warning colour so
+  // "you mounted your whole home folder" is legible without opening anything.
+  const mount = entry.mount
+  const mountColor = mount?.broad ? 'var(--color-warning)' : 'var(--color-info)'
+  const { Icon, color } = mount
+    ? { Icon: FolderSimpleDashed, color: mountColor }
+    : entry.is_dir
+      ? { Icon: Folder, color: '#D4AF37' }
+      : fileTypeMeta(entry.name, entry.mime)
   const kind = entry.is_dir ? 'other' : classifyLibraryEntry(entry)
   const isMedia = kind === 'image' || kind === 'video'
   // Falls back to the generic type icon if the media itself won't load, so a
@@ -150,12 +177,38 @@ export function LibraryEntryRow({
               hidden
             </span>
           )}
+          {mount && (
+            <span
+              data-testid={`library-mount-badge-${entry.path}`}
+              className={`shrink-0 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border ${
+                mount.broad
+                  ? 'border-[var(--color-warning)] text-[var(--color-warning)]'
+                  : 'border-[var(--color-info)] text-[var(--color-info)]'
+              }`}
+            >
+              {mount.broad ? 'Broad grant' : 'Mounted'}
+            </span>
+          )}
         </div>
-        <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-[var(--color-muted)]">
-          <span>{entry.is_dir ? '—' : formatLibrarySize(entry.size)}</span>
-          <span aria-hidden="true">·</span>
-          <span title={entry.modified_at}>{formatRelative(entry.modified_at)}</span>
-        </div>
+        {/* The real destination is shown in the row, not behind a tooltip: it
+            is the entire reason this entry behaves differently, and a grant the
+            operator cannot see is a grant they cannot review. */}
+        {mount ? (
+          <p
+            data-testid={`library-mount-target-${entry.path}`}
+            className="truncate mt-0.5 text-[11px] font-mono text-[var(--color-muted)]"
+            title={mount.host_path}
+          >
+            {mount.host_path}
+            {mount.broad && ' — covers your entire home folder'}
+          </p>
+        ) : (
+          <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-[var(--color-muted)]">
+            <span>{entry.is_dir ? '—' : formatLibrarySize(entry.size)}</span>
+            <span aria-hidden="true">·</span>
+            <span title={entry.modified_at}>{formatRelative(entry.modified_at)}</span>
+          </div>
+        )}
       </div>
 
       {/* Row action menu — stop propagation so opening it doesn't also
@@ -184,23 +237,41 @@ export function LibraryEntryRow({
               <DownloadSimple size={14} /> Download
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem onSelect={() => onRename(entry)} className="flex items-center gap-2">
-            <PencilSimple size={14} /> Rename
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => onTransfer(entry, 'move')} className="flex items-center gap-2">
-            <ArrowsLeftRight size={14} /> Move…
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => onTransfer(entry, 'copy')} className="flex items-center gap-2">
-            <ArrowsLeftRight size={14} /> Copy…
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onSelect={() => onDelete(entry)}
-            data-testid={`library-row-delete-${entry.path}`}
-            className="flex items-center gap-2 text-[var(--color-error)]"
-          >
-            <Trash size={14} /> Delete
-          </DropdownMenuItem>
+          {/* A mount's menu deliberately differs. On the row above, Delete
+              removes a working file; on a mounted row the same word sits over
+              the operator's real repository. Move/Copy of the grant itself have
+              no meaning, so they are not offered at all rather than shown and
+              failing. */}
+          {mount ? (
+            <DropdownMenuItem
+              onSelect={() => onUnmount?.(entry)}
+              data-testid={`library-row-unmount-${entry.path}`}
+              className="flex items-center gap-2 text-[var(--color-info)]"
+            >
+              <LinkBreak size={14} /> Unmount
+              <span className="ml-auto text-[11px] text-[var(--color-muted)]">files stay</span>
+            </DropdownMenuItem>
+          ) : (
+            <>
+              <DropdownMenuItem onSelect={() => onRename(entry)} className="flex items-center gap-2">
+                <PencilSimple size={14} /> Rename
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onTransfer(entry, 'move')} className="flex items-center gap-2">
+                <ArrowsLeftRight size={14} /> Move…
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onTransfer(entry, 'copy')} className="flex items-center gap-2">
+                <ArrowsLeftRight size={14} /> Copy…
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={() => onDelete(entry)}
+                data-testid={`library-row-delete-${entry.path}`}
+                className="flex items-center gap-2 text-[var(--color-error)]"
+              >
+                <Trash size={14} /> Delete
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

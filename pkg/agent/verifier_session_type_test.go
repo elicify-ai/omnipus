@@ -125,6 +125,7 @@ func TestVerifierSessionType_FallsBackWhenJudgeNotRegistered(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model"},
 			// Deliberately no List entries — no Judge, no worker, nothing.
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})

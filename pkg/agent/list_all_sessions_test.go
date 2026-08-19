@@ -40,6 +40,16 @@ func TestListAllSessions_PartialErrors(t *testing.T) {
 				MaxTokens: 4096,
 			},
 			List: []config.AgentConfig{
+				// No "main" sentinel to fall back to anymore — this is now
+				// an ordinary, explicitly-registered agent named "main"
+				// purely to pair with this test's pre-existing "agent-good"
+				// naming below (which — confusingly — gets the BROKEN
+				// store; "main" gets the good one).
+				{
+					ID:   "main",
+					Name: "Main Agent",
+					Home: tmpDir,
+				},
 				{
 					ID:   "agent-good",
 					Name: "Good Agent",

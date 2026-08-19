@@ -211,6 +211,11 @@ func TestWithOptionalAuth_CLIToken_Authenticates(t *testing.T) {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			// An explicitly registered agent. handleChatMessage refuses a chat
+			// frame it cannot resolve an agent for rather than publishing a
+			// message owned by nobody, and the implicit "main" sentinel that
+			// used to answer is gone (ADR-064).
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	api := &restAPI{
@@ -349,6 +354,11 @@ func TestAuthenticateWS_SecondAccountAuthenticates(t *testing.T) {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			// An explicitly registered agent. handleChatMessage refuses a chat
+			// frame it cannot resolve an agent for rather than publishing a
+			// message owned by nobody, and the implicit "main" sentinel that
+			// used to answer is gone (ADR-064).
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -412,6 +422,11 @@ func TestWithOptionalAuth_SecondAccountAuthenticates(t *testing.T) {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			// An explicitly registered agent. handleChatMessage refuses a chat
+			// frame it cannot resolve an agent for rather than publishing a
+			// message owned by nobody, and the implicit "main" sentinel that
+			// used to answer is gone (ADR-064).
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	api := &restAPI{
@@ -476,6 +491,11 @@ func TestWithAuthAcceptsSessionCookie(t *testing.T) {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			// An explicitly registered agent. handleChatMessage refuses a chat
+			// frame it cannot resolve an agent for rather than publishing a
+			// message owned by nobody, and the implicit "main" sentinel that
+			// used to answer is gone (ADR-064).
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	api := &restAPI{
@@ -521,6 +541,11 @@ func TestWithAuthBearerStillWorks(t *testing.T) {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			// An explicitly registered agent. handleChatMessage refuses a chat
+			// frame it cannot resolve an agent for rather than publishing a
+			// message owned by nobody, and the implicit "main" sentinel that
+			// used to answer is gone (ADR-064).
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	api := &restAPI{
@@ -573,6 +598,11 @@ func TestNoCredentialReturns401(t *testing.T) {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			// An explicitly registered agent. handleChatMessage refuses a chat
+			// frame it cannot resolve an agent for rather than publishing a
+			// message owned by nobody, and the implicit "main" sentinel that
+			// used to answer is gone (ADR-064).
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	api := &restAPI{
@@ -641,6 +671,11 @@ func TestWithOptionalAuthAcceptsSessionCookie(t *testing.T) {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			// An explicitly registered agent. handleChatMessage refuses a chat
+			// frame it cannot resolve an agent for rather than publishing a
+			// message owned by nobody, and the implicit "main" sentinel that
+			// used to answer is gone (ADR-064).
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	api := &restAPI{
@@ -727,6 +762,11 @@ func TestWithOptionalAuthInvalidCookie_FallsThroughToAnonymous(t *testing.T) {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			// An explicitly registered agent. handleChatMessage refuses a chat
+			// frame it cannot resolve an agent for rather than publishing a
+			// message owned by nobody, and the implicit "main" sentinel that
+			// used to answer is gone (ADR-064).
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	api := &restAPI{
@@ -806,6 +846,11 @@ func TestWSAuthAcceptsSessionCookie(t *testing.T) {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			// An explicitly registered agent. handleChatMessage refuses a chat
+			// frame it cannot resolve an agent for rather than publishing a
+			// message owned by nobody, and the implicit "main" sentinel that
+			// used to answer is gone (ADR-064).
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

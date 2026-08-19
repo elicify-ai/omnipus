@@ -46,10 +46,15 @@ echo "==> Generating openapi_types.gen.go via oapi-codegen..."
   -config pkg/api/generated/oapi-codegen-config.yaml \
   contracts/openapi.yaml
 
-echo "==> Generating asyncapi_types.gen.go via custom converter..."
+echo "==> Generating asyncapi_types.gen.go + llm_error_messages.gen.go via custom converter..."
+# Third argument emits the LLMError user-facing copy catalogue from the
+# x-user-messages block on components.schemas.LLMError. Codegen ABORTS if any
+# code in the enum lacks a message or an attribution — that hard failure is what
+# keeps pkg/agent/translate_error.go's catalogue exhaustive without a hand-written map.
 CGO_ENABLED=0 "$GO" run ./scripts/gen-asyncapi-go/ \
   contracts/asyncapi.yaml \
-  pkg/api/generated/asyncapi_types.gen.go
+  pkg/api/generated/asyncapi_types.gen.go \
+  pkg/api/generated/llm_error_messages.gen.go
 
 # Wire-format fixup: replace inline anonymous struct copies with named type
 # references so Constraint #8 is honored at the codegen level. See
@@ -61,3 +66,4 @@ CGO_ENABLED=0 "$GO" run ./scripts/gen-go-fixup.go \
 echo "==> Go type generation complete."
 echo "    pkg/api/generated/openapi_types.gen.go"
 echo "    pkg/api/generated/asyncapi_types.gen.go"
+echo "    pkg/api/generated/llm_error_messages.gen.go"

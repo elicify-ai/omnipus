@@ -45,7 +45,6 @@ const (
 // sessionMeta holds per-session metadata stored in a .meta.json file.
 type sessionMeta struct {
 	Key       string    `json:"key"`
-	Summary   string    `json:"summary"`
 	Skip      int       `json:"skip"`
 	Count     int       `json:"count"`
 	CreatedAt time.Time `json:"created_at"`
@@ -340,41 +339,6 @@ func (s *JSONLStore) ReadArchive(
 
 	// skip=0 reads every line regardless of meta.Skip (FR-016).
 	return readMessages(s.jsonlPath(sessionKey), 0)
-}
-
-func (s *JSONLStore) GetSummary(
-	_ context.Context, sessionKey string,
-) (string, error) {
-	l := s.sessionLock(sessionKey)
-	l.Lock()
-	defer l.Unlock()
-
-	meta, err := s.readMeta(sessionKey)
-	if err != nil {
-		return "", err
-	}
-	return meta.Summary, nil
-}
-
-func (s *JSONLStore) SetSummary(
-	_ context.Context, sessionKey, summary string,
-) error {
-	l := s.sessionLock(sessionKey)
-	l.Lock()
-	defer l.Unlock()
-
-	meta, err := s.readMeta(sessionKey)
-	if err != nil {
-		return err
-	}
-	now := time.Now()
-	if meta.CreatedAt.IsZero() {
-		meta.CreatedAt = now
-	}
-	meta.Summary = summary
-	meta.UpdatedAt = now
-
-	return s.writeMeta(sessionKey, meta)
 }
 
 func (s *JSONLStore) TruncateHistory(

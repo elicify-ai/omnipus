@@ -31,6 +31,11 @@ import (
 func TestAllImplementedToolsRegistered_DefaultConfig(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = t.TempDir()
+	// No "main" sentinel to fall back to anymore — a bare cfg.Agents.List
+	// now yields a registry with ZERO agents. This test only needs SOME
+	// registered agent to check tool registration against, so an ordinary
+	// one suffices.
+	cfg.Agents.List = []config.AgentConfig{{ID: "mia", Home: cfg.Agents.Defaults.Home}}
 
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})

@@ -36,6 +36,7 @@ func buildTrimTestAgentLoop(t *testing.T, contextWindow, maxTokens int) (*AgentL
 				MaxTokens:         maxTokens,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	mp := &mockProvider{}
@@ -276,9 +277,12 @@ func TestWindowTrim_SingleHugeTurn_KeepsLastUser(t *testing.T) {
 
 // ---------- T4: TestWindowTrim_NoDroppedMarker ----------
 
-// TestWindowTrim_NoDroppedMarker verifies that windowTrim never writes an
-// "[Emergency compression dropped N]" summary marker, and does not set a
-// summary at all.
+// TestWindowTrim_NoDroppedMarker verifies that windowTrim never injects an
+// "[Emergency compression dropped N]" marker into the live window.
+//
+// The legacy summariser (and with it the whole per-session summary store) is
+// decommissioned, so the surviving surface a marker could leak into is the
+// window itself.
 //
 // Traces to: US-1.4, FR-004.
 func TestWindowTrim_NoDroppedMarker(t *testing.T) {
@@ -297,16 +301,25 @@ func TestWindowTrim_NoDroppedMarker(t *testing.T) {
 	seedHistory(t, al, sk, history)
 
 	agent := al.GetRegistry().GetDefaultAgent()
-	// Clear any pre-existing summary.
-	agent.Sessions.SetSummary(sk, "")
 
 	al.windowTrim(agent, sk)
 
-	summary := agent.Sessions.GetSummary(sk)
-	assert.NotContains(t, summary, "Emergency compression dropped",
-		"windowTrim MUST NOT write a dropped-N summary marker (FR-004)")
-	assert.NotContains(t, summary, "[dropped",
-		"windowTrim MUST NOT write any [dropped ...] marker")
+	window := joinWindowContent(agent.Sessions.GetHistory(sk))
+	assert.NotContains(t, window, "Emergency compression dropped",
+		"windowTrim MUST NOT inject a dropped-N marker (FR-004)")
+	assert.NotContains(t, window, "[dropped",
+		"windowTrim MUST NOT inject any [dropped ...] marker")
+}
+
+// joinWindowContent concatenates every message's content so a test can assert
+// that no marker text leaked anywhere into the live window.
+func joinWindowContent(msgs []providers.Message) string {
+	var sb strings.Builder
+	for _, m := range msgs {
+		sb.WriteString(m.Content)
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
 // ---------- Bug 2 case 2: recall-span-drop-alone-under-budget ----------
@@ -423,12 +436,12 @@ func TestModelSwitch_ReWindowsNoSummary(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, updatedAgent)
 
-	// No summary written — FR-011 (no summary on re-window).
-	summary := updatedAgent.Sessions.GetSummary(sk)
-	assert.NotContains(t, summary, "Emergency compression dropped",
-		"handleModelSwitch MUST NOT write a compression summary marker")
-	assert.NotContains(t, summary, "Conversation moved",
-		"handleModelSwitch MUST NOT write a model-switch summary (windowTrim path)")
+	// No marker injected — FR-011 (nothing synthesized on re-window).
+	postSwitch := joinWindowContent(updatedAgent.Sessions.GetHistory(sk))
+	assert.NotContains(t, postSwitch, "Emergency compression dropped",
+		"handleModelSwitch MUST NOT inject a compression marker")
+	assert.NotContains(t, postSwitch, "Conversation moved",
+		"handleModelSwitch MUST NOT inject a model-switch note (windowTrim path)")
 
 	// Window must have shrunk.
 	after := updatedAgent.Sessions.GetHistory(sk)

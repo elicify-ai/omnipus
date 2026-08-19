@@ -16,11 +16,14 @@
 //
 // P1 scope: this file implements confined-vs-unrestricted resolution only
 // (fspolicy.FSScopeConfined / fspolicy.FSScopeUnrestricted). The ask/allow
-// tri-state (fspolicy.FSScopeAsk / FSScopeAllow) is P2 — toolName/callID/op
-// are threaded through the signature for that future ask-flow + audit
-// dimension but are NOT consulted for any decision here (Constraint #6: no
-// invented default, no early branch on a scope this package doesn't yet
-// implement).
+// tri-state (fspolicy.FSScopeAsk / FSScopeAllow) is P2 — toolName/callID are
+// threaded through the signature for that future ask-flow + audit dimension
+// but are NOT consulted for any decision here (Constraint #6: no invented
+// default, no early branch on a scope this package doesn't yet implement).
+//
+// ADR-063 / spec unified-file-access-and-mounts FR-2: op IS now consulted —
+// see FSOp's own doc comment and ResolvePath's resolution-order comment
+// below for the operation-aware decision table.
 
 package tools
 
@@ -38,13 +41,29 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // FSOp classifies the filesystem operation a ResolvePath caller is about to
-// perform. P1 does not branch on it (no read/write policy split — FR-032
-// requires a single symmetric tri-state); it is threaded through so the P2
-// ask-flow and the FR-035 audit dimension can key off it later without a
-// signature change.
+// perform. Originally threaded through as an inert seam for the P2 ask-flow
+// and the FR-035 audit dimension (ADR-046 P1 discarded it via `_ = op`) —
+// ADR-063 / spec unified-file-access-and-mounts FR-2 makes it load-bearing:
+// ResolvePath's decision for a path OUTSIDE the effective working directory
+// now depends on op:
+//
+//	FSOpRead, FSOpList, FSOpSend  allowed anywhere except the secret set
+//	                              (fspolicy.IsCarveOut, checked unconditionally
+//	                              regardless of op — see ResolvePath below)
+//	FSOpWrite, FSOpServe          work dir or a mount (policy.AllowedRoots)
+//	                              only — never open, regardless of Scope
+//	FSOpExec                      per the ADR-062 kernel model — left on the
+//	                              pre-FR-2 Scope-based path unchanged
+//
+// The zero value is REFUSED, not defaulted (FR-2.4): every real call site
+// already passes one of the named constants below, so an empty FSOp
+// reaching ResolvePath is a caller bug, and ResolvePath fails loudly on it
+// rather than silently taking whichever branch a switch's default case
+// would otherwise fall into.
 type FSOp string
 
 const (
@@ -53,6 +72,16 @@ const (
 	FSOpList  FSOp = "list"
 	FSOpExec  FSOp = "exec"
 	FSOpServe FSOp = "serve"
+
+	// FSOpSend distinguishes a disclosure to a chat channel (send_file) from
+	// an ordinary read, purely for audit and any future ask-flow (FR-2.3a).
+	// It carries NO additional path restriction beyond the open-read rule —
+	// the operator explicitly rejected a path-based "publish" gate for
+	// send_file (spec FR-2.3): it would have been bypassable in one extra
+	// step (read_file the path, paste the contents into the chat message),
+	// so the real gate is tool policy (Constraint #6), which already exists,
+	// is explicit per agent, and is hard-validated with no defaults.
+	FSOpSend FSOp = "send"
 )
 
 // PathHandle is the sanctioned I/O handle ResolvePath returns. root is nil
@@ -249,29 +278,46 @@ func (h *PathHandle) Close() error {
 // ResolvePath is the single, mandatory path-resolution chokepoint (FR-003).
 // rawPath is the caller-supplied (LLM/tool-argument) path; policy is the
 // turn's single source-of-record FSPolicy (fspolicy.EffectiveFSPolicy).
-// toolName, callID, and op are threaded through for the P2 ask-flow and the
-// FR-035 audit dimension but drive NO decision in this P1 implementation.
+// toolName and callID are threaded through for the P2 ask-flow and the
+// FR-035 audit dimension but drive NO decision in this implementation. op
+// DOES drive a decision as of ADR-063 / spec unified-file-access-and-mounts
+// FR-2 — see FSOp's doc comment and step 3 below.
 //
 // Resolution order:
-//  0. Validate policy's own structural invariants (BLOCK #1, ADR-046 P1
+//  0. Reject a zero-value or otherwise unrecognized op with ErrPathInvalid,
+//     before any other check (FR-2.4) — every real call site already passes
+//     one of the named FSOp constants, so an empty op reaching here is a
+//     caller bug and must fail loudly rather than silently taking whichever
+//     branch a switch's default case happens to reach.
+//     0a. Validate policy's own structural invariants (BLOCK #1, ADR-046 P1
 //     review) — a zero-value or otherwise malformed FSPolicy (e.g. an empty
 //     WorkDir, or a WorkDir sitting at/above one of its own CarveOuts) is
 //     refused with ErrPathInvalid before any access decision is made.
 //  1. Reject an embedded NUL byte or any hard (non-"not exist") resolution
 //     failure with ErrPathInvalid — before any policy decision.
 //  2. Check fspolicy.IsCarveOut on the resolved realpath, UNCONDITIONALLY —
-//     even under fspolicy.FSScopeUnrestricted an agent must never reach
+//     regardless of op or scope, an agent must never reach
 //     master.key/credentials.json/another agent's home/another workspace
 //     (FR-017).
 //  3. If the resolved realpath falls outside policy.WorkDir (a leading ".."
 //     escape, a mid-string ".." reentry, an absolute path elsewhere, or a
-//     symlink that resolves outside), dispatch on the effective scope: under
-//     fspolicy.FSScopeUnrestricted a legacy host-fs PathHandle (root==nil) is
-//     returned; under fspolicy.FSScopeConfined it is refused with
-//     ErrOutsideScope; fspolicy.FSScopeAsk/FSScopeAllow are P2 seams this
-//     package does not implement yet, so they are refused with
-//     ErrPathInvalid rather than silently falling through to some invented
-//     default (Constraint #6).
+//     symlink that resolves outside), dispatch on op (FR-2.2):
+//     - FSOpRead, FSOpList, FSOpSend: allowed anywhere except the secret
+//     set already refused at step 2 — a legacy host-fs PathHandle
+//     (root==nil) is returned, independent of policy.Scope.
+//     - FSOpWrite, FSOpServe: allowed only when the realpath also falls
+//     within one of policy.AllowedRoots (a workspace mount) — refused
+//     with ErrOutsideScope otherwise, independent of policy.Scope. This
+//     is the operation-aware split from the pre-FR-2 behaviour, where
+//     Scope alone decided every op identically.
+//     - FSOpExec: unchanged from the pre-FR-2 behaviour (per the ADR-062
+//     kernel model) — dispatches on policy.Scope exactly as every op
+//     used to: fspolicy.FSScopeUnrestricted returns a host-fs handle;
+//     fspolicy.FSScopeConfined refuses with ErrOutsideScope;
+//     fspolicy.FSScopeAsk/FSScopeAllow are P2 seams this package does
+//     not implement yet, so they are refused with ErrPathInvalid rather
+//     than silently falling through to some invented default
+//     (Constraint #6).
 //  4. Otherwise (the realpath falls within policy.WorkDir — including an
 //     absolute path that simply happens to resolve inside it, matching the
 //     pre-ADR-046 sandboxFs/getSafeRelPath contract every existing
@@ -286,12 +332,22 @@ func ResolvePath(
 	rawPath string,
 ) (*PathHandle, error) {
 	// P2 seam: the ask-flow and audit dimension will consult ctx/toolName/
-	// callID/op once filesystem_scope=ask lands. Referenced here only to
-	// make the current no-op deliberate rather than silently unused.
+	// callID once filesystem_scope=ask lands. Referenced here only to make
+	// the current no-op deliberate rather than silently unused.
 	_ = ctx
 	_ = toolName
 	_ = callID
-	_ = op
+
+	switch op {
+	case FSOpRead, FSOpList, FSOpSend, FSOpWrite, FSOpExec, FSOpServe:
+		// known, explicit op — proceed.
+	default:
+		// FR-2.4: the zero value (and any unrecognized string) is refused
+		// loudly rather than defaulted. Every production call site already
+		// passes one of the named constants above.
+		return nil, fmt.Errorf("%w: FSOp %q is invalid — ResolvePath requires an explicit, known FSOp (the zero value is refused, not defaulted)",
+			ErrPathInvalid, op)
+	}
 
 	if err := policy.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrPathInvalid, err)
@@ -330,17 +386,73 @@ func ResolvePath(
 	}
 
 	if !isWithinWorkspace(realAbs, realWorkDir) {
-		switch policy.Scope {
-		case fspolicy.FSScopeConfined:
-			return nil, fmt.Errorf("%w: %q resolves to %q, outside the effective working directory %q",
-				ErrOutsideScope, rawPath, realAbs, policy.WorkDir)
-		case fspolicy.FSScopeUnrestricted:
+		// FR-2.2: the decision now depends on op, not solely on
+		// policy.Scope. fspolicy.IsCarveOut has already refused the secret
+		// set unconditionally above (step 2), before op is ever consulted.
+		switch op {
+		case FSOpRead, FSOpList, FSOpSend:
+			// Reads (and sends — FR-2.3/FR-2.3a: send_file follows the open-
+			// read rule, governed by tool policy rather than a path
+			// restriction) are allowed anywhere outside the secret set,
+			// independent of policy.Scope.
 			return &PathHandle{abs: realAbs, policy: policy}, nil
-		case fspolicy.FSScopeAsk, fspolicy.FSScopeAllow:
-			return nil, fmt.Errorf("%w: filesystem_scope %q is not yet supported by ResolvePath (P2)",
-				ErrPathInvalid, policy.Scope)
+
+		case FSOpWrite, FSOpServe:
+			// Writes, and web_serve (FR-2.3b: preserved exactly, not a new
+			// rule — web_serve already hardcodes restrict=true/
+			// FSScopeConfined at every call site, so this produces the same
+			// outcome today; it also now honors a workspace mount, which
+			// Scope-based dispatch never could), are confined to the work
+			// dir or an explicitly granted mount — never open, regardless of
+			// policy.Scope.
+			//
+			// The handle returned here MUST be os.Root-backed, anchored at the
+			// matched mount root itself — never a host-fs (root==nil) handle
+			// carrying realAbs as a bare string. A mount's contents belong to
+			// whoever the operator pointed the mount at, which can be the SAME
+			// agent turn that is about to write through it: nothing stops that
+			// turn from swapping an ANCESTOR directory under the mount (e.g.
+			// turning a subdirectory it already created into a symlink that
+			// escapes every granted root) between this resolve and the actual
+			// write. A host-fs handle's recheckUnrestrictedCarveOut only
+			// re-verifies the secret set at I/O time, not containment in
+			// policy.AllowedRoots — so that swap would let the write land
+			// outside the mount entirely, the exact TOCTOU FR-006 exists to
+			// close for policy.WorkDir. Anchoring an os.Root at the mount root
+			// gives the write the identical protection WorkDir writes already
+			// get: the ancestor chain is re-resolved fresh, confined to the
+			// root, at the moment of the syscall — not merely at this earlier
+			// string check. See matchedAllowedRoot's doc comment for the
+			// remaining, narrower residual this does not close.
+			if root, ok := matchedAllowedRoot(realAbs, policy.AllowedRoots); ok {
+				return newMountRootHandle(root, rawPath, realAbs, policy)
+			}
+			return nil, fmt.Errorf("%w: %q resolves to %q, outside the effective working directory %q and no mount covers it",
+				ErrOutsideScope, rawPath, realAbs, policy.WorkDir)
+
+		case FSOpExec:
+			// Unchanged from the pre-FR-2 behaviour (per the ADR-062 kernel
+			// model): every op used to dispatch on Scope alone, and exec
+			// stays on that exact path.
+			switch policy.Scope {
+			case fspolicy.FSScopeConfined:
+				return nil, fmt.Errorf("%w: %q resolves to %q, outside the effective working directory %q",
+					ErrOutsideScope, rawPath, realAbs, policy.WorkDir)
+			case fspolicy.FSScopeUnrestricted:
+				return &PathHandle{abs: realAbs, policy: policy}, nil
+			case fspolicy.FSScopeAsk, fspolicy.FSScopeAllow:
+				return nil, fmt.Errorf("%w: filesystem_scope %q is not yet supported by ResolvePath (P2)",
+					ErrPathInvalid, policy.Scope)
+			default:
+				return nil, fmt.Errorf("resolvepath: internal error: unknown filesystem scope %q", policy.Scope)
+			}
+
 		default:
-			return nil, fmt.Errorf("resolvepath: internal error: unknown filesystem scope %q", policy.Scope)
+			// Unreachable: op was already validated to be one of the six
+			// known constants above. Kept as defense-in-depth so a future
+			// FSOp addition that forgets to extend this switch fails loudly
+			// instead of silently taking an unintended branch.
+			return nil, fmt.Errorf("%w: FSOp %q has no ResolvePath decision rule", ErrPathInvalid, op)
 		}
 	}
 
@@ -397,6 +509,142 @@ func ResolvePath(
 	return &PathHandle{root: root, rel: rel, abs: realAbs, policy: policy}, nil
 }
 
+// matchedAllowedRoot reports whether candidate falls on or under any of roots
+// (FR-2.2/FR-6.1: a workspace mount grants write access to its host_path),
+// and returns WHICH root matched. candidate MUST already be realpath-resolved
+// by the caller — this performs no I/O of its own.
+//
+// This is LIVE, not a placeholder: ResolveTurnFSPolicy populates
+// policy.AllowedRoots from workspace.AllowedMountRoots (ADR-063 FR-6.1), so
+// every write or serve inside a mounted host directory is admitted here and
+// nowhere else. The comment that used to sit here said the opposite — that
+// AllowedRoots was "always nil in P1" and this was "a no-op for every
+// production caller" — which stopped being true when mounts landed. Anyone
+// deciding whether this path needs validation should read it as load-bearing.
+//
+// Reuses isWithinWorkspace (filesystem.go) — the exact same containment test
+// ResolvePath already applies to policy.WorkDir itself — for each candidate
+// root, rather than a second, possibly-drifting implementation.
+//
+// Surfacing the SPECIFIC matched root (rather than a bool, which is all the
+// pre-fix isWithinAnyRoot returned) is what lets ResolvePath's FSOpWrite/
+// FSOpServe branch anchor an os.Root there instead of handing back a bare
+// abs string — see newMountRootHandle, and its call site's comment, for why
+// that anchoring is the fix for a real TOCTOU rather than cosmetic.
+func matchedAllowedRoot(candidate string, roots []string) (string, bool) {
+	for _, root := range roots {
+		if isWithinWorkspace(candidate, root) {
+			return root, true
+		}
+	}
+	return "", false
+}
+
+// newMountRootHandle builds the os.Root-backed PathHandle for a write/serve
+// that resolved OUTSIDE policy.WorkDir but inside mountRoot (one entry of
+// policy.AllowedRoots, already realpath-resolved at mount-CREATE time — see
+// workspace.Mount.HostPath's own doc comment).
+//
+// # Why this cannot just return &PathHandle{abs: realAbs, policy: policy}
+//
+// That was the pre-fix shape, and it is exactly the CWE-357 TOCTOU
+// resolvepath.go's own package doc claims to close everywhere: a root==nil
+// handle's I/O methods operate on h.abs, a STRING resolved once here and
+// never re-resolved before the actual syscall (recheckUnrestrictedCarveOut
+// re-verifies only the secret set at I/O time, not containment in
+// AllowedRoots). Nothing stops the same turn that is about to write from
+// swapping an ancestor directory under mountRoot — say turning
+// "<mountRoot>/002/sub" from a real directory into a symlink pointing
+// anywhere on the host — between this function returning and the caller's
+// next WriteFile/MkdirAll call. The attacker legitimately owns the mount's
+// contents (it is their own repository), so driving both sides of that race
+// from one turn needs no privilege escalation at all.
+//
+// # Why anchoring an os.Root here closes it
+//
+// This is the SAME mechanism policy.WorkDir writes already get (the bottom
+// of ResolvePath, above): the returned handle's rel is computed against
+// mountRoot via safeRelPath — ancestors resolved now, for the escaping-
+// symlink DETECTION this function itself needs to do below, but the LEAF
+// left exactly as the caller spelled it, so os.Root re-resolves the whole
+// relative chain fresh, confined to mountRoot, at the moment of the actual
+// syscall (FR-006). A swapped ancestor is then caught by the kernel/runtime
+// at I/O time, not merely by an earlier string check.
+//
+// # Residual race — what this does NOT close
+//
+// os.Root's re-resolution happens once, at the moment of each I/O call — a
+// swap landing between os.Root's internal walk and the underlying syscall it
+// issues is not eliminated by anything short of kernel-level confinement
+// (Landlock/Seatbelt on the spawned-child path, not this app-layer resolver).
+// That residual is identical in kind to the one policy.WorkDir writes already
+// carry (see PathHandle's own doc comment) — this fix brings mount writes up
+// to the SAME level WorkDir writes already had, it does not invent a stronger
+// guarantee than WorkDir gets. What it removes is the much larger, much more
+// practical window this function's doc above describes: an unbounded amount
+// of time between ResolvePath returning a handle and the caller's own,
+// arbitrarily-later WriteFile/MkdirAll call — not just the width of one
+// syscall.
+func newMountRootHandle(mountRoot, rawPath, realAbs string, policy fspolicy.FSPolicy) (*PathHandle, error) {
+	lexicalAbs, err := lexicalAbsPath(rawPath, policy.WorkDir)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrPathInvalid, err)
+	}
+
+	var rel string
+	if realAbs == mountRoot {
+		rel = "."
+	} else {
+		// lexicalAbs is always absolute (lexicalAbsPath's contract), so
+		// safeRelPath always takes its "absolute rawPath" branch here — the
+		// same resolveAncestorRealpath-based, leaf-preserving computation the
+		// policy.WorkDir case above uses, just anchored at mountRoot instead.
+		rel, err = safeRelPath(mountRoot, lexicalAbs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// os.OpenRoot needs a DIRECTORY. A workspace mount always is one, but
+	// AllowedRoots also carries the single-path grants
+	// ResolvePathAllowingPatterns injects for an operator's AllowWritePaths
+	// regex — and those name a FILE, which may not exist yet (the whole point
+	// of a write). Opening that as a root fails with ENOENT and the write is
+	// refused with a message about a "mount root" the operator never
+	// configured.
+	//
+	// Anchor at the nearest existing directory instead and re-derive rel from
+	// there. This does not widen anything: containment was already decided by
+	// matchedAllowedRoot against the granted root, and the handle can only ever
+	// address the single rel path computed here. os.Root's escape protection
+	// still applies from the anchor.
+	anchor := mountRoot
+	if fi, statErr := os.Stat(anchor); statErr != nil || !fi.IsDir() {
+		// Walk up to the deepest ancestor that EXISTS and is a directory. The
+		// grant may name a file several levels below the last existing
+		// directory (write_file creates intermediate dirs), so stopping at the
+		// immediate parent is not enough.
+		anchor = filepath.Dir(mountRoot)
+		for anchor != "/" && anchor != "." {
+			if fi, statErr := os.Stat(anchor); statErr == nil && fi.IsDir() {
+				break
+			}
+			anchor = filepath.Dir(anchor)
+		}
+		rel, err = safeRelPath(anchor, lexicalAbs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	root, err := os.OpenRoot(anchor)
+	if err != nil {
+		return nil, fmt.Errorf("resolvepath: open mount root %q: %w", anchor, err)
+	}
+
+	return &PathHandle{root: root, rel: rel, abs: realAbs, policy: policy}, nil
+}
+
 // ResolveTurnFSPolicy resolves the single, authoritative FSPolicy for a turn
 // (FR-036), using the exact parameter shape every generic path-taking tool's
 // Execute method previously assembled by hand (MEDIUM #7, ADR-046 P1
@@ -407,10 +655,69 @@ func ResolvePath(
 // 9 hand-duplicated call sites (filesystem.go x3, edit.go x2, send_file.go,
 // web_serve.go x2, browser/tools.go) — each a chance for the shape to drift.
 func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool) (fspolicy.FSPolicy, error) {
-	return fspolicy.EffectiveFSPolicy(
+	home := config.OmnipusHomeDir()
+	workspaceID := ToolWorkspaceID(ctx)
+
+	policy, err := fspolicy.EffectiveFSPolicy(
 		ctx, agentHome, TurnWorkspaceDir(ctx), restrict,
-		config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
+		home, ToolAgentID(ctx), workspaceID,
 	)
+	if err != nil {
+		return policy, err
+	}
+
+	// ADR-063 FR-6.1: the workspace's mounts become the turn's additional
+	// WRITE roots. Reads need no grant post-FR-2, so a mount grants write and
+	// nothing else — see ADR-063 D4.
+	//
+	// This is the one place it can be done. Every path-taking tool routes
+	// through this function (9 call sites), so populating AllowedRoots here
+	// reaches all of them at once; doing it per tool is exactly the
+	// hand-duplication this function was created to remove.
+	//
+	// It CANNOT reopen a secret. IsCarveOut and DeniedPathsFor take no
+	// AllowedRoots parameter at all, and ResolvePath consults the carve-out
+	// before it ever looks at a mount — so mounting even $HOME yields "write to
+	// $HOME minus the secret set". That independence is asserted structurally
+	// in pkg/fspolicy/mount_secret_independence_test.go rather than by example,
+	// because it is what makes the operator's warn-and-allow decision safe.
+	//
+	// A workspace with no mounts yields nil, which is the pre-mount behaviour
+	// exactly.
+	//
+	// Mounts must follow the work dir, not the turn-carried workspace_id.
+	// EffectiveFSPolicy's WorkDir above already prefers TurnWorkspaceDir(ctx)
+	// — the CoreTeam-resolved re-root pkg/agent/workspace_reroot.go's
+	// resolveTurnWorkDirOrRefuse computes via
+	// workspace.FindForAgentPreferring(home, agentID, optWorkspaceID) — over
+	// agentHome, regardless of whether this turn carries an explicit
+	// workspace_id at all. A CLI/ProcessDirect turn (`omnipus <agent> "..."`)
+	// and a scheduled/heartbeat turn never set tools.WithWorkspaceID (that is
+	// deliberate — see workspace_reroot.go's "does NOT touch
+	// tools.WithWorkspaceID/memory-room routing (FR-030)" note), so
+	// ToolWorkspaceID(ctx) is empty even though the work dir was re-rooted
+	// into a CoreTeam workspace. Looking mounts up only by ToolWorkspaceID
+	// then silently drops every mount the operator granted on that
+	// workspace: the agent gets the work dir but not the write grants that
+	// go with it, and a write into a mounted folder is refused with "no
+	// mount covers it" despite the mount existing.
+	//
+	// Resolve the SAME way the work dir was resolved when workspaceID is
+	// empty, so the two never disagree about which workspace this turn is
+	// rooted in. This does not change behaviour when workspaceID is already
+	// set — FindForAgentPreferring is consulted only on the empty path — and
+	// it does not set tools.WithWorkspaceID or otherwise touch memory-room
+	// routing; it only decides which workspace's mounts apply here.
+	mountWorkspaceID := workspaceID
+	if mountWorkspaceID == "" {
+		if wsID, found := workspace.FindForAgentPreferring(home, ToolAgentID(ctx), workspaceID); found {
+			mountWorkspaceID = wsID
+		}
+	}
+	if mountWorkspaceID != "" {
+		policy.AllowedRoots = workspace.AllowedMountRoots(home, mountWorkspaceID)
+	}
+	return policy, nil
 }
 
 // ResolvePathAllowingPatterns bridges the operator-configured AllowRead/
@@ -444,12 +751,58 @@ func ResolvePathAllowingPatterns(
 		}
 		lexicalAbs = filepath.Clean(lexicalAbs)
 		if isAllowedPath(lexicalAbs, patterns) {
-			unrestricted := policy
-			unrestricted.Scope = fspolicy.FSScopeUnrestricted
-			return ResolvePath(ctx, unrestricted, toolName, callID, op, rawPath)
+			granted := policy
+			granted.Scope = fspolicy.FSScopeUnrestricted
+
+			// FR-2.2 (ADR-063): FSOpWrite/FSOpServe no longer become open by
+			// Scope alone (see ResolvePath's outside-WorkDir switch) — Scope
+			// forcing above only still matters for FSOpRead/List/Send/Exec,
+			// which is why it is kept, not removed. This regex allow-list
+			// axis predates FR-2 and is orthogonal to filesystem_scope (see
+			// this function's own doc comment above); to keep granting a
+			// write/serve the operator already vetted via an AllowWritePaths
+			// pattern, resolve rawPath the SAME way ResolvePath itself is
+			// about to (resolveRealpathUnderWorkDir, the identical function,
+			// same inputs -> identical output) and add that ONE resolved
+			// location to a call-scoped copy of AllowedRoots. This grants
+			// exactly the path already vetted by isAllowedPath above — never
+			// a wider Unrestricted-for-writes reopening, which would defeat
+			// FR-2.2/FR-2.5's headline change for every OTHER outside-WorkDir
+			// write.
+			if resolvedGrant, resolveErr := resolveRealpathUnderWorkDir(rawPath, policy.WorkDir); resolveErr == nil {
+				grantedRoots := make([]string, 0, len(policy.AllowedRoots)+1)
+				grantedRoots = append(grantedRoots, policy.AllowedRoots...)
+				grantedRoots = append(grantedRoots, resolvedGrant)
+				granted.AllowedRoots = grantedRoots
+			}
+
+			return ResolvePath(ctx, granted, toolName, callID, op, rawPath)
 		}
 	}
 	return ResolvePath(ctx, policy, toolName, callID, op, rawPath)
+}
+
+// lexicalAbsPath joins rawPath under workDir (when rawPath is relative,
+// FR-004) and Cleans the result, WITHOUT resolving any symlink — the
+// pre-resolution "lexical" absolute spelling that resolveRealpathUnderWorkDir
+// then resolves in full, and that the FSOpWrite/FSOpServe mount branch of
+// ResolvePath (below) resolves only the ANCESTOR chain of, via
+// resolveAncestorRealpath/safeRelPath — see those functions' doc comments for
+// why the leaf must stay unresolved there.
+//
+// Fails closed on an embedded NUL byte: Go's os/syscall layer would reject
+// such a path at the first real syscall anyway (BytePtrFromString), but
+// checking it here — before any I/O — makes the rejection deterministic and
+// platform-independent rather than depending on exactly which syscall happens
+// to touch the string first.
+func lexicalAbsPath(rawPath, workDir string) (string, error) {
+	if strings.IndexByte(rawPath, 0) != -1 {
+		return "", fmt.Errorf("embedded NUL byte in path")
+	}
+	if filepath.IsAbs(rawPath) {
+		return filepath.Clean(rawPath), nil
+	}
+	return filepath.Clean(filepath.Join(workDir, rawPath)), nil
 }
 
 // resolveRealpathUnderWorkDir resolves rawPath to an absolute, symlink-
@@ -469,15 +822,9 @@ func ResolvePathAllowingPatterns(
 // and platform-independent rather than depending on exactly which syscall
 // happens to touch the string first.
 func resolveRealpathUnderWorkDir(rawPath, workDir string) (string, error) {
-	if strings.IndexByte(rawPath, 0) != -1 {
-		return "", fmt.Errorf("embedded NUL byte in path")
-	}
-
-	var abs string
-	if filepath.IsAbs(rawPath) {
-		abs = filepath.Clean(rawPath)
-	} else {
-		abs = filepath.Clean(filepath.Join(workDir, rawPath))
+	abs, err := lexicalAbsPath(rawPath, workDir)
+	if err != nil {
+		return "", err
 	}
 
 	if resolved, err := filepath.EvalSymlinks(abs); err == nil {

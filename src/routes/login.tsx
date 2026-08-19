@@ -60,7 +60,24 @@ function LoginScreen() {
       // ['commands', ...] cache entry (useSlashMenu, plus ChatScreen's own
       // UserMessage/useSkillChipData queries) refetches without needing a
       // full page reload.
+      //
+      // Generalised (landing-race bugfix): the SAME failure class hits
+      // ['workspaces', ...] (workspacesQueryKeys.list, src/lib/api.ts) — it's
+      // shared between Sidebar.tsx's 30s poll and DefaultWorkspaceRedirect
+      // (the "/" front door this login is about to navigate into). A
+      // background 401 on that shared entry sets its cache state to error
+      // (TanStack Query v5 does this even when the entry previously had
+      // data), and DefaultWorkspaceRedirect's error branch has no automatic
+      // recovery — see its own doc comment. A fresh login is, again, the one
+      // point we KNOW the NEW session is valid, and clearing stale/errored
+      // data here also stops a re-login (same tab, possibly a different
+      // user) from riding cached data that belongs to a previous session.
+      // Prefer the bare 'workspaces' prefix (matches every params variant —
+      // see Sidebar.tsx's own createWorkspaceMut.onSuccess for the same
+      // pattern) over the single {status:'active'} key so the archived list
+      // is covered too.
       queryClient.invalidateQueries({ queryKey: ['commands'] })
+      queryClient.invalidateQueries({ queryKey: ['workspaces'] })
       // Check if onboarding is still needed
       const state = await fetchAppState()
       if (!state.onboarding_complete) {

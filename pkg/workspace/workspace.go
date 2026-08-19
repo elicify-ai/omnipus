@@ -13,9 +13,18 @@ package workspace
 //
 // JSON tag rules (must stay stable — the files are the long-term store):
 //
-//	id, name, description, status, pinned, pin_order, core_team, repository,
-//	owner, is_default, setup_pending, delegation, member_configs, created_at,
-//	updated_at
+//	id, name, description, status, pinned, pin_order, core_team,
+//	owner, is_default, setup_pending, delegation, member_configs,
+//	created_at, updated_at
+//
+// `mounts` was REMOVED from this record and must not return — it is a write
+// grant and this file is writable by a sandboxed child. See the note where the
+// field used to be, and mountstore.go.
+//
+// repository was deleted with no back-compat (FR-9.1, ADR-063 D7, matching
+// the ADR-035/037 precedent) — do not reintroduce it. Git linkage is now a
+// convenience on top of mounting: clone to an operator-chosen location, then
+// mount it.
 //
 // Delegation is the typed form shared with delegation.go's DelegationEdge.
 // Adding a new field here requires a matching JSON tag and must be
@@ -30,9 +39,6 @@ type Workspace struct { // not-wire-format: internal disk-cache struct, mapped t
 
 	// CoreTeam is the list of agent IDs associated with this workspace.
 	CoreTeam []string `json:"core_team,omitempty"`
-
-	// Repository is an optional https:// URL for the associated git repo (SEC-5).
-	Repository string `json:"repository,omitempty"`
 
 	// Owner is the username of the user who created this workspace.
 	// Attribution only — not an access gate (FR-1.9).
@@ -69,6 +75,29 @@ type Workspace struct { // not-wire-format: internal disk-cache struct, mapped t
 	// CoreTeam shrinks (FR-022). omitempty so fresh workspaces serialize
 	// without the field.
 	MemberConfigs map[string]MemberConfig `json:"member_configs,omitempty"`
+
+	// NOTE — mounts are deliberately NOT a field here, and must never become
+	// one again. A mount is a WRITE GRANT, and this record is writable by a
+	// sandboxed child: the kernel policy grants $OMNIPUS_HOME RWX, and
+	// fspolicy.DeniedPathsFor re-admits the whole `workspaces` root for any
+	// re-rooted workspace turn, so `bash` can append to its own workspace
+	// record. Storing the grant list here let a child mount "/" for itself and
+	// then write anywhere — the exact defeat of ADR-062's default-deny-writes
+	// property. Re-validating on load does not close it, because host_path "/"
+	// is a legitimate operator-reachable value (FR-7.6 warn-and-allow); the
+	// list has to be unreachable. It lives in
+	// $OMNIPUS_HOME/entities/mounts/<id>.json, inside the kernel-and-app-layer
+	// denied `entities` root. See mountstore.go's leading comment.
+	//
+	// Mounts remain on the WIRE (gen.Workspace.Mounts) — pkg/gateway's
+	// workspaceToWire sources them from workspace.LoadMounts. Only the storage
+	// location changed.
+	//
+	// An old record still carrying a `mounts` array (or one a child plants
+	// there) is IGNORED by encoding/json on load and dropped on the next save.
+	// That is the intended migration: importing those entries into the
+	// protected store would launder exactly the attacker-controlled data this
+	// move exists to distrust.
 
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`

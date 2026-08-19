@@ -2705,6 +2705,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{id}/mounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a workspace mount (a named write-grant on a real local folder)
+         * @description FR-7.1/FR-5, ADR-063 D4/D6. Validates the name shape and uniqueness (400 on an invalid name, a collision with an existing mount, or a collision with an existing entry in work/; 400 also when host_path does not resolve to an existing, real, on-disk directory), resolves host_path to its realpath, and refuses (403) a target that IS or lies INSIDE $OMNIPUS_HOME (FR-7.5 — checked on the realpath-resolved target, so a symlink to it is refused too) — this is a policy refusal, not malformed input. Otherwise creates the mount and materialises it as a symlink under the workspace's work/ directory. A target that is broad but not refused (the operator's own home directory, the filesystem root, or a location that CONTAINS $OMNIPUS_HOME) still succeeds (201) but returns a non-empty `warning` (FR-7.4/FR-7.6) — the secret set is subtracted from every grant regardless of where it came from, so a broad mount is allowed, but the operator must be told what it covers. Takes effect immediately for every agent on the workspace — no restart (FR-8.1).
+         */
+        post: operations["createWorkspaceMount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mounts/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a workspace mount (revoke a write-grant)
+         * @description FR-7.3/FR-8.6. Removes the mount's symlink under work/ and its record from the workspace. The operator's real folder at the mount's host_path, and everything inside it, is never touched — only the symlink and the mount record are removed. Returns 404 both when id does not name a known workspace and when name does not name any mount on it. Takes effect immediately for every agent on the workspace — no restart (FR-8.1).
+         */
+        delete: operations["deleteWorkspaceMount"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{id}/instructions": {
         parameters: {
             query?: never;
@@ -2853,6 +2893,28 @@ export interface paths {
          * @description Aggregates token usage from SessionMeta.Stats across all session files for the requested period. period=month means the current calendar month UTC. No dollar estimates — token counts only.
          */
         get: operations["getTokenStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/system/folders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List directories on the operator's machine, for the mount folder picker
+         * @description Returns the directories directly inside `path`, each with a verdict on whether it may be mounted into a workspace.
+         *     It exists because a web page cannot open the native folder picker and learn a real filesystem path — the browser withholds it — so without a server-side listing the only way to add a mount is to type an absolute path from memory.
+         *     It exposes nothing new: post-ADR-062 reading is open, so an agent can already read anywhere on this machine. This gives the OPERATOR the same view. Admin-authenticated, read-only, and deliberately not reachable from any agent tool — an agent that wants a folder asks for it and the operator approves, rather than browsing for one itself.
+         */
+        get: operations["listHostFolders"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3198,7 +3260,7 @@ export interface components {
              */
             tokens_out: number;
             /**
-             * @description Sum of tokens_in and tokens_out.
+             * @description Authoritative total tokens for this session, as reported by the provider. Once the provider's input/output split has been recorded (tokens_in and/or tokens_out non-zero from a split-aware entry), tokens_total = tokens_in + tokens_out + tokens_cache_read + tokens_cache_write — NOT just tokens_in + tokens_out, since cache tokens are an additional component, not folded into either. Legacy entries written before that split existed instead book their entire turn into tokens_out with tokens_in left at 0, so a session mixing legacy and split-aware entries can have tokens_in + tokens_out + cache fall short of (or, for a legacy entry whose cache was tracked separately, exceed) tokens_total for the legacy portion. Always read tokens_total directly rather than deriving it from the other fields.
              * @example 1650
              */
             tokens_total: number;
@@ -3558,6 +3620,57 @@ export interface components {
             entry_count: number;
         };
         /**
+         * HostFolderListing
+         * @description One directory on the operator's own machine, listed so they can pick a folder to mount into a workspace (ADR-063 FR-7.1).
+         *     This exists because a web page CANNOT open the native folder picker and learn a real filesystem path — the browser deliberately withholds it. Without a server-side listing the only way to add a mount is to type an absolute path from memory, which is both unpleasant and error-prone in a control whose whole job is to be deliberate.
+         *     It exposes nothing new. Post-ADR-062 reading is open, so any agent can already read anywhere on this machine; this gives the OPERATOR the same view their own agents have. It is admin-authenticated and is deliberately NOT reachable from an agent tool — an agent that wants a folder asks for it and the operator approves, rather than browsing for one itself.
+         */
+        HostFolderListing: {
+            /**
+             * @description The absolute, symlink-resolved path this listing describes.
+             * @example /Users/dana/Documents
+             */
+            path: string;
+            /**
+             * @description The parent directory's absolute path, for an "up" control. Absent at the filesystem root, which is what tells the client there is nowhere further up to go.
+             * @example /Users/dana
+             */
+            parent?: string;
+            /** @description The directories directly inside `path`, sorted by name. Only directories are returned: a mount target is always a folder, and listing files would show the operator thousands of rows none of which they can pick. */
+            entries: components["schemas"]["HostFolderEntry"][];
+        };
+        /**
+         * HostFolderEntry
+         * @description One directory inside a HostFolderListing, with the verdict on whether it may be mounted. The verdict travels WITH the row so the client can disable the choice at the point of selection, rather than letting the operator pick a folder and only then be told no.
+         */
+        HostFolderEntry: {
+            /**
+             * @description The directory's own name (final path segment).
+             * @example projects
+             */
+            name: string;
+            /**
+             * @description The directory's absolute path.
+             * @example /Users/dana/Documents/projects
+             */
+            path: string;
+            /**
+             * @description False when mounting this directory would be REFUSED — that is, when it is or lies inside the Omnipus data directory (FR-7.5), the one hard boundary, because mounting it would make config.json and master.key writable and let an agent disable its own sandbox.
+             * @example true
+             */
+            mountable: boolean;
+            /**
+             * @description True when this directory is one of the deliberately wide locations (the home directory, the filesystem root, a top-level system directory). Mounting it is ALLOWED — the operator's call — but must be visibly flagged before they choose it, never silently accepted.
+             * @example false
+             */
+            broad?: boolean;
+            /**
+             * @description A short human-readable explanation, present only when `mountable` is false or `broad` is true. Written for the operator, naming what the grant would cover or why it is refused.
+             * @example Inside the Omnipus data directory — mounting it would expose your keys.
+             */
+            reason?: string;
+        };
+        /**
          * LibraryEntry
          * @description One file-explorer entry inside a workspace's work tree (library-spec.md D-2: "the Library is a file explorer over workspace trees, not a blob list" — entries are workspace-relative PATHS, not UUIDs, distinct from MediaLibraryEntry which is UUID-keyed). Returned by GET /api/v1/library/{workspace_id}/entries (directory listing), and echoed back by the write/rename/upload operations that produce or mutate a single entry.
          */
@@ -3599,11 +3712,34 @@ export interface components {
              * @example text/markdown
              */
             mime?: string;
+            mount?: components["schemas"]["LibraryEntryMount"];
             /**
              * @description Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
              * @example true
              */
             is_text_editable: boolean;
+        };
+        /**
+         * LibraryEntryMount
+         * @description Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
+         *     It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
+         */
+        LibraryEntryMount: {
+            /**
+             * @description The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
+             * @example omnipus-repo
+             */
+            name: string;
+            /**
+             * @description The realpath-resolved absolute path on the operator's machine that this mount grants write access to. Shown in the UI rather than hidden behind a tooltip: it is the whole reason the entry is treated differently, and a grant the operator cannot see is a grant they cannot review.
+             * @example /Users/dana/Documents/projects/api
+             */
+            host_path: string;
+            /**
+             * @description True when the target is one of the deliberately wide locations — the home directory, the filesystem root, or a top-level system directory. Such a mount is ALLOWED (operator decision, FR-7.4/FR-7.6) but must never be silent: the client is expected to mark it distinctly from an ordinary mount. Recomputed from the path on every read rather than stored, so it cannot go stale against the definition.
+             * @example false
+             */
+            broad: boolean;
         };
         /**
          * LibraryContentResponse
@@ -4931,6 +5067,13 @@ export interface components {
              */
             mode?: "off" | "permissive" | "enforce";
             /**
+             * @description The ADR-062 filesystem model this installation is configured for. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set. It never changes what an agent may WRITE — writes are confined to the workspace and its mounts under both models.
+             *     Reported here, and settable via SandboxConfigUpdate, because the two postures are indistinguishable from outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because that path happened to be on the enumerated list. Without a control, the only way to change it was to hand-edit config.json.
+             * @example open
+             * @enum {string}
+             */
+            filesystem_model?: "confined" | "open";
+            /**
              * @description The mode the gateway is currently enforcing. Differs from `mode` when the operator saved a change but has not restarted yet.
              * @example permissive
              */
@@ -5038,6 +5181,12 @@ export interface components {
              * @example enforce
              */
             mode?: string;
+            /**
+             * @description Which ADR-062 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
+             * @example confined
+             * @enum {string}
+             */
+            filesystem_model?: "confined" | "open";
             /** @description Reason the sandbox is disabled, if applicable. E.g. "config" or "kernel". */
             disabled_by?: string;
             /** @description Whether Landlock file-system access rules are enforced. */
@@ -5918,6 +6067,13 @@ export interface components {
              * @enum {string}
              */
             mode?: "off" | "permissive" | "enforce";
+            /**
+             * @description Switch the ADR-062 filesystem model. "confined" restricts reads and execution to enumerated paths; "open" leaves both unrestricted apart from the secret set. Neither model changes what may be WRITTEN.
+             *     Restart-gated, like `mode`: the running kernel profile was installed at boot and is not rebuilt in place, so the change is persisted and takes effect on the next start. Omit the field to leave the model unchanged.
+             * @example confined
+             * @enum {string}
+             */
+            filesystem_model?: "confined" | "open";
             /**
              * @description Allow agent tool calls to make outbound network connections.
              * @example true
@@ -7172,6 +7328,8 @@ export interface components {
              * @enum {string}
              */
             status: "ok";
+            /** @description Present only when action is "always". True when the standing Always Allow grant was stored. False means this call was approved once, but the next identical call will ask again — the grant did not stick (missing session, agent, or tool identity on the approval). */
+            grant_recorded?: boolean;
         };
         /**
          * UploadFilesResponse
@@ -8270,10 +8428,8 @@ export interface components {
             /** @description Username that created the schedule (for notification routing). */
             created_by?: string;
             trigger: components["schemas"]["ScheduleTrigger"];
-            /** @description The instruction delivered to the agent (deliver=false) or sent to the channel (deliver=true). */
+            /** @description The instruction the owning agent processes on each run. */
             message: string;
-            /** @description true = send the message straight to the channel (no agent turn); false = the owning agent processes it (autonomy). */
-            deliver: boolean;
             /**
              * @description isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
              * @enum {string}
@@ -8283,10 +8439,6 @@ export interface components {
             timeout_seconds: number;
             /** @description For continue/main modes, the persistent session id this schedule runs in. */
             session_id?: string;
-            /** @description Channel for deliver=true sends and the run's outbound context. */
-            channel?: string;
-            /** @description Chat/peer id within the channel for deliver=true sends. */
-            chat_id?: string;
             state: components["schemas"]["ScheduleState"];
             /** @description The most recent runs (newest first), capped at 20. */
             runs?: components["schemas"]["ScheduleRunRecord"][];
@@ -8304,8 +8456,6 @@ export interface components {
             owner_agent_id: string;
             trigger: components["schemas"]["ScheduleTrigger"];
             message: string;
-            /** @description Default false (agent processes it). */
-            deliver?: boolean;
             /**
              * @description Default isolated.
              * @enum {string}
@@ -8315,8 +8465,6 @@ export interface components {
             timeout_seconds?: number;
             /** @description Default true. */
             enabled?: boolean;
-            channel?: string;
-            chat_id?: string;
         };
         /**
          * ScheduleUpdate
@@ -8327,13 +8475,10 @@ export interface components {
             owner_agent_id?: string;
             trigger?: components["schemas"]["ScheduleTrigger"];
             message?: string;
-            deliver?: boolean;
             /** @enum {string} */
             session_mode?: "isolated" | "continue" | "main";
             timeout_seconds?: number;
             enabled?: boolean;
-            channel?: string;
-            chat_id?: string;
         };
         /**
          * ScheduleList
@@ -8441,10 +8586,10 @@ export interface components {
              */
             core_team?: string[];
             /**
-             * @description Optional git repository URL. Stored as-is, not validated for reachability. Frontend opens in new tab.
-             * @example https://github.com/org/repo
+             * @description Named write-grants on real local folders (FR-5, ADR-063 D4). Absent when no mount exists (empty array is also acceptable on the wire). Created and removed via the dedicated mounts lifecycle, not via this record's own create/update requests.
+             * @example []
              */
-            repository?: string;
+            mounts?: components["schemas"]["WorkspaceMount"][];
             /**
              * @description Number of GTD board tasks with this workspace_id. Computed at read time from ~/.omnipus/tasks/. Never stored in the workspace JSON file.
              * @example 3
@@ -8569,8 +8714,6 @@ export interface components {
             description?: string;
             /** @description Optional default agent roster. Deduplicated at write time. */
             core_team?: string[];
-            /** @description Optional git repository URL. */
-            repository?: string;
         };
         /** @description Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged. */
         WorkspaceUpdateRequest: {
@@ -8584,7 +8727,6 @@ export interface components {
             pinned?: boolean;
             pin_order?: number;
             core_team?: string[];
-            repository?: string;
             /** @description Per-member (agentId → config) heartbeat settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. session_id is server-managed (set at heartbeat-enable time) and ignored on input. */
             member_configs?: {
                 [key: string]: components["schemas"]["WorkspaceMemberConfig"];
@@ -8646,6 +8788,46 @@ export interface components {
         WorkspaceDelegationUpdateRequest: {
             /** @description The complete set of delegation edges for this workspace. An empty array clears all delegation. Deduplicated by (from_agent, to_agent) at write time. */
             edges: components["schemas"]["WorkspaceDelegationEdge"][];
+        };
+        /** @description Request body for POST /workspaces/{id}/mounts (FR-7.1, ADR-063 D4). Creates a new named write-grant on a real local folder. See WorkspaceMount.yaml for the exact shape rules `name` and `host_path` must satisfy. */
+        WorkspaceMountCreateRequest: {
+            /**
+             * @description A single path segment identifying this mount inside work/ (FR-5.2). Must be non-empty, contain no path separators (/ or \), and not be ".." or contain "..". Must be unique within the workspace and must not collide with an existing entry already present in work/.
+             * @example client-repo
+             */
+            name: string;
+            /**
+             * @description Absolute host filesystem path to the folder to mount (FR-5.3). Resolved via realpath at creation time; must currently exist and be a directory.
+             * @example /Users/operator/code/client-repo
+             */
+            host_path: string;
+        };
+        /**
+         * @description Response body for POST /workspaces/{id}/mounts. Fields mirror WorkspaceMount.yaml verbatim (duplicated rather than composed via allOf — matches the ADR-034 precedent of keeping operation-facing schemas flat, one file per schema) plus an operator-facing `warning` string.
+         *     FR-7.4/FR-7.6: a target that is broad but not refused (the operator's own home directory, the filesystem root, or a location that CONTAINS $OMNIPUS_HOME) still succeeds (201) but MUST warn — the warning has to cross the wire so the operator who made the call actually sees it, not just a server log. `warning` is absent (never an empty string) when the target warranted none.
+         */
+        WorkspaceMountCreateResponse: {
+            /**
+             * @description The mount's name, as created (see WorkspaceMountCreateRequest.name).
+             * @example client-repo
+             */
+            name: string;
+            /**
+             * @description The realpath-resolved host path this mount grants write access to (FR-5.3).
+             * @example /Users/operator/code/client-repo
+             */
+            host_path: string;
+            /**
+             * @description Server-computed liveness of the mount target at creation time (FR-8.2). Always "ok" immediately after a successful create — included for shape symmetry with WorkspaceMount.yaml.
+             * @example ok
+             * @enum {string}
+             */
+            status: "ok" | "broken";
+            /**
+             * @description Present only when the resolved target is broad but not refused (FR-7.4/ FR-7.6) — e.g. the operator's home directory, the filesystem root, or a folder that CONTAINS $OMNIPUS_HOME. Names exactly what the grant covers. Absent (not an empty string) when the target warranted no warning.
+             * @example mounting "/Users/operator" contains this Omnipus installation's own data directory (/Users/operator/.omnipus) — the installation's own secrets remain protected independently of this mount, but every OTHER file under /Users/operator becomes writable by any agent on this workspace
+             */
+            warning?: string;
         };
         /**
          * Plan
@@ -9288,27 +9470,27 @@ export interface components {
         /** @description Per-model token breakdown within a session or usage summary. */
         ModelTokens: {
             /**
-             * @description Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
-             * @example 0
+             * @description Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
+             * @example 820
              */
             in?: number;
             /**
-             * @description Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
-             * @example 0
+             * @description Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
+             * @example 180
              */
             out?: number;
             /**
-             * @description Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+             * @description Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
              * @example 150
              */
             cache_read?: number;
             /**
-             * @description Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+             * @description Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
              * @example 25
              */
             cache_write?: number;
             /**
-             * @description Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+             * @description Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
              * @example 1000
              */
             total: number;
@@ -10888,6 +11070,25 @@ export interface components {
          * @enum {string}
          */
         ExternalCli: "claude-code" | "codex" | "opencode";
+        /** @description A named write-grant on a real local folder (FR-5, ADR-063 D4). Materialised as a symlink work/<name> -> host_path; enforced by realpath resolution at both the app layer (FSPolicy.AllowedRoots) and, where a kernel sandbox backend is active, the kernel layer. Reads are already open (FR-2.2) — a mount exists to grant WRITE, nothing else. */
+        WorkspaceMount: {
+            /**
+             * @description A single path segment identifying this mount inside work/ (FR-5.2). Must be non-empty, contain no path separators (/ or \), and not be ".." or contain "..". Must be unique within the workspace and must not collide with an existing entry already present in work/.
+             * @example client-repo
+             */
+            name: string;
+            /**
+             * @description Absolute host filesystem path to the mounted folder (FR-5.3). Resolved via realpath at creation time — the resolved (symlink-free) form is what is stored; the raw form the operator typed is not retained.
+             * @example /Users/operator/code/client-repo
+             */
+            host_path: string;
+            /**
+             * @description Server-computed liveness of the mount target (FR-8.2). "broken" means the resolved host_path no longer exists or no longer resolves — the mount is never silently recreated as an empty directory (FR-8.3) and is never silently re-bound to a different same-named path (FR-8.5). Read-only from the client's perspective; ignored on input.
+             * @example ok
+             * @enum {string}
+             */
+            readonly status?: "ok" | "broken";
+        };
     };
     responses: {
         /** @description Bad request — missing or invalid field. */
@@ -16501,6 +16702,64 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
+    createWorkspaceMount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceMountCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description The created mount, with a warning field when the target was broad but not refused. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceMountCreateResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteWorkspaceMount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+                /** @description The mount's name. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            /** @description Unknown workspace ID, or name does not name any mount on this workspace. */
+            404: components["responses"]["404NotFound"];
+        };
+    };
     getWorkspaceInstructions: {
         parameters: {
             query?: never;
@@ -16823,6 +17082,56 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
         };
     };
+    listHostFolders: {
+        parameters: {
+            query?: {
+                /** @description Absolute path to list. Defaults to the operator's home directory, which is where a folder picker should sensibly open. */
+                path?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The directory listing. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostFolderListing"];
+                };
+            };
+            /** @description The path was relative, malformed, or not a directory. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The path does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     getHostCliDetect: {
         parameters: {
             query?: never;
@@ -16899,7 +17208,10 @@ export type Attachment = components["schemas"]["Attachment"];
 export type MediaLibraryEntry = components["schemas"]["MediaLibraryEntry"];
 export type MediaAttachmentRequest = components["schemas"]["MediaAttachmentRequest"];
 export type LibraryWorkspaceNode = components["schemas"]["LibraryWorkspaceNode"];
+export type HostFolderListing = components["schemas"]["HostFolderListing"];
+export type HostFolderEntry = components["schemas"]["HostFolderEntry"];
 export type LibraryEntry = components["schemas"]["LibraryEntry"];
+export type LibraryEntryMount = components["schemas"]["LibraryEntryMount"];
 export type LibraryContentResponse = components["schemas"]["LibraryContentResponse"];
 export type LibraryContentRequest = components["schemas"]["LibraryContentRequest"];
 export type LibraryRenameRequest = components["schemas"]["LibraryRenameRequest"];
@@ -17070,6 +17382,8 @@ export type WorkspaceUpdateRequest = components["schemas"]["WorkspaceUpdateReque
 export type WorkspaceDelegationEdge = components["schemas"]["WorkspaceDelegationEdge"];
 export type WorkspaceDelegation = components["schemas"]["WorkspaceDelegation"];
 export type WorkspaceDelegationUpdateRequest = components["schemas"]["WorkspaceDelegationUpdateRequest"];
+export type WorkspaceMountCreateRequest = components["schemas"]["WorkspaceMountCreateRequest"];
+export type WorkspaceMountCreateResponse = components["schemas"]["WorkspaceMountCreateResponse"];
 export type Plan = components["schemas"]["Plan"];
 export type PlanCreateRequest = components["schemas"]["PlanCreateRequest"];
 export type PlanUpdateRequest = components["schemas"]["PlanUpdateRequest"];

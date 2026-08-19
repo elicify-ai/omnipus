@@ -167,7 +167,6 @@ func TestRunTurn_HookDeny_AuditedWithUser(t *testing.T) {
 		UserMessage:     "please run dangerous_tool",
 		UserID:          "cli", // the WS-authenticated gateway principal (FR-017)
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	require.NoError(t, err, "policy deny is a loop-level action, not an agent error")
@@ -221,7 +220,6 @@ func TestRunTurn_HookDeny_NoUser_WhenUnauthenticated(t *testing.T) {
 		UserMessage:     "please run dangerous_tool",
 		UserID:          "", // no authenticated gateway principal
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	require.NoError(t, err)

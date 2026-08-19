@@ -98,6 +98,7 @@ func stiNewNestedHomeAgentLoop(t *testing.T) *AgentLoop {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: agentHome}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})
@@ -107,11 +108,12 @@ func stiNewNestedHomeAgentLoop(t *testing.T) *AgentLoop {
 
 // TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig proves
 // the ADR-032 fix B routing bug is fixed: a NATIVE parent (no Subagents.Executor
-// at all — the registry's default "main" agent) delegating to a subagent_3p
-// TARGET must dispatch external-cli using the TARGET's own workspace and model
-// — not fall back to native dispatch (the pre-fix bug, since the OLD code read
-// the PARENT's Subagents field to decide dispatch kind), and not run in the
-// PARENT's workspace with the PARENT's model (the OLD code's field source).
+// at all — a real registered non-worker agent resolved as the registry's
+// default) delegating to a subagent_3p TARGET must dispatch external-cli
+// using the TARGET's own workspace and model — not fall back to native
+// dispatch (the pre-fix bug, since the OLD code read the PARENT's Subagents
+// field to decide dispatch kind), and not run in the PARENT's workspace with
+// the PARENT's model (the OLD code's field source).
 func TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig(t *testing.T) {
 	fr, restore := withFakeDriver(t)
 	defer restore()
@@ -130,6 +132,16 @@ func TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig(t *te
 				ModelName: "parent-default-model",
 			},
 			List: []config.AgentConfig{
+				// The delegating PARENT: an ordinary, explicitly-registered
+				// non-worker agent (no "main" sentinel to fall back to
+				// anymore — GetDefaultAgent's Priority 2 skips workers, so
+				// without this entry the only registered agent would be the
+				// worker itself and the "native parent" premise below would
+				// not hold).
+				{
+					ID:   "mia",
+					Type: config.AgentTypeCore,
+				},
 				{
 					ID:    "ext-worker",
 					Type:  config.AgentTypeWorker,
@@ -164,10 +176,11 @@ func TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig(t *te
 
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})
 
-	// The delegating PARENT is the registry's default "main" agent: it has NO
-	// Subagents.Executor at all (native by construction). Pre-fix, dispatch
-	// would have resolved to NATIVE here regardless of the target, because the
-	// dispatch decision read the parent's own (nil) Subagents field.
+	// The delegating PARENT is the registry's default agent ("mia", the only
+	// non-worker registered): it has NO Subagents.Executor at all (native by
+	// construction). Pre-fix, dispatch would have resolved to NATIVE here
+	// regardless of the target, because the dispatch decision read the
+	// parent's own (nil) Subagents field.
 	parent := al.registry.GetDefaultAgent()
 	if parent == nil {
 		t.Fatal("test setup: no default agent")
@@ -262,6 +275,16 @@ func TestSpawnSubTurn_TargetIdentity_PropagatesFullTargetConfig(t *testing.T) {
 				ModelName: "parent-default-model",
 			},
 			List: []config.AgentConfig{
+				// The delegating PARENT: an ordinary, explicitly-registered
+				// non-worker agent. No "main" sentinel to fall back to
+				// anymore — GetDefaultAgent's Priority 2 skips workers, so
+				// without this entry the only registered agent would be the
+				// worker itself and the "parent and target must be distinct
+				// agents" invariant below would fail.
+				{
+					ID:   "mia",
+					Type: config.AgentTypeCore,
+				},
 				{
 					ID:    "ext-worker-full",
 					Name:  "Worker Full Identity",
@@ -457,6 +480,16 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel(t *t
 				ModelName: "parent-native-model",
 			},
 			List: []config.AgentConfig{
+				// The delegating PARENT: an ordinary, explicitly-registered
+				// non-worker agent. No "main" sentinel to fall back to
+				// anymore — GetDefaultAgent's Priority 2 skips workers, so
+				// without this entry the only registered agent would be the
+				// worker itself and the "target and parent must have
+				// distinct Workspace/Model" invariant below would fail.
+				{
+					ID:   "mia",
+					Type: config.AgentTypeCore,
+				},
 				{
 					ID:    "native-target",
 					Type:  config.AgentTypeWorker,
@@ -1015,6 +1048,10 @@ func TestSpawnSubTurn_ProviderPoolCopiedFromParent(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			// No "main" sentinel to fall back to anymore — self-delegation
+			// below resolves the parent via GetDefaultAgent, which needs a
+			// REAL registered agent.
+			List: []config.AgentConfig{{ID: "mia", Type: config.AgentTypeCore}},
 		},
 		Providers: []*config.ModelConfig{
 			{
@@ -1125,6 +1162,17 @@ func TestSpawnSubTurn_TargetIdentity_ConcurrentModelSwitchRace(t *testing.T) {
 				ModelName: "parent-default-model",
 			},
 			List: []config.AgentConfig{
+				// The delegating PARENT: an ordinary, explicitly-registered
+				// non-worker agent. No "main" sentinel to fall back to
+				// anymore — without this, GetDefaultAgent's Priority 2
+				// (which skips workers) would degenerate to returning
+				// "ext-worker-race" itself, collapsing this into a
+				// self-delegation and defeating the parent/target
+				// distinctness this test relies on.
+				{
+					ID:   "mia",
+					Type: config.AgentTypeCore,
+				},
 				{
 					ID:    "ext-worker-race",
 					Type:  config.AgentTypeWorker,

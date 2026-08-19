@@ -1001,6 +1001,47 @@ describe('OnboardingWizard — finish', () => {
     )
   })
 
+  // Same failure, same moment, the cache entry that actually decides where the
+  // user lands. ['workspaces'] is read by DefaultWorkspaceRedirect to pick the
+  // landing workspace and is shared with Sidebar's 30s poll, so an observer
+  // that mounted before the cookie existed holds a stale or errored entry and
+  // the landing decision is made from it. The ['commands'] invalidation above
+  // was added for exactly this class and was never generalised to this key.
+  it('invalidates the workspaces cache after completeOnboardingTransaction succeeds', async () => {
+    vi.mocked(configureProvider).mockResolvedValue({} as never)
+    vi.mocked(probeProvider).mockResolvedValue({ success: true })
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    await goToCompleteReady()
+    fireEvent.click(screen.getByRole('button', { name: /complete setup/i }))
+
+    await waitFor(() => {
+      expect(completeOnboardingTransaction).toHaveBeenCalledOnce()
+    })
+
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['workspaces'] }),
+    )
+  })
+
+  it('does NOT invalidate the workspaces cache when completeOnboardingTransaction fails', async () => {
+    vi.mocked(configureProvider).mockResolvedValue({} as never)
+    vi.mocked(probeProvider).mockResolvedValue({ success: true })
+    vi.mocked(completeOnboardingTransaction).mockRejectedValueOnce(new Error('server exploded'))
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    await goToCompleteReady()
+    fireEvent.click(screen.getByRole('button', { name: /complete setup/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('onboarding-error')).toBeInTheDocument()
+    })
+
+    expect(invalidateSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['workspaces'] }),
+    )
+  })
+
   it('Start chatting on Meet your Assistant navigates to root', async () => {
     vi.mocked(configureProvider).mockResolvedValue({} as never)
     vi.mocked(probeProvider).mockResolvedValue({ success: true })

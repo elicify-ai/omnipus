@@ -175,8 +175,9 @@ func TestUpsertAgentFast_ParityWithFullReload(t *testing.T) {
 // resolveRouteSafely's panic-to-fatal conversion, since cloneAgents()
 // deliberately leaves resolver at its nil zero value). Commenting out the
 // `newRegistry.SetDefaultAgentOverride(...)` call makes the GetDefaultAgent
-// assertion fail (falls back to the "main" sentinel instead of resolving the
-// newly-configured default).
+// assertion fail (falls back to the lexicographically-first non-worker agent
+// instead of resolving the newly-configured default — there is no "main"
+// sentinel to fall back to anymore).
 func TestUpsertAgentFast_TrapsClosed_RoutingAndDefaultAgent(t *testing.T) {
 	al := buildFastUpsertTestLoop(t, []config.AgentConfig{
 		{ID: "alpha", Name: "Alpha", Type: config.AgentTypeCustom},
@@ -304,13 +305,23 @@ func TestUpsertAgentFast_UnknownAgent(t *testing.T) {
 	require.Error(t, err, "UpsertAgentFast must reject an agent ID absent from cfg.Agents.List")
 }
 
-// TestUpsertAgentFast_ReservedID verifies the "main" sentinel can never be
-// hijacked through this path, mirroring NewAgentRegistry's own reserved-ID
-// protection.
-func TestUpsertAgentFast_ReservedID(t *testing.T) {
+// TestUpsertAgentFast_MainIsNoLongerReserved pins the removal of the "main"
+// sentinel: the retired sentinel used to occupy a reserved-ID slot that
+// NewAgentRegistry (and this UpsertAgentFast path) rejected any real agent
+// from claiming. That reserved-ID map, and UpsertAgentFast's rejection of
+// it, are BOTH gone now — "main" has no schema of its own, so an operator is
+// free to create a perfectly ordinary agent literally named "main" and it
+// must succeed exactly like any other id, with no special-cased failure.
+func TestUpsertAgentFast_MainIsNoLongerReserved(t *testing.T) {
 	al := buildFastUpsertTestLoop(t, []config.AgentConfig{{ID: "alpha", Type: config.AgentTypeCustom}})
 	cfg := cloneCfg(t, al.GetConfig())
-	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{ID: DefaultAgentID, Name: "Hijack"})
-	_, err := al.UpsertAgentFast(cfg, DefaultAgentID)
-	require.Error(t, err, "UpsertAgentFast must reject the reserved 'main' agent id")
+	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{ID: "main", Name: "Just A Regular Agent"})
+	inst, err := al.UpsertAgentFast(cfg, "main")
+	require.NoError(t, err, "UpsertAgentFast must accept 'main' like any other agent id — it is not reserved anymore")
+	require.NotNil(t, inst)
+	require.Equal(t, "main", inst.ID)
+
+	got, ok := al.GetRegistry().GetAgent("main")
+	require.True(t, ok, "the newly-created 'main' agent must be resolvable via GetAgent like any other agent")
+	require.Same(t, inst, got)
 }

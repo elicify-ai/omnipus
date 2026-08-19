@@ -57,6 +57,7 @@ func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg 
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Providers: cfgProviders,
 	}
@@ -235,15 +236,16 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 	assert.Equal(t, newModel, updatedAgent.Model,
 		"agent.Model must be updated to the new model after a switch")
 
-	// No summary marker written (windowTrim never writes one).
-	sessionSummary := updatedAgent.Sessions.GetSummary(sessionKey)
-	assert.NotContains(t, sessionSummary, "Emergency compression dropped",
-		"windowTrim path MUST NOT write a compression summary marker")
-	assert.NotContains(t, sessionSummary, "Conversation moved",
-		"windowTrim path MUST NOT write a model-switch summary note")
-
 	// History must have shrunk.
 	history := updatedAgent.Sessions.GetHistory(sessionKey)
+
+	// No marker injected (windowTrim never synthesizes one).
+	postSwitch := joinWindowContent(history)
+	assert.NotContains(t, postSwitch, "Emergency compression dropped",
+		"windowTrim path MUST NOT inject a compression marker")
+	assert.NotContains(t, postSwitch, "Conversation moved",
+		"windowTrim path MUST NOT inject a model-switch note")
+
 	tokensAfter := estimateHistoryTokens(history)
 	assert.Less(t, tokensAfter, tokensBefore,
 		"history token estimate must have shrunk after switch-time trim")
@@ -313,15 +315,11 @@ func TestSwitchTime_EmptySession_NoSyntheticMessage(t *testing.T) {
 	assert.Empty(t, history, "empty session switch must leave history empty")
 	assert.Equal(t, newModel, updatedAgent.Model,
 		"empty session switch still updates agent.Model")
-
-	summary := updatedAgent.Sessions.GetSummary(sessionKey)
-	assert.Empty(t, summary,
-		"empty session switch must not write a session summary")
 }
 
 // TestSwitchTime_LLMHistoryHasNoSystemMessage verifies that after a model
 // switch with trim, history contains no injected role=="system" message
-// (the summary path is deleted; the breadcrumb is separate from session summary).
+// (the summary path is deleted; the breadcrumb is separate from history).
 func TestSwitchTime_LLMHistoryHasNoSystemMessage(t *testing.T) {
 	const newModel = "openrouter/some-small-model"
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
@@ -355,11 +353,6 @@ func TestSwitchTime_LLMHistoryHasNoSystemMessage(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotNil(t, updatedAgent)
-
-	// Session summary must be empty (windowTrim writes no summary).
-	summary := updatedAgent.Sessions.GetSummary(sessionKey)
-	assert.Empty(t, summary,
-		"windowTrim switch path must not populate session summary")
 
 	// History must have no synthetic system message.
 	history := updatedAgent.Sessions.GetHistory(sessionKey)
@@ -493,7 +486,6 @@ func TestSwitchTime_UnknownModel_SurfacesToUserNotJustLog(t *testing.T) {
 		ChatID:              sessionID,
 		UserMessage:         "hello",
 		DefaultResponse:     defaultResponse,
-		EnableSummary:       false,
 		SendResponse:        false,
 		TranscriptSessionID: sessionID,
 		TranscriptStore:     store,

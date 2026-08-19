@@ -205,6 +205,62 @@ describe('Bugfix: successful login invalidates the commands cache (slash palette
 })
 
 // ---------------------------------------------------------------------------
+// Landing-race bugfix: the SAME failure class that hit ['commands'] above
+// also hits ['workspaces'] (workspacesQueryKeys.list, src/lib/api.ts) — it's
+// shared between Sidebar.tsx's 30s poll and DefaultWorkspaceRedirect (the "/"
+// front door login navigates into). Before this fix, only ['commands'] was
+// invalidated on login; a stale or errored workspaces cache entry rode
+// straight through a fresh sign-in. See -login-landing.test.tsx for the
+// end-to-end proof (ten consecutive sign-ins reusing one QueryClient).
+// ---------------------------------------------------------------------------
+describe('Bugfix: successful login invalidates the workspaces cache (landing-race recovery)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockLogin.mockResolvedValue({ token: 'tok-1', role: 'admin', username: 'admin' })
+    mockFetchAppState.mockResolvedValue({ onboarding_complete: true })
+  })
+
+  it('calls queryClient.invalidateQueries({ queryKey: ["workspaces"] }) after a successful login', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+    renderLogin()
+
+    fireEvent.change(screen.getByLabelText(/username/i), { target: { value: 'admin' } })
+    fireEvent.change(document.getElementById('login-password')!, { target: { value: 'secret' } })
+    fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
+    })
+
+    // Bare 'workspaces' prefix (not the specific {status:'active'} variant) —
+    // matches workspacesQueryKeys.list()'s shape for ANY params, same pattern
+    // Sidebar.tsx's own createWorkspaceMut.onSuccess uses, so the archived
+    // list is covered too.
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['workspaces'] }),
+    )
+  })
+
+  it('does NOT invalidate the workspaces cache when login fails (invalid credentials)', async () => {
+    mockLogin.mockRejectedValueOnce(Object.assign(new Error('unauthorized'), { status: 401 }))
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+    renderLogin()
+
+    fireEvent.change(screen.getByLabelText(/username/i), { target: { value: 'admin' } })
+    fireEvent.change(document.getElementById('login-password')!, { target: { value: 'wrong' } })
+    fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('login-error')).toBeInTheDocument()
+    })
+
+    expect(invalidateSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['workspaces'] }),
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
 // #27 — _app.tsx beforeLoad redirects not-onboarded user to /onboarding
 //
 // _app.tsx's beforeLoad is an async function that (a) fetches app state and

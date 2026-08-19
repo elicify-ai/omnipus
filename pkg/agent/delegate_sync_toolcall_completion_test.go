@@ -120,6 +120,7 @@ func TestRunTurn_SyncDelegate_PersistsResultOnReload(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 	}
 

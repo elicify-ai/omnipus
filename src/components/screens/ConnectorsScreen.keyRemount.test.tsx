@@ -206,8 +206,23 @@ describe('ConnectorsScreen — switching Configure targets while the panel stays
     expect(screen.getByLabelText(/^Bot Token/)).not.toHaveValue('A-dirty-unsaved-value')
 
     // Saving now must submit Discord's real value, never Telegram's leaked one.
-    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
+    //
+    // The click is RETRIED rather than fired once. A single click asserts more
+    // than this test means to: that by the instant Bot Token has hydrated, every
+    // OTHER field the panel's pre-save validation requires has hydrated too.
+    // That holds on an unloaded machine and is not guaranteed on a loaded one —
+    // a blocked-by-validation Save returns without calling configureChannel, so
+    // the click lands, does nothing, and the wait then expires on a mock that
+    // was never going to be called. Observed on CI, not reproducible locally,
+    // which is the usual shape of an ordering assumption that only fails under
+    // contention.
+    //
+    // Retrying keeps what the test is actually about — saving submits Discord's
+    // value, not Telegram's leaked one — while dropping the incidental claim
+    // about hydration order. A save that never becomes possible still fails
+    // here, because the wait still expires.
     await waitFor(() => {
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
       expect(mockConfigureChannel).toHaveBeenCalled()
     })
     const [calledId, payload] = mockConfigureChannel.mock.calls[0] as [string, Record<string, unknown>]

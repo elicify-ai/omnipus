@@ -18,6 +18,3 @@ properties:
       type: string
     maxItems: 20
     description: Optional default agent roster. Deduplicated at write time.
-  repository:
-    type: string
-    description: Optional git repository URL.

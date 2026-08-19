@@ -39,6 +39,12 @@ func TestAppendTranscript_AssistantEntry_StatsNonZero(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := meta.ID
 
+	// No PromptTokens/CompletionTokens set — this is the legacy no-split
+	// shape (see accumulateEntryStats in entry_stats.go). It is NOT true in
+	// general that an assistant entry leaves TokensIn at 0: an entry that
+	// DOES carry the provider's input/output split (PromptTokens > 0)
+	// contributes to TokensIn — see TestAppendTranscript_RecordsInputOutputSplit
+	// in token_split_test.go for that case.
 	entry := TranscriptEntry{
 		ID:        "entry-001",
 		Role:      "assistant",
@@ -57,7 +63,8 @@ func TestAppendTranscript_AssistantEntry_StatsNonZero(t *testing.T) {
 	assert.Equal(t, 120, got.Stats.TokensOut,
 		"TokensOut must equal the assistant entry Tokens")
 	assert.Equal(t, 0, got.Stats.TokensIn,
-		"TokensIn must remain 0 for an assistant entry")
+		"TokensIn stays 0 here because this entry carries no PromptTokens/CompletionTokens split "+
+			"(the legacy no-split fallback), not because assistant entries never affect TokensIn")
 	assert.Equal(t, 120, got.Stats.TokensTotal,
 		"TokensTotal must equal the assistant entry Tokens")
 	assert.InDelta(t, 0.0034, got.Stats.Cost, 1e-9,

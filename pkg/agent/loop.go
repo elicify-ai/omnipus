@@ -90,7 +90,6 @@ type AgentLoop struct {
 
 	// Runtime state
 	running     atomic.Bool
-	summarizing sync.Map
 	fallback    *providers.FallbackChain
 	transcriber voice.Transcriber
 
@@ -168,6 +167,11 @@ type AgentLoop struct {
 	// before boot wiring completes — create_plan/execute_plan then register
 	// but fail closed at Execute() (Wave-1 discipline, pkg/tools/plan.go).
 	planStore *plan.Store
+
+	// channelOwnership resolves which (workspace, agent) owns a channel
+	// instance (ADR-065). Stored rather than only pushed into tools, because
+	// registerSharedTools rebuilds every MessageTool on reload.
+	channelOwnership tools.ChannelOwnership
 	// loopSched is the dedicated /loop time-driven scheduler (ADR-049 D6/D7,
 	// loop_scheduler.go). Set once at boot by the gateway
 	// (SetLoopScheduler); nil in tests / before wiring — applyLoopCommandPrompt
@@ -430,6 +434,23 @@ type AgentLoop struct {
 	closing bool
 	recapWG sync.WaitGroup
 
+	// delegateTools are the per-agent DelegateTool instances this loop built,
+	// retained for ONE reason: Close() has to drain their background (async=true)
+	// delegation goroutines before the stores those goroutines write through are
+	// torn down.
+	//
+	// DelegateTool has always exposed WaitForAsyncTasks for exactly this, and its
+	// doc comment names both callers that need it — "tests rooted at t.TempDir()"
+	// and "a graceful-shutdown path that swaps stores". Neither ever called it:
+	// the tools were constructed as locals in registerAgentTools and dropped, so
+	// Close() had no handle to drain and its own promise that "nothing writes
+	// after Close() returns to race temp-dir cleanup" was false for background
+	// delegation specifically. The symptom is a cleanup-time failure in whichever
+	// test happens to lose the race ("TempDir RemoveAll cleanup: ... directory not
+	// empty"), attributed to that test rather than to the missing drain.
+	delegateToolsMu sync.Mutex
+	delegateTools   []*tools.DelegateTool
+
 	// stopCancel is the CancelFunc created by Run to support Stop(). When
 	// Stop() is called it cancels this func so the Run select wakes
 	// immediately without waiting for the next message or ticker. Stored
@@ -513,7 +534,6 @@ type processOptions struct {
 	Media                   []string              // media:// refs from inbound message
 	InitialSteeringMessages []providers.Message   // Steering messages from refactor/agent
 	DefaultResponse         string                // Response when LLM returns empty
-	EnableSummary           bool                  // Whether to trigger summarization
 	SendResponse            bool                  // Whether to send response via bus
 	SuppressToolFeedback    bool                  // Whether to suppress inline tool feedback messages
 	NoHistory               bool                  // If true, don't load session history (for heartbeat)
@@ -691,6 +711,14 @@ var ErrReloadAlreadyInProgress = errors.New("reload already in progress")
 // since both resolve ts.agent.ID the same way in the re-root block below.
 var ErrAgentNotWorkspaceMember = errors.New("agent is not a member of any workspace; turn refused")
 
+// ErrWorkspaceWorkDirUnavailable is returned when the agent belongs to a
+// workspace but its work/ directory could not be created or opened.
+var ErrWorkspaceWorkDirUnavailable = errors.New("workspace work directory unavailable")
+
+// ErrAgentHomeUnavailable is returned when a system agent's private home
+// directory is missing or could not be created.
+var ErrAgentHomeUnavailable = errors.New("agent home directory unavailable")
+
 // perCandidateTimeoutFromConfig derives a per-candidate timeout for the fallback
 // chain from the provider config. It uses the RequestTimeout of the first provider
 // that has a positive RequestTimeout value, falling back to the providers package
@@ -762,7 +790,6 @@ func NewAgentLoop(
 		registry:               registry,
 		state:                  stateManager,
 		eventBus:               eventBus,
-		summarizing:            sync.Map{},
 		fallback:               fallbackChain,
 		cmdRegistry:            commands.NewRegistry(commands.BuiltinDefinitions()),
 		steering:               newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
@@ -1308,6 +1335,9 @@ func (al *AgentLoop) recordRateLimitDenial(
 	// the prior dual-emit (EventKindError carrying RateLimitPayload +
 	// EventKindRateLimit) was a live-bus pollution source and was removed
 	// in the Wave 1 fix pass.
+	if payload.SessionID == "" {
+		payload.SessionID = string(ts.routingSessionID)
+	}
 	al.emitEvent(
 		EventKindRateLimit,
 		ts.eventMeta("runTurn", "turn.rate_limit"),
@@ -1327,7 +1357,11 @@ func (al *AgentLoop) recordRateLimitDenial(
 		retryHint = "retry shortly"
 	}
 	rlMsg := fmt.Sprintf("rate limit: %s (%s)", payload.PolicyRule, retryHint)
-	ts.appendErrorTranscript(EventKindRateLimit.String(), "runTurn", rlMsg)
+	ts.appendClassifiedError(EventKindRateLimit.String(), "rate_limit", LLMError{
+		Code:      CodeRateLimited,
+		Message:   rlMsg,
+		Retryable: isRetryable(CodeRateLimited),
+	})
 }
 
 // wireExecToolDeps replaces each agent's bash tool with one constructed via
@@ -1679,15 +1713,27 @@ func registerSharedTools(
 
 		// Message tool — outbound inter-agent message via bus.
 		messageTool := tools.NewMessageTool()
-		messageTool.SetSendCallback(func(channel, chatID, content string) error {
+		messageTool.SetSendCallback(func(channel, chatID, content string, origin tools.SendOrigin) error {
 			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer pubCancel()
+			// Origin travels with the message (ADR-065 spec FR-6) so a send can
+			// be attributed, and so dispatch can re-check ownership at the last
+			// common point before the wire. System-originated publishes leave
+			// these empty and are exempt by that emptiness.
 			return msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-				Channel: channel,
-				ChatID:  chatID,
-				Content: content,
+				Channel:          channel,
+				ChatID:           chatID,
+				Content:          content,
+				AgentID:          origin.AgentID,
+				WorkspaceID:      origin.WorkspaceID,
+				OwnershipChecked: origin.OwnershipChecked,
 			})
 		})
+		// Re-apply the stored resolver: this runs on every reload, and the
+		// MessageTool above is brand new each time (ADR-065).
+		if own := al.ChannelOwnership(); own != nil {
+			messageTool.SetChannelOwnership(own)
+		}
 		agent.Tools.Register(messageTool)
 
 		// Handoff tools — always registered (ScopeCore).
@@ -1730,7 +1776,25 @@ func registerSharedTools(
 			if currentCfg.Agents.Defaults.DefaultAgentID != "" {
 				return currentCfg.Agents.Defaults.DefaultAgentID
 			}
-			return DefaultAgentID
+			// No configured override — fall through to the registry's own
+			// resolution ladder (lexicographically-first non-worker agent)
+			// rather than a hardcoded name; ReturnToDefaultTool.Execute
+			// already handles an empty result as "no default agent
+			// configured" rather than silently switching to a name that
+			// doesn't exist.
+			// liveRegistry, not the `registry` parameter this closure could
+			// capture: that one is the boot-time instance, and a full registry
+			// rebuild (TriggerReload, e.g. after the default agent changes)
+			// REPLACES al.registry. This closure runs long after construction,
+			// so reading the captured parameter would resolve the default
+			// against a stale roster. The name difference is deliberate — it
+			// used to shadow, which read as an accident rather than intent.
+			if liveRegistry := al.GetRegistry(); liveRegistry != nil {
+				if def := liveRegistry.GetDefaultAgent(); def != nil {
+					return def.ID
+				}
+			}
+			return ""
 		}
 		// sharedStore is the shared session store; tools handle a nil store by
 		// skipping transcript ops (nil only occurs in tests without a store).
@@ -1808,6 +1872,11 @@ func registerSharedTools(
 			// doc comment (admission.go) for why wrapping SpawnSubTurn here
 			// is the correct choke point for both sync and async delegation.
 			delegateTool.SetSpawner(newRootDelegationAdmittingSpawner(NewSubTurnSpawner(al), al.rootDelegationAdmission, agentID))
+			// Retain it so Close() can drain its background delegations before
+			// the stores they write through are torn down. See delegateTools.
+			al.delegateToolsMu.Lock()
+			al.delegateTools = append(al.delegateTools, delegateTool)
+			al.delegateToolsMu.Unlock()
 			// FR-196 kill switch — wire it HERE, at construction, not only in
 			// SetSessionMessagingStores' later re-wire. This is a PER-AGENT
 			// DelegateTool: the session_messaging_wire.go re-wire walks the
@@ -2415,15 +2484,19 @@ func registerSharedTools(
 		// al.recallSpans). The routing session key is read from ctx at
 		// Execute time (tools.ToolSessionKey) — no per-agent construction
 		// needed beyond binding the correct archive reader here.
-		// Excluded for the "main" gateway agent (no memory tools there either).
-		if agentID != "main" {
-			if agent.Sessions != nil {
-				agent.Tools.Register(NewRecallConversationTool(agent.Sessions, al))
-			} else {
-				logger.WarnCF("agent",
-					"recall_conversation not registered — agent.Sessions is nil",
-					map[string]any{"agent_id": agentID})
-			}
+		// Registered for every agent (mirrors instance.go's remember/
+		// recall_memory/run_retrospective registration): this used to be
+		// gated on `agentID != "main"`, excluding the retired sentinel. That
+		// was a hardcoded identity check, not a capability one — the gate
+		// went with the sentinel, same as the other memory tools. Whether an
+		// agent may recall its own conversation history is its tool policy,
+		// like every other tool.
+		if agent.Sessions != nil {
+			agent.Tools.Register(NewRecallConversationTool(agent.Sessions, al))
+		} else {
+			logger.WarnCF("agent",
+				"recall_conversation not registered — agent.Sessions is nil",
+				map[string]any{"agent_id": agentID})
 		}
 
 		// Register the unified `load_tool` infra tool (search + load paths).
@@ -3403,7 +3476,12 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 						// reply. Route through the classifier so provider-originated body /
 						// status / model identity is replaced with the typed copy.
 						// The raw err stays in the defer's log line for operator triage.
-						response = TranslateLLMError(nil, err.Error()).Message
+						//
+						// TranslateTurnError, not TranslateLLMError(nil, err.Error()):
+						// passing the error VALUE keeps the sentinels intact, so a turn
+						// refused for a known reason (agent on no workspace) says so
+						// instead of falling to the "we can't tell why" copy.
+						response = TranslateTurnError(err).Message
 					}
 					if response != "" {
 						al.publishResponseIfNeeded(runCtx, ag, msg.Channel, msg.ChatID, response)
@@ -3674,6 +3752,13 @@ func (al *AgentLoop) Close() {
 		al.taskExecutor.Drain(30 * time.Second)
 	}
 
+	// Drain background (async=true) delegations for the same reason and with the
+	// same bounded-drain shape as the two above. A background delegate call is
+	// fire-and-forget for its CALLER by design, so its goroutine outlives the
+	// Execute that started it and keeps writing lifecycle/session state through
+	// the stores torn down below.
+	al.waitDelegateAsyncDrain(30 * time.Second)
+
 	// Cancel all active session workers and wait for them to drain (5 s budget).
 	// stopSessionWorkers is idempotent — safe to call here even if Run() has
 	// already called it on context-cancellation, because workers cancel their
@@ -3868,6 +3953,38 @@ func (al *AgentLoop) waitRecapDrain(budget time.Duration) {
 	case <-time.After(budget):
 		logger.WarnCF("agent", "Close: recap drain budget exceeded; proceeding with teardown",
 			map[string]any{"budget": budget.String()})
+	}
+}
+
+// waitDelegateAsyncDrain blocks until every agent's in-flight background
+// delegation goroutine has finished, or the budget expires.
+//
+// Bounded for the same reason waitRecapDrain is: a wedged sub-turn (a mock
+// provider that never returns, a real LLM hanging past its own timeout) must
+// never freeze teardown. Exceeding the budget is logged and teardown proceeds —
+// a delegation that did not finish writing is strictly better than a process
+// that will not exit.
+func (al *AgentLoop) waitDelegateAsyncDrain(budget time.Duration) {
+	al.delegateToolsMu.Lock()
+	pending := append([]*tools.DelegateTool(nil), al.delegateTools...)
+	al.delegateToolsMu.Unlock()
+	if len(pending) == 0 {
+		return
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, dt := range pending {
+			dt.WaitForAsyncTasks()
+		}
+	}()
+	select {
+	case <-done:
+		// Every background delegation finished writing.
+	case <-time.After(budget):
+		logger.WarnCF("agent", "Close: background-delegation drain budget exceeded; proceeding with teardown",
+			map[string]any{"budget": budget.String(), "tools": len(pending)})
 	}
 }
 
@@ -4179,15 +4296,14 @@ func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDe
 		ErrorPayload{
 			Stage: "hook." + stage, ChatID: ts.opts.ChatID,
 			Code: string(llm.Code), Message: err.Error(),
+			SessionID: string(ts.routingSessionID),
 		},
 	)
 	// US-1: persist the hook abort to the JSONL transcript so the
 	// replay path re-renders it after page reload (see appendErrorTranscript
 	// docstring). Without this, hook aborts vanish on session reopen.
-	ts.appendErrorTranscript(
-		EventKindError.String(), "hooks",
-		err.Error(),
-	)
+	llm.Message = err.Error()
+	ts.appendClassifiedError(EventKindError.String(), "hooks", llm)
 	return err
 }
 
@@ -4247,12 +4363,6 @@ func (al *AgentLoop) logEvent(evt Event) {
 		fields["reason"] = payload.Reason
 		fields["dropped_messages"] = payload.DroppedMessages
 		fields["remaining_messages"] = payload.RemainingMessages
-	case SessionSummarizePayload:
-		fields["summarized_messages"] = payload.SummarizedMessages
-		fields["kept_messages"] = payload.KeptMessages
-		fields["summary_len"] = payload.SummaryLen
-		fields["omitted_oversized"] = payload.OmittedOversized
-		fields["degraded"] = payload.Degraded
 	case ToolExecStartPayload:
 		fields["tool"] = payload.Tool
 		fields["args_count"] = len(payload.Arguments)
@@ -5099,8 +5209,8 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 // tools.InspectSessionStore interface (GetMeta/ReadTranscript keyed purely
 // on session ID — see that interface's own doc comment: "the store resolves
 // the owning agent internally"). ResolveSessionStore already implements
-// exactly that resolution (shared store fast path, DefaultAgentID legacy
-// fast path, then a scan across every per-agent store, cancel.go) — reused
+// exactly that resolution (shared store fast path, then a scan across every
+// per-agent store, cancel.go) — reused
 // here rather than re-implemented, so inspect_session and RequestCancel
 // agree on where any given session id actually lives.
 type agentLoopInspectSessionStore struct {
@@ -5403,7 +5513,12 @@ func (al *AgentLoop) resolveOrCreateChannelSession(
 	if title == "" {
 		title = chatID
 	}
-	meta, err := al.sharedSessionStore.NewChannelSession(channel, chatID, agentID, title)
+	// Persist the instance identity, not just the bare type. The in-memory
+	// index above has always keyed on it ("so two instances of the same type
+	// do not collide") — the session record did not, so that distinction was
+	// lost the moment the process restarted, and anything acting on "this
+	// channel's sessions" could not tell a hundred WhatsApp numbers apart.
+	meta, err := al.sharedSessionStore.NewChannelSession(channel, indexID, chatID, agentID, title)
 	if err != nil {
 		logger.WarnCF("agent", "Failed to create channel session",
 			map[string]any{"channel": channel, "chat_id": chatID, "error": err.Error()})
@@ -5471,24 +5586,12 @@ func (al *AgentLoop) ResolveSessionStore(sessionID string) *session.UnifiedStore
 			return al.sharedSessionStore
 		}
 	}
-	// Legacy fast path: main agent owns most old sessions.
-	if store := al.GetAgentStore(DefaultAgentID); store != nil {
-		if _, err := store.GetMeta(sessionID); err == nil {
-			return store
-		} else if !errors.Is(err, os.ErrNotExist) {
-			logger.WarnCF(
-				"agent",
-				"ResolveSessionStore: session meta unreadable (not a missing-session case); returning owning store despite read failure",
-				map[string]any{"session_id": sessionID, "store": store.BaseDir(), "error": err.Error()},
-			)
-			return store
-		}
-	}
-	// Slow path: scan all per-agent stores.
+	// Slow path: scan all per-agent stores. The former "legacy fast path"
+	// here special-cased the retired "main" sentinel agent (which used to own
+	// most old sessions); with the sentinel removed there is no reserved
+	// agent ID to fast-path or skip, so every registered agent is scanned
+	// uniformly.
 	for _, id := range al.GetRegistry().ListAgentIDs() {
-		if id == DefaultAgentID {
-			continue
-		}
 		store := al.GetAgentStore(id)
 		if store == nil {
 			continue
@@ -5743,7 +5846,6 @@ func (al *AgentLoop) processTaskDirect(
 		SenderID:               "task-executor",
 		UserMessage:            prompt,
 		DefaultResponse:        defaultResponse,
-		EnableSummary:          false,
 		SendResponse:           false,
 		TranscriptSessionID:    taskChatID,
 		TranscriptStore:        al.GetAgentStore(agentID),
@@ -6572,7 +6674,6 @@ func (al *AgentLoop) ProcessScheduled(
 		ChatID:              chatID,
 		UserMessage:         content,
 		DefaultResponse:     defaultResponse,
-		EnableSummary:       true,
 		SendResponse:        false,
 		TranscriptSessionID: sessionID,
 		TranscriptStore:     transcriptStore,
@@ -6775,6 +6876,34 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		}
 	}
 	if workspaceID == "" {
+		// The channel instance itself, before falling back to inbound metadata.
+		//
+		// resolveWorkspaceIDForContinuation has had this rung all along; this
+		// path did not, and the asymmetry was the bug: a session created
+		// BEFORE its channel was bound to a workspace keeps an empty
+		// workspace_id forever (resolveOrCreateChannelSession returns early on
+		// an index hit and never patches an existing session), and
+		// resolveEffectiveWorkspaceID then silently substitutes the DEFAULT
+		// workspace. Since ADR-037 makes delegation trust workspace-scoped,
+		// that authorises delegation against the wrong workspace's trust
+		// graph, and memory rooms, task placement and the working directory
+		// degrade the same way.
+		//
+		// setChannelRouting now re-stamps existing sessions when a binding is
+		// written, which repairs data. This closes it at resolution time as
+		// well, so a session created by any path that never went through that
+		// handler still resolves correctly — and so the two ladders stop
+		// disagreeing on this axis, which is the same defect shape as the
+		// default-agent divergence.
+		if instanceID := inboundInstanceID(msg); instanceID != "" {
+			if cfg := al.GetConfig(); cfg != nil {
+				if inst, ok := cfg.Channels[instanceID]; ok && inst.WorkspaceID != "" {
+					workspaceID = inst.WorkspaceID
+				}
+			}
+		}
+	}
+	if workspaceID == "" {
 		workspaceID = inboundMetadata(msg, "workspace_id")
 	}
 
@@ -6797,7 +6926,6 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		UserMessage:         msg.Content,
 		Media:               msg.Media,
 		DefaultResponse:     defaultResponse,
-		EnableSummary:       true,
 		SendResponse:        false,
 		TranscriptSessionID: transcriptSessionID,
 		TranscriptStore:     transcriptStore,
@@ -7295,7 +7423,6 @@ func (al *AgentLoop) processSystemMessage(
 		ChatID:              originChatID,
 		UserMessage:         fmt.Sprintf("[System: %s] %s", msg.Sender.CanonicalID, msg.Content),
 		DefaultResponse:     "Background task completed.",
-		EnableSummary:       false,
 		SendResponse:        true,
 		TranscriptSessionID: transcriptSessionID,
 		TranscriptStore:     transcriptStore,
@@ -7619,11 +7746,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// and external-cli dispatch paths again (a prior review found
 	// runExternalCLISubTurn had its own, weaker copy that fell through to the
 	// agent's private home directory instead of refusing).
-	wsDir, wsErr := resolveTurnWorkDirOrRefuse(turnCtx, ts.agent.ID, ts.agent.Home, ts.opts.WorkspaceID)
-	if wsErr != nil {
-		return turnResult{}, wsErr
-	}
-	turnCtx = tools.WithTurnWorkspaceDir(turnCtx, wsDir)
+	// The CALL itself is below, AFTER registerActiveTurn and the turn-end
+	// defers. A prior version returned here, before the turn existed as a
+	// turn: no EventKindError, no transcript, no done frame. The classifier
+	// already knew the cause (TranslateTurnError → agent_not_configured) and
+	// still had nowhere to put it. The user saw a turn that never started.
+	// Moving the call below makes a refusal a real failed turn the SPA can
+	// render. The gate function is unchanged — only when it runs changed.
 
 	// FR-7.5 / NFR-1: install a per-turn citation tracker so recall_memory can
 	// report surfaced memories and the loop can emit op:cited counter events
@@ -7731,6 +7860,46 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		)
 	}()
 
+	// A turn that ended in error must never close by claiming success.
+	//
+	// The "done" WS frame is emitted by the streamer reached through the
+	// unconditional `defer ts.finalizeStreamer(ctx)` registered above, which
+	// fires on EVERY return path — including the LLM-error early returns.
+	// Those paths set turnStatus = TurnEndStatusError but did NOT call
+	// markTurnFailed(), so the frame went out with DoneStats.TurnFailed
+	// absent — byte-for-byte what a successful turn looks like on the wire.
+	// Live consequence: a provider's HTTP 429 produced a turn that opened,
+	// streamed nothing, and reported success. It read as an agent ignoring
+	// the user, with nothing to retry from.
+	//
+	// The trigger is deliberately NARROW: turnStatus == TurnEndStatusError,
+	// nothing else. Emptiness is explicitly NOT a failure signal — a prior
+	// investigation enumerated eight legitimate zero-output cases (shadow
+	// sub-turn, user cancel/hard abort, abandoned turn, heartbeat with a
+	// caller-supplied success DefaultResponse, silent tool-only turn,
+	// SendResponse=false/NoHistory, client disconnected mid-stream, and the
+	// media-rejection friendly-response path) that a "no output = failed"
+	// guard would wrongly flag. None of the eight can reach this branch:
+	// every one of them exits with turnStatus Completed, Aborted, or Parked.
+	// TurnEndStatusAborted is likewise left alone — a user-initiated cancel
+	// is an intentional, successful action, and a system-initiated abort
+	// (abortTurn case 2) already emits its own EventKindError, so the user
+	// is never left in silence there.
+	//
+	// ORDERING IS LOAD-BEARING. Go runs defers LIFO, so this — registered
+	// AFTER the turn_end defer above and after finalizeStreamer's — runs
+	// FIRST, before finalizeStreamer reads ts.turnFailed and hands it to the
+	// streamer's SetTurnFailed. Registering it any earlier than
+	// `defer ts.finalizeStreamer(ctx)` would make it run too late and
+	// silently restore the bug — verified by mutation: moving this
+	// registration above finalizeStreamer's turns
+	// TestWS_ProviderRateLimitRefusal_DoneFrameDoesNotClaimSuccess red again.
+	defer func() {
+		if turnStatus == TurnEndStatusError {
+			ts.markTurnFailed()
+		}
+	}()
+
 	al.emitEvent(
 		EventKindTurnStart,
 		ts.eventMeta("runTurn", "turn.start"),
@@ -7742,6 +7911,33 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			IsRoot:      ts.parentTurnID == "",
 		},
 	)
+
+	// Shared workspace-membership gate — see the ADR-046 comment above for
+	// WHY this refuses. It runs HERE so a refusal is a registered turn:
+	// turn.start has already gone out, the LIFO defers (markTurnFailed →
+	// turn.end → finalizeStreamer) will fire on return, and the typed
+	// EventKindError below is what the SPA actually renders. Returning
+	// before registerActiveTurn left the user with silence and a classifier
+	// result nobody ever saw.
+	wsDir, wsErr := resolveTurnWorkDirOrRefuse(turnCtx, ts.agent.ID, ts.agent.Home, ts.opts.WorkspaceID)
+	if wsErr != nil {
+		turnStatus = TurnEndStatusError
+		llm := TranslateTurnError(wsErr)
+		al.emitEvent(
+			EventKindError,
+			ts.eventMeta("runTurn", "turn.error"),
+			ErrorPayload{
+				Stage:     "workspace",
+				ChatID:    ts.chatID,
+				SessionID: string(ts.routingSessionID),
+				Code:      string(llm.Code),
+				Message:   llm.Message,
+			},
+		)
+		ts.appendClassifiedError(EventKindError.String(), "workspace", llm)
+		return turnResult{}, wsErr
+	}
+	turnCtx = tools.WithTurnWorkspaceDir(turnCtx, wsDir)
 
 	// FR-011, FR-012: detect a per-thread model switch via the inbound message
 	// metadata. When the user-selected model differs from the agent's currently
@@ -7782,26 +7978,32 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				// CURRENT session learns immediately — the transcript write alone
 				// only becomes visible after a reload.
 				//
-				// Wave 1 (ADR-051 §RD5 MAJ-003): sanitize the model_switch
-				// message via the classifier so the model name does not leak
-				// into the assistant-facing copy. The classifier recognizes
-				// the "could not switch to model" shape via substring and
-				// emits a generic message; raw stays in logger.WarnCF for
-				// operator triage.
+				// The classifier has never recognized this sentence — the
+				// comment that said it did was stale. Stamp the dedicated
+				// code so live and replay both say the switch failed, not
+				// "we can't tell why". Raw stays in the warn log.
 				switchFailMsg := fmt.Sprintf(
 					"Could not switch to model %q: %s. This reply used %q instead.",
 					requested, switchErr.Error(), ts.agent.Model,
 				)
-				switchLLM := TranslateLLMError(nil, switchFailMsg)
+				switchLLM := LLMError{
+					Code:      CodeModelUnavailable,
+					Message:   defaultUserMessage(CodeModelUnavailable),
+					Retryable: isRetryable(CodeModelUnavailable),
+					Detail:    buildDetail(nil, switchFailMsg),
+				}
 				al.emitEvent(
 					EventKindError,
 					ts.eventMeta("runTurn", "turn.error"),
 					ErrorPayload{
-						Stage: "model_switch", Code: string(switchLLM.Code),
-						Message: switchLLM.Message, ChatID: ts.opts.ChatID,
+						Stage:     "model_switch",
+						Code:      string(switchLLM.Code),
+						Message:   switchLLM.Message,
+						ChatID:    ts.chatID,
+						SessionID: string(ts.routingSessionID),
 					},
 				)
-				ts.appendErrorTranscript(EventKindError.String(), "model_switch", switchLLM.Message)
+				ts.appendClassifiedError(EventKindError.String(), "model_switch", switchLLM)
 				// NB: no notification frame here — `model_switch_failed` is not a
 				// contract NotificationFrame.notification_type, so the SPA's
 				// inbound Zod validation would drop it. The EventKindError +
@@ -7818,7 +8020,6 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	}
 
 	var history []providers.Message
-	var summary string
 	if !ts.opts.NoHistory {
 		// FR-069 / FR-088: recover orphaned tool calls left by a SIGKILL or OOM
 		// kill while the gateway was paused awaiting approval. The function is
@@ -7827,16 +8028,14 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		// transcript is preserved; only the LLM-context slice (history) is
 		// cleaned so the LLM does not see dangling unanswered tool_call entries.
 		history = RecoverOrphanedToolCalls(ts.agent.Sessions, ts.sessionKey, al.auditLogger)
-		summary = ts.agent.Sessions.GetSummary(ts.sessionKey)
 	}
-	ts.captureRestorePoint(history, summary)
+	ts.captureRestorePoint(history)
 
 	// Site-1: initial assembly (CRITICAL 2 — error handled inside assembleMessages).
 	messages := al.assembleMessages(
 		turnCtx,
 		ts,
 		history,
-		summary,
 		ts.userMessage,
 		ts.media,
 		activeSkillNames(ts.agent, ts.opts),
@@ -7874,12 +8073,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			}
 			// Site-2: post-proactive-trim assembly.
 			newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
-			newSummary := ts.agent.Sessions.GetSummary(ts.sessionKey)
 			messages = al.assembleMessages(
 				turnCtx,
 				ts,
 				newHistory,
-				newSummary,
 				ts.userMessage,
 				ts.media,
 				activeSkillNames(ts.agent, ts.opts),
@@ -7972,6 +8169,7 @@ turnLoop:
 						RetryAfterSeconds: result.RetryAfterSeconds,
 						AgentID:           ts.agent.ID,
 						ChatID:            ts.chatID,
+						SessionID:         string(ts.routingSessionID),
 					},
 					map[string]any{"retry_after_seconds": result.RetryAfterSeconds},
 				)
@@ -8854,8 +9052,7 @@ turnLoop:
 							ts.refreshRestorePointFromSession(ts.agent)
 							// Site-3: post-timeout-trim assembly.
 							newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
-							newSummary := ts.agent.Sessions.GetSummary(ts.sessionKey)
-							messages = al.assembleMessages(turnCtx, ts, newHistory, newSummary, "", nil, activeSkillNames(ts.agent, ts.opts))
+							messages = al.assembleMessages(turnCtx, ts, newHistory, "", nil, activeSkillNames(ts.agent, ts.opts))
 							callMessages = messages
 							if gracefulTerminal {
 								callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
@@ -9005,8 +9202,7 @@ turnLoop:
 
 				// Site-4: post-context-overflow-trim assembly.
 				newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
-				newSummary := ts.agent.Sessions.GetSummary(ts.sessionKey)
-				messages = al.assembleMessages(turnCtx, ts, newHistory, newSummary, "", nil, activeSkillNames(ts.agent, ts.opts))
+				messages = al.assembleMessages(turnCtx, ts, newHistory, "", nil, activeSkillNames(ts.agent, ts.opts))
 				callMessages = messages
 				if gracefulTerminal {
 					callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
@@ -9039,11 +9235,10 @@ turnLoop:
 			pe := errorToProviderError(err)
 			llm := TranslateLLMError(pe, err.Error())
 
-			// FR-017a: outcome-based relabel overrides the classifier's code
-			// for both the live WS frame AND the transcript write. The relabel
-			// applies to any error emitted by this turn after the outcome-based
-			// strip-retry succeeded.
-			if ts.outcomeRelabel != "" {
+			// FR-017a: label an inconclusive residual 4xx after a
+			// successful strip-retry. A later distinct classified
+			// failure keeps its own code so live and persist agree.
+			if outcomeRelabelApplies(llm.Code, ts.outcomeRelabel) {
 				llm.Code = ts.outcomeRelabel
 				llm.Message = UserMessageForCode(ts.outcomeRelabel)
 			}
@@ -9056,16 +9251,13 @@ turnLoop:
 					Code:          string(llm.Code),
 					Message:       llm.Message,
 					ProviderError: pe,
+					SessionID:     string(ts.routingSessionID),
 				},
 			)
 			// FR-002: persist the translated provider error to the transcript
 			// (write choke point — ADR-051 §RD5). pe threaded through so the
 			// classifier sees status/body, not the stringified err.
-			ts.appendErrorTranscript(
-				EventKindError.String(), "runTurn",
-				llm.Message,
-				pe,
-			)
+			ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
 			logger.ErrorCF("agent", "LLM call failed",
 				map[string]any{
 					"agent_id":  ts.agent.ID,
@@ -9166,6 +9358,11 @@ turnLoop:
 			ts.AddTurnStats(int64(response.Usage.TotalTokens), callCost)
 			// Accumulate cache token split for transcript entry (Wave 1 token tracking).
 			ts.AddTurnCacheStats(response.Usage.CacheReadTokens, response.Usage.CacheWriteTokens)
+			// Accumulate the input/output split. The provider reports it and
+			// estimateLLMCallCost above already consumes it, but until this
+			// call existed it was dropped here — AddTurnStats carries only the
+			// collapsed total — so session stats could never report tokens_in.
+			ts.AddTurnIOStats(response.Usage.PromptTokens, response.Usage.CompletionTokens)
 		}
 
 		if len(response.ToolCalls) == 0 || gracefulTerminal {
@@ -9250,8 +9447,10 @@ turnLoop:
 				pe := errorToProviderError(err)
 				llm := TranslateLLMError(pe, err.Error())
 
-				// FR-017a: outcome-based relabel override for this turn.
-				if ts.outcomeRelabel != "" {
+				// FR-017a: label an inconclusive residual 4xx after a
+				// successful strip-retry. A later distinct classified
+				// failure keeps its own code so live and persist agree.
+				if outcomeRelabelApplies(llm.Code, ts.outcomeRelabel) {
 					llm.Code = ts.outcomeRelabel
 					llm.Message = UserMessageForCode(ts.outcomeRelabel)
 				}
@@ -9259,15 +9458,11 @@ turnLoop:
 				al.emitEvent(
 					EventKindError,
 					ts.eventMeta("runTurn", "turn.error"),
-					ErrorPayload{Stage: "llm_empty_retry", Code: string(llm.Code), Message: llm.Message, ProviderError: pe, ChatID: ts.opts.ChatID},
+					ErrorPayload{Stage: "llm_empty_retry", Code: string(llm.Code), Message: llm.Message, ProviderError: pe, ChatID: ts.opts.ChatID, SessionID: string(ts.routingSessionID)},
 				)
 				// FR-002: persist this provider error to the transcript (write
 				// choke point).
-				ts.appendErrorTranscript(
-					EventKindError.String(), "runTurn",
-					llm.Message,
-					pe,
-				)
+				ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
 				return turnResult{}, fmt.Errorf("LLM call failed during empty-response retry: %w", err)
 			}
 			if strings.TrimSpace(responseContent) == "" {
@@ -9720,7 +9915,7 @@ turnLoop:
 				// consults the SAME store first, so a granted call still
 				// short-circuits identically), and write the placeholder only on
 				// the path that genuinely blocks on a human.
-				approved := al.ApprovalGrants().IsAllowed(ts.transcriptSessionID, ts.agentID, toolName)
+				approved := al.ApprovalGrants().IsAllowed(ts.transcriptSessionID, ts.agentID, toolName, toolArgs)
 				denialReason := ""
 				if !approved {
 					// About to block on a human, for up to the approval
@@ -9983,6 +10178,7 @@ turnLoop:
 							AgentID:           ts.agent.ID,
 							ChatID:            ts.chatID,
 							Tool:              toolName,
+							SessionID:         string(ts.routingSessionID),
 						},
 						map[string]any{"retry_after_seconds": toolRLResult.RetryAfterSeconds},
 					)
@@ -10093,6 +10289,15 @@ turnLoop:
 					parts = append(parts, part)
 				}
 				outboundMedia := bus.OutboundMediaMessage{
+					// ADR-065 FR-6: media sends carry their origin too, so
+					// send_file is not a silent gap in the audit trail.
+					//
+					// From ts.agent.ID, NOT tools.ToolAgentID(ctx): ctx here is
+					// runTurn's ORIGINAL parameter and never carries the agent
+					// id — only the derived turnCtx does. The FIX 1 comment on
+					// WorkspaceID two fields below says precisely this, and the
+					// first version of this line ignored it and read back "".
+					AgentID: ts.agent.ID,
 					Channel: ts.channel,
 					ChatID:  ts.chatID,
 					// FIX 1: workspace-scoped media resolution (channels'
@@ -10573,15 +10778,13 @@ turnLoop:
 				ErrorPayload{
 					Stage: "session_save", ChatID: ts.opts.ChatID,
 					Code: string(saveLLM.Code), Message: saveLLM.Message,
+					SessionID: string(ts.routingSessionID),
 				},
 			)
 			// US-1: persist the session-save failure to the JSONL
 			// transcript so the replay path re-renders it after reload (see
 			// appendErrorTranscript docstring).
-			ts.appendErrorTranscript(
-				EventKindError.String(), "runTurn",
-				saveLLM.Message,
-			)
+			ts.appendClassifiedError(EventKindError.String(), "runTurn", saveLLM)
 			return turnResult{}, err
 		}
 	}
@@ -10600,10 +10803,6 @@ turnLoop:
 	ts.mu.RUnlock()
 	if !hasActiveStreamer && finalContent != "" {
 		ts.appendAssistantTranscript(finalContent)
-	}
-
-	if ts.opts.EnableSummary {
-		al.maybeSummarize(ts.agent, ts.sessionKey, ts.scope)
 	}
 
 	ts.setPhase(TurnPhaseCompleted)
@@ -10675,12 +10874,32 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 				EventKindError,
 				ts.eventMeta("abortTurn", "turn.error"),
 				ErrorPayload{
-					Stage:   "session_restore",
-					Code:    string(restoreLLM.Code),
-					Message: restoreLLM.Message,
-					ChatID:  ts.opts.ChatID,
+					Stage:     "session_restore",
+					Code:      string(restoreLLM.Code),
+					Message:   restoreLLM.Message,
+					ChatID:    ts.opts.ChatID,
+					SessionID: string(ts.routingSessionID),
 				},
 			)
+			ts.appendClassifiedError(EventKindError.String(), "session_restore", restoreLLM)
+			// Restore failed, so the rest of abortTurn cannot run. The
+			// live error is the restore failure (already emitted). If
+			// this was a system-initiated abort, also persist that
+			// reason so replay is not restore-only. Do not emit a
+			// second live abort frame.
+			if reason != hardInterruptAbortReason {
+				if reason == "" {
+					reason = "no reason provided"
+				}
+				abortErr := fmt.Errorf("turn aborted during %s: %s", stage, reason)
+				abortLLM := TranslateLLMError(nil, abortErr.Error())
+				presented := abortErr.Error()
+				if abortLLM.Code != CodeUnknown {
+					presented = abortLLM.Message
+				}
+				abortLLM.Message = presented
+				ts.appendClassifiedError(EventKindError.String(), stage, abortLLM)
+			}
 			return turnResult{}, err
 		}
 	}
@@ -10718,13 +10937,15 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 		EventKindError,
 		ts.eventMeta("abortTurn", "turn.error"),
 		ErrorPayload{
-			Stage:   stage,
-			Code:    string(abortLLM.Code),
-			Message: presented,
-			ChatID:  ts.opts.ChatID,
+			Stage:     stage,
+			Code:      string(abortLLM.Code),
+			Message:   presented,
+			ChatID:    ts.opts.ChatID,
+			SessionID: string(ts.routingSessionID),
 		},
 	)
-	ts.appendErrorTranscript(EventKindError.String(), stage, presented)
+	abortLLM.Message = presented
+	ts.appendClassifiedError(EventKindError.String(), stage, abortLLM)
 	return turnResult{status: TurnEndStatusAborted}, err
 }
 
@@ -10870,29 +11091,6 @@ func (al *AgentLoop) selectCandidates(
 	return agent.LightCandidates, resolvedCandidateModel(agent.LightCandidates, agent.Router.LightModel()), true
 }
 
-// maybeSummarize triggers summarization if the session history exceeds thresholds.
-func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey string, turnScope turnEventScope) {
-	newHistory := agent.Sessions.GetHistory(sessionKey)
-	tokenEstimate := al.estimateTokens(newHistory)
-	threshold := agent.ContextWindow * agent.SummarizeTokenPercent / 100
-
-	if len(newHistory) > agent.SummarizeMessageThreshold || tokenEstimate > threshold {
-		summarizeKey := agent.ID + ":" + sessionKey
-		if _, loading := al.summarizing.LoadOrStore(summarizeKey, true); !loading {
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						logger.ErrorCF("agent", "Panic during summarization", map[string]any{"panic": r})
-					}
-					al.summarizing.Delete(summarizeKey)
-				}()
-				logger.Debug("Memory threshold reached. Optimizing conversation history...")
-				al.summarizeSession(agent, sessionKey, turnScope)
-			}()
-		}
-	}
-}
-
 type compressionResult struct {
 	DroppedMessages   int
 	RemainingMessages int
@@ -10928,14 +11126,14 @@ type compressionResult struct {
 // ReadArchive error it logs at ERROR with a stable error id and emits a
 // FALLBACK breadcrumb stub so the recall path stays discoverable.
 //
-// Callers pass fresh history+summary (post-trim when called after windowTrim),
-// the current user message + media, and active skill names. The recall span is
+// Callers pass fresh history (post-trim when called after windowTrim), the
+// current user message + media, and active skill names. The recall span is
 // read from al.recallSpans for the given sessionKey.
 func (al *AgentLoop) assembleMessages(
 	ctx context.Context,
 	ts *turnState,
 	history []providers.Message,
-	summary, userMsg string,
+	userMsg string,
 	media []string,
 	skillNames []string,
 ) []providers.Message {
@@ -10973,7 +11171,6 @@ func (al *AgentLoop) assembleMessages(
 	spanMsgs := al.activeRecallSpan(ts.sessionKey).Messages()
 	return ts.agent.ContextBuilder.BuildMessages(
 		history,
-		summary,
 		userMsg,
 		media,
 		ts.opts.WorkspaceID,
@@ -11504,7 +11701,26 @@ func (al *AgentLoop) GetStartupInfo() map[string]any {
 	info := make(map[string]any)
 
 	registry := al.GetRegistry()
+	// Tools and skills are install-wide facts that every agent sees the same
+	// way — skills in particular load from ONE global directory
+	// ($OMNIPUS_HOME/skills; see globalSkillsDir). Reading them "through the
+	// default agent" was only ever a convenient handle, and it silently became
+	// a dependency on a default EXISTING once the "main" sentinel was removed
+	// (ADR-064): with no default, this returned an empty map, which made
+	// restAPI.installedSkillIDs empty, which made validateSkillIDs skip
+	// validation entirely and ACCEPT unknown skill ids. A fail-open reached
+	// through three layers of indirection.
+	//
+	// Any agent answers these questions identically, so ask any.
 	agent := registry.GetDefaultAgent()
+	if agent == nil {
+		for _, id := range registry.ListAgentIDs() {
+			if ag, ok := registry.GetAgent(id); ok && ag != nil {
+				agent = ag
+				break
+			}
+		}
+	}
 	if agent == nil {
 		return info
 	}
@@ -11603,276 +11819,6 @@ func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
 	}
 	sb.WriteString("]")
 	return sb.String()
-}
-
-// summarizeSession summarizes the conversation history for a session.
-func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string, turnScope turnEventScope) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-
-	history := agent.Sessions.GetHistory(sessionKey)
-	summary := agent.Sessions.GetSummary(sessionKey)
-
-	// Keep the most recent Turns for continuity, aligned to a Turn boundary
-	// so that no tool-call sequence is split.
-	if len(history) <= 4 {
-		return
-	}
-
-	safeCut := findSafeBoundary(history, len(history)-4)
-	if safeCut <= 0 {
-		return
-	}
-	keepCount := len(history) - safeCut
-	toSummarize := history[:safeCut]
-
-	// Oversized Message Guard
-	maxMessageTokens := agent.ContextWindow / 2
-	validMessages := make([]providers.Message, 0)
-	omitted := false
-
-	for _, m := range toSummarize {
-		if m.Role != "user" && m.Role != "assistant" {
-			continue
-		}
-		msgTokens := len(m.Content) / 2
-		if msgTokens > maxMessageTokens {
-			omitted = true
-			continue
-		}
-		validMessages = append(validMessages, m)
-	}
-
-	if len(validMessages) == 0 {
-		return
-	}
-
-	const (
-		maxSummarizationMessages = 10
-		llmMaxRetries            = 3
-		llmTemperature           = 0.3
-		fallbackMaxContentLength = 200
-	)
-
-	// Multi-Part Summarization
-	var finalSummary string
-	var degraded bool
-	if len(validMessages) > maxSummarizationMessages {
-		mid := len(validMessages) / 2
-
-		mid = al.findNearestUserMessage(validMessages, mid)
-
-		part1 := validMessages[:mid]
-		part2 := validMessages[mid:]
-
-		s1, s1Degraded := al.summarizeBatch(ctx, agent, part1, "")
-		s2, s2Degraded := al.summarizeBatch(ctx, agent, part2, "")
-		degraded = s1Degraded || s2Degraded
-
-		mergePrompt := fmt.Sprintf(
-			"Merge these two conversation summaries into one cohesive summary:\n\n1: %s\n\n2: %s",
-			s1,
-			s2,
-		)
-
-		resp, err := al.retryLLMCall(ctx, agent, mergePrompt, llmMaxRetries)
-		if err == nil && resp != nil && resp.Content != "" {
-			finalSummary = resp.Content
-		} else {
-			logger.WarnCF(
-				"agent",
-				"summarizeSession: LLM merge of multi-part summaries failed after retries, falling back to concatenation",
-				map[string]any{
-					"session_key": sessionKey,
-					"reason":      errString(err),
-				},
-			)
-			finalSummary = s1 + " " + s2
-			degraded = true
-		}
-	} else {
-		finalSummary, degraded = al.summarizeBatch(ctx, agent, validMessages, summary)
-	}
-
-	if omitted && finalSummary != "" {
-		finalSummary += "\n[Note: Some oversized messages were omitted from this summary for efficiency.]"
-	}
-
-	if finalSummary != "" {
-		agent.Sessions.SetSummary(sessionKey, finalSummary)
-		agent.Sessions.TruncateHistory(sessionKey, keepCount)
-		if saveErr := agent.Sessions.Save(sessionKey); saveErr != nil {
-			logger.ErrorCF("agent", "summarizeSession: failed to persist summarized session",
-				map[string]any{"session_key": sessionKey, "error": saveErr.Error()})
-		}
-		al.emitEvent(
-			EventKindSessionSummarize,
-			turnScope.meta(0, "summarizeSession", "turn.session.summarize"),
-			SessionSummarizePayload{
-				SummarizedMessages: len(validMessages),
-				KeptMessages:       keepCount,
-				SummaryLen:         len(finalSummary),
-				OmittedOversized:   omitted,
-				Degraded:           degraded,
-			},
-		)
-	}
-}
-
-// findNearestUserMessage finds the nearest user message to the given index.
-// It searches backward first, then forward if no user message is found.
-func (al *AgentLoop) findNearestUserMessage(messages []providers.Message, mid int) int {
-	originalMid := mid
-
-	for mid > 0 && messages[mid].Role != "user" {
-		mid--
-	}
-
-	if messages[mid].Role == "user" {
-		return mid
-	}
-
-	mid = originalMid
-	for mid < len(messages) && messages[mid].Role != "user" {
-		mid++
-	}
-
-	if mid < len(messages) {
-		return mid
-	}
-
-	return originalMid
-}
-
-// retryLLMCall calls the LLM with retry logic.
-func (al *AgentLoop) retryLLMCall(
-	ctx context.Context,
-	agent *AgentInstance,
-	prompt string,
-	maxRetries int,
-) (*providers.LLMResponse, error) {
-	const (
-		llmTemperature = 0.3
-	)
-
-	var resp *providers.LLMResponse
-	var err error
-
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		al.activeRequests.Add(1)
-		resp, err = func() (*providers.LLMResponse, error) {
-			defer al.activeRequests.Done()
-			return agent.Provider.Chat(
-				ctx,
-				[]providers.Message{{Role: "user", Content: prompt}},
-				nil,
-				agent.Model,
-				map[string]any{
-					"max_tokens":       agent.MaxTokens,
-					"temperature":      llmTemperature,
-					"prompt_cache_key": agent.ID,
-				},
-			)
-		}()
-
-		if err == nil && resp != nil && resp.Content != "" {
-			return resp, nil
-		}
-		if attempt < maxRetries-1 {
-			if sleepErr := sleepWithContext(ctx, time.Duration(attempt+1)*100*time.Millisecond); sleepErr != nil {
-				return resp, sleepErr
-			}
-		}
-	}
-
-	return resp, err
-}
-
-// summarizeBatch summarizes a batch of messages. It returns the summary text
-// and a degraded flag: degraded is true when the LLM summarization call
-// failed after retries and the returned text is a crude per-message
-// truncation fallback rather than a real LLM-produced summary.
-func (al *AgentLoop) summarizeBatch(
-	ctx context.Context,
-	agent *AgentInstance,
-	batch []providers.Message,
-	existingSummary string,
-) (string, bool) {
-	const (
-		llmMaxRetries             = 3
-		llmTemperature            = 0.3
-		fallbackMinContentLength  = 200
-		fallbackMaxContentPercent = 10
-	)
-
-	var sb strings.Builder
-	sb.WriteString(
-		"Provide a concise summary of this conversation segment, preserving core context and key points.\n",
-	)
-	if existingSummary != "" {
-		sb.WriteString("Existing context: ")
-		sb.WriteString(existingSummary)
-		sb.WriteString("\n")
-	}
-	sb.WriteString("\nCONVERSATION:\n")
-	for _, m := range batch {
-		fmt.Fprintf(&sb, "%s: %s\n", m.Role, m.Content)
-	}
-	prompt := sb.String()
-
-	response, err := al.retryLLMCall(ctx, agent, prompt, llmMaxRetries)
-	if err == nil && response != nil && response.Content != "" {
-		return strings.TrimSpace(response.Content), false
-	}
-
-	reason := "LLM returned empty content"
-	if err != nil {
-		reason = errString(err)
-	}
-	logger.WarnCF("agent", "summarizeBatch: LLM summarization failed after retries, falling back to crude truncation",
-		map[string]any{
-			"agent_id":    agent.ID,
-			"batch_size":  len(batch),
-			"max_retries": llmMaxRetries,
-			"reason":      reason,
-		})
-
-	var fallback strings.Builder
-	fallback.WriteString("Conversation summary: ")
-	for i, m := range batch {
-		if i > 0 {
-			fallback.WriteString(" | ")
-		}
-		content := strings.TrimSpace(m.Content)
-		runes := []rune(content)
-		if len(runes) == 0 {
-			fallback.WriteString(fmt.Sprintf("%s: ", m.Role))
-			continue
-		}
-
-		keepLength := len(runes) * fallbackMaxContentPercent / 100
-		if keepLength < fallbackMinContentLength {
-			keepLength = fallbackMinContentLength
-		}
-
-		if keepLength > len(runes) {
-			keepLength = len(runes)
-		}
-
-		content = string(runes[:keepLength])
-		if keepLength < len(runes) {
-			content += "..."
-		}
-		fallback.WriteString(fmt.Sprintf("%s: %s", m.Role, content))
-	}
-	return fallback.String(), true
-}
-
-// estimateTokens estimates the number of tokens in a message list.
-// Counts Content, ToolCalls arguments, and ToolCallID metadata so that
-// tool-heavy conversations are not systematically undercounted.
-func (al *AgentLoop) estimateTokens(messages []providers.Message) int {
-	return sumMessageTokens(messages)
 }
 
 func (al *AgentLoop) handleCommand(
@@ -12070,11 +12016,14 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 // mirroring how applyExplicitSkillCommand rewrites opts.UserMessage for
 // one-shot skill activation above.
 //
-// Known nuance: agentID "main" (the gateway/router agent) is never given the
-// remember / recall_memory / run_retrospective tools — pkg/agent/instance.go
-// registers them only for agentID != "main". The steering prompt still
-// degrades gracefully there: the model simply reports it doesn't have that
-// capability instead of the turn erroring.
+// Every agent is given the remember / recall_memory / recall_conversation /
+// run_retrospective tools now (pkg/agent/instance.go and this package's
+// agent.Tools.Register calls register them unconditionally — the retired
+// "main" sentinel used to be excluded by a hardcoded identity check, which
+// went away with the sentinel). Whether an agent can actually use one is
+// governed by its own tool policy like any other tool; the steering prompt
+// still degrades gracefully if a policy denies it — the model simply reports
+// it doesn't have that capability instead of the turn erroring.
 func (al *AgentLoop) applyMemoryCommandPrompt(
 	raw string,
 	opts *processOptions,
@@ -12164,7 +12113,6 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			}
 
 			agent.Sessions.SetHistory(opts.SessionKey, make([]providers.Message, 0))
-			agent.Sessions.SetSummary(opts.SessionKey, "")
 			return agent.Sessions.Save(opts.SessionKey)
 		}
 	}
@@ -12298,12 +12246,29 @@ func extractProvider(registry *AgentRegistry) (providers.LLMProvider, bool) {
 	if registry == nil {
 		return nil, false
 	}
-	// Get any agent to access the provider
-	defaultAgent := registry.GetDefaultAgent()
-	if defaultAgent == nil {
-		return nil, false
+	// Any agent's provider will do — they all borrow the same one. Ask the
+	// default first because it is the cheapest lookup, then any registered
+	// agent, then the registry's own.
+	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil && defaultAgent.Provider != nil {
+		return defaultAgent.Provider, true
 	}
-	return defaultAgent.Provider, true
+	for _, id := range registry.ListAgentIDs() {
+		if ag, ok := registry.GetAgent(id); ok && ag != nil && ag.Provider != nil {
+			return ag.Provider, true
+		}
+	}
+	// No agents at all. Before ADR-064 this was unreachable: the "main"
+	// sentinel was always registered, so a provider was always reachable
+	// through it. Removing the sentinel made an empty registry real, and
+	// UpsertAgentFast started failing here on first-agent creation — its
+	// callers then fell back to a full config reload, the restartServices
+	// cascade issue #571 exists to keep off this path.
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	if registry.provider != nil {
+		return registry.provider, true
+	}
+	return nil, false
 }
 
 // llmRate holds approximate per-1K-token pricing for a model family.
@@ -12587,7 +12552,7 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 	sessionID, agentID, toolName, toolCallID, turnID string,
 	args map[string]any,
 ) (approved bool, denialReason string) {
-	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName) {
+	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName, args) {
 		return true, ""
 	}
 	approver := al.loadToolApprover()
@@ -12837,4 +12802,66 @@ func (al *AgentLoop) forgetSession(sessionID string) {
 		}
 		return true
 	})
+}
+
+// ChannelOwnership returns the stored resolver, or nil before wiring.
+func (al *AgentLoop) ChannelOwnership() tools.ChannelOwnership {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	return al.channelOwnership
+}
+
+// SetChannelOwnership installs the channel-ownership resolver on every
+// registered agent's send_message tool (ADR-065).
+//
+// It is injected AFTER construction, following the SetPlanStore precedent,
+// because the resolver reads live gateway config and pkg/agent cannot import
+// pkg/gateway without a cycle. Until it runs, send_message has no ownership
+// information: it will reply into the turn's own conversation and REFUSE any
+// other target rather than assume the send is allowed. That is deliberate —
+// an unresolvable ownership question must not read as permission.
+func (al *AgentLoop) SetChannelOwnership(o tools.ChannelOwnership) {
+	// STORE it, not just push it. registerSharedTools builds a FRESH
+	// MessageTool per agent on every reload — and it re-runs on agent
+	// create/update, tool-policy writes, god-mode toggles and mailbox changes
+	// via ReloadProviderAndConfig and UpsertAgentFast. Pushing only into the
+	// instances that exist right now meant every one of those silently reset
+	// ownership to nil for the rest of the process lifetime. Because the tool
+	// is fail-closed that degraded into "refuses every target except the
+	// turn's own conversation" rather than a hole, but it was permanent and
+	// silent. This mirrors what SetPlanStore actually does: al.planStore is
+	// stored and re-read at registration.
+	al.mu.Lock()
+	al.channelOwnership = o
+	al.mu.Unlock()
+
+	if o == nil {
+		logger.ErrorCF("agent", "SetChannelOwnership: installed a nil resolver — "+
+			"send_message will refuse every target except the turn's own conversation", nil)
+		return
+	}
+	reg := al.GetRegistry()
+	if reg == nil {
+		logger.WarnCF("agent", "SetChannelOwnership: no registry yet; ownership not installed", nil)
+		return
+	}
+	installed := 0
+	for _, id := range reg.ListAgentIDs() {
+		ag, ok := reg.GetAgent(id)
+		if !ok || ag == nil || ag.Tools == nil {
+			continue
+		}
+		t, found := ag.Tools.Get("send_message")
+		if !found {
+			continue
+		}
+		mt, isMessageTool := t.(*tools.MessageTool)
+		if !isMessageTool {
+			continue
+		}
+		mt.SetChannelOwnership(o)
+		installed++
+	}
+	logger.InfoCF("agent", "channel ownership installed on send_message",
+		map[string]any{"agents": installed})
 }

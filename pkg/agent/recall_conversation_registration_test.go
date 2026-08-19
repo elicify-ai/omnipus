@@ -64,8 +64,6 @@ func TestRecallConversation_RealRegistration_ReachesEvictedTurns(t *testing.T) {
 
 	agent, ok := al.GetRegistry().GetAgent(delegateID)
 	require.True(t, ok, "test setup: delegate agent must be registered")
-	require.NotEqual(t, "main", agent.ID,
-		"test setup invariant: recall_conversation is excluded for the main agent")
 
 	// Seed enough turns that windowTrim evicts the earliest one from the live
 	// window while the archive (agent.Sessions, the per-agent store) keeps
@@ -104,7 +102,7 @@ func TestRecallConversation_RealRegistration_ReachesEvictedTurns(t *testing.T) {
 	// The regression check: fetch the REAL registered tool (not a
 	// hand-constructed stub) and confirm it can recall the evicted turn.
 	tool, ok := agent.Tools.Get("recall_conversation")
-	require.True(t, ok, "recall_conversation must be registered for a non-main agent")
+	require.True(t, ok, "recall_conversation must be registered for this agent")
 
 	ctx := tools.WithSessionKey(context.Background(), sessionKey)
 	result := tool.Execute(ctx, map[string]any{"turn_range": "1-1"})
@@ -132,4 +130,45 @@ func TestRecallConversation_RealRegistration_ReachesEvictedTurns(t *testing.T) {
 	}
 	require.True(t, found,
 		"the recall span's messages must contain the evicted turn's content — got %+v", spanMsgs)
+}
+
+// TestMemoryTools_RegisteredRegardlessOfAgentID pins the removal of the
+// `agentID != "main"` gate: instance.go used to register remember/
+// recall_memory/run_retrospective (and loop.go used to register
+// recall_conversation) for every agent EXCEPT the sentinel — a hardcoded
+// identity check, not a capability one. That gate is gone; every agent now
+// gets all four memory tools registered unconditionally, governed solely by
+// tool policy (which may still DENY them — registration and policy are
+// separate concerns). This test proves it for an agent literally named
+// "main" (no longer reserved) as the strongest possible regression pin: if
+// the old identity-based gate ever crept back in, this is exactly the ID it
+// would silently exclude again.
+func TestMemoryTools_RegisteredRegardlessOfAgentID(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:              tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+			List: []config.AgentConfig{
+				{ID: "main", Name: "Just An Agent Named Main", Type: config.AgentTypeCustom},
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom},
+			},
+		},
+	}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	t.Cleanup(al.Close)
+
+	for _, agentID := range []string{"main", "mia"} {
+		agent, ok := al.GetRegistry().GetAgent(agentID)
+		require.True(t, ok, "test setup: agent %q must be registered", agentID)
+
+		for _, toolName := range []string{"remember", "recall_memory", "run_retrospective", "recall_conversation"} {
+			_, ok := agent.Tools.Get(toolName)
+			require.True(t, ok, "agent %q must have %q registered — the old `agentID != \"main\"` gate is gone", agentID, toolName)
+		}
+	}
 }

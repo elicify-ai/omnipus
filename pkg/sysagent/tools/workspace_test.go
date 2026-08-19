@@ -108,7 +108,7 @@ func TestWorkspaceUpdate_PreservesDelegationGraph(t *testing.T) {
 
 // TestWorkspaceUpdate_FullFieldRoundTrip asserts that a gateway-authored workspace
 // file containing EVERY on-disk field (id, name, description, status, pinned,
-// pin_order, core_team, repository, owner, is_default, delegation,
+// pin_order, core_team, owner, is_default, delegation,
 // created_at, updated_at) survives an update_workspace round-trip with ALL
 // fields intact. This is the acceptance proof of the unified-struct fix: the
 // shared workspace.Workspace type ensures no field written by the gateway path
@@ -131,7 +131,6 @@ func TestWorkspaceUpdate_FullFieldRoundTrip(t *testing.T) {
 		"pinned": true,
 		"pin_order": 3,
 		"core_team": ["mia","jim","ava","ray"],
-		"repository": "https://github.com/example/repo",
 		"owner": "alice",
 		"is_default": false,
 		"delegation": [
@@ -190,7 +189,6 @@ func TestWorkspaceUpdate_FullFieldRoundTrip(t *testing.T) {
 	assertField("status", "active")
 	assertField("pinned", true)
 	assertField("pin_order", float64(3))
-	assertField("repository", "https://github.com/example/repo")
 	assertField("owner", "alice")
 	// is_default=false is omitted by json:",omitempty" — reads back as nil/absent,
 	// which correctly deserialises as the bool zero value false. Verify absence.

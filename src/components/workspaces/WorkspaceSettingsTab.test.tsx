@@ -83,7 +83,6 @@ const mockWorkspace: Workspace = {
   pin_order: 0,
   task_count: 0,
   is_default: false,
-  repository: '',
   core_team: [],
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
@@ -398,7 +397,7 @@ describe('WorkspaceSettingsTab — D3: hydration must not trigger a spurious PUT
   })
 })
 
-// D3 residual (2nd site) — the IDENTITY group (name/description/repository).
+// D3 residual (2nd site) — the IDENTITY group (name/description).
 //
 // Root cause: unlike the instructions group above, this group passed NO
 // `disabled` option to useAutoSave at all — the previous RCA called it "safe
@@ -407,7 +406,7 @@ describe('WorkspaceSettingsTab — D3: hydration must not trigger a spurious PUT
 // async gap). It is NOT true across a WORKSPACE SWITCH: this component
 // persists across switches (no `key` prop at the route — see the
 // instructions-group test above for the same premise), and the re-hydration
-// `useEffect` only re-syncs `name`/`description`/`repository` ONE commit
+// `useEffect` only re-syncs `name`/`description` ONE commit
 // after `workspace.id` itself already changed. That produces a real
 // committed render pairing the NEW workspace's id with the OLD workspace's
 // stale identity fields, which useAutoSave's change-detection reads as a
@@ -418,14 +417,13 @@ describe('WorkspaceSettingsTab — D3: hydration must not trigger a spurious PUT
 // useAutoSave on a reactive `identityHydrated` flag, reset via the SAME
 // mid-render pattern already used for `instructionsHydrated` above.
 describe('WorkspaceSettingsTab — D3 residual (identity group): workspace switch must not trigger a spurious PUT', () => {
-  it("REVERT-PROOF: switching to a SECOND workspace within the same mounted WorkspaceSettingsTab does not fire a spurious updateWorkspace PUT echoing that workspace's own (unedited) name/description/repository", async () => {
+  it("REVERT-PROOF: switching to a SECOND workspace within the same mounted WorkspaceSettingsTab does not fire a spurious updateWorkspace PUT echoing that workspace's own (unedited) name/description", async () => {
     const WORKSPACE_B_ID = 'ws-test-002'
     const mockWorkspaceB: Workspace = {
       ...mockWorkspace,
       id: WORKSPACE_B_ID,
       name: 'Workspace B',
       description: 'Workspace B description',
-      repository: 'https://github.com/org/b',
     }
 
     const queryClient = makeClient()

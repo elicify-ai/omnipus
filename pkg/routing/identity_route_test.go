@@ -55,6 +55,10 @@ func TestResolveRoute_IdentityUser_FallsThroughToDefault(t *testing.T) {
 		{ID: "jim"},
 	}
 	cfg := testConfig(agents, nil)
+	// Same as the sibling default tests: the per-entity Default flag does not
+	// drive resolution (ADR-054 D6.4) — the singleton does. Without it "jim"
+	// would win on the sorted last-resort rung.
+	cfg.Agents.Defaults.DefaultAgentID = "mia"
 	r := NewRouteResolver(cfg)
 
 	route := r.ResolveRoute(RouteInput{

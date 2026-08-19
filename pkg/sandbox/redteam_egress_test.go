@@ -98,7 +98,7 @@ func runEgressChild() {
 
 	// Use the production policy, exactly. Includes the bind-port allow-list
 	// for completeness even though we exercise CONNECT here, not BIND.
-	policy := sandbox.DefaultPolicy(home, nil, nil, []uint16{18001})
+	policy := sandbox.DefaultPolicy(home, nil, nil, nil, []uint16{18001})
 	if err := backend.Apply(policy); err != nil {
 		fmt.Fprintf(os.Stderr, "Apply failed (skip): %v\n", err)
 		os.Exit(77)

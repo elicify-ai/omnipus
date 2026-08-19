@@ -155,3 +155,37 @@ describe('D9 — isForceLoggingOut() race flag', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// Landing-race bugfix: forceLogout() now also drops every cached
+// query/mutation (queryClient.clear(), via the SAME dynamic-import pattern
+// already used for @/store/auth, for the same circular-import reason —
+// queryClient.ts imports forceLogout from this module). Without this, a
+// subsequent login (same tab, possibly a different user) could silently
+// reuse this session's cached data (e.g. the workspaces list — see
+// DefaultWorkspaceRedirect.tsx / Sidebar.tsx's shared workspacesQueryKeys
+// entry) for as long as its staleTime window allowed.
+// ---------------------------------------------------------------------------
+describe('forceLogout — clears the query cache (landing-race bugfix)', () => {
+  it('drops every cached query so a subsequent login cannot reuse stale cross-session data', async () => {
+    const { queryClient } = await import('@/lib/queryClient')
+    queryClient.setQueryData(['test-cache-key'], 'stale-value')
+    expect(queryClient.getQueryData(['test-cache-key'])).toBe('stale-value')
+
+    const { forceLogout } = await import('./authLogout')
+    act(() => { forceLogout() })
+    // Let the dynamic import('@/lib/queryClient').then(clear) microtask settle.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+    expect(queryClient.getQueryData(['test-cache-key'])).toBeUndefined()
+  })
+
+  it('runs cleanly with an empty cache — nothing to clear', async () => {
+    const { queryClient } = await import('@/lib/queryClient')
+    expect(queryClient.getQueryCache().getAll()).toHaveLength(0)
+
+    const { forceLogout } = await import('./authLogout')
+    expect(() => { act(() => { forceLogout() }) }).not.toThrow()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  })
+})

@@ -335,9 +335,8 @@ func TestIntegration_ContextCompactionOverflow(t *testing.T) {
 	assert.Contains(t, allRemaining, "apply the landlock policy",
 		"most-recent user message content must survive trim (FR-003 floor keeps last user msg)")
 
-	// -- Assert: NO compression summary (FR-004) ------------------------------
-	// windowTrim MUST NOT write an "Emergency compression dropped" marker.
-	summary := agent.Sessions.GetSummary(sessionKey)
-	assert.NotContains(t, summary, "Emergency compression dropped",
-		"windowTrim MUST NOT write a compression summary marker (FR-004)")
+	// -- Assert: NO compression marker (FR-004) -------------------------------
+	// windowTrim MUST NOT inject an "Emergency compression dropped" marker.
+	assert.NotContains(t, allRemaining, "Emergency compression dropped",
+		"windowTrim MUST NOT inject a compression marker (FR-004)")
 }

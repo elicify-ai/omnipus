@@ -941,13 +941,13 @@ func TestLoadConfig_HooksProcessConfig(t *testing.T) {
 }
 
 // TestDefaultConfig_DMScope verifies the default dm_scope value
-// TestDefaultConfig_SummarizationThresholds verifies summarization defaults
+// TestDefaultConfig_SummarizationThresholds verifies the SummarizeTokenPercent
+// default. The field survived the legacy-summariser decommission because it
+// also gates and sizes the timeout-recovery windowTrim trigger in
+// pkg/agent/loop.go::runTurn — it is no longer a summarization knob.
 func TestDefaultConfig_SummarizationThresholds(t *testing.T) {
 	cfg := DefaultConfig()
 
-	if cfg.Agents.Defaults.SummarizeMessageThreshold != 20 {
-		t.Errorf("SummarizeMessageThreshold = %d, want 20", cfg.Agents.Defaults.SummarizeMessageThreshold)
-	}
 	if cfg.Agents.Defaults.SummarizeTokenPercent != 75 {
 		t.Errorf("SummarizeTokenPercent = %d, want 75", cfg.Agents.Defaults.SummarizeTokenPercent)
 	}
@@ -2064,4 +2064,19 @@ func TestLoadConfig_PublicURL_AutoDetectFromDevpodPreviewURL(t *testing.T) {
 				cfg.Gateway.PublicURL, "https://pod-omnipus.fly.dev")
 		}
 	})
+}
+
+func TestLoadConfig_MissingVersionField(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"gateway":{"host":"127.0.0.1","port":5000}}`), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := LoadConfig(cfgPath)
+	if err == nil {
+		t.Fatal("LoadConfig must refuse a config with no version field")
+	}
+	if !strings.Contains(err.Error(), "missing a version field") {
+		t.Fatalf("error = %q, want it to name the missing version field", err.Error())
+	}
 }

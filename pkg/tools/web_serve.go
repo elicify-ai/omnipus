@@ -386,7 +386,9 @@ func (t *WebServeTool) executeStatic(ctx context.Context, rawPath string, args m
 		return ErrorResult("web_serve: static registry not configured")
 	}
 
-	// Register (atomically replaces any previous registration for this agent).
+	// Register (renews in place with the same token when this agent is
+	// re-serving the same directory; atomically replaces the previous
+	// registration, invalidating its token, only when the directory changes).
 	token, deadline, regErr := t.served.Register(agentID, absDir, duration)
 	if regErr != nil {
 		return ErrorResult(fmt.Sprintf("web_serve: registration failed: %v", regErr))
@@ -641,8 +643,18 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 		return auditErr
 	}
 
+	// ADR-063 FR-3.5: the dev-server child carries THIS TURN's policy, derived
+	// from the same authored FSPolicy that ResolvePath used to validate rawPath
+	// above — so the served directory and the child's kernel write grant come
+	// from one decision rather than two.
+	kernelPolicy, kpErr := sandbox.KernelPolicyForTurn(policy)
+	if kpErr != nil {
+		t.devReg.Unregister(token)
+		return ErrorResult(fmt.Sprintf("web_serve: sandbox policy error: %v", kpErr))
+	}
+
 	// Spawn the background child. Release the reservation if the spawn fails.
-	cmd, spawnErr := t.spawnDevChild(command, absDir, envSlice, exposePort)
+	cmd, spawnErr := t.spawnDevChild(command, absDir, envSlice, exposePort, kernelPolicy)
 	if spawnErr != nil {
 		t.devReg.Unregister(token)
 		return ErrorResult(fmt.Sprintf("web_serve: failed to start dev server: %v", spawnErr))
@@ -753,11 +765,16 @@ func (t *WebServeTool) proxyAddr() string {
 }
 
 // spawnDevChild starts the dev-server background child.
+//
+// kernelPolicy is the turn's per-turn kernel policy (ADR-063 FR-3.5), or nil
+// when no kernel policy is in force — in which case the child runs under the
+// boot profile exactly as it did before per-turn confinement was wired up.
 func (t *WebServeTool) spawnDevChild(
 	command string,
 	workDir string,
 	env []string,
 	port int32,
+	kernelPolicy *sandbox.SandboxPolicy,
 ) (*exec.Cmd, error) {
 	parts := strings.Fields(command)
 	if len(parts) == 0 {
@@ -769,6 +786,7 @@ func (t *WebServeTool) spawnDevChild(
 		MemoryLimitBytes: 0,
 		WorkspaceDir:     workDir,
 		EgressProxyAddr:  t.proxyAddr(),
+		KernelPolicy:     kernelPolicy,
 	}
 
 	return sandbox.SpawnBackgroundChild(parts, workDir, env, port, limits)

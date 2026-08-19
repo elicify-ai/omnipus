@@ -86,6 +86,9 @@ func newOrphanForegroundTurnTestWSHandler(
 				ModelName: "blocking-cancel-provider",
 				MaxTokens: 4096,
 			},
+			// An explicitly registered agent: no implicit "main" sentinel remains
+			// for chat dispatch to resolve to (ADR-064).
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

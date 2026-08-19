@@ -36,7 +36,6 @@ func TestMigrateFromJSON_Basic(t *testing.T) {
 			{Role: "user", Content: "hello"},
 			{Role: "assistant", Content: "hi"},
 		},
-		Summary: "A greeting.",
 		Created: time.Now(),
 		Updated: time.Now(),
 	})
@@ -58,14 +57,6 @@ func TestMigrateFromJSON_Basic(t *testing.T) {
 	}
 	if history[0].Content != "hello" || history[1].Content != "hi" {
 		t.Errorf("unexpected messages: %+v", history)
-	}
-
-	summary, err := store.GetSummary(ctx, "test")
-	if err != nil {
-		t.Fatalf("GetSummary: %v", err)
-	}
-	if summary != "A greeting." {
-		t.Errorf("summary = %q", summary)
 	}
 }
 
@@ -394,12 +385,6 @@ func TestMigrateFromJSON_SkipsMetaJSONFiles(t *testing.T) {
 	if addErr := store.AddMessage(ctx, "agent:main:omnipus:direct:omnipus:test", "user", "keep me"); addErr != nil {
 		t.Fatalf("AddMessage: %v", addErr)
 	}
-	if summaryErr := store.SetSummary(
-		ctx, "agent:main:omnipus:direct:omnipus:test", "keep summary",
-	); summaryErr != nil {
-		t.Fatalf("SetSummary: %v", summaryErr)
-	}
-
 	metaPath := filepath.Join(sessionsDir, "agent_main_omnipus_direct_omnipus_test.meta.json")
 	if _, statErr := os.Stat(metaPath); statErr != nil {
 		t.Fatalf("meta file missing before migration: %v", statErr)
@@ -419,14 +404,6 @@ func TestMigrateFromJSON_SkipsMetaJSONFiles(t *testing.T) {
 	}
 	if len(history) != 1 || history[0].Content != "keep me" {
 		t.Fatalf("history = %+v, want preserved single message", history)
-	}
-
-	summary, err := store.GetSummary(ctx, "agent:main:omnipus:direct:omnipus:test")
-	if err != nil {
-		t.Fatalf("GetSummary: %v", err)
-	}
-	if summary != "keep summary" {
-		t.Fatalf("summary = %q, want %q", summary, "keep summary")
 	}
 
 	if _, statErr := os.Stat(metaPath); statErr != nil {

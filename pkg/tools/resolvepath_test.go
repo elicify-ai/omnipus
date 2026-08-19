@@ -126,9 +126,18 @@ func TestResolvePath_IOThroughOsRoot_NoTOCTOU(t *testing.T) {
 	}
 }
 
-// TestResolvePath_AbsoluteGatedByScope — spec test 4 (FR-005/FR-016): an
-// absolute path outside WorkDir is refused under Confined and permitted
-// (minus carve-outs) under Unrestricted.
+// TestResolvePath_AbsoluteGatedByScope — spec test 4 (FR-005/FR-016), UPDATED
+// for ADR-063 / spec unified-file-access-and-mounts FR-2.2/FR-2.5: an
+// absolute FSOpRead path outside WorkDir is now permitted (minus carve-outs)
+// under BOTH Confined and Unrestricted — reads are open regardless of Scope.
+// The name is kept (it is the well-known "spec test 4" for FR-005/FR-016;
+// the underlying anchoring-on-realpath property those FRs describe is still
+// exercised, just no longer split by Scope for reads) but the body now
+// documents the FR-2.2 change directly: this used to be THE test proving
+// Confined denies an absolute outside read. It no longer does, by design.
+// The write side of the split (still Scope-independent, but confined to
+// WorkDir/a mount either way) is exercised separately by
+// TestResolvePath_FSOpWrite_ConfinedToWorkDirOrMount_RegardlessOfScope below.
 func TestResolvePath_AbsoluteGatedByScope(t *testing.T) {
 	workDir := t.TempDir()
 	outside := t.TempDir()
@@ -138,12 +147,17 @@ func TestResolvePath_AbsoluteGatedByScope(t *testing.T) {
 	}
 
 	confined := confinedPolicy(t, workDir)
-	_, err := ResolvePath(context.Background(), confined, "read_file", "", FSOpRead, outsideFile)
-	if err == nil {
-		t.Fatalf("expected confined scope to refuse an absolute outside path")
+	handleConfined, err := ResolvePath(context.Background(), confined, "read_file", "", FSOpRead, outsideFile)
+	if err != nil {
+		t.Fatalf("FR-2.2: expected Confined scope to permit an absolute outside READ, got: %v", err)
 	}
-	if !errors.Is(err, ErrOutsideScope) {
-		t.Errorf("expected ErrOutsideScope, got: %v", err)
+	defer handleConfined.Close()
+	dataConfined, err := handleConfined.ReadFile()
+	if err != nil {
+		t.Fatalf("ReadFile (confined): %v", err)
+	}
+	if string(dataConfined) != "outside content" {
+		t.Errorf("content = %q, want %q", dataConfined, "outside content")
 	}
 
 	unrestricted := unrestrictedPolicy(t, workDir)
@@ -161,10 +175,48 @@ func TestResolvePath_AbsoluteGatedByScope(t *testing.T) {
 	}
 }
 
-// TestResolvePath_SymlinkAnchorsOnRealpath — spec test 5 (FR-006): a
-// symlink INSIDE the confined WorkDir pointing OUTSIDE it is refused —
-// confinement anchors on the realpath, not the lexical in-workdir path.
-func TestResolvePath_SymlinkAnchorsOnRealpath(t *testing.T) {
+// TestResolvePath_FSOpWrite_ConfinedToWorkDirOrMount_RegardlessOfScope —
+// ADR-063 / spec unified-file-access-and-mounts FR-2.2/FR-2.5: unlike reads,
+// an FSOpWrite to the SAME absolute outside path is refused under BOTH
+// Confined and Unrestricted scope — writes are confined to WorkDir or a
+// mount (policy.AllowedRoots) regardless of Scope, which is the new,
+// narrower thing "restrict to workspace" governs (FR-2.5).
+func TestResolvePath_FSOpWrite_ConfinedToWorkDirOrMount_RegardlessOfScope(t *testing.T) {
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "x.txt")
+
+	for _, tc := range []struct {
+		name   string
+		policy func(t *testing.T, workDir string) fspolicy.FSPolicy
+	}{
+		{"confined", confinedPolicy},
+		{"unrestricted", unrestrictedPolicy},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			_, err := ResolvePath(context.Background(), tc.policy(t, workDir), "write_file", "", FSOpWrite, outsideFile)
+			if err == nil {
+				t.Fatalf("expected FSOpWrite outside WorkDir with no mount to be refused under %s scope", tc.name)
+			}
+			if !errors.Is(err, ErrOutsideScope) {
+				t.Errorf("expected ErrOutsideScope, got: %v", err)
+			}
+		})
+	}
+}
+
+// TestResolvePath_SymlinkAnchorsOnRealpath_Write — spec test 5 (FR-006),
+// NARROWED to FSOpWrite by ADR-063 / spec unified-file-access-and-mounts
+// FR-2.2: a symlink INSIDE the confined WorkDir pointing OUTSIDE it is
+// refused for a WRITE — confinement still anchors on the realpath, not the
+// lexical in-workdir path, for the op that still confines at all. The
+// original version of this test asserted the same for FSOpRead; that
+// assertion is now FALSE by design (see
+// TestResolvePath_SymlinkAnchorsOnRealpath_Read_NowOpen immediately below) —
+// reads are open regardless of Scope or of a symlink's target, so realpath
+// anchoring for reads now matters only for the carve-out check (FR-017),
+// covered by TestCarveOut_AnchoredOnOmnipusHome_NotWorkingDir.
+func TestResolvePath_SymlinkAnchorsOnRealpath_Write(t *testing.T) {
 	workDir := t.TempDir()
 	outside := t.TempDir()
 	secretFile := filepath.Join(outside, "secret.txt")
@@ -177,12 +229,46 @@ func TestResolvePath_SymlinkAnchorsOnRealpath(t *testing.T) {
 	}
 
 	policy := confinedPolicy(t, workDir)
-	_, err := ResolvePath(context.Background(), policy, "read_file", "", FSOpRead, "escape_link")
+	_, err := ResolvePath(context.Background(), policy, "write_file", "", FSOpWrite, "escape_link")
 	if err == nil {
-		t.Fatalf("expected symlink escape to be refused")
+		t.Fatalf("expected a write through a symlink escape to be refused")
 	}
 	if !errors.Is(err, ErrOutsideScope) {
 		t.Errorf("expected ErrOutsideScope, got: %v", err)
+	}
+}
+
+// TestResolvePath_SymlinkAnchorsOnRealpath_Read_NowOpen is the read half of
+// the same fixture, pinned to the FR-2.2 headline change directly: a read
+// through the identical symlink escape now SUCCEEDS, because FSOpRead is
+// open anywhere outside the secret set, regardless of Scope. This is the
+// exact BDD S-2 / dataset-row-1 shape ("read succeeds while write on the
+// same underlying target is denied") applied to a symlink rather than a
+// plain absolute path.
+func TestResolvePath_SymlinkAnchorsOnRealpath_Read_NowOpen(t *testing.T) {
+	workDir := t.TempDir()
+	outside := t.TempDir()
+	secretFile := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secretFile, []byte("top secret"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	link := filepath.Join(workDir, "escape_link_read")
+	if err := os.Symlink(secretFile, link); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+
+	policy := confinedPolicy(t, workDir)
+	handle, err := ResolvePath(context.Background(), policy, "read_file", "", FSOpRead, "escape_link_read")
+	if err != nil {
+		t.Fatalf("FR-2.2: expected a read through a symlink escape to succeed, got: %v", err)
+	}
+	defer handle.Close()
+	data, err := handle.ReadFile()
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "top secret" {
+		t.Errorf("content = %q, want %q", data, "top secret")
 	}
 }
 
@@ -283,9 +369,15 @@ func TestResolvePath_SymlinkedWorkspaceRoot_Confined(t *testing.T) {
 // negative control for the fix proven above (Binding Rule 4: a fix needs a
 // positive assertion AND a control proving it didn't just start accepting
 // everything). Normalizing policy.WorkDir's own symlink must not, in the
-// process, start ACCEPTING a path that genuinely escapes the workspace —
+// process, start ACCEPTING a WRITE that genuinely escapes the workspace —
 // neither via an absolute path to an unrelated real location, nor via a
-// lexical ".." escape expressed relative to the symlinked root.
+// lexical ".." escape expressed relative to the symlinked root. UPDATED for
+// ADR-063 / spec unified-file-access-and-mounts FR-2.2: this used FSOpRead
+// originally; reads are now open outside WorkDir by design (see
+// TestResolvePath_SymlinkedWorkspaceRoot_Read_NowOpen below for that half),
+// so the negative control that still means something here — "the symlink
+// normalization fix didn't quietly widen confinement" — is FSOpWrite, which
+// remains confined regardless of Scope.
 func TestResolvePath_SymlinkedWorkspaceRoot_GenuineEscapeStillRefused(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlinks are POSIX-specific here")
@@ -307,24 +399,61 @@ func TestResolvePath_SymlinkedWorkspaceRoot_GenuineEscapeStillRefused(t *testing
 	policy := fspolicy.FSPolicy{WorkDir: symlinkedWorkDir, Scope: fspolicy.FSScopeConfined}
 
 	// An absolute path to a real file entirely outside the (symlinked)
-	// workspace must still be refused.
-	_, err := ResolvePath(context.Background(), policy, "read_file", "call-1", FSOpRead, secretFile)
+	// workspace must still be refused for a write.
+	_, err := ResolvePath(context.Background(), policy, "write_file", "call-1", FSOpWrite, secretFile)
 	if err == nil {
-		t.Fatal("expected ResolvePath to refuse a path outside the symlinked workspace, got success")
+		t.Fatal("expected ResolvePath to refuse a write outside the symlinked workspace, got success")
 	}
 	if !errors.Is(err, ErrOutsideScope) {
 		t.Errorf("expected ErrOutsideScope, got: %v", err)
 	}
 
 	// A leading ".." escape expressed relative to the symlinked WorkDir must
-	// still be refused too.
-	_, err = ResolvePath(context.Background(), policy, "read_file", "call-2", FSOpRead, "../secret.txt")
+	// still be refused too, for a write.
+	_, err = ResolvePath(context.Background(), policy, "write_file", "call-2", FSOpWrite, "../secret.txt")
 	if err == nil {
 		t.Fatal("expected a leading .. escape to be refused even with a symlinked WorkDir")
 	}
 	if !errors.Is(err, ErrOutsideScope) {
 		t.Errorf("expected ErrOutsideScope, got: %v", err)
 	}
+}
+
+// TestResolvePath_SymlinkedWorkspaceRoot_Read_NowOpen is the FR-2.2 read
+// counterpart to the write-only negative control above: the identical
+// absolute-path and ".." escapes now succeed for a read, through a
+// symlinked WorkDir just like through a plain one.
+func TestResolvePath_SymlinkedWorkspaceRoot_Read_NowOpen(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks are POSIX-specific here")
+	}
+
+	realTarget := t.TempDir()
+	parent := t.TempDir()
+	symlinkedWorkDir := filepath.Join(parent, "workdir-link")
+	if err := os.Symlink(realTarget, symlinkedWorkDir); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+
+	outside := t.TempDir()
+	secretFile := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secretFile, []byte("top secret"), 0o600); err != nil {
+		t.Fatalf("seed secret: %v", err)
+	}
+
+	policy := fspolicy.FSPolicy{WorkDir: symlinkedWorkDir, Scope: fspolicy.FSScopeConfined}
+
+	handle, err := ResolvePath(context.Background(), policy, "read_file", "call-1", FSOpRead, secretFile)
+	if err != nil {
+		t.Fatalf("FR-2.2: expected a read outside the symlinked workspace to succeed, got: %v", err)
+	}
+	handle.Close()
+
+	handle2, err := ResolvePath(context.Background(), policy, "read_file", "call-2", FSOpRead, "../secret.txt")
+	if err != nil {
+		t.Fatalf("FR-2.2: expected a '..' escape read to succeed even with a symlinked WorkDir, got: %v", err)
+	}
+	handle2.Close()
 }
 
 // TestResolvePath_NullByteRejected — spec test 6 (dataset row 11): an
@@ -557,42 +686,108 @@ func TestResolvePath_EmptyPathDefaultsToWorkDir(t *testing.T) {
 	}
 }
 
-// TestResolvePath_LeadingDotDotEscape — item #10 (ADR-046 P1 review): a
-// rawPath that starts with ".." (escaping WorkDir from the very first
-// component) is refused under Confined scope.
-func TestResolvePath_LeadingDotDotEscape(t *testing.T) {
+// TestResolvePath_LeadingDotDotEscape_Write — item #10 (ADR-046 P1 review),
+// NARROWED to FSOpWrite by ADR-063 / spec unified-file-access-and-mounts
+// FR-2.2: a rawPath that starts with ".." (escaping WorkDir from the very
+// first component) is still refused under Confined scope for a WRITE. The
+// original FSOpRead version of this assertion is now false by design — see
+// TestResolvePath_LeadingDotDotEscape_Read_NowOpen.
+func TestResolvePath_LeadingDotDotEscape_Write(t *testing.T) {
 	workDir := t.TempDir()
 	policy := confinedPolicy(t, workDir)
 
-	_, err := ResolvePath(context.Background(), policy, "read_file", "", FSOpRead, filepath.Join("..", "outside.txt"))
+	_, err := ResolvePath(context.Background(), policy, "write_file", "", FSOpWrite, filepath.Join("..", "outside.txt"))
 	if err == nil {
-		t.Fatalf("expected a leading '..' escape to be refused")
+		t.Fatalf("expected a leading '..' escape to be refused for a write")
 	}
 	if !errors.Is(err, ErrOutsideScope) {
 		t.Errorf("expected ErrOutsideScope, got: %v", err)
 	}
 }
 
-// TestResolvePath_MidStringDotDotReentry — item #10 (ADR-046 P1 review): a
-// rawPath that dips into a subdirectory before ".."-ing back out past
-// WorkDir (rather than starting with ".." immediately) is refused too — a
-// lexically distinct shape from TestResolvePath_LeadingDotDotEscape and from
-// the symlink-based escape tests above (no symlink involved here at all,
-// pure ".." reentry).
-func TestResolvePath_MidStringDotDotReentry(t *testing.T) {
+// TestResolvePath_LeadingDotDotEscape_Read_NowOpen is the FR-2.2 read
+// counterpart: the identical ".." escape now succeeds for a read, since
+// reads are open outside WorkDir regardless of how the outside path was
+// spelled (absolute, symlink, or a lexical ".." escape) as long as it is not
+// in the secret set.
+func TestResolvePath_LeadingDotDotEscape_Read_NowOpen(t *testing.T) {
+	outer := t.TempDir()
+	workDir := filepath.Join(outer, "work")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workDir: %v", err)
+	}
+	// The ".." escape from workDir lands in workDir's own parent (outer,
+	// fully test-owned) — seed a real file there so a successful read has
+	// real content to check.
+	outsideFile := filepath.Join(outer, "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside content"), 0o644); err != nil {
+		t.Fatalf("seed outside file: %v", err)
+	}
+	policy := confinedPolicy(t, workDir)
+
+	handle, err := ResolvePath(context.Background(), policy, "read_file", "", FSOpRead, filepath.Join("..", "outside.txt"))
+	if err != nil {
+		t.Fatalf("FR-2.2: expected a leading '..' escape to succeed for a read, got: %v", err)
+	}
+	defer handle.Close()
+	data, err := handle.ReadFile()
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "outside content" {
+		t.Errorf("content = %q, want %q", data, "outside content")
+	}
+}
+
+// TestResolvePath_MidStringDotDotReentry_Write — item #10 (ADR-046 P1
+// review), NARROWED to FSOpWrite: a rawPath that dips into a subdirectory
+// before ".."-ing back out past WorkDir (rather than starting with ".."
+// immediately) is refused too — a lexically distinct shape from
+// TestResolvePath_LeadingDotDotEscape_Write and from the symlink-based
+// escape tests above (no symlink involved here at all, pure ".." reentry).
+func TestResolvePath_MidStringDotDotReentry_Write(t *testing.T) {
 	workDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(workDir, "sub"), 0o755); err != nil {
 		t.Fatalf("mkdir sub: %v", err)
 	}
 	policy := confinedPolicy(t, workDir)
 
-	_, err := ResolvePath(context.Background(), policy, "read_file", "", FSOpRead,
+	_, err := ResolvePath(context.Background(), policy, "write_file", "", FSOpWrite,
 		filepath.Join("sub", "..", "..", "outside.txt"))
 	if err == nil {
-		t.Fatalf("expected a mid-string '..' reentry escape to be refused")
+		t.Fatalf("expected a mid-string '..' reentry escape to be refused for a write")
 	}
 	if !errors.Is(err, ErrOutsideScope) {
 		t.Errorf("expected ErrOutsideScope, got: %v", err)
+	}
+}
+
+// TestResolvePath_MidStringDotDotReentry_Read_NowOpen is the FR-2.2 read
+// counterpart to the mid-string reentry shape above.
+func TestResolvePath_MidStringDotDotReentry_Read_NowOpen(t *testing.T) {
+	outer := t.TempDir()
+	workDir := filepath.Join(outer, "work")
+	if err := os.MkdirAll(filepath.Join(workDir, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir sub: %v", err)
+	}
+	outsideFile := filepath.Join(outer, "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside content"), 0o644); err != nil {
+		t.Fatalf("seed outside file: %v", err)
+	}
+	policy := confinedPolicy(t, workDir)
+
+	handle, err := ResolvePath(context.Background(), policy, "read_file", "", FSOpRead,
+		filepath.Join("sub", "..", "..", "outside.txt"))
+	if err != nil {
+		t.Fatalf("FR-2.2: expected a mid-string '..' reentry to succeed for a read, got: %v", err)
+	}
+	defer handle.Close()
+	data, err := handle.ReadFile()
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "outside content" {
+		t.Errorf("content = %q, want %q", data, "outside content")
 	}
 }
 
@@ -639,8 +834,12 @@ func TestGenericTools_PassDocumentedFSOp(t *testing.T) {
 			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)`,
 		},
 		{
+			// FR-2.3a (ADR-063 / spec unified-file-access-and-mounts):
+			// send_file uses FSOpSend, not FSOpRead, purely for audit —
+			// distinguishing a disclosure to a chat channel from an
+			// ordinary read. It carries no additional path restriction.
 			toolsDir, "send_file.go", "send_file",
-			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.allowPaths)`,
+			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpSend, path, t.allowPaths)`,
 		},
 		{
 			toolsDir, "web_serve.go", "web_serve (static + dev)",
@@ -669,6 +868,337 @@ func TestGenericTools_PassDocumentedFSOp(t *testing.T) {
 			if !strings.Contains(string(data), tc.snippet) {
 				t.Errorf("%s: expected call site for %q not found (FSOp drifted from its documented value):\n  %s",
 					tc.file, tc.tool, tc.snippet)
+			}
+		})
+	}
+}
+
+// ============================================================================
+// FR-2 (ADR-063 / spec unified-file-access-and-mounts) — operation-aware
+// decision coverage. The table below is the "every op x location" matrix the
+// task explicitly asks for: inside the work dir, outside it (non-carve-out),
+// inside a mount (policy.AllowedRoots), and the secret set (a dedicated
+// sub-test below, since it needs a real $OMNIPUS_HOME-shaped tree rather
+// than a bare two-directory fixture).
+// ============================================================================
+
+// fr2Tree is the shared fixture: a work dir, an unrelated outside dir, and a
+// mount root — a mount is modeled exactly as FR-6.1 describes it at the app
+// layer, a write grant on a real local folder via policy.AllowedRoots,
+// independent of the FR-5.4 symlink materialization mounts will also get.
+type fr2Tree struct {
+	workDir   string
+	outside   string
+	mountRoot string
+}
+
+func newFR2Tree(t *testing.T) fr2Tree {
+	t.Helper()
+	return fr2Tree{
+		workDir:   t.TempDir(),
+		outside:   t.TempDir(),
+		mountRoot: t.TempDir(),
+	}
+}
+
+// fr2Policy builds an FSPolicy for tr under the given scope, with
+// tr.mountRoot granted via AllowedRoots.
+func fr2Policy(t *testing.T, tr fr2Tree, scope fspolicy.FSScope) fspolicy.FSPolicy {
+	t.Helper()
+	realWork, err := filepath.EvalSymlinks(tr.workDir)
+	if err != nil {
+		t.Fatalf("resolve workDir: %v", err)
+	}
+	realMount, err := filepath.EvalSymlinks(tr.mountRoot)
+	if err != nil {
+		t.Fatalf("resolve mountRoot: %v", err)
+	}
+	return fspolicy.FSPolicy{WorkDir: realWork, Scope: scope, AllowedRoots: []string{realMount}}
+}
+
+// TestFR2_OpByLocationMatrix is the headline table-driven proof of FR-2.2:
+// FSOpRead/List/Send are allowed inside the work dir, outside it, AND inside
+// a mount (open, minus the secret set — a mount is a strict subset of what
+// reads already permit); FSOpWrite/Serve are allowed inside the work dir and
+// inside a mount, but refused outside both; FSOpExec is unchanged from the
+// pre-FR-2 Scope-only dispatch (exercised separately below, since it varies
+// by Scope, not by op-vs-location the way the other five do).
+func TestFR2_OpByLocationMatrix(t *testing.T) {
+	type location struct {
+		name   string
+		target func(tr fr2Tree) string
+	}
+	locations := []location{
+		{"inside work dir", func(tr fr2Tree) string { return filepath.Join(tr.workDir, "f.txt") }},
+		{"outside work dir (non-carve-out)", func(tr fr2Tree) string { return filepath.Join(tr.outside, "f.txt") }},
+		{"inside a mount", func(tr fr2Tree) string { return filepath.Join(tr.mountRoot, "f.txt") }},
+	}
+
+	readLikeOps := []FSOp{FSOpRead, FSOpList, FSOpSend}
+	writeLikeOps := []FSOp{FSOpWrite, FSOpServe}
+
+	for _, scope := range []fspolicy.FSScope{fspolicy.FSScopeConfined, fspolicy.FSScopeUnrestricted} {
+		for _, loc := range locations {
+			for _, op := range readLikeOps {
+				t.Run(string(scope)+"/"+string(op)+"/"+loc.name, func(t *testing.T) {
+					tr := newFR2Tree(t)
+					target := loc.target(tr)
+					if err := os.WriteFile(target, []byte("content:"+string(op)), 0o644); err != nil {
+						t.Fatalf("seed target: %v", err)
+					}
+					policy := fr2Policy(t, tr, scope)
+					handle, err := ResolvePath(context.Background(), policy, "test", "", op, target)
+					if err != nil {
+						t.Fatalf("FR-2.2: expected %s to be allowed at %s under %s scope, got: %v", op, loc.name, scope, err)
+					}
+					defer handle.Close()
+					data, err := handle.ReadFile()
+					if err != nil {
+						t.Fatalf("ReadFile: %v", err)
+					}
+					if string(data) != "content:"+string(op) {
+						t.Errorf("content = %q, want %q", data, "content:"+string(op))
+					}
+				})
+			}
+
+			for _, op := range writeLikeOps {
+				t.Run(string(scope)+"/"+string(op)+"/"+loc.name, func(t *testing.T) {
+					tr := newFR2Tree(t)
+					target := loc.target(tr)
+					policy := fr2Policy(t, tr, scope)
+					handle, err := ResolvePath(context.Background(), policy, "test", "", op, target)
+
+					if loc.name == "outside work dir (non-carve-out)" {
+						if err == nil {
+							handle.Close()
+							t.Fatalf("FR-2.2: expected %s outside WorkDir and outside any mount to be refused under %s scope", op, scope)
+						}
+						if !errors.Is(err, ErrOutsideScope) {
+							t.Errorf("expected ErrOutsideScope, got: %v", err)
+						}
+						return
+					}
+
+					// inside WorkDir or inside the mount: must succeed, and
+					// the write must actually persist to disk.
+					if err != nil {
+						t.Fatalf("FR-2.2: expected %s to be allowed at %s under %s scope, got: %v", op, loc.name, scope, err)
+					}
+					defer handle.Close()
+					if writeErr := handle.WriteFile([]byte("written:" + string(op))); writeErr != nil {
+						t.Fatalf("WriteFile: %v", writeErr)
+					}
+					data, err := os.ReadFile(target)
+					if err != nil || string(data) != "written:"+string(op) {
+						t.Fatalf("write did not persist: data=%q err=%v", data, err)
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestFR2_Exec_UnchangedScopeDispatch is FSOpExec's own coverage — per the
+// task brief and FR-2.2's table, exec is deliberately left on the pre-FR-2
+// Scope-only dispatch (the ADR-062 kernel model governs it, not this app
+// layer's mount awareness), so — unlike Read/Write/Serve — its outcome still
+// varies by Scope alone and does NOT consult policy.AllowedRoots.
+func TestFR2_Exec_UnchangedScopeDispatch(t *testing.T) {
+	tr := newFR2Tree(t)
+	outsideTarget := filepath.Join(tr.outside, "cwd")
+	if err := os.MkdirAll(outsideTarget, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	mountTarget := filepath.Join(tr.mountRoot, "cwd")
+	if err := os.MkdirAll(mountTarget, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	confined := fr2Policy(t, tr, fspolicy.FSScopeConfined)
+	if _, err := ResolvePath(context.Background(), confined, "bash", "", FSOpExec, outsideTarget); !errors.Is(err, ErrOutsideScope) {
+		t.Errorf("confined exec outside WorkDir: err = %v, want ErrOutsideScope", err)
+	}
+	// Unchanged from today: exec does NOT consult AllowedRoots, so even a
+	// mount does not help it under Confined scope.
+	if _, err := ResolvePath(context.Background(), confined, "bash", "", FSOpExec, mountTarget); !errors.Is(err, ErrOutsideScope) {
+		t.Errorf("confined exec inside a mount: err = %v, want ErrOutsideScope (exec ignores AllowedRoots, unchanged)", err)
+	}
+
+	unrestricted := fr2Policy(t, tr, fspolicy.FSScopeUnrestricted)
+	if handle, err := ResolvePath(context.Background(), unrestricted, "bash", "", FSOpExec, outsideTarget); err != nil {
+		t.Errorf("unrestricted exec outside WorkDir: unexpected error: %v", err)
+	} else {
+		handle.Close()
+	}
+}
+
+// TestFR2_MountWrite_AncestorSymlinkSwap_TOCTOU is the mount-write analogue of
+// TestResolvePath_IOThroughOsRoot_NoTOCTOU (spec test 3, FR-006), for the
+// adversarial-review finding that a mount write's I/O-time re-check
+// (recheckUnrestrictedCarveOut, before this fix) verified only the secret
+// set, never containment in policy.AllowedRoots — so a host-fs (root==nil)
+// handle carrying a bare resolved-abs string could be walked out from under
+// itself.
+//
+// The write resolves successfully to a target inside a granted mount; then,
+// BEFORE the actual I/O runs, an ANCESTOR directory under the mount — fully
+// owned by whoever the mount points at, which can be the SAME turn doing the
+// write, since it is their own repository — is swapped from a real directory
+// to a symlink pointing entirely outside every granted root (neither WorkDir
+// nor the mount). The write must be refused at I/O time, not silently
+// redirected to wherever the swapped symlink now resolves.
+func TestFR2_MountWrite_AncestorSymlinkSwap_TOCTOU(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink races are POSIX-specific")
+	}
+	tr := newFR2Tree(t)
+	policy := fr2Policy(t, tr, fspolicy.FSScopeConfined)
+
+	// The ancestor directory under the mount that gets swapped — modeling the
+	// finding's "002/sub" shape: a subdirectory the mount owner (here, the
+	// same turn) already created inside their own mounted repo.
+	subDir := filepath.Join(tr.mountRoot, "sub")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("seed sub: %v", err)
+	}
+	target := filepath.Join(subDir, "victim.txt")
+
+	handle, err := ResolvePath(context.Background(), policy, "write_file", "", FSOpWrite, target)
+	if err != nil {
+		t.Fatalf("initial resolve (still inside the mount) should succeed: %v", err)
+	}
+	defer handle.Close()
+
+	// escapeDir is outside BOTH WorkDir and the mount — the destination the
+	// swap tries to redirect the write to.
+	escapeDir := t.TempDir()
+
+	// Swap "sub" from a real directory to a symlink pointing at escapeDir.
+	// This needs no privilege beyond what a normal write-capable turn already
+	// has over its own mounted directory.
+	if err := os.RemoveAll(subDir); err != nil {
+		t.Fatalf("remove sub: %v", err)
+	}
+	if err := os.Symlink(escapeDir, subDir); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+
+	writeErr := handle.WriteFile([]byte("BREACH: wrote outside every granted root via ancestor symlink swap"))
+
+	if _, statErr := os.Stat(filepath.Join(escapeDir, "victim.txt")); statErr == nil {
+		t.Fatalf("BREACH: wrote outside every granted root via ancestor symlink swap (WriteFile err=%v)", writeErr)
+	}
+	if writeErr == nil {
+		t.Fatalf("expected the ancestor-swap write to be refused, but WriteFile reported success")
+	}
+}
+
+// TestFR2_SecretSet_DeniedForEveryOp is dataset rows 3/4 generalized across
+// every op: the secret set (master.key here) is refused for every FSOp, not
+// just reads — fspolicy.IsCarveOut runs unconditionally before ResolvePath
+// ever consults op.
+func TestFR2_SecretSet_DeniedForEveryOp(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	agentHome := filepath.Join(home, "agents", "self")
+	if err := os.MkdirAll(agentHome, 0o755); err != nil {
+		t.Fatalf("mkdir agentHome: %v", err)
+	}
+	masterKey := filepath.Join(home, "master.key")
+	if err := os.WriteFile(masterKey, []byte("key-material"), 0o600); err != nil {
+		t.Fatalf("seed master.key: %v", err)
+	}
+
+	for _, restrict := range []bool{true, false} {
+		policy, err := fspolicy.EffectiveFSPolicy(context.Background(), agentHome, "", restrict, config.OmnipusHomeDir(), "self", "")
+		if err != nil {
+			t.Fatalf("EffectiveFSPolicy: %v", err)
+		}
+		for _, op := range []FSOp{FSOpRead, FSOpList, FSOpSend, FSOpWrite, FSOpServe} {
+			t.Run(string(policy.Scope)+"/"+string(op), func(t *testing.T) {
+				_, err := ResolvePath(context.Background(), policy, "test", "", op, masterKey)
+				if !errors.Is(err, ErrCarveOut) {
+					t.Errorf("op %s: err = %v, want ErrCarveOut", op, err)
+				}
+			})
+		}
+	}
+}
+
+// TestFR2_ZeroValueFSOp_Rejected is FR-2.4's direct test: an empty FSOp must
+// fail loudly with ErrPathInvalid, whether the target resolves inside or
+// outside WorkDir — never silently take a default branch.
+func TestFR2_ZeroValueFSOp_Rejected(t *testing.T) {
+	tr := newFR2Tree(t)
+	policy := fr2Policy(t, tr, fspolicy.FSScopeConfined)
+
+	insideTarget := filepath.Join(tr.workDir, "f.txt")
+	if err := os.WriteFile(insideTarget, []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	t.Run("inside WorkDir", func(t *testing.T) {
+		_, err := ResolvePath(context.Background(), policy, "test", "", FSOp(""), insideTarget)
+		if !errors.Is(err, ErrPathInvalid) {
+			t.Errorf("err = %v, want ErrPathInvalid", err)
+		}
+	})
+
+	t.Run("outside WorkDir", func(t *testing.T) {
+		_, err := ResolvePath(context.Background(), policy, "test", "", FSOp(""), filepath.Join(tr.outside, "f.txt"))
+		if !errors.Is(err, ErrPathInvalid) {
+			t.Errorf("err = %v, want ErrPathInvalid", err)
+		}
+	})
+
+	t.Run("garbage FSOp value", func(t *testing.T) {
+		_, err := ResolvePath(context.Background(), policy, "test", "", FSOp("delete"), insideTarget)
+		if !errors.Is(err, ErrPathInvalid) {
+			t.Errorf("err = %v, want ErrPathInvalid", err)
+		}
+	})
+}
+
+// TestFR2_HeadlinePair_ReadSucceedsWriteDenied_SamePath is spec §4 row 1/2's
+// exact pairing, asserted directly against the SAME resolved path in one
+// test: "read_file on a path outside the work dir SUCCEEDS while write_file
+// on the SAME path is DENIED." This is the single assertion the whole of
+// FR-2 exists to make true.
+func TestFR2_HeadlinePair_ReadSucceedsWriteDenied_SamePath(t *testing.T) {
+	tr := newFR2Tree(t)
+	target := filepath.Join(tr.outside, "shared.txt")
+	if err := os.WriteFile(target, []byte("pre-existing content"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	for _, scope := range []fspolicy.FSScope{fspolicy.FSScopeConfined, fspolicy.FSScopeUnrestricted} {
+		t.Run(string(scope), func(t *testing.T) {
+			policy := fr2Policy(t, tr, scope)
+
+			readHandle, err := ResolvePath(context.Background(), policy, "read_file", "", FSOpRead, target)
+			if err != nil {
+				t.Fatalf("read_file on %q must succeed, got: %v", target, err)
+			}
+			data, err := readHandle.ReadFile()
+			readHandle.Close()
+			if err != nil || string(data) != "pre-existing content" {
+				t.Fatalf("ReadFile: data=%q err=%v", data, err)
+			}
+
+			_, err = ResolvePath(context.Background(), policy, "write_file", "", FSOpWrite, target)
+			if err == nil {
+				t.Fatalf("write_file on the SAME path %q must be denied", target)
+			}
+			if !errors.Is(err, ErrOutsideScope) {
+				t.Errorf("expected ErrOutsideScope, got: %v", err)
+			}
+
+			// The file must be untouched by the denied write attempt.
+			after, err := os.ReadFile(target)
+			if err != nil || string(after) != "pre-existing content" {
+				t.Fatalf("target must be unmodified after the denied write: data=%q err=%v", after, err)
 			}
 		})
 	}

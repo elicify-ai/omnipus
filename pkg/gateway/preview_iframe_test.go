@@ -901,6 +901,24 @@ func TestServePreview_LoadStress_ConcurrentProbes(t *testing.T) {
 		duration = 5 * time.Second
 	)
 
+	// Let the client REUSE connections. Go's default MaxIdleConnsPerHost is 2,
+	// so with 30 concurrent workers almost every request opened and closed a
+	// fresh connection — burning one ephemeral port each. macOS has 16,384
+	// ephemeral ports and holds each in TIME_WAIT for ~15s, so the range is
+	// exhausted within seconds and further dials fail with "can't assign
+	// requested address". Linux survives only because its range is ~28,000 and
+	// recycles faster.
+	//
+	// Without this the test measured the host's ephemeral port range, not the
+	// preview handler: measured standalone with no Omnipus code involved, the
+	// default client produced 46,015 requests with 295 errors, while a reusing
+	// client produced 344,143 requests with ZERO. The handler was never the
+	// variable.
+	if tr, ok := client.Transport.(*http.Transport); ok {
+		tr.MaxIdleConnsPerHost = workers
+		tr.MaxIdleConns = workers
+	}
+
 	var before runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)

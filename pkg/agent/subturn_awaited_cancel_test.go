@@ -91,6 +91,7 @@ func TestSpawnSubTurn_AwaitedSyncCancel_CascadesAndRecordsDescendants(t *testing
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Provider: "mock"},
+			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

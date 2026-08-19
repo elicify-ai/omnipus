@@ -822,6 +822,10 @@ func TestTestMCPServer_SuccessHealsDisconnectedEnabledServer(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			// This test asks the registry for the default agent and requires
+			// it: MCP tools are registered onto that agent. There is no
+			// implicit "main" sentinel to be it any more (ADR-064).
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{

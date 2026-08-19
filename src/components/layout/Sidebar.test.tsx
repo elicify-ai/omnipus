@@ -194,6 +194,19 @@ function makeWrapper() {
   }
 }
 
+// Like makeWrapper(), but also hands back the QueryClient instance itself —
+// makeWrapper() intentionally only exposes the Wrapper component (every
+// existing call site just needs `wrapper:`), but the landing-race
+// queryClient.clear()-on-sign-out test below needs to seed/inspect the SAME
+// client Sidebar's useQueryClient() hook resolves to.
+function makeWrapperWithClient() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const Wrapper = ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  )
+  return { Wrapper, queryClient }
+}
+
 // Mock Framer Motion — AnimatePresence/motion renders children without animation
 vi.mock('framer-motion', () => ({
   motion: {
@@ -935,5 +948,31 @@ describe('Sidebar — FR-020 sign-out calls server logout before local teardown'
 
     expect(clearAuthMock).toHaveBeenCalledOnce()
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/login' })
+  })
+
+  // Landing-race bugfix: a manual "Sign out" must drop the query cache too
+  // (mirrors forceLogout()'s queryClient.clear() in authLogout.ts, covered
+  // separately in authLogout.test.ts) — otherwise a later sign-in on the
+  // same tab could silently reuse this session's cached data (e.g. the
+  // workspaces list — see DefaultWorkspaceRedirect.tsx's shared
+  // workspacesQueryKeys entry) for as long as its staleTime window allows.
+  it('clears the query cache on sign-out, so a later sign-in cannot reuse this session\'s cached data', async () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    const { Wrapper, queryClient } = makeWrapperWithClient()
+    render(<Sidebar />, { wrapper: Wrapper })
+
+    // Seed an arbitrary cache entry — stands in for any session-scoped query
+    // (workspaces, sessions, agents, ...) that could otherwise ride into a
+    // subsequent sign-in.
+    act(() => { queryClient.setQueryData(['test-cache-key'], 'stale-value') })
+    expect(queryClient.getQueryData(['test-cache-key'])).toBe('stale-value')
+
+    const signOutBtn = screen.getByRole('button', { name: 'Sign out' })
+    await act(async () => {
+      fireEvent.click(signOutBtn)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(queryClient.getQueryData(['test-cache-key'])).toBeUndefined()
   })
 })

@@ -66,6 +66,19 @@ properties:
     type: string
     description: Current sandbox enforcement mode (from ApplyState).
     example: enforce
+  filesystem_model:
+    type: string
+    enum: [confined, open]
+    description: >
+      Which ADR-062 filesystem model is active. "confined" enumerates the
+      paths that may be read and executed; "open" leaves reads and execution
+      unrestricted apart from the secret set, and confines writes exactly as
+      "confined" does. This never affects what an agent may WRITE.
+      Surfaced because the two postures are indistinguishable from the
+      outside: an operator cannot tell from behaviour whether a read
+      succeeded because the model is open or because the path happened to be
+      on the enumerated list.
+    example: confined
   disabled_by:
     type: string
     description: >

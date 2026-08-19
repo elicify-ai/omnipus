@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -35,11 +34,11 @@ func TestListAgentSessions_IncludesSharedStoreSessions(t *testing.T) {
 	shared := api.agentLoop.GetSessionStore()
 	require.NotNil(t, shared, "test harness must wire a shared session store")
 
-	meta, err := shared.NewSession(session.SessionTypeChat, "webchat", agent.DefaultAgentID)
+	meta, err := shared.NewSession(session.SessionTypeChat, "webchat", "mia")
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	api.listAgentSessions(w, agent.DefaultAgentID)
+	api.listAgentSessions(w, "mia")
 
 	require.Equal(t, 200, w.Code, "body: %s", w.Body.String())
 	var got []gen.Session
@@ -60,10 +59,10 @@ func TestListAgentSessions_DedupesSessionPresentInBothStores(t *testing.T) {
 
 	shared := api.agentLoop.GetSessionStore()
 	require.NotNil(t, shared, "test harness must wire a shared session store")
-	legacy := api.agentLoop.GetAgentStore(agent.DefaultAgentID)
+	legacy := api.agentLoop.GetAgentStore("mia")
 	require.NotNil(t, legacy, "test harness must wire a legacy per-agent session store")
 
-	meta, err := shared.NewSession(session.SessionTypeChat, "webchat", agent.DefaultAgentID)
+	meta, err := shared.NewSession(session.SessionTypeChat, "webchat", "mia")
 	require.NoError(t, err)
 
 	// Simulate the pre-fix duplicate-mint bug: the exact same session id also
@@ -79,7 +78,7 @@ func TestListAgentSessions_DedupesSessionPresentInBothStores(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dupDir, "meta.json"), data, 0o600))
 
 	w := httptest.NewRecorder()
-	api.listAgentSessions(w, agent.DefaultAgentID)
+	api.listAgentSessions(w, "mia")
 
 	require.Equal(t, 200, w.Code, "body: %s", w.Body.String())
 	var got []gen.Session
@@ -124,7 +123,7 @@ func TestListAgentSessions_AllStoresFail_Returns500(t *testing.T) {
 
 	shared := api.agentLoop.GetSessionStore()
 	require.NotNil(t, shared)
-	legacy := api.agentLoop.GetAgentStore(agent.DefaultAgentID)
+	legacy := api.agentLoop.GetAgentStore("mia")
 	require.NotNil(t, legacy)
 
 	for _, dir := range []string{shared.BaseDir(), legacy.BaseDir()} {
@@ -134,7 +133,7 @@ func TestListAgentSessions_AllStoresFail_Returns500(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	api.listAgentSessions(w, agent.DefaultAgentID)
+	api.listAgentSessions(w, "mia")
 
 	assert.Equal(t, 500, w.Code, "body: %s", w.Body.String())
 }
@@ -164,11 +163,11 @@ func TestListAgentSessions_SharedStoreFailsLegacyOk_Returns500NotPartial200(t *t
 
 	shared := api.agentLoop.GetSessionStore()
 	require.NotNil(t, shared)
-	legacy := api.agentLoop.GetAgentStore(agent.DefaultAgentID)
+	legacy := api.agentLoop.GetAgentStore("mia")
 	require.NotNil(t, legacy)
 
 	// Seed the legacy store with a real, healthy session.
-	_, err := legacy.NewSession(session.SessionTypeChat, "webchat", agent.DefaultAgentID)
+	_, err := legacy.NewSession(session.SessionTypeChat, "webchat", "mia")
 	require.NoError(t, err)
 
 	// Break ONLY the shared store's directory.
@@ -177,7 +176,7 @@ func TestListAgentSessions_SharedStoreFailsLegacyOk_Returns500NotPartial200(t *t
 	t.Cleanup(func() { _ = os.Remove(shared.BaseDir()) })
 
 	w := httptest.NewRecorder()
-	api.listAgentSessions(w, agent.DefaultAgentID)
+	api.listAgentSessions(w, "mia")
 
 	require.Equal(t, 500, w.Code,
 		"a shared-store read failure must escalate to 500 even though the legacy store "+
@@ -201,11 +200,11 @@ func TestListAgentSessions_LegacyStoreFailsSharedOk_Returns500NotPartial200(t *t
 
 	shared := api.agentLoop.GetSessionStore()
 	require.NotNil(t, shared)
-	legacy := api.agentLoop.GetAgentStore(agent.DefaultAgentID)
+	legacy := api.agentLoop.GetAgentStore("mia")
 	require.NotNil(t, legacy)
 
 	// Seed the shared store with a real, healthy session.
-	_, err := shared.NewSession(session.SessionTypeChat, "webchat", agent.DefaultAgentID)
+	_, err := shared.NewSession(session.SessionTypeChat, "webchat", "mia")
 	require.NoError(t, err)
 
 	// Break ONLY the legacy store's directory.
@@ -214,7 +213,7 @@ func TestListAgentSessions_LegacyStoreFailsSharedOk_Returns500NotPartial200(t *t
 	t.Cleanup(func() { _ = os.Remove(legacy.BaseDir()) })
 
 	w := httptest.NewRecorder()
-	api.listAgentSessions(w, agent.DefaultAgentID)
+	api.listAgentSessions(w, "mia")
 
 	assert.Equal(t, 500, w.Code,
 		"a legacy-store read failure must escalate to 500 even though the shared store "+

@@ -42,6 +42,7 @@ func newHookTestLoop(
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -164,7 +165,6 @@ func TestAgentLoop_Hooks_ObserverAndLLMInterceptor(t *testing.T) {
 		ChatID:          "direct",
 		UserMessage:     "hello",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	if err != nil {
@@ -300,7 +300,6 @@ func TestAgentLoop_Hooks_ToolInterceptorCanRewrite(t *testing.T) {
 		ChatID:          "direct",
 		UserMessage:     "run tool",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	if err != nil {
@@ -336,7 +335,6 @@ func TestAgentLoop_Hooks_ToolApproverCanDeny(t *testing.T) {
 		ChatID:          "direct",
 		UserMessage:     "run tool",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	if err != nil {

@@ -195,8 +195,8 @@ func verifierUnitID(in JudgeCriteriaInput) string {
 // effects. Writing a file there would start silently touching the real
 // machine's home directory on every `go test ./pkg/coreagent/...` run.
 // pkg/coreagent also cannot cleanly resolve the Judge's REAL workspace path
-// itself: that resolution (OMNIPUS_HOME lookup, "main"-sentinel handling,
-// ID sanitization/traversal guard) lives in resolveAgentHome/ResolveAgentHome
+// itself: that resolution (OMNIPUS_HOME lookup, ID sanitization/traversal
+// guard) lives in resolveAgentHome/ResolveAgentHome
 // below, and pkg/coreagent cannot import pkg/agent to reach it (pkg/agent
 // already imports pkg/coreagent) — reimplementing that logic a second time
 // in pkg/coreagent would be a second source of truth that could silently

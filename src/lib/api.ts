@@ -101,6 +101,7 @@ import {
   ExecutorSmokeTestResponse as ExecutorSmokeTestResponseSchema,
   GatewayStatus as GatewayStatusSchema,
   ToolRegistryEntry as ToolRegistryEntrySchema,
+  ToolApprovalResponse as ToolApprovalResponseSchema,
   ChannelEntry as ChannelEntrySchema,
   ChannelEnabledResponse as ChannelEnabledResponseSchema,
   ChannelCreateResponse as ChannelCreateResponseSchema,
@@ -183,6 +184,8 @@ import {
   // the existing convention — see the comment above ExecutorCommandPreviewResponse).
   LibraryWorkspaceNode as LibraryWorkspaceNodeSchema,
   LibraryEntry as LibraryEntrySchema,
+  HostFolderListing as HostFolderListingSchema,
+  WorkspaceMountCreateResponse as WorkspaceMountCreateResponseSchema,
   LibraryContentResponse as LibraryContentResponseSchema,
   LibraryUploadResponse as LibraryUploadResponseSchema,
 } from '@/lib/api/generated/schemas'
@@ -440,6 +443,7 @@ import type {
   MailboxConfigureRequest,
   // Tool-approval "always" grant action (commit 35447760, contract-first #8):
   ToolApprovalActionRequest,
+  ToolApprovalResponse,
   // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
   BrowserInspectRequest,
   BrowserInspectResponse,
@@ -449,6 +453,11 @@ import type {
   // library-spec.md — Library file explorer over workspace work/ trees (contract-first #8):
   LibraryWorkspaceNode,
   LibraryEntry,
+  HostFolderListing,
+  HostFolderEntry,
+  LibraryEntryMount,
+  WorkspaceMountCreateRequest,
+  WorkspaceMountCreateResponse,
   LibraryContentResponse,
   LibraryContentRequest,
   LibraryMkdirRequest,
@@ -618,6 +627,11 @@ export type {
   // library-spec.md — Library file explorer over workspace work/ trees (contract-first #8):
   LibraryWorkspaceNode,
   LibraryEntry,
+  HostFolderListing,
+  HostFolderEntry,
+  LibraryEntryMount,
+  WorkspaceMountCreateRequest,
+  WorkspaceMountCreateResponse,
   LibraryContentResponse,
   LibraryContentRequest,
   LibraryMkdirRequest,
@@ -3887,16 +3901,18 @@ export function updateAgentTools(
  * action is the generated ToolApprovalActionRequest['action'] union — includes
  * "always" (approve this call AND record a session-scoped Always-Allow grant
  * via ApprovalGrantStore.Record; see pkg/gateway/rest_tool_registry.go).
+ * On "always", grant_recorded is present: true if the standing grant stuck,
+ * false if this call was approved once but the next identical call will ask
+ * again.
  */
 export function submitToolApproval(
   approvalId: string,
   action: ToolApprovalActionRequest['action'],
-): Promise<void> {
-  // no-schema: void response; POST returns 204 No Content.
-  return request<void>(`/tool-approvals/${encodeURIComponent(approvalId)}`, {
+): Promise<ToolApprovalResponse> {
+  return request<ToolApprovalResponse>(`/tool-approvals/${encodeURIComponent(approvalId)}`, {
     method: 'POST',
     body: JSON.stringify({ action }),
-  })
+  }, ToolApprovalResponseSchema as ZodType<ToolApprovalResponse>)
 }
 
 // ── Global Tool Policies ──────────────────────────────────────────────────────
@@ -4088,6 +4104,56 @@ export function fetchLibraryEntries(
     `/library/${encodeURIComponent(workspaceId)}/entries${qs ? `?${qs}` : ''}`,
     undefined,
     z.array(LibraryEntrySchema) as ZodType<LibraryEntry[]>,
+  )
+}
+
+/**
+ * List the directories inside `path` on the operator's own machine, for the
+ * mount folder picker.
+ *
+ * A web page cannot open the native folder picker and learn a real filesystem
+ * path, so the gateway lists folders instead. Omit `path` to start in the
+ * operator's home directory. Each entry carries its own `mountable`/`broad`
+ * verdict so the picker can disable a choice at the point of selection rather
+ * than accepting it and refusing afterwards.
+ */
+export function fetchHostFolders(path?: string): Promise<HostFolderListing> {
+  const qs = path ? `?path=${encodeURIComponent(path)}` : ''
+  return request<HostFolderListing>(
+    `/system/folders${qs}`,
+    undefined,
+    HostFolderListingSchema as ZodType<HostFolderListing>,
+  )
+}
+
+/**
+ * Mount a real local folder into a workspace, making it writable there.
+ *
+ * Resolves with a `warning` when the target was broad but allowed (the home
+ * directory, the filesystem root, a top-level system directory) — the caller
+ * MUST surface it. Rejects (400) when the target is or lies inside the Omnipus
+ * data directory, the one hard boundary.
+ */
+export function createWorkspaceMount(
+  workspaceId: string,
+  body: WorkspaceMountCreateRequest,
+): Promise<WorkspaceMountCreateResponse> {
+  return request<WorkspaceMountCreateResponse>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/mounts`,
+    { method: 'POST', body: JSON.stringify(body) },
+    WorkspaceMountCreateResponseSchema as ZodType<WorkspaceMountCreateResponse>,
+  )
+}
+
+/**
+ * Revoke a mount. This removes the workspace's ACCESS to the folder and
+ * deletes nothing on the operator's disk — the distinction the UI must state
+ * outright, since the control sits where "delete" normally lives.
+ */
+export function deleteWorkspaceMount(workspaceId: string, name: string): Promise<void> {
+  return request<void>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/mounts/${encodeURIComponent(name)}`,
+    { method: 'DELETE' },
   )
 }
 

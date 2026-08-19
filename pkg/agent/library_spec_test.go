@@ -49,7 +49,7 @@ func TestBuildMessages_CaptionlessMediaReachesModel(t *testing.T) {
 	cb := NewContextBuilder(tmpDir)
 	mediaRefs := []string{"media://workspace/ws1/00000000-0000-0000-0000-000000000001"}
 
-	msgs := cb.BuildMessages(nil, "", "", mediaRefs, "ws1", "webchat", "chat1", "", "", "", nil)
+	msgs := cb.BuildMessages(nil, "", mediaRefs, "ws1", "webchat", "chat1", "", "", "", nil)
 
 	require.NotEmpty(t, msgs, "BuildMessages must not return an empty message list")
 	last := msgs[len(msgs)-1]
@@ -70,7 +70,7 @@ func TestBuildMessages_CaptionAndMediaBothReach(t *testing.T) {
 	cb := NewContextBuilder(tmpDir)
 	mediaRefs := []string{"media://workspace/ws1/00000000-0000-0000-0000-000000000002"}
 
-	msgs := cb.BuildMessages(nil, "", "what is this?", mediaRefs, "ws1", "webchat", "chat1", "", "", "", nil)
+	msgs := cb.BuildMessages(nil, "what is this?", mediaRefs, "ws1", "webchat", "chat1", "", "", "", nil)
 
 	last := msgs[len(msgs)-1]
 	assert.Equal(t, "user", last.Role)
@@ -86,8 +86,8 @@ func TestBuildMessages_NoTextNoMedia_NothingAppended(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	cb := NewContextBuilder(tmpDir)
-	before := cb.BuildMessages(nil, "", "placeholder", nil, "", "webchat", "chat1", "", "", "", nil)
-	after := cb.BuildMessages(nil, "", "", nil, "", "webchat", "chat1", "", "", "", nil)
+	before := cb.BuildMessages(nil, "placeholder", nil, "", "webchat", "chat1", "", "", "", nil)
+	after := cb.BuildMessages(nil, "", nil, "", "webchat", "chat1", "", "", "", nil)
 
 	assert.Equal(t, len(before)-1, len(after),
 		"an empty caption with no media must still be dropped — only the media-present case changes")

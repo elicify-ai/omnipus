@@ -64,19 +64,6 @@ func TestJSONLBackend_AddFullMessage(t *testing.T) {
 	}
 }
 
-func TestJSONLBackend_Summary(t *testing.T) {
-	b := newBackend(t)
-
-	if got := b.GetSummary("s1"); got != "" {
-		t.Errorf("got %q, want empty", got)
-	}
-
-	b.SetSummary("s1", "test summary")
-	if got := b.GetSummary("s1"); got != "test summary" {
-		t.Errorf("got %q, want %q", got, "test summary")
-	}
-}
-
 func TestJSONLBackend_TruncateAndSave(t *testing.T) {
 	b := newBackend(t)
 
@@ -152,9 +139,9 @@ func TestJSONLBackend_SessionIsolation(t *testing.T) {
 	}
 }
 
-func TestJSONLBackend_SummarizeFlow(t *testing.T) {
-	// Simulates the real summarization flow in the agent loop:
-	// SetSummary → TruncateHistory → Save.
+func TestJSONLBackend_TrimFlow(t *testing.T) {
+	// Simulates the real window-trim flow in the agent loop:
+	// TruncateHistory → Save.
 	// Save is now a no-op (FR-005: Compact removed from Save path) — the
 	// live window is still readable via GetHistory after TruncateHistory.
 	b := newBackend(t)
@@ -163,15 +150,11 @@ func TestJSONLBackend_SummarizeFlow(t *testing.T) {
 		b.AddMessage("s1", "user", fmt.Sprintf("msg %d", i))
 	}
 
-	b.SetSummary("s1", "conversation about testing")
 	b.TruncateHistory("s1", 4)
 	if err := b.Save("s1"); err != nil {
 		t.Fatal(err)
 	}
 
-	if got := b.GetSummary("s1"); got != "conversation about testing" {
-		t.Errorf("summary = %q", got)
-	}
 	history := b.GetHistory("s1")
 	if len(history) != 4 {
 		t.Fatalf("got %d messages, want 4", len(history))

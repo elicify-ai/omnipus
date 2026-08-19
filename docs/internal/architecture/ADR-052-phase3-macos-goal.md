@@ -81,10 +81,13 @@ Only applicable when AC-1 = AUDIO-ABSENT.
 - [ ] The deferral is documented in the C3 ADR + README "Platform support".
 
 ### AC-6 — macOS sandbox (Seatbelt) implemented and tested
-- [ ] A Seatbelt/sandbox-exec profile is implemented for darwin (not just app-level fallback) and is the active backend when the kernel supports it.
-- [ ] Graceful degradation is preserved (HC #4): falls back to app-level enforcement if Seatbelt is unavailable.
-- [ ] The bundled-Chrome path is reachable under the Seatlock profile (no Landlock-style path block).
-- [ ] Unit tests for the darwin backend run where possible; integration verified on macOS.
+**Implemented on darwin/amd64** — full record, empirical findings and residual risk: [ADR-052 Phase 3 / AC-6 implementation record](ADR-052-phase3-AC6-macos-seatbelt.md).
+- [x] A Seatbelt/sandbox-exec profile is implemented for darwin (not just app-level fallback) and is the active backend when the kernel supports it. (`sandbox_darwin.go`; `applyPlatformHardening` wraps every hardened-exec child.)
+- [x] Graceful degradation is preserved (HC #4): falls back to app-level enforcement if Seatbelt is unavailable. (Real `sandbox-exec` probe + `OMNIPUS_SEATBELT_DISABLE` kill-switch, both covered by tests.)
+- [ ] The bundled-Chrome path is reachable under the Seatbelt profile (no Landlock-style path block). — **NOT verified.** Depends on AC-3, which has not landed: there is no darwin package Chrome on this host to exercise. The preamble does not cover `/Applications` at all — a bundled-Chrome path there is reachable only if a policy rule names it, so this needs re-checking when AC-3 lands.
+- [x] Unit tests for the darwin backend run where possible; integration verified on macOS. (Renderer tests run on Linux CI; `seatbelt_integration_darwin_test.go` and `seatbelt_adversarial_darwin_test.go` run real children on macOS.)
+
+> ⚠️ **Not an arm64 sign-off.** Validated on darwin/**amd64**; this phase targets darwin/arm64 and CI's `macos-latest` is arm64. Profile semantics are architecture-independent, but the empirically derived constants should be re-confirmed on arm64 before AC-6 is closed for the target platform.
 
 ### AC-7 — launchd service + credentials
 - [ ] A launchd plist starts/stops the gateway as a service on macOS.

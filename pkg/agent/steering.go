@@ -336,7 +336,6 @@ func (al *AgentLoop) continueWithSteeringMessages(
 		Channel:                 channel,
 		ChatID:                  chatID,
 		DefaultResponse:         defaultResponse,
-		EnableSummary:           true,
 		SendResponse:            false,
 		InitialSteeringMessages: steeringMsgs,
 		SkipInitialSteeringPoll: true,

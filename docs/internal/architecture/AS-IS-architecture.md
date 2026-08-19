@@ -92,7 +92,7 @@ Memory in this codebase is **conversation history + a rolling summary**. There i
 
 - Token counting is a single chars-per-token heuristic regardless of model: `tokens = chars × 2 / 5` plus 256/media item and 12/message overhead (`pkg/agent/context_budget.go:89-131`). No provider-specific tokenizer.
 - `isOverContextBudget` is checked before each LLM call (`pkg/agent/context_budget.go:161-176`).
-- `forceCompression` (`pkg/agent/loop.go:4473-4550`) drops ~50% of oldest *turns* (boundaries detected by `parseTurnBoundaries`, `pkg/agent/context_budget.go:22-30`) and writes a summary note via `SetHistory` + `Save`. The original lines remain on disk; only the meta `Skip` offset advances.
+- `windowTrim` (`pkg/agent/loop.go::windowTrim`) is the only compaction path: it evicts the oldest whole turn(s) from the in-memory window on a token budget (boundaries detected by `parseTurnBoundaries`, `pkg/agent/context_budget.go::parseTurnBoundaries`) and deletes nothing on disk. The retired LLM summariser (`maybeSummarize` / `summarizeSession` / `forceCompression`) no longer exists (`pkg/agent/window_trim_test.go` asserts those methods are never redefined).
 - `Compact` (`pkg/memory/jsonl.go:405-442`) physically rewrites the JSONL to discard skipped lines.
 
 ### 2.4 Persistence and concurrency

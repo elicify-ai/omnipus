@@ -118,7 +118,12 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
 	}
 
-	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.allowPaths)
+	// FR-2.3a: send_file uses FSOpSend, not FSOpRead — a disclosure to a chat
+	// channel is distinguishable from an ordinary read in audit, though it
+	// carries no additional path restriction (FR-2.3: the operator rejected
+	// a path-based "publish" gate here as bypassable and misleading; tool
+	// policy is the real gate).
+	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpSend, path, t.allowPaths)
 	if err != nil {
 		return PermissionDeniedResult(t.Name(), err, err.Error())
 	}

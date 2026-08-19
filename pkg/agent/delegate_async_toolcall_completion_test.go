@@ -199,6 +199,7 @@ func TestDelegateAsyncCompletion_ToolCallThenFinalAnswer_SurvivesParentFinish(t 
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 	}
 

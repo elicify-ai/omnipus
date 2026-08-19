@@ -82,7 +82,6 @@ func TestHookAbort_BeforeTool_CuratedReasonSurvivesClassification(t *testing.T) 
 		ChatID:              sessionID,
 		UserMessage:         "run the tool",
 		DefaultResponse:     defaultResponse,
-		EnableSummary:       false,
 		SendResponse:        false,
 		TranscriptSessionID: sessionID,
 		TranscriptStore:     store,

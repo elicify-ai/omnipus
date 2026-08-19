@@ -20,11 +20,12 @@ package commands
 // reply" pattern applyExplicitSkillCommand uses for one-shot skill
 // activation.
 //
-// Known nuance: agentID "main" (the gateway/router agent) is never given the
-// remember / recall_memory / run_retrospective tools — pkg/agent/instance.go
-// registers them only when agentID != "main". The steering prompt still
-// degrades gracefully there: the model simply reports it doesn't have that
-// tool rather than the turn erroring.
+// The memory tools are registered for EVERY agent now; whether one may use
+// them is its tool policy. (They were once withheld from the "main" sentinel
+// by a hardcoded identity check — that agent and its gate are both gone.) The
+// steering prompt still degrades gracefully for an agent whose policy denies
+// them: the model reports it does not have the tool rather than the turn
+// erroring.
 
 func rememberCommand() Definition {
 	return Definition{

@@ -194,6 +194,7 @@ func TestSubTurn_OriginalDelegation_EmitsExactlyOneSpawnEvent(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 	}
 	al := mustNewAgentLoop(t, agentCfg, bus.NewMessageBus(), &mockProvider{})

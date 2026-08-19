@@ -27,7 +27,7 @@ import (
 // session with all provided fields correctly set: Channel, PeerID, Title, Type, AgentID.
 //
 // BDD: Given a UnifiedStore backed by a temp directory,
-// When NewChannelSession("telegram", "user-42", "agent-1", "Alice") is called,
+// When NewChannelSession("telegram", "telegram", "user-42", "agent-1", "Alice") is called,
 // Then no error is returned, meta.Channel == "telegram", meta.PeerID == "user-42",
 // meta.Title == "Alice", meta.Type == SessionTypeChannel, meta.AgentID == "agent-1".
 //
@@ -36,7 +36,7 @@ func TestNewChannelSession_StoresAllFields(t *testing.T) {
 	store := newTestStore(t)
 
 	// When — create the channel session.
-	meta, err := store.NewChannelSession("telegram", "user-42", "agent-1", "Alice")
+	meta, err := store.NewChannelSession("telegram", "telegram", "user-42", "agent-1", "Alice")
 
 	// Then — all fields must be set correctly.
 	require.NoError(t, err, "NewChannelSession must succeed")
@@ -54,7 +54,7 @@ func TestNewChannelSession_StoresAllFields(t *testing.T) {
 // survive a read-back via GetMeta — proving the data is durably stored on disk, not
 // just held in memory.
 //
-// BDD: Given a session created with NewChannelSession("telegram", "user-42", "agent-1", "Alice"),
+// BDD: Given a session created with NewChannelSession("telegram", "telegram", "user-42", "agent-1", "Alice"),
 // When GetMeta(meta.ID) is called on the same store,
 // Then the returned meta has identical Channel, PeerID, Title, Type, and AgentID.
 //
@@ -62,7 +62,7 @@ func TestNewChannelSession_StoresAllFields(t *testing.T) {
 func TestNewChannelSession_RoundTrip(t *testing.T) {
 	store := newTestStore(t)
 
-	meta, err := store.NewChannelSession("telegram", "user-42", "agent-1", "Alice")
+	meta, err := store.NewChannelSession("telegram", "telegram", "user-42", "agent-1", "Alice")
 	require.NoError(t, err)
 
 	// Round-trip: read back from disk.
@@ -88,7 +88,7 @@ func TestNewChannelSession_RoundTrip(t *testing.T) {
 func TestNewChannelSession_EmptyTitle(t *testing.T) {
 	store := newTestStore(t)
 
-	meta, err := store.NewChannelSession("telegram", "user-42", "agent-1", "")
+	meta, err := store.NewChannelSession("telegram", "telegram", "user-42", "agent-1", "")
 	require.NoError(t, err)
 
 	// Title must be empty — no fallback at the store layer.
@@ -114,10 +114,10 @@ func TestNewChannelSession_EmptyTitle(t *testing.T) {
 func TestNewChannelSession_TwoCallsCreateTwoSessions(t *testing.T) {
 	store := newTestStore(t)
 
-	meta1, err := store.NewChannelSession("telegram", "user-42", "agent-1", "Alice")
+	meta1, err := store.NewChannelSession("telegram", "telegram", "user-42", "agent-1", "Alice")
 	require.NoError(t, err)
 
-	meta2, err := store.NewChannelSession("telegram", "user-42", "agent-1", "Alice")
+	meta2, err := store.NewChannelSession("telegram", "telegram", "user-42", "agent-1", "Alice")
 	require.NoError(t, err)
 
 	// Two calls must produce two independent sessions (no store-level dedup).
@@ -136,7 +136,7 @@ func TestNewChannelSession_TwoCallsCreateTwoSessions(t *testing.T) {
 //
 // This is the differentiation test: same peerID/agentID, different channels → different Channel.
 //
-// BDD: Given calls to NewChannelSession("telegram", ...) and NewChannelSession("discord", ...),
+// BDD: Given calls to NewChannelSession("telegram", "telegram", ...) and NewChannelSession("discord", "discord", ...),
 // When both succeed,
 // Then the first meta.Channel == "telegram" and the second meta.Channel == "discord".
 //
@@ -144,10 +144,10 @@ func TestNewChannelSession_TwoCallsCreateTwoSessions(t *testing.T) {
 func TestNewChannelSession_DifferentChannelsProduceDifferentMeta(t *testing.T) {
 	store := newTestStore(t)
 
-	meta1, err := store.NewChannelSession("telegram", "user-99", "agent-1", "Bob")
+	meta1, err := store.NewChannelSession("telegram", "telegram", "user-99", "agent-1", "Bob")
 	require.NoError(t, err)
 
-	meta2, err := store.NewChannelSession("discord", "user-99", "agent-1", "Bob")
+	meta2, err := store.NewChannelSession("discord", "discord", "user-99", "agent-1", "Bob")
 	require.NoError(t, err)
 
 	// IDs must be different.

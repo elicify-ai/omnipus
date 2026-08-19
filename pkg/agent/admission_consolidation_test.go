@@ -38,6 +38,7 @@ func TestNewAgentLoop_AdmissionCapMatchesPerformanceConfig(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Performance: config.PerformanceConfig{MaxParallelAgents: 3},
 	}
@@ -69,6 +70,7 @@ func TestNewAgentLoop_AdmissionCapTracksConfigChangeLive(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Performance: config.PerformanceConfig{MaxParallelAgents: 3},
 	}
@@ -118,6 +120,7 @@ func TestOnlyOneGate_SessionConcurrencyBoundByCentralValueAlone(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Performance: config.PerformanceConfig{MaxParallelAgents: 2},
 	}
@@ -207,6 +210,7 @@ func TestRemovedGate1_HardcodedNumCPUCapNoLongerBinds(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Performance: config.PerformanceConfig{MaxParallelAgents: configuredCap},
 	}

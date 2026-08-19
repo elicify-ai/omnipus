@@ -160,7 +160,8 @@ func (p *DefaultProvider) PublicURL() string {
 // ActiveWarnings implements Provider. Emits condition-based warnings for:
 //   - dev_mode_bypass active (auth bypass in effect)
 //   - Windows platform (flock is a no-op)
-//   - sandbox fallback on a Landlock-capable Linux kernel
+//   - sandbox fallback/degradation on a platform that has a kernel backend
+//     (Linux Landlock, macOS Seatbelt)
 func (p *DefaultProvider) ActiveWarnings() []string {
 	if os.Getenv("OMNIPUS_PENTEST_HIDE_SANDBOX") == "1" {
 		return nil
@@ -180,17 +181,38 @@ func (p *DefaultProvider) ActiveWarnings() []string {
 		)
 	}
 
-	// Emit sandbox-fallback-on-capable-kernel warning when the backend is
-	// NOT kernel-level on a Linux host. Spec FR-049 + MIN-001 say the
-	// warning fires unconditionally on linux + fallback — including when the
-	// kernel version can't be detected — because the alternative (hide a
-	// possible downgrade on unknown kernel) is less safe than noise.
-	if runtime.GOOS == "linux" {
-		status := sandbox.DescribeBackend(p.backend)
-		if !status.KernelLevel {
+	// Emit a sandbox-degradation warning when the SELECTED backend is not
+	// kernel-level, on a platform that has a kernel backend available in
+	// principle. This must be driven by the backend's actual reported
+	// capability (status.KernelLevel), not by runtime.GOOS alone — GOOS only
+	// tells us the platform, not whether the platform's kernel backend is
+	// actually in play for THIS process.
+	//
+	// Review finding 2 (MAJOR): before this fix, the check was gated on
+	// `runtime.GOOS == "linux"` and DescribeBackend was never even called on
+	// darwin. macOS can degrade the exact same way Linux can — SeatbeltBackend
+	// .Available() returns false when /usr/bin/sandbox-exec is missing OR when
+	// the operator kill-switch OMNIPUS_SEATBELT_DISABLE=1 is set — and in both
+	// cases selectBackendPlatform silently falls back to FallbackBackend with
+	// zero signal reaching the agent. A stale env var in a shell profile could
+	// disable the kernel sandbox with one boot log and nothing after it.
+	//
+	// Spec FR-049 + MIN-001 say the warning fires unconditionally on
+	// linux + fallback — including when the kernel version can't be detected —
+	// because the alternative (hide a possible downgrade on unknown kernel) is
+	// less safe than noise. The same posture now applies to darwin.
+	status := sandbox.DescribeBackend(p.backend)
+	if !status.KernelLevel {
+		switch runtime.GOOS {
+		case "linux":
 			warnings = append(
 				warnings,
 				"sandbox is running in application-level fallback mode despite a Landlock-capable kernel — this is typically an explicit operator downgrade.",
+			)
+		case "darwin":
+			warnings = append(
+				warnings,
+				"sandbox is running in application-level fallback mode — macOS Seatbelt (sandbox-exec) is unavailable or disabled via OMNIPUS_SEATBELT_DISABLE; spawned children are NOT kernel-confined.",
 			)
 		}
 	}

@@ -52,12 +52,16 @@ properties:
       type: string
     maxItems: 20
     example: ["mia", "jim"]
-  repository:
-    type: string
+  mounts:
+    type: array
     description: >
-      Optional git repository URL. Stored as-is, not validated for reachability.
-      Frontend opens in new tab.
-    example: "https://github.com/org/repo"
+      Named write-grants on real local folders (FR-5, ADR-063 D4). Absent when
+      no mount exists (empty array is also acceptable on the wire). Created
+      and removed via the dedicated mounts lifecycle, not via this record's
+      own create/update requests.
+    items:
+      $ref: './WorkspaceMount.yaml'
+    example: []
   task_count:
     type: integer
     description: >

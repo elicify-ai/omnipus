@@ -5,6 +5,7 @@ package envcontext_test
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
@@ -239,6 +240,112 @@ func TestEnvironmentProvider_ActiveWarnings_WindowsFlockNoop(t *testing.T) {
 				t.Errorf("DefaultProvider emitted Windows flock warning on non-windows GOOS=%s", runtime.GOOS)
 			}
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Review finding 2 (MAJOR) — TestEnvironmentProvider_ActiveWarnings_SandboxDegradation
+// Traces to: env-awareness-and-memory-spec.md FR-049
+//
+// Before this fix, the sandbox-degradation warning was gated on
+// `runtime.GOOS == "linux"` — DescribeBackend was never even called on
+// darwin, so a macOS host whose Seatbelt backend degraded to FallbackBackend
+// (missing /usr/bin/sandbox-exec, or the OMNIPUS_SEATBELT_DISABLE=1
+// kill-switch) told the agent nothing at all. This test asserts the warning
+// is driven by the backend's actual reported capability
+// (sandbox.Status.KernelLevel), not by GOOS, on whichever platform this test
+// happens to run — and that a genuinely kernel-confining backend does NOT
+// trigger the warning (the positive control), so these tests cannot pass
+// against a build that reports every backend as degraded.
+// ---------------------------------------------------------------------------
+
+// fakeKernelConfiner is a minimal sandbox.SandboxBackend that also implements
+// sandbox.KernelChildConfiner, so tests can simulate a genuinely
+// kernel-confining backend (e.g. Seatbelt) without needing a darwin-only
+// build. name mimics backend.Name() ("seatbelt" for the darwin case);
+// confines/applied control ConfinesChildren()/PolicyApplied() independently,
+// matching the real SeatbeltBackend split between "can confine" and "did
+// confine this process".
+type fakeKernelConfiner struct {
+	name     string
+	confines bool
+	applied  bool
+}
+
+func (f *fakeKernelConfiner) Name() string                      { return f.name }
+func (f *fakeKernelConfiner) Available() bool                   { return f.confines }
+func (f *fakeKernelConfiner) Apply(sandbox.SandboxPolicy) error { return nil }
+func (f *fakeKernelConfiner) ApplyToCmd(*exec.Cmd, sandbox.SandboxPolicy) error {
+	return nil
+}
+func (f *fakeKernelConfiner) ConfinesChildren() bool { return f.confines }
+func (f *fakeKernelConfiner) PolicyApplied() bool    { return f.applied }
+
+func TestEnvironmentProvider_ActiveWarnings_SandboxDegradation(t *testing.T) {
+	switch runtime.GOOS {
+	case "linux":
+		t.Run("fallback backend on linux triggers the Landlock-capable-kernel warning", func(t *testing.T) {
+			dp := envcontext.NewDefaultProvider(minimalConfig(), sandbox.NewFallbackBackend(), "/tmp/ws")
+			warnings := dp.ActiveWarnings()
+			found := false
+			for _, w := range warnings {
+				if strings.Contains(w, "application-level fallback mode") {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected a fallback-mode warning on linux with FallbackBackend selected; got %v", warnings)
+			}
+		})
+		t.Run("a genuinely kernel-confining backend does NOT trigger the warning", func(t *testing.T) {
+			confiner := &fakeKernelConfiner{name: "landlock-v3", confines: true, applied: true}
+			dp := envcontext.NewDefaultProvider(minimalConfig(), confiner, "/tmp/ws")
+			warnings := dp.ActiveWarnings()
+			for _, w := range warnings {
+				if strings.Contains(w, "application-level fallback mode") {
+					t.Errorf("kernel-confining backend must not trigger the degradation warning; got %v", warnings)
+				}
+			}
+		})
+	case "darwin":
+		t.Run("fallback backend on darwin (Seatbelt unavailable/disabled) triggers the warning", func(t *testing.T) {
+			dp := envcontext.NewDefaultProvider(minimalConfig(), sandbox.NewFallbackBackend(), "/tmp/ws")
+			warnings := dp.ActiveWarnings()
+			found := false
+			for _, w := range warnings {
+				if strings.Contains(w, "application-level fallback mode") && strings.Contains(w, "Seatbelt") {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected a Seatbelt fallback-mode warning on darwin with FallbackBackend selected; got %v", warnings)
+			}
+		})
+		t.Run("nil backend on darwin also triggers the warning (fails closed, not silent)", func(t *testing.T) {
+			dp := envcontext.NewDefaultProvider(minimalConfig(), nil, "/tmp/ws")
+			warnings := dp.ActiveWarnings()
+			found := false
+			for _, w := range warnings {
+				if strings.Contains(w, "Seatbelt") {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected a Seatbelt fallback-mode warning on darwin with nil backend; got %v", warnings)
+			}
+		})
+		t.Run("a genuinely kernel-confining Seatbelt-shaped backend does NOT trigger the warning", func(t *testing.T) {
+			confiner := &fakeKernelConfiner{name: "seatbelt", confines: true, applied: true}
+			dp := envcontext.NewDefaultProvider(minimalConfig(), confiner, "/tmp/ws")
+			warnings := dp.ActiveWarnings()
+			for _, w := range warnings {
+				if strings.Contains(w, "application-level fallback mode") {
+					t.Errorf("kernel-confining Seatbelt backend must not trigger the degradation warning; got %v", warnings)
+				}
+			}
+		})
+	default:
+		t.Skipf("no kernel sandbox backend defined for GOOS=%s; nothing to assert here", runtime.GOOS)
 	}
 }
 

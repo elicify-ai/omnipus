@@ -56,6 +56,7 @@ func newDrainTestExecutorWithProvider(t *testing.T, provider providers.LLMProvid
 			Defaults: config.AgentDefaults{
 				Home: tmpDir, ModelName: "test-model", MaxTokens: 4096, MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
@@ -84,7 +85,7 @@ func newDrainTestExecutorWithProvider(t *testing.T, provider providers.LLMProvid
 // that release.
 func TestTaskExecutor_Drain_WaitsForInFlightGoroutine(t *testing.T) {
 	te, store := newNoPerAgentCapExecutor(t, 10)
-	taskID := createDispatchableTask(t, store, "main", "drain-inflight")
+	taskID := createDispatchableTask(t, store, "mia", "drain-inflight")
 
 	entered := make(chan struct{})
 	gate := make(chan struct{})
@@ -128,7 +129,7 @@ func TestTaskExecutor_Drain_WaitsForInFlightGoroutine(t *testing.T) {
 // TestPlanEngineStop_BoundsDrainOnStartedEngineWithWedgedWakeTurn.
 func TestTaskExecutor_Drain_BoundsOnWedgedGoroutine(t *testing.T) {
 	te, store := newNoPerAgentCapExecutor(t, 10)
-	taskID := createDispatchableTask(t, store, "main", "drain-wedged")
+	taskID := createDispatchableTask(t, store, "mia", "drain-wedged")
 
 	entered := make(chan struct{})
 	gate := make(chan struct{}) // never closed — this goroutine is wedged for good
@@ -182,7 +183,7 @@ func TestTaskExecutor_Drain_RefusesNewDispatch(t *testing.T) {
 		t.Fatalf("Drain() with nothing in flight took %v — should return almost instantly", elapsed)
 	}
 
-	execTaskID := createDispatchableTask(t, store, "main", "refused-execute-task")
+	execTaskID := createDispatchableTask(t, store, "mia", "refused-execute-task")
 	err := te.ExecuteTask(context.Background(), execTaskID, nil)
 	require.ErrorIs(t, err, ErrExecutorDraining,
 		"ExecuteTask must refuse a new dispatch once draining with the ErrExecutorDraining sentinel")
@@ -191,7 +192,7 @@ func TestTaskExecutor_Drain_RefusesNewDispatch(t *testing.T) {
 	assert.Equal(t, task.StatusNext, unclaimed.Status,
 		"a task refused by the draining gate must never be claimed (still `next`, not `in_progress`)")
 
-	startNowTaskID := createDispatchableTask(t, store, "main", "refused-start-task-now")
+	startNowTaskID := createDispatchableTask(t, store, "mia", "refused-start-task-now")
 	sessionID, err := te.StartTaskNow(context.Background(), startNowTaskID)
 	require.ErrorIs(t, err, ErrExecutorDraining,
 		"StartTaskNow must refuse a new dispatch once draining with the ErrExecutorDraining sentinel")
@@ -340,12 +341,12 @@ func TestTaskExecutor_Drain_WaitsForParentFollowUpGoroutine(t *testing.T) {
 
 	parent := &task.Task{
 		Title: "parent", Prompt: "parent", Action: task.ActionLLM,
-		AgentID: "main", Priority: 3, WorkspaceID: "default", Status: task.StatusInProgress,
+		AgentID: "mia", Priority: 3, WorkspaceID: "default", Status: task.StatusInProgress,
 	}
 	require.NoError(t, store.Create(parent))
 	child := &task.Task{
 		Title: "child", Prompt: "child", Action: task.ActionLLM,
-		AgentID: "main", Priority: 3, WorkspaceID: "default", Status: task.StatusDone,
+		AgentID: "mia", Priority: 3, WorkspaceID: "default", Status: task.StatusDone,
 		ParentTaskID: parent.ID,
 	}
 	require.NoError(t, store.Create(child))

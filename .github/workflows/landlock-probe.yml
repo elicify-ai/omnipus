@@ -1,0 +1,64 @@
+name: Landlock probe
+
+# Manual only. Answers one question the Fly CI worker structurally cannot:
+# is the Linux KERNEL sandbox (Landlock) available on a GitHub runner?
+#
+# Fly's kernel is built without it (`# CONFIG_SECURITY_LANDLOCK is not set`,
+# landlock_create_ruleset -> ENOSYS, measured 2026-08-19 across four machines
+# in sin/ams/iad). So `go test ./pkg/sandbox/` on the Fly worker can never
+# exercise the Landlock path, and a green there carries no kernel signal.
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/macos-seatbelt-enablement]
+    paths: ['.github/workflows/landlock-probe.yml', 'pkg/sandbox/**']
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Kernel + Landlock ABI
+        run: |
+          uname -a
+          echo "--- kernel config ---"
+          (zcat /proc/config.gz 2>/dev/null || cat "/boot/config-$(uname -r)" 2>/dev/null) \
+            | grep -i landlock || echo "no kernel config readable"
+          echo "--- active LSMs ---"
+          cat /sys/kernel/security/lsm 2>/dev/null || echo "securityfs not mounted"
+          echo "--- syscall probe (444 = landlock_create_ruleset) ---"
+          python3 - <<'PY'
+          import ctypes
+          libc = ctypes.CDLL(None, use_errno=True)
+          abi = libc.syscall(444, 0, 0, 1)   # LANDLOCK_CREATE_RULESET_VERSION
+          err = ctypes.get_errno()
+          print(f"landlock_abi={abi} errno={err}")
+          if abi > 0:
+              print(f"LANDLOCK AVAILABLE (ABI v{abi})")
+          else:
+              print("LANDLOCK UNAVAILABLE")
+          PY
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run the Linux sandbox suite on a kernel that may have Landlock
+        run: |
+          mkdir -p pkg/gateway/spa
+          printf '<!doctype html><title>ci-stub</title>' > pkg/gateway/spa/index.html
+          CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 ./pkg/sandbox/ > /tmp/sb.log 2>&1 || true
+          echo "=== FAILING TESTS ==="
+          grep -aE '^--- FAIL|^    --- FAIL|^        --- FAIL' /tmp/sb.log | head -40 || echo "(none)"
+          echo "=== FAILURE DETAIL ==="
+          grep -aA 8 -E '^--- FAIL|^    --- FAIL' /tmp/sb.log | head -120 || true
+          echo "=== SUMMARY ==="
+          tail -5 /tmp/sb.log
+          grep -aqE '^(FAIL|ok)' /tmp/sb.log && grep -aE '^(FAIL|ok)' /tmp/sb.log | tail -3

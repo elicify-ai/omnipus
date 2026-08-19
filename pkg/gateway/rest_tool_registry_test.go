@@ -120,10 +120,13 @@ func TestREST_GetTools_MethodNotAllowed(t *testing.T) {
 // {name, configured_policy, effective_policy, manifest_tier}.
 // Traces to: tool-registry-redesign-spec.md FR-028, FR-086; Gap 3 manifest_tier.
 func TestREST_GetAgentTools_FilteredView(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
+	// newTestRestAPIWithHome seeds no agents (the retired "main" sentinel used
+	// to be registered implicitly regardless of cfg); use the
+	// newTestRestAPIWithHomeAndAgent variant (rest_tasks_occurrences_test.go)
+	// which seeds a real chat-target agent ("mia") instead.
+	api := newTestRestAPIWithHomeAndAgent(t)
 
-	// Use the default agent ID — always registered by NewAgentLoop.
-	agentID := "main"
+	agentID := "mia"
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+agentID+"/tools", nil)
 	r = withAdminRole(r)
 	w := httptest.NewRecorder()
@@ -166,9 +169,9 @@ func TestREST_GetAgentTools_FilteredView(t *testing.T) {
 // if load_tool is present it has "infra".
 // Traces to: tool-manifest-optimization-2026-06.md Gap 3.
 func TestREST_GetAgentTools_ManifestTierValues(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
+	api := newTestRestAPIWithHomeAndAgent(t)
 
-	agentID := "main"
+	agentID := "mia"
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+agentID+"/tools", nil)
 	r = withAdminRole(r)
 	w := httptest.NewRecorder()
@@ -1046,11 +1049,12 @@ func TestApproveTool_ActionAlways_RecordsGrantAndApproves(t *testing.T) {
 	require.NotNil(t, grants, "test harness must wire a real ApprovalGrantStore")
 
 	// Precondition: no grant exists for this (session, agent, tool) yet.
-	require.False(t, grants.IsAllowed(sessionID, agentID, toolName),
+	require.False(t, grants.IsAllowed(sessionID, agentID, toolName, nil),
 		"precondition: no Always-Allow grant may exist before the request")
 
+	lsArgs := map[string]any{"command": "ls"}
 	entry, accepted := reg.requestApproval(
-		"tc-always", toolName, map[string]any{"command": "ls"}, agentID, sessionID, "turn-1",
+		"tc-always", toolName, lsArgs, agentID, sessionID, "turn-1",
 	)
 	require.True(t, accepted)
 
@@ -1060,14 +1064,17 @@ func TestApproveTool_ActionAlways_RecordsGrantAndApproves(t *testing.T) {
 	// (a1) HTTP 200 with the echoed action and ok status.
 	require.Equal(t, http.StatusOK, w.Code, "always must be accepted with 200")
 	var resp struct {
-		ApprovalID string `json:"approval_id"`
-		Action     string `json:"action"`
-		Status     string `json:"status"`
+		ApprovalID    string `json:"approval_id"`
+		Action        string `json:"action"`
+		Status        string `json:"status"`
+		GrantRecorded *bool  `json:"grant_recorded"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, entry.ApprovalID, resp.ApprovalID)
 	assert.Equal(t, "always", resp.Action, "response must echo the always action")
 	assert.Equal(t, "ok", resp.Status)
+	require.NotNil(t, resp.GrantRecorded, "always must report whether the grant stuck")
+	assert.True(t, *resp.GrantRecorded, "a complete identity must record the grant")
 
 	// (a2) The pending tool call proceeds: entry transitioned to approved and the
 	// blocked loop goroutine receives an Approved outcome on its result channel.
@@ -1083,17 +1090,55 @@ func TestApproveTool_ActionAlways_RecordsGrantAndApproves(t *testing.T) {
 	}
 
 	// (b) A session-scoped grant was recorded and is queryable via IsAllowed.
-	assert.True(t, grants.IsAllowed(sessionID, agentID, toolName),
-		"always must record a grant queryable via ApprovalGrantStore.IsAllowed")
+	assert.True(t, grants.IsAllowed(sessionID, agentID, toolName, lsArgs),
+		"always must record a grant for the approval's exact arguments")
+	assert.False(t, grants.IsAllowed(sessionID, agentID, toolName, map[string]any{"command": "rm -rf /"}),
+		"a grant for {command:ls} must not approve a different argv")
 
 	// Scoping proof (consent boundary): the grant must NOT leak to a different
 	// agent, session, or tool.
-	assert.False(t, grants.IsAllowed(sessionID, "agent-b", toolName),
+	assert.False(t, grants.IsAllowed(sessionID, "agent-b", toolName, lsArgs),
 		"grant must not apply to a different agent")
-	assert.False(t, grants.IsAllowed("session-other", agentID, toolName),
+	assert.False(t, grants.IsAllowed("session-other", agentID, toolName, lsArgs),
 		"grant must not apply to a different session")
-	assert.False(t, grants.IsAllowed(sessionID, agentID, "read_file"),
+	assert.False(t, grants.IsAllowed(sessionID, agentID, "read_file", lsArgs),
 		"grant must not apply to a different tool")
+}
+
+// HTTP 200 + grant_recorded:false is the honesty contract: this call is
+// approved, but Always Allow did not stick because the approval had no
+// session identity. requestApproval still accepts an empty session id
+// (it increments missingActingSessionID) — that is the production shape
+// of a grant that cannot be stored.
+func TestApproveTool_ActionAlways_GrantNotRecordedWhenSessionMissing(t *testing.T) {
+	api, reg := newTestRestAPIWithApprovalReg(t)
+	grants := api.agentLoop.ApprovalGrants()
+	require.NotNil(t, grants)
+
+	lsArgs := map[string]any{"command": "ls"}
+	entry, accepted := reg.requestApproval(
+		"tc-always-nosess", "bash", lsArgs, "agent-a", "", "turn-1",
+	)
+	require.True(t, accepted)
+
+	w := postToolApproval(t, api, entry.ApprovalID, "always")
+	require.Equal(t, http.StatusOK, w.Code, "the call itself is still approved")
+
+	var resp struct {
+		Action        string `json:"action"`
+		Status        string `json:"status"`
+		GrantRecorded *bool  `json:"grant_recorded"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "always", resp.Action)
+	assert.Equal(t, "ok", resp.Status)
+	require.NotNil(t, resp.GrantRecorded, "always must report the grant outcome")
+	assert.False(t, *resp.GrantRecorded, "an empty session id cannot store a standing grant")
+
+	require.NotNil(t, reg.get(entry.ApprovalID))
+	assert.Equal(t, ApprovalStateApproved, reg.get(entry.ApprovalID).state)
+	assert.False(t, grants.IsAllowed("", "agent-a", "bash", lsArgs),
+		"Record must refuse an empty session key")
 }
 
 // Compile-time check that wsConn has the userID field used by emitSessionState.

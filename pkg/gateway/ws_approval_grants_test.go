@@ -83,8 +83,8 @@ func TestToolApproval_PolicyDenyOverridesGrant(t *testing.T) {
 	})
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 
-	al.ApprovalGrants().Record("session-1", "agent-a", "exec")
-	require.True(t, al.ApprovalGrants().IsAllowed("session-1", "agent-a", "exec"),
+	al.ApprovalGrants().Record("session-1", "agent-a", "exec", nil)
+	require.True(t, al.ApprovalGrants().IsAllowed("session-1", "agent-a", "exec", nil),
 		"setup: the grant must be recorded before asserting policy ignores it")
 
 	assert.Equal(t, "deny", al.ResolveApprovalToolPolicy("agent-a", "exec"),
@@ -113,7 +113,7 @@ func TestToolApproval_PolicyAllowNeverPrompts(t *testing.T) {
 	})
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 
-	require.False(t, al.ApprovalGrants().IsAllowed("session-1", "agent-a", "exec"),
+	require.False(t, al.ApprovalGrants().IsAllowed("session-1", "agent-a", "exec", nil),
 		"sanity: no grant exists for this (session, agent, tool)")
 
 	assert.Equal(t, "allow", al.ResolveApprovalToolPolicy("agent-a", "exec"),
@@ -132,7 +132,7 @@ func TestCheckGrantOrRequestApproval_AskWithGrantAutoApproves(t *testing.T) {
 	fake := &fakePolicyApprover{approved: false, reason: "must not be called"}
 	al.SetToolApprover(fake)
 
-	al.ApprovalGrants().Record("session-1", "agent-a", "exec")
+	al.ApprovalGrants().Record("session-1", "agent-a", "exec", nil)
 
 	approved, reason := al.CheckGrantOrRequestApproval(
 		context.Background(), "session-1", "agent-a", "exec", "call-1", "turn-1", nil,
@@ -181,7 +181,7 @@ func TestCheckGrantOrRequestApproval_GrantScopedByAgentAndSession(t *testing.T) 
 	fake := &fakePolicyApprover{approved: false, reason: "denied for test"}
 	al.SetToolApprover(fake)
 
-	al.ApprovalGrants().Record("session-1", "agent-a", "exec")
+	al.ApprovalGrants().Record("session-1", "agent-a", "exec", nil)
 
 	// Same session, same agent, same tool -> auto-approved, no prompt.
 	approved, _ := al.CheckGrantOrRequestApproval(
