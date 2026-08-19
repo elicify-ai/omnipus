@@ -1,0 +1,40 @@
+name: Landlock probe
+
+# Manual only. Answers one question the Fly CI worker structurally cannot:
+# is the Linux KERNEL sandbox (Landlock) available on a GitHub runner?
+#
+# Fly's kernel is built without it (`# CONFIG_SECURITY_LANDLOCK is not set`,
+# landlock_create_ruleset -> ENOSYS, measured 2026-08-19 across four machines
+# in sin/ams/iad). So `go test ./pkg/sandbox/` on the Fly worker can never
+# exercise the Landlock path, and a green there carries no kernel signal.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Kernel + Landlock ABI
+        run: |
+          uname -a
+          echo "--- kernel config ---"
+          (zcat /proc/config.gz 2>/dev/null || cat "/boot/config-$(uname -r)" 2>/dev/null) \
+            | grep -i landlock || echo "no kernel config readable"
+          echo "--- active LSMs ---"
+          cat /sys/kernel/security/lsm 2>/dev/null || echo "securityfs not mounted"
+          echo "--- syscall probe (444 = landlock_create_ruleset) ---"
+          python3 - <<'PY'
+          import ctypes
+          libc = ctypes.CDLL(None, use_errno=True)
+          abi = libc.syscall(444, 0, 0, 1)   # LANDLOCK_CREATE_RULESET_VERSION
+          err = ctypes.get_errno()
+          print(f"landlock_abi={abi} errno={err}")
+          if abi > 0:
+              print(f"LANDLOCK AVAILABLE (ABI v{abi})")
+          else:
+              print("LANDLOCK UNAVAILABLE")
+          PY
