@@ -34,7 +34,7 @@
    "id": "G005",
    "title": "verify",
    "objective": "CI green on release/v0.1.1 with everything landed",
-   "status": "pending",
+   "status": "in_progress",
    "evidence": null
   }
  ]

@@ -408,3 +408,27 @@ func TestSharedMediaTCP_Unconfigured_SaysNothing(t *testing.T) {
 	require.Nil(t, h.sharedMediaTCP(&config.Config{}))
 	require.Empty(t, h.iceTCPUnavailableNotice())
 }
+
+// TestTURNUnavailableNotice_SilentWhenOff keeps the tier-3 notice from
+// becoming noise on the default install, where TURN is not configured.
+func TestTURNUnavailableNotice_SilentWhenOff(t *testing.T) {
+	h := &BrowserWSHandler{}
+	require.Nil(t, h.sharedTURN(&config.Config{}))
+	require.Empty(t, h.turnUnavailableNotice())
+}
+
+// TestTURNUnavailableNotice_ReportsAConfiguredButFailedRelay is the ADR-061
+// discipline applied to tier 3: an operator who declared a relay port and
+// silently got nothing has no surface to find it on.
+func TestTURNUnavailableNotice_ReportsAConfiguredButFailedRelay(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Tools.Browser.WebRTCTurnUDPPort = 30000
+	// No public address configured, so StartTURN refuses: a relay that
+	// advertises a private address is useless to every remote viewer.
+	h := &BrowserWSHandler{}
+	require.Nil(t, h.sharedTURN(cfg))
+	notice := h.turnUnavailableNotice()
+	require.NotEmpty(t, notice)
+	require.Contains(t, notice, "webrtc_turn_udp_port")
+	require.LessOrEqual(t, len(notice), 512)
+}

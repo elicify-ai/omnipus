@@ -1624,7 +1624,7 @@ func (h *BrowserWSHandler) mediaPortFallbackNotice() string {
 // No-op — no frame at all — when nothing degraded, so the ordinary install
 // (fixed port bound exactly, or not configured) is completely unaffected.
 func (h *BrowserWSHandler) notifyMediaPortDegraded(wc *browserWSConn, sessID, viewerID string) {
-	notice := strings.TrimSpace(h.mediaPortFallbackNotice() + " " + h.iceTCPUnavailableNotice())
+	notice := strings.TrimSpace(h.mediaPortFallbackNotice() + " " + h.iceTCPUnavailableNotice() + " " + h.turnUnavailableNotice())
 	if notice == "" {
 		return
 	}
