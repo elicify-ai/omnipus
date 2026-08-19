@@ -9,6 +9,9 @@ name: Landlock probe
 # exercise the Landlock path, and a green there carries no kernel signal.
 on:
   workflow_dispatch:
+  push:
+    branches: [feat/macos-seatbelt-enablement]
+    paths: ['.github/workflows/landlock-probe.yml', 'pkg/sandbox/**']
 
 jobs:
   probe:
@@ -38,3 +41,17 @@ jobs:
           else:
               print("LANDLOCK UNAVAILABLE")
           PY
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run the Linux sandbox suite on a kernel that may have Landlock
+        run: |
+          mkdir -p pkg/gateway/spa
+          printf '<!doctype html><title>ci-stub</title>' > pkg/gateway/spa/index.html
+          CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -v ./pkg/sandbox/ 2>&1 | tail -40
