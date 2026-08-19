@@ -98,9 +98,24 @@ async function main() {
     await page.locator('#login-password').fill(ADMIN_PASS)
     await page.getByRole('button', { name: 'Sign in' }).click()
 
-    // A successful login navigates away from /login (to /onboarding if
-    // still needed, otherwise straight into the app at /).
-    await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: NAV_TIMEOUT_MS })
+    // A successful login navigates away from the login form (to /onboarding
+    // if still needed, otherwise into the app at "/", which itself redirects
+    // into the default workspace's Chat tab — see
+    // src/routes/_app/index.tsx::DefaultWorkspaceRedirect). This is a
+    // hash-router SPA (src/main.tsx uses createHashHistory() — "required for
+    // go:embed static file serving"): a client-side route change only
+    // rewrites the URL fragment after "#", never the real pathname, so a
+    // page.waitForURL() keyed on `url.pathname` never fires (pathname stays
+    // "/login" forever) and just times out — that is the bug this replaces.
+    // Wait instead for the login form itself to go away, which is true
+    // regardless of which route (onboarding vs. app) it was replaced by.
+    await page.locator('#login-password').waitFor({ state: 'detached', timeout: NAV_TIMEOUT_MS }).catch(async () => {
+      // Some browsers/DOM diffing keep the node attached but hidden rather
+      // than removing it outright — fall back to a hash-aware URL predicate
+      // (checking the fragment, not the real pathname) so a slow-but-real
+      // navigation away from #/login still counts as success.
+      await page.waitForURL((url) => !url.hash.includes('/login'), { timeout: NAV_TIMEOUT_MS })
+    })
 
     const loggedInUrl = page.url()
     if (loggedInUrl.includes('/onboarding')) {
@@ -117,7 +132,12 @@ async function main() {
     // "Process Sandbox (Landlock / seccomp)") is where the SPA renders
     // sandbox state; it is reached via the Settings screen's "Security" tab
     // (data-testid="settings-tab-security", src/components/screens/SettingsScreen.tsx). ---
-    await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS })
+    // Hash-router navigation (see the login-wait comment above): the real
+    // pathname is irrelevant to route resolution, only the "#/..." fragment
+    // is, so go straight to the settings route via the hash rather than a
+    // plain path (which would just reload into whatever "/" resolves to —
+    // the default workspace's Chat tab, not Settings).
+    await page.goto(`${BASE}/#/settings`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS })
 
     const securityTab = page.getByTestId('settings-tab-security')
     await securityTab.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS })

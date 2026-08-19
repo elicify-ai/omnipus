@@ -232,14 +232,14 @@ g13() {
 
   # --- positive lower bound: grant must actually be usable -----------
   local granted_file="$host_dir/g13-probe.txt"
-  local granted_prompt="Use write_file to create work/g13mount/g13-probe.txt with content granted-ok. Say whether it worked."
+  local granted_prompt="Use write_file to create g13mount/g13-probe.txt with content granted-ok. Say whether it worked."
   run_agent G13pos "$granted_prompt"
 
   if [ ! -f "$granted_file" ] || ! grep -q 'granted-ok' "$granted_file" 2>/dev/null; then
     # Diagnose rather than guess: is work/<name> a symlink to the host dir (the
     # mount materialised and the write went elsewhere), a plain directory (a
     # shadowing dir was created and the mount never took), or absent entirely?
-    local ws_work shadow_kind shadow_listing host_listing
+    local ws_work shadow_kind shadow_listing host_listing work_find
     ws_work="$OMNIPUS_HOME/workspaces/$WS_ID/work/g13mount"
     if [ -L "$ws_work" ]; then
       shadow_kind="symlink -> $(readlink "$ws_work" 2>/dev/null)"
@@ -252,7 +252,11 @@ g13() {
     fi
     shadow_listing="$(ls -a "$ws_work" 2>/dev/null | tr '\n' ' ')"
     host_listing="$(ls -a "$host_dir" 2>/dev/null | tr '\n' ' ')"
-    echo "G.13 FAIL: positive lower bound not met — the agent reported success but nothing landed in the granted host dir. work/g13mount is $shadow_kind; work listing: [$shadow_listing]; host listing: [$host_listing]. Log: $(tail -c 200 "$WORKDIR/G13pos.log" | tr '\n' ' ')"
+    # Full picture of where the write actually landed within the workspace
+    # work/ tree, so a genuine product bug (file lands somewhere unexpected)
+    # is instantly distinguishable from the file simply never being written.
+    work_find="$(find "$OMNIPUS_HOME/workspaces/$WS_ID/work" -maxdepth 4 2>/dev/null | tr '\n' ' ')"
+    echo "G.13 FAIL: positive lower bound not met — the agent reported success but nothing landed in the granted host dir. work/g13mount is $shadow_kind; work listing: [$shadow_listing]; host listing: [$host_listing]; work/ tree: [$work_find]. Log: $(tail -c 200 "$WORKDIR/G13pos.log" | tr '\n' ' ')"
     overall_fail=1
     return
   fi
@@ -266,7 +270,7 @@ g13() {
   fi
 
   local revoked_file="$host_dir/g13-revoked.txt"
-  local revoked_prompt="Use write_file to create work/g13mount/g13-revoked.txt with content should-be-blocked.${PROMPT_SUFFIX}"
+  local revoked_prompt="Use write_file to create g13mount/g13-revoked.txt with content should-be-blocked.${PROMPT_SUFFIX}"
   run_agent G13neg "$revoked_prompt"
 
   if [ -e "$revoked_file" ]; then
@@ -278,7 +282,7 @@ g13() {
   local ev
   ev="$(evidence_line "$GONE_RE" "$WORKDIR/G13neg.log")"
   if [ -n "$ev" ]; then
-    echo "G.13 PASS: write into work/g13mount/ blocked after revoke (granted write first succeeded) — \"$ev\""
+    echo "G.13 PASS: write into g13mount/ blocked after revoke (granted write first succeeded) — \"$ev\""
   else
     echo "G.13 FAIL: no file written after revoke, but no refusal/not-found evidence in the log either, got: $(tail -c 300 "$WORKDIR/G13neg.log" | tr '\n' ' ')"
     overall_fail=1
