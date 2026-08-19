@@ -21,7 +21,7 @@
 //   -> {type: 'browser_capture_hello',   token, ext_version}
 //   -> {type: 'browser_capture_offer',   sdp}
 //   <- {type: 'browser_capture_answer',  sdp}
-//   <-  {type: 'browser_capture_control', action: recapture|shutdown, reason?, expected_width?, expected_height?}  (server -> client)
+//   <-  {type: 'browser_capture_control', action: recapture|shutdown|adapt_reset, reason?, expected_width?, expected_height?}  (server -> client)
 //   ->  {type: 'browser_capture_control', action: ping}                        (client -> server)
 //
 // expected_width/expected_height (2026-07-31 follow-up,
@@ -1558,14 +1558,34 @@ function sendFrame(frame) {
   ws.send(JSON.stringify(frame));
 }
 
-// handleControlFrame handles the two SERVER -> CLIENT control actions
-// (recapture, shutdown). `ping` is this page's own CLIENT -> SERVER health
+// handleControlFrame handles the SERVER -> CLIENT control actions
+// (recapture, shutdown, adapt_reset). `ping` is this page's own CLIENT -> SERVER health
 // beacon (see startPingBeacon) — the gateway never sends ping to us, and
 // there is no `pong` action in the schema, so neither is handled as an
 // inbound case here.
 async function handleControlFrame(msg) {
   const action = msg.action;
   record('control frame: action=' + action + (msg.reason ? ' reason=' + msg.reason : ''));
+
+  if (action === 'adapt_reset') {
+    // A boot-warmed capture is being handed to its FIRST real viewer. The
+    // resolution the adaptation loop settled on while nobody was watching is
+    // not evidence about this viewer, so start them at full quality.
+    //
+    // Deliberately NOT a recapture: tearing the capture down and rebuilding it
+    // measured ~17s to first frame against ~4s without (hosted box,
+    // 2026-08-17), which is what made keeping a warm capture alive worse than
+    // not having one. Resetting the adaptation state and re-applying the
+    // sender constraints achieves the same "start clean" guarantee with no
+    // rebuild and no visible blip.
+    adaptState = adaptInitialState();
+    adaptCycleCount = 0;
+    if (currentPC) {
+      applyVideoSenderConstraints(currentPC, { context: 'adapt-reset', recordSuccess: true });
+    }
+    record('adapt reset for viewer handover: scale restored to ' + currentAdaptScale());
+    return;
+  }
 
   if (action === 'recapture') {
     // Read expected_width/expected_height off the frame BEFORE kicking off

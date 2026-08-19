@@ -7,7 +7,15 @@ description: >
   tab-follow logic that also drives the live-view session/control-lock
   bookkeeping, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer
   detached past the grace period, or the gateway is stopping the stream);
-  client (extension) → server (gateway) for `ping`, the encoder page's
+  Server → client also for `adapt_reset`: a boot-warmed capture is being
+  handed to its first real viewer, and whatever resolution the encoder's
+  adaptation loop settled on with nobody watching is not evidence about
+  this viewer. Unlike `recapture` this does NOT tear the capture down —
+  it only resets the adaptation to full quality and re-applies the sender
+  constraints, so the handover costs no rebuild. Forcing a rebuild here
+  measured ~17s to first frame versus ~4s (hosted box, 2026-08-17), which
+  is what made a long-lived warm capture worse than none.
+  Client (extension) → server (gateway) for `ping`, the encoder page's
   periodic health beacon / reconnect-watchdog signal. `reason` is an
   optional human-readable note (e.g. why shutdown was requested).
 type: object
@@ -25,6 +33,7 @@ properties:
       - recapture
       - shutdown
       - ping
+      - adapt_reset
   reason:
     type: string
     maxLength: 512

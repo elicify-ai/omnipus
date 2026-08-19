@@ -417,6 +417,10 @@ var versionContentHashes = map[string]string{
 	// the cause is overlapping applies invalidating each other's
 	// transaction, not empty encodings.
 	"1.0.13": "aea8a1f82b48584ffe0bcc0b55efa848893ddb40c8b7592cef667f7cb4d42241",
+	// 1.0.14 — adapt_reset: restore full quality at the boot-warm handover
+	// WITHOUT rebuilding the capture (a rebuild there measured ~17s to
+	// first frame against ~4s without it).
+	"1.0.14": "f04ed3f2e8fefe0490b160dad5b5e3223cf8381e6d13aa91123d7f41e8213394",
 }
 
 func embeddedContentHash(t *testing.T) string {

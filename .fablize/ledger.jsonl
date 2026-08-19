@@ -44,3 +44,5 @@
 {"ts": "2026-07-31T09:25:55.381158+00:00", "event": "checkpoint", "id": "G001", "status": "complete", "evidence": "live.go SetViewport: SetWindowBounds + dsf-only override + getLayoutMetrics read-back logged/cached; go build/vet clean; TestRescaleInputCoords PASS (agent report)", "verify_cmd": "", "verify_evidence": ""}
 {"ts": "2026-07-31T09:25:55.454424+00:00", "event": "story_started", "id": "G002", "title": "F2 resolution"}
 {"ts": "2026-07-31T09:25:55.527693+00:00", "event": "checkpoint", "id": "G002", "status": "complete", "evidence": "encoder.js maintain-resolution + scaleResolutionDownBy=1 + 6Mbps; node --check OK (agent report)", "verify_cmd": "", "verify_evidence": ""}
+{"ts": "2026-08-19T02:49:28.355283+00:00", "event": "plan_created", "brief": "Fix items 1-4: deploy final build, warm-up survives past idle window, ADR-062 tier 3 (TURN) for UDP-blocked viewers, encoder congestion-controls the viewer link. Tests for each. Release branch only.", "count": 5}
+{"ts": "2026-08-19T02:49:29.948625+00:00", "event": "story_started", "id": "G001", "title": "warmup"}

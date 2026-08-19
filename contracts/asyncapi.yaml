@@ -3511,6 +3511,7 @@ components:
           - recapture
           - shutdown
           - ping
+          - adapt_reset
         reason:
           type: string
           maxLength: 512

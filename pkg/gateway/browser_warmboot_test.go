@@ -258,7 +258,7 @@ func (f *fakeWarmCapture) Done() <-chan struct{} { return f.done }
 // Recapture counts the handover rebuild the watcher forces on a capture that
 // warmed unwatched for long enough to have adapted — see
 // browser_warmboot_handover_test.go for the rule it proves.
-func (f *fakeWarmCapture) Recapture() { f.recaptures.Add(1) }
+func (f *fakeWarmCapture) ResetAdaptation(string) { f.recaptures.Add(1) }
 
 // Stop mirrors CaptureSession.Stop's documented idempotence.
 func (f *fakeWarmCapture) Stop() {

@@ -582,7 +582,7 @@ export interface BrowserCaptureAnswerFrame {
 
 export interface BrowserCaptureControlFrame {
   type: "browser_capture_control";
-  action: "recapture" | "shutdown" | "ping";
+  action: "recapture" | "shutdown" | "ping" | "adapt_reset";
   reason?: string;
   expected_width?: number;
   expected_height?: number;

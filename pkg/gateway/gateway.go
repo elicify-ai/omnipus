@@ -2931,9 +2931,10 @@ type warmCaptureHandle interface {
 	ViewerCount() int
 	Done() <-chan struct{}
 	Stop()
-	// Recapture pushes a browser_capture_control{recapture} frame to the
-	// encoder page. Used at handover — see warmCaptureAdaptResetMinAge.
-	Recapture()
+	// ResetAdaptation pushes a browser_capture_control{adapt_reset} frame to
+	// the encoder page: restore full quality WITHOUT rebuilding the capture.
+	// Used at handover — see warmCaptureAdaptResetMinAge.
+	ResetAdaptation(reason string)
 }
 
 // watchWarmCaptureIdle stops a boot-warmed capture that no viewer ever came to
@@ -2979,14 +2980,21 @@ func watchWarmCaptureIdle(ctx context.Context, cs warmCaptureHandle, idle time.D
 					// and production logs are WARN-only — an INFO line here
 					// would leave an operator investigating "the video
 					// blinked when I opened the panel" with nothing to find.
-					logger.WarnCF("browser",
-						"boot-warmed capture adopted by a viewer after running unwatched — forcing one capture rebuild so the picture starts at full quality (brief blip); "+
+					// INFO, not WARN: this no longer costs the viewer a
+					// visible blip. It used to force a capture REBUILD, which
+					// measured ~17s to first frame against ~4s without it
+					// (hosted box, 2026-08-17) and made a long-lived warm
+					// capture worse than none. ResetAdaptation keeps the
+					// guarantee -- the viewer starts at full quality -- and
+					// drops the rebuild.
+					logger.InfoCF("browser",
+						"boot-warmed capture adopted by a viewer after running unwatched — resetting the encoder's adaptation so the picture starts at full quality; "+
 							"the resolution the encoder settled on with nobody watching is not evidence about this viewer",
 						map[string]any{
 							"agent_id":      agentID,
 							"unwatched_for": unwatchedFor.Round(time.Second).String(),
 						})
-					cs.Recapture()
+					cs.ResetAdaptation("boot-warmed capture handed to its first viewer")
 				} else {
 					logger.InfoCF("browser", "boot-warmed capture adopted by a viewer — handing it to the normal grace-stop path",
 						map[string]any{"agent_id": agentID, "unwatched_for": unwatchedFor.Round(time.Second).String()})

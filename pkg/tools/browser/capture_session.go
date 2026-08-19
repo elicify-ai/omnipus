@@ -1285,6 +1285,25 @@ func (cs *CaptureSession) CaptureScale() float64 {
 	return cs.captureScale
 }
 
+// ResetAdaptation asks the encoder to restore full quality WITHOUT rebuilding
+// the capture: it resets the adaptation loop's state and re-applies the sender
+// constraints. Used at the boot-warm handover, where the resolution the loop
+// settled on with nobody watching must not be inherited by the first real
+// viewer.
+//
+// Deliberately not Recapture(): a rebuild there measured ~17s to first frame
+// against ~4s without it (hosted box, 2026-08-17), which is what made keeping
+// a warm capture alive past its idle window worse than letting it stop. This
+// keeps the guarantee and drops the cost, so the warm capture stays useful for
+// a panel opened long after boot.
+func (cs *CaptureSession) ResetAdaptation(reason string) {
+	var reasonPtr *string
+	if reason != "" {
+		reasonPtr = &reason
+	}
+	cs.requestControl("adapt_reset", reasonPtr, 0, 0)
+}
+
 func (cs *CaptureSession) RecaptureAt(expectedW, expectedH int) {
 	cs.requestControl("recapture", nil, expectedW, expectedH)
 	cs.relay.SignalRecapture()

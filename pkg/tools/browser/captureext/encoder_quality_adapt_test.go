@@ -108,6 +108,22 @@ func TestEncoderJS_QualityAdaptGuards(t *testing.T) {
 			"synthesizing encodings:[{}] is what Chrome rejects as " +
 			"'getParameters() has never been called on this sender'")
 	}
+	// --- 1.0.14: the warm-handover reset must NOT be a capture rebuild ------
+	if !strings.Contains(src, "action === 'adapt_reset'") {
+		t.Error("encoder.js: must handle browser_capture_control{adapt_reset} — the gateway sends it at the " +
+			"boot-warm handover so the first real viewer does not inherit a resolution chosen with nobody watching")
+	}
+	if i := strings.Index(src, "if (action === 'adapt_reset') {"); i >= 0 {
+		j := strings.Index(src[i:], "if (action === 'recapture') {")
+		if j <= 0 {
+			t.Error("encoder.js: could not isolate the adapt_reset branch to check it")
+		} else if branch := src[i : i+j]; strings.Contains(branch, "runCaptureAndOffer") {
+			t.Error("encoder.js: adapt_reset must NOT rebuild the capture — a rebuild at handover measured " +
+				"~17s to first frame against ~4s without it (hosted box 2026-08-17), which is exactly what " +
+				"made keeping a warm capture alive worse than letting it stop")
+		}
+	}
+
 	if !strings.Contains(src, "senderParamsChain") || !strings.Contains(src, "queueSenderParams(") {
 		t.Error("encoder.js: every getParameters()->setParameters() pair must go through " +
 			"queueSenderParams — libwebrtc clears the sender transaction id on each " +

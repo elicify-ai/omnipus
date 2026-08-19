@@ -14,12 +14,16 @@ package gateway
 // The gateway's half of the fix is the only half that can exist here, because
 // viewers are the one thing the encoder page cannot see: when a real viewer
 // adopts a capture that has been warming unwatched for longer than
-// warmCaptureAdaptResetMinAge, force one capture rebuild so the encoder starts
-// the viewer at full quality (the encoder's adaptCarryOverIndex is what acts
-// on it). A viewer who arrives before any adaptation could have happened must
-// NOT pay for that rebuild — that is the case the warm-up was built for
-// (6,655ms -> 1,041ms to first frame), and spending it on a reset of nothing
-// would trade the whole measured win for no benefit.
+// warmCaptureAdaptResetMinAge, tell the encoder to RESET ITS ADAPTATION so the
+// viewer starts at full quality. A viewer who arrives before any adaptation
+// could have happened must NOT be sent one — that is the case the warm-up was
+// built for (6,655ms -> 1,041ms to first frame).
+//
+// CHANGED 2026-08-19: the handover used to force a capture REBUILD. Measured
+// on the hosted box, that cost ~17s to first frame against ~4s without it,
+// which made keeping a warm capture alive past its idle window worse than
+// letting it stop — the opposite of the point. adapt_reset restores full
+// quality without tearing the capture down.
 
 import (
 	"context"
@@ -36,10 +40,11 @@ func withWarmCaptureAdaptResetMinAge(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { warmCaptureAdaptResetMinAge = prev })
 }
 
-// TestWatchWarmCaptureIdle_HandoverAfterUnwatchedRunForcesARebuild is the F2
+// TestWatchWarmCaptureIdle_HandoverAfterUnwatchedRunResetsAdaptation is the F2
 // guarantee: a viewer adopting a capture that has been encoding unwatched must
-// not inherit whatever resolution that unwatched run settled on.
-func TestWatchWarmCaptureIdle_HandoverAfterUnwatchedRunForcesARebuild(t *testing.T) {
+// not inherit whatever resolution that unwatched run settled on — and must get
+// that guarantee WITHOUT a capture rebuild.
+func TestWatchWarmCaptureIdle_HandoverAfterUnwatchedRunResetsAdaptation(t *testing.T) {
 	// 0 means "any age qualifies", i.e. this handover is the
 	// warmed-long-enough-to-have-adapted case.
 	withWarmCaptureAdaptResetMinAge(t, 0)

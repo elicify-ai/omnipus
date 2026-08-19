@@ -658,7 +658,7 @@ export const BrowserCaptureAnswerFrame = z
 export const BrowserCaptureControlFrame = z
   .object({
     type: z.literal("browser_capture_control"),
-    action: z.enum(["recapture", "shutdown", "ping"]),
+    action: z.enum(["recapture", "shutdown", "ping", "adapt_reset"]),
     reason: z.string().max(512).optional(),
     expected_width: z.number().int().min(1).max(16384).optional(),
     expected_height: z.number().int().min(1).max(16384).optional(),

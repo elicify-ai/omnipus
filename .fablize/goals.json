@@ -1,39 +1,39 @@
 {
- "brief": "Fix browser live panel viewport+input; deploy to UAT; live-validate side panel AND pop-out fullscreen",
- "created": "2026-07-31T09:08:17.538769+00:00",
+ "brief": "Fix items 1-4: deploy final build, warm-up survives past idle window, ADR-062 tier 3 (TURN) for UDP-blocked viewers, encoder congestion-controls the viewer link. Tests for each. Release branch only.",
+ "created": "2026-08-19T02:49:28.352527+00:00",
  "goals": [
   {
    "id": "G001",
-   "title": "F1 reshape",
-   "objective": "SetViewport reshapes the real tab via Browser.setWindowBounds; setDeviceMetricsOverride only for DPR",
-   "status": "complete",
-   "evidence": "live.go SetViewport: SetWindowBounds + dsf-only override + getLayoutMetrics read-back logged/cached; go build/vet clean; TestRescaleInputCoords PASS (agent report)"
+   "title": "warmup",
+   "objective": "Warm capture helps a panel opened long after boot (fix rebuild-on-attach), with tests",
+   "status": "in_progress",
+   "evidence": null
   },
   {
    "id": "G002",
-   "title": "F2 resolution",
-   "objective": "encoder keeps resolution (maintain-resolution, scaleResolutionDownBy 1, higher bitrate)",
-   "status": "complete",
-   "evidence": "encoder.js maintain-resolution + scaleResolutionDownBy=1 + 6Mbps; node --check OK (agent report)"
+   "title": "congestion",
+   "objective": "Encoder bitrate driven by viewer RTCP, not the loopback hop, with tests",
+   "status": "pending",
+   "evidence": null
   },
   {
    "id": "G003",
-   "title": "F3 input mapping",
-   "objective": "pointer/keyboard mapping correct when capture size != page CSS pixels",
+   "title": "turn",
+   "objective": "ADR-062 tier 3 embedded TURN with scoped permissions + short-lived creds, ICE servers on the wire, with tests",
    "status": "pending",
    "evidence": null
   },
   {
    "id": "G004",
-   "title": "UAT side panel",
-   "objective": "deploy; live-measure stream aspect==panel aspect, size~panel CSSxDPR, click activates target in side panel",
+   "title": "deploy",
+   "objective": "Deploy final build and validate hosted end to end",
    "status": "pending",
    "evidence": null
   },
   {
    "id": "G005",
-   "title": "UAT pop-out",
-   "objective": "same live validation in pop-out new-tab fullscreen mode",
+   "title": "verify",
+   "objective": "CI green on release/v0.1.1 with everything landed",
    "status": "pending",
    "evidence": null
   }
