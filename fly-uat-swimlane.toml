@@ -50,6 +50,15 @@ primary_region = "sin"
   # This app's dedicated IPv4, allocated 2026-08-15 specifically so Fly can
   # route the media UDP service (a shared v4 cannot carry UDP at all).
   OMNIPUS_TOOLS_BROWSER_WEBRTC_PUBLIC_IP = "168.220.92.84"
+  # ADR-062 tier 3 — embedded TURN on its own declared UDP port, for a client
+  # that cannot send media to 50000 directly at all. Peers are restricted to
+  # this gateway's own media address, so it cannot become an open relay, and
+  # credentials are short-lived and minted per viewer.
+  #
+  # UDP only here on purpose: Fly's TCP proxy is not a transparent byte pipe
+  # (measured 2026-08-17 — it reset the ICE-TCP media connection), so a TURN
+  # TCP listener behind it would be reset the same way.
+  OMNIPUS_TOOLS_BROWSER_WEBRTC_TURN_UDP_PORT = "50002"
   # ADR-062 tier 2 (ICE-TCP) is DISABLED here. Fly's TCP proxy is not a
   # transparent byte pipe for ICE: it reset the media connection
   # ("could not proxy TCP data to/from instance ... Connection reset by
@@ -100,6 +109,15 @@ primary_region = "sin"
 
   [[services.ports]]
     port = 50000
+
+# TURN relay (ADR-062 tier 3). Same dedicated IPv4; a declared UDP service is
+# the only way Fly delivers inbound UDP at all.
+[[services]]
+  internal_port = 50002
+  protocol = "udp"
+
+  [[services.ports]]
+    port = 50002
 
 # Persist $OMNIPUS_HOME across deploys. Volume created 2026-08-16:
 # swimlane_omnipus_data (vol_vp2w0w1259987124) in sin. First attach is empty
