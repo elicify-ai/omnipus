@@ -67,3 +67,32 @@ properties:
       currently has no video — WebRTC not yet offered, not yet negotiated,
       or lost after an ICE/connection failure (ADR-061: there is no
       fallback tier to degrade to).
+  ice_servers:
+    type: array
+    maxItems: 8
+    description: >-
+      ADR-062 tier 3. The ICE servers this viewer should configure, including
+      short-lived TURN credentials minted for it. Present only when the
+      gateway runs the embedded relay. The SPA previously hard-coded a public
+      STUN server, which cannot help a client whose network blocks the
+      hole-punch; a relay the gateway itself runs can. Credentials cannot be
+      revoked per allocation (pion/turn exposes no teardown), so their
+      guarantee is a bounded lifetime, not revocation.
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - urls
+      properties:
+        urls:
+          type: array
+          maxItems: 4
+          items:
+            type: string
+            maxLength: 256
+        username:
+          type: string
+          maxLength: 256
+        credential:
+          type: string
+          maxLength: 256

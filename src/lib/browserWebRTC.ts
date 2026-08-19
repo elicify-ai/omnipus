@@ -174,6 +174,38 @@ function defaultPcFactory(): RTCPeerConnection {
 }
 
 /**
+ * ICE servers the GATEWAY told us to use (ADR-062 tier 3), taken from
+ * `browser_webrtc_state.ice_servers`.
+ *
+ * Why this exists: a hard-coded public STUN server can only ever help a client
+ * that is able to hole-punch. The client this tier is for cannot — a VPN
+ * system extension eats Chrome's ICE traffic, or the firewall permits only
+ * established outbound connections — and for them the only thing that works is
+ * a relay the gateway itself runs. The gateway mints short-lived credentials
+ * per viewer and sends them with the "you may offer" frame.
+ *
+ * STUN is kept alongside: the relay is a fallback, not a replacement, and ICE
+ * will still prefer a direct path whenever one exists.
+ */
+export interface BrowserICEServer { // not-wire-format: local view of the generated BrowserWebRTCStateFrame.ice_servers entry, never constructed from raw JSON here
+  urls: string[]
+  username?: string
+  credential?: string
+}
+
+export function pcFactoryWithICEServers(servers: readonly BrowserICEServer[]): () => RTCPeerConnection {
+  return () =>
+    new RTCPeerConnection({
+      iceServers: [
+        { urls: DEFAULT_STUN_SERVER },
+        ...servers
+          .filter((s) => s.urls.length > 0)
+          .map((s) => ({ urls: s.urls, username: s.username, credential: s.credential })),
+      ],
+    })
+}
+
+/**
  * Operator directive (JPEG-fallback removal) — turns a raw `onFallback`
  * reason string into the honest, actionable message BrowserLiveView.tsx
  * shows as the panel's PRIMARY content once WebRTC fails, not a toast:
@@ -219,7 +251,10 @@ export function translateWebRTCFallbackReason(reason: string): string {
 }
 
 export class BrowserWebRTCSession {
-  private readonly pcFactory: () => RTCPeerConnection
+  private pcFactory: () => RTCPeerConnection
+  /** True when the caller injected a factory (tests). Gateway-supplied ICE
+   * servers must never clobber it, or every fake PC becomes a real one. */
+  private readonly pcFactoryInjected: boolean
   private readonly answerTimeoutMs: number
   private readonly firstAnswerTimeoutMs: number
   private readonly disconnectedGraceMs: number
@@ -266,12 +301,27 @@ export class BrowserWebRTCSession {
 
   constructor(options: BrowserWebRTCSessionOptions = {}) {
     this.pcFactory = options.pcFactory ?? defaultPcFactory
+    this.pcFactoryInjected = options.pcFactory !== undefined
     this.answerTimeoutMs = options.answerTimeoutMs ?? DEFAULT_ANSWER_TIMEOUT_MS
     this.firstAnswerTimeoutMs = options.firstAnswerTimeoutMs ?? DEFAULT_FIRST_ANSWER_TIMEOUT_MS
     this.disconnectedGraceMs = options.disconnectedGraceMs ?? DEFAULT_DISCONNECTED_GRACE_MS
     this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES
     this.iceGatheringTimeoutMs = options.iceGatheringTimeoutMs ?? DEFAULT_ICE_GATHERING_TIMEOUT_MS
+  }
+
+  /**
+   * Adopt the ICE servers the gateway minted for this viewer (ADR-062 tier 3).
+   * Takes effect on the NEXT offer, which is exactly when it is needed: the
+   * servers arrive on the same `browser_webrtc_state` frame that tells the
+   * caller it may offer at all.
+   *
+   * A test-injected factory always wins — otherwise a gateway frame would
+   * replace a fake PeerConnection with a real one mid-test.
+   */
+  setICEServers(servers: readonly BrowserICEServer[]): void {
+    if (this.pcFactoryInjected) return
+    this.pcFactory = servers.length > 0 ? pcFactoryWithICEServers(servers) : defaultPcFactory
   }
 
   get state(): BrowserWebRTCState {

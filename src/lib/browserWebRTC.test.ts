@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { BrowserWebRTCSession, translateWebRTCFallbackReason } from './browserWebRTC'
+import { BrowserWebRTCSession, translateWebRTCFallbackReason, pcFactoryWithICEServers } from './browserWebRTC'
 
 // Operator directive (JPEG-fallback removal) — WebRTC is the only live-video
 // path now, so every onFallback reason must translate to an honest,
@@ -1220,5 +1220,64 @@ describe('BrowserWebRTCSession — retry budget (2026-07-30 UAT: permanent pictu
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// ADR-062 tier 3. A hard-coded public STUN server can only help a client that
+// is able to hole-punch; the client this tier exists for cannot. The gateway
+// mints short-lived TURN credentials per viewer and sends them on the same
+// frame that says "you may offer".
+describe('gateway-supplied ICE servers', () => {
+  it('keeps STUN and appends the gateway relay with its credentials', () => {
+    const seen: RTCConfiguration[] = []
+    const OriginalPC = globalThis.RTCPeerConnection
+    // @ts-expect-error - jsdom has no RTCPeerConnection; record the config instead.
+    globalThis.RTCPeerConnection = function (cfg: RTCConfiguration) {
+      seen.push(cfg)
+      return {} as RTCPeerConnection
+    }
+    try {
+      pcFactoryWithICEServers([
+        { urls: ['turn:203.0.113.9:30000?transport=udp'], username: '1750:viewer-1', credential: 'secret' },
+      ])()
+    } finally {
+      globalThis.RTCPeerConnection = OriginalPC
+    }
+
+    expect(seen).toHaveLength(1)
+    const servers = seen[0].iceServers ?? []
+    expect(servers.length).toBe(2)
+    expect(JSON.stringify(servers[0])).toContain('stun:')
+    expect(servers[1]).toMatchObject({
+      urls: ['turn:203.0.113.9:30000?transport=udp'],
+      username: '1750:viewer-1',
+      credential: 'secret',
+    })
+  })
+
+  it('drops entries with no urls rather than handing Chrome an empty server', () => {
+    const seen: RTCConfiguration[] = []
+    const OriginalPC = globalThis.RTCPeerConnection
+    // @ts-expect-error - see above.
+    globalThis.RTCPeerConnection = function (cfg: RTCConfiguration) {
+      seen.push(cfg)
+      return {} as RTCPeerConnection
+    }
+    try {
+      pcFactoryWithICEServers([{ urls: [] }])()
+    } finally {
+      globalThis.RTCPeerConnection = OriginalPC
+    }
+    expect((seen[0].iceServers ?? []).length).toBe(1)
+  })
+
+  it('never replaces a test-injected pcFactory — a gateway frame must not turn a fake PC into a real one', async () => {
+    const pc = makeFakePc()
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc) })
+    machine.setICEServers([{ urls: ['turn:203.0.113.9:30000'], username: 'u', credential: 'c' }])
+    const sendOffer = vi.fn(() => true)
+    machine.start(sendOffer)
+    await vi.waitFor(() => expect(pc.createOffer).toHaveBeenCalled())
+    machine.stop()
   })
 })

@@ -26,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 )
 
 // ADR-038 D1 — /api/v1/browser/ws is a DEDICATED WebSocket, deliberately
@@ -667,6 +668,13 @@ type BrowserWSHandler struct {
 	// a log line: an operator who declared a TCP media port and silently got
 	// nothing has no other way to find out.
 	mediaTCPBindErr error
+
+	// turnServer is the process-wide embedded TURN relay (ADR-062 tier 3),
+	// lazily started on first use and nil when the operator has not declared a
+	// port for it. Guarded by mediaConnMu, like the sockets above.
+	turnServer   *webrtc.TURNServer
+	turnStarted  bool
+	turnStartErr error
 
 	// mediaPortFallback is non-nil ONLY when the fixed media UDP port the
 	// operator explicitly configured could not be bound and sharedMediaConn

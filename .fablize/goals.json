@@ -13,14 +13,14 @@
    "id": "G002",
    "title": "congestion",
    "objective": "Encoder bitrate driven by viewer RTCP, not the loopback hop, with tests",
-   "status": "in_progress",
-   "evidence": null
+   "status": "complete",
+   "evidence": "RTCP ReceiverReport now read in drainViewerRTCP; AIMD policy in bitrate.go (pure, 8 tests incl floor/ceiling/hysteresis/throttle); set_bitrate contract action + max_bitrate field regenerated; encoder clamps and is guarded; webrtc+captureext suites pass; ADR-062 Finding 2 marked RESOLVED"
   },
   {
    "id": "G003",
    "title": "turn",
    "objective": "ADR-062 tier 3 embedded TURN with scoped permissions + short-lived creds, ICE servers on the wire, with tests",
-   "status": "pending",
+   "status": "in_progress",
    "evidence": null
   },
   {

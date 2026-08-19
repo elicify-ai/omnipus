@@ -3407,6 +3407,29 @@ components:
           description: 'True while a WebRTC PeerConnection for this viewer is currently connected and flowing media. False
             (or absent) means this viewer currently has no video — WebRTC not yet offered, not yet negotiated, or lost
             after an ICE/connection failure (ADR-061 — there is no fallback tier to degrade to).'
+        ice_servers:
+          type: array
+          maxItems: 8
+          description: 'ADR-062 tier 3: the ICE servers this viewer should configure, including short-lived TURN
+            credentials minted for it. Present only when the gateway runs the embedded relay.'
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - urls
+            properties:
+              urls:
+                type: array
+                maxItems: 4
+                items:
+                  type: string
+                  maxLength: 256
+              username:
+                type: string
+                maxLength: 256
+              credential:
+                type: string
+                maxLength: 256
     BrowserCaptureHelloFrame:
       title: BrowserCaptureHelloFrame
       description: 'Client (capture extension) → server (gateway). First frame on the loopback-only /api/v1/browser/capture-ingest

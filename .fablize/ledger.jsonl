@@ -48,3 +48,5 @@
 {"ts": "2026-08-19T02:49:29.948625+00:00", "event": "story_started", "id": "G001", "title": "warmup"}
 {"ts": "2026-08-19T03:04:11.875853+00:00", "event": "checkpoint", "id": "G001", "status": "complete", "evidence": "adapt_reset added contract-first (asyncapi+zod regenerated); encoder handles it without runCaptureAndOffer (guard test); CaptureSession.ResetAdaptation; handover switched from Recapture; gateway handover test + captureext tests pass; ext 1.0.14 pinned", "verify_cmd": "", "verify_evidence": ""}
 {"ts": "2026-08-19T03:04:13.729853+00:00", "event": "story_started", "id": "G002", "title": "congestion"}
+{"ts": "2026-08-19T03:22:01.073474+00:00", "event": "checkpoint", "id": "G002", "status": "complete", "evidence": "RTCP ReceiverReport now read in drainViewerRTCP; AIMD policy in bitrate.go (pure, 8 tests incl floor/ceiling/hysteresis/throttle); set_bitrate contract action + max_bitrate field regenerated; encoder clamps and is guarded; webrtc+captureext suites pass; ADR-062 Finding 2 marked RESOLVED", "verify_cmd": "", "verify_evidence": ""}
+{"ts": "2026-08-19T03:22:03.478415+00:00", "event": "story_started", "id": "G003", "title": "turn"}

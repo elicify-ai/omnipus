@@ -562,6 +562,11 @@ export interface BrowserWebRTCStateFrame {
   reason?: "disabled" | "not_capable" | "lite_build" | "error" | "multi_agent_capture_denied";
   has_audio?: boolean;
   active?: boolean;
+  ice_servers?: Array<{
+    urls: Array<string>;
+    username?: string;
+    credential?: string;
+  }>;
 }
 
 export interface BrowserCaptureHelloFrame {

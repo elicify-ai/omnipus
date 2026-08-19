@@ -3589,6 +3589,18 @@ type BrowserToolConfig struct {
 	// 0 = UDP only. Hosted installs set this so a viewer whose network drops
 	// raw UDP (VPN extensions) can open outbound TCP to the same public IP.
 	WebRTCMediaTCPPort int `json:"webrtc_media_tcp_port,omitempty" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_MEDIA_TCP_PORT"`
+	// WebRTCTurnUDPPort enables the embedded TURN relay (ADR-062 tier 3) on its
+	// own UDP port. 0 = off, the default: tier 3 costs a declared port, so it is
+	// opt-in. It serves the client that cannot send media directly to this
+	// gateway at all -- a VPN extension eating Chrome's ICE traffic, a firewall
+	// permitting only established outbound connections. Peers are restricted to
+	// this gateway's own media address, so it can never become an open relay.
+	WebRTCTurnUDPPort int `json:"webrtc_turn_udp_port,omitempty" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_TURN_UDP_PORT"`
+	// WebRTCTurnTCPPort optionally adds a TCP listener for the same relay, for a
+	// client that blocks UDP outright. On a hosted provider whose TCP proxy is
+	// not a transparent byte pipe this will be reset (measured on Fly for
+	// ICE-TCP, 2026-08-17).
+	WebRTCTurnTCPPort int `json:"webrtc_turn_tcp_port,omitempty" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_TURN_TCP_PORT"`
 	// WebRTCPublicIP overrides the address advertised to viewers as the media
 	// host candidate. Normally EMPTY: the gateway derives it from
 	// gateway.public_url, which an operator behind a domain has already set

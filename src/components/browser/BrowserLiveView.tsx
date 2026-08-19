@@ -1188,6 +1188,19 @@ export function BrowserLiveView({
       // available:true (e.g. a periodic re-affirmation) is a safe no-op.
       onWebRTCState: (f) => {
         setWebrtcHasAudio(f.has_audio ?? false)
+        // ADR-062 tier 3: adopt the gateway's ICE servers (which carry this
+        // viewer's short-lived TURN credentials) BEFORE start() builds the
+        // PeerConnection below. Without them a client that cannot hole-punch
+        // has no path at all, however healthy the gateway is.
+        if (f.ice_servers && f.ice_servers.length > 0) {
+          machine.setICEServers(
+            f.ice_servers.map((s) => ({
+              urls: s.urls,
+              username: s.username,
+              credential: s.credential,
+            })),
+          )
+        }
         machine.applyState(f)
         if (f.available) {
           // fix-wave B (MED): `sendWebRTCOffer` returns false when the socket

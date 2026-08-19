@@ -130,8 +130,26 @@ Two constraints this must keep:
   mapping is the only way in). Guarded by `TestSession_SelfHostedNoPublicIP_KeepsSrflx`.
   Network types are widened (not narrowed) only when a TCP mux exists; an earlier revision
   narrowed to UDP4-only, which silently removed every IPv6 host candidate.
-- **Tier 3 (embedded TURN) — BLOCKED pending a real decision** on the port question (Correction 1),
-  the permission handler (Correction 2), and credential lifecycle. Not "TLS on 443".
+- **Tier 3 (embedded TURN) — IMPLEMENTED 2026-08-19**, with all three blockers answered rather
+  than deferred (`pkg/tools/browser/webrtc/turnserver.go`):
+  - **Correction 1 (its own port).** `tools.browser.webrtc_turn_udp_port` (0 = off, the default),
+    with an optional `webrtc_turn_tcp_port`. No pretence of sharing 443: there is still no TLS
+    listener in this product, so the operator declares a port, exactly as for tier 1.
+  - **Correction 2 (not an open relay).** The permission handler admits ONLY this gateway's own
+    media address. `TestAllowedRelayPeer_AdmitsOnlyTheGatewayItself` proves loopback, cloud
+    metadata (169.254.169.254), provider-internal ranges and the open internet are all refused —
+    pion's `DefaultPermissionHandler` would have admitted every one of them.
+  - **Credential lifecycle.** Short-lived TURN-REST credentials minted per viewer
+    (`GenerateLongTermTURNRESTCredentials`), expiry encoded in the username so the server
+    enforces it. pion/turn exposes no per-allocation teardown, so the honest guarantee is a
+    bounded residual window (10 min), stated here and in the code rather than claimed as
+    revocation.
+  - **Wire contract.** `browser_webrtc_state.ice_servers` carries them to the SPA, which no
+    longer relies solely on a hard-coded public STUN server (that can only ever help a client
+    already able to hole-punch). STUN is kept alongside; ICE still prefers a direct path.
+  - **Deployment caveat, measured:** on a provider whose TCP proxy is not a transparent byte
+    pipe the TURN/TCP listener is subject to the same reset that disabled tier 2 on Fly. TURN/UDP
+    on a declared port is the usable path there.
 
 ## Non-goals
 

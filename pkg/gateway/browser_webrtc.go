@@ -692,7 +692,10 @@ func (h *BrowserWSHandler) announceWebRTCAvailability(
 		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, reason)
 		return
 	}
-	h.sendWebRTCState(wc, sessID, viewerID, true, false, false, "")
+	// Hand the viewer its ICE servers HERE, with the "you may offer" frame:
+	// the SPA needs them before it builds its PeerConnection, and credentials
+	// are minted per viewer with a bounded lifetime (ADR-062 tier 3).
+	h.sendWebRTCStateWithICE(wc, sessID, viewerID, true, false, false, "", h.iceServersForViewer(cfg, viewerID))
 }
 
 // sendWebRTCState builds and sends a browser_webrtc_state frame.
@@ -702,10 +705,26 @@ func (h *BrowserWSHandler) sendWebRTCState(
 	available, active, hasAudio bool,
 	reason string,
 ) {
+	h.sendWebRTCStateWithICE(wc, sessID, viewerID, available, active, hasAudio, reason, nil)
+}
+
+// sendWebRTCStateWithICE is sendWebRTCState plus the viewer's ICE servers
+// (ADR-062 tier 3). Split rather than adding a parameter to every call site
+// because only the availability announcement carries them: they are what the
+// SPA needs BEFORE it builds its PeerConnection, and a failure frame sent
+// afterwards has nothing useful to attach.
+func (h *BrowserWSHandler) sendWebRTCStateWithICE(
+	wc *browserWSConn,
+	sessID, viewerID string,
+	available, active, hasAudio bool,
+	reason string,
+	iceServers []iceServerEntry,
+) {
 	f := generated.BrowserWebRTCStateFrame{
-		Type:      string(generated.WsFrameTypeBrowserWebrtcState),
-		Available: available,
-		SessionId: &sessID,
+		Type:       string(generated.WsFrameTypeBrowserWebrtcState),
+		Available:  available,
+		SessionId:  &sessID,
+		IceServers: iceServers,
 	}
 	if active {
 		f.Active = boolPtr(true)
@@ -1735,6 +1754,97 @@ func (h *BrowserWSHandler) sharedMediaConn(cfg *config.Config) net.PacketConn {
 		"error", configuredErr,
 	)
 	return nil
+}
+
+// iceServerEntry aliases the anonymous struct oapi-codegen generates for
+// BrowserWebRTCStateFrame.ice_servers. An alias (not a new type) so it stays
+// assignable to the generated field — the generated types are the only legal
+// cross-boundary shape (Constraint #8).
+type iceServerEntry = struct {
+	Credential *string  `json:"credential,omitempty"`
+	Urls       []string `json:"urls"`
+	Username   *string  `json:"username,omitempty"`
+}
+
+// sharedTURN returns the process-wide embedded relay (ADR-062 tier 3),
+// starting it on first use. Returns nil when TURN is not configured — the
+// default — so every caller can invoke it unconditionally.
+//
+// Started once and kept for the process lifetime, for the same reason as the
+// media sockets: a Session exists per AGENT, and a per-Session relay would
+// mean the first agent wins the port and every later one silently gets
+// nothing.
+func (h *BrowserWSHandler) sharedTURN(cfg *config.Config) *webrtc.TURNServer {
+	port := cfg.Tools.Browser.WebRTCTurnUDPPort
+	if port <= 0 {
+		return nil
+	}
+	h.mediaConnMu.Lock()
+	defer h.mediaConnMu.Unlock()
+	if h.turnStarted {
+		return h.turnServer
+	}
+	h.turnStarted = true
+
+	publicIPs := resolveWebRTCPublicIPs(cfg)
+	var public string
+	if len(publicIPs) > 0 {
+		public = publicIPs[0]
+	}
+	srv, err := webrtc.StartTURN(webrtc.TURNConfig{
+		UDPPort:     port,
+		TCPPort:     cfg.Tools.Browser.WebRTCTurnTCPPort,
+		BindAddress: strings.TrimSpace(cfg.Tools.Browser.WebRTCMediaUDPBindAddress),
+		PublicIP:    public,
+	})
+	if err != nil {
+		h.turnStartErr = err
+		slog.Error("browser-webrtc: embedded TURN relay failed to start — clients that cannot reach the media port directly have no path",
+			"udp_port", port, "tcp_port", cfg.Tools.Browser.WebRTCTurnTCPPort, "error", err)
+		return nil
+	}
+	h.turnServer = srv
+	slog.Info("browser-webrtc: embedded TURN relay started (ADR-062 tier 3)",
+		"udp_port", port, "tcp_port", cfg.Tools.Browser.WebRTCTurnTCPPort, "relay_address", public)
+	return srv
+}
+
+// turnUnavailableNotice reports a configured-but-failed relay to the operator,
+// same discipline as the media sockets: a log line is not a surface.
+func (h *BrowserWSHandler) turnUnavailableNotice() string {
+	h.mediaConnMu.Lock()
+	defer h.mediaConnMu.Unlock()
+	if h.turnStartErr == nil {
+		return ""
+	}
+	return "Live video could not start the TURN relay you configured " +
+		"(tools.browser.webrtc_turn_udp_port), so viewers that cannot reach the media port directly have no path. " +
+		"Free that port or choose one your provider routes, then restart."
+}
+
+// iceServersForViewer mints this viewer's ICE servers. Credentials are
+// short-lived and per-viewer: pion/turn cannot revoke an allocation, so a
+// bounded lifetime is the guarantee (see webrtc.TURNServer).
+func (h *BrowserWSHandler) iceServersForViewer(cfg *config.Config, viewerID string) []iceServerEntry {
+	srv := h.sharedTURN(cfg)
+	if srv == nil {
+		return nil
+	}
+	servers, err := srv.ICEServers(viewerID)
+	if err != nil {
+		slog.Warn("browser-webrtc: could not mint TURN credentials for this viewer", "viewer_id", viewerID, "error", err)
+		return nil
+	}
+	out := make([]iceServerEntry, 0, len(servers))
+	for _, s := range servers {
+		user, cred := s.Username, s.Credential
+		out = append(out, iceServerEntry{
+			Urls:       s.URLs,
+			Username:   &user,
+			Credential: &cred,
+		})
+	}
+	return out
 }
 
 // sharedMediaTCP returns the process-wide ICE-TCP listener (ADR-062 tier 2),

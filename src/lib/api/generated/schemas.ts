@@ -10298,6 +10298,13 @@ export const BrowserWebRTCStateFrame = z
     reason: z.enum(["disabled", "not_capable", "lite_build", "error", "multi_agent_capture_denied"]).optional(),
     has_audio: z.boolean().optional(),
     active: z.boolean().optional(),
+    ice_servers: z.array(z
+    .object({
+      urls: z.array(z.string().max(256)).max(4),
+      username: z.string().max(256).optional(),
+      credential: z.string().max(256).optional(),
+    })
+    .strict()).max(8).optional(),
   })
   .strict();
 
