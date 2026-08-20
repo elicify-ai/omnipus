@@ -1,9 +1,18 @@
 name: PR
 
 on:
-  pull_request: { }
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   # Allow manual runs on feature branches without opening a PR.
   workflow_dispatch:
+
+# Six playwright e2e shards (llm-chat, llm-agents, llm-light, llm-hot-reload,
+# llm-verifier-eval, llm-conformance) call a real paid LLM (openrouter/z-ai/glm-5.2),
+# so every push to a PR branch spends money. Cancel the superseded run on each new
+# push instead of letting it burn through the full 17-job/9-shard fan-out.
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 defaults:
   run:
@@ -188,6 +197,34 @@ jobs:
 
       - name: Run TypeScript type check
         run: npm run typecheck
+
+  lint-spa:
+    name: ESLint (SPA)
+    # eslint.config.js runs @eslint/js + typescript-eslint at stock,
+    # unweakened severities (see that file's header). This repo had no SPA
+    # lint job at all before this — the config was decorative on its own.
+    # Existing pre-existing violations are recorded as an explicit,
+    # ratcheting baseline in scripts/check-eslint-ratchet.sh rather than
+    # silenced in config; the ratchet fails the build on any NEW violation
+    # and also fails if the baseline goes stale after a cleanup, so debt
+    # can only move down, never back up. No continue-on-error: violations
+    # must be visible as red on every PR, same as every other lint job in
+    # this workflow.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run ESLint (must be clean — no baseline, no ratchet)
+        run: npm run lint
 
   vitest:
     name: Vitest — ${{ matrix.group }}
@@ -804,6 +841,13 @@ jobs:
           npm run build
           rm -rf pkg/gateway/spa
           cp -r dist/spa pkg/gateway/spa
+      # NOTE: the security test suite runs BEFORE govulncheck/grype on purpose.
+      # Previously a govulncheck failure failed this job at an earlier step and the
+      # suite never executed — so a dependency CVE silently removed the security
+      # test signal. Scanners still fail the job; they just no longer mask the tests.
+      - name: Run security test suite
+        run: CGO_ENABLED=0 go test -tags goolm,stdjson -v -count=1 -timeout 10m ./tests/security/...
+
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Run govulncheck
@@ -834,9 +878,6 @@ jobs:
             --exclude './pkg/api/generated/**' \
             --exclude './src/lib/api/generated/**' \
             --exclude './src/routeTree.gen.ts'
-      - name: Run security test suite
-        run: CGO_ENABLED=0 go test -tags goolm,stdjson -v -count=1 -timeout 10m ./tests/security/...
-
   perf-smoke:
     name: Perf Smoke
     runs-on: ubuntu-latest

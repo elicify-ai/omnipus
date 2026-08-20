@@ -26,7 +26,18 @@ linters:
     - wsl
     - wsl_v5
 
-    # TODO: Disabled, because they are failing at the moment, we should fix them and enable (step by step)
+    # TODO: Disabled, because they are failing at the moment, we should fix them and enable (step by step).
+    - misspell # 0 with default settings, but 481 under this repo's `locale: US`
+              # (flags British spellings: behaviour->behavior, artefact->artifact).
+              # Style preference, not correctness. Enable only if US spelling is a
+              # deliberate house rule — then fix all 481 rather than downgrading.
+    # Measured 2026-08-20 with golangci-lint 2.12.2, --build-tags=goolm,stdjson,
+    # --max-issues-per-linter=0 --max-same-issues=0:
+    #   ineffassign 0   -> ENABLED (removed from this list)
+    #   staticcheck 162 -> mostly QF1012/QF1008 quickfixes; tractable in one pass
+    #   errcheck   1073 -> 412 production / 661 test
+    #   gosec      2258 -> G304 621, G104 584, G306 365, G301 270
+    # Re-measure before enabling any of the above; do not guess.
     - contextcheck
     - embeddedstructfieldcheck
     - errcheck
@@ -43,7 +54,6 @@ linters:
     - gocyclo
     - godox
     - gosec
-    - ineffassign
     - lll
     - maintidx
     - mnd
@@ -68,7 +78,6 @@ linters:
     # after a dedicated style-cleanup commit post-merge.
     - dupl
     - godoclint
-    - misspell
   settings:
     errcheck:
       check-type-assertions: true
