@@ -51,23 +51,34 @@ func RegisterTools(
 		return nil, err
 	}
 
-	registry.Register(&NavigateTool{mgr: mgr})
-	registry.Register(&ClickTool{mgr: mgr})
-	registry.Register(&TypeTool{mgr: mgr})
-	registry.Register(&ScreenshotTool{mgr: mgr, agentHome: agentHome, restrict: restrict})
-	registry.Register(&GetTextTool{mgr: mgr})
-	registry.Register(&WaitTool{mgr: mgr})
+	// RegisterReplacing, not Register: this function re-runs on EVERY hot
+	// reload (registerSharedTools via ReloadProviderAndConfig, any Settings
+	// save, UpsertAgentFast), and each re-run must install tools carrying the
+	// operator's CURRENT security state — EvaluateTool.executeEnabled, the
+	// screenshot workspace confinement, and the new mgr's SSRFChecker.
+	// #278 hardened Register to keep the incumbent and DISCARD a same-name
+	// newcomer, which is right for an untrusted claim but silently voided
+	// this first-party re-wire: disabling browser_evaluate in Settings
+	// reported success and left the JS-execution gate open. Regression test:
+	// TestRegisterTools_RewireMustApplyNewSecurityState.
+
+	registry.RegisterReplacing(&NavigateTool{mgr: mgr})
+	registry.RegisterReplacing(&ClickTool{mgr: mgr})
+	registry.RegisterReplacing(&TypeTool{mgr: mgr})
+	registry.RegisterReplacing(&ScreenshotTool{mgr: mgr, agentHome: agentHome, restrict: restrict})
+	registry.RegisterReplacing(&GetTextTool{mgr: mgr})
+	registry.RegisterReplacing(&WaitTool{mgr: mgr})
 	// browser_evaluate is always registered so the LLM sees it; the evaluateEnabled
 	// flag is forwarded to the tool's Execute method, which is the SOLE live gate
 	// (deny-by-default unless the operator opts in) — see the doc comment above.
-	registry.Register(&EvaluateTool{mgr: mgr, executeEnabled: evaluateEnabled})
+	registry.RegisterReplacing(&EvaluateTool{mgr: mgr, executeEnabled: evaluateEnabled})
 	// ADR-041 D3 — tab-management tools.
-	registry.Register(&ListTabsTool{mgr: mgr})
-	registry.Register(&SwitchTabTool{mgr: mgr})
-	registry.Register(&CloseTabTool{mgr: mgr})
+	registry.RegisterReplacing(&ListTabsTool{mgr: mgr})
+	registry.RegisterReplacing(&SwitchTabTool{mgr: mgr})
+	registry.RegisterReplacing(&CloseTabTool{mgr: mgr})
 	// Opens a NEW tab (the agent-facing counterpart to the human "+" button)
 	// — distinct from browser_navigate, which reuses the current tab.
-	registry.Register(&OpenTabTool{mgr: mgr})
+	registry.RegisterReplacing(&OpenTabTool{mgr: mgr})
 
 	return mgr, nil
 }
