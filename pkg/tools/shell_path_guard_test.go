@@ -46,6 +46,7 @@ package tools
 // segments are ALL inside the workspace still passes.
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -137,7 +138,7 @@ func TestGuardCommand_FalsePositives(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tool.guardCommand(tc.cmd, cwd)
+			got := tool.guardCommand(context.Background(), tc.cmd, cwd)
 			require.Empty(t, got, "command must be allowed (%s)\ncommand: %s", tc.why, tc.cmd)
 		})
 	}
@@ -268,7 +269,7 @@ func TestGuardCommand_TruePositivesStillBlocked(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tool.guardCommand(tc.cmd, cwd)
+			got := tool.guardCommand(context.Background(), tc.cmd, cwd)
 			require.NotEmpty(t, got, "command must be blocked: %s", tc.cmd)
 			require.Contains(t, got, tc.want, "wrong rejection reason for: %s", tc.cmd)
 		})
@@ -284,7 +285,7 @@ func TestGuardCommand_SafePathsExemptionSurvivesMetacharacters(t *testing.T) {
 
 	for _, suffix := range []string{"", ";", " ;", "&&  echo x", "| head -1", ")"} {
 		cmd := "echo hi 2>/dev/null" + suffix
-		require.Empty(t, tool.guardCommand(cmd, cwd),
+		require.Empty(t, tool.guardCommand(context.Background(), cmd, cwd),
 			"/dev/null must stay exempt when followed by %q", suffix)
 	}
 }

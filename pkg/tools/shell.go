@@ -725,7 +725,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 
 	// FR-B4: hardcoded deny-pattern baseline (unconditional) + the opt-in
 	// operator-extensible layer + the legacy command-text absolute-path scan.
-	if guardErr := t.guardCommand(command, cwd); guardErr != "" {
+	if guardErr := t.guardCommand(ctx, command, cwd); guardErr != "" {
 		t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
 		return ErrorResult(guardErr)
 	}
@@ -888,7 +888,7 @@ func (t *ExecTool) resolveCWD(ctx context.Context, args map[string]any, baseDir 
 // and (3) a legacy defense-in-depth scan for absolute paths referenced in the
 // command TEXT (independent of the cwd parameter guard above), gated on
 // restrictToWorkspace exactly as the pre-consolidation exec tool did.
-func (t *ExecTool) guardCommand(command, cwd string) string {
+func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string {
 	if msg := applyDenyPatterns(command, t.denyPatterns, nil); msg != "" {
 		return msg
 	}
@@ -918,6 +918,36 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		return "cannot resolve working directory"
 	}
 
+	// ADR-063 alignment: the command-TEXT scan below must honor the SAME
+	// workspace mounts that the kernel policy (turnKernelPolicy ->
+	// ResolveTurnFSPolicy) and the app-layer path resolver (matchedAllowedRoot)
+	// already grant write to. Without this, an absolute path under a mounted
+	// folder is rejected here with "no mount covers it" before the kernel —
+	// which WOULD allow it — ever runs, so the guard's own message described a
+	// mount check the function never performed. Resolve mount roots from that
+	// one authoritative source. On resolve error, fall back to NO mount
+	// exemption: the guard then stays exactly as strict as before, and (unlike
+	// the kernel path, which fails closed by ABORTING the spawn) it never aborts
+	// a command over a transient mount-resolution hiccup.
+	//
+	// The KERNEL sandbox remains the authoritative boundary, not this text scan.
+	// This guard is deliberately COARSER than the kernel for the mount exemption:
+	// it grants read+write+exec under a mount root where the kernel grants only
+	// read+write; it matches lexically (filepath.Abs) where the kernel enforces
+	// on realpaths (a symlink inside a mount pointing out is passed here, denied
+	// by the kernel); and it does NOT subtract the per-turn secret set, so a
+	// mount that overlaps $OMNIPUS_HOME could name a secret path here that the
+	// kernel still denies. On Linux 5.13+ the kernel blocks every one of those
+	// deltas. On a fallback platform (no Landlock) bash is governed by the boot
+	// profile, which already grants $OMNIPUS_HOME broadly — this scan was never a
+	// secret boundary there. (Subtracting KernelDeniedPathsFor here to close the
+	// gap needs a home/work-dir path-form match this call site can't cheaply
+	// guarantee; it is tracked as follow-up, not attempted inline.)
+	var mountRoots []string
+	if authored, ferr := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace); ferr == nil {
+		mountRoots = authored.AllowedRoots
+	}
+
 	// Web URL schemes whose path components (starting with //) should be
 	// exempt from workspace sandbox checks. file: is intentionally excluded
 	// so file:// URIs are still validated against the workspace boundary.
@@ -945,7 +975,7 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		// past the guard entirely.
 		if strings.Contains(raw, ":") && colonPathListPattern.MatchString(raw) {
 			for _, seg := range strings.Split(raw, ":") {
-				if msg := t.checkPathSegment(seg, cwdPath); msg != "" {
+				if msg := t.checkPathSegment(seg, cwdPath, mountRoots); msg != "" {
 					return msg
 				}
 			}
@@ -966,7 +996,7 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 			}
 		}
 
-		if msg := t.checkPathSegment(raw, cwdPath); msg != "" {
+		if msg := t.checkPathSegment(raw, cwdPath, mountRoots); msg != "" {
 			return msg
 		}
 	}
@@ -977,9 +1007,10 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 // checkPathSegment evaluates a single absolute-path candidate — either a
 // bare candidate from the main scan loop, or one `:`-separated segment of a
 // colon-joined path list — against the safePaths exemption, the
-// operator-configured allowlist, and the workspace-containment boundary.
+// operator-configured allowlist, the workspace-containment boundary, and the
+// turn's workspace mounts (mountRoots, from ResolveTurnFSPolicy.AllowedRoots).
 // Returns "" when the segment is allowed, or a rejection message otherwise.
-func (t *ExecTool) checkPathSegment(raw, cwdPath string) string {
+func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string) string {
 	p, err := filepath.Abs(raw)
 	if err != nil {
 		return "Command blocked by safety guard (cannot resolve path)"
@@ -996,6 +1027,14 @@ func (t *ExecTool) checkPathSegment(raw, cwdPath string) string {
 		return "Command blocked by safety guard (cannot resolve relative path)"
 	}
 	if strings.HasPrefix(rel, "..") {
+		// Outside the working dir — but a workspace mount may cover it. The
+		// kernel policy and the app-layer path resolver both grant paths under
+		// an AllowedRoots mount (matchedAllowedRoot); the guard must not reject a
+		// write the kernel would permit. This is the "and no mount covers it"
+		// branch finally consulting the mounts its message has always named.
+		if _, ok := matchedAllowedRoot(p, mountRoots); ok {
+			return ""
+		}
 		return fmt.Sprintf("Command blocked by safety guard (path outside working dir): %q is outside the effective working directory %q and no mount covers it", p, cwdPath)
 	}
 	return ""
