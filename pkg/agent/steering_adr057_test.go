@@ -15,11 +15,14 @@ package agent
 // cannot regress the way #577 did.
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
+	"time"
 )
 
 // --------------------------------------------------------------------------
@@ -116,6 +119,49 @@ func buildU8DelegationTree(t *testing.T, al *AgentLoop) (a, b, c, d *turnState) 
 // cancel.go/session_messaging_wire.go right now, not a defect in this test
 // or the fixture. It requires no further action from this unit: once
 // U15/U19 land, this test starts passing with no changes here.
+//
+// PERFORMANCE / HANG NOTE (found post-landing, root-caused via a goroutine
+// dump on timeout): the fixture imports pkg/agent, which transitively pulls
+// in ~858 packages (LLM SDKs, browser automation, every channel
+// implementation — this is a single-binary project, see CLAUDE.md). `go
+// build`'s action-cache key for EVERY package in that graph is derived from
+// the full active build-tag set, not just the tags a given package actually
+// branches on — so a `go build` invoked with a DIFFERENT tag set than the
+// one that built the currently-running test binary cannot reuse ANY of that
+// cache, even for packages whose source is byte-for-byte identical either
+// way. This project's test binaries are always built with `-tags "goolm
+// stdjson"` (mandatory per CLAUDE.md; the Matrix channel alone won't even
+// compile without them). The original version of this test invoked `go
+// build` with NO `-tags` at all, so it ran under a permanently-cold cache
+// namespace: the standard dev/CI workflow only ever warms the tagged
+// namespace, never the untagged one. The result was a full, from-scratch
+// ~858-package compile on every single run, on the resource-constrained CI
+// devpod this project uses (2-4 cores) — measured at several minutes even
+// before adding any concurrent load, long enough to blow through the
+// package's shared `-timeout` and take every other test in ./pkg/agent/
+// down with it via `panic: test timed out`.
+//
+// This is a TEST-ONLY defect, not a production one: this test never
+// executes the fixture binary (it only asserts the BUILD fails), so no
+// application code — let alone Interrupt/InterruptScope's own locking —
+// ever runs here. A goroutine dump taken during the hang confirmed the
+// blocked goroutine sat in ordinary os/exec plumbing
+// (os/exec.(*Cmd).Start.func2 -> io.Copy, servicing cmd.CombinedOutput's
+// pipe read) waiting on the child `go build` process — not on any
+// application channel, mutex, or WaitGroup.
+//
+// Fix, two parts:
+//  1. Read this test binary's OWN `-tags` setting via runtime/debug and
+//     pass it straight through to the nested `go build`, so it reuses the
+//     exact cache namespace `go test` just finished warming (verified:
+//     collapses the fixture build from several minutes to ~2s). This also
+//     keeps the fix correct if the project's canonical tags ever change —
+//     it never hardcodes "goolm,stdjson".
+//  2. Bound the subprocess with a context timeout so that even a
+//     genuinely cold cache (e.g. this test run completely in isolation on
+//     a brand new checkout) fails FAST with a clear, actionable message
+//     instead of silently hanging until the package's shared -timeout
+//     panics the whole suite.
 func TestInterruptScope_RequiredByCompiler(t *testing.T) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -129,11 +175,45 @@ func TestInterruptScope_RequiredByCompiler(t *testing.T) {
 		t.Fatalf("TestInterruptScope_RequiredByCompiler: expected a file at %s, found a directory", fixtureFile)
 	}
 
+	// Reuse the build cache this test binary itself was just compiled
+	// into: pass through the same -tags the running `go test` process
+	// used, read from our own build info rather than hardcoded, so this
+	// stays correct if the project's canonical tags change. Without this,
+	// the nested `go build` runs under a permanently-cold, never-warmed
+	// cache namespace (see the doc comment above) and can take minutes.
+	var buildTags string
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range bi.Settings {
+			if s.Key == "-tags" {
+				buildTags = s.Value
+				break
+			}
+		}
+	}
+
+	// Bound the subprocess: even with a warm cache this should finish in
+	// seconds, but a cold-cache first run compiling pkg/agent's ~858
+	// transitive dependencies from scratch is legitimately slow on a
+	// constrained CI devpod. Fail fast with a clear message well short of
+	// the package's shared -timeout, instead of hanging indefinitely and
+	// taking the whole suite down with it.
+	const buildTimeout = 3 * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
+	defer cancel()
+
 	outPath := filepath.Join(t.TempDir(), "interrupt_scope_required_bin")
-	cmd := exec.Command("go", "build", "-o", outPath, fixtureDir)
+	args := []string{"build"}
+	if buildTags != "" {
+		args = append(args, "-tags", buildTags)
+	}
+	args = append(args, "-o", outPath, fixtureDir)
+	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	out, buildErr := cmd.CombinedOutput()
 
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("TestInterruptScope_RequiredByCompiler: `go build` on the fixture did not finish within %s (tags=%q) — this must never silently hang the whole package; output so far:\n%s", buildTimeout, buildTags, out)
+	}
 	if buildErr == nil {
 		t.Fatalf("TestInterruptScope_RequiredByCompiler: `go build` on the fixture unexpectedly SUCCEEDED (output: %s) — Interrupt accepted a call missing its InterruptScope argument, which FR-041 forbids", out)
 	}
