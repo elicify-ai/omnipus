@@ -291,9 +291,30 @@ func TestEvidenceGate_NeverEmittedMarker_TerminatesWithinBudget(t *testing.T) {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
+	// Fail fast on the REAL livelock signal — an unbounded DISPATCH COUNT —
+	// rather than on elapsed wall-clock time. A runaway gate re-dispatches the
+	// worker without limit, so it trips runawayDispatchCeiling almost
+	// immediately on any machine; a 2s stopwatch, by contrast, was a proxy that
+	// reported livelock whenever the suite was merely busy (it was the sole
+	// failure in an 869s full-package run while passing in isolation) and would
+	// equally have reported success on a fast machine if the bound regressed
+	// only slightly. The generous deadline below is a backstop for the
+	// never-terminates case, NOT the thing under test: the bound itself is
+	// asserted by runawayDispatchCeiling here and by the exact dispatches == 2
+	// check further down.
+	const runawayDispatchCeiling = 8
+	deadline := time.Now().Add(60 * time.Second)
 	var final *task.Task
 	for time.Now().Before(deadline) {
+		worker.mu.Lock()
+		seen := worker.callCount
+		worker.mu.Unlock()
+		if seen > runawayDispatchCeiling {
+			t.Fatalf("worker dispatched %d times (ceiling %d) — the evidence-marker gate is "+
+				"re-dispatching without a bound (livelock); rejectBareEvidenceClaim is taking the "+
+				"free non-attempt-consuming path forever instead of routing through "+
+				"consumeAttemptOrExhaust", seen, runawayDispatchCeiling)
+		}
 		got, err := al.taskStore.Get(tk.ID)
 		if err != nil {
 			t.Fatalf("get task: %v", err)
@@ -305,8 +326,8 @@ func TestEvidenceGate_NeverEmittedMarker_TerminatesWithinBudget(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if final == nil {
-		t.Fatal("task never reached a terminal status within 2s — the evidence-marker gate is looping " +
-			"without a bound (livelock)")
+		t.Fatal("task never reached a terminal status within 60s and never exceeded the dispatch " +
+			"ceiling — the gate is stalled rather than looping (neither terminating nor re-dispatching)")
 	}
 	if final.Status != task.StatusFailed {
 		t.Errorf("status = %q, want %q — a worker that never emits [goal:evidence] must fail out, not "+

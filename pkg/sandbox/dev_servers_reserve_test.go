@@ -105,9 +105,9 @@ func TestReservePort_EnforcesCaps(t *testing.T) {
 	if _, _, err := r.ReservePort("a", 0, testPortLo, testPortHi, 10); !errors.Is(err, ErrPerAgentCap) {
 		t.Errorf("same-agent reservation err = %v; want ErrPerAgentCap", err)
 	}
-	var capErr GatewayCapError
-	if _, _, err := r.ReservePort("b", 0, testPortLo, testPortHi, 1); !errors.As(err, &capErr) {
-		t.Errorf("over-cap reservation err = %v; want GatewayCapError", err)
+	_, _, err := r.ReservePort("b", 0, testPortLo, testPortHi, 1)
+	if _, ok := err.(GatewayCapError); !ok {
+		t.Errorf("over-cap reservation err = %T: %v; want exactly GatewayCapError (ReservePort returns it unwrapped)", err, err)
 	}
 }
 

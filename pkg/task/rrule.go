@@ -230,7 +230,7 @@ func isStructurallyRegular(opt *rrule.ROption) bool {
 func regularSafeForFreq(freq rrule.Frequency, dtstart time.Time) bool {
 	switch freq {
 	case rrule.YEARLY:
-		return !(dtstart.Month() == time.February && dtstart.Day() == 29)
+		return dtstart.Month() != time.February || dtstart.Day() != 29
 	case rrule.MONTHLY:
 		return dtstart.Day() < 29
 	default:
@@ -467,10 +467,8 @@ func regularOccurrencesInRange(
 	k := occAtOrAfter(fromMs)
 	var raw []int64
 	truncated := false
-	for {
-		if count > 0 && k >= count {
-			break
-		}
+	for count <= 0 || k < count {
+
 		occ := regularOccurrenceAt(dtstart, loc, freq, interval, k)
 		if !until.IsZero() && occ.After(until) {
 			break

@@ -90,9 +90,9 @@ func TestFallback_AllFail(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when all candidates fail")
 	}
-	var exhausted *FallbackExhaustedError
-	if !errors.As(err, &exhausted) {
-		t.Errorf("expected FallbackExhaustedError, got %T: %v", err, err)
+	exhausted, ok := err.(*FallbackExhaustedError)
+	if !ok {
+		t.Fatalf("expected exactly *FallbackExhaustedError (Execute returns it unwrapped), got %T: %v", err, err)
 	}
 	if len(exhausted.Attempts) != 3 {
 		t.Errorf("attempts = %d, want 3", len(exhausted.Attempts))
@@ -145,9 +145,9 @@ func TestFallback_NonRetriableError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for non-retriable")
 	}
-	var fe *FailoverError
-	if !errors.As(err, &fe) {
-		t.Fatalf("expected FailoverError, got %T", err)
+	fe, ok := err.(*FailoverError)
+	if !ok {
+		t.Fatalf("expected exactly *FailoverError (Execute returns it unwrapped), got %T", err)
 	}
 	if fe.Reason != FailoverFormat {
 		t.Errorf("reason = %q, want format", fe.Reason)
@@ -218,9 +218,8 @@ func TestFallback_AllInCooldown(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when all in cooldown")
 	}
-	var exhausted *FallbackExhaustedError
-	if !errors.As(err, &exhausted) {
-		t.Fatalf("expected FallbackExhaustedError, got %T", err)
+	if _, ok := err.(*FallbackExhaustedError); !ok {
+		t.Fatalf("expected exactly *FallbackExhaustedError (Execute returns it unwrapped), got %T", err)
 	}
 }
 

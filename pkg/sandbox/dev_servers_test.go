@@ -35,9 +35,9 @@ func TestDevServerRegistry_GatewayCap(t *testing.T) {
 		t.Fatalf("first Register: %v", err)
 	}
 	_, err := r.Register("b", 18001, 2, "next dev", 1)
-	var capErr GatewayCapError
-	if !errors.As(err, &capErr) {
-		t.Fatalf("expected GatewayCapError, got %v", err)
+	capErr, ok := err.(GatewayCapError)
+	if !ok {
+		t.Fatalf("expected exactly GatewayCapError (Register returns it unwrapped), got %T: %v", err, err)
 	}
 	if capErr.Current != 1 || capErr.Max != 1 {
 		t.Errorf("GatewayCapError = %+v; want Current=1 Max=1", capErr)

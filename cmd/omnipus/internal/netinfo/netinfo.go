@@ -159,12 +159,12 @@ func AccessURLsFromConfig(configPath string) AccessURLs {
 // glance and actionable.
 func Render(u AccessURLs) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("  This machine:   %s\n", u.Primary))
+	fmt.Fprintf(&sb, "  This machine:   %s\n", u.Primary)
 	for _, e := range u.Extras {
-		sb.WriteString(fmt.Sprintf("  On your network: %s\n", e))
+		fmt.Fprintf(&sb, "  On your network: %s\n", e)
 	}
 	if u.Hint != "" {
-		sb.WriteString(fmt.Sprintf("  Hint: %s\n", u.Hint))
+		fmt.Fprintf(&sb, "  Hint: %s\n", u.Hint)
 	}
 	return sb.String()
 }

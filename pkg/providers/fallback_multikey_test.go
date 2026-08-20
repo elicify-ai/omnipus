@@ -107,9 +107,9 @@ func TestMultiKeyFailoverAllFail(t *testing.T) {
 	}
 
 	// Verify error type
-	var exhausted *FallbackExhaustedError
-	if !errors.As(err, &exhausted) {
-		t.Errorf("expected FallbackExhaustedError, got: %T - %v", err, err)
+	exhausted, ok := err.(*FallbackExhaustedError)
+	if !ok {
+		t.Fatalf("expected exactly *FallbackExhaustedError (Execute returns it unwrapped), got: %T - %v", err, err)
 	}
 
 	if len(exhausted.Attempts) != 3 {
@@ -206,9 +206,9 @@ func TestMultiKeyFailoverWithFormatError(t *testing.T) {
 	}
 
 	// Verify the error is a FailoverError with format reason
-	var failoverErr *FailoverError
-	if !errors.As(err, &failoverErr) {
-		t.Errorf("expected FailoverError, got: %T - %v", err, err)
+	failoverErr, ok := err.(*FailoverError)
+	if !ok {
+		t.Fatalf("expected exactly *FailoverError (Execute returns it unwrapped), got: %T - %v", err, err)
 	}
 
 	if failoverErr.Reason != FailoverFormat {

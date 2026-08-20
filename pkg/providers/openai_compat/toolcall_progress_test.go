@@ -14,12 +14,10 @@ import (
 // brief (or absent) preamble, then kilobytes of tool-call arguments.
 func toolArgsOnlyStream(toolName string, argChunks []string) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf(
-		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":%q,"arguments":""}}]}}]}`+"\n\n",
-		toolName))
+	fmt.Fprintf(&b, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":%q,"arguments":""}}]}}]}`+"\n\n",
+		toolName)
 	for _, c := range argChunks {
-		b.WriteString(fmt.Sprintf(
-			`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":%q}}]}}]}`+"\n\n", c))
+		fmt.Fprintf(&b, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":%q}}]}}]}`+"\n\n", c)
 	}
 	b.WriteString(`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n")
 	b.WriteString("data: [DONE]\n\n")
