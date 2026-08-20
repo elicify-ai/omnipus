@@ -569,7 +569,7 @@ func (c *WhatsAppNativeChannel) Send(ctx context.Context, msg bus.OutboundMessag
 	}
 
 	if _, err = client.SendMessage(ctx, to, waMsg); err != nil {
-		return fmt.Errorf("whatsapp send: %v: %w", err, channels.ErrTemporary)
+		return fmt.Errorf("whatsapp send: %w: %w", err, channels.ErrTemporary)
 	}
 	return nil
 }

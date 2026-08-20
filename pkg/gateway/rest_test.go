@@ -836,7 +836,8 @@ func TestUpdateAgent_LockedRejectsIdentityChange(t *testing.T) {
 		},
 	}
 	coreagent.SeedConfig(cfg)
-	cfgJSON, _ := json.Marshal(cfg)
+	cfgJSON, err := json.Marshal(cfg)
+	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
 	// ADR-054: the allowed model-change PUT below reaches updateAgent's
 	// persist step, which resolves/updates "jim" via the agent store
@@ -1561,7 +1562,8 @@ func TestUpdateAgent_LockedRejectsSkills(t *testing.T) {
 		},
 	}
 	coreagent.SeedConfig(cfg)
-	cfgJSON, _ := json.Marshal(cfg)
+	cfgJSON, err := json.Marshal(cfg)
+	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
 
 	msgBus := bus.NewMessageBus()

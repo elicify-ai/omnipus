@@ -228,16 +228,20 @@ func TestReplay_Params_And_Result_Fidelity(t *testing.T) {
 	start := findFrame(frames, "tool_call_start")
 	require.NotNil(t, start)
 	// Params must round-trip faithfully.
-	gotParamsJSON, _ := json.Marshal(start.Params)
-	wantParamsJSON, _ := json.Marshal(wantParams)
+	gotParamsJSON, err := json.Marshal(start.Params)
+	require.NoError(t, err)
+	wantParamsJSON, err := json.Marshal(wantParams)
+	require.NoError(t, err)
 	assert.JSONEq(t, string(wantParamsJSON), string(gotParamsJSON),
 		"params must be bit-for-bit equal after JSON round-trip")
 
 	result := findFrame(frames, "tool_call_result")
 	require.NotNil(t, result)
 	// Result must round-trip faithfully.
-	gotResultJSON, _ := json.Marshal(result.Result)
-	wantResultJSON, _ := json.Marshal(wantResult)
+	gotResultJSON, err := json.Marshal(result.Result)
+	require.NoError(t, err)
+	wantResultJSON, err := json.Marshal(wantResult)
+	require.NoError(t, err)
 	assert.JSONEq(t, string(wantResultJSON), string(gotResultJSON),
 		"result must be bit-for-bit equal after JSON round-trip")
 }
@@ -652,7 +656,8 @@ func TestReplay_DuplicateCallID_EmitsLatestOnly(t *testing.T) {
 	require.Len(t, results, 1, "only one tool_call_result must be emitted for duplicate IDs")
 
 	// The one that was emitted must be the latest (tc1b with cmd:"second").
-	paramJSON, _ := json.Marshal(starts[0].Params)
+	paramJSON, err := json.Marshal(starts[0].Params)
+	require.NoError(t, err)
 	assert.Contains(t, string(paramJSON), "second", "must emit the latest occurrence")
 
 	// Warn must be logged.
@@ -866,7 +871,8 @@ func TestReplay_BoundaryResult_NoTruncation(t *testing.T) {
 	boundaryResult := map[string]any{"data": value}
 
 	// Verify the encoded size is exactly at the limit.
-	encoded, _ := json.Marshal(boundaryResult)
+	encoded, err := json.Marshal(boundaryResult)
+	require.NoError(t, err)
 	require.Equal(t, replayMaxResultBytes, len(encoded), "fixture must be exactly 1 MiB encoded")
 
 	tc := toolCall("boundary-tc", "exec", "success", 1, nil, boundaryResult)

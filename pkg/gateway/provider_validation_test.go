@@ -462,7 +462,8 @@ func TestProviderTest_ClassifiedOutcome(t *testing.T) {
 			},
 		},
 	}
-	b, _ := json.Marshal(cfgJSON)
+	b, err := json.Marshal(cfgJSON)
+	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", b, 0o600))
 
 	api := &restAPI{
@@ -543,7 +544,8 @@ func TestProviderTest_DoesNotPersistCredential(t *testing.T) {
 			"api_base":    upstream.URL,
 		}},
 	}
-	b, _ := json.Marshal(cfgJSON)
+	b, err := json.Marshal(cfgJSON)
+	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", b, 0o600))
 
 	api := &restAPI{
@@ -644,7 +646,8 @@ func TestAudit_ProbeAndTestNotAudited(t *testing.T) {
 				"api_base":    upstream.URL,
 			}},
 		}
-		b, _ := json.Marshal(cfgJSON)
+		b, err := json.Marshal(cfgJSON)
+		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(tmpDir+"/config.json", b, 0o600))
 
 		api := &restAPI{
@@ -987,7 +990,8 @@ func TestAudit_WarningProceedNoSecret(t *testing.T) {
 			assert.Equal(t, "proceeded", details["action"],
 				"audit entry must record action=proceeded")
 			// SEC-16: audit entry must not contain the key.
-			lineJSON, _ := json.Marshal(line)
+			lineJSON, err := json.Marshal(line)
+			require.NoError(t, err)
 			assert.NotContains(t, string(lineJSON), "no-credit-key",
 				"SEC-16: audit entry must not contain the API key")
 			break

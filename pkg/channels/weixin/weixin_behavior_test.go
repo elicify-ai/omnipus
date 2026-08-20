@@ -147,7 +147,7 @@ func TestSend_FailsWhenNotRunning(t *testing.T) {
 	ch, _ := newTestWeixinChannel(t, func(w http.ResponseWriter, r *http.Request) {})
 
 	err := ch.Send(context.Background(), bus.OutboundMessage{ChatID: "u", Content: "hi"})
-	if err != basechannels.ErrNotRunning {
+	if !errors.Is(err, basechannels.ErrNotRunning) {
 		t.Fatalf("err=%v want ErrNotRunning", err)
 	}
 }

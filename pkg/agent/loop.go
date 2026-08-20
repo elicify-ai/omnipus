@@ -4304,11 +4304,26 @@ func (al *AgentLoop) logEvent(evt Event) {
 	logger.InfoCF("eventbus", fmt.Sprintf("Agent event: %s", evt.Kind.String()), fields)
 }
 
+// RegisterTool installs tool into every currently-registered agent's tool
+// registry. It is exported test/instrumentation surface only (58 call sites,
+// all in _test.go files as of this writing) — the standard pattern is a test
+// building a real AgentLoop (whose normal boot wiring, e.g. wireExecToolDeps,
+// already registers a real "bash" tool) and then calling RegisterTool with a
+// wrapper/capturing/scripted double under the SAME name to observe or
+// control behavior (e.g. bash_async_completion_test.go's sessionCapturingBash
+// wrapping the real ExecTool). This is a deliberate, intentional override —
+// not a hijack — so it uses RegisterReplacing, not Register: issue #278's
+// collision-rejection in Register/RegisterHidden exists to stop an
+// MCP-supplied tool from silently squatting on a trusted name (see
+// pkg/agent/loop_mcp.go's registerServerTools, the only caller that ever
+// registers untrusted/MCP-origin tools); this method is never called with an
+// MCP-origin tool, so collision rejection here would only ever block the
+// test/instrumentation override it exists to perform.
 func (al *AgentLoop) RegisterTool(tool tools.Tool) {
 	registry := al.GetRegistry()
 	for _, agentID := range registry.ListAgentIDs() {
 		if agent, ok := registry.GetAgent(agentID); ok {
-			agent.Tools.Register(tool)
+			agent.Tools.RegisterReplacing(tool)
 		}
 	}
 }

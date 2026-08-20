@@ -133,8 +133,9 @@ func TestWSHandlerNoAuthRequired(t *testing.T) {
 
 	// Send a message without auth — should succeed when token not configured.
 	frame := wsClientFrameTestHelper{Type: "message", Content: "hello no-auth"}
-	data, _ := json.Marshal(frame)
-	err := conn.WriteMessage(websocket.TextMessage, data)
+	data, err := json.Marshal(frame)
+	require.NoError(t, err)
+	err = conn.WriteMessage(websocket.TextMessage, data)
 	assert.NoError(t, err, "write must succeed when auth is not configured")
 }
 
@@ -164,13 +165,15 @@ func TestWSHandlerValidAuth(t *testing.T) {
 
 	// Send valid auth frame.
 	authFrame := wsClientFrameTestHelper{Type: "auth", Token: testToken}
-	authData, _ := json.Marshal(authFrame)
+	authData, err := json.Marshal(authFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, authData))
 
 	// After valid auth, send a message — must succeed.
 	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello after auth"}
-	msgData, _ := json.Marshal(msgFrame)
-	err := conn.WriteMessage(websocket.TextMessage, msgData)
+	msgData, err := json.Marshal(msgFrame)
+	require.NoError(t, err)
+	err = conn.WriteMessage(websocket.TextMessage, msgData)
 	assert.NoError(t, err, "message send must succeed after valid auth")
 }
 
@@ -206,7 +209,8 @@ func TestWSHandlerInvalidAuth(t *testing.T) {
 
 	// Send wrong token.
 	authFrame := wsClientFrameTestHelper{Type: "auth", Token: "wrong-token"}
-	authData, _ := json.Marshal(authFrame)
+	authData, err := json.Marshal(authFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, authData))
 
 	// Read the error frame sent before the server closes.
@@ -338,8 +342,9 @@ func TestWSHandlerMalformedFrame(t *testing.T) {
 	// Connection must remain open: send another valid frame.
 	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
 	validFrame := wsClientFrameTestHelper{Type: "message", Content: "still alive"}
-	validData, _ := json.Marshal(validFrame)
-	err := conn.WriteMessage(websocket.TextMessage, validData)
+	validData, err := json.Marshal(validFrame)
+	require.NoError(t, err)
+	err = conn.WriteMessage(websocket.TextMessage, validData)
 	assert.NoError(t, err, "connection must remain open after malformed frame")
 }
 
@@ -358,14 +363,16 @@ func TestWSHandlerCancelFrame(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	cancelFrame := wsClientFrameTestHelper{Type: "cancel"}
-	cancelData, _ := json.Marshal(cancelFrame)
+	cancelData, err := json.Marshal(cancelFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
 
 	// Connection must remain open after cancel.
 	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
 	pingFrame := wsClientFrameTestHelper{Type: "message", Content: "after cancel"}
-	pingData, _ := json.Marshal(pingFrame)
-	err := conn.WriteMessage(websocket.TextMessage, pingData)
+	pingData, err := json.Marshal(pingFrame)
+	require.NoError(t, err)
+	err = conn.WriteMessage(websocket.TextMessage, pingData)
 	assert.NoError(t, err, "connection must remain open after cancel frame")
 }
 
@@ -388,7 +395,8 @@ func TestWSHandlerMessagePublishedToBus(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "publish-to-bus-test"}
-	msgData, _ := json.Marshal(msgFrame)
+	msgData, err := json.Marshal(msgFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
 
 	msg := awaitInboundMessage(t, msgBus, "message frame must reach the bus")
@@ -416,7 +424,8 @@ func TestWSHandlerMessageMediaThreadedToBus(t *testing.T) {
 		// One valid ref, one bogus string that must be dropped.
 		Media: []string{"media://abc123", "not-a-media-ref"},
 	}
-	msgData, _ := json.Marshal(msgFrame)
+	msgData, err := json.Marshal(msgFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
 
 	msg := awaitInboundMessage(t, msgBus, "media-bearing message frame must reach the bus")
@@ -450,7 +459,8 @@ func TestWSHandlerMessageMediaOnly_NotDropped(t *testing.T) {
 		Content: "",
 		Media:   []string{"media://abc123"},
 	}
-	msgData, _ := json.Marshal(msgFrame)
+	msgData, err := json.Marshal(msgFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
 
 	msg := awaitInboundMessage(t, msgBus,
@@ -483,7 +493,8 @@ func TestWSHandlerMessageMediaBogusRef_IncreasesDropCount(t *testing.T) {
 		Content: "text with bad media",
 		Media:   []string{"not-a-ref", "http://example.com/file.jpg", "media://"},
 	}
-	msgData, _ := json.Marshal(msgFrame)
+	msgData, err := json.Marshal(msgFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
 
 	// The message reached the bus but Media must be empty. Waiting for the bus
@@ -534,7 +545,8 @@ func TestWSHandlerAuthNotRequired_NoFirstFrameNeeded(t *testing.T) {
 
 	// Send message directly (no auth frame first) — must be accepted.
 	frame := wsClientFrameTestHelper{Type: "message", Content: "no-auth-needed"}
-	data, _ := json.Marshal(frame)
+	data, err := json.Marshal(frame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
 	msg := awaitInboundMessage(t, msgBus,
@@ -560,7 +572,8 @@ func TestWSHandlerAuthRequired_InvalidTokenRejected(t *testing.T) {
 
 	// Send wrong token in auth frame.
 	bad := wsClientFrameTestHelper{Type: "auth", Token: "bad-token"}
-	badData, _ := json.Marshal(bad)
+	badData, err := json.Marshal(bad)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, badData))
 
 	// Server must send an error frame.

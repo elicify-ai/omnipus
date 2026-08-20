@@ -286,7 +286,8 @@ func TestHandleLogin_DifferentInputProducesDifferentToken(t *testing.T) {
 			},
 		},
 	}
-	data, _ := json.Marshal(cfg)
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", data, 0o600))
 
 	configObj := &config.Config{

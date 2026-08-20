@@ -202,7 +202,8 @@ func TestWS_MessageWithEmptySessionID_MintsAndAcks(t *testing.T) {
 		Content:   "second message with minted session",
 		SessionID: mintedSessionID,
 	}
-	data2, _ := json.Marshal(followup)
+	data2, err := json.Marshal(followup)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data2))
 
 	// Drain the second message's response; check no second session_started arrives.
@@ -280,7 +281,8 @@ func TestWS_TwoParallelSessions_NoCrosstalk(t *testing.T) {
 
 	// Mint session A
 	msgA := wsClientFrameTestHelper{Type: "message", Content: "session-a-message"}
-	dataA, _ := json.Marshal(msgA)
+	dataA, merr := json.Marshal(msgA)
+	require.NoError(t, merr)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataA))
 
 	startedA := readFrameOfType(t, conn, "session_started", 5*time.Second)
@@ -291,7 +293,8 @@ func TestWS_TwoParallelSessions_NoCrosstalk(t *testing.T) {
 
 	// Mint session B
 	msgB := wsClientFrameTestHelper{Type: "message", Content: "session-b-message"}
-	dataB, _ := json.Marshal(msgB)
+	dataB, merr := json.Marshal(msgB)
+	require.NoError(t, merr)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataB))
 
 	startedB := readFrameOfType(t, conn, "session_started", 5*time.Second)
@@ -306,15 +309,16 @@ func TestWS_TwoParallelSessions_NoCrosstalk(t *testing.T) {
 
 	// Send a follow-up to session A using its explicit id
 	followA := wsClientFrameTestHelper{Type: "message", Content: "a-followup", SessionID: sessionA}
-	dataFA, _ := json.Marshal(followA)
+	dataFA, merr := json.Marshal(followA)
+	require.NoError(t, merr)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataFA))
 
 	// Collect session-scoped frames; assert no A-frame carries B's id and vice versa
 	allowed := map[string]bool{sessionA: true, sessionB: true}
 	for i := 0; i < 30; i++ {
 		conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
+		_, raw, readErr := conn.ReadMessage()
+		if readErr != nil {
 			break
 		}
 		var f replayFrameDecoder
@@ -407,7 +411,8 @@ func TestWS_MessageWithUnknownSessionID_ErrorsCleanly(t *testing.T) {
 		Content:   "this session id has path traversal",
 		SessionID: invalidSID,
 	}
-	data, _ := json.Marshal(badMsg)
+	data, err := json.Marshal(badMsg)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
 	// BDD: Then — expect an error frame
@@ -417,7 +422,8 @@ func TestWS_MessageWithUnknownSessionID_ErrorsCleanly(t *testing.T) {
 	// BDD: And — connection stays open (write a follow-up to confirm)
 	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
 	ping := wsClientFrameTestHelper{Type: "message", Content: "still open after error?"}
-	pingData, _ := json.Marshal(ping)
+	pingData, err := json.Marshal(ping)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
 		"connection must stay open after error frame — not a fatal disconnect")
 }
@@ -454,7 +460,8 @@ func TestWS_HandoffOverrideKeyedBySessionID(t *testing.T) {
 
 	// Mint session A
 	msgA := wsClientFrameTestHelper{Type: "message", Content: "handoff-test-session-a"}
-	dataA, _ := json.Marshal(msgA)
+	dataA, err := json.Marshal(msgA)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataA))
 
 	startedA := readFrameOfType(t, conn, "session_started", 5*time.Second)
@@ -464,7 +471,8 @@ func TestWS_HandoffOverrideKeyedBySessionID(t *testing.T) {
 
 	// Mint session B
 	msgB := wsClientFrameTestHelper{Type: "message", Content: "handoff-test-session-b"}
-	dataB, _ := json.Marshal(msgB)
+	dataB, err := json.Marshal(msgB)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataB))
 
 	startedB := readFrameOfType(t, conn, "session_started", 5*time.Second)
@@ -523,7 +531,8 @@ func TestWS_FrameTaggingCompleteness_AllSessionScopedFramesCarrySessionID(t *tes
 
 	// Mint session
 	initMsg := wsClientFrameTestHelper{Type: "message", Content: "trigger session for frame tagging test"}
-	data, _ := json.Marshal(initMsg)
+	data, err := json.Marshal(initMsg)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
 	started := readFrameOfType(t, conn, "session_started", 5*time.Second)
@@ -615,7 +624,8 @@ func TestWS_PerAgentSessionKeyFormat(t *testing.T) {
 
 	// Mint session A — send, wait for session_started, wait for done.
 	msgA := wsClientFrameTestHelper{Type: "message", Content: "session-A-content"}
-	dataA, _ := json.Marshal(msgA)
+	dataA, err := json.Marshal(msgA)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataA))
 
 	startedA := readFrameOfType(t, conn, "session_started", 5*time.Second)
@@ -625,7 +635,8 @@ func TestWS_PerAgentSessionKeyFormat(t *testing.T) {
 
 	// Mint session B
 	msgB := wsClientFrameTestHelper{Type: "message", Content: "session-B-content"}
-	dataB, _ := json.Marshal(msgB)
+	dataB, err := json.Marshal(msgB)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataB))
 
 	startedB := readFrameOfType(t, conn, "session_started", 5*time.Second)
@@ -721,7 +732,8 @@ func TestWS_Cancel_OnlyInterruptsTargetSession(t *testing.T) {
 
 	// Mint a real session first.
 	msg := wsClientFrameTestHelper{Type: "message", Content: "hello"}
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 	started := readFrameOfType(t, conn, "session_started", 5*time.Second)
 	sessionID := started.SessionID
@@ -734,7 +746,8 @@ func TestWS_Cancel_OnlyInterruptsTargetSession(t *testing.T) {
 	// turn" and return cleanly without crashing or panicking.
 	// There must be no error frame emitted to the client from this cancel.
 	cancelFrame := wsClientFrameTestHelper{Type: "cancel", SessionID: sessionID}
-	cancelData, _ := json.Marshal(cancelFrame)
+	cancelData, err := json.Marshal(cancelFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
 
 	// Give the server a moment to process. No error frame should arrive.
@@ -771,7 +784,8 @@ func TestWS_TwoConnections_HandoffInOneDoesNotAffectOther(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn2)
 
 	// Mint session on connection 1.
-	data1, _ := json.Marshal(wsClientFrameTestHelper{Type: "message", Content: "conn1"})
+	data1, err := json.Marshal(wsClientFrameTestHelper{Type: "message", Content: "conn1"})
+	require.NoError(t, err)
 	require.NoError(t, conn1.WriteMessage(websocket.TextMessage, data1))
 	started1 := readFrameOfType(t, conn1, "session_started", 5*time.Second)
 	sid1 := started1.SessionID
@@ -779,7 +793,8 @@ func TestWS_TwoConnections_HandoffInOneDoesNotAffectOther(t *testing.T) {
 	drainUntilSessionDone(t, conn1, sid1, 5*time.Second)
 
 	// Mint session on connection 2.
-	data2, _ := json.Marshal(wsClientFrameTestHelper{Type: "message", Content: "conn2"})
+	data2, err := json.Marshal(wsClientFrameTestHelper{Type: "message", Content: "conn2"})
+	require.NoError(t, err)
 	require.NoError(t, conn2.WriteMessage(websocket.TextMessage, data2))
 	started2 := readFrameOfType(t, conn2, "session_started", 5*time.Second)
 	sid2 := started2.SessionID

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -222,7 +223,7 @@ func TestResolveChatID(t *testing.T) {
 func TestSend_FailsWhenNotRunning(t *testing.T) {
 	ch, _ := newTestLINEChannel("s")
 	err := ch.Send(context.Background(), bus.OutboundMessage{ChatID: "U1", Content: "hi"})
-	if err != channels.ErrNotRunning {
+	if !errors.Is(err, channels.ErrNotRunning) {
 		t.Fatalf("err=%v want ErrNotRunning", err)
 	}
 }

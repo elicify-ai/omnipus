@@ -6,6 +6,7 @@
 package gitevidence
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -47,7 +48,7 @@ func (r *Repo) LastCommitForTask(taskID string) (string, error) {
 	for {
 		c, err := iter.Next()
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			// A mid-walk object error (e.g. a shallow clone boundary or a

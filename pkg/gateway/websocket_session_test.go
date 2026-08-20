@@ -86,7 +86,8 @@ func TestWS_SessionClose_AcksOnValidSessionID(t *testing.T) {
 	// Connection must remain open after close ack.
 	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
 	ping := wsClientFrameTestHelper{Type: "message", Content: "still-open"}
-	pingData, _ := json.Marshal(ping)
+	pingData, err := json.Marshal(ping)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
 		"connection must remain open after session_close_ack")
 }
@@ -115,7 +116,8 @@ func TestWS_SessionClose_ReturnsErrorOnEmptySessionID(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	emptyClose := wsClientFrameTestHelper{Type: "session_close"}
-	data, _ := json.Marshal(emptyClose)
+	data, err := json.Marshal(emptyClose)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
 	resp := readFrameOfType(t, conn, "error", 3*time.Second)
@@ -148,7 +150,8 @@ func TestWS_SessionClose_Idempotent(t *testing.T) {
 
 	for i := 0; i < 2; i++ {
 		frame := wsClientFrameTestHelper{Type: "session_close", SessionID: sessionID}
-		data, _ := json.Marshal(frame)
+		data, err := json.Marshal(frame)
+		require.NoError(t, err)
 		require.NoErrorf(t, conn.WriteMessage(websocket.TextMessage, data), "write #%d", i+1)
 
 		resp := readFrameOfType(t, conn, "session_close_ack", 3*time.Second)
@@ -188,7 +191,8 @@ func TestWS_AttachSession_NoErrorOnValidSession(t *testing.T) {
 		Type:      "attach_session",
 		SessionID: "nonexistent-session-0000000000000",
 	}
-	data, _ := json.Marshal(attachFrame)
+	data, err := json.Marshal(attachFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
 	// Server should respond with an error frame (session not found).
@@ -244,7 +248,8 @@ func TestWS_AttachSession_NoLazyCAS_WhenSameSession(t *testing.T) {
 		AgentID:   agentID,
 		SessionID: sessionID,
 	}
-	data, _ := json.Marshal(attachFrame)
+	data, err := json.Marshal(attachFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
 	time.Sleep(100 * time.Millisecond)

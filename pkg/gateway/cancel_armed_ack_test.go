@@ -177,7 +177,8 @@ func TestHandleCancel_SecondClickOnAlreadyClaimedTurn_SendsNoAckFrame(t *testing
 	sendWSAuthFrameDevMode(t, conn)
 
 	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start iron turn"}
-	data, _ := json.Marshal(msgFrame)
+	data, err := json.Marshal(msgFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
 	started := readFrameOfType(t, conn, "session_started", cancelTestTurnStartDeadline)

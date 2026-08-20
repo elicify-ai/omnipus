@@ -3,6 +3,7 @@ package irc
 import (
 	"bufio"
 	"context"
+	"errors"
 	"net"
 	"strings"
 	"sync"
@@ -135,7 +136,7 @@ func TestSend_FailsWhenNotRunning(t *testing.T) {
 	ch, _ := newTestIRCChannel(t, config.IRCConfig{Nick: "testbot"})
 
 	err := ch.Send(context.Background(), bus.OutboundMessage{ChatID: "#chan", Content: "hi"})
-	if err != channels.ErrNotRunning {
+	if !errors.Is(err, channels.ErrNotRunning) {
 		t.Fatalf("Send err=%v want ErrNotRunning", err)
 	}
 }

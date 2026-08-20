@@ -260,7 +260,7 @@ func (c *DiscordChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMes
 			}
 		}
 		if err != nil {
-			return fmt.Errorf("discord send media: %w: %v", channels.ErrTemporary, err)
+			return fmt.Errorf("discord send media: %w: %w", channels.ErrTemporary, err)
 		}
 		return nil
 	case <-sendCtx.Done():
@@ -327,7 +327,7 @@ func (c *DiscordChannel) sendChunk(ctx context.Context, channelID, content, repl
 	select {
 	case err := <-done:
 		if err != nil {
-			return fmt.Errorf("discord send: %w: %v", channels.ErrTemporary, err)
+			return fmt.Errorf("discord send: %w: %w", channels.ErrTemporary, err)
 		}
 		return nil
 	case <-sendCtx.Done():

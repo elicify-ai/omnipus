@@ -214,7 +214,8 @@ func TestCancel_AuditEventEmitted(t *testing.T) {
 
 	// Start a real turn.
 	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start blocking turn for audit test"}
-	data, _ := json.Marshal(msgFrame)
+	data, err := json.Marshal(msgFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
 	started := readFrameOfType(t, conn, "session_started", cancelTestTurnStartDeadline)
@@ -233,7 +234,8 @@ func TestCancel_AuditEventEmitted(t *testing.T) {
 
 	// Send the WebSocket cancel frame — drives the real handleCancel path.
 	cancelFrame := wsClientFrameTestHelper{Type: "cancel", SessionID: sessionID}
-	cancelData, _ := json.Marshal(cancelFrame)
+	cancelData, err := json.Marshal(cancelFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
 
 	// The cancel_stage frame confirms the graceful phase fired.
@@ -276,7 +278,8 @@ func TestCancel_AuditEventEmitted(t *testing.T) {
 	// comes from real state — a hardcoded emitter would either emit nothing or
 	// always emit the same payload.
 	cancelFrame2 := wsClientFrameTestHelper{Type: "cancel", SessionID: sessionID}
-	cancelData2, _ := json.Marshal(cancelFrame2)
+	cancelData2, err := json.Marshal(cancelFrame2)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData2))
 
 	require.Eventually(t, func() bool {

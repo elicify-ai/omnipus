@@ -27,7 +27,7 @@ func TestErrorsIsAllTypes(t *testing.T) {
 
 		// Verify it doesn't match other sentinel errors
 		for _, other := range sentinels {
-			if other == sentinel {
+			if errors.Is(other, sentinel) {
 				continue
 			}
 			if errors.Is(wrapped, other) {

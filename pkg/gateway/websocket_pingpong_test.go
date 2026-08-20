@@ -126,7 +126,8 @@ func TestServerPongDoesNotCorruptInFlightStream(t *testing.T) {
 
 		// Inject a ping after we have seen session_started.
 		if gotSessionStarted && !pingInjected {
-			pingData, _ := json.Marshal(wsClientFrameTestHelper{Type: "ping"})
+			pingData, err := json.Marshal(wsClientFrameTestHelper{Type: "ping"})
+			require.NoError(t, err)
 			conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
 			_ = conn.WriteMessage(websocket.TextMessage, pingData)
 			pingInjected = true

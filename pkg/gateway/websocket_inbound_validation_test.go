@@ -111,7 +111,8 @@ func TestWS_InboundCancel_RejectsEmptySessionID(t *testing.T) {
 	// Connection must remain open.
 	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
 	ping := wsClientFrameTestHelper{Type: "ping"}
-	pingData, _ := json.Marshal(ping)
+	pingData, err := json.Marshal(ping)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
 		"connection must remain open after cancel rejection")
 }
@@ -183,7 +184,8 @@ func TestWS_ValidateInbound_SchemaRejectsMessageFrameMissingContent(t *testing.T
 	// Connection must remain open.
 	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
 	ping := wsClientFrameTestHelper{Type: "ping"}
-	pingData, _ := json.Marshal(ping)
+	pingData, err := json.Marshal(ping)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
 		"connection must remain open after schema rejection")
 }
@@ -225,7 +227,8 @@ func TestWS_ValidateInbound_ValidFramePassesThrough(t *testing.T) {
 	// a schema error the ping would arrive after the error frame.
 	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
 	ping := wsClientFrameTestHelper{Type: "ping"}
-	pingData, _ := json.Marshal(ping)
+	pingData, err := json.Marshal(ping)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
 		"connection must remain open when a valid frame is sent")
 }
@@ -270,7 +273,8 @@ func TestWS_ValidateInbound_EmptyContentWithMedia_PassesThrough(t *testing.T) {
 
 	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
 	ping := wsClientFrameTestHelper{Type: "ping"}
-	pingData, _ := json.Marshal(ping)
+	pingData, err := json.Marshal(ping)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
 		"connection must remain open — an attachment-only send must not fail schema validation")
 }

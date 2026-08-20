@@ -6,6 +6,7 @@ package bus
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -86,7 +87,7 @@ func TestSessionMessage_PublishAfterClose(t *testing.T) {
 	}
 
 	err := mb.PublishSessionMessage(context.Background(), SessionMessageEvent{TargetSessionID: "p", Message: sm})
-	if err != ErrBusClosed {
+	if !errors.Is(err, ErrBusClosed) {
 		t.Errorf("expected ErrBusClosed after Close(), got: %v", err)
 	}
 }

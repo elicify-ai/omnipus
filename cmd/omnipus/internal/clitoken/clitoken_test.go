@@ -3,6 +3,7 @@ package clitoken
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -219,7 +220,7 @@ func TestLoadCLIToken_MissingFile_ReturnsErrNoCLIToken(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if err != ErrNoCLIToken {
+	if !errors.Is(err, ErrNoCLIToken) {
 		t.Errorf("expected ErrNoCLIToken, got: %v", err)
 	}
 }

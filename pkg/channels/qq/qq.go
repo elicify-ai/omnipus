@@ -459,7 +459,7 @@ func (c *QQChannel) buildMediaUpload(part bus.MediaPart, callerWorkspace string)
 				"error":            err.Error(),
 			})
 		}
-		return nil, fmt.Errorf("qq resolve media ref %q: %v: %w", part.Ref, err, channels.ErrSendFailed)
+		return nil, fmt.Errorf("qq resolve media ref %q: %w: %w", part.Ref, err, channels.ErrSendFailed)
 	}
 	if part.Filename == "" {
 		part.Filename = meta.Filename
@@ -480,7 +480,7 @@ func (c *QQChannel) buildMediaUpload(part bus.MediaPart, callerWorkspace string)
 	if limitBytes := c.maxBase64FileSizeBytes(); limitBytes > 0 {
 		info, statErr := os.Stat(resolved)
 		if statErr != nil {
-			return nil, fmt.Errorf("qq stat local media %q: %v: %w", resolved, statErr, channels.ErrSendFailed)
+			return nil, fmt.Errorf("qq stat local media %q: %w: %w", resolved, statErr, channels.ErrSendFailed)
 		}
 		if info.Size() > limitBytes {
 			return nil, fmt.Errorf(
@@ -495,7 +495,7 @@ func (c *QQChannel) buildMediaUpload(part bus.MediaPart, callerWorkspace string)
 
 	data, err := os.ReadFile(resolved)
 	if err != nil {
-		return nil, fmt.Errorf("qq read local media %q: %v: %w", resolved, err, channels.ErrSendFailed)
+		return nil, fmt.Errorf("qq read local media %q: %w: %w", resolved, err, channels.ErrSendFailed)
 	}
 
 	payload.FileData = base64.StdEncoding.EncodeToString(data)

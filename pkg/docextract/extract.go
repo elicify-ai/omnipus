@@ -741,7 +741,7 @@ func parseDocxXML(r io.Reader, budget *archiveReadBudget) (string, bool, string)
 
 	for {
 		tok, err := dec.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -872,7 +872,7 @@ func parsePptxSlide(r io.Reader, runeLimit int) (string, error) {
 
 	for {
 		tok, err := dec.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -998,7 +998,7 @@ func parseSharedStrings(r io.Reader) ([]string, error) {
 
 	for {
 		tok, err := dec.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -1043,7 +1043,7 @@ func parseXlsxSheet(r io.Reader, sharedStrings []string, runeLimit int) (string,
 
 	for {
 		tok, err := dec.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

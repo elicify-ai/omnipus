@@ -297,7 +297,7 @@ func (c *WeComChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessa
 
 		localPath, filename, contentType, cleanup, err := c.resolveOutboundPart(ctx, part, msg.WorkspaceID)
 		if err != nil {
-			return fmt.Errorf("wecom resolve media %q: %v: %w", part.Ref, err, channels.ErrSendFailed)
+			return fmt.Errorf("wecom resolve media %q: %w: %w", part.Ref, err, channels.ErrSendFailed)
 		}
 
 		func() {
@@ -406,7 +406,7 @@ func (c *WeComChannel) runConnection() error {
 		_ = resp.Body.Close()
 	}
 	if err != nil {
-		return fmt.Errorf("%w: %v", channels.ErrTemporary, err)
+		return fmt.Errorf("%w: %w", channels.ErrTemporary, err)
 	}
 
 	c.connMu.Lock()
@@ -478,7 +478,7 @@ func (c *WeComChannel) readLoop(conn *websocket.Conn) error {
 			case <-c.ctx.Done():
 				return nil
 			default:
-				return fmt.Errorf("%w: %v", channels.ErrTemporary, err)
+				return fmt.Errorf("%w: %w", channels.ErrTemporary, err)
 			}
 		}
 
@@ -877,13 +877,13 @@ func (c *WeComChannel) writeAndWaitAck(
 
 	data, err := json.Marshal(cmd)
 	if err != nil {
-		return wecomEnvelope{}, fmt.Errorf("%w: %v", channels.ErrSendFailed, err)
+		return wecomEnvelope{}, fmt.Errorf("%w: %w", channels.ErrSendFailed, err)
 	}
 	c.connMu.Lock()
 	err = conn.WriteMessage(websocket.TextMessage, data)
 	c.connMu.Unlock()
 	if err != nil {
-		return wecomEnvelope{}, fmt.Errorf("%w: %v", channels.ErrTemporary, err)
+		return wecomEnvelope{}, fmt.Errorf("%w: %w", channels.ErrTemporary, err)
 	}
 
 	timer := time.NewTimer(timeout)

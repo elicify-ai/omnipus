@@ -281,7 +281,8 @@ func TestHandleCancel_FiredImmediately_NoLatchExpiredFalseAlarm(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start iron turn"}
-	data, _ := json.Marshal(msgFrame)
+	data, err := json.Marshal(msgFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
 	started := readFrameOfType(t, conn, "session_started", cancelTestTurnStartDeadline)

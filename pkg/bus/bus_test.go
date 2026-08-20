@@ -229,7 +229,7 @@ func TestPublishInbound_FullBuffer(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when buffer is full and context times out")
 	}
-	if err != context.DeadlineExceeded {
+	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
 	}
 }

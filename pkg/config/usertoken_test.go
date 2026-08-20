@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
@@ -128,10 +129,10 @@ func TestVerifyToken_LegacySingleToken(t *testing.T) {
 // TestVerifyToken_NoTokens reports ErrNoHashSet when the user holds nothing.
 func TestVerifyToken_NoTokens(t *testing.T) {
 	u := &UserConfig{Username: "empty"}
-	if err := u.VerifyToken("omnipus_1111_x"); err != ErrNoHashSet {
+	if err := u.VerifyToken("omnipus_1111_x"); !errors.Is(err, ErrNoHashSet) {
 		t.Fatalf("expected ErrNoHashSet, got %v", err)
 	}
-	if err := u.VerifyToken(""); err != ErrNoHashSet {
+	if err := u.VerifyToken(""); !errors.Is(err, ErrNoHashSet) {
 		t.Fatalf("expected ErrNoHashSet for empty token, got %v", err)
 	}
 }

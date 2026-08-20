@@ -192,7 +192,8 @@ func TestCancel_TwoStageTimer_GracefulThenHard(t *testing.T) {
 
 	// Start a real turn.
 	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start iron turn"}
-	data, _ := json.Marshal(msgFrame)
+	data, err := json.Marshal(msgFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
 	started := readFrameOfType(t, conn, "session_started", cancelTestTurnStartDeadline)
@@ -211,7 +212,8 @@ func TestCancel_TwoStageTimer_GracefulThenHard(t *testing.T) {
 
 	// Fire cancel.
 	cancelFrame := wsClientFrameTestHelper{Type: "cancel", SessionID: sessionID}
-	cancelData, _ := json.Marshal(cancelFrame)
+	cancelData, err := json.Marshal(cancelFrame)
+	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
 
 	// Collect all cancel_stage frames for 5 seconds (enough to see graceful + hard).

@@ -60,7 +60,8 @@ func createScheduleReq(t *testing.T, owner string) *bytes.Buffer {
 	body.Trigger.Kind = "cron"
 	expr := "0 18 * * *"
 	body.Trigger.CronExpr = &expr
-	buf, _ := json.Marshal(body)
+	buf, err := json.Marshal(body)
+	require.NoError(t, err)
 	return bytes.NewBuffer(buf)
 }
 
@@ -150,7 +151,8 @@ func TestSchedulesAPI_Update400WorkerOwner(t *testing.T) {
 	})
 
 	updateBody := gen.ScheduleUpdate{OwnerAgentId: ptr("worker-test")}
-	buf, _ := json.Marshal(updateBody)
+	buf, err := json.Marshal(updateBody)
+	require.NoError(t, err)
 
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/schedules/"+job.ID, bytes.NewBuffer(buf))
 	r.Header.Set("Content-Type", "application/json")
@@ -205,7 +207,8 @@ func TestSchedulesAPI_Update400HeartbeatOwnerReassignment(t *testing.T) {
 	job := seedHeartbeatJob(t, cs, "ws-1", "mia")
 
 	updateBody := gen.ScheduleUpdate{OwnerAgentId: ptr("max")}
-	buf, _ := json.Marshal(updateBody)
+	buf, err := json.Marshal(updateBody)
+	require.NoError(t, err)
 
 	r := withUser(
 		httptest.NewRequest(http.MethodPut, "/api/v1/schedules/"+job.ID, bytes.NewBuffer(buf)),
@@ -244,7 +247,8 @@ func TestSchedulesAPI_Update200HeartbeatJob_SameOwnerAndOtherFields(t *testing.T
 	sameOwner := "mia"
 	newMessage := "updated heartbeat body"
 	updateBody := gen.ScheduleUpdate{OwnerAgentId: &sameOwner, Message: &newMessage}
-	buf, _ := json.Marshal(updateBody)
+	buf, err := json.Marshal(updateBody)
+	require.NoError(t, err)
 
 	r := withUser(
 		httptest.NewRequest(http.MethodPut, "/api/v1/schedules/"+job.ID, bytes.NewBuffer(buf)),
@@ -269,7 +273,8 @@ func TestSchedulesAPI_InvalidTrigger400(t *testing.T) {
 	body.Trigger.Kind = "cron"
 	bad := "not a cron expr at all"
 	body.Trigger.CronExpr = &bad
-	buf, _ := json.Marshal(body)
+	buf, err := json.Marshal(body)
+	require.NoError(t, err)
 
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/schedules", bytes.NewBuffer(buf))
 	r = withUser(r, "alice")
@@ -526,7 +531,8 @@ func TestSchedulesAPI_Update_InvalidSessionMode400(t *testing.T) {
 	job := seedJob(t, cs, "mia", "alice")
 
 	bad := gen.ScheduleUpdateSessionMode("bogus-mode")
-	body, _ := json.Marshal(gen.ScheduleUpdate{SessionMode: &bad})
+	body, err := json.Marshal(gen.ScheduleUpdate{SessionMode: &bad})
+	require.NoError(t, err)
 	r := withUser(
 		httptest.NewRequest(http.MethodPut, "/api/v1/schedules/"+job.ID, bytes.NewBuffer(body)),
 		"alice",

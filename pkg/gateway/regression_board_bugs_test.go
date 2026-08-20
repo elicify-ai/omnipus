@@ -172,7 +172,8 @@ func TestRegression_RESTPatch_PreservesAllFields(t *testing.T) {
 	const wantAgentID = "01JXPRESERVE_AGENT00000001"
 	raw["agent_id"] = wantAgentID
 	raw["session_id"] = "preserve-session-999"
-	injected, _ := json.Marshal(raw)
+	injected, err := json.Marshal(raw)
+	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(rawPath, injected, 0o600))
 
 	// PATCH with only a title change — all other fields must survive.

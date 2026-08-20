@@ -124,7 +124,8 @@ func TestWSReadLimit_AcceptsSmallFrame(t *testing.T) {
 	// Use "ping" type (not "message") to avoid triggering session creation which
 	// writes to the temp dir and causes a cleanup race in the test.
 	pingFrame := wsClientFrameTestHelper{Type: "ping"}
-	pingData, _ := json.Marshal(pingFrame)
+	pingData, err := json.Marshal(pingFrame)
+	require.NoError(t, err)
 	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
 		"small ping frame must be written without error")
@@ -132,8 +133,9 @@ func TestWSReadLimit_AcceptsSmallFrame(t *testing.T) {
 	// Connection must remain open: send a second frame successfully.
 	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
 	pingFrame2 := wsClientFrameTestHelper{Type: "ping"}
-	pingData2, _ := json.Marshal(pingFrame2)
-	err := conn.WriteMessage(websocket.TextMessage, pingData2)
+	pingData2, err := json.Marshal(pingFrame2)
+	require.NoError(t, err)
+	err = conn.WriteMessage(websocket.TextMessage, pingData2)
 	assert.NoError(t, err, "connection must remain open after a small frame")
 }
 

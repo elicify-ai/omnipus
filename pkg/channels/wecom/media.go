@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -393,7 +394,7 @@ func detectLocalWeComContentType(localPath, hint string) string {
 
 	buf := make([]byte, 512)
 	n, err := file.Read(buf)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return contentType
 	}
 	if n == 0 {

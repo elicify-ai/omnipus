@@ -244,7 +244,8 @@ func TestGetSessionMessages_TurnCanceledEntry_PassesWireSchema(t *testing.T) {
 	schema := loadMessageSchema(t)
 	for i, entry := range entries {
 		validationErr := schema.Validate(any(entry))
-		raw, _ := json.Marshal(entry)
+		raw, err := json.Marshal(entry)
+		require.NoError(t, err)
 		assert.NoErrorf(t, validationErr,
 			"entry[%d] must validate against Message.yaml; raw=%s", i, string(raw))
 	}

@@ -7,6 +7,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,7 +52,13 @@ func doReAuth(api *restAPI, user *config.UserConfig, password string) *httptest.
 }
 
 func jsonString(s string) string {
-	b, _ := json.Marshal(s)
+	b, err := json.Marshal(s)
+	if err != nil {
+		// Unreachable: json.Marshal on a plain string can never fail. No
+		// *testing.T is available in this helper's signature, so fail
+		// loudly rather than silently discarding the error.
+		panic(fmt.Sprintf("jsonString: %v", err))
+	}
 	return string(b)
 }
 
