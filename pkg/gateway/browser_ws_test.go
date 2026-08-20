@@ -30,6 +30,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -336,8 +337,8 @@ func TestBrowserWS_Auth_InvalidToken_ClosesWithPolicyViolation(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
 	_, _, err = conn.ReadMessage()
 	require.Error(t, err, "connection must be closed after invalid auth")
-	closeErr, ok := err.(*websocket.CloseError)
-	require.True(t, ok, "expected a websocket.CloseError, got %T: %v", err, err)
+	var closeErr *websocket.CloseError
+	require.True(t, errors.As(err, &closeErr), "expected a websocket.CloseError, got %T: %v", err, err)
 	assert.Equal(t, websocket.ClosePolicyViolation, closeErr.Code,
 		"invalid bearer token must close with 1008 policy violation")
 }

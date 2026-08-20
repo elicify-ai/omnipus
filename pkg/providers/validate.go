@@ -441,6 +441,8 @@ func FetchModels(ctx context.Context, baseURL, apiKey string, checker URLChecker
 // upstream body (SEC-16).
 func BuildMessage(outcome Outcome, providerName string) string {
 	switch outcome {
+	case OutcomeValid:
+		return ""
 	case OutcomeInvalidKey:
 		return fmt.Sprintf(
 			"The API key was rejected by %s. Check you copied the whole key and that it's still active in your %s account.",

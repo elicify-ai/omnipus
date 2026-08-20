@@ -133,7 +133,7 @@ func (p *GHReleasePuller) Pull(ctx context.Context) ([]byte, error) {
 	// fallback is the always-on public endpoint.
 	rawData, rawErr := p.fetchRaw(ctx)
 	if rawErr != nil {
-		return nil, fmt.Errorf("capabilities: pull failed (release=%v, raw=%v)", fetchErr, rawErr)
+		return nil, fmt.Errorf("capabilities: pull failed (release=%w, raw=%w)", fetchErr, rawErr)
 	}
 	if verifyErr := p.verify(ctx, rawData, p.rawURL(p.Ref, p.Asset)); verifyErr != nil {
 		return nil, fmt.Errorf("capabilities: pull raw: %w", verifyErr)

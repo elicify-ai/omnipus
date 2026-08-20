@@ -105,17 +105,47 @@ func TestToolRegistry_Get_NotFound(t *testing.T) {
 	}
 }
 
+// TestToolRegistry_RegisterOverwrite originally pinned the PRE-#278
+// behaviour: a second Register() call for an already-registered name
+// silently replaced the first. Issue #278 (registry hijack) deliberately
+// reverses that contract in registerToolLocked (registry.go): Register/
+// RegisterHidden now reject a same-name collision outright and keep the
+// FIRST (incumbent) registration, because a caller of these void-returning
+// methods has no other way to detect or survive a hostile same-name
+// registration (see pkg/tools/mcp_registration_guard_test.go's
+// TestRegistry_Register_MustNotSilentlyOverwriteOnCollision, the #278
+// requirement test this change satisfies).
+//
+// This is NOT protecting a legitimate re-registration path: every
+// currently-existing caller that legitimately re-registers a tool under a
+// name already in the registry either (a) builds a brand-new ToolRegistry
+// per agent instance (pkg/agent/instance.go's NewAgentInstance — no
+// pre-existing entries to collide with), (b) checks
+// GetIncludingHidden(name) before calling Register/RegisterHidden and skips
+// the call entirely when the name is already present (loop_mcp.go's
+// registerServerTools, the MCP reconcile path — verified by reading
+// loop_mcp.go directly: an unchanged server's tools never reach
+// Register/RegisterHidden a second time), or (c) uses RegisterReplacing
+// instead of Register specifically because it IS an intentional
+// replacement (wirePlanToolsForAgent re-wiring the plan/task tool surface).
+// So the old silent-overwrite behaviour this test pinned had no real
+// caller depending on it, and the test is updated here to assert the new,
+// correct contract instead of being weakened or deleted.
 func TestToolRegistry_RegisterOverwrite(t *testing.T) {
 	r := NewToolRegistry()
 	r.Register(newMockTool("dup", "first"))
 	r.Register(newMockTool("dup", "second"))
 
 	if r.Count() != 1 {
-		t.Errorf("expected count 1 after overwrite, got %d", r.Count())
+		t.Errorf("expected count 1 after a rejected collision, got %d", r.Count())
 	}
-	tool, _ := r.Get("dup")
-	if tool.Description() != "second" {
-		t.Errorf("expected overwritten description 'second', got %q", tool.Description())
+	tool, ok := r.Get("dup")
+	if !ok {
+		t.Fatalf("expected %q to remain registered after a rejected collision, got not-found", "dup")
+	}
+	if tool.Description() != "first" {
+		t.Errorf("#278: a same-name collision must NOT overwrite the incumbent registration; "+
+			"expected the original description %q to be preserved, got %q", "first", tool.Description())
 	}
 }
 
@@ -758,13 +788,26 @@ func TestSanitizeToolName(t *testing.T) {
 // SanitizeToolName → UnsanitizeToolName recovers the original name when it
 // exists in the registry.
 //
-// BDD: Given a registry containing "browser.navigate" and "system.agent.create",
+// BDD: Given a registry containing "browser.navigate" and "mcp.agent.create",
 // When UnsanitizeToolName is called on their sanitized forms,
 // Then the original dotted names are returned.
+//
+// NOTE: this fixture originally used "system.agent.create" for the
+// multi-dot case. Issue #278's registry-hijack fix (registerToolLocked,
+// registry.go) now rejects any fresh registration under the reserved
+// "system." prefix (FR-060) unless the exact name is in the curated
+// reservedButPrivilegedToolNames allowlist — "system.agent.create" is not
+// a real reserved name (no such tool exists; see
+// pkg/sysagent/tools/contract_test.go's §7 rename, which retired all
+// "system."-prefixed tool names from production), so it would now be
+// silently discarded and never resolvable via UnsanitizeToolName. This
+// test is about the sanitize/unsanitize round-trip mechanics, not about
+// prefix reservation, so the fixture is updated to a non-reserved
+// multi-dot name that exercises the identical code path.
 func TestUnsanitizeToolName_RoundTrip(t *testing.T) {
 	r := NewToolRegistry()
 	r.Register(newMockTool("browser.navigate", "navigate to URL"))
-	r.Register(newMockTool("system.agent.create", "create agent"))
+	r.Register(newMockTool("mcp.agent.create", "create agent"))
 
 	tests := []struct {
 		sanitized string
@@ -772,7 +815,7 @@ func TestUnsanitizeToolName_RoundTrip(t *testing.T) {
 		desc      string
 	}{
 		{"browser_navigate", "browser.navigate", "single-dot round-trip"},
-		{"system_agent_create", "system.agent.create", "multi-dot round-trip"},
+		{"mcp_agent_create", "mcp.agent.create", "multi-dot round-trip"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.desc, func(t *testing.T) {

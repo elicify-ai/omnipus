@@ -106,7 +106,8 @@ func TestHandleToolPolicies_PUT_ReadBack(t *testing.T) {
 	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &resp))
 	_, hasDefaultPolicy := resp["default_policy"]
 	assert.False(t, hasDefaultPolicy, "default_policy no longer exists on the wire")
-	policies := resp["policies"].(map[string]any)
+	policies, policiesOk := resp["policies"].(map[string]any)
+	require.True(t, policiesOk, "response policies field must be an object")
 	assert.Equal(t, "ask", policies["browser_evaluate"])
 }
 

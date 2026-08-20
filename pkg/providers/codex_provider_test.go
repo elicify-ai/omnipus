@@ -641,7 +641,11 @@ func writeCompletedSSE(w http.ResponseWriter, response map[string]any) {
 		"sequence_number": 1,
 		"response":        response,
 	}
-	b, _ := json.Marshal(event)
+	b, err := json.Marshal(event)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	fmt.Fprintf(w, "event: response.completed\n")
 	fmt.Fprintf(w, "data: %s\n\n", string(b))

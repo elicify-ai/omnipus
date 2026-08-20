@@ -251,7 +251,8 @@ func TestU18ListSessions_RootsOnlyWithChildCount(t *testing.T) {
 		if s["id"] == parent.ID {
 			parentRow = s
 		}
-		if childIDs[s["id"].(string)] {
+		sID, sIDOk := s["id"].(string)
+		if sIDOk && childIDs[sID] {
 			t.Fatalf("child session %v must NOT appear as a top-level row in the default (roots-only) listing", s["id"])
 		}
 	}
@@ -307,7 +308,8 @@ func TestU18ListSessions_ExpandReturnsDirectChildrenPaged(t *testing.T) {
 	seen := map[string]bool{}
 	for _, p := range [][]map[string]any{page1.Sessions, page2.Sessions, page3.Sessions} {
 		for _, s := range p {
-			id := s["id"].(string)
+			id, idOk := s["id"].(string)
+			require.True(t, idOk, "session id must be a string")
 			assert.Falsef(t, seen[id], "session %s must not be duplicated across pages", id)
 			seen[id] = true
 		}

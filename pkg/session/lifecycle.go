@@ -52,6 +52,12 @@ var ErrLifecycleNotFound = errors.New("session: lifecycle record not found")
 // a new generation instead).
 var ErrLifecycleTerminalImmutable = errors.New("session: lifecycle: terminal record is immutable")
 
+// errNoTailRecord is tail's internal "no record yet" sentinel — the file
+// backing sessionID does not exist. It never escapes this file; every
+// caller below translates it into (nil result, nil error) or its own
+// not-found handling.
+var errNoTailRecord = errors.New("session: lifecycle: no tail record")
+
 // LifecycleState is the durable 8-state session lifecycle (ADR-053 S2 / the
 // S4 interlock state machine's authority).
 type LifecycleState string
@@ -366,7 +372,7 @@ func (s *LifecycleStore) tail(sessionID string) (*LifecycleRecord, error) {
 	f, err := os.Open(s.path(sessionID))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, errNoTailRecord
 		}
 		return nil, fmt.Errorf("session: lifecycle: open %q: %w", sessionID, err)
 	}
@@ -406,7 +412,7 @@ func (s *LifecycleStore) Load(sessionID string) (*LifecycleRecord, error) {
 	defer mu.Unlock()
 
 	rec, err := s.tail(sessionID)
-	if err != nil {
+	if err != nil && !errors.Is(err, errNoTailRecord) {
 		return nil, err
 	}
 	if rec == nil {
@@ -482,7 +488,7 @@ func (s *LifecycleStore) persistLocked(rec *LifecycleRecord) error {
 	}
 
 	prev, err := s.tail(rec.SessionID)
-	if err != nil {
+	if err != nil && !errors.Is(err, errNoTailRecord) {
 		return err
 	}
 
@@ -559,7 +565,7 @@ func (s *LifecycleStore) Mutate(sessionID string, fn func(*LifecycleRecord) erro
 	defer mu.Unlock()
 
 	cur, err := s.tail(sessionID)
-	if err != nil {
+	if err != nil && !errors.Is(err, errNoTailRecord) {
 		return err
 	}
 	var next *LifecycleRecord
@@ -691,7 +697,7 @@ func (s *LifecycleStore) List(filter LifecycleFilter) ([]LifecycleRecord, error)
 	for _, id := range ids {
 		rec, err := s.Load(id)
 		if err != nil {
-			if err == ErrLifecycleNotFound {
+			if errors.Is(err, ErrLifecycleNotFound) {
 				continue
 			}
 			return nil, err
@@ -721,7 +727,7 @@ func (s *LifecycleStore) listByParentDurableKey(filter LifecycleFilter) ([]Lifec
 	for _, id := range childIDs {
 		rec, err := s.Load(id)
 		if err != nil {
-			if err == ErrLifecycleNotFound {
+			if errors.Is(err, ErrLifecycleNotFound) {
 				// Stale index entry — e.g. PruneTerminal removed this
 				// child's file between children() snapshotting the set and
 				// this Load. Self-heal rather than fail the whole query.
@@ -830,7 +836,7 @@ func (s *LifecycleStore) pruneTerminalOne(id string, cutoff time.Time) bool {
 	defer mu.Unlock()
 
 	rec, err := s.tail(id)
-	if err != nil {
+	if err != nil && !errors.Is(err, errNoTailRecord) {
 		slog.Warn("session: lifecycle: prune_terminal: load failed, skipping", "session_id", id, "error", err)
 		return false
 	}

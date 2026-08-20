@@ -358,6 +358,9 @@ func newE2EFakeViewer(t *testing.T) *e2eFakeViewer {
 					fv.videoPkts.Add(1)
 				case pion.RTPCodecTypeAudio:
 					fv.audioPkts.Add(1)
+				case pion.RTPCodecTypeUnknown:
+					// Not video or audio; this fake viewer only counts the
+					// two track kinds it exercises.
 				}
 			}
 		}()
@@ -414,7 +417,9 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	// encoder dials the URL the PRODUCTION code computes, unmodified.
 	lst, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := lst.Addr().(*net.TCPAddr).Port
+	tcpAddr, tcpAddrOk := lst.Addr().(*net.TCPAddr)
+	require.True(t, tcpAddrOk, "listener address must be a *net.TCPAddr")
+	port := tcpAddr.Port
 
 	tmpDir := t.TempDir()
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {

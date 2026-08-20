@@ -97,7 +97,8 @@ func TestReAuthToken_SingleUse(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	token := resp["token"].(string)
+	token, tokenOk := resp["token"].(string)
+	require.True(t, tokenOk, "reauth response token must be a string")
 
 	store := api.reauthStoreOrInit()
 	assert.True(t, store.consume(token, reAuthTestUsername), "first consume must succeed")
@@ -112,7 +113,8 @@ func TestReAuthToken_WrongUser_Rejected(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	token := resp["token"].(string)
+	token, tokenOk := resp["token"].(string)
+	require.True(t, tokenOk, "reauth response token must be a string")
 	assert.False(t, api.reauthStoreOrInit().consume(token, "someone-else"))
 }
 
@@ -186,7 +188,9 @@ func TestIntegrationProviders_List_AllProviders(t *testing.T) {
 	}
 	gotSearch := map[string]bool{}
 	for _, p := range resp.Search {
-		gotSearch[p["id"].(string)] = true
+		id, idOk := p["id"].(string)
+		require.True(t, idOk, "search provider id must be a string")
+		gotSearch[id] = true
 	}
 	for id := range wantSearch {
 		assert.True(t, gotSearch[id], "search provider %q must be in the catalog", id)
@@ -197,7 +201,9 @@ func TestIntegrationProviders_List_AllProviders(t *testing.T) {
 	}
 	gotVoice := map[string]bool{}
 	for _, p := range resp.Voice {
-		gotVoice[p["id"].(string)] = true
+		id, idOk := p["id"].(string)
+		require.True(t, idOk, "voice provider id must be a string")
+		gotVoice[id] = true
 	}
 	for id := range wantVoice {
 		assert.True(t, gotVoice[id], "voice provider %q must be in the catalog", id)
@@ -230,7 +236,8 @@ func TestIntegrationProviderUpdate_SearXNGActivation_NeedsBaseURL(t *testing.T) 
 	require.Equal(t, http.StatusOK, rw.Code)
 	var rresp map[string]any
 	require.NoError(t, json.Unmarshal(rw.Body.Bytes(), &rresp))
-	token := rresp["token"].(string)
+	token, tokenOk := rresp["token"].(string)
+	require.True(t, tokenOk, "reauth response token must be a string")
 
 	w := putIntegration(api, user, "searxng", `{"kind":"search","active":true}`, token)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -261,7 +268,8 @@ func TestIntegrationProviderUpdate_WithReAuth_Succeeds(t *testing.T) {
 	require.Equal(t, http.StatusOK, rw.Code)
 	var rresp map[string]any
 	require.NoError(t, json.Unmarshal(rw.Body.Bytes(), &rresp))
-	token := rresp["token"].(string)
+	token, tokenOk := rresp["token"].(string)
+	require.True(t, tokenOk, "reauth response token must be a string")
 
 	// 2. Use it on the sensitive PUT (keyless provider → no credential store needed).
 	w := putIntegration(api, user, "duckduckgo", `{"kind":"search","active":true}`, token)

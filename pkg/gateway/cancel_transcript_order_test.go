@@ -19,6 +19,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -111,7 +112,7 @@ func TestRunTurn_CancelMidStream_TranscriptOrderAssistantBeforeTurnCanceled(t *t
 	runDone := make(chan struct{})
 	go func() {
 		defer close(runDone)
-		if err := al.Run(ctx); err != nil && err != context.Canceled {
+		if err := al.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			t.Logf("agent loop Run exited: %v", err)
 		}
 	}()

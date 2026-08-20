@@ -120,7 +120,11 @@ func TestConcurrentConfigWrites(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			data, _ := json.Marshal(map[string]any{"writer": n, "ok": true})
+			data, marshalErr := json.Marshal(map[string]any{"writer": n, "ok": true})
+			if marshalErr != nil {
+				errs <- marshalErr
+				return
+			}
 			if err := WithFlock(path, func() error {
 				return WriteFileAtomic(path, data, 0o600)
 			}); err != nil {

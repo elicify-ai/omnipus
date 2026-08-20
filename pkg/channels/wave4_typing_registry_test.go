@@ -1,6 +1,7 @@
 package channels
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -52,7 +53,7 @@ func TestChannelRegistryNoDisplacement(t *testing.T) {
 		sentinelName,
 		func(cfg *config.Config, instanceID string, _ credentials.SecretBundle, b *bus.MessageBus) (Channel, error) {
 			sentinelCalled = true
-			return nil, nil
+			return nil, errors.New("sentinel factory: not invoked in this test")
 		},
 	)
 
@@ -60,7 +61,7 @@ func TestChannelRegistryNoDisplacement(t *testing.T) {
 	RegisterFactory(
 		"test-wave4-second",
 		func(cfg *config.Config, instanceID string, _ credentials.SecretBundle, b *bus.MessageBus) (Channel, error) {
-			return nil, nil
+			return nil, errors.New("second sentinel factory: not invoked in this test")
 		},
 	)
 

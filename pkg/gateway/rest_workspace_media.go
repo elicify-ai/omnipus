@@ -347,7 +347,7 @@ func (a *restAPI) handleWorkspaceMediaDelete(w http.ResponseWriter, r *http.Requ
 		jsonOK(w, entry)
 		return
 
-	default: // mediaDeleteOutcomeSuccess
+	case mediaDeleteOutcomeSuccess:
 		a.logMediaDeleteAudit(workspaceID, mediaID, actor, entry, audit.DecisionAllow, true, nil)
 		bytesFreed := int64(0)
 		if entry.Size != nil {

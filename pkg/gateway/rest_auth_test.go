@@ -318,7 +318,8 @@ func TestHandleLogin_DifferentInputProducesDifferentToken(t *testing.T) {
 	require.Equal(t, http.StatusOK, w1.Code)
 	var resp1 map[string]any
 	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &resp1))
-	token1 := resp1["token"].(string)
+	token1, ok1 := resp1["token"].(string)
+	require.True(t, ok1, "login response token must be a string")
 
 	// Login as user2
 	body2 := `{"username":"user2","password":"password2"}`
@@ -329,7 +330,8 @@ func TestHandleLogin_DifferentInputProducesDifferentToken(t *testing.T) {
 	require.Equal(t, http.StatusOK, w2.Code)
 	var resp2 map[string]any
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
-	token2 := resp2["token"].(string)
+	token2, ok2 := resp2["token"].(string)
+	require.True(t, ok2, "login response token must be a string")
 
 	assert.NotEqual(t, token1, token2, "two different logins must produce different tokens")
 }
@@ -432,7 +434,8 @@ func TestHandleValidateToken_ValidToken(t *testing.T) {
 	require.Equal(t, http.StatusOK, loginW.Code)
 	var loginResp map[string]any
 	require.NoError(t, json.Unmarshal(loginW.Body.Bytes(), &loginResp))
-	token := loginResp["token"].(string)
+	token, tokenOk := loginResp["token"].(string)
+	require.True(t, tokenOk, "login response token must be a string")
 
 	// After login, the token hash is written to disk but the in-memory config
 	// doesn't update (no reload support in test). Read the updated config from
@@ -442,16 +445,20 @@ func TestHandleValidateToken_ValidToken(t *testing.T) {
 	require.NoError(t, err)
 	var diskCfg map[string]any
 	require.NoError(t, json.Unmarshal(diskData, &diskCfg))
-	gwMap := diskCfg["gateway"].(map[string]any)
-	users := gwMap["users"].([]any)
+	gwMap, gwOk := diskCfg["gateway"].(map[string]any)
+	require.True(t, gwOk, "config.gateway must be an object")
+	users, usersOk := gwMap["users"].([]any)
+	require.True(t, usersOk, "config.gateway.users must be an array")
 	require.Len(t, users, 1)
-	userMap := users[0].(map[string]any)
+	userMap, userMapOk := users[0].(map[string]any)
+	require.True(t, userMapOk, "config.gateway.users[0] must be an object")
 	// SEC-1: login writes the token into the bearer-token SET; the entry hash
 	// is bcrypt of the secret BODY (config.TokenSecret), not the full token.
 	tokens, ok := userMap["tokens"].([]any)
 	require.True(t, ok, "tokens set should be present after login")
 	require.Len(t, tokens, 1)
-	entry := tokens[0].(map[string]any)
+	entry, entryOk := tokens[0].(map[string]any)
+	require.True(t, entryOk, "tokens[0] must be an object")
 	tokenHash, _ := entry["hash"].(string)
 	require.NotEmpty(t, tokenHash, "token entry hash should be set after login")
 
@@ -879,7 +886,9 @@ func TestHandleLogout_RevokesOnlyPresentedToken(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, "login must succeed: %s", w.Body.String())
 		var resp map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		return resp["token"].(string)
+		tok, ok := resp["token"].(string)
+		require.True(t, ok, "login response token must be a string")
+		return tok
 	}
 
 	tok1 := login()
@@ -898,17 +907,23 @@ func TestHandleLogout_RevokesOnlyPresentedToken(t *testing.T) {
 	require.NoError(t, err)
 	var diskCfg map[string]any
 	require.NoError(t, json.Unmarshal(raw, &diskCfg))
-	gw := diskCfg["gateway"].(map[string]any)
-	users := gw["users"].([]any)
+	gw, gwOk := diskCfg["gateway"].(map[string]any)
+	require.True(t, gwOk, "config.gateway must be an object")
+	users, usersOk := gw["users"].([]any)
+	require.True(t, usersOk, "config.gateway.users must be an array")
 	require.Len(t, users, 1)
-	userMap := users[0].(map[string]any)
+	userMap, userMapOk := users[0].(map[string]any)
+	require.True(t, userMapOk, "config.gateway.users[0] must be an object")
 	tokens, ok := userMap["tokens"].([]any)
 	require.True(t, ok, "tokens set must still exist after single-token logout")
 	require.Len(t, tokens, 1, "exactly ONE token must remain after logging out one of two sessions")
 
 	verifyAgainstSet := func(plain string) bool {
 		for _, e := range tokens {
-			entry := e.(map[string]any)
+			entry, entryOk := e.(map[string]any)
+			if !entryOk {
+				continue
+			}
 			h, _ := entry["hash"].(string)
 			if bcrypt.CompareHashAndPassword([]byte(h), []byte(config.TokenSecret(plain))) == nil {
 				return true
@@ -1064,10 +1079,13 @@ func TestHandleChangePassword_Success(t *testing.T) {
 	require.NoError(t, err)
 	var diskCfg map[string]any
 	require.NoError(t, json.Unmarshal(diskData, &diskCfg))
-	gwMap := diskCfg["gateway"].(map[string]any)
-	users := gwMap["users"].([]any)
+	gwMap, gwOk := diskCfg["gateway"].(map[string]any)
+	require.True(t, gwOk, "config.gateway must be an object")
+	users, usersOk := gwMap["users"].([]any)
+	require.True(t, usersOk, "config.gateway.users must be an array")
 	require.Len(t, users, 1)
-	userMap := users[0].(map[string]any)
+	userMap, userMapOk := users[0].(map[string]any)
+	require.True(t, userMapOk, "config.gateway.users[0] must be an object")
 	newHash, _ := userMap["password_hash"].(string)
 	require.NotEmpty(t, newHash, "password_hash must be updated on disk")
 	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(newHash), []byte("NewPass456")),
@@ -1339,17 +1357,21 @@ func TestHandleLogin_StoresBcryptedTokenHash(t *testing.T) {
 
 	var diskCfg map[string]any
 	require.NoError(t, json.Unmarshal(raw, &diskCfg))
-	gw := diskCfg["gateway"].(map[string]any)
-	usersRaw := gw["users"].([]any)
+	gw, gwOk := diskCfg["gateway"].(map[string]any)
+	require.True(t, gwOk, "config.gateway must be an object")
+	usersRaw, usersRawOk := gw["users"].([]any)
+	require.True(t, usersRawOk, "config.gateway.users must be an array")
 	require.Len(t, usersRaw, 1)
-	userMap := usersRaw[0].(map[string]any)
+	userMap, userMapOk := usersRaw[0].(map[string]any)
+	require.True(t, userMapOk, "config.gateway.users[0] must be an object")
 
 	// SEC-1: login now writes the token into the bearer-token SET ("tokens"),
 	// not the legacy single token_hash field.
 	tokensRaw, ok := userMap["tokens"].([]any)
 	require.True(t, ok, "tokens set must be written to disk after login")
 	require.Len(t, tokensRaw, 1, "first login must create exactly one token entry")
-	entry := tokensRaw[0].(map[string]any)
+	entry, entryOk := tokensRaw[0].(map[string]any)
+	require.True(t, entryOk, "tokensRaw[0] must be an object")
 	tokenHash, _ := entry["hash"].(string)
 	require.NotEmpty(t, tokenHash, "token entry hash must be written to disk after login")
 
@@ -1401,10 +1423,13 @@ func TestHandleLogin_AppendsTokenSet_AfterRepeatedLogin(t *testing.T) {
 	require.NoError(t, err)
 	var diskCfg map[string]any
 	require.NoError(t, json.Unmarshal(raw, &diskCfg))
-	gw := diskCfg["gateway"].(map[string]any)
-	usersRaw := gw["users"].([]any)
+	gw, gwOk := diskCfg["gateway"].(map[string]any)
+	require.True(t, gwOk, "config.gateway must be an object")
+	usersRaw, usersRawOk := gw["users"].([]any)
+	require.True(t, usersRawOk, "config.gateway.users must be an array")
 	require.Len(t, usersRaw, 1)
-	userMap := usersRaw[0].(map[string]any)
+	userMap, userMapOk := usersRaw[0].(map[string]any)
+	require.True(t, userMapOk, "config.gateway.users[0] must be an object")
 	tokens, ok := userMap["tokens"].([]any)
 	require.True(t, ok, "tokens set must exist on disk")
 	require.Len(t, tokens, 2, "second login must APPEND, leaving two live tokens (not overwrite)")
@@ -1413,7 +1438,10 @@ func TestHandleLogin_AppendsTokenSet_AfterRepeatedLogin(t *testing.T) {
 	// guarantee that the first client is not logged out by the second login.
 	verify := func(plain string) bool {
 		for _, e := range tokens {
-			entry := e.(map[string]any)
+			entry, entryOk := e.(map[string]any)
+			if !entryOk {
+				continue
+			}
 			h, _ := entry["hash"].(string)
 			// SEC-1: entry hashes are over the secret body, not the full token.
 			if bcrypt.CompareHashAndPassword([]byte(h), []byte(config.TokenSecret(plain))) == nil {
@@ -1536,7 +1564,9 @@ func TestWithRateLimit_Returns429WithRetryAfterHeader(t *testing.T) {
 	// Response body must contain error field.
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp))
-	assert.Contains(t, resp["error"].(string), "rate limit exceeded",
+	errMsg, errMsgOk := resp["error"].(string)
+	require.True(t, errMsgOk, "response error field must be a string")
+	assert.Contains(t, errMsg, "rate limit exceeded",
 		"429 body must describe the rate limit error")
 }
 
@@ -1828,7 +1858,8 @@ func TestHandleValidateToken_TriggerReloadNotConfigured(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	var loginResp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &loginResp))
-	token := loginResp["token"].(string)
+	token, tokenOk := loginResp["token"].(string)
+	require.True(t, tokenOk, "login response token must be a string")
 
 	// After login, the in-memory config has no users. Read the updated config
 	// from disk and inject user context, simulating what withAuth does after reload.
@@ -1836,8 +1867,10 @@ func TestHandleValidateToken_TriggerReloadNotConfigured(t *testing.T) {
 	require.NoError(t, err)
 	var diskCfg map[string]any
 	require.NoError(t, json.Unmarshal(diskData, &diskCfg))
-	gwMap := diskCfg["gateway"].(map[string]any)
-	users := gwMap["users"].([]any)
+	gwMap, gwMapOk := diskCfg["gateway"].(map[string]any)
+	require.True(t, gwMapOk, "config.gateway must be an object")
+	users, usersOk := gwMap["users"].([]any)
+	require.True(t, usersOk, "config.gateway.users must be an array")
 	require.Len(t, users, 1)
 
 	testUser := &config.UserConfig{
@@ -1885,7 +1918,8 @@ func TestHandleChangePassword_InvalidatesExistingToken(t *testing.T) {
 	require.Equal(t, http.StatusOK, loginW.Code, "login must succeed before password change")
 	var loginResp map[string]any
 	require.NoError(t, json.Unmarshal(loginW.Body.Bytes(), &loginResp))
-	oldToken := loginResp["token"].(string)
+	oldToken, oldTokenOk := loginResp["token"].(string)
+	require.True(t, oldTokenOk, "login response token must be a string")
 	require.NotEmpty(t, oldToken, "login must return a non-empty token")
 
 	// Confirm token_hash is non-empty on disk after login.
@@ -1893,10 +1927,13 @@ func TestHandleChangePassword_InvalidatesExistingToken(t *testing.T) {
 	require.NoError(t, err)
 	var diskCfgBefore map[string]any
 	require.NoError(t, json.Unmarshal(diskDataBefore, &diskCfgBefore))
-	gwBefore := diskCfgBefore["gateway"].(map[string]any)
-	usersBefore := gwBefore["users"].([]any)
+	gwBefore, gwBeforeOk := diskCfgBefore["gateway"].(map[string]any)
+	require.True(t, gwBeforeOk, "config.gateway must be an object")
+	usersBefore, usersBeforeOk := gwBefore["users"].([]any)
+	require.True(t, usersBeforeOk, "config.gateway.users must be an array")
 	require.Len(t, usersBefore, 1)
-	userMapBefore := usersBefore[0].(map[string]any)
+	userMapBefore, userMapBeforeOk := usersBefore[0].(map[string]any)
+	require.True(t, userMapBeforeOk, "config.gateway.users[0] must be an object")
 	// SEC-1 / UAT #399: login appends bearer tokens to the "tokens" SET, not the
 	// legacy single "token_hash" field. The precondition is that the new token is
 	// live on disk, which now means the "tokens" array is non-empty.

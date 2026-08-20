@@ -193,6 +193,11 @@ test('pollUntilHealthy: hard backstop trips for slow/wedged probes', async () =>
   assert.ok(result.attempts < 75, 'the backstop, not the consecutive-failure threshold, must be what trips');
   assert.ok(result.elapsedMs >= 30_000);
   assert.equal(result.lastProbeError, probeErr);
+  // Cross-check the implementation's self-reported attempt count against the
+  // actual number of probe invocations — the same guard CASE 3a applies —
+  // so a miscount inside pollUntilHealthy's attempt bookkeeping can't hide
+  // behind a `result.attempts < 75` bound that a wrong count could also satisfy.
+  assert.equal(result.attempts, probeCalls);
 });
 
 // Sanity/regression check for the ordinary happy path: a handful of

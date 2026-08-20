@@ -147,7 +147,7 @@ func TestSendMedia_ImageFallbacksToDocumentOnInvalidDimensions(t *testing.T) {
 				return successResponse(t), nil
 			default:
 				t.Fatalf("unexpected API call: %s", url)
-				return nil, nil
+				return nil, errors.New("unreachable: t.Fatal halts the test goroutine")
 			}
 		},
 	}
@@ -336,7 +336,7 @@ func TestSendMedia_CrossWorkspaceRefLogsDistinctDenialWarning(t *testing.T) {
 	ch := newTestChannel(t, &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
 			t.Fatal("no Bot API call should be reached: the caller-workspace guard fires before any resolve")
-			return nil, nil
+			return nil, errors.New("unreachable: t.Fatal halts the test goroutine")
 		},
 	})
 	ch.SetMediaStore(media.NewFileMediaStore())
@@ -367,7 +367,7 @@ func TestSend_EmptyContent(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
 			t.Fatal("SendMessage should not be called for empty content")
-			return nil, nil
+			return nil, errors.New("unreachable: t.Fatal halts the test goroutine")
 		},
 	}
 	ch := newTestChannel(t, caller)
@@ -570,7 +570,7 @@ func TestSend_NotRunning(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
 			t.Fatal("should not be called")
-			return nil, nil
+			return nil, errors.New("unreachable: t.Fatal halts the test goroutine")
 		},
 	}
 	ch := newTestChannel(t, caller)
@@ -589,7 +589,7 @@ func TestSend_InvalidChatID(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
 			t.Fatal("should not be called")
-			return nil, nil
+			return nil, errors.New("unreachable: t.Fatal halts the test goroutine")
 		},
 	}
 	ch := newTestChannel(t, caller)

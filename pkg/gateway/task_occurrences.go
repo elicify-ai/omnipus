@@ -338,9 +338,9 @@ func buildOneOccurrenceSet(
 		}
 		occMs, buckets, truncated = res.raw, res.buckets, res.truncated
 
-	default:
-		// manual/once: not recurring-capable, rendered by the existing
-		// due/fire-chip path instead of this endpoint.
+	case task.TriggerManual, task.TriggerOnce:
+		// not recurring-capable, rendered by the existing due/fire-chip path
+		// instead of this endpoint.
 		return gen.TaskOccurrenceSet{}, false
 	}
 
@@ -532,6 +532,12 @@ func populateBucketRunCounts(set *gen.TaskOccurrenceSet, runs []task.TaskRun, lo
 				failed++
 			case task.StatusSkipped:
 				skipped++
+			case task.StatusInbox, task.StatusNext, task.StatusBlocked:
+				// Not a valid TaskRun status (task.IsValidRunStatus only
+				// allows in_progress/done/failed/skipped) — a run can never
+				// carry one of these Task-level statuses in practice. Not
+				// counted in any bucket, same as the prior unhandled-value
+				// fallthrough.
 			}
 		}
 		if inProgress == 0 && done == 0 && failed == 0 && skipped == 0 {

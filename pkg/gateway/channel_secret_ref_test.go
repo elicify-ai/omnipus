@@ -75,7 +75,10 @@ func TestConfigureChannel_RoutesSecretToCredentialStore(t *testing.T) {
 	// 2. token_ref must be set to the conventional credential name; no inline token.
 	var diskCfg map[string]any
 	require.NoError(t, json.Unmarshal(raw, &diskCfg))
-	tg := diskCfg["channels"].(map[string]any)["telegram"].(map[string]any)
+	channelsMap, channelsMapOk := diskCfg["channels"].(map[string]any)
+	require.True(t, channelsMapOk, "config.channels must be an object")
+	tg, tgOk := channelsMap["telegram"].(map[string]any)
+	require.True(t, tgOk, "config.channels.telegram must be an object")
 	assert.Equal(t, "channel_telegram_token", tg["token_ref"])
 	_, hasInline := tg["token"]
 	assert.False(t, hasInline, "inline token must not be persisted to config.json")
@@ -166,7 +169,10 @@ func TestConfigureChannel_ScrubsStaleInlinePlaintext(t *testing.T) {
 
 	var diskCfg map[string]any
 	require.NoError(t, json.Unmarshal(raw, &diskCfg))
-	tg := diskCfg["channels"].(map[string]any)["telegram"].(map[string]any)
+	channelsMap, channelsMapOk := diskCfg["channels"].(map[string]any)
+	require.True(t, channelsMapOk, "config.channels must be an object")
+	tg, tgOk := channelsMap["telegram"].(map[string]any)
+	require.True(t, tgOk, "config.channels.telegram must be an object")
 	_, hasInline := tg["token"]
 	assert.False(t, hasInline, "stale inline token key must be removed")
 	assert.Equal(t, "HTML", tg["parse_mode"], "the unrelated edit must still apply")
@@ -202,7 +208,10 @@ func TestConfigureChannel_ClearSecretDeletesCredential(t *testing.T) {
 	require.NoError(t, err)
 	var diskCfg map[string]any
 	require.NoError(t, json.Unmarshal(raw, &diskCfg))
-	mx := diskCfg["channels"].(map[string]any)["matrix"].(map[string]any)
+	channelsMap, channelsMapOk := diskCfg["channels"].(map[string]any)
+	require.True(t, channelsMapOk, "config.channels must be an object")
+	mx, mxOk := channelsMap["matrix"].(map[string]any)
+	require.True(t, mxOk, "config.channels.matrix must be an object")
 	assert.Equal(t, "", mx["crypto_passphrase_ref"], "crypto_passphrase_ref must be cleared")
 	_, err = api.credStore.Get("channel_matrix_crypto_passphrase")
 	assert.Error(t, err, "the stored credential must be deleted on clear")
@@ -388,7 +397,10 @@ func TestConfigureChannel_GoogleChatWebhookRoutesToCredentialStore(t *testing.T)
 	// 2. webhook_url_ref must be set; no inline webhook_url.
 	var diskCfg map[string]any
 	require.NoError(t, json.Unmarshal(raw, &diskCfg))
-	gc := diskCfg["channels"].(map[string]any)["google-chat"].(map[string]any)
+	channelsMap, channelsMapOk := diskCfg["channels"].(map[string]any)
+	require.True(t, channelsMapOk, "config.channels must be an object")
+	gc, gcOk := channelsMap["google-chat"].(map[string]any)
+	require.True(t, gcOk, "config.channels.google-chat must be an object")
 	assert.Equal(t, "channel_google-chat_webhook_url", gc["webhook_url_ref"])
 	_, hasInline := gc["webhook_url"]
 	assert.False(t, hasInline, "inline webhook_url must not be persisted to config.json")
@@ -425,7 +437,10 @@ func TestConfigureChannel_GoogleChatServiceAccountRoutesToCredentialStore(t *tes
 
 	var diskCfg map[string]any
 	require.NoError(t, json.Unmarshal(raw, &diskCfg))
-	gc := diskCfg["channels"].(map[string]any)["google-chat"].(map[string]any)
+	channelsMap, channelsMapOk := diskCfg["channels"].(map[string]any)
+	require.True(t, channelsMapOk, "config.channels must be an object")
+	gc, gcOk := channelsMap["google-chat"].(map[string]any)
+	require.True(t, gcOk, "config.channels.google-chat must be an object")
 	assert.Equal(t, "channel_google-chat_service_account_json", gc["service_account_json_ref"])
 	_, hasInline := gc["service_account_json"]
 	assert.False(t, hasInline, "inline service_account_json must not be persisted to config.json")

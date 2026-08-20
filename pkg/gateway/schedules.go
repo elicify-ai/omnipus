@@ -612,7 +612,20 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 		r.stampScheduledSessionWorkspace(store, meta.ID, workspaceID)
 		return meta.ID, nil
 
-	default: // isolated
+	case cron.SessionModeIsolated:
+		fresh, err := store.NewScheduledSession(owner)
+		if err != nil {
+			return "", fmt.Errorf("isolated session create: %w", err)
+		}
+		r.stampScheduledSessionOwner(store, fresh.ID, userOwner)
+		r.stampScheduledSessionWorkspace(store, fresh.ID, workspaceID)
+		return fresh.ID, nil
+
+	default:
+		// Any unrecognized SessionMode value (job data that predates a mode
+		// addition/removal, or a corrupted field) falls back to the
+		// isolated behavior — the safest option, since it never reuses or
+		// mutates a shared session.
 		fresh, err := store.NewScheduledSession(owner)
 		if err != nil {
 			return "", fmt.Errorf("isolated session create: %w", err)

@@ -1421,7 +1421,7 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 			agent.Tools.Unregister("bash")
 			continue
 		}
-		agent.Tools.Register(execTool)
+		agent.Tools.RegisterReplacing(execTool)
 	}
 }
 
@@ -1513,7 +1513,7 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 				minDurSec,
 				maxDurSec,
 			)
-			ag.Tools.Register(webServeTool)
+			ag.Tools.RegisterReplacing(webServeTool)
 		}
 
 		// bash (ADR-036): the unified shell tool used to be wired here as
@@ -1662,7 +1662,7 @@ func registerSharedTools(
 		if err != nil {
 			logger.ErrorCF("agent", "Failed to create web search tool", map[string]any{"error": err.Error()})
 		} else if searchTool != nil {
-			agent.Tools.Register(searchTool)
+			agent.Tools.RegisterReplacing(searchTool)
 		}
 
 		fetchTool, err := tools.NewWebFetchToolWithProxy(
@@ -1674,7 +1674,7 @@ func registerSharedTools(
 		if err != nil {
 			logger.ErrorCF("agent", "Failed to create web fetch tool", map[string]any{"error": err.Error()})
 		} else {
-			agent.Tools.Register(fetchTool)
+			agent.Tools.RegisterReplacing(fetchTool)
 		}
 
 		// Message tool — outbound inter-agent message via bus.
@@ -1688,7 +1688,7 @@ func registerSharedTools(
 				Content: content,
 			})
 		})
-		agent.Tools.Register(messageTool)
+		agent.Tools.RegisterReplacing(messageTool)
 
 		// Handoff tools — always registered (ScopeCore).
 		getRegistryReader := func() tools.AgentRegistryReader {
@@ -1735,8 +1735,8 @@ func registerSharedTools(
 		// sharedStore is the shared session store; tools handle a nil store by
 		// skipping transcript ops (nil only occurs in tests without a store).
 		sharedStore := al.GetSessionStore()
-		agent.Tools.Register(tools.NewHandoffTool(getRegistryReader, sharedStore, getContextWindow, onHandoffFrontend))
-		agent.Tools.Register(tools.NewReturnToDefaultTool(sharedStore, getDefaultAgent, onHandoffFrontend))
+		agent.Tools.RegisterReplacing(tools.NewHandoffTool(getRegistryReader, sharedStore, getContextWindow, onHandoffFrontend))
+		agent.Tools.RegisterReplacing(tools.NewReturnToDefaultTool(sharedStore, getDefaultAgent, onHandoffFrontend))
 
 		// Send file tool (outbound media via MediaStore — store injected later by SetMediaStore).
 		sendFileTool := tools.NewSendFileTool(
@@ -1746,7 +1746,7 @@ func registerSharedTools(
 			nil,
 			allowReadPaths,
 		)
-		agent.Tools.Register(sendFileTool)
+		agent.Tools.RegisterReplacing(sendFileTool)
 
 		// Skill discovery and installation tools — always registered.
 		// Runtime failures (ClawHub unreachable, no auth token) surface at call
@@ -1769,14 +1769,14 @@ func registerSharedTools(
 				cfg.Tools.Skills.SearchCache.MaxSize,
 				time.Duration(cfg.Tools.Skills.SearchCache.TTLSeconds)*time.Second,
 			)
-			agent.Tools.Register(tools.NewFindSkillsTool(registryMgr, searchCache))
+			agent.Tools.RegisterReplacing(tools.NewFindSkillsTool(registryMgr, searchCache))
 			// ADR-046 FR-009: install_skill targets the fixed, install-wide
 			// GLOBAL skills directory ($OMNIPUS_HOME/skills) — the SAME
 			// directory every agent's own SkillsLoader searches (see
 			// globalSkillsDir's doc comment in context.go) — never
 			// agent.Home, so a skill installed by one agent is discoverable
 			// by every other agent.
-			agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, globalSkillsDir()))
+			agent.Tools.RegisterReplacing(tools.NewInstallSkillTool(registryMgr, globalSkillsDir()))
 		}
 
 		// Email tools (M11) — registered ONLY for the agent that owns a configured,
@@ -1934,7 +1934,7 @@ func registerSharedTools(
 			// keeps its own default.
 			delegateTool.SetOwnershipWalkMaxDepth(cfg.Agents.Defaults.SubTurn.MaxDepth)
 
-			agent.Tools.Register(delegateTool)
+			agent.Tools.RegisterReplacing(delegateTool)
 		}
 
 		// ADR-053 Phase 2 on-ramp (session_messaging_wire.go): wire the S2/S3
@@ -1951,7 +1951,7 @@ func registerSharedTools(
 		if al.taskStore != nil {
 			currentAgentID := agentID
 
-			agent.Tools.Register(tools.NewTaskListTool(al.taskStore))
+			agent.Tools.RegisterReplacing(tools.NewTaskListTool(al.taskStore))
 
 			taskCreate := tools.NewTaskCreateTool(al.taskStore)
 			// Resolve the real default workspace (is_default ULID) when a
@@ -2020,7 +2020,7 @@ func registerSharedTools(
 				// Register the task's time trigger (no-op for manual/heartbeat).
 				al.NotifyTaskUpserted(entity)
 			})
-			agent.Tools.Register(taskCreate)
+			agent.Tools.RegisterReplacing(taskCreate)
 
 			taskUpdate := tools.NewTaskUpdateTool(al.taskStore)
 			taskUpdate.SetOnComplete(func(t *task.Task) {
@@ -2051,13 +2051,13 @@ func registerSharedTools(
 			// Same rationale as taskCreate above: the subagent_3p reassignment
 			// guard is retired now that processTaskDirect dispatches an
 			// external-CLI worker's task run through runExternalCLISubTurn.
-			agent.Tools.Register(taskUpdate)
+			agent.Tools.RegisterReplacing(taskUpdate)
 
 			setTodos := tools.NewSetTodosTool(al.taskStore)
 			setTodos.SetHome(filepath.Dir(cfg.AgentHomeBasePath()))
-			agent.Tools.Register(setTodos)
-			agent.Tools.Register(tools.NewTaskDeleteTool(al.taskStore))
-			agent.Tools.Register(tools.NewAgentListTool(func() []tools.AgentInfo {
+			agent.Tools.RegisterReplacing(setTodos)
+			agent.Tools.RegisterReplacing(tools.NewTaskDeleteTool(al.taskStore))
+			agent.Tools.RegisterReplacing(tools.NewAgentListTool(func() []tools.AgentInfo {
 				var infos []tools.AgentInfo
 				for _, id := range registry.ListAgentIDs() {
 					if a, ok := registry.GetAgent(id); ok {
@@ -2418,7 +2418,7 @@ func registerSharedTools(
 		// Excluded for the "main" gateway agent (no memory tools there either).
 		if agentID != "main" {
 			if agent.Sessions != nil {
-				agent.Tools.Register(NewRecallConversationTool(agent.Sessions, al))
+				agent.Tools.RegisterReplacing(NewRecallConversationTool(agent.Sessions, al))
 			} else {
 				logger.WarnCF("agent",
 					"recall_conversation not registered — agent.Sessions is nil",
@@ -2592,7 +2592,7 @@ func registerSharedTools(
 						return schemas, rejected
 					},
 				)
-				agent.Tools.Register(toolsTool)
+				agent.Tools.RegisterReplacing(toolsTool)
 			}
 		}
 	}
@@ -6193,7 +6193,7 @@ func (al *AgentLoop) wireSysagentDepsLocked(registry *AgentRegistry, deps *systo
 			continue
 		}
 		for _, t := range sysToolList {
-			ag.Tools.Register(t)
+			ag.Tools.RegisterReplacing(t)
 		}
 	}
 	logger.InfoCF("agent", "system.* tools wired into agent registry",

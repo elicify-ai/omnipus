@@ -6,6 +6,7 @@
 package audit
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -37,7 +38,8 @@ func TestLogger_Log_NilReceiver_DoesNotPanic(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if panicked, ok := err.(*nilReceiverPanicError); ok {
+		var panicked *nilReceiverPanicError
+		if errors.As(err, &panicked) {
 			t.Fatalf("nil *Logger.Log panicked: %v", panicked.val)
 		}
 		if err != nil {

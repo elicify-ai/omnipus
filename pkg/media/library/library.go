@@ -224,7 +224,7 @@ func newManifestEntry(
 	}
 	normalized, nameErr := normalizeFilename(filename)
 	if nameErr != nil {
-		return manifestEntry{}, fmt.Errorf("%w: %v", ErrInvalidManifest, nameErr)
+		return manifestEntry{}, fmt.Errorf("%w: %w", ErrInvalidManifest, nameErr)
 	}
 	if mime == "" {
 		return manifestEntry{}, fmt.Errorf("%w: mime is empty", ErrInvalidManifest)
@@ -317,7 +317,7 @@ func (m manifestEntry) validate(workspaceID string) error {
 		return fmt.Errorf("%w: workspace mismatch for %s", ErrInvalidManifest, m.id)
 	}
 	if _, err := normalizeFilename(m.filename); err != nil {
-		return fmt.Errorf("%w: filename for %s: %v", ErrInvalidManifest, m.id, err)
+		return fmt.Errorf("%w: filename for %s: %w", ErrInvalidManifest, m.id, err)
 	}
 	if m.refcount < 0 {
 		return fmt.Errorf("%w: negative refcount for %s", ErrInvalidManifest, m.id)
@@ -1362,7 +1362,7 @@ func (l *Library) loadLocked() error {
 	decoder.DisallowUnknownFields()
 	var persisted manifestFile
 	if err := decoder.Decode(&persisted); err != nil {
-		return fmt.Errorf("%w: decode: %v", ErrInvalidManifest, err)
+		return fmt.Errorf("%w: decode: %w", ErrInvalidManifest, err)
 	}
 	if err := ensureJSONEOF(decoder); err != nil {
 		return err

@@ -302,8 +302,8 @@ func TestProviderChat_JSONHTTPErrorDoesNotReportHTML(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	pe, ok := err.(*common.ProviderError)
-	if !ok {
+	var pe *common.ProviderError
+	if !errors.As(err, &pe) {
 		t.Fatalf("expected *common.ProviderError, got %T", err)
 	}
 	if pe.Status != http.StatusBadRequest {
@@ -362,8 +362,8 @@ func TestProviderChat_HTMLResponsesReturnHelpfulError(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
-			pe, ok := err.(*common.ProviderError)
-			if !ok {
+			var pe *common.ProviderError
+			if !errors.As(err, &pe) {
 				t.Fatalf("expected *common.ProviderError, got %T", err)
 			}
 			if pe.Status != tt.statusCode {
@@ -425,8 +425,8 @@ func TestProviderChat_LargeHTMLResponsePreviewIsTruncated(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	pe, ok := err.(*common.ProviderError)
-	if !ok {
+	var pe *common.ProviderError
+	if !errors.As(err, &pe) {
 		t.Fatalf("expected *common.ProviderError, got %T", err)
 	}
 	if pe.Status != http.StatusBadGateway {
@@ -832,7 +832,10 @@ func TestSerializeMessages_WithMedia(t *testing.T) {
 	}
 	result := common.SerializeMessages(messages)
 
-	data, _ := json.Marshal(result)
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 	var msgs []map[string]any
 	json.Unmarshal(data, &msgs)
 
@@ -844,16 +847,25 @@ func TestSerializeMessages_WithMedia(t *testing.T) {
 		t.Fatalf("expected 2 content parts, got %d", len(content))
 	}
 
-	textPart := content[0].(map[string]any)
+	textPart, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any content part, got %T", content[0])
+	}
 	if textPart["type"] != "text" || textPart["text"] != "describe this" {
 		t.Fatalf("text part mismatch: %v", textPart)
 	}
 
-	imgPart := content[1].(map[string]any)
+	imgPart, ok := content[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any content part, got %T", content[1])
+	}
 	if imgPart["type"] != "image_url" {
 		t.Fatalf("expected image_url type, got %v", imgPart["type"])
 	}
-	imgURL := imgPart["image_url"].(map[string]any)
+	imgURL, ok := imgPart["image_url"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any image_url, got %T", imgPart["image_url"])
+	}
 	if imgURL["url"] != "data:image/png;base64,abc123" {
 		t.Fatalf("image url mismatch: %v", imgURL["url"])
 	}
@@ -865,7 +877,10 @@ func TestSerializeMessages_MediaWithToolCallID(t *testing.T) {
 	}
 	result := common.SerializeMessages(messages)
 
-	data, _ := json.Marshal(result)
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 	var msgs []map[string]any
 	json.Unmarshal(data, &msgs)
 
@@ -1240,7 +1255,14 @@ func sseTextChunk(content string, finishReason *string) string {
 		Choices []choice `json:"choices"`
 	}
 	c := chunk{Choices: []choice{{Delta: delta{Content: content}, FinishReason: finishReason}}}
-	b, _ := json.Marshal(c)
+	b, err := json.Marshal(c)
+	if err != nil {
+		// c is built entirely from string/*string fields; Marshal cannot
+		// fail for this shape. A panic here means the fixture type changed
+		// in a way that broke JSON encoding, which every caller must know
+		// about immediately rather than receive a silently empty payload.
+		panic(fmt.Sprintf("sseTextChunk: json.Marshal: %v", err))
+	}
 	return string(b)
 }
 
@@ -1317,7 +1339,10 @@ func TestParseStreamResponse_ToolCallDeltas(t *testing.T) {
 
 	marshalChunk := func(tc tcDelta, fr *string) string {
 		c := chunk{Choices: []choice{{Delta: delta{ToolCalls: []tcDelta{tc}}, FinishReason: fr}}}
-		b, _ := json.Marshal(c)
+		b, err := json.Marshal(c)
+		if err != nil {
+			t.Fatalf("marshalChunk: json.Marshal: %v", err)
+		}
 		return string(b)
 	}
 
@@ -1395,7 +1420,10 @@ func TestParseStreamResponse_MultipleToolCalls(t *testing.T) {
 
 	marshalChunks := func(tcs []tcDelta, fr *string) string {
 		c := chunkT{Choices: []choice{{Delta: delta{ToolCalls: tcs}, FinishReason: fr}}}
-		b, _ := json.Marshal(c)
+		b, err := json.Marshal(c)
+		if err != nil {
+			t.Fatalf("marshalChunks: json.Marshal: %v", err)
+		}
 		return string(b)
 	}
 
@@ -1555,7 +1583,10 @@ func TestParseStreamResponse_UsageInFinalChunk(t *testing.T) {
 			TotalTokens:      15,
 		},
 	}
-	finalChunkJSON, _ := json.Marshal(finalChunk)
+	finalChunkJSON, err := json.Marshal(finalChunk)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 
 	payloads := []string{
 		textChunk,
@@ -1593,7 +1624,10 @@ func TestSerializeMessages_StripsSystemParts(t *testing.T) {
 	}
 	result := common.SerializeMessages(messages)
 
-	data, _ := json.Marshal(result)
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 	raw := string(data)
 	if strings.Contains(raw, "system_parts") {
 		t.Fatal("system_parts should not appear in serialized output")

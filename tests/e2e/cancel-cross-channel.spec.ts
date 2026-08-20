@@ -19,7 +19,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, agentPicker, assistantMessages, selectAgent, waitForConnected } from './fixtures/selectors'
+import { chatInput, agentPicker, selectAgent, waitForConnected } from './fixtures/selectors'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -310,8 +310,6 @@ test(
     await page.goto('/')
 
     await triggerLongStreamingTurn(page)
-
-    const input = chatInput(page)
 
     // Typing "/c" mid-stream: FR-3a requires the slash menu to appear during
     // streaming for commands tagged availableWhileStreaming: true.
@@ -1009,7 +1007,7 @@ test(
     let attemptEntry: AuditEntry | undefined
     let cancelledEntry: AuditEntry | undefined
     let newSessions: string[] = []
-    let cancelRowSummary = '[]'
+    let cancelRowSummary: string
     const auditDeadline = Date.now() + 30_000
     for (;;) {
       newSessions = listSessionDirs(OMNIPUS_HOME).filter((s) => !sessionsBefore.has(s))

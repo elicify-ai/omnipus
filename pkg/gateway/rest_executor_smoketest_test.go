@@ -360,7 +360,13 @@ func (f *capturingFakeDriver) Decide(runner.PermissionDecision) {}
 func (f *capturingFakeDriver) Cancel()                          {}
 func (f *capturingFakeDriver) Input(string) error               { return nil }
 func (f *capturingFakeDriver) Resume(context.Context, string) (<-chan runner.RunEvent, error) {
-	return nil, nil
+	// Resume is unused by this fake's scenarios; return an already-closed
+	// channel (rather than nil, nil) so a caller ranging over it sees an
+	// immediately-completed empty run instead of a nil channel that would
+	// block forever, and so the return isn't an ambiguous (nil, nil) (nilnil).
+	ch := make(chan runner.RunEvent)
+	close(ch)
+	return ch, nil
 }
 
 func (f *capturingFakeDriver) Test(context.Context) runner.ConnectionTestResult {
@@ -492,7 +498,13 @@ func (f *instantFakeDriver) Decide(runner.PermissionDecision) {}
 func (f *instantFakeDriver) Cancel()                          {}
 func (f *instantFakeDriver) Input(string) error               { return nil }
 func (f *instantFakeDriver) Resume(context.Context, string) (<-chan runner.RunEvent, error) {
-	return nil, nil
+	// Resume is unused by this fake's scenarios; return an already-closed
+	// channel (rather than nil, nil) so a caller ranging over it sees an
+	// immediately-completed empty run instead of a nil channel that would
+	// block forever, and so the return isn't an ambiguous (nil, nil) (nilnil).
+	ch := make(chan runner.RunEvent)
+	close(ch)
+	return ch, nil
 }
 
 func (f *instantFakeDriver) Test(context.Context) runner.ConnectionTestResult {
@@ -529,7 +541,13 @@ func (f *blockingFakeDriver) Decide(runner.PermissionDecision) {}
 func (f *blockingFakeDriver) Cancel()                          {}
 func (f *blockingFakeDriver) Input(string) error               { return nil }
 func (f *blockingFakeDriver) Resume(context.Context, string) (<-chan runner.RunEvent, error) {
-	return nil, nil
+	// Resume is unused by this fake's scenarios; return an already-closed
+	// channel (rather than nil, nil) so a caller ranging over it sees an
+	// immediately-completed empty run instead of a nil channel that would
+	// block forever, and so the return isn't an ambiguous (nil, nil) (nilnil).
+	ch := make(chan runner.RunEvent)
+	close(ch)
+	return ch, nil
 }
 
 func (f *blockingFakeDriver) Test(context.Context) runner.ConnectionTestResult {
@@ -819,7 +837,13 @@ func (f *delayedCloseFakeDriver) Decide(runner.PermissionDecision) {}
 func (f *delayedCloseFakeDriver) Cancel()                          {}
 func (f *delayedCloseFakeDriver) Input(string) error               { return nil }
 func (f *delayedCloseFakeDriver) Resume(context.Context, string) (<-chan runner.RunEvent, error) {
-	return nil, nil
+	// Resume is unused by this fake's scenarios; return an already-closed
+	// channel (rather than nil, nil) so a caller ranging over it sees an
+	// immediately-completed empty run instead of a nil channel that would
+	// block forever, and so the return isn't an ambiguous (nil, nil) (nilnil).
+	ch := make(chan runner.RunEvent)
+	close(ch)
+	return ch, nil
 }
 
 func (f *delayedCloseFakeDriver) Test(context.Context) runner.ConnectionTestResult {

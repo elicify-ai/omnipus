@@ -184,14 +184,13 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 // deepCopyConfig returns a deep copy of cfg via JSON round-trip. It is called
 // exactly once at boot to produce the appliedConfig snapshot; the original cfg
 // may be mutated by hot-reload afterward without affecting the snapshot.
-// Returns (nil, nil) when cfg is nil. Returns a non-nil error when the
-// JSON round-trip fails — callers must abort boot on error, otherwise the
-// pending-restart diff compares persisted config against an empty map and
-// incorrectly reports every gated key as pending.
+// cfg must be non-nil — callers check for a nil cfg themselves (see
+// mustDeepCopyConfig) since "no snapshot" and "round-trip failed" are
+// different outcomes that must not collapse into an ambiguous (nil, nil).
+// Returns a non-nil error when the JSON round-trip fails — callers must abort
+// boot on error, otherwise the pending-restart diff compares persisted config
+// against an empty map and incorrectly reports every gated key as pending.
 func deepCopyConfig(cfg *config.Config) (*config.Config, error) {
-	if cfg == nil {
-		return nil, nil
-	}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("pending-restart: failed to marshal boot config: %w", err)
@@ -209,6 +208,9 @@ func deepCopyConfig(cfg *config.Config) (*config.Config, error) {
 // appear pending immediately after boot, which is misleading and would
 // prevent the admin from ever clearing the restart banner.
 func mustDeepCopyConfig(cfg *config.Config) *config.Config {
+	if cfg == nil {
+		return nil
+	}
 	snap, err := deepCopyConfig(cfg)
 	if err != nil {
 		// Panic here causes cmd/omnipus/main.go's recovery to write the

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -328,11 +329,11 @@ func LoginDeviceCode(cfg OAuthProviderConfig) (*AuthCredential, error) {
 		case <-ticker.C:
 			cred, pollErr := pollDeviceCode(cfg, deviceResp.DeviceAuthID, deviceResp.UserCode)
 			if pollErr != nil {
-				if pollErr == errDeviceAuthPending {
+				if errors.Is(pollErr, errDeviceAuthPending) {
 					// Normal: user hasn't approved yet — keep polling.
 					continue
 				}
-				if pollErr == errDeviceAuthDenied {
+				if errors.Is(pollErr, errDeviceAuthDenied) {
 					// Fatal: user explicitly denied — abort.
 					return nil, fmt.Errorf("device code authentication denied by user")
 				}

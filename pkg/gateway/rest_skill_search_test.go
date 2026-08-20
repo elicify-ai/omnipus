@@ -8,6 +8,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,8 +43,13 @@ func (f *fakeSkillRegistry) Search(_ context.Context, query string, limit int) (
 	return f.results, nil
 }
 
+// GetSkillMeta is unused by this file's scenarios (they exercise Search and
+// DownloadAndInstall only); return a distinct error rather than (nil, nil)
+// so a caller cannot mistake "no metadata, no error" for a real lookup miss.
+var errFakeSkillRegistryGetSkillMetaUnused = errors.New("fakeSkillRegistry: GetSkillMeta not stubbed for this test")
+
 func (f *fakeSkillRegistry) GetSkillMeta(_ context.Context, _ string) (*skills.SkillMeta, error) {
-	return nil, nil
+	return nil, errFakeSkillRegistryGetSkillMetaUnused
 }
 
 func (f *fakeSkillRegistry) DownloadAndInstall(_ context.Context, _, _, _ string) (*skills.InstallResult, error) {

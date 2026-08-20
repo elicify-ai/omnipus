@@ -576,7 +576,9 @@ func TestServeWeb_PreviewListenerEndToEnd(t *testing.T) {
 	// Bind a real listener on an ephemeral port.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := ln.Addr().(*net.TCPAddr).Port
+	lnAddr, lnAddrOk := ln.Addr().(*net.TCPAddr)
+	require.True(t, lnAddrOk, "listener address must be a *net.TCPAddr")
+	port := lnAddr.Port
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/preview/", api.HandlePreview)

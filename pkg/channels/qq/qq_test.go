@@ -841,7 +841,7 @@ func (f *fakeQQAPI) WS(
 	map[string]string,
 	string,
 ) (*dto.WebsocketAP, error) {
-	return nil, nil
+	return nil, errors.New("fakeQQAPI: WS not implemented")
 }
 
 func (f *fakeQQAPI) PostGroupMessage(

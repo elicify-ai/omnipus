@@ -40,7 +40,9 @@ func (f *fakeTransport) ReadInbox(_ context.Context, limit int, unseenOnly bool)
 }
 
 func (f *fakeTransport) Search(context.Context, string, int) ([]Message, error) { return nil, nil }
-func (f *fakeTransport) ReadMessage(context.Context, uint32) (*Message, error)  { return nil, nil }
+func (f *fakeTransport) ReadMessage(context.Context, uint32) (*Message, error) {
+	return nil, errors.New("fakeTransport: ReadMessage not implemented")
+}
 func (f *fakeTransport) Send(context.Context, SendRequest) error                { return nil }
 func (f *fakeTransport) MarkSeen(_ context.Context, uid uint32) error {
 	f.seen[uid] = true
@@ -198,7 +200,7 @@ func (f *failingMarkSeenTransport) Search(context.Context, string, int) ([]Messa
 }
 
 func (f *failingMarkSeenTransport) ReadMessage(context.Context, uint32) (*Message, error) {
-	return nil, nil
+	return nil, errors.New("failingMarkSeenTransport: ReadMessage not implemented")
 }
 func (f *failingMarkSeenTransport) Send(context.Context, SendRequest) error { return nil }
 func (f *failingMarkSeenTransport) MarkSeen(_ context.Context, uid uint32) error {

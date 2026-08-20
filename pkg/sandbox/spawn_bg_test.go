@@ -1,6 +1,7 @@
 package sandbox_test
 
 import (
+	"errors"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -86,7 +87,8 @@ func TestSpawnBackgroundChild_EnvMerging(t *testing.T) {
 	}
 	if err := cmd.Wait(); err != nil {
 		// sh -c "env > file" exits 0; any non-zero exit is unexpected.
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			t.Fatalf("sh -c env: exit %d", ee.ExitCode())
 		}
 		t.Fatalf("cmd.Wait: %v", err)

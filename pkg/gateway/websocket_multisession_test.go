@@ -22,6 +22,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -96,7 +97,7 @@ func newStreamingTestWSHandler(t *testing.T) (*WSHandler, *bus.MessageBus, *agen
 	runDone := make(chan struct{})
 	go func() {
 		defer close(runDone)
-		if err := al.Run(ctx); err != nil && err != context.Canceled {
+		if err := al.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			t.Logf("agent loop Run exited: %v", err)
 		}
 	}()

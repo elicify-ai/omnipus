@@ -648,12 +648,20 @@ func TestWorkspaceLibrary_AuditCascadeDelete(t *testing.T) {
 		t.Fatalf("no media.cascade_delete audit record found in %d entries", len(records))
 	}
 
-	if got := len(cascade.Details["media_ids"].([]any)); got != len(files) {
+	mediaIDsRaw, ok := cascade.Details["media_ids"].([]any)
+	if !ok {
+		t.Fatalf("Details[media_ids] is not []any: %T", cascade.Details["media_ids"])
+	}
+	if got := len(mediaIDsRaw); got != len(files) {
 		t.Fatalf("Details[media_ids] length = %d, want %d", got, len(files))
 	}
 	mediaIDs := make([]string, 0, len(files))
-	for _, raw := range cascade.Details["media_ids"].([]any) {
-		mediaIDs = append(mediaIDs, raw.(string))
+	for _, raw := range mediaIDsRaw {
+		s, ok := raw.(string)
+		if !ok {
+			t.Fatalf("Details[media_ids] element is not string: %T", raw)
+		}
+		mediaIDs = append(mediaIDs, s)
 	}
 	sortedMediaIDs := append([]string(nil), mediaIDs...)
 	sortStrings(sortedMediaIDs)
@@ -668,9 +676,17 @@ func TestWorkspaceLibrary_AuditCascadeDelete(t *testing.T) {
 		}
 	}
 
+	filenamesRaw, ok := cascade.Details["filenames"].([]any)
+	if !ok {
+		t.Fatalf("Details[filenames] is not []any: %T", cascade.Details["filenames"])
+	}
 	filenames := make([]string, 0, len(files))
-	for _, raw := range cascade.Details["filenames"].([]any) {
-		filenames = append(filenames, raw.(string))
+	for _, raw := range filenamesRaw {
+		s, ok := raw.(string)
+		if !ok {
+			t.Fatalf("Details[filenames] element is not string: %T", raw)
+		}
+		filenames = append(filenames, s)
 	}
 	if got := len(filenames); got != len(files) {
 		t.Fatalf("Details[filenames] length = %d, want %d", got, len(files))

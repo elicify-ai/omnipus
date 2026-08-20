@@ -115,6 +115,12 @@ var ErrRunNotFound = errors.New("task: run not found")
 // for the same run_id.
 var ErrRunAlreadyClosed = errors.New("task: run already closed")
 
+// errNoOpenRun is findOpenRunLocked's internal "no match" sentinel: either
+// the task has no runs dir yet, or none of its day files have a currently-
+// open run matching the requested occurrence. It never escapes this file —
+// OpenRun (the sole caller) translates it into existing == nil.
+var errNoOpenRun = errors.New("task: no open run found")
+
 // TaskRun is one execution record for a task (ADR-050, additive run-history
 // layer). Event-sourced: OpenRun appends an "open" record (Status:
 // StatusInProgress, EndedAt: nil) to the task's runs/<day>.jsonl file;
@@ -301,7 +307,7 @@ func (s *Store) findOpenRunLocked(taskID string, occurrenceMs *int64) (*TaskRun,
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, errNoOpenRun
 		}
 		return nil, fmt.Errorf("task: list runs dir %q: %w", dir, err)
 	}
@@ -345,7 +351,7 @@ func (s *Store) findOpenRunLocked(taskID string, occurrenceMs *int64) (*TaskRun,
 			}
 		}
 	}
-	return nil, nil
+	return nil, errNoOpenRun
 }
 
 // appendRunRecord appends rec as one JSONL line to taskID's run day file for
@@ -436,7 +442,7 @@ func (s *Store) OpenRun(taskID string, occurrenceMs *int64, kind RunKind, sessio
 	defer mu.Unlock()
 
 	existing, err := s.findOpenRunLocked(taskID, occurrenceMs)
-	if err != nil {
+	if err != nil && !errors.Is(err, errNoOpenRun) {
 		return nil, false, err
 	}
 	if existing != nil {

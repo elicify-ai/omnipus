@@ -104,7 +104,15 @@ func gzipHandler(next http.Handler) http.Handler {
 			return
 		}
 
-		gz := gzipPool.Get().(*gzip.Writer)
+		gz, ok := gzipPool.Get().(*gzip.Writer)
+		if !ok {
+			// Defensive/unreachable: gzipPool's New always returns
+			// *gzip.Writer and nothing else is ever Put into this pool.
+			// Fail closed by skipping compression rather than panicking
+			// the request.
+			next.ServeHTTP(w, r)
+			return
+		}
 		gz.Reset(w)
 		defer func() {
 			gz.Close()

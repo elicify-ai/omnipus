@@ -8,6 +8,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -188,7 +189,7 @@ func killProcess(pid int) error {
 
 	// Send SIGTERM for graceful shutdown.
 	if err := proc.Signal(syscall.SIGTERM); err != nil {
-		if err == syscall.ESRCH {
+		if errors.Is(err, syscall.ESRCH) {
 			// Process already gone — that's fine.
 			slog.Debug("daemon: SIGTERM: process already gone", "pid", pid)
 			return nil
@@ -209,7 +210,7 @@ func killProcess(pid int) error {
 
 	// Grace period expired — escalate to SIGKILL.
 	slog.Warn("daemon: grace period expired; sending SIGKILL", "pid", pid)
-	if err := proc.Signal(syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+	if err := proc.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("daemon: SIGKILL pid %d: %w", pid, err)
 	}
 

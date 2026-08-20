@@ -63,7 +63,10 @@ func TestParseJSONLEvents_ToolCallExtraction(t *testing.T) {
 		Type: "item.completed",
 		Item: &codexEventItem{ID: "item_1", Type: "agent_message", Text: toolCallText},
 	}
-	itemJSON, _ := json.Marshal(item)
+	itemJSON, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 	usageEvt := `{"type":"turn.completed","usage":{"input_tokens":50,"cached_input_tokens":0,"output_tokens":20}}`
 	events := `{"type":"turn.started"}` + "\n" + string(itemJSON) + "\n" + usageEvt
 
@@ -99,7 +102,10 @@ func TestParseJSONLEvents_MultipleToolCalls(t *testing.T) {
 		Type: "item.completed",
 		Item: &codexEventItem{ID: "item_1", Type: "agent_message", Text: toolCallText},
 	}
-	itemJSON, _ := json.Marshal(item)
+	itemJSON, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 	events := `{"type":"turn.started"}` + "\n" + string(itemJSON) + "\n" + `{"type":"turn.completed"}`
 
 	resp, err := p.parseJSONLEvents(events)

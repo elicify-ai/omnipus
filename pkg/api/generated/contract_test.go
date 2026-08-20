@@ -798,8 +798,10 @@ func TestContract_LoginResponse_Differentiation(t *testing.T) {
 	f1 := FixtureLoginResponse_Populated()
 	f2 := FixtureLoginResponse_Edge()
 
-	raw1, _ := json.Marshal(f1)
-	raw2, _ := json.Marshal(f2)
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
 
 	assert.NotEqual(t, string(raw1), string(raw2),
 		"two different fixtures must produce different JSON (differentiation test)")
@@ -2152,8 +2154,10 @@ func TestContract_AuditLogToggleRequest_Edge(t *testing.T) {
 func TestContract_AuditLogToggleRequest_Differentiation(t *testing.T) {
 	f1 := FixtureAuditLogToggleRequest_Populated() // enabled=true
 	f2 := FixtureAuditLogToggleRequest_Edge()      // enabled=false
-	raw1, _ := json.Marshal(f1)
-	raw2, _ := json.Marshal(f2)
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
 	assert.NotEqual(t, string(raw1), string(raw2),
 		"enabled=true and enabled=false must produce different JSON")
 	mustPassComponent(t, "AuditLogToggleRequest", f1)
@@ -2538,8 +2542,10 @@ func TestContract_BackupCreateResponse_Edge(t *testing.T) {
 func TestContract_BackupCreateResponse_Differentiation(t *testing.T) {
 	f1 := FixtureBackupCreateResponse_Populated()
 	f2 := FixtureBackupCreateResponse_Edge()
-	raw1, _ := json.Marshal(f1)
-	raw2, _ := json.Marshal(f2)
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
 	assert.NotEqual(t, string(raw1), string(raw2),
 		"two different BackupCreateResponse fixtures must produce different JSON")
 	mustPassComponent(t, "BackupCreateResponse", f1)
@@ -2753,8 +2759,10 @@ func TestContract_OnboardingStatusResponse_MissingField(t *testing.T) {
 func TestContract_OnboardingStatusResponse_Differentiation(t *testing.T) {
 	doc1 := map[string]any{"onboarding_complete": true}
 	doc2 := map[string]any{"onboarding_complete": false}
-	raw1, _ := json.Marshal(doc1)
-	raw2, _ := json.Marshal(doc2)
+	raw1, err := json.Marshal(doc1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(doc2)
+	require.NoError(t, err)
 	assert.NotEqual(t, string(raw1), string(raw2),
 		"true vs false onboarding_complete must produce different JSON")
 }

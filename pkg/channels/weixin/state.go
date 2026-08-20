@@ -98,7 +98,7 @@ func loadContextTokens(path string) (map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return map[string]string{}, nil
 		}
 		return nil, err
 	}

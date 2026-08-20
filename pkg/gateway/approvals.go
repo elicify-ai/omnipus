@@ -60,6 +60,8 @@ func (s ApprovalState) isTerminal() bool {
 		ApprovalStateDeniedSaturated,
 		ApprovalStateDeniedBatchShortCircuit:
 		return true
+	case ApprovalStatePending:
+		return false
 	}
 	return false
 }

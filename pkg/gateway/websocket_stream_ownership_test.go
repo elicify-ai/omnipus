@@ -354,6 +354,7 @@ func TestClaimStreamOwnership_FreshClaimIsNotReclaimed(t *testing.T) {
 
 	actual, loaded := owners.Load("chat-fresh")
 	require.True(t, loaded)
-	claim := actual.(streamOwnerClaim)
+	claim, claimOk := actual.(streamOwnerClaim)
+	require.True(t, claimOk, "stored owner must be a streamOwnerClaim")
 	assert.Equal(t, "turn-current-owner", claim.turnID, "the original owner's claim must be untouched")
 }

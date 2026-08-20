@@ -50,8 +50,19 @@ func writeValidResponse(w http.ResponseWriter) {
 			"output_tokens_details": map[string]any{"reasoning_tokens": 0},
 		},
 	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if _, err := w.Write(data); err != nil {
+		// The test server's ResponseWriter failed mid-response; nothing more
+		// can be done here since the handler has already returned status 200
+		// implicitly on the first Write. Nothing to report to (no *testing.T
+		// in this helper's signature).
+		return
+	}
 }
 
 func TestProviderChat_AzureURLConstruction(t *testing.T) {

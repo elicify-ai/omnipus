@@ -15,6 +15,7 @@ package gateway
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -199,21 +200,8 @@ func TestGatewayBoot_MissingCredentialRefFailsFast(t *testing.T) {
 	hasNotFound := false
 	for _, e := range bundleErrs {
 		var nfe *credentials.NotFoundError
-		var curr error = e
-		for curr != nil {
-			if _, ok := curr.(*credentials.NotFoundError); ok {
-				hasNotFound = true
-				_ = nfe
-				break
-			}
-			type unwrapper interface{ Unwrap() error }
-			if u, ok := curr.(unwrapper); ok {
-				curr = u.Unwrap()
-			} else {
-				break
-			}
-		}
-		if hasNotFound {
+		if errors.As(e, &nfe) {
+			hasNotFound = true
 			break
 		}
 	}

@@ -703,10 +703,11 @@ func drainSmokeTestRun(
 				return strings.TrimSpace(sb.String()), false, sanitized
 			case runner.EventKindPermissionRequest:
 				return strings.TrimSpace(sb.String()), false, smokeTestPermissionDeniedErr
+			case runner.EventKindStart, runner.EventKindToolCall, runner.EventKindDiff,
+				runner.EventKindEnd, runner.EventKindToolResult:
+				// Ignored for the smoke test's purposes: it is a trivial Q&A
+				// that carries no further signal for a pass/fail verdict.
 			}
-			// Other event kinds (start/tool-call/diff/tool-result) are
-			// ignored for the smoke test's purposes: it is a trivial Q&A
-			// that carries no further signal for a pass/fail verdict.
 		}
 	}
 }

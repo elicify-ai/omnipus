@@ -3632,6 +3632,13 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				watchdogReason = "parent_timeout"
 			case agent.TurnEndStatusCompleted:
 				watchdogReason = "parent_done_early"
+			case agent.TurnEndStatusParked:
+				// Behavior-preserving: this previously fell through the
+				// `default` branch below to "unknown" (Parked was not a
+				// distinct case). Kept identical here rather than guessing
+				// a more specific wire value without frontend confirmation
+				// of what consumes it.
+				watchdogReason = "unknown"
 			default:
 				watchdogReason = "unknown"
 			}
@@ -4034,12 +4041,16 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 					slog.Error("ws: failed to marshal whatsapp_pairing frame for cache",
 						"channel_id", p.ChannelID, "error", merr)
 				}
-			case channels.PairingStatusLinked, channels.PairingStatusTimeout, channels.PairingStatusError:
-				h.lastPairingState.Delete(p.ChannelID)
-			default:
-				// PairingStatusWaiting and any future statuses that are not
+			case channels.PairingStatusLinked, channels.PairingStatusTimeout, channels.PairingStatusError,
+				channels.PairingStatusWaiting:
+				// PairingStatusWaiting and any other status that is not
 				// "code" must not leave a stale QR in the cache — evict so a
 				// late subscriber is not shown an outdated code.
+				h.lastPairingState.Delete(p.ChannelID)
+			default:
+				// Any future status not yet in this switch: same fail-safe
+				// eviction as above, so an unrecognized status never leaves
+				// a stale QR behind.
 				h.lastPairingState.Delete(p.ChannelID)
 			}
 			if !wc.wantsPairing(p.ChannelID) {
@@ -4199,6 +4210,18 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				runF.OccurrenceMs = &ms
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeTaskRunStatus), runF)
+
+		case agent.EventKindLLMRequest, agent.EventKindLLMDelta, agent.EventKindLLMResponse,
+			agent.EventKindLLMRetry, agent.EventKindContextCompress, agent.EventKindSessionSummarize,
+			agent.EventKindToolExecSkipped, agent.EventKindSteeringInjected, agent.EventKindFollowUpQueued,
+			agent.EventKindInterruptReceived, agent.EventKindSubTurnResultDelivered, agent.EventKindSubTurnOrphan,
+			agent.EventKindTurnTimeout, agent.EventKindEmptyResponseRetry, agent.EventKindCompactionRetry,
+			agent.EventKindBackgroundProcessKill:
+			// Not part of the live WS wire protocol — this forwarder only
+			// translates the kinds handled above into browser frames.
+			// Behavior-preserving: previously these fell through the switch
+			// unmatched (no default case existed), which is a silent no-op
+			// identical to this explicit, empty case.
 		}
 	}
 }

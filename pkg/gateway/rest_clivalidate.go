@@ -194,6 +194,9 @@ func (a *restAPI) validateCLI(ctx context.Context, cli, cliPath string) gen.CliV
 		// A target was found and spawned but did not report a version — surface
 		// the resolved path (no version).
 		resolved = strPtr(absResolvePath(cliPath))
+	case gen.CliValidateResponseReasonMissingBinary, gen.CliValidateResponseReasonUnknownCli:
+		// No binary was found/spawned for these reasons, so there is nothing
+		// to resolve — resolved and version stay nil.
 	}
 	return buildCliValidateResponse(reason, resolved, version)
 }

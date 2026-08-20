@@ -99,7 +99,10 @@ func TestParseResponseBody_NoCacheTokens_ZeroCacheFields(t *testing.T) {
 		},
 	}
 
-	body, _ := json.Marshal(apiResp)
+	body, err := json.Marshal(apiResp)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 	resp, err := parseResponseBody(body)
 	if err != nil {
 		t.Fatalf("parseResponseBody() error = %v", err)

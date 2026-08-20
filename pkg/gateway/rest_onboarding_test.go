@@ -419,7 +419,8 @@ func TestHandleCompleteOnboarding_ThenLogin(t *testing.T) {
 	require.Equal(t, http.StatusOK, onboardingW.Code)
 	var onboardingResp map[string]any
 	require.NoError(t, json.Unmarshal(onboardingW.Body.Bytes(), &onboardingResp))
-	onboardingToken := onboardingResp["token"].(string)
+	onboardingToken, onboardingTokenOk := onboardingResp["token"].(string)
+	require.True(t, onboardingTokenOk, "onboarding response token must be a string")
 	assert.NotEmpty(t, onboardingToken, "onboarding must return a token")
 
 	// Step 2: Login with the admin credentials
@@ -431,7 +432,8 @@ func TestHandleCompleteOnboarding_ThenLogin(t *testing.T) {
 	require.Equal(t, http.StatusOK, loginW.Code)
 	var loginResp map[string]any
 	require.NoError(t, json.Unmarshal(loginW.Body.Bytes(), &loginResp))
-	loginToken := loginResp["token"].(string)
+	loginToken, loginTokenOk := loginResp["token"].(string)
+	require.True(t, loginTokenOk, "login response token must be a string")
 	assert.NotEmpty(t, loginToken, "login must return a token")
 
 	// Step 3: Validate the login token.
@@ -512,7 +514,8 @@ func TestHandleCompleteOnboarding_PersistsAdmin(t *testing.T) {
 	tokens, ok := user["tokens"].([]any)
 	require.True(t, ok, "tokens set must be written by onboarding")
 	require.Len(t, tokens, 1, "onboarding issues exactly one bearer token")
-	entry := tokens[0].(map[string]any)
+	entry, entryOk := tokens[0].(map[string]any)
+	require.True(t, entryOk, "tokens[0] must be an object")
 	assert.NotEmpty(t, entry["hash"], "token entry hash must be set")
 	assert.NotEmpty(t, entry["id"], "token entry id must be set")
 }
@@ -736,8 +739,10 @@ func TestHandleCompleteOnboarding_Concurrent(t *testing.T) {
 	var configMap map[string]any
 	require.NoError(t, json.Unmarshal(configData, &configMap))
 
-	gateway := configMap["gateway"].(map[string]any)
-	users := gateway["users"].([]any)
+	gateway, gatewayOk := configMap["gateway"].(map[string]any)
+	require.True(t, gatewayOk, "config.gateway must be an object")
+	users, usersOk := gateway["users"].([]any)
+	require.True(t, usersOk, "config.gateway.users must be an array")
 	assert.Len(t, users, 1, "config.json must have exactly 1 admin user after concurrent calls (no duplication)")
 }
 
@@ -818,12 +823,14 @@ func TestHandleCompleteOnboarding_ConcurrentDifferentUsers(t *testing.T) {
 	var configMap map[string]any
 	require.NoError(t, json.Unmarshal(configData, &configMap))
 
-	gateway := configMap["gateway"].(map[string]any)
+	gateway, gatewayOk := configMap["gateway"].(map[string]any)
+	require.True(t, gatewayOk, "config.gateway must be an object")
 	usersRaw := gateway["users"]
 	if usersRaw == nil {
 		t.Fatal("gateway.users should not be nil")
 	}
-	users := usersRaw.([]any)
+	users, usersOk := usersRaw.([]any)
+	require.True(t, usersOk, "config.gateway.users must be an array")
 	assert.Len(t, users, 1, "config.json must have exactly 1 user after concurrent calls")
 }
 
@@ -904,7 +911,9 @@ func TestHandleOnboardingProbeProvider_UpstreamUnauthorized(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, false, resp["success"])
-	assert.Contains(t, resp["error"].(string), "401")
+	errMsg, errMsgOk := resp["error"].(string)
+	require.True(t, errMsgOk, "response error field must be a string")
+	assert.Contains(t, errMsg, "401")
 }
 
 // TestHandleOnboardingProbeProvider_AlreadyComplete verifies that once

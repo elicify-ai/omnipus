@@ -121,7 +121,7 @@ func TestFallback_ContextCanceled(t *testing.T) {
 	}
 
 	_, err := fc.Execute(ctx, candidates, run)
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled, got %v", err)
 	}
 }

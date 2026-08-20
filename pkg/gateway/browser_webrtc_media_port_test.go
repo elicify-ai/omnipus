@@ -349,7 +349,9 @@ func TestHandleWebRTCOffer_MediaPortFallback_TellsTheViewerInThePanel(t *testing
 func TestSharedMediaTCP_ConfiguredPortBinds(t *testing.T) {
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	free := probe.Addr().(*net.TCPAddr).Port
+	probeAddr, probeAddrOk := probe.Addr().(*net.TCPAddr)
+	require.True(t, probeAddrOk, "listener address must be a *net.TCPAddr")
+	free := probeAddr.Port
 	require.NoError(t, probe.Close())
 
 	cfg := &config.Config{}
@@ -360,7 +362,9 @@ func TestSharedMediaTCP_ConfiguredPortBinds(t *testing.T) {
 	ln := h.sharedMediaTCP(cfg)
 	require.NotNil(t, ln)
 	t.Cleanup(func() { _ = ln.Close() })
-	got := ln.Addr().(*net.TCPAddr).Port
+	lnAddr, lnAddrOk := ln.Addr().(*net.TCPAddr)
+	require.True(t, lnAddrOk, "listener address must be a *net.TCPAddr")
+	got := lnAddr.Port
 	require.Equal(t, free, got)
 	require.Same(t, ln, h.sharedMediaTCP(cfg), "ICE-TCP listener must be bound once and reused")
 }
@@ -378,7 +382,9 @@ func TestSharedMediaTCP_BindFailure_IsUserVisible(t *testing.T) {
 	blocker, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() { _ = blocker.Close() }()
-	taken := blocker.Addr().(*net.TCPAddr).Port
+	blockerAddr, blockerAddrOk := blocker.Addr().(*net.TCPAddr)
+	require.True(t, blockerAddrOk, "listener address must be a *net.TCPAddr")
+	taken := blockerAddr.Port
 
 	cfg := &config.Config{}
 	cfg.Tools.Browser.WebRTCMediaTCPPort = taken

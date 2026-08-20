@@ -102,7 +102,12 @@ func TestSetAgentMailbox_RoutesPasswordToCredentialStore(t *testing.T) {
 	assert.NotContains(t, string(raw), "app-pass-123", "plaintext password leaked into config.json")
 	var disk map[string]any
 	require.NoError(t, json.Unmarshal(raw, &disk))
-	mb := disk["mailboxes"].(map[string]any)["mia"].(map[string]any)["ws_my"].(map[string]any)
+	mailboxesMap, mailboxesMapOk := disk["mailboxes"].(map[string]any)
+	require.True(t, mailboxesMapOk, "config.mailboxes must be an object")
+	miaMap, miaMapOk := mailboxesMap["mia"].(map[string]any)
+	require.True(t, miaMapOk, "config.mailboxes.mia must be an object")
+	mb, mbOk := miaMap["ws_my"].(map[string]any)
+	require.True(t, mbOk, "config.mailboxes.mia.ws_my must be an object")
 	assert.Equal(t, "mailbox_mia_ws_my_password", mb["password_ref"])
 	_, hasInline := mb["password"]
 	assert.False(t, hasInline, "inline password must not be persisted")
@@ -394,7 +399,10 @@ func TestDeleteAgentMailbox_OnePairLeavesOtherIntact(t *testing.T) {
 	require.NoError(t, err)
 	var disk map[string]any
 	require.NoError(t, json.Unmarshal(raw, &disk))
-	agentEntry := disk["mailboxes"].(map[string]any)["mia"].(map[string]any)
+	mailboxesMap, mailboxesMapOk := disk["mailboxes"].(map[string]any)
+	require.True(t, mailboxesMapOk, "config.mailboxes must be an object")
+	agentEntry, agentEntryOk := mailboxesMap["mia"].(map[string]any)
+	require.True(t, agentEntryOk, "config.mailboxes.mia must be an object")
 	_, hasA := agentEntry["ws_a"]
 	assert.False(t, hasA, "ws_a pair must be removed from config.json")
 	_, hasB := agentEntry["ws_b"]

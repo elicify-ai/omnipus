@@ -99,7 +99,10 @@ func TestSerializeMessages_PlainText(t *testing.T) {
 	}
 	result := SerializeMessages(messages)
 
-	data, _ := json.Marshal(result)
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 	var msgs []map[string]any
 	json.Unmarshal(data, &msgs)
 
@@ -117,7 +120,10 @@ func TestSerializeMessages_WithMedia(t *testing.T) {
 	}
 	result := SerializeMessages(messages)
 
-	data, _ := json.Marshal(result)
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 	var msgs []map[string]any
 	json.Unmarshal(data, &msgs)
 
@@ -136,7 +142,10 @@ func TestSerializeMessages_WithAudioMedia(t *testing.T) {
 	}
 	result := SerializeMessages(messages)
 
-	data, _ := json.Marshal(result)
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 	var msgs []map[string]any
 	json.Unmarshal(data, &msgs)
 
@@ -174,7 +183,10 @@ func TestSerializeMessages_MediaWithToolCallID(t *testing.T) {
 	}
 	result := SerializeMessages(messages)
 
-	data, _ := json.Marshal(result)
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 	var msgs []map[string]any
 	json.Unmarshal(data, &msgs)
 
@@ -195,7 +207,10 @@ func TestSerializeMessages_StripsSystemParts(t *testing.T) {
 	}
 	result := SerializeMessages(messages)
 
-	data, _ := json.Marshal(result)
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 	if strings.Contains(string(data), "system_parts") {
 		t.Error("system_parts should not appear in serialized output")
 	}
@@ -650,8 +665,8 @@ func TestHandleErrorResponse_PreservesFullBodyUpToCap(t *testing.T) {
 	got := HandleErrorResponse(resp, server.URL)
 	require.NotNil(t, got, "HandleErrorResponse must return non-nil")
 
-	pe, ok := got.(*ProviderError)
-	require.True(t, ok, "HandleErrorResponse must return *ProviderError (not a plain error)")
+	var pe *ProviderError
+	require.True(t, errors.As(got, &pe), "HandleErrorResponse must return *ProviderError (not a plain error)")
 	assert.Equal(t, http.StatusBadRequest, pe.Status)
 	assert.Contains(
 		t,
@@ -709,8 +724,8 @@ func TestHandleErrorResponse_PartialBodyOnReadFailure(t *testing.T) {
 	got := HandleErrorResponse(resp, server.URL)
 	require.NotNil(t, got, "HandleErrorResponse must return non-nil even on partial reads")
 
-	pe, ok := got.(*ProviderError)
-	if !ok {
+	var pe *ProviderError
+	if !errors.As(got, &pe) {
 		// On certain read-error shapes (e.g. unexpected-EOF that fully
 		// empties the body) we may return a plain error. Either outcome
 		// is fine — the contract is "never silently lose all body".
@@ -744,8 +759,8 @@ func TestHandleErrorResponse_BodyTruncatedFlag(t *testing.T) {
 	defer resp.Body.Close()
 
 	got := HandleErrorResponse(resp, server.URL)
-	pe, ok := got.(*ProviderError)
-	require.True(t, ok)
+	var pe *ProviderError
+	require.True(t, errors.As(got, &pe))
 	assert.True(t, pe.BodyTruncated,
 		"a body at the cap exactly must surface BodyTruncated=true — the LimitReader cut off further bytes")
 	assert.Equal(t, http.StatusBadRequest, pe.Status)
@@ -780,8 +795,8 @@ func TestProviderError_Error_ReflectsBodyTruncated(t *testing.T) {
 // uniformly across every error path.
 func TestWrapHTMLResponseError_ReturnsProviderError(t *testing.T) {
 	got := WrapHTMLResponseError(502, []byte("<html>bad</html>"), "text/html", "https://api.example.com")
-	pe, ok := got.(*ProviderError)
-	require.True(t, ok, "WrapHTMLResponseError must return *ProviderError (not a plain error)")
+	var pe *ProviderError
+	require.True(t, errors.As(got, &pe), "WrapHTMLResponseError must return *ProviderError (not a plain error)")
 	assert.Equal(t, 502, pe.Status)
 	assert.Equal(t, "text/html", pe.ContentType)
 	assert.Contains(t, pe.Body, "<html>")

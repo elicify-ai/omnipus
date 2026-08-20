@@ -104,7 +104,8 @@ func TestToolResultLazyFetch_DifferentInputsDifferentOutputs(t *testing.T) {
 
 		sentinel, offloaded := maybeOffloadResult(store, "sess-diff", encoded)
 		require.True(t, offloaded)
-		ref := sentinel.(generated.ToolResultRef)
+		ref, refOk := sentinel.(generated.ToolResultRef)
+		require.True(t, refOk, "offloaded sentinel must be a generated.ToolResultRef")
 
 		req := newTestReq(t, http.MethodGet, "/api/v1/sessions/sess-diff/tool-results/"+ref.Ref, nil)
 		rw := newTestRW()

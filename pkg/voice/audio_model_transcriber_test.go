@@ -33,7 +33,7 @@ func (p *fakeLLMProvider) Chat(
 	options map[string]any,
 ) (*providers.LLMResponse, error) {
 	if p.chatFunc == nil {
-		return nil, nil
+		return nil, errors.New("fakeLLMProvider: chatFunc not set")
 	}
 	return p.chatFunc(ctx, messages, tools, model, options)
 }

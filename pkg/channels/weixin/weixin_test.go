@@ -102,7 +102,7 @@ func TestDownloadAndDecryptCDNBufferUsesFullURLWhenProvided(t *testing.T) {
 					}, nil
 				}
 				t.Fatalf("unexpected fallback request: %s", r.URL.String())
-				return nil, nil
+				return nil, errors.New("unreachable: t.Fatalf halts the test goroutine")
 			})},
 		},
 		config: config.WeixinConfig{

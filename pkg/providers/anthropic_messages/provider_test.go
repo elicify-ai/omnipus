@@ -642,7 +642,10 @@ func TestBuildRequestBody_UserToolResultsMerged(t *testing.T) {
 		t.Fatalf("expected 3 API messages, got %d", len(apiMessages))
 	}
 
-	toolResultMsg := apiMessages[2].(map[string]any)
+	toolResultMsg, ok := apiMessages[2].(map[string]any)
+	if !ok {
+		t.Fatalf("apiMessages[2] is not map[string]any: %T", apiMessages[2])
+	}
 	content, ok := toolResultMsg["content"].([]map[string]any)
 	if !ok {
 		t.Fatalf("content is not []map[string]any: %T", toolResultMsg["content"])

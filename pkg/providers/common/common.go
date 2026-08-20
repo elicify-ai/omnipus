@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -503,7 +504,7 @@ func ReadAndParseResponse(resp *http.Response, apiBase string) (*LLMResponse, er
 	contentType := resp.Header.Get("Content-Type")
 	reader := bufio.NewReader(resp.Body)
 	prefix, err := reader.Peek(256)
-	if err != nil && err != io.EOF && err != bufio.ErrBufferFull {
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) {
 		return nil, fmt.Errorf("failed to inspect response: %w", err)
 	}
 	if LooksLikeHTML(prefix, contentType) {

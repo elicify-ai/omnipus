@@ -65,6 +65,27 @@ func NewToolRegistry() *ToolRegistry {
 	}
 }
 
+// reservedButPrivilegedToolNames is the curated, explicit set of names
+// inside the reserved "system." namespace (FR-060) that Omnipus's own
+// (never MCP-supplied) code is entitled to register on this per-agent
+// registry despite validateReservedToolName's general rejection of the
+// prefix. Today this is exactly "system.shutdown" — the privileged control
+// operation backing FUNC-36 (graceful shutdown) — reserved here so no
+// MCP-supplied tool can ever squat on the name before Omnipus's own
+// implementation exists to claim it (the #278 hijack scenario the "system."
+// prefix rule exists to prevent in the first place). A name landing in this
+// map is still fully subject to the ordinary collision-protection rule in
+// registerToolLocked: only the FIRST registration under the name succeeds,
+// and any later same-name registration — MCP-supplied or not — is rejected
+// exactly like "exec"/"bash". This set is intentionally NOT consulted by
+// BuiltinRegistry.ValidateMCPName (builtin_registry.go): the central MCP
+// admission path stays unconditionally closed to the entire "system."
+// prefix, with no exceptions, because that path exists specifically to
+// keep MCP servers out of it.
+var reservedButPrivilegedToolNames = map[string]bool{
+	"system.shutdown": true,
+}
+
 // registerToolLocked saves a tool entry into the registry. Must be called
 // with r.mu held. warnOnOverwrite distinguishes a genuinely unexpected
 // name collision (Register/RegisterHidden — rejected outright, see below)
@@ -92,17 +113,29 @@ func NewToolRegistry() *ToolRegistry {
 //     FR-060) is rejected unconditionally, even on first registration with
 //     no pre-existing collision — mirrors BuiltinRegistry.ValidateMCPName's
 //     check, which only runs on the separate central MCP registry today and
-//     is not consulted by this per-agent path at all.
+//     is not consulted by this per-agent path at all. The one exception is
+//     reservedButPrivilegedToolNames (below): a small, curated set of names
+//     Omnipus itself reserves inside the "system." namespace for its own
+//     future control operations. A name on that list is NOT exempt from
+//     BuiltinRegistry.ValidateMCPName — the central MCP admission path
+//     (mcp_registry.go) stays unconditional, so an MCP server can never
+//     claim it either — it is only exempt from THIS per-agent registry's
+//     blanket prefix rejection, so a genuine first-party registration of a
+//     reserved name is not blocked by the very rule meant to protect it,
+//     while a same-name collision against it is still caught by the
+//     ordinary collision-protection rule immediately below, exactly like
+//     "exec"/"bash".
 //   - RegisterReplacing (warnOnOverwrite false) is unaffected by the
 //     collision rule: it is the deliberate re-registration path (e.g.
 //     wirePlanToolsForAgent re-wiring the plan/task tool surface once
 //     plan.Store becomes available) and must keep overwriting on every
 //     call. It is still subject to the reserved-name check, since nothing
-//     legitimate is ever named under the "system." prefix.
+//     legitimate is ever named under the "system." prefix except the
+//     curated reservedButPrivilegedToolNames set.
 func (r *ToolRegistry) registerToolLocked(tool Tool, isCore bool, warnPrefix, debugLabel string, warnOnOverwrite bool) {
 	name := tool.Name()
 
-	if err := validateReservedToolName(name); err != nil {
+	if err := validateReservedToolName(name); err != nil && !reservedButPrivilegedToolNames[name] {
 		logger.WarnCF("tools", warnPrefix+" rejected: invalid tool name",
 			map[string]any{"name": name, "error": err.Error()})
 		return

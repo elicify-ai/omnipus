@@ -12,9 +12,6 @@ func init() {
 		"irc",
 		func(cfg *config.Config, instanceID string, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
 			inst := cfg.Channels[instanceID]
-			if !inst.Enabled {
-				return nil, nil
-			}
 			return NewIRCChannel(config.InstanceToIRC(inst), secrets, b)
 		},
 	)

@@ -641,13 +641,16 @@ func createAntigravityTokenSource() func() (string, string, error) {
 
 // FetchAntigravityProjectID retrieves the Google Cloud project ID from the loadCodeAssist endpoint.
 func FetchAntigravityProjectID(accessToken string) (string, error) {
-	reqBody, _ := json.Marshal(map[string]any{
+	reqBody, err := json.Marshal(map[string]any{
 		"metadata": map[string]any{
 			"ideType":    "IDE_UNSPECIFIED",
 			"platform":   "PLATFORM_UNSPECIFIED",
 			"pluginType": "GEMINI",
 		},
 	})
+	if err != nil {
+		return "", fmt.Errorf("marshaling loadCodeAssist request: %w", err)
+	}
 
 	req, err := http.NewRequest("POST", antigravityBaseURL+"/v1internal:loadCodeAssist", bytes.NewReader(reqBody))
 	if err != nil {
@@ -689,9 +692,12 @@ func FetchAntigravityProjectID(accessToken string) (string, error) {
 
 // FetchAntigravityModels fetches available models from the Cloud Code Assist API.
 func FetchAntigravityModels(accessToken, projectID string) ([]AntigravityModelInfo, error) {
-	reqBody, _ := json.Marshal(map[string]any{
+	reqBody, err := json.Marshal(map[string]any{
 		"project": projectID,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("marshaling fetchAvailableModels request: %w", err)
+	}
 
 	req, err := http.NewRequest("POST", antigravityBaseURL+"/v1internal:fetchAvailableModels", bytes.NewReader(reqBody))
 	if err != nil {

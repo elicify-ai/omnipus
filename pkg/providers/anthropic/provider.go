@@ -498,6 +498,18 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 		finishReason = "length"
 	case anthropic.StopReasonEndTurn:
 		finishReason = "stop"
+	case anthropic.StopReasonStopSequence:
+		finishReason = "stop"
+	case anthropic.StopReasonPauseTurn:
+		// Long-running turn (e.g. server-side tool use) paused mid-flight;
+		// the caller is expected to continue with the same request. This is
+		// NOT a completed turn, so it must not be coerced to "stop".
+		finishReason = "pause_turn"
+	case anthropic.StopReasonRefusal:
+		// Model declined to generate content for safety reasons; treat like
+		// the other providers' content-policy rejection (bedrock uses the
+		// same "content_filter" value for its analogous case).
+		finishReason = "content_filter"
 	}
 
 	// PromptTokens = plain (uncached) input; cache tokens are tracked separately.

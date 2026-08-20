@@ -477,7 +477,10 @@ func TestBootConfigRoundTrip_RemovedKeys_Rejected(t *testing.T) {
 			},
 		},
 	}
-	data, _ := json.MarshalIndent(raw, "", "  ")
+	data, marshalErr := json.MarshalIndent(raw, "", "  ")
+	if marshalErr != nil {
+		t.Fatalf("marshaling test config: %v", marshalErr)
+	}
 	if err := os.WriteFile(cfgPath, data, 0o600); err != nil {
 		t.Fatalf("writing test config: %v", err)
 	}
@@ -504,7 +507,10 @@ func TestBootConfigRoundTrip_DefaultsApplied(t *testing.T) {
 			},
 		},
 	}
-	data, _ := json.MarshalIndent(raw, "", "  ")
+	data, marshalErr := json.MarshalIndent(raw, "", "  ")
+	if marshalErr != nil {
+		t.Fatalf("marshaling test config: %v", marshalErr)
+	}
 	if err := os.WriteFile(cfgPath, data, 0o600); err != nil {
 		t.Fatalf("writing test config: %v", err)
 	}

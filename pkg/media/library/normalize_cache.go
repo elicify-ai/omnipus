@@ -148,7 +148,11 @@ func (c *lruCache) Get(key NormalizeCacheKey) ([]byte, bool) {
 	c.order.MoveToFront(el)
 	c.hits++
 	// Return a copy so callers cannot mutate the cached bytes.
-	src := el.Value.(*lruEntry).value
+	entry, ok := el.Value.(*lruEntry)
+	if !ok {
+		panic("media library: normalize cache: list element value is not *lruEntry")
+	}
+	src := entry.value
 	out := make([]byte, len(src))
 	copy(out, src)
 	return out, true
@@ -167,7 +171,11 @@ func (c *lruCache) Put(key NormalizeCacheKey, value []byte) {
 		c.order.MoveToFront(el)
 		stored := make([]byte, len(value))
 		copy(stored, value)
-		el.Value.(*lruEntry).value = stored
+		entry, ok := el.Value.(*lruEntry)
+		if !ok {
+			panic("media library: normalize cache: list element value is not *lruEntry")
+		}
+		entry.value = stored
 		c.puts++
 		return
 	}
@@ -182,7 +190,11 @@ func (c *lruCache) Put(key NormalizeCacheKey, value []byte) {
 			return
 		}
 		c.order.Remove(oldest)
-		delete(c.entries, oldest.Value.(*lruEntry).mapKey)
+		oldestEntry, ok := oldest.Value.(*lruEntry)
+		if !ok {
+			panic("media library: normalize cache: list element value is not *lruEntry")
+		}
+		delete(c.entries, oldestEntry.mapKey)
 	}
 }
 
