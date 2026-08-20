@@ -60,7 +60,7 @@ func startMemIMAP(t *testing.T, msgs [][]byte, seenUIDs map[int]bool) *Client {
 	if err != nil {
 		t.Fatalf("dial (append): %v", err)
 	}
-	if err := appendCl.Login(testIMAPUser, testIMAPPass).Wait(); err != nil {
+	if err = appendCl.Login(testIMAPUser, testIMAPPass).Wait(); err != nil {
 		t.Fatalf("login (append): %v", err)
 	}
 	for i, raw := range msgs {
@@ -69,13 +69,13 @@ func startMemIMAP(t *testing.T, msgs [][]byte, seenUIDs map[int]bool) *Client {
 			opts = &imap.AppendOptions{Flags: []imap.Flag{imap.FlagSeen}}
 		}
 		cmd := appendCl.Append("INBOX", int64(len(raw)), opts)
-		if _, err := cmd.Write(raw); err != nil {
+		if _, err = cmd.Write(raw); err != nil {
 			t.Fatalf("append write %d: %v", i, err)
 		}
-		if err := cmd.Close(); err != nil {
+		if err = cmd.Close(); err != nil {
 			t.Fatalf("append close %d: %v", i, err)
 		}
-		if _, err := cmd.Wait(); err != nil {
+		if _, err = cmd.Wait(); err != nil {
 			t.Fatalf("append wait %d: %v", i, err)
 		}
 	}
