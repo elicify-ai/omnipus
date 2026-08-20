@@ -330,6 +330,7 @@ describe('BrowserNavigateBlock — "Watch live" launcher', () => {
   it('renders the Watch live button on a completed navigate row', () => {
     render(
       <BrowserNavigateBlock
+        toolName="browser.navigate"
         args={{ url: 'https://example.com' }}
         result={{ title: 'Example', url: 'https://example.com' }}
         isRunning={false}
@@ -339,7 +340,7 @@ describe('BrowserNavigateBlock — "Watch live" launcher', () => {
   })
 
   it('renders the Watch live button on a still-running navigate row (not gated on status)', () => {
-    render(<BrowserNavigateBlock args={{ url: 'https://example.com' }} result={null} isRunning={true} />)
+    render(<BrowserNavigateBlock toolName="browser.navigate" args={{ url: 'https://example.com' }} result={null} isRunning={true} />)
     expect(screen.getByRole('button', { name: 'Watch live' })).toBeInTheDocument()
   })
 
@@ -348,6 +349,7 @@ describe('BrowserNavigateBlock — "Watch live" launcher', () => {
 
     render(
       <BrowserNavigateBlock
+        toolName="browser.navigate"
         args={{ url: 'https://example.com' }}
         result={{ title: 'Example' }}
         isRunning={false}
@@ -361,6 +363,7 @@ describe('BrowserNavigateBlock — "Watch live" launcher', () => {
   it('shows an error toast and does not open the panel when there is no active session', () => {
     render(
       <BrowserNavigateBlock
+        toolName="browser.navigate"
         args={{ url: 'https://example.com' }}
         result={{ title: 'Example' }}
         isRunning={false}
@@ -403,7 +406,7 @@ describe('BrowserNavigateBlock — flat text-line status dot', () => {
 
   it('running: indicator is the spinning icon, not a dot', () => {
     const { container } = render(
-      <BrowserNavigateBlock args={{ url: 'https://example.com' }} result={null} isRunning={true} />
+      <BrowserNavigateBlock toolName="browser.navigate" args={{ url: 'https://example.com' }} result={null} isRunning={true} />
     )
     const indicator = getIndicatorEl(container)
     expect(indicator?.tagName.toLowerCase()).toBe('svg')
@@ -413,6 +416,7 @@ describe('BrowserNavigateBlock — flat text-line status dot', () => {
   it('completed with a result: indicator is an 8px success-colored dot', () => {
     const { container } = render(
       <BrowserNavigateBlock
+        toolName="browser.navigate"
         args={{ url: 'https://example.com' }}
         result={{ title: 'Example', url: 'https://example.com' }}
         isRunning={false}
@@ -426,7 +430,7 @@ describe('BrowserNavigateBlock — flat text-line status dot', () => {
 
   it('error: indicator is an 8px error-colored dot', () => {
     const { container } = render(
-      <BrowserNavigateBlock args={{ url: 'https://example.com' }} result={null} isRunning={false} isError />
+      <BrowserNavigateBlock toolName="browser.navigate" args={{ url: 'https://example.com' }} result={null} isRunning={false} isError />
     )
     const indicator = getIndicatorEl(container)
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
@@ -434,7 +438,7 @@ describe('BrowserNavigateBlock — flat text-line status dot', () => {
 
   it('cancelled: indicator is an 8px muted-colored dot with a "Cancelled" label, not the red error dot', () => {
     const { container } = render(
-      <BrowserNavigateBlock args={{ url: 'https://example.com' }} result={null} isRunning={false} isCancelled />
+      <BrowserNavigateBlock toolName="browser.navigate" args={{ url: 'https://example.com' }} result={null} isRunning={false} isCancelled />
     )
     const indicator = getIndicatorEl(container)
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
@@ -444,7 +448,7 @@ describe('BrowserNavigateBlock — flat text-line status dot', () => {
 
   it('a completed navigate with no result (no error, no cancellation) still shows a status dot + "Done" label — no silent terminal row', () => {
     const { container } = render(
-      <BrowserNavigateBlock args={{ url: 'https://example.com' }} result={null} isRunning={false} />
+      <BrowserNavigateBlock toolName="browser.navigate" args={{ url: 'https://example.com' }} result={null} isRunning={false} />
     )
     const indicator = getIndicatorEl(container)
     expect(indicator).toBeTruthy()
@@ -452,7 +456,7 @@ describe('BrowserNavigateBlock — flat text-line status dot', () => {
   })
 
   it('button toggle: disabled and aria-expanded omitted while there is nothing to expand (not running, no result)', () => {
-    render(<BrowserNavigateBlock args={{ url: 'https://example.com' }} result={null} isRunning={false} />)
+    render(<BrowserNavigateBlock toolName="browser.navigate" args={{ url: 'https://example.com' }} result={null} isRunning={false} />)
     const toggle = screen.getByRole('button', { name: /browser\.navigate/ })
     expect(toggle).toBeDisabled()
     expect(toggle).not.toHaveAttribute('aria-expanded')
@@ -461,6 +465,7 @@ describe('BrowserNavigateBlock — flat text-line status dot', () => {
   it('the outer container has no card-frame classes — flat/transparent on the thread', () => {
     const { container } = render(
       <BrowserNavigateBlock
+        toolName="browser.navigate"
         args={{ url: 'https://example.com' }}
         result={{ title: 'Example', url: 'https://example.com' }}
         isRunning={false}
@@ -476,6 +481,7 @@ describe('BrowserNavigateBlock — flat text-line status dot', () => {
   it('the row identifies the tool via the "browser.navigate" text, not a Globe icon', () => {
     render(
       <BrowserNavigateBlock
+        toolName="browser.navigate"
         args={{ url: 'https://example.com' }}
         result={{ title: 'Example', url: 'https://example.com' }}
         isRunning={false}
@@ -487,6 +493,7 @@ describe('BrowserNavigateBlock — flat text-line status dot', () => {
   it('expanded detail uses a left accent line, not a full bordered panel', () => {
     render(
       <BrowserNavigateBlock
+        toolName="browser.navigate"
         args={{ url: 'https://example.com' }}
         result={{ title: 'Example', url: 'https://example.com', content: 'page text' }}
         isRunning={false}
@@ -501,6 +508,7 @@ describe('BrowserNavigateBlock — flat text-line status dot', () => {
   it('no descendant carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1) — border-l-2 accent survives', () => {
     const { container } = render(
       <BrowserNavigateBlock
+        toolName="browser.navigate"
         args={{ url: 'https://example.com' }}
         result={{ title: 'Example', url: 'https://example.com', content: 'page text' }}
         isRunning={false}

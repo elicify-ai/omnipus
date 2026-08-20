@@ -84,7 +84,7 @@ func TestBlockedCheck_UnableToVerify(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	workerInst, _ := al.GetRegistry().GetAgent("native-agent")
 	fakeBash := &fakeBashTool{result: &tools.ToolResult{ForLLM: "ok"}}
-	workerInst.Tools.Register(fakeBash)
+	workerInst.Tools.RegisterReplacing(fakeBash)
 	// Intentionally do NOT call allowBashPolicy: no entry resolves to deny
 	// (Constraint #6 — no default-policy fallback), so the mechanism is
 	// policy-blocked → unable_to_verify.
@@ -134,7 +134,7 @@ func TestBlockedCheck_UnableToVerify_BoundedPersistentlyBlocked(t *testing.T) {
 
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	workerInst, _ := al.GetRegistry().GetAgent("native-agent")
-	workerInst.Tools.Register(&fakeBashTool{result: &tools.ToolResult{ForLLM: "ok"}})
+	workerInst.Tools.RegisterReplacing(&fakeBashTool{result: &tools.ToolResult{ForLLM: "ok"}})
 	// No allowBashPolicy → policy-blocked every call.
 
 	in := JudgeCriteriaInput{

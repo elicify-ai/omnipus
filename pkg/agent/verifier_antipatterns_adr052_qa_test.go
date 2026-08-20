@@ -246,7 +246,7 @@ func TestVerifierAntiPatterns(t *testing.T) {
 			IsError:  true,
 			ExitCode: &realExitCode,
 		}}
-		workerInst.Tools.Register(fakeBash)
+		workerInst.Tools.RegisterReplacing(fakeBash)
 		allowBashPolicy(workerInst)
 
 		result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{

@@ -36,7 +36,10 @@ const {
   mockSendTabAction: vi.fn(() => true),
   mockSendWebRTCOffer: vi.fn(() => true),
   wsCallbacksRef: { current: null as BrowserLiveWsCallbacks | null },
-  mockMachineSendInput: vi.fn(() => true),
+  mockMachineSendInput: vi.fn((_json: string) => {
+    void _json // present only to give the mock the real call-argument type it's asserted against below
+    return true
+  }),
   mockMachineStart: vi.fn(),
   mockMachineApplyAnswer: vi.fn(),
   mockMachineApplyState: vi.fn(),

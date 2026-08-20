@@ -1,141 +1,341 @@
-// toolVisibility.registry.test.ts — enumeration test for issue #494.
+// toolVisibility.registry.test.ts — enumeration + BEHAVIOURAL gate test for issue #494.
 //
-// PROBLEM: toolVisibility.test.ts (the sibling file) only unit-tests
-// shouldRenderToolCall's return values for a fixed set of known tool names.
-// It never looks at the *registration surface* — the set of
-// `makeAssistantToolUI({...})` call sites under src/components/chat/tools/,
-// each of which registers a per-tool-name UI component with assistant-ui.
-// As of this writing only 1 of those ~9 registration files (BashOutput.tsx)
-// consults `shouldRenderToolCall` before rendering; the other 8 render
-// unconditionally, so "verbose chat off" never hides their tool calls the
-// way the design intends. (GenericToolCall.tsx is the other file that
-// consults the gate, but it is a plain fallback component wired directly
-// into ChatScreen.tsx rather than a makeAssistantToolUI registration, so it
-// sits outside this particular scan — see the sanity-check test below.)
-// Because no test scans the registration list, a brand-new tool UI
-// component can skip the gate entirely and every existing test suite still
-// passes.
+// ── WHY THE PREVIOUS ORACLE WAS REPLACED ────────────────────────────────────
 //
-// FIX: this test derives the registration list from disk (not from a
-// hardcoded array) by scanning every *.tsx file directly under
-// src/components/chat/tools/ (excluding *.test.tsx) for
-// `makeAssistantToolUI(` call sites. Each file that registers a tool UI must
-// either:
-//   (a) import/call `shouldRenderToolCall` somewhere in the same file, or
-//   (b) be named in the ALLOWLIST below, annotated with `// TODO(#494)`.
+// The prior version of this file enforced "every tool-UI registration
+// consults shouldRenderToolCall" with a TEXT SCAN:
+//   contents.includes('shouldRenderToolCall')
+// That only proves the 21-character string appears somewhere in the file —
+// including inside an import line, a comment, or dead code. An independent
+// audit proved this has ZERO detection power: it copied the repo to a
+// scratchpad, deleted the import AND the entire
+// `if (!shouldRenderToolCall(...)) return null` block from
+// WebSearchResult.tsx (leaving the symbol only in a comment), and the full
+// suite still reported 673/673 passed, exit 0. The guard suite passed with
+// the feature deleted.
 //
-// The ALLOWLIST is seeded with the 8 currently-non-compliant components. That
-// makes this test PASS today. The instant an 11th (or 12th, ...) tool UI file
-// is added that calls makeAssistantToolUI without wiring shouldRenderToolCall
-// AND without adding itself to the allowlist, this test FAILS — that failure
-// is the entire point of the test. Shrinking the allowlist as #494 gets fixed
-// is expected and welcome; growing it silently is not (each addition should
-// carry its own justification, same as any other TODO).
+// SECOND FINDING from the same audit: `shouldRenderToolCall` (./toolVisibility.ts)
+// has no `case` for ANY of the 9 tool names these registration files gate on
+// (browser.navigate/browser_navigate, read_file/file.read, list_dir/file.list,
+// fetch_url/web_fetch, web_search, web_serve, write_file/file.write,
+// edit_file, append_file, plus the 6 browser.<verb> pairs in BrowserTool.tsx)
+// — they all fall through to `default: return true`. So even where the gate
+// IS wired correctly, it is a runtime no-op for every one of these
+// registrations today: no combination of args ever makes shouldRenderToolCall
+// return false for these tool names. That is a real constraint on what a
+// behavioural test can assert using only the tool names the classifier
+// currently hides — see "DECISION ON THE HIDE-LIST" below.
 //
-// A second assertion guards the allowlist itself from rotting: every
-// allowlisted filename must still exist under the tools directory and must
-// still actually call makeAssistantToolUI. If a component is deleted or
-// renamed, or someone fixes it and forgets to shrink the allowlist, that
-// assertion fails loudly instead of the allowlist silently going stale.
+// ── FIX: BEHAVIOURAL, NOT TEXTUAL ───────────────────────────────────────────
+//
+// This file still discovers the registration surface from disk (the
+// enumeration property is real and worth keeping — a brand-new tool-UI file
+// is picked up automatically, same scan as before: every *.tsx file directly
+// under src/components/chat/tools/, excluding *.test.tsx/*.edge.tsx, that
+// contains a `makeAssistantToolUI(` call site).
+//
+// But instead of grepping the file text, it MOUNTS the actual registered
+// component (via @testing-library/react) and asserts on the real DOM output:
+//   - when the gate reports HIDDEN, the registration must render nothing
+//     (`toBeEmptyDOMElement()`), for at least one of its tool-name
+//     registrations (a file can register several names off one shared block
+//     — e.g. BashOutput.tsx's `bash` vs. its 5 legacy aliases, which are
+//     deliberately EXEMPT from the gate; see "why per-file, not per-name"
+//     below).
+//   - when the gate reports VISIBLE, every registration must render real
+//     content (`not.toBeEmptyDOMElement()`) — this catches the opposite
+//     mutation, a component that always returns null regardless of the
+//     gate's answer.
+//
+// `makeAssistantToolUI` is intercepted (same pattern as
+// BashOutput.edge.test.tsx) to capture each `{ toolName, render }` config
+// pair as each file is dynamically imported, so the render function under
+// test is the SAME closure the app registers with assistant-ui — not a
+// hand-rolled stand-in.
+//
+// ── WHY PER-FILE, NOT PER-REGISTERED-NAME ───────────────────────────────────
+//
+// BashOutput.tsx registers `bash` (gated) plus 5 legacy aliases — `exec`,
+// `workspace_shell`, `workspace.shell`, `workspace_shell_bg`,
+// `workspace.shell_bg` — that are DELIBERATELY exempt from the gate forever
+// (they render old, already-persisted transcripts as originally stored; see
+// BashOutput.tsx's own comment and BashOutput.edge.test.tsx's "regression
+// guard" tests). A per-registered-name assertion of "must render null when
+// hidden" would be actively WRONG for those 5 aliases — it would encode a
+// requirement the spec explicitly rejects. So the HIDDEN-case assertion is
+// scoped per FILE: "at least one of this file's registrations honoured the
+// gate" — true today (via `bash`), and still catches the audited mutation
+// (delete the gate block from a file with only one registration, e.g.
+// WebSearchResult.tsx — then NONE of its registrations ever call the gate,
+// and the per-file assertion fails). The VISIBLE-case assertion has no such
+// exemption and applies to every registration.
+//
+// ── DECISION ON THE HIDE-LIST (task item 3) ─────────────────────────────────
+//
+// No new tool name was added to shouldRenderToolCall's hide-list. Every one
+// of these 9 files' registered names is exactly the case toolVisibility.ts's
+// own docstring calls "a deliberate, meaningful action" a chat reader would
+// want to see (reading a file, searching the web, navigating a page,
+// writing a file) — the opposite of the "noisy background infra" the
+// existing hide-list cases (`load_tool`, `delegate` action=run/status,
+// `bash` action=poll/read) target. Inventing a hide-list entry for one of
+// these just to give the test something to exercise would be fabricating
+// product intent to reach green, which is exactly the failure mode this
+// rewrite exists to eliminate.
+//
+// Because none of the 9 files' own registered names are hideable today, a
+// behavioural test needs a way to observe "does this component call the
+// gate and honour its answer" independent of which literal names the
+// classifier currently hides (a fact owned by toolVisibility.test.ts, not
+// this file). This file mocks `shouldRenderToolCall` itself (a boundary this
+// suite owns — see mocking-and-isolation guidance: mock at a real dependency
+// edge, never the unit under test) so it can force HIDDEN/VISIBLE
+// deterministically across all 9 files. A second, narrower test below skips
+// that mock entirely and drives BashOutput's real `bash` + `action: 'poll'`
+// case through the REAL, unmocked classifier — the literal fallback the task
+// suggested — as an end-to-end sanity check that the mocked-boundary tests
+// above are not testing a fiction.
 
-import { describe, it, expect } from 'vitest'
-import { readdirSync, readFileSync, existsSync } from 'node:fs'
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
+import { render } from '@testing-library/react'
+import { act } from 'react'
+import type { ReactNode } from 'react'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const TOOLS_DIR = join(__dirname, '..', 'components', 'chat', 'tools')
 
-// Known non-compliant tool-UI registrations (issue #494). Each entry is a
-// deliberate, tracked gap — not an oversight. Remove an entry only once the
-// corresponding component has been wired to consult `shouldRenderToolCall`.
-const ALLOWLIST = [
-  // INTENTIONALLY EMPTY.
-  // Operator decision 2026-08-20: no allowlist, no baseline, no ratchet.
-  // This test asserts the TRUE requirement — every makeAssistantToolUI()
-  // registration must consult shouldRenderToolCall. It fails until #494 is
-  // actually fixed. A passing run must mean the gate is universally applied.
-]
-
 // Matches both `makeAssistantToolUI(` and the generic-parameterized call form
-// `makeAssistantToolUI<Args, Result>(` (the pattern every real registration in
-// this codebase uses) — but NOT the bare `import { makeAssistantToolUI }`
-// line, which has no following `(` or `<`.
+// `makeAssistantToolUI<Args, Result>(`.
 const CALLS_MAKE_ASSISTANT_TOOL_UI = /makeAssistantToolUI\s*(<[^()]*>)?\s*\(/
 
-/** List every source (non-test) .tsx file directly under the tools dir that registers a tool UI. */
-function findToolUiRegistrations(): string[] {
+/** Every source (non-test) .tsx file directly under the tools dir that registers a tool UI. */
+function findToolUiRegistrationFiles(): string[] {
   return readdirSync(TOOLS_DIR)
     .filter((name) => name.endsWith('.tsx') && !name.includes('.test.') && !name.includes('.edge.'))
-    .filter((name) => {
-      const contents = readFileSync(join(TOOLS_DIR, name), 'utf-8')
-      return CALLS_MAKE_ASSISTANT_TOOL_UI.test(contents)
-    })
+    .filter((name) => CALLS_MAKE_ASSISTANT_TOOL_UI.test(readFileSync(join(TOOLS_DIR, name), 'utf-8')))
+    .sort()
 }
 
-/** Does this file's source reference shouldRenderToolCall (import or call)? */
-function referencesVisibilityGate(fileName: string): boolean {
-  const contents = readFileSync(join(TOOLS_DIR, fileName), 'utf-8')
-  return contents.includes('shouldRenderToolCall')
+type RenderProps = {
+  toolCallId?: string
+  args?: Record<string, unknown>
+  result?: unknown
+  status: { type: string; reason?: string }
+  isError?: boolean
+}
+type RenderFn = (props: RenderProps) => ReactNode
+
+interface Registration {
+  file: string
+  toolName: string
+  render: RenderFn
 }
 
-describe('tool-UI registration surface consults shouldRenderToolCall (#494)', () => {
-  const registrations = findToolUiRegistrations()
+// vi.hoisted: initialised before the vi.mock factories below run (temporal
+// dead zone workaround for const — same pattern as BashOutput.edge.test.tsx).
+const state = vi.hoisted(() => ({
+  registrations: [] as Registration[],
+  currentFile: '',
+  // 'forced' — shouldRenderToolCall ignores its real args and returns
+  // `gateResult`, for every tool name. 'real' — calls straight through to
+  // the actual classifier (used only by the unmocked end-to-end test).
+  mode: 'forced' as 'forced' | 'real',
+  gateResult: true,
+  gateCallCount: 0,
+}))
 
-  it('found at least the currently-known registrations (sanity check the scan itself works)', () => {
-    // Guards against the scan silently finding zero files (e.g. wrong path,
-    // renamed directory) and the test suite below vacuously passing.
-    //
-    // Note: GenericToolCall.tsx is deliberately NOT expected here — it does
-    // not call makeAssistantToolUI itself. It's a plain React component
-    // rendered directly by ChatScreen.tsx as the fallback view for any tool
-    // without a dedicated registration, and it consults shouldRenderToolCall
-    // from that call site. This test's scan targets the makeAssistantToolUI
-    // registration surface specifically (issue #494's actual defect class),
-    // which is a different — if related — set of call sites.
-    expect(registrations.length).toBeGreaterThanOrEqual(9)
-    expect(registrations).toContain('BashOutput.tsx')
-    expect(registrations).toContain('BrowserNavigate.tsx')
-    expect(registrations).toContain('WebServeUI.tsx')
+vi.mock('@assistant-ui/react', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@assistant-ui/react')>()
+  return {
+    ...original,
+    makeAssistantToolUI: (config: Record<string, unknown>) => {
+      state.registrations.push({
+        file: state.currentFile,
+        toolName: config.toolName as string,
+        render: config.render as RenderFn,
+      })
+      return config
+    },
+  }
+})
+
+vi.mock('@/lib/toolVisibility', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/lib/toolVisibility')>()
+  return {
+    ...original,
+    shouldRenderToolCall: (
+      tool: string,
+      params: Record<string, unknown> | undefined,
+      verboseChatEnabled: boolean,
+      isError = false,
+    ) => {
+      state.gateCallCount += 1
+      if (state.mode === 'real') {
+        return original.shouldRenderToolCall(tool, params, verboseChatEnabled, isError)
+      }
+      return state.gateResult
+    },
+  }
+})
+
+/** Dynamically import every discovered registration file, tagging each captured config with its source file. */
+async function loadAllRegistrations(files: string[]): Promise<void> {
+  for (const file of files) {
+    state.currentFile = file
+    const bare = file.replace(/\.tsx$/, '')
+    await import(`@/components/chat/tools/${bare}.tsx`)
+  }
+  state.currentFile = ''
+}
+
+const GENERIC_PROPS: RenderProps = {
+  toolCallId: 'test-tool-call-1',
+  args: {},
+  result: null,
+  status: { type: 'complete' },
+  isError: false,
+}
+
+describe('tool-UI registration surface honours shouldRenderToolCall (#494)', () => {
+  const files = findToolUiRegistrationFiles()
+
+  beforeAll(async () => {
+    await loadAllRegistrations(files)
   })
 
-  it.each(registrations)('%s either gates on shouldRenderToolCall or is an explicit, tracked allowlist entry', (fileName) => {
-    const gated = referencesVisibilityGate(fileName)
-    const allowlisted = ALLOWLIST.includes(fileName)
+  beforeEach(() => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    })
+    state.mode = 'forced'
+  })
 
-    if (!gated && !allowlisted) {
-      throw new Error(
-        `${fileName} registers a tool UI via makeAssistantToolUI() but never references ` +
-          `shouldRenderToolCall, and is not in the ALLOWLIST in toolVisibility.registry.test.ts. ` +
-          `Either wire it to shouldRenderToolCall (see BashOutput.tsx / GenericToolCall.tsx for the ` +
-          `pattern), or add it to ALLOWLIST with a // TODO(#494) comment if this is a deliberate, ` +
-          `tracked gap.`,
-      )
+  it('found at least the currently-known registration files (sanity check the scan itself works)', () => {
+    // Guards against the scan silently finding zero files (wrong path,
+    // renamed directory) and every assertion below passing vacuously.
+    expect(files.length).toBeGreaterThanOrEqual(9)
+    expect(files).toContain('BashOutput.tsx')
+    expect(files).toContain('BrowserNavigate.tsx')
+    expect(files).toContain('WebServeUI.tsx')
+  })
+
+  it('captured at least one makeAssistantToolUI registration for every discovered file', () => {
+    // Guards the capture mechanism itself (the mocked makeAssistantToolUI):
+    // if importing a file produced zero captures, every per-file assertion
+    // below would iterate zero registrations and pass vacuously — exactly
+    // the shape of failure this rewrite exists to eliminate.
+    for (const file of files) {
+      const count = state.registrations.filter((r) => r.file === file).length
+      expect(count, `${file} produced no captured makeAssistantToolUI registrations`).toBeGreaterThan(0)
+    }
+  })
+
+  describe.each(files)('%s', (file) => {
+    function registrationsFor(f: string): Registration[] {
+      return state.registrations.filter((r) => r.file === f)
     }
 
-    // A file that IS gated has no reason to also sit in the allowlist — that
-    // would be a stale entry masking as an exception. Fail so it gets
-    // trimmed promptly rather than drifting.
-    if (gated && allowlisted) {
-      throw new Error(
-        `${fileName} references shouldRenderToolCall but is still listed in ALLOWLIST — remove it ` +
-          `from ALLOWLIST in toolVisibility.registry.test.ts, it's no longer a gap.`,
-      )
-    }
+    it('at least one of its registrations renders NOTHING when the gate reports HIDDEN', () => {
+      state.gateResult = false
+      const regs = registrationsFor(file)
+      let gateHonoured = false
 
-    expect(gated || allowlisted).toBe(true)
+      for (const reg of regs) {
+        state.gateCallCount = 0
+        const { container, unmount } = render(
+          reg.render(GENERIC_PROPS) as Parameters<typeof render>[0],
+        )
+        if (state.gateCallCount > 0) {
+          gateHonoured = true
+          expect(
+            container,
+            `${file} (toolName "${reg.toolName}") called shouldRenderToolCall, got HIDDEN, but still rendered content`,
+          ).toBeEmptyDOMElement()
+        }
+        unmount()
+      }
+
+      // This is the assertion that catches the audited mutation directly:
+      // if the `if (!shouldRenderToolCall(...)) return null` block is
+      // deleted from every registration in this file, shouldRenderToolCall
+      // is never called, gateHonoured stays false, and this fails — even
+      // though every individual render() call above executed without error.
+      expect(
+        gateHonoured,
+        `${file} never invoked shouldRenderToolCall from any of its ${regs.length} registration(s) — the visibility gate appears to have been removed`,
+      ).toBe(true)
+    })
+
+    it('every registration renders real content when the gate reports VISIBLE', () => {
+      state.gateResult = true
+      const regs = registrationsFor(file)
+      expect(regs.length).toBeGreaterThan(0)
+
+      for (const reg of regs) {
+        const { container, unmount } = render(
+          reg.render(GENERIC_PROPS) as Parameters<typeof render>[0],
+        )
+        expect(
+          container,
+          `${file} (toolName "${reg.toolName}") rendered nothing even though the gate reports VISIBLE`,
+        ).not.toBeEmptyDOMElement()
+        unmount()
+      }
+    })
   })
 })
 
-describe('ALLOWLIST hygiene (no stale entries)', () => {
-  it.each(ALLOWLIST)('%s still exists in the tools dir and still calls makeAssistantToolUI', (fileName) => {
-    const path = join(TOOLS_DIR, fileName)
-    expect(existsSync(path)).toBe(true)
-    const contents = readFileSync(path, 'utf-8')
-    expect(CALLS_MAKE_ASSISTANT_TOOL_UI.test(contents)).toBe(true)
+// ── End-to-end sanity check: the REAL, unmocked classifier ─────────────────
+//
+// The suite above proves "component honours whatever shouldRenderToolCall
+// says" using a forced mock. This test proves that wiring means something in
+// production by driving one real, already-hidden case
+// (`bash` + `action: 'poll'` — see toolVisibility.ts's `bash` switch case)
+// through the ACTUAL classifier, no mock. It is the literal fallback named
+// in the task: "construct the test using a name the classifier already
+// hides." BashOutput.tsx is the only one of the 9 files where such a name
+// exists today (see "DECISION ON THE HIDE-LIST" above).
+describe('bash — real classifier, no mock (end-to-end sanity check)', () => {
+  beforeEach(() => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    })
+    state.mode = 'real'
   })
 
-  it('has no duplicate entries', () => {
-    expect(new Set(ALLOWLIST).size).toBe(ALLOWLIST.length)
+  function bashRegistration(): Registration {
+    const reg = state.registrations.find((r) => r.file === 'BashOutput.tsx' && r.toolName === 'bash')
+    if (!reg) throw new Error('BashOutput.tsx did not register a "bash" tool UI — cannot run the real-classifier sanity check')
+    return reg
+  }
+
+  it('renders nothing for a background poll (action: "poll") under the real classifier', () => {
+    const { container } = render(
+      bashRegistration().render({
+        toolCallId: 'poll-1',
+        args: { action: 'poll', session_id: 'abc' },
+        result: null,
+        status: { type: 'running' },
+        isError: false,
+      }) as Parameters<typeof render>[0],
+    )
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('renders real content for a foreground run under the real classifier', () => {
+    const { container } = render(
+      bashRegistration().render({
+        toolCallId: 'run-1',
+        args: { command: 'echo hi' },
+        result: 'hi\n',
+        status: { type: 'complete' },
+        isError: false,
+      }) as Parameters<typeof render>[0],
+    )
+    expect(container).not.toBeEmptyDOMElement()
   })
 })

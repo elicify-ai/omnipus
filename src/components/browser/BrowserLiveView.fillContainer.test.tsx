@@ -30,7 +30,10 @@ import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 
 const { mockSendControl, mockSendInput, mockSendViewport, callbacksRef } = vi.hoisted(() => ({
   mockSendControl: vi.fn(() => true),
-  mockSendInput: vi.fn(() => true),
+  mockSendInput: vi.fn((_input?: { kind: string; x: number; y: number }) => {
+    void _input // present only to give the mock the real call-argument type it's asserted against below
+    return true
+  }),
   mockSendViewport: vi.fn(() => true),
   callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
 }))

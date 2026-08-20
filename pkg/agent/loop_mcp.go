@@ -616,10 +616,14 @@ func (al *AgentLoop) registerServerTools(
 				continue
 			}
 
+			// #278 / FR-060: MCP-supplied tools MUST go through the hardened
+			// entry points, which validate reserved names unconditionally —
+			// including on a first, uncontested claim. Register/RegisterHidden
+			// are deliberately permissive and must never be used here.
 			if registerAsHidden {
-				agent.Tools.RegisterHidden(mcpTool)
+				agent.Tools.RegisterHiddenMCP(mcpTool)
 			} else {
-				agent.Tools.Register(mcpTool)
+				agent.Tools.RegisterMCP(mcpTool)
 			}
 
 			totalRegistrations++

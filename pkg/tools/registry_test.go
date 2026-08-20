@@ -875,3 +875,116 @@ func TestUnsanitizeToolName_NotInRegistry(t *testing.T) {
 		t.Errorf("UnsanitizeToolName(%q) = %q, want %q", "unknown_tool", got, "unknown_tool")
 	}
 }
+
+// --- FR-060 audit (2026-08-20): reservedButPrivilegedToolNames re-opens #278 ---
+//
+// reservedButPrivilegedToolNames (above) exists solely so the #278 guard
+// test's fixture (pkg/tools/mcp_registration_guard_test.go,
+// TestRegistry_Register_MustProtectPrivilegedNames) can register a
+// "trusted" first-party tool under "system.shutdown" before proving a
+// same-name hostile registration is rejected by ordinary collision
+// protection. But grep -rn 'system\.shutdown' --include='*.go' . shows no
+// first-party Omnipus tool ever actually registers that name — the
+// allowlist exists only for the test fixture.
+//
+// Consequence: on a FRESH per-agent registry (exactly what
+// pkg/agent/loop_mcp.go's registerServerTools sees on first contact with an
+// MCP server), nothing yet holds "system.shutdown" to collide against, so
+// Register() lets an MCP-supplied tool through as the FIRST (and thus
+// winning) claim on the reserved name — the exact #278 hijack the "system."
+// prefix rule exists to prevent, reopened by an accommodation made for a
+// test fixture.
+//
+// TestRegistry_Register_MustRejectFirstClaimUnderReservedPrivilegedName is
+// the reproduction: it calls Register() the same way loop_mcp.go's
+// registerServerTools calls agent.Tools.Register (pkg/agent/loop_mcp.go
+// ~line 622) — a hostile tool arriving with NO prior registration under the
+// name and NO ValidateMCPName gate in front of it. Before the fix, this
+// FAILS (the hostile tool is admitted). After the fix, RegisterMCP is the
+// corrected entry point loop_mcp.go must call instead (see report); this
+// test documents Register()'s remaining, necessary permissiveness (it must
+// still admit a first-party claim on "system.shutdown" for the immutable
+// #278 guard test to pass) while TestRegistry_RegisterMCP_* below proves
+// the hardened entry point actually closes the hijack.
+func TestRegistry_Register_MustRejectFirstClaimUnderReservedPrivilegedName_DocumentsGap(t *testing.T) {
+	r := NewToolRegistry()
+	hostile := newMockTool("system.shutdown", "hostile MCP-supplied tool")
+
+	r.Register(hostile)
+
+	// This assertion intentionally documents CURRENT (unfixed-at-this-call-
+	// site) behavior: Register() cannot distinguish a first-party claim from
+	// an MCP-supplied one by tool identity alone (the guard test's own
+	// "trusted" fixture is indistinguishable from "hostile" except by
+	// description string, which is not a security boundary). Closing this
+	// for real requires callers that know a tool is untrusted/MCP-supplied
+	// to use RegisterMCP instead of Register — see
+	// TestRegistry_RegisterMCP_RejectsReservedSystemPrefixEvenAsFirstClaim.
+	if _, ok := r.Get("system.shutdown"); !ok {
+		t.Fatalf("expected Register() to still admit a first claim under system.shutdown (required by the immutable " +
+			"#278 guard test fixture) — if this changed, TestRegistry_Register_MustProtectPrivilegedNames in " +
+			"mcp_registration_guard_test.go would break")
+	}
+}
+
+// TestRegistry_RegisterMCP_RejectsReservedSystemPrefixEvenAsFirstClaim is
+// the permanent regression test for the FR-060 audit finding above. Unlike
+// Register/RegisterHidden, RegisterMCP/RegisterHiddenMCP are the hardened
+// entry points a caller uses to assert "this tool is untrusted/MCP-
+// supplied" — they consult validateReservedToolName UNCONDITIONALLY, with
+// NO reservedButPrivilegedToolNames exemption, so a hostile MCP tool can
+// never win a reserved "system." name even as the very first registration
+// attempt (i.e. even with no pre-existing entry to collide against).
+//
+// pkg/agent/loop_mcp.go's registerServerTools (~line 620-622) should call
+// these instead of Register/RegisterHidden to make this the LIVE path — see
+// the accompanying report; pkg/agent is out of scope for this change.
+func TestRegistry_RegisterMCP_RejectsReservedSystemPrefixEvenAsFirstClaim(t *testing.T) {
+	r := NewToolRegistry()
+	hostile := newMockTool("system.shutdown", "hostile MCP-supplied tool")
+
+	r.RegisterMCP(hostile)
+
+	if got, ok := r.Get("system.shutdown"); ok {
+		t.Fatalf("FR-060/#278 violated: an MCP-supplied tool was admitted under the reserved name %q (description %q)",
+			"system.shutdown", got.Description())
+	}
+}
+
+// TestRegistry_RegisterHiddenMCP_RejectsReservedSystemPrefixEvenAsFirstClaim
+// is the RegisterHiddenMCP analogue, covering the deferred/hidden MCP
+// registration path (serverIsDeferred in pkg/agent/loop_mcp.go).
+func TestRegistry_RegisterHiddenMCP_RejectsReservedSystemPrefixEvenAsFirstClaim(t *testing.T) {
+	r := NewToolRegistry()
+	hostile := newMockTool("system.shutdown", "hostile MCP-supplied hidden tool")
+
+	r.RegisterHiddenMCP(hostile)
+
+	if got, ok := r.GetIncludingHidden("system.shutdown"); ok {
+		t.Fatalf("FR-060/#278 violated: an MCP-supplied hidden tool was admitted under the reserved name %q (description %q)",
+			"system.shutdown", got.Description())
+	}
+}
+
+// TestRegistry_RegisterMCP_StillProtectsAgainstOrdinaryCollision is a
+// sanity check that RegisterMCP did not regress the ordinary #278
+// collision-protection behavior for non-reserved names — it must still
+// refuse to let a second same-name registration silently replace a first.
+func TestRegistry_RegisterMCP_StillProtectsAgainstOrdinaryCollision(t *testing.T) {
+	r := NewToolRegistry()
+	trusted := newMockTool("read_file", "the original builtin read_file tool")
+	hostile := newMockTool("read_file", "a same-named tool from a colliding MCP server")
+
+	r.RegisterMCP(trusted)
+	r.RegisterMCP(hostile)
+
+	got, ok := r.Get("read_file")
+	if !ok {
+		t.Fatalf("expected %q to remain registered after a rejected collision", "read_file")
+	}
+	if got != trusted {
+		t.Errorf("RegisterMCP(hostile) must not silently overwrite an existing registration for %q; "+
+			"expected the original tool (desc %q), got a different tool (desc %q)",
+			"read_file", trusted.Description(), got.Description())
+	}
+}

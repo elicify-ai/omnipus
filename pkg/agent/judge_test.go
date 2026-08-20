@@ -186,7 +186,7 @@ func TestJudge_MachineCheck_DispatchesViaToolRegistry_NotRawExec(t *testing.T) {
 		t.Fatal("native-agent not found")
 	}
 	fakeBash := &fakeBashTool{result: &tools.ToolResult{ForLLM: "ok"}}
-	workerInst.Tools.Register(fakeBash) // overwrites the real ExecTool entry
+	workerInst.Tools.RegisterReplacing(fakeBash) // overwrites the real ExecTool entry
 	allowBashPolicy(workerInst)
 
 	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
@@ -228,7 +228,7 @@ func TestJudge_MachineCheck_PolicyTriad(t *testing.T) {
 			al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 			workerInst, _ := al.GetRegistry().GetAgent("native-agent")
 			fakeBash := &fakeBashTool{result: &tools.ToolResult{ForLLM: "ok"}}
-			workerInst.Tools.Register(fakeBash)
+			workerInst.Tools.RegisterReplacing(fakeBash)
 			workerInst.StoreToolPolicy(&tools.ToolPolicyCfg{
 				Policies: map[string]config.ToolPolicy{"bash": tc.policy},
 			})
@@ -282,7 +282,7 @@ func TestJudge_MachineCheck_TimeoutClassifiedUnableToVerify(t *testing.T) {
 		ForLLM:  "Command timed out after 60 seconds",
 		IsError: true,
 	}}
-	workerInst.Tools.Register(fakeBash)
+	workerInst.Tools.RegisterReplacing(fakeBash)
 	allowBashPolicy(workerInst)
 
 	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
@@ -318,7 +318,7 @@ func TestJudge_MachineCheck_TimedOutField_IsAuthoritative(t *testing.T) {
 		ForLLM:  "retry log: command timed out after 5 seconds on attempt 1, succeeded on retry\n\n[Command exited with code 0]",
 		IsError: false, // the REAL command genuinely exited 0 — TimedOut left at its zero value
 	}}
-	workerInst.Tools.Register(fakeBash)
+	workerInst.Tools.RegisterReplacing(fakeBash)
 	allowBashPolicy(workerInst)
 
 	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
@@ -372,7 +372,7 @@ func TestJudge_MachineCheck_ExitCodeClassification(t *testing.T) {
 			al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 			workerInst, _ := al.GetRegistry().GetAgent("native-agent")
 			fakeBash := &fakeBashTool{result: &tools.ToolResult{ForLLM: tc.forLLM, IsError: tc.isError}}
-			workerInst.Tools.Register(fakeBash)
+			workerInst.Tools.RegisterReplacing(fakeBash)
 			allowBashPolicy(workerInst)
 
 			result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
@@ -446,7 +446,7 @@ func TestJudge_MachineCheck_LargeOutputTruncationSpoof_FailsClosed(t *testing.T)
 		IsError:  true,
 		ExitCode: &realExitCodeVal,
 	}}
-	workerInst.Tools.Register(fakeBash)
+	workerInst.Tools.RegisterReplacing(fakeBash)
 	allowBashPolicy(workerInst)
 
 	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
@@ -677,7 +677,7 @@ func TestJudge_AllMachineCriteria_NeverCallsJudgeLLM(t *testing.T) {
 
 	workerInst, _ := al.GetRegistry().GetAgent("native-agent")
 	fakeBash := &fakeBashTool{result: &tools.ToolResult{ForLLM: "ok"}}
-	workerInst.Tools.Register(fakeBash)
+	workerInst.Tools.RegisterReplacing(fakeBash)
 	allowBashPolicy(workerInst)
 
 	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{

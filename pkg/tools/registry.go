@@ -132,10 +132,27 @@ var reservedButPrivilegedToolNames = map[string]bool{
 //     call. It is still subject to the reserved-name check, since nothing
 //     legitimate is ever named under the "system." prefix except the
 //     curated reservedButPrivilegedToolNames set.
-func (r *ToolRegistry) registerToolLocked(tool Tool, isCore bool, warnPrefix, debugLabel string, warnOnOverwrite bool) {
+//
+// strictReserved (FR-060 audit, 2026-08-20 — closing a #278 re-opening):
+// when true, the reservedButPrivilegedToolNames exemption above is not
+// consulted at all — ANY name starting with "system." is rejected
+// unconditionally, even as a first registration with nothing yet to
+// collide against. Register/RegisterHidden/RegisterReplacing pass false,
+// preserving the exemption for a genuine first-party claim (required by
+// the immutable #278 guard test's own fixture, which registers a "trusted"
+// tool under "system.shutdown" via plain Register). RegisterMCP/
+// RegisterHiddenMCP (below) pass true: a caller reaching for those methods
+// is explicitly asserting the tool is untrusted/MCP-supplied, so the
+// "Omnipus's own code may claim this reserved name" exemption must never
+// apply — closing the gap where nothing yet holds "system.shutdown" (no
+// first-party tool actually registers it — see grep -rn 'system\.shutdown'
+// --include='*.go' .) and a hostile MCP tool could otherwise win the name
+// outright as the first claimant, with no collision to reject it.
+func (r *ToolRegistry) registerToolLocked(tool Tool, isCore bool, warnPrefix, debugLabel string, warnOnOverwrite bool, strictReserved bool) {
 	name := tool.Name()
 
-	if err := validateReservedToolName(name); err != nil && !reservedButPrivilegedToolNames[name] {
+	exempt := !strictReserved && reservedButPrivilegedToolNames[name]
+	if err := validateReservedToolName(name); err != nil && !exempt {
 		logger.WarnCF("tools", warnPrefix+" rejected: invalid tool name",
 			map[string]any{"name": name, "error": err.Error()})
 		return
@@ -177,14 +194,44 @@ func (r *ToolRegistry) registerToolLocked(tool Tool, isCore bool, warnPrefix, de
 func (r *ToolRegistry) Register(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.registerToolLocked(tool, true, "Tool registration", "Registered core tool", true)
+	r.registerToolLocked(tool, true, "Tool registration", "Registered core tool", true, false)
 }
 
 // RegisterHidden saves hidden tools (visible only via TTL)
 func (r *ToolRegistry) RegisterHidden(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.registerToolLocked(tool, false, "Hidden tool registration", "Registered hidden tool", true)
+	r.registerToolLocked(tool, false, "Hidden tool registration", "Registered hidden tool", true, false)
+}
+
+// RegisterMCP is the hardened entry point for registering a tool KNOWN to
+// be untrusted/MCP-supplied (FR-060 audit, 2026-08-20). It behaves exactly
+// like Register (same collision protection, same visible-core semantics)
+// except the reservedButPrivilegedToolNames exemption never applies: a
+// name under the reserved "system." prefix is rejected unconditionally,
+// even as a first registration with no pre-existing entry to collide
+// against. This closes the gap Register alone cannot close — Register must
+// stay permissive enough to admit a genuine first-party claim on a
+// privileged name (e.g. the #278 guard test's own "system.shutdown"
+// fixture), so it cannot by itself distinguish "first party" from
+// "MCP-supplied" for an unclaimed reserved name. A caller that knows the
+// tool's origin is MCP (e.g. pkg/agent/loop_mcp.go's registerServerTools,
+// which wraps every tool in *MCPTool before registering it) should call
+// this instead of Register.
+func (r *ToolRegistry) RegisterMCP(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.registerToolLocked(tool, true, "MCP tool registration", "Registered MCP tool", true, true)
+}
+
+// RegisterHiddenMCP is RegisterMCP's RegisterHidden counterpart: the
+// hardened entry point for a deferred/hidden MCP tool registration
+// (serverIsDeferred in pkg/agent/loop_mcp.go). See RegisterMCP for the
+// full rationale.
+func (r *ToolRegistry) RegisterHiddenMCP(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.registerToolLocked(tool, false, "Hidden MCP tool registration", "Registered hidden MCP tool", true, true)
 }
 
 // RegisterReplacing saves a core tool entry exactly like Register, except a
@@ -201,7 +248,7 @@ func (r *ToolRegistry) RegisterHidden(tool Tool) {
 func (r *ToolRegistry) RegisterReplacing(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.registerToolLocked(tool, true, "Tool registration", "Registered core tool", false)
+	r.registerToolLocked(tool, true, "Tool registration", "Registered core tool", false, false)
 }
 
 // SetMediaStore injects a MediaStore into all registered tools that can

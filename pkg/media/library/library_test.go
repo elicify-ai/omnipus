@@ -657,8 +657,8 @@ func TestWorkspaceLibrary_AuditCascadeDelete(t *testing.T) {
 	}
 	mediaIDs := make([]string, 0, len(files))
 	for _, raw := range mediaIDsRaw {
-		s, ok := raw.(string)
-		if !ok {
+		s, strOK := raw.(string)
+		if !strOK {
 			t.Fatalf("Details[media_ids] element is not string: %T", raw)
 		}
 		mediaIDs = append(mediaIDs, s)

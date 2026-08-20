@@ -43,7 +43,7 @@ func (f *fakeTransport) Search(context.Context, string, int) ([]Message, error) 
 func (f *fakeTransport) ReadMessage(context.Context, uint32) (*Message, error) {
 	return nil, errors.New("fakeTransport: ReadMessage not implemented")
 }
-func (f *fakeTransport) Send(context.Context, SendRequest) error                { return nil }
+func (f *fakeTransport) Send(context.Context, SendRequest) error { return nil }
 func (f *fakeTransport) MarkSeen(_ context.Context, uid uint32) error {
 	f.seen[uid] = true
 	return nil

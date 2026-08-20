@@ -84,7 +84,7 @@ func marcusP4TestHome(t *testing.T, wsID, assigneeID string) (al *AgentLoop, wor
 	// fake double standing in for it.
 	execTool, err := tools.NewExecToolWithDeps(agentHome, false, nil, tools.ExecToolDeps{GodMode: true})
 	require.NoError(t, err)
-	assigneeInst.Tools.Register(execTool)
+	assigneeInst.Tools.RegisterReplacing(execTool)
 
 	return al, workDir, agentHome
 }
@@ -242,7 +242,7 @@ func TestJudge_MachineCheck_TaskWorkspaceUnreachable_RefusesHonestly(t *testing.
 	allowBashPolicy(assigneeInst)
 	execTool, err := tools.NewExecToolWithDeps(agentHome, false, nil, tools.ExecToolDeps{GodMode: true})
 	require.NoError(t, err)
-	assigneeInst.Tools.Register(execTool)
+	assigneeInst.Tools.RegisterReplacing(execTool)
 
 	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
 		Scope:           task.VerdictScopeTask,

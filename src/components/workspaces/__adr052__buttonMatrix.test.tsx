@@ -121,7 +121,8 @@ describe('ADR-052 §6.8 button matrix — planActionFor (plan-row data table, re
     ['failed', 'idle_expired', null, 'genuinely failed (idle-expired) -> no restart offered'],
     ['failed', undefined, null, 'failed with no recorded reason -> never assume cancelled, no button'],
     ['done', undefined, null, 'done -> no button'],
-  ] as const)('state=%s failed_reason=%s -> action=%s (%s)', (state, failed_reason, expected) => {
+  ] as const)('state=%s failed_reason=%s -> action=%s (%s)', (state, failed_reason, expected, _note) => {
+    void _note // present only so the callback's arity matches the 4-element `as const` tuple type
     const plan = { state, failed_reason } as Pick<Plan, 'state' | 'failed_reason'>
     expect(planActionFor(plan)).toBe(expected)
   })
@@ -279,7 +280,8 @@ describe('ADR-052 §6.8 button matrix — taskActionFor (task-row data table, re
     ['done', 'plan-1', undefined, null, 'in-plan, not running -> plan drives restart'],
     ['failed', 'plan-1', undefined, null, 'in-plan genuine failure -> plan restart only, not task-level (FR-025)'],
     ['failed', 'plan-1', 'stopped_by_user', null, 'in-plan CANCELLED member -> plan restart only, not task-level'],
-  ] as const)('status=%s plan_id=%s cancel_reason=%s -> action=%s (%s)', (status, plan_id, cancel_reason, expected) => {
+  ] as const)('status=%s plan_id=%s cancel_reason=%s -> action=%s (%s)', (status, plan_id, cancel_reason, expected, _note) => {
+    void _note // present only so the callback's arity matches the 5-element `as const` tuple type
     const task = { status, plan_id, cancel_reason } as Pick<Task, 'status' | 'plan_id' | 'cancel_reason'>
     expect(taskActionFor(task)).toBe(expected)
   })
