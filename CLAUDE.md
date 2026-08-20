@@ -159,6 +159,19 @@ Runs **twice**: after EACH feature (before its PR merges to base) AND on the WHO
 
 ## Quality Gates
 
+> **Read [`docs/internal/false-green-patterns.md`](docs/internal/false-green-patterns.md) before
+> trusting — or reporting — any green result.** A passing gate here has repeatedly meant
+> "nothing was verified" rather than "it works": 27% of the SPA test suite never ran while CI
+> reported green; a guard test passed 673/673 with the feature it guarded deleted; golangci-lint
+> silently caps findings at 3 per message (real counts were 3-30x the measured ones); and a
+> security control that reported "saved" changed nothing. The doc lists the specific traps, the
+> cheapest check that exposes each, and the environment artifacts (stale worktrees, build-tag
+> cache namespaces, machine load) that have produced convincing phantom failures. Two rules from
+> it are worth internalising even if you read nothing else: **capture exit codes without a pipe**
+> (`cmd > log 2>&1; echo "exit=$?"` — `cmd | tail` reports tail's status), and **reproduce a
+> reported failure yourself before acting on it** — three of five "must fix" items in one session
+> did not exist.
+
 Verify all applicable gates before reporting work done:
 
 ```bash
