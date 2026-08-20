@@ -882,22 +882,33 @@ func (ms *MemoryStore) AppendRetro(sessionID string, r Retro) error {
 	}
 	fmt.Fprintf(&sb, "<!-- next -->\n")
 
-	content := sb.String()
+	appended := sb.String()
 
-	return fileutil.WithFlock(retroPath, func() error {
-		f, err := os.OpenFile(retroPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-		if err != nil {
-			return fmt.Errorf("memory: open retro file: %w", err)
+	// Lock a SIDECAR path, never retroPath itself. fileutil.WithFlock opens
+	// whatever path it is given with O_CREATE to hold the advisory lock, so
+	// locking on retroPath created a zero-byte retro file the instant the lock
+	// was taken — before a single content byte was written. Any reader that
+	// discovers the retro via a directory listing (the recap idempotency check
+	// agentSessionHasRetro does exactly this) could observe that empty file and
+	// wrongly conclude the retro had already landed. Measured: 12 torn reads in
+	// 200 rounds. retroPath is now only ever touched via WriteFileAtomic's
+	// temp-file+rename, so a listing sees it fully absent or fully written —
+	// never partial. The read-modify-write stays inside the lock, so concurrent
+	// appends (the session-end recap and the agent-invocable retrospective tool
+	// can both target one sessionID) still cannot clobber each other.
+	lockPath := retroPath + ".lock"
+
+	return fileutil.WithFlock(lockPath, func() error {
+		existing, err := os.ReadFile(retroPath)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("memory: read existing retro: %w", err)
 		}
-		if _, err := f.WriteString(content); err != nil {
-			f.Close()
+
+		content := append(existing, []byte(appended)...)
+		if err := fileutil.WriteFileAtomic(retroPath, content, 0o600); err != nil {
 			return fmt.Errorf("memory: write retro: %w", err)
 		}
-		if err := f.Sync(); err != nil {
-			f.Close()
-			return fmt.Errorf("memory: sync retro: %w", err)
-		}
-		return f.Close()
+		return nil
 	})
 }
 

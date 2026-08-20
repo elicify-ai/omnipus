@@ -283,15 +283,25 @@ func TestDurableC1_RestartNoRoundBurn(t *testing.T) {
 	// awaiting_supervision + persists last_unmet_terminal_signature.
 	pe1.processPlan(context.Background(), "plan-c1")
 	// Drain the async judge round goroutine (runPlanJudgeRound runs in its own
-	// goroutine). Poll for the persisted phase rather than a fixed sleep.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		p, _ := ps.Get("plan-c1")
-		if p.EffectivePlanPhase() == plan.PhaseAwaitingSupervision && p.LastUnmetTerminalSignature != "" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// goroutine, tracked by judgeWG — beginPlanJudgeRound Add(1)s it
+	// synchronously before the `go` statement, so the counter is already
+	// non-zero by the time processPlan above returns). Waiting on judgeWG
+	// blocks until the goroutine's OWN return — which is AFTER
+	// applyJudgeRoundOutcome persists the phase/signature patch this test
+	// asserts on, but that same goroutine then falls through into
+	// wakeSupervisor(), which issues further planStore.Update writes
+	// (SupervisionWakeAt/Attempts/WakeError) into this test's t.TempDir().
+	// Polling only for the phase/signature patch (as this used to) observes
+	// the goroutine mid-flight, not finished: the test would proceed to spin
+	// up pe2 and eventually return while wakeSupervisor's trailing writes
+	// were still landing in the SAME temp dir, racing t.TempDir()'s cleanup
+	// RemoveAll ("directory not empty") — the goroutine, not the test body,
+	// is what must fully exit before this function returns. judgeWG.Wait()
+	// is the actual completion signal (see PlanEngine.Stop's doc comment,
+	// and the same idiom in plan_engine_g3_fixwave_test.go /
+	// plan_engine_adr055_fixwave_test.go / plan_stop_test.go).
+	pe1.judgeWG.Wait()
+	pe1.wakeWG.Wait()
 	parked, _ := ps.Get("plan-c1")
 	if parked.EffectivePlanPhase() != plan.PhaseAwaitingSupervision {
 		t.Fatalf("plan phase = %q, want awaiting_supervision", parked.EffectivePlanPhase())
@@ -314,6 +324,14 @@ func TestDurableC1_RestartNoRoundBurn(t *testing.T) {
 	}
 	// bootReconcile rehydrates the durable signature, then processPlan runs.
 	pe2.bootReconcile(context.Background())
+	// Same drain as pe1 above: bootReconcile's processPlan can itself reach
+	// beginPlanJudgeRound / wakeSupervisor synchronously (evaluateSupervisionDeadlineLocked's
+	// "no wake receipt; re-arming" path does, on THIS engine's fresh, empty
+	// in-memory state), but guard against any future path that spawns the
+	// round goroutine here too — draining both WaitGroups is a documented
+	// no-op when nothing was dispatched (PlanEngine.Stop's doc comment).
+	pe2.judgeWG.Wait()
+	pe2.wakeWG.Wait()
 
 	if got := judge2.callCount(); got != 0 {
 		t.Errorf("post-restart judge calls = %d, want 0 (durable gate MUST prevent re-judge of unchanged state)", got)
@@ -362,11 +380,17 @@ func TestDurableC1_RestartChangedStateReJudges(t *testing.T) {
 	pe.bootReconcile(context.Background())
 
 	// The signature changed -> a round MUST fire (the persisted gate does not
-	// match the new member set).
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && judge.callCount() == 0 {
-		time.Sleep(10 * time.Millisecond)
-	}
+	// match the new member set). The round runs on runPlanJudgeRound's own
+	// goroutine (judgeWG-tracked); judge.callCount() increments the instant
+	// JudgeCriteria is CALLED, well before that same goroutine finishes
+	// synthesizeAndComplete's plan-store writes and the subsequent wakeOwner
+	// call, so a poll keyed on callCount alone (as this used to be) lets the
+	// test return — and t.TempDir() start its RemoveAll cleanup — while the
+	// goroutine is still writing into this test's temp dir. Same race and
+	// same fix as TestDurableC1_RestartNoRoundBurn above: wait for the
+	// goroutine's own exit, not a proxy signal that fires mid-flight.
+	pe.judgeWG.Wait()
+	pe.wakeWG.Wait()
 	if judge.callCount() != 1 {
 		t.Fatalf("judge calls = %d, want 1 (changed all-terminal state MUST re-judge)", judge.callCount())
 	}

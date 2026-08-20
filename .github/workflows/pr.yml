@@ -242,9 +242,19 @@ jobs:
           # Group C: agents + settings + skills + shared + ui components
           - group: components-agents-settings
             patterns: "src/components/agents/ src/components/settings/ src/components/skills/ src/components/shared/ src/components/ui/"
-          # Group D: layout + command-center + projects components
-          - group: components-layout-projects
-            patterns: "src/components/layout/ src/components/command-center/ src/components/projects/"
+          # Group D: layout components
+          - group: components-layout
+            patterns: "src/components/layout/"
+          # Group E: workspaces — the largest single group (v0.3 flagship)
+          - group: components-workspaces
+            patterns: "src/components/workspaces/"
+          # Group F: everything else with tests. NOTE: this matrix is an
+          # ALLOWLIST — a test file matching no group is silently never run
+          # while the job still reports green. scripts/check-vitest-coverage.mjs
+          # fails the build if that happens, so add new directories HERE (or to
+          # a group above) rather than letting them go unexecuted.
+          - group: components-misc
+            patterns: "src/components/screens/ src/components/browser/ src/components/calendar/ src/components/library/ src/components/connectors/ src/components/providers/ src/components/search/ src/components/sessions/ src/hooks/ src/assets/ src/styles/"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -257,6 +267,11 @@ jobs:
 
       - name: Install Node dependencies
         run: npm ci
+
+      - name: Verify every test file is covered by some vitest group
+        # An unmatched test file is silently never run while this job still
+        # reports green — see the script header for the 116-file incident.
+        run: node scripts/check-vitest-coverage.mjs
 
       - name: Run Vitest (${{ matrix.group }})
         env:

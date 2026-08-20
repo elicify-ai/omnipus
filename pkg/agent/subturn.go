@@ -1967,6 +1967,16 @@ var updateToolCallStatusRetryDelays = []time.Duration{
 	500 * time.Millisecond,
 }
 
+// updateToolCallStatusSleep is the sleep primitive updateToolCallStatusWithRetry
+// uses for its backoff loop. It is a package var (not a direct time.Sleep call)
+// purely as a test seam: production always leaves it as time.Sleep, but a test
+// can swap in a counting/no-op stand-in to assert on ATTEMPT COUNT — the real
+// property ("did it retry at all?") — instead of racing a wall-clock margin
+// against machine load. See subturn_ack_race_test.go's
+// TestUpdateToolCallStatusWithRetry_FoundOnFirstAttemptSkipsRetry for why a
+// timing-based proxy for this was a false-signal generator in both directions.
+var updateToolCallStatusSleep = time.Sleep
+
 // updateToolCallStatusWithRetry calls store.UpdateToolCallStatusAndResult,
 // retrying with updateToolCallStatusRetryDelays's bounded backoff when async
 // is true and the first attempt finds no matching record yet (found=false,
@@ -2013,7 +2023,7 @@ func updateToolCallStatusWithRetry(
 		return found, err
 	}
 	for _, delay := range updateToolCallStatusRetryDelays {
-		time.Sleep(delay)
+		updateToolCallStatusSleep(delay)
 		found, err = store.UpdateToolCallStatusAndResult(sessionID, toolCallID, status, durationMS, result)
 		if err != nil || found {
 			return found, err

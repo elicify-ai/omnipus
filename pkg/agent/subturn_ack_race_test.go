@@ -135,6 +135,28 @@ func TestUpdateToolCallStatusWithRetry_SyncDoesNotWaitForDelayedRecord(t *testin
 // TestUpdateToolCallStatusWithRetry_FoundOnFirstAttemptSkipsRetry verifies
 // the common case (record already present) resolves immediately without any
 // retry delay, for both async and sync.
+//
+// The REAL property under test is behavioural, not temporal: when the
+// record is already present, updateToolCallStatusWithRetry must resolve on
+// the FIRST lookup and must never enter its retry/backoff loop at all — i.e.
+// zero calls to the sleep primitive. "How long did it take?" was only ever a
+// proxy for "did it sleep through a retry backoff?", and a proxy with a
+// ~10ms margin against a real stopwatch is a false-signal generator in BOTH
+// directions: it fails spuriously whenever the machine is loaded enough that
+// two store calls plus scheduling jitter exceed the margin (seen even on the
+// pre-existing release baseline), and on a fast/quiet machine it would pass
+// even if the retry logic regressed, because the margin is wide relative to
+// what a single extra store lookup costs.
+//
+// WHY NOT TIMING AT ALL: this assertion used to be
+// `elapsed < 10*time.Millisecond`, then `elapsed < baseline+10ms` — both
+// wall-clock proxies for the same underlying fact (attempt count). Asserting
+// the fact directly removes the machine-load dependency entirely: this test
+// swaps updateToolCallStatusSleep (subturn.go) for a counting stub and
+// asserts the count is exactly zero, which is deterministic on any machine
+// at any load and still fails hard if an already-present record wrongly
+// takes the retry/sleep path (see the mutation-test evidence in the delivery
+// report for this fix).
 func TestUpdateToolCallStatusWithRetry_FoundOnFirstAttemptSkipsRetry(t *testing.T) {
 	for _, async := range []bool{true, false} {
 		store, err := session.NewUnifiedStore(t.TempDir())
@@ -153,39 +175,21 @@ func TestUpdateToolCallStatusWithRetry_FoundOnFirstAttemptSkipsRetry(t *testing.
 			},
 		}))
 
-		// Baseline: time BARE store updates on the same already-present record
-		// (no retry wrapper, so structurally zero retries). Take the max of a
-		// few samples so the threshold absorbs whatever this machine's disk and
-		// scheduler cost happens to be right now.
-		//
-		// WHY NOT A FIXED THRESHOLD: this assertion used to be
-		// `elapsed < 10*time.Millisecond`, which is EXACTLY
-		// updateToolCallStatusRetryDelays[0]. That gave it zero margin — it
-		// could not distinguish "no retry on a loaded machine" from "one
-		// retry", so it failed under parallel CI load and was absorbed by the
-		// flake filter twice (2026-07-26) while asserting nothing reliable.
-		var baseline time.Duration
-		for i := 0; i < 3; i++ {
-			bStart := time.Now()
-			_, bErr := store.UpdateToolCallStatusAndResult(sessionID, callID, "success", 0, nil)
-			if sample := time.Since(bStart); sample > baseline {
-				baseline = sample
-			}
-			require.NoError(t, bErr)
-		}
+		// Intercept the retry loop's sleep primitive so we can count how many
+		// times it fires instead of timing it. Any call at all means the loop
+		// was entered, i.e. the first lookup did NOT resolve the record.
+		var sleepCalls int
+		origSleep := updateToolCallStatusSleep
+		updateToolCallStatusSleep = func(time.Duration) { sleepCalls++ }
+		t.Cleanup(func() { updateToolCallStatusSleep = origSleep })
 
-		start := time.Now()
 		found, updateErr := updateToolCallStatusWithRetry(store, sessionID, callID, "success", 100, async, nil)
-		elapsed := time.Since(start)
 
 		require.NoError(t, updateErr)
 		assert.True(t, found)
-		// A single retry costs at least updateToolCallStatusRetryDelays[0] of
-		// sleep ON TOP of a second store call, so anything at or below
-		// (baseline + first delay) provably took the no-retry path.
-		assert.Less(t, elapsed, baseline+updateToolCallStatusRetryDelays[0],
-			"an already-present record must resolve on the first attempt, no retry delay "+
-				"(async=%v, baseline=%v, first retry delay=%v)",
-			async, baseline, updateToolCallStatusRetryDelays[0])
+		assert.Zero(t, sleepCalls,
+			"an already-present record must resolve on the first attempt — zero calls to the "+
+				"retry-backoff sleep primitive (async=%v, sleepCalls=%d)",
+			async, sleepCalls)
 	}
 }
