@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/emersion/go-imap/v2"
 )
@@ -197,6 +198,201 @@ func TestDecodeBody_Differentiation(t *testing.T) {
 	b := decodeBody([]byte(buildMIME(map[string]string{"Content-Type": "text/plain"}, "beta body")))
 	if a == b {
 		t.Fatalf("decodeBody returned identical output for different messages: %q", a)
+	}
+}
+
+// --- degrade-loudly / edge-case decode tests (remediation) ---
+//
+// These pin the review-mandated behavior that a decode failure must degrade
+// LOUDLY (best-effort content + an explicit marker) and never silently drop to a
+// raw blob or an empty string. Oracles are derived from the MIME spec and the
+// markers this package defines, never read back off a prior run.
+
+// TestDecodeBody_NonMIMEAndGarbageFallback (T1) proves the best-effort fallbacks:
+// non-parseable input, a garbage Content-Type, and an unknown transfer-encoding
+// all return usable text (with a loud marker where a decode was attempted),
+// never a bare empty string when raw content exists, and never a panic.
+func TestDecodeBody_NonMIMEAndGarbageFallback(t *testing.T) {
+	// (a) Bytes that are not a parseable MIME message (no valid header block).
+	t.Run("non-MIME raw text", func(t *testing.T) {
+		const sentinel = "NONMIME_SENTINEL"
+		raw := []byte("this is not a mime message " + sentinel + " just text, no header")
+		got := decodeBody(raw)
+		if got == "" {
+			t.Fatal("non-MIME input must not decode to an empty string when raw content exists")
+		}
+		if !strings.Contains(got, sentinel) {
+			t.Fatalf("non-MIME fallback lost the content; got %q", got)
+		}
+	})
+
+	// (b) A message that parses as MIME but has no recognizable text part
+	// (garbage Content-Type). The raw-bytes fallback must surface the body rather
+	// than returning "". This is the assertion that dies if the raw fallback
+	// regresses to "" (the mutation self-check).
+	t.Run("garbage content-type falls back to raw", func(t *testing.T) {
+		const sentinel = "GARBAGE_CT_SENTINEL"
+		raw := buildMIME(map[string]string{"Content-Type": "garbage"}, sentinel+" in the body")
+		got := decodeBody([]byte(raw))
+		if got == "" {
+			t.Fatal("garbage Content-Type must fall back to raw content, not an empty string")
+		}
+		if !strings.Contains(got, sentinel) {
+			t.Fatalf("garbage-CT fallback lost the body; got %q", got)
+		}
+	})
+
+	// (c) An unknown Content-Transfer-Encoding leaves the body undecoded; the
+	// degrade must be LOUD (marker) and still carry best-effort content.
+	t.Run("unknown transfer-encoding degrades loudly", func(t *testing.T) {
+		const sentinel = "UNKNOWN_CTE_SENTINEL"
+		raw := buildMIME(map[string]string{
+			"Content-Type":              "text/plain; charset=utf-8",
+			"Content-Transfer-Encoding": "x-made-up",
+		}, sentinel)
+		got := decodeBody([]byte(raw))
+		if !strings.Contains(got, "could not be fully decoded") {
+			t.Fatalf("unknown transfer-encoding must degrade loudly with a marker; got %q", got)
+		}
+		if !strings.Contains(got, sentinel) {
+			t.Fatalf("unknown-CTE degrade dropped the best-effort content; got %q", got)
+		}
+	})
+}
+
+// TestDecodeBody_SizeCapMidRuneBackoff (T2) exercises the UTF-8 backoff loop the
+// existing all-ASCII SizeCap test never triggers: a body of 3-byte runes whose
+// byte length straddles maxBodyBytes must be cut on a whole-rune boundary.
+func TestDecodeBody_SizeCapMidRuneBackoff(t *testing.T) {
+	const runeStr = "€" // U+20AC = 3 UTF-8 bytes (E2 82 AC)
+	if len(runeStr) != 3 {
+		t.Fatalf("test premise: %q must be 3 bytes, got %d", runeStr, len(runeStr))
+	}
+	// maxBodyBytes is not a multiple of 3, so a cut at exactly maxBodyBytes lands
+	// mid-rune and MUST be backed off — that is the code path under test.
+	if maxBodyBytes%3 == 0 {
+		t.Fatalf("test premise broken: maxBodyBytes (%d) must not be a multiple of 3", maxBodyBytes)
+	}
+	bodyText := strings.Repeat(runeStr, maxBodyBytes/3+1000) // decoded length > maxBodyBytes
+	raw := buildMIME(map[string]string{
+		"Content-Type":              "text/plain; charset=utf-8",
+		"Content-Transfer-Encoding": "8bit",
+	}, bodyText)
+
+	got := decodeBody([]byte(raw))
+	idx := strings.Index(got, "\n…[truncated")
+	if idx < 0 {
+		t.Fatalf("truncated multibyte body missing marker; result len=%d", len(got))
+	}
+	prefix := got[:idx]
+	if !utf8.ValidString(prefix) {
+		t.Fatalf("kept prefix is not valid UTF-8 — the cut was left mid-rune")
+	}
+	// Whole runes only: the largest multiple of the 3-byte rune size that fits.
+	wantLen := (maxBodyBytes / 3) * 3
+	if len(prefix) != wantLen {
+		t.Fatalf("kept prefix length = %d, want %d (whole-rune multiple ≤ maxBodyBytes)", len(prefix), wantLen)
+	}
+	if !strings.HasSuffix(prefix, runeStr) {
+		t.Fatalf("kept prefix must end on a whole-rune boundary")
+	}
+	// The marker's byte count must equal exactly what was dropped.
+	wantMarker := fmt.Sprintf("\n…[truncated %d bytes]", len(bodyText)-wantLen)
+	if got[idx:] != wantMarker {
+		t.Fatalf("truncation marker = %q, want %q", got[idx:], wantMarker)
+	}
+}
+
+// TestDecodeBody_NestedMultipartMixedPrefersPlain (T3) proves the reader walks a
+// nested multipart/mixed → multipart/alternative tree, returns the text/plain
+// body, and keeps the sibling attachment's content out of the body.
+func TestDecodeBody_NestedMultipartMixedPrefersPlain(t *testing.T) {
+	const outer = "OUTER99"
+	const inner = "INNER77"
+	const attachSecret = "ATTACHMENT_SECRET_PAYLOAD"
+	attachB64 := base64.StdEncoding.EncodeToString([]byte(attachSecret))
+	body := "--" + outer + "\r\n" +
+		"Content-Type: multipart/alternative; boundary=\"" + inner + "\"\r\n\r\n" +
+		"--" + inner + "\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n\r\n" +
+		"The nested PLAIN body.\r\n" +
+		"--" + inner + "\r\n" +
+		"Content-Type: text/html; charset=utf-8\r\n\r\n" +
+		"<p>The nested <b>HTML</b> body.</p>\r\n" +
+		"--" + inner + "--\r\n" +
+		"--" + outer + "\r\n" +
+		"Content-Type: application/octet-stream; name=\"a.bin\"\r\n" +
+		"Content-Disposition: attachment; filename=\"a.bin\"\r\n" +
+		"Content-Transfer-Encoding: base64\r\n\r\n" +
+		attachB64 + "\r\n" +
+		"--" + outer + "--\r\n"
+	raw := buildMIME(map[string]string{
+		"Content-Type": "multipart/mixed; boundary=\"" + outer + "\"",
+	}, body)
+
+	got := decodeBody([]byte(raw))
+	if got != "The nested PLAIN body." {
+		t.Fatalf("nested multipart must return the text/plain body, got %q", got)
+	}
+	if strings.Contains(got, attachSecret) || strings.Contains(got, attachB64) {
+		t.Fatalf("attachment content leaked into the body: %q", got)
+	}
+	if strings.Contains(got, "HTML") || strings.Contains(got, "<p>") {
+		t.Fatalf("text/plain preference leaked HTML: %q", got)
+	}
+}
+
+// TestDecodeBody_UnknownCharsetDegradesLoudly pins fix #1's marker: an unknown
+// charset leaves the body raw, and that must be flagged, not passed off clean.
+func TestDecodeBody_UnknownCharsetDegradesLoudly(t *testing.T) {
+	const sentinel = "CHARSET_DEGRADE_SENTINEL"
+	raw := buildMIME(map[string]string{
+		"Content-Type": "text/plain; charset=x-nonexistent-charset-77",
+	}, sentinel+" ascii stays readable")
+	got := decodeBody([]byte(raw))
+	if !strings.HasPrefix(got, "[body could not be fully decoded:") {
+		t.Fatalf("unknown charset must PREPEND a loud decode marker; got %q", got)
+	}
+	if !strings.Contains(got, "unknown charset") {
+		t.Fatalf("marker must name the reason (unknown charset); got %q", got)
+	}
+	if !strings.Contains(got, sentinel) {
+		t.Fatalf("best-effort content must still be returned; got %q", got)
+	}
+}
+
+// TestDecodeBody_CorruptBase64TruncationMarker pins fix #3's marker: a base64
+// part that errors mid-stream keeps the decoded prefix and flags the truncation.
+func TestDecodeBody_CorruptBase64TruncationMarker(t *testing.T) {
+	// First 16 base64 chars = 4 quanta = 12 clean bytes ("PARTIAL DECO"); the
+	// injected '!' is an illegal base64 char that aborts the decode there.
+	good := base64.StdEncoding.EncodeToString([]byte("PARTIAL DECODED SENTINEL DATA HERE OK"))
+	corrupt := good[:16] + "!!!" + good[16:]
+	raw := buildMIME(map[string]string{
+		"Content-Type":              "text/plain; charset=utf-8",
+		"Content-Transfer-Encoding": "base64",
+	}, corrupt)
+	got := decodeBody([]byte(raw))
+	if !strings.Contains(got, "[body truncated: decode error]") {
+		t.Fatalf("corrupt base64 must append a truncation marker; got %q", got)
+	}
+	if !strings.Contains(got, "PARTIAL DEC") {
+		t.Fatalf("the prefix that DID decode must be preserved (best-effort); got %q", got)
+	}
+}
+
+// TestDecodeBody_HTMLOnlyEmptyMarker pins fix #4: an HTML body that flattens to
+// no text returns an explicit marker, so "empty render" != "empty message".
+func TestDecodeBody_HTMLOnlyEmptyMarker(t *testing.T) {
+	raw := buildMIME(map[string]string{
+		"Content-Type": "text/html; charset=utf-8",
+	}, `<html><body><img src="cid:x"><a href="https://example.com"></a></body></html>`)
+	got := decodeBody([]byte(raw))
+	if got == "" {
+		t.Fatal("an empty HTML render must be distinguishable from an empty message")
+	}
+	if got != noHTMLTextMarker {
+		t.Fatalf("HTML-only body with no text must return the explicit marker, got %q", got)
 	}
 }
 

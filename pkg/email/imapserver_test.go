@@ -346,6 +346,68 @@ func TestReadMessage_DecodesBase64ThroughServer(t *testing.T) {
 	}
 }
 
+// TestReadInbox_EmptyInbox proves the empty-mailbox paths return an empty result
+// with no error (ReadInbox default path and Search) through the real server.
+func TestReadInbox_EmptyInbox(t *testing.T) {
+	cl := startMemIMAP(t, nil, nil) // INBOX created, zero messages
+
+	got, err := cl.ReadInbox(context.Background(), InboxOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("empty inbox read must not error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("empty inbox must return no messages, got %d", len(got))
+	}
+
+	res, err := cl.Search(context.Background(), "anything", SearchOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("search of empty inbox must not error: %v", err)
+	}
+	if res.TotalMatches != 0 || len(res.Messages) != 0 {
+		t.Fatalf("empty search must return zero matches, got %+v", res)
+	}
+	if res.Messages == nil {
+		t.Fatal("empty search Messages must be a non-nil empty slice for stable JSON")
+	}
+}
+
+// TestReadMessage_AttachmentOnlyMarker proves an attachment-only message read
+// through the server yields a non-empty, flagged body (never a silent ""), and
+// that the decoded attachment bytes do not leak into the body.
+func TestReadMessage_AttachmentOnlyMarker(t *testing.T) {
+	const boundary = "BOUND1"
+	const secret = "BINARY_ATTACH_ONLY"
+	raw := []byte(
+		"From: sender@x.com\r\n" +
+			"To: mailbox@test.local\r\n" +
+			"Subject: Files\r\n" +
+			"Date: Mon, 02 Jan 2006 15:04:05 -0700\r\n" +
+			"Message-ID: <att@test.local>\r\n" +
+			"MIME-Version: 1.0\r\n" +
+			"Content-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n" +
+			"--" + boundary + "\r\n" +
+			"Content-Type: application/octet-stream; name=\"data.bin\"\r\n" +
+			"Content-Disposition: attachment; filename=\"data.bin\"\r\n" +
+			"Content-Transfer-Encoding: base64\r\n\r\n" +
+			base64.StdEncoding.EncodeToString([]byte(secret)) + "\r\n" +
+			"--" + boundary + "--\r\n")
+	cl := startMemIMAP(t, [][]byte{raw}, nil)
+
+	msg, err := cl.ReadMessage(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("read message: %v", err)
+	}
+	if msg.Body == "" {
+		t.Fatal("attachment-only message must not yield an empty body (silent '')")
+	}
+	if !strings.Contains(msg.Body, "attachment-only") {
+		t.Fatalf("attachment-only message must be flagged with a marker, got %q", msg.Body)
+	}
+	if strings.Contains(msg.Body, secret) {
+		t.Fatalf("decoded attachment content must not appear in the body: %q", msg.Body)
+	}
+}
+
 // TestSearch_CanceledContextReturnsError proves an already-canceled context
 // makes an operation fail fast rather than proceed.
 func TestSearch_CanceledContextReturnsError(t *testing.T) {

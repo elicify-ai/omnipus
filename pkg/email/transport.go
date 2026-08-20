@@ -33,6 +33,7 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
+	message "github.com/emersion/go-message"
 	gomail "github.com/emersion/go-message/mail"
 	"golang.org/x/net/html"
 
@@ -537,34 +538,84 @@ func bufferToMessage(m *imapclient.FetchMessageBuffer, withBody bool) Message {
 	return msg
 }
 
+// noHTMLTextMarker is returned when a message is HTML-only and the HTML flattens
+// to no readable text at all (an image/link-only mail). It keeps an empty render
+// distinguishable from a truly empty message.
+const noHTMLTextMarker = "[no text content in HTML body]"
+
 // decodeBody parses a full RFC 822 message (BODY[] — headers + body) and returns
 // a readable plain-text rendering: the first text/plain part (decoded from its
 // Content-Transfer-Encoding and charset by go-message), or, if the message is
 // HTML-only, the text/html part stripped to text. Attachments are skipped. The
-// result is trimmed and capped at maxBodyBytes. If the bytes are not a parseable
-// MIME message the raw bytes are returned (capped) so the agent still sees
-// something rather than nothing.
+// result is trimmed and capped at maxBodyBytes.
+//
+// The overriding contract is "the agent still sees SOMETHING rather than
+// nothing", and every way a decode can degrade is surfaced LOUDLY rather than
+// silently dropping to a raw blob or an empty string:
+//   - an unknown transfer-encoding/charset (go-message hands back a usable reader
+//     but leaves the body raw) is prefixed with an explicit "could not be fully
+//     decoded" marker;
+//   - a corrupt base64/quoted-printable part (partial bytes + read error) keeps
+//     the partial content but is suffixed with a truncation marker;
+//   - an unrecoverable mid-stream MIME parse error stops the walk and marks the
+//     body partial;
+//   - a message with no text/plain or text/html part (e.g. text/calendar, or an
+//     empty BodySection) falls back to the trimmed raw bytes;
+//   - an HTML-only body that strips to nothing returns an explicit marker.
 func decodeBody(raw []byte) string {
-	mr, err := gomail.CreateReader(bytes.NewReader(raw))
+	mr, headerErr := gomail.CreateReader(bytes.NewReader(raw))
 	if mr == nil {
-		// Unparseable as MIME (CreateReader returns a nil reader only for a hard
-		// parse error; an unknown charset still yields a usable reader + err).
-		return capBody(strings.TrimSpace(string(raw)))
+		// Unparseable as MIME. CreateReader returns a nil reader for a hard parse
+		// error OR a top-level unknown transfer-encoding — in the latter case the
+		// body is real content we could not decode, so mark the degrade instead of
+		// passing it off as clean text.
+		best := capBody(strings.TrimSpace(string(raw)))
+		if isDecodeDegrade(headerErr) {
+			return decodeDegradeMarker(headerErr) + best
+		}
+		return best
 	}
-	_ = err // unknown-charset errors are non-fatal; the reader is still usable.
 	defer mr.Close()
 
 	var plain, htmlBody string
+	var partial bool        // an unrecoverable mid-stream parse error cut the walk short
+	var truncatedPart bool  // a part body decode returned partial bytes + error
+	var sawInlineText bool  // at least one inline text/* part was present
+	var sawAttachment bool  // at least one attachment/non-inline part was present
+	degradeErr := headerErr // the first unknown charset/encoding we observe (header or part)
+
 	for {
 		part, perr := mr.NextPart()
+		if perr == io.EOF {
+			break
+		}
+		if perr != nil {
+			if isDecodeDegrade(perr) {
+				// Usable part + error: the part body is present but raw/undecoded.
+				if degradeErr == nil {
+					degradeErr = perr
+				}
+			} else {
+				// Genuine mid-stream failure (not a mere unknown CTE/charset): do NOT
+				// treat it as a clean EOF — stop and mark the body partial.
+				partial = true
+				break
+			}
+		}
 		if part == nil {
-			// io.EOF or an unrecoverable mid-stream error: stop, keep what we have.
 			break
 		}
 		switch h := part.Header.(type) {
 		case *gomail.InlineHeader:
+			sawInlineText = true
 			ct, _, _ := h.ContentType()
-			b, _ := io.ReadAll(part.Body)
+			b, rerr := io.ReadAll(part.Body)
+			if rerr != nil {
+				// A corrupt base64/quoted-printable part returns the bytes decoded so
+				// far PLUS an error. Keep the partial content, but never silently
+				// truncate — flag it below.
+				truncatedPart = true
+			}
 			switch {
 			case strings.EqualFold(ct, "text/plain"):
 				if plain == "" {
@@ -577,19 +628,76 @@ func decodeBody(raw []byte) string {
 			}
 		default:
 			// Attachment (or non-inline part) — drain and skip.
+			sawAttachment = true
 			_, _ = io.Copy(io.Discard, part.Body)
 		}
-		_ = perr
 	}
 
 	var body string
+	htmlEmpty := false
 	switch {
 	case strings.TrimSpace(plain) != "":
 		body = plain
 	case strings.TrimSpace(htmlBody) != "":
 		body = htmlToText(htmlBody)
+		if strings.TrimSpace(body) == "" {
+			// HTML-only mail that flattens to nothing (image/link-only): return an
+			// explicit marker so "empty render" != "empty message".
+			body = noHTMLTextMarker
+			htmlEmpty = true
+		}
 	}
-	return capBody(strings.TrimSpace(body))
+	body = strings.TrimSpace(body)
+
+	// Contract fallback: no usable text part was found (no text/plain or text/html
+	// — e.g. text/calendar, or an empty BodySection), but the raw bytes carry
+	// content. Show the raw content rather than nothing. The HTML-empty marker is
+	// itself content, so it is NOT overwritten here.
+	attachmentOnly := false
+	if body == "" && !htmlEmpty {
+		if trimmed := strings.TrimSpace(string(raw)); trimmed != "" {
+			body = trimmed
+			// A message whose ONLY parts were attachments (no inline text of any
+			// kind) has no meaningful text body; flag it so the base64 blob is not
+			// mistaken for the message text.
+			attachmentOnly = sawAttachment && !sawInlineText
+		}
+	}
+
+	out := capBody(body)
+	if attachmentOnly {
+		out = "[no readable text body: message is attachment-only]\n" + out
+	}
+	if truncatedPart {
+		out += "\n[body truncated: decode error]"
+	}
+	if partial {
+		out += "\n[body incomplete: MIME parse error]"
+	}
+	if isDecodeDegrade(degradeErr) {
+		out = decodeDegradeMarker(degradeErr) + out
+	}
+	return out
+}
+
+// isDecodeDegrade reports whether err is an unknown-charset or unknown-encoding
+// error from go-message — the kind that leaves a part body raw/undecoded but
+// still yields usable content.
+func isDecodeDegrade(err error) bool {
+	return err != nil && (message.IsUnknownCharset(err) || message.IsUnknownEncoding(err))
+}
+
+// decodeDegradeMarker renders the loud prefix for a partially-decoded body,
+// naming why decoding could not complete.
+func decodeDegradeMarker(err error) string {
+	reason := "unknown transfer-encoding or charset"
+	switch {
+	case message.IsUnknownCharset(err):
+		reason = "unknown charset"
+	case message.IsUnknownEncoding(err):
+		reason = "unknown transfer-encoding"
+	}
+	return fmt.Sprintf("[body could not be fully decoded: %s]\n", reason)
 }
 
 // blockHTMLTags are tags whose start/end should introduce a line break when

@@ -129,7 +129,10 @@ func (t *ReadInboxTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		limit = int(v)
 	}
 	unseenOnly, _ := args["unseen_only"].(bool)
-	beforeUID, _ := parseUID(args["before_uid"]) // absent/invalid → 0 (no cursor)
+	beforeUID, err := parseBeforeUID(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
 
 	msgs, err := tp.ReadInbox(ctx, email.InboxOptions{
 		Limit:      limit,
@@ -202,7 +205,10 @@ func (t *SearchEmailTool) Execute(ctx context.Context, args map[string]any) *Too
 	if v, ok := args["limit"].(float64); ok && v >= 1 {
 		limit = int(v)
 	}
-	beforeUID, _ := parseUID(args["before_uid"]) // absent/invalid → 0 (no cursor)
+	beforeUID, err := parseBeforeUID(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
 	bodySearch, _ := args["body"].(bool)
 
 	result, err := tp.Search(ctx, query, email.SearchOptions{
@@ -410,6 +416,24 @@ func marshalMessages(msgs []email.Message, toolName string) *ToolResult {
 		return ErrorResult(fmt.Sprintf("%s: marshal: %v", toolName, err))
 	}
 	return NewToolResult(string(data))
+}
+
+// parseBeforeUID resolves the optional before_uid pagination cursor from the
+// tool arguments. An ABSENT (or null) before_uid is valid and means "no cursor"
+// → (0, nil). A PRESENT before_uid that is not a positive integer is an ERROR,
+// never silently coerced to 0: a malformed cursor swallowed as 0 would rerun the
+// query as page 1, re-processing messages the caller already saw (and, for a
+// pagination loop, never terminating).
+func parseBeforeUID(args map[string]any) (uint32, error) {
+	raw, present := args["before_uid"]
+	if !present || raw == nil {
+		return 0, nil
+	}
+	uid, ok := parseUID(raw)
+	if !ok {
+		return 0, fmt.Errorf("before_uid must be a positive integer")
+	}
+	return uid, nil
 }
 
 // parseUID coerces a JSON arg (float64 from encoding/json, or int) to a uint32

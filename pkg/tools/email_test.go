@@ -641,6 +641,92 @@ func TestReadMessageTool_MissingUID(t *testing.T) {
 	}
 }
 
+// ── before_uid cursor validation + body-search arg (remediation) ────────────
+//
+// A present-but-malformed before_uid must be REJECTED, never silently coerced to
+// 0 (which would rerun as page 1 — re-processing messages / never terminating a
+// pagination loop). An absent before_uid stays valid (no cursor).
+
+func TestReadInboxTool_InvalidBeforeUIDErrors(t *testing.T) {
+	ft := newFakeTransport(email.Message{UID: 1, From: "a@x.com", Subject: "One"})
+	for _, bad := range []any{"notanumber", float64(0), float64(-3), true} {
+		res := NewReadInboxTool(EmailTransports{"ws_test": ft}).Execute(
+			context.Background(), map[string]any{"before_uid": bad})
+		if !res.IsError || !strings.Contains(res.ForLLM, "before_uid must be a positive integer") {
+			t.Fatalf("before_uid=%v (%T) must error, got %+v", bad, bad, res)
+		}
+	}
+}
+
+func TestSearchEmailTool_InvalidBeforeUIDErrors(t *testing.T) {
+	ft := newFakeTransport(email.Message{UID: 1, From: "a@x.com", Subject: "Hit"})
+	res := NewSearchEmailTool(EmailTransports{"ws_test": ft}).Execute(
+		context.Background(), map[string]any{"query": "Hit", "before_uid": "bogus"})
+	if !res.IsError || !strings.Contains(res.ForLLM, "before_uid must be a positive integer") {
+		t.Fatalf("invalid before_uid on search must error, got %+v", res)
+	}
+}
+
+func TestReadInboxTool_AbsentBeforeUIDStaysValid(t *testing.T) {
+	ft := newFakeTransport(email.Message{UID: 1, From: "a@x.com", Subject: "One"})
+	res := NewReadInboxTool(EmailTransports{"ws_test": ft}).Execute(
+		context.Background(), map[string]any{})
+	if res.IsError {
+		t.Fatalf("absent before_uid must remain valid (no cursor): %s", res.ForLLM)
+	}
+}
+
+func TestReadInboxTool_ValidBeforeUIDFilters(t *testing.T) {
+	ft := newFakeTransport(
+		email.Message{UID: 1, From: "a@x.com", Subject: "One"},
+		email.Message{UID: 2, From: "b@x.com", Subject: "Two"},
+		email.Message{UID: 3, From: "c@x.com", Subject: "Three"},
+	)
+	res := NewReadInboxTool(EmailTransports{"ws_test": ft}).Execute(
+		context.Background(), map[string]any{"before_uid": float64(3)})
+	if res.IsError {
+		t.Fatalf("valid before_uid must not error: %s", res.ForLLM)
+	}
+	var got []email.Message
+	if err := json.Unmarshal([]byte(res.ForLLM), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("before_uid=3 over {1,2,3} must return 2 messages, got %d", len(got))
+	}
+	for _, m := range got {
+		if m.UID >= 3 {
+			t.Fatalf("before_uid=3 must exclude UID>=3, got %d", m.UID)
+		}
+	}
+}
+
+func TestSearchEmailTool_BodyArgTriggersBodyMatch(t *testing.T) {
+	ft := newFakeTransport(
+		email.Message{UID: 1, From: "news@x.com", Subject: "Digest", Body: "the pineapple ships Tuesday"},
+	)
+	// Header-only search (default) must NOT match a body-only term.
+	resNoBody := NewSearchEmailTool(EmailTransports{"ws_test": ft}).Execute(
+		context.Background(), map[string]any{"query": "pineapple"})
+	var got1 email.SearchResult
+	if err := json.Unmarshal([]byte(resNoBody.ForLLM), &got1); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got1.TotalMatches != 0 {
+		t.Fatalf("without body=true a body-only term must not match; got %d", got1.TotalMatches)
+	}
+	// body=true opts into the body scan and matches.
+	resBody := NewSearchEmailTool(EmailTransports{"ws_test": ft}).Execute(
+		context.Background(), map[string]any{"query": "pineapple", "body": true})
+	var got2 email.SearchResult
+	if err := json.Unmarshal([]byte(resBody.ForLLM), &got2); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got2.TotalMatches != 1 || len(got2.Messages) != 1 || got2.Messages[0].UID != 1 {
+		t.Fatalf("body=true must match body content; got %+v", got2)
+	}
+}
+
 // ── Workspace resolution (per-(agent, workspace) mailboxes) ──────────────────
 //
 // The tools hold the agent's full workspace→transport map and pick the
