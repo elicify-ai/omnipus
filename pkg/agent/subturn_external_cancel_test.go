@@ -84,16 +84,26 @@ func (d *blockingExternalDriver) Run(ctx context.Context, _ runner.RunOptions) (
 // product bug and must still fail. "The cancel propagated a few microseconds
 // after we looked" is a test artefact. A bounded wait separates them; a bare
 // Load() cannot.
+//
+// The deadline was originally 2s (the fix that added this bounded poll in
+// the first place), but that was still tight enough to itself flake under
+// -race: this call always runs AFTER the caller's own outer wait (doneCh /
+// resultCh, both bounded at 10s elsewhere in this file) has already
+// observed the cancel, so the driver goroutine is only ever a scheduling
+// hop behind — but a 2s ceiling assumes that hop is cheap, and under -race's
+// ~10x slowdown plus CI contention it is not always. 10s matches every
+// other bound in this file (all sized against the same 30s run timeout) so
+// this is no longer the tightest deadline standing.
 func waitCtxCanceled(t *testing.T, d *blockingExternalDriver, what string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if d.ctxCanceled.Load() {
 			return
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	t.Errorf("%s: fake driver's run ctx was never canceled within 2s — "+
+	t.Errorf("%s: fake driver's run ctx was never canceled within 10s — "+
 		"the external CLI subprocess would not have been killed", what)
 }
 
