@@ -29,13 +29,20 @@ func newFakeTransport(msgs ...email.Message) *fakeTransport {
 	return ft
 }
 
-func (f *fakeTransport) ReadInbox(_ context.Context, limit int, unseenOnly bool) ([]email.Message, error) {
+func (f *fakeTransport) ReadInbox(_ context.Context, opts email.InboxOptions) ([]email.Message, error) {
 	if f.failRead {
 		return nil, errors.New("imap unreachable")
 	}
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 20
+	}
 	var out []email.Message
 	for _, m := range f.inbox {
-		if unseenOnly && m.Seen {
+		if opts.UnseenOnly && m.Seen {
+			continue
+		}
+		if opts.BeforeUID > 0 && m.UID >= opts.BeforeUID {
 			continue
 		}
 		out = append(out, m)
@@ -46,22 +53,38 @@ func (f *fakeTransport) ReadInbox(_ context.Context, limit int, unseenOnly bool)
 	return out, nil
 }
 
-func (f *fakeTransport) Search(_ context.Context, query string, limit int) ([]email.Message, error) {
+func (f *fakeTransport) Search(_ context.Context, query string, opts email.SearchOptions) (email.SearchResult, error) {
 	if f.failRead {
-		return nil, errors.New("imap unreachable")
+		return email.SearchResult{}, errors.New("imap unreachable")
+	}
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 20
 	}
 	q := strings.ToLower(query)
-	var out []email.Message
+	var all []email.Message
 	for _, m := range f.inbox {
-		hay := strings.ToLower(m.Subject + " " + m.From + " " + m.Body)
+		hay := strings.ToLower(m.Subject + " " + m.From)
+		if opts.Body {
+			hay += " " + strings.ToLower(m.Body)
+		}
+		if opts.BeforeUID > 0 && m.UID >= opts.BeforeUID {
+			continue
+		}
 		if strings.Contains(hay, q) {
-			out = append(out, m)
-			if len(out) >= limit {
-				break
-			}
+			all = append(all, m)
 		}
 	}
-	return out, nil
+	res := email.SearchResult{TotalMatches: len(all), Messages: []email.Message{}}
+	if len(all) > limit {
+		res.Truncated = true
+		all = all[:limit]
+		if len(all) > 0 {
+			res.NextBeforeUID = all[len(all)-1].UID
+		}
+	}
+	res.Messages = append(res.Messages, all...)
+	return res, nil
 }
 
 func (f *fakeTransport) ReadMessage(_ context.Context, uid uint32) (*email.Message, error) {
@@ -138,12 +161,18 @@ func TestSearchEmailTool(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.ForLLM)
 	}
-	var got []email.Message
+	var got email.SearchResult
 	if err := json.Unmarshal([]byte(res.ForLLM), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(got) != 1 || got[0].UID != 1 {
-		t.Fatalf("expected UID 1 match, got %+v", got)
+	if len(got.Messages) != 1 || got.Messages[0].UID != 1 {
+		t.Fatalf("expected UID 1 match, got %+v", got.Messages)
+	}
+	if got.TotalMatches != 1 {
+		t.Fatalf("expected total_matches 1, got %d", got.TotalMatches)
+	}
+	if got.Truncated {
+		t.Fatalf("expected truncated=false for a single match under the limit")
 	}
 }
 

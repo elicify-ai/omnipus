@@ -10,9 +10,17 @@
 // implicit TLS (465/SMTPS). The Transport interface is the test seam — the
 // email tools depend only on it, so unit tests inject an in-memory fake and
 // never stand up a real server.
+//
+// Inbound bodies are decoded from MIME on the read path: read_message fetches
+// the FULL message (BODY[], headers included) and go-message decodes the
+// Content-Transfer-Encoding (base64/quoted-printable) and charset, preferring
+// the text/plain part and falling back to a tag-stripped rendering of an
+// HTML-only body. Decoded bodies are capped (maxBodyBytes) so an
+// attachment-heavy message cannot bloat the agent's context.
 package email
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -21,9 +29,16 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
+	gomail "github.com/emersion/go-message/mail"
+	"golang.org/x/net/html"
+
+	// Register the extended charset decoders (ISO-8859-*, Windows-125x, GBK, …)
+	// so go-message can decode non-UTF-8 bodies. Pure Go via golang.org/x/text.
+	_ "github.com/emersion/go-message/charset"
 )
 
 const (
@@ -33,7 +48,30 @@ const (
 	// dialTimeout bounds a single IMAP/SMTP dial so a tool call cannot hang the
 	// agent turn indefinitely on an unreachable server.
 	dialTimeout = 30 * time.Second
+
+	// commandTimeout bounds a single IMAP command (LOGIN/SELECT/SEARCH/FETCH/
+	// STORE) once connected. A slow un-indexed body search on a huge mailbox
+	// therefore returns a timeout error instead of hanging the whole turn.
+	commandTimeout = 45 * time.Second
+
+	// defaultListLimit / maxListLimit bound how many messages a list/search
+	// returns. The cap is enforced in Go (clampLimit), not merely advertised in
+	// the JSON schema, so a model that ignores the schema still cannot request an
+	// unbounded fetch.
+	defaultListLimit = 20
+	maxListLimit     = 100
+
+	// maxBodyBytes caps a decoded message body. Larger bodies are truncated on a
+	// UTF-8 boundary with an explicit marker so the agent knows content was cut.
+	maxBodyBytes = 256 * 1024
 )
+
+// imapDial is the production IMAPS dialer. It is a package-level var only so
+// tests can point dialIMAP at an in-memory server over a plaintext connection;
+// production code never reassigns it.
+var imapDial = func(addr string, tlsCfg *tls.Config) (*imapclient.Client, error) {
+	return imapclient.DialTLS(addr, &imapclient.Options{TLSConfig: tlsCfg})
+}
 
 // Account holds the connection parameters for a single mailbox. The password is
 // resolved by the caller (from the encrypted credential store) and passed here
@@ -74,11 +112,55 @@ type Message struct {
 	Subject   string `json:"subject"`
 	// Date is the message Date header in RFC 3339 (UTC), best-effort.
 	Date string `json:"date,omitempty"`
-	// Body is the plain-text body. Populated by ReadMessage; for list/search
-	// results it is empty (envelope-only) to keep payloads small.
+	// Body is the decoded plain-text body. Populated by ReadMessage; for
+	// list/search results it is empty (envelope-only) to keep payloads small.
 	Body string `json:"body,omitempty"`
 	// Seen reflects the \Seen IMAP flag at fetch time.
 	Seen bool `json:"seen"`
+}
+
+// InboxOptions controls ReadInbox.
+type InboxOptions struct {
+	// Limit is the maximum number of messages to return. <=0 uses the default;
+	// values above maxListLimit are clamped down.
+	Limit int
+	// UnseenOnly restricts to \Unseen messages (uses a server-side UIDSearch).
+	UnseenOnly bool
+	// BeforeUID, when >0, returns only messages with UID strictly less than it —
+	// a deterministic pagination cursor so the caller can page an inbox without
+	// raising Limit.
+	BeforeUID uint32
+}
+
+// SearchOptions controls Search.
+type SearchOptions struct {
+	// Limit is the maximum number of results. <=0 uses the default; values above
+	// maxListLimit are clamped down.
+	Limit int
+	// BeforeUID, when >0, restricts to messages with UID strictly less than it
+	// (pagination cursor).
+	BeforeUID uint32
+	// Body, when true, opts in to an expensive server-side BODY substring scan in
+	// addition to the light Subject/From header match. Left false by default so
+	// the common case never issues an un-indexed full-body scan.
+	Body bool
+}
+
+// SearchResult is the outcome of a Search: the matched messages plus enough
+// metadata for the agent to know the results are partial and to page further.
+type SearchResult struct {
+	// Messages are the envelope-only matches, newest first, capped to the limit.
+	Messages []Message `json:"messages"`
+	// TotalMatches is how many messages the server matched BEFORE the limit was
+	// applied — so the agent can tell "5 of 5" from "20 of 4000".
+	TotalMatches int `json:"total_matches"`
+	// Truncated is true when TotalMatches exceeded the limit and results were
+	// cut. Never silently drop: this flag makes partial results explicit.
+	Truncated bool `json:"truncated"`
+	// NextBeforeUID is the pagination cursor for the next page (pass it back as
+	// SearchOptions.BeforeUID). Set only when Truncated. It is the smallest UID
+	// in this page, so the next page continues strictly older.
+	NextBeforeUID uint32 `json:"next_before_uid,omitempty"`
 }
 
 // SendRequest describes an outbound message.
@@ -94,13 +176,14 @@ type SendRequest struct {
 // Transport is the test seam the email tools depend on. The production
 // implementation is *Client; tests inject an in-memory fake.
 type Transport interface {
-	// ReadInbox returns up to limit of the most recent INBOX messages
-	// (envelope only, newest first). unseenOnly restricts to \Unseen messages.
-	ReadInbox(ctx context.Context, limit int, unseenOnly bool) ([]Message, error)
+	// ReadInbox returns up to opts.Limit of the most recent INBOX messages
+	// (envelope only, newest first).
+	ReadInbox(ctx context.Context, opts InboxOptions) ([]Message, error)
 	// Search returns envelope-only matches for a free-text query (matched
-	// against subject, from, and body), newest first, up to limit.
-	Search(ctx context.Context, query string, limit int) ([]Message, error)
-	// ReadMessage fetches a single message (including body) by IMAP UID.
+	// against subject and from by default, plus body when opts.Body is set),
+	// newest first, up to opts.Limit, with truncation/pagination metadata.
+	Search(ctx context.Context, query string, opts SearchOptions) (SearchResult, error)
+	// ReadMessage fetches a single message (including a decoded body) by IMAP UID.
 	ReadMessage(ctx context.Context, uid uint32) (*Message, error)
 	// Send delivers an outbound message via SMTP.
 	Send(ctx context.Context, req SendRequest) error
@@ -140,140 +223,249 @@ func NewClient(acct Account) (*Client, error) {
 // Address returns the mailbox's own email address (the SMTP/IMAP username).
 func (c *Client) Address() string { return c.acct.Username }
 
+// clampLimit normalises a caller-supplied limit: <=0 becomes the default, and
+// anything above the max is clamped down. Enforced here (not just in the JSON
+// schema) so an out-of-range request cannot trigger an unbounded fetch.
+func clampLimit(n int) int {
+	switch {
+	case n <= 0:
+		return defaultListLimit
+	case n > maxListLimit:
+		return maxListLimit
+	default:
+		return n
+	}
+}
+
+// runIMAP bounds a single blocking IMAP command by ctx (and commandTimeout). If
+// the deadline fires first the error is returned; the caller's deferred
+// client.Close then tears down the connection, which unblocks the goroutine
+// still parked in Wait/Collect. The result channel is buffered so that
+// goroutine can never leak even if it finishes after the timeout.
+func runIMAP[T any](ctx context.Context, op string, fn func() (T, error)) (T, error) {
+	cctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+
+	type result struct {
+		v   T
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		v, err := fn()
+		ch <- result{v, err}
+	}()
+
+	select {
+	case <-cctx.Done():
+		var zero T
+		return zero, fmt.Errorf("email transport: %s: %w", op, cctx.Err())
+	case r := <-ch:
+		return r.v, r.err
+	}
+}
+
 // dialIMAP dials the IMAP server over implicit TLS, logs in, and selects INBOX.
-// The caller must Close the returned client.
-func (c *Client) dialIMAP(ctx context.Context) (*imapclient.Client, error) {
+// It returns the SELECT response (whose NumMessages count drives the
+// trailing-range read path) alongside the client. The caller must Close the
+// returned client.
+func (c *Client) dialIMAP(ctx context.Context) (*imapclient.Client, *imap.SelectData, error) {
 	addr := fmt.Sprintf("%s:%d", c.acct.IMAPHost, c.acct.IMAPPort)
 	tlsCfg := &tls.Config{ServerName: c.acct.IMAPHost, MinVersion: tls.VersionTLS12}
 
 	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 
-	// imapclient.DialTLS does not take a context; guard the dial with a timeout
-	// goroutine so an unreachable server cannot block past dialTimeout.
+	// imapDial does not take a context; guard the dial with a timeout goroutine
+	// so an unreachable server cannot block past dialTimeout.
 	type dialResult struct {
 		cl  *imapclient.Client
 		err error
 	}
 	ch := make(chan dialResult, 1)
 	go func() {
-		cl, err := imapclient.DialTLS(addr, &imapclient.Options{TLSConfig: tlsCfg})
+		cl, err := imapDial(addr, tlsCfg)
 		ch <- dialResult{cl, err}
 	}()
 	var client *imapclient.Client
 	select {
 	case <-dialCtx.Done():
-		return nil, fmt.Errorf("email transport: dial %s: %w", addr, dialCtx.Err())
+		return nil, nil, fmt.Errorf("email transport: dial %s: %w", addr, dialCtx.Err())
 	case res := <-ch:
 		if res.err != nil {
-			return nil, fmt.Errorf("email transport: dial TLS %s: %w", addr, res.err)
+			return nil, nil, fmt.Errorf("email transport: dial TLS %s: %w", addr, res.err)
 		}
 		client = res.cl
 	}
 
-	if err := client.Login(c.acct.Username, c.acct.Password).Wait(); err != nil {
+	if _, err := runIMAP(ctx, "login", func() (struct{}, error) {
+		return struct{}{}, client.Login(c.acct.Username, c.acct.Password).Wait()
+	}); err != nil {
 		client.Close()
-		return nil, fmt.Errorf("email transport: login failed: %w", err)
+		return nil, nil, fmt.Errorf("email transport: login failed: %w", err)
 	}
-	if _, err := client.Select("INBOX", nil).Wait(); err != nil {
+	selData, err := runIMAP(ctx, "select INBOX", func() (*imap.SelectData, error) {
+		return client.Select("INBOX", nil).Wait()
+	})
+	if err != nil {
 		client.Close()
-		return nil, fmt.Errorf("email transport: select INBOX: %w", err)
+		return nil, nil, fmt.Errorf("email transport: select INBOX: %w", err)
 	}
-	return client, nil
+	return client, selData, nil
 }
 
-// ReadInbox returns up to limit of the most recent INBOX messages, newest first.
-func (c *Client) ReadInbox(ctx context.Context, limit int, unseenOnly bool) ([]Message, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	client, err := c.dialIMAP(ctx)
+// ReadInbox returns up to opts.Limit of the most recent INBOX messages, newest
+// first. The default (seen+unseen, no cursor) path avoids a full-mailbox
+// SEARCH ALL: it takes the SELECT EXISTS count and fetches the trailing
+// sequence range. Unseen-only mode and cursor paging go through a bounded
+// UIDSearch instead.
+func (c *Client) ReadInbox(ctx context.Context, opts InboxOptions) ([]Message, error) {
+	limit := clampLimit(opts.Limit)
+	client, selData, err := c.dialIMAP(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer client.Close()
 
-	var crit *imap.SearchCriteria
-	if unseenOnly {
-		crit = &imap.SearchCriteria{NotFlag: []imap.Flag{imap.FlagSeen}}
-	} else {
-		crit = &imap.SearchCriteria{}
+	if opts.UnseenOnly || opts.BeforeUID > 0 {
+		crit := &imap.SearchCriteria{}
+		if opts.UnseenOnly {
+			crit.NotFlag = []imap.Flag{imap.FlagSeen}
+		}
+		switch {
+		case opts.BeforeUID == 1:
+			// Nothing has a UID strictly below 1.
+			return []Message{}, nil
+		case opts.BeforeUID > 1:
+			var s imap.UIDSet
+			s.AddRange(imap.UID(1), imap.UID(opts.BeforeUID-1))
+			crit.UID = []imap.UIDSet{s}
+		}
+		searchData, err := runIMAP(ctx, "search inbox", func() (*imap.SearchData, error) {
+			return client.UIDSearch(crit, nil).Wait()
+		})
+		if err != nil {
+			return nil, fmt.Errorf("email transport: search inbox: %w", err)
+		}
+		uids := searchData.AllUIDs()
+		if len(uids) == 0 {
+			return []Message{}, nil
+		}
+		sort.Slice(uids, func(i, j int) bool { return uids[i] > uids[j] })
+		if len(uids) > limit {
+			uids = uids[:limit]
+		}
+		return c.fetchMessages(ctx, client, imap.UIDSetNum(uids...), false)
 	}
-	searchData, err := client.UIDSearch(crit, nil).Wait()
-	if err != nil {
-		return nil, fmt.Errorf("email transport: search inbox: %w", err)
-	}
-	uids := searchData.AllUIDs()
-	if len(uids) == 0 {
+
+	// Default path: the newest `limit` messages by sequence number, derived from
+	// the EXISTS count — no SEARCH ALL.
+	n := selData.NumMessages
+	if n == 0 {
 		return []Message{}, nil
 	}
-	// Newest first, then cap to limit.
-	sort.Slice(uids, func(i, j int) bool { return uids[i] > uids[j] })
-	if len(uids) > limit {
-		uids = uids[:limit]
+	start := uint32(1)
+	if n > uint32(limit) {
+		start = n - uint32(limit) + 1
 	}
-	return c.fetchEnvelopes(client, uids, false)
+	var seq imap.SeqSet
+	seq.AddRange(start, n)
+	return c.fetchMessages(ctx, client, seq, false)
 }
 
-// Search returns envelope-only matches for query, newest first, up to limit.
-func (c *Client) Search(ctx context.Context, query string, limit int) ([]Message, error) {
-	if limit <= 0 {
-		limit = 20
-	}
+// Search returns matches for query, newest first, up to opts.Limit, with
+// truncation and pagination metadata. Every IMAP command is bounded by the
+// context so a slow body scan on a large mailbox returns a timeout error rather
+// than hanging the turn.
+func (c *Client) Search(ctx context.Context, query string, opts SearchOptions) (SearchResult, error) {
 	q := strings.TrimSpace(query)
 	if q == "" {
-		return nil, fmt.Errorf("email transport: search query is empty")
+		return SearchResult{}, fmt.Errorf("email transport: search query is empty")
 	}
-	client, err := c.dialIMAP(ctx)
+	limit := clampLimit(opts.Limit)
+	client, _, err := c.dialIMAP(ctx)
 	if err != nil {
-		return nil, err
+		return SearchResult{}, err
 	}
 	defer client.Close()
 
-	// IMAP OR criteria across Subject / From / body Text. go-imap models OR as a
-	// pair, so chain Subject OR (From OR Text).
-	crit := &imap.SearchCriteria{
-		Or: [][2]imap.SearchCriteria{
-			{
-				{Header: []imap.SearchCriteriaHeaderField{{Key: "Subject", Value: q}}},
-				{
-					Or: [][2]imap.SearchCriteria{
-						{
-							{Header: []imap.SearchCriteriaHeaderField{{Key: "From", Value: q}}},
-							{Body: []string{q}},
-						},
-					},
-				},
-			},
-		},
-	}
-	searchData, err := client.UIDSearch(crit, nil).Wait()
+	crit := buildSearchCriteria(q, opts.Body, opts.BeforeUID)
+	searchData, err := runIMAP(ctx, "search", func() (*imap.SearchData, error) {
+		return client.UIDSearch(crit, nil).Wait()
+	})
 	if err != nil {
-		return nil, fmt.Errorf("email transport: search %q: %w", q, err)
+		return SearchResult{}, fmt.Errorf("email transport: search %q: %w", q, err)
 	}
 	uids := searchData.AllUIDs()
-	if len(uids) == 0 {
-		return []Message{}, nil
+	total := len(uids)
+	if total == 0 {
+		return SearchResult{Messages: []Message{}}, nil
 	}
 	sort.Slice(uids, func(i, j int) bool { return uids[i] > uids[j] })
-	if len(uids) > limit {
+
+	truncated := false
+	if total > limit {
 		uids = uids[:limit]
+		truncated = true
 	}
-	return c.fetchEnvelopes(client, uids, false)
+	msgs, err := c.fetchMessages(ctx, client, imap.UIDSetNum(uids...), false)
+	if err != nil {
+		return SearchResult{}, err
+	}
+	res := SearchResult{
+		Messages:     msgs,
+		TotalMatches: total,
+		Truncated:    truncated,
+	}
+	if truncated && len(msgs) > 0 {
+		// Cursor for the next page: everything strictly older than the smallest
+		// UID we returned (results are newest-first, so that is the last one).
+		res.NextBeforeUID = msgs[len(msgs)-1].UID
+	}
+	return res, nil
 }
 
-// ReadMessage fetches a single message (with body) by UID.
+// buildSearchCriteria assembles the server-side SEARCH criteria. The default is
+// the light, header-indexed Subject-OR-From match; the expensive un-indexed
+// BODY substring scan is added only when body is true. A non-zero beforeUID is
+// ANDed on as a "UID < beforeUID" range for pagination.
+func buildSearchCriteria(q string, body bool, beforeUID uint32) *imap.SearchCriteria {
+	crit := &imap.SearchCriteria{}
+	if body {
+		// (Subject OR (From OR BODY)) — go-imap models OR as a pair, so chain it.
+		crit.Or = [][2]imap.SearchCriteria{{
+			{Header: []imap.SearchCriteriaHeaderField{{Key: "Subject", Value: q}}},
+			{Or: [][2]imap.SearchCriteria{{
+				{Header: []imap.SearchCriteriaHeaderField{{Key: "From", Value: q}}},
+				{Body: []string{q}},
+			}}},
+		}}
+	} else {
+		crit.Or = [][2]imap.SearchCriteria{{
+			{Header: []imap.SearchCriteriaHeaderField{{Key: "Subject", Value: q}}},
+			{Header: []imap.SearchCriteriaHeaderField{{Key: "From", Value: q}}},
+		}}
+	}
+	if beforeUID > 1 {
+		var s imap.UIDSet
+		s.AddRange(imap.UID(1), imap.UID(beforeUID-1))
+		crit.UID = []imap.UIDSet{s}
+	}
+	return crit
+}
+
+// ReadMessage fetches a single message (with a decoded body) by UID.
 func (c *Client) ReadMessage(ctx context.Context, uid uint32) (*Message, error) {
 	if uid == 0 {
 		return nil, fmt.Errorf("email transport: uid is required")
 	}
-	client, err := c.dialIMAP(ctx)
+	client, _, err := c.dialIMAP(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer client.Close()
 
-	msgs, err := c.fetchEnvelopes(client, []imap.UID{imap.UID(uid)}, true)
+	msgs, err := c.fetchMessages(ctx, client, imap.UIDSetNum(imap.UID(uid)), true)
 	if err != nil {
 		return nil, err
 	}
@@ -283,36 +475,39 @@ func (c *Client) ReadMessage(ctx context.Context, uid uint32) (*Message, error) 
 	return &msgs[0], nil
 }
 
-// fetchEnvelopes fetches envelopes (and optionally the text body) for the given
-// UIDs and converts them to transport Messages. Results follow the order of the
-// supplied uids (already newest-first for list/search callers).
-func (c *Client) fetchEnvelopes(client *imapclient.Client, uids []imap.UID, withBody bool) ([]Message, error) {
-	uidSet := imap.UIDSetNum(uids...)
+// fetchMessages fetches envelopes (and, when withBody, the FULL raw message so
+// the MIME body can be decoded) for the given number set, converts them to
+// transport Messages, and returns them newest-first (by UID). The FETCH is
+// bounded by the context.
+func (c *Client) fetchMessages(ctx context.Context, client *imapclient.Client, numSet imap.NumSet, withBody bool) ([]Message, error) {
 	opts := &imap.FetchOptions{Envelope: true, Flags: true, UID: true}
 	if withBody {
-		opts.BodySection = []*imap.FetchItemBodySection{{Specifier: imap.PartSpecifierText}}
+		// BODY[] — the whole message including the headers that declare
+		// Content-Type / Content-Transfer-Encoding / boundary, which BODY[TEXT]
+		// omitted. Those headers are what makes MIME decoding possible.
+		opts.BodySection = []*imap.FetchItemBodySection{{}}
 	}
-	fetched, err := client.Fetch(uidSet, opts).Collect()
+	fetched, err := runIMAP(ctx, "fetch", func() ([]*imapclient.FetchMessageBuffer, error) {
+		return client.Fetch(numSet, opts).Collect()
+	})
 	if err != nil {
 		return nil, fmt.Errorf("email transport: fetch: %w", err)
 	}
 
-	byUID := make(map[imap.UID]*imapclient.FetchMessageBuffer, len(fetched))
+	out := make([]Message, 0, len(fetched))
 	for _, m := range fetched {
-		byUID[m.UID] = m
-	}
-	out := make([]Message, 0, len(uids))
-	for _, uid := range uids {
-		m, ok := byUID[uid]
-		if !ok || m.Envelope == nil {
+		if m == nil || m.Envelope == nil {
 			continue
 		}
 		out = append(out, bufferToMessage(m, withBody))
 	}
+	// Newest first, regardless of the order the server returned.
+	sort.Slice(out, func(i, j int) bool { return out[i].UID > out[j].UID })
 	return out, nil
 }
 
-// bufferToMessage converts a fetched IMAP buffer to a transport Message.
+// bufferToMessage converts a fetched IMAP buffer to a transport Message. When
+// withBody is set the BODY[] section is decoded from MIME.
 func bufferToMessage(m *imapclient.FetchMessageBuffer, withBody bool) Message {
 	env := m.Envelope
 	msg := Message{
@@ -331,15 +526,159 @@ func bufferToMessage(m *imapclient.FetchMessageBuffer, withBody bool) Message {
 	if !env.Date.IsZero() {
 		msg.Date = env.Date.UTC().Format(time.RFC3339)
 	}
-	if withBody && len(m.BodySection) > 0 {
+	if withBody {
 		for _, bs := range m.BodySection {
-			msg.Body = strings.TrimSpace(string(bs.Bytes))
-			if msg.Body != "" {
+			if decoded := decodeBody(bs.Bytes); decoded != "" {
+				msg.Body = decoded
 				break
 			}
 		}
 	}
 	return msg
+}
+
+// decodeBody parses a full RFC 822 message (BODY[] — headers + body) and returns
+// a readable plain-text rendering: the first text/plain part (decoded from its
+// Content-Transfer-Encoding and charset by go-message), or, if the message is
+// HTML-only, the text/html part stripped to text. Attachments are skipped. The
+// result is trimmed and capped at maxBodyBytes. If the bytes are not a parseable
+// MIME message the raw bytes are returned (capped) so the agent still sees
+// something rather than nothing.
+func decodeBody(raw []byte) string {
+	mr, err := gomail.CreateReader(bytes.NewReader(raw))
+	if mr == nil {
+		// Unparseable as MIME (CreateReader returns a nil reader only for a hard
+		// parse error; an unknown charset still yields a usable reader + err).
+		return capBody(strings.TrimSpace(string(raw)))
+	}
+	_ = err // unknown-charset errors are non-fatal; the reader is still usable.
+	defer mr.Close()
+
+	var plain, htmlBody string
+	for {
+		part, perr := mr.NextPart()
+		if part == nil {
+			// io.EOF or an unrecoverable mid-stream error: stop, keep what we have.
+			break
+		}
+		switch h := part.Header.(type) {
+		case *gomail.InlineHeader:
+			ct, _, _ := h.ContentType()
+			b, _ := io.ReadAll(part.Body)
+			switch {
+			case strings.EqualFold(ct, "text/plain"):
+				if plain == "" {
+					plain = string(b)
+				}
+			case strings.EqualFold(ct, "text/html"):
+				if htmlBody == "" {
+					htmlBody = string(b)
+				}
+			}
+		default:
+			// Attachment (or non-inline part) — drain and skip.
+			_, _ = io.Copy(io.Discard, part.Body)
+		}
+		_ = perr
+	}
+
+	var body string
+	switch {
+	case strings.TrimSpace(plain) != "":
+		body = plain
+	case strings.TrimSpace(htmlBody) != "":
+		body = htmlToText(htmlBody)
+	}
+	return capBody(strings.TrimSpace(body))
+}
+
+// blockHTMLTags are tags whose start/end should introduce a line break when
+// flattening HTML to text, so paragraphs and list items don't run together.
+var blockHTMLTags = map[string]bool{
+	"p": true, "br": true, "div": true, "tr": true, "li": true,
+	"h1": true, "h2": true, "h3": true, "h4": true, "h5": true, "h6": true,
+	"table": true, "ul": true, "ol": true, "blockquote": true, "pre": true,
+	"section": true, "article": true, "header": true, "footer": true, "hr": true,
+}
+
+// htmlToText strips HTML to readable text using an x/net/html tokenizer walk
+// (pure Go, no heavy markdown dep): script/style content is dropped, block-level
+// tags become line breaks, entities are decoded, and runs of whitespace are
+// collapsed.
+func htmlToText(h string) string {
+	z := html.NewTokenizer(strings.NewReader(h))
+	var sb strings.Builder
+	skipDepth := 0 // >0 while inside a <script>/<style> subtree
+	for {
+		tt := z.Next()
+		if tt == html.ErrorToken {
+			break // includes io.EOF
+		}
+		switch tt {
+		case html.StartTagToken, html.SelfClosingTagToken:
+			name, _ := z.TagName()
+			tag := string(name)
+			if tag == "script" || tag == "style" {
+				if tt == html.StartTagToken {
+					skipDepth++
+				}
+				continue
+			}
+			if blockHTMLTags[tag] {
+				sb.WriteByte('\n')
+			}
+		case html.EndTagToken:
+			name, _ := z.TagName()
+			tag := string(name)
+			if (tag == "script" || tag == "style") && skipDepth > 0 {
+				skipDepth--
+				continue
+			}
+			if blockHTMLTags[tag] {
+				sb.WriteByte('\n')
+			}
+		case html.TextToken:
+			if skipDepth == 0 {
+				sb.Write(z.Text()) // already entity-decoded
+			}
+		}
+	}
+	return collapseWhitespace(sb.String())
+}
+
+// collapseWhitespace normalises runs of spaces/tabs within each line to a single
+// space and collapses three-or-more consecutive newlines to a blank line,
+// preserving paragraph structure.
+func collapseWhitespace(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, ln := range lines {
+		lines[i] = strings.Join(strings.Fields(ln), " ")
+	}
+	joined := strings.Join(lines, "\n")
+	for strings.Contains(joined, "\n\n\n") {
+		joined = strings.ReplaceAll(joined, "\n\n\n", "\n\n")
+	}
+	return strings.TrimSpace(joined)
+}
+
+// capBody truncates s to at most maxBodyBytes, backing off to a UTF-8 rune
+// boundary and appending an explicit marker naming how many bytes were dropped.
+func capBody(s string) string {
+	if len(s) <= maxBodyBytes {
+		return s
+	}
+	truncated := s[:maxBodyBytes]
+	// Back off any partial rune left at the cut point.
+	for len(truncated) > 0 {
+		r, size := utf8.DecodeLastRuneInString(truncated)
+		if r == utf8.RuneError && size <= 1 {
+			truncated = truncated[:len(truncated)-1]
+			continue
+		}
+		break
+	}
+	removed := len(s) - len(truncated)
+	return truncated + fmt.Sprintf("\n…[truncated %d bytes]", removed)
 }
 
 func hasSeenFlag(flags []imap.Flag) bool {
@@ -363,7 +702,7 @@ func (c *Client) MarkSeen(ctx context.Context, uid uint32) error {
 	if uid == 0 {
 		return fmt.Errorf("email transport: uid is required")
 	}
-	client, err := c.dialIMAP(ctx)
+	client, _, err := c.dialIMAP(ctx)
 	if err != nil {
 		return err
 	}
@@ -375,7 +714,9 @@ func (c *Client) MarkSeen(ctx context.Context, uid uint32) error {
 		Flags:  []imap.Flag{imap.FlagSeen},
 		Silent: true,
 	}
-	if err := client.Store(uidSet, storeFlags, nil).Close(); err != nil {
+	if _, err := runIMAP(ctx, "store", func() (struct{}, error) {
+		return struct{}{}, client.Store(uidSet, storeFlags, nil).Close()
+	}); err != nil {
 		return fmt.Errorf("email transport: mark seen uid %d: %w", uid, err)
 	}
 	return nil
