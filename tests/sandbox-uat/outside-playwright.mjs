@@ -143,11 +143,49 @@ async function main() {
     await securityTab.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS })
     await securityTab.click()
 
-    // SandboxSection renders an <h3> "Process Sandbox" once its status
-    // query resolves (see resolveBackendLabel/resolveDescription in
-    // SandboxSection.tsx). Give it a real chance to load, but don't hang
-    // forever if the SPA never surfaces it.
-    const heading = page.getByText('Process Sandbox', { exact: false }).first()
+    // --- Root cause of the S.4 N/A verdict (issue #625): the Security tab's
+    // two-layer IA (src/components/settings/SecuritySection.tsx) hides ALL
+    // "jargon" — including the whole "Process Sandbox" panel — behind a
+    // single collapsed <AdvancedDisclosure title="Advanced / technical
+    // details"> (src/components/shared/AdvancedDisclosure.tsx). That
+    // component defaults to closed (defaultOpen=false, not overridden here)
+    // and — by design ("Children are NOT mounted until the disclosure is
+    // expanded (conditional render, not CSS visibility)") — does not put its
+    // children in the DOM at all while collapsed. SandboxSection, and its
+    // "Process Sandbox" <h3>, therefore never exist in the DOM until this
+    // trigger is clicked. This was never an auth or navigation-timing
+    // problem (both were already fine) — the probe was simply waiting on a
+    // heading that had not been mounted yet. The trigger carries a stable,
+    // already-shipped selector (data-testid="advanced-disclosure-trigger")
+    // and is the only AdvancedDisclosure instance reachable from the
+    // Security tab, so it is unambiguous here. ---
+    const advancedTrigger = page.getByTestId('advanced-disclosure-trigger')
+    try {
+      await advancedTrigger.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS })
+      if ((await advancedTrigger.getAttribute('aria-expanded')) !== 'true') {
+        await advancedTrigger.click()
+      }
+    } catch {
+      // Trigger itself never appeared — fall through; the heading wait below
+      // will also fail and this correctly resolves to a real N/A rather than
+      // masking the failure.
+    }
+
+    // SandboxSection renders an <h3> "Process Sandbox" unconditionally as
+    // soon as it mounts (see the JSX in SandboxSection.tsx — the heading is
+    // not gated on the status query's loading state, only the body below it
+    // is). Give it a real chance to appear now that the Advanced disclosure
+    // has been expanded, but don't hang forever if the SPA never surfaces it.
+    //
+    // Use a role-based locator (heading), NOT a plain text match. A plain
+    // `getByText('Process Sandbox', {exact:false})` also matches the static
+    // label `<p>Process Sandbox (Landlock / seccomp)</p>` that
+    // SecuritySection.tsx renders as a sibling wrapper one level up from
+    // SandboxSection's own <h3> — and since that <p> precedes the <h3> in
+    // DOM order, `.first()` silently picked the label, not the heading. The
+    // label is a <p>, not a heading element, so `getByRole('heading', ...)`
+    // resolves the real <h3> unambiguously.
+    const heading = page.getByRole('heading', { name: 'Process Sandbox', exact: false }).first()
     let sectionFound = true
     try {
       await heading.waitFor({ state: 'visible', timeout: 15000 })
@@ -165,10 +203,40 @@ async function main() {
 
     // Pull the readable text of the enclosing <section> for the panel so
     // the evidence captures the actual rendered claim, not just the heading.
-    const section = page
-      .locator('section')
-      .filter({ has: page.getByText('Process Sandbox', { exact: false }) })
-      .first()
+    //
+    // NOTE: this must be the NEAREST ancestor <section> of the heading, not
+    // just "any <section> containing the text 'Process Sandbox' on the
+    // page" — the DOM here is two nested <section>s: SecuritySection.tsx's
+    // wrapper (`<section><p>Process Sandbox (Landlock / seccomp)</p>
+    // <SandboxSection/><p>...auto-detected...</p></section>`) around
+    // SandboxSection's own root (`<section><h3>Process Sandbox</h3>
+    // {renderStatusBody()}</section>`), and BOTH match a text filter on
+    // "Process Sandbox" (the outer via its label <p>, the inner via its
+    // <h3>). `page.locator('section').filter(...).first()` — the original
+    // form here — resolves in DOM/document order, so it silently grabbed
+    // the OUTER wrapper, which holds only the static label and footnote,
+    // never the actual backend label / description that
+    // resolveBackendLabel/resolveDescription render inside SandboxSection's
+    // OWN section. That made the fallback-vs-kernel text comparison below
+    // structurally unable to see "Application fallback" even when the UI
+    // correctly rendered it. Walking up from the heading itself picks the
+    // correct (inner, nearest) section unambiguously.
+    const section = heading.locator('xpath=ancestor::section[1]')
+
+    // The heading is unconditional, but the status body underneath it
+    // (resolveBackendLabel/resolveDescription in SandboxSection.tsx) only
+    // renders its real content once the `/api/v1/security/sandbox-status`
+    // query resolves — before that it shows a text-free animate-pulse
+    // skeleton. Reading sectionText immediately after the heading appears
+    // can race that fetch and capture the skeleton (no backend label at
+    // all), which would make the fallback/kernel comparison below trivially
+    // vacuous. Wait for real content — the fallback label, a landlock/
+    // seatbelt backend name, or an explicit fetch-error message — before
+    // treating the panel text as evidence.
+    const contentReady = section.filter({
+      hasText: /application fallback|landlock|seatbelt|failed to load sandbox status/i,
+    })
+    await contentReady.first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {})
 
     let sectionText = ''
     try {
@@ -177,7 +245,14 @@ async function main() {
       sectionText = await heading.locator('xpath=ancestor::div[1]').innerText({ timeout: 5000 }).catch(async () => page.locator('body').innerText())
     }
 
-    // Full-page screenshot for evidence, whichever way this resolves.
+    // Full-page screenshot for evidence, whichever way this resolves. Scroll
+    // the panel into view first — the Advanced disclosure content can start
+    // well below the fold, and an un-scrolled screenshot would show the
+    // primary-layer Security Score card instead of the actual panel a human
+    // reviewing the CI artifact needs to see. The printed evidence line
+    // above (sectionText) is the authoritative verdict evidence regardless;
+    // this only makes the screenshot artifact match it.
+    await heading.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {})
     await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {})
 
     const lower = sectionText.toLowerCase()
