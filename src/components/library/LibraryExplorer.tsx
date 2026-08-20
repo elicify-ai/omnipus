@@ -142,7 +142,7 @@ export function LibraryExplorer({
     // Only the explorer's OWN navigation state matters here — re-running
     // this because the caller passed a new function reference would be
     // harmless but pointless noise.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [workspaceId])
 
   // Always fetched (cheap, small list) — backs the virtual-root listing AND

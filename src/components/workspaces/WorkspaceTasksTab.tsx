@@ -199,7 +199,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
       setOwnerAgentId(null)
       if (activeTags.length > 0) setActiveTags([])
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on view change only
+     
   }, [view])
 
   // Plan + owner + tag filters AND together (ADR-051 D2/D6) — the one

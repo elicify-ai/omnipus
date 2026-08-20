@@ -12,6 +12,8 @@ import { CaretDown, CaretUp, Camera, Broadcast } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 
 // ── Shared result parser ──────────────────────────────────────────────────────
@@ -102,6 +104,17 @@ export function BrowserToolBlock({
   summary,
 }: BrowserToolBlockProps) {
   const [expanded, setExpanded] = useState(false)
+
+  // Client-side render gate (issue #494): hides this row when
+  // shouldRenderToolCall says so for the given tool name/args, unless the
+  // user has opted into verbose chat. Must sit after every hook above and
+  // before the JSX return (Rules of Hooks) — mirrors BashOutput.tsx's gate.
+  // Covers both the live path (createBrowserToolUI below) and the replay
+  // path (BrowserToolReplayBlock), since both funnel through this component.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  if (!shouldRenderToolCall(toolName, args, verboseChatEnabled, !!isError)) {
+    return null
+  }
 
   const isRunning = status.type === 'running'
   const isCancelled = isCancelledStatus(status)

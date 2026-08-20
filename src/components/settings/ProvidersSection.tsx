@@ -378,7 +378,8 @@ function ProviderConfigSheet({
     onOpenChange(false)
     setSaveValidation((prev) => ({ ...prev, [draftKey]: undefined }))
     setDraftModels((prev) => {
-      const { [draftKey]: _drop, ...rest } = prev
+      const rest = { ...prev }
+      delete rest[draftKey]
       return rest
     })
     setNewModel((prev) => ({ ...prev, [draftKey]: '' }))

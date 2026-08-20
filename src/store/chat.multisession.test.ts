@@ -3,6 +3,7 @@ import { act } from 'react'
 import { useChatStore, getMessages } from './chat'
 import { useSessionStore } from './session'
 import { queryClient } from '@/lib/queryClient'
+import type { WsReceiveFrame } from '@/lib/ws'
 
 // chat.multisession.test.ts — per-session sharding unit tests.
 //
@@ -373,7 +374,7 @@ describe('chat.multisession — (h) frame missing session_id falls back with con
 
     // BDD: When a token frame arrives with no session_id
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'token', content: 'fallback-token' } as any)
+      useChatStore.getState().handleFrame({ type: 'token', content: 'fallback-token' } as unknown as WsReceiveFrame)
     })
 
     // BDD: Then a console.warn was emitted
@@ -452,7 +453,7 @@ describe('chat.multisession — (k) untagged session-scoped frame in production 
 
     act(() => {
       // This frame is session-scoped but missing session_id — should be dropped in production
-      useChatStore.getState().handleFrame({ type: 'token', content: 'should be dropped' } as any)
+      useChatStore.getState().handleFrame({ type: 'token', content: 'should be dropped' } as unknown as WsReceiveFrame)
     })
 
     // BDD: Then console.error was called

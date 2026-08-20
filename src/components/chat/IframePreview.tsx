@@ -265,7 +265,7 @@ export function IframePreview(props: IframePreviewProps) {
     }
     return () => stopPolling()
     // Run once per href resolution; re-triggered by the Retry handler below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [href])
 
   function handleRetry() {

@@ -144,7 +144,7 @@ export function useCommandPreview(req: ExecutorCommandPreviewRequest | undefined
     }
     // `req` itself is intentionally excluded — `key` is its full dependency
     // surface, and `attempt` exists purely to force a re-run on retry().
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [key, attempt])
 
   const retry = useCallback(() => setAttempt((n) => n + 1), [])

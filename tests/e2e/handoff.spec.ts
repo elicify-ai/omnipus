@@ -3,7 +3,7 @@ import * as path from 'path'
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, agentPicker, assistantMessages, selectAgent, waitForConnected } from './fixtures/selectors';
+import { chatInput, selectAgent, waitForConnected } from './fixtures/selectors';
 import { enableVerboseChat } from './fixtures/verbose-chat';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).

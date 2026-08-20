@@ -15,7 +15,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
   return {
     ...actual,
-    createFileRoute: (_path: string) => (opts: { component: React.ComponentType }) => opts,
+    createFileRoute: (path: string) => { void path; return (opts: { component: React.ComponentType }) => opts },
     useNavigate: () => mockNavigate,
     redirect: (opts: unknown) => {
       // Mimic TanStack Router's redirect throwing behaviour so callers can catch it.

@@ -31,6 +31,8 @@ import { makeAssistantToolUI } from '@assistant-ui/react'
 import { Globe, Terminal } from '@phosphor-icons/react'
 import { type ServeWorkspaceResult as ServeWorkspaceIframeResult, type RunInWorkspaceResult as RunInWorkspaceIframeResult } from '@/lib/api'
 import { hasPreviewShape } from '@/lib/preview-url'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { isCancelledStatus } from '@/lib/toolStatusConfig'
 import { IframePreview } from '../IframePreview'
 import { PreviewToolHeader } from './PreviewToolHeader'
@@ -172,6 +174,18 @@ export function WebServeBlock({
   isCancelled: boolean | undefined
   toolName: string
 }) {
+  // Client-side render gate (issue #494): mirrors BashOutput.tsx's gate —
+  // hides this row when shouldRenderToolCall says so, unless verbose chat is
+  // on. WebServeBlock takes no hooks of its own before this point, so this
+  // is the first hook call — still must precede every other branch/return
+  // below (Rules of Hooks).
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  if (
+    !shouldRenderToolCall(toolName, args as unknown as Record<string, unknown>, verboseChatEnabled, !!isError)
+  ) {
+    return null
+  }
+
   // B1.3e: when the type guard rejects the result and the tool is no longer
   // running, render the malformed block instead of crashing or rendering nothing.
   // We allow null result while running (tool not done yet — normal state).

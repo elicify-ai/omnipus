@@ -77,11 +77,18 @@ export const test = base.extend<{
   // Test-scoped, freshly empty per attempt — a test pushes into this array
   // as it creates each Plan; the array itself is never shared across tests
   // or across retries of the same test (each attempt gets its own).
-  createdPlanIds: async ({}, use) => {
+  // No destructured `{}` param here (that trips `no-empty-pattern`): neither
+  // fixture depends on any other fixture, so the first (fixtures) argument
+  // is simply left unnamed-but-typed via a leading placeholder. TypeScript's
+  // inference for `base.extend<Fixtures>({...})` comes from the option
+  // object's position/generic, not from destructuring the first param, so
+  // this is not a behavior change — just not naming an argument we never
+  // read.
+  createdPlanIds: async (_fixtures, use) => {
     const ids: string[] = []
     await use(ids)
   },
-  createdTaskIds: async ({}, use) => {
+  createdTaskIds: async (_fixtures, use) => {
     const ids: string[] = []
     await use(ids)
   },

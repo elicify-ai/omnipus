@@ -19,8 +19,14 @@ function rawEmojiInHtml(html: string): string[] {
   // Strip all <span data-phosphor-icon="..."></span>
   const stripped = html.replace(/<span data-phosphor-icon="[^"]*"><\/span>/g, '')
   // Match emoji ranges used by our EMOJI_MAP entries
+  // \u{2764} (heavy black heart) and \u{FE0F} (variation selector-16) are kept as
+  // separate alternation branches — not adjacent inside one character class — so this
+  // isn't misread as matching the combined ❤️ grapheme as a unit: a class only ever
+  // matches ONE code point per position, so the two must stay independently matchable
+  // (a bare ❤ or a stray FE0F) exactly as before, just without the misleading adjacency
+  // that no-misleading-character-class flags.
   const emojiRe =
-    /[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{231A}\u{231B}\u{23E9}-\u{23FA}\u{2764}\u{FE0F}]/gu
+    /[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{231A}\u{231B}\u{23E9}-\u{23FA}\u{2764}]|\u{FE0F}/gu
   return [...stripped.matchAll(emojiRe)].map((m) => m[0])
 }
 

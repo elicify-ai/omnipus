@@ -1050,7 +1050,7 @@ describe('useAutoSave', () => {
 
   it('D3: a disabled→enabled re-arm where the data happens to be IDENTICAL to the pre-disable baseline still does not fire (no false-positive save at the re-arm boundary itself)', async () => {
     const saveFn = vi.fn().mockResolvedValue(undefined)
-    let data: { id: string } = { id: 'A' }
+    const data: { id: string } = { id: 'A' }
     let disabled = false
 
     const { rerender } = renderHook(

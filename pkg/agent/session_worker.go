@@ -6,6 +6,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"runtime/debug"
 	"sync/atomic"
 	"time"
@@ -288,6 +289,13 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 
 	target, targetErr := al.buildContinuationTarget(msg)
 	if targetErr != nil {
+		if errors.Is(targetErr, ErrNoContinuationTarget) {
+			if finalResponse != "" {
+				al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse)
+				published = true
+			}
+			return
+		}
 		logger.WarnCF("agent.worker", "Failed to build steering continuation target",
 			map[string]any{
 				"scope":   w.scope,

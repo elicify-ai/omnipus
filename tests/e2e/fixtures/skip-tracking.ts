@@ -465,6 +465,7 @@ export function softSkip(
       `[skip-tracking] Self-test FAILED: validateAllowList rejected a valid entry.\n` +
       `Entry: ${JSON.stringify(validEntry)}\n` +
       `Error: ${e instanceof Error ? e.message : String(e)}`,
+      { cause: e },
     );
   }
 

@@ -21,7 +21,7 @@
 
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, agentPicker, assistantMessages, newChatButton, waitForConnected } from './fixtures/selectors'
+import { chatInput, assistantMessages, newChatButton, waitForConnected } from './fixtures/selectors'
 
 // ─── Bug-1: Skip onboarding button must be gone ───────────────────────────────
 

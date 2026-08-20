@@ -70,7 +70,7 @@ vi.mock('@assistant-ui/react', async () => {
   const passthrough = ({ children }: { children?: React.ReactNode }) =>
     React.createElement(React.Fragment, null, children ?? null)
   const passthroughFwd = React.forwardRef(
-    ({ children, ...rest }: Record<string, unknown>, _ref: unknown) => {
+    ({ children, ...rest }: Record<string, unknown>) => {
       void rest
       return React.createElement(React.Fragment, null, children as React.ReactNode ?? null)
     }
@@ -80,13 +80,11 @@ vi.mock('@assistant-ui/react', async () => {
     ThreadPrimitive: {
       Root: passthrough,
       Viewport: passthrough,
-      Messages: (_: { children: (args: { message: unknown }) => React.ReactNode }) =>
-        React.createElement(React.Fragment, null, null),
+      Messages: () => React.createElement(React.Fragment, null, null),
     },
     MessagePrimitive: {
       Root: passthrough,
-      Parts: (_: { children: (args: { part: unknown }) => React.ReactNode }) =>
-        React.createElement(React.Fragment, null, null),
+      Parts: () => React.createElement(React.Fragment, null, null),
     },
     MessagePartPrimitive: {
       InProgress: () => null,

@@ -117,7 +117,7 @@ func TestFallback_ContextCanceled(t *testing.T) {
 			return nil, context.Canceled
 		}
 		t.Error("should not reach second candidate after cancel")
-		return nil, nil
+		return nil, errors.New("test: unreachable candidate invoked after context cancel")
 	}
 
 	_, err := fc.Execute(ctx, candidates, run)
@@ -212,7 +212,7 @@ func TestFallback_AllInCooldown(t *testing.T) {
 	_, err := fc.Execute(context.Background(), candidates,
 		func(ctx context.Context, provider, model string) (*LLMResponse, error) {
 			t.Error("should not call any provider (all in cooldown)")
-			return nil, nil
+			return nil, errors.New("test: unreachable candidate invoked while all providers in cooldown")
 		})
 
 	if err == nil {

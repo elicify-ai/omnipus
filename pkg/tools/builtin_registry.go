@@ -138,6 +138,30 @@ func (r *BuiltinRegistry) Count() int {
 	return len(r.tools)
 }
 
+// reservedToolNamePrefix is the tool-name prefix reserved for Omnipus's own
+// system tools (FR-060). No externally-supplied (MCP) tool registration may
+// use it. This is checked in two independent places that must stay in
+// agreement: BuiltinRegistry.ValidateMCPName (central MCP registry
+// admission) and ToolRegistry.registerToolLocked (per-agent registration,
+// issue #278) — the latter has no reference to a populated BuiltinRegistry,
+// so the prefix check itself is factored out as a free function both call.
+const reservedToolNamePrefix = "system."
+
+// validateReservedToolName rejects a name that begins with the reserved
+// "system." prefix (FR-060). It does not check for a collision against any
+// specific registry's contents — callers that also need conflict-with-
+// existing-entry checks (e.g. ValidateMCPName's builtin-conflict check) do
+// that separately.
+func validateReservedToolName(name string) error {
+	if strings.HasPrefix(name, reservedToolNamePrefix) {
+		return fmt.Errorf(
+			"tools: name %q rejected: name begins with reserved prefix %q",
+			name, reservedToolNamePrefix,
+		)
+	}
+	return nil
+}
+
 // ValidateMCPName returns an error if the given MCP tool name would conflict
 // with the builtin registry (FR-034, FR-060).
 //   - If the name begins with "system." it is rejected unconditionally
@@ -145,11 +169,8 @@ func (r *BuiltinRegistry) Count() int {
 //   - If the name matches an existing builtin, it is rejected
 //     (`conflict_with: "builtin"`) per FR-034.
 func (r *BuiltinRegistry) ValidateMCPName(name string) error {
-	if strings.HasPrefix(name, "system.") {
-		return fmt.Errorf(
-			"tools.BuiltinRegistry: MCP tool %q rejected: name begins with reserved prefix \"system.\"",
-			name,
-		)
+	if err := validateReservedToolName(name); err != nil {
+		return fmt.Errorf("tools.BuiltinRegistry: MCP tool %q rejected: %w", name, err)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()

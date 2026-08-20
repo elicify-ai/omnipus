@@ -91,9 +91,10 @@ describe('sanitizeChildText — sanctioned markdown survives', () => {
 describe('sanitizeChildText — control-char / null-byte hardening', () => {
   it('strips null bytes used to smuggle tag-like payloads', () => {
     // A smuggled "<scr\x00ipt>" must not survive as a tag-like token.
-    const out = stripControlChars('foo<scr\x00ipt>bar')
-    expect(out).not.toContain('\x00')
-    expect(out).not.toMatch(/<scr\x00ipt>/)
+    const nullByte = String.fromCharCode(0)
+    const out = stripControlChars(`foo<scr${nullByte}ipt>bar`)
+    expect(out).not.toContain(nullByte)
+    expect(out).not.toContain(`<scr${nullByte}ipt>`)
   })
 
   it('strips C0 control chars but preserves tab/newline/carriage-return', () => {

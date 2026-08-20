@@ -36,9 +36,7 @@
 // user-facing flow"): every test depends on OPENROUTER_API_KEY_CI.
 // The global-setup preflight throws immediately if it is unset.
 
-import * as fs from 'fs'
-import * as path from 'path'
-import { expect, type Page, type APIRequestContext, request } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/plan-cleanup'
 import { chatInput, assistantMessages, selectAgent } from './fixtures/selectors'
 import { GatewayProcess } from './fixtures/gateway-process.js'
@@ -46,18 +44,6 @@ import { GatewayProcess } from './fixtures/gateway-process.js'
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
-
-const OMNIPUS_HOME =
-  process.env.OMNIPUS_HOME ||
-  (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '/tmp/omnipus-e2e-test')
-
-// Auth file written by global-setup.ts after onboarding.
-const AUTH_FILE = process.env.OMNIPUS_AUTH_FILE
-  ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
-  : path.join(
-      path.dirname(new URL(import.meta.url).pathname),
-      'fixtures/.auth/admin.json',
-    )
 
 // ── T0.1: API key gate ──────────────────────────────────────────────────────
 

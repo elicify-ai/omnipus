@@ -17,8 +17,6 @@ import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { seedAndOpenSession, openSessionByDeepLink } from './fixtures/session-setup'
 
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
-
 // ── Helper: get data-message-id from the ancestor message bubble ──────────────
 
 /**

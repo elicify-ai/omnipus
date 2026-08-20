@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
 import { CaretDown, CaretUp, ArrowSquareOut } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
 
 interface WebSearchArgs {
@@ -64,6 +66,18 @@ function WebSearchBlock({
   isCancelled?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
+
+  // Client-side render gate (issue #494): mirrors BashOutput.tsx's gate —
+  // hides this row when shouldRenderToolCall says so, unless verbose chat is
+  // on. Must sit after every hook above and before the JSX return. Only one
+  // tool name registers this block (web_search), so it's passed literally
+  // rather than threaded as a prop.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  if (
+    !shouldRenderToolCall('web_search', args as unknown as Record<string, unknown>, verboseChatEnabled, !!isError)
+  ) {
+    return null
+  }
 
   const query = args.query ?? '(search query)'
   const content = result != null ? String(result) : ''

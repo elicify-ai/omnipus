@@ -20,7 +20,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
   return {
     ...actual,
-    createFileRoute: (_path: string) => (opts: unknown) => opts,
+    createFileRoute: () => (opts: unknown) => opts,
     redirect: (opts: unknown) => {
       const err = Object.assign(new Error('redirect'), { isRedirect: true, ...(opts as object) })
       return err

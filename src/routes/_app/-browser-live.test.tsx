@@ -28,7 +28,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
   return {
     ...actual,
-    createFileRoute: (_path: string) => (opts: { component: React.ComponentType; validateSearch?: unknown }) => ({
+    createFileRoute: () => (opts: { component: React.ComponentType; validateSearch?: unknown }) => ({
       ...opts,
       useSearch: () => mockSearch,
     }),

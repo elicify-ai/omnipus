@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
+import type { WsConnection } from '@/lib/ws'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { ChatThread } from '@/components/chat/ChatThread'
@@ -195,7 +196,7 @@ describe('cancel integration (test #40)', () => {
           disconnect: vi.fn(),
           connect: vi.fn(),
           isConnected: true,
-        } as any,
+        } as unknown as WsConnection,
         isConnected: true,
       })
       useChatStore.getState().cancelStream()

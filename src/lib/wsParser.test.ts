@@ -13,9 +13,11 @@ import { WsConnection, type WsReceiveFrame } from './ws'
 
 // ── Mock WebSocket ─────────────────────────────────────────────────────────────
 // Use a vi.fn with a regular function body so that when called via `new`, `this` is the
-// newly constructed instance. We capture it in `lastWsInstance` so tests can trigger handlers.
+// newly constructed instance. Rather than aliasing `this` to an outer variable, we read
+// vitest's own `mock.instances` array (populated automatically for every `new` call) so
+// tests can look up the most recently constructed instance.
 
-let lastWsInstance: {
+type WsInstance = {
   onopen: (() => void) | null
   onmessage: ((ev: { data: string }) => void) | null
   onclose: ((ev: { code: number; reason: string }) => void) | null
@@ -25,8 +27,7 @@ let lastWsInstance: {
   readyState: number
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const MockWebSocket = vi.fn(function (this: any) {
+const mockWebSocketCtor = vi.fn(function (this: WsInstance) {
   this.onopen = null
   this.onmessage = null
   this.onclose = null
@@ -34,11 +35,25 @@ const MockWebSocket = vi.fn(function (this: any) {
   this.send = vi.fn()
   this.close = vi.fn()
   this.readyState = 1 // OPEN
-  lastWsInstance = this
-}) as unknown as typeof WebSocket & { OPEN: number; CLOSED: number; mockClear: () => void }
+})
+
+const MockWebSocket = mockWebSocketCtor as unknown as typeof WebSocket & {
+  OPEN: number
+  CLOSED: number
+  mockClear: () => void
+}
 
 MockWebSocket.OPEN = 1
 MockWebSocket.CLOSED = 3
+
+function getLastWsInstance(): WsInstance {
+  const instances = mockWebSocketCtor.mock.instances as unknown as WsInstance[]
+  const instance = instances[instances.length - 1]
+  if (!instance) {
+    throw new Error('No MockWebSocket instance has been constructed yet')
+  }
+  return instance
+}
 
 beforeEach(() => {
   MockWebSocket.mockClear()
@@ -67,7 +82,7 @@ function createConnectedWs(onFrame: (frame: WsReceiveFrame) => void) {
   })
   conn.connect()
   // Trigger onopen — this is synchronous; _createSocket() has already set the handler
-  lastWsInstance.onopen?.()
+  getLastWsInstance().onopen?.()
   return conn
 }
 
@@ -78,7 +93,7 @@ function createConnectedWs(onFrame: (frame: WsReceiveFrame) => void) {
  * iterating the heartbeat setInterval (which runs every 30 s and would loop).
  */
 function sendAndFlush(data: string) {
-  lastWsInstance.onmessage?.({ data })
+  getLastWsInstance().onmessage?.({ data })
   vi.advanceTimersByTime(1)
 }
 
@@ -183,9 +198,9 @@ describe('WsConnection — frame parsing (edge cases)', () => {
       onError,
     })
     conn.connect()
-    lastWsInstance.onopen?.()
+    getLastWsInstance().onopen?.()
     // Malformed JSON is dropped before the batch — no flush needed. Just verify no throw.
-    expect(() => lastWsInstance.onmessage?.({ data: 'not valid json' })).not.toThrow()
+    expect(() => getLastWsInstance().onmessage?.({ data: 'not valid json' })).not.toThrow()
     // Flush any pending timers with a safe single-tick advance (not runAllTimers which loops heartbeat).
     vi.advanceTimersByTime(0)
     expect(onFrame).not.toHaveBeenCalled()
@@ -206,9 +221,9 @@ describe('WsConnection — reconnect behavior', () => {
       onError: vi.fn(),
     })
     conn.connect()
-    lastWsInstance.onopen?.()
+    getLastWsInstance().onopen?.()
     // Simulate unexpected close (code !== 1000)
-    lastWsInstance.onclose?.({ code: 1006, reason: 'Abnormal closure' })
+    getLastWsInstance().onclose?.({ code: 1006, reason: 'Abnormal closure' })
     expect(onDisconnected).toHaveBeenCalled()
     // Advance timer to trigger reconnect — first delay is 1000ms (fake timers active from beforeEach).
     vi.advanceTimersByTime(1001)
@@ -225,9 +240,9 @@ describe('WsConnection — reconnect behavior', () => {
       onError: vi.fn(),
     })
     conn.connect()
-    lastWsInstance.onopen?.()
+    getLastWsInstance().onopen?.()
     conn.disconnect()
-    lastWsInstance.onclose?.({ code: 1000, reason: 'User disconnected' })
+    getLastWsInstance().onclose?.({ code: 1000, reason: 'User disconnected' })
     vi.advanceTimersByTime(5000)
     // WebSocket only created once (the initial connect)
     expect(MockWebSocket).toHaveBeenCalledTimes(1)

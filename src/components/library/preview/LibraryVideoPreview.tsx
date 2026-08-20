@@ -19,7 +19,7 @@ export function LibraryVideoPreview({ workspaceId, entry }: LibraryVideoPreviewP
       className="flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-4"
       data-testid="library-video-preview"
     >
-      {/* eslint-disable-next-line jsx-a11y/media-has-caption -- workspace files carry no caption tracks to attach */}
+      { }
       <video controls src={src} className="max-h-full max-w-full rounded-md">
         Your browser does not support playing this video. Use Download instead.
       </video>

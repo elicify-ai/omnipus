@@ -146,7 +146,7 @@ describe('Step2Personality — soul markdown upload (FR-026 / US-10)', () => {
       onload: ((e: ProgressEvent<FileReader>) => void) | null = null
       onerror: ((e: ProgressEvent<FileReader>) => void) | null = null
 
-      readAsText(_file: File) {
+      readAsText() {
         this.result = soulContent
         // Fire onload asynchronously (microtask) — mirrors real FileReader.
         Promise.resolve().then(() => {

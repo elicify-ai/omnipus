@@ -33,7 +33,7 @@ describe('detectVoiceProvider', () => {
       provider: 'openai-tts',
       voices: ['alloy', 'echo'],
       voices_endpoint: null,
-    } as any)
+    })
 
     const { detectVoiceProvider } = await import('@/lib/agents/voice-provider-detect')
     const result = await detectVoiceProvider()
@@ -47,7 +47,7 @@ describe('detectVoiceProvider', () => {
     vi.mocked(fetchVoiceProvider).mockResolvedValue({
       provider: 'custom-tts',
       voices_endpoint: null,
-    } as any)
+    })
 
     const { detectVoiceProvider } = await import('@/lib/agents/voice-provider-detect')
     const result = await detectVoiceProvider()
@@ -61,7 +61,7 @@ describe('detectVoiceProvider', () => {
       provider: 'piper',
       voices: [],
       voices_endpoint: null,
-    } as any)
+    })
 
     const { detectVoiceProvider } = await import('@/lib/agents/voice-provider-detect')
     const result = await detectVoiceProvider()
@@ -73,7 +73,7 @@ describe('detectVoiceProvider', () => {
     vi.mocked(fetchVoiceProvider).mockResolvedValue({
       provider: null,
       voices_endpoint: null,
-    } as any)
+    })
 
     const { detectVoiceProvider } = await import('@/lib/agents/voice-provider-detect')
     const result = await detectVoiceProvider()
@@ -108,7 +108,7 @@ describe('detectVoiceProvider', () => {
       provider: 'openai-tts',
       voices: ['alloy'],
       voices_endpoint: null,
-    } as any)
+    })
 
     const { detectVoiceProvider } = await import('@/lib/agents/voice-provider-detect')
     await detectVoiceProvider()
@@ -122,7 +122,7 @@ describe('detectVoiceProvider', () => {
       provider: 'openai-tts',
       voices: ['alloy'],
       voices_endpoint: null,
-    } as any)
+    })
 
     const { detectVoiceProvider } = await import('@/lib/agents/voice-provider-detect')
     await detectVoiceProvider()
@@ -137,7 +137,7 @@ describe('detectVoiceProvider', () => {
       provider: 'openai-tts',
       voices: ['alloy'],
       voices_endpoint: null,
-    } as any)
+    })
 
     const { detectVoiceProvider, bumpVoiceProviderCacheVersion } = await import('@/lib/agents/voice-provider-detect')
     await detectVoiceProvider()

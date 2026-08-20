@@ -50,11 +50,21 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 )
+
+// errNoCheckpoint is the sentinel error readChainCheckpoint returns when no
+// checkpoint sidecar exists on disk yet. It is distinct from any other
+// error readChainCheckpoint can return (parse failure, integrity-check
+// failure): callers use errors.Is against this sentinel to tell "nothing
+// written yet" (benign, silent genesis-seed fallback) apart from "a
+// checkpoint exists but cannot be trusted" (loggable, fail-closed
+// genesis-seed fallback). See readChainCheckpoint's doc comment.
+var errNoCheckpoint = errors.New("audit: no chain checkpoint")
 
 // checkpointFileName is the sidecar file that persists the HMAC chain
 // checkpoint. See this file's doc comment above for the naming rationale.
@@ -167,16 +177,19 @@ func writeChainCheckpoint(dir, appliesToFile string, finalHMAC, key []byte) erro
 // for dir.
 //
 // Return contract:
-//   - (nil, nil): no checkpoint file exists. This is the common case —
-//     either no cleanup has ever deleted a file, or retention hasn't kicked
-//     in yet. Callers must fall back to genesis-seeding (today's behavior).
-//   - (nil, err): the file exists but failed to parse OR failed its
-//     integrity check (Sum mismatch). Per the threat model in this file's
-//     doc comment, a Sum mismatch means either disk corruption or a forged
-//     checkpoint attempting to redirect the chain seed — the checkpoint
-//     MUST NOT be trusted. Callers fall back to genesis-seeding (fail
-//     closed: worst case is a false "chain broken" alarm investigable by an
-//     operator, never a silent bypass of real tampering).
+//   - (nil, errNoCheckpoint): no checkpoint file exists. This is the common
+//     case — either no cleanup has ever deleted a file, or retention hasn't
+//     kicked in yet. Callers must fall back to genesis-seeding (today's
+//     behavior), and should do so silently (errors.Is(err, errNoCheckpoint))
+//     since this is not an anomaly.
+//   - (nil, err) with err not errNoCheckpoint: the file exists but failed to
+//     parse OR failed its integrity check (Sum mismatch). Per the threat
+//     model in this file's doc comment, a Sum mismatch means either disk
+//     corruption or a forged checkpoint attempting to redirect the chain
+//     seed — the checkpoint MUST NOT be trusted. Callers fall back to
+//     genesis-seeding (fail closed: worst case is a false "chain broken"
+//     alarm investigable by an operator, never a silent bypass of real
+//     tampering).
 //   - (cp, nil): the checkpoint parsed and its Sum verified against key.
 //     Callers still must confirm cp.AppliesToFile matches the actual oldest
 //     surviving file before trusting cp.FinalHMAC as a seed — see VerifyDir.
@@ -185,7 +198,7 @@ func readChainCheckpoint(dir string, key []byte) (*chainCheckpoint, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, errNoCheckpoint
 		}
 		return nil, fmt.Errorf("audit: read chain checkpoint: %w", err)
 	}

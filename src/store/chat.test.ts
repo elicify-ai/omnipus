@@ -7,6 +7,7 @@ import { useSessionStore } from './session'
 import { useWhatsAppPairingStore } from './whatsappPairing'
 import { useWorkspacesStore } from './workspacesStore'
 import type { WhatsAppPairingFrame } from '@/lib/api/generated/asyncapi-types'
+import type { WsConnection, WsReceiveFrame } from '@/lib/ws'
 
 // test_chat_store (test #22)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: User sends message and receives streaming response
@@ -330,7 +331,7 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
     act(() => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
@@ -375,7 +376,7 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
       })
       useChatStore.setState({ isStreaming: true })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       // activeSessionId is already TEST_SESSION_ID from resetStore
@@ -391,7 +392,7 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
     act(() => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       useChatStore.getState().cancelStream()
@@ -435,7 +436,7 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
 
     act(() => {
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       // Seed BOTH buckets directly (appendMessage always targets the active
@@ -488,7 +489,7 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
         messages: activeMsgs,
       })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       useChatStore.getState().cancelStream()
@@ -512,7 +513,7 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
       { id: 'asst_other', session_id: OTHER_SID, role: 'assistant', content: 'ray is browsing...', timestamp: '2026-03-29T10:00:01Z', status: 'streaming', isStreaming: true },
     ]
     useConnectionStore.setState({
-      connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+      connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
       isConnected: true,
     })
     useChatStore.setState({
@@ -593,8 +594,8 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
     })
     act(() => {
       // Untagged token+done, mirroring the UAT report's literal claim.
-      useChatStore.getState().handleFrame({ type: 'token', content: 'Error processing message: turn canceled' } as any)
-      useChatStore.getState().handleFrame({ type: 'done', stats: { tokens: 1, cost: 0, duration_ms: 5 } } as any)
+      useChatStore.getState().handleFrame({ type: 'token', content: 'Error processing message: turn canceled' } as unknown as WsReceiveFrame)
+      useChatStore.getState().handleFrame({ type: 'done', stats: { tokens: 1, cost: 0, duration_ms: 5 } } as unknown as WsReceiveFrame)
     })
 
     const state = useChatStore.getState()
@@ -617,7 +618,7 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
     ]
     act(() => {
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       useChatStore.setState({
@@ -680,7 +681,7 @@ describe('chat store — sendMessage optimistic render', () => {
     act(() => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       useSessionStore.setState({
@@ -708,7 +709,7 @@ describe('chat store — sendMessage optimistic render', () => {
     act(() => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
@@ -733,7 +734,7 @@ describe('chat store — sendMessage optimistic render', () => {
     act(() => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
@@ -792,7 +793,7 @@ describe('chat store — sendMessage rebakes pending tool calls into prior assis
 
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
@@ -858,7 +859,7 @@ describe('chat store — sendMessage rebakes pending tool calls into prior assis
       })
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
@@ -883,7 +884,7 @@ describe('chat store — M4 workspace→turn binding (metadata.workspace_id)', (
     act(() => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
@@ -904,7 +905,7 @@ describe('chat store — M4 workspace→turn binding (metadata.workspace_id)', (
     act(() => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
@@ -923,7 +924,7 @@ describe('chat store — M4 workspace→turn binding (metadata.workspace_id)', (
     act(() => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
@@ -959,7 +960,7 @@ describe('chat store — #253 no-session send failure creates retriable error bu
     act(() => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
         connectionError: null,
       })
@@ -1002,7 +1003,7 @@ describe('chat store — #253 no-session send failure creates retriable error bu
     act(() => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       useSessionStore.setState({
@@ -3127,7 +3128,7 @@ describe('chat store — Fix 5a: live token attribution consumes TokenFrame.agen
     const mockSend = vi.fn().mockReturnValue(true)
     act(() => {
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
       useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'agent-mia', activeAgentType: null })

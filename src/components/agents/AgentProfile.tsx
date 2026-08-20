@@ -821,7 +821,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               message: `Runner test failed before save: ${msg}`,
               variant: 'error',
             })
-            throw new Error(`Runner test failed: ${msg}`)
+            throw new Error(`Runner test failed: ${msg}`, { cause: err })
           }
           if (!result.ok) {
             // Backend returned a structured failure (missing-binary,
@@ -865,11 +865,20 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // the same "dead interaction" class this strip exists to prevent in
       // the other direction.
       const stripSoulToo = !(agent && agentKindFlags(agent).isSystem)
+      const stripLockedIdentityFields = (raw: Record<string, unknown>): Record<string, unknown> => {
+        const rest = { ...raw }
+        const soulField = rest.soul
+        delete rest.name
+        delete rest.description
+        delete rest.soul
+        delete rest.color
+        delete rest.icon
+        delete rest.skills
+        delete rest.executor
+        return stripSoulToo ? rest : { ...rest, soul: soulField }
+      }
       const stripped = agent?.locked
-        ? (({
-            name: _n, description: _d, soul: soulField, color: _c, icon: _i,
-            skills: _sk, executor: _ex, ...rest
-          }) => (stripSoulToo ? rest : { ...rest, soul: soulField }))(data as Record<string, unknown>)
+        ? stripLockedIdentityFields(data as Record<string, unknown>)
         : data
       // W6-contracts: include updated_at from the last GET response so the
       // backend can reject stale writes with 409 Conflict.
@@ -3004,7 +3013,7 @@ function EnvironmentOverridesEditor({
     if (JSON.stringify(value) === JSON.stringify(lastPushedRef.current)) return
     lastPushedRef.current = value
     setRows(envRecordToRows(value))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [value])
 
   const duplicateKeys = findEnvDuplicateKeys(rows)

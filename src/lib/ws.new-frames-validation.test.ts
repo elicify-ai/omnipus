@@ -37,7 +37,8 @@ describe('parseFrameSafe — goal_status (ADR-049 R3)', () => {
   })
 
   it('drops + increments the counter when session_id is missing', () => {
-    const { session_id: _drop, ...rest } = valid
+    const rest = { ...valid } as Record<string, unknown>
+    delete rest.session_id
     const result = parseFrameSafe(JSON.stringify(rest))
     expect(result).toBeNull()
     expect(getDroppedFrameCount()).toBe(1)
@@ -68,7 +69,8 @@ describe('parseFrameSafe — loop_status (ADR-049 R3)', () => {
   })
 
   it('parses without the optional next_delay field', () => {
-    const { next_delay: _drop, ...rest } = valid
+    const rest = { ...valid } as Record<string, unknown>
+    delete rest.next_delay
     const result = parseFrameSafe(JSON.stringify(rest))
     expect(result).not.toBeNull()
   })
@@ -80,7 +82,8 @@ describe('parseFrameSafe — loop_status (ADR-049 R3)', () => {
   })
 
   it('drops + increments the counter when session_id is missing', () => {
-    const { session_id: _drop, ...rest } = valid
+    const rest = { ...valid } as Record<string, unknown>
+    delete rest.session_id
     const result = parseFrameSafe(JSON.stringify(rest))
     expect(result).toBeNull()
     expect(getDroppedFrameCount()).toBe(1)
@@ -141,7 +144,8 @@ describe('parseFrameSafe — judge_verdict (ADR-049 D2/D4/R3 — NO session_id)'
   })
 
   it('drops + increments the counter for a missing per_criterion field', () => {
-    const { per_criterion: _drop, ...rest } = valid
+    const rest = { ...valid } as Record<string, unknown>
+    delete rest.per_criterion
     const result = parseFrameSafe(JSON.stringify(rest))
     expect(result).toBeNull()
     expect(getDroppedFrameCount()).toBe(1)

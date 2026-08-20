@@ -78,7 +78,7 @@ describe('chat.dedup — T1.7: sendMessage merges duplicate tool_call ids', () =
     // tool_call_start for tc1 (adding it to the live map) even though it was
     // already baked into the message during the original sendMessage call.
     act(() => {
-      useChatStore.setState((_s) => {
+      useChatStore.setState(() => {
         const seedMsgs = [
           {
             id: 'user-1',
@@ -167,7 +167,7 @@ describe('chat.dedup — T1.8: replay_message tail dedup drops identical re-emit
     // but we use explicit session_id here for determinism.
     act(() => {
       // The session bucket must exist before handling replay frames
-      useChatStore.setState((_s) => ({
+      useChatStore.setState(() => ({
         sessionsById: {
           [SID]: {
             ...makeBucketMessages([]),
@@ -229,7 +229,7 @@ describe('chat.dedup — T1.8: replay_message tail dedup drops identical re-emit
 
   it('second replay_message with DIFFERENT content IS accepted (only exact-match is deduped)', () => {
     act(() => {
-      useChatStore.setState((_s) => ({
+      useChatStore.setState(() => ({
         sessionsById: {
           [SID]: {
             ...makeBucketMessages([]),

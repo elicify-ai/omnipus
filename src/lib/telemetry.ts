@@ -50,7 +50,7 @@ function _emit(event: TelemetryEvent): void {
   // Single-line JSON: makes grep / awk / log-collector parsing trivial.
   // The "telemetry" prefix is the stable key operators can filter on.
   const payload = JSON.stringify({ telemetry: 'error', ...event })
-  // eslint-disable-next-line no-console
+   
   console.error(payload)
 }
 

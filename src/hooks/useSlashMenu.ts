@@ -496,7 +496,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
         closeSlash()
       }
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [composerRuntime])
 
   // Fix B (bugfixes3 sign-off) — reconciliation for `mentionAnnouncement`.
@@ -1022,7 +1022,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     // ComposerPrimitive.Send's onClick both end in `composer.send()`, and
     // ChatScreen's own mid-stream path calls this method directly.
     composerRuntime.send()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on the readiness transition alone; every other value it reads (composer text, allCommands) must be the freshest at flush time, which is exactly what this render's closure holds.
+     
   }, [commandsFirstLoadPending])
 
   function onInputChange(val: string) {

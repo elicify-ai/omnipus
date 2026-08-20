@@ -31,6 +31,7 @@ import (
 	"crypto/hmac"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -254,7 +255,7 @@ func VerifyFile(ctx context.Context, path string, key []byte, seedHMAC []byte) (
 		prev = got
 		res.EntriesScanned = lineNo
 	}
-	if err := scanner.Err(); err != nil && err != io.EOF {
+	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("audit: read %s: %w", path, err)
 	}
 
@@ -348,6 +349,11 @@ func VerifyDir(ctx context.Context, dir string, key []byte) (*ChainResult, error
 // the two callers can never drift on when a checkpoint is trusted.
 func checkpointOrGenesisSeed(dir string, key []byte, oldestBase string) []byte {
 	cp, cpErr := readChainCheckpoint(dir, key)
+	if errors.Is(cpErr, errNoCheckpoint) {
+		// No checkpoint file at all — the common case (no cleanup has ever
+		// deleted a file). Genesis-seeding is correct.
+		return GenesisSeed()
+	}
 	if cpErr != nil {
 		// Checkpoint exists but failed to parse or failed its integrity
 		// check. Per checkpoint.go's threat model, an attacker without the
@@ -360,11 +366,6 @@ func checkpointOrGenesisSeed(dir string, key []byte, oldestBase string) []byte {
 		// bypass of real tampering.
 		slog.Warn("audit: chain checkpoint failed integrity check, falling back to genesis seed",
 			"dir", dir, "error", cpErr)
-		return GenesisSeed()
-	}
-	if cp == nil {
-		// No checkpoint file at all — the common case (no cleanup has ever
-		// deleted a file). Genesis-seeding is correct.
 		return GenesisSeed()
 	}
 	if cp.AppliesToFile != oldestBase {

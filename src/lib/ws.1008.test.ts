@@ -39,16 +39,21 @@ let lastWsInstance: {
   readyState: number
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const MockWebSocket = vi.fn(function (this: any) {
-  this.onopen = null
-  this.onmessage = null
-  this.onclose = null
-  this.onerror = null
-  this.send = vi.fn()
-  this.close = vi.fn()
-  this.readyState = 1 // OPEN
-  lastWsInstance = this
+const MockWebSocket = vi.fn(function () {
+  // Returning an object from a function invoked with `new` overrides the
+  // constructed `this` with the returned object — lets us build the
+  // instance as a plain local value instead of aliasing `this`.
+  const instance = {
+    onopen: null,
+    onmessage: null,
+    onclose: null,
+    onerror: null,
+    send: vi.fn(),
+    close: vi.fn(),
+    readyState: 1, // OPEN
+  }
+  lastWsInstance = instance
+  return instance
 }) as unknown as typeof WebSocket & {
   OPEN: number
   CLOSED: number

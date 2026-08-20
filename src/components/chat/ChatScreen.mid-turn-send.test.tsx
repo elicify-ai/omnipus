@@ -39,6 +39,7 @@ import * as React from 'react'
 import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
+import type { WsConnection } from '@/lib/ws'
 import { useSessionStore } from '@/store/session'
 import { useComposerRuntime } from '@assistant-ui/react'
 
@@ -211,7 +212,7 @@ function resetStores() {
       sessionCost: 0,
     })
     useConnectionStore.setState({
-      connection: { send: vi.fn().mockReturnValue(true) } as any,
+      connection: { send: vi.fn().mockReturnValue(true) } as unknown as WsConnection,
       isConnected: true,
       connectionError: null,
       reconnectPhase: null,
@@ -341,7 +342,7 @@ describe('OmnipusComposer — slash-menu Enter precedence mid-stream (menu-open 
 describe('OmnipusComposer — Stop + mid-turn Send button coexist while streaming', () => {
   it('Stop renders and still cancels the turn while streaming', () => {
     const mockCancelStream = vi.fn()
-    act(() => { useChatStore.setState({ cancelStream: mockCancelStream } as any) })
+    act(() => { useChatStore.setState({ cancelStream: mockCancelStream }) })
 
     render(<OmnipusComposer />)
     const stopBtn = screen.getByTestId('stop-btn')

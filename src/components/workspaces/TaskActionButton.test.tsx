@@ -218,7 +218,7 @@ describe('TaskActionButton — confirm-modal gating (ADR-052 FR-020) + chat-send
     const ancestorClick = vi.fn()
     render(
       <QueryClientProvider client={makeClient()}>
-        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
+        { }
         <div onClick={ancestorClick}>
           <TaskActionButton task={makeTask({ status: 'inbox' })} />
         </div>

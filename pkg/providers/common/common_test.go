@@ -2,6 +2,7 @@ package common
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -413,8 +414,8 @@ func TestReadAndParseResponse_HTMLResponse(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for HTML response")
 	}
-	pe, ok := err.(*ProviderError)
-	if !ok {
+	var pe *ProviderError
+	if !errors.As(err, &pe) {
 		t.Fatalf("expected *ProviderError, got %T", err)
 	}
 	if pe.Err == nil || !strings.Contains(pe.Err.Error(), "HTML instead of JSON") {
@@ -555,8 +556,8 @@ func TestWrapHTMLResponseError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	pe, ok := err.(*ProviderError)
-	if !ok {
+	var pe *ProviderError
+	if !errors.As(err, &pe) {
 		t.Fatalf("expected *ProviderError, got %T", err)
 	}
 	if pe.Status != 502 {

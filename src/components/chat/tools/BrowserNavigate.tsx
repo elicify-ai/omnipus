@@ -4,6 +4,8 @@ import { CaretDown, CaretUp, Camera, Broadcast } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 
 interface BrowserNavigateArgs {
@@ -50,12 +52,14 @@ function parseResult(result: unknown): BrowserResult {
 // to the fixed "browser.navigate" label, which already says what this row
 // is. Status now lives only in the leading dot/spinner.
 export function BrowserNavigateBlock({
+  toolName,
   args,
   result,
   isRunning,
   isError,
   isCancelled,
 }: {
+  toolName: string
   args: BrowserNavigateArgs
   result: unknown
   isRunning: boolean
@@ -63,6 +67,17 @@ export function BrowserNavigateBlock({
   isCancelled?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
+
+  // Client-side render gate (issue #494): hides this row when
+  // shouldRenderToolCall says so for the given tool name/args, unless the
+  // user has opted into verbose chat. Must sit after every hook above and
+  // before the JSX return (Rules of Hooks) — mirrors BashOutput.tsx's gate.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  if (
+    !shouldRenderToolCall(toolName, args as unknown as Record<string, unknown>, verboseChatEnabled, !!isError)
+  ) {
+    return null
+  }
 
   const url = args.url ?? '(unknown URL)'
   const parsed = parseResult(result)
@@ -204,6 +219,7 @@ export const BrowserNavigateUI = makeAssistantToolUI<BrowserNavigateArgs, unknow
   toolName: 'browser.navigate',
   render: ({ args, result, status, isError }) => (
     <BrowserNavigateBlock
+      toolName="browser.navigate"
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
@@ -218,6 +234,7 @@ export const BrowserNavigateUnderscoreUI = makeAssistantToolUI<BrowserNavigateAr
   toolName: 'browser_navigate',
   render: ({ args, result, status, isError }) => (
     <BrowserNavigateBlock
+      toolName="browser_navigate"
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}

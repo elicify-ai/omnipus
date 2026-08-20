@@ -201,7 +201,7 @@ export class ApiError extends Error {
       return new ApiError(res.status, defaultUserMessage(res.status), { retryAfterMs })
     }
 
-    let bodyText = ''
+    let bodyText: string
     try {
       bodyText = await res.text()
     } catch (err) {

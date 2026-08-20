@@ -45,6 +45,8 @@ import { useChatStore } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useWorkspacesStore } from './workspacesStore'
+import type { WsConnection } from '@/lib/ws'
+import type { ToolCall } from '@/lib/api'
 
 const TEST_SESSION_ID = 'sess_mid_turn_test'
 
@@ -91,7 +93,7 @@ function connectWithSendSpy() {
   const send = vi.fn().mockReturnValue(true)
   act(() => {
     useConnectionStore.setState({
-      connection: { send, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+      connection: { send, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
       isConnected: true,
       connectionError: null,
     })
@@ -207,7 +209,7 @@ describe('sendMessage — mid-turn steering send (bucket-level)', () => {
     const send = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false)
     act(() => {
       useConnectionStore.setState({
-        connection: { send, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: { send, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
         connectionError: null,
       })
@@ -244,7 +246,13 @@ describe('sendMessage — mid-turn steering send (bucket-level)', () => {
     // the bucket on every call (see file header comment), so a top-level-only
     // `setState({ toolCalls, toolCallOrder })` would be silently discarded by
     // the very first withBucket() call inside sendMessage.
-    const liveToolCall = { id: 'tc_1', name: 'bash', status: 'running', params: {} } as any
+    const liveToolCall: ToolCall & { call_id: string } = {
+      id: 'tc_1',
+      call_id: 'tc_1',
+      tool: 'bash',
+      status: 'running',
+      params: {},
+    }
     act(() => {
       useChatStore.setState((s) => ({
         sessionsById: {

@@ -587,7 +587,9 @@ export function ChannelConfigPanel({
     // which enforces CoreTeam membership) — echoing them back broke Save/Save &
     // Enable for every instance bound at creation (live-UAT: WhatsApp QR never
     // appeared because the enable never happened).
-    const { identity: _identity, workspace_id: _workspaceId, ...editable } = currentConfig as Record<string, unknown>
+    const editable: Record<string, unknown> = { ...(currentConfig as Record<string, unknown>) }
+    delete editable.identity
+    delete editable.workspace_id
 
     // SECURITY / UX: redactable (password/textarea) fields never hydrate the
     // raw "[configured]" sentinel into the form (see CONFIGURED_SENTINEL) — a

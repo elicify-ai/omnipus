@@ -111,12 +111,6 @@ function syntheticSessionID(base: string): string {
   return base.startsWith('session_') ? base : `session_${base}`;
 }
 
-/** ISO-8601 string for a moment N days ago from now. */
-function daysAgoISO(daysAgo: number): string {
-  const d = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
-  return d.toISOString();
-}
-
 /** Build synthetic transcript entries covering: user msg + assistant reply + tool call + tool result. */
 function buildEntries(
   sessionId: string,

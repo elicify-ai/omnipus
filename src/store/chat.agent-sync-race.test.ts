@@ -50,7 +50,9 @@ function connectWithSendSpy() {
   const send = vi.fn().mockReturnValue(true)
   act(() => {
     useConnectionStore.setState({
-      connection: { send, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+      connection: { send, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as ReturnType<
+        typeof useConnectionStore.getState
+      >['connection'],
       isConnected: true,
       connectionError: null,
     })

@@ -397,7 +397,7 @@ test(
     // (pkg/memrooms/rooms.go: DefaultRoomScope returns "shared" when Shared room is set)
     // A null here means we fall back to the private agent room in the disk assertion.
     const workspaceId = await resolveWorkspaceId(page);
-    // eslint-disable-next-line no-console
+     
     console.log(
       `[memory-remember-recall] agentId=${agentId} workspaceId=${workspaceId ?? '(none)'}`,
     );
@@ -475,7 +475,7 @@ test(
     const memFilePath = await waitForMemoryFileDisk(agentId, workspaceId, NONCE, 30_000, 500);
     // memFilePath is a non-null resolved path — log it for CI diagnostics.
     // (Playwright's reporter captures console.log output.)
-    // eslint-disable-next-line no-console
+     
     console.log(`[memory-remember-recall] Memory file written: ${memFilePath}`);
 
     // ── Turn 2: recall the nonce ──────────────────────────────────────────────

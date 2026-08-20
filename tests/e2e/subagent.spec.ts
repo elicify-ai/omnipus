@@ -16,7 +16,7 @@
 import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, assistantMessages, newChatButton, selectAgent, waitForConnected } from './fixtures/selectors';
+import { chatInput, assistantMessages, selectAgent, waitForConnected } from './fixtures/selectors';
 import { enableVerboseChat } from './fixtures/verbose-chat';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
@@ -25,27 +25,13 @@ import { enableVerboseChat } from './fixtures/verbose-chat';
 // T0.1: no longer soft-skips. The key is required in CI; its absence is a CI
 // configuration failure. The function is kept to preserve call-site structure
 // but now validates (throws) rather than skipping.
-function requireApiKey(_t: typeof test): void {
+function requireApiKey(): void {
   if (!process.env.OPENROUTER_API_KEY_CI) {
     throw new Error(
       'BLOCKED: OPENROUTER_API_KEY_CI not set. ' +
       'This test requires a real LLM. ' +
       'The key must be present in CI — see tests/e2e/README.md prerequisites.',
     );
-  }
-}
-
-// Helper: wait for up to `timeoutMs` ms for a subagent-collapsed block to appear.
-// Returns true if found, false if not.
-async function waitForSubagentBlock(
-  page: import('@playwright/test').Page,
-  timeoutMs = 30_000,
-): Promise<boolean> {
-  try {
-    await expect(page.locator('[data-testid="subagent-collapsed"]')).toBeVisible({ timeout: timeoutMs });
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -92,7 +78,7 @@ test.beforeEach(async ({ page }) => {
 test(
   '(a) grandchild refused: subagent attempting delegate gets unknown-tool error, no nested block',
   async ({ page }) => {
-    requireApiKey(test);
+    requireApiKey();
     // 420s total: this test triggers TWO LLM round-trips (parent delegate +
     // subagent's failed grandchild-delegate attempt) before the collapsed block
     // settles, so the budget is wider than the sibling subagent tests.
@@ -171,7 +157,7 @@ test(
 test(
   '(b) sibling delegate calls: two back-to-back delegate calls render as two independent SubagentBlocks',
   async ({ page }) => {
-    requireApiKey(test);
+    requireApiKey();
     // test.slow() triples the global 90s test timeout to 270s. Subagent
     // delegation + execution can take 30-90s end-to-end under suite load even
     // though the same test passes in 5-15s alone.
@@ -257,7 +243,7 @@ test(
     // See tests/e2e/README.md and the removed SKIP_ALLOWLIST entry (#155)
     // for the prior reasoning — validated below via repeated real runs
     // rather than assumed.
-    requireApiKey(test);
+    requireApiKey();
     // test.slow() triples the global 90s test timeout to 270s. Subagent
     // delegation + execution can take 30-90s end-to-end under suite load even
     // though the same test passes in 5-15s alone.
@@ -406,7 +392,7 @@ test(
   '(d) real-LLM smoke: a live delegate turn renders a working SubagentBlock with no console errors',
   async ({ page, consoleErrors }) => {
     // T0.1: OPENROUTER_API_KEY_CI soft-skip removed. The key is required in CI.
-    requireApiKey(test);
+    requireApiKey();
     // 360s budget, matching cancel-cross-channel.spec.ts's T24a/T24b precedent:
     // glm-5.2 (the standard e2e model, swapped in for the old gemini-2.5-flash
     // pick — see tests/e2e/fixtures/onboard-via-api.ts) can genuinely take a
@@ -500,7 +486,7 @@ test(
 test(
   '(e) axe baseline: SubagentBlock elements are WCAG 2.1 AA clean',
   async ({ page }) => {
-    requireApiKey(test);
+    requireApiKey();
     // test.slow() triples the global 90s test timeout to 270s. Subagent
     // delegation + execution can take 30-90s end-to-end under suite load even
     // though the same test passes in 5-15s alone.

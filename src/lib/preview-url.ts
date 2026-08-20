@@ -91,7 +91,7 @@ const LEGACY_HOSTS = new Set([
  *
  * Per FR-010b / MR-10.
  */
-const PREVIEW_PATH_REGEX = /^\/(?:preview|serve|dev)\/[A-Za-z0-9_\-]+\/[A-Za-z0-9_\-]+(?:\/.*)?$/
+const PREVIEW_PATH_REGEX = /^\/(?:preview|serve|dev)\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+(?:\/.*)?$/
 
 /**
  * Returns `true` when `path` is a safe, well-formed preview path that the
@@ -288,6 +288,10 @@ export function resolveEffectivePreview(
   _aboutInfo: unknown,
   _windowHostname: string,
 ): { hostname: string; port: number } | null {
+  // Params are intentionally unused — see doc comment above: kept only so
+  // existing call sites don't need to change their arity.
+  void _aboutInfo
+  void _windowHostname
   return null
 }
 

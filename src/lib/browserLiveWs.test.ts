@@ -31,16 +31,22 @@ let lastWsInstance: {
   readyState: number
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const MockWebSocket = vi.fn(function (this: any) {
-  this.onopen = null
-  this.onmessage = null
-  this.onclose = null
-  this.onerror = null
-  this.send = vi.fn()
-  this.close = vi.fn()
-  this.readyState = 1 // OPEN
-  lastWsInstance = this
+const MockWebSocket = vi.fn(function () {
+  // Returning an object explicitly from a constructor function makes `new
+  // MockWebSocket()` yield THIS object instead of the implicit `this` —
+  // avoids aliasing `this` to a local variable (no-this-alias) while still
+  // giving the test a handle on the instance the app code just created.
+  const instance = {
+    onopen: null as (() => void) | null,
+    onmessage: null as ((ev: { data: string }) => void) | null,
+    onclose: null as ((ev: { code: number; reason: string }) => void) | null,
+    onerror: null as (() => void) | null,
+    send: vi.fn(),
+    close: vi.fn(),
+    readyState: 1, // OPEN
+  }
+  lastWsInstance = instance
+  return instance
 }) as unknown as typeof WebSocket & {
   OPEN: number
   CLOSED: number

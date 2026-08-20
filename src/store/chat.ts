@@ -483,6 +483,22 @@ function emptySessionState(): SessionChatState {
 }
 
 /**
+ * Drop `keys` from `obj`, typed as `Omit<T, K>`. Used by bucketToForeground and
+ * syncChatForeground to strip the internal-only bucket fields (messageOrder,
+ * trimmedCount, span maps, toolCallOwnerMessageId) before exposing a bucket as
+ * ChatStore's foreground session fields — a real omit rather than a
+ * `const { field: _unused, ...rest } = obj` destructure, which would require
+ * binding (and then never reading) one throwaway local per dropped field.
+ */
+function omitKeys<T extends object, K extends keyof T>(obj: T, keys: readonly K[]): Omit<T, K> {
+  const clone: T = { ...obj }
+  for (const key of keys) {
+    delete clone[key]
+  }
+  return clone
+}
+
+/**
  * Client-only extension of {@link ToolCall} carrying its interleaving
  * position within the owning message. `textOffset` is the character offset
  * into the owning message's FINAL `content` string where this call started
@@ -1516,7 +1532,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
    * build already happening here.
    */
   function bucketToForeground(bucket: SessionChatState): Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanByParentCallId' | 'spanBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null } {
-    const { messageOrder: _mo, trimmedCount: _tc, spanByParentCallId: _sp, spanBySpanId: _ssid, toolCallOwnerMessageId: _tcm, ...rest } = bucket
+    const rest = omitKeys(bucket, ['messageOrder', 'trimmedCount', 'spanByParentCallId', 'spanBySpanId', 'toolCallOwnerMessageId'] as const)
     return {
       ...rest,
       messages: getMessages(bucket),
@@ -3936,9 +3952,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   message: 'Some subagent steps arrived without their span — displayed as flat tool calls',
                 })
                 withBucket(targetSid, (bucket) => {
-                  let patchToolCalls = { ...bucket.toolCalls }
+                  const patchToolCalls = { ...bucket.toolCalls }
                   let patchOrder = [...bucket.toolCallOrder]
-                  let patchText = { ...bucket.textAtToolCallStart }
+                  const patchText = { ...bucket.textAtToolCallStart }
                   let patchMsgs = getMessages(bucket)
                   for (const { frame: bf } of buffered) {
                     if (bf.type === 'tool_call_start') {
@@ -4192,10 +4208,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   message: 'Some subagent steps arrived without their span — displayed as flat tool calls',
                 })
                 withBucket(targetSid, (bucket) => {
-                  let patchToolCalls = { ...bucket.toolCalls }
+                  const patchToolCalls = { ...bucket.toolCalls }
                   let patchOrder = [...bucket.toolCallOrder]
-                  let patchText = { ...bucket.textAtToolCallStart }
-                  let patchMsgs = getMessages(bucket)
+                  const patchText = { ...bucket.textAtToolCallStart }
+                  const patchMsgs = getMessages(bucket)
                   for (const { frame: bf } of buffered) {
                     if (bf.type === 'tool_call_start') {
                       const lastMsg = patchMsgs[patchMsgs.length - 1]
@@ -5083,7 +5099,7 @@ export function syncChatForeground(): void {
     const fg = (activeSid ? state.sessionsById[activeSid] : null) ?? EMPTY_BUCKET
     // Project messageOrder+messagesById → messages for foreground consumers
     // (messagesById itself passes through as-is — see bucketToForeground).
-    const { messageOrder: _mo, trimmedCount: _tc, spanByParentCallId: _sp, spanBySpanId: _ssid, toolCallOwnerMessageId: _tcm, ...rest } = fg
+    const rest = omitKeys(fg, ['messageOrder', 'trimmedCount', 'spanByParentCallId', 'spanBySpanId', 'toolCallOwnerMessageId'] as const)
     return { ...rest, messages: getMessages(fg) }
   })
 }

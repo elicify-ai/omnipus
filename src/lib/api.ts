@@ -2986,7 +2986,7 @@ export async function fetchSkills(): Promise<Skill[]> {
     else dropped++
   }
   if (dropped > 0 && import.meta.env?.DEV) {
-    // eslint-disable-next-line no-console
+     
     console.warn(`fetchSkills: dropped ${dropped} skill(s) that failed schema validation`)
   }
   return out
@@ -3018,7 +3018,7 @@ export async function fetchCommands(surface: 'web' | 'cli' | 'channel' = 'web'):
   }
   if (dropped > 0) {
     if (import.meta.env?.DEV) {
-      // eslint-disable-next-line no-console
+       
       console.warn(`fetchCommands: dropped ${dropped} command(s) that failed schema validation`)
     } else if (import.meta.env?.MODE !== 'test') {
       // Bugfix (slash-palette silent-empty): this warning used to be DEV-only,

@@ -38,7 +38,8 @@ export function useFocusRestore(isOpen: boolean): UseFocusRestoreReturn {
   const triggerRef = useRef<HTMLElement | null>(null)
   const prevOpenRef = useRef(isOpen)
 
-  const onOpenAutoFocus = (_e: Event) => {
+  const onOpenAutoFocus = (e: Event) => {
+    void e
     const active = document.activeElement
     if (active instanceof HTMLElement && active !== document.body) {
       triggerRef.current = active

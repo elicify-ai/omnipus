@@ -56,7 +56,11 @@ interface WorkspaceTeamTabProps {
   workspaceId: string
 }
 
-export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
+// workspaceId is accepted for API symmetry with the route wrapper
+// (workspaces.$workspaceId.team.tsx passes it through), but this component
+// resolves the active workspace from WorkspaceTabContainer's context instead.
+export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
+  void props
   const workspace = useActiveWorkspace()
   const workspaceId = workspace.id
   const queryClient = useQueryClient()

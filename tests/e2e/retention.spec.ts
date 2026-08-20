@@ -436,7 +436,7 @@ test('session_past_retention_threshold_is_swept', async ({ page }) => {
       // not fail the test (the assertion above is what matters; later tests
       // get a fresh OMNIPUS_HOME in CI anyway).
       if (!reloadResp.ok()) {
-        // eslint-disable-next-line no-console
+         
         console.warn(
           `retention.spec: post-test config restore reload returned ${reloadResp.status()}`,
         );

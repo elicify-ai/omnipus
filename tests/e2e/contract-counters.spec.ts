@@ -152,7 +152,7 @@ test('no schema-validation errors during authenticated page load + navigation', 
 // emitted unconditionally from src/lib/queryClient.ts.
 //
 // Traces to: Bug-1 / contracts/components/schemas/Message.yaml type enum.
-test('navigating to a session with tool_call + turn_canceled entries fires no ApiSchemaError', async ({ page, request }) => {
+test('navigating to a session with tool_call + turn_canceled entries fires no ApiSchemaError', async ({ page }) => {
   // Capture every console.error from page load through navigation.
   const schemaErrors: string[] = []
   page.on('console', (msg) => {

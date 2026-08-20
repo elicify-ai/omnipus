@@ -954,6 +954,14 @@ func repairAndValidateToolPolicyCoverage(cfg *config.Config) []config.CoverageGa
 // Production always passes sandbox.NewEgressProxy itself.
 type egressProxyConstructor func([]string, sandbox.EgressAuditFunc) (*sandbox.EgressProxy, error)
 
+// errEgressProxyDisabled is the sentinel returned by buildEgressProxyOrAbort
+// when construction failed but no sandbox.egress_allow_list was configured
+// (the operator never opted into egress restriction). Callers use
+// errors.Is(err, errEgressProxyDisabled) to distinguish this non-fatal,
+// log-and-continue outcome from a real boot-abort error — a plain (nil, nil)
+// return would leave both states indistinguishable to the caller (nilnil).
+var errEgressProxyDisabled = errors.New("gateway: egress proxy disabled (construction failed with no sandbox.egress_allow_list configured)")
+
 // buildEgressProxyOrAbort constructs the Tier 2/3 egress proxy and decides
 // what a construction failure means, per CLAUDE.md hard constraint 6
 // (deny-by-default / fail-closed for security controls).
@@ -996,7 +1004,7 @@ func buildEgressProxyOrAbort(
 	if len(allowList) == 0 {
 		slog.Warn("gateway: egress proxy failed to start; web_serve dev mode will run without egress enforcement",
 			"error", err)
-		return nil, nil
+		return nil, errEgressProxyDisabled
 	}
 
 	audit.EmitBootAbortStderr(
@@ -4010,7 +4018,7 @@ func setupAndStartServices(
 	}
 
 	egressProxy, epErr := buildEgressProxyOrAbort(cfg.Sandbox.EgressAllowList, egressAuditFn, sandbox.NewEgressProxy)
-	if epErr != nil {
+	if epErr != nil && !errors.Is(epErr, errEgressProxyDisabled) {
 		return nil, epErr
 	}
 	if egressProxy != nil {

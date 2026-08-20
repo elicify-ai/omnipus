@@ -503,7 +503,7 @@ test('auto-recap toggle changes runtime behaviour (saved != ignored)', async ({ 
   // If WS fails we still do the file-absent poll (the recap would not run anyway
   // since the gateway didn't receive the close — so the assert-absent still holds).
   if (!wsSendResult.ok) {
-    // eslint-disable-next-line no-console
+     
     console.warn(`settings-memory: WS session_close send warning: ${wsSendResult.error}`);
   }
 

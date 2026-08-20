@@ -14,7 +14,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 vi.mock('@tanstack/react-router', () => ({
-  createFileRoute: (_path: string) => (opts: { component: React.ComponentType }) => opts,
+  createFileRoute: () => (opts: { component: React.ComponentType }) => opts,
   useNavigate: () => vi.fn(),
   useParams: () => ({}),
   Link: ({ children }: { children: React.ReactNode }) => <>{children}</>,

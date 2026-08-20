@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
 import { Folder, File, CaretDown, CaretUp } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
 
 interface ListDirArgs {
@@ -40,12 +42,14 @@ function parseTree(text: string): TreeEntry[] {
 }
 
 function FileTreeBlock({
+  toolName,
   args,
   result,
   isRunning,
   isError,
   isCancelled,
 }: {
+  toolName: string
   args: ListDirArgs
   result: unknown
   isRunning: boolean
@@ -53,6 +57,16 @@ function FileTreeBlock({
   isCancelled?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
+
+  // Client-side render gate (issue #494): mirrors BashOutput.tsx's gate —
+  // hides this row when shouldRenderToolCall says so, unless verbose chat is
+  // on. Must sit after every hook above and before the JSX return.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  if (
+    !shouldRenderToolCall(toolName, args as unknown as Record<string, unknown>, verboseChatEnabled, !!isError)
+  ) {
+    return null
+  }
 
   const path = args.path ?? '.'
   const content = result != null ? String(result) : ''
@@ -140,6 +154,7 @@ export const FileTreeViewUI = makeAssistantToolUI<ListDirArgs, unknown>({
   toolName: 'list_dir',
   render: ({ args, result, status, isError }) => (
     <FileTreeBlock
+      toolName="list_dir"
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
@@ -154,6 +169,7 @@ export const FileListAliasDotUI = makeAssistantToolUI<ListDirArgs, unknown>({
   toolName: 'file.list',
   render: ({ args, result, status, isError }) => (
     <FileTreeBlock
+      toolName="file.list"
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}

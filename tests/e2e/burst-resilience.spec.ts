@@ -98,7 +98,7 @@ test(
           ws.onmessage(new MessageEvent('message', { data: syntheticFrame(i) }))
         }
       } else {
-        // eslint-disable-next-line no-console
+         
         console.warn('T4: no open WebSocket in window.__ws_instances — has the SPA connected yet?')
       }
     }, frameCount)
@@ -150,7 +150,7 @@ test(
     } else {
       // Send button not found — the SPA may be in onboarding state.
       // Log and continue; the heap assertion is still the primary guard.
-      // eslint-disable-next-line no-console
+       
       console.warn('T4: send button not found — SPA may be in onboarding state. Heap assertion is the primary guard.')
     }
   },

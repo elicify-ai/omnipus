@@ -893,7 +893,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // than a content/tool_calls change (e.g. liteMode).
   const messageParts = useMemo(
     () => splitMessageParts(message.content ?? '', positionedToolCalls),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the
+     
     // message's raw fields (stable references unless the message actually
     // changed), not the freshly-allocated `positionedToolCalls` derived
     // above — see comment.

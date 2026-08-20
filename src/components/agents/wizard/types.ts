@@ -110,7 +110,7 @@ export interface AdvancedFields {
 // Step props for the Advanced disclosure — same payload/setField plumbing
 // as the wizard steps, but `initialType` drives the type-branched field
 // set and `useDefaultProvider` is unused.
-export interface AdvancedProps extends StepProps {}
+export type AdvancedProps = StepProps
 
 // Re-exported so consumers can `import type { AdvancedFields } from
 // './types'` without going through CreateAgentWizard.

@@ -84,7 +84,7 @@ beforeEach(resetStores)
 /** Seed an empty bucket at SID so handleFrame has somewhere to route to. */
 function seedEmptyBucket(opts: { isReplaying?: boolean; isStreaming?: boolean } = {}): void {
   act(() => {
-    useChatStore.setState((_s) => ({
+    useChatStore.setState({
       sessionsById: {
         [SID]: {
           ...makeBucketMessages([]),
@@ -108,7 +108,7 @@ function seedEmptyBucket(opts: { isReplaying?: boolean; isStreaming?: boolean } 
       toolCallOrder: [],
       isStreaming: opts.isStreaming ?? false,
       isReplaying: opts.isReplaying ?? false,
-    }))
+    })
   })
 }
 
@@ -330,29 +330,27 @@ describe("ADR-051 'replay_error' — typed payload translation + coalesce", () =
       isStreaming: true,
     }
     act(() => {
-      useChatStore.setState((_s) => {
-        const bucket = {
-          ...makeBucketMessages([placeholder]),
-          toolCalls: {},
-          toolCallOrder: [],
-          textAtToolCallStart: {},
-          isStreaming: true,
-          isReplaying: true,
-          replayCompletedForSession: null,
-          sessionTokens: 0,
-          sessionCost: 0,
-          rateLimitEvent: null,
-          cancelStage: null,
-          lastUserMessageAt: null,
-          lastReceivedEventTime: null,
-          spanByParentCallId: {},
-        }
-        return {
-          sessionsById: { [SID]: bucket },
-          messages: getMessages(bucket),
-          isStreaming: true,
-          isReplaying: true,
-        }
+      const bucket = {
+        ...makeBucketMessages([placeholder]),
+        toolCalls: {},
+        toolCallOrder: [],
+        textAtToolCallStart: {},
+        isStreaming: true,
+        isReplaying: true,
+        replayCompletedForSession: null,
+        sessionTokens: 0,
+        sessionCost: 0,
+        rateLimitEvent: null,
+        cancelStage: null,
+        lastUserMessageAt: null,
+        lastReceivedEventTime: null,
+        spanByParentCallId: {},
+      }
+      useChatStore.setState({
+        sessionsById: { [SID]: bucket },
+        messages: getMessages(bucket),
+        isStreaming: true,
+        isReplaying: true,
       })
     })
 

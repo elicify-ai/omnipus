@@ -1067,7 +1067,6 @@ function ModelKeyStep({
   onSelectCompany,
   onSelectPlan,
   onSelectRegion,
-  onSelect: _onSelect,
   apiKey,
   onApiKeyChange,
   endpoint,

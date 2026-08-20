@@ -65,8 +65,7 @@ for (const { name, payload } of xssPayloads) {
       // Wait for the page to settle (network idle ensures JS has rendered content).
       await page.waitForLoadState('networkidle');
 
-      // --- Assert: no <script> elements anywhere in the DOM ---
-      const scriptCount = await page.locator('script').count();
+      // --- Assert: no <script> elements in the agent description content area ---
       // Note: the page will have legitimate <script> elements from the SPA bundle.
       // We must NOT count those. Instead, assert that no <script> appears inside
       // the main content area where the agent description is rendered.
@@ -123,7 +122,7 @@ for (const { name, payload } of xssPayloads) {
   });
 }
 
-test('chat message with XSS payload renders as escaped text, not live HTML', async ({ page, request }) => {
+test('chat message with XSS payload renders as escaped text, not live HTML', async ({ page }) => {
   // This test verifies the chat rendering path (not just the agent description field).
   // It uses page.route to intercept a WS message and inject an XSS payload as
   // an assistant response, then asserts the payload appears as escaped text in the DOM.

@@ -162,8 +162,8 @@ describe('GoalIndicator — loop status line', () => {
   })
 
   it('renders self-paced mode without a next_delay', () => {
-    const { next_delay: _drop, ...rest } = makeLoop({ mode: 'self_paced', run: 4, max_runs: 4 })
-    render(<GoalIndicator goalStatus={null} loopStatus={rest as LoopStatusFrame} />)
+    const loop = makeLoop({ mode: 'self_paced', run: 4, max_runs: 4, next_delay: undefined })
+    render(<GoalIndicator goalStatus={null} loopStatus={loop} />)
     const line = screen.getByTestId('loop-status-line')
     expect(line).toHaveTextContent('self-paced')
     expect(line).toHaveTextContent('run 4/4')

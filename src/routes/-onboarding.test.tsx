@@ -17,7 +17,7 @@ import { queryClient } from '@/lib/queryClient'
 // Mock TanStack Router navigate
 const mockNavigate = vi.fn()
 vi.mock('@tanstack/react-router', () => ({
-  createFileRoute: (_path: string) => (opts: { component: React.ComponentType }) => opts,
+  createFileRoute: () => (opts: { component: React.ComponentType }) => opts,
   useNavigate: () => mockNavigate,
   redirect: (opts: unknown) => opts,
   useRouteContext: () => ({ appStateBannerMessage: null }),

@@ -189,7 +189,7 @@ export function RecurrenceEditor({
     onValidityChange?.(validity.valid)
     // onValidityChange is expected to be a stable callback (or intentionally
     // omitted); only the actual validity boolean should re-trigger this.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [validity.valid])
 
   function updateState(patch: Partial<RecurrenceEditorState>) {

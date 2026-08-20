@@ -323,7 +323,7 @@ function _parseServerFrame(data: unknown): ServerFrame | null {
         const known = new Set(['model_name', 'workspace_id', 'workspace_setup_kickoff'])
         const extras = Object.keys(meta as Record<string, unknown>).filter((k) => !known.has(k))
         if (extras.length > 0) {
-          // eslint-disable-next-line no-console
+           
           console.debug(`[ws-debug] extra metadata keys: ${extras.join(', ')}`)
         }
       }
@@ -528,7 +528,7 @@ export class WsConnection {
       this._workerAvailable = true
 
       this._worker.onmessage = (event: MessageEvent) => {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+         
         const { id, frame, droppedReason } = event.data as {
           id: number
           frame: ServerFrame | null

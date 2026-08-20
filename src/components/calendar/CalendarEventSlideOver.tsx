@@ -240,7 +240,7 @@ export function CalendarEventSlideOver({
     }
     // Draft checklist only applies to CREATE mode; always start empty on (re)open.
     setDraftTodos([])
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [open, task?.id, initialDate])
 
   // ── Agent roster (mirrors CreateTaskSlideOver / TaskDetailPanel) ───────────

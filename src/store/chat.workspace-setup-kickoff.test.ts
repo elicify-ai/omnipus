@@ -16,6 +16,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
 import { useChatStore, buildWorkspaceSetupKickoffContent, getMessages } from './chat'
 import { useConnectionStore } from './connection'
+import type { WsConnection } from '@/lib/ws'
 import { useSessionStore } from './session'
 import { useWorkspacesStore } from './workspacesStore'
 import { useUiStore } from './ui'
@@ -77,7 +78,7 @@ function connectMock(sendReturn = true) {
   const mockSend = vi.fn().mockReturnValue(sendReturn)
   act(() => {
     useConnectionStore.setState({
-      connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+      connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
       isConnected: true,
     })
   })

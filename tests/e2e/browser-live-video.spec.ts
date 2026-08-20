@@ -610,7 +610,7 @@ test(
 
       const latencyMs = (detectedAtMs as number) - t0;
       testInfo.annotations.push({ type: 'input-latency-ms', description: String(latencyMs) });
-      // eslint-disable-next-line no-console
+       
       console.log(`[browser-live-video] measured end-to-end input latency: ${latencyMs}ms`);
       expect(latencyMs, `end-to-end input latency (${latencyMs}ms) exceeded the realtime budget`).toBeLessThan(3_000);
     });

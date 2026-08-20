@@ -205,7 +205,7 @@ async function stubChannelsRest(
 async function mockWebSocket(page: import('@playwright/test').Page): Promise<void> {
   await page.routeWebSocket(/api\/v1\/chat\/ws/, (ws: WebSocketRoute) => {
     ws.onMessage((raw: string | Buffer) => {
-      let parsed: { type?: string; active?: boolean } = {}
+      let parsed: { type?: string; active?: boolean }
       try {
         parsed = JSON.parse(typeof raw === 'string' ? raw : raw.toString()) as {
           type?: string

@@ -53,6 +53,6 @@ export function useVersionCheck() {
       clearInterval(interval)
       window.removeEventListener('focus', onFocus)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [])
 }

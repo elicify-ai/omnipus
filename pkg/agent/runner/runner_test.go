@@ -89,7 +89,7 @@ func TestRunner_RemoteA2A_ReservedNotResolvable(t *testing.T) {
 	if err == nil {
 		t.Fatalf("ResolveDispatch(remote-a2a) error = nil, want ErrRemoteA2AReserved")
 	}
-	if err != runner.ErrRemoteA2AReserved {
+	if !errors.Is(err, runner.ErrRemoteA2AReserved) {
 		t.Errorf("ResolveDispatch(remote-a2a) error = %v, want ErrRemoteA2AReserved", err)
 	}
 	if kind != "" {

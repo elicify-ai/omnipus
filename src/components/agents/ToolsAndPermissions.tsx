@@ -167,7 +167,7 @@ export function ToolsAndPermissions({
     const incomingValue = cfgToValue(agentToolsData.config)
     setEditorValue(incomingValue)
     setIsDraftReady(true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [agentToolsData, agentId])
 
   // Keep editorValue in sync with parent `tools` prop when the agent changes
@@ -181,7 +181,7 @@ export function ToolsAndPermissions({
       setIsDraftReady(false)
       setEditorValue(cfgToValue(tools))
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [agentId])
 
   // useAutoSave: debounces user edits and fires the re-auth-gated PUT with the

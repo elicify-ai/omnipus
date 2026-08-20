@@ -1290,7 +1290,7 @@ export function BrowserLiveView({
       machine.stop()
       webrtcRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [sessionId, agentId])
 
   // ── Bind the <video> sink's srcObject imperatively. React has no

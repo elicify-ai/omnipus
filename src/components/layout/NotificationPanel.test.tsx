@@ -13,7 +13,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   return { ...actual, useNavigate: () => mockNavigate }
 })
 
-const markNotificationRead = vi.fn((_id: string) => Promise.resolve())
+const markNotificationRead = vi.fn((id: string) => { void id; return Promise.resolve() })
 const markAllNotificationsRead = vi.fn(() => Promise.resolve())
 vi.mock('@/lib/api', () => ({
   markNotificationRead: (id: string) => markNotificationRead(id),

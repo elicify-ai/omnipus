@@ -185,7 +185,7 @@ describe('PlanActionButton — click isolation (Gate-2 finding #2, parity with T
     const ancestorClick = vi.fn()
     render(
       <QueryClientProvider client={makeClient()}>
-        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
+        { }
         <div onClick={ancestorClick}>
           <PlanActionButton plan={makePlan({ state: 'draft' })} />
         </div>

@@ -59,7 +59,7 @@ function MemoryObserverLifecycle() {
       unsubscribe()
     }
     // setLiteMode is a stable Zustand reference.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [])
 
   return null
@@ -248,7 +248,7 @@ function WsLifecycle() {
       setConnection(null);
     };
     // Store methods are stable Zustand references — intentional empty deps
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   return null;

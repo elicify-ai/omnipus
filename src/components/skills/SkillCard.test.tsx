@@ -12,7 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 // inside SkillsScreen (src/routes/_app/skills.tsx). This test file tests SkillsScreen via its component.
 
 vi.mock('@tanstack/react-router', () => ({
-  createFileRoute: (_path: string) => (opts: { component: React.ComponentType }) => opts,
+  createFileRoute: () => (opts: { component: React.ComponentType }) => opts,
   useNavigate: () => vi.fn(),
   useParams: () => ({}),
   Link: ({ children }: { children: React.ReactNode }) => <>{children}</>,

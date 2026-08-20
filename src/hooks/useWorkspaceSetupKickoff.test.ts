@@ -19,6 +19,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
 import type { Agent, Workspace } from '@/lib/api'
 import { workspacesQueryKeys } from '@/lib/api'
+import type { WsConnection } from '@/lib/ws'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useChatStore } from '@/store/chat'
@@ -65,7 +66,7 @@ function makeClient() {
 function connect() {
   act(() => {
     useConnectionStore.setState({
-      connection: { send: vi.fn(), disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+      connection: { send: vi.fn(), disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
       isConnected: true,
     })
   })

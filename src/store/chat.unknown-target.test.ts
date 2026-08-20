@@ -65,7 +65,7 @@ describe('chat.unknown-target — T1.14: done for unknown targetSid force-clears
       isStreaming: true,
     }
     act(() => {
-      useChatStore.setState((_s) => ({
+      useChatStore.setState(() => ({
         sessionsById: {
           [ACTIVE_SID]: {
             ...makeBucketMessages([spinnerMsg]),
@@ -125,7 +125,7 @@ describe('chat.unknown-target — T1.14: done for unknown targetSid force-clears
       isStreaming: true,
     }
     act(() => {
-      useChatStore.setState((_s) => ({
+      useChatStore.setState(() => ({
         sessionsById: {
           [ACTIVE_SID]: {
             ...makeBucketMessages([liveMsg]),

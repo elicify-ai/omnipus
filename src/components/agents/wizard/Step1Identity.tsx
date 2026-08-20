@@ -521,7 +521,7 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
     if (entry?.installed && entry.path) {
       setField('executor_cli_path', entry.path)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [payload.cli, cliDetect])
 
   // US-3/US-5: validate-on-blur, debounced + cancel-in-flight (see the hook).
@@ -546,7 +546,7 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
   useEffect(() => {
     if (cliValidation.status.kind !== 'result') return
     setField('executor_cli_validation_reason', cliValidation.status.result.reason)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [cliValidation.status])
 
   return (

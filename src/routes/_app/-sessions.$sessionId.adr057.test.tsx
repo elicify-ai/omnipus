@@ -67,11 +67,14 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
   return {
     ...actual,
-    createFileRoute: (_path: string) => (opts: { component: React.ComponentType; loader?: unknown }) => ({
-      ...opts,
-      useParams: () => ({ sessionId: mockChildSessionId }),
-      useLoaderData: () => _mockUseQueryData,
-    }),
+    createFileRoute: (path: string) => {
+      void path
+      return (opts: { component: React.ComponentType; loader?: unknown }) => ({
+        ...opts,
+        useParams: () => ({ sessionId: mockChildSessionId }),
+        useLoaderData: () => _mockUseQueryData,
+      })
+    },
     useParams: () => ({ sessionId: mockChildSessionId }),
   }
 })

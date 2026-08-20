@@ -95,7 +95,7 @@ export function useCancelState(isStreaming: boolean, cancelStream: () => void): 
       }
       setStopLabel('stop')
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [isStreaming])
 
   const cancelIfStreaming = useCallback(() => {

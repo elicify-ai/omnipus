@@ -2,6 +2,8 @@ import { makeAssistantToolUI } from '@assistant-ui/react'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
 import { isFileExistsRefusal } from './toolResultSentinels'
 import { useChatStore } from '@/store/chat'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { cn } from '@/lib/utils'
 
 interface WriteFileArgs {
@@ -154,6 +156,7 @@ function FileOpRow({
   detail,
   result,
   status,
+  params,
 }: {
   label: string
   toolCallId: string
@@ -161,6 +164,14 @@ function FileOpRow({
   detail?: string
   result: unknown
   status: { type: string }
+  /**
+   * The tool call's raw args, threaded through only for the visibility gate
+   * (issue #494) — `label` doubles as the registered tool name for every
+   * caller of this row (write_file/file.write via makeWriteFileUI, plus the
+   * hardcoded edit_file/append_file registrations below), so no separate
+   * toolName prop is needed.
+   */
+  params: Record<string, unknown> | undefined
 }) {
   const storeCall = useChatStore((s) => s.toolCalls[toolCallId])
   // The gateway parses the structured refusal into the frame's `result`, so
@@ -178,6 +189,16 @@ function FileOpRow({
   // the hook for `reason` (storeCall?.error), which has no equivalent on
   // that boolean, so there is no simplification to gain by reading both.
   const isError = !isCancelled && storeCall?.status === 'error'
+
+  // Client-side render gate (issue #494): mirrors BashOutput.tsx's gate —
+  // hides this row when shouldRenderToolCall says so, unless verbose chat is
+  // on. Must sit after every hook above (including useChatStore) and before
+  // the JSX return (Rules of Hooks).
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  if (!shouldRenderToolCall(label, params, verboseChatEnabled, isError)) {
+    return null
+  }
+
   return (
     <FileOpBlock
       label={label}
@@ -206,6 +227,7 @@ function makeWriteFileUI(toolName: string) {
         detail={byteCount(args?.content)}
         result={result}
         status={status}
+        params={args as Record<string, unknown> | undefined}
       />
     ),
   })
@@ -225,6 +247,7 @@ export const EditFileConfirmUI = makeAssistantToolUI<EditFileArgs, unknown>({
       path={args?.path ?? '(unknown)'}
       result={result}
       status={status}
+      params={args as Record<string, unknown> | undefined}
     />
   ),
 })
@@ -239,6 +262,7 @@ export const AppendFileConfirmUI = makeAssistantToolUI<AppendFileArgs, unknown>(
       detail={byteCount(args?.content)}
       result={result}
       status={status}
+      params={args as Record<string, unknown> | undefined}
     />
   ),
 })

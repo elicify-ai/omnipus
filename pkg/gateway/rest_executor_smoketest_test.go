@@ -279,7 +279,13 @@ func (f *permissionRequestFakeDriver) Decide(d runner.PermissionDecision) {
 func (f *permissionRequestFakeDriver) Cancel()            {}
 func (f *permissionRequestFakeDriver) Input(string) error { return nil }
 func (f *permissionRequestFakeDriver) Resume(context.Context, string) (<-chan runner.RunEvent, error) {
-	return nil, nil
+	// Resume is unused by this fake's scenarios; return an already-closed
+	// channel (rather than nil, nil) so a caller ranging over it sees an
+	// immediately-completed empty run instead of a nil channel that would
+	// block forever, and so the return isn't an ambiguous (nil, nil) (nilnil).
+	ch := make(chan runner.RunEvent)
+	close(ch)
+	return ch, nil
 }
 
 func (f *permissionRequestFakeDriver) Test(context.Context) runner.ConnectionTestResult {

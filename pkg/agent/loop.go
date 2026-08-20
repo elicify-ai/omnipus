@@ -3549,9 +3549,15 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, ag *AgentInsta
 		})
 }
 
+// ErrNoContinuationTarget is a sentinel returned by buildContinuationTarget
+// for messages that have no continuation target by design (e.g. the
+// synthetic "system" channel). Callers use errors.Is to distinguish this
+// expected no-target case from a genuine resolution failure.
+var ErrNoContinuationTarget = errors.New("no continuation target for message")
+
 func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuationTarget, error) {
 	if msg.Channel == "system" {
-		return nil, nil
+		return nil, ErrNoContinuationTarget
 	}
 
 	route, _, err := al.resolveMessageRoute(msg)

@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
 import { CaretDown, CaretUp } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
 
 interface ReadFileArgs {
@@ -15,12 +17,14 @@ function basename(p: string): string {
 }
 
 function FileReadBlock({
+  toolName,
   args,
   result,
   isRunning,
   isError,
   isCancelled,
 }: {
+  toolName: string
   args: ReadFileArgs
   result: unknown
   isRunning: boolean
@@ -28,6 +32,16 @@ function FileReadBlock({
   isCancelled?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
+
+  // Client-side render gate (issue #494): mirrors BashOutput.tsx's gate —
+  // hides this row when shouldRenderToolCall says so, unless verbose chat is
+  // on. Must sit after every hook above and before the JSX return.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  if (
+    !shouldRenderToolCall(toolName, args as unknown as Record<string, unknown>, verboseChatEnabled, !!isError)
+  ) {
+    return null
+  }
 
   const path = args.path ?? '(unknown file)'
   const name = basename(path)
@@ -109,6 +123,7 @@ export const FileReadPreviewUI = makeAssistantToolUI<ReadFileArgs, unknown>({
   toolName: 'read_file',
   render: ({ args, result, status, isError }) => (
     <FileReadBlock
+      toolName="read_file"
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
@@ -123,6 +138,7 @@ export const FileReadAliasDotUI = makeAssistantToolUI<ReadFileArgs, unknown>({
   toolName: 'file.read',
   render: ({ args, result, status, isError }) => (
     <FileReadBlock
+      toolName="file.read"
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}

@@ -43,7 +43,7 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
     onSelect?: () => void
     [key: string]: unknown
   }) => (
-    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
+     
     <div role="menuitem" onClick={() => onSelect?.()} {...rest}>
       {children}
     </div>

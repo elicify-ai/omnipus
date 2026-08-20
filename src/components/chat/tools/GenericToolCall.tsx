@@ -329,8 +329,9 @@ export function GenericToolCall({
   error,
   isError: isErrorProp,
   durationMs,
-  // defaultCollapsed: accepted but not used — tool calls always start collapsed.
-  defaultCollapsed: _defaultCollapsed,
+  // defaultCollapsed is accepted in GenericToolCallProps for API compatibility with
+  // callers (e.g. ChatScreen), but intentionally not destructured here — tool calls
+  // always start collapsed regardless of the caller's requested initial state.
   sessionId = '',
 }: GenericToolCallProps) {
   const [expanded, setExpanded] = useState(false)

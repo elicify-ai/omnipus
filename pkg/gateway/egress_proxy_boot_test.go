@@ -41,8 +41,8 @@ func fakeFailingEgressConstructor(_ []string, _ sandbox.EgressAuditFunc) (*sandb
 // nil proxy and no boot-abort error — even when construction fails.
 func TestBuildEgressProxyOrAbort_EmptyAllowList_ConstructionFails_LogsAndContinues(t *testing.T) {
 	proxy, err := buildEgressProxyOrAbort(nil, nil, fakeFailingEgressConstructor)
-	if err != nil {
-		t.Fatalf("expected no boot-abort error for an empty allow-list, got: %v", err)
+	if !errors.Is(err, errEgressProxyDisabled) {
+		t.Fatalf("expected errEgressProxyDisabled (non-fatal) for an empty allow-list, got: %v", err)
 	}
 	if proxy != nil {
 		t.Fatalf("expected nil proxy when construction fails, got: %+v", proxy)
@@ -50,8 +50,8 @@ func TestBuildEgressProxyOrAbort_EmptyAllowList_ConstructionFails_LogsAndContinu
 
 	// Also verify with an explicit empty (non-nil) slice — same contract.
 	proxy2, err2 := buildEgressProxyOrAbort([]string{}, nil, fakeFailingEgressConstructor)
-	if err2 != nil {
-		t.Fatalf("expected no boot-abort error for an explicit empty allow-list, got: %v", err2)
+	if !errors.Is(err2, errEgressProxyDisabled) {
+		t.Fatalf("expected errEgressProxyDisabled (non-fatal) for an explicit empty allow-list, got: %v", err2)
 	}
 	if proxy2 != nil {
 		t.Fatalf("expected nil proxy when construction fails, got: %+v", proxy2)

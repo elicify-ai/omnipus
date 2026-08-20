@@ -24,8 +24,6 @@
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
-
 // ── T1.12: visibilitychange triggers reconnect with persistent banner ─────────
 
 test(

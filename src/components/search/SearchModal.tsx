@@ -450,10 +450,20 @@ export function SearchModal() {
   )
 
   const toggleWs = useCallback((key: string) => {
-    setCollapsedWs((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
+    setCollapsedWs((prev) => {
+      const n = new Set(prev)
+      if (n.has(key)) n.delete(key)
+      else n.add(key)
+      return n
+    })
   }, [])
   const toggleAgent = useCallback((key: string) => {
-    setCollapsedAgent((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
+    setCollapsedAgent((prev) => {
+      const n = new Set(prev)
+      if (n.has(key)) n.delete(key)
+      else n.add(key)
+      return n
+    })
   }, [])
 
   // Resets all transient panel state (search text, date filter, collapse
@@ -512,7 +522,8 @@ export function SearchModal() {
     for (const s of sessions) {
       if (!s.parent_session_id || !sessionById.has(s.parent_session_id)) continue
       const arr = map.get(s.parent_session_id)
-      arr ? arr.push(s) : map.set(s.parent_session_id, [s])
+      if (arr) arr.push(s)
+      else map.set(s.parent_session_id, [s])
     }
     return map
   }, [sessions, sessionById])
@@ -647,7 +658,9 @@ export function SearchModal() {
     const aBuckets = new Map<string, Session[]>()
     for (const s of sess) {
       const aId = s.active_agent_id ?? s.agent_id ?? 'unknown'
-      const arr = aBuckets.get(aId); arr ? arr.push(s) : aBuckets.set(aId, [s])
+      const arr = aBuckets.get(aId)
+      if (arr) arr.push(s)
+      else aBuckets.set(aId, [s])
     }
     const agGroups: AgentGroup[] = []
     for (const [aId, aSess] of aBuckets) {
@@ -656,7 +669,7 @@ export function SearchModal() {
     }
     agGroups.sort((a, b) => new Date(b.sessions[0]?.updated_at ?? '').getTime() - new Date(a.sessions[0]?.updated_at ?? '').getTime())
     return agGroups
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [agents])
 
   const groups = useMemo<WsGroup[]>(() => {
@@ -679,7 +692,9 @@ export function SearchModal() {
       const byWorkspace = new Map<string, Session[]>()
       for (const s of rootSessions) {
         if (s.workspace_id && wsMap.has(s.workspace_id)) {
-          const arr = byWorkspace.get(s.workspace_id); arr ? arr.push(s) : byWorkspace.set(s.workspace_id, [s])
+          const arr = byWorkspace.get(s.workspace_id)
+          if (arr) arr.push(s)
+          else byWorkspace.set(s.workspace_id, [s])
         }
       }
       const matched = q ? workspaces.filter((w) => w.name.toLowerCase().includes(q)) : workspaces
@@ -710,7 +725,9 @@ export function SearchModal() {
     const wsBuckets = new Map<string | null, Session[]>()
     for (const s of filtered) {
       const k = s.workspace_id && wsMap.has(s.workspace_id) ? s.workspace_id : null
-      const arr = wsBuckets.get(k); arr ? arr.push(s) : wsBuckets.set(k, [s])
+      const arr = wsBuckets.get(k)
+      if (arr) arr.push(s)
+      else wsBuckets.set(k, [s])
     }
 
     const result: WsGroup[] = []

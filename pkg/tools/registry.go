@@ -67,20 +67,61 @@ func NewToolRegistry() *ToolRegistry {
 
 // registerToolLocked saves a tool entry into the registry. Must be called
 // with r.mu held. warnOnOverwrite distinguishes a genuinely unexpected
-// name collision (Register/RegisterHidden — logged at WARN so an operator
-// notices) from an intentional, expected replacement (RegisterReplacing —
-// logged at DEBUG only): both still overwrite the entry identically, only
-// the log level differs.
+// name collision (Register/RegisterHidden — rejected outright, see below)
+// from an intentional, expected replacement (RegisterReplacing — still
+// allowed to overwrite, logged at DEBUG only).
+//
+// Issue #278 (registry hijack): Register/RegisterHidden have void
+// signatures, so no caller can observe a rejected registration via an error
+// return — this is why a collision or an invalid name must be handled here,
+// as a no-op that preserves whatever is already registered, rather than by
+// returning an error a caller would have to opt into checking. This also
+// means the fix requires no changes to any of the ~45 existing void-call
+// call sites across pkg/agent, pkg/tools/browser, and pkg/sysagent/tools.
+//   - A same-name collision on Register/RegisterHidden (warnOnOverwrite
+//     true) is rejected: the existing entry is left untouched and the new
+//     tool is discarded, logged at WARN. This is the live per-agent MCP
+//     path's only backstop — pkg/agent/loop_mcp.go's registerServerTools
+//     calls Register/RegisterHidden directly with no collision check of its
+//     own, so an MCP-supplied tool named e.g. "read_file", "exec", or
+//     "bash" must not be able to silently take over dispatch for that name
+//     (privileged names are protected by this same general rule — nothing
+//     MCP-supplied is ever allowed to replace an already-registered entry,
+//     trusted or not).
+//   - A name that fails validateReservedToolName (the "system." prefix,
+//     FR-060) is rejected unconditionally, even on first registration with
+//     no pre-existing collision — mirrors BuiltinRegistry.ValidateMCPName's
+//     check, which only runs on the separate central MCP registry today and
+//     is not consulted by this per-agent path at all.
+//   - RegisterReplacing (warnOnOverwrite false) is unaffected by the
+//     collision rule: it is the deliberate re-registration path (e.g.
+//     wirePlanToolsForAgent re-wiring the plan/task tool surface once
+//     plan.Store becomes available) and must keep overwriting on every
+//     call. It is still subject to the reserved-name check, since nothing
+//     legitimate is ever named under the "system." prefix.
 func (r *ToolRegistry) registerToolLocked(tool Tool, isCore bool, warnPrefix, debugLabel string, warnOnOverwrite bool) {
 	name := tool.Name()
-	if _, exists := r.tools[name]; exists {
+
+	if err := validateReservedToolName(name); err != nil {
+		logger.WarnCF("tools", warnPrefix+" rejected: invalid tool name",
+			map[string]any{"name": name, "error": err.Error()})
+		return
+	}
+
+	if existing, exists := r.tools[name]; exists {
 		if warnOnOverwrite {
-			logger.WarnCF("tools", warnPrefix+" overwrites existing tool",
-				map[string]any{"name": name})
-		} else {
-			logger.DebugCF("tools", warnPrefix+" replaced existing tool (expected)",
-				map[string]any{"name": name})
+			// #278: never let a same-name collision silently replace an
+			// already-registered tool. Keep the incumbent and discard the
+			// new registration — this is the only signal a void-returning
+			// Register/RegisterHidden call can give a caller that ignores
+			// it, but it is the one that matters: dispatch (Execute, via
+			// Get) keeps resolving to the trusted tool either way.
+			logger.WarnCF("tools", warnPrefix+" rejected: name already registered, keeping existing tool",
+				map[string]any{"name": name, "existing_desc": existing.Tool.Description(), "rejected_desc": tool.Description()})
+			return
 		}
+		logger.DebugCF("tools", warnPrefix+" replaced existing tool (expected)",
+			map[string]any{"name": name})
 	}
 	r.tools[name] = &ToolEntry{
 		Tool:   tool,

@@ -625,7 +625,7 @@ export function useAutoSave<T>(
     // nothing; `doSave` is deliberately NOT listed here — it's read fresh
     // via `doSaveRef` specifically so this effect's cleanup does not re-fire
     // on every `disabled` toggle.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [hasPendingChanges])
 
   return { status, error, lastSavedAt, saveNow: doSave, hasPendingChanges }
