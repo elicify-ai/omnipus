@@ -338,30 +338,50 @@ func TestWorkspaceCreate_InvalidName(t *testing.T) {
 	}
 }
 
-// TestWorkspaceCreate_CoreTeamValidation checks that core_team > 20 unique entries is rejected.
-// Note: the sanitizeCoreTeam function deduplicates entries, so the 21 entries must all be unique.
+// TestWorkspaceCreate_LargeCoreTeamAccepted proves the 20-agent core_team cap
+// is gone: a workspace created with 25 unique, registered agent IDs succeeds and
+// persists all 25.
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.10
-func TestWorkspaceCreate_CoreTeamValidation(t *testing.T) {
-	deps, _ := newTestDepsWithHome(t)
+func TestWorkspaceCreate_LargeCoreTeamAccepted(t *testing.T) {
+	// 25 unique agent IDs, all registered in the live config exactly as a real
+	// install would have them.
+	ids := make([]string, 25)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("agent-id-%02d", i)
+	}
+	deps, _ := newTestDepsWithHomeAndAgents(t, ids...)
 	tool := systools.NewWorkspaceCreateTool(deps)
 
-	// 21 unique agent IDs to exceed the 20-entry limit after deduplication.
-	bigTeam := make([]any, 21)
-	for i := range bigTeam {
-		bigTeam[i] = fmt.Sprintf("agent-id-%02d", i)
+	bigTeam := make([]any, len(ids))
+	for i, id := range ids {
+		bigTeam[i] = id
 	}
 	result := tool.Execute(context.Background(), map[string]any{
-		"name":      "Too Big Team",
+		"name":      "Big Team",
 		"core_team": bigTeam,
 	})
-	if !result.IsError {
-		t.Fatal("expected error for core_team > 20 unique entries, got success")
+	if result.IsError {
+		t.Fatalf("expected success for a 25-member core_team, got error: %s", result.ForLLM)
 	}
-	m := parseError(t, result.ForLLM)
-	errBlock, _ := m["error"].(map[string]any)
-	if errBlock["code"] != "INVALID_INPUT" {
-		t.Errorf("code = %v, want INVALID_INPUT", errBlock["code"])
+
+	m := parseSuccess(t, result.ForLLM)
+	team, ok := m["core_team"].([]any)
+	if !ok {
+		t.Fatalf("core_team missing or wrong type in response: %#v", m["core_team"])
+	}
+	if len(team) != len(ids) {
+		t.Fatalf("core_team has %d entries, want %d", len(team), len(ids))
+	}
+	got := make(map[string]struct{}, len(team))
+	for _, v := range team {
+		s, _ := v.(string)
+		got[s] = struct{}{}
+	}
+	for _, id := range ids {
+		if _, ok := got[id]; !ok {
+			t.Errorf("persisted core_team is missing agent id %q", id)
+		}
 	}
 }
 

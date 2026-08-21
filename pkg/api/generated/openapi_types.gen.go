@@ -13289,7 +13289,7 @@ type VoiceProvider struct {
 
 // Workspace A Level 1 workspace record. Workspaces are lightweight metadata — no filesystem directories or room topology. task_count is computed at read time and never stored. core_team is a default agent roster, not an access gate.
 type Workspace struct {
-	// CoreTeam Default agent roster for this workspace. Not an access gate — any agent can work on any workspace's tasks. Deduplicated at write time. Max 20 entries.
+	// CoreTeam Default agent roster for this workspace. Not an access gate — any agent can work on any workspace's tasks. Deduplicated at write time.
 	CoreTeam *[]string `json:"core_team,omitempty"`
 
 	// CreatedAt RFC3339 UTC creation timestamp

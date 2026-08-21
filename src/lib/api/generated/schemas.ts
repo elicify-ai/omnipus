@@ -3059,7 +3059,7 @@ export const Workspace: z.ZodType<Workspace> = z
     status: z.enum(["active", "archived"]),
     pinned: z.boolean(),
     pin_order: z.number().int(),
-    core_team: z.array(z.string()).max(20).optional(),
+    core_team: z.array(z.string()).optional(),
     mounts: z
       .array(
         z.object({
@@ -3082,7 +3082,7 @@ export const WorkspaceCreateRequest = z
   .object({
     name: z.string().min(1).max(200),
     description: z.string().max(2000).optional(),
-    core_team: z.array(z.string()).max(20).optional(),
+    core_team: z.array(z.string()).optional(),
   })
   .passthrough();
 export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> = z
@@ -3092,7 +3092,7 @@ export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> = z
     status: z.enum(["active", "archived"]),
     pinned: z.boolean(),
     pin_order: z.number().int(),
-    core_team: z.array(z.string()).max(20),
+    core_team: z.array(z.string()),
     member_configs: z.record(WorkspaceMemberConfig),
   })
   .partial()
