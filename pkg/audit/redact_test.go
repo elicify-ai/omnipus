@@ -178,8 +178,8 @@ func TestRedactionEngine_RedactEntry(t *testing.T) {
 	// Test cleanup: Close error is inconsequential — t.TempDir() removes
 	// the backing directory regardless, and no test here asserts on it.
 	defer func() {
-		if err := logger.Close(); err != nil {
-			_ = err
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -235,8 +235,8 @@ func TestFieldNameRedaction(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer func() {
-		if err := logger.Close(); err != nil {
-			_ = err
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -342,8 +342,8 @@ func TestFieldNameRedaction_NestedMaps(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer func() {
-		if err := logger.Close(); err != nil {
-			_ = err
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -398,8 +398,8 @@ func TestFieldNameRedaction_ArrayOfMaps(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer func() {
-		if err := logger.Close(); err != nil {
-			_ = err
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 

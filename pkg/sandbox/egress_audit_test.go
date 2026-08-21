@@ -33,8 +33,8 @@ func TestEgressProxy_DenyEmitsAuditViaHook(t *testing.T) {
 		t.Fatalf("NewEgressProxy: %v", err)
 	}
 	defer func() {
-		if err := p.Close(); err != nil {
-			_ = err
+		if closeErr := p.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -102,8 +102,8 @@ func TestEgressProxy_AllowedHostDoesNotEmitDenyAudit(t *testing.T) {
 		t.Fatalf("NewEgressProxy: %v", err)
 	}
 	defer func() {
-		if err := p.Close(); err != nil {
-			_ = err
+		if closeErr := p.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 

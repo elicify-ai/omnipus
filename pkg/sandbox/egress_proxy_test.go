@@ -105,8 +105,8 @@ func TestEgressProxy_DenyEmitsAudit(t *testing.T) {
 	// Test cleanup: Close errors on proxies/servers/conns/response
 	// bodies are inconsequential once assertions have run.
 	defer func() {
-		if err := p.Close(); err != nil {
-			_ = err
+		if closeErr := p.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -123,8 +123,8 @@ func TestEgressProxy_DenyEmitsAudit(t *testing.T) {
 		t.Fatalf("client.Get: %v", err)
 	}
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			_ = err
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	if resp.StatusCode != http.StatusForbidden {
@@ -176,8 +176,8 @@ func TestEgressProxy_AllowedRequestForwards(t *testing.T) {
 	}
 	go func() { _ = upstream.Serve(listener) }()
 	defer func() {
-		if err := upstream.Close(); err != nil {
-			_ = err
+		if closeErr := upstream.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	upstreamHost := listener.Addr().String() // 127.0.0.1:NNNNN
@@ -188,8 +188,8 @@ func TestEgressProxy_AllowedRequestForwards(t *testing.T) {
 		t.Fatalf("NewEgressProxy: %v", err)
 	}
 	defer func() {
-		if err := p.Close(); err != nil {
-			_ = err
+		if closeErr := p.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -203,8 +203,8 @@ func TestEgressProxy_AllowedRequestForwards(t *testing.T) {
 		t.Fatalf("client.Get: %v", err)
 	}
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			_ = err
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	body, _ := io.ReadAll(resp.Body)
@@ -221,8 +221,8 @@ func TestEgressProxy_EmptyAllowListDeniesAll(t *testing.T) {
 		t.Fatalf("NewEgressProxy: %v", err)
 	}
 	defer func() {
-		if err := p.Close(); err != nil {
-			_ = err
+		if closeErr := p.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	if p.hostAllowed("registry.npmjs.org") {
@@ -240,8 +240,8 @@ func TestClose_WaitsForTunnels(t *testing.T) {
 		t.Fatalf("listenLoopback: %v", err)
 	}
 	defer func() {
-		if err := upstream.Close(); err != nil {
-			_ = err
+		if closeErr := upstream.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -254,8 +254,8 @@ func TestClose_WaitsForTunnels(t *testing.T) {
 		}
 		close(upstreamReady)
 		defer func() {
-			if err := conn.Close(); err != nil {
-				_ = err
+			if closeErr := conn.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 		<-releaseUpstream
@@ -272,8 +272,8 @@ func TestClose_WaitsForTunnels(t *testing.T) {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer func() {
-		if err := dial.Close(); err != nil {
-			_ = err
+		if closeErr := dial.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	if _, err := dial.Write(
@@ -310,8 +310,8 @@ func TestClose_WaitsForTunnels(t *testing.T) {
 
 	// Release upstream so io.Copy goroutines complete and Close returns.
 	close(releaseUpstream)
-	if err := dial.Close(); err != nil {
-		_ = err
+	if closeErr := dial.Close(); closeErr != nil {
+		_ = closeErr
 	}
 
 	select {

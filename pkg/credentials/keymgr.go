@@ -168,8 +168,8 @@ func generateAndPersistMasterKey(path string) ([]byte, error) {
 		return nil, fmt.Errorf("create key file %q: %w", path, err)
 	}
 	if _, writeErr := f.WriteString(hexKey); writeErr != nil {
-		if err := f.Close(); err != nil {
-			_ = err
+		if closeErr := f.Close(); closeErr != nil {
+			_ = closeErr
 		}
 		rmErr := os.Remove(path)
 		if rmErr != nil {

@@ -344,8 +344,8 @@ func TestSSRFChecker_SafeDialContext_RealDNSResolution(t *testing.T) {
 		require.NoError(t, err)
 		// Test cleanup: Close error is inconsequential.
 		defer func() {
-			if err := listener.Close(); err != nil {
-				_ = err
+			if closeErr := listener.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 
@@ -373,8 +373,8 @@ func TestSSRFChecker_SafeDialContext_RealDNSResolution(t *testing.T) {
 		require.NoError(t, err)
 		// Test cleanup: Close error is inconsequential.
 		defer func() {
-			if err := listener.Close(); err != nil {
-				_ = err
+			if closeErr := listener.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 
@@ -385,8 +385,8 @@ func TestSSRFChecker_SafeDialContext_RealDNSResolution(t *testing.T) {
 				return
 			}
 			// Test goroutine cleanup: Close error not actionable here.
-			if err := conn.Close(); err != nil {
-				_ = err
+			if closeErr := conn.Close(); closeErr != nil {
+				_ = closeErr
 			}
 			accepted <- struct{}{}
 		}()
@@ -398,8 +398,8 @@ func TestSSRFChecker_SafeDialContext_RealDNSResolution(t *testing.T) {
 		dialContext := checker.SafeDialContext(&net.Dialer{Timeout: time.Second})
 		conn, err := dialContext(context.Background(), "tcp", net.JoinHostPort("localhost", port))
 		require.NoError(t, err, "expected localhost DNS resolution to succeed once allowlisted")
-		if err := conn.Close(); err != nil {
-			_ = err
+		if closeErr := conn.Close(); closeErr != nil {
+			_ = closeErr
 		}
 
 		select {
@@ -530,8 +530,8 @@ func TestSSRFChecker_CheckRedirect_BlocksPrivateIPTarget(t *testing.T) {
 	if resp != nil {
 		// SSRF-blocked/error response body; draining is unnecessary and
 		// the Close error is not actionable in an already-error test path.
-		if err := resp.Body.Close(); err != nil {
-			_ = err
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}
 	require.Error(t, err, "redirect to private IP 10.1.2.3 must be rejected, not followed")
@@ -557,8 +557,8 @@ func TestSSRFChecker_CheckRedirect_BlocksCloudMetadataTarget(t *testing.T) {
 	if resp != nil {
 		// SSRF-blocked/error response body; draining is unnecessary and
 		// the Close error is not actionable in an already-error test path.
-		if err := resp.Body.Close(); err != nil {
-			_ = err
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}
 	require.Error(t, err, "redirect to cloud metadata endpoint must be rejected, not followed")
@@ -589,8 +589,8 @@ func TestSSRFChecker_CheckRedirect_AllowsSameOriginRedirect(t *testing.T) {
 	resp, err := client.Get(server.URL + "/start")
 	require.NoError(t, err, "legitimate same-origin redirect must be followed, not blocked")
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			_ = err
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	body, readErr := io.ReadAll(resp.Body)
@@ -619,8 +619,8 @@ func TestSSRFChecker_CheckRedirect_TooManyRedirectsRejected(t *testing.T) {
 	if resp != nil {
 		// SSRF-blocked/error response body; draining is unnecessary and
 		// the Close error is not actionable in an already-error test path.
-		if err := resp.Body.Close(); err != nil {
-			_ = err
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}
 	require.Error(t, err, "an infinite same-origin redirect loop must eventually be rejected")
@@ -805,8 +805,8 @@ func TestAllowGatewayOrigin_ConcurrentWithCheckURL(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < iters; j++ {
 				checker.AllowGatewayOrigin("localhost", 5000+port)
-				if err := checker.CheckURL(ctx, "http://127.0.0.1:5000/x"); err != nil {
-					_ = err
+				if ignoredErr := checker.CheckURL(ctx, "http://127.0.0.1:5000/x"); ignoredErr != nil {
+					_ = ignoredErr
 				}
 				checker.AllowGatewayOrigin("", 0)
 			}
@@ -818,8 +818,8 @@ func TestAllowGatewayOrigin_ConcurrentWithCheckURL(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < iters; j++ {
-				if err := checker.CheckURL(ctx, "http://127.0.0.1:5000/x"); err != nil {
-					_ = err
+				if ignoredErr := checker.CheckURL(ctx, "http://127.0.0.1:5000/x"); ignoredErr != nil {
+					_ = ignoredErr
 				}
 			}
 		}()

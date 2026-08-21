@@ -95,8 +95,8 @@ func firstEntryTimestamp(path string) (time.Time, bool) {
 	// Read-only handle used only to sort files by timestamp; a Close error
 	// here has no data-loss or correctness consequence.
 	defer func() {
-		if err := f.Close(); err != nil {
-			_ = err
+		if closeErr := f.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 

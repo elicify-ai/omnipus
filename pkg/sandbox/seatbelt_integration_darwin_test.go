@@ -139,8 +139,8 @@ func TestSeatbelt_RealChild_NetworkDefaultDeny(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() {
-		if err := ln.Close(); err != nil {
-			_ = err
+		if closeErr := ln.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	go func() {
@@ -149,8 +149,8 @@ func TestSeatbelt_RealChild_NetworkDefaultDeny(t *testing.T) {
 			if acceptErr != nil {
 				return
 			}
-			if err := conn.Close(); err != nil {
-				_ = err
+			if closeErr := conn.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}
 	}()
@@ -420,8 +420,8 @@ func TestSeatbelt_RealChild_UDPFollowsThePortAllowList(t *testing.T) {
 	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() {
-		if err := conn.Close(); err != nil {
-			_ = err
+		if closeErr := conn.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	go func() {
@@ -431,8 +431,8 @@ func TestSeatbelt_RealChild_UDPFollowsThePortAllowList(t *testing.T) {
 			if readErr != nil {
 				return
 			}
-			if _, err := conn.WriteTo([]byte("UDP-REPLY"), addr); err != nil {
-				_ = err
+			if _, writeErr := conn.WriteTo([]byte("UDP-REPLY"), addr); writeErr != nil {
+				_ = writeErr
 			}
 			_ = n
 		}

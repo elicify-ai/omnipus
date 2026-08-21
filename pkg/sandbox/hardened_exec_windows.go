@@ -91,8 +91,8 @@ func applyPostStartHardening(cmd *exec.Cmd, lim Limits) error {
 		uint32(unsafe.Sizeof(info)),
 	)
 	if err != nil {
-		if err := windows.CloseHandle(job); err != nil {
-			_ = err
+		if ignoredErr := windows.CloseHandle(job); ignoredErr != nil {
+			_ = ignoredErr
 		}
 		return fmt.Errorf("SetInformationJobObject: %w", err)
 	}
@@ -104,16 +104,16 @@ func applyPostStartHardening(cmd *exec.Cmd, lim Limits) error {
 		pid,
 	)
 	if err != nil {
-		if err := windows.CloseHandle(job); err != nil {
-			_ = err
+		if ignoredErr := windows.CloseHandle(job); ignoredErr != nil {
+			_ = ignoredErr
 		}
 		return fmt.Errorf("OpenProcess pid=%d: %w", pid, err)
 	}
 	defer windows.CloseHandle(procHandle)
 
 	if err := windows.AssignProcessToJobObject(job, procHandle); err != nil {
-		if err := windows.CloseHandle(job); err != nil {
-			_ = err
+		if ignoredErr := windows.CloseHandle(job); ignoredErr != nil {
+			_ = ignoredErr
 		}
 		return fmt.Errorf("AssignProcessToJobObject: %w", err)
 	}

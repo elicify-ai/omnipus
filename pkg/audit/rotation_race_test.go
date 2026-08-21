@@ -63,8 +63,8 @@ func TestRotation_ConcurrentWritesNoPanic(t *testing.T) {
 	// Test cleanup: Close error is inconsequential — t.TempDir() removes
 	// the backing directory regardless, and no test here asserts on it.
 	defer func() {
-		if err := logger.Close(); err != nil {
-			_ = err
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -184,8 +184,8 @@ func TestRotation_NoPanicOnConcurrentClose(t *testing.T) {
 			}
 		}()
 		time.Sleep(5 * time.Millisecond)
-		if err := logger.Close(); err != nil {
-			_ = err
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -201,8 +201,8 @@ func TestRotation_NoPanicOnConcurrentClose(t *testing.T) {
 			t.Errorf("Log() after Close() panicked: %v", r)
 		}
 	}()
-	if err := logger.Log(&audit.Entry{Event: audit.EventShutdown, Decision: audit.DecisionAllow}); err != nil {
-		_ = err
+	if logErr := logger.Log(&audit.Entry{Event: audit.EventShutdown, Decision: audit.DecisionAllow}); logErr != nil {
+		_ = logErr
 	}
 }
 
@@ -232,8 +232,8 @@ func countAllJSONLLines(t *testing.T, dir string) int {
 		}
 		// Read-only helper file handle; Close error has no effect on the
 		// line count already accumulated.
-		if err := data.Close(); err != nil {
-			_ = err
+		if closeErr := data.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}
 	return total

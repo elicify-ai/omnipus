@@ -716,8 +716,8 @@ func (l *Logger) openCurrentFile() error {
 		// l.file (only a local var on this failed-setup path) and we're
 		// already latching degraded + returning the stat error above, so a
 		// close failure here changes nothing about correctness or safety.
-		if err := f.Close(); err != nil {
-			_ = err
+		if closeErr := f.Close(); closeErr != nil {
+			_ = closeErr
 		}
 		l.degraded = true
 		return fmt.Errorf("audit: stat %s: %w", path, err)

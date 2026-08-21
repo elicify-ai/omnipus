@@ -176,8 +176,8 @@ func SpawnBackgroundChild(
 	// above already did for the macOS Seatbelt profile.
 	if err := StartLockedWithPolicy(cmd, limits.KernelPolicy); err != nil {
 		if logFile != nil {
-			if err := logFile.Close(); err != nil {
-				_ = err
+			if closeErr := logFile.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}
 		return nil, fmt.Errorf("SpawnBackgroundChild: start %s: %w", strings.Join(parts, " "), err)

@@ -328,8 +328,8 @@ func TestGitSandbox_RunAllowsReadEndToEnd(t *testing.T) {
 	// (It may still fail to spawn if git is absent — we only assert the guard
 	// did not veto it, i.e. the error is not ErrGitEvidenceProtected.)
 	work := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(work, ".git"), 0o755); err != nil {
-		_ = err
+	if ignoredErr := os.MkdirAll(filepath.Join(work, ".git"), 0o755); ignoredErr != nil {
+		_ = ignoredErr
 	}
 	if err := sandbox.ProtectRepoWorkdir(work); err != nil {
 		t.Fatalf("Protect: %v", err)

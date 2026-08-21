@@ -121,8 +121,8 @@ func (l *Logger) Verify(ctx context.Context) (*ChainResult, error) {
 	l.mu.Lock()
 	// Flush so any buffered writes hit disk before we read.
 	if l.writer != nil {
-		if err := l.writer.Flush(); err != nil {
-			_ = err
+		if flushErr := l.writer.Flush(); flushErr != nil {
+			_ = flushErr
 		}
 	}
 	key := make([]byte, len(l.chainKey))
@@ -158,8 +158,8 @@ func VerifyFile(ctx context.Context, path string, key []byte, seedHMAC []byte) (
 	// Read-only handle; a Close error here has no effect on the chain
 	// verification result already computed from the bytes read.
 	defer func() {
-		if err := f.Close(); err != nil {
-			_ = err
+		if closeErr := f.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -483,8 +483,8 @@ func readChainSeedFromFile(path string) ([]byte, bool) {
 	// Read-only handle; a Close error here has no effect on the chain seed
 	// already read into memory below.
 	defer func() {
-		if err := f.Close(); err != nil {
-			_ = err
+		if closeErr := f.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 

@@ -40,8 +40,8 @@ func TestE2E_RateLimitTriggered(t *testing.T) {
 	// Test cleanup: Close error is inconsequential — t.TempDir()
 	// removes the backing directory regardless.
 	defer func() {
-		if err := auditLogger.Close(); err != nil {
-			_ = err
+		if closeErr := auditLogger.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -97,8 +97,8 @@ func TestE2E_SSRFBlocked(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer func() {
-		if err := auditLogger.Close(); err != nil {
-			_ = err
+		if closeErr := auditLogger.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 

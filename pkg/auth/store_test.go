@@ -58,8 +58,8 @@ func TestStoreRoundtrip(t *testing.T) {
 	// restore is a redundant belt-and-braces best-effort — its error is not
 	// actionable in a defer and t.Setenv's restore is the real guarantee.
 	defer func() {
-		if err := os.Setenv("HOME", origHome); err != nil {
-			_ = err
+		if setenvErr := os.Setenv("HOME", origHome); setenvErr != nil {
+			_ = setenvErr
 		}
 	}()
 
@@ -102,8 +102,8 @@ func TestStoreFilePermissions(t *testing.T) {
 	// restore is a redundant belt-and-braces best-effort — its error is not
 	// actionable in a defer and t.Setenv's restore is the real guarantee.
 	defer func() {
-		if err := os.Setenv("HOME", origHome); err != nil {
-			_ = err
+		if setenvErr := os.Setenv("HOME", origHome); setenvErr != nil {
+			_ = setenvErr
 		}
 	}()
 
@@ -135,8 +135,8 @@ func TestStoreMultiProvider(t *testing.T) {
 	// restore is a redundant belt-and-braces best-effort — its error is not
 	// actionable in a defer and t.Setenv's restore is the real guarantee.
 	defer func() {
-		if err := os.Setenv("HOME", origHome); err != nil {
-			_ = err
+		if setenvErr := os.Setenv("HOME", origHome); setenvErr != nil {
+			_ = setenvErr
 		}
 	}()
 
@@ -175,8 +175,8 @@ func TestDeleteCredential(t *testing.T) {
 	// restore is a redundant belt-and-braces best-effort — its error is not
 	// actionable in a defer and t.Setenv's restore is the real guarantee.
 	defer func() {
-		if err := os.Setenv("HOME", origHome); err != nil {
-			_ = err
+		if setenvErr := os.Setenv("HOME", origHome); setenvErr != nil {
+			_ = setenvErr
 		}
 	}()
 
@@ -206,8 +206,8 @@ func TestLoadStoreEmpty(t *testing.T) {
 	// restore is a redundant belt-and-braces best-effort — its error is not
 	// actionable in a defer and t.Setenv's restore is the real guarantee.
 	defer func() {
-		if err := os.Setenv("HOME", origHome); err != nil {
-			_ = err
+		if setenvErr := os.Setenv("HOME", origHome); setenvErr != nil {
+			_ = setenvErr
 		}
 	}()
 

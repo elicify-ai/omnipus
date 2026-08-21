@@ -394,16 +394,16 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Hijack the client's connection. From here on we're outside HTTP.
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		if err := upstream.Close(); err != nil {
-			_ = err
+		if closeErr := upstream.Close(); closeErr != nil {
+			_ = closeErr
 		}
 		http.Error(w, "egress_proxy: hijacking unsupported", http.StatusInternalServerError)
 		return
 	}
 	clientConn, _, err := hj.Hijack()
 	if err != nil {
-		if err := upstream.Close(); err != nil {
-			_ = err
+		if closeErr := upstream.Close(); closeErr != nil {
+			_ = closeErr
 		}
 		slog.Warn("egress_proxy: hijack failed", "error", err)
 		return
@@ -422,11 +422,11 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		p.tunnels.Done()
 		p.tunnels.Done()
-		if err := clientConn.Close(); err != nil {
-			_ = err
+		if closeErr := clientConn.Close(); closeErr != nil {
+			_ = closeErr
 		}
-		if err := upstream.Close(); err != nil {
-			_ = err
+		if closeErr := upstream.Close(); closeErr != nil {
+			_ = closeErr
 		}
 		return
 	}
@@ -439,11 +439,11 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if _, err := io.Copy(upstream, clientConn); err != nil {
 			_ = err
 		}
-		if err := upstream.Close(); err != nil {
-			_ = err
+		if closeErr := upstream.Close(); closeErr != nil {
+			_ = closeErr
 		}
-		if err := clientConn.Close(); err != nil {
-			_ = err
+		if closeErr := clientConn.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	go func() {
@@ -451,11 +451,11 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if _, err := io.Copy(clientConn, upstream); err != nil {
 			_ = err
 		}
-		if err := upstream.Close(); err != nil {
-			_ = err
+		if closeErr := upstream.Close(); closeErr != nil {
+			_ = closeErr
 		}
-		if err := clientConn.Close(); err != nil {
-			_ = err
+		if closeErr := clientConn.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 }

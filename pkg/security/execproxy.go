@@ -91,8 +91,8 @@ func (p *ExecProxy) Stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.server != nil {
-		if err := p.server.Close(); err != nil {
-			_ = err
+		if closeErr := p.server.Close(); closeErr != nil {
+			_ = closeErr
 		}
 		p.server = nil
 	}
@@ -238,8 +238,8 @@ func (p *ExecProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// Body is fully streamed to the client via io.Copy below; a Close
 	// error on an already-drained response body is not actionable here.
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			_ = err
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -291,8 +291,8 @@ func (p *ExecProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
 		// Abort path, no data in flight yet — Close error not actionable.
-		if err := targetConn.Close(); err != nil {
-			_ = err
+		if closeErr := targetConn.Close(); closeErr != nil {
+			_ = closeErr
 		}
 		return
 	}
@@ -301,8 +301,8 @@ func (p *ExecProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
 		// Abort path, no data in flight yet — Close error not actionable.
-		if err := targetConn.Close(); err != nil {
-			_ = err
+		if closeErr := targetConn.Close(); closeErr != nil {
+			_ = closeErr
 		}
 		return
 	}
@@ -313,13 +313,13 @@ func (p *ExecProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// errors that tear the relay down afterward carry no extra information.
 	go func() {
 		defer func() {
-			if err := targetConn.Close(); err != nil {
-				_ = err
+			if closeErr := targetConn.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 		defer func() {
-			if err := clientConn.Close(); err != nil {
-				_ = err
+			if closeErr := clientConn.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 		if _, err := io.Copy(targetConn, clientConn); err != nil {
@@ -328,13 +328,13 @@ func (p *ExecProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}()
 	go func() {
 		defer func() {
-			if err := targetConn.Close(); err != nil {
-				_ = err
+			if closeErr := targetConn.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 		defer func() {
-			if err := clientConn.Close(); err != nil {
-				_ = err
+			if closeErr := clientConn.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 		if _, err := io.Copy(clientConn, targetConn); err != nil {

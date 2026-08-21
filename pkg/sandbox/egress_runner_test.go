@@ -27,8 +27,8 @@ func TestRunnerEgressProxy_AllowAllExternalEmptyList(t *testing.T) {
 	// Test cleanup: Close errors on proxies/servers/conns/response
 	// bodies are inconsequential once assertions have run.
 	defer func() {
-		if err := p.Close(); err != nil {
-			_ = err
+		if closeErr := p.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -54,8 +54,8 @@ func TestRunnerEgressProxy_NonEmptyAllowListEnforced(t *testing.T) {
 		t.Fatalf("NewRunnerEgressProxy: %v", err)
 	}
 	defer func() {
-		if err := p.Close(); err != nil {
-			_ = err
+		if closeErr := p.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	if p.allowAll {
@@ -91,8 +91,8 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackHTTP(t *testing.T) {
 	}
 	go func() { _ = upstream.Serve(listener) }()
 	defer func() {
-		if err := upstream.Close(); err != nil {
-			_ = err
+		if closeErr := upstream.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	upstreamHost := listener.Addr().String() // 127.0.0.1:NNNNN
@@ -102,8 +102,8 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackHTTP(t *testing.T) {
 		t.Fatalf("NewRunnerEgressProxy: %v", err)
 	}
 	defer func() {
-		if err := p.Close(); err != nil {
-			_ = err
+		if closeErr := p.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -117,8 +117,8 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackHTTP(t *testing.T) {
 		t.Fatalf("client.Get: %v", err)
 	}
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			_ = err
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	if resp.StatusCode != http.StatusForbidden {
@@ -140,8 +140,8 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackCONNECT(t *testing.T) {
 		t.Fatalf("listenLoopback: %v", err)
 	}
 	defer func() {
-		if err := upstream.Close(); err != nil {
-			_ = err
+		if closeErr := upstream.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	reached := make(chan struct{}, 1)
@@ -155,8 +155,8 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackCONNECT(t *testing.T) {
 		default:
 		}
 		// Test goroutine cleanup: Close error not actionable here.
-		if err := conn.Close(); err != nil {
-			_ = err
+		if closeErr := conn.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -165,8 +165,8 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackCONNECT(t *testing.T) {
 		t.Fatalf("NewRunnerEgressProxy: %v", err)
 	}
 	defer func() {
-		if err := p.Close(); err != nil {
-			_ = err
+		if closeErr := p.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -175,8 +175,8 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackCONNECT(t *testing.T) {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer func() {
-		if err := dial.Close(); err != nil {
-			_ = err
+		if closeErr := dial.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	req := "CONNECT " + upstream.Addr().String() + " HTTP/1.1\r\nHost: " + upstream.Addr().String() + "\r\n\r\n"
@@ -209,8 +209,8 @@ func TestRunnerEgressProxy_SSRFAuditHook(t *testing.T) {
 		t.Fatalf("NewRunnerEgressProxy: %v", err)
 	}
 	defer func() {
-		if err := p.Close(); err != nil {
-			_ = err
+		if closeErr := p.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -219,8 +219,8 @@ func TestRunnerEgressProxy_SSRFAuditHook(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer func() {
-		if err := listener.Close(); err != nil {
-			_ = err
+		if closeErr := listener.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	proxyURL, _ := url.Parse("http://" + p.Addr())
@@ -233,8 +233,8 @@ func TestRunnerEgressProxy_SSRFAuditHook(t *testing.T) {
 		t.Fatalf("client.Get: %v", err)
 	}
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			_ = err
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 	if _, err := io.ReadAll(resp.Body); err != nil {

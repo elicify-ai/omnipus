@@ -32,8 +32,8 @@ func TestLastWriterForPath_Basic(t *testing.T) {
 	// Test cleanup: Close error is inconsequential — t.TempDir() removes
 	// the backing directory regardless, and no test here asserts on it.
 	defer func() {
-		if err := logger.Close(); err != nil {
-			_ = err
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -100,8 +100,8 @@ func TestLastWriterForPath_RotationBoundary(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer func() {
-		if err := logger.Close(); err != nil {
-			_ = err
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 
@@ -151,8 +151,8 @@ func TestLastWriterForPath_RotationBoundary(t *testing.T) {
 	logger2, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
 	require.NoError(t, err)
 	defer func() {
-		if err := logger2.Close(); err != nil {
-			_ = err
+		if closeErr := logger2.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 

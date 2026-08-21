@@ -57,8 +57,8 @@ func TestExecProxy_SSRFBlock(t *testing.T) {
 			// Test cleanup: Close error is inconsequential once the status
 			// assertion below has run.
 			defer func() {
-				if err := resp.Body.Close(); err != nil {
-					_ = err
+				if closeErr := resp.Body.Close(); closeErr != nil {
+					_ = closeErr
 				}
 			}()
 			// Proxy should return 403 Forbidden for private IP requests

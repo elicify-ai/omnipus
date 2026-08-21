@@ -330,8 +330,8 @@ func portAvailable(port int32) bool {
 	if err != nil {
 		return false
 	}
-	if err := ln.Close(); err != nil {
-		_ = err
+	if closeErr := ln.Close(); closeErr != nil {
+		_ = closeErr
 	}
 	return true
 }

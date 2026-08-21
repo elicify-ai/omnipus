@@ -37,8 +37,8 @@ func TestAuditLogger_WriteAndRotate(t *testing.T) {
 		// this file — t.TempDir() removes the backing directory regardless,
 		// and no test in this file asserts on a cleanup Close.
 		defer func() {
-			if err := logger.Close(); err != nil {
-				_ = err
+			if closeErr := logger.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 
@@ -84,8 +84,8 @@ func TestAuditLogger_WriteAndRotate(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() {
-			if err := logger.Close(); err != nil {
-				_ = err
+			if closeErr := logger.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 
@@ -98,18 +98,18 @@ func TestAuditLogger_WriteAndRotate(t *testing.T) {
 		for i := 0; i < (rotationSize/1024 - 1); i++ {
 			// Test fixture setup: a write failure here would surface as a
 			// later assertion failure on file size/rotation, not silently.
-			if _, err := fmt.Fprintln(f, bigPad); err != nil {
-				_ = err
+			if _, writeErr := fmt.Fprintln(f, bigPad); writeErr != nil {
+				_ = writeErr
 			}
 		}
-		if err := f.Close(); err != nil {
-			_ = err
+		if closeErr := f.Close(); closeErr != nil {
+			_ = closeErr
 		}
 
 		// Reopen the logger (it reads current file size on open); Close
 		// error is inconsequential test cleanup (see top of file).
-		if err := logger.Close(); err != nil {
-			_ = err
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr
 		}
 		logger, err = audit.NewLogger(audit.LoggerConfig{
 			Dir:           dir,
@@ -117,8 +117,8 @@ func TestAuditLogger_WriteAndRotate(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() {
-			if err := logger.Close(); err != nil {
-				_ = err
+			if closeErr := logger.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 
@@ -165,8 +165,8 @@ func TestAuditLogger_WriteAndRotate(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() {
-			if err := logger.Close(); err != nil {
-				_ = err
+			if closeErr := logger.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 
@@ -194,8 +194,8 @@ func TestAuditLogger_WriteAndRotate(t *testing.T) {
 		})
 		require.NoError(t, err)
 		defer func() {
-			if err := logger.Close(); err != nil {
-				_ = err
+			if closeErr := logger.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 
@@ -233,8 +233,8 @@ func TestAuditLogger_RedactionPipeline(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer func() {
-		if err := logger.Close(); err != nil {
-			_ = err
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 

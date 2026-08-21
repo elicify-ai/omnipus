@@ -77,8 +77,8 @@ func BenchmarkAuditAppend_Concurrent(b *testing.B) {
 			// Test cleanup: Close error is inconsequential — t.TempDir() removes
 			// the backing directory regardless, and no test here asserts on it.
 			defer func() {
-				if err := logger.Close(); err != nil {
-					_ = err
+				if closeErr := logger.Close(); closeErr != nil {
+					_ = closeErr
 				}
 			}()
 
@@ -136,8 +136,8 @@ func BenchmarkAuditAppend_Concurrent_Fsync(b *testing.B) {
 			dir := b.TempDir()
 			logger := newPerfBenchLogger(b, dir)
 			defer func() {
-				if err := logger.Close(); err != nil {
-					_ = err
+				if closeErr := logger.Close(); closeErr != nil {
+					_ = closeErr
 				}
 			}()
 
@@ -192,8 +192,8 @@ func TestAuditLog_ConcurrentAppend(t *testing.T) {
 	dir := t.TempDir()
 	logger := newPerfBenchLogger(t, dir)
 	defer func() {
-		if err := logger.Close(); err != nil {
-			_ = err
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr
 		}
 	}()
 

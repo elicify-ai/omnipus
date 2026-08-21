@@ -259,14 +259,14 @@ func startGatedChild(t *testing.T, script string) *gatedChild {
 		if c.waited {
 			return
 		}
-		if err := c.stdin.Close(); err != nil {
-			_ = err
+		if closeErr := c.stdin.Close(); closeErr != nil {
+			_ = closeErr
 		}
-		if err := c.cmd.Process.Kill(); err != nil {
-			_ = err
+		if killErr := c.cmd.Process.Kill(); killErr != nil {
+			_ = killErr
 		}
-		if err := c.cmd.Wait(); err != nil {
-			_ = err
+		if waitErr := c.cmd.Wait(); waitErr != nil {
+			_ = waitErr
 		}
 	})
 	return c
@@ -280,8 +280,8 @@ func (c *gatedChild) release(t *testing.T) {
 	if _, err := io.WriteString(c.stdin, "go\n"); err != nil {
 		t.Fatalf("release gated child: %v", err)
 	}
-	if err := c.stdin.Close(); err != nil {
-		_ = err
+	if closeErr := c.stdin.Close(); closeErr != nil {
+		_ = closeErr
 	}
 }
 
@@ -410,11 +410,11 @@ func TestReadCurrentUserNProc_CountsOtherProcessesThreads(t *testing.T) {
 		t.Fatalf("start helper child: %v", err)
 	}
 	defer func() {
-		if err := child.Process.Kill(); err != nil {
-			_ = err
+		if killErr := child.Process.Kill(); killErr != nil {
+			_ = killErr
 		}
-		if err := child.Wait(); err != nil {
-			_ = err
+		if waitErr := child.Wait(); waitErr != nil {
+			_ = waitErr
 		}
 	}()
 

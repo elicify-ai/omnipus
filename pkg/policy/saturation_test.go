@@ -134,8 +134,8 @@ func TestSaturationGuard_PositiveCapAccepted(t *testing.T) {
 	// Force-close before reading back so the writer is flushed; the
 	// t.Cleanup close (idempotent no-op on an already-closed logger) is
 	// the real guarantee, so this Close's error is not actionable here.
-	if err := lg.Close(); err != nil {
-		_ = err
+	if closeErr := lg.Close(); closeErr != nil {
+		_ = closeErr
 	}
 	if events := readEvents(t, path); len(events) != 0 {
 		t.Errorf("positive cap should not emit audit; got %v", events)

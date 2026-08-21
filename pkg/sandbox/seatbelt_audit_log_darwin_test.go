@@ -158,8 +158,8 @@ func TestSeatbelt_GatewayItselfStaysUnconfined(t *testing.T) {
 	}
 	if _, writeErr := f.WriteString(`{"event":"tool_call","decision":"allow"}` + "\n"); writeErr != nil {
 		// Cleanup on an already-failing path (t.Fatalf below ends the test).
-		if err := f.Close(); err != nil {
-			_ = err
+		if closeErr := f.Close(); closeErr != nil {
+			_ = closeErr
 		}
 		t.Fatalf("gateway-equivalent write must succeed: %v", writeErr)
 	}

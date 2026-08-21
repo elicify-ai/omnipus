@@ -323,8 +323,8 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 	defer func() {
 		// Best-effort restore; if the test process still has children
 		// alive this may EPERM, but the test is ending anyway.
-		if err := unix.Setrlimit(unix.RLIMIT_NPROC, &oldRlim); err != nil {
-			_ = err
+		if ignoredErr := unix.Setrlimit(unix.RLIMIT_NPROC, &oldRlim); ignoredErr != nil {
+			_ = ignoredErr
 		}
 	}()
 	currentPIDs := uint64(countOurPIDs(t))
@@ -407,11 +407,11 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 	peakPIDs := samplePeakPIDs(t, ctx, baselinePIDs)
 
 	// Kill the bomb's process group so we don't leave zombies.
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-		_ = err
+	if killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); killErr != nil {
+		_ = killErr
 	}
-	if err := cmd.Wait(); err != nil {
-		_ = err
+	if waitErr := cmd.Wait(); waitErr != nil {
+		_ = waitErr
 	}
 
 	// After v0.2 #155 item 5, the production hardened-exec code applies
@@ -497,8 +497,8 @@ func TestRedteam_ForkBomb_UlimitRaiseThenFork_Contained(t *testing.T) {
 		t.Fatalf("getrlimit NPROC (safety probe): %v", err)
 	}
 	defer func() {
-		if err := unix.Setrlimit(unix.RLIMIT_NPROC, &oldRlim); err != nil {
-			_ = err
+		if ignoredErr := unix.Setrlimit(unix.RLIMIT_NPROC, &oldRlim); ignoredErr != nil {
+			_ = ignoredErr
 		}
 	}()
 	safetyCap := uint64(countOurPIDs(t)) + 512
@@ -542,11 +542,11 @@ ulimit -u unlimited 2>/dev/null || ulimit -u "$(ulimit -H -u)" 2>/dev/null
 		t.Fatalf("start gated bomb: %v", err)
 	}
 	defer func() {
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-			_ = err
+		if killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); killErr != nil {
+			_ = killErr
 		}
-		if err := cmd.Wait(); err != nil {
-			_ = err
+		if waitErr := cmd.Wait(); waitErr != nil {
+			_ = waitErr
 		}
 	}()
 	if err := sandbox.ApplyChildPostStartHardening(cmd, sandbox.Limits{}); err != nil {
@@ -572,13 +572,13 @@ ulimit -u unlimited 2>/dev/null || ulimit -u "$(ulimit -H -u)" 2>/dev/null
 	if _, err := io.WriteString(stdin, "go\n"); err != nil {
 		t.Fatalf("release gated bomb: %v", err)
 	}
-	if err := stdin.Close(); err != nil {
-		_ = err
+	if closeErr := stdin.Close(); closeErr != nil {
+		_ = closeErr
 	}
 
 	peakPIDs := samplePeakPIDs(t, ctx, baselinePIDs)
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-		_ = err
+	if killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); killErr != nil {
+		_ = killErr
 	}
 
 	// Same bound as the indirect test: childNProcSlack (128) plus transient

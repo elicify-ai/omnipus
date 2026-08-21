@@ -30,8 +30,8 @@ func TestBuildLimits(t *testing.T) {
 		}
 		// Test cleanup: Close error is inconsequential.
 		defer func() {
-			if err := proxy.Close(); err != nil {
-				_ = err
+			if closeErr := proxy.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 
@@ -116,8 +116,8 @@ func TestResolveLimits(t *testing.T) {
 			t.Fatalf("NewEgressProxy: %v", err)
 		}
 		defer func() {
-			if err := proxy.Close(); err != nil {
-				_ = err
+			if closeErr := proxy.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 
@@ -154,8 +154,8 @@ func TestResolveLimits(t *testing.T) {
 			t.Fatalf("NewEgressProxy: %v", err)
 		}
 		defer func() {
-			if err := proxy.Close(); err != nil {
-				_ = err
+			if closeErr := proxy.Close(); closeErr != nil {
+				_ = closeErr
 			}
 		}()
 
