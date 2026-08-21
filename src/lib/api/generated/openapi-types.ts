@@ -8578,7 +8578,7 @@ export interface components {
              */
             pin_order: number;
             /**
-             * @description Default agent roster for this workspace. Not an access gate — any agent can work on any workspace's tasks. Deduplicated at write time. Max 20 entries.
+             * @description Default agent roster for this workspace. Not an access gate — any agent can work on any workspace's tasks. Deduplicated at write time.
              * @example [
              *       "mia",
              *       "jim"

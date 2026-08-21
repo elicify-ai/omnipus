@@ -31,9 +31,9 @@ type workspace = workspacepkg.Workspace
 
 func workspacesDir(home string) string { return filepath.Join(home, "workspaces") }
 
-// sanitizeCoreTeam deduplicates (case-sensitive) and enforces max 20 entries.
-// Returns an error if the limit is exceeded (after dedup). Empty strings are silently dropped.
-func sanitizeCoreTeam(raw []any) ([]string, error) {
+// sanitizeCoreTeam deduplicates (case-sensitive) the raw entries. Empty strings
+// and non-string values are silently dropped.
+func sanitizeCoreTeam(raw []any) []string {
 	seen := make(map[string]struct{})
 	var out []string
 	for _, v := range raw {
@@ -46,10 +46,7 @@ func sanitizeCoreTeam(raw []any) ([]string, error) {
 			out = append(out, s)
 		}
 	}
-	if len(out) > 20 {
-		return nil, fmt.Errorf("core_team may have at most 20 entries, got %d", len(out))
-	}
-	return out, nil
+	return out
 }
 
 // workspaceFromFile reads a workspace JSON into the workspace struct.
@@ -177,11 +174,7 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 		w.Description = v
 	}
 	if raw, ok := args["core_team"].([]any); ok {
-		team, err := sanitizeCoreTeam(raw)
-		if err != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "Provide at most 20 agent IDs"))
-		}
-		w.CoreTeam = team
+		w.CoreTeam = sanitizeCoreTeam(raw)
 	}
 	if err := writeEntity(workspacesDir(t.deps.Home), w.ID, w); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
@@ -283,11 +276,7 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 		w.PinOrder = int(v)
 	}
 	if raw, ok := args["core_team"].([]any); ok {
-		team, err := sanitizeCoreTeam(raw)
-		if err != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "Provide at most 20 agent IDs"))
-		}
-		w.CoreTeam = team
+		w.CoreTeam = sanitizeCoreTeam(raw)
 		coreTeamChanged = true
 	}
 

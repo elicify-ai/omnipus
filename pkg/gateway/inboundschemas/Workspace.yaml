@@ -47,10 +47,9 @@ properties:
     type: array
     description: >
       Default agent roster for this workspace. Not an access gate — any agent
-      can work on any workspace's tasks. Deduplicated at write time. Max 20 entries.
+      can work on any workspace's tasks. Deduplicated at write time.
     items:
       type: string
-    maxItems: 20
     example: ["mia", "jim"]
   mounts:
     type: array

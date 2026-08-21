@@ -811,10 +811,6 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "description exceeds 2000 characters")
 		return
 	}
-	if req.CoreTeam != nil && len(*req.CoreTeam) > 20 {
-		jsonErr(w, http.StatusBadRequest, "core_team may have at most 20 entries")
-		return
-	}
 	// review r1 major M4/Gap #6: reject an unregistered or System Agent id
 	// before any workspace/session side effects.
 	if req.CoreTeam != nil {
@@ -998,10 +994,6 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	}
 	if req.Description != nil && len(*req.Description) > 2000 {
 		jsonErr(w, http.StatusBadRequest, "description exceeds 2000 characters")
-		return
-	}
-	if req.CoreTeam != nil && len(*req.CoreTeam) > 20 {
-		jsonErr(w, http.StatusBadRequest, "core_team may have at most 20 entries")
 		return
 	}
 	if req.Status != nil && !req.Status.Valid() {
