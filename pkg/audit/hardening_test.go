@@ -41,7 +41,9 @@ func TestCRIT2_NewLogger_AuditRequested_FailClosed(t *testing.T) {
 	require.NoError(t, os.MkdirAll(auditDir, 0o000), "create unwritable audit dir")
 	t.Cleanup(func() {
 		// Restore writable mode so t.TempDir cleanup can remove it.
-		_ = os.Chmod(auditDir, 0o700)
+		if err := os.Chmod(auditDir, 0o700); err != nil {
+			_ = err
+		}
 	})
 
 	logger, err := audit.NewLogger(audit.LoggerConfig{
@@ -85,7 +87,9 @@ func TestCRIT2_NewLogger_AuditNotRequested_DegradedMode(t *testing.T) {
 	})
 	t.Cleanup(func() {
 		if logger != nil {
-			_ = logger.Close()
+			if err := logger.Close(); err != nil {
+				_ = err
+			}
 		}
 	})
 

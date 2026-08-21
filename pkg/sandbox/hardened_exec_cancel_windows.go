@@ -21,5 +21,8 @@ import "os/exec"
 // (Process.Kill -> TerminateProcess) plus the caller's cmd.WaitDelay backstop
 // already bound the foreground child's lifetime. See file header.
 func installProcessGroupCancel(cmd *exec.Cmd) {
+	// Explicitly unused: the Windows path installs no cancel hook (see the
+	// function doc above). Named so the parameter is not mistaken for an
+	// oversight.
 	_ = cmd
 }

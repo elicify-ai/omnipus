@@ -33,7 +33,14 @@ func TestAuditLogger_WriteAndRotate(t *testing.T) {
 			RetentionDays: 90,
 		})
 		require.NoError(t, err)
-		defer logger.Close()
+		// Test cleanup: Close error is inconsequential here and throughout
+		// this file — t.TempDir() removes the backing directory regardless,
+		// and no test in this file asserts on a cleanup Close.
+		defer func() {
+			if err := logger.Close(); err != nil {
+				_ = err
+			}
+		}()
 
 		entry := audit.Entry{
 			Timestamp:  time.Now().UTC(),
@@ -76,7 +83,11 @@ func TestAuditLogger_WriteAndRotate(t *testing.T) {
 			RetentionDays: 90,
 		})
 		require.NoError(t, err)
-		defer logger.Close()
+		defer func() {
+			if err := logger.Close(); err != nil {
+				_ = err
+			}
+		}()
 
 		logPath := filepath.Join(dir, "audit.jsonl")
 
@@ -85,18 +96,31 @@ func TestAuditLogger_WriteAndRotate(t *testing.T) {
 		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY, 0o644)
 		require.NoError(t, err)
 		for i := 0; i < (rotationSize/1024 - 1); i++ {
-			fmt.Fprintln(f, bigPad)
+			// Test fixture setup: a write failure here would surface as a
+			// later assertion failure on file size/rotation, not silently.
+			if _, err := fmt.Fprintln(f, bigPad); err != nil {
+				_ = err
+			}
 		}
-		f.Close()
+		if err := f.Close(); err != nil {
+			_ = err
+		}
 
-		// Reopen the logger (it reads current file size on open)
-		logger.Close()
+		// Reopen the logger (it reads current file size on open); Close
+		// error is inconsequential test cleanup (see top of file).
+		if err := logger.Close(); err != nil {
+			_ = err
+		}
 		logger, err = audit.NewLogger(audit.LoggerConfig{
 			Dir:           dir,
 			RetentionDays: 90,
 		})
 		require.NoError(t, err)
-		defer logger.Close()
+		defer func() {
+			if err := logger.Close(); err != nil {
+				_ = err
+			}
+		}()
 
 		// Write an entry — should trigger rotation
 		entry := audit.Entry{
@@ -140,7 +164,11 @@ func TestAuditLogger_WriteAndRotate(t *testing.T) {
 			RetentionDays: 7,
 		})
 		require.NoError(t, err)
-		defer logger.Close()
+		defer func() {
+			if err := logger.Close(); err != nil {
+				_ = err
+			}
+		}()
 
 		_, statErr := os.Stat(stalePath)
 		assert.True(t, os.IsNotExist(statErr),
@@ -165,7 +193,11 @@ func TestAuditLogger_WriteAndRotate(t *testing.T) {
 			RetentionDays: 90,
 		})
 		require.NoError(t, err)
-		defer logger.Close()
+		defer func() {
+			if err := logger.Close(); err != nil {
+				_ = err
+			}
+		}()
 
 		// File should now contain only the valid first line
 		data, err := os.ReadFile(logPath)
@@ -200,7 +232,11 @@ func TestAuditLogger_RedactionPipeline(t *testing.T) {
 		RedactEnabled: true,
 	})
 	require.NoError(t, err)
-	defer logger.Close()
+	defer func() {
+		if err := logger.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	entry := audit.Entry{
 		Timestamp: time.Now().UTC(),

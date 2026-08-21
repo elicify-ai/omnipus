@@ -102,7 +102,13 @@ func TestEgressProxy_DenyEmitsAudit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEgressProxy: %v", err)
 	}
-	defer p.Close()
+	// Test cleanup: Close errors on proxies/servers/conns/response
+	// bodies are inconsequential once assertions have run.
+	defer func() {
+		if err := p.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	// Make an HTTP request through the proxy targeting a denied host.
 	proxyURL, _ := url.Parse("http://" + p.Addr())
@@ -116,7 +122,11 @@ func TestEgressProxy_DenyEmitsAudit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.Get: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
+	}()
 	if resp.StatusCode != http.StatusForbidden {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("status = %d, want 403; body=%s", resp.StatusCode, body)
@@ -154,7 +164,9 @@ func TestEgressProxy_AllowedRequestForwards(t *testing.T) {
 	upstream := &http.Server{
 		Addr: "127.0.0.1:0",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte("upstream-ok"))
+			if _, err := w.Write([]byte("upstream-ok")); err != nil {
+				_ = err
+			}
 		}),
 	}
 	// We need to start the upstream on an actual port to get its addr.
@@ -163,7 +175,11 @@ func TestEgressProxy_AllowedRequestForwards(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	go func() { _ = upstream.Serve(listener) }()
-	defer upstream.Close()
+	defer func() {
+		if err := upstream.Close(); err != nil {
+			_ = err
+		}
+	}()
 	upstreamHost := listener.Addr().String() // 127.0.0.1:NNNNN
 
 	// Allow-list "127.0.0.1" exactly.
@@ -171,7 +187,11 @@ func TestEgressProxy_AllowedRequestForwards(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEgressProxy: %v", err)
 	}
-	defer p.Close()
+	defer func() {
+		if err := p.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	proxyURL, _ := url.Parse("http://" + p.Addr())
 	client := &http.Client{
@@ -182,7 +202,11 @@ func TestEgressProxy_AllowedRequestForwards(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.Get: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
+	}()
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "upstream-ok" {
 		t.Errorf("body = %q, want upstream-ok", body)
@@ -196,7 +220,11 @@ func TestEgressProxy_EmptyAllowListDeniesAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEgressProxy: %v", err)
 	}
-	defer p.Close()
+	defer func() {
+		if err := p.Close(); err != nil {
+			_ = err
+		}
+	}()
 	if p.hostAllowed("registry.npmjs.org") {
 		t.Errorf("empty allow-list permitted registry.npmjs.org; should deny")
 	}
@@ -211,7 +239,11 @@ func TestClose_WaitsForTunnels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listenLoopback: %v", err)
 	}
-	defer upstream.Close()
+	defer func() {
+		if err := upstream.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	releaseUpstream := make(chan struct{})
 	upstreamReady := make(chan struct{})
@@ -221,7 +253,11 @@ func TestClose_WaitsForTunnels(t *testing.T) {
 			return
 		}
 		close(upstreamReady)
-		defer conn.Close()
+		defer func() {
+			if err := conn.Close(); err != nil {
+				_ = err
+			}
+		}()
 		<-releaseUpstream
 	}()
 
@@ -235,7 +271,11 @@ func TestClose_WaitsForTunnels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial proxy: %v", err)
 	}
-	defer dial.Close()
+	defer func() {
+		if err := dial.Close(); err != nil {
+			_ = err
+		}
+	}()
 	if _, err := dial.Write(
 		[]byte("CONNECT " + host + ":" + port + " HTTP/1.1\r\nHost: " + host + ":" + port + "\r\n\r\n"),
 	); err != nil {
@@ -270,7 +310,9 @@ func TestClose_WaitsForTunnels(t *testing.T) {
 
 	// Release upstream so io.Copy goroutines complete and Close returns.
 	close(releaseUpstream)
-	_ = dial.Close()
+	if err := dial.Close(); err != nil {
+		_ = err
+	}
 
 	select {
 	case err := <-closeReturned:

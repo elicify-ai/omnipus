@@ -38,7 +38,13 @@ func FetchAnthropicUsage(token string) (*AnthropicUsage, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	// Response body is fully drained via io.ReadAll below; a Close error on
+	// an already-consumed HTTP response body carries no data-loss risk.
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

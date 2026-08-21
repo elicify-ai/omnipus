@@ -29,7 +29,13 @@ func TestLastWriterForPath_Basic(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 1})
 	require.NoError(t, err)
-	defer logger.Close()
+	// Test cleanup: Close error is inconsequential — t.TempDir() removes
+	// the backing directory regardless, and no test here asserts on it.
+	defer func() {
+		if err := logger.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	require.NoError(t, logger.Log(&audit.Entry{
 		Event:    audit.EventFileOp,
@@ -93,7 +99,11 @@ func TestLastWriterForPath_RotationBoundary(t *testing.T) {
 		RetentionDays: 90,
 	})
 	require.NoError(t, err)
-	defer logger.Close()
+	defer func() {
+		if err := logger.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	// Entry 1: the write we want to find. Recorded BEFORE rotation.
 	require.NoError(t, logger.Log(&audit.Entry{
@@ -140,7 +150,11 @@ func TestLastWriterForPath_RotationBoundary(t *testing.T) {
 	// boundary.
 	logger2, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
 	require.NoError(t, err)
-	defer logger2.Close()
+	defer func() {
+		if err := logger2.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	agentID, found := logger2.LastWriterForPath(audit.EventFileOp, "/shared/identity.txt")
 	require.True(

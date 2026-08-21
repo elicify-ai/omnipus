@@ -32,7 +32,11 @@ func TestEgressProxy_DenyEmitsAuditViaHook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEgressProxy: %v", err)
 	}
-	defer func() { _ = p.Close() }()
+	defer func() {
+		if err := p.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	proxyURL, err := url.Parse("http://" + p.Addr())
 	if err != nil {
@@ -97,7 +101,11 @@ func TestEgressProxy_AllowedHostDoesNotEmitDenyAudit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEgressProxy: %v", err)
 	}
-	defer func() { _ = p.Close() }()
+	defer func() {
+		if err := p.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	proxyURL, _ := url.Parse("http://" + p.Addr())
 	client := &http.Client{

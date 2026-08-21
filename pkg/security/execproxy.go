@@ -91,7 +91,9 @@ func (p *ExecProxy) Stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.server != nil {
-		_ = p.server.Close()
+		if err := p.server.Close(); err != nil {
+			_ = err
+		}
 		p.server = nil
 	}
 	p.running.Store(false)
@@ -233,7 +235,13 @@ func (p *ExecProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	// Body is fully streamed to the client via io.Copy below; a Close
+	// error on an already-drained response body is not actionable here.
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	for k, vv := range resp.Header {
 		for _, v := range vv {
@@ -241,7 +249,9 @@ func (p *ExecProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		_ = err
+	}
 }
 
 func (p *ExecProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
@@ -280,25 +290,55 @@ func (p *ExecProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
-		targetConn.Close()
+		// Abort path, no data in flight yet — Close error not actionable.
+		if err := targetConn.Close(); err != nil {
+			_ = err
+		}
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
-		targetConn.Close()
+		// Abort path, no data in flight yet — Close error not actionable.
+		if err := targetConn.Close(); err != nil {
+			_ = err
+		}
 		return
 	}
 
+	// Raw bidirectional TCP relay: io.Copy's own error is already dropped
+	// above by design (connection resets from either peer are the normal
+	// way a CONNECT tunnel ends, not a fault to surface), so the Close
+	// errors that tear the relay down afterward carry no extra information.
 	go func() {
-		defer targetConn.Close()
-		defer clientConn.Close()
-		_, _ = io.Copy(targetConn, clientConn)
+		defer func() {
+			if err := targetConn.Close(); err != nil {
+				_ = err
+			}
+		}()
+		defer func() {
+			if err := clientConn.Close(); err != nil {
+				_ = err
+			}
+		}()
+		if _, err := io.Copy(targetConn, clientConn); err != nil {
+			_ = err
+		}
 	}()
 	go func() {
-		defer targetConn.Close()
-		defer clientConn.Close()
-		_, _ = io.Copy(clientConn, targetConn)
+		defer func() {
+			if err := targetConn.Close(); err != nil {
+				_ = err
+			}
+		}()
+		defer func() {
+			if err := clientConn.Close(); err != nil {
+				_ = err
+			}
+		}()
+		if _, err := io.Copy(clientConn, targetConn); err != nil {
+			_ = err
+		}
 	}()
 }

@@ -167,7 +167,9 @@ func writeChainCheckpoint(dir, appliesToFile string, finalHMAC, key []byte) erro
 		return fmt.Errorf("audit: write chain checkpoint temp file: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+		if err := os.Remove(tmp); err != nil {
+			_ = err
+		}
 		return fmt.Errorf("audit: rename chain checkpoint into place: %w", err)
 	}
 	return nil

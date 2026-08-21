@@ -48,7 +48,13 @@ func permCheckSupported(t *testing.T, dir string) bool {
 	if err := os.WriteFile(probe, []byte("x"), 0o644); err != nil {
 		return false
 	}
-	defer os.Remove(probe)
+	// Probe file lives under t.TempDir(), which is removed at test end
+	// regardless; this cleanup is best-effort only.
+	defer func() {
+		if err := os.Remove(probe); err != nil {
+			_ = err
+		}
+	}()
 	info, err := os.Stat(probe)
 	if err != nil {
 		return false

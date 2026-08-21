@@ -28,7 +28,12 @@ func TestBuildLimits(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewEgressProxy: %v", err)
 		}
-		defer proxy.Close()
+		// Test cleanup: Close error is inconsequential.
+		defer func() {
+			if err := proxy.Close(); err != nil {
+				_ = err
+			}
+		}()
 
 		lim, err := sandbox.BuildLimits(dir, proxy, timeout)
 		if err != nil {
@@ -110,7 +115,11 @@ func TestResolveLimits(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewEgressProxy: %v", err)
 		}
-		defer proxy.Close()
+		defer func() {
+			if err := proxy.Close(); err != nil {
+				_ = err
+			}
+		}()
 
 		lim, err := sandbox.ResolveLimits(true, nested, proxy, timeout)
 		if err != nil {
@@ -144,7 +153,11 @@ func TestResolveLimits(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewEgressProxy: %v", err)
 		}
-		defer proxy.Close()
+		defer func() {
+			if err := proxy.Close(); err != nil {
+				_ = err
+			}
+		}()
 
 		want, wantErr := sandbox.BuildLimits(dir, proxy, timeout)
 		if wantErr != nil {

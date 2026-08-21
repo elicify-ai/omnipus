@@ -62,7 +62,9 @@ func providersCfg(pairs ...[2]string) *config.Config {
 func TestInjectFromConfig_MailboxesNestedMap_TwoPairsBothInjected(t *testing.T) {
 	store := newUnlockedTestStore(t)
 	const refA, refB = "INJECT_TEST_MBX_PW_A", "INJECT_TEST_MBX_PW_B"
-	t.Cleanup(func() { os.Unsetenv(refA); os.Unsetenv(refB) })
+	// Test cleanup: env var unset is best-effort; process env is
+	// scoped to this test process and any leak has no security impact.
+	t.Cleanup(func() { _ = os.Unsetenv(refA); _ = os.Unsetenv(refB) })
 
 	if err := store.Set(refA, "secret-a"); err != nil {
 		t.Fatalf("store.Set(refA): %v", err)
@@ -92,7 +94,7 @@ func TestInjectFromConfig_MailboxesNestedMap_TwoPairsBothInjected(t *testing.T) 
 func TestInjectFromConfig_MailboxesSharedRef_DedupedNoError(t *testing.T) {
 	store := newUnlockedTestStore(t)
 	const sharedRef = "INJECT_TEST_MBX_PW_SHARED"
-	t.Cleanup(func() { os.Unsetenv(sharedRef) })
+	t.Cleanup(func() { _ = os.Unsetenv(sharedRef) })
 
 	if err := store.Set(sharedRef, "shared-secret"); err != nil {
 		t.Fatalf("store.Set: %v", err)
@@ -119,7 +121,7 @@ func TestInjectFromConfig_MailboxesSharedRef_DedupedNoError(t *testing.T) {
 func TestInjectFromConfig_MailboxesMissingCredential_CollectedErrorDoesNotBlockOthers(t *testing.T) {
 	store := newUnlockedTestStore(t)
 	const okRef, missingRef = "INJECT_TEST_MBX_PW_OK", "INJECT_TEST_MBX_PW_MISSING"
-	t.Cleanup(func() { os.Unsetenv(okRef); os.Unsetenv(missingRef) })
+	t.Cleanup(func() { _ = os.Unsetenv(okRef); _ = os.Unsetenv(missingRef) })
 
 	if err := store.Set(okRef, "ok-secret"); err != nil {
 		t.Fatalf("store.Set: %v", err)
@@ -243,7 +245,7 @@ func TestResolveAll_MailboxesMissingCredential_CollectedErrorDoesNotBlockOthers(
 func TestInjectFromConfig_ProviderValidAPIKeyRef_InjectsCorrectKey(t *testing.T) {
 	store := newUnlockedTestStore(t)
 	const refA, refB = "INJECT_TEST_PROV_KEY_A", "INJECT_TEST_PROV_KEY_B"
-	t.Cleanup(func() { os.Unsetenv(refA); os.Unsetenv(refB) })
+	t.Cleanup(func() { _ = os.Unsetenv(refA); _ = os.Unsetenv(refB) })
 
 	if err := store.Set(refA, "sk-provider-a-secret"); err != nil {
 		t.Fatalf("store.Set(refA): %v", err)
@@ -280,7 +282,7 @@ func TestInjectFromConfig_ProviderValidAPIKeyRef_InjectsCorrectKey(t *testing.T)
 func TestInjectFromConfig_ProviderMissingCredential_CollectedErrorDoesNotBlockOthers(t *testing.T) {
 	store := newUnlockedTestStore(t)
 	const okRef, missingRef = "INJECT_TEST_PROV_KEY_OK", "INJECT_TEST_PROV_KEY_MISSING"
-	t.Cleanup(func() { os.Unsetenv(okRef); os.Unsetenv(missingRef) })
+	t.Cleanup(func() { _ = os.Unsetenv(okRef); _ = os.Unsetenv(missingRef) })
 
 	if err := store.Set(okRef, "ok-provider-secret"); err != nil {
 		t.Fatalf("store.Set: %v", err)
@@ -323,7 +325,7 @@ func TestInjectFromConfig_ProviderMissingCredential_CollectedErrorDoesNotBlockOt
 func TestInjectFromConfig_ProviderNoAPIKeyRef_SkippedWithoutError(t *testing.T) {
 	store := newUnlockedTestStore(t)
 	const withRef = "INJECT_TEST_PROV_KEY_WITHREF"
-	t.Cleanup(func() { os.Unsetenv(withRef) })
+	t.Cleanup(func() { _ = os.Unsetenv(withRef) })
 
 	if err := store.Set(withRef, "with-ref-secret"); err != nil {
 		t.Fatalf("store.Set: %v", err)

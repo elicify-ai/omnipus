@@ -101,7 +101,12 @@ func LoginBrowser(cfg OAuthProviderConfig) (*AuthCredential, error) {
 		}
 
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, "<html><body><h2>Authentication successful!</h2><p>You can close this window.</p></body></html>")
+		// The auth code has already been captured into resultCh above; a
+		// failed write of this cosmetic confirmation page (e.g. the user
+		// already closed the tab) has no effect on the login flow.
+		if _, err := fmt.Fprint(w, "<html><body><h2>Authentication successful!</h2><p>You can close this window.</p></body></html>"); err != nil {
+			slog.Debug("oauth: writing callback confirmation page failed", "error", err)
+		}
 		resultCh <- callbackResult{code: code}
 	})
 
@@ -111,11 +116,17 @@ func LoginBrowser(cfg OAuthProviderConfig) (*AuthCredential, error) {
 	}
 
 	server := &http.Server{Handler: mux}
-	go server.Serve(listener)
+	go func() {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			slog.Warn("oauth: callback server stopped unexpectedly", "error", err)
+		}
+	}()
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		server.Shutdown(ctx)
+		if err := server.Shutdown(ctx); err != nil {
+			slog.Warn("oauth: callback server shutdown failed", "error", err)
+		}
 	}()
 
 	fmt.Printf("Open this URL to authenticate:\n\n%s\n\n", authURL)
@@ -202,7 +213,14 @@ func RequestDeviceCode(cfg OAuthProviderConfig) (*DeviceCodeInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("requesting device code: %w", err)
 	}
-	defer resp.Body.Close()
+	// Response body is fully drained (via io.ReadAll or a bounded LimitReader
+	// below); a Close error on an already-consumed HTTP response body has no
+	// effect on the parsed OAuth result.
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -293,7 +311,14 @@ func LoginDeviceCode(cfg OAuthProviderConfig) (*AuthCredential, error) {
 	if err != nil {
 		return nil, fmt.Errorf("requesting device code: %w", err)
 	}
-	defer resp.Body.Close()
+	// Response body is fully drained (via io.ReadAll or a bounded LimitReader
+	// below); a Close error on an already-consumed HTTP response body has no
+	// effect on the parsed OAuth result.
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -373,7 +398,14 @@ func pollDeviceCode(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*Au
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	// Response body is fully drained (via io.ReadAll or a bounded LimitReader
+	// below); a Close error on an already-consumed HTTP response body has no
+	// effect on the parsed OAuth result.
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		// Try to read the error body to distinguish pending vs denied.
@@ -427,7 +459,14 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 	if err != nil {
 		return nil, fmt.Errorf("refreshing token: %w", err)
 	}
-	defer resp.Body.Close()
+	// Response body is fully drained (via io.ReadAll or a bounded LimitReader
+	// below); a Close error on an already-consumed HTTP response body has no
+	// effect on the parsed OAuth result.
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -523,7 +562,14 @@ func ExchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirect
 	if err != nil {
 		return nil, fmt.Errorf("exchanging code for tokens: %w", err)
 	}
-	defer resp.Body.Close()
+	// Response body is fully drained (via io.ReadAll or a bounded LimitReader
+	// below); a Close error on an already-consumed HTTP response body has no
+	// effect on the parsed OAuth result.
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

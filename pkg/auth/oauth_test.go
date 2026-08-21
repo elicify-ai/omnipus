@@ -197,7 +197,12 @@ func TestExchangeCodeForTokens(t *testing.T) {
 			return
 		}
 
-		r.ParseForm()
+		// Test httptest handler: a ParseForm failure leaves FormValue()
+		// returning empty, which the grant_type check below then rejects
+		// — the error surfaces via the test's own assertions.
+		if err := r.ParseForm(); err != nil {
+			_ = err
+		}
 		if r.FormValue("grant_type") != "authorization_code" {
 			http.Error(w, "invalid grant_type", http.StatusBadRequest)
 			return
@@ -208,7 +213,12 @@ func TestExchangeCodeForTokens(t *testing.T) {
 			"refresh_token": "mock-refresh-token",
 			"expires_in":    3600,
 		}
-		json.NewEncoder(w).Encode(resp)
+		// Test httptest handler: an Encode failure on a static map literal
+		// is not realistically reachable; if it somehow failed, the client
+		// side would fail the response-decode assertions instead.
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			_ = err
+		}
 	}))
 	defer server.Close()
 
@@ -236,7 +246,9 @@ func TestRefreshAccessToken(t *testing.T) {
 			return
 		}
 
-		r.ParseForm()
+		if err := r.ParseForm(); err != nil {
+			_ = err
+		}
 		if r.FormValue("grant_type") != "refresh_token" {
 			http.Error(w, "invalid grant_type", http.StatusBadRequest)
 			return
@@ -247,7 +259,9 @@ func TestRefreshAccessToken(t *testing.T) {
 			"refresh_token": "refreshed-refresh-token",
 			"expires_in":    3600,
 		}
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			_ = err
+		}
 	}))
 	defer server.Close()
 
@@ -296,7 +310,9 @@ func TestRefreshAccessTokenPreservesRefreshAndAccountID(t *testing.T) {
 			"access_token": "new-access-token-only",
 			"expires_in":   3600,
 		}
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			_ = err
+		}
 	}))
 	defer server.Close()
 

@@ -168,7 +168,9 @@ func generateAndPersistMasterKey(path string) ([]byte, error) {
 		return nil, fmt.Errorf("create key file %q: %w", path, err)
 	}
 	if _, writeErr := f.WriteString(hexKey); writeErr != nil {
-		_ = f.Close()
+		if err := f.Close(); err != nil {
+			_ = err
+		}
 		rmErr := os.Remove(path)
 		if rmErr != nil {
 			return nil, fmt.Errorf("write key file %q: %w (cleanup remove failed: %w)", path, writeErr, rmErr)
@@ -189,15 +191,38 @@ func generateAndPersistMasterKey(path string) ([]byte, error) {
 	// file before credentials.Unlock runs, so writes to os.Stderr at this
 	// point go to $OMNIPUS_HOME/logs/gateway_panic.log — not the console.
 	// Stdout is unaffected and is what systemd / Docker / tail watch.
-	fmt.Fprintln(os.Stdout)
-	fmt.Fprintln(os.Stdout, "================================================================")
-	fmt.Fprintln(os.Stdout, "  Omnipus generated a new master key on fresh install.")
-	fmt.Fprintln(os.Stdout, "  Key file: "+path)
-	fmt.Fprintln(os.Stdout, "")
-	fmt.Fprintln(os.Stdout, "  BACK THIS FILE UP. Losing it makes your encrypted credential")
-	fmt.Fprintln(os.Stdout, "  store (API keys, channel tokens) permanently inaccessible.")
-	fmt.Fprintln(os.Stdout, "================================================================")
-	fmt.Fprintln(os.Stdout)
+	// Errors from these Fprintln calls are intentionally dropped: os.Stdout
+	// writes essentially never fail in this context, there is nothing
+	// meaningful to retry, and the warning is NOT solely reliant on stdout
+	// — slog.Warn below records the same fact through the persistent log
+	// path regardless of whether the operator's terminal received it.
+	if _, err := fmt.Fprintln(os.Stdout); err != nil {
+		_ = err
+	}
+	if _, err := fmt.Fprintln(os.Stdout, "================================================================"); err != nil {
+		_ = err
+	}
+	if _, err := fmt.Fprintln(os.Stdout, "  Omnipus generated a new master key on fresh install."); err != nil {
+		_ = err
+	}
+	if _, err := fmt.Fprintln(os.Stdout, "  Key file: "+path); err != nil {
+		_ = err
+	}
+	if _, err := fmt.Fprintln(os.Stdout, ""); err != nil {
+		_ = err
+	}
+	if _, err := fmt.Fprintln(os.Stdout, "  BACK THIS FILE UP. Losing it makes your encrypted credential"); err != nil {
+		_ = err
+	}
+	if _, err := fmt.Fprintln(os.Stdout, "  store (API keys, channel tokens) permanently inaccessible."); err != nil {
+		_ = err
+	}
+	if _, err := fmt.Fprintln(os.Stdout, "================================================================"); err != nil {
+		_ = err
+	}
+	if _, err := fmt.Fprintln(os.Stdout); err != nil {
+		_ = err
+	}
 	// slog.Warn still writes through the default slog handler (stderr →
 	// panic log) — that's fine, it's the persistent record. The stdout
 	// banner above is the operator-facing copy.

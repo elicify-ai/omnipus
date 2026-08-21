@@ -27,7 +27,9 @@ func newTestLogger(t *testing.T) (*audit.Logger, string) {
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
-	t.Cleanup(func() { lg.Close() })
+	// Test cleanup: Close error is inconsequential — t.TempDir() removes the
+	// backing directory regardless.
+	t.Cleanup(func() { _ = lg.Close() })
 	return lg, filepath.Join(dir, "audit.jsonl")
 }
 
@@ -129,7 +131,12 @@ func TestSaturationGuard_PositiveCapAccepted(t *testing.T) {
 	if !ok || effective != 64 {
 		t.Fatalf("got (%d, %v), want (64, true)", effective, ok)
 	}
-	lg.Close()
+	// Force-close before reading back so the writer is flushed; the
+	// t.Cleanup close (idempotent no-op on an already-closed logger) is
+	// the real guarantee, so this Close's error is not actionable here.
+	if err := lg.Close(); err != nil {
+		_ = err
+	}
 	if events := readEvents(t, path); len(events) != 0 {
 		t.Errorf("positive cap should not emit audit; got %v", events)
 	}

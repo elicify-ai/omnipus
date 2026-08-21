@@ -45,7 +45,13 @@ func TestRotationBySizeAndDaily(t *testing.T) {
 			RetentionDays: 90,
 		})
 		require.NoError(t, err)
-		defer logger.Close()
+		// Test cleanup: Close error is inconsequential — t.TempDir() removes
+		// the backing directory regardless, and no test here asserts on it.
+		defer func() {
+			if err := logger.Close(); err != nil {
+				_ = err
+			}
+		}()
 
 		// Write entries until we exceed the threshold.
 		entry := &audit.Entry{
@@ -81,7 +87,11 @@ func TestRotationBySizeAndDaily(t *testing.T) {
 			RetentionDays: 90,
 		})
 		require.NoError(t, err)
-		defer logger.Close()
+		defer func() {
+			if err := logger.Close(); err != nil {
+				_ = err
+			}
+		}()
 
 		require.NoError(t, logger.Log(&audit.Entry{
 			Timestamp: time.Now().UTC(),
@@ -145,7 +155,11 @@ func TestRotationBySizeAndDaily(t *testing.T) {
 			RetentionDays: 1,
 		})
 		require.NoError(t, err)
-		defer logger.Close()
+		defer func() {
+			if err := logger.Close(); err != nil {
+				_ = err
+			}
+		}()
 
 		// After startup cleanup, the total number of rotated files must be within retention.
 		rotated, err := filepath.Glob(filepath.Join(dir, "audit-*.jsonl"))
@@ -271,7 +285,11 @@ func TestRotationBySizeAndDaily(t *testing.T) {
 			HMACKey:       key,
 		})
 		require.NoError(t, err)
-		defer logger2.Close()
+		defer func() {
+			if err := logger2.Close(); err != nil {
+				_ = err
+			}
+		}()
 
 		survivingRotated, err := filepath.Glob(filepath.Join(dir, "audit-*.jsonl"))
 		require.NoError(t, err)

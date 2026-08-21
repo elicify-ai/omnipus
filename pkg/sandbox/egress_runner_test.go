@@ -24,7 +24,13 @@ func TestRunnerEgressProxy_AllowAllExternalEmptyList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRunnerEgressProxy: %v", err)
 	}
-	defer p.Close()
+	// Test cleanup: Close errors on proxies/servers/conns/response
+	// bodies are inconsequential once assertions have run.
+	defer func() {
+		if err := p.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	if !p.SSRFEnabled() {
 		t.Error("runner proxy should have SSRF enabled")
@@ -47,7 +53,11 @@ func TestRunnerEgressProxy_NonEmptyAllowListEnforced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRunnerEgressProxy: %v", err)
 	}
-	defer p.Close()
+	defer func() {
+		if err := p.Close(); err != nil {
+			_ = err
+		}
+	}()
 	if p.allowAll {
 		t.Error("runner proxy with non-empty allow-list should set allowAll=false")
 	}
@@ -70,7 +80,9 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackHTTP(t *testing.T) {
 			case reached <- struct{}{}:
 			default:
 			}
-			_, _ = w.Write([]byte("should-not-reach"))
+			if _, err := w.Write([]byte("should-not-reach")); err != nil {
+				_ = err
+			}
 		}),
 	}
 	listener, err := listenLoopback(t)
@@ -78,14 +90,22 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackHTTP(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	go func() { _ = upstream.Serve(listener) }()
-	defer upstream.Close()
+	defer func() {
+		if err := upstream.Close(); err != nil {
+			_ = err
+		}
+	}()
 	upstreamHost := listener.Addr().String() // 127.0.0.1:NNNNN
 
 	p, err := NewRunnerEgressProxy(nil, nil) // allowAll + SSRF
 	if err != nil {
 		t.Fatalf("NewRunnerEgressProxy: %v", err)
 	}
-	defer p.Close()
+	defer func() {
+		if err := p.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	proxyURL, _ := url.Parse("http://" + p.Addr())
 	client := &http.Client{
@@ -96,7 +116,11 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.Get: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
+	}()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d, want 403 (SSRF block of loopback)", resp.StatusCode)
 	}
@@ -115,7 +139,11 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackCONNECT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listenLoopback: %v", err)
 	}
-	defer upstream.Close()
+	defer func() {
+		if err := upstream.Close(); err != nil {
+			_ = err
+		}
+	}()
 	reached := make(chan struct{}, 1)
 	go func() {
 		conn, acceptErr := upstream.Accept()
@@ -126,20 +154,31 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackCONNECT(t *testing.T) {
 		case reached <- struct{}{}:
 		default:
 		}
-		conn.Close()
+		// Test goroutine cleanup: Close error not actionable here.
+		if err := conn.Close(); err != nil {
+			_ = err
+		}
 	}()
 
 	p, err := NewRunnerEgressProxy(nil, nil)
 	if err != nil {
 		t.Fatalf("NewRunnerEgressProxy: %v", err)
 	}
-	defer p.Close()
+	defer func() {
+		if err := p.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	dial, err := net.Dial("tcp", p.Addr())
 	if err != nil {
 		t.Fatalf("dial proxy: %v", err)
 	}
-	defer dial.Close()
+	defer func() {
+		if err := dial.Close(); err != nil {
+			_ = err
+		}
+	}()
 	req := "CONNECT " + upstream.Addr().String() + " HTTP/1.1\r\nHost: " + upstream.Addr().String() + "\r\n\r\n"
 	if _, err := dial.Write([]byte(req)); err != nil {
 		t.Fatalf("write CONNECT: %v", err)
@@ -169,13 +208,21 @@ func TestRunnerEgressProxy_SSRFAuditHook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRunnerEgressProxy: %v", err)
 	}
-	defer p.Close()
+	defer func() {
+		if err := p.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	listener, err := listenLoopback(t)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer listener.Close()
+	defer func() {
+		if err := listener.Close(); err != nil {
+			_ = err
+		}
+	}()
 	proxyURL, _ := url.Parse("http://" + p.Addr())
 	client := &http.Client{
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
@@ -185,8 +232,14 @@ func TestRunnerEgressProxy_SSRFAuditHook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.Get: %v", err)
 	}
-	defer resp.Body.Close()
-	_, _ = io.ReadAll(resp.Body)
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
+	}()
+	if _, err := io.ReadAll(resp.Body); err != nil {
+		_ = err
+	}
 	select {
 	case ev := <-auditCalls:
 		if ev != "egress_ssrf_blocked" {

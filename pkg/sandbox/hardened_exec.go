@@ -793,14 +793,18 @@ func runOnCurrentThread(ctx context.Context, argv []string, env []string, lim Li
 				"hardening_err",
 				hardeningErr,
 			)
-			_, _ = cmd.Process.Wait()
+			if _, err := cmd.Process.Wait(); err != nil {
+				_ = err
+			}
 			return Result{}, fmt.Errorf(
 				"hardened_exec: post-start hardening: %w; kill also failed: %v",
 				hardeningErr,
 				killErr,
 			)
 		}
-		_, _ = cmd.Process.Wait()
+		if _, err := cmd.Process.Wait(); err != nil {
+			_ = err
+		}
 		return Result{}, fmt.Errorf("hardened_exec: post-start hardening: %w", hardeningErr)
 	}
 

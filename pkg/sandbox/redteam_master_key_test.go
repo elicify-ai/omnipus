@@ -61,7 +61,9 @@ func nonTmpHome(t *testing.T) string {
 		t.Skipf("cannot create non-/tmp tempdir under %q: %v", base, err)
 	}
 	t.Cleanup(func() {
-		_ = os.RemoveAll(dir)
+		if err := os.RemoveAll(dir); err != nil {
+			_ = err
+		}
 	})
 	return dir
 }

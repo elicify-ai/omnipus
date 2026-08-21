@@ -54,7 +54,13 @@ func TestExecProxy_SSRFBlock(t *testing.T) {
 		// Attempt to reach private IP via proxy — should be blocked
 		resp, err := client.Get("http://10.0.0.1/secret")
 		if err == nil {
-			defer resp.Body.Close()
+			// Test cleanup: Close error is inconsequential once the status
+			// assertion below has run.
+			defer func() {
+				if err := resp.Body.Close(); err != nil {
+					_ = err
+				}
+			}()
 			// Proxy should return 403 Forbidden for private IP requests
 			assert.Equal(t, http.StatusForbidden, resp.StatusCode,
 				"proxy must return 403 for private IP requests")

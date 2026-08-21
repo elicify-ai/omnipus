@@ -60,7 +60,13 @@ func TestRotation_ConcurrentWritesNoPanic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
-	defer logger.Close()
+	// Test cleanup: Close error is inconsequential — t.TempDir() removes
+	// the backing directory regardless, and no test here asserts on it.
+	defer func() {
+		if err := logger.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
 	defer cancel()
@@ -158,11 +164,13 @@ func TestRotation_NoPanicOnConcurrentClose(t *testing.T) {
 			}
 		}()
 		for i := range 50 {
-			_ = logger.Log(&audit.Entry{
+			if err := logger.Log(&audit.Entry{
 				Event:    audit.EventStartup,
 				Decision: audit.DecisionAllow,
 				Details:  map[string]any{"i": i},
-			})
+			}); err != nil {
+				_ = err
+			}
 		}
 	}()
 
@@ -176,7 +184,9 @@ func TestRotation_NoPanicOnConcurrentClose(t *testing.T) {
 			}
 		}()
 		time.Sleep(5 * time.Millisecond)
-		_ = logger.Close()
+		if err := logger.Close(); err != nil {
+			_ = err
+		}
 	}()
 
 	wg.Wait()
@@ -191,7 +201,9 @@ func TestRotation_NoPanicOnConcurrentClose(t *testing.T) {
 			t.Errorf("Log() after Close() panicked: %v", r)
 		}
 	}()
-	_ = logger.Log(&audit.Entry{Event: audit.EventShutdown, Decision: audit.DecisionAllow})
+	if err := logger.Log(&audit.Entry{Event: audit.EventShutdown, Decision: audit.DecisionAllow}); err != nil {
+		_ = err
+	}
 }
 
 // countAllJSONLLines counts valid JSONL lines across all *.jsonl files in dir.
@@ -218,7 +230,11 @@ func countAllJSONLLines(t *testing.T, dir string) int {
 				total++
 			}
 		}
-		data.Close()
+		// Read-only helper file handle; Close error has no effect on the
+		// line count already accumulated.
+		if err := data.Close(); err != nil {
+			_ = err
+		}
 	}
 	return total
 }

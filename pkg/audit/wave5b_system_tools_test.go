@@ -38,7 +38,13 @@ func TestAuditLogging(t *testing.T) {
 		RedactEnabled: true,
 	})
 	require.NoError(t, err)
-	defer logger.Close()
+	// Test cleanup: Close error is inconsequential — t.TempDir() removes
+	// the backing directory regardless, and no test here asserts on it.
+	defer func() {
+		if err := logger.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	// Simulate a system tool invocation: system.provider.configure with an API key.
 	// The audit entry uses Details for caller_role and device_id since the Entry
@@ -119,7 +125,11 @@ func TestAuditLogging_SystemToolBulkCredentials(t *testing.T) {
 		RedactEnabled: true,
 	})
 	require.NoError(t, err)
-	defer logger.Close()
+	defer func() {
+		if err := logger.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	// Multiple credential-looking values in parameters.
 	entry := &audit.Entry{

@@ -26,7 +26,9 @@ func newTestLogger(t *testing.T) (*Logger, string) {
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
-	t.Cleanup(func() { lg.Close() })
+	// Test cleanup: Close error is inconsequential — t.TempDir() removes the
+	// backing directory regardless, and no test asserts on this Close.
+	t.Cleanup(func() { _ = lg.Close() })
 	return lg, filepath.Join(dir, "audit.jsonl")
 }
 

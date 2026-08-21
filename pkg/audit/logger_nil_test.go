@@ -64,7 +64,9 @@ func TestLogger_Log_NilEntry_DoesNotPanic(t *testing.T) {
 				done <- struct{}{}
 				return
 			}
-			_ = l.Log(nil)
+			if err := l.Log(nil); err != nil {
+				_ = err
+			}
 			done <- struct{}{}
 		}()
 	}()

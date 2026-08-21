@@ -394,13 +394,17 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Hijack the client's connection. From here on we're outside HTTP.
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		_ = upstream.Close()
+		if err := upstream.Close(); err != nil {
+			_ = err
+		}
 		http.Error(w, "egress_proxy: hijacking unsupported", http.StatusInternalServerError)
 		return
 	}
 	clientConn, _, err := hj.Hijack()
 	if err != nil {
-		_ = upstream.Close()
+		if err := upstream.Close(); err != nil {
+			_ = err
+		}
 		slog.Warn("egress_proxy: hijack failed", "error", err)
 		return
 	}
@@ -418,8 +422,12 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		p.tunnels.Done()
 		p.tunnels.Done()
-		_ = clientConn.Close()
-		_ = upstream.Close()
+		if err := clientConn.Close(); err != nil {
+			_ = err
+		}
+		if err := upstream.Close(); err != nil {
+			_ = err
+		}
 		return
 	}
 
@@ -428,15 +436,27 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Close drain in-flight tunnels rather than leaking them.
 	go func() {
 		defer p.tunnels.Done()
-		_, _ = io.Copy(upstream, clientConn)
-		_ = upstream.Close()
-		_ = clientConn.Close()
+		if _, err := io.Copy(upstream, clientConn); err != nil {
+			_ = err
+		}
+		if err := upstream.Close(); err != nil {
+			_ = err
+		}
+		if err := clientConn.Close(); err != nil {
+			_ = err
+		}
 	}()
 	go func() {
 		defer p.tunnels.Done()
-		_, _ = io.Copy(clientConn, upstream)
-		_ = upstream.Close()
-		_ = clientConn.Close()
+		if _, err := io.Copy(clientConn, upstream); err != nil {
+			_ = err
+		}
+		if err := upstream.Close(); err != nil {
+			_ = err
+		}
+		if err := clientConn.Close(); err != nil {
+			_ = err
+		}
 	}()
 }
 

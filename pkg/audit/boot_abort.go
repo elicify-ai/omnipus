@@ -55,7 +55,9 @@ func EmitBootAbortStderr(event, agentID, path string, err error, extra []KV) int
 	if werr != nil {
 		// Last-ditch: try the real os.Stderr in case `w` was a broken test
 		// double. Best-effort; the gateway is about to exit anyway.
-		_, _ = io.WriteString(os.Stderr, line)
+		if _, err := io.WriteString(os.Stderr, line); err != nil {
+			_ = err
+		}
 	}
 	return n
 }

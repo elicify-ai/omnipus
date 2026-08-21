@@ -712,7 +712,13 @@ func (l *Logger) openCurrentFile() error {
 		// (file pointer set, but currentSize uninitialised). The caller must
 		// also treat the returned error as a setup failure, but the latch
 		// belt-and-braces guards every subsequent write attempt.
-		f.Close()
+		// Close error is intentionally dropped: f is never assigned to
+		// l.file (only a local var on this failed-setup path) and we're
+		// already latching degraded + returning the stat error above, so a
+		// close failure here changes nothing about correctness or safety.
+		if err := f.Close(); err != nil {
+			_ = err
+		}
 		l.degraded = true
 		return fmt.Errorf("audit: stat %s: %w", path, err)
 	}
@@ -754,11 +760,31 @@ func (l *Logger) openCurrentFile() error {
 // an empty audit.jsonl and skip the readChainSeedFromFile path — leaving
 // l.prevHMAC pointed at the correct seed for the new file's first entry.
 func (l *Logger) rotate() error {
+	// errcheck fix (security-critical audit-write path): a dropped Flush/Close
+	// error here previously let rotation proceed to rename a file that might
+	// be missing buffered audit entries — the exact silent-data-loss shape
+	// CRIT-3 (below) was written to prevent for os.Rename. Fail closed and
+	// latch degraded, matching the os.Rename failure handling.
 	if l.writer != nil {
-		l.writer.Flush()
+		if err := l.writer.Flush(); err != nil {
+			l.degraded = true
+			// Best-effort fd cleanup: the flush already failed so the rotation
+			// is aborting regardless; release the handle rather than leak it.
+			// Its own error (if any) is secondary to the flush failure we're
+			// already returning.
+			if l.file != nil {
+				if closeErr := l.file.Close(); closeErr != nil {
+					slog.Warn("audit: rotate: close after flush failure", "error", closeErr)
+				}
+			}
+			return fmt.Errorf("audit: rotate: flush %s: %w", l.auditPath(), err)
+		}
 	}
 	if l.file != nil {
-		l.file.Close()
+		if err := l.file.Close(); err != nil {
+			l.degraded = true
+			return fmt.Errorf("audit: rotate: close %s: %w", l.auditPath(), err)
+		}
 	}
 
 	// v0.2 #155: capture the chain seed BEFORE we rename. l.prevHMAC is
@@ -866,7 +892,15 @@ func (l *Logger) recoverCorruption() {
 		}
 		return
 	}
-	defer f.Close()
+	defer func() {
+		// Truncate (if it happens below) is a direct syscall on the fd, not
+		// buffered — a Close failure afterward can't undo it or lose data.
+		// Still surface it: an unexpected close error on the audit file at
+		// startup is worth an operator's attention.
+		if closeErr := f.Close(); closeErr != nil {
+			slog.Warn("audit: close failed after corruption recovery", "path", path, "error", closeErr)
+		}
+	}()
 
 	info, err := f.Stat()
 	if err != nil || info.Size() == 0 {

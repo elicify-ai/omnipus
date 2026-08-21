@@ -127,7 +127,9 @@ func TestMergeEnv_NoProxyWhenAddrEmpty(t *testing.T) {
 func TestCappedBuffer_TruncatesWithNotice(t *testing.T) {
 	cb := cappedBuffer{cap: 16}
 	for i := 0; i < 5; i++ {
-		_, _ = cb.Write([]byte("0123456789"))
+		if _, err := cb.Write([]byte("0123456789")); err != nil {
+			_ = err
+		}
 	}
 	out := cb.Bytes()
 	if len(out) <= 16 {
@@ -138,7 +140,9 @@ func TestCappedBuffer_TruncatesWithNotice(t *testing.T) {
 	}
 	// Untruncated buffer should NOT carry the notice.
 	cb2 := cappedBuffer{cap: 100}
-	_, _ = cb2.Write([]byte("short"))
+	if _, err := cb2.Write([]byte("short")); err != nil {
+		_ = err
+	}
 	if strings.Contains(string(cb2.Bytes()), "truncated") {
 		t.Errorf("untruncated buffer should not include notice: %q", cb2.Bytes())
 	}

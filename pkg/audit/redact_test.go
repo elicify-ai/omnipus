@@ -175,7 +175,13 @@ func TestRedactionEngine_RedactEntry(t *testing.T) {
 		RedactEnabled: true,
 	})
 	require.NoError(t, err)
-	defer logger.Close()
+	// Test cleanup: Close error is inconsequential — t.TempDir() removes
+	// the backing directory regardless, and no test here asserts on it.
+	defer func() {
+		if err := logger.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	entry := audit.Entry{
 		Timestamp: time.Now().UTC(),
@@ -228,7 +234,11 @@ func TestFieldNameRedaction(t *testing.T) {
 		RedactEnabled: true,
 	})
 	require.NoError(t, err)
-	defer logger.Close()
+	defer func() {
+		if err := logger.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	logAndRead := func(t *testing.T, params map[string]any) map[string]any {
 		t.Helper()
@@ -331,7 +341,11 @@ func TestFieldNameRedaction_NestedMaps(t *testing.T) {
 		RedactEnabled: true,
 	})
 	require.NoError(t, err)
-	defer logger.Close()
+	defer func() {
+		if err := logger.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	entry := audit.Entry{
 		Timestamp: time.Now().UTC(),
@@ -383,7 +397,11 @@ func TestFieldNameRedaction_ArrayOfMaps(t *testing.T) {
 		RedactEnabled: true,
 	})
 	require.NoError(t, err)
-	defer logger.Close()
+	defer func() {
+		if err := logger.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	entry := audit.Entry{
 		Timestamp: time.Now().UTC(),

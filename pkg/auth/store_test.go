@@ -54,7 +54,14 @@ func TestStoreRoundtrip(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
 	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	// t.Setenv above already auto-restores HOME at test end; this manual
+	// restore is a redundant belt-and-braces best-effort — its error is not
+	// actionable in a defer and t.Setenv's restore is the real guarantee.
+	defer func() {
+		if err := os.Setenv("HOME", origHome); err != nil {
+			_ = err
+		}
+	}()
 
 	cred := &AuthCredential{
 		AccessToken:  "test-access-token",
@@ -91,7 +98,14 @@ func TestStoreFilePermissions(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
 	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	// t.Setenv above already auto-restores HOME at test end; this manual
+	// restore is a redundant belt-and-braces best-effort — its error is not
+	// actionable in a defer and t.Setenv's restore is the real guarantee.
+	defer func() {
+		if err := os.Setenv("HOME", origHome); err != nil {
+			_ = err
+		}
+	}()
 
 	cred := &AuthCredential{
 		AccessToken: "secret-token",
@@ -117,7 +131,14 @@ func TestStoreMultiProvider(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
 	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	// t.Setenv above already auto-restores HOME at test end; this manual
+	// restore is a redundant belt-and-braces best-effort — its error is not
+	// actionable in a defer and t.Setenv's restore is the real guarantee.
+	defer func() {
+		if err := os.Setenv("HOME", origHome); err != nil {
+			_ = err
+		}
+	}()
 
 	openaiCred := &AuthCredential{AccessToken: "openai-token", Provider: "openai", AuthMethod: "oauth"}
 	anthropicCred := &AuthCredential{AccessToken: "anthropic-token", Provider: "anthropic", AuthMethod: "token"}
@@ -150,7 +171,14 @@ func TestDeleteCredential(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
 	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	// t.Setenv above already auto-restores HOME at test end; this manual
+	// restore is a redundant belt-and-braces best-effort — its error is not
+	// actionable in a defer and t.Setenv's restore is the real guarantee.
+	defer func() {
+		if err := os.Setenv("HOME", origHome); err != nil {
+			_ = err
+		}
+	}()
 
 	cred := &AuthCredential{AccessToken: "to-delete", Provider: "openai", AuthMethod: "oauth"}
 	if err := SetCredential("openai", cred); err != nil {
@@ -174,7 +202,14 @@ func TestLoadStoreEmpty(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
 	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	// t.Setenv above already auto-restores HOME at test end; this manual
+	// restore is a redundant belt-and-braces best-effort — its error is not
+	// actionable in a defer and t.Setenv's restore is the real guarantee.
+	defer func() {
+		if err := os.Setenv("HOME", origHome); err != nil {
+			_ = err
+		}
+	}()
 
 	store, err := LoadStore()
 	if err != nil {

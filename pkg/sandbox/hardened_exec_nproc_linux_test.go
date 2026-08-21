@@ -259,9 +259,15 @@ func startGatedChild(t *testing.T, script string) *gatedChild {
 		if c.waited {
 			return
 		}
-		_ = c.stdin.Close()
-		_ = c.cmd.Process.Kill()
-		_ = c.cmd.Wait()
+		if err := c.stdin.Close(); err != nil {
+			_ = err
+		}
+		if err := c.cmd.Process.Kill(); err != nil {
+			_ = err
+		}
+		if err := c.cmd.Wait(); err != nil {
+			_ = err
+		}
 	})
 	return c
 }
@@ -274,7 +280,9 @@ func (c *gatedChild) release(t *testing.T) {
 	if _, err := io.WriteString(c.stdin, "go\n"); err != nil {
 		t.Fatalf("release gated child: %v", err)
 	}
-	_ = c.stdin.Close()
+	if err := c.stdin.Close(); err != nil {
+		_ = err
+	}
 }
 
 // wait reaps the child exactly once, so the cleanup hook does not Kill a
@@ -402,8 +410,12 @@ func TestReadCurrentUserNProc_CountsOtherProcessesThreads(t *testing.T) {
 		t.Fatalf("start helper child: %v", err)
 	}
 	defer func() {
-		_ = child.Process.Kill()
-		_ = child.Wait()
+		if err := child.Process.Kill(); err != nil {
+			_ = err
+		}
+		if err := child.Wait(); err != nil {
+			_ = err
+		}
 	}()
 
 	taskDir := "/proc/" + strconv.Itoa(child.Process.Pid) + "/task"

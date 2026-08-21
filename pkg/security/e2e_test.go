@@ -37,7 +37,13 @@ func TestE2E_RateLimitTriggered(t *testing.T) {
 		RetentionDays: 90,
 	})
 	require.NoError(t, err)
-	defer auditLogger.Close()
+	// Test cleanup: Close error is inconsequential — t.TempDir()
+	// removes the backing directory regardless.
+	defer func() {
+		if err := auditLogger.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	sw := security.NewSlidingWindow(3, time.Minute, security.ScopeAgent, "researcher", "llm_calls")
 
@@ -90,7 +96,11 @@ func TestE2E_SSRFBlocked(t *testing.T) {
 		RedactEnabled: true,
 	})
 	require.NoError(t, err)
-	defer auditLogger.Close()
+	defer func() {
+		if err := auditLogger.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	checker := security.NewSSRFChecker(nil)
 

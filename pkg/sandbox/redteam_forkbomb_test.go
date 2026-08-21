@@ -323,7 +323,9 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 	defer func() {
 		// Best-effort restore; if the test process still has children
 		// alive this may EPERM, but the test is ending anyway.
-		_ = unix.Setrlimit(unix.RLIMIT_NPROC, &oldRlim)
+		if err := unix.Setrlimit(unix.RLIMIT_NPROC, &oldRlim); err != nil {
+			_ = err
+		}
 	}()
 	currentPIDs := uint64(countOurPIDs(t))
 	// safetyCap = current + 512 — comfortably above childNProcSlack (128) +
@@ -405,8 +407,12 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 	peakPIDs := samplePeakPIDs(t, ctx, baselinePIDs)
 
 	// Kill the bomb's process group so we don't leave zombies.
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	_ = cmd.Wait()
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		_ = err
+	}
+	if err := cmd.Wait(); err != nil {
+		_ = err
+	}
 
 	// After v0.2 #155 item 5, the production hardened-exec code applies
 	// RLIMIT_NPROC=baseline+128 to every child. The bomb's growth must
@@ -491,7 +497,9 @@ func TestRedteam_ForkBomb_UlimitRaiseThenFork_Contained(t *testing.T) {
 		t.Fatalf("getrlimit NPROC (safety probe): %v", err)
 	}
 	defer func() {
-		_ = unix.Setrlimit(unix.RLIMIT_NPROC, &oldRlim)
+		if err := unix.Setrlimit(unix.RLIMIT_NPROC, &oldRlim); err != nil {
+			_ = err
+		}
 	}()
 	safetyCap := uint64(countOurPIDs(t)) + 512
 	if oldRlim.Cur > 0 && safetyCap > oldRlim.Cur {
@@ -534,8 +542,12 @@ ulimit -u unlimited 2>/dev/null || ulimit -u "$(ulimit -H -u)" 2>/dev/null
 		t.Fatalf("start gated bomb: %v", err)
 	}
 	defer func() {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		_ = cmd.Wait()
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+			_ = err
+		}
+		if err := cmd.Wait(); err != nil {
+			_ = err
+		}
 	}()
 	if err := sandbox.ApplyChildPostStartHardening(cmd, sandbox.Limits{}); err != nil {
 		t.Fatalf("ApplyChildPostStartHardening (RLIMIT_NPROC): %v", err)
@@ -560,10 +572,14 @@ ulimit -u unlimited 2>/dev/null || ulimit -u "$(ulimit -H -u)" 2>/dev/null
 	if _, err := io.WriteString(stdin, "go\n"); err != nil {
 		t.Fatalf("release gated bomb: %v", err)
 	}
-	_ = stdin.Close()
+	if err := stdin.Close(); err != nil {
+		_ = err
+	}
 
 	peakPIDs := samplePeakPIDs(t, ctx, baselinePIDs)
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		_ = err
+	}
 
 	// Same bound as the indirect test: childNProcSlack (128) plus transient
 	// slack. The payload having TRIED to raise its limit must make no

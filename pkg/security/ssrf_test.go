@@ -342,7 +342,12 @@ func TestSSRFChecker_SafeDialContext_RealDNSResolution(t *testing.T) {
 	t.Run("blocks localhost resolution without allowlist", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
-		defer listener.Close()
+		// Test cleanup: Close error is inconsequential.
+		defer func() {
+			if err := listener.Close(); err != nil {
+				_ = err
+			}
+		}()
 
 		_, port, err := net.SplitHostPort(listener.Addr().String())
 		require.NoError(t, err)
@@ -366,7 +371,12 @@ func TestSSRFChecker_SafeDialContext_RealDNSResolution(t *testing.T) {
 		// permitted) is unchanged, only the address family is made env-agnostic.
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
-		defer listener.Close()
+		// Test cleanup: Close error is inconsequential.
+		defer func() {
+			if err := listener.Close(); err != nil {
+				_ = err
+			}
+		}()
 
 		accepted := make(chan struct{}, 1)
 		go func() {
@@ -374,7 +384,10 @@ func TestSSRFChecker_SafeDialContext_RealDNSResolution(t *testing.T) {
 			if acceptErr != nil {
 				return
 			}
-			conn.Close()
+			// Test goroutine cleanup: Close error not actionable here.
+			if err := conn.Close(); err != nil {
+				_ = err
+			}
 			accepted <- struct{}{}
 		}()
 
@@ -385,7 +398,9 @@ func TestSSRFChecker_SafeDialContext_RealDNSResolution(t *testing.T) {
 		dialContext := checker.SafeDialContext(&net.Dialer{Timeout: time.Second})
 		conn, err := dialContext(context.Background(), "tcp", net.JoinHostPort("localhost", port))
 		require.NoError(t, err, "expected localhost DNS resolution to succeed once allowlisted")
-		conn.Close()
+		if err := conn.Close(); err != nil {
+			_ = err
+		}
 
 		select {
 		case <-accepted:
@@ -513,7 +528,11 @@ func TestSSRFChecker_CheckRedirect_BlocksPrivateIPTarget(t *testing.T) {
 
 	resp, err := client.Get(server.URL + "/redirect-private")
 	if resp != nil {
-		resp.Body.Close()
+		// SSRF-blocked/error response body; draining is unnecessary and
+		// the Close error is not actionable in an already-error test path.
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
 	}
 	require.Error(t, err, "redirect to private IP 10.1.2.3 must be rejected, not followed")
 	assert.Contains(t, err.Error(), "SSRF")
@@ -536,7 +555,11 @@ func TestSSRFChecker_CheckRedirect_BlocksCloudMetadataTarget(t *testing.T) {
 
 	resp, err := client.Get(server.URL + "/redirect-metadata")
 	if resp != nil {
-		resp.Body.Close()
+		// SSRF-blocked/error response body; draining is unnecessary and
+		// the Close error is not actionable in an already-error test path.
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
 	}
 	require.Error(t, err, "redirect to cloud metadata endpoint must be rejected, not followed")
 	assert.Contains(t, err.Error(), "SSRF")
@@ -553,7 +576,9 @@ func TestSSRFChecker_CheckRedirect_AllowsSameOriginRedirect(t *testing.T) {
 	})
 	mux.HandleFunc("/landed", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		if _, err := w.Write([]byte("ok")); err != nil {
+			_ = err
+		}
 	})
 	server := httptest.NewServer(mux)
 	defer server.Close()
@@ -563,7 +588,11 @@ func TestSSRFChecker_CheckRedirect_AllowsSameOriginRedirect(t *testing.T) {
 
 	resp, err := client.Get(server.URL + "/start")
 	require.NoError(t, err, "legitimate same-origin redirect must be followed, not blocked")
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
+	}()
 	body, readErr := io.ReadAll(resp.Body)
 	require.NoError(t, readErr)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -588,7 +617,11 @@ func TestSSRFChecker_CheckRedirect_TooManyRedirectsRejected(t *testing.T) {
 
 	resp, err := client.Get(server.URL + "/loop")
 	if resp != nil {
-		resp.Body.Close()
+		// SSRF-blocked/error response body; draining is unnecessary and
+		// the Close error is not actionable in an already-error test path.
+		if err := resp.Body.Close(); err != nil {
+			_ = err
+		}
 	}
 	require.Error(t, err, "an infinite same-origin redirect loop must eventually be rejected")
 	assert.Contains(t, err.Error(), "too many redirects")
@@ -772,7 +805,9 @@ func TestAllowGatewayOrigin_ConcurrentWithCheckURL(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < iters; j++ {
 				checker.AllowGatewayOrigin("localhost", 5000+port)
-				_ = checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
+				if err := checker.CheckURL(ctx, "http://127.0.0.1:5000/x"); err != nil {
+					_ = err
+				}
 				checker.AllowGatewayOrigin("", 0)
 			}
 		}(i)
@@ -783,7 +818,9 @@ func TestAllowGatewayOrigin_ConcurrentWithCheckURL(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < iters; j++ {
-				_ = checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
+				if err := checker.CheckURL(ctx, "http://127.0.0.1:5000/x"); err != nil {
+					_ = err
+				}
 			}
 		}()
 	}

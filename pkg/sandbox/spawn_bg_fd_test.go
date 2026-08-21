@@ -55,7 +55,9 @@ func TestSpawn_NoLeakedParentFD_AfterStart(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		_ = cmd.Process.Kill()
+		if err := cmd.Process.Kill(); err != nil {
+			_ = err
+		}
 		t.Fatal("child did not exit within 5 s")
 	}
 
@@ -118,7 +120,9 @@ func TestSpawn_LogFileClosedAfterStart(t *testing.T) {
 		t.Fatalf("SpawnBackgroundChild: %v", err)
 	}
 	// Kill immediately — we only care about the parent's fd state post-Start.
-	_ = cmd.Process.Signal(syscall.SIGTERM)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		_ = err
+	}
 
 	// Wait briefly for the child.
 	done := make(chan struct{}, 1)
@@ -129,7 +133,9 @@ func TestSpawn_LogFileClosedAfterStart(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		_ = cmd.Process.Kill()
+		if err := cmd.Process.Kill(); err != nil {
+			_ = err
+		}
 	}
 
 	logPath := filepath.Join(workspace, ".dev-server.log")

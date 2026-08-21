@@ -56,11 +56,13 @@ func TestSandboxBackend_Fallback(t *testing.T) {
 	t.Run("CheckPath allows path inside workspace", func(t *testing.T) {
 		workspaceDir := t.TempDir()
 		backend2 := sandbox.NewFallbackBackend()
-		_ = backend2.Apply(sandbox.SandboxPolicy{
+		if err := backend2.Apply(sandbox.SandboxPolicy{
 			FilesystemRules: []sandbox.PathRule{
 				{Path: workspaceDir, Access: sandbox.AccessRead | sandbox.AccessWrite},
 			},
-		})
+		}); err != nil {
+			_ = err
+		}
 		allowedFile := filepath.Join(workspaceDir, "file.txt")
 		require.NoError(t, os.WriteFile(allowedFile, []byte("ok"), 0o644))
 		err := backend2.CheckPath(allowedFile)
@@ -70,11 +72,13 @@ func TestSandboxBackend_Fallback(t *testing.T) {
 	t.Run("CheckPath blocks path outside workspace", func(t *testing.T) {
 		workspaceDir := t.TempDir()
 		backend2 := sandbox.NewFallbackBackend()
-		_ = backend2.Apply(sandbox.SandboxPolicy{
+		if err := backend2.Apply(sandbox.SandboxPolicy{
 			FilesystemRules: []sandbox.PathRule{
 				{Path: workspaceDir, Access: sandbox.AccessRead},
 			},
-		})
+		}); err != nil {
+			_ = err
+		}
 
 		// Try to access /etc/passwd (outside workspace)
 		if _, err := os.Stat("/etc/passwd"); err == nil {

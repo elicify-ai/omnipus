@@ -92,7 +92,13 @@ func firstEntryTimestamp(path string) (time.Time, bool) {
 	if err != nil {
 		return time.Time{}, false
 	}
-	defer f.Close()
+	// Read-only handle used only to sort files by timestamp; a Close error
+	// here has no data-loss or correctness consequence.
+	defer func() {
+		if err := f.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 1<<20)

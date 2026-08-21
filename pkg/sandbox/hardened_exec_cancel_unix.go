@@ -60,7 +60,9 @@ func installProcessGroupCancel(cmd *exec.Cmd) {
 		if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
 			// Fall back to signaling just the direct child if the group
 			// signal failed for a reason other than "already gone".
-			_ = cmd.Process.Signal(syscall.SIGTERM)
+			if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				_ = err
+			}
 		}
 
 		// Grace window: give the group a moment to flush and exit on

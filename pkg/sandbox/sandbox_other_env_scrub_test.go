@@ -133,9 +133,17 @@ func TestScrubGatewayEnv_SensitiveKeysAbsentWhenUnset(t *testing.T) {
 	t.Setenv("OMNIPUS_MASTER_KEY", "")
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	t.Setenv("OMNIPUS_KEY_FILE", "")
-	os.Unsetenv("OMNIPUS_MASTER_KEY")
-	os.Unsetenv("OMNIPUS_BEARER_TOKEN")
-	os.Unsetenv("OMNIPUS_KEY_FILE")
+	// os.Unsetenv essentially never fails; t.Setenv above already registers
+	// the test-end restore, so these are pure test-state setup.
+	if err := os.Unsetenv("OMNIPUS_MASTER_KEY"); err != nil {
+		_ = err
+	}
+	if err := os.Unsetenv("OMNIPUS_BEARER_TOKEN"); err != nil {
+		_ = err
+	}
+	if err := os.Unsetenv("OMNIPUS_KEY_FILE"); err != nil {
+		_ = err
+	}
 
 	// Must not panic.
 	var scrubbed []string
@@ -185,7 +193,10 @@ func TestScrubGatewayEnv_SensitiveKeysAbsentWhenUnset(t *testing.T) {
 func TestScrubGatewayEnv_Differentiation(t *testing.T) {
 	const uniqueKey = "OMNIPUS_CHILD_SCRUB_DIFFERENTIATION_XYZ"
 	t.Setenv(uniqueKey, "")
-	os.Unsetenv(uniqueKey)
+	// os.Unsetenv essentially never fails; test-state setup only.
+	if err := os.Unsetenv(uniqueKey); err != nil {
+		_ = err
+	}
 
 	// First call: unique key absent.
 	scrubbed1 := ScrubGatewayEnv()

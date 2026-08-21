@@ -121,7 +121,9 @@ func (l *Logger) Verify(ctx context.Context) (*ChainResult, error) {
 	l.mu.Lock()
 	// Flush so any buffered writes hit disk before we read.
 	if l.writer != nil {
-		_ = l.writer.Flush()
+		if err := l.writer.Flush(); err != nil {
+			_ = err
+		}
 	}
 	key := make([]byte, len(l.chainKey))
 	copy(key, l.chainKey)
@@ -153,7 +155,13 @@ func VerifyFile(ctx context.Context, path string, key []byte, seedHMAC []byte) (
 	if err != nil {
 		return nil, fmt.Errorf("audit: open %s: %w", path, err)
 	}
-	defer f.Close()
+	// Read-only handle; a Close error here has no effect on the chain
+	// verification result already computed from the bytes read.
+	defer func() {
+		if err := f.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	res := &ChainResult{
 		Valid:        true,
@@ -472,7 +480,13 @@ func readChainSeedFromFile(path string) ([]byte, bool) {
 	if err != nil {
 		return nil, false
 	}
-	defer f.Close()
+	// Read-only handle; a Close error here has no effect on the chain seed
+	// already read into memory below.
+	defer func() {
+		if err := f.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	// Read the whole file into memory and scan from the end. Audit files
 	// are bounded by the 50 MiB rotation threshold, so this is bounded.

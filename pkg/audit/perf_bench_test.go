@@ -74,7 +74,13 @@ func BenchmarkAuditAppend_Concurrent(b *testing.B) {
 		b.Run(fmt.Sprintf("N=%d", n), func(b *testing.B) {
 			dir := b.TempDir()
 			logger := newPerfBenchLogger(b, dir)
-			defer logger.Close()
+			// Test cleanup: Close error is inconsequential — t.TempDir() removes
+			// the backing directory regardless, and no test here asserts on it.
+			defer func() {
+				if err := logger.Close(); err != nil {
+					_ = err
+				}
+			}()
 
 			var failed int64
 
@@ -129,7 +135,11 @@ func BenchmarkAuditAppend_Concurrent_Fsync(b *testing.B) {
 		b.Run(fmt.Sprintf("N=%d", n), func(b *testing.B) {
 			dir := b.TempDir()
 			logger := newPerfBenchLogger(b, dir)
-			defer logger.Close()
+			defer func() {
+				if err := logger.Close(); err != nil {
+					_ = err
+				}
+			}()
 
 			var failed int64
 
@@ -181,7 +191,11 @@ func BenchmarkAuditAppend_Concurrent_Fsync(b *testing.B) {
 func TestAuditLog_ConcurrentAppend(t *testing.T) {
 	dir := t.TempDir()
 	logger := newPerfBenchLogger(t, dir)
-	defer logger.Close()
+	defer func() {
+		if err := logger.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	const n = 32
 	errs := make([]error, n)

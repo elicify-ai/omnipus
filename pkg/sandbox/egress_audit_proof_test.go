@@ -27,7 +27,13 @@ func TestEgressProxy_AuditEntryShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("audit.NewLogger: %v", err)
 	}
-	defer logger.Close()
+	// Test cleanup: Close error is inconsequential — t.TempDir() removes
+	// the backing directory regardless.
+	defer func() {
+		if err := logger.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	// B1.2(c): the proxy now hands us a fully-shaped *audit.Entry. Tests
 	// re-tag the event from "egress_denied" to the documented gateway-side
@@ -46,7 +52,11 @@ func TestEgressProxy_AuditEntryShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEgressProxy: %v", err)
 	}
-	defer p.Close()
+	defer func() {
+		if err := p.Close(); err != nil {
+			_ = err
+		}
+	}()
 
 	proxyURL, _ := url.Parse("http://" + p.Addr())
 	client := &http.Client{
@@ -57,14 +67,25 @@ func TestEgressProxy_AuditEntryShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.Get: %v", err)
 	}
-	io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
+	// Draining the denied response is only to unblock the connection;
+	// neither error is checked as the response's own status assertion
+	// below is the test oracle.
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		_ = err
+	}
+	if err := resp.Body.Close(); err != nil {
+		_ = err
+	}
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d; want 403", resp.StatusCode)
 	}
 
 	// Flush the audit logger so the line lands on disk before we read.
-	logger.Close()
+	// The deferred Close above is idempotent, so this early Close's error
+	// is not actionable here.
+	if err := logger.Close(); err != nil {
+		_ = err
+	}
 
 	// Read the audit JSONL and confirm shape.
 	contents, err := readAuditFile(dir)
@@ -101,7 +122,11 @@ func readAuditFile(dir string) (string, error) {
 			return "", err
 		}
 		b, err := io.ReadAll(f)
-		f.Close()
+		// Read-only handle; a Close error has no effect on the bytes
+		// already read above.
+		if err := f.Close(); err != nil {
+			_ = err
+		}
 		if err != nil {
 			return "", err
 		}
