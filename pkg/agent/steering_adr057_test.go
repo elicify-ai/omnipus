@@ -238,9 +238,36 @@ func TestInterruptScope_RequiredByCompiler(t *testing.T) {
 	}
 
 	output := string(out)
-	if !strings.Contains(output, "Interrupt") {
-		t.Logf("TestInterruptScope_RequiredByCompiler: build error does not name Interrupt (see the KNOWN TRANSITIONAL CAVEAT doc comment — pkg/agent may not yet compile as a whole on this tree); got:\n%s", output)
-		t.Fail()
+
+	// The build must fail for the RIGHT reason. A bare
+	// strings.Contains(output, "Interrupt") is too weak: any build failure
+	// whose text merely contains that substring satisfies it — including an
+	// `undefined: agent.InterruptScopeTurn` from a fixture that references a
+	// constant which does not exist, since that identifier contains
+	// "Interrupt" too. That exact false pass was observed while
+	// mutation-testing this test: the fixture was broken in an unrelated way
+	// and the assertion stayed green.
+	//
+	// Pin the real property instead — the compiler rejected THIS CALL because
+	// the InterruptScope argument is missing:
+	//   1. the diagnostic names the call site (al.Interrupt), not just the
+	//      word "Interrupt" somewhere in the output, and
+	//   2. it names the argument type the call omitted (InterruptScope), which
+	//      Go includes when it prints the wanted signature, and
+	//   3. it is not an "undefined:" error, which would mean the fixture is
+	//      broken rather than the arity rule being enforced.
+	if strings.Contains(output, "undefined:") {
+		t.Errorf("TestInterruptScope_RequiredByCompiler: the fixture failed to compile for an "+
+			"UNRELATED reason (an undefined identifier), so this run proves nothing about "+
+			"FR-041's mandatory scope argument. Fix the fixture; got:\n%s", output)
+		return
+	}
+	if !strings.Contains(output, "al.Interrupt") || !strings.Contains(output, "InterruptScope") {
+		t.Errorf("TestInterruptScope_RequiredByCompiler: the build failed, but the diagnostic does "+
+			"not show that al.Interrupt was rejected for its missing InterruptScope argument "+
+			"(want the message to name both `al.Interrupt` and `InterruptScope`). Either the "+
+			"signature changed, or pkg/agent failed to compile for some other reason — see the "+
+			"KNOWN TRANSITIONAL CAVEAT doc comment; got:\n%s", output)
 	}
 }
 

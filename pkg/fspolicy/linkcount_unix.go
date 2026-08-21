@@ -35,8 +35,7 @@ func linkCount(info os.FileInfo) (uint64, bool) {
 	// reports this one line as an unused directive — that is the inverse of the
 	// same platform split, not a defect, and removing the cast to silence it
 	// would break the macOS build outright.
-	//nolint:unconvert // required on darwin (uint16 Nlink); see above
-	return uint64(st.Nlink), true
+	return widenToUint64(st.Nlink), true
 }
 
 // deviceID returns the filesystem device an entry lives on.
@@ -51,6 +50,20 @@ func deviceID(info os.FileInfo) (uint64, bool) {
 	if !ok {
 		return 0, false
 	}
-	//nolint:unconvert // Dev is int32 on darwin, uint64 on linux — see linkCount.
-	return uint64(st.Dev), true
+	return widenToUint64(st.Dev), true
+}
+
+// widenToUint64 converts any platform-sized integer field of syscall.Stat_t to
+// uint64.
+//
+// It exists to resolve a genuine platform split that no fixed spelling can
+// satisfy: syscall.Stat_t.Nlink is uint16 on darwin and uint64 on linux, and
+// Dev is int32 on darwin and uint64 on linux. A direct `uint64(st.Nlink)` is
+// REQUIRED to compile on darwin and REDUNDANT on linux, so the file needed a
+// //nolint:unconvert directive that was in turn flagged as unused by nolintlint
+// on darwin — each platform reporting the other's correct form as a defect.
+// Routing the widening through a generic keeps one spelling that is correct
+// everywhere and silences neither linter by annotation.
+func widenToUint64[T ~int8 | ~int16 | ~int32 | ~int64 | ~int | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uint](v T) uint64 {
+	return uint64(v)
 }
