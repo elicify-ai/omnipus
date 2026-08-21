@@ -208,7 +208,23 @@ func TestInterruptScope_RequiredByCompiler(t *testing.T) {
 	}
 	args = append(args, "-o", outPath, fixtureDir)
 	cmd := exec.CommandContext(ctx, "go", args...)
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	// GOPROXY=off makes the nested build HERMETIC. The fixture adds no
+	// dependency the parent module does not already have, so every package it
+	// needs is in the local module cache — yet without this the child `go
+	// build` still consults the module proxy and can stall there for minutes
+	// (observed: repeated `go: downloading ...` lines for modules that were
+	// already present locally, tripping the 3-minute bound below on an
+	// otherwise idle machine). Offline, the same build finishes in ~0.5s and
+	// produces the compile error this test exists to assert. A test that
+	// reaches the network is not a compiler test — it is a network test that
+	// happens to invoke a compiler, and it fails in any sandboxed or offline
+	// CI runner for reasons that have nothing to do with the code under test.
+	//
+	// Do NOT also set GOFLAGS=-mod=mod here: it forces module-graph
+	// re-resolution, which needs the proxy and so reintroduces the very
+	// downloads GOPROXY=off is here to prevent (measured: the build went
+	// straight back to timing out). The default -mod=readonly is correct.
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOPROXY=off")
 	out, buildErr := cmd.CombinedOutput()
 
 	if ctx.Err() == context.DeadlineExceeded {

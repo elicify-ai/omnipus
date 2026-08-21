@@ -468,7 +468,6 @@ func regularOccurrencesInRange(
 	var raw []int64
 	truncated := false
 	for count <= 0 || k < count {
-
 		occ := regularOccurrenceAt(dtstart, loc, freq, interval, k)
 		if !until.IsZero() && occ.After(until) {
 			break

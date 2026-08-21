@@ -94,4 +94,32 @@ export default tseslint.config(
       'jsx-a11y': jsxA11y,
     },
   },
+  // Node-run scripts and harnesses execute under Node, not in a browser, so
+  // `process`/`console`/`fetch`/`AbortSignal` are legitimately defined there.
+  // Without this, the base `no-undef` rule judges them by browser globals and
+  // reports 27 false positives (all in tests/sandbox-uat/outside-playwright.mjs).
+  // A false RED is as corrosive as a false green — it trains people to ignore
+  // the linter. This declares the real runtime; it relaxes no rule.
+  {
+    files: ['**/*.mjs', '**/*.cjs', 'scripts/**/*.js'],
+    languageOptions: {
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+        fetch: 'readonly',
+        AbortSignal: 'readonly',
+        AbortController: 'readonly',
+        URL: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        Buffer: 'readonly',
+        __dirname: 'readonly',
+        __filename: 'readonly',
+        require: 'readonly',
+        TextEncoder: 'readonly',
+        TextDecoder: 'readonly',
+        structuredClone: 'readonly',
+      },
+    },
+  },
 );

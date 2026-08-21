@@ -7,7 +7,9 @@ package agent
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -55,6 +57,30 @@ func TestMain(m *testing.M) {
 	tmp, err := os.MkdirTemp("", "omnipus-agent-pkg-test-home-*")
 	if err != nil {
 		panic("pkg/agent TestMain: MkdirTemp: " + err.Error())
+	}
+	// Pin the REAL Go caches before HOME is redirected. GOMODCACHE and GOCACHE
+	// both DEFAULT to paths under $HOME, so pointing HOME at a fresh temp dir
+	// silently aims every child `go` invocation in this package at an EMPTY
+	// module cache — it then re-downloads the entire dependency tree on every
+	// run. That is what made TestInterruptScope_RequiredByCompiler's nested
+	// `go build` appear to hang for 13-17 minutes and time out the whole
+	// package: it was not a deadlock, and not (only) a build-tag cache-key
+	// mismatch, it was a cache that did not exist. Resolving these BEFORE the
+	// Setenv keeps child builds on the warm shared caches while the test
+	// process itself still gets an isolated HOME.
+	for _, key := range []string{"GOMODCACHE", "GOCACHE"} {
+		if os.Getenv(key) != "" {
+			continue // already pinned explicitly by the caller/CI
+		}
+		out, envErr := exec.Command("go", "env", key).Output()
+		if envErr != nil {
+			continue // leave the default; a child build may be slow but correct
+		}
+		if v := strings.TrimSpace(string(out)); v != "" {
+			if err := os.Setenv(key, v); err != nil {
+				panic("pkg/agent TestMain: Setenv(" + key + "): " + err.Error())
+			}
+		}
 	}
 	if err := os.Setenv("HOME", tmp); err != nil {
 		panic("pkg/agent TestMain: Setenv(HOME): " + err.Error())
