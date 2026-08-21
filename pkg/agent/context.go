@@ -1167,18 +1167,6 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 	return final
 }
 
-func (cb *ContextBuilder) AddToolResult(
-	messages []providers.Message,
-	toolCallID, toolName, result string,
-) []providers.Message {
-	messages = append(messages, providers.Message{
-		Role:       "tool",
-		Content:    result,
-		ToolCallID: toolCallID,
-	})
-	return messages
-}
-
 // AddAssistantMessage appends an assistant message to the message slice.
 // The toolCalls parameter was previously unused and has been removed (M5).
 func (cb *ContextBuilder) AddAssistantMessage(

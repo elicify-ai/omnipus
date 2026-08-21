@@ -39,24 +39,6 @@ type ProviderConfig struct {
 	ApiKey  string        `json:"apiKey"`
 }
 
-type OpenClawModelConfig struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Reasoning     bool     `json:"reasoning"`
-	Input         []string `json:"input"`
-	Cost          Cost     `json:"cost"`
-	ContextWindow int      `json:"contextWindow"`
-	MaxTokens     int      `json:"maxTokens"`
-	Api           string   `json:"api,omitempty"`
-}
-
-type Cost struct {
-	Input      float64 `json:"input"`
-	Output     float64 `json:"output"`
-	CacheRead  float64 `json:"cacheRead"`
-	CacheWrite float64 `json:"cacheWrite"`
-}
-
 type OpenClawTools struct {
 	Profile *string  `json:"profile"`
 	Allow   []string `json:"allow"`
@@ -274,10 +256,6 @@ type OpenClawSkills struct {
 type OpenClawProviderConfig struct {
 	APIKey  string `json:"api_key"`
 	BaseURL string `json:"base_url"`
-}
-
-func (c *OpenClawConfig) GetEnabled() bool {
-	return true
 }
 
 func LoadOpenClawConfig(path string) (*OpenClawConfig, error) {

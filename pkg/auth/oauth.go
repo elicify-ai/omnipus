@@ -1,22 +1,15 @@
 package auth
 
 import (
-	"bufio"
-	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -65,123 +58,6 @@ func GenerateState() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buf), nil
-}
-
-func LoginBrowser(cfg OAuthProviderConfig) (*AuthCredential, error) {
-	pkce, err := GeneratePKCE()
-	if err != nil {
-		return nil, fmt.Errorf("generating PKCE: %w", err)
-	}
-
-	state, err := GenerateState()
-	if err != nil {
-		return nil, fmt.Errorf("generating state: %w", err)
-	}
-
-	redirectURI := fmt.Sprintf("http://localhost:%d/auth/callback", cfg.Port)
-
-	authURL := buildAuthorizeURL(cfg, pkce, state, redirectURI)
-
-	resultCh := make(chan callbackResult, 1)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/auth/callback", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("state") != state {
-			resultCh <- callbackResult{err: fmt.Errorf("state mismatch")}
-			http.Error(w, "State mismatch", http.StatusBadRequest)
-			return
-		}
-
-		code := r.URL.Query().Get("code")
-		if code == "" {
-			errMsg := r.URL.Query().Get("error")
-			resultCh <- callbackResult{err: fmt.Errorf("no code received: %s", errMsg)}
-			http.Error(w, "No authorization code received", http.StatusBadRequest)
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/html")
-		// The auth code has already been captured into resultCh above; a
-		// failed write of this cosmetic confirmation page (e.g. the user
-		// already closed the tab) has no effect on the login flow.
-		if _, err := fmt.Fprint(w, "<html><body><h2>Authentication successful!</h2><p>You can close this window.</p></body></html>"); err != nil {
-			slog.Debug("oauth: writing callback confirmation page failed", "error", err)
-		}
-		resultCh <- callbackResult{code: code}
-	})
-
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.Port))
-	if err != nil {
-		return nil, fmt.Errorf("starting callback server on port %d: %w", cfg.Port, err)
-	}
-
-	server := &http.Server{Handler: mux}
-	go func() {
-		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
-			slog.Warn("oauth: callback server stopped unexpectedly", "error", err)
-		}
-	}()
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		if err := server.Shutdown(ctx); err != nil {
-			slog.Warn("oauth: callback server shutdown failed", "error", err)
-		}
-	}()
-
-	fmt.Printf("Open this URL to authenticate:\n\n%s\n\n", authURL)
-
-	if err := OpenBrowser(authURL); err != nil {
-		fmt.Printf("Could not open browser automatically.\nPlease open this URL manually:\n\n%s\n\n", authURL)
-	}
-
-	fmt.Printf(
-		"Wait! If you are in a headless environment (like Coolify/VPS) and cannot reach localhost:%d,\n",
-		cfg.Port,
-	)
-	fmt.Println(
-		"please complete the login in your local browser and then PASTE the final redirect URL (or just the code) here.",
-	)
-	fmt.Println("Waiting for authentication (browser or manual paste)...")
-
-	// Start manual input in a goroutine
-	manualCh := make(chan string)
-	go func() {
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		manualCh <- strings.TrimSpace(input)
-	}()
-
-	select {
-	case result := <-resultCh:
-		if result.err != nil {
-			return nil, result.err
-		}
-		return ExchangeCodeForTokens(cfg, result.code, pkce.CodeVerifier, redirectURI)
-	case manualInput := <-manualCh:
-		if manualInput == "" {
-			return nil, fmt.Errorf("manual input canceled")
-		}
-		// Extract code from URL if it's a full URL
-		code := manualInput
-		if strings.Contains(manualInput, "?") {
-			u, err := url.Parse(manualInput)
-			if err == nil {
-				code = u.Query().Get("code")
-			}
-		}
-		if code == "" {
-			return nil, fmt.Errorf("could not find authorization code in input")
-		}
-		return ExchangeCodeForTokens(cfg, code, pkce.CodeVerifier, redirectURI)
-	case <-time.After(5 * time.Minute):
-		return nil, fmt.Errorf("authentication timed out after 5 minutes")
-	}
-}
-
-type callbackResult struct {
-	code string
-	err  error
 }
 
 type deviceCodeResponse struct {
@@ -298,91 +174,10 @@ func parseFlexibleInt(raw json.RawMessage) (int, error) {
 	return 0, fmt.Errorf("invalid integer value: %s", string(raw))
 }
 
-func LoginDeviceCode(cfg OAuthProviderConfig) (*AuthCredential, error) {
-	reqBody, _ := json.Marshal(map[string]string{
-		"client_id": cfg.ClientID,
-	})
-
-	resp, err := http.Post(
-		cfg.Issuer+"/api/accounts/deviceauth/usercode",
-		"application/json",
-		strings.NewReader(string(reqBody)),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("requesting device code: %w", err)
-	}
-	// Response body is fully drained (via io.ReadAll or a bounded LimitReader
-	// below); a Close error on an already-consumed HTTP response body has no
-	// effect on the parsed OAuth result.
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			_ = err
-		}
-	}()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading device code response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("device code request failed: %s", string(body))
-	}
-
-	deviceResp, err := parseDeviceCodeResponse(body)
-	if err != nil {
-		return nil, fmt.Errorf("parsing device code response: %w", err)
-	}
-
-	if deviceResp.Interval < 1 {
-		deviceResp.Interval = 5
-	}
-
-	fmt.Printf(
-		"\nTo authenticate, open this URL in your browser:\n\n  %s/codex/device\n\nThen enter this code: %s\n\nWaiting for authentication...\n",
-		cfg.Issuer,
-		deviceResp.UserCode,
-	)
-
-	deadline := time.After(15 * time.Minute)
-	ticker := time.NewTicker(time.Duration(deviceResp.Interval) * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-deadline:
-			return nil, fmt.Errorf("device code authentication timed out after 15 minutes")
-		case <-ticker.C:
-			cred, pollErr := pollDeviceCode(cfg, deviceResp.DeviceAuthID, deviceResp.UserCode)
-			if pollErr != nil {
-				if errors.Is(pollErr, errDeviceAuthPending) {
-					// Normal: user hasn't approved yet — keep polling.
-					continue
-				}
-				if errors.Is(pollErr, errDeviceAuthDenied) {
-					// Fatal: user explicitly denied — abort.
-					return nil, fmt.Errorf("device code authentication denied by user")
-				}
-				// Other transient error (network, server) — log and keep polling.
-				slogWarnOnce(pollErr)
-				continue
-			}
-			if cred != nil {
-				return cred, nil
-			}
-		}
-	}
-}
-
 var (
 	errDeviceAuthPending = fmt.Errorf("authorization_pending")
 	errDeviceAuthDenied  = fmt.Errorf("access_denied")
 )
-
-// slogWarnOnce logs device-code poll errors; called on unexpected transient errors.
-// Uses standard log/slog to avoid importing the logger package from auth.
-func slogWarnOnce(err error) {
-	slog.Warn("device code poll error", "error", err)
-}
 
 func pollDeviceCode(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*AuthCredential, error) {
 	reqBody, _ := json.Marshal(map[string]string{
@@ -683,18 +478,4 @@ func parseJWTClaims(token string) (map[string]any, error) {
 func base64URLDecode(s string) ([]byte, error) {
 	s = strings.NewReplacer("-", "+", "_", "/").Replace(s)
 	return base64.StdEncoding.DecodeString(s)
-}
-
-// OpenBrowser opens the given URL in the user's default browser.
-func OpenBrowser(url string) error {
-	switch runtime.GOOS {
-	case "darwin":
-		return exec.Command("open", url).Start()
-	case "linux":
-		return exec.Command("xdg-open", url).Start()
-	case "windows":
-		return exec.Command("cmd", "/c", "start", url).Start()
-	default:
-		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
-	}
 }

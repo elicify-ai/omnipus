@@ -168,12 +168,6 @@ func (s *ProcessSession) GetExitCode() int {
 	return s.ExitCode
 }
 
-func (s *ProcessSession) SetExitCode(code int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ExitCode = code
-}
-
 // statusPriority ranks terminal SessionStatus values so KillAndRelabel can
 // tell a caller with a SPECIFIC terminal reason (canceled/killed/timeout)
 // apart from one with only a GENERIC fallback reason (done/exited — "no more

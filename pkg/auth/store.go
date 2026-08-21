@@ -126,11 +126,3 @@ func DeleteCredential(provider string) error {
 	delete(store.Credentials, provider)
 	return SaveStore(store)
 }
-
-func DeleteAllCredentials() error {
-	path := authFilePath()
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
