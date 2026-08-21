@@ -120,6 +120,17 @@ func newCancelCascadeAgentLoop(t *testing.T) (*AgentLoop, *session.LifecycleStor
 			},
 			List: []config.AgentConfig{
 				{
+					// The outermost delegator needs a real registered instance.
+					// It used to come from GetDefaultAgent's last-resort rung,
+					// which returned ANY agent including a worker; that rung is
+					// gone (ADR-064 §7) and every other agent here IS a worker,
+					// so spawnSubTurn failed with "parent turnState has no agent
+					// instance".
+					ID:    "jim",
+					Home:  tmpDir,
+					Model: &config.AgentModelConfig{Primary: "test-model"},
+				},
+				{
 					ID:    "ray",
 					Type:  config.AgentTypeWorker,
 					Home:  tmpDir,

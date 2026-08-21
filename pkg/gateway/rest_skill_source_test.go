@@ -80,6 +80,11 @@ func newTestRestAPIWithSkillsDirs(t *testing.T, builtinDir string) *restAPI {
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
+			// An explicitly registered agent. Skill listing and agent-create
+			// validation both resolve through GetDefaultAgent, which returns nil
+			// for an empty roster now that the "main" sentinel is gone
+			// (ADR-064) — ListSkillsDetailed then returns no skills at all.
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	// Enable the ClawHub marketplace so search/install handlers exercise the

@@ -81,7 +81,7 @@ func (d *Drainer) Drain(ctx context.Context) int {
 
 // drainMailbox drains a single mailbox and returns the number of tasks created.
 func (d *Drainer) drainMailbox(ctx context.Context, mb Mailbox) int {
-	msgs, err := mb.Transport.ReadInbox(ctx, d.maxPerMb, true /* unseenOnly */)
+	msgs, err := mb.Transport.ReadInbox(ctx, InboxOptions{Limit: d.maxPerMb, UnseenOnly: true})
 	if err != nil {
 		slog.Warn("email drainer: read inbox failed", "agent_id", mb.AgentID, "error", err)
 		return 0

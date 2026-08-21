@@ -29,63 +29,6 @@ func parseTurnBoundaries(history []providers.Message) []int {
 	return starts
 }
 
-// isSafeBoundary reports whether index is a valid Turn boundary — i.e.,
-// a position where the kept portion (history[index:]) begins at a user
-// message, so no tool-call sequence is torn apart.
-func isSafeBoundary(history []providers.Message, index int) bool {
-	if index <= 0 || index >= len(history) {
-		return true
-	}
-	return history[index].Role == "user"
-}
-
-// findSafeBoundary locates the nearest Turn boundary to targetIndex.
-// It prefers the boundary at or before targetIndex (preserving more recent
-// context). Falls back to the nearest boundary after targetIndex, and
-// returns targetIndex unchanged only when no Turn boundary exists at all.
-func findSafeBoundary(history []providers.Message, targetIndex int) int {
-	if len(history) == 0 {
-		return 0
-	}
-	if targetIndex <= 0 {
-		return 0
-	}
-	if targetIndex >= len(history) {
-		return len(history)
-	}
-
-	turns := parseTurnBoundaries(history)
-	if len(turns) == 0 {
-		return targetIndex
-	}
-
-	// Find the last Turn boundary at or before targetIndex.
-	// Prefer backward: keeps more recent messages.
-	backward := -1
-	for _, t := range turns {
-		if t <= targetIndex {
-			backward = t
-		}
-	}
-	if backward > 0 {
-		return backward
-	}
-
-	// No valid Turn boundary before target (or only at index 0 which
-	// would keep everything). Use the first Turn after targetIndex.
-	for _, t := range turns {
-		if t > targetIndex {
-			return t
-		}
-	}
-
-	// No Turn boundary after targetIndex either. The only boundary is at
-	// index 0, meaning the entire history is a single Turn. Return 0 to
-	// signal that safe compression is not possible — callers check for
-	// mid <= 0 and skip compression in that case.
-	return 0
-}
-
 // estimateMessageTokens estimates the token count for a single message,
 // including Content, ReasoningContent, ToolCalls arguments, ToolCallID
 // metadata, and Media items. Uses a heuristic of 2.5 characters per token.

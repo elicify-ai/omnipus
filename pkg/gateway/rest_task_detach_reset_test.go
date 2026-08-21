@@ -30,7 +30,7 @@ import (
 func TestTaskDetach_NextMemberOfDraftPlan_ResetToInbox(t *testing.T) {
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 	planStore := wirePlanStore(t, api)
 
 	p := makeTestPlan(t, planStore, wsID, plan.StateDraft)
@@ -64,7 +64,7 @@ func TestTaskDetach_NextMemberOfDraftPlan_ResetToInbox(t *testing.T) {
 func TestTaskDetach_ExplicitStatusWins(t *testing.T) {
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 	planStore := wirePlanStore(t, api)
 
 	p := makeTestPlan(t, planStore, wsID, plan.StateDraft)
@@ -86,7 +86,7 @@ func TestTaskDetach_ExplicitStatusWins(t *testing.T) {
 func TestTaskDetach_ReparentDoesNotResetStatus(t *testing.T) {
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 	planStore := wirePlanStore(t, api)
 
 	pA := makeTestPlan(t, planStore, wsID, plan.StateDraft)
@@ -110,7 +110,7 @@ func TestTaskDetach_ReparentDoesNotResetStatus(t *testing.T) {
 func TestTaskDetach_TerminalMemberStillDetaches(t *testing.T) {
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 	planStore := wirePlanStore(t, api)
 
 	p := makeTestPlan(t, planStore, wsID, plan.StateDraft)

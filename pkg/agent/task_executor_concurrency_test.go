@@ -49,8 +49,10 @@ func TestStartTaskNow_NoConcurrentDoubleLaunch(t *testing.T) {
 		dispatchSema: newDispatchSemaphore(2), // cap>1 so sema is not the bottleneck
 	}
 
-	// Register a fake agent so the registry look-up succeeds.
-	const agentID = "main"
+	// newTestAgentLoop registers testDefaultAgentID ("mia") — there is no
+	// "main" sentinel to fall back to anymore, so the task's AgentID must
+	// name a REAL registered agent for the registry look-up to succeed.
+	const agentID = testDefaultAgentID
 
 	// Create a task in inbox → advance to next so StartTaskNow can pick it up.
 	tk := &task.Task{
@@ -194,7 +196,7 @@ func TestErrDispatchCapReached_IsDetectable(t *testing.T) {
 	tk := &task.Task{
 		Title:       "cap-test",
 		Prompt:      "do it",
-		AgentID:     "main",
+		AgentID:     testDefaultAgentID,
 		Action:      task.ActionLLM,
 		Priority:    3,
 		WorkspaceID: "default",

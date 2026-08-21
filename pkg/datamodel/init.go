@@ -54,9 +54,8 @@ var defaultConfig = map[string]any{
 	},
 	"storage": map[string]any{
 		"retention": map[string]any{
-			"session_days":            90,
-			"archive_before_delete":   true,
-			"keep_compaction_summary": true,
+			"session_days":          90,
+			"archive_before_delete": true,
 		},
 	},
 }

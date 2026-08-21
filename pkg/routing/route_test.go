@@ -22,6 +22,11 @@ func testConfig(agents []config.AgentConfig, bindings []config.AgentBinding) *co
 	}
 }
 
+// TestResolveRoute_DefaultAgent_NoBindings pins the post-sentinel-removal
+// contract: with an empty agent list, resolveDefaultAgentID has no sentinel
+// left to invent and returns "" (WARN-logged) — it must NOT resolve to a
+// hardcoded agent name. Traces to route.go::resolveDefaultAgentID's "No
+// agents are configured" branch.
 func TestResolveRoute_DefaultAgent_NoBindings(t *testing.T) {
 	cfg := testConfig(nil, nil)
 	r := NewRouteResolver(cfg)
@@ -31,8 +36,11 @@ func TestResolveRoute_DefaultAgent_NoBindings(t *testing.T) {
 		Peer:    &RoutePeer{Kind: "direct", ID: "user1"},
 	})
 
-	if route.AgentID != DefaultAgentID {
-		t.Errorf("AgentID = %q, want %q", route.AgentID, DefaultAgentID)
+	if route.AgentID != "" {
+		t.Errorf("AgentID = %q, want empty string (no agents configured, no sentinel to fall back to)", route.AgentID)
+	}
+	if route.Drop {
+		t.Errorf("Drop = true, want false — an empty default is a routable empty ID, not a drop")
 	}
 	if route.MatchedBy != "default" {
 		t.Errorf("MatchedBy = %q, want 'default'", route.MatchedBy)

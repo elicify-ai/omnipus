@@ -259,7 +259,7 @@ func TestNewChannelSession_PostCreateMutationDoesNotLeakIntoCache(t *testing.T) 
 	store := newTestStore(t)
 
 	const originalTitle = "Original Title"
-	meta, err := store.NewChannelSession("telegram", "peer-1", "agent-1", originalTitle)
+	meta, err := store.NewChannelSession("telegram", "telegram", "peer-1", "agent-1", originalTitle)
 	require.NoError(t, err)
 	require.Equal(t, originalTitle, meta.Title)
 
@@ -390,7 +390,7 @@ func TestConcurrentNewChannelSessionWhileListing(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
 			peer := fmt.Sprintf("peer-%d", i)
-			if _, err := store.NewChannelSession("telegram", peer, "agent-1", "Title-"+peer); err != nil {
+			if _, err := store.NewChannelSession("telegram", "telegram", peer, "agent-1", "Title-"+peer); err != nil {
 				t.Errorf("NewChannelSession failed: %v", err)
 			}
 		}

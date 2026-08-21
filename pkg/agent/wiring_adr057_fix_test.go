@@ -167,6 +167,7 @@ func TestWiring_RootDelegationAdmission_RefusesPastCapThenAdmitsOnRelease(t *tes
 				MaxToolIterations: 10,
 				SubTurn:           config.SubTurnConfig{MaxConcurrent: 1},
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -279,6 +280,7 @@ func TestWiring_RootDelegationFanOut_BoundedByCentralValueNot16(t *testing.T) {
 				// root-delegation cap inherits the central value below
 				// rather than any fixed number.
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Performance: config.PerformanceConfig{MaxParallelAgents: 40},
 	}
@@ -382,6 +384,7 @@ func TestWiring_StatsFlushInterval_ReachesSharedSessionStore(t *testing.T) {
 				MaxToolIterations: 10,
 				SubTurn:           config.SubTurnConfig{MaxConcurrent: 16},
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Session: sessCfg,
 	}

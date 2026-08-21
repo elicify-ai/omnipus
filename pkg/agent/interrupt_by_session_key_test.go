@@ -131,6 +131,7 @@ func TestDelegateCancelHard_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Provider: "mock"},
+			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	// #577's cancel path is gated behind the FR-196 session-messaging kill
@@ -291,6 +292,7 @@ func TestDelegateCancelSoft_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Provider: "mock"},
+			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	cfg.SessionMessaging.Enabled = boolPtr(true)

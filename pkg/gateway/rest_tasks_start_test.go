@@ -279,26 +279,28 @@ func TestHandleTaskPatch_InProgress_NilTaskExecutor(t *testing.T) {
 //
 // BDD:
 //
-//	Given a task with agent_id="main" (the test registry's default agent),
+//	Given a task with agent_id="mia" (the test registry's one seeded agent),
 //	When PATCH /api/v1/tasks/{id} with {"status":"in_progress"},
 //	Then 200 and status=in_progress.
 func TestHandleTaskPatch_InProgress_WithKnownAgent(t *testing.T) {
 	// Use aligned stores so the executor can find the task by ID.
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
-	// "main" is the always-registered default agent sentinel (agent/registry.go
-	// DefaultAgentID) but is NOT part of defaultWorkspaceTeam's fixed base-roster
-	// candidate list, so it must be put on this workspace's team explicitly for
+	// "mia" is newTestRestAPIAlignedStoresWithProvider's one explicitly seeded
+	// chat-target agent (the retired "main" sentinel used to be registered
+	// implicitly regardless of cfg — see that helper's comment) but is NOT
+	// part of defaultWorkspaceTeam's fixed base-roster candidate list, so it
+	// must be put on this workspace's team explicitly for
 	// validateTaskAgentID's team-membership check to accept it below.
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 	tsk := createTaskViaAPI(t, api, "AgentTask", wsID)
 	advanceTaskToNext(t, api, tsk.Id)
 
 	// First assign the agent_id so the follow-up PATCH can transition to in_progress.
-	wAssign := patchTask(t, api, tsk.Id, `{"agent_id":"main"}`)
+	wAssign := patchTask(t, api, tsk.Id, `{"agent_id":"mia"}`)
 	require.Equal(t, http.StatusOK, wAssign.Code,
-		"assigning agent_id=main must return 200; body=%s", wAssign.Body.String())
+		"assigning agent_id=mia must return 200; body=%s", wAssign.Body.String())
 
 	// Now transition to in_progress — StartTaskNow is called synchronously; the
 	// goroutine may fail later (no real LLM in test), but the PATCH response must
@@ -349,10 +351,10 @@ func TestTransition_DoneRepeatingTaskRunNow(t *testing.T) {
 	t.Run("done every task: PATCH status=in_progress is rejected (400, use POST /runs)", func(t *testing.T) {
 		api := newTestRestAPIAlignedStores(t)
 		wsID := ensureTestWorkspace(t, api)
-		setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+		setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 		body := fmt.Sprintf(
-			`{"title":"RerunMe","action":"llm","workspace_id":%q,"agent_id":"main","trigger":{"type":"every","config":{"every_ms":60000}}}`,
+			`{"title":"RerunMe","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"every","config":{"every_ms":60000}}}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -433,10 +435,10 @@ func TestTransition_DoneRepeatingTaskRunNow(t *testing.T) {
 func TestHandleTaskPatch_RepeatingRunNow_RejectedLeavesDataUnchanged(t *testing.T) {
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 	body := fmt.Sprintf(
-		`{"title":"RerunFailPreserve","action":"llm","workspace_id":%q,"agent_id":"main","trigger":{"type":"every","config":{"every_ms":60000}}}`,
+		`{"title":"RerunFailPreserve","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"every","config":{"every_ms":60000}}}`,
 		wsID,
 	)
 	w := httptest.NewRecorder()
@@ -612,9 +614,17 @@ func newTestRestAPIAlignedStoresWithProvider(t *testing.T, provider providers.LL
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
+			// A single real, chat-target agent ("mia") so tests that need "a
+			// known agent in the registry" have one to assign tasks to. The
+			// retired "main" sentinel used to be registered implicitly
+			// regardless of this list (pkg/agent/registry.go's old always-on
+			// fallback); that sentinel is gone with no back-compat, so this
+			// harness must seed a real agent explicitly instead — see
+			// TestHandleTaskPatch_InProgress_WithKnownAgent and friends below.
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
-	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[{"id":"mia"}]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
 
 	msgBus := bus.NewMessageBus()
@@ -690,12 +700,12 @@ func TestHandleTaskPatch_RunTask_DispatchCapReturns409(t *testing.T) {
 	wsID := ensureTestWorkspace(t, api)
 	// See TestHandleTaskPatch_InProgress_WithKnownAgent: "main" must be put on
 	// the workspace team explicitly for the team-membership check to accept it.
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 	tsk := createTaskViaAPI(t, api, "CapTest", wsID)
 	advanceTaskToNext(t, api, tsk.Id)
 
-	wAssign := patchTask(t, api, tsk.Id, `{"agent_id":"main"}`)
+	wAssign := patchTask(t, api, tsk.Id, `{"agent_id":"mia"}`)
 	require.Equal(t, http.StatusOK, wAssign.Code,
 		"assign agent_id must succeed; body=%s", wAssign.Body.String())
 

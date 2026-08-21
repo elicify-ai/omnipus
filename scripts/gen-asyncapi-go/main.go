@@ -2,11 +2,13 @@
 //
 // Usage:
 //
-//	go run . <asyncapi.yaml> <output.go>
+//	go run . <asyncapi.yaml> <types-output.go> [<llm-error-messages-output.go>]
 //
 // The generator reads the `components.schemas` section of the given AsyncAPI YAML
-// file and emits a Go source file containing one struct per schema. It applies the
-// following mapping rules:
+// file and emits a Go source file containing one struct per schema. Given the
+// optional third path it ALSO emits the LLMError user-facing copy catalogue from
+// the x-user-messages block on components.schemas.LLMError — see usermessages.go.
+// It applies the following mapping rules:
 //
 //   - required fields → non-pointer Go types (string, int, bool, map[string]any, []T)
 //   - optional fields → pointer types (*string, *int, *bool) or `,omitempty` for maps/slices
@@ -44,12 +46,20 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Fprintf(os.Stderr, "usage: gen-asyncapi-go <asyncapi.yaml> <output.go>\n")
+	if len(os.Args) != 3 && len(os.Args) != 4 {
+		fmt.Fprintf(os.Stderr,
+			"usage: gen-asyncapi-go <asyncapi.yaml> <types-output.go> [<llm-error-messages-output.go>]\n")
 		os.Exit(1)
 	}
 	inputPath := os.Args[1]
 	outputPath := os.Args[2]
+	// Optional third output: the LLMError user-facing copy catalogue emitted
+	// from components.schemas.LLMError's x-user-messages block. See
+	// usermessages.go. Omitted by callers that only want the struct types.
+	messagesOutputPath := ""
+	if len(os.Args) == 4 {
+		messagesOutputPath = os.Args[3]
+	}
 
 	raw, err := os.ReadFile(inputPath)
 	if err != nil {
@@ -84,8 +94,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := os.WriteFile(outputPath, formatted, 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "write %s: %v\n", outputPath, err)
+	if writeErr := os.WriteFile(outputPath, formatted, 0o644); writeErr != nil {
+		fmt.Fprintf(os.Stderr, "write %s: %v\n", outputPath, writeErr)
+		os.Exit(1)
+	}
+
+	if messagesOutputPath == "" {
+		return
+	}
+
+	catalogue, err := extractUserMessageCatalogue(doc, "LLMError")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "extract LLMError user-message catalogue: %v\n", err)
+		os.Exit(1)
+	}
+	messagesSrc, err := generateUserMessages(catalogue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "generate LLMError user-message catalogue: %v\n", err)
+		os.Exit(1)
+	}
+	if writeErr := os.WriteFile(messagesOutputPath, messagesSrc, 0o644); writeErr != nil {
+		fmt.Fprintf(os.Stderr, "write %s: %v\n", messagesOutputPath, writeErr)
 		os.Exit(1)
 	}
 }

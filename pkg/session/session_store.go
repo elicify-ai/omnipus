@@ -9,7 +9,7 @@ import (
 
 // SessionReader defines the read-only operations used by the agent loop.
 // Split out of SessionStore (interface segregation) so callers that only
-// ever read a session's history/summary can depend on the narrower contract.
+// ever read a session's history can depend on the narrower contract.
 type SessionReader interface {
 	// GetHistory returns the live window messages (post-Skip) for the session.
 	GetHistory(key string) []providers.Message
@@ -18,8 +18,6 @@ type SessionReader interface {
 	// ArchivedMessage carries the per-line TS written by addMsg (FR-016/FR-017).
 	// Legacy lines pre-dating the TS stamp unmarshal with TS==0.
 	ReadArchive(ctx context.Context, key string) ([]memory.ArchivedMessage, error)
-	// GetSummary returns the conversation summary, or "" if none.
-	GetSummary(key string) string
 }
 
 // SessionWriter defines the mutating persistence operations used by the
@@ -32,8 +30,6 @@ type SessionWriter interface {
 	AddMessage(sessionKey, role, content string)
 	// AddFullMessage appends a complete message including tool calls.
 	AddFullMessage(sessionKey string, msg providers.Message)
-	// SetSummary replaces the conversation summary.
-	SetSummary(key, summary string)
 	// SetHistory replaces the full message history.
 	SetHistory(key string, history []providers.Message)
 	// TruncateHistory keeps only the last keepLast messages.

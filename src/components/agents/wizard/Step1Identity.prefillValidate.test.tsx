@@ -179,7 +179,15 @@ describe('Step1Identity / ExecutorInputs — validate-on-blur blocking rule (US-
     })
 
     await advanceToStep3()
-    expect(screen.getByTestId('wizard-create')).not.toBeDisabled()
+    // WAIT for the block to clear rather than sampling the instant
+    // advanceToStep3 returns. Re-validation runs on a debounce timer, so
+    // "Create is still disabled" and "Create had not re-enabled YET" look
+    // identical to a bare assertion — and under full-suite load the second one
+    // wins. What the test is actually about survives: a block that never clears
+    // still fails here, because the wait expires.
+    await waitFor(() => {
+      expect(screen.getByTestId('wizard-create')).not.toBeDisabled()
+    })
     expect(screen.queryByTestId('wizard-cli-validation-blocked')).toBeNull()
   })
 
@@ -257,7 +265,15 @@ describe('Step1Identity / ExecutorInputs — FR-019 (never trap Create)', () => 
     fireEvent.change(screen.getByTestId('wizard-cli-path'), { target: { value: '/usr/local/bin/claude' } })
 
     await advanceToStep3()
-    expect(screen.getByTestId('wizard-create')).not.toBeDisabled()
+    // WAIT for the block to clear rather than sampling the instant
+    // advanceToStep3 returns. Re-validation runs on a debounce timer, so
+    // "Create is still disabled" and "Create had not re-enabled YET" look
+    // identical to a bare assertion — and under full-suite load the second one
+    // wins. What the test is actually about survives: a block that never clears
+    // still fails here, because the wait expires.
+    await waitFor(() => {
+      expect(screen.getByTestId('wizard-create')).not.toBeDisabled()
+    })
     expect(screen.queryByTestId('wizard-cli-validation-blocked')).toBeNull()
   })
 })

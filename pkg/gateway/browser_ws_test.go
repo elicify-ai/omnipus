@@ -123,6 +123,12 @@ func newBrowserWSTestHandler(t *testing.T, mutate func(cfg *config.Config)) (*Br
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
+			// An explicitly registered agent. Several tests built on this
+			// harness call GetRegistry().GetDefaultAgent() and require a
+			// non-nil result. That used to be satisfied by the implicit "main"
+			// sentinel, which is gone (ADR-064) — GetDefaultAgent now returns
+			// nil for an empty roster rather than inventing an agent.
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	cfg.Tools.Browser.LiveViewEnabled = true

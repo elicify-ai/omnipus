@@ -125,7 +125,7 @@ sequenceDiagram
         end
     end
 
-    Note over RT: 7 — Post-turn: maybeSummarize() may compress history in the background
+    Note over RT: 7 — Post-turn: windowTrim() may evict the oldest whole turn(s) if the token budget is exceeded (zero LLM calls; nothing deleted on disk)
 ```
 
 ---
@@ -240,9 +240,9 @@ return activeProvider.Chat(providerCtx, msgs, toolDefs, model, opts) // non-stre
 - **Thinking:** when the agent's thinking level is on and the provider is
   `ThinkingCapable`, a `thinking_level` option is added (`loop.go:~3701`).
 - **Retries:** transient/provider errors back off and retry (max 2);
-  context-limit errors trigger `forceCompression` and a retry on refreshed
+  context-limit errors trigger `windowTrim` and a retry on the trimmed
   history; an empty-content response retries once via the closure without
-  advancing the outer iteration (`loop.go:~3997–4097`, `~4248`).
+  advancing the outer iteration (`loop.go::windowTrim`).
 
 **Tool-call decision.**
 - *No tool calls* → `finalContent = response.Content` and the loop breaks.
@@ -319,24 +319,21 @@ queue supports one-at-a-time or drain-all modes
 (`Agents.Defaults.SteeringMode`). This is also the mechanism the graceful stage
 of cancellation rides on (below).
 
-## Summarization & compression
+## Compaction
 
-History is kept in check three ways:
+History is kept in check one way:
 
-- **Background summarization** — `maybeSummarize` (`loop.go:5231`) runs after a
-  turn when message count exceeds `SummarizeMessageThreshold` or the token
-  estimate exceeds `SummarizeTokenPercent` of the context window. It launches
-  `summarizeSession` (`loop.go:5426`) in a goroutine, deduped per session so two
-  summaries don't run at once.
-- **Emergency compression** — `forceCompression` (`loop.go:5270`) runs inline
-  when the provider returns a context-limit error: it drops roughly the oldest
-  half of complete turns (or, as a last resort, keeps only the most recent user
-  message), records a compression note in the summary, and the turn retries.
-- **Summary-aware rebuild** — every turn rebuilds its prompt from the current
-  summary + remaining history, so compression is transparent to the next turn.
+- **Sliding-window trim** — `windowTrim` (`loop.go::windowTrim`) evicts the
+  oldest whole turn(s) when the in-memory window exceeds the token budget.
+  It makes **zero LLM calls** and deletes nothing on disk. The next turn
+  rebuilds its prompt from the remaining window.
 
-> Note: history compression here is single-layer (drop-oldest + summary note).
-> There is no separate "tool-result pruning" pass.
+The legacy LLM summariser (`maybeSummarize` / `summarizeSession` /
+`forceCompression`) is deleted. `pkg/agent/window_trim_test.go` forbids
+those methods being redefined.
+
+> Note: compaction is single-layer (drop oldest whole turns). There is no
+> separate "tool-result pruning" pass and no summary note.
 
 ---
 
@@ -491,7 +488,7 @@ crash-recovery path doesn't try to resume a turn that was killed at exit.
 | `buildContinuationTarget` | `loop.go:1723` | scope for post-turn steering drain |
 | `markStreamed` / `Send` | `webchat_channel.go:45/62` | streamed-vs-published dedup |
 | `resolveSteeringTarget` | `loop.go:3066` | scope resolution for steering |
-| `maybeSummarize` / `windowTrim` | `loop.go::maybeSummarize` / `loop.go::windowTrim` | legacy LLM summarization (output renders inert, ADR-028) + the zero-LLM-call sliding-window trim that replaced the retired `forceCompression` |
+| `windowTrim` | `loop.go::windowTrim` | only compaction path (ADR-028): zero-LLM-call sliding-window trim; the LLM summariser (`maybeSummarize` / `summarizeSession` / `forceCompression`) is deleted |
 | `RequestCancel` | `cancel.go:212` | canonical cancel state machine |
 | `Interrupt` / `InterruptSessionHard` | `steering.go:667` / `steering.go:729` | graceful / hard cascade; **both take a mandatory `InterruptScope`** |
 | `ClaimCancel` / `Finish` | `turn.go::ClaimCancel` / `turn.go::Finish` | first-cancel-wins + exactly-once finish callback |

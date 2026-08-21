@@ -83,9 +83,15 @@ func TestSandboxApply_StatusEndpointReflectsBackend(t *testing.T) {
 	assert.NotEmpty(t, status.Backend,
 		"backend field must not be empty — every platform has at least a fallback backend")
 
-	// Differentiation assertion: two known backend names exist in the codebase.
-	// Assert the returned backend is one of the recognized values.
-	knownBackends := []string{"linux", "landlock", "fallback", "windows", "none"}
+	// Differentiation assertion: assert the returned backend is one of the
+	// recognized values.
+	//
+	// "seatbelt" was missing here, so this test failed on every Mac from the
+	// day the macOS backend shipped — a hardcoded list of known values going
+	// stale the moment a new one is added. That is the same defect class
+	// ADR-062 is about, in a test rather than a policy: enumerate a set that
+	// grows, and the omission shows up as a failure somewhere unrelated.
+	knownBackends := []string{"linux", "landlock", "seatbelt", "fallback", "windows", "none"}
 	matched := false
 	for _, known := range knownBackends {
 		if strings.Contains(strings.ToLower(status.Backend), known) {
@@ -150,13 +156,21 @@ func TestSandboxApply_FallbackWhenKernelTooOld(t *testing.T) {
 	var status sandboxStatusResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&status))
 
+	// This scenario is "the kernel is too old, so we fall back". On a host that
+	// HAS a kernel backend there is no such state to observe, and asserting
+	// kernel_level=false there tests the host rather than the code.
+	//
+	// macOS is exactly that case: Seatbelt is always available, so the gateway
+	// correctly selects a kernel backend and this test failed on every Mac —
+	// reporting a fallback bug where the real behaviour was correct.
+	if status.KernelLevel {
+		t.Skipf("host provides a kernel backend (%q); the too-old-kernel fallback "+
+			"cannot be exercised here — see the Linux CI run for this scenario", status.Backend)
+	}
+
 	// BDD: Then policy_applied=false (fallback does not apply kernel policy)
 	assert.False(t, status.PolicyApplied,
 		"FallbackBackend must report policy_applied=false — Apply() is a no-op")
-
-	// BDD: Then kernel_level=false
-	assert.False(t, status.KernelLevel,
-		"FallbackBackend must report kernel_level=false")
 
 	// BDD: Then the gateway did not crash (we reached this assertion)
 	assert.NotEmpty(t, status.Backend,

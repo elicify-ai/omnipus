@@ -26,6 +26,7 @@ package tools
 // Build tags: goolm,stdjson (CGO_ENABLED=0).
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -120,7 +121,7 @@ func TestBashSubstitutionGuard_BenignSubstitutionsAllowed(t *testing.T) {
 			}
 			// Full baseline: proves no OTHER deny pattern picks up the slack
 			// and re-blocks the command we just unblocked.
-			if msg := tool.guardCommand(tc.cmd, t.TempDir()); msg != "" {
+			if msg := tool.guardCommand(context.Background(), tc.cmd, t.TempDir()); msg != "" {
 				t.Errorf("BENIGN-SUBSTITUTION REGRESSION: full guardCommand blocked benign command %q: %s (%s)",
 					tc.cmd, msg, tc.why)
 			}
@@ -252,7 +253,7 @@ func TestBashSubstitutionGuard_DangerousSubstitutionsBlocked(t *testing.T) {
 
 	for _, tc := range dangerous {
 		t.Run(tc.name, func(t *testing.T) {
-			msg := tool.guardCommand(tc.cmd, t.TempDir())
+			msg := tool.guardCommand(context.Background(), tc.cmd, t.TempDir())
 			if msg == "" {
 				t.Errorf("SECURITY REGRESSION: guardCommand ALLOWED %q — %s", tc.cmd, tc.why)
 				return
@@ -291,7 +292,7 @@ func TestBashSubstitutionGuard_WrapperShapesBlockedByR3(t *testing.T) {
 	}
 	for _, cmd := range wrappers {
 		t.Run(cmd, func(t *testing.T) {
-			if msg := tool.guardCommand(cmd, t.TempDir()); msg == "" {
+			if msg := tool.guardCommand(context.Background(), cmd, t.TempDir()); msg == "" {
 				t.Errorf("SECURITY REGRESSION: guardCommand ALLOWED wrapper shape %q", cmd)
 			}
 		})
@@ -345,7 +346,7 @@ func TestBashSubstitutionGuard_ParserDifferentials(t *testing.T) {
 
 	for _, tc := range differentials {
 		t.Run(tc.name, func(t *testing.T) {
-			if msg := tool.guardCommand(tc.cmd, t.TempDir()); msg == "" {
+			if msg := tool.guardCommand(context.Background(), tc.cmd, t.TempDir()); msg == "" {
 				t.Errorf("SECURITY REGRESSION: guardCommand ALLOWED %q — bash executes this. %s",
 					tc.cmd, tc.why)
 			}

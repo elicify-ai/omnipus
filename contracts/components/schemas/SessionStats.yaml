@@ -21,7 +21,19 @@ properties:
   tokens_total:
     type: integer
     minimum: 0
-    description: Sum of tokens_in and tokens_out.
+    description: >
+      Authoritative total tokens for this session, as reported by the
+      provider. Once the provider's input/output split has been recorded
+      (tokens_in and/or tokens_out non-zero from a split-aware entry),
+      tokens_total = tokens_in + tokens_out + tokens_cache_read +
+      tokens_cache_write — NOT just tokens_in + tokens_out, since cache
+      tokens are an additional component, not folded into either. Legacy
+      entries written before that split existed instead book their entire
+      turn into tokens_out with tokens_in left at 0, so a session mixing
+      legacy and split-aware entries can have tokens_in + tokens_out +
+      cache fall short of (or, for a legacy entry whose cache was tracked
+      separately, exceed) tokens_total for the legacy portion. Always read
+      tokens_total directly rather than deriving it from the other fields.
     example: 1650
   cost:
     type: number

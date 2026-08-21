@@ -189,3 +189,87 @@ func TestHydrateAgentHistoryFromTranscript_EmptyTranscriptIsNoOp(t *testing.T) {
 		t.Fatalf("HydrateAgentHistoryFromTranscript on empty transcript should not error: %v", err)
 	}
 }
+
+// TestHydrateAgentHistoryFromTranscript_BlankOwnerFailsLoud is the regression
+// guard for the removal of the "main" sentinel's silent fallback. Before the
+// sentinel was retired, HydrateAgentHistoryFromTranscript defaulted
+// sessionOwner to "main" whenever a transcript entry had a blank AgentID and
+// session metadata itself carried no ActiveAgentID/AgentID — so those
+// entries hydrated (or silently vanished, since "main" was never really a
+// resolvable registry member either) with zero error and zero log signal.
+// That was a genuine silent-history-loss path: perAgent[""] would never
+// match a real registry.GetAgent lookup, so the affected messages simply
+// disappeared from the next turn's context with nothing to indicate why.
+//
+// The general fallback remains: an entry with no AgentID of its own is
+// attributed to the SESSION's owner, which is what lets a session whose
+// original agent is gone still hydrate. What was removed is the
+// agent-of-last-resort behind it — naming a specific agent when metadata
+// resolves nothing would reattribute one agent's history to another.
+//
+// So when neither the entry nor the session names an owner, the entry is
+// simply skipped: not hydrated under a blank owner, and not turned into a
+// hard failure of the whole session either. This test pins that the call
+// SUCCEEDS and that the unattributable entry reaches no agent.
+func TestHydrateAgentHistoryFromTranscript_UnownedEntryIsSkipped(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	cfg := &config.Config{}
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
+	t.Cleanup(func() { al.Close() })
+
+	store, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	if err != nil {
+		t.Fatalf("NewUnifiedStore: %v", err)
+	}
+	al.sharedSessionStore = store
+
+	// Deliberately create the session with an EMPTY creatingAgentID, so its
+	// meta carries neither ActiveAgentID nor AgentID — session metadata alone
+	// cannot resolve an owner. This mirrors a real (if rare) production
+	// gap: a session created via a path that never stamped an owning agent.
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if meta.ActiveAgentID != "" || meta.AgentID != "" {
+		t.Fatalf("test setup invariant broken: meta must carry no owner, got ActiveAgentID=%q AgentID=%q",
+			meta.ActiveAgentID, meta.AgentID)
+	}
+
+	// A transcript entry with a blank AgentID — e.g. assistant text written
+	// by the wsStreamer fallback before a handoff ever ran.
+	now := time.Now().UTC()
+	if err := store.AppendTranscript(meta.ID, session.TranscriptEntry{
+		Role:      "assistant",
+		Content:   "orphaned reply with no owning agent",
+		AgentID:   "",
+		Timestamp: now,
+	}); err != nil {
+		t.Fatalf("AppendTranscript: %v", err)
+	}
+
+	if err := al.HydrateAgentHistoryFromTranscript(meta.ID); err != nil {
+		t.Fatalf("an unattributable entry must be skipped, not fail the session: %v", err)
+	}
+
+	// The entry belonged to nobody, so it must have reached nobody. Crucially
+	// it must not have landed under a blank key or a guessed identity: the
+	// point of removing the sentinel is that no agent inherits another
+	// agent's history by default.
+	reg := al.GetRegistry()
+	for _, id := range reg.ListAgentIDs() {
+		ag, ok := reg.GetAgent(id)
+		if !ok || ag == nil || ag.Sessions == nil {
+			continue
+		}
+		key := fmt.Sprintf("agent:%s:session:%s", ag.ID, meta.ID)
+		for _, m := range ag.Sessions.GetHistory(key) {
+			if strings.Contains(m.Content, "orphaned reply with no owning agent") {
+				t.Fatalf("agent %q received an entry that named no owner", ag.ID)
+			}
+		}
+	}
+}

@@ -36,7 +36,6 @@ func TestEventForwarder_ErrorFrame_PrefersPayloadCodeAndMessage(t *testing.T) {
 	cases := []struct {
 		name        string
 		payload     agent.ErrorPayload
-		wantFrame   bool
 		wantMessage string
 		wantCode    string
 	}{
@@ -48,7 +47,6 @@ func TestEventForwarder_ErrorFrame_PrefersPayloadCodeAndMessage(t *testing.T) {
 				Message: curated,
 				ChatID:  "chat-1",
 			},
-			wantFrame:   true,
 			wantMessage: curated,
 			wantCode:    string(agent.CodeUnknown),
 		},
@@ -60,19 +58,40 @@ func TestEventForwarder_ErrorFrame_PrefersPayloadCodeAndMessage(t *testing.T) {
 				ProviderError: &agent.ProviderError{Status: 500, Body: "internal server error"},
 				ChatID:        "chat-1",
 			},
-			wantFrame:   true,
 			wantMessage: agent.UserMessageForCode(agent.CodeNetwork),
 			wantCode:    string(agent.CodeNetwork),
 		},
 		{
-			name: "Code=rate_limited is suppressed — RateLimitFrame is authoritative",
+			// SUPERSEDED CASE — read before "restoring" it.
+			//
+			// This case previously asserted the OPPOSITE (wantFrame: false,
+			// "Code=rate_limited is suppressed — RateLimitFrame is
+			// authoritative") and checked only assert.Empty(t, ch): it pinned
+			// the suppression as correct and asserted nothing about a
+			// replacement frame ever arriving. That made it a test that
+			// encoded the bug — a provider's HTTP 429 emits exactly this
+			// payload from runTurn's LLM-error block, and the suppression
+			// deleted the user's only signal, producing a turn that opened,
+			// said nothing, and closed reporting success.
+			//
+			// The "RateLimitFrame is authoritative" premise is false for this
+			// payload: EventKindRateLimit has exactly one producer
+			// (recordRateLimitDenial), reachable only from Omnipus's own
+			// internal SEC-26 limiter, which never runs for an upstream
+			// refusal. See eventForwarder's EventKindError arm for the full
+			// producer argument, and
+			// TestEventForwarder_InternalRateLimitDenial_EmitsExactlyOneFrame
+			// for the proof that the internal limiter still emits exactly one
+			// frame.
+			name: "Code=rate_limited is FORWARDED — an upstream refusal must reach the user",
 			payload: agent.ErrorPayload{
 				Stage:   "runTurn",
 				Code:    string(agent.CodeRateLimited),
 				Message: "rate limit: too many requests (retry after 5s)",
 				ChatID:  "chat-1",
 			},
-			wantFrame: false,
+			wantMessage: "rate limit: too many requests (retry after 5s)",
+			wantCode:    string(agent.CodeRateLimited),
 		},
 	}
 
@@ -87,11 +106,6 @@ func TestEventForwarder_ErrorFrame_PrefersPayloadCodeAndMessage(t *testing.T) {
 			bus.Emit(agent.Event{Kind: agent.EventKindError, Payload: tc.payload})
 			bus.Close()
 			<-done
-
-			if !tc.wantFrame {
-				assert.Empty(t, ch, "rate_limited errors must not emit a duplicate ErrorFrame")
-				return
-			}
 
 			require.Len(t, ch, 1)
 			raw := <-ch

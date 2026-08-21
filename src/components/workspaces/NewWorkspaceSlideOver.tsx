@@ -30,11 +30,10 @@ interface NewWorkspaceSlideOverProps {
 interface FormState {
   name: string
   description: string
-  repository: string
   core_team: string[]
 }
 
-const INITIAL_FORM: FormState = { name: '', description: '', repository: '', core_team: [] }
+const INITIAL_FORM: FormState = { name: '', description: '', core_team: [] }
 
 export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideOverProps) {
   const queryClient = useQueryClient()
@@ -53,7 +52,6 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
       createWorkspace({
         name: form.name.trim(),
         description: form.description.trim() || undefined,
-        repository: form.repository.trim() || undefined,
         core_team: form.core_team.length > 0 ? form.core_team : undefined,
       }),
     onSuccess: () => {
@@ -78,9 +76,6 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
     }
     if (form.description.length > 2000) {
       errors.description = 'Description must be 2000 characters or fewer'
-    }
-    if (form.repository.length > 500) {
-      errors.repository = 'Repository URL must be 500 characters or fewer'
     }
     setFieldErrors(errors)
     return Object.keys(errors).length === 0
@@ -150,27 +145,6 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
             {fieldErrors.description && (
               <p id="new-workspace-desc-error" className="text-xs text-[var(--color-error)]">
                 {fieldErrors.description}
-              </p>
-            )}
-          </div>
-
-          {/* Repository */}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="new-workspace-repo" className="text-[var(--color-secondary)]">
-              Repository
-            </Label>
-            <Input
-              id="new-workspace-repo"
-              value={form.repository}
-              onChange={(e) => setForm((s) => ({ ...s, repository: e.target.value }))}
-              placeholder="https://github.com/..."
-              maxLength={500}
-              aria-invalid={!!fieldErrors.repository}
-              aria-describedby={fieldErrors.repository ? 'new-workspace-repo-error' : undefined}
-            />
-            {fieldErrors.repository && (
-              <p id="new-workspace-repo-error" className="text-xs text-[var(--color-error)]">
-                {fieldErrors.repository}
               </p>
             )}
           </div>

@@ -176,7 +176,26 @@ func TestIsSafeSlug(t *testing.T) {
 	assert.NoError(t, utils.ValidateSkillIdentifier("github"))
 	assert.NoError(t, utils.ValidateSkillIdentifier("docker-compose"))
 	assert.Error(t, utils.ValidateSkillIdentifier(""))
+	assert.Error(t, utils.ValidateSkillIdentifier("."))
 	assert.Error(t, utils.ValidateSkillIdentifier("../etc/passwd"))
 	assert.Error(t, utils.ValidateSkillIdentifier("path/traversal"))
 	assert.Error(t, utils.ValidateSkillIdentifier("path\\traversal"))
+}
+
+// TestSkillIdentifierPattern_MatchesNamePattern pins the two skill-name rules
+// to one shape. pkg/skills owns namePattern (loader.go), which SkillWriter,
+// the loader and the manifest validator all enforce; pkg/utils owns
+// SkillIdentifierPattern, which install_skill and the ClawHub registry enforce.
+// pkg/skills imports pkg/utils, so the constant cannot be shared in that
+// direction without an import cycle — this test is the substitute.
+//
+// It exists because a weaker second validator standing beside a stronger one is
+// exactly how a lone "." reached os.RemoveAll: the authoring path had already
+// rejected it for years while the install path had not.
+func TestSkillIdentifierPattern_MatchesNamePattern(t *testing.T) {
+	assert.Equal(t, namePattern.String(), utils.SkillIdentifierPattern,
+		"the skill identifier rule has drifted between pkg/skills and pkg/utils — "+
+			"two validators of different strictness on the same value is the defect this pins")
+	assert.Equal(t, MaxNameLength, utils.MaxSkillIdentifierLength,
+		"the skill identifier length bound has drifted between pkg/skills and pkg/utils")
 }

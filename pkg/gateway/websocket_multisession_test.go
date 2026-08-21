@@ -85,6 +85,16 @@ func newStreamingTestWSHandler(t *testing.T) (*WSHandler, *bus.MessageBus, *agen
 				ModelName: "streaming-test-model",
 				MaxTokens: 4096,
 			},
+			// A real, chat-target agent ("mia") so the default-agent
+			// resolution every test in this file relies on (every message
+			// frame below omits agent_id) has something to resolve to. The
+			// retired "main" sentinel used to be registered implicitly
+			// regardless of cfg (pkg/agent/registry.go's old always-on
+			// fallback); with it gone, pkg/gateway/websocket.go's
+			// handleChatMessage now rejects rather than silently persisting
+			// an empty owner when no agent_id is supplied and no default can
+			// be resolved.
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

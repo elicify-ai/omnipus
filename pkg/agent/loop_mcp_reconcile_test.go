@@ -272,21 +272,25 @@ func TestReconcileMCP_StubServerLifecycle(t *testing.T) {
 		t.Fatalf("central MCP registry has %d tools after connect, want %d", got, stubToolCount)
 	}
 
-	mainAgent, ok := al.GetRegistry().GetAgent(DefaultAgentID)
+	// mia is minimalTestConfig's seeded default agent (coreagent.SeedConfig
+	// stamps her as config.Agents.Defaults.DefaultAgentID on fresh install).
+	// There is no "main" sentinel to fall back to anymore — every agent
+	// checked here is a real, registered, seeded core agent.
+	miaAgent, ok := al.GetRegistry().GetAgent("mia")
 	if !ok {
-		t.Fatal("default agent not found in registry")
+		t.Fatal("mia agent not found in registry")
 	}
-	if got := countToolsWithPrefix(mainAgent.Tools.List(), "mcp_stub-server_"); got != stubToolCount {
+	if got := countToolsWithPrefix(miaAgent.Tools.List(), "mcp_stub-server_"); got != stubToolCount {
 		t.Errorf(
-			"default agent has %d mcp_stub-server_* tools, want %d; got %v",
+			"mia agent has %d mcp_stub-server_* tools, want %d; got %v",
 			got,
 			stubToolCount,
-			mainAgent.Tools.List(),
+			miaAgent.Tools.List(),
 		)
 	}
 
-	// A non-default agent (jim, core roster) must get the same tools — the
-	// register loop iterates ALL agents, not just the default one.
+	// A different core agent (jim) must get the same tools — the register
+	// loop iterates ALL agents, not just one.
 	jimAgent, ok := al.GetRegistry().GetAgent("jim")
 	if !ok {
 		t.Fatal("jim agent not found in registry")
@@ -312,7 +316,7 @@ func TestReconcileMCP_StubServerLifecycle(t *testing.T) {
 	if got := centralMCP.Count(); got != 0 {
 		t.Errorf("central MCP registry still has %d tools after disable, want 0", got)
 	}
-	if hasToolWithPrefix(mainAgent.Tools.List(), "mcp_stub-server_") {
+	if hasToolWithPrefix(miaAgent.Tools.List(), "mcp_stub-server_") {
 		t.Error("default agent still has a registered mcp_stub-server_* tool after disable")
 	}
 	if hasToolWithPrefix(jimAgent.Tools.List(), "mcp_stub-server_") {
@@ -344,7 +348,7 @@ func TestReconcileMCP_StubServerLifecycle(t *testing.T) {
 	if got := centralMCP.Count(); got != 0 {
 		t.Errorf("central MCP registry still has %d tools after global kill-switch, want 0", got)
 	}
-	if hasToolWithPrefix(mainAgent.Tools.List(), "mcp_stub-server_") {
+	if hasToolWithPrefix(miaAgent.Tools.List(), "mcp_stub-server_") {
 		t.Error("default agent still has a registered mcp_stub-server_* tool after global kill-switch")
 	}
 }

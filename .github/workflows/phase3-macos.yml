@@ -122,26 +122,35 @@ jobs:
           done
           echo "::error::mac gateway did not become ready"; cat gateway.log >&2; kill "$PID" 2>/dev/null || true; exit 1
 
-      - name: Seatbelt profile syntax (sandbox-exec -p) — AC-6 precondition
-        # The backend is DRAFT/unwired. Validate the runner can apply a
-        # Seatbelt profile (the precondition for AC-6's future activation)
-        # by feeding sandbox-exec a well-formed profile in parse-only mode.
+      - name: Seatbelt sandbox suite (real children) — AC-6
+        # AC-6 is IMPLEMENTED, not a precondition any more: sandbox_darwin.go
+        # selects the Seatbelt backend and applyPlatformHardening wraps every
+        # hardened-exec child.
+        #
+        # This step exists because the evidence for that is darwin-gated:
+        # pkg/sandbox/seatbelt_integration_darwin_test.go and
+        # seatbelt_adversarial_darwin_test.go spawn REAL children under REAL
+        # profiles, and Linux CI cannot even compile them. Without this step
+        # every claim about kernel enforcement — including the adversarial
+        # escape attempts — is verified only on a developer laptop.
+        #
+        # It deliberately does NOT tolerate failure. The previous version of
+        # this step fed sandbox-exec a hardcoded sample profile and downgraded
+        # its own failure to a ::warning::, which cannot detect a regression.
         shell: bash
         run: |
-          printf '(version 1)\n(deny default)\n(allow process-exec* (subpath "/usr/bin"))\n(allow file-read* (subpath "/usr/lib"))\n' > /tmp/sample.sb
-          # -f = profile file; -p expects an inline profile string. This
-          # step is a *precondition* check for AC-6 activation — the real
-          # Seatbelt activation (sandbox-exec wrapping a child) is deferred
-          # to a real mac host per ADR-052 phase-3 goal §7. On the GH
-          # macos-latest image, sandbox-exec can reject this profile (exit
-          # 64 "Exactly one of -f, -n, -p must be specified") for an
-          # environment-specific reason. Tolerate the failure so the mac
-          # CI reaches terminal evidence; record it as a ::warning::.
-          if sandbox-exec -f /tmp/sample.sb; then
-            echo "sandbox-exec accepts a rendered Seatbelt profile ✓"
-          else
-            echo "::warning::sandbox-exec -f rejected the sample profile (exit $?) — likely a macos-latest CI image quirk; the Seatbelt renderer is unit-tested on Linux, full AC-6 activation is deferred to a real mac host (ADR-052 phase-3 goal §7)."
-          fi
+          export CGO_ENABLED=0
+          go test -tags goolm,stdjson -count=1 ./pkg/sandbox/
+
+      - name: Seatbelt gateway wiring (permissive/enforce) — AC-6
+        # Covers pkg/gateway/sandbox_apply.go's darwin branch: that enforce
+        # installs a profile, and that permissive does NOT (Seatbelt has no
+        # audit-only mode, so applying one under permissive would enforce
+        # while reporting that it does not).
+        shell: bash
+        run: |
+          export CGO_ENABLED=0
+          go test -tags goolm,stdjson -count=1 -p 1 -run 'TestApplySandbox_Darwin' ./pkg/gateway/
 
       - name: launchd plist validity — AC-7
         shell: bash

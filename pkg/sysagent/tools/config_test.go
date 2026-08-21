@@ -200,20 +200,32 @@ func TestConfigSet_RequiresRestartFlag(t *testing.T) {
 // set requires_restart=true.
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.13
+// The key under test used to be "heartbeat.enabled". It was a bad choice, and
+// the reason is the defect this file now pins elsewhere: there is no Heartbeat
+// field on config.Config at all — "heartbeat." is listed in
+// knownConfigPrefixes but names no section — so that write was dropped by
+// json.Unmarshal and set_config reported success anyway. The test passed
+// because it only ever looked at requires_restart. devices.enabled is a real
+// bool field (config.DevicesConfig.Enabled) that is likewise not restart-gated,
+// so it tests requires_restart against a write that actually happens.
+// See TestConfigSet_PhantomSectionRejected for the heartbeat case itself.
 func TestConfigSet_NoRestartForNonRestartKey(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, cfg := newTestDeps()
+	cfg.Devices.Enabled = false
 
-	// heartbeat.enabled is not in the restart-required list.
 	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
-		"key":   "heartbeat.enabled",
-		"value": false,
+		"key":   "devices.enabled",
+		"value": true,
 	})
 	if result.IsError {
-		t.Fatalf("set heartbeat.enabled failed: %s", result.ForLLM)
+		t.Fatalf("set devices.enabled failed: %s", result.ForLLM)
 	}
 	m := parseSuccess(t, result.ForLLM)
 	if m["requires_restart"] == true {
-		t.Errorf("requires_restart = true for heartbeat.enabled, expected false")
+		t.Errorf("requires_restart = true for devices.enabled, expected false")
+	}
+	if !cfg.Devices.Enabled {
+		t.Errorf("cfg.Devices.Enabled = false — the write this test reports on did not happen")
 	}
 }
 

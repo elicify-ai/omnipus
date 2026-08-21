@@ -57,12 +57,18 @@ import (
 // discipline requires ("coordinate by contract, not by editing each other's
 // files").
 //
-// The stats-accumulation block below intentionally mirrors
-// UnifiedStore.AppendTranscript's byte-for-byte. U5 has since landed FR-002
-// (unified.go's AppendTranscript now routes its own stats mutation through
-// u6MarkStatsDirtyLocked, the FR-061 in-memory-only throttle), and this
-// method converges on the exact same call per FR-001's own text — "a name,
-// not a second behavior" (14-reviewer fix wave finding #4).
+// The stats-accumulation block below calls the SAME accumulateEntryStats
+// helper (entry_stats.go) UnifiedStore.AppendTranscript calls — it used to
+// carry its own byte-for-byte copy of that logic, a deliberate, temporary
+// concession to this wave's "coordinate by contract, not by editing each
+// other's files" discipline (each unit owned a different file and this one
+// was told not to touch unified.go). That constraint ended with the wave;
+// the duplication was extracted into a single shared implementation once
+// the concurrent-edit risk it existed to avoid was gone. U5 has since landed
+// FR-002 (unified.go's AppendTranscript now routes its own stats mutation
+// through u6MarkStatsDirtyLocked, the FR-061 in-memory-only throttle), and
+// this method converges on the exact same call per FR-001's own text — "a
+// name, not a second behavior" (14-reviewer fix wave finding #4).
 //
 // THE PROBLEM THAT CONVERGENCE CLOSES. Before this fix, this method still
 // called writeMetaLocked — which, to decide which of the four on-disk field
@@ -116,31 +122,10 @@ func (us *UnifiedStore) AppendTranscriptStrict(sessionID string, entry Transcrip
 		return fmt.Errorf("unified_store: append transcript: %w", err)
 	}
 
-	// Stats + UpdatedAt bookkeeping — mirrors AppendTranscript exactly; see
-	// this method's doc comment for why it is duplicated rather than shared.
-	if entry.Role == "assistant" {
-		meta.Stats.TokensOut += entry.Tokens
-		meta.Stats.TokensCacheRead += entry.CacheReadTokens
-		meta.Stats.TokensCacheWrite += entry.CacheWriteTokens
-		if entry.Model != "" {
-			if meta.Stats.ByModel == nil {
-				meta.Stats.ByModel = make(map[string]ModelTokens)
-			}
-			mt := meta.Stats.ByModel[entry.Model]
-			mt.CacheRead += entry.CacheReadTokens
-			mt.CacheWrite += entry.CacheWriteTokens
-			mt.Total += entry.Tokens
-			meta.Stats.ByModel[entry.Model] = mt
-		}
-	} else {
-		meta.Stats.TokensIn += entry.Tokens
-	}
-	meta.Stats.TokensTotal += entry.Tokens
-	meta.Stats.Cost += entry.Cost
-	meta.Stats.ToolCalls += len(entry.ToolCalls)
-	if entry.Type == "" || entry.Type == EntryTypeMessage {
-		meta.Stats.MessageCount++
-	}
+	// Stats + UpdatedAt bookkeeping — calls the same accumulateEntryStats
+	// helper AppendTranscript uses (entry_stats.go); see this method's doc
+	// comment above for the extraction history.
+	accumulateEntryStats(&meta.Stats, entry)
 	meta.UpdatedAt = entry.Timestamp
 
 	// FR-061 throttle (see this method's doc comment for the convergence

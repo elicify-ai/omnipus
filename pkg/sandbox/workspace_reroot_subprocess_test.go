@@ -145,7 +145,7 @@ func runWorkspaceRerootChild() {
 	// $OMNIPUS_HOME (plus the read-only system paths). workspaces/<id>/ is a
 	// child of home, so it inherits the RWX grant; nothing widens the sandbox
 	// to the re-rooted dir specifically.
-	policy := sandbox.DefaultPolicy(home, nil, nil, nil)
+	policy := sandbox.DefaultPolicy(home, nil, nil, nil, nil)
 	if err := backend.Apply(policy); err != nil {
 		// ABI mismatch / kernel rejection → skip, not failure.
 		fmt.Fprintf(os.Stderr, "Apply failed (treating as skip): %v\n", err)

@@ -1482,7 +1482,22 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 		ctx, m,
 		m.bus.OutboundChan(),
 		func(msg bus.OutboundMessage) string { return msg.Channel },
-		m.enqueueOutbound,
+		func(ctx context.Context, w *channelWorker, msg bus.OutboundMessage) bool {
+			// ADR-065 FR-7: the last common point before the wire. Only
+			// agent-originated sends are in scope; see
+			// allowAgentOriginatedSend for why a second check exists.
+			// Returning false here would TERMINATE the dispatcher: dispatchLoop
+			// treats this as its continuation signal (`if !safeEnqueue(...) {
+			// return }`), and enqueueOutbound returns false only for
+			// ctx.Done(). An earlier version of this hook returned false on a
+			// refusal, which would have killed outbound messaging on EVERY
+			// channel, permanently, on the first refused send. Skip the
+			// message; keep the loop alive.
+			if !allowAgentOriginatedSend(m.configSnapshot(), msg) {
+				return true
+			}
+			return m.enqueueOutbound(ctx, w, msg)
+		},
 		"Outbound dispatcher started",
 		"Outbound dispatcher stopped",
 		"Unknown channel for outbound message",

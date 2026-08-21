@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -537,4 +538,30 @@ func TestGetAtPath_MissingSegment(t *testing.T) {
 
 	val2 := getAtPath(m, "sandbox.mode")
 	assert.Nil(t, val2, "missing root segment must return nil")
+}
+
+// TestRestartGatedKeys_NoChannelKeys_GetAtPathSplitsBlindly is a trip-wire, not
+// a behavioural test. getAtPath walks a dotted config path with a plain
+// strings.SplitN(dotted, ".", 2), which is correct for every key currently in
+// RestartGatedKeys and wrong for any "channels.*" key: a channel instance id is
+// itself built as <type>.<slug> (rest.go's createChannelInstance), so
+// "channels.telegram.one.enabled" would be walked as channel "telegram", field
+// "one" — a lookup that silently misses and reports no drift, meaning the
+// operator is never told a restart is needed.
+//
+// pkg/sysagent/tools/config.go solved this for the settings tool by coalescing
+// the instance key against cfg.Channels before splitting. getAtPath was left
+// alone deliberately: it is unreachable for channel keys today, and an
+// unreachable fix is untestable dead weight. This test fails the moment that
+// stops being true, so whoever adds the first channels.* gated key is told to
+// teach getAtPath the same grammar rather than discovering the miss in the
+// field.
+func TestRestartGatedKeys_NoChannelKeys_GetAtPathSplitsBlindly(t *testing.T) {
+	for _, k := range RestartGatedKeys {
+		if strings.HasPrefix(string(k), "channels.") {
+			t.Fatalf("RestartGatedKeys contains %q: getAtPath splits dotted paths blindly and "+
+				"cannot address a <type>.<slug> channel instance id. Teach getAtPath the instance-key "+
+				"grammar (see pkg/sysagent/tools/config.go::configKeySegments) before gating a channels.* key.", k)
+		}
+	}
 }

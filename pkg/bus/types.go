@@ -128,12 +128,41 @@ type OutboundMessage struct {
 	// Populated by the agent loop from the originating turn so channels
 	// (and the SPA) can route the frame to the right session bucket.
 	SessionID string `json:"session_id,omitempty"`
-	// InstanceID is the channel-instance key this message is bound for
-	// (ADR-019 FR-4b / NFR-1). Optional; channels that know their instance
-	// set it directly instead of relying on Channel alone.
-	InstanceID       string `json:"instance_id,omitempty"`
+	// AgentID is the acting agent (tools.ToolAgentID(ctx)) for an
+	// AGENT-ORIGINATED send only — i.e. one that reached the bus via the
+	// send_message tool (ADR-065 / channel-agent-ownership-spec.md FR-6).
+	// Left empty by the ~19 system producers (streamed replies, notifyDrop
+	// backpressure, schedule delivery, device notifications, ...): they are
+	// not model-addressable and are exempt from the FR-6 dispatch-time
+	// ownership re-check by definition of this field being unset. Do not
+	// set this for a system-originated send.
+	AgentID string `json:"agent_id,omitempty"`
+	// WorkspaceID is the turn's workspace (tools.ToolWorkspaceID(ctx)) for
+	// an AGENT-ORIGINATED send only, paired with AgentID above — together
+	// they are the (workspace, agent) ownership pair FR-6's dispatch-time
+	// check validates against the target instance's
+	// ChannelInstanceConfig.WorkspaceID + Identity. Left empty by the same
+	// system producers that leave AgentID empty.
+	WorkspaceID      string `json:"workspace_id,omitempty"`
 	Content          string `json:"content"`
 	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
+
+	// OwnershipChecked records that the send tool already applied ADR-065's
+	// ownership rule to this message. In-process only — never on the wire.
+	//
+	// It exists because the tool layer decides with MORE information than
+	// dispatch has. send_message knows the turn's own conversation and lets an
+	// agent reply into it even when the instance belongs to someone else —
+	// which is exactly what keeps hand-off and delegation working, since a
+	// delegate answers inside its parent's conversation under its own
+	// identity. Dispatch sees only (instance, agent, workspace), so re-deriving
+	// the same verdict there produces FALSE REFUSALS on ordinary delegation.
+	//
+	// So dispatch does not re-decide; it checks that a decision was made. A
+	// message carrying an AgentID but not this flag reached the bus without
+	// passing the tool's check, which is precisely the "someone adds a second
+	// route later" regression FR-7 exists to catch.
+	OwnershipChecked bool `json:"-"`
 }
 
 // MediaPart describes a single media attachment to send.
@@ -147,9 +176,27 @@ type MediaPart struct {
 
 // OutboundMediaMessage carries media attachments from Agent to channels via the bus.
 type OutboundMediaMessage struct {
-	Channel     string      `json:"channel"`
-	ChatID      string      `json:"chat_id"`
-	SessionID   string      `json:"session_id,omitempty"`
-	WorkspaceID string      `json:"workspace_id,omitempty"`
-	Parts       []MediaPart `json:"parts"`
+	Channel   string `json:"channel"`
+	ChatID    string `json:"chat_id"`
+	SessionID string `json:"session_id,omitempty"`
+	// WorkspaceID was already carried here pre-ADR-065 (FIX 1, see
+	// pkg/agent/media_workspace_id_test.go) so channel media sends resolve
+	// refs via the turn's actual workspace rather than the private/global
+	// room. ADR-065 / FR-6 gives it a second job for AGENT-ORIGINATED
+	// sends: paired with AgentID below, it is the same (workspace, agent)
+	// ownership pair OutboundMessage carries, so send_file's dispatch-time
+	// audit trail is consistent with send_message's rather than a silent
+	// gap in observability. Still left empty for any non-agent-originated
+	// media send.
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	// AgentID is the acting agent (tools.ToolAgentID(ctx)) for an
+	// AGENT-ORIGINATED media send only, mirroring OutboundMessage.AgentID
+	// above. Today's sole producer (pkg/agent/loop.go's send_file
+	// tool-media delivery block) is always agent-originated, so this is
+	// always set in practice — the "empty = system-originated, exempt from
+	// the FR-6 ownership re-check" convention is documented here anyway so
+	// a future non-agent producer (there is none today) fails safe rather
+	// than needing this comment rewritten first.
+	AgentID string      `json:"agent_id,omitempty"`
+	Parts   []MediaPart `json:"parts"`
 }

@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -402,24 +403,33 @@ func (r *RouteResolver) isSkippedAgentID(id string) bool {
 // settings-singleton override config.Agents.Defaults.DefaultAgentID), but the
 // two are independent resolvers over different data and are NOT guaranteed
 // to produce the same agent ID:
-//   - This function's Priority 2 fallback returns the FIRST chat-target
-//     agent in cfg.Agents.List's SLICE ORDER (not sorted), and only falls
-//     through to the literal DefaultAgentID ("main") constant when the list
-//     has no chat-target agent at all.
-//   - GetDefaultAgent's registry-map equivalent always has the implicit
-//     "main" sentinel available as its own Priority 2, ahead of a
-//     lexicographically-sorted last resort.
+//   - Both ladders now apply the SAME rule at every rung: Priority 1 accepts
+//     the configured override only when it names a chat target (not a worker,
+//     not a System Agent); the last resort is the lexicographically-first
+//     chat-target agent, sorted on the NORMALIZED id; and both yield nothing
+//     — empty here, nil there — when no legitimate chat target exists.
+//
+// They agree with or without an override. Before ADR-064 §7 they did not: this
+// one took slice order while the registry sorted, and the registry accepted a
+// System Agent where this one skipped it. That divergence is why an unset
+// override was a release blocker in July 2026.
 //
 // Concretely: with no override configured and at least one chat-target
 // custom/core agent in cfg.Agents.List, this function resolves to that agent
-// (e.g. Mia) while GetDefaultAgent resolves to "main" for the same config —
-// intentional, since the two serve different callers (this one the channel
-// binding cascade; GetDefaultAgent registry-level lookups with no routing
-// input), not a bug to reconcile here.
+// The two serve different callers — this one the channel binding cascade,
+// GetDefaultAgent registry-level lookups with no routing input — but they must
+// answer "who is the default agent?" identically, and
+// TestDefaultAgentLadders_AgreeWithoutAnOverride pins that.
 func (r *RouteResolver) resolveDefaultAgentID() string {
 	agents := r.cfg.Agents.List
 	if len(agents) == 0 {
-		return DefaultAgentID
+		// No agents at all. There is no sentinel to fall back on any more, so
+		// say so instead of naming an agent that does not exist. Callers treat
+		// an empty id as "no route" and drop the message loudly, which is the
+		// honest outcome for a config with nobody in it.
+		logger.WarnCF("routing", "No agents are configured; inbound message has no route",
+			map[string]any{})
+		return ""
 	}
 	// Priority 1: the configured override, when it names a chat-target agent
 	// that is actually registered. R3 (ADR-054 §0): if the override names an
@@ -441,20 +451,48 @@ func (r *RouteResolver) resolveDefaultAgentID() string {
 	// inbound messages are never silently dropped. Workers are skipped —
 	// they must never be resolved as the default. Log a warning so operators can
 	// detect misconfigured setups.
+	// Last resort: the lexicographically-FIRST chat-target agent.
+	//
+	// This used to take the first chat target in cfg.Agents.List's slice order
+	// — whatever order the config file happened to list agents in — while
+	// AgentRegistry.GetDefaultAgent sorted. Two ladders answering the same
+	// question by different rules agree only by luck, and they were only ever
+	// guaranteed to agree via the configured override, which is why the
+	// override being unset was a release blocker in July 2026 (ADR-064 §7).
+	// Sorting here makes the answer independent of file layout and identical
+	// to the registry's.
+	candidates := make([]string, 0, len(agents))
 	for _, a := range agents {
-		if a.IsChatTarget() {
-			id := strings.TrimSpace(a.ID)
-			if id == "" {
-				continue
-			}
-			normalized := NormalizeAgentID(id)
-			logger.WarnCF("routing", "No default agent override resolved; falling back to first available agent",
-				map[string]any{"fallback_agent_id": normalized, "custom_agent_count": len(agents)})
-			return normalized
+		if !a.IsChatTarget() {
+			continue
+		}
+		if id := strings.TrimSpace(a.ID); id != "" {
+			candidates = append(candidates, NormalizeAgentID(id))
 		}
 	}
-	// No chat-target agents with valid IDs — last resort is the DefaultAgentID constant.
-	logger.WarnCF("routing", "No available agent found; routing falls back to built-in default",
+	if len(candidates) > 0 {
+		sort.Strings(candidates)
+		logger.WarnCF("routing", "No default agent override resolved; falling back to first available agent",
+			map[string]any{"fallback_agent_id": candidates[0], "custom_agent_count": len(agents)})
+		return candidates[0]
+	}
+	// No chat-target agents with valid IDs. The "main" sentinel used to be the
+	// last resort here; it is gone, and inventing a name for an agent that does
+	// not exist only moves the failure somewhere harder to read.
+	logger.WarnCF("routing", "No chat-target agent found; inbound message has no route",
 		map[string]any{"custom_agent_count": len(agents)})
-	return DefaultAgentID
+	return ""
+}
+
+// DefaultAgentIDForTest exposes resolveDefaultAgentID across the package
+// boundary so pkg/agent can assert that ITS default-agent ladder and this one
+// return the same answer for the same config.
+//
+// The two resolvers are the reason this seam exists: they answer the same
+// question from different data (registry map vs cfg.Agents.List), and their
+// last-resort rungs silently disagreed until ADR-064 §7 was closed. A
+// cross-package equality test is the only thing that can catch them drifting
+// apart again, and it cannot be written without reaching this function.
+func (r *RouteResolver) DefaultAgentIDForTest() string {
+	return r.resolveDefaultAgentID()
 }

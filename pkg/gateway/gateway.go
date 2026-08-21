@@ -1068,9 +1068,9 @@ func pluralSuffix(n int) string {
 //     would start silently touching the real machine's home directory on
 //     every `go test ./pkg/coreagent/...` run.
 //  2. pkg/coreagent cannot cleanly resolve a System Agent's REAL workspace
-//     path itself — that resolution (OMNIPUS_HOME lookup, the "main"-sentinel
-//     special case, ID sanitization/traversal guarding) lives in
-//     agent.ResolveAgentHome, and pkg/coreagent cannot import pkg/agent
+//     path itself — that resolution (OMNIPUS_HOME lookup, ID sanitization,
+//     traversal guarding) lives in agent.ResolveAgentHome, and
+//     pkg/coreagent cannot import pkg/agent
 //     (pkg/agent already imports pkg/coreagent — that direction would be a
 //     cycle). Reimplementing the resolution a second time in pkg/coreagent
 //     would be a second source of truth that could silently drift from the
@@ -1204,12 +1204,16 @@ func forgetRosterBaseline(homePath string) {
 //
 // This distinction matters far more than it looks: an EMPTY cfg.Agents.List
 // does not merely mean "no agent to route a message to". Verified
-// 2026-07-26 as a real privilege-escalation chain, not a theoretical one:
-// pkg/agent/registry.go's NewAgentRegistry ALWAYS registers an unrestricted
-// "main" sentinel AgentConfig with no Tools/Policies at all, and
-// pkg/tools/compositor.go's global×agent policy merge
+// 2026-07-26 as a real privilege-escalation chain, not a theoretical one.
+//
+// The chain's ENTRY POINT is now closed: NewAgentRegistry used to ALWAYS
+// register an unrestricted "main" sentinel AgentConfig carrying no
+// Tools/Policies at all, and that agent has been removed — the registry now
+// contains only agents from cfg.Agents.List, each of which the coverage gate
+// does validate. The MECHANISM it exploited is unchanged and still worth
+// guarding: pkg/tools/compositor.go's global×agent policy merge
 // (resolveEffectivePolicyWith) falls through to the GLOBAL floor for every
-// tool an agent has no per-agent policy entry for — which is every tool,
+// tool an agent has no per-agent policy entry for — which was every tool,
 // for that sentinel. pkg/config/defaults.go seeds that global floor "allow"
 // for bash, write_file, edit_file, delegate, send_email, and more. So a
 // wiped roster silently promotes ALL routed traffic (via
@@ -4173,6 +4177,12 @@ func setupAndStartServices(
 	// above, so this guards against a future refactor silently routing a
 	// nil store through, not today's happy path.
 	agentLoop.SetPlanStore(planStore)
+
+	// Channel ownership for send_message (ADR-065). Injected here, next to the
+	// plan store, for the same reason: it reads live config, so pkg/agent
+	// cannot construct it without importing pkg/gateway. Until this runs
+	// send_message refuses every target except the turn's own conversation.
+	agentLoop.SetChannelOwnership(newChannelOwnershipResolver(agentLoop.GetConfig))
 	if agentLoop.GetPlanStore() == nil {
 		return nil, fmt.Errorf("gateway: plan store wiring failed — SetPlanStore did not install a non-nil store")
 	}
@@ -5557,16 +5567,6 @@ func setupCronTool(
 		return ok
 	})
 	runner := newScheduledRunner(agentLoop, checker, msgBus, notifStore, agentLoop.GetConfig)
-	// M2: resolve the channel registry lazily — the channel manager is wired onto
-	// the agent loop after this runner is built (SetChannelManager during service
-	// start), so the runner re-fetches it at delivery time. A nil manager makes
-	// channelIsActive degrade to the legacy non-empty check.
-	runner.setChannelChecker(func() channelChecker {
-		if cm := agentLoop.GetChannelManager(); cm != nil {
-			return cm
-		}
-		return nil
-	})
 	// Best-effort per-run child-process cleanup (FR-011). The minimal per-session
 	// registry tracks PIDs the run spawns (via the tracker installed on the run
 	// context, reported by the exec/shell tools) and terminates them on

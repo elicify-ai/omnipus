@@ -69,9 +69,14 @@ import (
 // was honored) and that a turn_canceled transcript entry lands with a
 // non-empty DescendantsCancelled — the exact assertion T24a makes.
 func TestRepro_AsyncDelegateCancel_ArmsBeforeChildRegisters(t *testing.T) {
+	// No "main" sentinel to fall back to anymore — self-delegation below
+	// resolves the parent's own agent identity via the registry, so cfg
+	// must register a REAL agent for this to succeed.
+	const testAgentID = "mia"
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Provider: "mock"},
+			List:     []config.AgentConfig{{ID: testAgentID, Name: "Mia"}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -83,7 +88,7 @@ func TestRepro_AsyncDelegateCancel_ArmsBeforeChildRegisters(t *testing.T) {
 
 	store := al.GetSessionStore()
 	require.NotNil(t, store, "shared session store must be non-nil")
-	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	meta, err := store.NewSession(session.SessionTypeChat, "web", testAgentID)
 	require.NoError(t, err)
 	sessionID := meta.ID
 
@@ -115,7 +120,7 @@ func TestRepro_AsyncDelegateCancel_ArmsBeforeChildRegisters(t *testing.T) {
 		// consumption path) now match on routingSessionID, not
 		// transcriptSessionID.
 		routingSessionID: session.RoutingSessionID(sessionID),
-		agentID:          DefaultAgentID,
+		agentID:          testAgentID,
 		channel:          "web",
 		chatID:           "main",
 		depth:            0,

@@ -102,8 +102,23 @@ import (
 // that file used to carry //go:build !cgo, so it was excluded under
 // CGO_ENABLED=1 (i.e. -race) and left these references undefined. That tag has
 // since been removed package-wide; the placement is kept to avoid churn.
+//
+// testEventTimeout was 2s, which is tight for what it actually waits on:
+// TestNestedDelegate_Background's two require.Eventually calls poll for a
+// SECOND, detached background goroutine (ray's nested async delegate to
+// planner, and planner's own turn draining its scripted provider) to reach
+// observable state via the event collector / scripted-provider counter —
+// there is no cheaper synchronization primitive available since that work
+// is intentionally fire-and-forget from the test's point of view. Under
+// -race's ~10x slowdown plus CI package-parallelism contention, 2s was not
+// always enough scheduler time for that second goroutine to run at all,
+// which matches the "failed once, passed on isolated re-run" signature CI
+// reported — the poll target was already correct (real state, not a
+// sleep), only the ceiling was too tight. 10s keeps the same
+// fail-fast intent (still far below the 5s/30s per-turn timeouts these
+// tests configure) while giving the background goroutine real headroom.
 const (
-	testEventTimeout = 2 * time.Second
+	testEventTimeout = 10 * time.Second
 	testEventPoll    = 10 * time.Millisecond
 )
 
@@ -111,10 +126,20 @@ const (
 // "ray" and "planner", both policy-allowed to call "delegate", plus a
 // workspace whose delegation graph carries a single, fully-unrestricted
 // ray -> planner edge (mirroring the UAT repro's "wired ray -> planner
-// (unrestricted)" setup). "jim" is not a registered config agent — the test
-// drives the jim -> ray hop via a direct spawnSubTurn call (matching the
-// established pattern in approval_grant_delegation_test.go), so jim's own
-// identity/policy is never exercised; only ray's nested call is under test.
+// (unrestricted)" setup), plus "jim" as the outermost delegator.
+//
+// jim used to be left UNREGISTERED here, on the reasoning that the test drives
+// the jim -> ray hop via a direct spawnSubTurn call so jim's own identity is
+// never exercised. That worked only because the parent turnState's agent
+// instance came from GetDefaultAgent's last-resort rung, which would return
+// ANY registered agent — including a worker. That rung is gone (ADR-064 §7:
+// resolving a worker or System Agent as the chat default could route real user
+// messages at an agent that must never receive them), and with ray and planner
+// both being workers there was nothing left to resolve, so spawnSubTurn failed
+// with "parent turnState has no agent instance".
+//
+// A parent needs a real instance. Registering jim says that plainly instead of
+// depending on a fallback that should never have been load-bearing.
 func newNestedDelegationAgentLoop(t *testing.T) *AgentLoop {
 	t.Helper()
 
@@ -141,6 +166,12 @@ func newNestedDelegationAgentLoop(t *testing.T) *AgentLoop {
 				MaxToolIterations: 10,
 			},
 			List: []config.AgentConfig{
+				{
+					ID:    "jim",
+					Home:  tmpDir,
+					Model: &config.AgentModelConfig{Primary: "test-model"},
+					Tools: allowDelegate,
+				},
 				{
 					ID:    "ray",
 					Type:  config.AgentTypeWorker,

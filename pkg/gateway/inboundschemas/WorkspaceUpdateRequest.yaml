@@ -23,8 +23,6 @@ properties:
     items:
       type: string
     maxItems: 20
-  repository:
-    type: string
   member_configs:
     type: object
     additionalProperties:

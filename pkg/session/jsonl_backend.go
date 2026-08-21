@@ -47,21 +47,6 @@ func (b *JSONLBackend) GetHistory(key string) []providers.Message {
 	return msgs
 }
 
-func (b *JSONLBackend) GetSummary(key string) string {
-	summary, err := b.store.GetSummary(context.Background(), key)
-	if err != nil {
-		slog.Error("session: get summary", "key", key, "error", err)
-		return ""
-	}
-	return summary
-}
-
-func (b *JSONLBackend) SetSummary(key, summary string) {
-	if err := b.store.SetSummary(context.Background(), key, summary); err != nil {
-		slog.Error("session: set summary", "key", key, "error", err)
-	}
-}
-
 func (b *JSONLBackend) SetHistory(key string, history []providers.Message) {
 	if err := b.store.SetHistory(context.Background(), key, history); err != nil {
 		slog.Error("session: set history", "key", key, "error", err)

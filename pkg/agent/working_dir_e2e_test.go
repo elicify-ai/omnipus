@@ -77,6 +77,10 @@ func TestRunTurn_MultiMembership_AdvertisementMatchesEnforcement(t *testing.T) {
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
 			},
+			// "main" here is an ordinary, explicitly-registered agent id — no
+			// implicit sentinel anymore — chosen to match the pre-existing
+			// agentWorkspaceDir path and core_team JSON literals above.
+			List: []config.AgentConfig{{ID: "main", Home: agentWorkspaceDir}},
 		},
 	}
 

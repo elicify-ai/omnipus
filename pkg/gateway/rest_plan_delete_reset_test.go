@@ -40,7 +40,7 @@ import (
 func TestPlanDelete_DraftPlan_NextMember_DetachedAndReset_NotDispatched(t *testing.T) {
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 	planStore := wirePlanStore(t, api)
 
 	p := makeTestPlan(t, planStore, wsID, plan.StateDraft)
@@ -84,7 +84,7 @@ func TestPlanDelete_DraftPlan_NextMember_DetachedAndReset_NotDispatched(t *testi
 func TestPlanDelete_StoppedPlan_NextMembers_NoneBecomeRunnable(t *testing.T) {
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 	planStore := wirePlanStore(t, api)
 
 	// Attach the members while the plan is still draft, THEN Stop it — the

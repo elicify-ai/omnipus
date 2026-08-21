@@ -22,9 +22,6 @@ properties:
   message:
     type: string
     minLength: 1
-  deliver:
-    type: boolean
-    description: Default false (agent processes it).
   session_mode:
     type: string
     enum:
@@ -39,7 +36,3 @@ properties:
   enabled:
     type: boolean
     description: Default true.
-  channel:
-    type: string
-  chat_id:
-    type: string

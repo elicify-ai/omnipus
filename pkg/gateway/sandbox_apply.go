@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -236,13 +237,40 @@ WARN: SANDBOX IN PERMISSIVE MODE — NOT ENFORCED. DO NOT USE IN PRODUCTION.
 // case, the caller MUST abort boot (FR-J-004: fail closed, exit code 78,
 // never bind the HTTP listener). The returned result is still populated so
 // the caller can inspect what was attempted, but the error overrides it.
-func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
+func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err error) {
 	if opts.GetEnv == nil {
 		opts.GetEnv = os.Getenv
 	}
 	if opts.Stderr == nil {
 		opts.Stderr = os.Stderr
 	}
+
+	// ADR-062 filesystem model, resolved BEFORE any exit path so the status
+	// endpoint reports it even when the sandbox never gets applied (mode=off,
+	// a permissive downgrade, an Apply failure). An operator debugging "why can
+	// the agent read this" needs to know which model is configured, and the
+	// answer is least obvious precisely on the paths that return early.
+	//
+	// A malformed value ABORTS boot rather than falling back. The value decides
+	// whether reads are enumerated or open, and quietly resolving a typo to
+	// either hands the operator a posture they did not choose.
+	filesystemModel := sandbox.FilesystemModelConfined
+	if opts.Cfg != nil {
+		parsed, perr := sandbox.ParseFilesystemModel(
+			opts.Cfg.Sandbox.FilesystemModel, sandbox.FilesystemModelConfined)
+		if perr != nil {
+			return nil, fmt.Errorf("sandbox config: %w", perr)
+		}
+		filesystemModel = parsed
+	}
+	// Stamped once here rather than at each of the several `return result, nil`
+	// sites: a new early return added later would otherwise silently report an
+	// empty model, and an empty model reads as "confined" to every consumer.
+	defer func() {
+		if result != nil {
+			result.ApplyState.FilesystemModel = filesystemModel
+		}
+	}()
 
 	// Step 1 — Resolve mode from CLI + config. CLI > config > default.
 	// Validation of the CLI flag string was already done by cobra (see
@@ -277,11 +305,23 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	} else {
 		backend, backendName = sandbox.SelectBackend()
 	}
-	result := &SandboxApplyResult{
+	result = &SandboxApplyResult{
 		Backend:     backend,
 		BackendName: backendName,
 		Mode:        mode,
-		DisabledBy:  disabledBy,
+	}
+	// DisabledBy answers "what turned the sandbox OFF" and its own doc says
+	// it is empty for enforce and permissive. resolveMode returns the SOURCE
+	// of the mode setting, which is a different question — assigning it here
+	// unconditionally made a fully enforcing sandbox report that it had been
+	// disabled by config. Measured on a Landlock v7 runner (2026-08-19):
+	// backend=landlock-v7, landlock_enforced=true, seccomp_enforced=true,
+	// and disabled_by="config" alongside them. Nothing was disabled. The same
+	// constant also appeared on a kernel with no Landlock at all, where the
+	// real reason (kernel_too_old_or_non_linux) was known and logged — so the
+	// field carried no information in either direction.
+	if mode == sandbox.ModeOff {
+		result.DisabledBy = disabledBy
 	}
 
 	// Step 3 — Handle mode=off: no Apply, no Install. Log-only. Arm the
@@ -311,24 +351,15 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	// anything and the sandbox degrades gracefully. FR-J-014 gates seccomp
 	// strictly on LinuxBackend selection — no seccomp-alone.
 	linuxBE, isLinux := backend.(linuxApplier)
-	if !isLinux {
-		// Graceful degradation path. Not an error; operator asked for
-		// enforce/permissive but the kernel cannot provide it. Hard
-		// Constraint #4 (CLAUDE.md) requires we continue serving with
-		// application-level fallback rather than crashing.
-		slog.Warn("sandbox.degraded",
-			"reason", "kernel_too_old_or_non_linux",
-			"selected_backend", backendName,
-			"requested_mode", string(mode))
-		result.Mode = mode
-		result.ApplyState = sandbox.ApplyState{
-			Mode: mode,
-			ExtraNotes: []string{
-				"kernel does not support Landlock; falling back to application-level enforcement",
-			},
-		}
-		return result, nil
-	}
+
+	// NOTE — non-Linux backends are handled AFTER the policy is computed, in
+	// the "non-Linux apply" block below. This function used to return right
+	// here for every non-Linux backend, which was correct while darwin's only
+	// option was FallbackBackend (nothing to apply). Once ADR-052 Phase-3 AC-6
+	// gave macOS a real Seatbelt backend, that early return became a silent
+	// hole: SelectBackend reported "seatbelt", the boot log named it, and
+	// backend.Apply() was NEVER called — so no profile was ever installed and
+	// every child ran completely unconfined. Do not restore the early return.
 
 	// Step 5 — Compute the workspace policy. $OMNIPUS_HOME gets RWX;
 	// system libs get R; user AllowedPaths gets R or RW with the
@@ -367,7 +398,16 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	if rep, ok := backend.(interface{ ABIVersion() int }); ok {
 		abiVersion = rep.ABIVersion()
 	}
-	if abiVersion >= 4 && opts.Cfg != nil {
+
+	// Port rules are only worth computing when the selected backend actually
+	// enforces them. Landlock needs ABI v4+; Seatbelt enforces bind/connect
+	// rules unconditionally and exposes no ABI version at all (abiVersion
+	// stays 0 on darwin), so gating purely on abiVersion would silently strip
+	// every dev-server port rule from the macOS profile.
+	kernelConfiner, confinesChildren := backend.(sandbox.KernelChildConfiner)
+	enforcePortRules := abiVersion >= 4 || (confinesChildren && kernelConfiner.ConfinesChildren())
+
+	if enforcePortRules && opts.Cfg != nil {
 		pr := opts.Cfg.Sandbox.DevServerPortRange
 		if !pr.IsZero() {
 			for p := pr.Min(); p <= pr.Max(); p++ {
@@ -384,7 +424,88 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 		// pkg/tools/browser/cdppipe), which needs no bind() at all, so there
 		// is nothing to allow-list for it anymore.
 	}
-	policy := sandbox.DefaultPolicy(opts.HomePath, allowedPaths, warnFn, bindPorts)
+	// allowedExecPaths is read+execute-only (see sandbox.buildExecPathRules).
+	// Deliberately NOT folded into configTouched below: it is seeded non-empty
+	// on a fresh install, so treating it as "the operator configured something"
+	// would make configTouched permanently true and silently disable the
+	// Docker permissive auto-downgrade.
+	var allowedExecPaths []string
+	if opts.Cfg != nil {
+		allowedExecPaths = opts.Cfg.Sandbox.AllowedExecPaths
+	}
+	// filesystem_model is seeded non-empty and so, like allowedExecPaths, is
+	// deliberately NOT folded into configTouched: treating it as "the operator
+	// configured something" would make configTouched permanently true and
+	// silently disable the Docker permissive auto-downgrade.
+	policy := sandbox.DefaultPolicyForModel(
+		filesystemModel, opts.HomePath, allowedPaths, allowedExecPaths, warnFn, bindPorts)
+
+	// Spec FR-4.4 / FR-5.3: say once, at boot, how the secret set is actually
+	// protected here — the mechanism differs per platform and the difference is
+	// invisible at runtime.
+	//
+	// Review finding 3 (MAJOR): this used to switch on runtime.GOOS ALONE,
+	// after backend/backendName (and confinesChildren/kernelConfiner, computed
+	// a few lines above for the port-rule gate) were already known — and
+	// ignored them. That meant a Linux host pre-5.13, or a container without
+	// Landlock, selected FallbackBackend (nothing enforced) yet still logged
+	// mechanism=landlock_never_granted; a macOS host with sandbox-exec missing,
+	// or mode=permissive (Seatbelt has no audit-only mode — see the non-Linux
+	// apply block below), still logged mechanism=seatbelt_deny. The Windows/
+	// default branch was honest by contrast (sandbox.secret_set.UNPROTECTED),
+	// which made the other two worse: an operator comparing logs reads the
+	// difference as meaningful.
+	//
+	// The fix gates each "protected" branch on the REAL capability the
+	// gateway just computed, not the platform name:
+	//   - macOS: confinesChildren && kernelConfiner.ConfinesChildren() — the
+	//     same capability check enforcePortRules already uses above — AND
+	//     mode == enforce, because the non-Linux apply block below proves
+	//     Seatbelt installs a profile ONLY under enforce; permissive
+	//     deliberately degrades to application-level enforcement (no kernel
+	//     profile at all) since Seatbelt has no audit-only mode.
+	//   - Linux: isLinux (the backend actually implements linuxApplier, i.e.
+	//     SelectBackend chose LinuxBackend because the kernel is capable) AND
+	//     mode == enforce, matching the same "permissive doesn't actually
+	//     block anything" reasoning — mode == off already returned earlier in
+	//     this function, so the only values reaching here are enforce/permissive.
+	// Anything else — including a genuinely unsupported platform like
+	// Windows — falls through to the UNPROTECTED warning, worded differently
+	// depending on whether a kernel backend exists here in principle.
+	seatbeltProtects := runtime.GOOS == "darwin" && confinesChildren && kernelConfiner.ConfinesChildren() && mode == sandbox.ModeEnforce
+	landlockProtects := isLinux && mode == sandbox.ModeEnforce
+	switch {
+	case seatbeltProtects:
+		slog.Info("sandbox.secret_set.protected",
+			"mechanism", "seatbelt_deny",
+			"model", string(filesystemModel),
+			"mode", string(mode),
+			"entries", sandbox.SecretEntriesRelative,
+			"detail", "children are denied read and write on these paths; the gateway process itself is not Seatbelt-confined")
+	case landlockProtects:
+		slog.Info("sandbox.secret_set.protected",
+			"mechanism", "landlock_never_granted",
+			"model", string(filesystemModel),
+			"mode", string(mode),
+			"entries", sandbox.SecretEntriesRelative,
+			"detail", "Landlock has no deny primitive; children are granted the siblings of these paths and never the paths themselves")
+	default:
+		detail := "no filesystem sandbox backend exists on this platform; master.key and the credential vault " +
+			"are protected by file permissions alone. Do not run untrusted agents here."
+		if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
+			detail = fmt.Sprintf(
+				"a kernel sandbox backend exists on this platform but is not actively enforcing right now "+
+					"(backend=%s, mode=%s); master.key and the credential vault are protected by file permissions "+
+					"alone. Do not run untrusted agents here.", backendName, mode)
+		}
+		slog.Warn("sandbox.secret_set.UNPROTECTED",
+			"platform", runtime.GOOS,
+			"backend", backendName,
+			"mode", string(mode),
+			"model", string(filesystemModel),
+			"entries", sandbox.SecretEntriesRelative,
+			"detail", detail)
+	}
 
 	// Extend the connect-port allow-list (v0.2 #155 item 4). DefaultPolicy
 	// pre-seeds {53, 80, 443}; we append every port in DevServerPortRange so
@@ -392,7 +513,7 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	// the kernel intercepting at connect(2). Done after DefaultPolicy
 	// returns so we don't have to thread an additional parameter through
 	// DefaultPolicy's call sites (the redteam test, agent loop, etc.).
-	if abiVersion >= 4 && opts.Cfg != nil {
+	if enforcePortRules && opts.Cfg != nil {
 		pr := opts.Cfg.Sandbox.DevServerPortRange
 		if !pr.IsZero() {
 			extra := make([]sandbox.NetPortRule, 0, pr.Max()-pr.Min()+1)
@@ -414,6 +535,140 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 		// there is no loopback connect(2) to allow-list for it anymore.
 	}
 	result.Policy = policy
+
+	// Step 5.3 — publish the BOOT HALF of a per-turn kernel policy
+	// (ADR-063 D1 / FR-1.3, FR-3.5).
+	//
+	// sandbox.DeriveKernelPolicy needs the operator's configuration (filesystem
+	// model, allowed paths, port ranges) as well as the turn's own authored
+	// FSPolicy, and the tool layer that knows the second half has no access to
+	// the first. Registering it here — rather than letting pkg/tools recompute
+	// it from config on every spawn — keeps DeriveKernelPolicy the single place
+	// a kernel policy is ever constructed. A second construction site is
+	// exactly how the app layer and the kernel layer drifted apart before.
+	//
+	// registerTurnPolicyBase is called on EVERY exit path below, with nil
+	// wherever no kernel policy ends up in force, so a degraded boot can never
+	// leave a base behind that makes spawn sites derive policies nothing will
+	// enforce.
+	registerTurnPolicyBase := func(enforcing bool) {
+		if !enforcing {
+			sandbox.RegisterTurnPolicyBase(nil)
+			return
+		}
+		sandbox.RegisterTurnPolicyBase(&sandbox.TurnPolicyInput{
+			HomePath:         opts.HomePath,
+			Model:            filesystemModel,
+			AllowedPaths:     allowedPaths,
+			AllowedExecPaths: allowedExecPaths,
+			BindPorts:        bindPorts,
+			ConnectPorts:     connectPortsFromRules(policy.ConnectPortRules),
+			WarnFn:           warnFn,
+		})
+	}
+	registerTurnPolicyBase(false)
+
+	// Step 5.4 — non-Linux apply. Reached for every backend that is not the
+	// LinuxBackend; see the NOTE at the linuxApplier type assertion above for
+	// why this is not an early return any more.
+	if !isLinux {
+		if confinesChildren && kernelConfiner.ConfinesChildren() {
+			kernelBackend := kernelConfiner
+			// PERMISSIVE IS NOT AVAILABLE HERE, AND MUST NOT SILENTLY ENFORCE.
+			//
+			// Landlock supports an audit-only mode, so on Linux `permissive`
+			// computes and logs the policy without restricting anything.
+			// Seatbelt has no equivalent: sandbox-exec either applies a
+			// profile or it does not. Applying one under `permissive` would
+			// give an operator running the documented "watch what would break
+			// before turning it on" step full hard enforcement instead —
+			// with no banner, no audit_only flag, and no way to tell.
+			//
+			// So permissive degrades to application-level enforcement and says
+			// so, matching what the mode promises rather than what the backend
+			// finds convenient.
+			if mode == sandbox.ModePermissive {
+				slog.Warn("sandbox.permissive.unsupported_by_backend",
+					"backend", backendName,
+					"requested_mode", string(mode),
+					"effect", "kernel profile NOT installed; falling back to application-level enforcement",
+					"reason", "seatbelt has no audit-only mode; applying the profile would enforce, which is not what permissive means")
+				fmt.Fprint(opts.Stderr, permissiveNagBanner)
+				result.Mode = mode
+				result.NagReason = "permissive"
+				result.ApplyState = sandbox.ApplyState{
+					Mode:      mode,
+					AuditOnly: true,
+					ExtraNotes: []string{
+						"macOS Seatbelt has no audit-only mode; permissive does NOT install a kernel profile. " +
+							"Use mode=enforce for kernel confinement, or mode=off to disable it explicitly.",
+					},
+				}
+				return result, nil
+			}
+
+			// macOS kernel sandbox (ADR-052 Phase-3 AC-6). Apply installs the
+			// rendered profile as the process-wide active policy; every
+			// hardened-exec child is then wrapped by applyPlatformHardening.
+			if err := kernelBackend.Apply(policy); err != nil {
+				slog.Error("sandbox.apply_failed",
+					"error", err,
+					"mode", string(mode),
+					"backend", backendName)
+				// Fail closed, matching the Linux contract: if the operator
+				// asked for enforcement and the backend cannot deliver it,
+				// booting unconfined would silently downgrade the boundary.
+				return result, fmt.Errorf("sandbox: Seatbelt Apply failed: %w", err)
+			}
+			// The boot profile is installed and every hardened-exec child is
+			// now wrapped, so per-turn policies are enforceable from here on.
+			registerTurnPolicyBase(true)
+
+			result.Mode = mode
+			result.ApplyState = sandbox.ApplyState{
+				Mode: mode,
+				ExtraNotes: []string{
+					"macOS Seatbelt: hardened-exec children are confined via sandbox-exec; " +
+						"the gateway process itself is not (no-CGo limitation, see ADR-052 Phase-3 AC-6)",
+				},
+			}
+			slog.Info("sandbox.applied",
+				"backend", backendName,
+				"mode", string(mode),
+				"model", string(filesystemModel),
+				"filesystem_rules", len(policy.FilesystemRules),
+				"connect_ports", len(policy.ConnectPortRules),
+				"bind_ports", len(policy.BindPortRules))
+			return result, nil
+		}
+
+		// Graceful degradation path. Not an error; operator asked for
+		// enforce/permissive but the platform cannot provide it. Hard
+		// Constraint #4 (CLAUDE.md) requires we continue serving with
+		// application-level fallback rather than crashing.
+		// Report a reason the operator can act on. "kernel_too_old_or_non_linux"
+		// and "kernel does not support Landlock" are actively misleading on
+		// macOS, where the usual causes are a missing sandbox-exec or the
+		// operator's own OMNIPUS_SEATBELT_DISABLE kill-switch — neither of
+		// which has anything to do with kernel age or Landlock.
+		degradedReason := "kernel_too_old_or_non_linux"
+		degradedNote := "kernel does not support Landlock; falling back to application-level enforcement"
+		if runtime.GOOS == "darwin" {
+			degradedReason = "seatbelt_unavailable"
+			degradedNote = "macOS kernel sandbox (Seatbelt) unavailable — sandbox-exec missing or disabled via " +
+				"OMNIPUS_SEATBELT_DISABLE; falling back to application-level enforcement"
+		}
+		slog.Warn("sandbox.degraded",
+			"reason", degradedReason,
+			"selected_backend", backendName,
+			"requested_mode", string(mode))
+		result.Mode = mode
+		result.ApplyState = sandbox.ApplyState{
+			Mode:       mode,
+			ExtraNotes: []string{degradedNote},
+		}
+		return result, nil
+	}
 
 	// Step 5.5 — process-level self-hardening (PR_SET_DUMPABLE=0). Closes
 	// C6 from the insider-pentest report: same-uid children can read
@@ -451,6 +706,12 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 		return result, fmt.Errorf("sandbox: seccomp Install failed on capable kernel: %w", err)
 	}
 
+	// Per-turn kernel policy is enforceable only under enforce mode: Landlock's
+	// per-thread re-apply (RestrictCurrentThreadWithPolicy) is a no-op when the
+	// saved mode is permissive, so registering a base under permissive would
+	// promise confinement the backend has explicitly declined to deliver.
+	registerTurnPolicyBase(mode == sandbox.ModeEnforce)
+
 	// Step 8 — Populate result state for /health and /api/.../sandbox-status.
 	// abiVersion is already resolved above for the net-rule gating.
 	result.ApplyState = sandbox.ApplyState{
@@ -484,6 +745,7 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 		slog.Info("sandbox.applied",
 			"backend", backendName,
 			"mode", "enforce",
+			"model", string(filesystemModel),
 			"landlock_abi", abiVersion,
 			"seccomp_syscalls", len(seccompProg.BlockedSyscalls()))
 	}
@@ -499,6 +761,26 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 // Install is reached.
 type linuxApplier interface {
 	ApplyWithMode(policy sandbox.SandboxPolicy, mode sandbox.Mode) error
+}
+
+// connectPortsFromRules flattens the boot policy's outbound port rules back to
+// the plain port list sandbox.TurnPolicyInput takes.
+//
+// It reads the FINAL rules rather than recomputing them from
+// cfg.Sandbox.DevServerPortRange, because the boot policy's connect set is
+// assembled in two steps (DefaultPolicyForModel seeds 53/80/443, then the block
+// above appends the dev-server range). Recomputing only the second step is how a
+// per-turn policy would end up silently missing the first, so the boot policy
+// itself is the source of truth.
+func connectPortsFromRules(rules []sandbox.NetPortRule) []uint16 {
+	if len(rules) == 0 {
+		return nil
+	}
+	out := make([]uint16, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, r.Port)
+	}
+	return out
 }
 
 // orDefault returns value if non-empty, otherwise fallback.

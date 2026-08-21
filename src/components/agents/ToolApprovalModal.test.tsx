@@ -69,7 +69,11 @@ beforeEach(async () => {
     useToolApprovalStore.setState({ queue: [] })
   })
   vi.clearAllMocks()
-  vi.mocked(api.submitToolApproval).mockResolvedValue(undefined)
+  vi.mocked(api.submitToolApproval).mockResolvedValue({
+    approval_id: 'appr-001',
+    action: 'approve',
+    status: 'ok',
+  })
 })
 
 const SAMPLE_APPROVAL = {
@@ -94,7 +98,11 @@ describe('ToolApprovalModal — rendering', () => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
     render(<ToolApprovalModal />)
-    expect(screen.getByText('fetch_url')).toBeInTheDocument()
+    // Deliverable 3: the modal shows the HUMAN tool name (humanizeToolName),
+    // not the raw wire identifier — 'fetch_url' has an EXPLICIT_LABELS entry
+    // ('Fetch URL'), so the raw id should no longer appear as the Tool label.
+    expect(screen.getByText('Fetch URL')).toBeInTheDocument()
+    expect(screen.queryByText('fetch_url')).not.toBeInTheDocument()
     expect(screen.getByText('Tool Approval Required')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Deny/i })).toBeInTheDocument()
@@ -245,6 +253,51 @@ describe('ToolApprovalModal — button dispatch', () => {
     })
   })
 
+  it('toasts when Always Allow approved this call but the grant did not stick', async () => {
+    vi.mocked(api.submitToolApproval).mockResolvedValue({
+      approval_id: 'appr-001',
+      action: 'always',
+      status: 'ok',
+      grant_recorded: false,
+    })
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+
+    await waitFor(() => {
+      expect(capturedAddToast).toHaveBeenCalledWith({
+        message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
+        variant: 'warning',
+      })
+    })
+    expect(useToolApprovalStore.getState().queue).toHaveLength(0)
+  })
+
+  it('toasts when Always Allow omits grant_recorded — treated as did-not-stick', async () => {
+    vi.mocked(api.submitToolApproval).mockResolvedValue({
+      approval_id: 'appr-001',
+      action: 'always',
+      status: 'ok',
+    })
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+
+    await waitFor(() => {
+      expect(capturedAddToast).toHaveBeenCalledWith({
+        message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
+        variant: 'warning',
+      })
+    })
+    expect(useToolApprovalStore.getState().queue).toHaveLength(0)
+  })
+
   it('removes approval from queue after successful Approve', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
@@ -259,6 +312,12 @@ describe('ToolApprovalModal — button dispatch', () => {
   })
 
   it('removes approval from queue after successful Always Allow', async () => {
+    vi.mocked(api.submitToolApproval).mockResolvedValue({
+      approval_id: 'appr-001',
+      action: 'always',
+      status: 'ok',
+      grant_recorded: true,
+    })
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
@@ -269,6 +328,7 @@ describe('ToolApprovalModal — button dispatch', () => {
     await waitFor(() => {
       expect(useToolApprovalStore.getState().queue).toHaveLength(0)
     })
+    expect(capturedAddToast).not.toHaveBeenCalled()
   })
 })
 
@@ -601,3 +661,68 @@ describe.each(edgeCases)(
     })
   },
 )
+
+// ── "Always Allow" for request_mount ────────────────────────────────────────
+//
+// Grants remember the whole arguments object, so Always Allow on Add folder
+// means "this folder, this session" — not "any folder". The button is shown
+// when a folder path is present. It stays hidden on reconnect stubs and when
+// request_mount arrives with no host_path/path.
+
+const MOUNT_APPROVAL = {
+  approvalId: 'appr-mount',
+  toolCallId: 'call-mount',
+  toolName: 'request_mount',
+  args: { host_path: '/Users/dana/Documents/projects/api', reason: 'to run the build' },
+  agentId: 'agent-main',
+  sessionId: 'sess-001',
+  turnId: 'turn-001',
+  expiresAt: Date.now() + 300_000,
+}
+
+describe('ToolApprovalModal — Always Allow for request_mount', () => {
+  it('offers Always Allow for an ordinary tool', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
+  })
+
+  it('offers Always Allow for request_mount when args are present', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
+  })
+
+  it('hides Always Allow for request_mount when no folder path is present', () => {
+    act(() => {
+      useToolApprovalStore.setState({
+        queue: [{ ...MOUNT_APPROVAL, args: { reason: 'UAT folder A' } }],
+      })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.queryByTestId('always-allow-toggle')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Add folder|Approve/i })).toBeInTheDocument()
+  })
+
+  it('still offers a way to approve and a way to deny request_mount', () => {
+    // Always Allow is offered when args are present (a grant is this folder,
+    // this session). Approve and Deny must still be there either way.
+    //
+    // request_mount's copy diverges from the generic Approve/Deny labels
+    // (operator-approved "Add folder" / "Don't add" — see
+    // approvalPreviews/registry.ts and RequestMountApprovalPreview.tsx) but
+    // still dispatches the same 'approve'/'deny' actions — covered by the
+    // dedicated ToolApprovalModal.readablePreviews.test.tsx suite. This test
+    // only asserts BOTH decision buttons are present, whatever their label.
+    act(() => {
+      useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.getByRole('button', { name: /Add folder/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Don't add/i })).toBeInTheDocument()
+  })
+})

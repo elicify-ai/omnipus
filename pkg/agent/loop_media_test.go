@@ -384,6 +384,7 @@ func TestAgentLoop_ImageRejection_FriendlyMessage(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 3,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -403,7 +404,6 @@ func TestAgentLoop_ImageRejection_FriendlyMessage(t *testing.T) {
 		ChatID:          "direct",
 		UserMessage:     "What is in this image?",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 
@@ -467,6 +467,7 @@ func TestAgentLoop_NonImageError_PropagatesAsError(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 3,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -491,7 +492,6 @@ func TestAgentLoop_NonImageError_PropagatesAsError(t *testing.T) {
 		ChatID:          "direct",
 		UserMessage:     "Hello",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 

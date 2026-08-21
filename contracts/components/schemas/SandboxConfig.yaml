@@ -12,6 +12,24 @@ properties:
       - permissive
       - enforce
     example: enforce
+  filesystem_model:
+    type: string
+    enum:
+      - confined
+      - open
+    description: >
+      The ADR-062 filesystem model this installation is configured for.
+      "confined" enumerates the paths that may be read and executed; "open"
+      leaves reads and execution unrestricted apart from the secret set. It
+      never changes what an agent may WRITE — writes are confined to the
+      workspace and its mounts under both models.
+
+      Reported here, and settable via SandboxConfigUpdate, because the two
+      postures are indistinguishable from outside: an operator cannot tell from
+      behaviour whether a read succeeded because the model is open or because
+      that path happened to be on the enumerated list. Without a control, the
+      only way to change it was to hand-edit config.json.
+    example: open
   applied_mode:
     type: string
     description: >

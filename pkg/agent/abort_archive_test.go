@@ -286,7 +286,6 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 
 	// initialArchiveLen is what ts.initialArchiveLen captures at turn start.
 	initialArchiveLen := archiveLineCountFromAgent(t, al, sk)
-	summaryAtTurnStart := agent.Sessions.GetSummary(sk)
 
 	// --- Phase 3: simulate in-turn appends (3 messages: user + tool call + result).
 	inTurnMsgs := []providers.Message{
@@ -316,19 +315,16 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 	// Construct a minimal turnState with the fields restoreSession reads:
 	//   ts.initialArchiveLen → targetLen for RollbackAppended
 	//   ts.initialHistoryLength → used to derive targetSkip (round-2 fix)
-	//   ts.restorePointSummary → summary to restore
 	//   ts.sessionKey → session key for the store calls
 	ts := &turnState{
 		sessionKey:           sk,
 		initialArchiveLen:    initialArchiveLen,
 		initialHistoryLength: len(windowAfterEvict),
-		restorePointSummary:  summaryAtTurnStart,
 	}
 
 	// restoreSession (turn.go:721):
 	//   computes targetSkip = initialArchiveLen - initialHistoryLength
 	//   calls agent.Sessions.RollbackAppended(ts.sessionKey, targetLen, targetSkip)
-	//   calls agent.Sessions.SetSummary(ts.sessionKey, summary)
 	//   calls agent.Sessions.Save(ts.sessionKey)
 	err := ts.restoreSession(agent)
 	require.NoError(t, err, "restoreSession must not error on an evicted session")
@@ -428,7 +424,6 @@ func TestAssembleMessages_ReadArchiveError_FallsBackToBreadcrumb(t *testing.T) {
 	// Must not panic.
 	assembled := cb.BuildMessages(
 		liveWindow,
-		"",
 		currentMsg,
 		nil,
 		"",
@@ -474,7 +469,6 @@ func TestAssembleMessages_ReadArchiveError_FallsBackToBreadcrumb(t *testing.T) {
 
 	assembledWithBreadcrumb := cb.BuildMessages(
 		liveWindow,
-		"",
 		currentMsg,
 		nil,
 		"",
@@ -663,7 +657,6 @@ func TestRollbackAppended_MidTurnEviction_RestoreSession(t *testing.T) {
 	initialArchiveLen := archiveLineCountFromAgent(t, al, sk) // 12
 	initialHistoryLength := len(windowAfterPreEvict)          // 8
 	turnStartSkip := initialArchiveLen - initialHistoryLength // 4
-	summaryAtTurnStart := agent.Sessions.GetSummary(sk)
 
 	// Phase 3: mid-turn windowTrim → keep 4 visible (Skip advances to 8).
 	agent.Sessions.TruncateHistory(sk, 4)
@@ -685,7 +678,6 @@ func TestRollbackAppended_MidTurnEviction_RestoreSession(t *testing.T) {
 		sessionKey:           sk,
 		initialArchiveLen:    initialArchiveLen,
 		initialHistoryLength: initialHistoryLength,
-		restorePointSummary:  summaryAtTurnStart,
 	}
 	err := ts.restoreSession(agent)
 	require.NoError(t, err, "restoreSession must not error")

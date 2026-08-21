@@ -51,6 +51,7 @@ func TestSynthesizeImageRejection_PriorPDFDowngrade_DoesNotBlockFriendlySynthesi
 				MaxTokens:         4096,
 				MaxToolIterations: 3,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -72,7 +73,6 @@ func TestSynthesizeImageRejection_PriorPDFDowngrade_DoesNotBlockFriendlySynthesi
 		ChatID:          "direct",
 		UserMessage:     "What is in this image?",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	}
 	// Mirror runAgentLoop's own ts-construction sequence exactly (loop.go)

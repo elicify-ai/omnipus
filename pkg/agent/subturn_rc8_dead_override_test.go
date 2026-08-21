@@ -99,6 +99,16 @@ func TestSpawnSubTurn_NativeDispatch_SystemPromptComesFromTargetContextBuilder(t
 				ModelName: "parent-default-model",
 			},
 			List: []config.AgentConfig{
+				// The delegating PARENT: an ordinary, explicitly-registered
+				// non-worker agent. No "main" sentinel to fall back to
+				// anymore — GetDefaultAgent's Priority 2 skips workers, so
+				// without this entry the only registered agent would be the
+				// worker itself and the "parent and worker target must be
+				// distinct agents" invariant below would fail.
+				{
+					ID:   "mia",
+					Type: config.AgentTypeCore,
+				},
 				{
 					ID:   string(coreagent.IDWorker),
 					Name: "Worker",

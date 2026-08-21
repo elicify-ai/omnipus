@@ -70,6 +70,43 @@ func (d *blockingExternalDriver) Run(ctx context.Context, _ runner.RunOptions) (
 	return ch, nil
 }
 
+// waitCtxCanceled waits for the fake driver to OBSERVE its run context being
+// cancelled, rather than sampling the flag the instant the parent returns.
+//
+// The driver sets ctxCanceled from its own goroutine after <-ctx.Done(), so
+// there is no happens-before edge between runExternalCLISubTurn returning and
+// that store. Reading it immediately is a race the test loses under contention:
+// CI caught this on the -race gate, where the parent returned with
+// context.Canceled (every other assertion passed) while the driver goroutine
+// had not yet been scheduled.
+//
+// The distinction being preserved: "the cancel never propagated" is a real
+// product bug and must still fail. "The cancel propagated a few microseconds
+// after we looked" is a test artefact. A bounded wait separates them; a bare
+// Load() cannot.
+//
+// The deadline was originally 2s (the fix that added this bounded poll in
+// the first place), but that was still tight enough to itself flake under
+// -race: this call always runs AFTER the caller's own outer wait (doneCh /
+// resultCh, both bounded at 10s elsewhere in this file) has already
+// observed the cancel, so the driver goroutine is only ever a scheduling
+// hop behind — but a 2s ceiling assumes that hop is cheap, and under -race's
+// ~10x slowdown plus CI contention it is not always. 10s matches every
+// other bound in this file (all sized against the same 30s run timeout) so
+// this is no longer the tightest deadline standing.
+func waitCtxCanceled(t *testing.T, d *blockingExternalDriver, what string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if d.ctxCanceled.Load() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Errorf("%s: fake driver's run ctx was never canceled within 10s — "+
+		"the external CLI subprocess would not have been killed", what)
+}
+
 func (d *blockingExternalDriver) Decide(runner.PermissionDecision) {}
 
 func (d *blockingExternalDriver) Cancel() {}
@@ -171,9 +208,7 @@ func TestExternalCLISubTurn_CancelPropagates_Async(t *testing.T) {
 			"cancel did not propagate to the external-cli child (async/background delegation)")
 	}
 
-	if !driver.ctxCanceled.Load() {
-		t.Error("fake driver's run ctx was never canceled — the external CLI subprocess would not have been killed")
-	}
+	waitCtxCanceled(t, driver, t.Name())
 }
 
 // TestExternalCLISubTurn_CancelPropagates_Sync proves the HARD-abort cascade
@@ -246,9 +281,7 @@ func TestExternalCLISubTurn_CancelPropagates_Sync(t *testing.T) {
 	if res == nil || res.Err == nil || !errors.Is(res.Err, context.Canceled) {
 		t.Fatalf("expected a canceled ToolResult with Err=context.Canceled, got %+v", res)
 	}
-	if !driver.ctxCanceled.Load() {
-		t.Error("fake driver's run ctx was never canceled — the external CLI subprocess would not have been killed")
-	}
+	waitCtxCanceled(t, driver, t.Name())
 }
 
 // TestExternalCLISubTurn_CancelDuringWorkspaceLockWait is the BLOCK-finding
@@ -414,9 +447,7 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the first external-cli sub-turn did not cancel during cleanup")
 	}
-	if !d.ctxCanceled.Load() {
-		t.Error("fake driver's run ctx was never canceled — the external CLI subprocess would not have been killed")
-	}
+	waitCtxCanceled(t, d, t.Name())
 }
 
 // TestExternalCLISubTurn_RequestCancelEndToEnd_ExternalCLIOnlySession drives
@@ -505,9 +536,7 @@ func TestExternalCLISubTurn_RequestCancelEndToEnd_ExternalCLIOnlySession(t *test
 		t.Fatal("runExternalCLISubTurn did not return after RequestCancel — " +
 			"the real public cancel entrypoint did not reach the external-cli child")
 	}
-	if !driver.ctxCanceled.Load() {
-		t.Error("fake driver's run ctx was never canceled via the real RequestCancel entrypoint")
-	}
+	waitCtxCanceled(t, driver, t.Name())
 
 	// Best-effort (per this fix's scope): the turn_canceled transcript entry
 	// is written by RequestCancel's onCancelFinish callback, which only fires

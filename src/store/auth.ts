@@ -23,6 +23,22 @@ function getStoredUsername(): string | null {
   return localStorage.getItem('omnipus_auth_username')
 }
 
+// hasStoredSession reports whether this browser has EVER completed a login —
+// i.e. whether omnipus_auth_username is present in localStorage. It is a
+// "has this browser had a session" hint, not a validity check: it stays true
+// for a returning user whose session has since expired (nothing clears the
+// key until forceLogout()/clearAuth() actually runs), and only goes false
+// after an explicit sign-out or a confirmed-401 forced logout.
+//
+// Consumed by routes/_app.tsx's beforeLoad guard: a browser that has never
+// signed in has no session to validate, so the guard skips the network round
+// trip to GET /api/v1/auth/validate (which would otherwise 401
+// unconditionally on a fresh browser) instead of treating "never signed in"
+// the same as "signed in, then expired".
+export function hasStoredSession(): boolean {
+  return getStoredUsername() !== null
+}
+
 export const useAuthStore = create<AuthStore>((set) => ({
   username: getStoredUsername(),
   setUsername: (username) => {

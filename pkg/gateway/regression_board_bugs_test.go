@@ -359,38 +359,39 @@ func TestRegression_RestartPersistence(t *testing.T) {
 		"two different tasks must have different IDs (differentiation)")
 }
 
-// ── REP: repository scheme validation ───────────────────────────────────────
+// ── REP: repository field retirement ────────────────────────────────────────
 
-// TestRegression_Repository_SchemeValidation verifies that POST /api/v1/workspaces
-// rejects non-http/https repository URLs and accepts empty or valid URLs.
+// TestRegression_Repository_FieldRetired verifies that POST and PUT
+// /api/v1/workspaces reject any request body carrying a "repository" field
+// outright (FR-9.2, ADR-063 D7) — the field was deleted from the wire with no
+// back-compat, superseding the earlier SEC-5 URL-scheme-only validation this
+// test used to pin.
 //
 // BDD:
-//   - POST with repository="javascript:alert(1)" → 400.
-//   - POST with repository="data:text/plain,x" → 400.
-//   - POST with repository="https://github.com/x/y" → 201 (valid https).
-//   - POST with repository="" → 201 (empty is always accepted).
-//   - PUT with repository="javascript:alert(1)" → 400.
+//   - POST with repository="javascript:alert(1)" → 400 (field retired).
+//   - POST with repository="https://github.com/x/y" → 400 (field retired,
+//     even though the URL itself would have been valid under the old rule).
+//   - POST with no repository field at all → 201 (unaffected).
+//   - PUT with repository="javascript:alert(1)" → 400 (field retired).
 //
-// Traces to: feat/level1-project-task-mgmt — repository SEC-5 validation
-func TestRegression_Repository_SchemeValidation(t *testing.T) {
+// Traces to: FR-9.2, ADR-063 D7.
+func TestRegression_Repository_FieldRetired(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	tests := []struct {
 		name         string
 		repository   string
+		hasField     bool
 		expectedCode int
 	}{
-		{"javascript scheme rejected", "javascript:alert(1)", http.StatusBadRequest},
-		{"data scheme rejected", "data:text/plain,hello", http.StatusBadRequest},
-		{"file scheme rejected", "file:///etc/passwd", http.StatusBadRequest},
-		{"empty accepted", "", http.StatusCreated},
-		{"https accepted", "https://github.com/x/y", http.StatusCreated},
-		{"http accepted", "http://github.com/x/y", http.StatusCreated},
+		{"javascript rejected — field retired", "javascript:alert(1)", true, http.StatusBadRequest},
+		{"https rejected — field retired regardless of value", "https://github.com/x/y", true, http.StatusBadRequest},
+		{"no field accepted", "", false, http.StatusCreated},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var bodyStr string
-			if tc.repository == "" {
+			if !tc.hasField {
 				bodyStr = `{"name":"RepoProject"}`
 			} else {
 				bodyStr = fmt.Sprintf(`{"name":"RepoProject","repository":%q}`, tc.repository)
@@ -401,12 +402,12 @@ func TestRegression_Repository_SchemeValidation(t *testing.T) {
 			r.URL.Path = "/api/v1/workspaces"
 			api.HandleWorkspaces(w, r)
 			assert.Equal(t, tc.expectedCode, w.Code,
-				"POST /workspaces with repository=%q must return %d; body=%s",
-				tc.repository, tc.expectedCode, w.Body.String())
+				"POST /workspaces with repository field present=%v must return %d; body=%s",
+				tc.hasField, tc.expectedCode, w.Body.String())
 		})
 	}
 
-	// PUT repository validation: set a valid project then try to update with a bad URL.
+	// PUT with a repository field is rejected outright, same as POST.
 	projID := createWorkspaceViaAPI(t, api, "PUTRepoProject", "")
 	wPutBad := httptest.NewRecorder()
 	rPutBad := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+projID,
@@ -415,7 +416,7 @@ func TestRegression_Repository_SchemeValidation(t *testing.T) {
 	rPutBad.URL.Path = "/api/v1/workspaces/" + projID
 	api.HandleWorkspaces(wPutBad, rPutBad)
 	assert.Equal(t, http.StatusBadRequest, wPutBad.Code,
-		"PUT /workspaces/{id} with javascript: repository must return 400; body=%s", wPutBad.Body.String())
+		"PUT /workspaces/{id} with repository field must return 400; body=%s", wPutBad.Body.String())
 }
 
 // ── OWN: ownership scoping gaps ──────────────────────────────────────────────

@@ -241,6 +241,12 @@ func TestHandleCancel_FiredImmediately_NoLatchExpiredFalseAlarm(t *testing.T) {
 				ModelName: "iron-provider",
 				MaxTokens: 4096,
 			},
+			// An explicitly registered agent. There is no implicit "main" sentinel
+			// to fall back on any more (ADR-064), and handleChatMessage now
+			// REFUSES a chat frame it cannot resolve an agent for rather than
+			// creating a session with an empty owner -- so a config with no
+			// agents produces no session_started frame at all.
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			Mode: config.SandboxModeOff,

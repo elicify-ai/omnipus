@@ -190,6 +190,7 @@ func TestRetryOnStreamingReset_SingleCandidateTurnSucceeds(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 	}
 
@@ -208,7 +209,6 @@ func TestRetryOnStreamingReset_SingleCandidateTurnSucceeds(t *testing.T) {
 		ChatID:          "test-chat",
 		UserMessage:     "hello",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	require.NoError(t, err,
@@ -246,6 +246,7 @@ func TestRetryOnStreamingReset_GoAwayTurnSucceeds(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -264,7 +265,6 @@ func TestRetryOnStreamingReset_GoAwayTurnSucceeds(t *testing.T) {
 		ChatID:          "test-chat-goaway",
 		UserMessage:     "hello",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	require.NoError(t, err,
@@ -304,6 +304,7 @@ func TestRetryOnStreamingReset_ExhaustsMaxRetries(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -322,7 +323,6 @@ func TestRetryOnStreamingReset_ExhaustsMaxRetries(t *testing.T) {
 		ChatID:          "test-chat-exhaust",
 		UserMessage:     "hello",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	require.Error(t, err,
@@ -356,6 +356,7 @@ func TestRetryOnStreamingReset_AuthErrorNotRetried(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -374,7 +375,6 @@ func TestRetryOnStreamingReset_AuthErrorNotRetried(t *testing.T) {
 		ChatID:          "test-chat-auth",
 		UserMessage:     "hello",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	require.Error(t, err, "auth failure must cause the turn to fail")
@@ -408,6 +408,7 @@ func TestRetryOnStreamingReset_ScenarioProviderVariant(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -426,7 +427,6 @@ func TestRetryOnStreamingReset_ScenarioProviderVariant(t *testing.T) {
 		ChatID:          "test-chat-scenario",
 		UserMessage:     "hello",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	require.NoError(t, err,
@@ -488,6 +488,7 @@ func TestRetryOnStreamingReset_NothingToTrimStillRetries(t *testing.T) {
 				MaxTokens:             4096,
 				MaxToolIterations:     10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -506,7 +507,6 @@ func TestRetryOnStreamingReset_NothingToTrimStillRetries(t *testing.T) {
 		ChatID:          "test-chat-nothing-to-trim",
 		UserMessage:     "hello",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	require.NoError(t, err,
@@ -608,6 +608,7 @@ func TestRetryOnStreamingReset_RecallSpanDropAloneStillRetries(t *testing.T) {
 				MaxTokens:             2000,
 				MaxToolIterations:     10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 
@@ -655,7 +656,6 @@ func TestRetryOnStreamingReset_RecallSpanDropAloneStillRetries(t *testing.T) {
 		ChatID:          "test-chat-recall-drop",
 		UserMessage:     "hello",
 		DefaultResponse: defaultResponse,
-		EnableSummary:   false,
 		SendResponse:    false,
 	})
 	require.NoError(t, err,

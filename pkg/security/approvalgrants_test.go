@@ -12,18 +12,18 @@ import "testing"
 // agent in a different session, must still be asked.
 func TestApprovalGrantStore_ScopedByAgentAndSession(t *testing.T) {
 	s := NewApprovalGrantStore()
-	s.Record("session-1", "agent-a", "exec")
+	s.Record("session-1", "agent-a", "exec", nil)
 
-	if !s.IsAllowed("session-1", "agent-a", "exec") {
+	if !s.IsAllowed("session-1", "agent-a", "exec", nil) {
 		t.Error("IsAllowed(S, A, T) after Record(S, A, T) must be true")
 	}
-	if s.IsAllowed("session-1", "agent-b", "exec") {
+	if s.IsAllowed("session-1", "agent-b", "exec", nil) {
 		t.Error("a DIFFERENT agent in the same session must NOT inherit the grant")
 	}
-	if s.IsAllowed("session-2", "agent-a", "exec") {
+	if s.IsAllowed("session-2", "agent-a", "exec", nil) {
 		t.Error("the same agent in a DIFFERENT session must NOT reuse the grant")
 	}
-	if s.IsAllowed("session-1", "agent-a", "other_tool") {
+	if s.IsAllowed("session-1", "agent-a", "other_tool", nil) {
 		t.Error("a grant for one tool must not apply to a different tool")
 	}
 }
@@ -40,9 +40,9 @@ func TestApprovalGrantStore_SurvivesReconnect(t *testing.T) {
 	hook1 := shared
 	hook2 := shared
 
-	hook1.Record("session-1", "agent-a", "exec")
+	hook1.Record("session-1", "agent-a", "exec", nil)
 
-	if !hook2.IsAllowed("session-1", "agent-a", "exec") {
+	if !hook2.IsAllowed("session-1", "agent-a", "exec", nil) {
 		t.Error(
 			"a grant recorded via one connection's hook must be visible via a reconnected hook sharing the same store",
 		)
@@ -63,14 +63,14 @@ func TestApprovalGrantStore_SurvivesReconnect(t *testing.T) {
 // regression coverage for the two-key contract going forward.
 func TestApprovalGrantStore_Inherit(t *testing.T) {
 	s := NewApprovalGrantStore()
-	s.Record("session-1", "parent", "exec")
+	s.Record("session-1", "parent", "exec", nil)
 
 	s.InheritFrom("session-1", "parent", "session-1", "child")
 
-	if !s.IsAllowed("session-1", "child", "exec") {
+	if !s.IsAllowed("session-1", "child", "exec", nil) {
 		t.Error("child must inherit the parent's granted tool")
 	}
-	if s.IsAllowed("session-1", "child", "other_tool") {
+	if s.IsAllowed("session-1", "child", "other_tool", nil) {
 		t.Error("child must NOT inherit a grant the parent never had")
 	}
 }
@@ -82,7 +82,7 @@ func TestApprovalGrantStore_InheritNoParentGrant(t *testing.T) {
 
 	s.InheritFrom("session-1", "parent", "session-1", "child")
 
-	if s.IsAllowed("session-1", "child", "exec") {
+	if s.IsAllowed("session-1", "child", "exec", nil) {
 		t.Error("child must inherit nothing when the parent has no grants")
 	}
 }
@@ -92,15 +92,15 @@ func TestApprovalGrantStore_InheritNoParentGrant(t *testing.T) {
 // survives inheriting the parent's (different) grants.
 func TestApprovalGrantStore_InheritPreservesChildOwnGrants(t *testing.T) {
 	s := NewApprovalGrantStore()
-	s.Record("session-1", "child", "read_file")
-	s.Record("session-1", "parent", "exec")
+	s.Record("session-1", "child", "read_file", nil)
+	s.Record("session-1", "parent", "exec", nil)
 
 	s.InheritFrom("session-1", "parent", "session-1", "child")
 
-	if !s.IsAllowed("session-1", "child", "read_file") {
+	if !s.IsAllowed("session-1", "child", "read_file", nil) {
 		t.Error("child's own pre-existing grant must survive InheritFrom")
 	}
-	if !s.IsAllowed("session-1", "child", "exec") {
+	if !s.IsAllowed("session-1", "child", "exec", nil) {
 		t.Error("child must also gain the parent's grant")
 	}
 }
@@ -111,26 +111,26 @@ func TestApprovalGrantStore_InheritPreservesChildOwnGrants(t *testing.T) {
 func TestApprovalGrantStore_FailSafeEmptyKeys(t *testing.T) {
 	s := NewApprovalGrantStore()
 
-	if s.IsAllowed("", "agent-a", "exec") {
+	if s.IsAllowed("", "agent-a", "exec", nil) {
 		t.Error("empty session_id must never be allowed")
 	}
-	if s.IsAllowed("session-1", "", "exec") {
+	if s.IsAllowed("session-1", "", "exec", nil) {
 		t.Error("empty agent_id must never be allowed")
 	}
-	if s.IsAllowed("session-1", "agent-a", "") {
+	if s.IsAllowed("session-1", "agent-a", "", nil) {
 		t.Error("empty tool must never be allowed")
 	}
 
 	// Recording under an empty key must not create a cross-caller collision:
 	// two unrelated callers that both pass an empty session_id must NOT
 	// match each other.
-	s.Record("", "agent-a", "exec")
-	if s.IsAllowed("", "agent-a", "exec") {
+	s.Record("", "agent-a", "exec", nil)
+	if s.IsAllowed("", "agent-a", "exec", nil) {
 		t.Error("a grant recorded under an empty session_id must never be retrievable")
 	}
 
-	s.Record("session-1", "", "exec")
-	if s.IsAllowed("session-1", "", "exec") {
+	s.Record("session-1", "", "exec", nil)
+	if s.IsAllowed("session-1", "", "exec", nil) {
 		t.Error("a grant recorded under an empty agent_id must never be retrievable")
 	}
 }
@@ -147,13 +147,13 @@ func TestApprovalGrantStore_NilStoreNeverPanicsNeverAutoApproves(t *testing.T) {
 		}
 	}()
 
-	if s.IsAllowed("session-1", "agent-a", "exec") {
+	if s.IsAllowed("session-1", "agent-a", "exec", nil) {
 		t.Error("nil store must never report a grant as allowed")
 	}
-	s.Record("session-1", "agent-a", "exec")                   // must be a no-op, not a panic
+	s.Record("session-1", "agent-a", "exec", nil)              // must be a no-op, not a panic
 	s.InheritFrom("session-1", "parent", "session-1", "child") // must be a no-op, not a panic
 	s.ClearSession("session-1")                                // must be a no-op, not a panic
-	if s.IsAllowed("session-1", "agent-a", "exec") {
+	if s.IsAllowed("session-1", "agent-a", "exec", nil) {
 		t.Error("nil store must still report false after no-op writes")
 	}
 }
@@ -163,19 +163,136 @@ func TestApprovalGrantStore_NilStoreNeverPanicsNeverAutoApproves(t *testing.T) {
 // sessions' grants intact — no unbounded growth, no cross-session leak.
 func TestApprovalGrantStore_ClearSession(t *testing.T) {
 	s := NewApprovalGrantStore()
-	s.Record("session-1", "agent-a", "exec")
-	s.Record("session-1", "agent-b", "read_file")
-	s.Record("session-2", "agent-a", "exec")
+	s.Record("session-1", "agent-a", "exec", nil)
+	s.Record("session-1", "agent-b", "read_file", nil)
+	s.Record("session-2", "agent-a", "exec", nil)
 
 	s.ClearSession("session-1")
 
-	if s.IsAllowed("session-1", "agent-a", "exec") {
+	if s.IsAllowed("session-1", "agent-a", "exec", nil) {
 		t.Error("ClearSession must remove agent-a's grant in session-1")
 	}
-	if s.IsAllowed("session-1", "agent-b", "read_file") {
+	if s.IsAllowed("session-1", "agent-b", "read_file", nil) {
 		t.Error("ClearSession must remove agent-b's grant in session-1")
 	}
-	if !s.IsAllowed("session-2", "agent-a", "exec") {
+	if !s.IsAllowed("session-2", "agent-a", "exec", nil) {
 		t.Error("ClearSession must NOT touch grants belonging to a different session")
+	}
+}
+
+// TestApprovalGrantStore_ArgsAreExactMatch is the locked UAT decision:
+// Always Allow remembers the WHOLE arguments object. A grant for
+// bash {command:ls} must not approve bash {command:rm -rf /}.
+func TestApprovalGrantStore_ArgsAreExactMatch(t *testing.T) {
+	s := NewApprovalGrantStore()
+	ls := map[string]any{"command": "ls"}
+	rm := map[string]any{"command": "rm -rf /"}
+
+	if !s.Record("session-1", "agent-a", "bash", ls) {
+		t.Fatal("Record of ls must succeed")
+	}
+	if !s.IsAllowed("session-1", "agent-a", "bash", ls) {
+		t.Error("same tool, same args must be allowed")
+	}
+	if s.IsAllowed("session-1", "agent-a", "bash", rm) {
+		t.Error("same tool, different args must NOT be allowed")
+	}
+
+	if !s.Record("session-1", "agent-a", "bash", rm) {
+		t.Fatal("a second Record of the same tool with different args must union, not replace")
+	}
+	if !s.IsAllowed("session-1", "agent-a", "bash", ls) {
+		t.Error("union: the first fingerprint must still match after a second Record")
+	}
+	if !s.IsAllowed("session-1", "agent-a", "bash", rm) {
+		t.Error("union: the second fingerprint must also match")
+	}
+}
+
+// TestApprovalGrantStore_KeyOrderDoesNotMatter proves encoding/json's
+// sorted-key marshal is the fingerprint: swapped object keys are the same grant.
+func TestApprovalGrantStore_KeyOrderDoesNotMatter(t *testing.T) {
+	s := NewApprovalGrantStore()
+	if !s.Record("session-1", "agent-a", "bash", map[string]any{"a": 1, "b": 2}) {
+		t.Fatal("Record must succeed")
+	}
+	if !s.IsAllowed("session-1", "agent-a", "bash", map[string]any{"b": 2, "a": 1}) {
+		t.Error("same object with keys swapped must fingerprint identically")
+	}
+}
+
+// TestApprovalGrantStore_NilAndEmptyArgsAreTheSameGrant: a no-arg tool
+// recorded with nil args must match a later empty-map call, and vice versa.
+func TestApprovalGrantStore_NilAndEmptyArgsAreTheSameGrant(t *testing.T) {
+	s := NewApprovalGrantStore()
+	if !s.Record("session-1", "agent-a", "ping", nil) {
+		t.Fatal("Record(nil) must succeed — empty args is a real no-arg grant")
+	}
+	if !s.IsAllowed("session-1", "agent-a", "ping", map[string]any{}) {
+		t.Error("nil Record must match an empty-map IsAllowed")
+	}
+
+	s2 := NewApprovalGrantStore()
+	if !s2.Record("session-1", "agent-a", "ping", map[string]any{}) {
+		t.Fatal("Record(empty map) must succeed")
+	}
+	if !s2.IsAllowed("session-1", "agent-a", "ping", nil) {
+		t.Error("empty-map Record must match a nil IsAllowed")
+	}
+}
+
+// TestApprovalGrantStore_RequestMountPathADoesNotGrantPathB is the
+// product-level consequence: Always Allow on Add folder means "this folder,
+// this session", not "any folder".
+func TestApprovalGrantStore_RequestMountPathADoesNotGrantPathB(t *testing.T) {
+	s := NewApprovalGrantStore()
+	pathA := map[string]any{"host_path": "/Users/dana/Documents/projects/api"}
+	pathB := map[string]any{"host_path": "/Users/dana/Secrets"}
+
+	if !s.Record("session-1", "agent-a", "request_mount", pathA) {
+		t.Fatal("Record of path A must succeed")
+	}
+	if !s.IsAllowed("session-1", "agent-a", "request_mount", pathA) {
+		t.Error("path A must be allowed after Always Allow on path A")
+	}
+	if s.IsAllowed("session-1", "agent-a", "request_mount", pathB) {
+		t.Error("path B must NOT be auto-approved by a grant for path A")
+	}
+}
+
+// TestApprovalGrantStore_InheritFromCopiesFingerprints: a child inherits
+// the parent's exact argument fingerprints, not a blanket tool-name grant.
+func TestApprovalGrantStore_InheritFromCopiesFingerprints(t *testing.T) {
+	s := NewApprovalGrantStore()
+	ls := map[string]any{"command": "ls"}
+	rm := map[string]any{"command": "rm -rf /"}
+	if !s.Record("session-1", "parent", "bash", ls) {
+		t.Fatal("Record must succeed")
+	}
+
+	s.InheritFrom("session-1", "parent", "session-1", "child")
+
+	if !s.IsAllowed("session-1", "child", "bash", ls) {
+		t.Error("child must inherit the parent's fingerprint")
+	}
+	if s.IsAllowed("session-1", "child", "bash", rm) {
+		t.Error("child must NOT inherit a blanket grant for other args of the same tool")
+	}
+}
+
+// TestApprovalGrantStore_MarshalFailureFailsClosed: args that cannot be
+// encoded are never stored and never match.
+func TestApprovalGrantStore_MarshalFailureFailsClosed(t *testing.T) {
+	s := NewApprovalGrantStore()
+	bad := map[string]any{"ch": make(chan int)}
+
+	if s.Record("session-1", "agent-a", "bash", bad) {
+		t.Error("Record must return false when args cannot be marshaled")
+	}
+	if s.IsAllowed("session-1", "agent-a", "bash", bad) {
+		t.Error("IsAllowed must return false when args cannot be marshaled")
+	}
+	if s.IsAllowed("session-1", "agent-a", "bash", nil) {
+		t.Error("a failed Record must not have stored any grant")
 	}
 }

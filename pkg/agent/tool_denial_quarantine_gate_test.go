@@ -138,6 +138,7 @@ func TestRunTurn_QuarantineGate_ShortCircuitsAndTurnContinues(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			AuditLog: true,
@@ -247,6 +248,7 @@ func TestRunTurn_ToolDenialBudget_AbortsAtTenNotEleven(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			AuditLog: true,
@@ -391,6 +393,7 @@ func TestRunTurn_QuarantineGate_KeyMatchesAcrossRenamingHook(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			AuditLog: true,
@@ -501,6 +504,7 @@ func TestRunTurn_QuarantineGate_SkipsBeforeToolHookOnReplay(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			AuditLog: true,

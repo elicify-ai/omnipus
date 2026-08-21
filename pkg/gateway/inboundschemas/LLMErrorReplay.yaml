@@ -6,18 +6,106 @@ required:
   - message
   - retryable
 additionalProperties: false
+# ── Fault attribution vocabulary ─────────────────────────────────────────────
+# Who owns the fault behind a code. The generators (scripts/gen-asyncapi-go and
+# scripts/_gen-asyncapi-types.mjs) emit this as a closed Go/TS type and HARD-FAIL
+# when an x-user-messages entry names an attribution that is not on this list —
+# so a typo'd tag ("providr") breaks codegen instead of silently shipping.
+#
+#   model      — the model itself refused or mishandled the request.
+#   provider   — the hosting provider (not the model) blocked or throttled us.
+#   product    — WE built a bad request. Omnipus is at fault, not the user.
+#   config     — an operator-fixable setting (credentials, workspace membership).
+#   ambiguous  — could be either side; the copy must say where to look.
+#   unknown    — genuinely unclassified.
+x-user-message-attributions:
+  - model
+  - provider
+  - product
+  - config
+  - ambiguous
+  - unknown
+# ── User-facing copy catalogue (SINGLE SOURCE OF TRUTH) ──────────────────────
+# Every enum value below MUST appear here exactly once, with a non-empty message
+# and an attribution drawn from x-user-message-attributions. Both generators
+# validate that bijection and abort on any gap, so "every code has a message and
+# an attribution" is true by construction rather than by review.
+#
+# The Go catalogue (pkg/api/generated/llm_error_messages.gen.go, consumed by
+# pkg/agent/translate_error.go) and the TS catalogue
+# (src/lib/api/generated/llm-error-messages.ts, consumed by src/lib/llm-error.ts)
+# are BOTH generated from this block. Do not hand-write either one.
+#
+# Copy rules enforced by test (pkg/agent/translate_error_test.go and
+# src/lib/llm-error.test.ts):
+#   - a `product` or `config` message never tells the user to switch models,
+#     never asks them to rephrase their content, and — for `config` — never
+#     tells them to retry (a credentials/membership fault will not self-heal).
+#   - no message anywhere tells the user to contact support.
+#
+# There is deliberately NO blanket "From the model:" prefix: attribution is
+# written into each sentence instead, so the copy stays readable and each
+# message names the real owner of the fault.
+x-user-messages:
+  media_unsupported:
+    message: "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it."
+    attribution: model
+  provider_rejected:
+    message: "The model declined to respond to this request. Try rephrasing it, or switch models."
+    attribution: model
+  request_too_large:
+    message: "We built a request that was too large for this model to accept. Try shortening your message, or switch to a model with a larger limit."
+    attribution: product
+  provider_auth_failed:
+    message: "The model provider rejected our credentials. Check this provider’s API key in Settings."
+    attribution: config
+  rate_limited:
+    message: "The model provider is temporarily overloaded. Wait a moment, then retry."
+    attribution: provider
+  network:
+    message: "We couldn’t reach the model provider. Check your internet connection and retry."
+    attribution: ambiguous
+  content_policy:
+    message: "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content."
+    attribution: provider
+  context_too_long:
+    message: "This turn needed more context than the model can hold, even after trimming older turns automatically. Try a model with a larger context window, or shorten this message."
+    attribution: product
+  tool_args:
+    message: "The model filled in a tool’s arguments incorrectly. Retry — Verbose chat shows which tool and what went wrong."
+    attribution: model
+  schema:
+    message: "We sent the model provider a request it couldn’t process — that’s a bug on our side, not yours. Retry the turn, or open Verbose chat for technical details."
+    attribution: product
+  agent_not_configured:
+    message: "This agent isn’t on any workspace yet, so it has nowhere to work. Add it to a workspace team to get started."
+    attribution: config
+  workspace_unavailable:
+    message: "This agent’s working folder could not be opened. Check that the disk has space and the folder is writable."
+    attribution: config
+  model_unavailable:
+    message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
+    attribution: config
+  unknown:
+    message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
+    attribution: unknown
 properties:
   code:
     type: string
     enum:
       - media_unsupported
       - provider_rejected
+      - request_too_large
+      - provider_auth_failed
       - rate_limited
       - network
       - content_policy
       - context_too_long
       - tool_args
       - schema
+      - agent_not_configured
+      - workspace_unavailable
+      - model_unavailable
       - unknown
   message:
     type: string

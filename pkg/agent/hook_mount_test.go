@@ -51,6 +51,7 @@ func newConfiguredHookLoop(t *testing.T, provider *llmHookTestProvider, hooks co
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 		Hooks: hooks,
 	}

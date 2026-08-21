@@ -1,0 +1,46 @@
+title: HostFolderEntry
+description: >
+  One directory inside a HostFolderListing, with the verdict on whether it may
+  be mounted. The verdict travels WITH the row so the client can disable the
+  choice at the point of selection, rather than letting the operator pick a
+  folder and only then be told no.
+type: object
+additionalProperties: false
+required:
+  - name
+  - path
+  - mountable
+properties:
+  name:
+    type: string
+    minLength: 1
+    description: The directory's own name (final path segment).
+    example: "projects"
+  path:
+    type: string
+    minLength: 1
+    description: The directory's absolute path.
+    example: "/Users/dana/Documents/projects"
+  mountable:
+    type: boolean
+    description: >
+      False when mounting this directory would be REFUSED — that is, when it is
+      or lies inside the Omnipus data directory (FR-7.5), the one hard boundary,
+      because mounting it would make config.json and master.key writable and let
+      an agent disable its own sandbox.
+    example: true
+  broad:
+    type: boolean
+    description: >
+      True when this directory is one of the deliberately wide locations (the
+      home directory, the filesystem root, a top-level system directory).
+      Mounting it is ALLOWED — the operator's call — but must be visibly flagged
+      before they choose it, never silently accepted.
+    example: false
+  reason:
+    type: string
+    description: >
+      A short human-readable explanation, present only when `mountable` is false
+      or `broad` is true. Written for the operator, naming what the grant would
+      cover or why it is refused.
+    example: "Inside the Omnipus data directory — mounting it would expose your keys."

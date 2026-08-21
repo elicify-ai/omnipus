@@ -1,0 +1,42 @@
+title: HostFolderListing
+description: >
+  One directory on the operator's own machine, listed so they can pick a folder
+  to mount into a workspace (ADR-063 FR-7.1).
+
+  This exists because a web page CANNOT open the native folder picker and learn
+  a real filesystem path — the browser deliberately withholds it. Without a
+  server-side listing the only way to add a mount is to type an absolute path
+  from memory, which is both unpleasant and error-prone in a control whose whole
+  job is to be deliberate.
+
+  It exposes nothing new. Post-ADR-062 reading is open, so any agent can already
+  read anywhere on this machine; this gives the OPERATOR the same view their own
+  agents have. It is admin-authenticated and is deliberately NOT reachable from
+  an agent tool — an agent that wants a folder asks for it and the operator
+  approves, rather than browsing for one itself.
+type: object
+additionalProperties: false
+required:
+  - path
+  - entries
+properties:
+  path:
+    type: string
+    minLength: 1
+    description: The absolute, symlink-resolved path this listing describes.
+    example: "/Users/dana/Documents"
+  parent:
+    type: string
+    description: >
+      The parent directory's absolute path, for an "up" control. Absent at the
+      filesystem root, which is what tells the client there is nowhere further
+      up to go.
+    example: "/Users/dana"
+  entries:
+    type: array
+    description: >
+      The directories directly inside `path`, sorted by name. Only directories
+      are returned: a mount target is always a folder, and listing files would
+      show the operator thousands of rows none of which they can pick.
+    items:
+      $ref: "./HostFolderEntry.yaml"

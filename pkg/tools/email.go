@@ -104,11 +104,16 @@ func (t *ReadInboxTool) Parameters() map[string]any {
 				"type":        "integer",
 				"minimum":     1,
 				"maximum":     100,
-				"description": "Maximum number of messages to return (default 20).",
+				"description": "Maximum number of messages to return (default 20, hard-capped at 100).",
 			},
 			"unseen_only": map[string]any{
 				"type":        "boolean",
 				"description": "When true, return only unread messages.",
+			},
+			"before_uid": map[string]any{
+				"type":        "integer",
+				"minimum":     1,
+				"description": "Pagination cursor: return only messages with a uid strictly less than this. Pass the smallest uid from the previous page to fetch the next (older) page.",
 			},
 		},
 	}
@@ -124,8 +129,16 @@ func (t *ReadInboxTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		limit = int(v)
 	}
 	unseenOnly, _ := args["unseen_only"].(bool)
+	beforeUID, err := parseBeforeUID(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
 
-	msgs, err := tp.ReadInbox(ctx, limit, unseenOnly)
+	msgs, err := tp.ReadInbox(ctx, email.InboxOptions{
+		Limit:      limit,
+		UnseenOnly: unseenOnly,
+		BeforeUID:  beforeUID,
+	})
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("read_inbox failed: %v", err))
 	}
@@ -148,7 +161,7 @@ func (t *SearchEmailTool) Name() string           { return "search_email" }
 func (t *SearchEmailTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *SearchEmailTool) Category() ToolCategory { return CategoryCommunication }
 func (t *SearchEmailTool) Description() string {
-	return "Search your mailbox for messages matching a free-text query (matched against subject, sender, and body). Returns envelope-only results (uid, from, subject, date), newest first."
+	return "Search your mailbox for messages matching a free-text query. By default matches sender and subject (fast); set body=true to also scan message bodies (slower on large mailboxes). Returns an object with an envelope-only results array (newest first), the total number of matches, a truncated flag when there were more matches than the limit, and a next_before_uid pagination cursor."
 }
 
 func (t *SearchEmailTool) Parameters() map[string]any {
@@ -163,7 +176,16 @@ func (t *SearchEmailTool) Parameters() map[string]any {
 				"type":        "integer",
 				"minimum":     1,
 				"maximum":     100,
-				"description": "Maximum number of results (default 20).",
+				"description": "Maximum number of results (default 20, hard-capped at 100).",
+			},
+			"before_uid": map[string]any{
+				"type":        "integer",
+				"minimum":     1,
+				"description": "Pagination cursor: return only matches with a uid strictly less than this. Pass next_before_uid from the previous page to fetch the next (older) page.",
+			},
+			"body": map[string]any{
+				"type":        "boolean",
+				"description": "When true, also scan message bodies (not just sender/subject). Slower on large mailboxes; leave false unless a header match is insufficient.",
 			},
 		},
 		"required": []string{"query"},
@@ -183,11 +205,28 @@ func (t *SearchEmailTool) Execute(ctx context.Context, args map[string]any) *Too
 	if v, ok := args["limit"].(float64); ok && v >= 1 {
 		limit = int(v)
 	}
-	msgs, err := tp.Search(ctx, query, limit)
+	beforeUID, err := parseBeforeUID(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	bodySearch, _ := args["body"].(bool)
+
+	result, err := tp.Search(ctx, query, email.SearchOptions{
+		Limit:     limit,
+		BeforeUID: beforeUID,
+		Body:      bodySearch,
+	})
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("search_email failed: %v", err))
 	}
-	return marshalMessages(msgs, "search_email")
+	if result.Messages == nil {
+		result.Messages = []email.Message{}
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("search_email: marshal: %v", err))
+	}
+	return NewToolResult(string(data))
 }
 
 // --- read_message ---
@@ -377,6 +416,24 @@ func marshalMessages(msgs []email.Message, toolName string) *ToolResult {
 		return ErrorResult(fmt.Sprintf("%s: marshal: %v", toolName, err))
 	}
 	return NewToolResult(string(data))
+}
+
+// parseBeforeUID resolves the optional before_uid pagination cursor from the
+// tool arguments. An ABSENT (or null) before_uid is valid and means "no cursor"
+// → (0, nil). A PRESENT before_uid that is not a positive integer is an ERROR,
+// never silently coerced to 0: a malformed cursor swallowed as 0 would rerun the
+// query as page 1, re-processing messages the caller already saw (and, for a
+// pagination loop, never terminating).
+func parseBeforeUID(args map[string]any) (uint32, error) {
+	raw, present := args["before_uid"]
+	if !present || raw == nil {
+		return 0, nil
+	}
+	uid, ok := parseUID(raw)
+	if !ok {
+		return 0, fmt.Errorf("before_uid must be a positive integer")
+	}
+	return uid, nil
 }
 
 // parseUID coerces a JSON arg (float64 from encoding/json, or int) to a uint32

@@ -116,11 +116,11 @@ func TestFinishTaskRun_ToolDenialBudgetAbort_TaskLandsFailedNamingToolReasonAgen
 				MaxToolIterations: 20,
 			},
 			// A real, NAMED agent config entry for "mia" — required so
-			// ExecuteTask's registry.GetAgent(t.AgentID) resolves it (the
-			// implicitly-registered "main" sentinel agent is not enough:
-			// BDD-08 requires the FAILING task be assigned to an agent whose
-			// own id ("mia") is one of the three fixture values asserted in
-			// Task.Result).
+			// ExecuteTask's registry.GetAgent(t.AgentID) resolves it. There
+			// is no implicit sentinel agent to fall back on anymore: BDD-08
+			// requires the FAILING task be assigned to an agent whose own id
+			// ("mia") is one of the three fixture values asserted in
+			// Task.Result.
 			List: []config.AgentConfig{
 				{
 					ID:    agentID,

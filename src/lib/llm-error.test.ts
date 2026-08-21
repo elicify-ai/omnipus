@@ -7,10 +7,11 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { llmErrorAttributionValues, llmErrorCodes } from './api/generated/llm-error-messages'
 import {
+  codeToAttribution,
   codeToDisplay,
   codeToMessage,
-  fromModelPrefix,
   getLLMErrorDisplay,
   readEntryIdFromFrame,
   readLLMErrorFromFrame,
@@ -19,21 +20,48 @@ import {
   type LLMErrorCode,
 } from './llm-error'
 
+// Every code on the wire, listed explicitly so adding one is a conscious
+// test-side decision rather than something the suite absorbs silently.
+//
+// This literal used to name 7 of the then-9 codes and nothing noticed — the
+// per-code loops below simply skipped `tool_args` and `schema` forever. The
+// equality assertion immediately after is the fix: the list can go stale, but
+// it can no longer go stale QUIETLY.
 const ALL_CODES: LLMErrorCode[] = [
   'media_unsupported',
   'provider_rejected',
+  'request_too_large',
+  'provider_auth_failed',
   'rate_limited',
   'network',
   'content_policy',
   'context_too_long',
+  'tool_args',
+  'schema',
+  'agent_not_configured',
+  'workspace_unavailable',
+  'model_unavailable',
   'unknown',
 ]
 
 describe('llm-error — codeToDisplay map', () => {
+  it('ALL_CODES covers exactly the generated contract enum (no silent under-testing)', () => {
+    expect([...ALL_CODES].sort()).toEqual([...llmErrorCodes].sort())
+  })
+
   it('has an entry for every backend code (no missing translations)', () => {
     for (const code of ALL_CODES) {
       expect(codeToDisplay[code], `code "${code}" must have display copy`).toBeTypeOf('string')
-      expect(codeToDisplay[code].length, `code "${code}" copy must be non-empty`).toBeGreaterThan(0)
+      expect(codeToDisplay[code].trim().length, `code "${code}" copy must be non-empty`).toBeGreaterThan(0)
+    }
+  })
+
+  it('has a valid attribution for every backend code', () => {
+    for (const code of ALL_CODES) {
+      expect(
+        llmErrorAttributionValues as readonly string[],
+        `code "${code}" must carry an attribution from the contract vocabulary`,
+      ).toContain(codeToAttribution[code])
     }
   })
 
@@ -53,45 +81,117 @@ describe('llm-error — codeToDisplay map', () => {
     expect(codeToMessage(null as unknown as undefined)).toBe(codeToDisplay.unknown)
   })
 
-  // Attribution: errors whose cause is upstream of Omnipus carry the
-  // "From the model:" prefix so the user knows the failure is not a product
-  // bug. Failures we own outright (5xx, fallback) carry no prefix;
-  // `network` is ambiguous and carries no prefix because the wording
-  // ("check the network") already disambiguates. Mirrors Go userMessages
-  // in pkg/agent/translate_error.go so the bubble and the persisted
-  // transcript stay in one voice. See
-  // docs/internal/uat/ADR-051-rev4-error-copy-review.md for rationale.
-  it('upstream-caused codes start with the "From the model:" attribution prefix', () => {
-    const upstreamCodes: LLMErrorCode[] = [
-      'media_unsupported',
-      'provider_rejected',
-      'rate_limited',
-      'content_policy',
-      'context_too_long',
-      'tool_args',
-      'schema',
-      'unknown',
-    ]
-    for (const code of upstreamCodes) {
+  // The blanket "From the model:" prefix is DELETED. It blamed the model for
+  // every failure — including the ones Omnipus causes (an oversized request we
+  // built) and the ones an operator fixes in Settings (a bad API key).
+  // Attribution now lives in each sentence, plus a machine-readable tag.
+  it('no copy carries the retired "From the model:" blanket prefix', () => {
+    for (const code of ALL_CODES) {
       expect(
-        codeToDisplay[code].startsWith('From the model:'),
-        `code "${code}" copy must start with "From the model:" prefix; got: ${codeToDisplay[code]}`,
-      ).toBe(true)
+        codeToDisplay[code].includes('From the model:'),
+        `code "${code}" must not reintroduce the retired blanket prefix; got: ${codeToDisplay[code]}`,
+      ).toBe(false)
     }
   })
 
-  it('ambiguous codes (network) do NOT carry the prefix', () => {
-    expect(codeToDisplay.network.startsWith('From the model:')).toBe(false)
-    // Wording already disambiguates; "check the network" cues the user.
-    expect(codeToDisplay.network.toLowerCase()).toContain('network')
+  // ── The class-killer ───────────────────────────────────────────────────────
+  //
+  // When the fault is OURS (`product`) or the operator's SETTINGS (`config`),
+  // the copy must not push the user at remedies that cannot possibly work.
+  // Telling someone to switch models because we built a malformed request, or
+  // to rephrase their perfectly fine sentence because an API key is wrong,
+  // sends them off to burn time on the wrong thing — and hides the real defect
+  // behind user error. Each ban below is a sentence that was in the shipped
+  // copy before this change.
+  const OURS: LLMErrorCode[] = ALL_CODES.filter(
+    (code) => codeToAttribution[code] === 'product' || codeToAttribution[code] === 'config',
+  )
+
+  it('has at least one product-attributed and one config-attributed code (guard is not vacuous)', () => {
+    expect(ALL_CODES.some((c) => codeToAttribution[c] === 'product')).toBe(true)
+    expect(ALL_CODES.some((c) => codeToAttribution[c] === 'config')).toBe(true)
   })
 
-  it('exposes the fromModelPrefix constant so renderers can style it', () => {
-    // Renderers may want to split the bubble copy on this prefix and render
-    // the attribution in a muted `<small>` tag. Pin the exact wording so
-    // the prefix match between the constant and every prefixed copy stays
-    // a compile-time invariant.
-    expect(fromModelPrefix).toBe('From the model:')
+  it('never tells the user to switch models when the fault is ours or the operator’s', () => {
+    // Unqualified model-shopping only. "switch to a model with a larger limit"
+    // is fine: it names the property that would actually help.
+    const banned = ['switch models', 'switch model.', 'different model', 'another model', 'pick a model']
+    for (const code of OURS) {
+      const copy = codeToDisplay[code].toLowerCase()
+      for (const phrase of banned) {
+        expect(
+          copy.includes(phrase),
+          `code "${code}" is attributed "${codeToAttribution[code]}" but tells the user to shop for a model ("${phrase}"); got: ${codeToDisplay[code]}`,
+        ).toBe(false)
+      }
+    }
+  })
+
+  it('never asks the user to rephrase when the fault is ours or the operator’s', () => {
+    for (const code of OURS) {
+      const copy = codeToDisplay[code].toLowerCase()
+      for (const phrase of ['rephras', 'reword', 'try asking differently']) {
+        expect(
+          copy.includes(phrase),
+          `code "${code}" is attributed "${codeToAttribution[code]}" but blames the user's wording ("${phrase}"); got: ${codeToDisplay[code]}`,
+        ).toBe(false)
+      }
+    }
+  })
+
+  it('never tells the user to retry a config fault (retrying cannot fix a setting)', () => {
+    // `product` may legitimately suggest a retry — a request we built badly can
+    // come out right the second time. A `config` fault cannot: the same wrong
+    // API key, the same missing workspace membership, the same failure.
+    for (const code of ALL_CODES.filter((c) => codeToAttribution[c] === 'config')) {
+      const copy = codeToDisplay[code].toLowerCase()
+      for (const phrase of ['retry', 'try again']) {
+        expect(
+          copy.includes(phrase),
+          `code "${code}" is a config fault but tells the user to ${phrase}; got: ${codeToDisplay[code]}`,
+        ).toBe(false)
+      }
+    }
+  })
+
+  it('never tells the user to contact support (Omnipus is self-hosted; there is no support desk)', () => {
+    const banned = [
+      'contact support',
+      'contact us',
+      'customer support',
+      'support team',
+      'our support',
+      'reach out',
+      'get in touch',
+      'file a ticket',
+      'open a ticket',
+      'help desk',
+      'helpdesk',
+    ]
+    for (const code of ALL_CODES) {
+      const copy = codeToDisplay[code].toLowerCase()
+      for (const phrase of banned) {
+        expect(
+          copy.includes(phrase),
+          `code "${code}" points the user at a support desk that does not exist ("${phrase}"); got: ${codeToDisplay[code]}`,
+        ).toBe(false)
+      }
+    }
+  })
+
+  it('attributes the three split codes to their real fault owners', () => {
+    // The single `provider_rejected` bucket used to swallow all three.
+    expect(codeToAttribution.request_too_large).toBe('product')
+    expect(codeToAttribution.provider_auth_failed).toBe('config')
+    expect(codeToAttribution.agent_not_configured).toBe('config')
+    // …and each says where to go.
+    expect(codeToDisplay.provider_auth_failed.toLowerCase()).toContain('settings')
+    expect(codeToDisplay.agent_not_configured.toLowerCase()).toContain('workspace')
+  })
+
+  it('ambiguous codes (network) name where to look instead of assigning blame', () => {
+    expect(codeToAttribution.network).toBe('ambiguous')
+    expect(codeToDisplay.network.toLowerCase()).toContain('internet connection')
   })
 })
 

@@ -62,6 +62,12 @@ func TestSetupAndStartServices_TaskExecutorLifecycleStoreWiring(t *testing.T) {
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
+			// A real, chat-target agent ("mia") so registry.GetAgent("mia")
+			// resolves for the standalone task dispatched below. The retired
+			// "main" sentinel used to be registered implicitly regardless of
+			// cfg (pkg/agent/registry.go's old always-on fallback); it is gone
+			// with no back-compat, so this harness must seed a real agent.
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -102,15 +108,15 @@ func TestSetupAndStartServices_TaskExecutorLifecycleStoreWiring(t *testing.T) {
 	tStore := agent.GetTaskStore(al)
 	require.NotNil(t, tStore, "boot must construct a task store")
 
-	// A standalone task (PlanID == "") assigned to "main" — the always-
-	// registered default agent sentinel (agent/registry.go DefaultAgentID),
-	// so registry.GetAgent("main") resolves without any workspace/team setup.
+	// A standalone task (PlanID == "") assigned to "mia" — the one real,
+	// chat-target agent seeded into cfg.Agents.List above, so
+	// registry.GetAgent("mia") resolves without any workspace/team setup.
 	// WorkspaceID only needs to be non-empty (task.Store.normalize enforces
 	// presence, not FK existence — the workspace-membership check is a
 	// REST/tool-layer concern this Go-level dispatch bypasses entirely).
 	tsk := &task.Task{
 		Title:       "lifecycle-wiring-smoke",
-		AgentID:     "main",
+		AgentID:     "mia",
 		Status:      task.StatusNext,
 		WorkspaceID: "lifecycle-wiring-smoke-ws",
 	}

@@ -566,6 +566,14 @@ function OnboardingWizard() {
       // refetches once the user reaches chat, instead of staying empty for
       // the rest of the page session (only a manual reload used to recover).
       queryClient.invalidateQueries({ queryKey: ['commands'] })
+      // Same reasoning, same moment, different cache entry: ['workspaces'] is
+      // read by DefaultWorkspaceRedirect to decide where the user lands, and
+      // it is shared with Sidebar's 30s poll. On a fresh install any observer
+      // that mounted before this cookie existed holds an errored or empty
+      // entry, and the landing decision is made from it. The ['commands']
+      // invalidation above was added for exactly this failure and was never
+      // generalised to the key that governs where the user actually ends up.
+      queryClient.invalidateQueries({ queryKey: ['workspaces'] })
       setCompleted(true)
     } catch (err) {
       // Surface the failure both inline (so the user stays on step 3 and can

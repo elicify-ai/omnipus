@@ -66,6 +66,11 @@ func GeneralBuiltinMetadata() []Tool {
 	// land (D-1) — see pkg/agent.LibraryDirName.
 	out = append(out, NewLibraryListTool("", false))
 	out = append(out, NewLibraryReadTool("", false, 0))
+	// request_mount (ADR-063 FR-7.2): the agent's way to ASK for write access
+	// to a real folder. Catalogued with empty home/workspace because this list
+	// is the static catalog used for policy enumeration and the tool picker;
+	// the per-turn instance is built with a real workspace when registered.
+	out = append(out, NewRequestMountTool(""))
 
 	// --- Web tools (CategoryWeb) ---
 	// search_web: use DuckDuckGoEnabled to satisfy the at-least-one-provider

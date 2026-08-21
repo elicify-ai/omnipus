@@ -49,9 +49,10 @@ import (
 // MUTATION-SENSITIVE: reverting the cfg-rebase block inside
 // UpsertAgentFast's lost-race branch (registry.go) — i.e. retrying with the
 // same, now-stale `cfg` instead of rebasing onto the live al.cfg — makes
-// every "must survive" assertion below fail: GetDefaultAgent resolves to
-// the "main" sentinel instead of "delta", and
-// al.GetConfig().Agents.Defaults.DefaultAgentID reverts to "".
+// every "must survive" assertion below fail: GetDefaultAgent falls back to
+// its lexicographically-first-non-worker fallback (e.g. "alpha") instead of
+// resolving "delta" (there is no "main" sentinel to fall back to anymore),
+// and al.GetConfig().Agents.Defaults.DefaultAgentID reverts to "".
 func TestUpsertAgentFast_ConcurrentFullReload_CfgNotReverted(t *testing.T) {
 	al := buildFastUpsertTestLoop(t, []config.AgentConfig{
 		{ID: "alpha", Name: "Alpha", Type: config.AgentTypeCustom},

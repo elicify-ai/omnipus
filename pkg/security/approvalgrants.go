@@ -10,39 +10,48 @@
 // idle, gateway restart, refresh), every reconnect created a fresh hook with
 // an empty map, silently discarding the grant and re-prompting the user.
 //
-// ApprovalGrantStore fixes this by keying grants on (session_id, agent_id,
-// tool_name) rather than the connection, so the grant survives reconnects for
-// the lifetime of the SESSION, and correctly requires a fresh prompt when a
-// DIFFERENT agent (in the same session) or a DIFFERENT session calls the same
-// tool.
+// ApprovalGrantStore keys grants on (session_id, agent_id, tool_name, args
+// fingerprint) rather than the connection, so the grant survives reconnects
+// for the lifetime of the SESSION. A grant recorded for one argument object
+// never auto-approves a later call of the same tool with different arguments
+// ("Always Allow" on `request_mount` of folder A is "this folder, this
+// session", not "any folder"). A DIFFERENT agent in the same session, or a
+// DIFFERENT session calling the same tool, still requires a fresh prompt.
 
 package security
 
 import (
+	"encoding/json"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 )
 
-// grantKey scopes a set of always-allowed tool names to one (session, agent)
-// pair. Both fields participate in the key so a grant recorded for one agent
-// never applies to a different agent running in the same session, and a
-// grant recorded in one session never applies to another session.
+// grantKey scopes a set of always-allowed (tool → argument fingerprints) to
+// one (session, agent) pair. Both fields participate in the key so a grant
+// recorded for one agent never applies to a different agent running in the
+// same session, and a grant recorded in one session never applies to another
+// session.
 type grantKey struct {
 	sessionID string
 	agentID   string
 }
 
 // ApprovalGrantStore is a thread-safe, session-scoped store of "Always
-// Allow" tool-approval grants. The zero value is not usable — construct with
-// NewApprovalGrantStore. Every method is nil-receiver-safe: calling a method
-// on a nil *ApprovalGrantStore never panics and always resolves to the
-// fail-safe outcome (IsAllowed => false, i.e. "ask"; Record/InheritFrom/
-// ClearSession => no-op). This lets callers hold a possibly-unwired store
-// (e.g. in a test fixture) without an extra nil check at every call site.
+// Allow" tool-approval grants. Each (session, agent, tool) holds a SET of
+// argument fingerprints: one Always Allow on `bash {command:ls}` does not
+// approve `bash {command:rm -rf /}`; a later Always Allow on a different
+// argv for the same tool is a second fingerprint (union).
+//
+// The zero value is not usable — construct with NewApprovalGrantStore. Every
+// method is nil-receiver-safe: calling a method on a nil *ApprovalGrantStore
+// never panics and always resolves to the fail-safe outcome (IsAllowed =>
+// false, i.e. "ask"; Record/InheritFrom/ClearSession => no-op). This lets
+// callers hold a possibly-unwired store (e.g. in a test fixture) without an
+// extra nil check at every call site.
 type ApprovalGrantStore struct {
 	mu     sync.Mutex
-	grants map[grantKey]map[string]struct{}
+	grants map[grantKey]map[string]map[string]struct{}
 
 	// inheritSourceMiss counts InheritFrom calls whose four key components
 	// were all non-empty but whose SOURCE key held no grants, so nothing was
@@ -73,21 +82,42 @@ type ApprovalGrantStore struct {
 // NewApprovalGrantStore creates an empty grant store.
 func NewApprovalGrantStore() *ApprovalGrantStore {
 	return &ApprovalGrantStore{
-		grants: make(map[grantKey]map[string]struct{}),
+		grants: make(map[grantKey]map[string]map[string]struct{}),
 	}
 }
 
+// fingerprintArgs returns the canonical JSON of args. encoding/json sorts
+// object keys at every nesting level, so key order does not matter. A nil
+// map and an empty map both encode as "{}" and therefore match. A Marshal
+// failure returns ("", false) so the caller can fail closed.
+func fingerprintArgs(args map[string]any) (string, bool) {
+	if args == nil {
+		args = map[string]any{}
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		return "", false
+	}
+	return string(b), true
+}
+
 // IsAllowed reports whether (sessionID, agentID) has previously been granted
-// "Always Allow" for tool.
+// "Always Allow" for tool with this exact argument object.
 //
 // Fail-safe (consent boundary — SEC audit): a nil store, or an empty
 // sessionID / agentID / tool, ALWAYS returns false. This is deliberate and
 // load-bearing: an empty string must never be treated as a valid scoping key,
 // or two unrelated callers that both happen to have an empty session_id (or
-// empty agent_id) would silently share the same grant. Callers MUST keep
-// prompting ("ask") whenever this returns false.
-func (s *ApprovalGrantStore) IsAllowed(sessionID, agentID, tool string) bool {
+// empty agent_id) would silently share the same grant. An args map that
+// cannot be marshaled also returns false. An empty (or nil) args map is NOT
+// fail-closed — it is a real grant for a no-arg tool, fingerprinted as "{}".
+// Callers MUST keep prompting ("ask") whenever this returns false.
+func (s *ApprovalGrantStore) IsAllowed(sessionID, agentID, tool string, args map[string]any) bool {
 	if s == nil || sessionID == "" || agentID == "" || tool == "" {
+		return false
+	}
+	fp, ok := fingerprintArgs(args)
+	if !ok {
 		return false
 	}
 	s.mu.Lock()
@@ -96,34 +126,49 @@ func (s *ApprovalGrantStore) IsAllowed(sessionID, agentID, tool string) bool {
 	if !ok {
 		return false
 	}
-	_, granted := tools[tool]
+	fps, ok := tools[tool]
+	if !ok {
+		return false
+	}
+	_, granted := fps[fp]
 	return granted
 }
 
-// Record grants "Always Allow" for tool, scoped to (sessionID, agentID).
+// Record grants "Always Allow" for tool with this exact argument object,
+// scoped to (sessionID, agentID). A later Record of the same tool with a
+// different argv adds a second fingerprint; it does not replace the first.
 //
 // Returns true when the grant was actually recorded, false when this call was
-// a no-op — a nil store or an empty sessionID / agentID / tool provides no
-// safe key to record the grant under, and recording it under an empty-string
-// key would risk exactly the cross-caller collision IsAllowed's fail-safe
-// check exists to prevent. Callers that report success back to a human (e.g.
-// the "always" tool-approval action) MUST check this return value rather than
-// assuming the grant took effect — see rest_tool_registry.go's
-// HandleToolApprovals, which logs a Warn instead of Info when Record no-ops so
-// the operator knows the tool will keep prompting on the next matching call.
-func (s *ApprovalGrantStore) Record(sessionID, agentID, tool string) bool {
+// a no-op — a nil store, an empty sessionID / agentID / tool, or an args map
+// that cannot be marshaled. Recording under an empty-string key would risk
+// exactly the cross-caller collision IsAllowed's fail-safe check exists to
+// prevent. Callers that report success back to a human (e.g. the "always"
+// tool-approval action) MUST check this return value rather than assuming the
+// grant took effect — see rest_tool_registry.go's HandleToolApprovals, which
+// logs a Warn instead of Info when Record no-ops so the operator knows the
+// tool will keep prompting on the next matching call.
+func (s *ApprovalGrantStore) Record(sessionID, agentID, tool string, args map[string]any) bool {
 	if s == nil || sessionID == "" || agentID == "" || tool == "" {
+		return false
+	}
+	fp, ok := fingerprintArgs(args)
+	if !ok {
 		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := grantKey{sessionID: sessionID, agentID: agentID}
-	set, ok := s.grants[key]
+	tools, ok := s.grants[key]
 	if !ok {
-		set = make(map[string]struct{})
-		s.grants[key] = set
+		tools = make(map[string]map[string]struct{})
+		s.grants[key] = tools
 	}
-	set[tool] = struct{}{}
+	fps, ok := tools[tool]
+	if !ok {
+		fps = make(map[string]struct{})
+		tools[tool] = fps
+	}
+	fps[fp] = struct{}{}
 	return true
 }
 
@@ -131,7 +176,8 @@ func (s *ApprovalGrantStore) Record(sessionID, agentID, tool string) bool {
 // {srcSessionID, srcAgentID} into the DESTINATION key {dstSessionID,
 // dstAgentID} — a union, not a replace, so any grant the destination already
 // holds in its own right is preserved, and a copy, not a move, so the source
-// still resolves afterwards.
+// still resolves afterwards. Every tool → every argument fingerprint is
+// copied.
 //
 // This is copy-at-spawn semantics: it snapshots the source's grants at the
 // moment of the call. Grants recorded on the source AFTER a child has already
@@ -208,11 +254,18 @@ func (s *ApprovalGrantStore) InheritFrom(srcSessionID, srcAgentID, dstSessionID,
 	if srcKey != dstKey {
 		dstSet := s.grants[dstKey]
 		if dstSet == nil {
-			dstSet = make(map[string]struct{}, len(srcSet))
+			dstSet = make(map[string]map[string]struct{}, len(srcSet))
 			s.grants[dstKey] = dstSet
 		}
-		for tool := range srcSet {
-			dstSet[tool] = struct{}{}
+		for tool, srcFPs := range srcSet {
+			dstFPs := dstSet[tool]
+			if dstFPs == nil {
+				dstFPs = make(map[string]struct{}, len(srcFPs))
+				dstSet[tool] = dstFPs
+			}
+			for fp := range srcFPs {
+				dstFPs[fp] = struct{}{}
+			}
 		}
 	}
 	s.mu.Unlock()

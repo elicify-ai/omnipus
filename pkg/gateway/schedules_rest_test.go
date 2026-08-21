@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 func newSchedulesTestAPI(t *testing.T) (*restAPI, *cron.CronService) {
@@ -132,11 +133,7 @@ func TestSchedulesAPI_Update400WorkerOwner(t *testing.T) {
 	job, err := cs.AddJob(
 		"daily",
 		cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)},
-		"go",
-		false,
-		"",
-		"",
-	)
+		"go")
 	require.NoError(t, err)
 	job.AgentID = "mia"
 	job.CreatedBy = "alice"
@@ -299,11 +296,7 @@ func TestSchedulesAPI_ListMapsTriggerStateRuns(t *testing.T) {
 	job, err := cs.AddJob(
 		"nightly",
 		cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)},
-		"go",
-		false,
-		"telegram",
-		"c1",
-	)
+		"go")
 	require.NoError(t, err)
 	job.AgentID = "mia"
 	job.SessionMode = cron.SessionModeContinue
@@ -342,7 +335,7 @@ func TestSchedulesAPI_ListMapsTriggerStateRuns(t *testing.T) {
 
 func TestSchedulesAPI_PauseToggles(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
-	job, err := cs.AddJob("j", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "m", false, "", "")
+	job, err := cs.AddJob("j", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "m")
 	require.NoError(t, err)
 	job.AgentID = "mia"
 	require.NoError(t, cs.UpdateJob(job))
@@ -362,20 +355,25 @@ func TestSchedulesAPI_PauseToggles(t *testing.T) {
 func TestSchedulesAPI_RunNow(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
 	// deliver=true so RunNow completes deterministically without an agent turn.
-	// Wire a runner that direct-sends.
+	// Wire a runner that wakes the owning agent — the only mode a schedule has
+	// now that the deliver=true direct-send path is gone (ADR-065 spec FR-8).
+	// That path needed no session store, which is why this harness never had
+	// one; waking an agent does.
+	sessStore, err := session.NewUnifiedStore(t.TempDir())
+	require.NoError(t, err)
 	msgBus := bus.NewMessageBus()
 	go func() {
 		for range msgBus.OutboundChan() {
 		}
 	}()
 	cs.SetRunner(newScheduledRunner(
-		&fakeExecutor{cfg: api.agentLoop.GetConfig()},
+		&fakeExecutor{store: sessStore, cfg: api.agentLoop.GetConfig(), reply: "ok"},
 		fakeChecker{registered: map[string]bool{"mia": true}},
 		msgBus, api.notifStore, api.agentLoop.GetConfig,
 	))
 
-	job, err := cs.AddJob("rn", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "hi", true, "telegram", "c1")
-	require.NoError(t, err)
+	job, err2 := cs.AddJob("rn", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "hi")
+	require.NoError(t, err2)
 	job.AgentID = "mia"
 	require.NoError(t, cs.UpdateJob(job))
 
@@ -393,7 +391,7 @@ func TestSchedulesAPI_RunNow(t *testing.T) {
 
 func TestSchedulesAPI_DeleteAndGet(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
-	job, err := cs.AddJob("d", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "m", false, "", "")
+	job, err := cs.AddJob("d", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "m")
 	require.NoError(t, err)
 	job.AgentID = "mia"
 	require.NoError(t, cs.UpdateJob(job))

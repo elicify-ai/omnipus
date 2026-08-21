@@ -37,6 +37,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/pathsafe"
@@ -71,6 +72,28 @@ var (
 	// ErrAlreadyExists marks a rename/move/copy destination that is
 	// already occupied.
 	ErrAlreadyExists = errors.New("library: destination already exists")
+	// ErrIsMountRoot marks an operation aimed at a mounted folder's own entry
+	// rather than at something inside it.
+	//
+	// This is a DATA-LOSS guard, not a tidiness rule. A mount resolves to its
+	// own os.Root, so "delete work/myrepo" would reach that root as "." and
+	// recursively remove the contents of the operator's real folder — their
+	// actual repository, not a workspace file. Revoking a mount is a different
+	// operation with a different verb (unmount), and it deletes nothing.
+	//
+	// Rename is refused for the milder reason that a mount's name lives in the
+	// mount record; renaming the symlink alone would desynchronise the two.
+	ErrIsMountRoot = errors.New("library: path is a mounted folder's own entry")
+	// ErrCrossRootTransfer marks a move/rename whose source and destination
+	// live in different roots (work tree ↔ a mount, or two different mounts).
+	//
+	// os.Root cannot rename across roots — that is not a limitation to work
+	// around but the containment doing its job, since a cross-root rename is by
+	// definition an operation that leaves the root it started in. Performing it
+	// safely means copy-then-delete with its own partial-failure semantics,
+	// which is deliberately NOT smuggled in behind a verb the caller believes
+	// is atomic.
+	ErrCrossRootTransfer = errors.New("library: cannot move directly between the work tree and a mounted folder")
 )
 
 // DestinationParentNotFoundError marks a rename/move/copy/write destination
@@ -109,6 +132,34 @@ func (e *DestinationParentNotFoundError) Unwrap() error { return ErrNotFound }
 type Root struct {
 	dir  string // absolute workspace work/ directory (workspace.SafeWorkDir)
 	root *os.Root
+
+	// mounts maps a mount's NAME to its own independently-opened os.Root.
+	//
+	// ADR-063 D4 made a mount a real local folder reachable inside a workspace,
+	// materialised as a symlink at work/<name>. os.Root refuses to follow a
+	// symlink out of its root — correctly, that is what stops one workspace
+	// reading another's files — so a single root can NEVER open a mount. Before
+	// this map existed the Library listed mounted folders and then failed on
+	// click with "path escapes the workspace work tree": visible and unopenable,
+	// which reads as a broken product rather than as a boundary.
+	//
+	// One root per mount rather than one relaxed root: browsing inside a mount
+	// is then contained to THAT folder exactly as work/ is contained to itself.
+	// Nothing is loosened — you still cannot escape a mount, reach a sibling
+	// workspace, or walk up to the rest of the disk — the containment simply
+	// learns that a workspace legitimately has more than one root, which is what
+	// the enforcement engine already models (fspolicy.FSPolicy.AllowedRoots).
+	mounts map[string]*mountRoot
+}
+
+// mountRoot is one mounted folder's own containment plus the facts the API
+// layer needs to describe it (the real path it points at, and whether the grant
+// was flagged broad when it was created).
+type mountRoot struct {
+	root   *os.Root
+	name   string
+	target string // realpath-resolved absolute path on the host
+	broad  bool
 }
 
 // OpenRoot opens workspaceID's work/ directory as a path-safe Root,
@@ -137,13 +188,146 @@ func OpenRoot(home, workspaceID string) (*Root, error) {
 	if err != nil {
 		return nil, fmt.Errorf("library: open work directory root: %w", err)
 	}
-	return &Root{dir: dir, root: r}, nil
+	return &Root{dir: dir, root: r, mounts: openMountRoots(home, workspaceID)}, nil
+}
+
+// openMountRoots opens one os.Root per mount declared on this workspace.
+//
+// A mount whose target cannot be opened is SKIPPED rather than failing the
+// whole Root: spec FR-8.2 requires that a missing target never blocks the
+// workspace, because the operator's folder is theirs to move, rename, or put on
+// a volume that is not currently attached. The mount stays listed (the caller
+// still sees it, and can revoke it) — it simply cannot be entered until the
+// target comes back. Failing here instead would make one detached external disk
+// take the entire Library offline.
+func openMountRoots(home, workspaceID string) map[string]*mountRoot {
+	mounts, ok := workspace.LoadMounts(home, workspaceID)
+	if !ok || len(mounts) == 0 {
+		return nil
+	}
+	out := make(map[string]*mountRoot, len(mounts))
+	for _, m := range mounts {
+		if m.Name == "" || m.HostPath == "" {
+			continue
+		}
+		mr, err := os.OpenRoot(m.HostPath)
+		if err != nil {
+			// Target missing, renamed, or on a detached volume. RECORD it with a
+			// nil root rather than skipping it.
+			//
+			// Skipping made the doc comment above false: with no entry in the
+			// map, mountFor and annotateMount saw an ordinary directory, so the
+			// row lost its badge, its host path and its Unmount action, the
+			// header count and the mounts dialog omitted it (both filter on
+			// entry.mount), and isMountRootEntry stopped refusing Delete and
+			// Rename on it. A BROKEN mount — the one an operator most wants to
+			// revoke — became the one they could not revoke, and could delete
+			// through by accident.
+			out[m.Name] = &mountRoot{
+				root:   nil,
+				name:   m.Name,
+				target: m.HostPath,
+				broad:  workspace.IsBroadMountTarget(m.HostPath),
+			}
+			continue
+		}
+		out[m.Name] = &mountRoot{
+			root:   mr,
+			name:   m.Name,
+			target: m.HostPath,
+			broad:  workspace.IsBroadMountTarget(m.HostPath),
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// resolve maps a workspace-relative path to the os.Root that actually contains
+// it, and to that path expressed relative to THAT root.
+//
+// This is the single seam through which every filesystem operation in this
+// package passes. It exists so the multi-root rule is stated once: a path whose
+// FIRST segment names a mount belongs to that mount's root, everything else
+// belongs to the work root. Spreading the same test across the ~26 call sites
+// that touch a root would be 26 chances to forget it, and the one that forgot
+// would silently fall back to the work root — where the mount is a symlink, so
+// the operation fails with the containment error this change exists to remove.
+//
+// rel MUST already have passed CleanRelPath: resolve does no lexical validation
+// and relies on os.Root for containment, exactly as the single-root code did.
+func (r *Root) resolve(rel string) (*os.Root, string) {
+	if r.mounts == nil || rel == "" || rel == "." {
+		return r.root, rel
+	}
+	name, rest, _ := strings.Cut(rel, "/")
+	m, ok := r.mounts[name]
+	if !ok || m.root == nil {
+		// A mount whose target could not be opened has no root to resolve into.
+		// Falling back to the work root is correct: there the entry is the
+		// dangling symlink, and os.Root refuses to follow it — so the caller
+		// gets the containment error that describes reality ("this does not
+		// resolve") instead of a nil-pointer panic.
+		return r.root, rel
+	}
+	if rest == "" {
+		// The mount's own directory entry — the root itself, from its side.
+		return m.root, "."
+	}
+	return m.root, rest
+}
+
+// mountFor reports the mount a workspace-relative path belongs to, if any.
+// Used by the API layer to mark entries and to name the real destination
+// before a write lands on the operator's actual disk.
+func (r *Root) mountFor(rel string) *mountRoot {
+	if r.mounts == nil || rel == "" || rel == "." {
+		return nil
+	}
+	name, _, _ := strings.Cut(rel, "/")
+	return r.mounts[name]
+}
+
+// MountAt returns the mount rooted at the first segment of rel, reporting its
+// name, real host path, and whether it was flagged a broad grant. ok is false
+// when rel is not inside a mount.
+func (r *Root) MountAt(rel string) (name, target string, broad, ok bool) {
+	m := r.mountFor(rel)
+	if m == nil {
+		return "", "", false, false
+	}
+	return m.name, m.target, m.broad, true
+}
+
+// HostPath returns the real absolute path a workspace-relative path resolves
+// to, following a mount when one applies. It is a STRING computation for
+// display and audit — it grants nothing and opens nothing.
+func (r *Root) HostPath(rel string) string {
+	if m := r.mountFor(rel); m != nil {
+		_, rest, _ := strings.Cut(rel, "/")
+		if rest == "" {
+			return m.target
+		}
+		return filepath.Join(m.target, rest)
+	}
+	if rel == "" || rel == "." {
+		return r.dir
+	}
+	return filepath.Join(r.dir, rel)
 }
 
 // Close releases the underlying os.Root. Safe to call on a nil *Root.
 func (r *Root) Close() error {
 	if r == nil || r.root == nil {
 		return nil
+	}
+	// Every mount root is a separate open file descriptor; closing only the
+	// work root would leak one per mount per request.
+	for _, m := range r.mounts {
+		if m != nil && m.root != nil {
+			_ = m.root.Close()
+		}
 	}
 	return r.root.Close()
 }
@@ -292,7 +476,8 @@ func (r *Root) StatDir(rel string) (os.FileInfo, error) {
 	if name == "" {
 		name = "."
 	}
-	fi, err := r.root.Stat(name)
+	rt, sub := r.resolve(name)
+	fi, err := rt.Stat(sub)
 	if err != nil {
 		return nil, translateErr(err)
 	}
@@ -306,7 +491,8 @@ func (r *Root) StatDir(rel string) (os.FileInfo, error) {
 // ErrNotFound if nothing exists there, ErrIsDir if it exists but is a
 // directory.
 func (r *Root) StatFile(rel string) (os.FileInfo, error) {
-	fi, err := r.root.Stat(rel)
+	rt, sub := r.resolve(rel)
+	fi, err := rt.Stat(sub)
 	if err != nil {
 		return nil, translateErr(err)
 	}
@@ -314,4 +500,27 @@ func (r *Root) StatFile(rel string) (os.FileInfo, error) {
 		return nil, ErrIsDir
 	}
 	return fi, nil
+}
+
+// isMountRootEntry reports whether rel names a mounted folder's OWN entry
+// (rather than something inside it). Used to refuse operations that would act
+// on the operator's real folder itself — see ErrIsMountRoot.
+func (r *Root) isMountRootEntry(rel string) bool {
+	if r.mounts == nil || rel == "" || rel == "." {
+		return false
+	}
+	name, rest, _ := strings.Cut(rel, "/")
+	if rest != "" {
+		return false
+	}
+	_, ok := r.mounts[name]
+	return ok
+}
+
+// sameRoot reports whether two workspace-relative paths resolve to the same
+// os.Root, i.e. whether an atomic rename between them is even expressible.
+func (r *Root) sameRoot(aRel, bRel string) bool {
+	ra, _ := r.resolve(aRel)
+	rb, _ := r.resolve(bRel)
+	return ra == rb
 }

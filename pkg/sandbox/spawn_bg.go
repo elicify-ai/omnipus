@@ -170,7 +170,11 @@ func SpawnBackgroundChild(
 	// so the child inherits the kernel sandbox. See StartLocked for the
 	// full rationale. clearPdeathsigForBackground above ensures the dev
 	// server survives the launching thread's death.
-	if err := StartLocked(cmd); err != nil {
+	// limits.KernelPolicy carries the TURN's policy (nil when the caller has
+	// no turn), so on Linux the launching thread's Landlock domain is the
+	// turn's, not the boot-global one — matching what ApplyChildHardening
+	// above already did for the macOS Seatbelt profile.
+	if err := StartLockedWithPolicy(cmd, limits.KernelPolicy); err != nil {
 		if logFile != nil {
 			_ = logFile.Close()
 		}

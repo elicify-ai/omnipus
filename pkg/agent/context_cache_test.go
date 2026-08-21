@@ -32,7 +32,7 @@ func setupWorkspace(t *testing.T, files map[string]string) string {
 }
 
 // TestSingleSystemMessage verifies that BuildMessages always produces exactly one
-// system message regardless of summary/history variations.
+// system message regardless of history variations.
 // Fix: multiple system messages break Anthropic (top-level system param) and
 // Codex (only reads last system message as instructions).
 func TestSingleSystemMessage(t *testing.T) {
@@ -46,26 +46,26 @@ func TestSingleSystemMessage(t *testing.T) {
 	tests := []struct {
 		name    string
 		history []providers.Message
-		summary string
 		message string
 	}{
 		{
-			name:    "no summary, no history",
-			summary: "",
+			name:    "no history",
 			message: "hello",
 		},
 		{
-			name:    "with summary",
-			summary: "Previous conversation discussed X",
-			message: "hello",
-		},
-		{
-			name: "with history and summary",
+			name: "with history",
 			history: []providers.Message{
 				{Role: "user", Content: "hi"},
 				{Role: "assistant", Content: "hello"},
 			},
-			summary: strings.Repeat("Long summary text. ", 50),
+			message: "new message",
+		},
+		{
+			name: "long history",
+			history: []providers.Message{
+				{Role: "user", Content: strings.Repeat("Long user text. ", 50)},
+				{Role: "assistant", Content: strings.Repeat("Long reply text. ", 50)},
+			},
 			message: "new message",
 		},
 		{
@@ -75,14 +75,13 @@ func TestSingleSystemMessage(t *testing.T) {
 				{Role: "user", Content: "hi"},
 				{Role: "assistant", Content: "hello"},
 			},
-			summary: "",
 			message: "new message",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msgs := cb.BuildMessages(tt.history, tt.summary, tt.message, nil, "", "test", "chat1", "", "", "", nil)
+			msgs := cb.BuildMessages(tt.history, tt.message, nil, "", "test", "chat1", "", "", "", nil)
 
 			systemCount := 0
 			for _, m := range msgs {
@@ -109,18 +108,10 @@ func TestSingleSystemMessage(t *testing.T) {
 				t.Error("system message missing dynamic time context")
 			}
 
-			// Summary handling
-			if tt.summary != "" {
-				if !strings.Contains(sys, "CONTEXT_SUMMARY:") {
-					t.Error("summary present but CONTEXT_SUMMARY prefix missing")
-				}
-				if !strings.Contains(sys, tt.summary[:20]) {
-					t.Error("summary content not found in system message")
-				}
-			} else {
-				if strings.Contains(sys, "CONTEXT_SUMMARY:") {
-					t.Error("CONTEXT_SUMMARY should not appear without summary")
-				}
+			// The legacy summariser is decommissioned: BuildMessages must
+			// never emit a CONTEXT_SUMMARY block for any input.
+			if strings.Contains(sys, "CONTEXT_SUMMARY:") {
+				t.Error("CONTEXT_SUMMARY must never appear — the legacy summariser is decommissioned")
 			}
 		})
 	}
@@ -170,7 +161,6 @@ func TestBuildMessages_CurrentSenderDynamicContext(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			msgs := cb.BuildMessages(
 				nil,
-				"",
 				"hello",
 				nil,
 				"",
@@ -695,7 +685,7 @@ func TestConcurrentBuildSystemPromptWithCache(t *testing.T) {
 				}
 
 				// Also exercise BuildMessages concurrently
-				msgs := cb.BuildMessages(nil, "", "hello", nil, "", "test", "chat", "", "", "", nil)
+				msgs := cb.BuildMessages(nil, "hello", nil, "", "test", "chat", "", "", "", nil)
 				if len(msgs) < 2 {
 					errs <- "BuildMessages returned fewer than 2 messages"
 					return
@@ -783,6 +773,6 @@ func BenchmarkBuildMessagesWithCache(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = cb.BuildMessages(history, "summary", "new message", nil, "", "cli", "test", "", "", "", nil)
+		_ = cb.BuildMessages(history, "new message", nil, "", "cli", "test", "", "", "", nil)
 	}
 }

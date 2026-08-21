@@ -39,9 +39,16 @@ import (
 // DELEGATE, not coincidentally on whichever agent happens to be default.
 const asyncResultTestDelegateID = "ava-worker"
 
+// asyncResultTestDefaultID is a second, explicitly-registered agent distinct
+// from asyncResultTestDelegateID. No "main" sentinel to fall back to
+// anymore — NewAgentRegistry no longer auto-creates a default agent, so this
+// test must register its own to keep the delegate/default distinction the
+// attribution assertions below depend on.
+const asyncResultTestDefaultID = "mia-default"
+
 // newAsyncResultTestLoop builds a real AgentLoop with two agents: the
-// registry's auto-created default and the named, non-default delegate
-// asyncResultTestDelegateID.
+// explicitly-registered default (asyncResultTestDefaultID) and the named,
+// non-default delegate (asyncResultTestDelegateID).
 func newAsyncResultTestLoop(
 	t *testing.T,
 	provider providers.LLMProvider,
@@ -55,8 +62,17 @@ func newAsyncResultTestLoop(
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
+				// Explicit override rather than relying on alphabetical
+				// fallback ordering — asyncResultTestDefaultID
+				// ("mia-default") does not sort before
+				// asyncResultTestDelegateID ("ava-worker"), so
+				// GetDefaultAgent's Priority 2 fallback alone would pick the
+				// delegate. Naming the override explicitly is also the more
+				// realistic production shape (config.Agents.Defaults.DefaultAgentID).
+				DefaultAgentID: asyncResultTestDefaultID,
 			},
 			List: []config.AgentConfig{
+				{ID: asyncResultTestDefaultID, Name: "Default Agent", Type: config.AgentTypeCustom},
 				{ID: asyncResultTestDelegateID, Name: "Ava Worker", Type: config.AgentTypeCustom},
 			},
 		},

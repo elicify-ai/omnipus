@@ -72,6 +72,7 @@ func newCancelTestAgentLoop(t *testing.T) *AgentLoop {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

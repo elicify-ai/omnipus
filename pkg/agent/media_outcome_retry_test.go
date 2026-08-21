@@ -126,41 +126,46 @@ func TestClassifier_CodeSchema(t *testing.T) {
 // backstop: when the classifier has an EXPLICIT status (401/403/413)
 // that already maps to a non-media code, the new body-substring
 // detectors MUST NOT promote the error to CodeToolArgs/CodeSchema.
-// Status wins — the new codes are only meaningful for residual 4xx
-// variants where the status path would otherwise return CodeUnknown or
-// fall through to CodeProviderRejected.
+// Status wins — the body-substring codes are only meaningful for
+// residual 4xx variants where the status path would otherwise return
+// CodeUnknown.
 //
 // Spec FR-018 wording: "the body-substring match is a SECONDARY
 // detector; the status-code path is the PRIMARY gate". A 403 with a
-// body that happens to mention "schema validation" must remain a
-// provider_rejected (auth/permission denial), NOT a CodeSchema — the
-// operator's auth failure must surface unchanged.
+// body that happens to mention "schema validation" must remain the
+// auth/permission denial, NOT a CodeSchema — the operator's auth
+// failure must surface unchanged.
+//
+// The expected codes are the post-split ones: 401/403 are
+// CodeProviderAuthFailed and 413 is CodeRequestTooLarge, where all three
+// used to share CodeProviderRejected. The PROPERTY under test —
+// status beats body substring — is unchanged.
 func TestClassifier_StatusBackstop_ToolArgsVia403(t *testing.T) {
-	t.Run("403 + tool-args body stays provider_rejected", func(t *testing.T) {
+	t.Run("403 + tool-args body stays provider_auth_failed", func(t *testing.T) {
 		pe := &ProviderError{
 			Status: 403,
 			Body:   "invalid tool arguments: missing field",
 		}
 		llm := TranslateLLMError(pe, "")
-		assert.Equal(t, CodeProviderRejected, llm.Code,
+		assert.Equal(t, CodeProviderAuthFailed, llm.Code,
 			"403 status wins over body substring — must NOT promote to CodeToolArgs (FR-018 backstop)")
 	})
-	t.Run("401 + schema body stays provider_rejected", func(t *testing.T) {
+	t.Run("401 + schema body stays provider_auth_failed", func(t *testing.T) {
 		pe := &ProviderError{
 			Status: 401,
 			Body:   "schema validation failed",
 		}
 		llm := TranslateLLMError(pe, "")
-		assert.Equal(t, CodeProviderRejected, llm.Code,
+		assert.Equal(t, CodeProviderAuthFailed, llm.Code,
 			"401 status wins over body substring — must NOT promote to CodeSchema (FR-018 backstop)")
 	})
-	t.Run("413 + tool-args body stays provider_rejected", func(t *testing.T) {
+	t.Run("413 + tool-args body stays request_too_large", func(t *testing.T) {
 		pe := &ProviderError{
 			Status: 413,
 			Body:   "invalid tool arguments",
 		}
 		llm := TranslateLLMError(pe, "")
-		assert.Equal(t, CodeProviderRejected, llm.Code,
+		assert.Equal(t, CodeRequestTooLarge, llm.Code,
 			"413 status wins over body substring — must NOT promote to CodeToolArgs (FR-018 backstop)")
 	})
 }
@@ -645,6 +650,12 @@ func TestClassifier_CodeUnknown_ForUnrecognizedBody400(t *testing.T) {
 // this pair defines the classifier vs. gate contract: residual 4xx
 // → CodeUnknown (gate accepts), every other 4xx → its specific code
 // (gate rejects).
+//
+// The auth and size rows now expect the post-split codes
+// (CodeProviderAuthFailed for 401/403, CodeRequestTooLarge for 413) where
+// all three used to share CodeProviderRejected. The INVARIANT is unchanged:
+// each still resolves to a specific, non-CodeUnknown verdict, so the media
+// strip-retry gate still rejects them.
 func TestClassifier_StillReturnsProviderRejected_ForKnownRejections(t *testing.T) {
 	cases := []struct {
 		name string
@@ -652,19 +663,19 @@ func TestClassifier_StillReturnsProviderRejected_ForKnownRejections(t *testing.T
 		want LLMErrorCode
 	}{
 		{
-			name: "401 auth → provider_rejected",
+			name: "401 auth → provider_auth_failed",
 			pe:   &ProviderError{Status: 401, Body: ""},
-			want: CodeProviderRejected,
+			want: CodeProviderAuthFailed,
 		},
 		{
-			name: "403 permission → provider_rejected",
+			name: "403 permission → provider_auth_failed",
 			pe:   &ProviderError{Status: 403, Body: ""},
-			want: CodeProviderRejected,
+			want: CodeProviderAuthFailed,
 		},
 		{
-			name: "413 + request too large → provider_rejected (NOT context_too_long per ADR-051 Rev 3)",
+			name: "413 + request too large → request_too_large (NOT context_too_long per ADR-051 Rev 3)",
 			pe:   &ProviderError{Status: 413, Body: "request too large"},
-			want: CodeProviderRejected,
+			want: CodeRequestTooLarge,
 		},
 		{
 			name: "400 + invalid tool arguments → tool_args (FR-018)",

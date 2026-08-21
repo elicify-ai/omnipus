@@ -92,6 +92,10 @@ type MetaPatch struct {
 	// WorkspaceID tags the session with the active workspace (M4 workspace→turn
 	// binding). Only written when non-nil; empty string clears the tag.
 	WorkspaceID *string
+
+	// InstanceID patches the channel instance key. Needed so a session created
+	// before the field existed can be identified later rather than guessed at.
+	InstanceID *string
 	// ParentSessionID stamps this session's direct parent (ADR-057 FR-008).
 	// Only written when non-nil; empty string clears it (making the session
 	// a root again). The write path also wires the FR-097 in-memory parent
@@ -593,11 +597,19 @@ func (us *UnifiedStore) NewSession(
 // NewChannelSession creates a new shared session for (channel, peerID).
 // Unlike NewSession it writes PeerID and Title atomically so the caller does
 // not need a follow-up SetMeta call.
-func (us *UnifiedStore) NewChannelSession(channel, peerID, agentID, title string) (*UnifiedMeta, error) {
+// NewChannelSession creates a channel session.
+//
+// instanceID is the channel INSTANCE key (e.g. "whatsapp.eu"), not the bare
+// type. It is separate from channel because an install can hold many instances
+// of one platform, each bound to its own (workspace, agent) pair — without it,
+// their sessions are indistinguishable and anything acting on "this channel's
+// sessions" acts on all of them.
+func (us *UnifiedStore) NewChannelSession(channel, instanceID, peerID, agentID, title string) (*UnifiedMeta, error) {
 	meta, err := us.NewSession(SessionTypeChannel, channel, agentID)
 	if err != nil {
 		return nil, err
 	}
+	meta.InstanceID = instanceID
 	meta.PeerID = peerID
 	meta.Title = title
 	h := us.lockSession(meta.ID)
@@ -831,6 +843,9 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	if patch.TaskID != nil {
 		meta.TaskID = *patch.TaskID
 		identityTouched = true
+	}
+	if patch.InstanceID != nil {
+		meta.InstanceID = *patch.InstanceID
 	}
 	if patch.Owner != nil {
 		meta.Owner = *patch.Owner
@@ -1189,30 +1204,11 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 	}
 
 	// Update stats and UpdatedAt — targeted stats-group write only (FR-084);
-	// a transcript append never touches meta.json/goal.json/loop.json.
-	if entry.Role == "assistant" {
-		meta.Stats.TokensOut += entry.Tokens
-		meta.Stats.TokensCacheRead += entry.CacheReadTokens
-		meta.Stats.TokensCacheWrite += entry.CacheWriteTokens
-		if entry.Model != "" {
-			if meta.Stats.ByModel == nil {
-				meta.Stats.ByModel = make(map[string]ModelTokens)
-			}
-			mt := meta.Stats.ByModel[entry.Model]
-			mt.CacheRead += entry.CacheReadTokens
-			mt.CacheWrite += entry.CacheWriteTokens
-			mt.Total += entry.Tokens
-			meta.Stats.ByModel[entry.Model] = mt
-		}
-	} else {
-		meta.Stats.TokensIn += entry.Tokens
-	}
-	meta.Stats.TokensTotal += entry.Tokens
-	meta.Stats.Cost += entry.Cost
-	meta.Stats.ToolCalls += len(entry.ToolCalls)
-	if entry.Type == "" || entry.Type == EntryTypeMessage {
-		meta.Stats.MessageCount++
-	}
+	// a transcript append never touches meta.json/goal.json/loop.json. See
+	// accumulateEntryStats (entry_stats.go) for the full token-accounting
+	// convention shared with PartitionStore.AppendMessage and
+	// UnifiedStore.AppendTranscriptStrict.
+	accumulateEntryStats(&meta.Stats, entry)
 	meta.UpdatedAt = entry.Timestamp
 	// ADR-057 U6 W24 (FR-061/FR-062): the per-token counter write is
 	// throttled — this mutates ONLY the cached entry (never touching
@@ -1916,23 +1912,6 @@ func (us *UnifiedStore) GetHistory(sessionKey string) []providers.Message {
 		return []providers.Message{}
 	}
 	return msgs
-}
-
-// GetSummary implements SessionStore.
-func (us *UnifiedStore) GetSummary(sessionKey string) string {
-	summary, err := us.backend.GetSummary(context.Background(), sessionKey)
-	if err != nil {
-		slog.Error("unified_store: get summary", "key", sessionKey, "error", err)
-		return ""
-	}
-	return summary
-}
-
-// SetSummary implements SessionStore.
-func (us *UnifiedStore) SetSummary(sessionKey, summary string) {
-	if err := us.backend.SetSummary(context.Background(), sessionKey, summary); err != nil {
-		slog.Error("unified_store: set summary", "key", sessionKey, "error", err)
-	}
 }
 
 // SetHistory implements SessionStore.

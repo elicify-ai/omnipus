@@ -56,6 +56,7 @@ func makeLoopWithSharedStore(t *testing.T) (*AgentLoop, *session.UnifiedStore) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspace}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
@@ -148,7 +149,7 @@ func TestRebuildChannelSessionIndex_RestoresSessionIDs(t *testing.T) {
 	al, store := makeLoopWithSharedStore(t)
 
 	// Pre-create a channel session in the shared store (simulates a previous run).
-	meta, err := store.NewChannelSession("telegram", "user-1", "agent-1", "Alice")
+	meta, err := store.NewChannelSession("telegram", "telegram", "user-1", "agent-1", "Alice")
 	require.NoError(t, err)
 	sessionID1 := meta.ID
 

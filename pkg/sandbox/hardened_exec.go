@@ -497,6 +497,33 @@ type Limits struct {
 	// acknowledgement: this is HTTP/HTTPS only. Raw TCP connect
 	// is NOT covered. Documented as a trusted-prompt-feature limitation.
 	EgressProxyAddr string
+
+	// KernelPolicy is the PER-TURN kernel-enforcement policy for this child,
+	// typically produced by sandbox.DeriveKernelPolicy from the turn's
+	// authored fspolicy.FSPolicy (spec unified-file-access-and-mounts FR-4.0).
+	//
+	// nil is the explicit "no per-turn policy supplied" value, and it is NOT
+	// the same as "run unconfined": every platform falls back to its existing
+	// boot-global behaviour when this is nil, so a spawn path with no turn
+	// (MCP server startup, anything before a policy is applied) sees no
+	// change. A non-nil pointer is what narrows the child from "everything the
+	// gateway may touch" to "everything THIS TURN may touch".
+	//
+	// Both platforms consume it, by different mechanisms:
+	//
+	//   - macOS: applyPlatformHardening renders it into the child's Seatbelt
+	//     profile (SeatbeltBackend.ApplyToCmd).
+	//   - Linux: the spawning thread's Landlock domain is rebuilt from it
+	//     before the fork, and the child inherits that domain — see
+	//     RestrictCurrentThreadWithPolicy. Run passes it there directly;
+	//     background spawns go via StartLockedWithPolicy.
+	//
+	// The pointer (not a value) is deliberate: SandboxPolicy is not small
+	// (FilesystemRules/BindPortRules/ConnectPortRules can each run into the
+	// thousands for a production dev-server port range), and a nil pointer is
+	// the only way to distinguish "no policy" from "the zero-value policy"
+	// without adding a second bool field that could drift from it.
+	KernelPolicy *SandboxPolicy
 }
 
 // Result captures the outcome of a hardened child execution.
@@ -608,7 +635,12 @@ func Run(ctx context.Context, argv []string, env []string, lim Limits) (Result, 
 		// Intentionally NO UnlockOSThread — see comment above. The
 		// goroutine returns at the end of this function, which causes the
 		// runtime to terminate the locked thread.
-		if err := restrictCurrentThreadIfNeeded(); err != nil {
+		// lim.KernelPolicy is the per-turn policy: on Linux this is what the
+		// spawning thread's Landlock domain is built from, so the forked child
+		// inherits the TURN's confinement rather than the boot-global one.
+		// A nil policy falls back to the boot policy (see
+		// RestrictCurrentThreadWithPolicy).
+		if err := restrictCurrentThreadIfNeeded(lim.KernelPolicy); err != nil {
 			// B1.2(d): emit a sandbox_restrict_failed audit entry BEFORE
 			// returning the error so operators see the kernel-level
 			// degradation in the audit trail, not just in slog. The spawn
@@ -649,6 +681,20 @@ func Run(ctx context.Context, argv []string, env []string, lim Limits) (Result, 
 // restrictCurrentThreadIfNeeded is a no-op and this wrapper costs only one
 // goroutine + channel hop per spawn.
 func StartLocked(cmd *exec.Cmd) error {
+	return StartLockedWithPolicy(cmd, nil)
+}
+
+// StartLockedWithPolicy is StartLocked with an explicit per-turn kernel policy.
+//
+// It is the background-spawn counterpart of Run's lim.KernelPolicy: on Linux
+// the launching thread's Landlock domain is built from kernelPolicy so the
+// forked child inherits the TURN's confinement instead of the boot-global one.
+// A nil policy reproduces StartLocked's original behaviour exactly.
+//
+// Two entry points rather than one changed signature because StartLocked has
+// callers with genuinely no turn to speak of (MCP server startup), and giving
+// them a nil to pass would say nothing about why.
+func StartLockedWithPolicy(cmd *exec.Cmd, kernelPolicy *SandboxPolicy) error {
 	// Record that the correct spawn path (StartLocked) has been used in this
 	// process. ApplyToCmd contract enforcement (B1.4-b) uses this marker in
 	// debug assertions to confirm callers are not bypassing StartLocked.
@@ -658,7 +704,7 @@ func StartLocked(cmd *exec.Cmd) error {
 	go func() {
 		runtime.LockOSThread()
 		// Intentionally NO UnlockOSThread.
-		if err := restrictCurrentThreadIfNeeded(); err != nil {
+		if err := restrictCurrentThreadIfNeeded(kernelPolicy); err != nil {
 			// B1.2(d): same audit emission as Run() — every per-thread
 			// restrict failure is a loud signal of sandbox degradation,
 			// regardless of which spawn entry point fired it.

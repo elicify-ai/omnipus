@@ -3277,6 +3277,35 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // placeholder — either would erase the (interrupted) label or create a
                 // ghost streaming bubble without the label.
                 if (lastMsgId && draft.messagesById[lastMsgId].status === 'interrupted') return
+                // Same rule, same reason, for a terminally errored bubble.
+                //
+                // A failed turn delivers its explanation TWICE by design, on two
+                // independent paths: the typed `error` frame (rich — code,
+                // retryable, detail, Retry button), and then a plain `token` +
+                // `done` from the outbound-publish fallback that exists so a
+                // turn which produced no tokens still terminates the stream
+                // instead of leaving a stuck "thinking" spinner
+                // (pkg/gateway/websocket.go, wsStreamer.Finalize's markStreamed
+                // guard). Both carry the same user-facing sentence.
+                //
+                // Without this guard the trailing token crosses the closed-bubble
+                // segment boundary below and mints a SECOND bubble holding a
+                // duplicate of the text already shown — and the duplicate carries
+                // none of the error treatment, so the copy the user is most
+                // likely to read is the one with no Retry button. Worse, the two
+                // paths classify independently (the frame from the provider's
+                // HTTP status, the fallback from the error STRING via
+                // TranslateTurnError with a nil ProviderError), so they can
+                // legitimately disagree and show the user two different
+                // explanations for one failure.
+                //
+                // Discarding here rather than suppressing server-side is
+                // deliberate: the client is the only party that KNOWS the error
+                // frame arrived. A backend suppression would have to assume
+                // delivery, and a wrong assumption there turns a duplicate
+                // message into no message at all — trading a cosmetic defect for
+                // the silence this whole fix exists to remove.
+                if (lastMsgId && draft.messagesById[lastMsgId].status === 'error') return
                 // Track the bubble being left behind by either boundary check
                 // below so any tool calls it already holds can be baked onto
                 // it (see the baking block right after both checks) instead
@@ -3521,8 +3550,28 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   if (m?.role !== 'assistant') continue
                   if (id !== lastMsgId && !m.isStreaming && m.status !== 'streaming') continue
                   // FR-21 / T21–T25: do NOT overwrite 'interrupted' status with 'done'.
+                  //
+                  // 'error' is preserved for the same reason, and it is not a
+                  // theoretical case: a failed turn emits its typed `error`
+                  // frame and then, microseconds later, the streamer's
+                  // deferred finalize emits `done` for the SAME session. The
+                  // error bubble IS lastMsgId, so the `continue` above does not
+                  // protect it, and demoting it to 'done' silently erased every
+                  // bit of the error treatment the frame had just earned:
+                  // the "Error" label, the Retry button (AssistantUI maps
+                  // 'error' → incomplete), and the verbose "Technical details"
+                  // disclosure. errorCode was left set, so the bubble ended in
+                  // a state no renderer can act on — status 'done' carrying an
+                  // errorCode, while every renderer gates on status === 'error'.
+                  //
+                  // A terminal status is terminal. `done` means "the turn is
+                  // over", which is already true of an errored turn; it must
+                  // never be read as "the turn succeeded". The rendering layer
+                  // owns this property rather than inheriting it from whatever
+                  // order the backend happens to emit its frames in.
                   m.isStreaming = false
-                  m.status = m.status === 'interrupted' ? 'interrupted' : 'done'
+                  m.status =
+                    m.status === 'interrupted' || m.status === 'error' ? m.status : 'done'
                   // Clear the tool-call text-boundary marker on finalize. If the
                   // turn's last event was a tool call with no trailing narration
                   // token before `done`, pendingTextBoundary would otherwise be
@@ -3771,26 +3820,40 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 }
               }
               const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
-              // C8 defense-in-depth: close the UNION of {the last assistant
-              // message} (unchanged — always closed exactly as before, even
-              // when it isn't flagged "streaming" at all, e.g. a
-              // replay-reconstructed bubble whose `isStreaming` is
-              // `undefined` — mirrors the matching `done`-handler fix above)
-              // ∪ {every OTHER still-streaming assistant message in the
-              // bucket} — mirrors clearStreamingState's own sweep (used on a
-              // hard WS-drop). A mid-turn steer (sendMessage's `isStreaming`
-              // branch) appends the steering text as a new USER message
-              // AFTER the still-open assistant bubble, so that bubble is no
-              // longer "the last message" by the time `error` arrives —
-              // closing only the last assistant message here would leave the
-              // ORIGINAL bubble permanently stuck at isStreaming:true even
-              // though the turn just errored out.
+              const lastMsg = lastMsgId ? b.messagesById[lastMsgId] : undefined
+              // Mirror replay_error: only coalesce into lastMsgId when that
+              // bubble is THIS turn (streaming, or an empty placeholder).
+              // A second tab / reload has history and no placeholder —
+              // lastMsgId is the last successful reply and must not be
+              // restamped as the failure. SessionID delivery made that
+              // live frame reach the second tab; this guard is the pair.
+              const lastContentEmpty = !!lastMsg && (!lastMsg.content || !lastMsg.content.trim())
+              const lastIsThisTurn = !!lastMsg && (
+                lastMsg.isStreaming
+                || lastMsg.status === 'streaming'
+                || lastContentEmpty
+              )
+              const lastIsTerminalError = !!lastMsg
+                && lastMsg.status === 'error'
+                && !lastMsg.isStreaming
+              const lastIsSameError = lastIsTerminalError
+                && !!llmError
+                && (
+                  errorEntryId
+                    ? lastMsg?.errorEntryId === errorEntryId
+                    : (lastMsg?.errorCode === llmError.code
+                      || lastMsg?.content === translatedMessage)
+                )
+              // C8: close every still-streaming assistant (a mid-turn steer
+              // appends a USER message after the open bubble, so it is no
+              // longer last). Include last only when it belongs to this turn.
               const streamingIds: string[] = []
               for (let i = b.messageOrder.length - 1; i >= 0; i--) {
                 const id = b.messageOrder[i]
                 const m = b.messagesById[id]
                 if (m?.role !== 'assistant') continue
-                if (id === lastMsgId || m.isStreaming || m.status === 'streaming') {
+                const isLastThisTurn = id === lastMsgId && lastIsThisTurn && !lastIsTerminalError
+                if (isLastThisTurn || m.isStreaming || m.status === 'streaming') {
                   // ADR-051 — when the incoming frame carries a typed
                   // payload, do NOT include an already-terminal 'error'
                   // bubble in the C8 close sweep. The sweep's purpose is to
@@ -3869,11 +3932,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   }
                 }) as Partial<SessionChatState>
               }
-              // streamingIds is empty here only when there is NO assistant
-              // message in the bucket at all (lastMsgId, unconditionally
-              // included above whenever it exists, would otherwise have made
-              // it non-empty) — push one below so the error isn't silently
-              // dropped. Only show an error toast for non-cancel errors.
+              // Same catalogue already on the last bubble (replay drew it,
+              // then the live frame arrived): do not mint a duplicate.
+              if (lastIsSameError) {
+                return produce(b, (draft) => {
+                  draft.isStreaming = false
+                  if (clearReplayingNow) draft.isReplaying = false
+                }) as Partial<SessionChatState>
+              }
+              // No this-turn assistant to coalesce into — last is a prior
+              // healthy reply, or the bucket is empty. Push one new bubble
+              // so the error is not silently dropped or written onto history.
               if (!isCancelAck) {
                 // D5 fix (Site 3): safeMessage, not the raw frame.message.
                 useConnectionStore.getState().setConnectionError(safeMessage)

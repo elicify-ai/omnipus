@@ -150,9 +150,9 @@ func roundRobinToolCalls(names []string, n int) []providers.ToolCall {
 }
 
 // baseLoopDenialTestConfig is the shared cfg/harness shape every test below
-// uses — a single-agent ("main", the registry default for a Defaults-only
-// cfg with no Agents.List) AgentLoop rooted at a private temp workspace,
-// with audit logging enabled so the BDD-09 test can read it back.
+// uses — a single, explicitly-registered agent ("mia" — there is no "main"
+// sentinel to fall back to anymore) AgentLoop rooted at a private temp
+// workspace, with audit logging enabled so the BDD-09 test can read it back.
 func baseLoopDenialTestConfig(t *testing.T) (*config.Config, string) {
 	t.Helper()
 	tmpHome := t.TempDir()
@@ -166,6 +166,7 @@ func baseLoopDenialTestConfig(t *testing.T) (*config.Config, string) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			AuditLog: true,
@@ -223,10 +224,11 @@ func TestRunTurn_TimeoutDenial_PersistedPayloadNeverClaimsUserDenied(t *testing.
 	// Locate the persisted role="tool" permission_denied message. Same
 	// session-key derivation as scenario_runturn_test.go's precedent:
 	// ProcessDirect's channel="cli"/chatID="direct" resolves to DMScopeMain,
-	// producing session key "agent:main:main" via BuildAgentMainSessionKey.
+	// producing session key "agent:mia:main" via BuildAgentMainSessionKey
+	// ("mia" is the only agent baseLoopDenialTestConfig registers).
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
-	const resolvedSessionKey = "agent:main:main"
+	const resolvedSessionKey = "agent:mia:main"
 	history := defaultAgent.Sessions.GetHistory(resolvedSessionKey)
 	require.NotEmpty(t, history)
 

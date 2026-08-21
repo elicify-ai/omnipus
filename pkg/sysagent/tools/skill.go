@@ -21,7 +21,8 @@ func NewSkillRemoveTool(d *Deps) *SkillRemoveTool { return &SkillRemoveTool{deps
 func (t *SkillRemoveTool) Name() string           { return "remove_skill" }
 func (t *SkillRemoveTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillRemoveTool) Description() string {
-	return "Remove an installed skill. Parameters: name (required), confirm (bool, must be true)."
+	return "Remove an installed skill. Parameters: name (required, the skill id as " +
+		"reported by list_skills — no path separators), confirm (bool, must be true)."
 }
 
 func (t *SkillRemoveTool) Parameters() map[string]any {
@@ -40,6 +41,18 @@ func (t *SkillRemoveTool) Execute(_ context.Context, args map[string]any) *tools
 	confirm, _ := args["confirm"].(bool)
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
+	}
+	// The LLM supplies this name and it ends up in a filesystem path, so it gets
+	// the same entity-id guard every other path-bearing sysagent tool uses — and
+	// the same one the REST delete handler applies (validateEntityID). Without
+	// it, name=".." reached os.RemoveAll(filepath.Join(workspace,"skills",".."))
+	// and deleted the operator's workspace. This is the outer of two layers:
+	// skills.SkillInstaller.Uninstall independently confines the resolved path,
+	// which is what catches the cases validateID does not (e.g. ".").
+	if err := validateID(name); err != nil {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT",
+			fmt.Sprintf("invalid skill name %q: a skill id must not contain path separators or %q", name, ".."),
+			"use list_skills to see the id of each installed skill"))
 	}
 	if !confirm {
 		return tools.ErrorResult(errorJSON("CONFIRMATION_REQUIRED",

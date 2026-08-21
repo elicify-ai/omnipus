@@ -13,7 +13,7 @@
 // always resolve 'ok', so it structurally cannot reach this branch — hence a
 // dedicated file with its own mock of ./authValidation.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // --- Router mock — mirrors -login.test.tsx's redirect-throwing shim ---
 vi.mock('@tanstack/react-router', async (importOriginal) => {
@@ -71,6 +71,17 @@ describe('_app.tsx beforeLoad — auth-check branch (D2)', () => {
     vi.clearAllMocks()
     vi.resetModules()
     mockFetchAppState.mockResolvedValue({ onboarding_complete: true })
+    // These tests are all about a RETURNING user (checkTokenValidity's
+    // verdict handling) — the boot-401 fix below adds an earlier guard that
+    // skips checkTokenValidity entirely for a browser that has never signed
+    // in (hasStoredSession(), src/store/auth.ts). Seed the "has signed in
+    // before" hint so these tests keep reaching the branch they exist to
+    // cover; the never-signed-in case has its own dedicated describe block.
+    localStorage.setItem('omnipus_auth_username', 'admin')
+  })
+
+  afterEach(() => {
+    localStorage.clear()
   })
 
   it('calls forceLogout("expired") BEFORE throwing the redirect on a confirmed 401 ("unauthorized" verdict)', async () => {
@@ -109,5 +120,96 @@ describe('_app.tsx beforeLoad — auth-check branch (D2)', () => {
     const beforeLoad = await getBeforeLoad()
     await expect(beforeLoad()).resolves.toBeUndefined()
     expect(mockForceLogout).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Boot-401 fix: GET /api/v1/auth/validate used to fire unconditionally on
+// every first paint into an _app/* route, even for a browser that has NEVER
+// signed in — a guaranteed 401 on every fresh install/browser, which is both
+// noisy (an "error" that's actually normal) and useless as a signal for
+// spotting a REAL failure. hasStoredSession() (src/store/auth.ts) is a "has
+// this browser ever completed a login" hint backed by
+// localStorage['omnipus_auth_username'] (written only by a successful
+// login/onboarding, per store/auth.ts's setUsername). beforeLoad now checks
+// it BEFORE calling checkTokenValidity(validateToken) at all.
+//
+// validateToken() itself is not double-mocked here the way checkTokenValidity
+// is elsewhere in this file — the assertion that matters is whether
+// checkTokenValidity (the thing that actually calls validateToken) is invoked
+// at all, which is exactly what a "no failed request" claim needs: if it's
+// never called, validateToken() never runs, so GET /api/v1/auth/validate
+// never fires.
+// ---------------------------------------------------------------------------
+describe('_app.tsx beforeLoad — skip validateToken for a never-signed-in browser (boot-401 fix)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.resetModules()
+    mockFetchAppState.mockResolvedValue({ onboarding_complete: true })
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    localStorage.clear()
+  })
+
+  it('never calls checkTokenValidity (so validateToken/GET /auth/validate never fires) when no session was ever stored', async () => {
+    // localStorage is empty — hasStoredSession() must be false.
+    const beforeLoad = await getBeforeLoad()
+
+    let thrown: unknown = null
+    try {
+      await beforeLoad()
+    } catch (err) {
+      thrown = err
+    }
+
+    expect(mockCheckTokenValidity).not.toHaveBeenCalled()
+    // Still ends up at /login — just without ever asking the server.
+    expect(thrown).not.toBeNull()
+    expect((thrown as { to: string }).to).toBe('/login')
+  })
+
+  it('does NOT call forceLogout for a never-signed-in browser — there is no session being forced out, so no involuntary-logout banner', async () => {
+    // Deliberately set the verdict checkTokenValidity WOULD return if it were
+    // (wrongly) reached — this is what makes the test discriminate: without
+    // the hasStoredSession() guard, beforeLoad calls checkTokenValidity,
+    // gets 'unauthorized', and DOES call forceLogout('expired'). With the
+    // guard, checkTokenValidity is never reached at all, so this verdict is
+    // never consulted.
+    mockCheckTokenValidity.mockResolvedValue('unauthorized')
+    const beforeLoad = await getBeforeLoad()
+    try {
+      await beforeLoad()
+    } catch {
+      // redirect throw is expected; assertion below is what this test checks.
+    }
+    expect(mockForceLogout).not.toHaveBeenCalled()
+  })
+
+  it('DOES call checkTokenValidity for a returning user (hasStoredSession true) even when the session is still valid', async () => {
+    localStorage.setItem('omnipus_auth_username', 'admin')
+    mockCheckTokenValidity.mockResolvedValue('ok')
+    const beforeLoad = await getBeforeLoad()
+
+    await expect(beforeLoad()).resolves.toBeUndefined()
+    expect(mockCheckTokenValidity).toHaveBeenCalledOnce()
+  })
+
+  it('DOES call checkTokenValidity for a returning user whose session has genuinely expired, and still forces them out', async () => {
+    localStorage.setItem('omnipus_auth_username', 'admin')
+    mockCheckTokenValidity.mockResolvedValue('unauthorized')
+    const beforeLoad = await getBeforeLoad()
+
+    let thrown: unknown = null
+    try {
+      await beforeLoad()
+    } catch (err) {
+      thrown = err
+    }
+
+    expect(mockCheckTokenValidity).toHaveBeenCalledOnce()
+    expect(mockForceLogout).toHaveBeenCalledWith('expired')
+    expect((thrown as { to: string }).to).toBe('/login')
   })
 })

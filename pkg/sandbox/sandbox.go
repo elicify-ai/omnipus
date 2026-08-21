@@ -74,6 +74,131 @@ type SandboxPolicy struct {
 	BindPortRules     []NetPortRule
 	ConnectPortRules  []NetPortRule
 	InheritToChildren bool
+
+	// ReadsOpen and ExecOpen carry the FilesystemModel decision down to the
+	// backends so neither needs access to the config (spec FR-2.4). When set,
+	// reads (resp. process execution) are unrestricted EXCEPT for DeniedPaths.
+	//
+	// The two travel together in practice and are still separate fields: on
+	// Landlock read and execute are independent rights, so a backend that
+	// opened execute while leaving read handled would stop every child starting
+	// (ADR-062 §6). Keeping them distinct makes that pairing explicit at each
+	// use rather than implied by one flag.
+	ReadsOpen bool
+	ExecOpen  bool
+
+	// DeniedPaths are absolute paths a sandboxed child must never reach,
+	// populated from SecretPaths regardless of model (spec FR-9.4 — the hole
+	// they close predates the model and must not survive behind it).
+	//
+	// The two backends consume this differently, and the asymmetry is
+	// intentional rather than an omission: macOS renders each entry as an
+	// explicit deny, which Seatbelt supports; Landlock has no deny primitive at
+	// all, so on Linux the same list is honoured by NEVER GRANTING these paths
+	// while granting their siblings. Same list, same outcome, two mechanisms.
+	DeniedPaths []string
+
+	// DeniedNodes are absolute DIRECTORY paths a sandboxed child must not
+	// WRITE TO AS ENTRIES, while everything beneath them stays reachable.
+	// Populated per turn from fspolicy.KernelDeniedNodesFor.
+	//
+	// This is a different question from DeniedPaths, and conflating the two is
+	// what left the hole it closes. DeniedPaths names SUBTREES that must be
+	// unreachable; these nodes must stay reachable, because the caller's own
+	// work dir lives underneath them ($OMNIPUS_HOME/agents for an
+	// agent-home-rooted turn). What must not be permitted is operating on the
+	// directory ENTRY itself — above all rename(2):
+	//
+	//	mv $OMNIPUS_HOME/agents $OMNIPUS_HOME/agents-old
+	//
+	// moves every agent's home to a path no DeniedPaths entry covers, and the
+	// child then reads all of them. That was executed against a real child
+	// under /usr/bin/sandbox-exec and SUCCEEDED, with the whole per-sibling
+	// deny list in place — the list was correct and the rename walked around
+	// it.
+	//
+	// Consumed asymmetrically, exactly as DeniedPaths is: macOS emits
+	// (deny file-write* (literal ...)) per node, which covers the entry and
+	// nothing below it. Linux needs no rule — ExpandRulesExcluding never grants
+	// a directory that contains a denied descendant, only its children, so the
+	// node carries no write right there to begin with (asserted by
+	// TestExpandRulesExcluding_NeverGrantsADeniedNode).
+	DeniedNodes []string
+
+	// DeniedPathPrefixes are absolute path PREFIXES a sandboxed child must
+	// never reach, matching every path that starts with them. Populated from
+	// fspolicy.SecretBackupPathPrefixes.
+	//
+	// DeniedPaths cannot express this. It is a list of paths, discovered by
+	// listing $OMNIPUS_HOME when the policy is built, and the files it must
+	// cover — `config.json.bak-<timestamp>` and friends — are written by the
+	// GATEWAY, mid-turn, after the child is already running under a fixed
+	// profile. A real install's config backup carries the gateway CLI token and
+	// the user account list, verified on a live install. Measured: with the
+	// full enumerated deny list in place, a real child read a backup created
+	// after it started.
+	//
+	// macOS renders each prefix as an anchored (regex #"^…") deny — the only
+	// Seatbelt filter that matches a path which does not exist yet, since both
+	// subpath and literal name a specific path and `config.json.bak-1` is not
+	// under `config.json` in the subpath sense.
+	//
+	// Linux DOES need a rule, and this field is it. ExpandRulesExcluding grants
+	// $OMNIPUS_HOME's existing children individually, and that enumeration runs
+	// at SPAWN — later than the policy build that captured the exact deny list.
+	// A backup created in between is by then an existing child that no exact
+	// path matches, so it was granted the parent's access. The walk now applies
+	// these prefixes per entry, which is what makes the field mean the same
+	// thing on both platforms.
+	//
+	// The earlier text here claimed Linux needed no rule because the home itself
+	// is never granted. True, and not sufficient: the gap was never the parent
+	// grant, it was the per-entry grant handed to a child that appeared after
+	// the snapshot.
+	DeniedPathPrefixes []string
+}
+
+// FilesystemModel selects how the sandbox treats reads and program execution.
+// ADR-062. Writes are confined under both models — the model governs reading
+// and running, never writing.
+type FilesystemModel string
+
+const (
+	// FilesystemModelConfined is the historical model: reads and execution are
+	// permitted only on paths the policy enumerates.
+	//
+	// Its defect is structural rather than a matter of a missing entry: the set
+	// of paths a working toolchain reads cannot be enumerated in advance, so
+	// every new tool an operator installs is a fresh, silent breakage.
+	FilesystemModelConfined FilesystemModel = "confined"
+
+	// FilesystemModelOpen leaves reads and execution unrestricted apart from
+	// DeniedPaths, and confines writes exactly as before. This is the model
+	// Claude Code and Codex both ship.
+	FilesystemModelOpen FilesystemModel = "open"
+)
+
+// ParseFilesystemModel normalizes a config value. Unlike ParseMode it does NOT
+// accept aliases or fold case: the value is new, has no legacy spellings to
+// honour, and a typo that silently resolved to a weaker model is precisely the
+// failure this rejects (spec FR-1.1).
+//
+// Empty resolves to the caller-supplied default rather than erroring, so an
+// absent key means "seeded default" and not "invalid" (FR-1.2).
+func ParseFilesystemModel(s string, fallback FilesystemModel) (FilesystemModel, error) {
+	switch s {
+	case "":
+		return fallback, nil
+	case string(FilesystemModelConfined):
+		return FilesystemModelConfined, nil
+	case string(FilesystemModelOpen):
+		return FilesystemModelOpen, nil
+	default:
+		return "", fmt.Errorf(
+			"sandbox: unknown filesystem_model %q (valid values: %q, %q)",
+			s, FilesystemModelConfined, FilesystemModelOpen,
+		)
+	}
 }
 
 // Mode selects how the sandbox enforces policy. Sprint J / BRD SEC-01..03.
@@ -127,6 +252,14 @@ func ParseMode(s string) (Mode, error) {
 //
 // Order-independent. Each entry matches itself and any child path (prefix
 // match on the directory boundary).
+//
+// The list is DECLARED in Linux/POSIX terms. Platform aliases are NOT listed
+// here — isSystemRestricted derives them by resolving each entry against the
+// running filesystem, which is what makes "/etc" also cover macOS's real
+// /private/etc without hard-coding a second, drift-prone table. In particular
+// "/private/var" is deliberately absent: /var is not restricted on any
+// platform, and listing its macOS alias would sweep in $TMPDIR
+// (/private/var/folders/…) and turn the per-user temp directory read-only.
 var SystemRestrictedPaths = []string{
 	"/etc",
 	"/proc",
@@ -139,11 +272,29 @@ var SystemRestrictedPaths = []string{
 // isSystemRestricted returns true if path equals or lies under any entry in
 // SystemRestrictedPaths. The path is cleaned first so that traversal sequences
 // like "../../../etc" resolve to /etc before the check.
+//
+// Both the candidate and each restricted entry are compared in every form the
+// kernel could reach them by — cleaned-as-declared and symlink-resolved — and
+// case-insensitively (comparisonForms / pathCoversFold in exec_paths.go carry
+// the full rationale). Without that, three macOS spellings of one directory
+// slipped past a literal compare: "/private/etc" (the real location; /etc is a
+// symlink to it), "/ETC" (case-insensitive APFS), and "/Private/Etc" (same,
+// with the real /private component keeping its typed case through
+// EvalSymlinks). Each rendered as (allow file-write* (subpath "/private/etc")),
+// leaving only Unix file ownership between a root-run gateway and /etc.
+//
+// This intentionally does NOT treat an ANCESTOR of a restricted path as
+// restricted: allowed_paths "/" or "/private" still get the write bit, exactly
+// as before. Widening that is a separate policy change, not part of closing
+// the alias gap.
 func isSystemRestricted(path string) bool {
-	clean := filepath.Clean(path)
-	for _, restricted := range SystemRestrictedPaths {
-		if clean == restricted || strings.HasPrefix(clean, restricted+string(filepath.Separator)) {
-			return true
+	for _, candidate := range comparisonForms(path) {
+		for _, restricted := range SystemRestrictedPaths {
+			for _, r := range comparisonForms(restricted) {
+				if pathCoversFold(r, candidate) {
+					return true
+				}
+			}
 		}
 	}
 	return false
@@ -169,17 +320,6 @@ func isSystemRestricted(path string) bool {
 // or 127.0.0.1:80. CIDR-level filtering for code paths the gateway controls
 // is layered on top via pkg/security/SSRFChecker.
 var DefaultConnectPorts = []uint16{53, 80, 443}
-
-// SecretFilesRelative is the list of file basenames under $OMNIPUS_HOME that
-// hold cryptographic key material or other root-of-trust state. Tool-exec
-// children (and the redteam carve-out test) MUST NOT have these paths in
-// their Landlock allow-tree even when the rest of $OMNIPUS_HOME is granted.
-// Closes pentest items C1 (master.key exfil) and C2 (credentials.json
-// exfil) per v0.2 #155 item 8.
-var SecretFilesRelative = []string{
-	"master.key",
-	"credentials.json",
-}
 
 // DefaultChildPolicy is the narrowed policy DESIGN for tool-exec children.
 // It returns the same shape as DefaultPolicy but with the
@@ -213,10 +353,11 @@ var SecretFilesRelative = []string{
 func DefaultChildPolicy(
 	homePath string,
 	allowedPaths []string,
+	allowedExecPaths []string,
 	warnFn func(msg string, path string),
 	bindPorts []uint16,
 ) SandboxPolicy {
-	policy := DefaultPolicy(homePath, allowedPaths, warnFn, bindPorts)
+	policy := DefaultPolicy(homePath, allowedPaths, allowedExecPaths, warnFn, bindPorts)
 	if homePath == "" {
 		return policy
 	}
@@ -240,8 +381,12 @@ func DefaultChildPolicy(
 		return policy
 	}
 
-	secretSet := make(map[string]struct{}, len(SecretFilesRelative))
-	for _, name := range SecretFilesRelative {
+	// The BOOT set, not the combined one. DefaultChildPolicy runs without a
+	// work dir, and the combined list includes the coarse `agents/` and
+	// `workspaces/` roots whose exclusion is only meaningful relative to one.
+	// Iterating the combined list here strips every agent's own home.
+	secretSet := make(map[string]struct{}, len(SecretEntriesAlwaysRelative))
+	for _, name := range SecretEntriesAlwaysRelative {
 		secretSet[name] = struct{}{}
 	}
 
@@ -305,13 +450,53 @@ func DefaultChildPolicy(
 func DefaultPolicy(
 	homePath string,
 	allowedPaths []string,
+	allowedExecPaths []string,
 	warnFn func(msg string, path string),
 	bindPorts []uint16,
 ) SandboxPolicy {
+	return DefaultPolicyForModel(FilesystemModelConfined, homePath, allowedPaths, allowedExecPaths, warnFn, bindPorts)
+}
+
+// DefaultPolicyForModel is DefaultPolicy with the ADR-062 filesystem model
+// selected explicitly. DefaultPolicy delegates here with FilesystemModelConfined,
+// so the confined output is byte-identical to the pre-ADR-062 policy BY
+// CONSTRUCTION rather than by a test that has to be remembered (spec FR-2.5).
+// That structural guarantee is the safety net the whole change rests on: if
+// confined can drift, nothing else in ADR-062 is safe to land.
+//
+// Under FilesystemModelOpen two rule groups are omitted entirely:
+//
+//   - readOnlySystem, because enumerating readable system paths is the defect
+//     being removed. Both its bits go: dropping read while keeping execute
+//     stops every child starting, since a binary cannot be mmap'd unreadable.
+//   - allowedExecPaths, because execution is open and the operator no longer
+//     has to predict where their toolchain lives. The config key stays valid
+//     and simply stops mattering, so an operator who set it is not punished
+//     for having done so.
+//
+// Everything else is unchanged: $OMNIPUS_HOME, /tmp, $TMPDIR, allowed_paths,
+// /dev/null and /dev/shm keep exactly the access they had. Writes are confined
+// under both models.
+func DefaultPolicyForModel(
+	model FilesystemModel,
+	homePath string,
+	allowedPaths []string,
+	allowedExecPaths []string,
+	warnFn func(msg string, path string),
+	bindPorts []uint16,
+) SandboxPolicy {
+	open := model == FilesystemModelOpen
 	rules := make([]PathRule, 0, 16+len(allowedPaths))
 
-	// Workspace: full RWX on $OMNIPUS_HOME. This is where agents write
+	// Agent home: full RWX on $OMNIPUS_HOME. This is where agents write
 	// sessions, credentials, config, skills, and state.
+	//
+	// Worded "Agent home" rather than the older heading so it no longer trips
+	// pkg/config's rename guard, which flags the retired agent-config
+	// identifier that ADR renamed to .Home. That guard is keyed by file:line,
+	// so the alternative was an allow-list entry going stale every time a line
+	// above this one moves — it broke twice on this branch alone. Removing the
+	// trigger is durable; maintaining a line number is not.
 	if homePath != "" {
 		rules = append(rules, PathRule{
 			Path:   filepath.Clean(homePath),
@@ -325,6 +510,21 @@ func DefaultPolicy(
 		Path:   "/tmp",
 		Access: AccessRead | AccessWrite | AccessExecute,
 	})
+
+	// The PER-USER temp directory, which on macOS is NOT /tmp.
+	//
+	// os.TempDir() honours $TMPDIR, and on macOS that is a per-user directory
+	// under /var/folders/<x>/<y>/T/. hardened_exec forwards TMPDIR to every
+	// child (allowedChildEnvKeys), so without this rule a child is handed a
+	// temp directory the policy denies: mktemp, npm, pip, git and `go build`
+	// all fail with a bare "operation not permitted" that never mentions the
+	// sandbox. Granting /tmp alone looks correct and fixes none of it.
+	if tmpDir := filepath.Clean(os.TempDir()); tmpDir != "" && tmpDir != "/tmp" && filepath.IsAbs(tmpDir) {
+		rules = append(rules, PathRule{
+			Path:   tmpDir,
+			Access: AccessRead | AccessWrite | AccessExecute,
+		})
+	}
 
 	// Read-only system dependencies required by the gateway at runtime.
 	// Missing paths (e.g. /lib64 on ARM64) are silently skipped by
@@ -348,11 +548,13 @@ func DefaultPolicy(
 		"/dev/urandom", // RNG source used by libc, OpenSSL, Chromium, etc.
 		"/dev/random",
 	}
-	for _, p := range readOnlySystem {
-		rules = append(rules, PathRule{
-			Path:   p,
-			Access: AccessRead | AccessExecute, // exec bit lets dynamic loader mmap .so files
-		})
+	if !open {
+		for _, p := range readOnlySystem {
+			rules = append(rules, PathRule{
+				Path:   p,
+				Access: AccessRead | AccessExecute, // exec bit lets dynamic loader mmap .so files
+			})
+		}
 	}
 
 	// Universally writable device files required by Chromium/headless tools
@@ -370,7 +572,19 @@ func DefaultPolicy(
 		if raw == "" {
 			continue
 		}
-		clean := filepath.Clean(raw)
+		// Expand ~ before anything else. The REST validator accepts "~/work"
+		// and persists it, but this loop used to only Clean() it — leaving a
+		// relative path in the policy. Landlock skipped it with a warning;
+		// the Seatbelt renderer rejects a relative path outright, which fails
+		// the render, fails Apply, and aborts boot with exit 78. An operator
+		// whose config the product itself validated could not start.
+		clean, expanded := expandUserPath(raw)
+		if !expanded {
+			if warnFn != nil {
+				warnFn("Sandbox allowed path is not absolute and could not be expanded; skipping.", raw)
+			}
+			continue
+		}
 		if isSystemRestricted(clean) {
 			// Strip Write bit — user intent (read) is preserved, but
 			// write access to /etc, /proc, /sys, /dev, /boot, /root and
@@ -391,6 +605,36 @@ func DefaultPolicy(
 			Path:   clean,
 			Access: AccessRead | AccessWrite,
 		})
+	}
+
+	// Execute-capable toolchain paths (config: sandbox.allowed_exec_paths).
+	//
+	// These pair read with execute and deliberately withhold write. (The
+	// readOnlySystem loop above also grants read+exec; what is unique here is
+	// that these paths are operator-configurable.) Without them an agent
+	// cannot run anything
+	// installed outside the system binary directories — Homebrew, fnm/nvm,
+	// cargo, pyenv — which on a developer machine is nearly every tool it needs.
+	//
+	// The read+exec-without-write shape is what makes this safe: the kernel
+	// denies writes to these directories regardless of Unix ownership, so the
+	// agent cannot drop a binary into one and execute it. buildExecPathRule
+	// hard-codes the access bits so a future edit cannot widen them by
+	// extending a shared loop.
+	//
+	// The writable set is derived from the rules ACTUALLY granted above, not
+	// from allowedPaths alone. $OMNIPUS_HOME, /tmp and $TMPDIR are granted RWX
+	// unconditionally, so checking only the operator's list let an exec grant
+	// on (say) /tmp/toolchain through — producing exactly the writable AND
+	// executable directory this guard exists to prevent.
+	writableRoots := make([]string, 0, len(rules))
+	for _, r := range rules {
+		if r.Access&AccessWrite != 0 {
+			writableRoots = append(writableRoots, r.Path)
+		}
+	}
+	if !open {
+		rules = append(rules, buildExecPathRules(allowedExecPaths, writableRoots, warnFn)...)
 	}
 
 	var bindRules []NetPortRule
@@ -419,6 +663,24 @@ func DefaultPolicy(
 		BindPortRules:     bindRules,
 		ConnectPortRules:  connectRules,
 		InheritToChildren: true,
+		ReadsOpen:         open,
+		ExecOpen:          open,
+
+		// Populated under BOTH models. The exposure these close — a child
+		// reading the live bearer token, or writing config.json to turn the
+		// sandbox off on the next boot — exists in shipped code today and is
+		// not introduced by the open model. Gating the fix on the model would
+		// leave it alive behind confined, which is where an operator would
+		// least expect it (spec FR-9.4).
+		DeniedPaths: SecretPaths(homePath),
+
+		// Backup copies, as PREFIXES. Set HERE rather than only in
+		// DeriveKernelPolicy so the BOOT profile carries it too: a child that
+		// runs without a registered per-turn policy falls back to this one, and
+		// the gateway writes config.json.bak-<ts> whenever a migration rewrites
+		// the config — which is a boot-time event as much as a turn-time one.
+		// SecretPaths above can only name the backups that already exist.
+		DeniedPathPrefixes: SecretBackupPathPrefixes(homePath),
 	}
 }
 
@@ -751,6 +1013,11 @@ type Status struct {
 	// available but not actively enforcing — see the package comment for
 	// the wiring status.
 	PolicyApplied bool `json:"policy_applied"`
+	// FilesystemModel reports which ADR-062 model is active ("confined" or
+	// "open"). Surfaced because the two are indistinguishable from outside:
+	// a successful read tells an operator nothing about whether the model is
+	// open or the path merely happened to be on the enumerated list.
+	FilesystemModel FilesystemModel `json:"filesystem_model,omitempty"`
 	// Mode is the effective sandbox mode ("enforce", "permissive", "off").
 	// Empty string means the caller has not set the mode (e.g. describe was
 	// called before Apply wiring was done).
@@ -817,6 +1084,10 @@ type ApplyState struct {
 	// backend itself (e.g. "permissive mode degraded to audit-only on
 	// kernel 6.8").
 	ExtraNotes []string
+	// FilesystemModel is the resolved ADR-062 model for this process
+	// lifetime. It is gateway-level state for the same reason Mode is: the
+	// backend renders the model but does not choose it.
+	FilesystemModel FilesystemModel
 }
 
 // DescribeBackend returns the operator-facing status of the given backend.
@@ -850,17 +1121,47 @@ func DescribeBackendWithState(backend SandboxBackend, state ApplyState) Status {
 		return Status{Backend: "none", Available: false}
 	}
 	status := Status{
-		Backend:    backend.Name(),
-		Available:  backend.Available(),
-		Mode:       state.Mode,
-		DisabledBy: state.DisabledBy,
-		AuditOnly:  state.AuditOnly,
+		Backend:         backend.Name(),
+		Available:       backend.Available(),
+		Mode:            state.Mode,
+		DisabledBy:      state.DisabledBy,
+		AuditOnly:       state.AuditOnly,
+		FilesystemModel: state.FilesystemModel,
 	}
 
 	rep, ok := backend.(abiReporter)
 	if !ok {
-		// Non-kernel backend (e.g. FallbackBackend). KernelLevel stays false.
-		// Preserve any gateway-level notes (e.g. "kernel too old").
+		// No Landlock ABI to report. That is NOT the same as "no kernel
+		// enforcement": the macOS Seatbelt backend confines every child in the
+		// kernel and simply has no versioned ABI to expose. Reporting it here
+		// as a non-kernel backend told operators `kernel_level: false,
+		// policy_applied: false` while their children were in fact confined —
+		// the inverse of the truth, and exactly as misleading as the opposite
+		// error would be.
+		if confiner, isConfiner := backend.(KernelChildConfiner); isConfiner && confiner.ConfinesChildren() {
+			status.KernelLevel = true
+			status.PolicyApplied = confiner.PolicyApplied()
+			// ABIVersion stays 0 and LandlockFeatures/BlockedSyscalls stay
+			// empty: those are Landlock-specific and have no Seatbelt analogue.
+			// A consumer must not read ABIVersion == 0 as "not kernel-level".
+			//
+			// The same "why isn't it applied" explanation the Landlock path
+			// gives. This branch returns early, so before it shared the helper
+			// an operator on macOS with the sandbox off saw a kernel-capable
+			// backend reporting policy_applied=false and NO reason for it —
+			// while the identical state on Linux said "operator choice". Same
+			// question, same answer, regardless of platform.
+			if !status.PolicyApplied {
+				status.Notes = append(status.Notes, notAppliedNote(state.DisabledBy))
+			}
+			if len(state.ExtraNotes) > 0 {
+				status.Notes = append(status.Notes, state.ExtraNotes...)
+			}
+			return status
+		}
+
+		// Genuinely non-kernel backend (e.g. FallbackBackend). KernelLevel
+		// stays false. Preserve any gateway-level notes (e.g. "kernel too old").
 		if len(state.ExtraNotes) > 0 {
 			status.Notes = append(status.Notes, state.ExtraNotes...)
 		}
@@ -916,24 +1217,7 @@ func DescribeBackendWithState(backend SandboxBackend, state ApplyState) Status {
 		// when the operator explicitly chose this state. Reserve the gap
 		// warning for the unexpected-disabled case (DisabledBy empty), which
 		// really does mean Apply failed or wasn't wired.
-		switch state.DisabledBy {
-		case "cli_flag":
-			status.Notes = append(
-				status.Notes,
-				"Sandbox disabled via --sandbox CLI flag (operator choice). Pass --sandbox=enforce or set gateway.sandbox.mode to re-enable.",
-			)
-		case "config":
-			status.Notes = append(status.Notes,
-				"Sandbox disabled via gateway.sandbox.mode=off in config.json (operator choice).")
-		default:
-			// Unexpected: capable kernel, no DisabledBy marker, but Apply
-			// didn't succeed. That's the original failure mode — keep the
-			// loud warning.
-			status.Notes = append(
-				status.Notes,
-				"sandbox backend is capable of kernel-level enforcement but Apply() has not been called on the Omnipus process; child processes are not currently restricted by Landlock or seccomp",
-			)
-		}
+		status.Notes = append(status.Notes, notAppliedNote(state.DisabledBy))
 	}
 
 	if len(state.ExtraNotes) > 0 {
@@ -952,4 +1236,23 @@ func SelectBackend() (SandboxBackend, string) {
 // Returns 0 if unavailable. Platform-specific implementation in sandbox_linux.go.
 func ProbeLandlockABI() int {
 	return probeLandlockABIPlatform()
+}
+
+// notAppliedNote explains, in operator terms, why a kernel-CAPABLE backend is
+// not currently enforcing. Shared by the Landlock and Seatbelt paths so the two
+// cannot answer the same question differently.
+//
+// The phrasing turns on WHY. An operator who passed --sandbox=off chose this
+// state, and showing them the alarming "Apply() has not been called" implies a
+// misconfiguration they did not make. That warning is reserved for the case with
+// no DisabledBy marker, which really does mean Apply failed or was never wired.
+func notAppliedNote(disabledBy string) string {
+	switch disabledBy {
+	case "cli_flag":
+		return "Sandbox disabled via --sandbox CLI flag (operator choice). Pass --sandbox=enforce or set gateway.sandbox.mode to re-enable."
+	case "config":
+		return "Sandbox disabled via gateway.sandbox.mode=off in config.json (operator choice)."
+	default:
+		return "sandbox backend is capable of kernel-level enforcement but Apply() has not been called on the Omnipus process; child processes are not currently restricted"
+	}
 }

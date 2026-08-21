@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -37,9 +38,61 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
+	"github.com/elicify-ai/omnipus/pkg/onboarding"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
+
+// newTestRestAPIWithHomeAndAgent is newTestRestAPIWithHome (rest_extra_test.go)
+// plus one real, chat-target agent ("mia") seeded into cfg.Agents.List BEFORE
+// the AgentLoop/AgentRegistry is constructed. newTestRestAPIWithHome itself
+// seeds NO agents — the retired "main" sentinel used to be registered
+// implicitly regardless of cfg (pkg/agent/registry.go's old always-on
+// fallback), papering over that. That sentinel is gone with no back-compat,
+// so any test using this file's createRecurringTaskViaAPI (which assigns
+// agent_id="mia" — validateTaskAgentID/validateScheduledAgentAssignment
+// require a real registered agent) needs one seeded from construction.
+//
+// Deliberately does NOT reuse the existing addAgentsToAPI helper
+// (channel_routing_binding_test.go): that helper persists an entity record
+// and calls refreshConfigAndRewireServices, which only swaps
+// AgentLoop.cfg (SwapConfig) — it does NOT rebuild AgentLoop.registry (see
+// SwapConfig's own doc comment: "al.registry is untouched"). validateTaskAgentID
+// reads a.agentLoop.GetRegistry(), so a post-hoc addAgentsToAPI call is
+// invisible to it; only an agent present in cfg.Agents.List at
+// agent.NewAgentLoop construction time (which builds the registry fresh from
+// that list) is resolvable here.
+func newTestRestAPIWithHomeAndAgent(t *testing.T) *restAPI {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:      tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{{ID: "mia"}},
+		},
+	}
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[{"id":"mia"}]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	return &restAPI{
+		agentLoop:     al,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		homePath:      tmpDir,
+		taskStore:     task.New(tmpDir + "/tasks"),
+		taskLock:      task.TaskFileLock,
+	}
+}
 
 // newTestRestAPIWithTaskTrigger extends newTestRestAPIAlignedStores with a
 // live agent.TaskTriggerScheduler wired into the agent loop
@@ -67,11 +120,13 @@ func newTestRestAPIWithTaskTrigger(t *testing.T) (*restAPI, *agent.TaskTriggerSc
 // (e.g. "heartbeat" for the selection-predicate tests).
 //
 // A recurring+llm task must carry an agent_id (store.validateScheduledAgentAssignment
-// — a scheduled task with no agent is a dead task, rejected at Create). "main"
-// is the test harness's always-registered default agent sentinel
-// (agent.DefaultAgentID); it is put on wsID's core team here (mirroring
-// TestHandleTaskPatch_InProgress_WithKnownAgent's setWorkspaceCoreTeam
-// precedent) so validateTaskAgentID's team-membership check accepts it.
+// — a scheduled task with no agent is a dead task, rejected at Create). "mia"
+// is newTestRestAPIAlignedStoresWithProvider's one explicitly seeded
+// chat-target agent (the retired "main" sentinel used to be registered
+// implicitly regardless of cfg — see that helper's comment); it is put on
+// wsID's core team here (mirroring TestHandleTaskPatch_InProgress_WithKnownAgent's
+// setWorkspaceCoreTeam precedent) so validateTaskAgentID's team-membership
+// check accepts it.
 func createRecurringTaskViaAPI(
 	t *testing.T,
 	api *restAPI,
@@ -80,13 +135,13 @@ func createRecurringTaskViaAPI(
 	tz, surface string,
 ) gen.Task {
 	t.Helper()
-	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 	surfaceField := ""
 	if surface != "" {
 		surfaceField = fmt.Sprintf(`,"surface":%q`, surface)
 	}
 	body := fmt.Sprintf(
-		`{"title":%q,"action":"llm","workspace_id":%q,"agent_id":"main","trigger":{"type":"recurring","config":{"rrule":%q,"dtstart_ms":%d,"tz":%q}}%s}`,
+		`{"title":%q,"action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"recurring","config":{"rrule":%q,"dtstart_ms":%d,"tz":%q}}%s}`,
 		title,
 		wsID,
 		rrule,
@@ -166,7 +221,7 @@ func getOccurrences(t *testing.T, api *restAPI, params url.Values) *httptest.Res
 
 func TestRestTasks_CreateRecurringRrule(t *testing.T) {
 	t.Run("POST rrule creates 201 and round-trips a valid RRULE with no cron_expr", func(t *testing.T) {
-		api := newTestRestAPIWithHome(t)
+		api := newTestRestAPIWithHomeAndAgent(t)
 		wsID := ensureTestWorkspace(t, api)
 		dtstart := time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC).UnixMilli()
 
@@ -204,16 +259,16 @@ func TestRestTasks_CreateRecurringRrule(t *testing.T) {
 	})
 
 	t.Run("PATCH legacy cron_expr -> rrule updates to 200 and emits an FR-022 audit entry", func(t *testing.T) {
-		api := newTestRestAPIWithHome(t)
+		api := newTestRestAPIWithHomeAndAgent(t)
 		auditDir := t.TempDir()
 		logger, err := audit.NewLogger(audit.LoggerConfig{Dir: auditDir, RetentionDays: 90})
 		require.NoError(t, err)
 		api.auditor = logger
 
 		wsID := ensureTestWorkspace(t, api)
-		setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+		setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 		body := fmt.Sprintf(
-			`{"title":"Legacy","action":"llm","workspace_id":%q,"agent_id":"main","trigger":{"type":"recurring","config":{"cron_expr":"0 9 * * MON"}}}`,
+			`{"title":"Legacy","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"recurring","config":{"cron_expr":"0 9 * * MON"}}}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -257,7 +312,7 @@ func TestRestTasks_CreateRecurringRrule(t *testing.T) {
 	})
 
 	t.Run("PATCH RRULE -> different RRULE audits; a title-only edit does not", func(t *testing.T) {
-		api := newTestRestAPIWithHome(t)
+		api := newTestRestAPIWithHomeAndAgent(t)
 		auditDir := t.TempDir()
 		logger, err := audit.NewLogger(audit.LoggerConfig{Dir: auditDir, RetentionDays: 90})
 		require.NoError(t, err)
@@ -370,7 +425,7 @@ func filterAuditEvents(entries []map[string]any, event string) []map[string]any 
 
 func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 	t.Run("200 bucketed shape for a dense recurring rule over an overview-mode range", func(t *testing.T) {
-		api := newTestRestAPIWithHome(t)
+		api := newTestRestAPIWithHomeAndAgent(t)
 		wsID := ensureTestWorkspace(t, api)
 		dtstart := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
 		tsk := createRecurringTaskViaAPI(t, api, wsID, "Hourly", "FREQ=HOURLY", dtstart, "UTC", "")
@@ -402,7 +457,7 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 		// next occurrence (pkg/agent/task_trigger.go OnTaskUpserted), so the
 		// occurrences endpoint's selection predicate must keep rendering it
 		// too. newTestRestAPIAlignedStores (not newTestRestAPIWithHome): the
-		// recurring task carries agent_id="main"
+		// recurring task carries agent_id="mia"
 		// (store.validateScheduledAgentAssignment requires it), so
 		// advanceTaskToDone's walk through in_progress goes through the real
 		// StartTaskNow launch path (rest_tasks.go ~L1000), which 503s with a
@@ -474,10 +529,10 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 		// `every` job's NextRunAtMS to that PATCH's own wall-clock time.
 		api, sched := newTestRestAPIWithTaskTrigger(t)
 		wsID := ensureTestWorkspace(t, api)
-		setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+		setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 		body := fmt.Sprintf(
-			`{"title":"EveryDoneStillFires","action":"llm","workspace_id":%q,"agent_id":"main",`+
+			`{"title":"EveryDoneStillFires","action":"llm","workspace_id":%q,"agent_id":"mia",`+
 				`"trigger":{"type":"every","config":{"every_ms":60000}}}`,
 			wsID,
 		)
@@ -521,10 +576,10 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 	t.Run("done once task still omitted (non-repeating trigger)", func(t *testing.T) {
 		api := newTestRestAPIAlignedStores(t)
 		wsID := ensureTestWorkspace(t, api)
-		setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+		setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 		atMs := time.Date(2020, 1, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
 		body := fmt.Sprintf(
-			`{"title":"OnceDone","action":"llm","workspace_id":%q,"agent_id":"main","trigger":{"type":"once","config":{"at_ms":%d}}}`,
+			`{"title":"OnceDone","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"once","config":{"at_ms":%d}}}`,
 			wsID,
 			atMs,
 		)
@@ -558,7 +613,7 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 	t.Run(
 		"heartbeat-surface task omitted (selection predicate); a user-surface sibling still renders",
 		func(t *testing.T) {
-			api := newTestRestAPIWithHome(t)
+			api := newTestRestAPIWithHomeAndAgent(t)
 			wsID := ensureTestWorkspace(t, api)
 			dtstart := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
 			hb := createRecurringTaskViaAPI(t, api, wsID, "Heartbeat", "FREQ=DAILY", dtstart, "UTC", "heartbeat")
@@ -591,7 +646,7 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 	)
 
 	t.Run("zero-occurrence task omitted; empty result is [] never null", func(t *testing.T) {
-		api := newTestRestAPIWithHome(t)
+		api := newTestRestAPIWithHomeAndAgent(t)
 		wsID := ensureTestWorkspace(t, api)
 		dtstart := time.Date(2020, 1, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
 		createRecurringTaskViaAPI(t, api, wsID, "Exhausted", "FREQ=DAILY;COUNT=1", dtstart, "UTC", "")

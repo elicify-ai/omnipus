@@ -86,36 +86,36 @@ func TestApprovalGrants_InheritFromTwoKeys(t *testing.T) {
 	requireDistinct(t, parentSid, childSid)
 
 	s := NewApprovalGrantStore()
-	if !s.Record(parentSid, parentAgent, toolT) {
+	if !s.Record(parentSid, parentAgent, toolT, nil) {
 		t.Fatal("fixture: Record on the source key must succeed")
 	}
 
 	// --- ABSENT BEFORE (BDD-88, dataset row 1). Without this the rest of the
 	// test is vacuous.
-	if s.IsAllowed(childSid, childAgent, toolT) {
+	if s.IsAllowed(childSid, childAgent, toolT, nil) {
 		t.Fatalf("precondition violated: %q must NOT resolve under the destination "+
 			"key {%s, %s} before InheritFrom runs", toolT, childSid, childAgent)
 	}
 
 	s.InheritFrom(parentSid, parentAgent, childSid, childAgent)
 
-	if !s.IsAllowed(childSid, childAgent, toolT) {
+	if !s.IsAllowed(childSid, childAgent, toolT, nil) {
 		t.Errorf("BDD-88: after InheritFrom, %q must resolve under the destination "+
 			"key {%s, %s}", toolT, childSid, childAgent)
 	}
 	// Copy, not move.
-	if !s.IsAllowed(parentSid, parentAgent, toolT) {
+	if !s.IsAllowed(parentSid, parentAgent, toolT, nil) {
 		t.Errorf("BDD-88: inheritance is a COPY — %q must still resolve under the "+
 			"source key {%s, %s}", toolT, parentSid, parentAgent)
 	}
 	// Scoping is otherwise unchanged: the destination AGENT under the SOURCE
 	// session, and the source agent under the destination session, are both
 	// still unrelated keys.
-	if s.IsAllowed(parentSid, childAgent, toolT) {
+	if s.IsAllowed(parentSid, childAgent, toolT, nil) {
 		t.Errorf("InheritFrom must not widen scope: {%s, %s} must not resolve",
 			parentSid, childAgent)
 	}
-	if s.IsAllowed(childSid, parentAgent, toolT) {
+	if s.IsAllowed(childSid, parentAgent, toolT, nil) {
 		t.Errorf("InheritFrom must not widen scope: {%s, %s} must not resolve",
 			childSid, parentAgent)
 	}
@@ -130,18 +130,18 @@ func TestApprovalGrants_InheritFromTwoKeys(t *testing.T) {
 	// --- Dataset row 4: a destination that ALREADY holds a grant of its own
 	// gets the union, not a replacement.
 	const toolU = "web_fetch"
-	if !s.Record(childSid, childAgent, toolU) {
+	if !s.Record(childSid, childAgent, toolU, nil) {
 		t.Fatal("fixture: Record on the destination key must succeed")
 	}
 	s.InheritFrom(parentSid, parentAgent, childSid, childAgent)
-	if !s.IsAllowed(childSid, childAgent, toolT) || !s.IsAllowed(childSid, childAgent, toolU) {
+	if !s.IsAllowed(childSid, childAgent, toolT, nil) || !s.IsAllowed(childSid, childAgent, toolU, nil) {
 		t.Errorf("dataset row 4: destination must hold the UNION {%s, %s}, got T=%v U=%v",
 			toolT, toolU,
-			s.IsAllowed(childSid, childAgent, toolT),
-			s.IsAllowed(childSid, childAgent, toolU))
+			s.IsAllowed(childSid, childAgent, toolT, nil),
+			s.IsAllowed(childSid, childAgent, toolU, nil))
 	}
 	// The union must not have leaked back into the source.
-	if s.IsAllowed(parentSid, parentAgent, toolU) {
+	if s.IsAllowed(parentSid, parentAgent, toolU, nil) {
 		t.Errorf("dataset row 4: the destination's own grant %q must not leak into "+
 			"the source key", toolU)
 	}
@@ -149,10 +149,10 @@ func TestApprovalGrants_InheritFromTwoKeys(t *testing.T) {
 	// --- BDD-32: the child's inherited grant does not outlive the child, and
 	// clearing the child leaves the parent untouched.
 	s.ClearSession(childSid)
-	if s.IsAllowed(childSid, childAgent, toolT) || s.IsAllowed(childSid, childAgent, toolU) {
+	if s.IsAllowed(childSid, childAgent, toolT, nil) || s.IsAllowed(childSid, childAgent, toolU, nil) {
 		t.Errorf("BDD-32: after ClearSession(%s) the child's grant set must be gone", childSid)
 	}
-	if !s.IsAllowed(parentSid, parentAgent, toolT) {
+	if !s.IsAllowed(parentSid, parentAgent, toolT, nil) {
 		t.Errorf("BDD-32: clearing the child must leave the PARENT's grant set untouched")
 	}
 }
@@ -173,21 +173,21 @@ func TestApprovalGrants_InheritFrom_SelfDelegationUnion(t *testing.T) {
 	requireDistinct(t, parentSid, childSid)
 
 	s := NewApprovalGrantStore()
-	if !s.Record(parentSid, agentX, toolT) {
+	if !s.Record(parentSid, agentX, toolT, nil) {
 		t.Fatal("fixture: Record must succeed")
 	}
-	if s.IsAllowed(childSid, agentX, toolT) {
+	if s.IsAllowed(childSid, agentX, toolT, nil) {
 		t.Fatalf("precondition violated: %q must NOT resolve under {%s, %s} before "+
 			"InheritFrom runs", toolT, childSid, agentX)
 	}
 
 	s.InheritFrom(parentSid, agentX, childSid, agentX)
 
-	if !s.IsAllowed(childSid, agentX, toolT) {
+	if !s.IsAllowed(childSid, agentX, toolT, nil) {
 		t.Errorf("dataset row 3: same agent, different session — %q must resolve "+
 			"under the destination session %s", toolT, childSid)
 	}
-	if !s.IsAllowed(parentSid, agentX, toolT) {
+	if !s.IsAllowed(parentSid, agentX, toolT, nil) {
 		t.Errorf("dataset row 3: the source session %s must be untouched", parentSid)
 	}
 	if got := s.InheritSourceMissCount(); got != 0 {
@@ -239,7 +239,7 @@ func TestApprovalGrants_InheritFrom_SourceMissIsNotSilent(t *testing.T) {
 		}
 	}
 	// The no-op is still a no-op: nothing was invented under either key.
-	if s.IsAllowed(childSid, childAgent, "bash") || s.IsAllowed(parentSid, parentAgent, "bash") {
+	if s.IsAllowed(childSid, childAgent, "bash", nil) || s.IsAllowed(parentSid, parentAgent, "bash", nil) {
 		t.Error("BDD-89: a source miss must not create any grant")
 	}
 
@@ -304,10 +304,10 @@ func TestApprovalGrants_SingleKeyFormCannotSatisfyBDD88(t *testing.T) {
 	requireDistinct(t, parentSid, childSid)
 
 	s := NewApprovalGrantStore()
-	if !s.Record(parentSid, parentAgent, toolT) {
+	if !s.Record(parentSid, parentAgent, toolT, nil) {
 		t.Fatal("fixture: Record on the source key must succeed")
 	}
-	if s.IsAllowed(childSid, childAgent, toolT) {
+	if s.IsAllowed(childSid, childAgent, toolT, nil) {
 		t.Fatalf("precondition violated: %q must NOT resolve under {%s, %s} yet",
 			toolT, childSid, childAgent)
 	}
@@ -316,7 +316,7 @@ func TestApprovalGrants_SingleKeyFormCannotSatisfyBDD88(t *testing.T) {
 	// to serve as both source and destination, so the source lookup misses.
 	s.InheritFrom(childSid, parentAgent, childSid, childAgent)
 
-	if s.IsAllowed(childSid, childAgent, toolT) {
+	if s.IsAllowed(childSid, childAgent, toolT, nil) {
 		t.Fatalf("C-1 control is broken: the single-key form must NOT be able to " +
 			"carry a grant across two different session ids — if it can, this test " +
 			"no longer discriminates and the two-key requirement is unproven")
@@ -328,7 +328,7 @@ func TestApprovalGrants_SingleKeyFormCannotSatisfyBDD88(t *testing.T) {
 
 	// The two-key form, same fixture, does carry it.
 	s.InheritFrom(parentSid, parentAgent, childSid, childAgent)
-	if !s.IsAllowed(childSid, childAgent, toolT) {
+	if !s.IsAllowed(childSid, childAgent, toolT, nil) {
 		t.Errorf("InheritFrom must succeed on the fixture the single-key form fails")
 	}
 }
@@ -338,7 +338,7 @@ func TestApprovalGrants_SingleKeyFormCannotSatisfyBDD88(t *testing.T) {
 // the new counters, which live outside the mutex.
 func TestApprovalGrants_InheritFrom_ConcurrentSafe(t *testing.T) {
 	s := NewApprovalGrantStore()
-	s.Record("sess_conc_src_1", "jim", "bash")
+	s.Record("sess_conc_src_1", "jim", "bash", nil)
 
 	done := make(chan struct{})
 	const workers = 8
@@ -348,7 +348,7 @@ func TestApprovalGrants_InheritFrom_ConcurrentSafe(t *testing.T) {
 			for j := 0; j < 200; j++ {
 				s.InheritFrom("sess_conc_src_1", "jim", "sess_conc_dst_1", "ava")
 				s.InheritFrom("sess_conc_absent", "jim", "sess_conc_dst_1", "ava")
-				_ = s.IsAllowed("sess_conc_dst_1", "ava", "bash")
+				_ = s.IsAllowed("sess_conc_dst_1", "ava", "bash", nil)
 				_ = s.InheritSourceMissCount()
 			}
 		}()
@@ -357,7 +357,7 @@ func TestApprovalGrants_InheritFrom_ConcurrentSafe(t *testing.T) {
 		<-done
 	}
 
-	if !s.IsAllowed("sess_conc_dst_1", "ava", "bash") {
+	if !s.IsAllowed("sess_conc_dst_1", "ava", "bash", nil) {
 		t.Error("concurrent InheritFrom must still produce the destination grant")
 	}
 	if got, want := s.InheritSourceMissCount(), int64(workers*200); got != want {

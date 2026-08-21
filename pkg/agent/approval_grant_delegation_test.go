@@ -141,6 +141,17 @@ func newGrantChainAgentLoop(t *testing.T) *AgentLoop {
 				ModelName: "test-model",
 			},
 			List: []config.AgentConfig{
+				// The delegating PARENT: an ordinary, explicitly-registered
+				// non-worker agent. No "main" sentinel to fall back to
+				// anymore — GetDefaultAgent's Priority 2 skips workers, and
+				// without this entry the only registered agents are BOTH
+				// workers, so the degenerate all-workers fallback would
+				// return "child-agent" itself as "the default agent",
+				// collapsing this test's parent/child distinction.
+				{
+					ID:   "grant-chain-parent",
+					Type: config.AgentTypeCore,
+				},
 				{
 					ID:    "child-agent",
 					Type:  config.AgentTypeWorker,
@@ -237,15 +248,15 @@ func TestApprovalGrant_FullChainSpawnInheritDeny(t *testing.T) {
 	require.NotEqual(t, parentSessionID, childSessionID, "parent and child session ids must be distinct")
 
 	// 1. Parent records an "Always Allow" grant for "bash" in ITS OWN session.
-	al.ApprovalGrants().Record(parentSessionID, parentAgent.ID, "bash")
-	if !al.ApprovalGrants().IsAllowed(parentSessionID, parentAgent.ID, "bash") {
+	al.ApprovalGrants().Record(parentSessionID, parentAgent.ID, "bash", nil)
+	if !al.ApprovalGrants().IsAllowed(parentSessionID, parentAgent.ID, "bash", nil) {
 		t.Fatal("setup: parent grant must be recorded before delegating")
 	}
 
 	// Sanity: the child must NOT already show the grant under its own
 	// (not-yet-created) session before any delegation happens — otherwise the
 	// assertion below would be vacuous.
-	if al.ApprovalGrants().IsAllowed(childSessionID, "child-agent", "bash") {
+	if al.ApprovalGrants().IsAllowed(childSessionID, "child-agent", "bash", nil) {
 		t.Fatal("setup invariant broken: child-agent must not already have the grant")
 	}
 
@@ -296,14 +307,14 @@ func TestApprovalGrant_FullChainSpawnInheritDeny(t *testing.T) {
 	// (parentTS.transcriptSessionID/agentID as source, childID/agent.ID as
 	// destination — subturn.go:939), not just in a unit test that calls
 	// InheritFrom directly.
-	if !al.ApprovalGrants().IsAllowed(childSessionID, "child-agent", "bash") {
+	if !al.ApprovalGrants().IsAllowed(childSessionID, "child-agent", "bash", nil) {
 		t.Fatal("expected child-agent to inherit the parent's 'bash' grant, keyed to its OWN session, via the real spawnSubTurn -> InheritFrom call")
 	}
 	// THE NEW-INVARIANT PROOF (negative space the pre-ADR-057 assertion could
 	// never express): the grant must NOT be visible under the shared PARENT
 	// session for the child's identity — InheritFrom re-keys to the child's
 	// own session, it does not also leave a copy under the parent's.
-	if al.ApprovalGrants().IsAllowed(parentSessionID, "child-agent", "bash") {
+	if al.ApprovalGrants().IsAllowed(parentSessionID, "child-agent", "bash", nil) {
 		t.Fatal("child-agent's inherited grant must be keyed to its OWN session, not the shared parent session — " +
 			"this is the D1 identity split InheritFrom (FR-031) exists to honor")
 	}
@@ -359,7 +370,7 @@ func TestApprovalGrant_FullChainSpawnInheritDeny(t *testing.T) {
 	// 7. THE CONSEQUENTIAL-SEMANTICS PROOF (FR-033, US-18): once the child's
 	// turn has genuinely ended, its inherited grant must be cleared — it must
 	// not leak for the process lifetime of every ever-delegated child.
-	if al.ApprovalGrants().IsAllowed(childSessionID, "child-agent", "bash") {
+	if al.ApprovalGrants().IsAllowed(childSessionID, "child-agent", "bash", nil) {
 		t.Fatal("expected child-agent's inherited grant to be cleared once its turn ended (FR-033 CloseSession)")
 	}
 }
@@ -413,7 +424,7 @@ func TestApprovalGrant_TransitiveAcrossThreeLevels(t *testing.T) {
 
 	// 1. Grandparent (the default agent) records an "Always Allow" grant for
 	// "bash" in ITS OWN session.
-	al.ApprovalGrants().Record(grandparentSessionID, grandparentAgent.ID, "bash")
+	al.ApprovalGrants().Record(grandparentSessionID, grandparentAgent.ID, "bash", nil)
 
 	// 2. Hop 1 — grandparent delegates to "child-agent" via a REAL
 	// spawnSubTurn call (external-cli dispatch via a BLOCKING driver, so
@@ -462,7 +473,7 @@ func TestApprovalGrant_TransitiveAcrossThreeLevels(t *testing.T) {
 	// proceeding to hop 2 — this is the same assertion
 	// TestApprovalGrant_FullChainSpawnInheritDeny makes, re-checked here
 	// because hop 2's correctness depends on it.
-	if !al.ApprovalGrants().IsAllowed(childSessionID, "child-agent", "bash") {
+	if !al.ApprovalGrants().IsAllowed(childSessionID, "child-agent", "bash", nil) {
 		t.Fatal("hop 1: child-agent must inherit the grandparent's grant, keyed to its OWN session, before hop 2 can prove transitivity")
 	}
 
@@ -523,17 +534,17 @@ func TestApprovalGrant_TransitiveAcrossThreeLevels(t *testing.T) {
 	// hop 2's InheritFrom call copies child-agent's ENTIRE current bucket —
 	// read from child-agent's OWN session — which by this point already
 	// includes what it inherited from the grandparent in hop 1).
-	if !al.ApprovalGrants().IsAllowed(grandchildSessionID, "grandchild-agent", "bash") {
+	if !al.ApprovalGrants().IsAllowed(grandchildSessionID, "grandchild-agent", "bash", nil) {
 		t.Fatal(
 			"expected grandchild-agent to inherit the grandparent's 'bash' grant transitively, keyed to its OWN session, across two real spawnSubTurn hops",
 		)
 	}
 	// THE NEW-INVARIANT PROOF (negative space): the grant must not be visible
 	// under either ancestor's shared session for the grandchild's identity.
-	if al.ApprovalGrants().IsAllowed(grandparentSessionID, "grandchild-agent", "bash") {
+	if al.ApprovalGrants().IsAllowed(grandparentSessionID, "grandchild-agent", "bash", nil) {
 		t.Fatal("grandchild-agent's inherited grant must be keyed to its OWN session, not the grandparent's")
 	}
-	if al.ApprovalGrants().IsAllowed(childSessionID, "grandchild-agent", "bash") {
+	if al.ApprovalGrants().IsAllowed(childSessionID, "grandchild-agent", "bash", nil) {
 		t.Fatal("grandchild-agent's inherited grant must be keyed to its OWN session, not its direct parent's")
 	}
 
@@ -577,7 +588,7 @@ func TestApprovalGrant_TransitiveAcrossThreeLevels(t *testing.T) {
 	require.True(t, driver2.ctxCanceled.Load(), "the grandchild's external-cli driver ctx must have been canceled")
 	// FR-033 consequential-semantics proof for the grandchild (US-18) —
 	// mirrors TestApprovalGrant_FullChainSpawnInheritDeny's step 7.
-	if al.ApprovalGrants().IsAllowed(grandchildSessionID, "grandchild-agent", "bash") {
+	if al.ApprovalGrants().IsAllowed(grandchildSessionID, "grandchild-agent", "bash", nil) {
 		t.Fatal("expected grandchild-agent's inherited grant to be cleared once its turn ended (FR-033 CloseSession)")
 	}
 

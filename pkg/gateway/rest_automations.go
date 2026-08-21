@@ -121,16 +121,10 @@ func triggerDisplay(s cron.CronSchedule) string {
 	}
 }
 
-// actionDisplay humanizes what a fired schedule does. deliver=true sends the
-// message straight to a channel; deliver=false runs the owning agent.
-func (a *restAPI) actionDisplay(job cron.CronJob, agentName string) string {
-	if job.Payload.Deliver {
-		target := strings.TrimSpace(job.Payload.Channel)
-		if target == "" {
-			target = "channel"
-		}
-		return "Send to " + target
-	}
+// actionDisplay humanizes what a fired schedule does. Every schedule now wakes
+// its owning agent: the deliver=true branch (publish straight to a channel with
+// no agent turn) went with the retired Schedules UI plumbing.
+func (a *restAPI) actionDisplay(_ cron.CronJob, agentName string) string {
 	return "Run agent: " + agentName
 }
 

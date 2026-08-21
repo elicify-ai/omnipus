@@ -84,6 +84,7 @@ func TestStress_ExternalCLI_ConcurrentSpawnAndCancel(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Provider: "mock"},
+			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})

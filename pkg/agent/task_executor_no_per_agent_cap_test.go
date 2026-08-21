@@ -110,7 +110,7 @@ func createDispatchableTask(t *testing.T, store *task.Store, agentID, title stri
 // (task_executor.go, pre-removal executeTask), not from a wave-spec line
 // number.
 func TestTaskExecutor_NoPerAgentConcurrencyCap(t *testing.T) {
-	const agentID = "main"
+	const agentID = testDefaultAgentID // no "main" sentinel to fall back to anymore; must be a real registered agent
 	const numTasks = 8
 
 	te, store := newNoPerAgentCapExecutor(t, 100) // sema cap >> numTasks
@@ -229,7 +229,7 @@ func TestTaskExecutor_NoPerAgentConcurrencyCap(t *testing.T) {
 // dispatchSema remain "the ONLY concurrency gate on task dispatch"
 // (task_executor.go's own doc comment on the field).
 func TestTaskExecutor_DispatchSemaphoreStillGatesSingleAgent(t *testing.T) {
-	const agentID = "main"
+	const agentID = testDefaultAgentID // no "main" sentinel to fall back to anymore; must be a real registered agent
 	const semaCap = 3
 	const numTasks = 5 // > semaCap, so the excess must be refused
 

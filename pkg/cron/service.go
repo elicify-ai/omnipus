@@ -113,10 +113,14 @@ type CronPayload struct {
 	Kind    string `json:"kind"`
 	Message string `json:"message"`
 	Command string `json:"command,omitempty"`
-	Deliver bool   `json:"deliver"`
-	Channel string `json:"channel,omitempty"`
-	To      string `json:"to,omitempty"`
 }
+
+// Deliver, Channel and To were removed with the retired Schedules UI plumbing
+// (ADR-065 spec FR-8). Deliver:true published a message straight to a channel
+// with NO agent turn — an egress path no ownership rule could govern, because
+// no agent was involved in it. Nothing in the product ever set it; it was
+// reachable only by calling the API directly. Scheduled work is tasks and
+// heartbeats, and both wake the owning agent.
 
 // CronRunRecord is one inline run-history entry (Revision 2 run-history shape).
 type CronRunRecord struct {
@@ -642,8 +646,8 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	}
 
 	// Log job execution start
-	log.Printf("[cron] ▶ executing job '%s' (id: %s, schedule: %s, channel: %s)",
-		callbackJob.Name, jobID, callbackJob.Schedule.Kind, callbackJob.Payload.Channel)
+	log.Printf("[cron] ▶ executing job '%s' (id: %s, schedule: %s, owner: %s)",
+		callbackJob.Name, jobID, callbackJob.Schedule.Kind, callbackJob.AgentID)
 
 	// Apply a per-run deadline (FR-003) derived from the schedule's timeout.
 	runCtx := ctx
@@ -971,12 +975,14 @@ func (cs *CronService) saveStoreUnsafe() error {
 	return fileutil.WriteFileAtomic(cs.storePath, data, 0o600)
 }
 
+// AddJob creates a schedule. It used to take deliver/channel/to as well; those
+// went with the retired Schedules UI plumbing (ADR-065 spec FR-8) and were
+// left as ignored parameters for a while, which is its own kind of lie about
+// what the function does.
 func (cs *CronService) AddJob(
 	name string,
 	schedule CronSchedule,
 	message string,
-	deliver bool,
-	channel, to string,
 ) (*CronJob, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -994,9 +1000,6 @@ func (cs *CronService) AddJob(
 		Payload: CronPayload{
 			Kind:    "agent_turn",
 			Message: message,
-			Deliver: deliver,
-			Channel: channel,
-			To:      to,
 		},
 		State: CronJobState{
 			NextRunAtMS: cs.computeNextRun(&schedule, now),
@@ -1025,9 +1028,6 @@ type JobSpec struct {
 	Schedule       CronSchedule
 	Message        string
 	Command        string
-	Deliver        bool
-	Channel        string
-	To             string
 	AgentID        string
 	SessionMode    SessionMode
 	TimeoutSeconds int
@@ -1075,9 +1075,6 @@ func (cs *CronService) AddJobFull(spec JobSpec) (*CronJob, error) {
 			Kind:    "agent_turn",
 			Message: spec.Message,
 			Command: spec.Command,
-			Deliver: spec.Deliver,
-			Channel: spec.Channel,
-			To:      spec.To,
 		},
 		State: CronJobState{
 			NextRunAtMS: cs.computeNextRun(&spec.Schedule, now),

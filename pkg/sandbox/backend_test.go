@@ -151,14 +151,19 @@ func TestLandlockDetector_ABIVersion(t *testing.T) {
 		assert.NotNil(t, backend)
 		// On Linux with Landlock, name will be "landlock-vN"
 		// On Linux without Landlock, name will be "seccomp" or "fallback"
-		// On non-Linux, name will be "fallback"
+		// On macOS with sandbox-exec present, name will be "seatbelt"
+		//   (ADR-052 Phase-3 AC-6; before that darwin always reported
+		//   "fallback", which is why this list previously had no entry for it)
+		// On any other platform, or when the preferred backend is unavailable,
+		// name degrades to "fallback" (HC #4).
 		validNames := map[string]bool{
 			"fallback": true,
+			"seatbelt": true,
 		}
 		// Landlock names are "landlock-v1", "landlock-v2", "landlock-v3"
 		isLandlock := len(name) > 9 && name[:9] == "landlock-"
 		isValid := validNames[name] || isLandlock
 		assert.True(t, isValid,
-			"backend name %q should be 'fallback' or 'landlock-vN'", name)
+			"backend name %q should be 'fallback', 'seatbelt', or 'landlock-vN'", name)
 	})
 }

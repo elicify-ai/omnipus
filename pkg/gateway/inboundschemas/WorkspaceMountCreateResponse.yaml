@@ -1,0 +1,51 @@
+type: object
+additionalProperties: false
+description: >
+  Response body for POST /workspaces/{id}/mounts. Fields mirror
+  WorkspaceMount.yaml verbatim (duplicated rather than composed via allOf —
+  matches the ADR-034 precedent of keeping operation-facing schemas flat, one
+  file per schema) plus an operator-facing `warning` string.
+
+  FR-7.4/FR-7.6: a target that is broad but not refused (the operator's own
+  home directory, the filesystem root, or a location that CONTAINS
+  $OMNIPUS_HOME) still succeeds (201) but MUST warn — the warning has to
+  cross the wire so the operator who made the call actually sees it, not just
+  a server log. `warning` is absent (never an empty string) when the target
+  warranted none.
+required:
+  - name
+  - host_path
+  - status
+properties:
+  name:
+    type: string
+    minLength: 1
+    description: The mount's name, as created (see WorkspaceMountCreateRequest.name).
+    example: "client-repo"
+  host_path:
+    type: string
+    minLength: 1
+    description: The realpath-resolved host path this mount grants write access to (FR-5.3).
+    example: "/Users/operator/code/client-repo"
+  status:
+    type: string
+    enum: [ok, broken]
+    description: >
+      Server-computed liveness of the mount target at creation time (FR-8.2).
+      Always "ok" immediately after a successful create — included for shape
+      symmetry with WorkspaceMount.yaml.
+    example: "ok"
+  warning:
+    type: string
+    minLength: 1
+    description: >
+      Present only when the resolved target is broad but not refused (FR-7.4/
+      FR-7.6) — e.g. the operator's home directory, the filesystem root, or a
+      folder that CONTAINS $OMNIPUS_HOME. Names exactly what the grant covers.
+      Absent (not an empty string) when the target warranted no warning.
+    example: >-
+      mounting "/Users/operator" contains this Omnipus installation's own
+      data directory (/Users/operator/.omnipus) — the installation's own
+      secrets remain protected independently of this mount, but every OTHER
+      file under /Users/operator becomes writable by any agent on this
+      workspace

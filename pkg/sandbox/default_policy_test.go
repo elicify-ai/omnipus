@@ -13,7 +13,7 @@ import (
 // root ($OMNIPUS_HOME) gets Read+Write+Execute access in the computed
 // policy, so agents can freely read/write under the home directory.
 func TestDefaultPolicy_IncludesHomeAsRWX(t *testing.T) {
-	policy := DefaultPolicy("/opt/omnipus", nil, nil, nil)
+	policy := DefaultPolicy("/opt/omnipus", nil, nil, nil, nil)
 	if len(policy.FilesystemRules) == 0 {
 		t.Fatal("DefaultPolicy returned no rules")
 	}
@@ -59,7 +59,7 @@ func TestDefaultPolicy_SystemRestrictedReadOnly(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var warnedPath string
 			warnFn := func(_, path string) { warnedPath = path }
-			policy := DefaultPolicy("/tmp/home", []string{tc.path}, warnFn, nil)
+			policy := DefaultPolicy("/tmp/home", []string{tc.path}, nil, warnFn, nil)
 
 			var userRule *PathRule
 			for i := range policy.FilesystemRules {
@@ -92,7 +92,7 @@ func TestDefaultPolicy_SystemRestrictedReadOnly(t *testing.T) {
 func TestDefaultPolicy_NonSystemPathKeepsWrite(t *testing.T) {
 	warnCount := 0
 	warnFn := func(_, _ string) { warnCount++ }
-	policy := DefaultPolicy("/tmp/home", []string{"/opt/shared"}, warnFn, nil)
+	policy := DefaultPolicy("/tmp/home", []string{"/opt/shared"}, nil, warnFn, nil)
 
 	var userRule *PathRule
 	for i := range policy.FilesystemRules {
@@ -118,7 +118,7 @@ func TestDefaultPolicy_NonSystemPathKeepsWrite(t *testing.T) {
 func TestDefaultPolicy_TraversalIsCleaned(t *testing.T) {
 	var warnedPath string
 	warnFn := func(_, path string) { warnedPath = path }
-	policy := DefaultPolicy("/tmp/home", []string{"../../../etc"}, warnFn, nil)
+	policy := DefaultPolicy("/tmp/home", []string{"../../../etc"}, nil, warnFn, nil)
 
 	// Clean should produce "/etc" (absolute) or "../etc" (relative)?
 	// With our current impl, filepath.Clean on "../../../etc" leaves it
@@ -150,7 +150,7 @@ func TestDefaultPolicy_TraversalIsCleaned(t *testing.T) {
 // row 1: with no user-declared AllowedPaths, the policy contains only
 // the baseline rules (home, /tmp, /proc/self, system libs, CA certs).
 func TestDefaultPolicy_EmptyAllowedPathsReturnsDefaults(t *testing.T) {
-	policy := DefaultPolicy("/tmp/home", nil, nil, nil)
+	policy := DefaultPolicy("/tmp/home", nil, nil, nil, nil)
 	if len(policy.FilesystemRules) == 0 {
 		t.Fatal("DefaultPolicy: empty rule set")
 	}

@@ -1317,6 +1317,23 @@ func (h *WSHandler) handleChatMessage(
 		return
 	}
 
+	// No caller-supplied agent_id AND neither fallback resolved one (no
+	// seeded default agent, no chat-target agent in the roster at all): reject
+	// explicitly rather than letting an empty targetAgentID flow into
+	// store.NewSession/transcript writes below. The retired "main" sentinel
+	// used to silently absorb this case; there is no substitute default to
+	// fall back to now — an empty owner on a persisted session is exactly the
+	// unpoliced-shadow-agent bug removing the sentinel was meant to close.
+	if targetAgentID == "" {
+		slog.Warn("ws: rejecting chat frame — no agent_id supplied and no default agent could be resolved",
+			"chat_id", chatID, "workspace_id", workspaceID)
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "no agent available to handle this message: no default agent is configured",
+		})
+		return
+	}
+
 	// Validate the raw client-supplied agent_id format HERE, before any of the
 	// workspace-kickoff consume/mint/audit work below. The previous placement
 	// of this check (immediately before the bus publish, at the very end of
@@ -3909,11 +3926,18 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			if !ok {
 				continue
 			}
-			if p.Scope != "global" && !matchesChatID(p.ChatID) {
+			// Prefer the routing session stamped on the payload so a
+			// second tab / reload attached to the same session still
+			// sees the denial. ChatID alone is a dead webchat: uuid
+			// after ServeHTTP mints a new connection.
+			rateSID := p.SessionID
+			if rateSID == "" {
+				rateSID = sessionIDForChat(p.ChatID)
+			}
+			if p.Scope != "global" && !matchesEvent(p.ChatID, rateSID) {
 				continue
 			}
 			// Use generated.RateLimitFrame (contract-first migration).
-			rateSID := sessionIDForChat(p.ChatID)
 			rateF := generated.RateLimitFrame{
 				Type:              string(generated.WsFrameTypeRateLimit),
 				SessionId:         rateSID,
@@ -3935,14 +3959,55 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			// ADR-051 §RD6: forward translated provider/LLM errors to the
 			// browser so the chat UI can render the typed ErrorFrame inline
 			// (Code/Retryable/Detail) instead of the raw provider text.
-			// `code==rate_limited` is suppressed here — the dedicated
-			// RateLimitFrame above is authoritative for that class and the SPA
-			// would otherwise render two bubbles for the same denial.
+			//
+			// NO CODE IS SUPPRESSED HERE — and `rate_limited` least of all.
+			// This arm used to end with an unconditional
+			// `if code == agent.CodeRateLimited { continue }`, justified as
+			// "the dedicated RateLimitFrame above is authoritative for that
+			// class". That justification was false, and it cost a user their
+			// only signal: an upstream HTTP 429 produced a turn that opened,
+			// said nothing, and closed reporting success.
+			//
+			// The two mechanisms share a code NAME but not a producer:
+			//
+			//   - EventKindRateLimit (the arm above) has EXACTLY ONE producer,
+			//     AgentLoop.recordRateLimitDenial (pkg/agent/loop.go), called
+			//     from two sites both guarded on Omnipus's OWN internal SEC-26
+			//     limiter being configured (cfg.Sandbox.RateLimits.MaxAgent{
+			//     LLMCallsPerHour,ToolCallsPerMinute} > 0). It means "Omnipus
+			//     denied this".
+			//   - An UPSTREAM refusal never reaches that function at all. It
+			//     travels runTurn's LLM-error block, which emits EventKindError
+			//     with Code: "rate_limited". It means "the provider denied
+			//     this" — a different fact with a different remedy (wait /
+			//     retry / switch model, not raise your own cap).
+			//
+			// So the suppression could never de-duplicate anything: it only
+			// ever deleted the provider case, with nothing replacing it.
+			//
+			// Nor is a dual-emit lurking behind it. recordRateLimitDenial emits
+			// ONE event, and its doc comment records that the prior
+			// "EventKindError + RateLimitPayload + EventKindRateLimit"
+			// dual-emit was deliberately removed as bus pollution — that
+			// removal was correct and stays. Even reinstated in its old shape
+			// it could not reach this frame: it carried a RateLimitPayload,
+			// which the ErrorPayload type assertion immediately below already
+			// rejects. Dedup belongs at the producer (one event per denial),
+			// not here — pinned end-to-end by
+			// TestEventForwarder_InternalRateLimitDenial_EmitsExactlyOneFrame.
 			p, ok := evt.Payload.(agent.ErrorPayload)
 			if !ok {
 				continue
 			}
-			if !matchesChatID(p.ChatID) {
+			// Prefer the routing session stamped on the payload (survives
+			// reload: the originating chatID is a dead webchat: uuid).
+			// Fall back to the live chatID→session map for older emitters
+			// that only set ChatID.
+			errSID := p.SessionID
+			if errSID == "" {
+				errSID = sessionIDForChat(p.ChatID)
+			}
+			if !matchesEvent(p.ChatID, errSID) {
 				continue
 			}
 			// FIX 2: prefer the already-computed p.Code/p.Message over a
@@ -3988,10 +4053,6 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				// curated Code/Message this frame actually carries.
 				detail = agent.BuildDetail(p.ProviderError, message)
 			}
-			if code == agent.CodeRateLimited {
-				continue
-			}
-			errSID := sessionIDForChat(p.ChatID)
 			errF := generated.ErrorFrame{
 				Type:      string(generated.WsFrameTypeError),
 				SessionId: &errSID,
@@ -4212,7 +4273,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			sendConnGenFrame(wc, string(generated.WsFrameTypeTaskRunStatus), runF)
 
 		case agent.EventKindLLMRequest, agent.EventKindLLMDelta, agent.EventKindLLMResponse,
-			agent.EventKindLLMRetry, agent.EventKindContextCompress, agent.EventKindSessionSummarize,
+			agent.EventKindLLMRetry, agent.EventKindContextCompress,
 			agent.EventKindToolExecSkipped, agent.EventKindSteeringInjected, agent.EventKindFollowUpQueued,
 			agent.EventKindInterruptReceived, agent.EventKindSubTurnResultDelivered, agent.EventKindSubTurnOrphan,
 			agent.EventKindTurnTimeout, agent.EventKindEmptyResponseRetry, agent.EventKindCompactionRetry,
@@ -4311,11 +4372,18 @@ type wsStreamer struct {
 	// Populates the "done" frame so the chat UI shows real token counts and
 	// cost instead of zeros (issue #12). Mutex-protected because SetTurnStats
 	// and Finalize may be called from different goroutines.
-	statsMu         sync.Mutex
-	statsTokens     int64
-	statsCostUSD    float64
-	statsDuration   time.Duration
-	statsTurnFailed bool // set by SetTurnFailed when the engine used a synthetic fallback
+	statsMu sync.Mutex
+	// statsPromptTokens/statsCompletionTokens/statsCacheRead/statsCacheWrite
+	// carry the provider's token split so Finalize can stamp it onto the
+	// TranscriptEntry it writes. Guarded by statsMu like the fields below.
+	statsPromptTokens     int
+	statsCompletionTokens int
+	statsCacheRead        int
+	statsCacheWrite       int
+	statsTokens           int64
+	statsCostUSD          float64
+	statsDuration         time.Duration
+	statsTurnFailed       bool // set by SetTurnFailed when the engine used a synthetic fallback
 
 	// transcriptPersisted records that the agent loop already wrote this
 	// streamer's narration to the transcript via
@@ -4527,6 +4595,21 @@ func (s *wsStreamer) SetTurnStats(tokens int64, costUSD float64, duration time.D
 	s.statsDuration = duration
 }
 
+// SetTurnIOStats receives the provider's input/output and cache token split
+// from the agent loop's finalizeStreamer (streamerIOStatsSetter).
+//
+// SetTurnStats above carries only a collapsed total, which is why a streamed
+// turn used to persist an entry with no split at all — leaving tokens_in at 0
+// for every webchat session.
+func (s *wsStreamer) SetTurnIOStats(promptTokens, completionTokens, cacheReadTokens, cacheWriteTokens int) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	s.statsPromptTokens = promptTokens
+	s.statsCompletionTokens = completionTokens
+	s.statsCacheRead = cacheReadTokens
+	s.statsCacheWrite = cacheWriteTokens
+}
+
 // SetTurnFailed is called by the agent loop's finalizeStreamer when the turn
 // ended via the engine's error/limit fallback rather than a real model response.
 // Conditions that set the flag: (1) LLM returned empty after retries and the
@@ -4723,6 +4806,12 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	s.statsMu.Lock()
 	tokensF := float64(s.statsTokens)
 	costF := s.statsCostUSD
+	// Read the split under the same lock as the total, so the entry cannot
+	// carry a total from one turn and a split from another.
+	promptTokensF := s.statsPromptTokens
+	completionTokensF := s.statsCompletionTokens
+	cacheReadF := s.statsCacheRead
+	cacheWriteF := s.statsCacheWrite
 	durF := float64(s.statsDuration.Milliseconds())
 	transcriptAlreadyPersisted := s.transcriptPersisted
 	producedModel := s.producedModel
@@ -4868,6 +4957,14 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 				Tokens:    int(tokensF),
 				Cost:      costF,
 				Model:     producedModel,
+				// The provider's token split. Without these four fields the
+				// session-stats aggregator sees no split and falls back to
+				// booking the whole turn total as output, which is how every
+				// webchat session came to report tokens_in: 0.
+				PromptTokens:     promptTokensF,
+				CompletionTokens: completionTokensF,
+				CacheReadTokens:  cacheReadF,
+				CacheWriteTokens: cacheWriteF,
 				// ParentSpawnCallID: stamped via SetParentSpawnCallID so a
 				// delegation child sub-turn's own streamed narration/final
 				// response carries the same nesting correlation its

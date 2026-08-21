@@ -62,6 +62,7 @@ func TestCancel_SessionIsolation(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 	}
 
@@ -182,6 +183,7 @@ func TestCancel_SessionIsolation_TranscriptWrittenOnlyForA(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 	}
 

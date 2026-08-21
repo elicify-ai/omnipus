@@ -454,7 +454,7 @@ func newTestClient(t *testing.T) *Client {
 // Traces to: transport.go Client.Search (empty query guard)
 func TestClient_Search_EmptyQueryError(t *testing.T) {
 	cl := newTestClient(t)
-	_, err := cl.Search(t.Context(), "", 10)
+	_, err := cl.Search(t.Context(), "", SearchOptions{Limit: 10})
 	if err == nil {
 		t.Fatal("Search with empty query must return an error")
 	}
@@ -468,7 +468,7 @@ func TestClient_Search_EmptyQueryError(t *testing.T) {
 // Traces to: transport.go Client.Search (empty query guard after TrimSpace)
 func TestClient_Search_WhitespaceOnlyQuery(t *testing.T) {
 	cl := newTestClient(t)
-	_, err := cl.Search(t.Context(), "   ", 10)
+	_, err := cl.Search(t.Context(), "   ", SearchOptions{Limit: 10})
 	if err == nil {
 		t.Fatal("Search with whitespace-only query must return an error")
 	}
@@ -481,8 +481,8 @@ func TestClient_Search_WhitespaceOnlyQuery(t *testing.T) {
 // different error behavior (one guard error, one dial error).
 func TestClient_Search_Differentiation(t *testing.T) {
 	cl := newTestClient(t)
-	_, emptyErr := cl.Search(t.Context(), "", 5)
-	_, dialErr := cl.Search(t.Context(), "invoice", 5)
+	_, emptyErr := cl.Search(t.Context(), "", SearchOptions{Limit: 5})
+	_, dialErr := cl.Search(t.Context(), "invoice", SearchOptions{Limit: 5})
 	// emptyErr is the guard error (no dial); dialErr is a dial/network error.
 	// They must be different error values.
 	if emptyErr == nil {
@@ -581,7 +581,7 @@ func TestClient_Send_Differentiation(t *testing.T) {
 // Traces to: transport.go Client.ReadInbox (dial attempt)
 func TestClient_ReadInbox_DialFails(t *testing.T) {
 	cl := newTestClient(t)
-	_, err := cl.ReadInbox(t.Context(), 5, false)
+	_, err := cl.ReadInbox(t.Context(), InboxOptions{Limit: 5})
 	if err == nil {
 		t.Fatal("ReadInbox on unreachable server must return an error")
 	}
@@ -598,7 +598,7 @@ func TestClient_ReadInbox_DialFails(t *testing.T) {
 // Traces to: transport.go Client.ReadInbox (limit<=0 branch)
 func TestClient_ReadInbox_ZeroLimitDefaultsAndDials(t *testing.T) {
 	cl := newTestClient(t)
-	_, err := cl.ReadInbox(t.Context(), 0, false)
+	_, err := cl.ReadInbox(t.Context(), InboxOptions{Limit: 0})
 	if err == nil {
 		t.Fatal("ReadInbox with limit=0 on unreachable server must return an error")
 	}
@@ -613,7 +613,7 @@ func TestClient_ReadInbox_ZeroLimitDefaultsAndDials(t *testing.T) {
 // Traces to: transport.go Client.ReadInbox (unseenOnly branch)
 func TestClient_ReadInbox_UnseenOnly(t *testing.T) {
 	cl := newTestClient(t)
-	_, err := cl.ReadInbox(t.Context(), 10, true)
+	_, err := cl.ReadInbox(t.Context(), InboxOptions{Limit: 10, UnseenOnly: true})
 	if err == nil {
 		t.Fatal("ReadInbox (unseenOnly) on unreachable server must return an error")
 	}
@@ -624,7 +624,7 @@ func TestClient_ReadInbox_UnseenOnly(t *testing.T) {
 // Traces to: transport.go Client.Search (limit<=0 branch + dial)
 func TestClient_Search_NegativeLimitDefaults(t *testing.T) {
 	cl := newTestClient(t)
-	_, err := cl.Search(t.Context(), "query", -1)
+	_, err := cl.Search(t.Context(), "query", SearchOptions{Limit: -1})
 	if err == nil {
 		t.Fatal("Search with limit=-1 on unreachable server must return an error")
 	}
@@ -710,7 +710,7 @@ func TestDialIMAP_ContextCancelledBeforeDial(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately so the context is already done
 
-	_, err := cl.ReadInbox(ctx, 5, false)
+	_, err := cl.ReadInbox(ctx, InboxOptions{Limit: 5})
 	if err == nil {
 		t.Fatal("ReadInbox with canceled context must return an error")
 	}
@@ -728,8 +728,8 @@ func TestDialIMAP_ContextCancelledBeforeDial(t *testing.T) {
 func TestClient_ReadInbox_Differentiation_UnseenVsAll(t *testing.T) {
 	cl := newTestClient(t)
 	// Both must fail (no server), but the function enters different code paths.
-	_, errUnseen := cl.ReadInbox(t.Context(), 5, true)
-	_, errAll := cl.ReadInbox(t.Context(), 5, false)
+	_, errUnseen := cl.ReadInbox(t.Context(), InboxOptions{Limit: 5, UnseenOnly: true})
+	_, errAll := cl.ReadInbox(t.Context(), InboxOptions{Limit: 5})
 	if errUnseen == nil || errAll == nil {
 		t.Fatal("both calls must fail on unreachable server")
 	}

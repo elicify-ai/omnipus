@@ -45,6 +45,7 @@ func TestRootDelegationCap_SourcedFromSubTurnMaxConcurrent(t *testing.T) {
 			Defaults: config.AgentDefaults{
 				SubTurn: config.SubTurnConfig{MaxConcurrent: 24},
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Performance: config.PerformanceConfig{
 			// Deliberately a DIFFERENT number, and one clampParallelExplicit
@@ -83,6 +84,7 @@ func TestRootDelegationCap_NegativeIsBootError(t *testing.T) {
 				Defaults: config.AgentDefaults{
 					SubTurn: config.SubTurnConfig{MaxConcurrent: v},
 				},
+				List: []config.AgentConfig{{ID: "mia"}},
 			},
 		}
 		_, err := ResolveRootDelegationCap(cfg)
@@ -113,6 +115,7 @@ func TestRootDelegationCap_UnsetResolvesToCentralValue(t *testing.T) {
 			Defaults: config.AgentDefaults{
 				SubTurn: config.SubTurnConfig{MaxConcurrent: 0},
 			},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 		Performance: config.PerformanceConfig{MaxParallelAgents: 40},
 	}

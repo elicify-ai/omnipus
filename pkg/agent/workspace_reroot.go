@@ -164,7 +164,8 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 			map[string]any{"agent_id": agentID, "workspace_id": wsID, "error": dirErr.Error()},
 		)
 		return "", fmt.Errorf(
-			"workspace work dir unavailable for agent_id=%s workspace_id=%s: %w",
+			"%w: agent_id=%s workspace_id=%s: %w",
+			ErrWorkspaceWorkDirUnavailable,
 			agentID,
 			wsID,
 			dirErr,
@@ -184,10 +185,10 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 func systemAgentHomeDir(agentID, agentHome string) (string, error) {
 	agentHome = strings.TrimSpace(agentHome)
 	if agentHome == "" {
-		return "", fmt.Errorf("system agent has no resolvable work directory: agent_id=%s", agentID)
+		return "", fmt.Errorf("%w: agent_id=%s", ErrAgentHomeUnavailable, agentID)
 	}
 	if mkErr := os.MkdirAll(agentHome, 0o700); mkErr != nil {
-		return "", fmt.Errorf("system agent home dir unavailable for agent_id=%s: %w", agentID, mkErr)
+		return "", fmt.Errorf("%w: agent_id=%s: %v", ErrAgentHomeUnavailable, agentID, mkErr)
 	}
 	return agentHome, nil
 }

@@ -66,6 +66,16 @@ type CommitResult struct {
 	// ExcludedForSecret lists write-set files that were NOT staged because
 	// their content matched the registered sensitive-value scan (MIN-5).
 	ExcludedForSecret []string
+	// ExcludedSymlink lists write-set entries that were NOT staged because
+	// the path itself is a symlink (spec FR-5.5, ADR-063 D4): a workspace
+	// mount is materialized as a symlink work/<name> -> host_path, and a
+	// symlink must never be read-and-restaged as if it were the file/tree it
+	// points at — that would either error out reading a directory (a
+	// symlink to a directory) or, worse, silently stage the CONTENT of a
+	// file living outside this repository entirely (a symlink to a file).
+	// See the symlink guard in Commit's per-file staging loop for why the
+	// exclusion happens at Lstat time, before the content is ever read.
+	ExcludedSymlink []string
 }
 
 // Commit takes a write-set-scoped, serialized boundary commit (FR-151).
@@ -185,6 +195,33 @@ func (r *Repo) Commit(boundary Boundary, meta CommitMeta, writeSet []string) (*C
 
 	for _, f := range toStage {
 		abs := filepath.Join(r.dir, filepath.FromSlash(f.relPath))
+
+		// Spec FR-5.5 (ADR-063 D4): a workspace mount is materialized as a
+		// symlink work/<name> -> host_path. VERIFIED (not assumed — see the
+		// package's git-status experiment this guard replaced): go-git's own
+		// wt.Status() already treats a symlink as ONE atomic, opaque entry
+		// and never walks through it, so a write-set path reaching INSIDE a
+		// mount (e.g. "mymount/src/main.go") never shows up as dirty in the
+		// first place and is naturally dropped before this loop ever sees
+		// it. The one gap that verification found: a write-set entry naming
+		// the mount's TOP-LEVEL symlink itself is NOT filtered upstream —
+		// os.ReadFile below follows it, which either errors the WHOLE
+		// Commit call ("is a directory", failing every other declared file
+		// in the same boundary too) or, for a symlink-to-file target, would
+		// silently read and stage bytes that live entirely outside this
+		// repository. Checking Lstat here, before any read, closes both: the
+		// symlink itself is excluded (never read, never staged) and every
+		// other declared file in the same boundary still commits normally.
+		if fi, lstatErr := os.Lstat(abs); lstatErr == nil && fi.Mode()&os.ModeSymlink != 0 {
+			result.ExcludedSymlink = append(result.ExcludedSymlink, f.relPath)
+			logger.WarnCF("gitevidence", "excluding write-set path from boundary commit: path is a symlink (e.g. a workspace mount) — its target is never read or staged", map[string]any{
+				"dir": r.dir, "boundary": string(boundary), "path": f.relPath,
+			})
+			continue
+		} else if lstatErr != nil && !os.IsNotExist(lstatErr) {
+			return nil, fmt.Errorf("gitevidence: lstat write-set file %s: %w", f.relPath, lstatErr)
+		}
+
 		data, readErr := os.ReadFile(abs)
 		if readErr != nil {
 			if os.IsNotExist(readErr) {
@@ -214,12 +251,16 @@ func (r *Repo) Commit(boundary Boundary, meta CommitMeta, writeSet []string) (*C
 	}
 	sort.Strings(result.Committed)
 	sort.Strings(result.ExcludedForSecret)
+	sort.Strings(result.ExcludedSymlink)
 
 	if len(result.Committed) == 0 {
 		result.Skipped = true
-		if len(result.ExcludedForSecret) > 0 {
+		switch {
+		case len(result.ExcludedForSecret) > 0:
 			result.SkipReason = "all_paths_excluded_for_secrets"
-		} else {
+		case len(result.ExcludedSymlink) > 0:
+			result.SkipReason = "all_paths_excluded_as_symlinks"
+		default:
 			result.SkipReason = "no_changes"
 		}
 		return result, nil

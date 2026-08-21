@@ -27,6 +27,12 @@ func TestResolveRoute_MiaIsDefault(t *testing.T) {
 		{ID: "ava"},
 	}
 	cfg := testConfig(agents, nil)
+	// The per-entity Default flag is NOT consulted by either default-agent
+	// resolver (ADR-054 D6.4) — the singleton is. This test passed before only
+	// because "mia" happened to be FIRST in slice order, which the last-resort
+	// rung used to honour; it now sorts, so "ava" would win. Setting the
+	// singleton makes the test assert the rule it always claimed to.
+	cfg.Agents.Defaults.DefaultAgentID = "mia"
 	r := NewRouteResolver(cfg)
 
 	route := r.ResolveRoute(RouteInput{Channel: "telegram"})
@@ -60,6 +66,10 @@ func TestResolveRoute_ChannelBindingOverridesDefault(t *testing.T) {
 		},
 	}
 	cfg := testConfig(agents, bindings)
+	// Same as the sibling default tests: the per-entity Default flag does not
+	// drive resolution (ADR-054 D6.4) — the singleton does. Without it "jim"
+	// would win on the sorted last-resort rung.
+	cfg.Agents.Defaults.DefaultAgentID = "mia"
 	r := NewRouteResolver(cfg)
 
 	route := r.ResolveRoute(RouteInput{
@@ -75,14 +85,15 @@ func TestResolveRoute_ChannelBindingOverridesDefault(t *testing.T) {
 }
 
 // TestResolveRoute_NoDefaultFallsToFirstAgent verifies that when no agent
-// has Default=true, the resolver picks the first chat-target agent instead of
-// the DefaultAgentID constant ("main").
+// has Default=true, the resolver picks the first chat-target agent. The old
+// "main" sentinel constant (routing.DefaultAgentID) is deleted entirely — there
+// is no longer a hardcoded name it could fall back to instead.
 //
 // BDD: Given agents alpha and beta, neither is default,
 //
 //	When ResolveRoute is called,
 //	Then the resolved agent is "alpha" (first in list),
-//	And the old "main" constant is NOT returned.
+//	And it is NOT the literal "main" (the retired sentinel's name).
 func TestResolveRoute_NoDefaultFallsToFirstAgent(t *testing.T) {
 	agents := []config.AgentConfig{
 		{ID: "alpha"},
@@ -95,10 +106,10 @@ func TestResolveRoute_NoDefaultFallsToFirstAgent(t *testing.T) {
 	if route.AgentID != "alpha" {
 		t.Errorf("AgentID = %q, want 'alpha' (first agent when no default set)", route.AgentID)
 	}
-	if route.AgentID == DefaultAgentID {
+	if route.AgentID == "main" {
 		t.Errorf(
-			"AgentID must NOT be %q — fallback must be the first available agent, not the constant",
-			DefaultAgentID,
+			"AgentID = %q — fallback must be the first available agent, not the retired 'main' sentinel",
+			route.AgentID,
 		)
 	}
 }
@@ -166,6 +177,10 @@ func TestResolveRoute_NonExistentAgentInBindingFallsToDefault(t *testing.T) {
 		},
 	}
 	cfg := testConfig(agents, bindings)
+	// The per-entity Default flag does not drive resolution (ADR-054 D6.4)
+	// — the singleton does. Without it "jim" would win on the sorted
+	// last-resort rung, which is what this test used to rely on.
+	cfg.Agents.Defaults.DefaultAgentID = "mia"
 	r := NewRouteResolver(cfg)
 
 	route := r.ResolveRoute(RouteInput{
@@ -178,5 +193,66 @@ func TestResolveRoute_NonExistentAgentInBindingFallsToDefault(t *testing.T) {
 			"AgentID = %q, want 'mia' — binding references non-existent 'ghost-agent', "+
 				"must fall back to default agent via pickAgentID → resolveDefaultAgentID",
 			route.AgentID)
+	}
+}
+
+// TestResolveDefaultAgentID_EmptyAgentList directly pins
+// route.go::resolveDefaultAgentID's first branch: an empty cfg.Agents.List
+// has no sentinel left to invent, so it must return "" — never a hardcoded
+// agent name (the retired "main" sentinel included). Called directly (not
+// via ResolveRoute) since resolveDefaultAgentID is unexported but this test
+// file lives in the same package.
+func TestResolveDefaultAgentID_EmptyAgentList(t *testing.T) {
+	cfg := testConfig(nil, nil)
+	r := NewRouteResolver(cfg)
+
+	got := r.resolveDefaultAgentID()
+	if got != "" {
+		t.Errorf("resolveDefaultAgentID() = %q, want empty string for an empty agent list", got)
+	}
+}
+
+// TestResolveDefaultAgentID_NoChatTargetAgent directly pins
+// route.go::resolveDefaultAgentID's second branch: a non-empty agent list
+// containing ONLY workers (no chat-target agent) also has nothing to fall
+// back to and must return "".
+func TestResolveDefaultAgentID_NoChatTargetAgent(t *testing.T) {
+	agents := []config.AgentConfig{
+		{ID: "w1", Type: config.AgentTypeWorker},
+		{ID: "w2", Type: config.AgentTypeWorker},
+	}
+	cfg := testConfig(agents, nil)
+	r := NewRouteResolver(cfg)
+
+	got := r.resolveDefaultAgentID()
+	if got != "" {
+		t.Errorf("resolveDefaultAgentID() = %q, want empty string when no agent is a chat target", got)
+	}
+}
+
+// TestResolveDefaultAgentID_Differentiation is an anti-shortcut check: two
+// different configs (different override, different first chat-target agent)
+// must produce two different resolved IDs. This catches a resolveDefaultAgentID
+// that was hollowed out to always return the same hardcoded string.
+func TestResolveDefaultAgentID_Differentiation(t *testing.T) {
+	cfgA := testConfig([]config.AgentConfig{{ID: "alpha"}, {ID: "beta"}}, nil)
+	cfgA.Agents.Defaults.DefaultAgentID = "beta"
+	gotA := NewRouteResolver(cfgA).resolveDefaultAgentID()
+	if gotA != "beta" {
+		t.Fatalf("resolveDefaultAgentID() = %q, want 'beta' (configured override)", gotA)
+	}
+
+	// No override: the last resort is the lexicographically-FIRST chat target,
+	// so "delta" wins over "gamma" despite being listed second. Sorting (rather
+	// than slice order) is what makes this resolver agree with
+	// agent.AgentRegistry.GetDefaultAgent — see ADR-064 §7.
+	cfgB := testConfig([]config.AgentConfig{{ID: "gamma"}, {ID: "delta"}}, nil)
+	gotB := NewRouteResolver(cfgB).resolveDefaultAgentID()
+	if gotB != "delta" {
+		t.Fatalf("resolveDefaultAgentID() = %q, want 'delta' (lexicographically first chat-target, no override)", gotB)
+	}
+
+	if gotA == gotB {
+		t.Fatalf("two different configs both resolved to %q — resolveDefaultAgentID may be hardcoded", gotA)
 	}
 }

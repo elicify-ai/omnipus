@@ -937,30 +937,29 @@ func spawnSubTurn(
 	// and providerPool are unexported atomic fields a struct literal cannot
 	// copy at all, also set below.
 	agent := AgentInstance{
-		ID:                        execSource.ID,
-		Name:                      execSource.Name,
-		Model:                     execModel,
-		Fallbacks:                 execSource.Fallbacks,
-		FallbackModels:            execSource.FallbackModels,
-		Home:                      execSource.Home,
-		MaxIterations:             execSource.MaxIterations,
-		MaxTokens:                 execSource.MaxTokens,
-		Temperature:               execSource.Temperature,
-		ThinkingLevel:             execThinkingLevel,
-		ContextWindow:             execSource.ContextWindow,
-		SummarizeMessageThreshold: execSource.SummarizeMessageThreshold,
-		SummarizeTokenPercent:     execSource.SummarizeTokenPercent,
-		Provider:                  execProvider,
-		Sessions:                  ephemeralStore,
-		ContextBuilder:            execSource.ContextBuilder,
-		Subagents:                 execSource.Subagents,
-		SkillsFilter:              execSource.SkillsFilter,
-		Candidates:                execCandidates,
-		TimeoutSeconds:            execSource.TimeoutSeconds,
-		Router:                    execSource.Router,
-		LightCandidates:           execSource.LightCandidates,
-		LightProvider:             execSource.LightProvider,
-		AgentType:                 execSource.AgentType,
+		ID:                    execSource.ID,
+		Name:                  execSource.Name,
+		Model:                 execModel,
+		Fallbacks:             execSource.Fallbacks,
+		FallbackModels:        execSource.FallbackModels,
+		Home:                  execSource.Home,
+		MaxIterations:         execSource.MaxIterations,
+		MaxTokens:             execSource.MaxTokens,
+		Temperature:           execSource.Temperature,
+		ThinkingLevel:         execThinkingLevel,
+		ContextWindow:         execSource.ContextWindow,
+		SummarizeTokenPercent: execSource.SummarizeTokenPercent,
+		Provider:              execProvider,
+		Sessions:              ephemeralStore,
+		ContextBuilder:        execSource.ContextBuilder,
+		Subagents:             execSource.Subagents,
+		SkillsFilter:          execSource.SkillsFilter,
+		Candidates:            execCandidates,
+		TimeoutSeconds:        execSource.TimeoutSeconds,
+		Router:                execSource.Router,
+		LightCandidates:       execSource.LightCandidates,
+		LightProvider:         execSource.LightProvider,
+		AgentType:             execSource.AgentType,
 	}
 	// providerPool is tied to the SAME Candidates it was built for — now that
 	// Candidates is execSource's own (above), the pool must match, or
@@ -1280,7 +1279,6 @@ func spawnSubTurn(
 		Media:                   nil,
 		InitialSteeringMessages: cfg.InitialMessages,
 		DefaultResponse:         "",
-		EnableSummary:           false,
 		SendResponse:            false,
 		// ADR-057 FR-007: NoHistory MUST NOT be set for a delegated child —
 		// was `true` here ("SubTurns don't use session history"). Left at
@@ -2127,7 +2125,6 @@ func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, re
 type ephemeralSessionStore struct {
 	mu      sync.Mutex
 	history []providers.Message
-	summary string
 }
 
 // newEphemeralSession returns a session.SessionStore backed by an in-memory
@@ -2186,18 +2183,6 @@ func (e *ephemeralSessionStore) ReadArchive(_ context.Context, _ string) ([]memo
 		out[i] = memory.ArchivedMessage{Message: m}
 	}
 	return out, nil
-}
-
-func (e *ephemeralSessionStore) GetSummary(_ string) string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.summary
-}
-
-func (e *ephemeralSessionStore) SetSummary(_, summary string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.summary = summary
 }
 
 func (e *ephemeralSessionStore) SetHistory(_ string, history []providers.Message) {

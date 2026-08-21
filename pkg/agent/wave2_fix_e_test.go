@@ -88,8 +88,9 @@ func TestRunAgentLoop_RoundTrip_AfterReopen_PreservesModelAndErrorStatus(t *test
 	provider := testutil.NewScenario().WithText("warm-up response")
 
 	// Budget=1 → first call allowed, second call denied. We use a custom
-	// (non-privileged) agent because the default "main" agent is core and
-	// exempt from rate limiting (IsPrivilegedAgent).
+	// (non-privileged) agent because core-roster agents are exempt from
+	// rate limiting (IsPrivilegedAgent) — no "main" sentinel to worry about
+	// anymore, just an ordinary custom agent id.
 	const customAgentID = "wave2-roundtrip-agent"
 
 	cfg := &config.Config{
@@ -138,7 +139,6 @@ func TestRunAgentLoop_RoundTrip_AfterReopen_PreservesModelAndErrorStatus(t *test
 		ChatID:              sessionID,
 		UserMessage:         "warm up",
 		DefaultResponse:     defaultResponse,
-		EnableSummary:       false,
 		SendResponse:        false,
 		TranscriptSessionID: sessionID,
 		TranscriptStore:     store,
@@ -155,7 +155,6 @@ func TestRunAgentLoop_RoundTrip_AfterReopen_PreservesModelAndErrorStatus(t *test
 		ChatID:              sessionID,
 		UserMessage:         "trigger limit",
 		DefaultResponse:     defaultResponse,
-		EnableSummary:       false,
 		SendResponse:        false,
 		TranscriptSessionID: sessionID,
 		TranscriptStore:     store,
@@ -296,6 +295,7 @@ func TestRunTurn_StampsModelFieldOnAssistantEntry(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 	}
 
@@ -306,7 +306,7 @@ func TestRunTurn_StampsModelFieldOnAssistantEntry(t *testing.T) {
 
 	store := al.GetSessionStore()
 	require.NotNil(t, store)
-	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "mia")
 	require.NoError(t, err)
 	sessionID := meta.ID
 
@@ -336,7 +336,6 @@ func TestRunTurn_StampsModelFieldOnAssistantEntry(t *testing.T) {
 		ChatID:              sessionID,
 		UserMessage:         "test model stamp",
 		DefaultResponse:     defaultResponse,
-		EnableSummary:       false,
 		SendResponse:        false,
 		TranscriptSessionID: sessionID,
 		TranscriptStore:     store,
@@ -607,14 +606,14 @@ func TestRunAgentLoop_ErrorEntry_HasStatusErrorField(t *testing.T) {
 	// Warm-up
 	_, err = al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey: "sc-warm", Channel: "web", ChatID: sessionID,
-		UserMessage: "warm", DefaultResponse: defaultResponse, EnableSummary: false, SendResponse: false,
+		UserMessage: "warm", DefaultResponse: defaultResponse, SendResponse: false,
 		TranscriptSessionID: sessionID, TranscriptStore: store,
 	})
 	require.NoError(t, err)
 	// Trigger rate limit
 	_, err = al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey: "sc-block", Channel: "web", ChatID: sessionID,
-		UserMessage: "block", DefaultResponse: defaultResponse, EnableSummary: false, SendResponse: false,
+		UserMessage: "block", DefaultResponse: defaultResponse, SendResponse: false,
 		TranscriptSessionID: sessionID, TranscriptStore: store,
 	})
 	require.Error(t, err)
@@ -708,6 +707,7 @@ func TestApplyAgentModel_SwitchesInPlace_PreservesID(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 		Providers: []*config.ModelConfig{
 			{
@@ -773,6 +773,7 @@ func TestRunAgentLoop_ProviderError_HasStatusErrorField(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
 	}
 
@@ -783,13 +784,13 @@ func TestRunAgentLoop_ProviderError_HasStatusErrorField(t *testing.T) {
 
 	store := al.GetSessionStore()
 	require.NotNil(t, store)
-	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "mia")
 	require.NoError(t, err)
 	sessionID := meta.ID
 
 	_, err = al.runAgentLoop(context.Background(), al.GetRegistry().GetDefaultAgent(), processOptions{
 		SessionKey: "pe-block", Channel: "web", ChatID: sessionID,
-		UserMessage: "trigger", DefaultResponse: defaultResponse, EnableSummary: false, SendResponse: false,
+		UserMessage: "trigger", DefaultResponse: defaultResponse, SendResponse: false,
 		TranscriptSessionID: sessionID, TranscriptStore: store,
 	})
 	require.Error(t, err)

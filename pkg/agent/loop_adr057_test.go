@@ -264,7 +264,6 @@ func TestToolExecPayloads_RealRootTurn_StampsRoutingKeyOnly(t *testing.T) {
 		ChatID:              sessionID,
 		UserMessage:         "run the stub tool",
 		DefaultResponse:     defaultResponse,
-		EnableSummary:       false,
 		SendResponse:        false,
 		TranscriptSessionID: sessionID,
 		TranscriptStore:     store,
@@ -354,7 +353,7 @@ func TestCheckGrantOrRequestApproval_UsesActingSessionKey(t *testing.T) {
 	grants := security.NewApprovalGrantStore()
 	// The immediate PARENT recorded "Always Allow" under its OWN session
 	// id — the root itself never did...
-	require.True(t, grants.Record(parentSessionID, agentID, toolName))
+	require.True(t, grants.Record(parentSessionID, agentID, toolName, nil))
 	// ...and InheritFrom (U17a) copies it into the CHILD's OWN session id at
 	// spawn — mirroring what U7's spawnSubTurn call site (Wave F) will do.
 	// routingSessionID for this same child would be the ROOT's id (FR-011),
@@ -367,7 +366,7 @@ func TestCheckGrantOrRequestApproval_UsesActingSessionKey(t *testing.T) {
 
 	// Positive lower bound (Rule 4): the grant genuinely exists under the
 	// child's key, via the store's own read, before the code under test runs.
-	require.True(t, grants.IsAllowed(childSessionID, agentID, toolName),
+	require.True(t, grants.IsAllowed(childSessionID, agentID, toolName, nil),
 		"SETUP: InheritFrom must have copied the grant into the child's own key")
 
 	approved, reason := al.CheckGrantOrRequestApproval(

@@ -3266,6 +3266,24 @@ func (e RunnerTestResponseReason) Valid() bool {
 	}
 }
 
+// Defines values for SandboxConfigFilesystemModel.
+const (
+	SandboxConfigFilesystemModelConfined SandboxConfigFilesystemModel = "confined"
+	SandboxConfigFilesystemModelOpen     SandboxConfigFilesystemModel = "open"
+)
+
+// Valid indicates whether the value is a known member of the SandboxConfigFilesystemModel enum.
+func (e SandboxConfigFilesystemModel) Valid() bool {
+	switch e {
+	case SandboxConfigFilesystemModelConfined:
+		return true
+	case SandboxConfigFilesystemModelOpen:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SandboxConfigMode.
 const (
 	SandboxConfigModeEnforce    SandboxConfigMode = "enforce"
@@ -3287,6 +3305,24 @@ func (e SandboxConfigMode) Valid() bool {
 	}
 }
 
+// Defines values for SandboxConfigUpdateFilesystemModel.
+const (
+	SandboxConfigUpdateFilesystemModelConfined SandboxConfigUpdateFilesystemModel = "confined"
+	SandboxConfigUpdateFilesystemModelOpen     SandboxConfigUpdateFilesystemModel = "open"
+)
+
+// Valid indicates whether the value is a known member of the SandboxConfigUpdateFilesystemModel enum.
+func (e SandboxConfigUpdateFilesystemModel) Valid() bool {
+	switch e {
+	case SandboxConfigUpdateFilesystemModelConfined:
+		return true
+	case SandboxConfigUpdateFilesystemModelOpen:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SandboxConfigUpdateMode.
 const (
 	SandboxConfigUpdateModeEnforce    SandboxConfigUpdateMode = "enforce"
@@ -3302,6 +3338,24 @@ func (e SandboxConfigUpdateMode) Valid() bool {
 	case SandboxConfigUpdateModeOff:
 		return true
 	case SandboxConfigUpdateModePermissive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SandboxStatusFilesystemModel.
+const (
+	Confined SandboxStatusFilesystemModel = "confined"
+	Open     SandboxStatusFilesystemModel = "open"
+)
+
+// Valid indicates whether the value is a known member of the SandboxStatusFilesystemModel enum.
+func (e SandboxStatusFilesystemModel) Valid() bool {
+	switch e {
+	case Confined:
+		return true
+	case Open:
 		return true
 	default:
 		return false
@@ -5293,13 +5347,13 @@ func (e ToolApprovalResponseAction) Valid() bool {
 
 // Defines values for ToolApprovalResponseStatus.
 const (
-	Ok ToolApprovalResponseStatus = "ok"
+	ToolApprovalResponseStatusOk ToolApprovalResponseStatus = "ok"
 )
 
 // Valid indicates whether the value is a known member of the ToolApprovalResponseStatus enum.
 func (e ToolApprovalResponseStatus) Valid() bool {
 	switch e {
-	case Ok:
+	case ToolApprovalResponseStatusOk:
 		return true
 	default:
 		return false
@@ -5399,6 +5453,24 @@ func (e ToolRegistryEntrySource) Valid() bool {
 	}
 }
 
+// Defines values for WorkspaceMountsStatus.
+const (
+	WorkspaceMountsStatusBroken WorkspaceMountsStatus = "broken"
+	WorkspaceMountsStatusOk     WorkspaceMountsStatus = "ok"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceMountsStatus enum.
+func (e WorkspaceMountsStatus) Valid() bool {
+	switch e {
+	case WorkspaceMountsStatusBroken:
+		return true
+	case WorkspaceMountsStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkspaceStatus.
 const (
 	WorkspaceStatusActive   WorkspaceStatus = "active"
@@ -5465,6 +5537,24 @@ func (e WorkspaceDelegationUpdateRequestEdgesModes) Valid() bool {
 	case WorkspaceDelegationUpdateRequestEdgesModesDirect:
 		return true
 	case WorkspaceDelegationUpdateRequestEdgesModesTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkspaceMountCreateResponseStatus.
+const (
+	Broken WorkspaceMountCreateResponseStatus = "broken"
+	Ok     WorkspaceMountCreateResponseStatus = "ok"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceMountCreateResponseStatus enum.
+func (e WorkspaceMountCreateResponseStatus) Valid() bool {
+	switch e {
+	case Broken:
+		return true
+	case Ok:
 		return true
 	default:
 		return false
@@ -6362,19 +6452,19 @@ type AgentTokenEntry struct {
 
 	// ByModel Per-model breakdown for this agent. Absent when no model data is available.
 	ByModel *map[string]struct {
-		// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
 
-		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
 		CacheWrite *int `json:"cache_write,omitempty"`
 
-		// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+		// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
 		In *int `json:"in,omitempty"`
 
-		// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
-		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 
@@ -8139,6 +8229,53 @@ type HealthResponse struct {
 // HealthResponseStatus Always "ok" when the gateway is healthy.
 type HealthResponseStatus string
 
+// HostFolderEntry One directory inside a HostFolderListing, with the verdict on whether it may be mounted. The verdict travels WITH the row so the client can disable the choice at the point of selection, rather than letting the operator pick a folder and only then be told no.
+type HostFolderEntry struct {
+	// Broad True when this directory is one of the deliberately wide locations (the home directory, the filesystem root, a top-level system directory). Mounting it is ALLOWED — the operator's call — but must be visibly flagged before they choose it, never silently accepted.
+	Broad *bool `json:"broad,omitempty"`
+
+	// Mountable False when mounting this directory would be REFUSED — that is, when it is or lies inside the Omnipus data directory (FR-7.5), the one hard boundary, because mounting it would make config.json and master.key writable and let an agent disable its own sandbox.
+	Mountable bool `json:"mountable"`
+
+	// Name The directory's own name (final path segment).
+	Name string `json:"name"`
+
+	// Path The directory's absolute path.
+	Path string `json:"path"`
+
+	// Reason A short human-readable explanation, present only when `mountable` is false or `broad` is true. Written for the operator, naming what the grant would cover or why it is refused.
+	Reason *string `json:"reason,omitempty"`
+}
+
+// HostFolderListing One directory on the operator's own machine, listed so they can pick a folder to mount into a workspace (ADR-063 FR-7.1).
+// This exists because a web page CANNOT open the native folder picker and learn a real filesystem path — the browser deliberately withholds it. Without a server-side listing the only way to add a mount is to type an absolute path from memory, which is both unpleasant and error-prone in a control whose whole job is to be deliberate.
+// It exposes nothing new. Post-ADR-062 reading is open, so any agent can already read anywhere on this machine; this gives the OPERATOR the same view their own agents have. It is admin-authenticated and is deliberately NOT reachable from an agent tool — an agent that wants a folder asks for it and the operator approves, rather than browsing for one itself.
+type HostFolderListing struct {
+	// Entries The directories directly inside `path`, sorted by name. Only directories are returned: a mount target is always a folder, and listing files would show the operator thousands of rows none of which they can pick.
+	Entries []struct {
+		// Broad True when this directory is one of the deliberately wide locations (the home directory, the filesystem root, a top-level system directory). Mounting it is ALLOWED — the operator's call — but must be visibly flagged before they choose it, never silently accepted.
+		Broad *bool `json:"broad,omitempty"`
+
+		// Mountable False when mounting this directory would be REFUSED — that is, when it is or lies inside the Omnipus data directory (FR-7.5), the one hard boundary, because mounting it would make config.json and master.key writable and let an agent disable its own sandbox.
+		Mountable bool `json:"mountable"`
+
+		// Name The directory's own name (final path segment).
+		Name string `json:"name"`
+
+		// Path The directory's absolute path.
+		Path string `json:"path"`
+
+		// Reason A short human-readable explanation, present only when `mountable` is false or `broad` is true. Written for the operator, naming what the grant would cover or why it is refused.
+		Reason *string `json:"reason,omitempty"`
+	} `json:"entries"`
+
+	// Parent The parent directory's absolute path, for an "up" control. Absent at the filesystem root, which is what tells the client there is nowhere further up to go.
+	Parent *string `json:"parent,omitempty"`
+
+	// Path The absolute, symlink-resolved path this listing describes.
+	Path string `json:"path"`
+}
+
 // IntegrationProvider A single configurable non-LLM integration provider as surfaced in Settings → Integrations (FR-12.1). Covers web-search providers (SearchProvider) and voice-input transcription providers (Transcriber). API keys are stored encrypted in credentials.json (via api_key_ref) — never returned in plaintext; configured is true when a key (or, for keyless providers like DuckDuckGo, the provider itself) is available.
 type IntegrationProvider struct {
 	// Active True when this provider is the one currently selected for its kind (the active search engine or the active transcriber).
@@ -8285,6 +8422,19 @@ type LibraryEntry struct {
 	// ModifiedAt RFC3339 UTC last-modified timestamp of the underlying file or directory.
 	ModifiedAt time.Time `json:"modified_at"`
 
+	// Mount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
+	// It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
+	Mount *struct {
+		// Broad True when the target is one of the deliberately wide locations — the home directory, the filesystem root, or a top-level system directory. Such a mount is ALLOWED (operator decision, FR-7.4/FR-7.6) but must never be silent: the client is expected to mark it distinctly from an ordinary mount. Recomputed from the path on every read rather than stored, so it cannot go stale against the definition.
+		Broad bool `json:"broad"`
+
+		// HostPath The realpath-resolved absolute path on the operator's machine that this mount grants write access to. Shown in the UI rather than hidden behind a tooltip: it is the whole reason the entry is treated differently, and a grant the operator cannot see is a grant they cannot review.
+		HostPath string `json:"host_path"`
+
+		// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
+		Name string `json:"name"`
+	} `json:"mount,omitempty"`
+
 	// Name Base filename or directory name (final path segment).
 	Name string `json:"name"`
 
@@ -8293,6 +8443,19 @@ type LibraryEntry struct {
 
 	// Size File size in bytes. Always 0 for directories.
 	Size int64 `json:"size"`
+}
+
+// LibraryEntryMount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
+// It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
+type LibraryEntryMount struct {
+	// Broad True when the target is one of the deliberately wide locations — the home directory, the filesystem root, or a top-level system directory. Such a mount is ALLOWED (operator decision, FR-7.4/FR-7.6) but must never be silent: the client is expected to mark it distinctly from an ordinary mount. Recomputed from the path on every read rather than stored, so it cannot go stale against the definition.
+	Broad bool `json:"broad"`
+
+	// HostPath The realpath-resolved absolute path on the operator's machine that this mount grants write access to. Shown in the UI rather than hidden behind a tooltip: it is the whole reason the entry is treated differently, and a grant the operator cannot see is a grant they cannot review.
+	HostPath string `json:"host_path"`
+
+	// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
+	Name string `json:"name"`
 }
 
 // LibraryMkdirRequest Request body for POST /api/v1/library/{workspace_id}/mkdir. Creates a directory at path within the workspace's work tree, creating any missing intermediate directories along the way (mkdir -p semantics) — the sole directory-creation primitive the Library API exposes. Added to close a UAT gap: without it, there was no way to create a folder at all, and a clean, non-malicious nested Move/Copy destination whose parent didn't exist yet (e.g. "subfolder/test.txt") had no path to success — see POST /api/v1/library/move and POST /api/v1/library/copy, which deliberately still require the destination's immediate parent directory to already exist rather than auto-creating it (matching `mv`/`cp` semantics — this endpoint is the explicit, deliberate way to create that folder first). Idempotent: if a directory already exists at path, the request succeeds (200) rather than erroring; rejected 409 if a regular FILE already exists there.
@@ -8344,6 +8507,19 @@ type LibraryUploadResponse struct {
 
 		// ModifiedAt RFC3339 UTC last-modified timestamp of the underlying file or directory.
 		ModifiedAt time.Time `json:"modified_at"`
+
+		// Mount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
+		// It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
+		Mount *struct {
+			// Broad True when the target is one of the deliberately wide locations — the home directory, the filesystem root, or a top-level system directory. Such a mount is ALLOWED (operator decision, FR-7.4/FR-7.6) but must never be silent: the client is expected to mark it distinctly from an ordinary mount. Recomputed from the path on every read rather than stored, so it cannot go stale against the definition.
+			Broad bool `json:"broad"`
+
+			// HostPath The realpath-resolved absolute path on the operator's machine that this mount grants write access to. Shown in the UI rather than hidden behind a tooltip: it is the whole reason the entry is treated differently, and a grant the operator cannot see is a grant they cannot review.
+			HostPath string `json:"host_path"`
+
+			// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
+			Name string `json:"name"`
+		} `json:"mount,omitempty"`
 
 		// Name Base filename or directory name (final path segment).
 		Name string `json:"name"`
@@ -9037,19 +9213,19 @@ type ModelCapabilitiesModalities string
 
 // ModelTokens Per-model token breakdown within a session or usage summary.
 type ModelTokens struct {
-	// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+	// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 	CacheRead *int `json:"cache_read,omitempty"`
 
-	// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+	// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
 	CacheWrite *int `json:"cache_write,omitempty"`
 
-	// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+	// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
 	In *int `json:"in,omitempty"`
 
-	// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+	// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 	Out *int `json:"out,omitempty"`
 
-	// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+	// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 	Total int `json:"total"`
 }
 
@@ -10399,6 +10575,10 @@ type SandboxConfig struct {
 	// AppliedMode The mode the gateway is currently enforcing. Differs from `mode` when the operator saved a change but has not restarted yet.
 	AppliedMode *string `json:"applied_mode,omitempty"`
 
+	// FilesystemModel The ADR-062 filesystem model this installation is configured for. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set. It never changes what an agent may WRITE — writes are confined to the workspace and its mounts under both models.
+	// Reported here, and settable via SandboxConfigUpdate, because the two postures are indistinguishable from outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because that path happened to be on the enumerated list. Without a control, the only way to change it was to hand-edit config.json.
+	FilesystemModel *SandboxConfigFilesystemModel `json:"filesystem_model,omitempty"`
+
 	// GodMode O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
 	GodMode *bool `json:"god_mode,omitempty"`
 
@@ -10430,6 +10610,10 @@ type SandboxConfig struct {
 	SsrfEnabled *bool `json:"ssrf_enabled,omitempty"`
 }
 
+// SandboxConfigFilesystemModel The ADR-062 filesystem model this installation is configured for. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set. It never changes what an agent may WRITE — writes are confined to the workspace and its mounts under both models.
+// Reported here, and settable via SandboxConfigUpdate, because the two postures are indistinguishable from outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because that path happened to be on the enumerated list. Without a control, the only way to change it was to hand-edit config.json.
+type SandboxConfigFilesystemModel string
+
 // SandboxConfigMode Configured sandbox enforcement mode.
 type SandboxConfigMode string
 
@@ -10440,6 +10624,10 @@ type SandboxConfigUpdate struct {
 
 	// AllowedPaths List of host filesystem paths the agent is allowed to read/write. Restart-gated. Must be absolute paths; empty list clears all exceptions.
 	AllowedPaths *[]string `json:"allowed_paths,omitempty"`
+
+	// FilesystemModel Switch the ADR-062 filesystem model. "confined" restricts reads and execution to enumerated paths; "open" leaves both unrestricted apart from the secret set. Neither model changes what may be WRITTEN.
+	// Restart-gated, like `mode`: the running kernel profile was installed at boot and is not rebuilt in place, so the change is persisted and takes effect on the next start. Omit the field to leave the model unchanged.
+	FilesystemModel *SandboxConfigUpdateFilesystemModel `json:"filesystem_model,omitempty"`
 
 	// Mode Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
 	Mode *SandboxConfigUpdateMode `json:"mode,omitempty"`
@@ -10459,6 +10647,10 @@ type SandboxConfigUpdate struct {
 	// SsrfEnabled Enable SSRF (server-side request forgery) protection for HTTP tool calls.
 	SsrfEnabled *bool `json:"ssrf_enabled,omitempty"`
 }
+
+// SandboxConfigUpdateFilesystemModel Switch the ADR-062 filesystem model. "confined" restricts reads and execution to enumerated paths; "open" leaves both unrestricted apart from the secret set. Neither model changes what may be WRITTEN.
+// Restart-gated, like `mode`: the running kernel profile was installed at boot and is not rebuilt in place, so the change is persisted and takes effect on the next start. Omit the field to leave the model unchanged.
+type SandboxConfigUpdateFilesystemModel string
 
 // SandboxConfigUpdateMode Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
 type SandboxConfigUpdateMode string
@@ -10485,6 +10677,9 @@ type SandboxStatus struct {
 
 	// DisabledBy Reason the sandbox is disabled, if applicable. E.g. "config" or "kernel".
 	DisabledBy *string `json:"disabled_by,omitempty"`
+
+	// FilesystemModel Which ADR-062 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
+	FilesystemModel *SandboxStatusFilesystemModel `json:"filesystem_model,omitempty"`
 
 	// IssueRef Set when a known kernel incompatibility is flagged. Do NOT hard-code the literal issue number in the SPA.
 	IssueRef *string `json:"issue_ref,omitempty"`
@@ -10514,20 +10709,15 @@ type SandboxStatus struct {
 	SeccompEnforced *bool `json:"seccomp_enforced,omitempty"`
 }
 
+// SandboxStatusFilesystemModel Which ADR-062 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
+type SandboxStatusFilesystemModel string
+
 // Schedule A scheduled instruction for an agent (#264) — the wire projection of a cron job. When it fires, the owning agent runs the message in the chosen session mode under guardrails. Read model returned by the /schedules endpoints.
 type Schedule struct {
-	// Channel Channel for deliver=true sends and the run's outbound context.
-	Channel *string `json:"channel,omitempty"`
-
-	// ChatId Chat/peer id within the channel for deliver=true sends.
-	ChatId      *string `json:"chat_id,omitempty"`
-	CreatedAtMs int64   `json:"created_at_ms"`
+	CreatedAtMs int64 `json:"created_at_ms"`
 
 	// CreatedBy Username that created the schedule (for notification routing).
 	CreatedBy *string `json:"created_by,omitempty"`
-
-	// Deliver true = send the message straight to the channel (no agent turn); false = the owning agent processes it (autonomy).
-	Deliver bool `json:"deliver"`
 
 	// Enabled When false, the scheduler does not fire it (paused).
 	Enabled bool `json:"enabled"`
@@ -10535,7 +10725,7 @@ type Schedule struct {
 	// Id Stable schedule id (the underlying cron job id).
 	Id string `json:"id"`
 
-	// Message The instruction delivered to the agent (deliver=false) or sent to the channel (deliver=true).
+	// Message The instruction the owning agent processes on each run.
 	Message string `json:"message"`
 	Name    string `json:"name"`
 
@@ -10616,12 +10806,6 @@ type ScheduleTriggerKind string
 
 // ScheduleCreate Request body to create a schedule (#264). owner_agent_id must reference an existing, non-worker-restricted agent (single-user model — no per-caller ownership check). Omitted optional fields take their documented defaults.
 type ScheduleCreate struct {
-	Channel *string `json:"channel,omitempty"`
-	ChatId  *string `json:"chat_id,omitempty"`
-
-	// Deliver Default false (agent processes it).
-	Deliver *bool `json:"deliver,omitempty"`
-
 	// Enabled Default true.
 	Enabled      *bool  `json:"enabled,omitempty"`
 	Message      string `json:"message"`
@@ -10657,18 +10841,10 @@ type ScheduleCreateTriggerKind string
 // ScheduleList List of schedules (#264).
 type ScheduleList struct {
 	Schedules []struct {
-		// Channel Channel for deliver=true sends and the run's outbound context.
-		Channel *string `json:"channel,omitempty"`
-
-		// ChatId Chat/peer id within the channel for deliver=true sends.
-		ChatId      *string `json:"chat_id,omitempty"`
-		CreatedAtMs int64   `json:"created_at_ms"`
+		CreatedAtMs int64 `json:"created_at_ms"`
 
 		// CreatedBy Username that created the schedule (for notification routing).
 		CreatedBy *string `json:"created_by,omitempty"`
-
-		// Deliver true = send the message straight to the channel (no agent turn); false = the owning agent processes it (autonomy).
-		Deliver bool `json:"deliver"`
 
 		// Enabled When false, the scheduler does not fire it (paused).
 		Enabled bool `json:"enabled"`
@@ -10676,7 +10852,7 @@ type ScheduleList struct {
 		// Id Stable schedule id (the underlying cron job id).
 		Id string `json:"id"`
 
-		// Message The instruction delivered to the agent (deliver=false) or sent to the channel (deliver=true).
+		// Message The instruction the owning agent processes on each run.
 		Message string `json:"message"`
 		Name    string `json:"name"`
 
@@ -10828,9 +11004,6 @@ type ScheduleTrigger struct {
 
 // ScheduleUpdate Request body to update a schedule (#264). All fields optional; only provided fields are changed. Changing owner_agent_id is re-authorized.
 type ScheduleUpdate struct {
-	Channel        *string                    `json:"channel,omitempty"`
-	ChatId         *string                    `json:"chat_id,omitempty"`
-	Deliver        *bool                      `json:"deliver,omitempty"`
 	Enabled        *bool                      `json:"enabled,omitempty"`
 	Message        *string                    `json:"message,omitempty"`
 	Name           *string                    `json:"name,omitempty"`
@@ -10906,19 +11079,19 @@ type Session struct {
 	Stats struct {
 		// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 		ByModel *map[string]struct {
-			// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+			// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 			CacheRead *int `json:"cache_read,omitempty"`
 
-			// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+			// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
 			CacheWrite *int `json:"cache_write,omitempty"`
 
-			// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+			// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
 			In *int `json:"in,omitempty"`
 
-			// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
 
-			// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
 
@@ -10940,7 +11113,7 @@ type Session struct {
 		// TokensOut Total output tokens generated across all messages in this session.
 		TokensOut int `json:"tokens_out"`
 
-		// TokensTotal Sum of tokens_in and tokens_out.
+		// TokensTotal Authoritative total tokens for this session, as reported by the provider. Once the provider's input/output split has been recorded (tokens_in and/or tokens_out non-zero from a split-aware entry), tokens_total = tokens_in + tokens_out + tokens_cache_read + tokens_cache_write — NOT just tokens_in + tokens_out, since cache tokens are an additional component, not folded into either. Legacy entries written before that split existed instead book their entire turn into tokens_out with tokens_in left at 0, so a session mixing legacy and split-aware entries can have tokens_in + tokens_out + cache fall short of (or, for a legacy entry whose cache was tracked separately, exceed) tokens_total for the legacy portion. Always read tokens_total directly rather than deriving it from the other fields.
 		TokensTotal int `json:"tokens_total"`
 
 		// ToolCalls Total number of tool calls made in this session.
@@ -11179,19 +11352,19 @@ type SessionDetail struct {
 		Stats struct {
 			// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 			ByModel *map[string]struct {
-				// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+				// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 				CacheRead *int `json:"cache_read,omitempty"`
 
-				// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+				// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
 				CacheWrite *int `json:"cache_write,omitempty"`
 
-				// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+				// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
 				In *int `json:"in,omitempty"`
 
-				// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+				// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 				Out *int `json:"out,omitempty"`
 
-				// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+				// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 				Total int `json:"total"`
 			} `json:"by_model,omitempty"`
 
@@ -11213,7 +11386,7 @@ type SessionDetail struct {
 			// TokensOut Total output tokens generated across all messages in this session.
 			TokensOut int `json:"tokens_out"`
 
-			// TokensTotal Sum of tokens_in and tokens_out.
+			// TokensTotal Authoritative total tokens for this session, as reported by the provider. Once the provider's input/output split has been recorded (tokens_in and/or tokens_out non-zero from a split-aware entry), tokens_total = tokens_in + tokens_out + tokens_cache_read + tokens_cache_write — NOT just tokens_in + tokens_out, since cache tokens are an additional component, not folded into either. Legacy entries written before that split existed instead book their entire turn into tokens_out with tokens_in left at 0, so a session mixing legacy and split-aware entries can have tokens_in + tokens_out + cache fall short of (or, for a legacy entry whose cache was tracked separately, exceed) tokens_total for the legacy portion. Always read tokens_total directly rather than deriving it from the other fields.
 			TokensTotal int `json:"tokens_total"`
 
 			// ToolCalls Total number of tool calls made in this session.
@@ -11822,19 +11995,19 @@ type SessionScopeUpdateResponse struct {
 type SessionStats struct {
 	// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 	ByModel *map[string]struct {
-		// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
 
-		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
 		CacheWrite *int `json:"cache_write,omitempty"`
 
-		// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+		// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
 		In *int `json:"in,omitempty"`
 
-		// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
-		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 
@@ -11856,7 +12029,7 @@ type SessionStats struct {
 	// TokensOut Total output tokens generated across all messages in this session.
 	TokensOut int `json:"tokens_out"`
 
-	// TokensTotal Sum of tokens_in and tokens_out.
+	// TokensTotal Authoritative total tokens for this session, as reported by the provider. Once the provider's input/output split has been recorded (tokens_in and/or tokens_out non-zero from a split-aware entry), tokens_total = tokens_in + tokens_out + tokens_cache_read + tokens_cache_write — NOT just tokens_in + tokens_out, since cache tokens are an additional component, not folded into either. Legacy entries written before that split existed instead book their entire turn into tokens_out with tokens_in left at 0, so a session mixing legacy and split-aware entries can have tokens_in + tokens_out + cache fall short of (or, for a legacy entry whose cache was tracked separately, exceed) tokens_total for the legacy portion. Always read tokens_total directly rather than deriving it from the other fields.
 	TokensTotal int `json:"tokens_total"`
 
 	// ToolCalls Total number of tool calls made in this session.
@@ -12885,19 +13058,19 @@ type TokenUsageSummary struct {
 
 		// ByModel Per-model breakdown for this agent. Absent when no model data is available.
 		ByModel *map[string]struct {
-			// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+			// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 			CacheRead *int `json:"cache_read,omitempty"`
 
-			// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+			// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
 			CacheWrite *int `json:"cache_write,omitempty"`
 
-			// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+			// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
 			In *int `json:"in,omitempty"`
 
-			// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
 
-			// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
 
@@ -12913,19 +13086,19 @@ type TokenUsageSummary struct {
 
 	// ByModel Cross-agent per-model breakdown for the period. Keys are model name strings. Absent when no model data is available.
 	ByModel *map[string]struct {
-		// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
+		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
 
-		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. A SUBSET of total, not additive to it.
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
 		CacheWrite *int `json:"cache_write,omitempty"`
 
-		// In Uncached input tokens for this model. On the assistant-turn write path this stays 0 (the full turn total is recorded directly in total); it is only populated via the UpdateStats delta path.
+		// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
 		In *int `json:"in,omitempty"`
 
-		// Out Output-side tokens for this model. On the assistant-turn write path this stays 0 (per-model accounting records the authoritative total directly).
+		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
-		// Total Authoritative total tokens recorded for this model. cache_read/cache_write are a subset of total, NOT additive — do not reconstruct total as in + out + cache_read + cache_write.
+		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 
@@ -12964,6 +13137,9 @@ type ToolApprovalResponse struct {
 
 	// ApprovalId The approval ID that was resolved.
 	ApprovalId string `json:"approval_id"`
+
+	// GrantRecorded Present only when action is "always". True when the standing Always Allow grant was stored. False means this call was approved once, but the next identical call will ask again — the grant did not stick (missing session, agent, or tool identity on the approval).
+	GrantRecorded *bool `json:"grant_recorded,omitempty"`
 
 	// Status Result status. Always "ok" when the action was accepted.
 	Status ToolApprovalResponseStatus `json:"status"`
@@ -13131,6 +13307,18 @@ type Workspace struct {
 	// MemberConfigs Per-member (agentId → config) heartbeat settings for this workspace. Absent when no member has a config (empty map). Keys are agent IDs.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
 
+	// Mounts Named write-grants on real local folders (FR-5, ADR-063 D4). Absent when no mount exists (empty array is also acceptable on the wire). Created and removed via the dedicated mounts lifecycle, not via this record's own create/update requests.
+	Mounts *[]struct {
+		// HostPath Absolute host filesystem path to the mounted folder (FR-5.3). Resolved via realpath at creation time — the resolved (symlink-free) form is what is stored; the raw form the operator typed is not retained.
+		HostPath string `json:"host_path"`
+
+		// Name A single path segment identifying this mount inside work/ (FR-5.2). Must be non-empty, contain no path separators (/ or \), and not be ".." or contain "..". Must be unique within the workspace and must not collide with an existing entry already present in work/.
+		Name string `json:"name"`
+
+		// Status Server-computed liveness of the mount target (FR-8.2). "broken" means the resolved host_path no longer exists or no longer resolves — the mount is never silently recreated as an empty directory (FR-8.3) and is never silently re-bound to a different same-named path (FR-8.5). Read-only from the client's perspective; ignored on input.
+		Status *WorkspaceMountsStatus `json:"status,omitempty"`
+	} `json:"mounts,omitempty"`
+
 	// Name Human-readable workspace name. Not unique.
 	Name string `json:"name"`
 
@@ -13142,9 +13330,6 @@ type Workspace struct {
 
 	// Pinned Whether this workspace is pinned to the top of the sidebar.
 	Pinned bool `json:"pinned"`
-
-	// Repository Optional git repository URL. Stored as-is, not validated for reachability. Frontend opens in new tab.
-	Repository *string `json:"repository,omitempty"`
 
 	// SetupPending True while this workspace's initial team-setup interview has not yet run. Set server-side at creation when the default (Ava-only) roster was auto-seeded; cleared server-side when the setup kickoff turn is accepted. Absent/false otherwise. Server-set; ignored on input (readOnly).
 	SetupPending *bool `json:"setup_pending,omitempty"`
@@ -13159,6 +13344,9 @@ type Workspace struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// WorkspaceMountsStatus Server-computed liveness of the mount target (FR-8.2). "broken" means the resolved host_path no longer exists or no longer resolves — the mount is never silently recreated as an empty directory (FR-8.3) and is never silently re-bound to a different same-named path (FR-8.5). Read-only from the client's perspective; ignored on input.
+type WorkspaceMountsStatus string
+
 // WorkspaceStatus Workspace visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
 type WorkspaceStatus string
 
@@ -13172,9 +13360,6 @@ type WorkspaceCreateRequest struct {
 
 	// Name Workspace name. Required. Not unique.
 	Name string `json:"name"`
-
-	// Repository Optional git repository URL.
-	Repository *string `json:"repository,omitempty"`
 }
 
 // WorkspaceDelegation The per-workspace delegation graph (M5). This is the editable source of truth surfaced in the workspace Team tab and the Agents-area "Workspace Teams" view — always workspace-scoped, never global. Nodes are the workspace team's agents (core_team ∪ every agent named by an edge); edges are the directed delegation authorizations. This graph is the sole delegation-enforcement mechanism — there is no separate global per-agent delegation policy; the graph is both what the UI edits and what the runtime enforces.
@@ -13255,6 +13440,34 @@ type WorkspaceMemberHeartbeat struct {
 	SessionId *string `json:"session_id,omitempty"`
 }
 
+// WorkspaceMountCreateRequest Request body for POST /workspaces/{id}/mounts (FR-7.1, ADR-063 D4). Creates a new named write-grant on a real local folder. See WorkspaceMount.yaml for the exact shape rules `name` and `host_path` must satisfy.
+type WorkspaceMountCreateRequest struct {
+	// HostPath Absolute host filesystem path to the folder to mount (FR-5.3). Resolved via realpath at creation time; must currently exist and be a directory.
+	HostPath string `json:"host_path"`
+
+	// Name A single path segment identifying this mount inside work/ (FR-5.2). Must be non-empty, contain no path separators (/ or \), and not be ".." or contain "..". Must be unique within the workspace and must not collide with an existing entry already present in work/.
+	Name string `json:"name"`
+}
+
+// WorkspaceMountCreateResponse Response body for POST /workspaces/{id}/mounts. Fields mirror WorkspaceMount.yaml verbatim (duplicated rather than composed via allOf — matches the ADR-034 precedent of keeping operation-facing schemas flat, one file per schema) plus an operator-facing `warning` string.
+// FR-7.4/FR-7.6: a target that is broad but not refused (the operator's own home directory, the filesystem root, or a location that CONTAINS $OMNIPUS_HOME) still succeeds (201) but MUST warn — the warning has to cross the wire so the operator who made the call actually sees it, not just a server log. `warning` is absent (never an empty string) when the target warranted none.
+type WorkspaceMountCreateResponse struct {
+	// HostPath The realpath-resolved host path this mount grants write access to (FR-5.3).
+	HostPath string `json:"host_path"`
+
+	// Name The mount's name, as created (see WorkspaceMountCreateRequest.name).
+	Name string `json:"name"`
+
+	// Status Server-computed liveness of the mount target at creation time (FR-8.2). Always "ok" immediately after a successful create — included for shape symmetry with WorkspaceMount.yaml.
+	Status WorkspaceMountCreateResponseStatus `json:"status"`
+
+	// Warning Present only when the resolved target is broad but not refused (FR-7.4/ FR-7.6) — e.g. the operator's home directory, the filesystem root, or a folder that CONTAINS $OMNIPUS_HOME. Names exactly what the grant covers. Absent (not an empty string) when the target warranted no warning.
+	Warning *string `json:"warning,omitempty"`
+}
+
+// WorkspaceMountCreateResponseStatus Server-computed liveness of the mount target at creation time (FR-8.2). Always "ok" immediately after a successful create — included for shape symmetry with WorkspaceMount.yaml.
+type WorkspaceMountCreateResponseStatus string
+
 // WorkspaceUpdateRequest Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged.
 type WorkspaceUpdateRequest struct {
 	CoreTeam    *[]string `json:"core_team,omitempty"`
@@ -13265,7 +13478,6 @@ type WorkspaceUpdateRequest struct {
 	Name          *string                           `json:"name,omitempty"`
 	PinOrder      *int                              `json:"pin_order,omitempty"`
 	Pinned        *bool                             `json:"pinned,omitempty"`
-	Repository    *string                           `json:"repository,omitempty"`
 
 	// Status Archive or restore a workspace.
 	Status *WorkspaceUpdateRequestStatus `json:"status,omitempty"`
@@ -13420,6 +13632,12 @@ type GetTokenStatsParams struct {
 
 // GetTokenStatsParamsPeriod defines parameters for GetTokenStats.
 type GetTokenStatsParamsPeriod string
+
+// ListHostFoldersParams defines parameters for ListHostFolders.
+type ListHostFoldersParams struct {
+	// Path Absolute path to list. Defaults to the operator's home directory, which is where a folder picker should sensibly open.
+	Path *string `form:"path,omitempty" json:"path,omitempty"`
+}
 
 // ListTasksParams defines parameters for ListTasks.
 type ListTasksParams struct {
@@ -13693,6 +13911,9 @@ type PutWorkspaceInstructionsJSONRequestBody = WorkspaceInstructionsRequest
 
 // CreateWorkspaceMediaAttachmentJSONRequestBody defines body for CreateWorkspaceMediaAttachment for application/json ContentType.
 type CreateWorkspaceMediaAttachmentJSONRequestBody = MediaAttachmentRequest
+
+// CreateWorkspaceMountJSONRequestBody defines body for CreateWorkspaceMount for application/json ContentType.
+type CreateWorkspaceMountJSONRequestBody = WorkspaceMountCreateRequest
 
 // CreateWorkspacePlanJSONRequestBody defines body for CreateWorkspacePlan for application/json ContentType.
 type CreateWorkspacePlanJSONRequestBody = PlanCreateRequest

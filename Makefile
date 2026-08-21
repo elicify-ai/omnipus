@@ -86,6 +86,16 @@ PTY_PATCH_LOONG64=pty_dir=$$(go env GOMODCACHE)/github.com/creack/pty@v1.1.9; \
 # Golangci-lint
 GOLANGCI_LINT?=golangci-lint
 
+# Quality-gate tool versions (see the `tools` target).
+# oapi-codegen's pin is READ FROM scripts/gen-contracts.sh rather than repeated
+# here: that script hard-fails on a mismatch, so two hand-maintained copies of
+# the version would eventually disagree and the failure would surface as a
+# confusing verify-contracts diff. One source of truth, derived.
+OAPI_CODEGEN_VERSION := $(shell sed -n 's/^REQUIRED_OAPI_CODEGEN_VERSION="\(.*\)"/\1/p' scripts/gen-contracts.sh)
+# govulncheck is installed @latest by CI (.github/workflows/pr.yml), so local
+# installs track the same moving target rather than pinning behind it.
+GOVULNCHECK_VERSION?=latest
+
 # Installation
 INSTALL_PREFIX?=$(HOME)/.local
 INSTALL_BIN_DIR=$(INSTALL_PREFIX)/bin
@@ -311,6 +321,38 @@ fix:
 deps:
 	@$(GO) mod download
 	@$(GO) mod verify
+
+## tools: Install the Go CLI tools the quality gates need (contracts + vuln scan)
+## Versions are PINNED to what CI installs (.github/workflows/pr.yml). oapi-codegen
+## in particular must match exactly: scripts/gen-contracts.sh hard-fails on a
+## version mismatch because its generated output is version-dependent in ways
+## that are not confined to comments, so a different version produces a spurious
+## verify-contracts diff.
+##
+## The remaining contract tooling (@redocly/cli, openapi-typescript,
+## openapi-zod-client) are npm devDependencies resolved via `npx --no-install`,
+## so `npm ci` covers them — they are deliberately NOT installed here.
+tools:
+	@echo "Installing pinned Go tools into $$($(GO) env GOPATH)/bin ..."
+	@CGO_ENABLED=0 go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION)
+	@CGO_ENABLED=0 go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+	@echo "Done. Ensure $$($(GO) env GOPATH)/bin is on PATH."
+
+## tools-check: Report whether each quality-gate tool is present and correctly versioned
+tools-check:
+	@fail=0; \
+	if command -v oapi-codegen >/dev/null 2>&1; then \
+		v=$$(oapi-codegen --version 2>/dev/null | tail -1 | tr -d '[:space:]'); \
+		if [ "$$v" = "$(OAPI_CODEGEN_VERSION)" ]; then echo "  oapi-codegen   $$v (pinned OK)"; \
+		else echo "  oapi-codegen   $$v (WRONG, want $(OAPI_CODEGEN_VERSION)) -> make tools"; fail=1; fi; \
+	else echo "  oapi-codegen   MISSING -> make tools"; fail=1; fi; \
+	if command -v govulncheck >/dev/null 2>&1; then echo "  govulncheck    present"; \
+	else echo "  govulncheck    MISSING -> make tools"; fail=1; fi; \
+	if command -v $(GOLANGCI_LINT) >/dev/null 2>&1; then echo "  golangci-lint  present"; \
+	else echo "  golangci-lint  MISSING -> https://golangci-lint.run/welcome/install/"; fail=1; fi; \
+	if [ -d node_modules ]; then echo "  node_modules   present (redocly/openapi-* resolve via npx)"; \
+	else echo "  node_modules   MISSING -> npm ci"; fail=1; fi; \
+	exit $$fail
 
 ## update-deps: Update dependencies
 update-deps:

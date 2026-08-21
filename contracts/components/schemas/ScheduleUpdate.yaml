@@ -16,8 +16,6 @@ properties:
   message:
     type: string
     minLength: 1
-  deliver:
-    type: boolean
   session_mode:
     type: string
     enum:
@@ -29,7 +27,3 @@ properties:
     minimum: 0
   enabled:
     type: boolean
-  channel:
-    type: string
-  chat_id:
-    type: string

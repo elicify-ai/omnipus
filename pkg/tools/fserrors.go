@@ -84,7 +84,10 @@ var ErrPathInvalid = errors.New("invalid path")
 // unlike a tool-policy "saturated" approval-queue denial, retrying the same
 // call cannot succeed.
 func PermissionDeniedResult(toolName string, classErr error, detail string) *ToolResult {
-	const message = "Access to this path is denied by filesystem policy."
+	message := "Access to this path is denied by filesystem policy."
+	if classErr != nil && errors.Is(classErr, ErrOutsideScope) && detail != "" {
+		message = detail
+	}
 
 	reason := detail
 	if reason == "" && classErr != nil {

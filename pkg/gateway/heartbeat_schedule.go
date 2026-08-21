@@ -199,7 +199,7 @@ func ReconcileHeartbeatSchedules(
 				cur.SessionMode = cron.SessionModeContinue
 				cur.SessionID = d.sessionID
 				cur.Schedule = cron.CronSchedule{Kind: "every", EveryMS: &everyMS}
-				cur.Payload = cron.CronPayload{Kind: heartbeatJobKind, Message: d.message, Deliver: false}
+				cur.Payload = cron.CronPayload{Kind: heartbeatJobKind, Message: d.message}
 				if err := cs.UpdateJob(&cur); err != nil {
 					recordErr(fmt.Errorf("heartbeat reconcile: update %s: %w", name, err))
 				}

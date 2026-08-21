@@ -29,3 +29,10 @@ properties:
     enum:
       - ok
     example: ok
+  grant_recorded:
+    type: boolean
+    description: >
+      Present only when action is "always". True when the standing Always
+      Allow grant was stored. False means this call was approved once, but
+      the next identical call will ask again — the grant did not stick
+      (missing session, agent, or tool identity on the approval).

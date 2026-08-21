@@ -22,13 +22,17 @@ func newFakeTransport(msgs ...Message) *fakeTransport {
 	return &fakeTransport{msgs: msgs, seen: map[uint32]bool{}}
 }
 
-func (f *fakeTransport) ReadInbox(_ context.Context, limit int, unseenOnly bool) ([]Message, error) {
+func (f *fakeTransport) ReadInbox(_ context.Context, opts InboxOptions) ([]Message, error) {
 	if f.failRead {
 		return nil, errors.New("imap down")
 	}
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 20
+	}
 	var out []Message
 	for _, m := range f.msgs {
-		if unseenOnly && f.seen[m.UID] {
+		if opts.UnseenOnly && f.seen[m.UID] {
 			continue
 		}
 		out = append(out, m)
@@ -39,11 +43,11 @@ func (f *fakeTransport) ReadInbox(_ context.Context, limit int, unseenOnly bool)
 	return out, nil
 }
 
-func (f *fakeTransport) Search(context.Context, string, int) ([]Message, error) { return nil, nil }
-func (f *fakeTransport) ReadMessage(context.Context, uint32) (*Message, error) {
-	return nil, errors.New("fakeTransport: ReadMessage not implemented")
+func (f *fakeTransport) Search(context.Context, string, SearchOptions) (SearchResult, error) {
+	return SearchResult{}, nil
 }
-func (f *fakeTransport) Send(context.Context, SendRequest) error { return nil }
+func (f *fakeTransport) ReadMessage(context.Context, uint32) (*Message, error) { return nil, nil }
+func (f *fakeTransport) Send(context.Context, SendRequest) error               { return nil }
 func (f *fakeTransport) MarkSeen(_ context.Context, uid uint32) error {
 	f.seen[uid] = true
 	return nil
@@ -184,7 +188,11 @@ type failingMarkSeenTransport struct {
 	msgs []Message
 }
 
-func (f *failingMarkSeenTransport) ReadInbox(_ context.Context, limit int, unseenOnly bool) ([]Message, error) {
+func (f *failingMarkSeenTransport) ReadInbox(_ context.Context, opts InboxOptions) ([]Message, error) {
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 20
+	}
 	out := make([]Message, 0, len(f.msgs))
 	for _, m := range f.msgs {
 		out = append(out, m)
@@ -195,8 +203,8 @@ func (f *failingMarkSeenTransport) ReadInbox(_ context.Context, limit int, unsee
 	return out, nil
 }
 
-func (f *failingMarkSeenTransport) Search(context.Context, string, int) ([]Message, error) {
-	return nil, nil
+func (f *failingMarkSeenTransport) Search(context.Context, string, SearchOptions) (SearchResult, error) {
+	return SearchResult{}, nil
 }
 
 func (f *failingMarkSeenTransport) ReadMessage(context.Context, uint32) (*Message, error) {

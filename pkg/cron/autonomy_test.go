@@ -74,7 +74,7 @@ func newAutonomyService(t *testing.T, clk Clock) (*CronService, string) {
 // addDueJob inserts an enabled recurring job whose NextRun is in the past.
 func addDueJob(t *testing.T, cs *CronService, owner string) *CronJob {
 	t.Helper()
-	job, err := cs.AddJob("due", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "do it", false, "cli", "direct")
+	job, err := cs.AddJob("due", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "do it")
 	if err != nil {
 		t.Fatalf("AddJob: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestMigration_NilDefaultSkipsFire(t *testing.T) {
 	defer cs.Stop()
 
 	// Add an owner-less due job (no SetDefaultAgentID).
-	job, err := cs.AddJob("orphan", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "x", false, "cli", "direct")
+	job, err := cs.AddJob("orphan", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "x")
 	if err != nil {
 		t.Fatalf("AddJob: %v", err)
 	}
