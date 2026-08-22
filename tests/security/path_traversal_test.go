@@ -70,7 +70,22 @@ type traversalCase struct {
 // each per-tool test since it depends on a workspace-scoped symlink.
 func canonicalCases() []traversalCase {
 	return []traversalCase{
-		{name: "unix_parent_traversal", path: "../../../etc/passwd", mustRejectOnLinux: true},
+		// escapesByDesign: this leaves the work dir by SCOPE, not by malformed
+		// input, and ADR-062/ADR-063 opened reads. It kept mustRejectOnLinux
+		// from before that inversion and only ever failed on Linux, where
+		// /etc/passwd actually exists — on macOS the traversal from t.TempDir()
+		// lands nowhere and the case passed for the wrong reason.
+		//
+		// Decision (founder, 2026-08-22): accepted as designed. /etc/passwd is
+		// world-readable and carries no password hashes; an agent that can run
+		// a toolchain can read it by a dozen other routes. What must NOT follow
+		// is a write, and the escapesByDesign branch below asserts exactly that
+		// for this path — so the relaxation stays scoped to reads.
+		//
+		// Still refused, and asserted by their own rows: /proc/self/mem and
+		// /proc/1/environ (live process memory and environment, where real
+		// credentials are), and every write outside the work dir.
+		{name: "unix_parent_traversal", path: "../../../etc/passwd", mustRejectOnLinux: true, escapesByDesign: true},
 		{name: "windows_parent_traversal", path: `..\..\..\windows\system32\config\sam`, platformNativeWindows: true},
 		{name: "absolute_outside_workspace", path: "/absolute/outside/workspace", mustRejectOnLinux: true},
 		{name: "proc_self_environ", path: "/proc/1/environ", mustRejectOnLinux: true},
