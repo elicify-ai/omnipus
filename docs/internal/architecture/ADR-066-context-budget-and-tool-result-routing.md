@@ -169,6 +169,32 @@ Verified:
 
 ---
 
+### 6.4 D5.4 — Recall is injected at the tool-result site (P0; ships as a hotfix first, then this branch inherits it)
+
+**The bug (operator report 2026-08-22, severity High), verified on this branch.** `pkg/agent/recall_conversation.go::Execute` builds the full-text span (whole turns, verbatim), calls `setRecallSpan`, and returns only *"Recalled N turn(s) … into context."* The span is read in exactly **two** places — `loop.go::assembleMessages` (turn start and the trim sites) and `loop.go::windowTrim` (FR-019, which **drops** it under pressure). Inside the tool loop every LLM call uses `callMessages` built from `repairedHistory := messages` — the in-memory slice — and `activeRecallSpan` is never consulted there. So a recall made mid-turn reaches the model only if a trim happens to re-assemble before the next call; otherwise the next request carries the receipt string and nothing else. Live evidence (sessions `01M0HYPY…`, `01M0MS6W…`): 25 recall calls, all "success", the model's next answer quotes nothing; no span set/drop is logged. Existing tests (`TestRecallSpan_ReinjectedProviderValid` and siblings) assert the tool result string and span state only — none asserts that the **next LLM request** contains recalled text. **This is a precondition for D5: "emptied content comes back via recall" is false until it is fixed.**
+
+**Decision.** Recall is injected **at the tool-result site, inside the tool loop, immediately after the recall tool result is appended to `messages`** — the same in-memory mutation point D5/D6 use:
+
+- (a) splice `span.Messages()` at the position `BuildMessages` would use (after the pinned core, before the window) and run `sanitizeHistoryForProvider` on the combined slice;
+- (b) mark the span injected (`ts.injectedRecallSpan`, by identity); `assembleMessages` skips an already-injected span so a later Site-3/4 reassembly does not double it;
+- (c) **budget first:** before splicing, run the same fit check `windowTrim` uses (D6's one budget B); if the span does not fit, do **not** splice and do **not** drop silently — the tool result says *"N turn(s) found (X estimator tokens) but they do not fit the current window; narrow with turn_range or query"*, so the model learns the real outcome;
+- (d) the receipt is rewritten to describe what happened: *"Recalled N turn(s) (turns A–B); their text is now in your context"* **only** when injected;
+- (e) the `tool_call_id` mode (§6.3) injects the same way, one page at a time;
+- (f) span set / injected / refused / dropped are logged at INFO with sizes (there is no observability today);
+- (g) once injected, the span is subject to D5 emptying and D6 budget like any tool result.
+
+**Regression test (loop level, fake recording provider):** seed a nonce in turn 1, evict it (advance `Skip`), have the provider's first response call `recall_conversation(turn_range:"1-1")`, assert the provider's **second** request contains the nonce and the recall marker; variant with a window too small → the tool result states the non-fit and the request lacks the nonce.
+
+**Known limitation, recorded with a test, not fixed here:** `spawnSubTurn` gives the child the parent's tool registry (`Tools: cfg.Tools`) but its own `ephemeralSessionStore`; the recall tool was constructed with the parent's `agent.Sessions`, so a child's recall reads the parent store under the child's ephemeral key and returns nothing.
+
+### 6.5 D5.5 — Hydration may only fill an empty archive, never overwrite one (P0; ships as a hotfix first, then this branch inherits it)
+
+**The bug, verified on this branch and on the operator's data.** `pkg/agent/attach_hydrate.go::HydrateAgentHistoryFromTranscript` rebuilds the per-agent archive **from the UI transcript** — user/assistant text plus one `role: "tool"` stub per recorded tool call, whose content is `marshalToolResult(tc)` (the transcript's bounded inline `result` map when present — ≤ 50 KiB, larger results are offloaded stubs — else `{"status":…}`) — and writes it with `SetHistory`, which (`pkg/memory/jsonl.go::SetHistory`) rewrites the whole file and sets `meta.Skip = 0`. It is called **unconditionally** from the `attach_session` handler (`pkg/gateway/websocket.go`) and conditionally from `loop.go` (self-heal when the history has no assistant/tool message). Evidence: the 08-21 Jarvis archive held 21 user / 53 assistant / 36 tool lines at the 19:19 snapshot and 22 / 42 / 0 afterwards with `skip = 0` — a whole-file replacement, not a rollback. Consequences: every reopen discards all real tool results (recall returns text only), resets the window pointer, and violates ADR-028's append-only archive — so D5's "the full result stays in the archive" is false until this is fixed.
+
+**Decision.** Hydration may only **fill an empty archive**: the attach path checks the agent archive first and skips hydration when it has ≥ 1 line; the self-heal path keeps its existing emptiness condition. When hydration does run (a genuinely empty archive) it must preserve tool results: the UI transcript's `tool_call` entries gain a bounded `result` field, capped by D4 and written by the same choke point, so the rebuilt archive is not lossy; until that transcript-shape change lands, a hydrated archive is marked `hydrated: true` in meta and recall by `tool_call_id` answers *"not available — session was rebuilt from the transcript"*. `SetHistory` must never reset `Skip` on an existing archive — greenfield: it refuses when the file is non-empty.
+
+**Regression tests:** attach the same session twice → the archive file is byte-identical and `meta.skip` unchanged; attach to a session whose archive is empty → hydration runs once and includes tool results; the ADR-028/FR-019 append-only invariant test gains an attach step.
+
 ## 7. D6 — The window runs mid-turn
 
 Two changes to `windowTrim`'s caller and to its notion of a legal operation. Either alone fails: checking mid-turn with user-only boundaries finds no legal cut; allowing finer operations while checking only at turn start means nobody looks while the turn fills.
@@ -259,6 +285,8 @@ D4 protects the window; it cannot protect the process — by the time a result i
 3. The local-endpoint live window query and the "set the context length" state on the provider row and model picker (D3).
 4. Bound the three search providers' reads (D10).
 5. Confirm the provider ordering rule in §16 before allowing any mid-turn cut in future.
+6. **P0 hotfix, inherited by this branch:** D5.4 — recall injection at the tool-result site, with the loop-level nonce test and the sub-turn limitation test.
+7. **P0 hotfix, inherited by this branch:** D5.5 — hydration fills only an empty archive; `SetHistory` refuses a non-empty file; the transcript `tool_call.result` field; the attach-twice byte-identity test.
 
 ### 15.1 Tier-1 audit (2026-08-22, this branch)
 
@@ -295,3 +323,5 @@ Each item names the pass-2 finding it closes (`ADR-066-…-review-pass2.md`).
 5. **Silent-exit test** — each of the four §1.4 returns now produces a log line, an event and a transcript entry.
 6. **Local-endpoint test** — a `locality: local` model whose endpoint fails to report a window is refused with `context_window_unknown` and the "set the context length under Settings → Models → Model overrides" message, never assigned 128,000, and the catalog `GET` projection shows `window_unknown: true` for it; writing the per-(provider, model) override via `PUT /api/v1/settings/context` triggers a reload and makes it usable without restart. A custom row at a public host is `locality: cloud` and floored, never refused.
 7. **Resolver test** — `ResolveWindow(provider, model)` with no agent returns the rung-2–6 window and source for a catalog model; an exempt (subprocess-CLI) provider returns 0 with no source.
+8. **Recall-injection test (D5.4)** — a nonce evicted past `Skip` is present in the provider's second request after `recall_conversation(turn_range:"1-1")`, with the recall marker; with a window too small, the tool result states the non-fit and the request lacks the nonce; the sub-turn limitation is pinned by a test.
+9. **Hydration test (D5.5)** — attaching a session twice leaves the archive byte-identical and `skip` unchanged; attaching to an empty archive hydrates once with tool results; `SetHistory` on a non-empty archive is refused.
