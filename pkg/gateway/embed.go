@@ -10,6 +10,63 @@ import (
 	"sync"
 )
 
+// spaContentSecurityPolicy is the ADR-067 §10.7 policy for the SPA shell
+// (FR-019b), reproduced from the specification.
+//
+// WHY THE SPA NEEDS ONE AT ALL. It was served with no policy whatsoever, which
+// was tolerable while it rendered only its own code. It is not tolerable once
+// it parses arbitrary PDFs — from disk, and from agents — in the same origin as
+// the session cookie and the whole authenticated API.
+//
+// `frame-ancestors 'none'` is FR-006b and is part of THIS string, not a second
+// header: the measured preview policy (§10.3) contains `frame-src 'self'`, so a
+// previewed page may embed any gateway page including the real SPA. The nested
+// context reads no cookie and reaches no network, so the residual is interface
+// deception rather than data disclosure — genuine Omnipus chrome rendered inside
+// attacker-authored content. Narrowing `frame-src` on the preview side instead
+// would invalidate the three-engine measurement the entire P0 control rests on,
+// so the control belongs on the FRAMED resource, which is here.
+//
+// NON-NEGOTIABLE: no 'unsafe-eval'. If a bundled library ever needs it, the
+// library is reconfigured or replaced — FR-019a is exactly that move for PDF.js,
+// whose scripting interpreter is excluded from the build rather than disabled by
+// a flag. TestSpaCsp_DirectiveFloor asserts this and the rest of MV-25's floor
+// with a checker it also proves can fail.
+//
+// UNLIKE §10.3, THIS STRING IS NOT MEASURED. §10.7 says so itself: it is a
+// proposal, frozen only after a headed run in Chromium, Firefox and Safari with
+// zero violations while exercising initial load, the WebSocket, a Mermaid
+// diagram, a highlighted code block and a PDF. Its assumptions, each with the
+// symptom if wrong:
+//
+//	no inline bootstrap script          → white screen at boot
+//	worker-src covers the built PDF.js
+//	  worker URL                        → PDF.js does NOT fail; it falls back to
+//	                                      parsing on the main thread, which
+//	                                      FR-019c forbids, with a console warning
+//	                                      as the only symptom (test 96 asserts the
+//	                                      THREAD, not the configuration)
+//	Tailwind and Radix need inline
+//	  styles                            → broken layout
+//	same-origin WebSocket matches 'self'→ the live connection silently fails
+//	Shiki needs no WebAssembly          → code blocks stop highlighting
+//	nothing embeds the SPA              → any embedding surface goes blank
+const spaContentSecurityPolicy = "default-src 'self'; script-src 'self'; " +
+	"worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; " +
+	"connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; " +
+	"form-action 'self'; frame-ancestors 'none'"
+
+// pdfJSAssetPathPrefix is the SPA-relative prefix PDF.js's runtime assets and
+// worker are served from (FR-018a, FR-018b).
+//
+// It MUST equal vite.config.ts's PDFJS_ASSET_PREFIX. The two live in different
+// languages with no shared source, so TestSpaEmbed_PdfJsPrefixMatchesTheBuild
+// reads the TypeScript and compares — a rename on either side would otherwise
+// leave the 404 branch guarding a prefix nothing is served under, which restores
+// the silent-blank-PDF failure with no other symptom.
+const pdfJSAssetPathPrefix = "pdfjs/"
+
 // spaFS is the embedded SPA filesystem.
 // Requires the spa/ directory to exist at build time (run 'pnpm build' first).
 //
@@ -27,6 +84,15 @@ func newSPAHandler() http.Handler {
 	fileServer := http.FileServer(http.FS(sub))
 
 	spaHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// ADR-067 FR-019b / FR-006b — the SPA's own Content-Security-Policy.
+		//
+		// ONE header, never two. Multiple Content-Security-Policy headers are
+		// INTERSECTED rather than merged, so a second one is not an error — it
+		// silently makes the effective policy something neither string states.
+		// FR-006b's `frame-ancestors 'none'` is therefore absorbed into the
+		// §10.7 string below rather than sent alongside it.
+		w.Header().Set(headerContentSecurityPolicy, spaContentSecurityPolicy)
+
 		// Try to serve the file directly
 		path := r.URL.Path
 		if path == "/" {
@@ -49,6 +115,26 @@ func newSPAHandler() http.Handler {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			}
 			fileServer.ServeHTTP(w, r)
+			return
+		}
+
+		// ADR-067 FR-018b — a missing runtime asset must fail VISIBLY.
+		//
+		// Everything below this line is the SPA-routing fallback: an unmatched
+		// path is answered with index.html and HTTP 200, which is correct for
+		// /library, /chat and every other client-side route. It is catastrophic
+		// for an ASSET request. PDF.js fetches its character maps, standard
+		// fonts, WASM and colour profiles per DOCUMENT, over plain HTTP, and it
+		// checks the status: a 404 it can report, a 200 carrying an HTML page it
+		// cannot. Without cmaps/ a Japanese, Chinese or Korean PDF then renders
+		// BLANK, with nothing anywhere naming the cause — which is precisely the
+		// failure FR-018b exists to prevent, reached by a fallback that looks
+		// like a success.
+		//
+		// So the fallback stops at the PDF.js prefix. A request under it either
+		// finds a real embedded file above, or gets a real 404.
+		if strings.HasPrefix(cleanPath, pdfJSAssetPathPrefix) {
+			http.NotFound(w, r)
 			return
 		}
 

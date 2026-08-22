@@ -129,6 +129,22 @@ type restAPI struct {
 	// that will only take effect after a restart.
 	appliedConfig *config.Config
 
+	// previewTokens is the live ADR-067 preview-token store (rest_library_preview.go),
+	// published by newLibraryPreviewRoutes at registration time.
+	//
+	// It lives on the restAPI, and not in a package variable, because FR-003d's
+	// three revocation events are handled in three OTHER files —
+	// HandleLogout (rest_auth.go), handleWorkspaceMountDelete
+	// (rest_workspace_mounts.go) and the Library delete/rename/move handlers
+	// (rest_library.go) — none of which ever sees the route registrar. Without a
+	// reachable handle every one of them silently degrades to "expiry is the only
+	// revocation", which FR-003d names as the omission that turns a preview token
+	// into a standing unauthenticated read grant.
+	//
+	// Nil until the preview routes are registered; every reader goes through
+	// previewTokenStore(), which is nil-safe.
+	previewTokens atomic.Pointer[PreviewTokenStore]
+
 	// devServers is the gateway-wide Tier 3 dev-server registry. Shared with
 	// the web_serve tool (dev mode) and workspace.shell_bg tool via the agent
 	// instance. HandlePreview reads this to validate tokens and resolve the
@@ -5215,6 +5231,11 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// attack surface for the non-upload operations.
 	cm.RegisterHTTPHandler("/api/v1/library", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
 	cm.RegisterHTTPHandler("/api/v1/library/", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
+	// ADR-067 stage 1 (FR-003f): the preview-token mint endpoint and the bare
+	// /library-preview/ serving prefix. Registered from rest_library_preview.go
+	// so the two halves share one token store. The mint path is an EXACT
+	// pattern, so it outranks the "/api/v1/library/" subtree above.
+	a.registerLibraryPreviewRoutes(cm)
 	cm.RegisterHTTPHandler("/api/v1/providers", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/providers/", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/mcp-servers", a.withAuth(a.HandleMCPServers))
@@ -10057,9 +10078,22 @@ func (a *restAPI) HandleServeUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Disposition", "inline")
-	http.ServeFile(w, r, resolved)
+	// ADR-067 FR-008b/FR-015: this route used to set a bare
+	// "Content-Disposition: inline" and hand the file to http.ServeFile, which
+	// types it from the host MIME registry and then sniffs the bytes. An
+	// uploaded .html was therefore served as a real document on the gateway
+	// origin with no policy. serveLibraryPath decides the type from the
+	// extension, attaches anything off the §10.4 allow-list, and carries the
+	// §10.3 isolation policy on whatever it does serve inline.
+	if err := serveLibraryPath(w, r, resolved, filename); err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, errLibraryBytesNotAFile) {
+			jsonErr(w, http.StatusNotFound, "file not found")
+			return
+		}
+		slog.Error("rest: uploads: serve failed", "session_id", sessionID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read file")
+		return
+	}
 }
 
 // --- Media ---
@@ -10181,13 +10215,31 @@ func (a *restAPI) serveMedia(
 		return
 	}
 
-	h := w.Header()
-	h.Set("X-Content-Type-Options", "nosniff")
-	if meta.ContentType != "" {
-		h.Set("Content-Type", meta.ContentType)
+	// ADR-067 FR-008b, and this is the round-4 LIVE exposure, not a preview
+	// feature: this route is registered withOptionalAuth and used to serve
+	// workspace-library bytes with a bare "inline" disposition, the media
+	// entry's own recorded ContentType, and NO policy — so an .html entry
+	// (pkg/library/entries.go types it text/html) rendered as a real document
+	// on the gateway origin, same-origin with the session cookie.
+	//
+	// meta.ContentType is deliberately no longer consulted. It is the type an
+	// UPSTREAM claimed — a channel, an MCP server, an upload form — and
+	// FR-015b makes the compiled-in extension table the only source. The
+	// storage path is only a fallback for a legacy registry entry with no
+	// recorded filename: a workspace-library entry lives at <libdir>/<mediaID>
+	// with no extension, so it can never supply one.
+	displayName := meta.Filename
+	if libraryExtOf(displayName) == "" {
+		displayName = filepath.Base(localPath)
 	}
-	if meta.Filename != "" {
-		h.Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", meta.Filename))
+	if err := serveLibraryPath(w, r, localPath, displayName); err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, errLibraryBytesNotAFile) {
+			slog.Warn("rest: media: resolved path is not a readable file", "ref", logRef, "error", err.Error())
+			jsonErr(w, http.StatusNotFound, "media not found")
+			return
+		}
+		slog.Error("rest: media: serve failed", "ref", logRef, "error", err.Error())
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
 	}
-	http.ServeFile(w, r, localPath)
 }

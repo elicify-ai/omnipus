@@ -125,6 +125,12 @@ func (a *restAPI) HandleLibrary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.handleLibraryDownload(w, r, workspaceID)
+	case "inline-disposition":
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryInlineDisposition(w, r, workspaceID)
 	default:
 		http.NotFound(w, r)
 	}
@@ -323,6 +329,11 @@ func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Reques
 		mapLibraryErr(w, "delete entry", workspaceID, err)
 		return
 	}
+	// ADR-067 FR-003d: the granted path is gone, so any preview token naming it
+	// — or naming something beneath it — must stop working now rather than in
+	// fifteen minutes. InvalidatePath covers the beneath-it half: deleting the
+	// directory "reports" also kills a bundle token scoped to "reports/q3".
+	a.revokePreviewTokensForPath(workspaceID, rel)
 	a.logLibraryAudit(r, "library.delete", workspaceID, map[string]any{"path": rel})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -743,10 +754,18 @@ func (a *restAPI) handleLibraryDownload(w http.ResponseWriter, r *http.Request, 
 	}
 	defer f.Close()
 
-	filename := path.Base(rel)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Disposition", contentDispositionAttachment(filename))
-	http.ServeContent(w, r, filename, fi.ModTime(), f)
+	// ADR-067 FR-015a/FR-003g. This used to call http.ServeContent with the
+	// filename and no Content-Type, so the type came from the HOST MIME
+	// registry and, failing that, from sniffing the first 512 bytes — both
+	// forbidden by FR-015, and the registry half means the same binary answers
+	// differently on a developer Mac and in a scratch container.
+	//
+	// forceAttachment is true and must stay true: FR-003g keeps the
+	// authenticated Library path serving attachments unchanged, so this
+	// response also carries no isolation policy (MV-13's second half). Inline
+	// serving belongs to the preview-token path, which is the only URL whose
+	// credential is scoped to a single file.
+	serveLibraryContent(w, r, f, fi.ModTime(), path.Base(rel), true)
 }
 
 // --- POST /library/{workspace_id}/rename ---
@@ -792,8 +811,74 @@ func (a *restAPI) handleLibraryRename(w http.ResponseWriter, r *http.Request, wo
 		mapLibraryErr(w, "rename", workspaceID, err)
 		return
 	}
+	// ADR-067 FR-003d: the granted path has MOVED, so every token naming it —
+	// or naming something beneath it — must stop working now.
+	//
+	// The SOURCE only, and that is not an oversight. A token over the
+	// DESTINATION cannot exist: minting requires the path to be readable at mint
+	// time, and this handler refuses a destination that already exists (409,
+	// root.Rename's ErrExists). If that ever stops being true — an overwrite
+	// mode, a force flag — the destination becomes a live grant over bytes its
+	// holder never saw, and this is the line that has to grow a second call.
+	a.revokePreviewTokensForPath(workspaceID, fromRel)
 	a.logLibraryAudit(r, "library.rename", workspaceID, map[string]any{"from": fromRel, "to": toRel})
 	jsonOK(w, library.EntryFromInfo(toRel, fi))
+}
+
+// --- GET /library/{workspace_id}/inline-disposition ---
+
+// handleLibraryInlineDisposition answers, for ONE file, whether the Library may
+// serve it inline, as what Content-Type, which SPA surface should draw it, and
+// whether drawing it makes the browser execute it (ADR-067 D15, FR-080).
+//
+// WHY THIS ENDPOINT EXISTS RATHER THAN THE SPA WORKING IT OUT. The §10.4
+// allow-list and the extension→type table are compiled into the binary and are
+// the single source of truth (FR-015a, FR-015b). A second copy in TypeScript is
+// a second answer, and the two disagree the first time an extension is added to
+// one of them — at which point the SPA mounts a surface for bytes the server
+// will not serve that way, which is exactly the type confusion FR-015 exists to
+// prevent, arriving from the inside.
+//
+// IT ANSWERS ABOUT THE FILE, NOT ABOUT A GRANT. Nothing here mints anything;
+// fetching the bytes inline still requires a preview token. What it does owe the
+// caller is the same containment the rest of the Library owes: the path is
+// shape-checked by library.CleanRelPath and then resolved through an
+// os.Root-confined Stat, so an out-of-root symlink is a 403 here rather than a
+// confident answer about a file the caller may not read.
+//
+// The file must EXIST. An answer for a path that is not there would be a
+// perfectly plausible, entirely fictional classification — and the SPA would
+// mount a renderer for it before discovering the 404.
+func (a *restAPI) handleLibraryInlineDisposition(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	rawPath := r.URL.Query().Get("path")
+	if rawPath == "" {
+		jsonErr(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	rel, err := library.CleanRelPath(rawPath)
+	if err != nil || rel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	// StatFile, not Stat: a directory has no disposition, and mapLibraryErr
+	// turns library.ErrIsDir into the 404 the contract specifies for it.
+	if _, statErr := root.StatFile(rel); statErr != nil {
+		mapLibraryErr(w, "inline disposition", workspaceID, statErr)
+		return
+	}
+
+	jsonOK(w, libraryInlineDispositionFor(rel))
 }
 
 // --- POST /library/move, POST /library/copy ---
@@ -878,6 +963,16 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 	if opErr != nil {
 		mapLibraryErr(w, string(mode), req.FromWorkspaceId, opErr)
 		return
+	}
+
+	// ADR-067 FR-003d. A MOVE vacates from_path, so every token over it dies —
+	// in the SOURCE workspace, which for a cross-workspace transfer is not the
+	// one the entry landed in. A COPY destroys nothing and moves nothing, so it
+	// is not one of FR-003d's events and revokes nothing; the destination cannot
+	// hold a live grant either, because both modes refuse an existing
+	// destination (409) and a token can only be minted over a path that exists.
+	if mode == transferModeMove {
+		a.revokePreviewTokensForPath(req.FromWorkspaceId, fromRel)
 	}
 
 	entry := library.EntryFromInfo(toRel, fi)

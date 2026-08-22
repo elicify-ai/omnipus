@@ -286,7 +286,7 @@ func withRateLimit(limiter *apiRateLimiter, handler http.HandlerFunc) http.Handl
 		if !limiter.allow(ip) {
 			retryAfter := limiter.retryAfter(ip)
 			w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
-			slog.Warn("api: rate limit exceeded", "ip", ip, "path", r.URL.Path, "retry_after", retryAfter)
+			slog.Warn("api: rate limit exceeded", "ip", ip, "path", redactRequestPath(r.URL.Path), "retry_after", retryAfter)
 			jsonErr(
 				w,
 				http.StatusTooManyRequests,
@@ -550,6 +550,26 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
+
+	// ADR-067 FR-003d — revoke this session's live preview tokens FIRST, before
+	// any of the three early returns below can skip it.
+	//
+	// A preview token is an UNAUTHENTICATED bearer credential in a URL path. It
+	// keeps working after the session that minted it ends unless something
+	// explicitly kills it, and expiry is fifteen minutes away. FR-003d states
+	// the consequence plainly: without this call an administrator's token stays
+	// a valid read grant on the workspace after they log out.
+	//
+	// It is placed here, not beside the cookie clearing at the bottom, because
+	// the CLI-token and dev-bypass branches both return early — and a CLI or
+	// bypass caller can hold preview tokens exactly like a browser one. It also
+	// runs before the config write, so a 500 from that write still leaves the
+	// tokens dead: failing closed is the correct direction for a revocation.
+	//
+	// PreviewSessionKey reads the same credential the mint request carried
+	// (session cookie, else bearer token), so the key matches by construction —
+	// the logout request still has both at this point.
+	a.revokePreviewTokensForSession(r)
 
 	// A CLI-token-authenticated caller's synthetic "cli" identity is not
 	// backed by any Gateway.Users row (see CLITokenContextKey's doc) — the

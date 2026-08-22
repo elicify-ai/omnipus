@@ -4650,7 +4650,7 @@ func setupAndStartServices(
 			logger := api.agentLoop.AuditLogger()
 			if logger == nil {
 				slog.Warn("csrf: token mismatch (no audit logger)",
-					"source_ip", sourceIP, "route", route, "method", r.Method)
+					"source_ip", sourceIP, "route", redactRequestPath(route), "method", r.Method)
 				return
 			}
 			// Named logErr to avoid shadowing the outer err declared in
@@ -4661,7 +4661,7 @@ func setupAndStartServices(
 				Decision: audit.DecisionDeny,
 				Details: map[string]any{
 					"source_ip": sourceIP,
-					"route":     route,
+					"route":     redactRequestPath(route),
 					"method":    r.Method,
 				},
 				PolicyRule: "csrf: cookie/header mismatch on state-changing request",

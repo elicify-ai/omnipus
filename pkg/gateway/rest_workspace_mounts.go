@@ -178,6 +178,17 @@ func (a *restAPI) handleWorkspaceMountDelete(w http.ResponseWriter, _ *http.Requ
 		return
 	}
 
+	// ADR-067 FR-003d — a revoked mount must not keep serving bytes through a
+	// preview token minted while it was attached.
+	//
+	// Workspace-wide, because a grant records the workspace and the work-tree-
+	// relative scope root and NOT which mount backs it, so the store cannot be
+	// asked "was this path inside the mount that just went away". The cost of
+	// over-revoking is a re-mint the SPA does transparently; the cost of
+	// under-revoking is an unauthenticated read grant over a folder the
+	// operator believes they just detached.
+	a.revokePreviewTokensForWorkspace(id)
+
 	if a.auditor != nil {
 		if aErr := a.auditor.Log(&audit.Entry{
 			Event:    "workspace.mount.delete",
