@@ -183,50 +183,6 @@ func packageChromeRootProbe() (string, ProbeStatus) {
 	return firstIssuePath, firstIssueStatus
 }
 
-// packageChromeRoot returns the usable package-Chrome root path, or "" when
-// no candidate has a valid integrity-manifested payload. Runtime callers use
-// this single-value form when they do not need the diagnostic classification.
-func packageChromeRoot() string {
-	root, status := packageChromeRootProbe()
-	if status != ProbeUsable {
-		return ""
-	}
-	return root
-}
-
-// PackageChromeRoot returns the runtime-computed package-Chrome root for the
-// running binary, or "" when no candidate layout contains a usable payload.
-func PackageChromeRoot() string {
-	return packageChromeRoot()
-}
-
-// PackageChromeRootProbe returns a candidate path and its classification.
-// Unlike PackageChromeRoot, this preserves the first existing invalid
-// candidate so doctor can emit WARN-BROWSER-008 for a symlinked or
-// world-writable root and WARN-BROWSER-009 for an empty payload root.
-func PackageChromeRootProbe() (string, ProbeStatus) {
-	if runtime.GOOS == "windows" {
-		windowsPackageChromeDeferralLogged.Do(func() {
-			logger.WarnCF(
-				"browser",
-				"Windows package-chrome path is deferred to Phase 4 (ADR-052); runtime falls through to managed download",
-				nil,
-			)
-		})
-		return "", ProbeUnsupportedOS
-	}
-	if packageChromeRootForTest != "" {
-		return packageChromeRootForTest, packageChromeRootCandidateStatus(packageChromeRootForTest)
-	}
-	for _, candidate := range packageChromeRootCandidates() {
-		status := packageChromeRootCandidateStatus(candidate)
-		if status != ProbeNotFound {
-			return candidate, status
-		}
-	}
-	return "", ProbeNotFound
-}
-
 var windowsPackageChromeDeferralLogged sync.Once
 
 func packageChromeRootCandidateStatus(candidate string) ProbeStatus {

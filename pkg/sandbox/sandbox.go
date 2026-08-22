@@ -799,24 +799,9 @@ func (sp *SeccompProgram) Mode() Mode {
 	return sp.mode
 }
 
-// Blocks returns true if the given syscall name is blocked by this program.
-func (sp *SeccompProgram) Blocks(syscall string) bool {
-	for _, sc := range sp.syscalls {
-		if sc.Name == syscall {
-			return true
-		}
-	}
-	return false
-}
-
 // BlockedSyscalls returns the list of blocked syscalls.
 func (sp *SeccompProgram) BlockedSyscalls() []BlockedSyscall {
 	return sp.syscalls
-}
-
-// UsesTSync returns true if the program uses SECCOMP_FILTER_FLAG_TSYNC (SEC-03).
-func (sp *SeccompProgram) UsesTSync() bool {
-	return sp.useTSync
 }
 
 // allowedEntry pairs a path with its permitted access flags.

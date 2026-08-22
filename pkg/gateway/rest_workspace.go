@@ -2,19 +2,15 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package gateway — workspace-read endpoint (..,
-// US-3).
+// Package gateway — shared workspace/preview security-header and
+// Content-Type helpers (buildWorkspaceCSP, setWorkspaceSecurityHeaders,
+// contentTypeForPath, resolveMainOrigin).
 //
-// GET /api/v1/workspace/{agent_id}/{path...}
-//
-// Auth: RequireSessionCookieOrBearer (authentication only — ownership-based
-// authorization was removed with the single-user model; see issue #470).
-//
-// Path guard: tools.ResolvePath (ADR-046 mandatory chokepoint, FR-003/FR-034).
-// Out-of-workspace → 403. Not-found → 404. Method other than GET → 405.
-//
-// Content-Type is derived from the file extension via an allow-list (FR-020a).
-// Unknown extensions are served as application/octet-stream.
+// These originally backed a GET /api/v1/workspace/{agent_id}/{path...}
+// endpoint (HandleWorkspace) that was built but never registered on any mux
+// (see issue #470) and was removed as dead code; the helpers themselves
+// survive because pkg/gateway/rest_preview.go's ADR-044 `/preview/` handlers
+// (the mechanism that superseded the workspace-read endpoint) still use them.
 //
 // Security headers :
 // - Referrer-Policy: no-referrer
@@ -28,18 +24,12 @@
 package gateway
 
 import (
-	"errors"
 	"fmt"
-	"io"
-	"io/fs"
-	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/fspolicy"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // workspaceStreamingThreshold is the file size boundary for buffered vs
@@ -159,193 +149,4 @@ func resolveMainOrigin(cfg *config.Config) string {
 		return fmt.Sprintf("%s://%s:%d", scheme, host, port)
 	}
 	return fmt.Sprintf("%s://%s", scheme, host)
-}
-
-// HandleWorkspace serves GET /api/v1/workspace/{agent_id}/{path...}.
-//
-// Route prefix: "/api/v1/workspace/". The handler strips the prefix and
-// extracts the first path segment as agent_id; the remainder is the file
-// path within the agent's workspace.
-//
-// This handler is registered via:
-//
-//	middleware.RequireSessionCookieOrBearer(getCfg)(http.HandlerFunc(a.HandleWorkspace))
-//
-// so the authenticated user is available via UserContextKey.
-func (a *restAPI) HandleWorkspace(w http.ResponseWriter, r *http.Request) {
-	// Method gate: workspace reads are GET only.
-	if r.Method != http.MethodGet {
-		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	// Parse agent_id and file path from the URL.
-	// URL shape: /api/v1/workspace/{agent_id}/{file_path...}
-	remainder := strings.TrimPrefix(r.URL.Path, "/api/v1/workspace/")
-	remainder = strings.TrimPrefix(remainder, "/")
-	if remainder == "" {
-		jsonErr(w, http.StatusBadRequest, "agent_id required")
-		return
-	}
-
-	slashIdx := strings.Index(remainder, "/")
-	var agentID, filePath string
-	if slashIdx == -1 {
-		agentID = remainder
-		filePath = ""
-	} else {
-		agentID = remainder[:slashIdx]
-		filePath = remainder[slashIdx+1:]
-	}
-
-	if err := validateEntityID(agentID); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid agent ID")
-		return
-	}
-
-	// Resolve authenticated user from context (set by RequireSessionCookieOrBearer).
-	user, _ := r.Context().Value(UserContextKey{}).(*config.UserConfig)
-	if user == nil {
-		jsonErr(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	// Resolve current config.
-	cfg := configFromContext(r.Context())
-	if cfg == nil {
-		cfg = a.agentLoop.GetConfig()
-	}
-
-	// Find the agent in config.
-	var agentCfg *config.AgentConfig
-	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].ID == agentID {
-			ac := cfg.Agents.List[i]
-			agentCfg = &ac
-			break
-		}
-	}
-	if agentCfg == nil {
-		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
-		return
-	}
-
-	// Ownership machinery removed (single-user model, see issue #470 for this
-	// handler's own unregistered status) — the sole remaining auth check is
-	// the "user == nil" guard above; if this route is ever wired up for real,
-	// its authorization needs to be reconsidered from scratch at that time.
-
-	// Resolve workspace path for this agent.
-	agentWorkspace, err := agentWorkspacePath(cfg, agentCfg.ID, agentCfg.Home, a.homePath)
-	if err != nil {
-		slog.Error("rest: HandleWorkspace: agentWorkspacePath failed",
-			"agent_id", agentID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not resolve agent workspace")
-		return
-	}
-
-	if filePath == "" {
-		jsonErr(w, http.StatusBadRequest, "file path required")
-		return
-	}
-
-	// Canonicalise and guard the requested path against the agent's workspace
-	// via ResolvePath (ADR-046 mandatory chokepoint, FR-003/FR-034) — the
-	// SAME resolver every path-taking tool routes through, replacing the
-	// retired tools.ValidateWorkspacePath/validatePathWithAllowPaths.
-	// restrict=true, no allow-list patterns (workspace only); this handler
-	// has no per-turn Workspace re-root, so turnWorkDir is always "".
-	policy, err := fspolicy.EffectiveFSPolicy(
-		r.Context(), agentWorkspace, "", true, config.OmnipusHomeDir(), agentID, "",
-	)
-	if err != nil {
-		slog.Error("rest: HandleWorkspace: failed to resolve filesystem policy",
-			"agent_id", agentID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not resolve filesystem policy")
-		return
-	}
-	handle, err := tools.ResolvePath(r.Context(), policy, "workspace_read", "", tools.FSOpRead, filePath)
-	if err != nil {
-		slog.Info("rest: HandleWorkspace: path rejected",
-			"agent_id", agentID, "path", filePath, "error", err)
-		// ErrOutsideScope covers both "outside workspace" and "symlink escapes
-		// workspace"; ErrCarveOut covers FR-017's carve-outs (including
-		// another agent's home directory — the case the retired
-		// isCrossAgentPath used to check) — both were 403s under the legacy
-		// validator and stay 403s here.
-		if errors.Is(err, tools.ErrOutsideScope) || errors.Is(err, tools.ErrCarveOut) {
-			jsonErr(w, http.StatusForbidden, fmt.Sprintf("access denied: %v", err))
-		} else {
-			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("invalid path: %v", err))
-		}
-		return
-	}
-	defer handle.Close()
-
-	// absPath is used ONLY for Content-Type detection and log lines below —
-	// PathHandle.RealPath's documented ONE exception to "never hand back a
-	// bare string" (advisory only; all actual I/O below goes through handle).
-	absPath, err := handle.RealPath()
-	if err != nil {
-		slog.Error("rest: HandleWorkspace: failed to resolve real path", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not resolve file path")
-		return
-	}
-
-	// Stat the file to determine streaming strategy.
-	info, err := handle.Stat()
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			jsonErr(w, http.StatusNotFound, "file not found")
-			return
-		}
-		slog.Error("rest: HandleWorkspace: stat failed", "path", absPath, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not stat file")
-		return
-	}
-	if info.IsDir() {
-		jsonErr(w, http.StatusBadRequest, "path is a directory; specify a file path")
-		return
-	}
-
-	if info.Size() <= workspaceStreamingThreshold {
-		// Buffered path: read into memory before setting any headers so that
-		// read errors can still return a proper HTTP error status.
-		data, readErr := handle.ReadFile()
-		if readErr != nil {
-			slog.Error("rest: HandleWorkspace: ReadFile failed", "path", absPath, "error", readErr)
-			jsonErr(w, http.StatusInternalServerError, "could not read file")
-			return
-		}
-		// Headers set only after successful read — status code is still settable.
-		setWorkspaceSecurityHeaders(w, resolveMainOrigin(cfg))
-		w.Header().Set("Content-Type", contentTypeForPath(absPath))
-		w.WriteHeader(http.StatusOK)
-		if _, writeErr := w.Write(data); writeErr != nil {
-			slog.Debug("rest: HandleWorkspace: write failed", "error", writeErr)
-		}
-		return
-	}
-
-	// Streaming path: open file BEFORE setting any response headers so that an
-	// open failure can still return a proper HTTP error status (not a silent 200
-	// with an empty body). Once WriteHeader is called the status code is frozen.
-	f, openErr := handle.Open()
-	if openErr != nil {
-		slog.Error("rest: HandleWorkspace: Open failed", "path", absPath, "error", openErr)
-		jsonErr(w, http.StatusInternalServerError, "could not open file")
-		return
-	}
-	defer func() {
-		if closeErr := f.Close(); closeErr != nil {
-			slog.Debug("rest: HandleWorkspace: file close error", "error", closeErr)
-		}
-	}()
-	// File is open — no more error paths before the response. Set headers now.
-	setWorkspaceSecurityHeaders(w, resolveMainOrigin(cfg))
-	w.Header().Set("Content-Type", contentTypeForPath(absPath))
-	w.WriteHeader(http.StatusOK)
-	if _, copyErr := io.Copy(w, f); copyErr != nil {
-		slog.Debug("rest: HandleWorkspace: io.Copy failed", "error", copyErr)
-	}
 }

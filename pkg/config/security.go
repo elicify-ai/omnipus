@@ -16,8 +16,8 @@ import (
 // This file provides:
 //   - SensitiveDataCache: runtime lookup for filtering credential values out of
 //     LLM responses and logs (used throughout the agent loop)
-//   - SecureString / SecureStrings: typed wrappers for credential values that
-//     are redacted on JSON serialization
+//   - SecureString: typed wrapper for credential values that is redacted on
+//     JSON serialization
 //
 // The old PicoClaw ".security.yml" credential-separation mechanism has been
 // removed. Credential separation is now handled exclusively by the Omnipus
@@ -114,7 +114,7 @@ func (sec *Config) collectSensitiveValues() []string {
 	return values
 }
 
-// collectSensitive recursively traverses the value and collects SecureString/SecureStrings values.
+// collectSensitive recursively traverses the value and collects SecureString values.
 func collectSensitive(v reflect.Value, values *[]string) {
 	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 		if v.IsNil() {
@@ -176,32 +176,6 @@ const (
 	notHereValue = "[NOT_HERE]"
 )
 
-// SecureStrings is a slice of SecureString.
-type SecureStrings []*SecureString
-
-// Values returns the resolved values.
-func (s *SecureStrings) Values() []string {
-	if s == nil {
-		return nil
-	}
-	keys := make([]string, len(*s))
-	for i, k := range *s {
-		keys[i] = k.String()
-	}
-	return unique(keys)
-}
-
-// SimpleSecureStrings builds a SecureStrings from plain string values.
-// Used by tests and by internal config construction.
-func SimpleSecureStrings(val ...string) SecureStrings {
-	val = unique(val)
-	vv := make(SecureStrings, len(val))
-	for i, s := range val {
-		vv[i] = NewSecureString(s)
-	}
-	return vv
-}
-
 // unique returns a new slice with duplicate elements removed.
 func unique[T comparable](input []T) []T {
 	m := make(map[T]struct{})
@@ -213,23 +187,6 @@ func unique[T comparable](input []T) []T {
 		}
 	}
 	return result
-}
-
-func (s SecureStrings) MarshalJSON() ([]byte, error) {
-	return []byte(notHere), nil
-}
-
-func (s *SecureStrings) UnmarshalJSON(value []byte) error {
-	if string(value) == notHere {
-		return nil
-	}
-	var v []*SecureString
-	err := json.Unmarshal(value, &v)
-	if err != nil {
-		return err
-	}
-	*s = v
-	return nil
 }
 
 // SecureString wraps a credential value. It is redacted on JSON output

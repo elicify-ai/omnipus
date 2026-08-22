@@ -10,45 +10,14 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
-// DownloadToFile streams an HTTP response body to a temporary file in small
-// chunks (~32KB), keeping peak memory usage constant regardless of file size.
-//
-// Parameters:
-//   - ctx:      context for cancellation/timeout
-//   - client:   HTTP client to use (caller controls timeouts, transport, etc.)
-//   - req:      fully prepared *http.Request (method, URL, headers, etc.)
-//   - maxBytes: maximum bytes to download; 0 means no limit
-//
-// Returns the path to the temporary file. The caller is responsible for
-// removing it when done (defer os.Remove(path)).
-//
-// On any error the temp file is cleaned up automatically.
-//
-// This performs a single request via client.Do — it does not retry on
-// transient failures (429/5xx). Use DownloadToFileWithRetry for that.
-func DownloadToFile(ctx context.Context, client *http.Client, req *http.Request, maxBytes int64) (string, error) {
-	req = req.WithContext(ctx)
-
-	logger.DebugCF("download", "Starting download", map[string]any{
-		"url":       req.URL.String(),
-		"max_bytes": maxBytes,
-	})
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
-	}
-
-	return streamResponseToTempFile(resp, maxBytes)
-}
-
-// DownloadToFileWithRetry behaves exactly like DownloadToFile, except the
+// DownloadToFileWithRetry streams an HTTP response body to a temporary file
+// in small chunks (~32KB), keeping peak memory usage constant regardless of
+// file size. It behaves exactly like a single-attempt download, except the
 // request is issued via DoRequestWithRetry — transient failures (HTTP 429
 // and 5xx) are retried with backoff before the response is streamed to disk.
 //
 // Use this for downloads from registries/services expected to rate-limit or
-// occasionally 5xx (e.g. skill-registry ZIP downloads); use DownloadToFile
-// for single-attempt fetches where retry semantics aren't desired.
+// occasionally 5xx (e.g. skill-registry ZIP downloads).
 func DownloadToFileWithRetry(
 	ctx context.Context,
 	client *http.Client,

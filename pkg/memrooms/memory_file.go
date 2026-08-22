@@ -54,19 +54,6 @@ const (
 	MemoryTypeNote      MemoryType = "note"
 )
 
-// ParseMemoryType validates a string into a MemoryType.
-func ParseMemoryType(s string) (MemoryType, error) {
-	switch MemoryType(s) {
-	case MemoryTypeDecision, MemoryTypeFact, MemoryTypeReference, MemoryTypeLesson,
-		MemoryTypePerson, MemoryTypeProject, MemoryTypeMOC, MemoryTypeNote:
-		return MemoryType(s), nil
-	}
-	return "", fmt.Errorf(
-		"invalid memory type %q; expected one of: decision, fact, reference, lesson, person, project, moc, note",
-		s,
-	)
-}
-
 // MemoryStatus is the closed 3-member enum for memory lifecycle status (FR-7.2).
 type MemoryStatus string
 

@@ -66,18 +66,3 @@ func getPrerequisite(channelType string) (PrerequisiteChecker, bool) {
 	f, ok := prerequisites[channelType]
 	return f, ok
 }
-
-// RegisteredFactoryNames returns the sorted names of every factory currently
-// registered. Exposed for the half-wired-channel regression guard in
-// pkg/gateway: any name passed to initChannel("name", ...) in manager.go MUST
-// resolve to a registered factory, otherwise the operator-visible config knob
-// is dead code at runtime (see issue #161).
-func RegisteredFactoryNames() []string {
-	factoriesMu.RLock()
-	defer factoriesMu.RUnlock()
-	names := make([]string, 0, len(factories))
-	for n := range factories {
-		names = append(names, n)
-	}
-	return names
-}

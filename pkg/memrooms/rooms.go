@@ -89,27 +89,6 @@ const (
 	RoomScopeBoth RoomScope = "both"
 )
 
-// ParseRoomScope parses a string into a RoomScope.
-// Accepts "private", "shared", "both"; returns an error on anything else.
-func ParseRoomScope(s string) (RoomScope, error) {
-	switch RoomScope(s) {
-	case RoomScopePrivate, RoomScopeShared, RoomScopeBoth:
-		return RoomScope(s), nil
-	case "":
-		return RoomScopePrivate, nil
-	}
-	return "", &InvalidRoomScopeError{s}
-}
-
-// InvalidRoomScopeError is returned when an unrecognized room scope string is supplied.
-type InvalidRoomScopeError struct {
-	Got string
-}
-
-func (e *InvalidRoomScopeError) Error() string {
-	return "invalid room scope " + e.Got + "; expected one of: private, shared, both"
-}
-
 // ResolveAgentPrivateRoom returns the Room for an agent's private room given the
 // agent's workspace directory (i.e., $OMNIPUS_HOME/agents/<id>/).
 //

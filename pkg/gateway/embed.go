@@ -61,14 +61,6 @@ func newSPAHandler() http.Handler {
 	return gzipHandler(spaHandler)
 }
 
-// HasSPA returns true if a SPA was embedded at build time.
-func HasSPA() bool {
-	if _, err := fs.Sub(spaFS, "spa"); err != nil {
-		return false
-	}
-	return true
-}
-
 // gzipPool reuses gzip writers to reduce allocation pressure.
 var gzipPool = sync.Pool{
 	New: func() any {

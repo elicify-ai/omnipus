@@ -1,9 +1,7 @@
 package auth
 
 import (
-	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -61,85 +59,10 @@ func GoogleAntigravityOAuthConfig() OAuthProviderConfig {
 	}
 }
 
-// GenerateState generates a random state string for OAuth CSRF protection.
-func GenerateState() (string, error) {
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(buf), nil
-}
-
 type deviceCodeResponse struct {
 	DeviceAuthID string
 	UserCode     string
 	Interval     int
-}
-
-// DeviceCodeInfo holds the device code information returned by the OAuth provider.
-type DeviceCodeInfo struct {
-	DeviceAuthID string `json:"device_auth_id"`
-	UserCode     string `json:"user_code"`
-	VerifyURL    string `json:"verify_url"`
-	Interval     int    `json:"interval"`
-}
-
-// RequestDeviceCode requests a device code from the OAuth provider.
-// Returns the info needed for the user to authenticate in a browser.
-func RequestDeviceCode(cfg OAuthProviderConfig) (*DeviceCodeInfo, error) {
-	reqBody, err := json.Marshal(map[string]string{
-		"client_id": cfg.ClientID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("marshaling device code request: %w", err)
-	}
-
-	resp, err := http.Post(
-		cfg.Issuer+"/api/accounts/deviceauth/usercode",
-		"application/json",
-		strings.NewReader(string(reqBody)),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("requesting device code: %w", err)
-	}
-	// Response body is fully drained (via io.ReadAll or a bounded LimitReader
-	// below); a Close error on an already-consumed HTTP response body has no
-	// effect on the parsed OAuth result.
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading device code response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("device code request failed: %s", string(body))
-	}
-
-	deviceResp, err := parseDeviceCodeResponse(body)
-	if err != nil {
-		return nil, fmt.Errorf("parsing device code response: %w", err)
-	}
-
-	if deviceResp.Interval < 1 {
-		deviceResp.Interval = 5
-	}
-
-	return &DeviceCodeInfo{
-		DeviceAuthID: deviceResp.DeviceAuthID,
-		UserCode:     deviceResp.UserCode,
-		VerifyURL:    cfg.Issuer + "/codex/device",
-		Interval:     deviceResp.Interval,
-	}, nil
-}
-
-// PollDeviceCodeOnce makes a single poll attempt to check if the user has authenticated.
-// Returns (credential, nil) on success, (nil, nil) if still pending, or (nil, err) on failure.
-func PollDeviceCodeOnce(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*AuthCredential, error) {
-	return pollDeviceCode(cfg, deviceAuthID, userCode)
 }
 
 func parseDeviceCodeResponse(body []byte) (deviceCodeResponse, error) {
@@ -185,70 +108,6 @@ func parseFlexibleInt(raw json.RawMessage) (int, error) {
 	}
 
 	return 0, fmt.Errorf("invalid integer value: %s", string(raw))
-}
-
-var (
-	errDeviceAuthPending = fmt.Errorf("authorization_pending")
-	errDeviceAuthDenied  = fmt.Errorf("access_denied")
-)
-
-func pollDeviceCode(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*AuthCredential, error) {
-	reqBody, err := json.Marshal(map[string]string{
-		"device_auth_id": deviceAuthID,
-		"user_code":      userCode,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("marshaling device token request: %w", err)
-	}
-
-	resp, err := http.Post(
-		cfg.Issuer+"/api/accounts/deviceauth/token",
-		"application/json",
-		strings.NewReader(string(reqBody)),
-	)
-	if err != nil {
-		return nil, err
-	}
-	// Response body is fully drained (via io.ReadAll or a bounded LimitReader
-	// below); a Close error on an already-consumed HTTP response body has no
-	// effect on the parsed OAuth result.
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		// Try to read the error body to distinguish pending vs denied. A
-		// partial/failed read still yields whatever bytes were read before
-		// the error; the substring check below degrades safely to "pending".
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
-		if readErr != nil {
-			_ = readErr
-		}
-		bodyStr := strings.ToLower(strings.TrimSpace(string(body)))
-		if strings.Contains(bodyStr, "access_denied") {
-			return nil, errDeviceAuthDenied
-		}
-		return nil, errDeviceAuthPending
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading device token response: %w", err)
-	}
-
-	var tokenResp struct {
-		AuthorizationCode string `json:"authorization_code"`
-		CodeChallenge     string `json:"code_challenge"`
-		CodeVerifier      string `json:"code_verifier"`
-	}
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return nil, err
-	}
-
-	redirectURI := cfg.Issuer + "/deviceauth/callback"
-	return ExchangeCodeForTokens(cfg, tokenResp.AuthorizationCode, tokenResp.CodeVerifier, redirectURI)
 }
 
 func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCredential, error) {

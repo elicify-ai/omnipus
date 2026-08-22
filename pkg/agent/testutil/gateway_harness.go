@@ -64,7 +64,8 @@ func RegisterGatewayRunner(fn func(context.Context, bool, string, string, bool) 
 //
 // Public API: URL, HTTPClient, Provider are exported fields. Use the getter
 // methods HomeDir(), Token(), and ConfigPath() to read the private fields.
-// Use SeedUser() to add users via the gateway's own locking mechanism.
+// Use SeedCLIToken() to provision a CLI bearer credential via the gateway's
+// own locking mechanism.
 type TestGateway struct {
 	// URL is the base URL of the running gateway, e.g. "http://127.0.0.1:54321".
 	URL string
@@ -612,127 +613,11 @@ func (g *TestGateway) Do(req *http.Request) (*http.Response, error) {
 	return g.HTTPClient.Do(req)
 }
 
-// SeedUser appends u to the gateway.users list in config.json on disk, then
-// POSTs /reload and polls until the gateway recognizes the new user.
-//
-// It uses a raw JSON read-modify-write cycle (the same approach the gateway's
-// safeUpdateConfigJSON uses) to avoid destroying SecureString values that would
-// be lost through a Go-struct round-trip. A sync.Mutex internal to SeedUser
-// serializes concurrent calls; for additional isolation, callers should avoid
-// racing SeedUser with direct config.json writes.
-//
-// ctx controls the maximum wait for reload propagation; use a context with a
-// reasonable deadline (5–10 s is typical for CI).
-//
-// beforeWrite, if non-nil, is called with the raw config map after the user
-// is appended but before the config is written to disk and reloaded. This lets
-// callers mutate fields such as DevModeBypass without needing a separate
-// write-reload round-trip. Example:
-//
-//	SeedUser(ctx, user, func(m map[string]any) {
-//		gw := m["gateway"].(map[string]any)
-//		gw["dev_mode_bypass"] = false
-//	})
-func (g *TestGateway) SeedUser(ctx context.Context, u config.UserConfig, beforeWrite func(map[string]any)) error {
-	// Read-modify-write the raw JSON to preserve SecureString values.
-	cfgPath := g.configPath
-	raw, err := os.ReadFile(cfgPath)
-	if err != nil {
-		return fmt.Errorf("SeedUser: read config: %w", err)
-	}
-	var m map[string]any
-	if err = json.Unmarshal(raw, &m); err != nil {
-		return fmt.Errorf("SeedUser: unmarshal config: %w", err)
-	}
-
-	gwSection, _ := m["gateway"].(map[string]any)
-	if gwSection == nil {
-		gwSection = map[string]any{}
-	}
-	users, _ := gwSection["users"].([]any)
-
-	// Marshal the new user as a generic map entry so it serializes cleanly
-	// alongside the existing users (which may already be map[string]any).
-	userBytes, err := json.Marshal(u)
-	if err != nil {
-		return fmt.Errorf("SeedUser: marshal user: %w", err)
-	}
-	var userMap map[string]any
-	if err = json.Unmarshal(userBytes, &userMap); err != nil {
-		return fmt.Errorf("SeedUser: re-unmarshal user: %w", err)
-	}
-	gwSection["users"] = append(users, userMap)
-	m["gateway"] = gwSection
-
-	// Allow caller to mutate the config before writing.
-	if beforeWrite != nil {
-		beforeWrite(m)
-	}
-
-	out, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return fmt.Errorf("SeedUser: marshal config: %w", err)
-	}
-
-	// Write to a temp file in the same directory then rename for atomicity.
-	tmpPath := cfgPath + ".seeduser.tmp"
-	if err = os.WriteFile(tmpPath, out, 0o600); err != nil {
-		return fmt.Errorf("SeedUser: write tmp config: %w", err)
-	}
-	if err = os.Rename(tmpPath, cfgPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("SeedUser: rename config: %w", err)
-	}
-
-	// Trigger a gateway reload so the in-memory config picks up the new user.
-	//
-	// No retry loop: this used to poll for up to 2s on 500 "reload already in
-	// progress", because the gateway's reload trigger rejected any request that
-	// arrived while another reload was running (e.g. onboarding's own reload via
-	// rest_onboarding.go::awaitReload). That trigger now COALESCES instead of
-	// rejecting — a mid-flight request is recorded and served by a follow-up
-	// reload that re-reads config from disk — so /reload answers 200 and the
-	// 500 this loop existed to absorb can no longer occur. Any non-200 here is
-	// now a genuine failure and must surface immediately rather than being
-	// retried for 2s and reported as something else.
-	reloadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.URL+"/reload", nil)
-	if err != nil {
-		return fmt.Errorf("SeedUser: build reload request: %w", err)
-	}
-	reloadReq.Header.Set("Origin", g.URL)
-	reloadResp, err := g.HTTPClient.Do(reloadReq)
-	if err != nil {
-		return fmt.Errorf("SeedUser: POST /reload: %w", err)
-	}
-	_ = reloadResp.Body.Close()
-	if reloadResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("SeedUser: POST /reload returned %d", reloadResp.StatusCode)
-	}
-
-	// Poll with the new user's token (if non-empty) until the auth middleware
-	// accepts it (non-401), confirming reload has propagated.
-	if u.TokenHash.IsZero() {
-		// No token to probe with — caller must verify independently.
-		return nil
-	}
-
-	// We cannot reverse the hash here to get the plaintext token, so we can only
-	// verify the reload completed by polling the health endpoint with a small
-	// delay. The reload is triggered synchronously before this point; the in-memory
-	// swap happens asynchronously. A 300 ms grace period is sufficient for CI.
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("SeedUser: context canceled before reload propagated: %w", ctx.Err())
-	case <-time.After(300 * time.Millisecond):
-	}
-
-	return nil
-}
-
 // SeedCLIToken writes tok to gateway.cli_token in config.json on disk, then
 // POSTs /reload and polls until the gateway recognizes the new token.
 //
-// Mirrors SeedUser's raw JSON read-modify-write cycle (preserves SecureString
+// Uses the same raw JSON read-modify-write cycle as the gateway's
+// safeUpdateConfigJSON (preserves SecureString
 // values) but targets the dedicated Gateway.CLIToken slot instead of the
 // human-account Gateway.Users list — the CLI's machine-only bearer credential
 // is checked as a distinct principal from the human account (see

@@ -108,22 +108,6 @@ type CompileResult struct {
 	Rejection *FeasibilityRejection
 }
 
-// Compiled reports whether r represents a successful compile and returns the
-// compiled goal — a defensive accessor (fix-wave finding 6(f)) for
-// consumers that would otherwise dereference r.Goal directly and trust the
-// "exactly one of Goal/Rejection is set" invariant compileGoalIntent's
-// return paths currently uphold but do not enforce at the type level. A
-// nil-check-free `res.Goal` deref at a consumer is one accidental future
-// producer bug away from a nil-pointer panic; Compiled() collapses both the
-// Rejection-set and the Goal-nil cases into a single, ordinary "not
-// compiled" false return.
-func (r CompileResult) Compiled() (*CompiledGoal, bool) {
-	if r.Rejection != nil || r.Goal == nil {
-		return nil, false
-	}
-	return r.Goal, true
-}
-
 // --- Co-located marker parser (B2/Gate-2: parser + teaching fragment) -------
 //
 // The compiler accepts free-form intent AND optional inline markers that pin a

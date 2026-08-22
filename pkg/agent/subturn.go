@@ -126,7 +126,7 @@ type subTurnRuntimeConfig struct {
 //	    SystemPrompt: "Analyze this code",
 //	    Async: false,  // Result returned immediately
 //	}
-//	result, err := SpawnSubTurn(ctx, cfg)
+//	result, err := spawner.SpawnSubTurn(ctx, cfg) // spawner is a tools.SubTurnSpawner
 //	// Use result directly here
 //	processResult(result)
 //
@@ -137,7 +137,7 @@ type subTurnRuntimeConfig struct {
 //	    SystemPrompt: "Background analysis",
 //	    Async: true,  // Result delivered to channel
 //	}
-//	result, err := SpawnSubTurn(ctx, cfg)
+//	result, err := spawner.SpawnSubTurn(ctx, cfg) // spawner is a tools.SubTurnSpawner
 //	// Result also available in parent's pendingResults channel
 //	// Parent turn will poll and process it in a later iteration
 type SubTurnConfig struct {
@@ -386,12 +386,6 @@ func WithAgentLoop(ctx context.Context, al *AgentLoop) context.Context {
 	return context.WithValue(ctx, agentLoopKey, al)
 }
 
-// AgentLoopFromContext retrieves AgentLoop from context
-func AgentLoopFromContext(ctx context.Context) *AgentLoop {
-	al, _ := ctx.Value(agentLoopKey).(*AgentLoop)
-	return al
-}
-
 // ====================== Helper Functions ======================
 
 // resolveDelegateSoul returns the soul (system-prompt text) of the configured
@@ -562,26 +556,6 @@ func (s *AgentLoopSpawner) MarkPendingDelegateSpawn(sessionID, channel, chatID s
 		return
 	}
 	s.al.cancelPreArm.markPendingSpawn(time.Now(), keys...)
-}
-
-// SpawnSubTurn is the exported entry point for tools to spawn sub-turns.
-// It retrieves AgentLoop and parent turnState from context and delegates to spawnSubTurn.
-func SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*tools.ToolResult, error) {
-	al := AgentLoopFromContext(ctx)
-	if al == nil {
-		return nil, errors.New(
-			"AgentLoop not found in context - ensure context is properly initialized",
-		)
-	}
-
-	parentTS := turnStateFromContext(ctx)
-	if parentTS == nil {
-		return nil, errors.New(
-			"parent turnState not found in context - cannot spawn sub-turn outside of a turn",
-		)
-	}
-
-	return spawnSubTurn(ctx, al, parentTS, cfg)
 }
 
 func spawnSubTurn(

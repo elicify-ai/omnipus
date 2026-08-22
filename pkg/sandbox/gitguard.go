@@ -255,32 +255,6 @@ func (g *GitGuard) Unprotect(workDir string) {
 	g.mu.Unlock()
 }
 
-// ProtectedWorkdirs returns a snapshot of the registered work dirs (canonical).
-func (g *GitGuard) ProtectedWorkdirs() []string {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	out := make([]string, 0, len(g.workdirs))
-	for d := range g.workdirs {
-		out = append(out, d)
-	}
-	return out
-}
-
-// ProtectedGitDir returns the protected .git path for a work dir
-// ("<workDir>/.git"), canonicalized the same way Protect stores it. It does not
-// require the dir to be registered — it is a pure path helper for callers.
-func ProtectedGitDir(workDir string) string {
-	canon, err := canonicalizePath(workDir)
-	if err != nil {
-		if abs, aerr := filepath.Abs(workDir); aerr == nil {
-			canon = filepath.Clean(abs)
-		} else {
-			canon = filepath.Clean(workDir)
-		}
-	}
-	return filepath.Join(canon, ".git")
-}
-
 // resolvedGitDirs returns the canonical "<workDir>/.git" for every registered
 // work dir. Caller must not hold the lock.
 func (g *GitGuard) resolvedGitDirs() []string {
@@ -744,13 +718,6 @@ func UnprotectRepoWorkdir(workDir string) { DefaultGitGuard.Unprotect(workDir) }
 // InspectExecForGit vets argv/cwd against the process-wide DefaultGitGuard.
 func InspectExecForGit(argv []string, cwd string) ExecDecision {
 	return DefaultGitGuard.InspectExec(argv, cwd)
-}
-
-// CheckGitPathWrite vets a single file-write path against the process-wide
-// DefaultGitGuard (for cooperative file-tools; bash/exec goes through
-// hardened_exec.Run automatically).
-func CheckGitPathWrite(path string) ExecDecision {
-	return DefaultGitGuard.CheckGitPathWrite(path)
 }
 
 // IsProtectedGitPath reports whether path is at/under any protected .git on the

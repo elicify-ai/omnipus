@@ -129,14 +129,6 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
-func CopyFile(src, dst string, perm os.FileMode) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return fmt.Errorf("fileutil: read source file %q: %w", src, err)
-	}
-	return WriteFileAtomic(dst, data, perm)
-}
-
 // AppendJSONLSync appends a single JSON-encoded record followed by a newline
 // to a JSONL file, syncs the file, and returns — the exact durability
 // posture AppendJSONL callers need when the append is a linearization point

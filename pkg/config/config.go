@@ -2301,22 +2301,6 @@ func InstanceToGoogleChat(inst ChannelInstanceConfig) GoogleChatConfig {
 	}
 }
 
-// InstanceToEmail returns the EmailConfig for a ChannelInstanceConfig of type "email".
-// The password credential is stored encrypted via PasswordRef; only non-secret fields
-// are copied directly from the instance. The PasswordRef field in ChannelInstanceConfig
-// (shared with IRC) carries the email credential-store key.
-func InstanceToEmail(inst ChannelInstanceConfig) EmailConfig {
-	return EmailConfig{
-		Enabled:     inst.Enabled,
-		IMAPHost:    inst.IMAPHost,
-		IMAPPort:    inst.IMAPPort,
-		SMTPHost:    inst.SMTPHost,
-		SMTPPort:    inst.SMTPPort,
-		Username:    inst.EmailUsername,
-		PasswordRef: inst.PasswordRef,
-	}
-}
-
 // GroupTriggerConfig controls when the bot responds in group chats.
 type GroupTriggerConfig struct {
 	MentionOnly bool     `json:"mention_only,omitempty"`

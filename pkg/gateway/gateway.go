@@ -773,26 +773,11 @@ func (e *SandboxBootError) Unwrap() error {
 	return e.Err
 }
 
-// Run starts the gateway runtime using the configuration loaded from configPath.
-// It installs OS signal handlers (SIGINT, SIGTERM) and blocks until one fires,
-// then delegates to RunContext for the actual boot and serve logic.
-// Zero behavior change from the caller's perspective — the CLI entry point
-// continues to call Run unchanged.
-//
-// For Sprint-J options (--sandbox), call RunWithOptions instead.
-func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) error {
-	return RunWithOptions(RunOptions{
-		Debug:             debug,
-		HomePath:          homePath,
-		ConfigPath:        configPath,
-		AllowEmptyStartup: allowEmptyStartup,
-	})
-}
-
-// RunWithOptions is the Sprint-J entry point. Handles the same boot flow as
-// Run but accepts the expanded RunOptions struct (including SandboxMode).
-// Installs OS signal handlers the same way Run does, then delegates to
-// RunContextWithOptions.
+// RunWithOptions is the Sprint-J entry point. Handles the gateway boot flow,
+// accepting the expanded RunOptions struct (including SandboxMode). Installs
+// OS signal handlers (SIGINT, SIGTERM) and blocks until one fires, then
+// delegates to RunContextWithOptions. This is the CLI entry point
+// (cmd/omnipus/internal/gateway/command.go).
 func RunWithOptions(opts RunOptions) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -813,9 +798,9 @@ func RunWithOptions(opts RunOptions) error {
 }
 
 // RunContext is the context-cancellable entry point for the gateway runtime.
-// Run is a thin signal-driven wrapper around this function. Tests call RunContext
-// directly with a context they control, enabling in-process integration testing
-// without signal wiring.
+// RunWithOptions is a thin signal-driven wrapper around this function (via
+// RunContextWithOptions). Tests call RunContext directly with a context they
+// control, enabling in-process integration testing without signal wiring.
 //
 // The caller is responsible for canceling ctx when the gateway should shut down.
 // RunContext blocks until ctx is canceled or a fatal error occurs, then performs

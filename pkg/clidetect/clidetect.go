@@ -28,7 +28,6 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -64,16 +63,6 @@ var cliBinaries = map[string]string{
 	"claude-code": "claude",
 	"codex":       "codex",
 	"opencode":    "opencode",
-}
-
-// SupportedCLIs returns the recognized cli identifiers in deterministic order.
-func SupportedCLIs() []string {
-	out := make([]string, 0, len(cliBinaries))
-	for k := range cliBinaries {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // Detect resolves a single cli. An unknown cli returns the zero Result
