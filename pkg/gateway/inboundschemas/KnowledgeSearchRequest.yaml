@@ -1,0 +1,57 @@
+title: KnowledgeSearchRequest
+description: >
+  Request body for POST /api/v1/library/{workspace_id}/knowledge/search
+  (ADR-067 D18). Relevance search over one knowledge base's index.
+
+  Scope is not negotiable by the caller beyond naming a collection: the
+  gateway restricts every search to knowledge bases mounted into the calling
+  agent's workspace (FR-052), and a collection outside that scope yields an
+  EMPTY result set rather than a permission error (FR-053) — so a caller can
+  never use the error channel to probe for collections it may not see.
+type: object
+additionalProperties: false
+required:
+  - query
+  - collection_id
+properties:
+  query:
+    type: string
+    minLength: 1
+    maxLength: 1024
+    description: Free-text relevance query.
+    example: "landlock seccomp fallback"
+  collection_id:
+    type: string
+    minLength: 1
+    description: >
+      The KnowledgeBaseInfo.collection_id to search. Exactly one — a
+      knowledge base is exactly one mounted folder and no query resolves
+      across two collections (FR-026).
+    example: "kb_3d1c9a7e5b2f4806"
+  limit:
+    type: integer
+    minimum: 1
+    default: 20
+    description: >
+      Maximum hits to return. A value above the server cap is CLAMPED, not
+      rejected, and the clamp is reported on the response
+      (limit_clamped / limit_applied, FR-037).
+    example: 20
+  offset:
+    type: integer
+    minimum: 0
+    default: 0
+    description: Number of hits to skip, for paging through a large result set.
+    example: 0
+  kinds:
+    type: array
+    items:
+      type: string
+      enum:
+        - note
+        - attachment
+    description: >
+      Restrict hits to these entry kinds. Omitted means both. Attachments are
+      indexed by FILENAME AND PATH ONLY — their contents are never opened
+      (FR-039a) — so an attachment hit never carries a body excerpt.
+    example: ["note"]

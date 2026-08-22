@@ -25,7 +25,9 @@
     "type-check": "tsc -b --noEmit",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "check:vitest-coverage": "node scripts/check-vitest-coverage.mjs",
+    "check:vitest-coverage:self-test": "node scripts/check-vitest-coverage.mjs --self-test"
   },
   "peerDependencies": {
     "react": "^19.0.0",

@@ -1,0 +1,72 @@
+title: KnowledgeGraphEdge
+description: >
+  One directed link between two nodes, plus how it was resolved. Resolution
+  order is fixed (FR-040): exact path, then unique basename, then shortest
+  path, then lexicographic order. An ambiguous basename still RESOLVES by
+  that rule and is ALSO reported as ambiguous (FR-041) — resolving it is not
+  a licence to stay quiet about it.
+type: object
+additionalProperties: false
+required:
+  - from_path
+  - to_path
+  - resolution
+  - ambiguous
+properties:
+  from_path:
+    type: string
+    minLength: 1
+    description: Collection-relative path of the note containing the link.
+    example: "index.md"
+  to_path:
+    type: string
+    minLength: 1
+    description: >
+      Collection-relative path of the resolved target, or the normalised link
+      text when resolution is "unresolved".
+    example: "architecture/sandboxing.md"
+  link_text:
+    type: string
+    description: The link target exactly as written in the source note.
+    example: "sandboxing"
+  alias:
+    type: string
+    description: Display alias, for an aliased wikilink such as [[note|alias]].
+    example: "how sandboxing works"
+  heading:
+    type: string
+    description: Heading fragment, for a heading link such as [[note#Section]].
+    example: "Section"
+  resolution:
+    type: string
+    enum:
+      - exact_path
+      - unique_basename
+      - shortest_path
+      - lexicographic
+      - unresolved
+    description: >
+      Which rule in the FR-040 ladder produced to_path. "unresolved" means no
+      target matched, or the target lay outside the collection root — in
+      which case the target was NOT read (FR-043).
+    example: "unique_basename"
+  ambiguous:
+    type: boolean
+    description: >
+      True when more than one file matched and the tie-break decided it. The
+      alternatives are listed in candidates.
+    example: false
+  candidates:
+    type: array
+    items:
+      type: string
+    description: >
+      Every path that matched, in tie-break order, when ambiguous is true.
+      Present only then.
+    example: ["notes/setup.md", "archive/setup.md"]
+  embed:
+    type: boolean
+    description: >
+      True when the link is a transclusion (![[note]]) rather than a plain
+      link.
+    example: false

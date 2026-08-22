@@ -1,0 +1,54 @@
+title: LibraryPreviewTokenRequest
+description: >
+  Request body for POST /api/v1/library/preview-token (FR-003f).
+  Mints a short-lived, path-bearing credential that lets a SANDBOXED
+  document — which has an opaque origin and can therefore send neither the
+  SameSite=Strict session cookie nor an Authorization header — load itself
+  and its relative subresources (FR-003a, FR-003).
+
+  Minting is authenticated and NEVER WIDENS ACCESS (FR-003b): the caller
+  must already be able to read the path, and the token is scoped to one
+  workspace and one path. There is no whole-workspace scope, by design.
+
+  No workspace_id in the route: this is a mint operation over the Library as
+  a whole, matching the existing /library/move and /library/copy shape, and
+  the workspace it applies to is part of the request rather than the path.
+type: object
+additionalProperties: false
+required:
+  - workspace_id
+  - path
+  - scope
+properties:
+  workspace_id:
+    type: string
+    minLength: 1
+    description: Workspace whose work tree contains path.
+    example: "ws_7f3a"
+  path:
+    type: string
+    minLength: 1
+    description: >
+      Workspace-relative path, forward-slash separated. For scope "file",
+      the file itself. For scope "bundle", the DIRECTORY that is the bundle
+      root. Never absolute and never containing a ".." segment; resolution
+      is confined to the workspace work tree at the syscall boundary, not
+      merely by string cleaning (FR-003i).
+    example: "reports/q3"
+  scope:
+    type: string
+    enum:
+      - file
+      - bundle
+    description: >
+      "file" grants exactly one file. "bundle" grants one directory and its
+      descendants, which is what an HTML page with its own stylesheets,
+      scripts, fonts and media needs. Nothing wider exists (FR-003b).
+    example: "bundle"
+  entry_path:
+    type: string
+    description: >
+      For scope "bundle", the bundle-root-relative document to open first,
+      used to build the returned url. Defaults to "index.html". Ignored for
+      scope "file".
+    example: "index.html"

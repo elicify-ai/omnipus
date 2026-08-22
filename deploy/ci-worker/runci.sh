@@ -453,12 +453,17 @@ _e2e_build() {
   # across 5 shards — every one of them `browserType.launch: Executable doesn't exist`,
   # each "failing" in 4-6ms because no browser ever started. Infra noise indistinguishable
   # from a real regression at a glance.
-  log "e2e: install matching chromium"
+  log "e2e: install matching browsers (chromium, firefox, webkit)"
   local pw=./node_modules/.bin/playwright
   [ -x "$pw" ] || { echo "e2e: $pw missing or not executable — npm ci must run first" >&2; return 1; }
   # chromium_headless_shell is a SEPARATE download from chromium; the suite launches it
   # directly, so installing only `chromium` leaves the headless path broken.
-  "$pw" install chromium chromium-headless-shell || return 1
+  # ADR-067: the preview-isolation specs run on three engines, so all three must be
+  # present here or they fail with the same `Executable doesn't exist` signature this
+  # block already documents — 48 phantom failures in 4-6ms, indistinguishable from a
+  # real regression. Installing more than the suite needs is cheap; installing less is
+  # the failure mode above.
+  "$pw" install chromium chromium-headless-shell firefox webkit || return 1
 
   # A zero exit above is NOT proof the right browser landed — installing the WRONG
   # revision also exits 0. Verify the exact revision this runner resolves is on disk,
@@ -467,7 +472,7 @@ _e2e_build() {
     const fs = require("fs"), path = require("path");
     const root = process.env.PLAYWRIGHT_BROWSERS_PATH || "";
     const want = require("./node_modules/playwright-core/browsers.json").browsers
-      .filter(b => b.name === "chromium" || b.name === "chromium-headless-shell");
+      .filter(b => ["chromium", "chromium-headless-shell", "firefox", "webkit"].includes(b.name));
     let bad = 0;
     for (const b of want) {
       const dir = path.join(root, `${b.name.replace(/-/g, "_")}-${b.revision}`);

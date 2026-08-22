@@ -40,7 +40,7 @@ RUN go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.7.0 &
 # immediate on a freshly-deployed machine. Image grows by ~500 MB; acceptable for a CI box.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN npm install -g @playwright/test@1.49.0 playwright@1.49.0 \
-    && playwright install chromium \
+    && playwright install chromium firefox webkit \
     && rm -rf /root/.npm /tmp/*
 
 # Persistent caches live on the mounted volume (/cache) so repeat runs are fast.

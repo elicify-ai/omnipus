@@ -901,6 +901,40 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 		for _, name := range []string{"create_plan", "execute_plan", "run_task", "inspect_session"} {
 			out[name] = struct{}{}
 		}
+		// ADR-067 D17 (FR-070/FR-071) — the nine knowledge-base tool names are
+		// unioned in explicitly here for the same reason, and under the same
+		// rule, as the ADR-052 four directly above: independent of their
+		// pkg/knowledge implementation landing, so the tool-policy coverage
+		// universe (config.ValidateToolPolicyCoverage /
+		// RepairIncompleteToolPolicyCoverage) recognizes them from the
+		// config-seeding side immediately. Mirrors pkg/coreagent/core.go's
+		// allStaticToolNames literal-for-literal
+		// (TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog
+		// enforces the two stay in sync). Idempotent once the real
+		// implementations register themselves (same names, no duplicate
+		// entries in a set).
+		//
+		// Why the union is load-bearing rather than tidy-up: BOTH the coverage
+		// validator and the load-path repair derive their gap list from this
+		// map, and neither reports anything for a name it does not contain. A
+		// knowledge tool seeded in pkg/config/defaults.go and
+		// pkg/coreagent/core.go but MISSING here is invisible to both — the
+		// boot check passes, no gap is reported, and any test asserting "no
+		// knowledge_* entry was backfilled to deny" passes vacuously because
+		// nothing could ever have been backfilled. That is FR-071's failure
+		// mode, and it is silent: repairAndValidateToolPolicyCoverage below
+		// repairs BEFORE it validates, so a genuine gap ships as an explicit
+		// deny plus one WARN line rather than aborting boot.
+		for _, name := range []string{
+			// Retrieval.
+			"knowledge_search", "knowledge_graph",
+			// Authoring.
+			"knowledge_create", "knowledge_link", "knowledge_set_property",
+			"knowledge_append_section", "knowledge_tasks",
+			"knowledge_move", "knowledge_rename",
+		} {
+			out[name] = struct{}{}
+		}
 		knownBuiltinToolNamesCache = out
 	})
 	return knownBuiltinToolNamesCache

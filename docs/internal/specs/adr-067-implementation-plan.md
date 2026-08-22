@@ -227,3 +227,42 @@ suite locally — this project's notes are explicit that the full suite can exha
 - **Form filling and signing** — proven feasible, deliberately out of scope for this release.
 - **The vault design note** — the project's own design-first rule wants it before the ADR is
   ratified. This plan builds against a `Proposed` ADR.
+
+---
+
+## 7. Wave 1 — outcome (2026-08-22)
+
+Six agents, zero errors. **The vitest gap was far larger than the spec knew: 117 of 427 SPA test
+files (27%) matched no group and ran nowhere** — not the 11 the spec cited, and including all 57
+workspace tests. Two configured patterns pointed at deleted directories, not one.
+
+Landed and independently verified:
+
+| Work | Evidence |
+|---|---|
+| Six rebuilt vitest groups + a coverage guard job | Guard exits **1** on an injected orphan file, **0** clean — verified without a pipe, since `exit=$?` after `\| tail` reports the pipe's status |
+| Playwright matrix, five projects at `retries: 0` | Config written; specs are skipping placeholders until later waves |
+| Windows `pathsafe` job, `GOOS=windows go vet` | Cross-compiles clean locally; **the job itself has never executed** — no Windows machine here |
+| Contracts: 18 schemas, generated Go + TS | `make verify-contracts` exits 0, no drift |
+| Tool-policy seeding, all three catalogs | Five named tests pass; positive control shown red |
+
+**Assigned and fixed by the orchestrator:** the Fly CI worker installed Chromium only, so the
+three-engine isolation projects would have failed with `Executable doesn't exist` — the exact
+phantom-failure signature `runci.sh` already documents from 2026-07-26. Both the Dockerfile and
+the runtime install now cover chromium, firefox and webkit, and the revision check verifies all
+of them rather than two.
+
+> **Outstanding on that fix, and it is not cosmetic:** the worker image must be **rebuilt and
+> redeployed** for the Dockerfile change to take effect, and **WebKit needs Debian packages the
+> image does not carry** (gstreamer, libwoff, libenchant among them). Until both are done, the
+> e2e gate on that worker cannot run WebKit. Tracked here rather than assumed.
+
+**Process lesson, recorded because it cost real time.** Two file collisions and one broken build
+came from the orchestrator **messaging an agent while it was still running** — which resumes it
+into a second concurrent execution. Both instances then wrote the same files, each experiencing
+the other as an intruder: identical substance, different prose. **Do not message a running
+agent.** Feedback waits for completion or goes into the next brief.
+
+A `go test` was also OOM-killed mid-mutation, leaving a shared file altered for about a minute.
+The agent restored from a checksummed backup and declined to retry — so one mutation is
+**argued, not measured**, and says so.

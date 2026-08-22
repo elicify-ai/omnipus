@@ -183,6 +183,89 @@ type LibraryEntryMount = {
 type LibraryUploadResponse = {
   entries: Array<LibraryEntry>;
 };
+type KnowledgeSearchResponse = {
+  collection_id: string;
+  hits: Array<KnowledgeSearchHit>;
+  incompleteness: KnowledgeSearchIncompleteness;
+  limit_applied: number;
+  limit_clamped: boolean;
+  limit_requested?: number | undefined;
+};
+type KnowledgeSearchHit = {
+  path: string;
+  title: string;
+  score: number;
+  kind: "note" | "attachment";
+  excerpt?: string | undefined;
+  excerpt_unavailable?:
+    | ("file_unreadable" | "file_missing" | "match_moved" | "budget_exhausted")
+    | undefined;
+  byte_offset?: number | undefined;
+};
+type KnowledgeSearchIncompleteness = {
+  complete: boolean;
+  total_known: boolean;
+  statement: string;
+  indexed_files?: number | undefined;
+  total_files?: number | undefined;
+};
+type KnowledgeGraphResponse = {
+  collection_id: string;
+  kind: "links" | "backlinks" | "unresolved" | "orphans" | "neighbourhood";
+  source_path?: string | undefined;
+  nodes: Array<KnowledgeGraphNode>;
+  edges: Array<KnowledgeGraphEdge>;
+  skipped: Array<KnowledgeGraphSkip>;
+  truncated: boolean;
+  hop_limit_applied?: number | undefined;
+  node_limit_applied?: number | undefined;
+};
+type KnowledgeGraphNode = {
+  path: string;
+  title?: string | undefined;
+  exists: boolean;
+};
+type KnowledgeGraphEdge = {
+  from_path: string;
+  to_path: string;
+  link_text?: string | undefined;
+  alias?: string | undefined;
+  heading?: string | undefined;
+  resolution:
+    | "exact_path"
+    | "unique_basename"
+    | "shortest_path"
+    | "lexicographic"
+    | "unresolved";
+  ambiguous: boolean;
+  candidates?: Array<string> | undefined;
+  embed?: boolean | undefined;
+};
+type KnowledgeGraphSkip = {
+  path: string;
+  reason:
+    | "symlink"
+    | "outside_root"
+    | "unreadable"
+    | "not_addressable"
+    | "node_limit"
+    | "hop_limit";
+  detail?: string | undefined;
+};
+type KnowledgeOutline = {
+  path: string;
+  is_knowledge_base: boolean;
+  collection_id?: string | undefined;
+  headings: Array<KnowledgeOutlineHeading>;
+  frontmatter_malformed?: boolean | undefined;
+};
+type KnowledgeOutlineHeading = {
+  level: number;
+  text: string;
+  slug: string;
+  line?: number | undefined;
+  byte_offset?: number | undefined;
+};
 type Agent = {
   id: string;
   name: string;
@@ -3164,6 +3247,174 @@ export const LibraryRenameRequest = z.object({
   from: z.string().min(1),
   to: z.string().min(1),
 });
+export const LibraryPreviewTokenRequest = z.object({
+  workspace_id: z.string().min(1),
+  path: z.string().min(1),
+  scope: z.enum(["file", "bundle"]),
+  entry_path: z.string().optional(),
+});
+export const LibraryPreviewTokenResponse = z.object({
+  token: z.string().min(43).max(43),
+  url: z.string().min(1),
+  expires_at: z.string().datetime({ offset: true }),
+  expires_in_seconds: z.number().int().gte(1),
+  scope: z.enum(["file", "bundle"]),
+  scope_root: z.string().min(1),
+  workspace_id: z.string().min(1).optional(),
+});
+export const LibraryInlineDisposition = z.object({
+  path: z.string().min(1),
+  extension: z.string(),
+  disposition: z.enum(["inline", "attachment"]),
+  content_type: z.string().min(1),
+  renderer: z.enum([
+    "html",
+    "pdf",
+    "audio",
+    "video",
+    "image",
+    "markdown",
+    "text",
+    "code",
+    "none",
+  ]),
+  requires_sandbox: z.boolean(),
+  reason: z.string().optional(),
+});
+export const KnowledgeBaseInfo = z.object({
+  workspace_id: z.string().min(1),
+  root_path: z.string().min(1),
+  is_knowledge_base: z.boolean(),
+  marker: z.enum(["omnipus_vault", "obsidian", "none"]),
+  collection_id: z.string().min(1).optional(),
+  display_name: z.string().optional(),
+  template_path: z.string().optional(),
+  detection_error: z
+    .object({
+      code: z.enum([
+        "marker_unreadable",
+        "root_unreadable",
+        "root_missing",
+        "not_a_directory",
+      ]),
+      message: z.string().min(1),
+    })
+    .optional(),
+});
+export const KnowledgeMountConflictError = z.object({
+  error: z.string().min(1),
+  code: z.literal("knowledge_mount_conflict"),
+  existing_root_path: z.string().min(1),
+  requested_root_path: z.string().min(1),
+  existing_collection_id: z.string().optional(),
+});
+export const KnowledgeSearchRequest = z.object({
+  query: z.string().min(1).max(1024),
+  collection_id: z.string().min(1),
+  limit: z.number().int().gte(1).optional().default(20),
+  offset: z.number().int().gte(0).optional().default(0),
+  kinds: z.array(z.enum(["note", "attachment"])).optional(),
+});
+export const KnowledgeSearchHit: z.ZodType<KnowledgeSearchHit> = z.object({
+  path: z.string().min(1),
+  title: z.string(),
+  score: z.number(),
+  kind: z.enum(["note", "attachment"]),
+  excerpt: z.string().optional(),
+  excerpt_unavailable: z
+    .enum([
+      "file_unreadable",
+      "file_missing",
+      "match_moved",
+      "budget_exhausted",
+    ])
+    .optional(),
+  byte_offset: z.number().int().gte(0).optional(),
+});
+export const KnowledgeSearchIncompleteness: z.ZodType<KnowledgeSearchIncompleteness> =
+  z.object({
+    complete: z.boolean(),
+    total_known: z.boolean(),
+    statement: z.string().min(1),
+    indexed_files: z.number().int().gte(0).optional(),
+    total_files: z.number().int().gte(0).optional(),
+  });
+export const KnowledgeSearchResponse: z.ZodType<KnowledgeSearchResponse> =
+  z.object({
+    collection_id: z.string().min(1),
+    hits: z.array(KnowledgeSearchHit),
+    incompleteness: KnowledgeSearchIncompleteness,
+    limit_applied: z.number().int().gte(1),
+    limit_clamped: z.boolean(),
+    limit_requested: z.number().int().gte(1).optional(),
+  });
+export const KnowledgeGraphNode: z.ZodType<KnowledgeGraphNode> = z.object({
+  path: z.string().min(1),
+  title: z.string().optional(),
+  exists: z.boolean(),
+});
+export const KnowledgeGraphEdge: z.ZodType<KnowledgeGraphEdge> = z.object({
+  from_path: z.string().min(1),
+  to_path: z.string().min(1),
+  link_text: z.string().optional(),
+  alias: z.string().optional(),
+  heading: z.string().optional(),
+  resolution: z.enum([
+    "exact_path",
+    "unique_basename",
+    "shortest_path",
+    "lexicographic",
+    "unresolved",
+  ]),
+  ambiguous: z.boolean(),
+  candidates: z.array(z.string()).optional(),
+  embed: z.boolean().optional(),
+});
+export const KnowledgeGraphSkip: z.ZodType<KnowledgeGraphSkip> = z.object({
+  path: z.string().min(1),
+  reason: z.enum([
+    "symlink",
+    "outside_root",
+    "unreadable",
+    "not_addressable",
+    "node_limit",
+    "hop_limit",
+  ]),
+  detail: z.string().optional(),
+});
+export const KnowledgeGraphResponse: z.ZodType<KnowledgeGraphResponse> =
+  z.object({
+    collection_id: z.string().min(1),
+    kind: z.enum([
+      "links",
+      "backlinks",
+      "unresolved",
+      "orphans",
+      "neighbourhood",
+    ]),
+    source_path: z.string().optional(),
+    nodes: z.array(KnowledgeGraphNode),
+    edges: z.array(KnowledgeGraphEdge),
+    skipped: z.array(KnowledgeGraphSkip),
+    truncated: z.boolean(),
+    hop_limit_applied: z.number().int().gte(1).optional(),
+    node_limit_applied: z.number().int().gte(1).optional(),
+  });
+export const KnowledgeOutlineHeading: z.ZodType<KnowledgeOutlineHeading> =
+  z.object({
+    level: z.number().int().gte(1).lte(6),
+    text: z.string(),
+    slug: z.string().min(1),
+    line: z.number().int().gte(1).optional(),
+    byte_offset: z.number().int().gte(0).optional(),
+  });
+export const KnowledgeOutline: z.ZodType<KnowledgeOutline> = z.object({
+  path: z.string().min(1),
+  is_knowledge_base: z.boolean(),
+  collection_id: z.string().min(1).optional(),
+  headings: z.array(KnowledgeOutlineHeading),
+  frontmatter_malformed: z.boolean().optional(),
+});
 export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
   z.object({
     from_agent: z.string().min(1),
@@ -3373,6 +3624,13 @@ export const CliValidateResponse = z.object({
 });
 export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
   LoginResponse;
+export const KnowledgeConflictError = z.object({
+  error: z.string().min(1),
+  code: z.literal("knowledge_version_conflict"),
+  path: z.string().min(1),
+  expected_version: z.string().optional(),
+  actual_version: z.string().optional(),
+});
 export const AgentSession = z
   .object({
     id: z.string(),
@@ -5721,6 +5979,308 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
   },
   {
+    method: "get",
+    path: "/library/:workspace_id/inline-disposition",
+    alias: "getLibraryInlineDisposition",
+    description: `Returns the server&#x27;s own answer for one file: allow-listed for inline display or not, the extension-derived Content-Type it will be served with, which SPA renderer should draw it, and whether drawing it makes the browser execute it (ADR-067 D15).
+
+Exists so the SPA never re-derives any of that from the filename. The allow-list and the extension-to-type table are compiled into the binary and are the single source of truth (FR-015a, FR-015b); a second copy in TypeScript would be a second answer, and the two would disagree the first time an extension was added to one of them.
+
+Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if path does not exist or names a directory.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: LibraryInlineDisposition,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/knowledge",
+    alias: "getKnowledgeBaseInfo",
+    description: `Marker-based detection (ADR-067 FR-020, FR-021): a folder is a knowledge base when its root contains .omnipus-vault/ or .obsidian/. File CONTENT is never read to decide this.
+
+Returns 200 with is_knowledge_base&#x3D;false for an ordinary folder — that is an answer, not an error. A marker that exists but cannot be read is reported through detection_error rather than silently downgrading the folder to ordinary (E-9).
+
+Carries no index counts. Index progress is a streaming state pushed over the WebSocket as knowledge_index_progress (FR-080); polling this endpoint for it is the mistake that contract is written to prevent.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: KnowledgeBaseInfo,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `A second knowledge-base root was requested for a workspace that already has one. A knowledge base is exactly one mounted folder (FR-026); the body names both roots.
+`,
+        schema: KnowledgeMountConflictError,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/knowledge/graph",
+    alias: "getKnowledgeGraph",
+    description: `One operation serves all five graph queries (FR-051) because they differ only in which subgraph is selected, not in what a link is.
+
+Link resolution follows a fixed ladder — exact path, unique basename, shortest path, lexicographic (FR-040) — and an ambiguous basename is resolved by that rule AND reported as ambiguous (FR-041): resolving it is not a licence to stay quiet about it. A link with no match, or one whose target lies outside the collection root, is reported unresolved and the target is not read (FR-042, FR-043). Symbolic links are skipped and reported rather than followed (FR-044), which is also how a symlink loop terminates.
+
+Every query is bounded by hop count and node count (FR-054) and reports its own truncation, so a small graph is never mistaken for a clipped one.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "collection_id",
+        type: "Query",
+        schema: z.string(),
+      },
+      {
+        name: "kind",
+        type: "Query",
+        schema: z.enum([
+          "links",
+          "backlinks",
+          "unresolved",
+          "orphans",
+          "neighbourhood",
+        ]),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+      {
+        name: "hops",
+        type: "Query",
+        schema: z.number().int().gte(1).optional(),
+      },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().gte(1).optional(),
+      },
+    ],
+    response: KnowledgeGraphResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/knowledge/outline",
+    alias: "getKnowledgeOutline",
+    description: `Returns the heading outline that drives the reading rail, for ANY markdown file — whether or not it belongs to a knowledge base (FR-062). An outline is parsed from the one file in hand and needs no index, which is exactly why search and backlinks stay knowledge-base-only: those do need one. The is_knowledge_base field tells the client which other rail panels it may offer.
+
+Headings come back as a FLAT list in document order with nesting carried by level, not as a tree — a document that skips from H1 to H3 has one honest representation that way, where a tree would force the server to invent an intermediate heading the author never wrote.
+
+Frontmatter that is not valid YAML is reported through frontmatter_malformed; the file is still outlined and still indexed for body text (E-17).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: KnowledgeOutline,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/knowledge/search",
+    alias: "searchKnowledgeBase",
+    description: `Returns ranked hits with path, title and a matched excerpt (FR-050), AND — in the same response — the incompleteness statement qualifying them (FR-035). A caller cannot obtain results without also obtaining the statement, which is the point: a partial answer that looks whole is worse than no answer.
+
+The excerpt is re-read from the file at query time and never stored in the index (FR-050a), so it always matches disk. When the re-read cannot be done — the file moved, became unreadable, or the latency budget ran out — the hit is still returned with path and title and a machine-readable excerpt_unavailable reason. Never a fabricated excerpt; never a silently dropped result.
+
+A limit above the server cap is clamped and the clamp is reported (FR-037). A collection outside the caller&#x27;s workspace scope returns an EMPTY result set rather than a permission error (FR-052, FR-053), so the error channel cannot be used to probe for collections the caller may not see. POST rather than GET because a query plus its filters does not belong in a URL that lands in request logs.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: KnowledgeSearchRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: KnowledgeSearchResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "post",
     path: "/library/:workspace_id/mkdir",
     alias: "createLibraryDirectory",
@@ -5966,6 +6526,62 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 409,
         description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/preview-token",
+    alias: "mintLibraryPreviewToken",
+    description: `Mints the path-bearing credential a SANDBOXED preview needs (ADR-067 FR-003a, FR-003f). A document served under the isolation policy has an opaque origin, so it can send neither the SameSite&#x3D;Strict session cookie nor an Authorization header on its own &lt;link&gt;, &lt;script&gt;, font or media requests — without this token an HTML bundle simply cannot load its own subresources.
+
+Minting is authenticated and never widens access: the caller must already be able to read the path, and the grant covers one workspace and one path only — a single file, or one bundle root and its descendants (FR-003b). The token lives 15 minutes and is also invalidated by logout, mount revoke, and deletion or move of the named path (FR-003d).
+
+Re-minting returns a NEW token and invalidates the previous one (FR-003m). There is no renewal endpoint.
+
+Both this endpoint and the /library-preview/&lt;token&gt;/&lt;path&gt; serving prefix are rate-limited, and a session may hold at most 8 live tokens; a 9th mint request is refused with 429 (FR-003k).
+
+The serving prefix itself is deliberately NOT in this document: it is a bare, token-authenticated path on the main listener (ADR-044 shape) that returns file bytes or an HTML error page, carries no JSON contract, and answers GET and HEAD only — every other method is 405 with Allow: GET, HEAD (FR-003j).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: LibraryPreviewTokenRequest,
+      },
+    ],
+    response: LibraryPreviewTokenResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
       {
@@ -10563,6 +11179,21 @@ export const JudgeVerdictFrame = z
   })
   .strict();
 
+export const KnowledgeIndexProgressFrame = z
+  .object({
+    type: z.literal("knowledge_index_progress"),
+    collection_id: z.string().min(1),
+    workspace_id: z.string().min(1),
+    phase: z.enum(["enumerating", "indexing", "idle", "failed"]),
+    indexed_files: z.number().int().min(0),
+    total_known: z.boolean(),
+    total_files: z.number().int().min(0).optional(),
+    skipped_files: z.number().int().min(0).optional(),
+    error: z.string().optional(),
+    updated_at: z.string().optional(),
+  })
+  .strict();
+
 export const ErrorPayload = z
   .object({
     llm_error: LLMError,
@@ -10632,6 +11263,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   LoopStatusFrame,
   PlanStatusFrame,
   JudgeVerdictFrame,
+  KnowledgeIndexProgressFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

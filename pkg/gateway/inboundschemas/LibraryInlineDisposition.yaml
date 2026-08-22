@@ -1,0 +1,88 @@
+title: LibraryInlineDisposition
+description: >
+  Inline-preview metadata for one Library file (ADR-067 D18 / D15).
+  Returned by GET /api/v1/library/{workspace_id}/inline-disposition?path=...
+
+  Answers one question before the SPA commits to a renderer: may these bytes
+  be shown inline, as what type, and does showing them require the sandboxed
+  token path? The SPA MUST NOT re-derive any of this from the file
+  extension — the allow-list and the extension-to-type table are compiled
+  into the binary and are the single source of truth (FR-015a, FR-015b), and
+  a second copy in TypeScript is a second answer waiting to disagree.
+
+  This describes the file, not a grant. Fetching the bytes inline still
+  requires a preview token (LibraryPreviewTokenRequest).
+type: object
+additionalProperties: false
+required:
+  - path
+  - extension
+  - disposition
+  - content_type
+  - renderer
+  - requires_sandbox
+properties:
+  path:
+    type: string
+    minLength: 1
+    description: Workspace-relative path this answer describes.
+    example: "reports/q3/index.html"
+  extension:
+    type: string
+    description: >
+      Lower-cased filename extension including the leading dot, or empty for
+      a file with none.
+    example: ".html"
+  disposition:
+    type: string
+    enum:
+      - inline
+      - attachment
+    description: >
+      "inline" when the extension is on the allow-list; "attachment" for
+      everything else, which is the default and includes .pdf (FR-008).
+      A .pdf is an attachment deliberately: PDF.js fetches its bytes from
+      the AUTHENTICATED Library endpoint, so a PDF never becomes a browser
+      document at all.
+    example: "inline"
+  content_type:
+    type: string
+    minLength: 1
+    description: >
+      The Content-Type the server will send, derived from the EXTENSION and
+      never from sniffing the content (FR-015). Compiled into the binary, so
+      the same build answers identically on every machine (FR-015b).
+      "application/octet-stream" for an extension not in the table.
+    example: "text/html"
+  renderer:
+    type: string
+    enum:
+      - html
+      - pdf
+      - audio
+      - video
+      - image
+      - markdown
+      - text
+      - code
+      - none
+    description: >
+      Which SPA surface should draw this file. "html" is the only value that
+      makes the bytes a browser document; every other value names a
+      component Omnipus draws itself, which is why only "html" is sandboxed
+      (FR-014, FR-017). "none" means offer a download card.
+    example: "html"
+  requires_sandbox:
+    type: boolean
+    description: >
+      True when displaying this file makes the browser execute it, so it MUST
+      be loaded through the preview-token path inside a sandboxed iframe.
+      True for renderer "html" — including .svg, which is scriptable when
+      opened as a document. False for everything Omnipus renders itself.
+    example: true
+  reason:
+    type: string
+    description: >
+      Why disposition is "attachment", when it is. Present only then, so the
+      SPA can say something better than a blank download card.
+    example: "extension not on the inline allow-list"

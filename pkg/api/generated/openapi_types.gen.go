@@ -1610,6 +1610,417 @@ func (e JudgeVerdictScope) Valid() bool {
 	}
 }
 
+// Defines values for KnowledgeBaseInfoDetectionErrorCode.
+const (
+	MarkerUnreadable KnowledgeBaseInfoDetectionErrorCode = "marker_unreadable"
+	NotADirectory    KnowledgeBaseInfoDetectionErrorCode = "not_a_directory"
+	RootMissing      KnowledgeBaseInfoDetectionErrorCode = "root_missing"
+	RootUnreadable   KnowledgeBaseInfoDetectionErrorCode = "root_unreadable"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeBaseInfoDetectionErrorCode enum.
+func (e KnowledgeBaseInfoDetectionErrorCode) Valid() bool {
+	switch e {
+	case MarkerUnreadable:
+		return true
+	case NotADirectory:
+		return true
+	case RootMissing:
+		return true
+	case RootUnreadable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeBaseInfoMarker.
+const (
+	None         KnowledgeBaseInfoMarker = "none"
+	Obsidian     KnowledgeBaseInfoMarker = "obsidian"
+	OmnipusVault KnowledgeBaseInfoMarker = "omnipus_vault"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeBaseInfoMarker enum.
+func (e KnowledgeBaseInfoMarker) Valid() bool {
+	switch e {
+	case None:
+		return true
+	case Obsidian:
+		return true
+	case OmnipusVault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeConflictErrorCode.
+const (
+	KnowledgeVersionConflict KnowledgeConflictErrorCode = "knowledge_version_conflict"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeConflictErrorCode enum.
+func (e KnowledgeConflictErrorCode) Valid() bool {
+	switch e {
+	case KnowledgeVersionConflict:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeGraphEdgeResolution.
+const (
+	KnowledgeGraphEdgeResolutionExactPath      KnowledgeGraphEdgeResolution = "exact_path"
+	KnowledgeGraphEdgeResolutionLexicographic  KnowledgeGraphEdgeResolution = "lexicographic"
+	KnowledgeGraphEdgeResolutionShortestPath   KnowledgeGraphEdgeResolution = "shortest_path"
+	KnowledgeGraphEdgeResolutionUniqueBasename KnowledgeGraphEdgeResolution = "unique_basename"
+	KnowledgeGraphEdgeResolutionUnresolved     KnowledgeGraphEdgeResolution = "unresolved"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeGraphEdgeResolution enum.
+func (e KnowledgeGraphEdgeResolution) Valid() bool {
+	switch e {
+	case KnowledgeGraphEdgeResolutionExactPath:
+		return true
+	case KnowledgeGraphEdgeResolutionLexicographic:
+		return true
+	case KnowledgeGraphEdgeResolutionShortestPath:
+		return true
+	case KnowledgeGraphEdgeResolutionUniqueBasename:
+		return true
+	case KnowledgeGraphEdgeResolutionUnresolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeGraphResponseEdgesResolution.
+const (
+	KnowledgeGraphResponseEdgesResolutionExactPath      KnowledgeGraphResponseEdgesResolution = "exact_path"
+	KnowledgeGraphResponseEdgesResolutionLexicographic  KnowledgeGraphResponseEdgesResolution = "lexicographic"
+	KnowledgeGraphResponseEdgesResolutionShortestPath   KnowledgeGraphResponseEdgesResolution = "shortest_path"
+	KnowledgeGraphResponseEdgesResolutionUniqueBasename KnowledgeGraphResponseEdgesResolution = "unique_basename"
+	KnowledgeGraphResponseEdgesResolutionUnresolved     KnowledgeGraphResponseEdgesResolution = "unresolved"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeGraphResponseEdgesResolution enum.
+func (e KnowledgeGraphResponseEdgesResolution) Valid() bool {
+	switch e {
+	case KnowledgeGraphResponseEdgesResolutionExactPath:
+		return true
+	case KnowledgeGraphResponseEdgesResolutionLexicographic:
+		return true
+	case KnowledgeGraphResponseEdgesResolutionShortestPath:
+		return true
+	case KnowledgeGraphResponseEdgesResolutionUniqueBasename:
+		return true
+	case KnowledgeGraphResponseEdgesResolutionUnresolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeGraphResponseKind.
+const (
+	KnowledgeGraphResponseKindBacklinks     KnowledgeGraphResponseKind = "backlinks"
+	KnowledgeGraphResponseKindLinks         KnowledgeGraphResponseKind = "links"
+	KnowledgeGraphResponseKindNeighbourhood KnowledgeGraphResponseKind = "neighbourhood"
+	KnowledgeGraphResponseKindOrphans       KnowledgeGraphResponseKind = "orphans"
+	KnowledgeGraphResponseKindUnresolved    KnowledgeGraphResponseKind = "unresolved"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeGraphResponseKind enum.
+func (e KnowledgeGraphResponseKind) Valid() bool {
+	switch e {
+	case KnowledgeGraphResponseKindBacklinks:
+		return true
+	case KnowledgeGraphResponseKindLinks:
+		return true
+	case KnowledgeGraphResponseKindNeighbourhood:
+		return true
+	case KnowledgeGraphResponseKindOrphans:
+		return true
+	case KnowledgeGraphResponseKindUnresolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeGraphResponseSkippedReason.
+const (
+	KnowledgeGraphResponseSkippedReasonHopLimit       KnowledgeGraphResponseSkippedReason = "hop_limit"
+	KnowledgeGraphResponseSkippedReasonNodeLimit      KnowledgeGraphResponseSkippedReason = "node_limit"
+	KnowledgeGraphResponseSkippedReasonNotAddressable KnowledgeGraphResponseSkippedReason = "not_addressable"
+	KnowledgeGraphResponseSkippedReasonOutsideRoot    KnowledgeGraphResponseSkippedReason = "outside_root"
+	KnowledgeGraphResponseSkippedReasonSymlink        KnowledgeGraphResponseSkippedReason = "symlink"
+	KnowledgeGraphResponseSkippedReasonUnreadable     KnowledgeGraphResponseSkippedReason = "unreadable"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeGraphResponseSkippedReason enum.
+func (e KnowledgeGraphResponseSkippedReason) Valid() bool {
+	switch e {
+	case KnowledgeGraphResponseSkippedReasonHopLimit:
+		return true
+	case KnowledgeGraphResponseSkippedReasonNodeLimit:
+		return true
+	case KnowledgeGraphResponseSkippedReasonNotAddressable:
+		return true
+	case KnowledgeGraphResponseSkippedReasonOutsideRoot:
+		return true
+	case KnowledgeGraphResponseSkippedReasonSymlink:
+		return true
+	case KnowledgeGraphResponseSkippedReasonUnreadable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeGraphSkipReason.
+const (
+	KnowledgeGraphSkipReasonHopLimit       KnowledgeGraphSkipReason = "hop_limit"
+	KnowledgeGraphSkipReasonNodeLimit      KnowledgeGraphSkipReason = "node_limit"
+	KnowledgeGraphSkipReasonNotAddressable KnowledgeGraphSkipReason = "not_addressable"
+	KnowledgeGraphSkipReasonOutsideRoot    KnowledgeGraphSkipReason = "outside_root"
+	KnowledgeGraphSkipReasonSymlink        KnowledgeGraphSkipReason = "symlink"
+	KnowledgeGraphSkipReasonUnreadable     KnowledgeGraphSkipReason = "unreadable"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeGraphSkipReason enum.
+func (e KnowledgeGraphSkipReason) Valid() bool {
+	switch e {
+	case KnowledgeGraphSkipReasonHopLimit:
+		return true
+	case KnowledgeGraphSkipReasonNodeLimit:
+		return true
+	case KnowledgeGraphSkipReasonNotAddressable:
+		return true
+	case KnowledgeGraphSkipReasonOutsideRoot:
+		return true
+	case KnowledgeGraphSkipReasonSymlink:
+		return true
+	case KnowledgeGraphSkipReasonUnreadable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeMountConflictErrorCode.
+const (
+	KnowledgeMountConflict KnowledgeMountConflictErrorCode = "knowledge_mount_conflict"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeMountConflictErrorCode enum.
+func (e KnowledgeMountConflictErrorCode) Valid() bool {
+	switch e {
+	case KnowledgeMountConflict:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeSearchHitExcerptUnavailable.
+const (
+	KnowledgeSearchHitExcerptUnavailableBudgetExhausted KnowledgeSearchHitExcerptUnavailable = "budget_exhausted"
+	KnowledgeSearchHitExcerptUnavailableFileMissing     KnowledgeSearchHitExcerptUnavailable = "file_missing"
+	KnowledgeSearchHitExcerptUnavailableFileUnreadable  KnowledgeSearchHitExcerptUnavailable = "file_unreadable"
+	KnowledgeSearchHitExcerptUnavailableMatchMoved      KnowledgeSearchHitExcerptUnavailable = "match_moved"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeSearchHitExcerptUnavailable enum.
+func (e KnowledgeSearchHitExcerptUnavailable) Valid() bool {
+	switch e {
+	case KnowledgeSearchHitExcerptUnavailableBudgetExhausted:
+		return true
+	case KnowledgeSearchHitExcerptUnavailableFileMissing:
+		return true
+	case KnowledgeSearchHitExcerptUnavailableFileUnreadable:
+		return true
+	case KnowledgeSearchHitExcerptUnavailableMatchMoved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeSearchHitKind.
+const (
+	KnowledgeSearchHitKindAttachment KnowledgeSearchHitKind = "attachment"
+	KnowledgeSearchHitKindNote       KnowledgeSearchHitKind = "note"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeSearchHitKind enum.
+func (e KnowledgeSearchHitKind) Valid() bool {
+	switch e {
+	case KnowledgeSearchHitKindAttachment:
+		return true
+	case KnowledgeSearchHitKindNote:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeSearchRequestKinds.
+const (
+	KnowledgeSearchRequestKindsAttachment KnowledgeSearchRequestKinds = "attachment"
+	KnowledgeSearchRequestKindsNote       KnowledgeSearchRequestKinds = "note"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeSearchRequestKinds enum.
+func (e KnowledgeSearchRequestKinds) Valid() bool {
+	switch e {
+	case KnowledgeSearchRequestKindsAttachment:
+		return true
+	case KnowledgeSearchRequestKindsNote:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeSearchResponseHitsExcerptUnavailable.
+const (
+	KnowledgeSearchResponseHitsExcerptUnavailableBudgetExhausted KnowledgeSearchResponseHitsExcerptUnavailable = "budget_exhausted"
+	KnowledgeSearchResponseHitsExcerptUnavailableFileMissing     KnowledgeSearchResponseHitsExcerptUnavailable = "file_missing"
+	KnowledgeSearchResponseHitsExcerptUnavailableFileUnreadable  KnowledgeSearchResponseHitsExcerptUnavailable = "file_unreadable"
+	KnowledgeSearchResponseHitsExcerptUnavailableMatchMoved      KnowledgeSearchResponseHitsExcerptUnavailable = "match_moved"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeSearchResponseHitsExcerptUnavailable enum.
+func (e KnowledgeSearchResponseHitsExcerptUnavailable) Valid() bool {
+	switch e {
+	case KnowledgeSearchResponseHitsExcerptUnavailableBudgetExhausted:
+		return true
+	case KnowledgeSearchResponseHitsExcerptUnavailableFileMissing:
+		return true
+	case KnowledgeSearchResponseHitsExcerptUnavailableFileUnreadable:
+		return true
+	case KnowledgeSearchResponseHitsExcerptUnavailableMatchMoved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeSearchResponseHitsKind.
+const (
+	KnowledgeSearchResponseHitsKindAttachment KnowledgeSearchResponseHitsKind = "attachment"
+	KnowledgeSearchResponseHitsKindNote       KnowledgeSearchResponseHitsKind = "note"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeSearchResponseHitsKind enum.
+func (e KnowledgeSearchResponseHitsKind) Valid() bool {
+	switch e {
+	case KnowledgeSearchResponseHitsKindAttachment:
+		return true
+	case KnowledgeSearchResponseHitsKindNote:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LibraryInlineDispositionDisposition.
+const (
+	LibraryInlineDispositionDispositionAttachment LibraryInlineDispositionDisposition = "attachment"
+	LibraryInlineDispositionDispositionInline     LibraryInlineDispositionDisposition = "inline"
+)
+
+// Valid indicates whether the value is a known member of the LibraryInlineDispositionDisposition enum.
+func (e LibraryInlineDispositionDisposition) Valid() bool {
+	switch e {
+	case LibraryInlineDispositionDispositionAttachment:
+		return true
+	case LibraryInlineDispositionDispositionInline:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LibraryInlineDispositionRenderer.
+const (
+	LibraryInlineDispositionRendererAudio    LibraryInlineDispositionRenderer = "audio"
+	LibraryInlineDispositionRendererCode     LibraryInlineDispositionRenderer = "code"
+	LibraryInlineDispositionRendererHtml     LibraryInlineDispositionRenderer = "html"
+	LibraryInlineDispositionRendererImage    LibraryInlineDispositionRenderer = "image"
+	LibraryInlineDispositionRendererMarkdown LibraryInlineDispositionRenderer = "markdown"
+	LibraryInlineDispositionRendererNone     LibraryInlineDispositionRenderer = "none"
+	LibraryInlineDispositionRendererPdf      LibraryInlineDispositionRenderer = "pdf"
+	LibraryInlineDispositionRendererText     LibraryInlineDispositionRenderer = "text"
+	LibraryInlineDispositionRendererVideo    LibraryInlineDispositionRenderer = "video"
+)
+
+// Valid indicates whether the value is a known member of the LibraryInlineDispositionRenderer enum.
+func (e LibraryInlineDispositionRenderer) Valid() bool {
+	switch e {
+	case LibraryInlineDispositionRendererAudio:
+		return true
+	case LibraryInlineDispositionRendererCode:
+		return true
+	case LibraryInlineDispositionRendererHtml:
+		return true
+	case LibraryInlineDispositionRendererImage:
+		return true
+	case LibraryInlineDispositionRendererMarkdown:
+		return true
+	case LibraryInlineDispositionRendererNone:
+		return true
+	case LibraryInlineDispositionRendererPdf:
+		return true
+	case LibraryInlineDispositionRendererText:
+		return true
+	case LibraryInlineDispositionRendererVideo:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LibraryPreviewTokenRequestScope.
+const (
+	LibraryPreviewTokenRequestScopeBundle LibraryPreviewTokenRequestScope = "bundle"
+	LibraryPreviewTokenRequestScopeFile   LibraryPreviewTokenRequestScope = "file"
+)
+
+// Valid indicates whether the value is a known member of the LibraryPreviewTokenRequestScope enum.
+func (e LibraryPreviewTokenRequestScope) Valid() bool {
+	switch e {
+	case LibraryPreviewTokenRequestScopeBundle:
+		return true
+	case LibraryPreviewTokenRequestScopeFile:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LibraryPreviewTokenResponseScope.
+const (
+	LibraryPreviewTokenResponseScopeBundle LibraryPreviewTokenResponseScope = "bundle"
+	LibraryPreviewTokenResponseScopeFile   LibraryPreviewTokenResponseScope = "file"
+)
+
+// Valid indicates whether the value is a known member of the LibraryPreviewTokenResponseScope enum.
+func (e LibraryPreviewTokenResponseScope) Valid() bool {
+	switch e {
+	case LibraryPreviewTokenResponseScopeBundle:
+		return true
+	case LibraryPreviewTokenResponseScopeFile:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for McpServerStatus.
 const (
 	McpServerStatusConnected    McpServerStatus = "connected"
@@ -3703,22 +4114,22 @@ func (e SessionCreateRequestType) Valid() bool {
 
 // Defines values for SessionDetailMessagesAttachmentsType.
 const (
-	SessionDetailMessagesAttachmentsTypeAudio SessionDetailMessagesAttachmentsType = "audio"
-	SessionDetailMessagesAttachmentsTypeFile  SessionDetailMessagesAttachmentsType = "file"
-	SessionDetailMessagesAttachmentsTypeImage SessionDetailMessagesAttachmentsType = "image"
-	SessionDetailMessagesAttachmentsTypeVideo SessionDetailMessagesAttachmentsType = "video"
+	Audio SessionDetailMessagesAttachmentsType = "audio"
+	File  SessionDetailMessagesAttachmentsType = "file"
+	Image SessionDetailMessagesAttachmentsType = "image"
+	Video SessionDetailMessagesAttachmentsType = "video"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesAttachmentsType enum.
 func (e SessionDetailMessagesAttachmentsType) Valid() bool {
 	switch e {
-	case SessionDetailMessagesAttachmentsTypeAudio:
+	case Audio:
 		return true
-	case SessionDetailMessagesAttachmentsTypeFile:
+	case File:
 		return true
-	case SessionDetailMessagesAttachmentsTypeImage:
+	case Image:
 		return true
-	case SessionDetailMessagesAttachmentsTypeVideo:
+	case Video:
 		return true
 	default:
 		return false
@@ -5624,6 +6035,33 @@ const (
 func (e DeleteCredential200JSONResponseBodyStatus) Valid() bool {
 	switch e {
 	case Removed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetKnowledgeGraphParamsKind.
+const (
+	GetKnowledgeGraphParamsKindBacklinks     GetKnowledgeGraphParamsKind = "backlinks"
+	GetKnowledgeGraphParamsKindLinks         GetKnowledgeGraphParamsKind = "links"
+	GetKnowledgeGraphParamsKindNeighbourhood GetKnowledgeGraphParamsKind = "neighbourhood"
+	GetKnowledgeGraphParamsKindOrphans       GetKnowledgeGraphParamsKind = "orphans"
+	GetKnowledgeGraphParamsKindUnresolved    GetKnowledgeGraphParamsKind = "unresolved"
+)
+
+// Valid indicates whether the value is a known member of the GetKnowledgeGraphParamsKind enum.
+func (e GetKnowledgeGraphParamsKind) Valid() bool {
+	switch e {
+	case GetKnowledgeGraphParamsKindBacklinks:
+		return true
+	case GetKnowledgeGraphParamsKindLinks:
+		return true
+	case GetKnowledgeGraphParamsKindNeighbourhood:
+		return true
+	case GetKnowledgeGraphParamsKindOrphans:
+		return true
+	case GetKnowledgeGraphParamsKindUnresolved:
 		return true
 	default:
 		return false
@@ -8375,6 +8813,400 @@ type JudgeVerdict struct {
 // JudgeVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type JudgeVerdictScope string
 
+// KnowledgeBaseInfo Identity and detection result for one knowledge base (ADR-067 D18). Returned by GET /api/v1/library/{workspace_id}/knowledge?path=... for any folder in the workspace work tree.
+// Detection is marker-based and never reads file CONTENT (FR-020, FR-021): a folder is a knowledge base when its root contains .omnipus-vault/ or .obsidian/. Omnipus writes only its own marker and never creates .obsidian/ (FR-022, FR-023).
+// Deliberately carries NO index counts or percentages. Index progress is a streaming state delivered over the WebSocket as KnowledgeIndexProgressFrame (FR-080); a caller that wants to know how far indexing has got subscribes, it does not poll this endpoint.
+type KnowledgeBaseInfo struct {
+	// CollectionId Stable opaque identifier for this collection, derived from the root's RESOLVED REAL PATH (FR-031). Two mounts of the same folder — into one workspace or several — share a collection_id and therefore one index; the index is reference-counted across those mounts. Absent when is_knowledge_base is false. Callers MUST treat this as opaque and MUST NOT parse a filesystem path out of it.
+	CollectionId *string `json:"collection_id,omitempty"`
+
+	// DetectionError Present when detection could not complete — a marker exists but could not be read, or the root itself could not be stat-ed. Detection then fails LOUDLY: is_knowledge_base carries the last known answer and the caller MUST surface this rather than treating the folder as ordinary (E-9).
+	DetectionError *struct {
+		// Code Machine-readable reason detection could not complete.
+		Code KnowledgeBaseInfoDetectionErrorCode `json:"code"`
+
+		// Message Human-readable explanation naming the path involved.
+		Message string `json:"message"`
+	} `json:"detection_error,omitempty"`
+
+	// DisplayName Human-readable collection name recorded in the marker (FR-024). Absent when the marker records none; the SPA then falls back to the root folder's own name.
+	DisplayName *string `json:"display_name,omitempty"`
+
+	// IsKnowledgeBase True when a marker directory was found at root_path. False means an ordinary folder — NOT "we could not tell"; an unreadable marker is reported through detection_error instead of being silently downgraded (E-9).
+	IsKnowledgeBase bool `json:"is_knowledge_base"`
+
+	// Marker Which marker directory established the result. "omnipus_vault" is .omnipus-vault/, "obsidian" is .obsidian/, "none" accompanies is_knowledge_base=false. When both markers are present the Omnipus one is reported.
+	Marker KnowledgeBaseInfoMarker `json:"marker"`
+
+	// RootPath Workspace-relative path of the collection root, forward-slash separated. Never absolute, never containing a ".." segment. Knowledge bases live inside the workspace tree, never at an arbitrary host path (FR-025).
+	RootPath string `json:"root_path"`
+
+	// TemplatePath Collection-relative path of the folder holding note templates, as recorded in the marker (FR-024). Reachable without enabling hidden files (FR-101). Absent when the collection defines no templates.
+	TemplatePath *string `json:"template_path,omitempty"`
+
+	// WorkspaceId Workspace whose work tree contains this folder.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// KnowledgeBaseInfoDetectionErrorCode Machine-readable reason detection could not complete.
+type KnowledgeBaseInfoDetectionErrorCode string
+
+// KnowledgeBaseInfoMarker Which marker directory established the result. "omnipus_vault" is .omnipus-vault/, "obsidian" is .obsidian/, "none" accompanies is_knowledge_base=false. When both markers are present the Omnipus one is reported.
+type KnowledgeBaseInfoMarker string
+
+// KnowledgeConflictError Typed 409 body for a refused knowledge-base write (ADR-067 D18 / D14). Returned when the version token a write carried does not match the file on disk (FR-106) — the file changed underneath the caller and applying the write would silently lose whatever changed.
+// The refusal NAMES THE PATH, because "conflict" without a path is not actionable in a collection of thousands of notes.
+// THE VERSION TOKEN, defined here because this is the type that carries it: an opaque string the server computes over the file's CONTENT — not its modification time, which is not sufficient on its own to detect an external change (FR-107). Every read that a write may follow returns the current token, every write MUST send back the token it read, and the server compares them. Callers MUST treat the token as opaque: never parse it, never compare it for ordering, never construct one. The encoding is the server's to change without a contract change, and a client that has not decoded it cannot be broken by that.
+// Shares the "error" and "code" fields of the standard ErrorResponse envelope so a generic error handler still works on it unchanged; the extra fields are what a conflict-aware handler uses.
+type KnowledgeConflictError struct {
+	// ActualVersion The opaque version token of the file as it now stands. A caller that re-reads, merges and retries sends this one back. Absent when the file has been deleted since.
+	ActualVersion *string `json:"actual_version,omitempty"`
+
+	// Code Machine-readable discriminator. A single value, so a client can branch on it without string matching on the message.
+	Code KnowledgeConflictErrorCode `json:"code"`
+
+	// Error Human-readable message, safe to display.
+	Error string `json:"error"`
+
+	// ExpectedVersion The opaque version token the caller sent — what it believed the file was. Absent when the caller sent none, which is itself a refusal (FR-106 requires a token on every write).
+	ExpectedVersion *string `json:"expected_version,omitempty"`
+
+	// Path Collection-relative path of the file that was NOT written.
+	Path string `json:"path"`
+}
+
+// KnowledgeConflictErrorCode Machine-readable discriminator. A single value, so a client can branch on it without string matching on the message.
+type KnowledgeConflictErrorCode string
+
+// KnowledgeGraphEdge One directed link between two nodes, plus how it was resolved. Resolution order is fixed (FR-040): exact path, then unique basename, then shortest path, then lexicographic order. An ambiguous basename still RESOLVES by that rule and is ALSO reported as ambiguous (FR-041) — resolving it is not a licence to stay quiet about it.
+type KnowledgeGraphEdge struct {
+	// Alias Display alias, for an aliased wikilink such as [[note|alias]].
+	Alias *string `json:"alias,omitempty"`
+
+	// Ambiguous True when more than one file matched and the tie-break decided it. The alternatives are listed in candidates.
+	Ambiguous bool `json:"ambiguous"`
+
+	// Candidates Every path that matched, in tie-break order, when ambiguous is true. Present only then.
+	Candidates *[]string `json:"candidates,omitempty"`
+
+	// Embed True when the link is a transclusion (![[note]]) rather than a plain link.
+	Embed *bool `json:"embed,omitempty"`
+
+	// FromPath Collection-relative path of the note containing the link.
+	FromPath string `json:"from_path"`
+
+	// Heading Heading fragment, for a heading link such as [[note#Section]].
+	Heading *string `json:"heading,omitempty"`
+
+	// LinkText The link target exactly as written in the source note.
+	LinkText *string `json:"link_text,omitempty"`
+
+	// Resolution Which rule in the FR-040 ladder produced to_path. "unresolved" means no target matched, or the target lay outside the collection root — in which case the target was NOT read (FR-043).
+	Resolution KnowledgeGraphEdgeResolution `json:"resolution"`
+
+	// ToPath Collection-relative path of the resolved target, or the normalised link text when resolution is "unresolved".
+	ToPath string `json:"to_path"`
+}
+
+// KnowledgeGraphEdgeResolution Which rule in the FR-040 ladder produced to_path. "unresolved" means no target matched, or the target lay outside the collection root — in which case the target was NOT read (FR-043).
+type KnowledgeGraphEdgeResolution string
+
+// KnowledgeGraphNode One note or attachment appearing in a KnowledgeGraphResponse. A node may describe a target that does not exist on disk — that is how an unresolved wikilink is represented (FR-042).
+type KnowledgeGraphNode struct {
+	// Exists False for the target of an unresolved link. The client MUST mark such a node visibly and MUST NOT navigate on click (FR-065).
+	Exists bool `json:"exists"`
+
+	// Path Collection-relative path, forward-slash separated. For a node that does not exist, this is the link text as written, normalised — it is NOT a path the caller may read.
+	Path string `json:"path"`
+
+	// Title Display title. Absent for a node that does not exist.
+	Title *string `json:"title,omitempty"`
+}
+
+// KnowledgeGraphResponse Response for GET /api/v1/library/{workspace_id}/knowledge/graph (ADR-067 D18). One shape serves all five graph queries (FR-051) — links, backlinks, unresolved, orphans and neighbourhood — because they differ only in which subgraph is selected, not in what a link is.
+// Every query is bounded (FR-054) and reports its own truncation, so a caller can always tell a small graph from a clipped one.
+type KnowledgeGraphResponse struct {
+	// CollectionId The collection queried.
+	CollectionId string `json:"collection_id"`
+
+	// Edges Every edge in this graph. Empty for "orphans". Always an array, never null.
+	Edges []WorkspaceDelegationEdge `json:"edges"`
+
+	// HopLimitApplied Maximum hops walked from source_path (FR-054). Present for "neighbourhood".
+	HopLimitApplied *int `json:"hop_limit_applied,omitempty"`
+
+	// Kind Which query produced this graph. "links" and "backlinks" are outbound and inbound edges of source_path; "unresolved" lists edges whose target does not exist; "orphans" lists nodes with no inbound edge; "neighbourhood" is the bounded subgraph around source_path.
+	Kind KnowledgeGraphResponseKind `json:"kind"`
+
+	// NodeLimitApplied Maximum nodes this response may contain (FR-054).
+	NodeLimitApplied *int `json:"node_limit_applied,omitempty"`
+
+	// Nodes Every node referenced by this graph, including non-existent link targets (exists=false). Always an array, never null.
+	Nodes []struct {
+		// Exists False for the target of an unresolved link. The client MUST mark such a node visibly and MUST NOT navigate on click (FR-065).
+		Exists bool `json:"exists"`
+
+		// Path Collection-relative path, forward-slash separated. For a node that does not exist, this is the link text as written, normalised — it is NOT a path the caller may read.
+		Path string `json:"path"`
+
+		// Title Display title. Absent for a node that does not exist.
+		Title *string `json:"title,omitempty"`
+	} `json:"nodes"`
+
+	// Skipped Paths the walk did not follow, with reasons. Always an array, never null — an empty array is a positive statement that nothing was skipped.
+	Skipped []struct {
+		// Detail Human-readable explanation, safe to display.
+		Detail *string `json:"detail,omitempty"`
+
+		// Path Collection-relative path that was skipped.
+		Path string `json:"path"`
+
+		// Reason "symlink" — a symbolic link, skipped and reported rather than followed (FR-044); this is also how a symlink loop terminates (E-8). "outside_root" — the resolved target lay outside the collection root and was not read (FR-043). "unreadable" — permissions or I/O error; an evicted or unreadable file fails loudly and is never indexed as empty (FR-111). "not_addressable" — the name cannot be represented on this platform. "node_limit" / "hop_limit" — the neighbourhood bound was reached (FR-054).
+		Reason KnowledgeGraphResponseSkippedReason `json:"reason"`
+	} `json:"skipped"`
+
+	// SourcePath The note the query was about. Required in practice for links, backlinks and neighbourhood; absent for unresolved and orphans, which are collection-wide.
+	SourcePath *string `json:"source_path,omitempty"`
+
+	// Truncated True when a bound stopped the walk before it was exhausted, so this graph is a clipped view. The bounds that applied are in hop_limit_applied and node_limit_applied.
+	Truncated bool `json:"truncated"`
+}
+
+// KnowledgeGraphResponseEdgesResolution Which rule in the FR-040 ladder produced to_path. "unresolved" means no target matched, or the target lay outside the collection root — in which case the target was NOT read (FR-043).
+type KnowledgeGraphResponseEdgesResolution string
+
+// KnowledgeGraphResponseKind Which query produced this graph. "links" and "backlinks" are outbound and inbound edges of source_path; "unresolved" lists edges whose target does not exist; "orphans" lists nodes with no inbound edge; "neighbourhood" is the bounded subgraph around source_path.
+type KnowledgeGraphResponseKind string
+
+// KnowledgeGraphResponseSkippedReason "symlink" — a symbolic link, skipped and reported rather than followed (FR-044); this is also how a symlink loop terminates (E-8). "outside_root" — the resolved target lay outside the collection root and was not read (FR-043). "unreadable" — permissions or I/O error; an evicted or unreadable file fails loudly and is never indexed as empty (FR-111). "not_addressable" — the name cannot be represented on this platform. "node_limit" / "hop_limit" — the neighbourhood bound was reached (FR-054).
+type KnowledgeGraphResponseSkippedReason string
+
+// KnowledgeGraphSkip One path the walk deliberately did not follow, and why. Reported rather than omitted: a file the system cannot address must be visible to the caller, never silently absent (FR-112).
+type KnowledgeGraphSkip struct {
+	// Detail Human-readable explanation, safe to display.
+	Detail *string `json:"detail,omitempty"`
+
+	// Path Collection-relative path that was skipped.
+	Path string `json:"path"`
+
+	// Reason "symlink" — a symbolic link, skipped and reported rather than followed (FR-044); this is also how a symlink loop terminates (E-8). "outside_root" — the resolved target lay outside the collection root and was not read (FR-043). "unreadable" — permissions or I/O error; an evicted or unreadable file fails loudly and is never indexed as empty (FR-111). "not_addressable" — the name cannot be represented on this platform. "node_limit" / "hop_limit" — the neighbourhood bound was reached (FR-054).
+	Reason KnowledgeGraphSkipReason `json:"reason"`
+}
+
+// KnowledgeGraphSkipReason "symlink" — a symbolic link, skipped and reported rather than followed (FR-044); this is also how a symlink loop terminates (E-8). "outside_root" — the resolved target lay outside the collection root and was not read (FR-043). "unreadable" — permissions or I/O error; an evicted or unreadable file fails loudly and is never indexed as empty (FR-111). "not_addressable" — the name cannot be represented on this platform. "node_limit" / "hop_limit" — the neighbourhood bound was reached (FR-054).
+type KnowledgeGraphSkipReason string
+
+// KnowledgeMountConflictError Typed 409 body for a refused knowledge-base mount. A knowledge base is exactly ONE mounted folder (FR-026): a second root is refused, and the error NAMES BOTH so the operator can see which existing collection is in the way rather than guessing.
+// Beyond ADR-067 D18's seven-type table, added because FR-026 requires a "typed error naming both" and that is by definition a cross-boundary type. Without it here, the first implementer hand-writes the struct and trips the Hard Constraint #8 lint gate.
+type KnowledgeMountConflictError struct {
+	// Code Machine-readable discriminator.
+	Code KnowledgeMountConflictErrorCode `json:"code"`
+
+	// Error Human-readable message naming both roots.
+	Error string `json:"error"`
+
+	// ExistingCollectionId collection_id of the already-mounted collection, when known.
+	ExistingCollectionId *string `json:"existing_collection_id,omitempty"`
+
+	// ExistingRootPath Workspace-relative root of the collection already mounted.
+	ExistingRootPath string `json:"existing_root_path"`
+
+	// RequestedRootPath Workspace-relative root the caller asked to mount.
+	RequestedRootPath string `json:"requested_root_path"`
+}
+
+// KnowledgeMountConflictErrorCode Machine-readable discriminator.
+type KnowledgeMountConflictErrorCode string
+
+// KnowledgeOutline Response for GET /api/v1/library/{workspace_id}/knowledge/outline (ADR-067 D18). The heading tree for the reading rail.
+// Available for ANY markdown file, whether or not it belongs to a knowledge base (FR-062): an outline is parsed from the one file in hand and needs no index. Search and backlinks stay knowledge-base-only precisely because they do need one — is_knowledge_base tells the client which of the rail's panels it may offer.
+type KnowledgeOutline struct {
+	// CollectionId The collection containing this file. Present only when is_knowledge_base is true.
+	CollectionId *string `json:"collection_id,omitempty"`
+
+	// FrontmatterMalformed True when the file opens with a frontmatter block that is not valid YAML. The file is still outlined and still indexed for body text; the malformed frontmatter is reported rather than silently dropped (E-17).
+	FrontmatterMalformed *bool `json:"frontmatter_malformed,omitempty"`
+
+	// Headings Headings in document order. Always an array, never null; empty for a file with no headings.
+	Headings []struct {
+		// ByteOffset Absolute byte offset of the heading within the whole file, for jump-to-heading without re-parsing.
+		ByteOffset *int64 `json:"byte_offset,omitempty"`
+
+		// Level Heading level, 1 for "#" through 6 for "######".
+		Level int `json:"level"`
+
+		// Line 1-based line number of the heading in the source file.
+		Line *int `json:"line,omitempty"`
+
+		// Slug URL fragment identifying this heading, used to make a heading addressable and to resolve a heading link ([[note#Section]]). Unique within one outline — a repeated heading text gets a numeric suffix.
+		Slug string `json:"slug"`
+
+		// Text Heading text with markdown inline formatting removed. May be empty for a heading marker with no text.
+		Text string `json:"text"`
+	} `json:"headings"`
+
+	// IsKnowledgeBase True when this file sits inside a detected knowledge base, so the client may additionally offer search and backlinks. False means the outline is all that is available for this file — not an error.
+	IsKnowledgeBase bool `json:"is_knowledge_base"`
+
+	// Path Workspace-relative path of the file this outline describes.
+	Path string `json:"path"`
+}
+
+// KnowledgeOutlineHeading One heading in a markdown file's outline. The outline is a FLAT list ordered as the headings appear in the document, with nesting carried by level — not a recursive tree. A flat list has one representation for any document, including one that skips from H1 to H3, where a tree would force the server to invent an intermediate node the author never wrote.
+type KnowledgeOutlineHeading struct {
+	// ByteOffset Absolute byte offset of the heading within the whole file, for jump-to-heading without re-parsing.
+	ByteOffset *int64 `json:"byte_offset,omitempty"`
+
+	// Level Heading level, 1 for "#" through 6 for "######".
+	Level int `json:"level"`
+
+	// Line 1-based line number of the heading in the source file.
+	Line *int `json:"line,omitempty"`
+
+	// Slug URL fragment identifying this heading, used to make a heading addressable and to resolve a heading link ([[note#Section]]). Unique within one outline — a repeated heading text gets a numeric suffix.
+	Slug string `json:"slug"`
+
+	// Text Heading text with markdown inline formatting removed. May be empty for a heading marker with no text.
+	Text string `json:"text"`
+}
+
+// KnowledgeSearchHit One relevance hit from a knowledge-base search (FR-050). Carries path, title and a matched excerpt.
+// A note larger than the segment size is indexed as several consecutive index documents (FR-034a) — no note is ever refused, skipped or truncated. Hits from several segments of one note COLLAPSE INTO ONE hit here, scored by its best segment, so a caller never has to de-duplicate by path.
+type KnowledgeSearchHit struct {
+	// ByteOffset ABSOLUTE byte offset of the match within the whole file — not within the index segment that produced it — so segmentation (FR-034a) cannot misdirect a re-read or a jump-to-match (FR-050a c).
+	ByteOffset *int64 `json:"byte_offset,omitempty"`
+
+	// Excerpt Matched text, RE-READ FROM THE FILE AT QUERY TIME and never stored in the index (FR-050a), so it always matches what is on disk. ABSENT when the re-read could not be performed — see excerpt_unavailable. A hit is still returned in that case, with path and title, because a silently dropped result and a fabricated excerpt are both worse than an honest gap.
+	Excerpt *string `json:"excerpt,omitempty"`
+
+	// ExcerptUnavailable Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
+	ExcerptUnavailable *KnowledgeSearchHitExcerptUnavailable `json:"excerpt_unavailable,omitempty"`
+
+	// Kind Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
+	Kind KnowledgeSearchHitKind `json:"kind"`
+
+	// Path Collection-relative path of the matched entry, forward-slash separated. Always inside the collection root (FR-043).
+	Path string `json:"path"`
+
+	// Score Relevance score. Comparable only within one response; not stable across queries or across index rebuilds of different content.
+	Score float64 `json:"score"`
+
+	// Title Display title — the note's frontmatter title or first heading, falling back to the basename. May be empty for an attachment.
+	Title string `json:"title"`
+}
+
+// KnowledgeSearchHitExcerptUnavailable Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
+type KnowledgeSearchHitExcerptUnavailable string
+
+// KnowledgeSearchHitKind Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
+type KnowledgeSearchHitKind string
+
+// KnowledgeSearchIncompleteness The incompleteness statement that rides on EVERY KnowledgeSearchResponse (FR-035). Required, not optional: "absent" would be ambiguous between "complete" and "the server forgot", and the whole point of this object is that a partial answer can never be mistaken for a whole one.
+// Distinct from KnowledgeIndexProgressFrame, and the distinction is the one FR-080 turns on. This object is a PROPERTY OF THIS ANSWER — "the results you are reading were drawn from a partially built index". The frame is a STREAMING STATE — "indexing has now reached N of M". A client renders this next to the results it qualifies; it subscribes to the frame to watch a number move. Neither substitutes for the other.
+type KnowledgeSearchIncompleteness struct {
+	// Complete True when the index covered the whole collection at query time, so these results are the whole answer.
+	Complete bool `json:"complete"`
+
+	// IndexedFiles Files indexed and therefore searchable at query time.
+	IndexedFiles *int64 `json:"indexed_files,omitempty"`
+
+	// Statement Human-readable sentence stating what was and was not covered, ready to render beside the results. Server-authored so the client cannot phrase an incomplete answer as a complete one.
+	Statement string `json:"statement"`
+
+	// TotalFiles Total files in the collection. Present only when total_known is true.
+	TotalFiles *int64 `json:"total_files,omitempty"`
+
+	// TotalKnown False while the collection is still being ENUMERATED and the total file count is not yet known. The caller MUST then report an indeterminate state rather than computing a ratio (FR-036) — indexed_files is present but total_files is not, and inventing a denominator is exactly the confidently-wrong answer this field exists to prevent.
+	TotalKnown bool `json:"total_known"`
+}
+
+// KnowledgeSearchRequest Request body for POST /api/v1/library/{workspace_id}/knowledge/search (ADR-067 D18). Relevance search over one knowledge base's index.
+// Scope is not negotiable by the caller beyond naming a collection: the gateway restricts every search to knowledge bases mounted into the calling agent's workspace (FR-052), and a collection outside that scope yields an EMPTY result set rather than a permission error (FR-053) — so a caller can never use the error channel to probe for collections it may not see.
+type KnowledgeSearchRequest struct {
+	// CollectionId The KnowledgeBaseInfo.collection_id to search. Exactly one — a knowledge base is exactly one mounted folder and no query resolves across two collections (FR-026).
+	CollectionId string `json:"collection_id"`
+
+	// Kinds Restrict hits to these entry kinds. Omitted means both. Attachments are indexed by FILENAME AND PATH ONLY — their contents are never opened (FR-039a) — so an attachment hit never carries a body excerpt.
+	Kinds *[]KnowledgeSearchRequestKinds `json:"kinds,omitempty"`
+
+	// Limit Maximum hits to return. A value above the server cap is CLAMPED, not rejected, and the clamp is reported on the response (limit_clamped / limit_applied, FR-037).
+	Limit *int `json:"limit,omitempty"`
+
+	// Offset Number of hits to skip, for paging through a large result set.
+	Offset *int `json:"offset,omitempty"`
+
+	// Query Free-text relevance query.
+	Query string `json:"query"`
+}
+
+// KnowledgeSearchRequestKinds defines model for KnowledgeSearchRequest.Kinds.
+type KnowledgeSearchRequestKinds string
+
+// KnowledgeSearchResponse Response for POST /api/v1/library/{workspace_id}/knowledge/search (ADR-067 D18). Hits plus the incompleteness statement, in the SAME response (FR-035) — a caller cannot obtain results without also obtaining the statement qualifying them.
+// A collection outside the caller's workspace scope yields hits: [] with incompleteness.complete = true, not an error (FR-053).
+type KnowledgeSearchResponse struct {
+	// CollectionId The collection these hits came from, echoed from the request.
+	CollectionId string `json:"collection_id"`
+
+	// Hits Matched entries, best-scored first. Always present — an empty array, never null — so a client may map over it without a nil check.
+	Hits []struct {
+		// ByteOffset ABSOLUTE byte offset of the match within the whole file — not within the index segment that produced it — so segmentation (FR-034a) cannot misdirect a re-read or a jump-to-match (FR-050a c).
+		ByteOffset *int64 `json:"byte_offset,omitempty"`
+
+		// Excerpt Matched text, RE-READ FROM THE FILE AT QUERY TIME and never stored in the index (FR-050a), so it always matches what is on disk. ABSENT when the re-read could not be performed — see excerpt_unavailable. A hit is still returned in that case, with path and title, because a silently dropped result and a fabricated excerpt are both worse than an honest gap.
+		Excerpt *string `json:"excerpt,omitempty"`
+
+		// ExcerptUnavailable Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
+		ExcerptUnavailable *KnowledgeSearchResponseHitsExcerptUnavailable `json:"excerpt_unavailable,omitempty"`
+
+		// Kind Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
+		Kind KnowledgeSearchResponseHitsKind `json:"kind"`
+
+		// Path Collection-relative path of the matched entry, forward-slash separated. Always inside the collection root (FR-043).
+		Path string `json:"path"`
+
+		// Score Relevance score. Comparable only within one response; not stable across queries or across index rebuilds of different content.
+		Score float64 `json:"score"`
+
+		// Title Display title — the note's frontmatter title or first heading, falling back to the basename. May be empty for an attachment.
+		Title string `json:"title"`
+	} `json:"hits"`
+
+	// Incompleteness The incompleteness statement that rides on EVERY KnowledgeSearchResponse (FR-035). Required, not optional: "absent" would be ambiguous between "complete" and "the server forgot", and the whole point of this object is that a partial answer can never be mistaken for a whole one.
+	// Distinct from KnowledgeIndexProgressFrame, and the distinction is the one FR-080 turns on. This object is a PROPERTY OF THIS ANSWER — "the results you are reading were drawn from a partially built index". The frame is a STREAMING STATE — "indexing has now reached N of M". A client renders this next to the results it qualifies; it subscribes to the frame to watch a number move. Neither substitutes for the other.
+	Incompleteness struct {
+		// Complete True when the index covered the whole collection at query time, so these results are the whole answer.
+		Complete bool `json:"complete"`
+
+		// IndexedFiles Files indexed and therefore searchable at query time.
+		IndexedFiles *int64 `json:"indexed_files,omitempty"`
+
+		// Statement Human-readable sentence stating what was and was not covered, ready to render beside the results. Server-authored so the client cannot phrase an incomplete answer as a complete one.
+		Statement string `json:"statement"`
+
+		// TotalFiles Total files in the collection. Present only when total_known is true.
+		TotalFiles *int64 `json:"total_files,omitempty"`
+
+		// TotalKnown False while the collection is still being ENUMERATED and the total file count is not yet known. The caller MUST then report an indeterminate state rather than computing a ratio (FR-036) — indexed_files is present but total_files is not, and inventing a denominator is exactly the confidently-wrong answer this field exists to prevent.
+		TotalKnown bool `json:"total_known"`
+	} `json:"incompleteness"`
+
+	// LimitApplied The result cap actually used for this query.
+	LimitApplied int `json:"limit_applied"`
+
+	// LimitClamped True when the requested limit exceeded the server cap and was reduced to limit_applied. The clamp is REPORTED, never silent (FR-037).
+	LimitClamped bool `json:"limit_clamped"`
+
+	// LimitRequested The limit the caller asked for. Present only when limit_clamped is true, so the caller can see exactly what was refused.
+	LimitRequested *int `json:"limit_requested,omitempty"`
+}
+
+// KnowledgeSearchResponseHitsExcerptUnavailable Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
+type KnowledgeSearchResponseHitsExcerptUnavailable string
+
+// KnowledgeSearchResponseHitsKind Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
+type KnowledgeSearchResponseHitsKind string
+
 // LibraryContentRequest Request body for PUT /api/v1/library/{workspace_id}/content. Writes text content to a file at the given workspace-relative path (library-spec.md D-5 editing scope), creating the file if it does not already exist and overwriting any existing content entirely. The path's parent directory must already exist within the workspace's work tree.
 type LibraryContentRequest struct {
 	// Content Full replacement text content for the file, UTF-8. Maximum 10485760 bytes (10 MB) — matches the threshold GET .../content uses to set too_large=true, so a file this endpoint can write is always one the read endpoint can subsequently render inline.
@@ -8458,11 +9290,93 @@ type LibraryEntryMount struct {
 	Name string `json:"name"`
 }
 
+// LibraryInlineDisposition Inline-preview metadata for one Library file (ADR-067 D18 / D15). Returned by GET /api/v1/library/{workspace_id}/inline-disposition?path=...
+// Answers one question before the SPA commits to a renderer: may these bytes be shown inline, as what type, and does showing them require the sandboxed token path? The SPA MUST NOT re-derive any of this from the file extension — the allow-list and the extension-to-type table are compiled into the binary and are the single source of truth (FR-015a, FR-015b), and a second copy in TypeScript is a second answer waiting to disagree.
+// This describes the file, not a grant. Fetching the bytes inline still requires a preview token (LibraryPreviewTokenRequest).
+type LibraryInlineDisposition struct {
+	// ContentType The Content-Type the server will send, derived from the EXTENSION and never from sniffing the content (FR-015). Compiled into the binary, so the same build answers identically on every machine (FR-015b). "application/octet-stream" for an extension not in the table.
+	ContentType string `json:"content_type"`
+
+	// Disposition "inline" when the extension is on the allow-list; "attachment" for everything else, which is the default and includes .pdf (FR-008). A .pdf is an attachment deliberately: PDF.js fetches its bytes from the AUTHENTICATED Library endpoint, so a PDF never becomes a browser document at all.
+	Disposition LibraryInlineDispositionDisposition `json:"disposition"`
+
+	// Extension Lower-cased filename extension including the leading dot, or empty for a file with none.
+	Extension string `json:"extension"`
+
+	// Path Workspace-relative path this answer describes.
+	Path string `json:"path"`
+
+	// Reason Why disposition is "attachment", when it is. Present only then, so the SPA can say something better than a blank download card.
+	Reason *string `json:"reason,omitempty"`
+
+	// Renderer Which SPA surface should draw this file. "html" is the only value that makes the bytes a browser document; every other value names a component Omnipus draws itself, which is why only "html" is sandboxed (FR-014, FR-017). "none" means offer a download card.
+	Renderer LibraryInlineDispositionRenderer `json:"renderer"`
+
+	// RequiresSandbox True when displaying this file makes the browser execute it, so it MUST be loaded through the preview-token path inside a sandboxed iframe. True for renderer "html" — including .svg, which is scriptable when opened as a document. False for everything Omnipus renders itself.
+	RequiresSandbox bool `json:"requires_sandbox"`
+}
+
+// LibraryInlineDispositionDisposition "inline" when the extension is on the allow-list; "attachment" for everything else, which is the default and includes .pdf (FR-008). A .pdf is an attachment deliberately: PDF.js fetches its bytes from the AUTHENTICATED Library endpoint, so a PDF never becomes a browser document at all.
+type LibraryInlineDispositionDisposition string
+
+// LibraryInlineDispositionRenderer Which SPA surface should draw this file. "html" is the only value that makes the bytes a browser document; every other value names a component Omnipus draws itself, which is why only "html" is sandboxed (FR-014, FR-017). "none" means offer a download card.
+type LibraryInlineDispositionRenderer string
+
 // LibraryMkdirRequest Request body for POST /api/v1/library/{workspace_id}/mkdir. Creates a directory at path within the workspace's work tree, creating any missing intermediate directories along the way (mkdir -p semantics) — the sole directory-creation primitive the Library API exposes. Added to close a UAT gap: without it, there was no way to create a folder at all, and a clean, non-malicious nested Move/Copy destination whose parent didn't exist yet (e.g. "subfolder/test.txt") had no path to success — see POST /api/v1/library/move and POST /api/v1/library/copy, which deliberately still require the destination's immediate parent directory to already exist rather than auto-creating it (matching `mv`/`cp` semantics — this endpoint is the explicit, deliberate way to create that folder first). Idempotent: if a directory already exists at path, the request succeeds (200) rather than erroring; rejected 409 if a regular FILE already exists there.
 type LibraryMkdirRequest struct {
 	// Path Workspace-relative directory path to create, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). May name a nested path whose intermediate directories do not exist yet — all of them are created, matching `mkdir -p`.
 	Path string `json:"path"`
 }
+
+// LibraryPreviewTokenRequest Request body for POST /api/v1/library/preview-token (FR-003f). Mints a short-lived, path-bearing credential that lets a SANDBOXED document — which has an opaque origin and can therefore send neither the SameSite=Strict session cookie nor an Authorization header — load itself and its relative subresources (FR-003a, FR-003).
+// Minting is authenticated and NEVER WIDENS ACCESS (FR-003b): the caller must already be able to read the path, and the token is scoped to one workspace and one path. There is no whole-workspace scope, by design.
+// No workspace_id in the route: this is a mint operation over the Library as a whole, matching the existing /library/move and /library/copy shape, and the workspace it applies to is part of the request rather than the path.
+type LibraryPreviewTokenRequest struct {
+	// EntryPath For scope "bundle", the bundle-root-relative document to open first, used to build the returned url. Defaults to "index.html". Ignored for scope "file".
+	EntryPath *string `json:"entry_path,omitempty"`
+
+	// Path Workspace-relative path, forward-slash separated. For scope "file", the file itself. For scope "bundle", the DIRECTORY that is the bundle root. Never absolute and never containing a ".." segment; resolution is confined to the workspace work tree at the syscall boundary, not merely by string cleaning (FR-003i).
+	Path string `json:"path"`
+
+	// Scope "file" grants exactly one file. "bundle" grants one directory and its descendants, which is what an HTML page with its own stylesheets, scripts, fonts and media needs. Nothing wider exists (FR-003b).
+	Scope LibraryPreviewTokenRequestScope `json:"scope"`
+
+	// WorkspaceId Workspace whose work tree contains path.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// LibraryPreviewTokenRequestScope "file" grants exactly one file. "bundle" grants one directory and its descendants, which is what an HTML page with its own stylesheets, scripts, fonts and media needs. Nothing wider exists (FR-003b).
+type LibraryPreviewTokenRequestScope string
+
+// LibraryPreviewTokenResponse Response for POST /api/v1/library/preview-token (FR-003f). The minted credential, where to point an iframe at it, and when it dies.
+// Lifetime is 15 minutes (FR-003d) — long enough to load and read a bundle, short enough that a token found later in a log is already dead. Expiry alone is not revocation: a token is ALSO invalidated when the minting session logs out, when the workspace mount is revoked, and when the named path is deleted or moved. The store is in memory, so a gateway restart invalidates every live preview.
+// RE-MINTING RETURNS A NEW VALUE AND INVALIDATES THE PREVIOUS ONE (FR-003m). Do not copy the same-token-for-the-same-directory behaviour of the agent web_serve path: re-registering there returns the SAME string, so the credential survives as long as the tab is open — exactly the property a 15-minute lifetime exists to prevent.
+// There is no renewal endpoint and no silent timer-driven reload. The SPA uses expires_at to show a visible expiry notice in Omnipus chrome OUTSIDE the frame, with an explicit Reload, because the frame is cross-origin and opaque: the embedder cannot detect that its request failed, and onload fires for an error page exactly as it does for content.
+type LibraryPreviewTokenResponse struct {
+	// ExpiresAt Absolute RFC3339 UTC instant at which the token stops working. Drives the visible expiry notice (FR-003m).
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// ExpiresInSeconds Seconds from the moment this response was produced until expires_at — 900 for the 15-minute lifetime. Present alongside the absolute instant because a client whose clock is wrong would compute a wrong countdown from expires_at alone, and a preview that claims to have expired while it still works is as confusing as the reverse.
+	ExpiresInSeconds int `json:"expires_in_seconds"`
+
+	// Scope The granted scope, echoed from the request.
+	Scope LibraryPreviewTokenResponseScope `json:"scope"`
+
+	// ScopeRoot Workspace-relative path this token is confined to — the file itself for scope "file", the bundle root for scope "bundle". Every request on the token path resolves inside THIS root, not merely inside the workspace (FR-003i).
+	ScopeRoot string `json:"scope_root"`
+
+	// Token The credential: 32 bytes from a cryptographic random source, encoded base64url without padding — 43 characters (FR-003h). Minting FAILS CLOSED if the entropy source errors: no token, no fallback, no shortened value. This string is the entire security of an unauthenticated bearer path, so it MUST NOT be logged, put in an audit record, or sent in a Referer header (FR-003e).
+	Token string `json:"token"`
+
+	// Url Gateway-relative URL to put in the iframe's src. Serves GET and HEAD only; every other method is 405 (FR-003j). Use it as <iframe src="…"> and never as srcdoc — srcdoc resolves relative URLs against the EMBEDDER, so no bundle subresource would load, and it has no response to carry the isolation policy.
+	Url string `json:"url"`
+
+	// WorkspaceId Workspace the token is scoped to, echoed from the request.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
+}
+
+// LibraryPreviewTokenResponseScope The granted scope, echoed from the request.
+type LibraryPreviewTokenResponseScope string
 
 // LibraryRenameRequest Request body for POST /api/v1/library/{workspace_id}/rename. Renames or moves a file or directory within the workspace's work tree — "to" may name a different parent directory than "from", so this operation doubles as a move.
 type LibraryRenameRequest struct {
@@ -13567,6 +14481,45 @@ type ListLibraryEntriesParams struct {
 	IncludeHidden *bool `form:"include_hidden,omitempty" json:"include_hidden,omitempty"`
 }
 
+// GetLibraryInlineDispositionParams defines parameters for GetLibraryInlineDisposition.
+type GetLibraryInlineDispositionParams struct {
+	// Path Workspace-relative path of the file to classify.
+	Path string `form:"path" json:"path"`
+}
+
+// GetKnowledgeBaseInfoParams defines parameters for GetKnowledgeBaseInfo.
+type GetKnowledgeBaseInfoParams struct {
+	// Path Workspace-relative path of the folder to test. Use "" or "." for the work-tree root.
+	Path string `form:"path" json:"path"`
+}
+
+// GetKnowledgeGraphParams defines parameters for GetKnowledgeGraph.
+type GetKnowledgeGraphParams struct {
+	// CollectionId The KnowledgeBaseInfo.collection_id to query.
+	CollectionId string `form:"collection_id" json:"collection_id"`
+
+	// Kind Which graph query to run.
+	Kind GetKnowledgeGraphParamsKind `form:"kind" json:"kind"`
+
+	// Path Collection-relative path of the note the query is about. Required for links, backlinks and neighbourhood; ignored for unresolved and orphans, which are collection-wide.
+	Path *string `form:"path,omitempty" json:"path,omitempty"`
+
+	// Hops Maximum hops for a neighbourhood query. Clamped to the server bound; the value actually used is echoed as hop_limit_applied.
+	Hops *int `form:"hops,omitempty" json:"hops,omitempty"`
+
+	// Limit Maximum nodes in the response. Clamped to the server bound; the value actually used is echoed as node_limit_applied.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetKnowledgeGraphParamsKind defines parameters for GetKnowledgeGraph.
+type GetKnowledgeGraphParamsKind string
+
+// GetKnowledgeOutlineParams defines parameters for GetKnowledgeOutline.
+type GetKnowledgeOutlineParams struct {
+	// Path Workspace-relative path of the markdown file.
+	Path string `form:"path" json:"path"`
+}
+
 // UploadLibraryFilesMultipartBody defines parameters for UploadLibraryFiles.
 type UploadLibraryFilesMultipartBody struct {
 	// Files One or more files to upload.
@@ -13780,8 +14733,14 @@ type CopyLibraryEntryJSONRequestBody = LibraryTransferRequest
 // MoveLibraryEntryJSONRequestBody defines body for MoveLibraryEntry for application/json ContentType.
 type MoveLibraryEntryJSONRequestBody = LibraryTransferRequest
 
+// MintLibraryPreviewTokenJSONRequestBody defines body for MintLibraryPreviewToken for application/json ContentType.
+type MintLibraryPreviewTokenJSONRequestBody = LibraryPreviewTokenRequest
+
 // PutLibraryContentJSONRequestBody defines body for PutLibraryContent for application/json ContentType.
 type PutLibraryContentJSONRequestBody = LibraryContentRequest
+
+// SearchKnowledgeBaseJSONRequestBody defines body for SearchKnowledgeBase for application/json ContentType.
+type SearchKnowledgeBaseJSONRequestBody = KnowledgeSearchRequest
 
 // CreateLibraryDirectoryJSONRequestBody defines body for CreateLibraryDirectory for application/json ContentType.
 type CreateLibraryDirectoryJSONRequestBody = LibraryMkdirRequest

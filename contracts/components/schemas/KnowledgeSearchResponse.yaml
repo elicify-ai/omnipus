@@ -1,0 +1,50 @@
+title: KnowledgeSearchResponse
+description: >
+  Response for POST /api/v1/library/{workspace_id}/knowledge/search
+  (ADR-067 D18). Hits plus the incompleteness statement, in the SAME
+  response (FR-035) — a caller cannot obtain results without also obtaining
+  the statement qualifying them.
+
+  A collection outside the caller's workspace scope yields hits: [] with
+  incompleteness.complete = true, not an error (FR-053).
+type: object
+additionalProperties: false
+required:
+  - collection_id
+  - hits
+  - incompleteness
+  - limit_applied
+  - limit_clamped
+properties:
+  collection_id:
+    type: string
+    minLength: 1
+    description: The collection these hits came from, echoed from the request.
+    example: "kb_3d1c9a7e5b2f4806"
+  hits:
+    type: array
+    description: >
+      Matched entries, best-scored first. Always present — an empty array,
+      never null — so a client may map over it without a nil check.
+    items:
+      $ref: "./KnowledgeSearchHit.yaml"
+  incompleteness:
+    $ref: "./KnowledgeSearchIncompleteness.yaml"
+  limit_applied:
+    type: integer
+    minimum: 1
+    description: The result cap actually used for this query.
+    example: 20
+  limit_clamped:
+    type: boolean
+    description: >
+      True when the requested limit exceeded the server cap and was reduced
+      to limit_applied. The clamp is REPORTED, never silent (FR-037).
+    example: false
+  limit_requested:
+    type: integer
+    minimum: 1
+    description: >
+      The limit the caller asked for. Present only when limit_clamped is
+      true, so the caller can see exactly what was refused.
+    example: 5000

@@ -2681,6 +2681,154 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/preview-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a short-lived preview token for a Library file or bundle
+         * @description Mints the path-bearing credential a SANDBOXED preview needs (ADR-067 FR-003a, FR-003f). A document served under the isolation policy has an opaque origin, so it can send neither the SameSite=Strict session cookie nor an Authorization header on its own <link>, <script>, font or media requests — without this token an HTML bundle simply cannot load its own subresources.
+         *
+         *     Minting is authenticated and never widens access: the caller must already be able to read the path, and the grant covers one workspace and one path only — a single file, or one bundle root and its descendants (FR-003b). The token lives 15 minutes and is also invalidated by logout, mount revoke, and deletion or move of the named path (FR-003d).
+         *
+         *     Re-minting returns a NEW token and invalidates the previous one (FR-003m). There is no renewal endpoint.
+         *
+         *     Both this endpoint and the /library-preview/<token>/<path> serving prefix are rate-limited, and a session may hold at most 8 live tokens; a 9th mint request is refused with 429 (FR-003k).
+         *
+         *     The serving prefix itself is deliberately NOT in this document: it is a bare, token-authenticated path on the main listener (ADR-044 shape) that returns file bytes or an HTML error page, carries no JSON contract, and answers GET and HEAD only — every other method is 405 with Allow: GET, HEAD (FR-003j).
+         */
+        post: operations["mintLibraryPreviewToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/inline-disposition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ask whether a Library file may be previewed inline, and as what
+         * @description Returns the server's own answer for one file: allow-listed for inline display or not, the extension-derived Content-Type it will be served with, which SPA renderer should draw it, and whether drawing it makes the browser execute it (ADR-067 D15).
+         *
+         *     Exists so the SPA never re-derives any of that from the filename. The allow-list and the extension-to-type table are compiled into the binary and are the single source of truth (FR-015a, FR-015b); a second copy in TypeScript would be a second answer, and the two would disagree the first time an extension was added to one of them.
+         *
+         *     Returns 403 if path resolves outside the workspace's work tree; 404 if path does not exist or names a directory.
+         */
+        get: operations["getLibraryInlineDisposition"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/knowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Detect whether a folder is a knowledge base, and describe it
+         * @description Marker-based detection (ADR-067 FR-020, FR-021): a folder is a knowledge base when its root contains .omnipus-vault/ or .obsidian/. File CONTENT is never read to decide this.
+         *
+         *     Returns 200 with is_knowledge_base=false for an ordinary folder — that is an answer, not an error. A marker that exists but cannot be read is reported through detection_error rather than silently downgrading the folder to ordinary (E-9).
+         *
+         *     Carries no index counts. Index progress is a streaming state pushed over the WebSocket as knowledge_index_progress (FR-080); polling this endpoint for it is the mistake that contract is written to prevent.
+         */
+        get: operations["getKnowledgeBaseInfo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/knowledge/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Relevance search over one knowledge base
+         * @description Returns ranked hits with path, title and a matched excerpt (FR-050), AND — in the same response — the incompleteness statement qualifying them (FR-035). A caller cannot obtain results without also obtaining the statement, which is the point: a partial answer that looks whole is worse than no answer.
+         *
+         *     The excerpt is re-read from the file at query time and never stored in the index (FR-050a), so it always matches disk. When the re-read cannot be done — the file moved, became unreadable, or the latency budget ran out — the hit is still returned with path and title and a machine-readable excerpt_unavailable reason. Never a fabricated excerpt; never a silently dropped result.
+         *
+         *     A limit above the server cap is clamped and the clamp is reported (FR-037). A collection outside the caller's workspace scope returns an EMPTY result set rather than a permission error (FR-052, FR-053), so the error channel cannot be used to probe for collections the caller may not see. POST rather than GET because a query plus its filters does not belong in a URL that lands in request logs.
+         */
+        post: operations["searchKnowledgeBase"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/knowledge/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Links, backlinks, unresolved links, orphans or a neighbourhood
+         * @description One operation serves all five graph queries (FR-051) because they differ only in which subgraph is selected, not in what a link is.
+         *
+         *     Link resolution follows a fixed ladder — exact path, unique basename, shortest path, lexicographic (FR-040) — and an ambiguous basename is resolved by that rule AND reported as ambiguous (FR-041): resolving it is not a licence to stay quiet about it. A link with no match, or one whose target lies outside the collection root, is reported unresolved and the target is not read (FR-042, FR-043). Symbolic links are skipped and reported rather than followed (FR-044), which is also how a symlink loop terminates.
+         *
+         *     Every query is bounded by hop count and node count (FR-054) and reports its own truncation, so a small graph is never mistaken for a clipped one.
+         */
+        get: operations["getKnowledgeGraph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/knowledge/outline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Heading outline for a markdown file
+         * @description Returns the heading outline that drives the reading rail, for ANY markdown file — whether or not it belongs to a knowledge base (FR-062). An outline is parsed from the one file in hand and needs no index, which is exactly why search and backlinks stay knowledge-base-only: those do need one. The is_knowledge_base field tells the client which other rail panels it may offer.
+         *
+         *     Headings come back as a FLAT list in document order with nesting carried by level, not as a tree — a document that skips from H1 to H3 has one honest representation that way, where a tree would force the server to invent an intermediate heading the author never wrote.
+         *
+         *     Frontmatter that is not valid YAML is reported through frontmatter_malformed; the file is still outlined and still indexed for body text (E-17).
+         */
+        get: operations["getKnowledgeOutline"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{id}/delegation": {
         parameters: {
             query?: never;
@@ -3859,6 +4007,601 @@ export interface components {
              * @example projects/2026/reports
              */
             path: string;
+        };
+        /**
+         * LibraryInlineDisposition
+         * @description Inline-preview metadata for one Library file (ADR-067 D18 / D15). Returned by GET /api/v1/library/{workspace_id}/inline-disposition?path=...
+         *     Answers one question before the SPA commits to a renderer: may these bytes be shown inline, as what type, and does showing them require the sandboxed token path? The SPA MUST NOT re-derive any of this from the file extension — the allow-list and the extension-to-type table are compiled into the binary and are the single source of truth (FR-015a, FR-015b), and a second copy in TypeScript is a second answer waiting to disagree.
+         *     This describes the file, not a grant. Fetching the bytes inline still requires a preview token (LibraryPreviewTokenRequest).
+         */
+        LibraryInlineDisposition: {
+            /**
+             * @description Workspace-relative path this answer describes.
+             * @example reports/q3/index.html
+             */
+            path: string;
+            /**
+             * @description Lower-cased filename extension including the leading dot, or empty for a file with none.
+             * @example .html
+             */
+            extension: string;
+            /**
+             * @description "inline" when the extension is on the allow-list; "attachment" for everything else, which is the default and includes .pdf (FR-008). A .pdf is an attachment deliberately: PDF.js fetches its bytes from the AUTHENTICATED Library endpoint, so a PDF never becomes a browser document at all.
+             * @example inline
+             * @enum {string}
+             */
+            disposition: "inline" | "attachment";
+            /**
+             * @description The Content-Type the server will send, derived from the EXTENSION and never from sniffing the content (FR-015). Compiled into the binary, so the same build answers identically on every machine (FR-015b). "application/octet-stream" for an extension not in the table.
+             * @example text/html
+             */
+            content_type: string;
+            /**
+             * @description Which SPA surface should draw this file. "html" is the only value that makes the bytes a browser document; every other value names a component Omnipus draws itself, which is why only "html" is sandboxed (FR-014, FR-017). "none" means offer a download card.
+             * @example html
+             * @enum {string}
+             */
+            renderer: "html" | "pdf" | "audio" | "video" | "image" | "markdown" | "text" | "code" | "none";
+            /**
+             * @description True when displaying this file makes the browser execute it, so it MUST be loaded through the preview-token path inside a sandboxed iframe. True for renderer "html" — including .svg, which is scriptable when opened as a document. False for everything Omnipus renders itself.
+             * @example true
+             */
+            requires_sandbox: boolean;
+            /**
+             * @description Why disposition is "attachment", when it is. Present only then, so the SPA can say something better than a blank download card.
+             * @example extension not on the inline allow-list
+             */
+            reason?: string;
+        };
+        /**
+         * LibraryPreviewTokenRequest
+         * @description Request body for POST /api/v1/library/preview-token (FR-003f). Mints a short-lived, path-bearing credential that lets a SANDBOXED document — which has an opaque origin and can therefore send neither the SameSite=Strict session cookie nor an Authorization header — load itself and its relative subresources (FR-003a, FR-003).
+         *     Minting is authenticated and NEVER WIDENS ACCESS (FR-003b): the caller must already be able to read the path, and the token is scoped to one workspace and one path. There is no whole-workspace scope, by design.
+         *     No workspace_id in the route: this is a mint operation over the Library as a whole, matching the existing /library/move and /library/copy shape, and the workspace it applies to is part of the request rather than the path.
+         */
+        LibraryPreviewTokenRequest: {
+            /**
+             * @description Workspace whose work tree contains path.
+             * @example ws_7f3a
+             */
+            workspace_id: string;
+            /**
+             * @description Workspace-relative path, forward-slash separated. For scope "file", the file itself. For scope "bundle", the DIRECTORY that is the bundle root. Never absolute and never containing a ".." segment; resolution is confined to the workspace work tree at the syscall boundary, not merely by string cleaning (FR-003i).
+             * @example reports/q3
+             */
+            path: string;
+            /**
+             * @description "file" grants exactly one file. "bundle" grants one directory and its descendants, which is what an HTML page with its own stylesheets, scripts, fonts and media needs. Nothing wider exists (FR-003b).
+             * @example bundle
+             * @enum {string}
+             */
+            scope: "file" | "bundle";
+            /**
+             * @description For scope "bundle", the bundle-root-relative document to open first, used to build the returned url. Defaults to "index.html". Ignored for scope "file".
+             * @example index.html
+             */
+            entry_path?: string;
+        };
+        /**
+         * LibraryPreviewTokenResponse
+         * @description Response for POST /api/v1/library/preview-token (FR-003f). The minted credential, where to point an iframe at it, and when it dies.
+         *     Lifetime is 15 minutes (FR-003d) — long enough to load and read a bundle, short enough that a token found later in a log is already dead. Expiry alone is not revocation: a token is ALSO invalidated when the minting session logs out, when the workspace mount is revoked, and when the named path is deleted or moved. The store is in memory, so a gateway restart invalidates every live preview.
+         *     RE-MINTING RETURNS A NEW VALUE AND INVALIDATES THE PREVIOUS ONE (FR-003m). Do not copy the same-token-for-the-same-directory behaviour of the agent web_serve path: re-registering there returns the SAME string, so the credential survives as long as the tab is open — exactly the property a 15-minute lifetime exists to prevent.
+         *     There is no renewal endpoint and no silent timer-driven reload. The SPA uses expires_at to show a visible expiry notice in Omnipus chrome OUTSIDE the frame, with an explicit Reload, because the frame is cross-origin and opaque: the embedder cannot detect that its request failed, and onload fires for an error page exactly as it does for content.
+         */
+        LibraryPreviewTokenResponse: {
+            /**
+             * @description The credential: 32 bytes from a cryptographic random source, encoded base64url without padding — 43 characters (FR-003h). Minting FAILS CLOSED if the entropy source errors: no token, no fallback, no shortened value. This string is the entire security of an unauthenticated bearer path, so it MUST NOT be logged, put in an audit record, or sent in a Referer header (FR-003e).
+             * @example kZ8vQ2mR7xT1yB4nW6cA9pL0sD3fG5hJ8kM2nP4qR6t
+             */
+            token: string;
+            /**
+             * @description Gateway-relative URL to put in the iframe's src. Serves GET and HEAD only; every other method is 405 (FR-003j). Use it as <iframe src="…"> and never as srcdoc — srcdoc resolves relative URLs against the EMBEDDER, so no bundle subresource would load, and it has no response to carry the isolation policy.
+             * @example /library-preview/kZ8vQ2mR7xT1yB4nW6cA9pL0sD3fG5hJ8kM2nP4qR6t/index.html
+             */
+            url: string;
+            /**
+             * Format: date-time
+             * @description Absolute RFC3339 UTC instant at which the token stops working. Drives the visible expiry notice (FR-003m).
+             * @example 2026-08-22T14:45:00Z
+             */
+            expires_at: string;
+            /**
+             * @description Seconds from the moment this response was produced until expires_at — 900 for the 15-minute lifetime. Present alongside the absolute instant because a client whose clock is wrong would compute a wrong countdown from expires_at alone, and a preview that claims to have expired while it still works is as confusing as the reverse.
+             * @example 900
+             */
+            expires_in_seconds: number;
+            /**
+             * @description The granted scope, echoed from the request.
+             * @example bundle
+             * @enum {string}
+             */
+            scope: "file" | "bundle";
+            /**
+             * @description Workspace-relative path this token is confined to — the file itself for scope "file", the bundle root for scope "bundle". Every request on the token path resolves inside THIS root, not merely inside the workspace (FR-003i).
+             * @example reports/q3
+             */
+            scope_root: string;
+            /**
+             * @description Workspace the token is scoped to, echoed from the request.
+             * @example ws_7f3a
+             */
+            workspace_id?: string;
+        };
+        /**
+         * KnowledgeBaseInfo
+         * @description Identity and detection result for one knowledge base (ADR-067 D18). Returned by GET /api/v1/library/{workspace_id}/knowledge?path=... for any folder in the workspace work tree.
+         *     Detection is marker-based and never reads file CONTENT (FR-020, FR-021): a folder is a knowledge base when its root contains .omnipus-vault/ or .obsidian/. Omnipus writes only its own marker and never creates .obsidian/ (FR-022, FR-023).
+         *     Deliberately carries NO index counts or percentages. Index progress is a streaming state delivered over the WebSocket as KnowledgeIndexProgressFrame (FR-080); a caller that wants to know how far indexing has got subscribes, it does not poll this endpoint.
+         */
+        KnowledgeBaseInfo: {
+            /**
+             * @description Workspace whose work tree contains this folder.
+             * @example ws_7f3a
+             */
+            workspace_id: string;
+            /**
+             * @description Workspace-relative path of the collection root, forward-slash separated. Never absolute, never containing a ".." segment. Knowledge bases live inside the workspace tree, never at an arbitrary host path (FR-025).
+             * @example notes/vault
+             */
+            root_path: string;
+            /**
+             * @description True when a marker directory was found at root_path. False means an ordinary folder — NOT "we could not tell"; an unreadable marker is reported through detection_error instead of being silently downgraded (E-9).
+             * @example true
+             */
+            is_knowledge_base: boolean;
+            /**
+             * @description Which marker directory established the result. "omnipus_vault" is .omnipus-vault/, "obsidian" is .obsidian/, "none" accompanies is_knowledge_base=false. When both markers are present the Omnipus one is reported.
+             * @example omnipus_vault
+             * @enum {string}
+             */
+            marker: "omnipus_vault" | "obsidian" | "none";
+            /**
+             * @description Stable opaque identifier for this collection, derived from the root's RESOLVED REAL PATH (FR-031). Two mounts of the same folder — into one workspace or several — share a collection_id and therefore one index; the index is reference-counted across those mounts. Absent when is_knowledge_base is false. Callers MUST treat this as opaque and MUST NOT parse a filesystem path out of it.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id?: string;
+            /**
+             * @description Human-readable collection name recorded in the marker (FR-024). Absent when the marker records none; the SPA then falls back to the root folder's own name.
+             * @example Research vault
+             */
+            display_name?: string;
+            /**
+             * @description Collection-relative path of the folder holding note templates, as recorded in the marker (FR-024). Reachable without enabling hidden files (FR-101). Absent when the collection defines no templates.
+             * @example templates
+             */
+            template_path?: string;
+            /** @description Present when detection could not complete — a marker exists but could not be read, or the root itself could not be stat-ed. Detection then fails LOUDLY: is_knowledge_base carries the last known answer and the caller MUST surface this rather than treating the folder as ordinary (E-9). */
+            detection_error?: {
+                /**
+                 * @description Machine-readable reason detection could not complete.
+                 * @example marker_unreadable
+                 * @enum {string}
+                 */
+                code: "marker_unreadable" | "root_unreadable" | "root_missing" | "not_a_directory";
+                /**
+                 * @description Human-readable explanation naming the path involved.
+                 * @example cannot read notes/vault/.omnipus-vault: permission denied
+                 */
+                message: string;
+            };
+        };
+        /**
+         * KnowledgeSearchRequest
+         * @description Request body for POST /api/v1/library/{workspace_id}/knowledge/search (ADR-067 D18). Relevance search over one knowledge base's index.
+         *     Scope is not negotiable by the caller beyond naming a collection: the gateway restricts every search to knowledge bases mounted into the calling agent's workspace (FR-052), and a collection outside that scope yields an EMPTY result set rather than a permission error (FR-053) — so a caller can never use the error channel to probe for collections it may not see.
+         */
+        KnowledgeSearchRequest: {
+            /**
+             * @description Free-text relevance query.
+             * @example landlock seccomp fallback
+             */
+            query: string;
+            /**
+             * @description The KnowledgeBaseInfo.collection_id to search. Exactly one — a knowledge base is exactly one mounted folder and no query resolves across two collections (FR-026).
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id: string;
+            /**
+             * @description Maximum hits to return. A value above the server cap is CLAMPED, not rejected, and the clamp is reported on the response (limit_clamped / limit_applied, FR-037).
+             * @default 20
+             * @example 20
+             */
+            limit: number;
+            /**
+             * @description Number of hits to skip, for paging through a large result set.
+             * @default 0
+             * @example 0
+             */
+            offset: number;
+            /**
+             * @description Restrict hits to these entry kinds. Omitted means both. Attachments are indexed by FILENAME AND PATH ONLY — their contents are never opened (FR-039a) — so an attachment hit never carries a body excerpt.
+             * @example [
+             *       "note"
+             *     ]
+             */
+            kinds?: ("note" | "attachment")[];
+        };
+        /**
+         * KnowledgeSearchResponse
+         * @description Response for POST /api/v1/library/{workspace_id}/knowledge/search (ADR-067 D18). Hits plus the incompleteness statement, in the SAME response (FR-035) — a caller cannot obtain results without also obtaining the statement qualifying them.
+         *     A collection outside the caller's workspace scope yields hits: [] with incompleteness.complete = true, not an error (FR-053).
+         */
+        KnowledgeSearchResponse: {
+            /**
+             * @description The collection these hits came from, echoed from the request.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id: string;
+            /** @description Matched entries, best-scored first. Always present — an empty array, never null — so a client may map over it without a nil check. */
+            hits: components["schemas"]["KnowledgeSearchHit"][];
+            incompleteness: components["schemas"]["KnowledgeSearchIncompleteness"];
+            /**
+             * @description The result cap actually used for this query.
+             * @example 20
+             */
+            limit_applied: number;
+            /**
+             * @description True when the requested limit exceeded the server cap and was reduced to limit_applied. The clamp is REPORTED, never silent (FR-037).
+             * @example false
+             */
+            limit_clamped: boolean;
+            /**
+             * @description The limit the caller asked for. Present only when limit_clamped is true, so the caller can see exactly what was refused.
+             * @example 5000
+             */
+            limit_requested?: number;
+        };
+        /**
+         * KnowledgeSearchHit
+         * @description One relevance hit from a knowledge-base search (FR-050). Carries path, title and a matched excerpt.
+         *     A note larger than the segment size is indexed as several consecutive index documents (FR-034a) — no note is ever refused, skipped or truncated. Hits from several segments of one note COLLAPSE INTO ONE hit here, scored by its best segment, so a caller never has to de-duplicate by path.
+         */
+        KnowledgeSearchHit: {
+            /**
+             * @description Collection-relative path of the matched entry, forward-slash separated. Always inside the collection root (FR-043).
+             * @example architecture/sandboxing.md
+             */
+            path: string;
+            /**
+             * @description Display title — the note's frontmatter title or first heading, falling back to the basename. May be empty for an attachment.
+             * @example Sandboxing
+             */
+            title: string;
+            /**
+             * Format: double
+             * @description Relevance score. Comparable only within one response; not stable across queries or across index rebuilds of different content.
+             * @example 7.42
+             */
+            score: number;
+            /**
+             * @description Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
+             * @example note
+             * @enum {string}
+             */
+            kind: "note" | "attachment";
+            /**
+             * @description Matched text, RE-READ FROM THE FILE AT QUERY TIME and never stored in the index (FR-050a), so it always matches what is on disk. ABSENT when the re-read could not be performed — see excerpt_unavailable. A hit is still returned in that case, with path and title, because a silently dropped result and a fabricated excerpt are both worse than an honest gap.
+             * @example …Landlock is per-thread and inherited, so the gateway and its children…
+             */
+            excerpt?: string;
+            /**
+             * @description Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
+             * @example budget_exhausted
+             * @enum {string}
+             */
+            excerpt_unavailable?: "file_unreadable" | "file_missing" | "match_moved" | "budget_exhausted";
+            /**
+             * Format: int64
+             * @description ABSOLUTE byte offset of the match within the whole file — not within the index segment that produced it — so segmentation (FR-034a) cannot misdirect a re-read or a jump-to-match (FR-050a c).
+             * @example 20481
+             */
+            byte_offset?: number;
+        };
+        /**
+         * KnowledgeSearchIncompleteness
+         * @description The incompleteness statement that rides on EVERY KnowledgeSearchResponse (FR-035). Required, not optional: "absent" would be ambiguous between "complete" and "the server forgot", and the whole point of this object is that a partial answer can never be mistaken for a whole one.
+         *     Distinct from KnowledgeIndexProgressFrame, and the distinction is the one FR-080 turns on. This object is a PROPERTY OF THIS ANSWER — "the results you are reading were drawn from a partially built index". The frame is a STREAMING STATE — "indexing has now reached N of M". A client renders this next to the results it qualifies; it subscribes to the frame to watch a number move. Neither substitutes for the other.
+         */
+        KnowledgeSearchIncompleteness: {
+            /**
+             * @description True when the index covered the whole collection at query time, so these results are the whole answer.
+             * @example false
+             */
+            complete: boolean;
+            /**
+             * @description False while the collection is still being ENUMERATED and the total file count is not yet known. The caller MUST then report an indeterminate state rather than computing a ratio (FR-036) — indexed_files is present but total_files is not, and inventing a denominator is exactly the confidently-wrong answer this field exists to prevent.
+             * @example true
+             */
+            total_known: boolean;
+            /**
+             * @description Human-readable sentence stating what was and was not covered, ready to render beside the results. Server-authored so the client cannot phrase an incomplete answer as a complete one.
+             * @example Searched 4,120 of 12,880 notes — indexing is still running.
+             */
+            statement: string;
+            /**
+             * Format: int64
+             * @description Files indexed and therefore searchable at query time.
+             * @example 4120
+             */
+            indexed_files?: number;
+            /**
+             * Format: int64
+             * @description Total files in the collection. Present only when total_known is true.
+             * @example 12880
+             */
+            total_files?: number;
+        };
+        /**
+         * KnowledgeGraphResponse
+         * @description Response for GET /api/v1/library/{workspace_id}/knowledge/graph (ADR-067 D18). One shape serves all five graph queries (FR-051) — links, backlinks, unresolved, orphans and neighbourhood — because they differ only in which subgraph is selected, not in what a link is.
+         *     Every query is bounded (FR-054) and reports its own truncation, so a caller can always tell a small graph from a clipped one.
+         */
+        KnowledgeGraphResponse: {
+            /**
+             * @description The collection queried.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id: string;
+            /**
+             * @description Which query produced this graph. "links" and "backlinks" are outbound and inbound edges of source_path; "unresolved" lists edges whose target does not exist; "orphans" lists nodes with no inbound edge; "neighbourhood" is the bounded subgraph around source_path.
+             * @example backlinks
+             * @enum {string}
+             */
+            kind: "links" | "backlinks" | "unresolved" | "orphans" | "neighbourhood";
+            /**
+             * @description The note the query was about. Required in practice for links, backlinks and neighbourhood; absent for unresolved and orphans, which are collection-wide.
+             * @example architecture/sandboxing.md
+             */
+            source_path?: string;
+            /** @description Every node referenced by this graph, including non-existent link targets (exists=false). Always an array, never null. */
+            nodes: components["schemas"]["KnowledgeGraphNode"][];
+            /** @description Every edge in this graph. Empty for "orphans". Always an array, never null. */
+            edges: components["schemas"]["KnowledgeGraphEdge"][];
+            /** @description Paths the walk did not follow, with reasons. Always an array, never null — an empty array is a positive statement that nothing was skipped. */
+            skipped: components["schemas"]["KnowledgeGraphSkip"][];
+            /**
+             * @description True when a bound stopped the walk before it was exhausted, so this graph is a clipped view. The bounds that applied are in hop_limit_applied and node_limit_applied.
+             * @example false
+             */
+            truncated: boolean;
+            /**
+             * @description Maximum hops walked from source_path (FR-054). Present for "neighbourhood".
+             * @example 2
+             */
+            hop_limit_applied?: number;
+            /**
+             * @description Maximum nodes this response may contain (FR-054).
+             * @example 200
+             */
+            node_limit_applied?: number;
+        };
+        /**
+         * KnowledgeGraphNode
+         * @description One note or attachment appearing in a KnowledgeGraphResponse. A node may describe a target that does not exist on disk — that is how an unresolved wikilink is represented (FR-042).
+         */
+        KnowledgeGraphNode: {
+            /**
+             * @description Collection-relative path, forward-slash separated. For a node that does not exist, this is the link text as written, normalised — it is NOT a path the caller may read.
+             * @example architecture/sandboxing.md
+             */
+            path: string;
+            /**
+             * @description Display title. Absent for a node that does not exist.
+             * @example Sandboxing
+             */
+            title?: string;
+            /**
+             * @description False for the target of an unresolved link. The client MUST mark such a node visibly and MUST NOT navigate on click (FR-065).
+             * @example true
+             */
+            exists: boolean;
+        };
+        /**
+         * KnowledgeGraphEdge
+         * @description One directed link between two nodes, plus how it was resolved. Resolution order is fixed (FR-040): exact path, then unique basename, then shortest path, then lexicographic order. An ambiguous basename still RESOLVES by that rule and is ALSO reported as ambiguous (FR-041) — resolving it is not a licence to stay quiet about it.
+         */
+        KnowledgeGraphEdge: {
+            /**
+             * @description Collection-relative path of the note containing the link.
+             * @example index.md
+             */
+            from_path: string;
+            /**
+             * @description Collection-relative path of the resolved target, or the normalised link text when resolution is "unresolved".
+             * @example architecture/sandboxing.md
+             */
+            to_path: string;
+            /**
+             * @description The link target exactly as written in the source note.
+             * @example sandboxing
+             */
+            link_text?: string;
+            /**
+             * @description Display alias, for an aliased wikilink such as [[note|alias]].
+             * @example how sandboxing works
+             */
+            alias?: string;
+            /**
+             * @description Heading fragment, for a heading link such as [[note#Section]].
+             * @example Section
+             */
+            heading?: string;
+            /**
+             * @description Which rule in the FR-040 ladder produced to_path. "unresolved" means no target matched, or the target lay outside the collection root — in which case the target was NOT read (FR-043).
+             * @example unique_basename
+             * @enum {string}
+             */
+            resolution: "exact_path" | "unique_basename" | "shortest_path" | "lexicographic" | "unresolved";
+            /**
+             * @description True when more than one file matched and the tie-break decided it. The alternatives are listed in candidates.
+             * @example false
+             */
+            ambiguous: boolean;
+            /**
+             * @description Every path that matched, in tie-break order, when ambiguous is true. Present only then.
+             * @example [
+             *       "notes/setup.md",
+             *       "archive/setup.md"
+             *     ]
+             */
+            candidates?: string[];
+            /**
+             * @description True when the link is a transclusion (![[note]]) rather than a plain link.
+             * @example false
+             */
+            embed?: boolean;
+        };
+        /**
+         * KnowledgeGraphSkip
+         * @description One path the walk deliberately did not follow, and why. Reported rather than omitted: a file the system cannot address must be visible to the caller, never silently absent (FR-112).
+         */
+        KnowledgeGraphSkip: {
+            /**
+             * @description Collection-relative path that was skipped.
+             * @example notes/link-to-home
+             */
+            path: string;
+            /**
+             * @description "symlink" — a symbolic link, skipped and reported rather than followed (FR-044); this is also how a symlink loop terminates (E-8). "outside_root" — the resolved target lay outside the collection root and was not read (FR-043). "unreadable" — permissions or I/O error; an evicted or unreadable file fails loudly and is never indexed as empty (FR-111). "not_addressable" — the name cannot be represented on this platform. "node_limit" / "hop_limit" — the neighbourhood bound was reached (FR-054).
+             * @example symlink
+             * @enum {string}
+             */
+            reason: "symlink" | "outside_root" | "unreadable" | "not_addressable" | "node_limit" | "hop_limit";
+            /**
+             * @description Human-readable explanation, safe to display.
+             * @example symbolic link to /home/dan/other-vault — not followed
+             */
+            detail?: string;
+        };
+        /**
+         * KnowledgeOutline
+         * @description Response for GET /api/v1/library/{workspace_id}/knowledge/outline (ADR-067 D18). The heading tree for the reading rail.
+         *     Available for ANY markdown file, whether or not it belongs to a knowledge base (FR-062): an outline is parsed from the one file in hand and needs no index. Search and backlinks stay knowledge-base-only precisely because they do need one — is_knowledge_base tells the client which of the rail's panels it may offer.
+         */
+        KnowledgeOutline: {
+            /**
+             * @description Workspace-relative path of the file this outline describes.
+             * @example notes/vault/architecture/sandboxing.md
+             */
+            path: string;
+            /**
+             * @description True when this file sits inside a detected knowledge base, so the client may additionally offer search and backlinks. False means the outline is all that is available for this file — not an error.
+             * @example true
+             */
+            is_knowledge_base: boolean;
+            /**
+             * @description The collection containing this file. Present only when is_knowledge_base is true.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id?: string;
+            /** @description Headings in document order. Always an array, never null; empty for a file with no headings. */
+            headings: components["schemas"]["KnowledgeOutlineHeading"][];
+            /**
+             * @description True when the file opens with a frontmatter block that is not valid YAML. The file is still outlined and still indexed for body text; the malformed frontmatter is reported rather than silently dropped (E-17).
+             * @example false
+             */
+            frontmatter_malformed?: boolean;
+        };
+        /**
+         * KnowledgeOutlineHeading
+         * @description One heading in a markdown file's outline. The outline is a FLAT list ordered as the headings appear in the document, with nesting carried by level — not a recursive tree. A flat list has one representation for any document, including one that skips from H1 to H3, where a tree would force the server to invent an intermediate node the author never wrote.
+         */
+        KnowledgeOutlineHeading: {
+            /**
+             * @description Heading level, 1 for "#" through 6 for "######".
+             * @example 2
+             */
+            level: number;
+            /**
+             * @description Heading text with markdown inline formatting removed. May be empty for a heading marker with no text.
+             * @example Sandboxing
+             */
+            text: string;
+            /**
+             * @description URL fragment identifying this heading, used to make a heading addressable and to resolve a heading link ([[note#Section]]). Unique within one outline — a repeated heading text gets a numeric suffix.
+             * @example sandboxing
+             */
+            slug: string;
+            /**
+             * @description 1-based line number of the heading in the source file.
+             * @example 42
+             */
+            line?: number;
+            /**
+             * Format: int64
+             * @description Absolute byte offset of the heading within the whole file, for jump-to-heading without re-parsing.
+             * @example 1180
+             */
+            byte_offset?: number;
+        };
+        /**
+         * KnowledgeConflictError
+         * @description Typed 409 body for a refused knowledge-base write (ADR-067 D18 / D14). Returned when the version token a write carried does not match the file on disk (FR-106) — the file changed underneath the caller and applying the write would silently lose whatever changed.
+         *     The refusal NAMES THE PATH, because "conflict" without a path is not actionable in a collection of thousands of notes.
+         *     THE VERSION TOKEN, defined here because this is the type that carries it: an opaque string the server computes over the file's CONTENT — not its modification time, which is not sufficient on its own to detect an external change (FR-107). Every read that a write may follow returns the current token, every write MUST send back the token it read, and the server compares them. Callers MUST treat the token as opaque: never parse it, never compare it for ordering, never construct one. The encoding is the server's to change without a contract change, and a client that has not decoded it cannot be broken by that.
+         *     Shares the "error" and "code" fields of the standard ErrorResponse envelope so a generic error handler still works on it unchanged; the extra fields are what a conflict-aware handler uses.
+         */
+        KnowledgeConflictError: {
+            /**
+             * @description Human-readable message, safe to display.
+             * @example architecture/sandboxing.md changed on disk since you opened it
+             */
+            error: string;
+            /**
+             * @description Machine-readable discriminator. A single value, so a client can branch on it without string matching on the message.
+             * @example knowledge_version_conflict
+             * @enum {string}
+             */
+            code: "knowledge_version_conflict";
+            /**
+             * @description Collection-relative path of the file that was NOT written.
+             * @example architecture/sandboxing.md
+             */
+            path: string;
+            /**
+             * @description The opaque version token the caller sent — what it believed the file was. Absent when the caller sent none, which is itself a refusal (FR-106 requires a token on every write).
+             * @example v1:9f2a7c40
+             */
+            expected_version?: string;
+            /**
+             * @description The opaque version token of the file as it now stands. A caller that re-reads, merges and retries sends this one back. Absent when the file has been deleted since.
+             * @example v1:1b8e330d
+             */
+            actual_version?: string;
+        };
+        /**
+         * KnowledgeMountConflictError
+         * @description Typed 409 body for a refused knowledge-base mount. A knowledge base is exactly ONE mounted folder (FR-026): a second root is refused, and the error NAMES BOTH so the operator can see which existing collection is in the way rather than guessing.
+         *     Beyond ADR-067 D18's seven-type table, added because FR-026 requires a "typed error naming both" and that is by definition a cross-boundary type. Without it here, the first implementer hand-writes the struct and trips the Hard Constraint #8 lint gate.
+         */
+        KnowledgeMountConflictError: {
+            /**
+             * @description Human-readable message naming both roots.
+             * @example workspace already has a knowledge base at notes/vault; cannot also mount research/second-vault
+             */
+            error: string;
+            /**
+             * @description Machine-readable discriminator.
+             * @example knowledge_mount_conflict
+             * @enum {string}
+             */
+            code: "knowledge_mount_conflict";
+            /**
+             * @description Workspace-relative root of the collection already mounted.
+             * @example notes/vault
+             */
+            existing_root_path: string;
+            /**
+             * @description Workspace-relative root the caller asked to mount.
+             * @example research/second-vault
+             */
+            requested_root_path: string;
+            /**
+             * @description collection_id of the already-mounted collection, when known.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            existing_collection_id?: string;
         };
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
@@ -16646,6 +17389,235 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    mintLibraryPreviewToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryPreviewTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Token minted. The caller should put url into an iframe src and drive its expiry notice from expires_at. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryPreviewTokenResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getLibraryInlineDisposition: {
+        parameters: {
+            query: {
+                /**
+                 * @description Workspace-relative path of the file to classify.
+                 * @example reports/q3/index.html
+                 */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How this file may be displayed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryInlineDisposition"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getKnowledgeBaseInfo: {
+        parameters: {
+            query: {
+                /**
+                 * @description Workspace-relative path of the folder to test. Use "" or "." for the work-tree root.
+                 * @example notes/vault
+                 */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Detection result for this folder. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeBaseInfo"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            /** @description A second knowledge-base root was requested for a workspace that already has one. A knowledge base is exactly one mounted folder (FR-026); the body names both roots. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeMountConflictError"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    searchKnowledgeBase: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KnowledgeSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Hits and the incompleteness statement qualifying them. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeSearchResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getKnowledgeGraph: {
+        parameters: {
+            query: {
+                /**
+                 * @description The KnowledgeBaseInfo.collection_id to query.
+                 * @example kb_3d1c9a7e5b2f4806
+                 */
+                collection_id: string;
+                /**
+                 * @description Which graph query to run.
+                 * @example backlinks
+                 */
+                kind: "links" | "backlinks" | "unresolved" | "orphans" | "neighbourhood";
+                /**
+                 * @description Collection-relative path of the note the query is about. Required for links, backlinks and neighbourhood; ignored for unresolved and orphans, which are collection-wide.
+                 * @example architecture/sandboxing.md
+                 */
+                path?: string;
+                /**
+                 * @description Maximum hops for a neighbourhood query. Clamped to the server bound; the value actually used is echoed as hop_limit_applied.
+                 * @example 2
+                 */
+                hops?: number;
+                /**
+                 * @description Maximum nodes in the response. Clamped to the server bound; the value actually used is echoed as node_limit_applied.
+                 * @example 200
+                 */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The selected subgraph, with whatever the walk skipped. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeGraphResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getKnowledgeOutline: {
+        parameters: {
+            query: {
+                /**
+                 * @description Workspace-relative path of the markdown file.
+                 * @example notes/vault/architecture/sandboxing.md
+                 */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file's headings in document order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeOutline"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     getWorkspaceDelegation: {
         parameters: {
             query?: never;
@@ -17218,6 +18190,22 @@ export type LibraryRenameRequest = components["schemas"]["LibraryRenameRequest"]
 export type LibraryUploadResponse = components["schemas"]["LibraryUploadResponse"];
 export type LibraryTransferRequest = components["schemas"]["LibraryTransferRequest"];
 export type LibraryMkdirRequest = components["schemas"]["LibraryMkdirRequest"];
+export type LibraryInlineDisposition = components["schemas"]["LibraryInlineDisposition"];
+export type LibraryPreviewTokenRequest = components["schemas"]["LibraryPreviewTokenRequest"];
+export type LibraryPreviewTokenResponse = components["schemas"]["LibraryPreviewTokenResponse"];
+export type KnowledgeBaseInfo = components["schemas"]["KnowledgeBaseInfo"];
+export type KnowledgeSearchRequest = components["schemas"]["KnowledgeSearchRequest"];
+export type KnowledgeSearchResponse = components["schemas"]["KnowledgeSearchResponse"];
+export type KnowledgeSearchHit = components["schemas"]["KnowledgeSearchHit"];
+export type KnowledgeSearchIncompleteness = components["schemas"]["KnowledgeSearchIncompleteness"];
+export type KnowledgeGraphResponse = components["schemas"]["KnowledgeGraphResponse"];
+export type KnowledgeGraphNode = components["schemas"]["KnowledgeGraphNode"];
+export type KnowledgeGraphEdge = components["schemas"]["KnowledgeGraphEdge"];
+export type KnowledgeGraphSkip = components["schemas"]["KnowledgeGraphSkip"];
+export type KnowledgeOutline = components["schemas"]["KnowledgeOutline"];
+export type KnowledgeOutlineHeading = components["schemas"]["KnowledgeOutlineHeading"];
+export type KnowledgeConflictError = components["schemas"]["KnowledgeConflictError"];
+export type KnowledgeMountConflictError = components["schemas"]["KnowledgeMountConflictError"];
 export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
 export type AgentRateLimits = components["schemas"]["AgentRateLimits"];

@@ -189,25 +189,89 @@ jobs:
       - name: Run TypeScript type check
         run: npm run typecheck
 
+  vitest-coverage-guard:
+    name: Vitest Matrix Coverage Guard
+    # ADR-067 FR-085 / FR-086. Fails if any test file vitest would collect is
+    # matched by no `patterns:` group below (it would never run while this
+    # workflow reported green), if a file is matched by two groups (it runs
+    # twice and the shard split is a lie), or if a pattern points at a path that
+    # no longer exists (a deleted directory in the matrix READS as coverage).
+    #
+    # Deliberately NOT a step inside the vitest matrix job: it must fail once,
+    # loudly, with the full list — not six times with whatever each shard sees —
+    # and it must still run when a shard is red. No `npm ci`: the script uses
+    # only node builtins, so this job is seconds, not minutes.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Self-test the guard
+        # Guard the guard: if its glob/substring matching silently stops
+        # matching, every check below reports clean.
+        run: node scripts/check-vitest-coverage.mjs --self-test
+
+      - name: Verify every test file is in exactly one vitest group
+        run: node scripts/check-vitest-coverage.mjs
+
   vitest:
     name: Vitest — ${{ matrix.group }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        # THE GROUPS ARE THE TEST SELECTION. A test file matched by no pattern
+        # below is never executed and this job still reports green — the
+        # pipeline says "tests passed" about files it never opened.
+        #
+        # That is not hypothetical: before 2026-08-22 these groups covered four
+        # areas and missed twelve, so ~117 of 427 SPA test files (27%) ran
+        # NOWHERE — every one of src/components/workspaces/ (57 files, the v0.3
+        # flagship), src/hooks/ (16), src/components/screens/ (12),
+        # src/components/browser/ (11), src/components/library/ (7, the
+        # directory ADR-067 modifies), src/components/calendar/ (7), and the
+        # rest. Two patterns (src/components/command-center/,
+        # src/components/projects/) pointed at directories that had been
+        # DELETED, so the matrix looked broader than it was.
+        #
+        # Rules when editing:
+        #   1. Patterns are vitest positional filters: plain SUBSTRING matches
+        #      against the full path, not globs.
+        #   2. Keep them mutually exclusive (disjoint path prefixes). Overlap
+        #      runs a file twice and hides which group owns it.
+        #   3. Adding a test directory means adding it here. Nothing infers
+        #      coverage from the tree — but the `vitest-coverage-guard` job
+        #      above (scripts/check-vitest-coverage.mjs, ADR-067 FR-085/FR-086)
+        #      turns that from a convention into an enforced property: it fails
+        #      the build, naming the files, rather than letting them go unrun.
         include:
-          # Group A: lib, store, routes, test — fast pure-logic units
-          - group: lib-store
-            patterns: "src/lib/ src/store/ src/routes/ src/test/"
-          # Group B: chat components — heaviest component group
+          # Group A: lib + routes + test helpers + e2e fixture units.
+          # tests/e2e/ contributes only *.test.ts fixture units — the Playwright
+          # *.spec.ts files are not in vitest's `include` (see vite.config.ts).
+          - group: lib-routes
+            patterns: "src/lib/ src/routes/ src/test/ tests/e2e/"
+          # Group B: store + hooks + styles + brand assets
+          - group: store-hooks
+            patterns: "src/store/ src/hooks/ src/styles/ src/assets/"
+          # Group C: chat components — heaviest single component group
           - group: components-chat
             patterns: "src/components/chat/"
-          # Group C: agents + settings + skills + shared + ui components
+          # Group D: agents + settings + skills + shared + ui components
           - group: components-agents-settings
             patterns: "src/components/agents/ src/components/settings/ src/components/skills/ src/components/shared/ src/components/ui/"
-          # Group D: layout + command-center + projects components
-          - group: components-layout-projects
-            patterns: "src/components/layout/ src/components/command-center/ src/components/projects/"
+          # Group E: workspaces (incl. team/ and graph/) — the v0.3 flagship
+          - group: components-workspaces
+            patterns: "src/components/workspaces/"
+          # Group F: library (incl. preview/) + the remaining component areas.
+          # library/ is expected to grow under ADR-067; this group is sized with
+          # headroom so it can be split off on its own when it does.
+          - group: components-library-misc
+            patterns: "src/components/library/ src/components/browser/ src/components/screens/ src/components/layout/ src/components/calendar/ src/components/sessions/ src/components/search/ src/components/providers/ src/components/connectors/"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -480,6 +544,26 @@ jobs:
         # and release builds are always CGO_ENABLED=0.
         run: go vet -tags goolm,stdjson ./...
 
+      - name: GOOS=windows vet (cross-target compile check)
+        # The Linux-side half of ADR-067 Stage 0's Windows coverage, and the
+        # cheap half: `go vet` type-checks every package AND every _test.go for
+        # windows/amd64 without needing a Windows runner.
+        #
+        # What it catches that nothing else does: pathsafe selects its name-shape
+        # rule set through a pair of GOOS-suffixed one-line files. A file that
+        # only compiles on Linux is invisible to every other gate here — the
+        # windows-pathsafe job below would fail, but only for PRs that reach it,
+        # and `make build-all`'s windows cross-compile never looks at test files.
+        #
+        # Requires the SPA embed target, which the "Build SPA" step above has
+        # already populated (pkg/gateway/embed.go has //go:embed all:spa).
+        # Verified 2026-08-22: the whole module vets clean under GOOS=windows;
+        # the POSIX-only test files are all //go:build-tagged already.
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: go vet -tags goolm,stdjson ./...
+
       - name: CGO_ENABLED=1 build (all packages)
         # The counterpart to the CGO=0 build above, and the gate CLAUDE.md has
         # always documented but CI never actually ran (every job pinned
@@ -495,6 +579,55 @@ jobs:
           CGO_ENABLED: "1"
         run: go build -tags goolm,stdjson ./...
 
+  windows-pathsafe:
+    name: Windows — pathsafe (test) + library (build)
+    # The ONLY job in this repository that RUNS Go code on Windows (ADR-067
+    # Stage 0). Every other workflow is ubuntu-* or macos-*; the sole other
+    # Windows exposure is the cross-compile in `make build-all`, which proves
+    # the code compiles and asserts nothing about what it does.
+    #
+    # Scope is deliberately narrow, and asymmetric on purpose:
+    #
+    #   pkg/pathsafe — BUILT AND TESTED. Its name-shape rule set is a value
+    #     selected by GOOS, so both rule sets are exercised on the Linux runner
+    #     by a table that passes each explicitly. Exactly one fact needs real
+    #     Windows: that the Windows set is the one Windows actually picks.
+    #     That is what this job establishes.
+    #
+    #   pkg/library — BUILT ONLY. See the residual below.
+    #
+    # RESIDUAL, stated rather than implied: pkg/library's Windows *runtime*
+    # behaviour stays unexecuted. Its containment tests create symlinks, which
+    # needs SeCreateSymbolicLinkPrivilege — withheld from non-elevated accounts
+    # by default. Running them here would not fail; they would SKIP, and a
+    # skipped security test reports green while proving nothing, which is worse
+    # than not running it at all. Building the package catches compile-level
+    # breakage on Windows and that is the whole of the claim. Widening this job
+    # means solving the privilege problem first (Developer Mode on the runner,
+    # or an elevated step), not deleting the package scope below.
+    #
+    # No SPA build step: neither package imports pkg/gateway, so //go:embed
+    # all:spa is not in this build graph.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build pathsafe + library (windows/amd64)
+        run: go build -tags goolm,stdjson ./pkg/pathsafe/... ./pkg/library/...
+
+      - name: Run pathsafe tests
+        # -count=1 defeats the test cache: a cached PASS from a previous run is
+        # not evidence that this commit's GOOS selection is right.
+        run: go test -tags goolm,stdjson -count=1 ./pkg/pathsafe/...
 
   test:
     name: Tests
@@ -1137,7 +1270,17 @@ jobs:
           echo "OPENROUTER_API_KEY_CI is set (${#OPENROUTER_API_KEY_CI} chars)."
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        # All three engines, not just Chromium (ADR-067 SC-012). The preview
+        # isolation specs assert cross-origin properties — "the cookie was not
+        # readable", "nothing reached the external origin" — and those are
+        # ENGINE-SPECIFIC: Chromium, Firefox and WebKit implement partitioning
+        # and referrer rules differently, so a Chromium-only pass says nothing
+        # about the other two. If an engine is missing here, its project fails
+        # to launch rather than silently skipping.
+        #
+        # Scope note: WebKit is not Safari, and no macOS runner is planned —
+        # Safari proper remains uncovered, deliberately and on the record.
+        run: npx playwright install --with-deps chromium firefox webkit
 
       - name: Run Playwright tests
         # OPENROUTER_API_KEY_CI is inherited per-shard from $GITHUB_ENV (Resolve shard LLM key).

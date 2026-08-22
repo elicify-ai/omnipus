@@ -596,6 +596,40 @@ func DefaultConfig() *Config {
 				// including the Worker's sparse-map deny — an absent key there
 				// would inherit this "allow").
 				"list_jobs": "allow",
+
+				// --- ADR-067 D17 (FR-070) knowledge-base tools ---
+				// All nine seeded "allow" at the ceiling, retrieval and
+				// authoring alike. As everywhere else in this map, that grants
+				// the tools to NOBODY by itself — it only raises the level an
+				// agent's own policy may be granted up to, and every seeded
+				// agent carries an explicit per-agent entry
+				// (pkg/coreagent/core.go's coreAgentSeed: allow/allow for Jim
+				// and Ava, allow-retrieval + ask-authoring for Mia and Ray,
+				// explicit deny everywhere else including the Worker's sparse
+				// map, where an absent key would silently INHERIT this allow).
+				//
+				// An "ask" ceiling on the authoring tools would be the same
+				// landed defect recorded four times above (inspect_session,
+				// the ADR-052 three, plan_correct/stop_plan, list_jobs): the
+				// runtime global x agent merge is strictest-wins
+				// (pkg/tools/compositor.go:resolveEffectivePolicyWith), so it
+				// would drag Jim's and Ava's seeded "allow" back down to "ask"
+				// and make D17's role split dead on every install while the
+				// seed data still read exactly as the ADR requires.
+				//
+				// The real containment for these tools is not the ceiling: it
+				// is the per-agent seed, the workspace-mount scoping the
+				// retrieval tools enforce themselves (ADR-067 D7), and the
+				// per-mutation audit event (ADR-067 D19).
+				"knowledge_search":         "allow",
+				"knowledge_graph":          "allow",
+				"knowledge_create":         "allow",
+				"knowledge_link":           "allow",
+				"knowledge_set_property":   "allow",
+				"knowledge_append_section": "allow",
+				"knowledge_tasks":          "allow",
+				"knowledge_move":           "allow",
+				"knowledge_rename":         "allow",
 			},
 		},
 		// Planning holds the Planning & Goals epic's global loop bounds

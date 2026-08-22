@@ -1,0 +1,56 @@
+title: KnowledgeSearchIncompleteness
+description: >
+  The incompleteness statement that rides on EVERY KnowledgeSearchResponse
+  (FR-035). Required, not optional: "absent" would be ambiguous between
+  "complete" and "the server forgot", and the whole point of this object is
+  that a partial answer can never be mistaken for a whole one.
+
+  Distinct from KnowledgeIndexProgressFrame, and the distinction is the one
+  FR-080 turns on. This object is a PROPERTY OF THIS ANSWER — "the results
+  you are reading were drawn from a partially built index". The frame is a
+  STREAMING STATE — "indexing has now reached N of M". A client renders this
+  next to the results it qualifies; it subscribes to the frame to watch a
+  number move. Neither substitutes for the other.
+type: object
+additionalProperties: false
+required:
+  - complete
+  - total_known
+  - statement
+properties:
+  complete:
+    type: boolean
+    description: >
+      True when the index covered the whole collection at query time, so
+      these results are the whole answer.
+    example: false
+  total_known:
+    type: boolean
+    description: >
+      False while the collection is still being ENUMERATED and the total file
+      count is not yet known. The caller MUST then report an indeterminate
+      state rather than computing a ratio (FR-036) — indexed_files is present
+      but total_files is not, and inventing a denominator is exactly the
+      confidently-wrong answer this field exists to prevent.
+    example: true
+  statement:
+    type: string
+    minLength: 1
+    description: >
+      Human-readable sentence stating what was and was not covered, ready to
+      render beside the results. Server-authored so the client cannot phrase
+      an incomplete answer as a complete one.
+    example: "Searched 4,120 of 12,880 notes — indexing is still running."
+  indexed_files:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Files indexed and therefore searchable at query time.
+    example: 4120
+  total_files:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      Total files in the collection. Present only when total_known is true.
+    example: 12880

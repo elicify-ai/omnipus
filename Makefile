@@ -24,7 +24,7 @@
 #   bedrock    compiles in the real AWS Bedrock provider (stub without it)
 # =============================================================================
 
-.PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast spa-embed release-snapshot release-build
+.PHONY: all build install uninstall clean help test vet vet-windows gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast spa-embed release-snapshot release-build
 
 # Build variables
 BINARY_NAME=omnipus
@@ -300,6 +300,17 @@ clean:
 ## vet: Run go vet for static analysis
 vet: generate
 	@$(GO) vet $(GOFLAGS) ./...
+
+## vet-windows: go vet the whole module for windows/amd64 from this machine
+# The local equivalent of pr.yml's "GOOS=windows vet" step. It type-checks every
+# package AND every _test.go for Windows without a Windows machine, which is the
+# only way to catch a GOOS-selected file (e.g. pathsafe's rule-set selection,
+# ADR-067 Stage 0) that compiles on Linux and not on Windows.
+# Needs pkg/gateway/spa/ to exist for //go:embed all:spa — run `make spa-embed`
+# first, or the gateway package alone fails to load with "pattern all:spa: no
+# matching files found".
+vet-windows: generate
+	@GOOS=windows GOARCH=amd64 $(GO) vet $(GOFLAGS) ./...
 
 ## test: Test Go code
 test: generate

@@ -92,7 +92,28 @@
         "tests/e2e/retention.spec.ts",
         "tests/e2e/settings-memory.spec.ts",
         "tests/e2e/tool-order.spec.ts",
-        "tests/e2e/browser-live-video.spec.ts"
+        "tests/e2e/browser-live-video.spec.ts",
+        "tests/e2e/preview-pdf.spec.ts"
+      ]
+    },
+    {
+      "_comment": "ADR-067 §13.4 isolation matrix. These two specs are the ONLY files the isolation-chromium/firefox/webkit projects match, and each runs on all three engines, so this shard needs `playwright install firefox webkit` in addition to chromium -- a chromium-only runner cannot execute it. Its own shard for exactly that reason: the extra engine install is confined here instead of slowing every other shard. key_slot a because nothing here calls an LLM.",
+      "group": "preview-isolation",
+      "key_slot": "a",
+      "port": 6069,
+      "specs": [
+        "tests/e2e/preview-isolation.spec.ts",
+        "tests/e2e/preview-bundle.spec.ts"
+      ]
+    },
+    {
+      "_comment": "ADR-067 §13.4 item 4 / §0. The only two headed cases -- the browser's OWN PDF handling, which headless Chromium does not have. Needs a display (xvfb-run, or GitHub Actions' bundled X server) because playwright.config.ts sets headless:false on the `preview-headed` project. Separate shard so that requirement lands on one job rather than all of them.",
+      "group": "preview-headed",
+      "key_slot": "a",
+      "port": 6070,
+      "specs": [
+        "tests/e2e/preview-pdf-toplevel.spec.ts",
+        "tests/e2e/preview-pdf-viewer-control.spec.ts"
       ]
     },
     {

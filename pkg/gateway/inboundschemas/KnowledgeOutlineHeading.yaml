@@ -1,0 +1,47 @@
+title: KnowledgeOutlineHeading
+description: >
+  One heading in a markdown file's outline. The outline is a FLAT list
+  ordered as the headings appear in the document, with nesting carried by
+  level — not a recursive tree. A flat list has one representation for any
+  document, including one that skips from H1 to H3, where a tree would force
+  the server to invent an intermediate node the author never wrote.
+type: object
+additionalProperties: false
+required:
+  - level
+  - text
+  - slug
+properties:
+  level:
+    type: integer
+    minimum: 1
+    maximum: 6
+    description: Heading level, 1 for "#" through 6 for "######".
+    example: 2
+  text:
+    type: string
+    description: >
+      Heading text with markdown inline formatting removed. May be empty for
+      a heading marker with no text.
+    example: "Sandboxing"
+  slug:
+    type: string
+    minLength: 1
+    description: >
+      URL fragment identifying this heading, used to make a heading
+      addressable and to resolve a heading link ([[note#Section]]). Unique
+      within one outline — a repeated heading text gets a numeric suffix.
+    example: "sandboxing"
+  line:
+    type: integer
+    minimum: 1
+    description: 1-based line number of the heading in the source file.
+    example: 42
+  byte_offset:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      Absolute byte offset of the heading within the whole file, for
+      jump-to-heading without re-parsing.
+    example: 1180

@@ -344,6 +344,29 @@ type JudgeVerdictFrame struct {
 	Type   string  `json:"type"`
 }
 
+// KnowledgeIndexProgressFrame — Server → client. Indexing progress for ONE knowledge base (ADR-067 D18 `KnowledgeIndexProgress`, FR-080). WHY THIS IS A FRAME AND NOT A REST FIELD. Progress is a value that moves — enumerating a large collection can take seconds and indexing it minutes. A REST field means the client either polls (lagging behind, and hammering the gateway to lag less) or shows a number that quietly goes stale. Pushing it means the reader sees the count move and the gateway does no work it was not already doing. A REST surface that exposed progress would invite exactly the polling loop this decision exists to prevent, which is why KnowledgeBaseInfo carries no counts at all. NOT THE SAME THING AS KnowledgeSearchResponse.incompleteness. That object rides on a search response and qualifies THAT ANSWER — "these results were drawn from a partially built index". This frame is the live state of the indexer, independent of any query. Both exist deliberately; neither replaces the other. HONESTY WHILE ENUMERATING. total_files is ABSENT until enumeration finishes, and total_known says so (FR-036). A client MUST render an indeterminate state in that window and MUST NOT compute a ratio against a total it does not have — a progress bar built on an invented denominator is a confidently wrong answer, which is the one outcome this feature refuses everywhere else too.
+type KnowledgeIndexProgressFrame struct {
+	// The collection being indexed — KnowledgeBaseInfo.collection_id, derived from the root's resolved real path (FR-031). Opaque to the client. Two mounts of one folder share it, so a client that shows the same collection twice updates both from one frame.
+	CollectionId string `json:"collection_id"`
+	// Human-readable failure reason. Present if and only if phase is "failed".
+	Error *string `json:"error,omitempty"`
+	// Files indexed and therefore searchable right now. Monotonic within one indexing run; resets when a rebuild starts.
+	IndexedFiles int64 `json:"indexed_files"`
+	// "enumerating" — walking the tree to discover files; total_files is not yet known. "indexing" — parsing and writing index documents; total_files is known. "idle" — nothing in flight and the index is current; this is the terminal success state and the client should stop showing progress. "failed" — indexing stopped with an error, described in `error`; the client MUST surface it rather than leaving a bar stalled at some percentage forever.
+	Phase string `json:"phase"`
+	// Files deliberately not indexed and reported — symbolic links, paths resolving outside the collection root, unreadable or evicted files (FR-044, FR-043, FR-111, FR-112). Non-zero here is not a failure, but it is never silent: it is the client's cue to offer the detail rather than let files vanish unmentioned.
+	SkippedFiles *int64 `json:"skipped_files,omitempty"`
+	// Total files in the collection. Present if and only if total_known is true.
+	TotalFiles *int64 `json:"total_files,omitempty"`
+	// False while enumerating. When false, total_files is absent and the client MUST show an indeterminate state (FR-036).
+	TotalKnown bool   `json:"total_known"`
+	Type       string `json:"type"`
+	// When the server produced this frame. Lets a client discard a frame that arrives out of order rather than letting a stale count overwrite a fresher one.
+	UpdatedAt *string `json:"updated_at,omitempty"`
+	// Workspace through which this collection is mounted.
+	WorkspaceId string `json:"workspace_id"`
+}
+
 // LLMError — Translated provider/LLM error safe for the live WebSocket boundary.
 type LLMError struct {
 	Code string `json:"code"`

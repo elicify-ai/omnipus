@@ -57,6 +57,17 @@ tags:
     would otherwise also match it.
 - name: Preview
   description: Agent-generated preview content served on the main gateway listener at /preview/ (token-authenticated, ADR-044)
+- name: Knowledge
+  description: >
+    Knowledge-base read surface over a mounted collection inside a workspace
+    work tree (ADR-067) — marker-based detection, relevance search, the link
+    graph, and per-file heading outlines. Retrieval is scoped to knowledge
+    bases mounted into the calling agent's workspace; a collection outside
+    that scope returns an empty result set rather than a permission error, so
+    the error channel cannot be used to probe for collections the caller may
+    not see. Index PROGRESS is deliberately absent from this REST surface: it
+    is a streaming state carried by the knowledge_index_progress WebSocket
+    frame in contracts/asyncapi.yaml, not something a client polls for.
 - name: Agents
   description: Agent management endpoints
 - name: Settings
@@ -190,6 +201,38 @@ components:
       $ref: ./components/schemas/LibraryTransferRequest.yaml
     LibraryMkdirRequest:
       $ref: ./components/schemas/LibraryMkdirRequest.yaml
+    LibraryInlineDisposition:
+      $ref: ./components/schemas/LibraryInlineDisposition.yaml
+    LibraryPreviewTokenRequest:
+      $ref: ./components/schemas/LibraryPreviewTokenRequest.yaml
+    LibraryPreviewTokenResponse:
+      $ref: ./components/schemas/LibraryPreviewTokenResponse.yaml
+    KnowledgeBaseInfo:
+      $ref: ./components/schemas/KnowledgeBaseInfo.yaml
+    KnowledgeSearchRequest:
+      $ref: ./components/schemas/KnowledgeSearchRequest.yaml
+    KnowledgeSearchResponse:
+      $ref: ./components/schemas/KnowledgeSearchResponse.yaml
+    KnowledgeSearchHit:
+      $ref: ./components/schemas/KnowledgeSearchHit.yaml
+    KnowledgeSearchIncompleteness:
+      $ref: ./components/schemas/KnowledgeSearchIncompleteness.yaml
+    KnowledgeGraphResponse:
+      $ref: ./components/schemas/KnowledgeGraphResponse.yaml
+    KnowledgeGraphNode:
+      $ref: ./components/schemas/KnowledgeGraphNode.yaml
+    KnowledgeGraphEdge:
+      $ref: ./components/schemas/KnowledgeGraphEdge.yaml
+    KnowledgeGraphSkip:
+      $ref: ./components/schemas/KnowledgeGraphSkip.yaml
+    KnowledgeOutline:
+      $ref: ./components/schemas/KnowledgeOutline.yaml
+    KnowledgeOutlineHeading:
+      $ref: ./components/schemas/KnowledgeOutlineHeading.yaml
+    KnowledgeConflictError:
+      $ref: ./components/schemas/KnowledgeConflictError.yaml
+    KnowledgeMountConflictError:
+      $ref: ./components/schemas/KnowledgeMountConflictError.yaml
     Agent:
       $ref: ./components/schemas/Agent.yaml
     AgentModelParams:
@@ -6770,6 +6813,420 @@ paths:
               schema:
                 type: string
                 format: binary
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/preview-token:
+    post:
+      operationId: mintLibraryPreviewToken
+      summary: Mint a short-lived preview token for a Library file or bundle
+      description: >
+        Mints the path-bearing credential a SANDBOXED preview needs
+        (ADR-067 FR-003a, FR-003f). A document served under the isolation
+        policy has an opaque origin, so it can send neither the
+        SameSite=Strict session cookie nor an Authorization header on its
+        own <link>, <script>, font or media requests — without this token
+        an HTML bundle simply cannot load its own subresources.
+
+
+        Minting is authenticated and never widens access: the caller must
+        already be able to read the path, and the grant covers one workspace
+        and one path only — a single file, or one bundle root and its
+        descendants (FR-003b). The token lives 15 minutes and is also
+        invalidated by logout, mount revoke, and deletion or move of the
+        named path (FR-003d).
+
+
+        Re-minting returns a NEW token and invalidates the previous one
+        (FR-003m). There is no renewal endpoint.
+
+
+        Both this endpoint and the /library-preview/<token>/<path> serving
+        prefix are rate-limited, and a session may hold at most 8 live
+        tokens; a 9th mint request is refused with 429 (FR-003k).
+
+
+        The serving prefix itself is deliberately NOT in this document: it
+        is a bare, token-authenticated path on the main listener (ADR-044
+        shape) that returns file bytes or an HTML error page, carries no
+        JSON contract, and answers GET and HEAD only — every other method is
+        405 with Allow: GET, HEAD (FR-003j).
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LibraryPreviewTokenRequest'
+      responses:
+        '201':
+          description: >
+            Token minted. The caller should put url into an iframe src and
+            drive its expiry notice from expires_at.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryPreviewTokenResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/inline-disposition:
+    get:
+      operationId: getLibraryInlineDisposition
+      summary: Ask whether a Library file may be previewed inline, and as what
+      description: >
+        Returns the server's own answer for one file: allow-listed for
+        inline display or not, the extension-derived Content-Type it will be
+        served with, which SPA renderer should draw it, and whether drawing
+        it makes the browser execute it (ADR-067 D15).
+
+
+        Exists so the SPA never re-derives any of that from the filename.
+        The allow-list and the extension-to-type table are compiled into the
+        binary and are the single source of truth (FR-015a, FR-015b); a
+        second copy in TypeScript would be a second answer, and the two
+        would disagree the first time an extension was added to one of them.
+
+
+        Returns 403 if path resolves outside the workspace's work tree; 404
+        if path does not exist or names a directory.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+        description: Workspace-relative path of the file to classify.
+        example: "reports/q3/index.html"
+      responses:
+        '200':
+          description: How this file may be displayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryInlineDisposition'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge:
+    get:
+      operationId: getKnowledgeBaseInfo
+      summary: Detect whether a folder is a knowledge base, and describe it
+      description: >
+        Marker-based detection (ADR-067 FR-020, FR-021): a folder is a
+        knowledge base when its root contains .omnipus-vault/ or .obsidian/.
+        File CONTENT is never read to decide this.
+
+
+        Returns 200 with is_knowledge_base=false for an ordinary folder —
+        that is an answer, not an error. A marker that exists but cannot be
+        read is reported through detection_error rather than silently
+        downgrading the folder to ordinary (E-9).
+
+
+        Carries no index counts. Index progress is a streaming state pushed
+        over the WebSocket as knowledge_index_progress (FR-080); polling
+        this endpoint for it is the mistake that contract is written to
+        prevent.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+        description: >
+          Workspace-relative path of the folder to test. Use "" or "." for
+          the work-tree root.
+        example: "notes/vault"
+      responses:
+        '200':
+          description: Detection result for this folder.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeBaseInfo'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          description: >
+            A second knowledge-base root was requested for a workspace that
+            already has one. A knowledge base is exactly one mounted folder
+            (FR-026); the body names both roots.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeMountConflictError'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/search:
+    post:
+      operationId: searchKnowledgeBase
+      summary: Relevance search over one knowledge base
+      description: >
+        Returns ranked hits with path, title and a matched excerpt (FR-050),
+        AND — in the same response — the incompleteness statement qualifying
+        them (FR-035). A caller cannot obtain results without also obtaining
+        the statement, which is the point: a partial answer that looks whole
+        is worse than no answer.
+
+
+        The excerpt is re-read from the file at query time and never stored
+        in the index (FR-050a), so it always matches disk. When the re-read
+        cannot be done — the file moved, became unreadable, or the latency
+        budget ran out — the hit is still returned with path and title and a
+        machine-readable excerpt_unavailable reason. Never a fabricated
+        excerpt; never a silently dropped result.
+
+
+        A limit above the server cap is clamped and the clamp is reported
+        (FR-037). A collection outside the caller's workspace scope returns
+        an EMPTY result set rather than a permission error (FR-052, FR-053),
+        so the error channel cannot be used to probe for collections the
+        caller may not see. POST rather than GET because a query plus its
+        filters does not belong in a URL that lands in request logs.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KnowledgeSearchRequest'
+      responses:
+        '200':
+          description: Hits and the incompleteness statement qualifying them.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeSearchResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/graph:
+    get:
+      operationId: getKnowledgeGraph
+      summary: Links, backlinks, unresolved links, orphans or a neighbourhood
+      description: >
+        One operation serves all five graph queries (FR-051) because they
+        differ only in which subgraph is selected, not in what a link is.
+
+
+        Link resolution follows a fixed ladder — exact path, unique
+        basename, shortest path, lexicographic (FR-040) — and an ambiguous
+        basename is resolved by that rule AND reported as ambiguous
+        (FR-041): resolving it is not a licence to stay quiet about it. A
+        link with no match, or one whose target lies outside the collection
+        root, is reported unresolved and the target is not read (FR-042,
+        FR-043). Symbolic links are skipped and reported rather than
+        followed (FR-044), which is also how a symlink loop terminates.
+
+
+        Every query is bounded by hop count and node count (FR-054) and
+        reports its own truncation, so a small graph is never mistaken for a
+        clipped one.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: collection_id
+        in: query
+        required: true
+        schema:
+          type: string
+        description: The KnowledgeBaseInfo.collection_id to query.
+        example: "kb_3d1c9a7e5b2f4806"
+      - name: kind
+        in: query
+        required: true
+        schema:
+          type: string
+          enum:
+          - links
+          - backlinks
+          - unresolved
+          - orphans
+          - neighbourhood
+        description: Which graph query to run.
+        example: "backlinks"
+      - name: path
+        in: query
+        required: false
+        schema:
+          type: string
+        description: >
+          Collection-relative path of the note the query is about. Required
+          for links, backlinks and neighbourhood; ignored for unresolved and
+          orphans, which are collection-wide.
+        example: "architecture/sandboxing.md"
+      - name: hops
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+        description: >
+          Maximum hops for a neighbourhood query. Clamped to the server
+          bound; the value actually used is echoed as hop_limit_applied.
+        example: 2
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+        description: >
+          Maximum nodes in the response. Clamped to the server bound; the
+          value actually used is echoed as node_limit_applied.
+        example: 200
+      responses:
+        '200':
+          description: The selected subgraph, with whatever the walk skipped.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeGraphResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/outline:
+    get:
+      operationId: getKnowledgeOutline
+      summary: Heading outline for a markdown file
+      description: >
+        Returns the heading outline that drives the reading rail, for ANY
+        markdown file — whether or not it belongs to a knowledge base
+        (FR-062). An outline is parsed from the one file in hand and needs
+        no index, which is exactly why search and backlinks stay
+        knowledge-base-only: those do need one. The is_knowledge_base field
+        tells the client which other rail panels it may offer.
+
+
+        Headings come back as a FLAT list in document order with nesting
+        carried by level, not as a tree — a document that skips from H1 to
+        H3 has one honest representation that way, where a tree would force
+        the server to invent an intermediate heading the author never wrote.
+
+
+        Frontmatter that is not valid YAML is reported through
+        frontmatter_malformed; the file is still outlined and still indexed
+        for body text (E-17).
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+        description: Workspace-relative path of the markdown file.
+        example: "notes/vault/architecture/sandboxing.md"
+      responses:
+        '200':
+          description: The file's headings in document order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeOutline'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':

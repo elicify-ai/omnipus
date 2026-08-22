@@ -736,6 +736,21 @@ export const JudgeVerdictFrame = z
   })
   .strict();
 
+export const KnowledgeIndexProgressFrame = z
+  .object({
+    type: z.literal("knowledge_index_progress"),
+    collection_id: z.string().min(1),
+    workspace_id: z.string().min(1),
+    phase: z.enum(["enumerating", "indexing", "idle", "failed"]),
+    indexed_files: z.number().int().min(0),
+    total_known: z.boolean(),
+    total_files: z.number().int().min(0).optional(),
+    skipped_files: z.number().int().min(0).optional(),
+    error: z.string().optional(),
+    updated_at: z.string().optional(),
+  })
+  .strict();
+
 export const ErrorPayload = z
   .object({
     llm_error: LLMError,
@@ -805,6 +820,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   LoopStatusFrame,
   PlanStatusFrame,
   JudgeVerdictFrame,
+  KnowledgeIndexProgressFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

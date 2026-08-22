@@ -1,0 +1,78 @@
+title: KnowledgeSearchHit
+description: >
+  One relevance hit from a knowledge-base search (FR-050). Carries path,
+  title and a matched excerpt.
+
+  A note larger than the segment size is indexed as several consecutive
+  index documents (FR-034a) — no note is ever refused, skipped or truncated.
+  Hits from several segments of one note COLLAPSE INTO ONE hit here, scored
+  by its best segment, so a caller never has to de-duplicate by path.
+type: object
+additionalProperties: false
+required:
+  - path
+  - title
+  - score
+  - kind
+properties:
+  path:
+    type: string
+    minLength: 1
+    description: >
+      Collection-relative path of the matched entry, forward-slash
+      separated. Always inside the collection root (FR-043).
+    example: "architecture/sandboxing.md"
+  title:
+    type: string
+    description: >
+      Display title — the note's frontmatter title or first heading, falling
+      back to the basename. May be empty for an attachment.
+    example: "Sandboxing"
+  score:
+    type: number
+    format: double
+    description: >
+      Relevance score. Comparable only within one response; not stable across
+      queries or across index rebuilds of different content.
+    example: 7.42
+  kind:
+    type: string
+    enum:
+      - note
+      - attachment
+    description: >
+      Whether this hit is a note (body text indexed) or an attachment
+      (filename and path only — contents are never opened, FR-039a).
+    example: "note"
+  excerpt:
+    type: string
+    description: >
+      Matched text, RE-READ FROM THE FILE AT QUERY TIME and never stored in
+      the index (FR-050a), so it always matches what is on disk. ABSENT when
+      the re-read could not be performed — see excerpt_unavailable. A hit is
+      still returned in that case, with path and title, because a silently
+      dropped result and a fabricated excerpt are both worse than an honest
+      gap.
+    example: "…Landlock is per-thread and inherited, so the gateway and its children…"
+  excerpt_unavailable:
+    type: string
+    enum:
+      - file_unreadable
+      - file_missing
+      - match_moved
+      - budget_exhausted
+    description: >
+      Machine-readable reason no excerpt accompanies this hit. Present if and
+      only if excerpt is absent. "budget_exhausted" is the ordinary case, not
+      an error: excerpt re-reads are budgeted because the latency target
+      allows 500 ms across up to 20 results (FR-050a b).
+    example: "budget_exhausted"
+  byte_offset:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      ABSOLUTE byte offset of the match within the whole file — not within
+      the index segment that produced it — so segmentation (FR-034a) cannot
+      misdirect a re-read or a jump-to-match (FR-050a c).
+    example: 20481
