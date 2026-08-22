@@ -1,7 +1,7 @@
 # Spec — ADR-067: registry-fed catalog and provider identity (D1 · D11 · D12)
 
 - **Source ADR:** `docs/internal/architecture/ADR-067-registry-fed-catalog-and-provider-identity.md` (Proposed 2026-08-22; §8a pass-2 resolutions MAJ-005/006/010/014 folded in). Companion review: `docs/internal/architecture/ADR-066-context-budget-and-tool-result-routing-review-pass2.md` (MAJ-004/005/006/010/014/015, MIN-003/004, open questions 7–8).
-- **Status:** Draft (plan-spec) · **Phase 1 gate: the ADR is treated as the confirmed brief** (operator unavailable for this pass). Where the ADR is silent the spec does NOT invent: each gap is in §9 with the assumption the spec proceeds under, labelled `[A-n]` wherever it is used. The operator resolves §9 afterwards.
+- **Status:** Draft (plan-spec) · Phase 1 gate: the ADR treated as the confirmed brief · **Phase 5.5 gate PASSED — all 22 ambiguities resolved by operator/coordinator 2026-08-22** (§9). `[A-n]` labels in the body now point at the *resolved* decision in §9, not an open assumption.
 - **Branch:** `feat/context-budget-and-tool-result-routing` (worktree `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-context-budget`). Facts read @ this tree on 2026-08-22.
 - **Tech:** Go (`pkg/providers`, `pkg/gateway`, `pkg/agent`, `pkg/media`) · React 19 + Vite (SPA, consumer only) · contract-first (`contracts/*` → `pkg/api/generated`, `src/lib/api/generated`) · Go tests run with `-tags goolm,stdjson`; never the full gateway suite locally.
 - **Scope:** ADR-067 only — D1 (one catalog, schema 2.0.0, assembled daily elsewhere, checksum-only, committed embedded snapshot, retargeted puller at 24 h + startup, last-known-good on registry disagreement), D11 (models.dev provider ids, protocol as a field, protocol dispatch, exact `(provider, model)` lookup, `resolveStrippedPrefix` removed, unknown provider degrades per provider/agent, `capabilities` folded into `catalog`), D12 (every registry provider selectable, Popular pinned, cloud-IAM visible-disabled, custom endpoint, selector reads the catalog; live `/models` only for entitlement / local endpoints / probe).
@@ -136,7 +136,7 @@ An operator configures a provider by its registry id; Omnipus builds the transpo
 An operator whose config names an unknown provider still reaches Settings to fix it. *Why P0:* MAJ-010; the alternative is an install with no UI path to repair. *Independent test:* boot with one unknown provider and two agents (one bound to it).
 
 1. **Given** config with providers `openai` and `nope`, and agents A (openai) and B (nope), **When** the gateway boots, **Then** boot succeeds, A runs turns normally, and the providers list shows `nope` in an *unknown provider* state.
-2. **Given** the same, **When** B is asked to run a turn, **Then** the turn is refused with a typed error stating the agent needs a provider, nothing is sent upstream, and the agent list marks B as needing a provider `[A-16]`.
+2. **Given** the same, **When** B is asked to run a turn, **Then** the turn is refused with a typed error stating the agent needs a provider, nothing is sent upstream, and the agent list marks B as needing a provider `[A-16]` (`degraded_reason: "needs_provider"`; when ADR-068's derived `needs_model` is also true, `needs_provider` takes precedence in any copy — a provider must exist before a model can).
 3. **Given** the operator re-points B to `openai` through the existing agent update path, **When** saved, **Then** B runs without a restart beyond the existing reload mechanism.
 4. **Given** an unknown provider, **When** the providers list is read, **Then** no rename, alias, or suggestion of a canonical id is produced anywhere (log, API, UI text).
 
@@ -148,6 +148,7 @@ The SPA and any client read the same document the gateway uses, through a contra
 3. **Given** a client sending `If-None-Match` with the current document's ETag, **When** called, **Then** 304 with no body `[A-1]`.
 4. **Given** the catalog failed to construct at boot, **When** called, **Then** 503 with a typed error (never an empty 200 that looks like "no providers") `[A-12]`.
 5. **Given** the response, **When** validated against the generated schema, **Then** it validates; the SPA consumes only the generated type.
+6. **Given** a config with two configured providers, **When** `GET /api/v1/providers` is called, **Then** exactly those two rows are returned — no template/"disconnected" rows for unconfigured catalog providers (the picker lists the catalog; the providers list lists configurations; coordination note for ADR-068 D14).
 
 ### US-8 — Tiers are data: every provider selectable, Popular pinned, cloud-IAM visible-disabled, custom endpoint — **P1**
 The operator can pick any registry provider; the picker knows which are popular and which are unsupported from the document, not from code. *Why P1:* the data must exist for ADR-068's UI; the UI itself is out of scope. *Independent test:* inspect the document and the endpoint output.
@@ -224,6 +225,7 @@ Nothing in the binary maps old names, and nothing refers to them. *Why P0:* exit
 - The system must not abort boot, refuse to start the gateway, or hide Settings because a provider id is unknown (MAJ-010).
 - The system must not keep a second catalog file, package, or Go slice of providers, because one document is the decision ("One catalog, not two").
 - The system must not strip provider prefixes during lookup, because that returns another route's limits.
+- The system must not resolve, validate, or construct anything from a provider's `aliases[]`, because that field exists only for the picker's search box (A-9); treating it as identity would reintroduce the alias table greenfield forbids.
 - The system must not silently adopt a newer registry value during a disagreement (assembly side), because last-known-good is the decision (MAJ-014).
 - The system must not implement cloud-IAM (SigV4/GCP OAuth/IBM IAM) transports, because they are excluded pending per-provider ADRs and Constraint #1.
 - The system must not specify or change picker layout, grouping, "show all" affordances, or the entitlement button's UX — that is ADR-068.
@@ -239,8 +241,8 @@ Nothing in the binary maps old names, and nothing refers to them. *Why P0:* exit
 ### Integration Boundaries
 
 **Assembly repository → Omnipus (the feed).**
-- *Data in:* one GitHub Release per day on the assembly repo (owner/repo pinned in Go `[A-5]`), assets `providers_catalog.json` and `providers_catalog.json.sha256` (format: `<64 hex>` or `<64 hex>  providers_catalog.json`). Also reachable at the raw URL of the default branch (existing fallback path).
-- *Document shape (2.0.0):* top level `schema_version` (`"2.0.0"`), `version` (monotonic, semver-comparable — `YYYY.M.D` `[A-6]`), `updated_at` (RFC 3339), `source` (free text with upstream commit ids), `default_resize_limits {long_edge_px, max_bytes}` `[A-10]`, `providers[]`. Provider: `id` (models.dev id or local-file id), `name` `[A-14]`, `api` (base URL; empty only when `unsupported`), `protocol` (primary, one of `openai-compatible|anthropic|google|ollama|cli`), `protocols[]` (all offered, each with its own `api`) `[A-8]`, `env` (key variable name), `region` (optional), `plan` (optional), `tier` (`popular|standard|unsupported`) `[A-9]`, `unsupported_reason` (`cloud-iam` when tier unsupported), `subscription_policy` (opaque to this spec; ADR-068 consumes), `resize_limits {long_edge_px, max_bytes}`, `models[]`. Model: `id`, `name` `[A-14]`, `context_window` (int, 0 = unknown), `max_output_tokens` (int, 0 = unknown), `input_modalities[]` (must include `text`), `tool_call` (bool), `status` (`active|retired`) `[A-3]`, `disputed` (bool, optional) `[A-22]`.
+- *Data in:* one GitHub Release per day on the assembly repo **`elicify-ai/omnipus-provider-catalog`** (owner/repo pinned in Go `[A-5]`; puller order unchanged: release API → raw fallback), assets `providers_catalog.json` and `providers_catalog.json.sha256` (format: `<64 hex>` or `<64 hex>  providers_catalog.json`). Also reachable at the raw URL of the default branch (existing fallback path).
+- *Document shape (2.0.0):* top level `schema_version` (`"2.0.0"`), `version` (monotonic, semver-comparable — `YYYY.M.D` `[A-6]`), `updated_at` (RFC 3339), `source` (free text with upstream commit ids), `default_resize_limits {long_edge_px, max_bytes}` `[A-10]`, `providers[]`. Provider: `id` (models.dev id or local-file id), `name` `[A-14]`, `api` (base URL; empty only when `unsupported`), `protocol` (primary, one of `openai-compatible|anthropic|google|ollama|cli`), `protocols[]` (all offered, each with its own `api`) `[A-8]`, `env` (key variable name), `region` (optional), `plan` (optional), `tier` (`popular|standard|unsupported`) `[A-9]`, `unsupported_reason` (`cloud-iam` when tier unsupported), `auth_methods[]` (`api_key|sign_in`, ≥1; ADR-068 picker) `[A-9]`, `aliases[]` (**search-only** strings for the picker's filter — never consulted by resolution, the factory, or config validation) `[A-9]`, `subscription_policy` (opaque to this spec; ADR-068 consumes), `resize_limits {long_edge_px, max_bytes}`, `models[]`. Model: `id`, `name` `[A-14]`, `release_date` (`YYYY-MM-DD`, optional) `[A-9]`, `context_window` (int, 0 = unknown), `max_output_tokens` (int, 0 = unknown), `input_modalities[]` (must include `text`), `tool_call` (bool), `status` (`active|retired`) `[A-3]`, `disputed` (bool, optional) `[A-22]`. **Source per field:** everything from models.dev (LiteLLM adjudicating, `overrides/` winning) except `tier`, `unsupported_reason`, `auth_methods`, `aliases`, which come only from `overrides/`; `resize_limits` from `resize_limits.json`.
 - *Inputs to the job (for the record, not enforced by Omnipus):* models.dev `api.json`, LiteLLM `model_prices_and_context_window.json`, `overrides/` (wins over both), `resize_limits.json` (per provider, joined onto every model), a local-provider file for ids absent from models.dev, a manifest of upstream commits.
 - *Failure behaviour:* unreachable / 404 / rate-limited → raw fallback → otherwise retain current, WARN; checksum mismatch → reject, WARN; wrong schema → ignore, WARN; oversize → reject, WARN. Omnipus never blocks on the feed.
 - *Development approach:* simulated twin — `httptest` servers replaying fixture releases (existing `puller_test.go` pattern), plus one conformance fixture `testdata/providers_catalog_2.0.0_fixture.json` shared by Go tests and, by copy, the assembly repo's own tests.
@@ -249,7 +251,7 @@ Nothing in the binary maps old names, and nothing refers to them. *Why P0:* exit
 - `/models` (OpenAI-compatible) only on entitlement check and inside key validation for non-catalog providers; `/api/tags` and `/api/show` for ollama; `/v1/models` `max_model_len` for vLLM (ADR-066 D3 owns the window semantics). Failure → annotated "unknown", never a selector wipe. SSRF-safe client retained (SEC-24).
 
 **Omnipus → SPA.**
-- `GET /api/v1/providers/catalog` (new), `POST /api/v1/providers/{id}/entitlement` `[A-13]` (replaces `refresh-models`), `POST /onboarding/probe-provider` (id now free string). Removed: `GET /providers/model-capabilities` `[A-12]`, `src/lib/generated/providerCatalog.ts`.
+- `GET /api/v1/providers/catalog` (new), `POST /api/v1/providers/{id}/entitlement` `[A-13]` (replaces `refresh-models`), `POST /onboarding/probe-provider` (id now free string), `GET /api/v1/providers` (configured rows only — FR-029). Removed: `GET /providers/model-capabilities` `[A-12]`, `src/lib/generated/providerCatalog.ts`.
 
 ---
 
@@ -455,6 +457,11 @@ Given a prior 200 with `ETag: E`
 When `GET` with `If-None-Match: E`
 Then 304, empty body; and after a refresh to a new version, 200 with a different ETag.
 
+**Scenario (HP): providers list is configurations only** — Traces to US-7.AC6
+Given config with providers `openai` and `zai` and an embedded snapshot of 190+ providers
+When `GET /api/v1/providers`
+Then the response has exactly 2 rows (`openai`, `zai`) and no row with a synthetic `disconnected` status for an unconfigured catalog provider.
+
 **Scenario (EP): catalog unavailable** — Traces to US-7.AC4
 Given the catalog failed construction
 When `GET /api/v1/providers/catalog`
@@ -582,6 +589,7 @@ When `PUT /providers/custom {api_base, protocol: ollama}` → 400.
 | 32 | `TestBuildProviderPool_UnknownProvider_Skips` | Unit | boot survives | existing WARN+skip retained; pool lacks `nope` |
 | 33 | `TestAgentTurn_NeedsProvider_TypedRefusal` | Unit (agent) | bound agent refuses | error kind `needs_provider`, 0 upstream `[A-16]` |
 | 34 | `TestRestProvidersCatalog_GET` | Integration (scoped gateway test, `-run`, `-p 1`) | catalog endpoint; 401; ETag; 503 | all four statuses |
+| 34b | `TestRestProviders_GET_ConfiguredOnly` | Integration | providers list is configurations only | 2 configured → 2 rows; 0 template rows |
 | 35 | `TestRestProviders_PUT_Unknown_CloudIAM_Custom` | Integration | cloud-IAM 400; custom 400/200; standard 200 | error vocabulary exact |
 | 36 | `TestRestProviders_OfflineModelList` | Integration | offline model list | outbound counter 0 |
 | 37 | `TestRestProviders_Entitlement_Intersects_Caches` | Integration | entitlement | annotations + cache `[A-13]` |
@@ -619,6 +627,8 @@ When `PUT /providers/custom {api_base, protocol: ollama}` → 400.
 | 13 | 2.0.0 | 2026.8.22 | 16 MB + 1 byte | size | reject `too_large` | E1 |
 | 14 | 2.0.0 | 2026.8.22 | 16 MB exactly | size | accept | E1 (max) |
 | 15 | 2.0.0 | 2026.8.22 | `default_resize_limits.max_bytes: 0` | invariant | reject | US-1.AC3 |
+| 16 | 2.0.0 | 2026.8.22 | `auth_methods: []` | invariant | reject `providers[0].auth_methods` | US-1.AC3 |
+| 17 | 2.0.0 | 2026.8.22 | `aliases: ["z-ai"]` on `zai`, config `provider: z-ai` | none | accept doc; `z-ai` still unknown | FR-030 |
 
 **DS-2 resolution** (Traces to US-4)
 | # | provider | model | expect window | Traces |
@@ -668,6 +678,8 @@ When `PUT /providers/custom {api_base, protocol: ollama}` → 400.
 | 2 | GET /providers/catalog | no | 401 | US-7.AC2 |
 | 3 | GET /providers/catalog If-None-Match=E | yes | 304 | US-7.AC3 |
 | 4 | GET /providers/catalog (catalog nil) | yes | 503 | US-7.AC4 |
+| 4b | GET /providers (2 configured) | yes | 200, exactly 2 rows | US-7.AC6 |
+| 4c | GET /providers (0 configured) | yes | 200, `[]` | US-7.AC6 (empty) |
 | 5 | PUT /providers/amazon-bedrock | yes | 400 cloud-iam | US-8.AC2 |
 | 6 | PUT /providers/togetherai + key | yes | 200 | US-8.AC3 |
 | 7 | PUT /providers/custom no base | yes | 400 | US-8.AC4 |
@@ -699,7 +711,7 @@ This feature **modifies existing functionality**.
 ### Functional Requirements
 
 - **FR-001** The system MUST load provider catalogs only at `schema_version` `2.0.0`; any other value is rejected and the previously loaded document retained.
-- **FR-002** The system MUST validate on load: non-empty `version`/`updated_at`/`source`; positive default resize limits; ≥1 provider; unique non-empty provider ids; per-provider unique non-empty model ids; `protocol ∈ {openai-compatible, anthropic, google, ollama, cli}`; every model's `input_modalities` includes `text`; `tier ∈ {popular, standard, unsupported}`; `status ∈ {active, retired}`.
+- **FR-002** The system MUST validate on load: non-empty `version`/`updated_at`/`source`; positive default resize limits; ≥1 provider; unique non-empty provider ids; per-provider unique non-empty model ids; `protocol ∈ {openai-compatible, anthropic, google, ollama, cli}`; every model's `input_modalities` includes `text`; `tier ∈ {popular, standard, unsupported}`; `auth_methods` non-empty ⊆ `{api_key, sign_in}`; `status ∈ {active, retired}`; `release_date`, when present, parses as `YYYY-MM-DD`.
 - **FR-003** The system MUST key every lookup on the exact `(provider id, model id)` pair and MUST NOT strip or add prefixes.
 - **FR-004** A lookup miss MUST yield the optimistic modality default and catalog default resize limits to the media path, and *unknown* window/output to the agent loop.
 - **FR-005** `pkg/providers/capabilities` MUST be removed; its machinery lives in `pkg/providers/catalog`; exactly one embedded catalog file exists.
@@ -726,6 +738,9 @@ This feature **modifies existing functionality**.
 - **FR-026** The embedded snapshot MUST be ≤ 8 MB `[A-2]` and MUST contain the nine local-file providers, the popular set, and the five cloud-IAM providers as unsupported.
 - **FR-027** The assembly contract (§5) MUST be captured in a conformance fixture committed under `pkg/providers/catalog/testdata/` and used by the Go tests.
 - **FR-028** The refresh loop MUST serialize concurrent pulls and be race-free under `-race`.
+- **FR-029** `GET /api/v1/providers` MUST return configured providers only; the handler MUST NOT emit template rows for unconfigured catalog providers (today's ~25 permanent `disconnected` rows are removed). The catalog is served by FR-017 alone.
+- **FR-030** The provider shape MUST carry `auth_methods[]`, `aliases[]` (search-only), `name`, and per model `name`, `release_date`, for ADR-068's picker; `aliases[]` MUST NOT participate in resolution, validation, or construction `[A-9]`.
+- **FR-031** When both `degraded_reason: needs_provider` (this spec) and ADR-068's derived `needs_model` apply to an agent, `needs_provider` MUST take precedence in user-facing copy `[A-16]`.
 
 ### Success Criteria
 
@@ -775,6 +790,9 @@ This feature **modifies existing functionality**.
 | FR-026 | US-2, US-8 | local providers present; popular; cloud-IAM | T16–T19 |
 | FR-027 | US-2 | load conforming; release layout | T1, T8 |
 | FR-028 | E5 | concurrent refresh | T14 |
+| FR-029 | US-7 | providers list is configurations only | T34b, DS-5.4b/4c |
+| FR-030 | US-2, US-11 | load conforming; reject malformed (`auth_methods`) | T1, T2, T29 (aliases never resolved) |
+| FR-031 | US-6 | bound agent refuses, typed | T33 |
 
 Every BDD scenario above maps to ≥1 FR via its US; assembly-side scenario US-2.AC2 traces to FR-027 (fixture carries `disputed`) and is executed in the assembly repo.
 
@@ -782,32 +800,33 @@ Every BDD scenario above maps to ≥1 FR via its US; assembly-side scenario US-2
 
 ## 9. Ambiguity Self-Audit
 
-**GATE NOT YET PASSED — operator unavailable for this pass.** The spec proceeds under the *Likely assumption* column, labelled `[A-n]` at each use. Each row needs an operator answer, an accepted assumption, or an explicit deferral.
+**GATE PASSED — all 22 resolved by operator/coordinator 2026-08-22.** Decisions are applied throughout; `[A-n]` in the body refers to the row below.
 
-| # | What is ambiguous (ADR silent) | Likely assumption (spec proceeds under this) | Question to resolve |
-|---|---|---|---|
-| A-1 | Response shape and caching of the providers-catalog `GET` (MIN-004, pass-2 Q8): full document vs. paged/filtered; ETag; how the SPA learns of a mid-session refresh | Full document in one response; strong ETag = SHA-256 of the served bytes; `If-None-Match` → 304; SPA re-validates on Settings open and every 15 min; no WS push | Full document OK at ~7k models? Is an ETag/304 rule enough, or is a WS `catalog_updated` frame wanted? |
-| A-2 | Size of the embedded snapshot — full registry (193 providers / ~7,246 models) or a filtered subset | Full document; hard test bound 8 MB; if the full document exceeds it the assembly job trims `status: retired` models first | Embed everything, or only popular+standard active models? |
-| A-3 | Name of the model deprecation status value (MIN-003: `deprecated` collides with the greenfield grep) | `status ∈ {active, retired}`; the greenfield grep whitelists that one token in `pkg/providers/catalog` | Accept `retired`? |
-| A-4 | Persisted last-known-good filename/location | `$OMNIPUS_HOME/providers_catalog.json` (new name); the old `capabilities_catalog.json` is never read and never deleted | New filename OK? Delete the old file or leave it? |
-| A-5 | The assembly repository's GitHub owner/repo (the puller pin) and release cadence vs. the "raw first" suggestion in MIN-004 | `elicify-ai/omnipus-provider-catalog`; puller order unchanged (release API → raw fallback) | Repo name? Keep release-API-first? |
-| A-6 | `version` format in 2.0.0 (must be comparable by the existing semver-aware anti-downgrade) | Date-derived semver `YYYY.M.D` (e.g. `2026.8.22`), with `.N` patch for same-day republishes | Accept date-semver? |
-| A-7 | The exact protocol enum and how `google` and `cli` dispatch (§3.2 item 3 lists ~5; `google` is reached via the OpenAI-compatible Gemini endpoint today) | `{openai-compatible, anthropic, google, ollama, cli}`; `google` constructs the HTTP provider at the Gemini OpenAI-compatible base (today's behaviour); `cli` covers `claude-cli`/`codex-cli`/`openai-chatgpt` per ADR-068 MAJ-013 | Keep `google` as a distinct protocol value, or fold into `openai-compatible`? |
-| A-8 | Where an operator's protocol choice lives for dual-protocol providers (`zai` openai-compatible + anthropic) now that `-anthropic` ids are gone | New `ModelConfig.protocol` (`json:"protocol,omitempty"`) and the same field on `Provider`/`ProviderUpdateRequest` wire types; absent → catalog primary | Accept a `protocol` field on the provider config and wire? |
-| A-9 | Mechanism that marks Popular / unsupported (ADR says "pinned" but not where) | A `tier` field in the document, set by `overrides/` in the assembly repo; Go has no hardcoded popular list | Tier as catalog data (assembly-owned) rather than code? |
-| A-10 | Whether 2.0.0 carries a top-level default resize limit (today's DTO requires `default_resize_budget`) | Yes: `default_resize_limits`, used for providers with no row in `resize_limits.json` and for lookup misses | Keep a catalog-level default? |
-| A-11 | Models whose registry entry lacks `max_output_tokens` or `context_window` | Accepted with `0` = unknown; ADR-066's ladder decides (floor/WARN) | Accept, or should the assembly job refuse to publish such a model? |
-| A-12 | Fate of `GET /providers/model-capabilities` (flat, bare-model-id keyed; the SPA vision toast reads it) | Deleted; the SPA derives modalities from the providers-catalog `GET` using the agent's `(provider, model)` | Delete, or keep as a projection? |
-| A-13 | Wire shape of "Check with my account" and of `POST /providers/{id}/refresh-models` | `refresh-models` removed; new `POST /api/v1/providers/{id}/entitlement` → `ProviderEntitlement` (`models[] {id, entitled: true/false/unknown, in_catalog}`), cached per key in memory for the process lifetime | Endpoint name/shape? Cache TTL? |
-| A-14 | Display names: ADR's provider shape has no `name`; models.dev has one | Provider and model carry `name`; `knownDisplayNames` deleted; unknown → id verbatim | Add `name` to the shape? |
-| A-15 | Cadence/owner of the scheduled PR that refreshes the committed snapshot, and the staleness bound at release | Weekly bot PR from the assembly repo; release checklist requires snapshot ≤ 14 days old | Cadence and bound? |
-| A-16 | Wire vocabulary for the degraded states (MAJ-010): provider row and agent row | `Provider.status` gains `unknown-provider`; `Agent` gains `degraded_reason: "needs_provider"` (string, optional) | Accept these two values (ADR-068 also extends `Provider.status`)? |
-| A-17 | Which Go type holds the loaded document and whether the media/agent consumers get one object or two views | One `catalog.Catalog` with `Resolve(provider, model) Handle` exposing `Window()`, `MaxOutput()`, `Supports()`, `Budget()`, `Status()`; no separate capabilities view | Single handle type OK? |
-| A-18 | Maximum accepted size of a pulled document | 16 MB read limit before parse | Accept 16 MB? |
-| A-19 | Normalisation of provider ids at the config boundary | Trim whitespace only; no case folding (ids are exact) | Trim-only? |
-| A-20 | Probe-model selection rule from the catalog | First `status: active` model with `tool_call: true` and `text` modality, in document order; provider with no such model → probe skipped with the existing "no endpoint to probe" warning | Accept the rule? Should the assembly document carry an explicit `probe_model` per provider instead? |
-| A-21 | CLI onboarding (`cmd/omnipus/internal/onboard`) validation source | Validates against the embedded snapshot (no gateway running) | OK for the CLI to use the snapshot only? |
-| A-22 | Whether a disagreement under adjudication is visible in the document (pass-2 suggested `disputed: true`; ADR §8a chose last-known-good without a marker) | Model carries optional `disputed: true`; Omnipus surfaces it only through ADR-066 D9's "source" label | Carry the marker? |
+| # | Ambiguity | RESOLVED decision |
+|---|---|---|
+| A-1 | Providers-catalog `GET` shape/caching | **ACCEPT** — full document; strong ETag = SHA-256 of served bytes; `If-None-Match` → 304; SPA re-validates on Settings open and every 15 min; no WS push (FR-017). |
+| A-2 | Embedded snapshot extent | **ACCEPT** — full document; 8 MB test bound; assembly job trims `status: retired` models first if exceeded (FR-026). |
+| A-3 | Deprecation status value | **ACCEPT** — `status ∈ {active, retired}`; greenfield grep whitelists that token in `pkg/providers/catalog` (SC-009). |
+| A-4 | Persisted last-known-good file | **ACCEPT** — `$OMNIPUS_HOME/providers_catalog.json`; old `capabilities_catalog.json` neither read nor deleted (no code handles it) (FR-010). |
+| A-5 | Assembly repo / puller order | **OPERATOR DECISION** — `elicify-ai/omnipus-provider-catalog`; puller order unchanged (release API → raw fallback) (FR-007). |
+| A-6 | `version` format | **ACCEPT** — date-semver `YYYY.M.D[.N]` (T7). |
+| A-7 | Protocol enum | **ACCEPT** — `{openai-compatible, anthropic, google, ollama, cli}`, `google` distinct (keeps the Gemini base-URL rule explicit) (FR-012). |
+| A-8 | Protocol choice location | **ACCEPT** — `protocol` on `ModelConfig` and on `Provider`/`ProviderUpdateRequest` wire types; absent → catalog primary (ADR-067 D11) (FR-013, FR-024). |
+| A-9 | Tier mechanism + picker fields | **RESOLVED by ADR-067 D12** — tier is catalog data from `overrides/`; no popular list in Go or SPA. **Shape extended** for ADR-068's picker: provider `tier`, `unsupported_reason`, `auth_methods[]`, `aliases[]` (search-only, never resolution), `name`; model `name`, `release_date`, `tool_call`, `context_window`, `max_output_tokens`, `input_modalities`, `status`. All from models.dev except tier/unsupported_reason/auth_methods/aliases (overrides only) (FR-018, FR-030). |
+| A-10 | Catalog-level default resize | **ACCEPT** — `default_resize_limits` (FR-002, FR-004). |
+| A-11 | Missing limits | **ACCEPT** — `0` = unknown; ADR-066 ladder decides (FR-004). |
+| A-12 | `GET /providers/model-capabilities` | **ACCEPT** — deleted; SPA derives modalities from the catalog `GET` by `(provider, model)` (FR-025). |
+| A-13 | Entitlement surface | **ACCEPT** — `POST /api/v1/providers/{id}/entitlement` → `ProviderEntitlement`; `refresh-models` removed; cache per key for process lifetime (FR-021). |
+| A-14 | Display names | **ACCEPT** — `name` on provider and model; `knownDisplayNames` deleted; unknown → id verbatim (FR-025, FR-030). |
+| A-15 | Snapshot refresh cadence | **ACCEPT** — weekly bot PR; release checklist requires snapshot ≤ 14 days old (FR-006). |
+| A-16 | Degraded-state wire vocabulary | **ACCEPT** — `Provider.status` gains `unknown-provider`; `Agent.degraded_reason: "needs_provider"`. Coordinated with ADR-068's derived `needs_model`: both may be true; **`needs_provider` wins in copy** (FR-016, FR-031). |
+| A-17 | Catalog Go type | **ACCEPT** — single `catalog.Catalog` with `Resolve(provider, model) Handle` (FR-005). |
+| A-18 | Pull size limit | **ACCEPT** — 16 MB read limit before parse (FR-009). |
+| A-19 | Id normalisation | **ACCEPT** — trim-only, exact ids (T28). |
+| A-20 | Probe-model rule | **ACCEPT** — first active tool-calling text model in document order; no `probe_model` field (FR-022). |
+| A-21 | CLI onboarding source | **ACCEPT** — validates against the embedded snapshot (FR-011). |
+| A-22 | Disputed marker | **ACCEPT** — carry `disputed: true`; surfaced only via ADR-066 D9's source label (FR-027). |
+| + | Coordinator addition | `GET /providers` returns **configured providers only**; the ~25 template `disconnected` rows are removed (greenfield; ADR-068 D14 context). Picker = catalog; providers list = configurations (US-7.AC6, FR-029). |
 
 ---
 
@@ -824,11 +843,11 @@ Every BDD scenario above maps to ≥1 FR via its US; assembly-side scenario US-2
 ---
 
 ### Summary
-- **Gate status:** Phase 1 treated as confirmed (ADR = brief); Phase 5.5 **open** — 22 ambiguities proceed under labelled assumptions for operator resolution.
+- **Gate status:** Phase 1 treated as confirmed (ADR = brief); Phase 5.5 **PASSED** — 22 ambiguities resolved 2026-08-22 plus one coordinator addition (FR-029).
 - **User stories:** 11 (P0: US-1,2,3,4,5,6,7,10,11 · P1: US-8,9)
-- **BDD scenarios:** 53 (HP 22 · AP 11 · EP 14 · EC 6) including 4 scenario outlines (9 + 4 + 5 + 4 example rows)
-- **Test datasets:** 6 (DS-1: 15 · DS-2: 8 · DS-3: 12 · DS-4: 9 · DS-5: 17 · DS-6: 78 generated rows) = 139 data rows
-- **Functional requirements:** 28 · **Success criteria:** 13
-- **Tests planned:** 48 (31 unit · 2 agent-unit · 11 integration · 2 vitest · 2 CI gates)
+- **BDD scenarios:** 54 (HP 23 · AP 11 · EP 14 · EC 6) including 4 scenario outlines (9 + 4 + 5 + 4 example rows)
+- **Test datasets:** 6 (DS-1: 17 · DS-2: 8 · DS-3: 12 · DS-4: 9 · DS-5: 19 · DS-6: 78 generated rows) = 143 data rows
+- **Functional requirements:** 31 · **Success criteria:** 13
+- **Tests planned:** 49 (31 unit · 2 agent-unit · 12 integration · 2 vitest · 2 CI gates)
 - **Risk flagged:** factory collapse + `GetDefaultAPIBase` removal are HIGH-impact (every provider construction path); must land atomically with the table-backed replacement.
 - **Follow-ups outside this spec:** picker/entitlement UX, `Provider.status` additions for sign-in, provider deletion (ADR-068); window ladder/floor/learned consumption of `Window()` (ADR-066 D2–D3/D8/D9); the assembly repository's own implementation against §5's contract and the shared fixture.
