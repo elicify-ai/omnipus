@@ -1,6 +1,6 @@
 # Feature Specification: Omnipus knowledge base and render-first preview
 
-- **Implements:** [ADR-067](../architecture/ADR-067-omnipus-knowledge-base-and-render-first-preview.md) (20 decisions, 37 acceptance criteria)
+- **Implements:** [ADR-067](../architecture/ADR-067-omnipus-knowledge-base-and-render-first-preview.md) (20 decisions, 43 acceptance criteria)
 - **Origin:** [issue #632](https://github.com/elicify-ai/omnipus/issues/632); founder interview 2026-08-21 ([requirements](library-improvements-requirements-2026-08-21.md))
 - **Branch:** `feat/library-improvements`
 - **Date:** 2026-08-22
@@ -310,9 +310,9 @@ selection file failing to compile; and correcting that workflow comment.
 ### Requirements — Stage 0
 
 - **FR-0001** The system MUST NOT apply name-shape rules when **reading, listing, indexing or linking** an existing file, on any platform. Those files are the operator's; Omnipus reports what is on disk.
-- **FR-0001a** The system MUST apply name-shape rules only when **creating or renaming**, and MUST evaluate them **after root resolution**, so the destination's population is known.
+- **FR-0001a** The system MUST apply name-shape rules only when **creating or renaming**, and MUST evaluate them **after root resolution**, so the destination's population is known. The enforcement point MUST be **one new method on the resolved root**, not a rule repeated per handler: five handlers create or rename, and the one that forgot would silently accept what the other four refuse. Exactly those five MUST call it on their **destination** path — content-put, upload, mkdir, rename, transfer. Population is decided by the mount predicate that already exists, so mount detection is stated once in the package rather than a sixth time here.
 - **FR-0001b** The system MUST NOT apply name-shape rules to a create or rename **inside a mount**.
-- **FR-0001c** The system MAY apply Windows-safe naming to workspace storage, gated on the build target rather than a runtime flag.
+- **FR-0001c** The system **MUST** apply Windows-safe naming to what it creates in workspace storage, selected by the build target rather than a runtime flag. *`MUST`, not `MAY`:* two mandatory tests require a Windows-illegal name to be refused on create under the Windows rule set, so an implementation applying nothing would satisfy a `MAY` and fail them both. A permission no implementation can decline is a requirement written in the wrong mood.
 - **FR-0002** The system MUST NOT relax path-traversal, containment or root-confinement checks on any platform, in any build.
 - **FR-0002a** The system MUST separate **control-character rejection** (r <= 0x1F) from Windows-shape rejection before any split. They are fused in `pathsafe.firstIllegalRune` today. The split MUST also cover the **sanitising** paths — `replaceIllegalRunes` / `SanitizeComponent`, used at untrusted ingest (`pkg/utils/media.go`, `pkg/notifications/store.go`) — not only the validating one.
 - **FR-0003** The Library download handler MUST build `Content-Disposition` to **RFC 6266**, emitting `filename*=UTF-8''<percent-encoded>` for any non-ASCII name alongside an ASCII fallback. *Rewritten because the previous requirement tested a case that already works.* Verified by running the current construction: a double quote is already escaped, and CR/LF/NUL are already escaped, so header injection is already blocked here. **The real gap is non-ASCII** — `Ünïcödé — Näme.md` is emitted as raw UTF-8 inside a quoted string, which carries no declared character set, so a client may read it as Latin-1 and save `ÃœnÃ¯cÃ¶dÃ©`. Stage 0 makes such names strictly more common. Round 2's claim that `%q` escapes non-ASCII is **false**; that is why this requirement changed rather than being dropped.
@@ -326,7 +326,7 @@ selection file failing to compile; and correcting that workflow comment.
 | 0a | `TestNameShape_CreateOnlyNotRead` | Unit | FR-0001, FR-0001a | The same name is accepted for READ and rejected for CREATE in workspace storage on a Windows build |
 | 0b | `TestPathsafe_TraversalStillRefused` | Unit | AS-6, FR-0002 | **The guard that must not regress** |
 | 0c | `TestLibrary_QuoteInFilenameHeaderSafe` | Integration | AS-5, FR-0003 | Header injection via filename |
-| 0d | `TestLibrary_LongFilenameOpens` | Integration | AS-4 | 106-character basename |
+| 0d | `TestLibrary_LengthRulesByUnit` | Integration | AS-4, FR-0004 | Three cases, one per unit. **(a)** 106-rune Latin basename: opens on the read path. **(b)** 93-rune / **273-byte** CJK basename: read-addressable, refused on POSIX **create** with a byte-count error. **(c)** 240-rune mounted path: read-addressable, because the whole-path cap is create-side only. Renamed — at 106 Latin characters the old case is 106 bytes and could not distinguish a correct byte rule from no byte rule |
 | 0e | `TestPathsafeRegression_WindowsUnchanged` | Unit | AS-3 | The 29 existing assertions still hold under the Windows tag, for **workspace storage** |
 | 0f | `TestMountedFile_NoNameShapeValidation` | Integration | FR-0001, FR-0001b | A mounted file with any OS-legal name lists, opens, indexes AND can be created — on every platform, including Windows builds |
 | 0g | `TestPathsafe_ControlCharsRejectedEveryPlatform` | Unit | FR-0002a | NUL, CR, LF rejected under **every** build tag |
@@ -738,7 +738,7 @@ documented, stable contract.
 | E-2 | Collection with exactly 1 note | Search, outline and backlinks all work; orphans lists that note |
 | E-3 | Collection with 100,000 notes | §1.2 targets met |
 | E-4 | Note filename containing `:` or `?` **in a mounted folder** | Addressable (STAGE 0). Only files Omnipus creates in workspace storage on Windows builds are restricted |
-| E-5 | Note 200 MB in size | Indexed with a documented body cap, or skipped and reported — never an unbounded read |
+| E-5 | Note 200 MB in size | **Fully indexed — never capped, never truncated, never skipped.** Segmented into consecutive 8 MB index documents, each carrying the note's path and the absolute byte offset of its start; hits collapse into one result scored by its best segment. *Corrected:* an earlier revision offered "a documented body cap, or skipped and reported", which the requirement now forbids outright |
 | E-6 | Wikilink to a note that does not exist | Rendered as unresolved; listed by the unresolved query |
 | E-7 | Two notes sharing a basename | Tie-break applies; ambiguity reported |
 | E-8 | Symlink loop inside the collection | Walk terminates; loop reported |
@@ -807,9 +807,9 @@ documented, stable contract.
 - MV-18 The index grace period after the last mount is revoked is exactly 7 days (FR-109a).
 - MV-19 Indexing a collection of 100,000 attachments reads **zero** content bytes from them (FR-039a).
 - MV-20 A preview token is refused 15 minutes after minting and accepted at 14, against a named constant rather than a literal repeated in handler and test.
-- MV-21 The SPA shell response carries a Content-Security-Policy, and that string contains no `'unsafe-eval'`.
+- MV-21 The SPA shell response carries a Content-Security-Policy that passes the **directive floor in MV-25**. The earlier form — "a policy is present, and contains no `'unsafe-eval'`" — was satisfied by `default-src *`, which grants everything the policy exists to withhold.
 - MV-22 The set of extensions served inline on the token path is exactly the documented allow-list — no more, no fewer.
-- MV-23 No log line anywhere in the gateway contains a preview token. Driven, not reasoned: force a 429 on the token path and assert the captured record's path is redacted.
+- MV-23 No preview token reaches any log line **or any audit record**, asserted at **each of the six sites** rather than one. Driven: a real 429, a real CSRF rejection and a real bypass-gate 503 with token-bearing paths, asserting every captured record. The 429 case MUST first assert a 429 actually occurred — if the path is not rate-limited the capture is empty and the assertion passes having tested nothing.
 - MV-24 A file whose extension is absent from the Library type table is served `application/octet-stream` **even when its bytes would sniff to something else** — the oracle is an HTML payload under an unknown extension, which must not come back as `text/html`.
 
 ---
@@ -880,7 +880,11 @@ FR-018.
 **Why `.svg` is on the list.** SVG **is** scriptable, and opened at its own URL it is a document
 that runs its own `<script>`. It is included anyway because the token path applies **one policy
 to every byte it serves** — so an SVG there gets the same containment `.html` gets: opaque
-origin, zero egress. Excluding it would break `<img src="logo.svg">` inside ordinary bundles.
+origin, zero egress. **The earlier justification is withdrawn.** It read: *"excluding it would break `<img src="logo.svg">` inside ordinary bundles."* Excluding an extension means serving it as an attachment — and that header governs **navigation, not subresource loading**, so an `<img>` renders it normally. The sentence that justified putting the one scriptable non-HTML format on this list was an unverified browser-behaviour claim pointing the opposite way. The decision no longer rests on it; it rests on containment alone.
+
+**The middle option, evaluated and rejected.** Serving `.svg` with the correct type **and** as an attachment would close the top-level case outright with no new measurement — but it works *only if* the withdrawn claim is false. If it isn't, every bundle logo silently stops rendering, and a missing image is the kind of failure nobody files a bug about. Inline works whichever way browsers behave, and its remaining uncertainty sits on the security side, where a test settles it, rather than the rendering side, where it shows up as silent breakage.
+
+**Three contexts, and only one was covered.** An `.svg` is reachable three ways: as a document at its token URL (test 94); as a subresource inside a sandboxed bundle, where `<img>` runs SVG in secure static mode so the script never executes (**test 122**); and inside the SPA, classified as an image and drawn in an `<img>`, fetched over the authenticated path which serves attachments (**test 123**). **All three must pass before `.svg` ships inline** — rows two and three are where a future refactor breaks the property *silently*: swapping the embed renderer to inline-SVG injection "so it scales properly" turns the reader into a script host, and nothing else notices.
 Inside the SPA it never becomes a document either: it is classified as an image and drawn in an
 `<img>`, which never runs an SVG's scripts, and fetched over the authenticated path, which serves
 attachments. **Both URLs are closed, by different means.**
@@ -900,7 +904,8 @@ reads this table as its source of truth.
 | **Scope** | One workspace, one path — a single file, or one bundle root and its descendants. Never a whole workspace |
 | **Shape** | 32 random bytes from a cryptographic source, base64url — matching `pkg/agent/served_subdirs.go` |
 | **Lifetime** | **15 minutes.** Long enough to load and read a bundle; short enough that a token found later in a log is already dead. 96× below the 24-hour ceiling a copy-paste implementation would inherit |
-| **Renewal** | If a preview outlives its token, the SPA re-mints (an authenticated request, so no widening) and reloads the frame. FR-003c's visible error is the fallback when re-minting fails |
+| **Renewal** | **Dropped as originally described — it was not buildable.** The SPA cannot detect that the frame's request failed: the frame is cross-origin and opaque, and `onload` fires for an error page exactly as for content. Replaced by FR-003m |
+| **Shape, borrowed narrowly** | §10.5 cites `pkg/agent/served_subdirs.go` for **byte count and encoding only**. Do **not** copy its renewal branch — verified, re-registering the same directory returns the **same token string**, so the token survives as long as the tab is open, the exact property a 15-minute lifetime exists to prevent |
 | **Revocation** | Expiry, **plus** logout of the minting session, mount revoke, and deletion or move of the named path |
 | **Storage** | In-memory, keyed by token. A gateway restart invalidates every live preview — accepted, since a restart also drops the page holding them |
 | **Route** | `POST /api/v1/library/preview-token` mints; `/library-preview/<token>/<path>` serves, **GET and HEAD only** |
@@ -1409,14 +1414,15 @@ come last within their stage because they are slowest and most environment-depen
 | 59a | any `scripts/check-*.sh` used instead | CI gate | FR-016 | MUST ship a `--self-test` wired in **ahead of** the real run, matching `check-no-handwritten-wire-types.sh --self-test` at `pr.yml:252-260`. A checker with no self-test is a grep wearing a gate's uniform |
 | 60 | `E2E_FontAppliesWithCorsHeader` | E2E (browser) | AC-15.1, FR-019 | Real font covering the measured glyphs, on an inline element, asserted by **rendered width**. `document.fonts.status` is NOT the oracle — it reports "loaded" on failure |
 | 61 | `preview-pdf.spec.ts › PDF.js loads only when a PDF is opened` | E2E (browser) | AC-15.6, FR-018 | **Runtime, two ordered phases in one session.** Phase 1: open a `.md`, assert **zero** requests match the PDF.js chunk. Phase 2: open a `.pdf` in the same session, assert the chunk **is** requested and the canvas renders — which is what stops phase 1 passing because the app never loaded. Catches converting the lazy import to a static one |
-| 61a | `viteConfig.test.ts › PDF.js chunk keeps its stable name` | Unit | AC-15.6 | Test 61 identifies the chunk by name, which requires a named chunk group. Catches renaming or removing it — otherwise test 61 passes by matching nothing, the precise failure of grepping a hashed filename |
+| 61a | `TestSpaEmbed_PdfJsChunkIsNamed` | Unit (build gate) | AC-15.6, FR-018 | **Re-aimed from the config file to the built artefact**, because the config branch it was written against does not exist. Asserts the SPA output holds **exactly one** named PDF.js chunk carrying a PDF.js marker, and that the entry chunk carries none. **Zero matching files is a failure, never a pass.** Must read a **freshly built** output — pointing it at a stale embed directory is a stale-artefact green |
 | 64 | `E2E_BundleLoadsViaTokenPath` | E2E (browser, HEADED) | FR-003a | **Against the real authenticated gateway**, not a static server — the gap that hid this |
 | 65 | `TestPreviewToken_ScopeAndExpiry` | Integration | FR-003b | Token outside its path/workspace is refused; expired token is refused |
 | 66 | `TestPreviewResponse_NoReferrerAndVisibleExpiry` | Integration | FR-003c | |
-| 67 | `TestPdfJs_HardeningFlagsAtCallSite` | Unit | FR-019a, FR-019c, AC-15.10 | Asserts the configuration object, not a comment |
+| 67 | `TestPdfJs_HardeningFlagsAtCallSite` | Unit | FR-019a *(XFA and scripting options only)* | Asserts the options the call site actually passes. **It cannot detect either failure it used to be cited for:** the eval option no longer exists, so asserting it would pass forever; and a build that silently parses on the main thread carries the *same* configuration as one that does not. Those two are tests 121 and 96 |
 | 67a | `E2E_HostilePdfFailsInert` | E2E (browser, HEADED) | AC-15.8 | A malformed/hostile PDF fails to render **without** executing script, navigating, or issuing a network request |
 | 68 | `TestSpaServedWithCSP` | Integration | FR-019b, AC-15.9 | |
-| 62 | `TestIndex_LargeNoteChunkedNotSkipped` | Integration | FR-034a | A 200 MB note is fully indexed with bounded peak memory — never skipped, never capped |
+| 62 | `TestIndex_LargeNoteSegmentedNotSkipped` | Integration | FR-034a | A 200 MB note fully indexed — never skipped, never capped — and **peak resident memory stays under 128 MB above baseline**, well below the file's own size, so a whole-file read fails rather than merely being slower. Oracle: a high-water resident-memory reading, whose unit **differs between Linux and macOS** and must be normalised. Two rejected oracles: "no error" passes on a skip, and Go's heap statistics measure the wrong thing entirely |
+| 101 | `TestIndex_SegmentedNoteCollapsesToOneHit` | Integration | FR-034a | A term in three separate segments of one note returns **exactly one** result, scored by its best segment, with offsets absolute within the file so the excerpt re-read lands correctly. **Catches** the naive implementation returning one hit per segment — three rows for one note, ranked as three notes |
 | 63 | `TestOutline_PlainMarkdownOutsideKB` | Integration | FR-062 | An ordinary .md file gets an outline; it does NOT get search or backlinks |
 | 69 | `TestExcerpt_ReReadAtQueryTimeNotStored` | Integration | FR-050a | Index a note, **edit the file on disk**, then query — the excerpt must reflect current bytes, and the stored document must carry no excerpt field. Catches caching the excerpt at index time |
 | 69a | `TestExcerpt_UnavailableIsReportedNotFabricated` | Integration | FR-050a | Deleted, unreadable, and term-removed. Each returns the hit with an explicit reason. Catches returning `""` on error, and dropping the hit. "No panic" would pass all three |
@@ -1442,7 +1448,21 @@ come last within their stage because they are slowest and most environment-depen
 | 93 | `TestPreviewPath_TokenNeverLogged` | Integration | MV-23, FR-003e | Drives a **real 429** with a capturing log handler; the record contains neither the token nor an unredacted path. Reading the code is not the test |
 | 94 | `E2E_SvgWithScript_TopLevel_IsInert` | E2E (browser) | FR-008a | An `.svg` whose script beacons the cookie, opened top-level at its token URL. **Positive control required** — the same payload with no policy must execute, or the negative proves nothing |
 | 95 | `E2E_PreviewFrame_SandboxComposition` | E2E (browser) | FR-005b | Frame carries the three attributes; the bundle renders; with the response header removed the attribute alone still blocks egress |
-| 96 | `E2E_PdfJs_ParsesOnRealWorker` | E2E (browser) | FR-019c | Spies `window.Worker`; asserts a worker was constructed and no fake-worker warning. Run **with the SPA policy applied** — that is the point |
+| 96 | `E2E_PdfJs_ParsesOnRealWorker` | E2E (browser) | FR-019c | Asserts a real worker was constructed and no fallback warning was emitted. Run **with the SPA policy applied** — that is the point |
+| 110 | `E2E_PreviewSameOrigin_ReachableButUnauthenticated` | E2E (browser) | FR-006, FR-006a | **The column the experiment never measured.** A previewed page loads an image from a gateway path; the server asserts the request **arrived** (documenting the accepted residual) and carried **no session cookie**. Positive control: the same path from the authenticated app does carry it. **Catches** flipping the cookie's same-site mode — which turns an accepted residual into authenticated API calls from untrusted content, with no other symptom |
+| 111 | `E2E_PreviewCannotFrameTheSpa` | E2E (browser) | FR-006b | A previewed page nests the real app. The shell request arrives server-side; in the browser the nested context never requests the app's entry chunk, because the policy refused to render it. Console text is **not** the oracle — engines word it differently |
+| 112 | `TestPreviewToken_EntropyAndFailClosed` | Unit | FR-003h | 1,000 mints: each 32 bytes, all distinct. Then the entropy source errors and minting MUST return an error and issue **no** token. **Catches** the one a distinctness check alone misses — ignoring the error and issuing a zero-filled token |
+| 113 | `TestPreviewTokenPath_ContainedAtSyscall` | Integration | FR-003i | Four refusals with a read-recording filesystem proving zero reads outside the scope: traversal, percent-encoded traversal, an absolute path, and **a symlink inside the scope pointing outside**. Positive control required — an ordinary nested file **is** served, or "404 for everything" passes. **Catches** the likely implementation, which refuses the first three and follows the symlink |
+| 114 | `TestPreviewTokenPath_VerbsGetHeadOnly` | Integration | FR-003j | Table over seven methods: GET and HEAD succeed, the rest 405 with `Allow`, no body consumed. **Catches** registering on a bare prefix, which accepts every method and quietly voids the argument that no CSRF exemption is needed |
+| 115 | `TestPreviewToken_RateLimitedAndCapped` | Integration | FR-003k | The path returns 429 past its window; the mint endpoint is limited; the ninth live token is refused. **Catches** omitting rate limiting — which also silently empties test 118's capture |
+| 116 | `TestPreviewToken_ReMintRotatesValue` | Integration | FR-003m | Re-minting returns a **different** value and the first is refused afterwards. **Catches** exactly the copy-the-precedent mistake: renewing in place returns the previous string, which passes any "renewal works" assertion while making the lifetime meaningless |
+| 117 | `TestPreviewToken_ExpiredResponseIsPolicyCarrying` | Integration | FR-003n | Expired, revoked and unknown each return 404, HTML, `nosniff`, a non-empty body and the policy byte-identically — and are **indistinguishable from each other**. **Catches** a bare not-found (blank frame) and a status split that reveals whether a token ever existed |
+| 118 | `TestRequestPathRedaction_EveryLoggingSite` | Integration | FR-003e | Drives a **real** 429, CSRF rejection and bypass-gate response with token-bearing paths, capturing logs **and the audit entry**. Each assertion first asserts the status occurred, so an empty capture fails rather than passes. **Catches** fixing one site only — and specifically the raw route written into the audit record, the most durable store the product has |
+| 119 | `TestSpaCsp_DirectiveFloor` | Integration + Unit | FR-019b | Two halves; the second is the point. Fetch the shell, parse the header, assert each floor item. Then feed the **same checker** a mutation table — a wide-open policy, the framing control removed, eval added, worker source dropped — and assert each is **rejected**. **Catches a checker that cannot fail**, which is what the previous test was |
+| 120 | `playwrightConfig.test.ts › every spec has a project, no isolation project retries` | Unit | SC-012 | Asserts the projects exist, each has **zero retries**, each match resolves to exactly the intended files, and the default project ignores those while matching **every other** end-to-end spec on disk. **Catches the trap this fix would otherwise introduce:** adding projects makes unmatched specs stop running entirely — a shard with five specs where four match runs four and reports green, the same false-green as the vitest gap, in a different tool. **Must not live under `tests/`**, which matches the test runner's own config but none of CI's four groups |
+| 121 | `TestSpaEmbed_NoEvalInPdfJsBundle` | Unit (build gate) | FR-019a, AC-15.10 | The obligation FR-019a states **first** and nothing tested: no eval path in the shipped bundle. Scans the shipped chunk and worker files; zero matches required, and **zero files scanned is a failure**. Positive control: the same scanner over a fixture containing both patterns must report both — otherwise a glob that stops matching passes silently. Catches an upgrade that reintroduces the path, precisely the case a call-site flag could never catch |
+| 122 | `preview-isolation.spec.ts › an SVG subresource renders and stays inert` | E2E (3 engines) | FR-008a | The second of the three `.svg` contexts, which test 94 never reaches. A bundle whose page carries `<img src="logo.svg">`, the SVG carrying a script that beacons the cookie. Asserts the image **decoded** — not merely a 200 — and that **zero requests reached the beacon origin**, server-side. Catches dropping `.svg` from the list (the image fails to paint — the breakage the withdrawn justification predicted, now measured), and rendering the embed through `<object>`/`<iframe>`, which would run the script |
+| 123 | `TestSvgInSpa_ImageNotDocument` | Unit + Integration | FR-008a | The third context. Classification is `image`, the preview mounts an `<img>`, and a knowledge-base embed renders through the image path — never `<object>`, `<iframe>` or injected markup. Server half: the authenticated route answers with an attachment, the correct type and `nosniff`. **Catches the refactor nobody would flag in review.** Gated on the CI-coverage fix, because it lands in a directory that runs nowhere today |
 | **Stage 2** |
 | 13 | `TestDetectKnowledgeBase_MarkerMatrix` | Unit | US-4 AS-1,2,3 | Both markers, neither |
 | 14 | `TestDetectKnowledgeBase_NoContentReads` | Unit | US-4 AS-4 | Read-counting fake |
@@ -1466,7 +1486,7 @@ come last within their stage because they are slowest and most environment-depen
 | 32 | `TestRebuild_IdenticalQueryAndGraphAnswers` | Integration | US-11 AS-1,2 | **Never byte comparison** |
 | 33 | `TestIndexing_NoModelCalls` | Unit | US-11 AS-4 | Failing model client |
 | 34 | `TestBoot_ZeroToolPolicyGaps` | Integration | FR-070 | |
-| 35 | `TestBoot_NoKnowledgeToolDenyBackfill` | Integration | FR-071 | Asserts the repair returns **zero** `knowledge_*` pairs on a seeded config. The old name promised a migration test for installs that do not exist |
+| 35 | `TestBoot_NoKnowledgeToolDenyBackfill` | Integration | FR-071, AC-17.2 | Two halves, and the second is what makes the first mean anything. **(a)** With the builtin registry **populated** — never a hand-assembled config — the repair returns **zero** `knowledge_*` pairs. **(b) Positive control:** delete one seeded entry and assert the repair returns **exactly that one**. Without (b) the test passes vacuously: coverage validation returns nothing when the tool registry is empty, and the repair derives its gap list from that same call — so a harness that never populates the registry reports green with the seeding entirely absent |
 | 36 | `TestContracts_NoDrift` | Integration | FR-080 | `make verify-contracts` |
 | 37 | `Bench_Search_p95_100k` | Perf | MV-1 | Fixture collection |
 | 38 | `Bench_InitialIndex_PeakRSS_100k` | Perf | MV-2 | |
@@ -1645,14 +1665,22 @@ Required, each a named piece of work:
 - **FR-003b** A preview token MUST be minted only by an authenticated request, MUST be scoped to one workspace and one Library path (a file, or one bundle root and its descendants), MUST be short-lived, and MUST NOT grant access the caller does not already have.
 - **FR-003c** Preview responses MUST carry `Referrer-Policy: no-referrer`, and token expiry MUST surface as a visible error rather than a blank frame.
 - **FR-003d** A preview token MUST expire **15 minutes** after minting (MV-20), and MUST additionally be invalidated when the minting session logs out, when the workspace mount is revoked, and when the file or bundle root is deleted or moved. **Expiry alone is not revocation:** without logout invalidation, an administrator's token stays a valid unauthenticated read grant after they log out — the outcome FR-003b forbids, reached by omission. The token store is in-memory; a gateway restart invalidates every live preview, which is accepted because a restart also drops the page holding them.
-- **FR-003e** A preview token MUST NOT reach any log. Concretely, `withRateLimit` (`pkg/gateway/rest_auth.go`) logs `"path", r.URL.Path` at WARN on every 429, so a rate-limited token path would write a **live credential** into `gateway.log`. Every site recording a request path MUST route it through one redaction helper. Asserted by driving a real 429, not by reading the code.
+- **FR-003e** A preview token MUST NOT reach any log **or any audit record**. Stated per site, because a universal claim with a single-instance oracle is satisfied by fixing one site. **Six** places in `pkg/gateway` record a request path; five raw. The worst is not a log at all: `gateway.go`'s reporter closure writes the raw route into an **audit entry**, which is HMAC-chained and outlives log rotation. **Why that is reachable, which is not obvious:** FR-003f argues the token path needs no CSRF exemption because it is GET/HEAD-only — correct about *blocking*, wrong about *logging*. CSRF is applied gateway-wide with prefix exemptions, and `/library-preview/` is not one, so a `POST` to a token URL reaches the CSRF gate **before** the router can 405 it, and the raw path is recorded. **The existing helper cannot be reused as-is:** `sanitisePreviewPath` takes the token as an argument (five of the six sites never hold it) and its fallback assumes the token is the **third** path segment — true of `/serve/<agent>/<token>/`, false of `/library-preview/<token>/`, where it is the second, so it would blank the wrong segment and leave the credential in place. The generalised helper MUST be **prefix-driven** and MUST fall back to a static placeholder, never the raw path.
 - **FR-003f** The minting request and response MUST be defined in `contracts/` before any handler code (FR-080). Minted at `POST /api/v1/library/preview-token`; served from a bare `/library-preview/<token>/<relative-path>` prefix on the main listener, **GET and HEAD only** — which is why it needs no CSRF exemption, since that middleware gates state-changing verbs only.
 - **FR-003g** The authenticated Library path MUST continue to serve `Content-Disposition: attachment` unchanged. Only the token path serves inline and only it carries the §10.3 policy. "Its Library URL", wherever this spec uses the phrase, means the **token** URL.
+- **FR-003h** A preview token MUST be **32 bytes from `crypto/rand`, `base64.RawURLEncoding`**. Minting MUST **fail closed** if the entropy source errors — no token, no fallback, no shortened value. This is the entire security of an unauthenticated bearer path and existed only as a sentence in a table.
+- **FR-003i** The token path MUST resolve its relative path through the **same containment chain as the authenticated path** — `library.CleanRelPath` for shape, and an `os.Root`-confined open at the **syscall** boundary — confined to the token's own scope root, not merely the workspace. **The most serious gap §10.5 left uncarried:** this is a new, unauthenticated, path-addressed file server shipping in the same release that relaxes name-shape validation, and `os.Root` appeared nowhere in this spec. A `filepath.Clean`+`Join` implementation passes every string-level traversal test and still follows a symlink out.
+- **FR-003j** The token path MUST serve **GET and HEAD only**; every other method returns 405 with `Allow: GET, HEAD`, without reading a body. FR-003f uses this as the *reason* no CSRF exemption is needed, so it must be asserted — a handler on a bare prefix accepts every method by default.
+- **FR-003k** The token path and the mint endpoint MUST be rate-limited, with at most **8 live tokens per session**. Two reasons: minting creates a credential in an in-memory store, so an uncapped caller is a memory-growth path; and the no-token-in-logs oracle **is** a forced 429 on this path — without rate limiting that test captures nothing and passes.
+- **FR-003m** **Renewal is dropped and replaced.** It was not buildable: the frame is cross-origin, opaque and sandboxed, so the embedder can read neither status nor body, and `onload` fires identically for an error page. What ships: the SPA shows a **visible expiry notice in Omnipus chrome outside the frame**, driven by the expiry timestamp the mint already returned, plus an explicit **Reload**. Re-minting MUST return a **new** value and invalidate the previous one. No timer-driven silent reload — that discards scroll position and in-document state, a product decision nobody has made.
+- **FR-003n** A request bearing an expired, revoked or unknown token MUST receive a **human-readable HTML body** — the in-frame half of "visible error rather than a blank frame" — with `404`, `text/html`, `nosniff`, and the §10.3 policy byte-identically. Expired, revoked and unknown MUST be **indistinguishable**: a `410`-vs-`404` split is a working oracle for whether a token ever existed.
 - **FR-004** The system MUST execute scripts in a previewed HTML document.
 - **FR-005** The system MUST bind every inline-previewed document to an opaque origin, established by the response and not by the embedder.
 - **FR-005a** The system MUST serve the **literal policy string in §10.3** on every preview-token response, and MUST combine **both** mechanisms — the `sandbox` directive and the source directives. Measured on all three engines: `sandbox` alone let five of seven egress vectors out; source directives alone let `window.open` out, because no CSP directive covers popup navigation.
 - **FR-005b** The system MUST embed previewed documents with `<iframe src="<token URL>">` — **never `srcdoc`**, which resolves relative URLs against the embedder and so cannot load a bundle's subresources at all (FR-003), and which has no response to carry FR-005's policy. The frame MUST also carry `sandbox="allow-scripts"`, `referrerpolicy="no-referrer"` and an empty `allow=""`. The effective sandbox is the **intersection** of attribute and header, so adding a token to only one grants nothing.
-- **FR-006** The system MUST block network egress from a previewed document.
+- **FR-006** The system MUST block egress from a previewed document **to any origin other than the gateway's own**, and MUST permit no `fetch`, XHR, `sendBeacon` or WebSocket to **any** origin, the gateway's included. *The earlier wording — "MUST block network egress" — overstated what was measured:* the experiment's ground truth was requests arriving at a **second** origin standing in for the internet, and the policy's `'self'` sources permit subresource loads back to the gateway.
+- **FR-006a** Same-origin **subresource** loads from a previewed document remain possible, and this is **accepted** on one stated condition: they arrive **unauthenticated**. The condition holds because the document has an opaque origin, making the request cross-site, and the session cookie is `SameSite=Strict`. Residual accepted alongside: attacker-timed requests reach the gateway and land in the request log; their responses are unreadable to the page. **The condition MUST be asserted, not assumed** — one edit to the cookie's `SameSite` mode turns this into authenticated API calls from untrusted content, with no other symptom.
+- **FR-006b** The SPA shell MUST be served with `frame-ancestors 'none'`. The measured policy contains `frame-src 'self'`, so a previewed page may embed any gateway page including the real SPA — the nested context reads no cookie, but renders genuine Omnipus chrome inside attacker-authored content. The control belongs on the **framed** resource; narrowing `frame-src` instead would invalidate the measurement.
 - **FR-007** The system MUST display a persistent untrusted-content boundary outside any inline-rendered frame.
 - **FR-008** The system MUST continue to serve non-allow-listed file types as attachments.
 - **FR-008a** The inline allow-list is the table in **§10.4** and nothing else (MV-22). `.svg` is on it: the token path applies **one policy to every byte it serves**, so an SVG there has the same opaque origin and zero egress `.html` gets. **This is reasoned from the measured HTML result, not separately measured — test 94 must pass before `.svg` ships inline.**
@@ -1674,7 +1702,7 @@ Required, each a named piece of work:
 - **FR-015c** The table MUST cover **every extension in §10.4**, and at minimum: `.html`/`.htm`, **`.css`, `.js`**, the four webfont extensions, the eight image extensions including `.svg`, the seven audio extensions and the three video extensions, plus `.pdf`, `.txt`, `.md`, `.json`. *Round 4 caught the omission:* an earlier list left out `.css` and `.js` — which §10.4 requires inline — so with the octet-stream default and mandatory `nosniff` every browser would refuse a bundle's own stylesheet and script, breaking US-1 AS-4, the flagship scenario. The table and §10.4 MUST be the same set, asserted by test 3b. An extension absent from the table MUST be served `application/octet-stream` as an attachment — one stated default, no second guess, no sniff.
 - **FR-016** The system MUST fail its build if an extension is added to the inline allow-list without a corresponding type-confusion test.
 - **FR-017** The system MUST describe the isolation rule accurately: only content the browser executes is sandboxed. It MUST NOT imply that formats Omnipus renders itself are sandboxed, nor that HTML is not.
-- **FR-018** The system MUST render PDFs with PDF.js inside the SPA, as a component alongside the existing image and video previews, and MUST load that bundle lazily rather than in the initial payload.
+- **FR-018** The system MUST render PDFs with PDF.js inside the SPA, as a component alongside the existing image and video previews, and MUST load that bundle lazily rather than in the initial payload. **The bundle MUST land in a named chunk**, produced by a new branch in the build's chunking function. *Verified:* that function returns exactly four names today and `pdfjs-dist` is not yet a dependency — so the name the laziness test matches does not exist and no build step creates it. **A lazy import alone does not produce a name**; it produces a hash-named chunk, which is exactly what makes that test match nothing and pass. **Two properties here are unmeasured and MUST be measured:** that a manual chunk reachable only through the lazy import stays lazy (the bundler will hoist it into the eager graph if anything imports it statically), and that PDF.js's worker builds and runs as a **real** worker — workers go through a separate build pipeline whose default output format differs from what PDF.js ships, and getting it wrong produces no build error, just the silent main-thread fallback.
 - **FR-018a** The system MUST ship PDF.js's **runtime asset directories** — `cmaps/`, `standard_fonts/`, `wasm/`, `iccs/` — and point PDF.js at them. These are fetched **per document**, not per bundle, so bundling the JavaScript does not bring them. Without `cmaps/` a Japanese, Chinese or Korean PDF renders **blank**; without `standard_fonts/` a non-embedding PDF renders with wrong metrics; without `wasm/` a scanned PDF loses its images.
 - **FR-018b** A missing asset MUST fail **visibly**. *The sharp edge:* `newSPAHandler` answers any path outside the embedded tree with `index.html` and **HTTP 200**. So an un-embedded character map does not 404 — PDF.js receives an HTML page, the document renders blank, and nothing names the cause. The handler MUST return a real 404 under the PDF.js asset prefixes, and the viewer MUST surface a fetch failure as a visible error.
 - **FR-018c** The asset list MUST be **enumerated from the installed package at build time**, never hand-maintained — a hand-listed set silently loses whatever the next version adds, invisible until someone opens the one PDF that needs it. The build MUST fail if the enumeration is empty or any entry is missing from the SPA output.
@@ -1796,8 +1824,8 @@ Required, each a named piece of work:
 | FR-0002 | US-0 | Traversal still refused | 0b |
 | FR-0002a | US-0 | (control chars kept on all platforms) | 0g |
 | FR-0002b | US-0 | (`..` rejected independently) | 0h |
-| FR-0003 | US-0 | Quote in filename header-safe | 0c |
-| FR-0004 | US-0 | Long filename opens | 0d |
+| FR-0003 | US-0 | A non-ASCII filename downloads under its own name | 0c |
+| FR-0004 | US-0 | Length rules measured in the unit each limit protects | 0d |
 | FR-001 | US-1 | HTML page renders / Documents and media render | 2, 9 |
 | FR-002 | US-1 | Source is available behind Edit | 9 |
 | FR-003 | US-1 | A complete bundle loads all of its assets | 9 |
@@ -1808,14 +1836,22 @@ Required, each a named piece of work:
 | FR-003e | US-2 | (token never logged) | 93 |
 | FR-003f | US-2 | (contract types and route) | 36, 65 |
 | FR-003g | US-2 | (authenticated path stays an attachment) | 4, 90 |
+| FR-003h | US-2 | (token entropy, encoding, fail-closed) | 112 |
+| FR-003i | US-2 | (token path contained at the syscall) | 113 |
+| FR-003j | US-2 | (GET and HEAD only) | 114 |
+| FR-003k | US-2 | (rate-limited, live-token cap) | 115 |
+| FR-003m | US-2 | (renewal rotates the value) | 116 |
+| FR-003n | US-2 | (expired response carries the policy, uniform) | 117 |
 | FR-004 | US-1 | Scripts in a previewed page execute | 9 |
 | FR-005 | US-2 | Cannot read the session cookie (both contexts) | 5, 10, 12 |
 | FR-005a | US-2 | The literal policy string, both mechanisms | 90, 12 |
 | FR-005b | US-2 | Frame mechanism and sandbox composition | 95 |
 | FR-006 | US-2 | Cannot reach the network | 11 |
+| FR-006a | US-2 | (same-origin subresources reach the gateway, unauthenticated) | 110 |
+| FR-006b | US-2 | (the SPA refuses to be framed by a preview) | 111 |
 | FR-007 | US-2 | Untrusted content is visibly marked | 10 |
 | FR-008 | US-2 | Types outside the allow-list are attachments | 4 |
-| FR-008a | US-2 | (allow-list closed; `.svg` inert at its own URL) | 59, 94 |
+| FR-008a | US-2 | (allow-list closed; `.svg` inert in all three contexts) | 59, 94, 122, 123 |
 | FR-008b | US-2 | (every inline route carries the policy) | 99 |
 | FR-008c | US-2 | (inline routes enumerated and asserted) | 99 |
 | FR-085 | — | (every SPA test file matches a group) | 97 |
@@ -1836,15 +1872,15 @@ Required, each a named piece of work:
 | FR-015c | US-1 | (table coverage, octet-stream default) | 3, 3a |
 | FR-016 | US-2 | (build gate) | 59 |
 | FR-017 | US-2 | (documentation) | — doc review |
-| FR-018 | US-1 | A PDF renders in the preview pane | 57, 61 |
+| FR-018 | US-1 | A PDF renders in the preview pane | 57, 61, 61a |
 | FR-018a | US-1 | (runtime assets shipped) | 80, 81 |
 | FR-018b | US-1 | (missing asset fails visibly) | 82 |
 | FR-018c | US-1 | (assets enumerated at build) | 83 |
 | FR-018d | US-1 | (version pinned, owner named) | 83 |
 | FR-019 | US-1 | A complete bundle loads all of its assets | 60 |
-| FR-019a | US-2 | (PDF.js hardened) | 67 |
+| FR-019a | US-2 | (hardening asserted on the shipped artefact, not the call site) | 121, 84, 67 |
 | FR-019b | US-2 | (SPA CSP) | 68 |
-| FR-019c | US-1 | (worker isolation) | 67 |
+| FR-019c | US-1 | (the oracle is the thread, not the configuration) | 96 |
 | FR-020 | US-4 | Marker presence decides status | 13 |
 | FR-021 | US-4 | Detection reads no file contents | 14 |
 | FR-022 | US-4 | Creating writes only the Omnipus marker | 15 |
@@ -1931,7 +1967,7 @@ Required, each a named piece of work:
 | AC-6.4 | 33 | AC-17.1 | 34 |
 | AC-15.5 | 58 | AC-15.8 | 67a |
 | AC-15.6 | 61 | AC-15.9 | 68 |
-| AC-15.7 | 59 | AC-15.10 | 67 |
+| AC-15.7 | 59 | AC-15.10 | 121, 84 |
 |  |  | AC-17.2 | 35 |
 
 ---
@@ -1964,7 +2000,7 @@ way an interview's answers evaporate between transcript and code.
 | AW-4 automatic link rewriting | FR-103, FR-104 | 43, 45 |
 | AW-5 one collection is one folder | FR-026 | 71 |
 | AW-6 health check on a schedule | FR-038, FR-038a | 72 |
-| AW-7 no note size cap | FR-034a | 62, 62a |
+| AW-7 no note size cap | FR-034a | 62, 101 |
 | AW-8 7-day grace period | FR-109, FR-109a, MV-18 | 52, 73 |
 | AW-9 outline for any markdown | FR-062 | 63 |
 

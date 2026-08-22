@@ -602,7 +602,12 @@ the session cookie. Revision 3 stated the isolation question "disappears"; that 
 > the real handler.)*
 > **AC-15.3** Each audio extension returns a playable `Content-Type`, asserted against the
 > **Library** handler, not the workspace MIME table.
-> **AC-15.4** A `.pdf` renders in the preview pane via PDF.js in Chrome, Firefox and Safari.
+> **AC-15.4** A `.pdf` renders in the preview pane via PDF.js on all three engines in the
+> matrix — Chromium, Firefox and **WebKit**. *Amended 2026-08-22:* this read "Chrome, Firefox
+> and Safari". Safari proper is not covered and nobody is building that coverage — the engine
+> Playwright drives is not Safari and no macOS runner is planned. Naming Safari made the
+> criterion unsatisfiable by anything anyone intends to write, which reads as coverage while
+> guaranteeing none.
 > **Tests MUST run headed** — headless Chromium has no PDF viewer and headless WebKit failed
 > to render PDFs even unprotected, which previously produced a false negative.
 > **AC-15.5** An HTML document named `.pdf` does not execute: served `application/pdf`,
